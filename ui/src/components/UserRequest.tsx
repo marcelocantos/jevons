@@ -14,33 +14,140 @@ import {
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
 
-export function UserRequest(props: {
+export type RecalledRequest = { id: string; text: string };
+
+type UserRequestProps = {
   name: string;
   density?: Density;
   onSend: (text: string) => void;
   disabled?: boolean;
-}) {
+  history?: RecalledRequest[];
+  onRecall?: (request: RecalledRequest | null) => void;
+  onRewind?: (request: RecalledRequest, text: string) => Promise<void>;
+};
+
+// A selected-agent change owns a new composer lifetime, including uploads and
+// rewind responses still in flight for the previous agent.
+export function UserRequest(props: UserRequestProps) {
+  return <NamedUserRequest key={props.name} {...props} />;
+}
+
+function NamedUserRequest(props: UserRequestProps) {
   const density = normalizeDensity(props.density);
   const compact = density === 'compact';
-  const raw = useDrafts((s) => s.drafts[props.name] || '');
+  const liveDraft = useDrafts((s) => s.drafts[props.name] || '');
   const setDraft = useDrafts((s) => s.setDraft);
   const [pending, setPending] = useState<PendingImage[]>([]);
   const boxRef = useRef<HTMLTextAreaElement>(null);
+  const [recalled, setRecalled] = useState<RecalledRequest | null>(null);
+  const [recalledText, setRecalledText] = useState('');
+  // Editing history never overwrites the ordinary persisted draft. Changing
+  // agent cancels this local edit instead of turning it into an ordinary Send.
+  const raw = recalled ? recalledText : liveDraft;
+  const imagesBeforeRecall = useRef<PendingImage[]>([]);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const activeRef = useRef(true);
+  const uploadsRef = useRef(0);
+  const draftGeneration = useRef(0);
+  const [rewinding, setRewinding] = useState(false);
+  const [recallError, setRecallError] = useState('');
   const canSend = raw.trim().length > 0 || pending.length > 0;
 
-  useEffect(() => {
-    return () => {
+  const leaveRecall = (restore: boolean) => {
+    draftGeneration.current += 1;
+    if (restore) {
       pending.forEach((img) => revokeObjectUrl(img.objectUrl));
+      setPending(imagesBeforeRecall.current);
+    } else {
+      imagesBeforeRecall.current.forEach((img) => revokeObjectUrl(img.objectUrl));
+    }
+    imagesBeforeRecall.current = [];
+    setRecalled(null);
+    setRecalledText('');
+    setRecallError('');
+    props.onRecall?.(null);
+  };
+
+  const navigateHistory = (direction: -1 | 1) => {
+    if (rewinding) return;
+    if (uploadsRef.current) {
+      setRecallError('Wait for the image upload to finish before recalling another request.');
+      return;
+    }
+    const history = props.history || [];
+    if (!history.length || (!recalled && direction === 1)) return;
+    const current = recalled ? history.findIndex((r) => r.id === recalled.id) : history.length;
+    if (current < 0) {
+      setRecallError('This recalled request is no longer in the conversation. Cancel to restore your draft.');
+      return;
+    }
+    if (!recalled) {
+      imagesBeforeRecall.current = pending;
+      setPending([]);
+    }
+    const next = Math.max(0, current + direction);
+    if (next >= history.length) {
+      leaveRecall(true);
+      return;
+    }
+    const request = history[next];
+    if (recalled && request.id !== recalled.id) {
+      pending.forEach((img) => revokeObjectUrl(img.objectUrl));
+      setPending([]);
+    }
+    draftGeneration.current += 1;
+    setRecalled(request);
+    setRecallError('');
+    setRecalledText(request.text);
+    props.onRecall?.(request);
+    queueMicrotask(() => boxRef.current?.setSelectionRange(request.text.length, request.text.length));
+  };
+
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      pendingRef.current.forEach((img) => revokeObjectUrl(img.objectUrl));
+      imagesBeforeRecall.current.forEach((img) => revokeObjectUrl(img.objectUrl));
     };
-    // Unmount only: live removes revoke in removeChip / submit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent, append = false) => {
     e.preventDefault();
+    if (rewinding || props.disabled) return;
     const payload = composeSendText(raw, pending);
     if (!payload) return;
-    props.onSend(payload);
+    if (recalled && !append) {
+      if (!props.history?.some((request) => request.id === recalled.id && request.text === recalled.text)) {
+        setRecallError('This request changed or is no longer in the conversation. Cancel and select it again.');
+        return;
+      }
+      if (!props.onRewind) {
+        setRecallError('Rewind is unavailable for this conversation. You can cancel or send as a new message.');
+        return;
+      }
+      setRewinding(true);
+      setRecallError('');
+      try {
+        await props.onRewind(recalled, payload);
+      } catch (error) {
+        if (activeRef.current) setRecallError(error instanceof Error ? error.message : 'Rewind failed. Your edited request is preserved.');
+        return;
+      } finally {
+        if (activeRef.current) setRewinding(false);
+      }
+      if (!activeRef.current) return;
+      leaveRecall(true);
+      queueMicrotask(() => boxRef.current?.focus());
+      return;
+    } else {
+      props.onSend(payload);
+      if (recalled) {
+        setDraft(props.name, payload);
+        leaveRecall(false);
+      }
+    }
     pending.forEach((img) => revokeObjectUrl(img.objectUrl));
     setPending([]);
     // 🎯T545.3: keep the sent text until the transcript echoes a user row.
@@ -51,11 +158,18 @@ export function UserRequest(props: {
   };
 
   const attachFromTransfer = (data: ClipboardLike | null | undefined): boolean => {
+    if (rewinding) return false;
     const files = filesFromTransfer(data);
     if (!files.length) return false;
+    uploadsRef.current += 1;
+    const generation = draftGeneration.current;
     void ingestPastedFiles(files).then((added) => {
+      if (!activeRef.current || generation !== draftGeneration.current) {
+        added.forEach((img) => revokeObjectUrl(img.objectUrl));
+        return;
+      }
       if (added.length) setPending((cur) => cur.concat(added));
-    });
+    }).finally(() => { uploadsRef.current -= 1; });
     return true;
   };
 
@@ -109,12 +223,24 @@ export function UserRequest(props: {
         ref={boxRef}
         data-composer={compact ? 'sidebar' : 'main'}
         value={raw}
-        onChange={(e) => setDraft(props.name, e.target.value)}
+        onChange={(e) => recalled ? setRecalledText(e.target.value) : setDraft(props.name, e.target.value)}
         placeholder={compact ? 'Message this agent…' : 'Message...'}
         autoFocus={!compact}
         rows={1}
+        disabled={rewinding}
         onPaste={onPaste}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
+          if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+            e.preventDefault();
+            navigateHistory(e.key === 'ArrowUp' ? -1 : 1);
+            return;
+          }
+          if (e.key === 'Escape' && recalled && !rewinding) {
+            e.preventDefault();
+            leaveRecall(true);
+            return;
+          }
           if (applyComposerHomeEnd(e.currentTarget, e)) return;
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -122,6 +248,14 @@ export function UserRequest(props: {
           }
         }}
       />
+      {recalled ? (
+        <div className="composer-recall" role="group" aria-label="Editing an earlier request">
+          <span>{props.onRewind ? 'Editing an earlier request. Enter rewinds and resends.' : 'Editing an earlier request. Rewind is not available yet.'}</span>
+          <button type="button" disabled={rewinding} onClick={() => leaveRecall(true)}>Cancel edit</button>
+          <button type="button" disabled={rewinding || !canSend} onClick={(e) => void submit(e, true)}>Send as new message</button>
+        </div>
+      ) : null}
+      {recallError ? <div className="composer-recall-error" role="alert">{recallError}</div> : null}
       {compact ? null : (
         <>
           <span id="input-hint" className="sr-only">
@@ -133,11 +267,11 @@ export function UserRequest(props: {
       <button
         id={sendId}
         type="button"
-        disabled={props.disabled === true ? true : props.disabled === false ? false : !canSend}
+        disabled={rewinding || (props.disabled === true ? true : props.disabled === false ? false : !canSend)}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => submit(e as unknown as FormEvent)}
       >
-        Send
+        {rewinding ? 'Rewinding…' : recalled ? 'Rewind and resend' : 'Send'}
       </button>
     </div>
   );

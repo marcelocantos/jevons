@@ -83,10 +83,8 @@ func TestOwnerSendLandsOnAStatedbBackedServer(t *testing.T) {
 // hold the same line, or the fix trades a false gap for a false green —
 // the worse of the two.
 //
-// Asserted on the signal itself rather than through persistChatLine: with
-// the store shut, statedbN reads 0 and the caller correctly falls back to
-// the JSONL, where the line really is durable. That fallback is right, and
-// it would mask what this test is about.
+// The lower-level signal and the owner-facing caller must agree. A write to
+// obsolete JSONL is not durable in the canonical conversation's recovery path.
 func TestDurableWriteFailureIsReportedAsNotDurable(t *testing.T) {
 	db, err := statedb.Open(":memory:")
 	if err != nil {
@@ -104,5 +102,45 @@ func TestDurableWriteFailureIsReportedAsNotDurable(t *testing.T) {
 	_ = db.Close()
 	if s.muxFanTranscript(name, chatUserEcho("after the store is gone")) {
 		t.Fatal("a failed durable write reported itself durable")
+	}
+}
+
+func TestOwnerPersistenceFailureDoesNotClaimLegacyFallbackAsDurable(t *testing.T) {
+	for _, shape := range []string{"empty", "populated", "sqlite-only"} {
+		t.Run(shape, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := statedb.Open(filepath.Join(dir, "state.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := New("test", dir)
+			s.SetStateDB(db)
+			clog, err := chatlog.Open(filepath.Join(dir, "chat.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clog.Close()
+			if shape != "sqlite-only" {
+				s.SetChatLog(clog)
+			}
+			s.ImportTranscripts()
+			if shape == "populated" {
+				s.persistChatLine(chatUserEcho("earlier request"))
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			text := "retain this request for recovery"
+			echo := chatUserEcho(text)
+			s.NoteOwnerSend(text, echo)
+			s.persistChatLine(echo)
+			if s.ObserveOwnerInteraction(time.Now()).SendJournaled {
+				t.Fatal("failed canonical write was reported durable via obsolete JSONL")
+			}
+			if n := statedb.JSONLSize(clog.Path()); n != 0 {
+				t.Fatalf("failed canonical write silently switched stores: JSONL bytes=%d", n)
+			}
+		})
 	}
 }

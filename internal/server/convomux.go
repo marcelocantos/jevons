@@ -113,15 +113,23 @@ func (w *muxWatch) sentSnapshot() map[string]struct{} {
 }
 
 type muxHub struct {
-	mu        sync.Mutex
-	conns     map[*muxSession]struct{}
-	events    map[string][]muxwin.Event
-	tailBytes map[string]int
-	truncated map[string]bool
-	stamps    map[string][]muxwin.ToolStamp
+	// journalLocks serialize refresh/install with fold/persist for one agent.
+	// They are separate from mu: database I/O must not block the whole fleet.
+	journalLocks sync.Map // map[string]*sync.Mutex; entries live with this hub
+	mu           sync.Mutex
+	conns        map[*muxSession]struct{}
+	events       map[string][]muxwin.Event
+	tailBytes    map[string]int
+	truncated    map[string]bool
+	stamps       map[string][]muxwin.ToolStamp
 	// journalN is the absolute coalesced length (statedb MAX(idx)).
 	// Zero means "use len(events)" — the JSONL-tail fallback.
 	journalN map[string]int
+}
+
+func (h *muxHub) journalLock(name string) *sync.Mutex {
+	lock, _ := h.journalLocks.LoadOrStore(name, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 type muxSession struct {
@@ -217,9 +225,7 @@ func (h *muxHub) replaceCacheN(name string, evs []muxwin.Event, bytes int, trunc
 	h.events[name] = evs
 	h.tailBytes[name] = bytes
 	h.truncated[name] = truncated
-	if n > 0 {
-		h.journalN[name] = n
-	}
+	h.journalN[name] = n
 	h.mu.Unlock()
 }
 
@@ -533,7 +539,10 @@ func (s *Server) muxFanTranscript(name, frameJSON string) bool {
 	if s == nil || s.mux == nil {
 		return false
 	}
-	s.muxEnsureLive(name)
+	lock := s.mux.journalLock(name)
+	lock.Lock()
+	defer lock.Unlock()
+	s.muxEnsureLiveLocked(name)
 	folds, stamps := s.mux.applyLine(name, frameJSON)
 	durable := s.statedbUpsertFolds(name, folds)
 	if len(folds) > 0 {
@@ -549,9 +558,9 @@ func (s *Server) muxFanTranscript(name, frameJSON string) bool {
 	return durable
 }
 
-// muxEnsureLive seeds the hub cache from statedb so ApplyLive continues
-// absolute indexes instead of restarting at 1.
-func (s *Server) muxEnsureLive(name string) {
+// muxEnsureLiveLocked seeds the hub cache from statedb so ApplyLive continues
+// absolute indexes instead of restarting at 1. Caller holds the journal lock.
+func (s *Server) muxEnsureLiveLocked(name string) {
 	if s == nil || s.mux == nil {
 		return
 	}
@@ -561,7 +570,7 @@ func (s *Server) muxEnsureLive(name string) {
 	if s.stateStore() == nil {
 		return
 	}
-	_ = s.muxCoalesced(name, false)
+	_ = s.muxCoalescedLocked(name, false)
 }
 
 func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
@@ -795,6 +804,17 @@ func (s *Server) muxTruncated(name string) bool {
 // journal-absolute (🎯T548.2). Otherwise force rebuilds from a JSONL
 // byte tail — not a full Replay.
 func (s *Server) muxCoalesced(name string, force bool) []muxwin.Event {
+	if s.mux != nil {
+		lock := s.mux.journalLock(name)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	return s.muxCoalescedLocked(name, force)
+}
+
+// Caller holds the agent's journal lock across the database read and cache
+// install, so an older read cannot erase a new fold or reuse its row index.
+func (s *Server) muxCoalescedLocked(name string, force bool) []muxwin.Event {
 	if s.mux != nil && !force {
 		if evs := s.mux.eventsFor(name); len(evs) > 0 {
 			return evs
@@ -836,7 +856,18 @@ func (s *Server) muxCoalescedFromDB(name string) ([]muxwin.Event, bool) {
 		n = s.statedbN(name)
 	}
 	if n == 0 {
-		return nil, false
+		uninitialized, err := db.ShouldImport(name)
+		if err != nil {
+			slog.Error("statedb: cannot establish canonical transcript state", "agent", name, "err", err)
+			return nil, true // Never replace an unreadable database with stale JSONL.
+		}
+		if uninitialized {
+			return nil, false
+		}
+		if s.mux != nil {
+			s.mux.replaceCacheN(name, nil, 0, false, 0)
+		}
+		return nil, true // An initialized empty journal is authoritative too.
 	}
 	lo := s.statedbTailStartForPaint(name, muxwin.DefaultFollow)
 	if lo < 1 {

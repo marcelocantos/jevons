@@ -46,6 +46,7 @@ async function main() {
 
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const screenshot = values.screenshot || path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'jevons-react-ui-')), 'cockpit.png');
   page.setDefaultTimeout(live ? 90000 : 10000);
   const errors = [];
   const received = [];
@@ -59,6 +60,27 @@ async function main() {
   if (!live) {
     const histories = new Map();
     const agents = ['jevons', 'jevons-po'].map(name => ({ name, parent: name === 'jevons-po' ? 'jevons' : '', purpose: name === 'jevons-po' ? 'po' : 'overseer', provider: 'fixture', running: true, status: 'running', phase: 'idle' }));
+    for (const agent of agents) {
+      const rows = [];
+      const add = (type, text, origin) => {
+        const index = rows.length + 1;
+        rows.push({ id: `e:${index}`, index, op: 'put', type, event: {
+          type, turn_origin: origin,
+          message: { role: type, content: [{ type: 'text', text }], stop_reason: type === 'assistant' ? 'end_turn' : undefined },
+        } });
+      };
+      // Long enough that e:1 begins outside the viewport. Distinct canonical
+      // owner IDs with equal text, including an agent-origin predecessor,
+      // catch mapper errors the standalone composer fixture cannot expose.
+      for (let i = 0; i < 12; i++) {
+        add('user', `Earlier owner request ${i} for ${agent.name}`, 'owner');
+        add('assistant', `I recorded request ${i}. This response belongs to ${agent.name}. The conversation keeps earlier requests available while new replies arrive.`, undefined);
+      }
+      add('user', `Shared request text for ${agent.name}`, 'agent');
+      add('user', `Shared request text for ${agent.name}`, 'owner');
+      add('user', `Shared request text for ${agent.name}`, 'owner');
+      histories.set(`transcript:${agent.name}`, rows);
+    }
     await page.route('**/api/**', async route => {
       const pathname = new URL(route.request().url()).pathname;
       const body = pathname === '/api/agents' ? agents : pathname === '/api/plan-usage' ? { backends: [] } : pathname === '/api/frontier' ? [] : {};
@@ -83,7 +105,7 @@ async function main() {
           const index = rows.length + 1;
           rows.push({ id: `e:${index}`, index, op: 'put', type, event: {
             type, turn_origin: type === 'user' ? 'owner' : undefined,
-            message: { role: type, content: [{ type: 'text', text: content }], stop_reason: type === 'assistant' ? 'end_turn' : undefined },
+            message: { role: type, content: [{ type: 'text', text: type === 'user' ? `<user_query>${content}</user_query>` : content }], stop_reason: type === 'assistant' ? 'end_turn' : undefined },
           } });
         }
         histories.set(frame.ch, rows);
@@ -125,19 +147,75 @@ async function main() {
     assert.equal(await page.locator(`${transcript} [data-kind="assistant"] .msg-body`).filter({ hasText: token }).count(), 1, 'reload preserves one matching reply');
     assert.equal(await page.locator(input).inputValue(), '', 'sent draft remains cleared after reload');
     assert.equal(await page.locator(`${transcript} [data-kind="diagnostic"]`).count(), 0, 'send has no diagnostic failure');
+    return prompt;
   }
 
-  await sendAndReload({ input: '#input', button: '#send', transcript: '#messages', agent: 'jevons' });
+  // Recall is a UI slice only. This does not certify provider rewind/resend;
+  // that requires its own correlated live operation and retained-context check.
+  async function recallAndCancel({ input, transcript, prompt, agent }) {
+    const composer = page.locator(input);
+    const draft = `unfinished-${randomUUID()}`;
+    await composer.fill(draft);
+    await composer.press('Alt+ArrowUp');
+    assert.equal(await composer.inputValue(), prompt, 'Alt+Up recalls the selected agent\'s last owner request');
+    const selected = page.locator(`${transcript} [data-kind="user"][aria-current="true"]`);
+    await selected.waitFor({ state: 'visible' });
+    assert.equal(await selected.count(), 1, 'one canonical turn is highlighted');
+    assert.equal(await selected.locator('.msg-body').textContent(), prompt, 'highlight matches the recalled request');
+    assert(await selected.getAttribute('data-event-id'), 'recall has a canonical event identity');
+    if (!live) {
+      const oldestInitiallyVisible = await page.locator(transcript).evaluate(el => {
+        const oldest = el.querySelector('[data-event-id="e:1"]');
+        if (!oldest) return false;
+        const row = oldest.getBoundingClientRect(), pane = el.getBoundingClientRect();
+        return row.bottom > pane.top && row.top < pane.bottom;
+      });
+      assert.equal(oldestInitiallyVisible, false, 'older recall begins offscreen');
+      await composer.press('Alt+ArrowUp');
+      assert.equal(await composer.inputValue(), `Shared request text for ${agent}`);
+      assert.equal(await selected.getAttribute('data-event-id'), 'e:27');
+      await composer.press('Alt+ArrowUp');
+      assert.equal(await composer.inputValue(), `Shared request text for ${agent}`);
+      assert.equal(await selected.getAttribute('data-event-id'), 'e:26', 'identical owner text retains distinct identity');
+      await composer.press('Alt+ArrowUp');
+      assert.equal(await composer.inputValue(), `Earlier owner request 11 for ${agent}`, 'agent-origin row is excluded from owner recall');
+      for (let i = 10; i >= 0; i--) await composer.press('Alt+ArrowUp');
+      assert.equal(await composer.inputValue(), `Earlier owner request 0 for ${agent}`);
+      assert.equal(await selected.getAttribute('data-event-id'), 'e:1');
+    }
+    await page.waitForFunction(transcript => {
+      const pane = document.querySelector(transcript);
+      const selected = pane?.querySelector('[aria-current="true"]');
+      if (!pane || !selected) return false;
+      const rowBox = selected.getBoundingClientRect(), paneBox = pane.getBoundingClientRect();
+      return rowBox.bottom > paneBox.top && rowBox.top < paneBox.bottom;
+    }, transcript);
+    const recallScreenshot = screenshot.replace(/\.png$/, '') + (input === '#input' ? '-recall-main.png' : '-recall-sidebar.png');
+    await page.screenshot({ path: recallScreenshot });
+    console.log(`Recall screenshot: ${recallScreenshot}`);
+    await composer.fill('an edit that must not send on cancel');
+    await composer.press('Escape');
+    assert.equal(await composer.inputValue(), draft, 'Escape restores the unsent draft');
+    assert.equal(await selected.count(), 0, 'Escape clears the selected turn');
+    await composer.press('Alt+ArrowUp');
+    await composer.press('Alt+ArrowDown');
+    assert.equal(await composer.inputValue(), draft, 'Alt+Down past newest restores the unsent draft');
+    assert.equal(await selected.count(), 0, 'Alt+Down clears the selected turn');
+    await composer.fill('');
+  }
+
+  const mainPrompt = await sendAndReload({ input: '#input', button: '#send', transcript: '#messages', agent: 'jevons' });
+  await recallAndCancel({ input: '#input', transcript: '#messages', prompt: mainPrompt, agent: 'jevons' });
   if (!live) {
     await page.goto(new URL('/?agent=jevons-po&tab=transcript', base).href);
     await page.locator('#agent-inspect[data-agent-id="jevons-po"]').waitFor({ state: 'visible' });
-    await sendAndReload({ input: '#agent-inspect-input', button: '#agent-inspect-send', transcript: '#agent-inspect-body', agent: 'jevons-po' });
+    const sidePrompt = await sendAndReload({ input: '#agent-inspect-input', button: '#agent-inspect-send', transcript: '#agent-inspect-body', agent: 'jevons-po' });
+    await recallAndCancel({ input: '#agent-inspect-input', transcript: '#agent-inspect-body', prompt: sidePrompt, agent: 'jevons-po' });
   }
   assert.deepEqual(errors, [], 'React has no uncaught browser errors');
-  const screenshot = values.screenshot || path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'jevons-react-ui-')), 'cockpit.png');
   await page.screenshot({ path: screenshot });
   console.log(`Screenshot: ${screenshot}`);
-  console.log(live ? 'PASS: packaged React owner send, correlated terminal reply and reload (real provider)' : 'PASS: built React main/sidebar send, real query deep link and reload (mocked transport; not a live journey)');
+  console.log(live ? 'PASS: packaged React owner send, correlated terminal reply, reload and recall/cancel (real provider; rewind not exercised)' : 'PASS: built React main/sidebar send, real query deep link, reload and recall/cancel (mocked transport; not a live journey; rewind not exercised)');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

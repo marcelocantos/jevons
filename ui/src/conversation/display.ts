@@ -37,6 +37,8 @@ export type StepItem = { cls: string; text: string };
 export type DisplayRow = {
   kind: DisplayKind;
   text: string;
+  /** Canonical mux event identity for selecting an owner request. */
+  id?: string;
   steps?: number;
   /** 🎯T233: harness inject nugget kind (row is a steps-family turn-marker). */
   inject?: string;
@@ -227,6 +229,9 @@ export function isWrappedInjectUserText(raw: string): boolean {
 
 export function userTurnOrigin(frame: unknown, raw: string, inspect = false): TurnOrigin {
   if (turnOriginOf(frame) === 'agent') return 'agent';
+  const f = asRec(frame);
+  const origin = f.turn_origin ?? f.turnOrigin ?? f.origin;
+  if (typeof origin === 'string' && origin.trim().toLowerCase() === 'owner') return 'owner';
   // Main chat: the owner's own echo is also user_query-wrapped (🎯T537.1.2), so the
   // wrapper is provenance only on the RHS inspect surface (vanilla T221 was inspect-only).
   return inspect && isWrappedInjectUserText(raw) ? 'agent' : 'owner';
@@ -319,10 +324,16 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       if (isNonBoundaryUserText(raw)) continue;
       const text = normalizeOwnerEchoText(raw);
       if (!text) continue;
+      const frameId = asRec(f).id;
+      const id = typeof frameId === 'string' ? frameId : undefined;
+      const origin = userTurnOrigin(f, raw, !!opts?.inspect);
       const last = out[out.length - 1];
-      if (last && last.kind === 'user' && normalizeOwnerEchoText(last.text) === text) continue;
+      // Canonical identities distinguish real repeated prompts. Text-only
+      // echo folding is limited to old unindexed frames of the same origin.
+      if (last && last.kind === 'user' && last.origin === origin &&
+        (id ? last.id === id : !last.id) && normalizeOwnerEchoText(last.text) === text) continue;
       flush();
-      out.push({ kind: 'user', text, when, origin: userTurnOrigin(f, raw, !!opts?.inspect) });
+      out.push({ kind: 'user', text, when, id, origin });
       continue;
     }
     // Walk content in order so a mixed text+tool_use frame reports every
