@@ -392,3 +392,12 @@ without a warning is not presented as proof it exercised that trigger.
 The broader server race run remains red (`40f130e4`) for a separate existing
 `handleRemote` disconnect-log map race. Baseline `8ef4b57e` reproduces it in
 unchanged server source. It is tracked separately, not repaired in this slice.
+
+Clean fixed revision `88658538446c` passed server, cost and journey tests,
+focused owner/notification race tests and a fresh daemon build (`9eb268d3`).
+Real selected/effective Grok (`38541088`) and Cursor (`e79ec4ea`) then both
+passed J2, J4 and J5: exact reply, actual seed replay, a fresh reply through the
+replacement socket, canonical seed persistence and completed isolate teardown.
+The broader remote-provider race remains T604.1 in the shared target ledger.
+Development activation and observation remain separate from these isolate
+results; T623.1 has not been achieved on this evidence alone.
