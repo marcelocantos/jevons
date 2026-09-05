@@ -5,6 +5,7 @@ package fleet
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,12 +197,32 @@ func TestChunkSeparator(t *testing.T) {
 		want     string
 	}{
 		{claudia.ProviderGrok, ""},
+		{claudia.ProviderCursor, ""},
 		{claudia.ProviderClaude, "\n"},
 		{claudia.ProviderCodex, "\n"},
 		{"", "\n"},
 	} {
 		if got := chunkSeparator(tc.provider); got != tc.want {
 			t.Errorf("chunkSeparator(%q) = %q, want %q", tc.provider, got, tc.want)
+		}
+	}
+}
+
+func TestReplyAssemblerPreservesCursorAppendChunks(t *testing.T) {
+	for _, chunks := range [][]string{
+		{"orch-direct-b75af5cb-b5f6-4999-aa", "94-80e632efb7db"},
+		{"first line\n", "second", " line\nthird line"},
+	} {
+		r := testAssembler(chunkSeparator(claudia.ProviderCursor))
+		defer r.Close()
+		r.Started()
+		for _, text := range chunks {
+			r.Observe(delta(text))
+		}
+		r.Observe(claudia.Event{Type: "assistant", StopReason: "end_turn"})
+		got := mustWait(t, r)
+		if want := strings.Join(chunks, ""); got != want {
+			t.Fatalf("Cursor reply=%q, want %q", got, want)
 		}
 	}
 }

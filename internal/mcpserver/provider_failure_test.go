@@ -113,6 +113,15 @@ func TestThreadDirectPassesRealWorkThrough(t *testing.T) {
 	}
 }
 
+func TestThreadDirectPreservesStatusDigitsInReply(t *testing.T) {
+	const reply = "orch-direct-1271abc2-9bb6-4700-981b-ecc1500100dd"
+	s, id := directServer(t, &failFleet{reply: reply})
+	res := callDirect(t, s, id, "Reply with exactly: "+reply)
+	if res.IsError || toolText(res) != reply {
+		t.Fatalf("successful reply rewritten as failure: error=%v text=%q", res.IsError, toolText(res))
+	}
+}
+
 // A missing thread is a caller error, not a provider failure — wording that
 // existing callers match on must survive.
 func TestThreadDirectLeavesNonProviderErrorsAlone(t *testing.T) {

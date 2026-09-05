@@ -431,3 +431,27 @@ real Grok J9 run passed (`5e7525f2`) before the final registry-removal assertion
 fresh verification of the final committed slice remains required. J6c's
 independent tool effect, post-bounce action and full React owner-to-worker
 coverage remain open. This change does not enable rewind or close T625.
+
+The stricter clean J9 on `7f2aaeeb` exposed two product failures. Grok
+`7c98c4b0` returned its exact UUID, but the `500` substring inside it was
+classified as a backend outage. The log records the exact successful response
+as the failure's raw text; this was a local classification defect, not evidence
+that Grok was unavailable. Cursor `e3ae0ae1` returned its UUID split by an
+inserted newline. Its saved provider transcript contains two correct chunks
+without that newline and a separate empty terminal event. The fleet assembler
+treated Cursor append chunks as paragraph blocks. That run also failed J5
+because the J9-only fixture had made no owner turn; subsequent subsets include
+J2 to establish the owner-store precondition.
+
+T625.1 narrows numeric failure markers to whole status tokens, preserving
+identifier punctuation instead of matching numeric substrings. Real status
+messages retain their classes. T625.2 concatenates Cursor append chunks
+verbatim, including provider-authored newlines, while retaining existing
+Claude/Codex block behavior. Captured failures reproduce before the fixes
+(`38e3fb2b`, `aae656f7`); affected classifier, fleet, MCP and journey suites
+pass afterward (`7be65319`). An earlier Cursor regression attempt failed to
+compile because its new test lacked an import (`111c3a17`); it was corrected
+before obtaining the actual red reproduction. The strict J9 now deliberately
+includes numeric status-shaped fragments before its fresh UUID on every run.
+Clean real-provider verification and development activation remain outstanding
+for these product fixes.

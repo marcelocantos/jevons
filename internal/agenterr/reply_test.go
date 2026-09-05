@@ -101,3 +101,42 @@ func TestReplyFailureOkFalseOnWork(t *testing.T) {
 		t.Errorf("class=%v msg=%q, want zero values", class, msg)
 	}
 }
+
+func TestNumericStatusFragmentsAreNotFailures(t *testing.T) {
+	for _, classify := range []struct {
+		name string
+		fn   func(string) Class
+	}{{"reply", ClassifyReply}, {"transport text", ClassifyText}} {
+		t.Run(classify.name, func(t *testing.T) {
+			for _, code := range []string{"400", "401", "403", "429", "500", "502", "503", "504"} {
+				for _, text := range []string{
+					"reference" + code, code + "reference", "ref_" + code,
+					"ref-" + code + "-id", "1" + code + "9", "字" + code,
+					"0." + code, "." + code, "/records/" + code, code + ".json", "status " + code + "9",
+				} {
+					if got := classify.fn(text); got.IsFailure() {
+						t.Errorf("%q classified as %s", text, got)
+					}
+				}
+			}
+			const observed = "orch-direct-1271abc2-9bb6-4700-981b-ecc1500100dd"
+			if got := classify.fn(observed); got.IsFailure() {
+				t.Errorf("observed successful reply classified as %s", got)
+			}
+			for _, tc := range []struct {
+				code string
+				want Class
+			}{{"400", ClassClientBug}, {"401", ClassAuth}, {"403", ClassAuth},
+				{"429", ClassRateLimit}, {"500", ClassBackendUnavailable},
+				{"502", ClassBackendUnavailable}, {"503", ClassBackendUnavailable}, {"504", ClassBackendUnavailable}} {
+				for _, text := range []string{tc.code, "HTTP " + tc.code, "status=" + tc.code,
+					"status: " + tc.code + ".", "HTTP/1.1 " + tc.code,
+					"ref-" + tc.code + " HTTP " + tc.code} {
+					if got := classify.fn(text); got != tc.want {
+						t.Errorf("%q classified as %s, want %s", text, got, tc.want)
+					}
+				}
+			}
+		})
+	}
+}

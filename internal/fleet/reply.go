@@ -63,12 +63,12 @@ const (
 )
 
 // chunkSeparator is what goes between consecutive assistant events of one
-// turn for a provider. Grok's ACP stream publishes token deltas that must
+// turn for a provider. Grok and Cursor ACP publish token deltas that must
 // be concatenated verbatim — the same way the owner chat path accumulates
 // them. Every other provider publishes one event per content block or
 // whole message, where a newline preserves the author's paragraphing.
 func chunkSeparator(p claudia.Provider) string {
-	if p == claudia.ProviderGrok {
+	if p == claudia.ProviderGrok || p == claudia.ProviderCursor {
 		return ""
 	}
 	return "\n"
