@@ -251,3 +251,20 @@ changes in this slice. A live-provider smoke run is additional compatibility
 evidence, not a replacement for those tests or proof of provider rewind. The
 existing J17 queue-bounce journey only checks that recovery is reported, so its
 green result must not be presented as receipt-correlated delivery evidence.
+
+Verification at `df59db58969a`: `queue-attempt-clean` (`5c3e2e16`) ran from a
+fresh checkout and passed 3,191 Go tests (four skipped), the focused queue and
+lifecycle race checks, and the daemon build. Local integration `f1379e2e` has
+the same committed tree; unrelated shared-checkout work was preserved.
+
+The subsequent live experiment did **not** pass: `queue-attempt-grok-smoke`
+(`4adefcb4`) failed J17 after its pre-bounce reply said `queued (0 pending)`.
+Although the isolate selected Grok, J17 omitted the thread's provider and the
+effective worker was Claude. The journey never established a message in the
+daemon-owned queue; no post-bounce recovery/re-offer evidence appeared. J5
+isolation passed and the throwaway daemon was stopped. This is recorded under
+T625: the journey must enforce or report its effective provider, identify a
+fresh request, establish its durable queue entry before bouncing, and verify
+the corresponding recovery outcome. The failed experiment is neither a live
+recovery pass nor evidence that this queue fix regressed a working journey.
+The development daemon has not been activated with this slice.
