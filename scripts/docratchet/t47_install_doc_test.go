@@ -29,7 +29,7 @@ func TestSecondUserInstallDocMarkers(t *testing.T) {
 		"credential.json",
 		"https://carrier-pigeon.fly.dev",
 		"http://localhost:13705/",
-		"embeds the web UI",
+		"embeds the React UI",
 		// Honest residual so a stranger is not sold a finished onboarding.
 		"no App Store",
 		"jevons --init",

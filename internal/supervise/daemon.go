@@ -58,7 +58,6 @@ func DaemonPlistXML(spec DaemonSpec) string {
 	args := []string{
 		spec.Binary,
 		"-port", strconv.Itoa(spec.Port),
-		"-vanilla-port", "0",
 		"-workdir", spec.Workdir,
 	}
 	var b strings.Builder

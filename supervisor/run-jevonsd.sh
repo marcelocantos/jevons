@@ -60,4 +60,4 @@ if [ "${1:-}" = "--print-bin" ]; then
   exit 0
 fi
 echo "jevonsd: running $BIN" >&2
-exec "$BIN" -port 13705 -vanilla-port 0 -workdir "$ROOT"
+exec "$BIN" -port 13705 -workdir "$ROOT"

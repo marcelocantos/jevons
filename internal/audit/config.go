@@ -173,7 +173,7 @@ func DefaultConfig(workdir, home string) Config {
 		cfg.CodeRoots = []string{
 			filepath.Join(workdir, "cmd"),
 			filepath.Join(workdir, "internal"),
-			filepath.Join(workdir, "web", "scripts"),
+			filepath.Join(workdir, "ui", "src"),
 			filepath.Join(workdir, "scripts"),
 		}
 		cfg.PromptRoots = []string{

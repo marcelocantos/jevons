@@ -1399,8 +1399,8 @@ body.rhs-resizing-row { cursor: row-resize; }
    its model subscript while keeping the two marks visually distinct. */
 .agent-node .model-badge .model-provider-icon[data-mark="amazon-bedrock"] {
   flex: none; margin-right: 3px; background-color: currentColor;
-  -webkit-mask: url('assets/bedrock.svg') center / contain no-repeat;
-  mask: url('assets/bedrock.svg') center / contain no-repeat;
+  -webkit-mask: url('/assets/bedrock.svg') center / contain no-repeat;
+  mask: url('/assets/bedrock.svg') center / contain no-repeat;
 }
 /* 🎯T302: Grok reads as a faded version of its own black mark — the muted row
    colour at the 0.8 above. Claude reads the same way in its own brand orange,
@@ -1524,18 +1524,6 @@ body.rhs-resizing-row { cursor: row-resize; }
    Keep nodes selectable for future use without opening black chrome. */
 .agent-node { cursor: default; }
 .agent-node.selected { background: var(--accent-dim); }
-
-/* PNG fixture: timestamp on the border; 5/15 pad is the same 20px box as
-   live 10/16 but puts first-line glyphs on golden y=45 without a transform
-   compositor layer. */
-html[data-pixel-fixture] .msg-time { margin-top: 0; }
-html[data-pixel-fixture] .msg { padding: 5px 16px 15px; }
-html[data-pixel-fixture] #frontier-table .ft-id { transform: translateY(1px); }
-html[data-pixel-fixture] #frontier-table .ft-name { transform: translate(-2px, 1px); }
-html[data-pixel-fixture] #frontier-table .ft-status,
-html[data-pixel-fixture] #frontier-table .ft-fanout,
-html[data-pixel-fixture] #frontier-table .ft-play { transform: translateY(1px); }
-
 
 /* 🎯T588.1: the default tip is sized for a sentence, and a six-column grid
    is not a sentence — at the shared cap the cursor column fell off the right

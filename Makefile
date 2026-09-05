@@ -15,7 +15,7 @@ all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsn
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
 
-bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE)
+bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE) ui-build
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
 
@@ -230,6 +230,7 @@ run: run-jevonsd
 init:
 	@echo "── jevons project setup ──"
 	@command -v go >/dev/null 2>&1 || { echo "ERROR: Go not found. Install from https://go.dev/dl/"; exit 1; }
+	@command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 || { echo "ERROR: Node.js 24+ and npm are required to build React"; exit 1; }
 	@echo "  Go: $$(go version)"
 	@go mod download
 	@echo "  Go dependencies downloaded"
@@ -272,7 +273,7 @@ test-go: bin/gotest
 test-go-raw:
 	go test ./...
 
-# React cockpit (🎯T540). Daily :13705 GET / serves ui/dist (T540.2).
+# React cockpit (🎯T540). The daemon embeds the tracked bundle (T540.2).
 .PHONY: ui-dev ui-build test-ui-react ui-deps ui-daemon-install ui-daemon-stop ui-daemon-status
 ui-dev:
 	cd ui && npm run dev
@@ -281,6 +282,13 @@ ui-dev:
 # `make ui-dev` is the fast HMR path; Vitest alone does not type-check.
 ui-build: ui-deps
 	cd ui && npm run build
+	go run ./scripts/package-ui
+
+# Acceptance checks the tracked embed input before anything regenerates it.
+.PHONY: ui-check-bundle
+ui-check-bundle: ui-deps
+	cd ui && npm run build
+	go run ./scripts/package-ui -check
 
 # Daily/dev servers (🎯T540.4 / vellum supervisor/ shape): tracked
 # supervisor/*.ini with @REPO@, rendered into Homebrew supervisor.d.
@@ -291,11 +299,10 @@ supervisor-install: bin/jevonsd
 	supervisor/install.sh
 
 supervisor-status:
-	-supervisorctl status jevonsd jevons-vanilla
+	-supervisorctl status jevonsd
 
 # Daily UI LaunchAgents (legacy 🎯T540.4 path). Prefer make supervisor-install.
 UI_DAEMON_LABEL := com.marcelocantos.jevons-ui
-UI_VANILLA_LABEL := com.marcelocantos.jevons-ui-vanilla
 ui-daemon-install: bin/jevonsd
 	bin/jevonsd -install-ui-agents
 
@@ -304,7 +311,6 @@ ui-daemon-stop: bin/jevonsd
 
 ui-daemon-status:
 	-launchctl print gui/$$(id -u)/$(UI_DAEMON_LABEL) | head -20
-	-launchctl print gui/$$(id -u)/$(UI_VANILLA_LABEL) | head -20
 
 # ui/node_modules is gitignored, so a clean checkout of HEAD (bin/gate -clean,
 # CI, a fresh clone) has no vitest until this install runs. 🎯T563: the old
@@ -322,61 +328,9 @@ $(UI_VITEST_MOD): ui/package.json ui/package-lock.json
 test-ui-react: ui-deps
 	cd ui && npm test
 
-# Hermetic Node tests for chat working-indicator lifecycle (🎯T39)
-# and attention-thread model (🎯T65).  Reference vanilla (🎯T540) — prefer
-# porting failures into ui/ rather than growing web/.
-test-web:
-	node web/scripts/boot_sentinel_test.js
-	node web/scripts/module_gate_test.js
-	node web/scripts/chat_events_test.js
-	node web/scripts/owner_turn_shape_test.js
-	node web/scripts/attention_threads_test.js
-	node web/scripts/idea_capture_test.js
-	node web/scripts/aside_history_test.js
-	node web/scripts/fleet_row_test.js
-	node web/scripts/fleet_paint_test.js
-	node web/scripts/fleet_cycle_test.js
-	node web/scripts/fleet_selection_test.js
-	node web/scripts/model_prefix_test.js
-	node web/scripts/provider_menu_test.js
-	node web/scripts/portfolio_group_test.js
-	node web/scripts/virtual_list_test.js
-	node web/scripts/idle_monitor_test.js
-	node web/scripts/thread_route_test.js
-	node web/scripts/route_suggest_test.js
-	node web/scripts/layout_probe_test.js
-	node web/scripts/composer_layout_test.js
-	node web/scripts/composer_keys_test.js
-	node web/scripts/composer_focus_test.js
-	node web/scripts/wispr_context_test.js
-	node web/scripts/send_queue_test.js
-	node web/scripts/composer_persist_test.js
-	node web/scripts/pending_turns_test.js
-	node web/scripts/rhs_layout_test.js
-	node web/scripts/decision_log_test.js
-	node web/scripts/chat_reconnect_test.js
-	node web/scripts/owner_ux_test.js
-	node web/scripts/history_loading_test.js
-	node web/scripts/tool_summary_test.js
-	node web/scripts/working_progress_test.js
-	node web/scripts/tool_tooltip_test.js
-	node web/scripts/instant_tip_test.js
-	node web/scripts/agent_transcript_test.js
-	node web/scripts/conversation_widget_test.js
-	node web/scripts/viewport_census_test.js
-	node web/scripts/frontier_table_test.js
-	node web/scripts/rsi_dispositions_test.js
-	node web/scripts/target_context_chrome_test.js
-	node web/scripts/target_hotspot_test.js
-	node web/scripts/mermaid_actions_test.js
-	node web/scripts/markdown_normalize_test.js
-	node web/scripts/jevons_envelope_test.js
-	node web/scripts/decision_matrix_test.js
-	node web/scripts/streaming_markdown_test.js
-	node web/scripts/cost_display_test.js
-	node web/scripts/plan_usage_test.js
-	node web/scripts/link_safety_test.js
-	node web/scripts/image_lightbox_test.js
+# Historical command retained as a React-unit alias. Legacy assertions are
+# traceable in docs/audits/react-retirement-2026-09-05/legacy-suites.json.
+test-web: test-ui-react
 
 # Playwright perceptual chat UI (hermetic mocked WS). node_modules under
 # scripts/browser-loop-test is gitignored (🎯T438), so a clean checkout of
@@ -391,49 +345,20 @@ $(PLAYWRIGHT_MOD): scripts/browser-loop-test/package.json scripts/browser-loop-t
 	cd scripts/browser-loop-test && npm ci
 	@test -d $@ || (echo "npm ci did not install playwright at $@" >&2; exit 1)
 
-# Live: make test-ui-live.
-.PHONY: test-ui
-test-ui: playwright-deps
-	node scripts/chat-ui-test/test.js
-	node scripts/chat-ui-test/collapse-test.js
-	node scripts/chat-ui-test/stream-scroll-test.js
-	node scripts/chat-ui-test/fleet-tree-test.js
-	node scripts/chat-ui-test/attention-ui-test.js
-	node scripts/chat-ui-test/batch-t109-test.js
-	node scripts/chat-ui-test/infinite-scroll-test.js
-	node scripts/chat-ui-test/replay-scroll-test.js
-	node scripts/chat-ui-test/mermaid-test.js
-	node scripts/chat-ui-test/t280-frontier-graph-test.js
-	node scripts/chat-ui-test/t294-frontier-graph-test.js
-	node scripts/chat-ui-test/agent-note-test.js
-	node scripts/chat-ui-test/t159-seal-test.js
-	node scripts/chat-ui-test/virtual-list-test.js
-	node scripts/chat-ui-test/image-paste-test.js
-	node scripts/chat-ui-test/image-lightbox-test.js
-	node scripts/chat-ui-test/t164-aside-dismiss-test.js
-	node scripts/chat-ui-test/t241-alt-enter-test.js
-	node scripts/chat-ui-test/t289-paint-thrash-test.js
-	node scripts/chat-ui-test/t341-jiggle-thrash-test.js
-	node scripts/chat-ui-test/t351-fractional-pin-test.js
-	node scripts/chat-ui-test/t493-visibility-test.js
-	node scripts/chat-ui-test/t363-scroll-up-anchor-test.js
-	node scripts/chat-ui-test/t361-owner-ux-test.js
-	node scripts/chat-ui-test/t309.1-conversation-widget-test.js
-	node scripts/chat-ui-test/t340-frontier-table-layout-test.js
-	node scripts/chat-ui-test/t390.1-plan-ticker-layout-test.js
-	node scripts/chat-ui-test/t366-composer-tab-cycle-test.js
-	node scripts/chat-ui-test/t374-no-onerror-test.js
-	node scripts/chat-ui-test/t374-module-gate-test.js
-	node scripts/chat-ui-test/t375-boot-sentinel-test.js
-	node scripts/chat-ui-test/t370-fleet-cycle-test.js
-	node scripts/chat-ui-test/t369-decision-matrix-test.js
-	node scripts/chat-ui-test/t368-image-prefix-route-test.js
-	node scripts/chat-ui-test/t381-agent-report-markdown-test.js
-	node scripts/chat-ui-test/t509-envelope-render-test.js
+# Browser checks drive the built React main/sidebar widgets. Transport is
+# mocked here; the real packaged owner turn is journey J30.
+.PHONY: test-ui playwright-browser
+playwright-browser: playwright-deps
+	cd scripts/browser-loop-test && npx playwright install chromium
+
+test-ui: ui-build playwright-browser
+	node scripts/react-ui-test/legacy-obligations.cjs
+	node scripts/react-ui-test/test.cjs
 
 .PHONY: test-ui-live
-test-ui-live: playwright-deps
-	node scripts/chat-ui-test/test.js --live
+test-ui-live: playwright-browser
+	@test -n "$(UI_HOST)" || (echo "Set UI_HOST to an isolated daemon host:port; use make test-journey for managed isolation" >&2; exit 2)
+	node scripts/react-ui-test/test.cjs --host "$(UI_HOST)"
 
 # Does the cockpit tell the truth (🎯T603)? Compares what the UI paints
 # against /api/agents + /api/plan-usage AND against the live tmux server —
@@ -463,11 +388,12 @@ test-live-suite:
 # agent the journeys spawn (🎯T282), e.g.:
 #	make test-journey PROVIDER=claude
 .PHONY: test-journey
-test-journey: jevonsd
+test-journey: jevonsd playwright-browser
 	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
 
 # Full product net (🎯T492): hermetic layers first, then Universe-B journeys.
-test: ui-build test-go test-web test-ui test-ui-react test-journey
+test: ui-check-bundle
+	$(MAKE) test-go test-web test-ui test-journey
 
 # ── Fleet spend (🎯T392.6) ──────────────────────────
 # Decomposes spend into the levers that act on it:

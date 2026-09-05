@@ -3,7 +3,6 @@
 
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
-import { pixelFixtureActive } from '../visual/oldCockpitFixture';
 import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
 
 export type AgentRow = {
@@ -64,33 +63,7 @@ function ModelBadge({ node }: { node: AgentNode }) {
       title={p.title}
       aria-label={aria}
     >
-      {pixelFixtureActive() && p.company === 'anthropic' ? (
-        <svg
-          className="model-icon"
-          data-mark="claude-splat"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <circle
-            cx="12"
-            cy="12"
-            r="7.2"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-          />
-          <line
-            x1="7.2"
-            y1="16.8"
-            x2="16.8"
-            y2="7.2"
-            stroke="currentColor"
-            strokeWidth="2.2"
-          />
-        </svg>
-      ) : (
-        <CompanyMark company={p.company} />
-      )}
+      <CompanyMark company={p.company} />
       {sub}
     </button>
   );

@@ -82,9 +82,9 @@ every run today; live is the default truth.
 2. **J2-chat-round-trip** — idle send → terminal
 3. **J3-cancel-and-send** — long turn → interrupt → settle → replacement → terminal
 4. **J4-reconnect-sealed** — seed turn → reconnect → bounded replay + sandbox journal only
-4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns into the isolate journal (not the owner's history) → hard-load the **React** cockpit (isolate `GET /` when `ui/dist` exists; otherwise Vite :5173-style proxy — 🎯T540.2 dual-path residual) → Playwright census of the React transcript plus T493 gates (`checkVisibility`, centre hit-test, Vision OCR of a pinned 1280×800 viewport). Empty pane with model rows is a fail (🎯T494). Portguard still refuses `:13705` and `:13706`.
+4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns into the isolate journal (not the owner's history) → hard-load the **React** cockpit (packaged isolate `GET /`; a missing React root fails rather than starting Vite) → Playwright census of the React transcript plus T493 gates (`checkVisibility`, centre hit-test, Vision OCR of a pinned 1280×800 viewport). Empty pane with model rows is a fail (🎯T494). Portguard still refuses `:13705` and `:13706`.
 4c. **J20-plan-dest** — fixture weekly remaining (not live vendor) → omit-provider mint refuses when dest empty; sweep parks an explicit-hot worker (🎯T390.1.5). Overseer chat turn proves isolate agent interaction.
-4d. **J22–J28 chrome pack** (🎯T540.1 census) — React Vite-proxy journeys that re-prove retired owner-visible contracts (send-once, fold/mermaid/silent, composer Home/End, fleet tree, aside `target:`, frontier table+Graph, plan ticker). Referent is the ledger + vanilla chrome (`#input`, `.msg.user`, `.msg-clipped`), not today’s React tree. A miss is a gap, not a reason to relax the check. Shared helper: `react_surface.go` + `react_paint.js`.
+4d. **J22–J28 chrome pack** (🎯T540.1 census) — packaged React journeys that re-prove retired owner-visible contracts (send-once, fold/mermaid/silent, composer Home/End, fleet tree, aside `target:`, frontier table+Graph, plan ticker). Referent is the ledger + vanilla chrome (`#input`, `.msg.user`, `.msg-clipped`), not today’s React tree. A miss is a gap, not a reason to relax the check. Shared helper: `react_surface.go` + `react_paint.js`.
 
 ### Orchestration (MCP-direct on the isolate)
 5. **J6-mcp-tool-surface** — agent + thread tools registered
@@ -104,3 +104,22 @@ every run today; live is the default truth.
 On exit the suite always stops the isolated daemon and runs
 `grok mcp remove jevonsmcp-journey` so `~/.grok/config.toml` is not left
 pointing at a dead test port. The daily `jevonsmcp` entry is never removed.
+
+## Packaged React retirement slice (🎯T540.2)
+
+`J30-packaged-react-owner-turn` loads the daemon's embedded React application,
+checks the effective provider, types a fresh nonce request into the actual
+composer, observes that request's terminal assistant frame on `/ws/mux`, and
+reloads to verify exactly one owner turn and reply. It does not inject a turn
+through a separate Go socket or start Vite. `J5` reads the actual SQLite
+transcript store in read-only mode; historical JSONL is not current evidence.
+
+```bash
+make jevonsd playwright-browser
+go run ./scripts/journey-suite -bin /absolute/path/to/jevonsd -port 0 -only J30,J5 -provider grok
+```
+
+The suite starts the daemon in the isolated working directory. Screenshots
+are written under the system temporary directory. A missing provider fails as
+OUTAGE; a provider mismatch or missing request-specific reply cannot pass.
+This thin packaging slice does not establish full React fidelity.

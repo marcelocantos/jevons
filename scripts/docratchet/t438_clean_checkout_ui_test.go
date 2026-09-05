@@ -11,7 +11,7 @@
 // node_modules is gitignored on purpose; the fix is that `make test-ui`
 // installs when absent. This ratchet checks that a detached worktree of HEAD
 // can require playwright after the build's install step, and runs one fast
-// UI oracle so a missing browser binary skips by name rather than claiming
+// UI oracle; a missing dependency fails rather than claiming
 // green over MODULE_NOT_FOUND.
 package docratchet_test
 
@@ -27,13 +27,13 @@ import (
 // TestT438CleanCheckoutUISuiteInvocable checks HEAD out into a detached
 // worktree and asserts the Playwright UI path is invocable there: make
 // installs the gitignored deps, require(playwright) succeeds, and one UI
-// test either exits 0 or skips naming a missing browser binary — never
+// test exits 0 — never
 // MODULE_NOT_FOUND.
 func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 	root := gitRepo(t)
 	for _, bin := range []string{"node", "npm", "make"} {
 		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH", bin)
+			t.Fatalf("required UI dependency %s not on PATH", bin)
 		}
 	}
 
@@ -79,7 +79,7 @@ func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 	}
 
 	// One fast UI oracle named in the acceptance (not the full make test-ui).
-	ui := exec.Command("node", "scripts/chat-ui-test/t370-fleet-cycle-test.js")
+	ui := exec.Command("make", "test-ui")
 	ui.Dir = wt
 	out, err := ui.CombinedOutput()
 	if err == nil {
@@ -91,10 +91,7 @@ func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 			"Install must make playwright require-able; this is not a browser-binary skip.\n%s",
 			err, out)
 	}
-	if missingBrowser(msg) {
-		t.Skipf("playwright browser binary missing (deps installed; MODULE_NOT_FOUND ruled out):\n%s", msg)
-	}
-	t.Fatalf("`node scripts/chat-ui-test/t370-fleet-cycle-test.js` RED on clean HEAD (%v).\n%s", err, out)
+	t.Fatalf("`make test-ui` RED on clean HEAD (%v).\n%s", err, out)
 }
 
 func jsString(s string) string {
@@ -111,21 +108,4 @@ func jsString(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
-}
-
-func missingBrowser(msg string) bool {
-	needles := []string{
-		"Executable doesn't exist",
-		"browserType.launch",
-		"Please run the following command to download new browsers",
-		"npx playwright install",
-		"playwright install",
-	}
-	lower := strings.ToLower(msg)
-	for _, n := range needles {
-		if strings.Contains(msg, n) || strings.Contains(lower, strings.ToLower(n)) {
-			return true
-		}
-	}
-	return false
 }

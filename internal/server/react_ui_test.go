@@ -4,133 +4,140 @@
 package server
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
+
+	"github.com/marcelocantos/jevons/ui"
 )
 
-func TestReactDistReady(t *testing.T) {
-	if ReactDistReady(t.TempDir()) {
-		t.Fatal("empty dir is not a React dist")
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<div id="root"></div>`), 0o644); err != nil {
+func TestReactBundleServesStandaloneWithNavigationAndAPIPrecedence(t *testing.T) {
+	// No disk dist or developer checkout is an input to the serving path.
+	t.Chdir(t.TempDir())
+	mux := http.NewServeMux()
+	if err := RegisterProductUIRoutes(mux); err != nil {
 		t.Fatal(err)
 	}
-	if !ReactDistReady(dir) {
-		t.Fatal("index.html must make dist ready")
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/agents", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[]`))
+	})
+	// Query parameters are the product deep-link contract. The arbitrary
+	// path checks only HTTP SPA fallback, not that React implements that route.
+	for _, route := range []string{"/", "/?agent=jevons&tab=transcript", "/navigation-fallback"} {
+		req := httptest.NewRequest(http.MethodGet, route, nil)
+		req.Header.Set("Accept", "text/html")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="root"`) {
+			t.Fatalf("React navigation %s: status=%d body=%s", route, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "boot_sentinel") || strings.Contains(rec.Body.String(), "DEPRECATED REFERENCE") {
+			t.Fatal("packaged surface contains vanilla runtime")
+		}
+	}
+	for route, status := range map[string]int{
+		"/mcp":               http.StatusNoContent,
+		"/api/agents":        http.StatusOK,
+		"/api/missing":       http.StatusNotFound,
+		"/api":               http.StatusNotFound,
+		"/ws":                http.StatusNotFound,
+		"/ws/missing":        http.StatusNotFound,
+		"/mcp/missing":       http.StatusNotFound,
+		"/assets/missing.js": http.StatusNotFound,
+		"/assets/missing":    http.StatusNotFound,
+		"/missing.css":       http.StatusNotFound,
+	} {
+		req := httptest.NewRequest(http.MethodGet, route, nil)
+		req.Header.Set("Accept", "text/html")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != status {
+			t.Errorf("GET %s = %d, want %d", route, rec.Code, status)
+		}
 	}
 }
 
-func TestRegisterReactUIRoutesServesRootAndAssets(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<!doctype html><div id="root"></div>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(dir, "assets"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "assets", "app.js"), []byte("window.__react=1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	mux := http.NewServeMux()
-	RegisterReactUIRoutes(mux, dir)
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET / = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `id="root"`) {
-		t.Fatalf("GET / must be the React document, got %q", body)
-	}
-	if strings.Contains(body, "DEPRECATED REFERENCE") || strings.Contains(body, "boot_sentinel.js") {
-		t.Fatal("GET / must not be vanilla web/")
-	}
-
-	recA := httptest.NewRecorder()
-	mux.ServeHTTP(recA, httptest.NewRequest(http.MethodGet, "/assets/app.js", nil))
-	if recA.Code != http.StatusOK {
-		t.Fatalf("GET /assets/app.js = %d", recA.Code)
-	}
-	if !strings.Contains(recA.Body.String(), "window.__react=1") {
-		t.Fatalf("asset body: %q", recA.Body.String())
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "favicon.svg"), []byte("<svg/>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	recF := httptest.NewRecorder()
-	mux.ServeHTTP(recF, httptest.NewRequest(http.MethodGet, "/favicon.svg", nil))
-	if recF.Code != http.StatusOK {
-		t.Fatalf("GET /favicon.svg = %d", recF.Code)
-	}
-	// /mcp must still be registerable (GET /{file} conflict took daily down).
-	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {})
-}
-
-func TestRegisterProductUIRoutesDailyRequiresDist(t *testing.T) {
-	mux := http.NewServeMux()
-	_, err := RegisterProductUIRoutes(mux, t.TempDir(), t.TempDir(), true)
-	if err == nil {
-		t.Fatal("daily without ui/dist must fail closed")
-	}
-	if !strings.Contains(err.Error(), "T540.2") {
-		t.Fatalf("error must name T540.2: %v", err)
-	}
-}
-
-func TestRegisterProductUIRoutesIsolateFallsBackToVanilla(t *testing.T) {
-	web := t.TempDir()
-	if err := os.WriteFile(filepath.Join(web, "index.html"), []byte(`<html>DEPRECATED REFERENCE</html>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	ds, err := RegisterProductUIRoutes(mux, t.TempDir(), web, false)
+func TestReactBundleEveryAssetIsServed(t *testing.T) {
+	files, err := ui.Files()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ds == nil {
-		t.Fatal("isolate without dist must disk-serve vanilla")
-	}
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET / = %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "DEPRECATED REFERENCE") {
-		t.Fatalf("isolate fallback must be vanilla, got %q", rec.Body.String())
-	}
-}
-
-func TestRegisterProductUIRoutesPrefersReactWhenDistExists(t *testing.T) {
-	react := t.TempDir()
-	web := t.TempDir()
-	if err := os.WriteFile(filepath.Join(react, "index.html"), []byte(`<div id="root"></div>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(web, "index.html"), []byte(`<html>DEPRECATED REFERENCE</html>`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	mux := http.NewServeMux()
-	ds, err := RegisterProductUIRoutes(mux, react, web, true)
+	if err := RegisterProductUIRoutes(mux); err != nil {
+		t.Fatal(err)
+	}
+	var scripts, styles, images int
+	err = fs.WalkDir(files, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		want, err := fs.ReadFile(files, name)
+		if err != nil {
+			return err
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+name, nil))
+		if rec.Code != http.StatusOK || rec.Body.String() != string(want) {
+			t.Errorf("packaged %s: status=%d or bytes differ", name, rec.Code)
+		}
+		switch {
+		case strings.HasSuffix(name, ".js"):
+			scripts++
+		case strings.HasSuffix(name, ".css"):
+			styles++
+		case strings.HasSuffix(name, ".svg"):
+			images++
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ds != nil {
-		t.Fatal("React path must not start a vanilla DevServer")
+	if scripts == 0 || styles == 0 || images == 0 {
+		t.Fatalf("incomplete real bundle: scripts=%d styles=%d images=%d", scripts, styles, images)
 	}
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if !strings.Contains(rec.Body.String(), `id="root"`) {
-		t.Fatalf("must serve React, got %q", rec.Body.String())
+}
+
+func TestReactBundleMissingReferencedAssetFailsClosed(t *testing.T) {
+	for _, missing := range []string{"app.js", "app.css", "favicon.svg"} {
+		t.Run(missing, func(t *testing.T) {
+			files := fstest.MapFS{
+				"index.html":  {Data: []byte(`<link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"><div id="root"></div><script src="/app.js"></script>`)},
+				"app.js":      {Data: []byte("window.app = true")},
+				"app.css":     {Data: []byte("body { color: black }")},
+				"favicon.svg": {Data: []byte("<svg/>")},
+			}
+			delete(files, missing)
+			if err := RegisterReactUIRoutes(http.NewServeMux(), files); err == nil || !strings.Contains(err.Error(), missing) {
+				t.Fatalf("missing %s must prevent serving, got %v", missing, err)
+			}
+		})
 	}
-	if strings.Contains(rec.Body.String(), "DEPRECATED REFERENCE") {
-		t.Fatal("must not serve vanilla when dist exists")
+}
+
+// Preserve the old asset guard's comment/traversal guarantees on the new
+// immutable product path. Browser-inactive tags cannot invent missing loads.
+func TestReactBundleAssetReferencesFollowHTMLSemantics(t *testing.T) {
+	for _, suffix := range []string{
+		`<!-- <script src="/missing.js"></script> -->`,
+		`<!-- unterminated <script src="/missing.js">`,
+		`<script src="https://example.com/external.js"></script>`,
+	} {
+		files := fstest.MapFS{"index.html": {Data: []byte(`<div id="root"></div><script src='/real.js?v=2'></script>` + suffix)}, "real.js": {Data: []byte("app()")}}
+		if err := RegisterReactUIRoutes(http.NewServeMux(), files); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, src := range []string{"../private.js", "/assets/../../private.js", "/assets/%2e%2e/private.js"} {
+		files := fstest.MapFS{"index.html": {Data: []byte(`<div id="root"></div><script src="` + src + `"></script>`)}}
+		if err := RegisterReactUIRoutes(http.NewServeMux(), files); err == nil {
+			t.Fatalf("invalid local asset path %q accepted", src)
+		}
 	}
 }

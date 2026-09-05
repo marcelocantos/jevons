@@ -66,8 +66,9 @@ cd jevons
 make jevonsd
 ```
 
-Requires Go 1.26+ and a C compiler (CGo is needed for SQLite). The
-released binary embeds the web UI (no repo checkout required after
+Source builds require Go 1.26+, Node.js 24+ with npm, and a C compiler
+(CGo is needed for SQLite). `make jevonsd` type-checks and packages React.
+The released binary embeds the React UI (no Node.js or repo checkout required after
 install).
 
 ### 3. Optional config

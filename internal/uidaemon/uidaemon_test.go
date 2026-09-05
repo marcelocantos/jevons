@@ -10,13 +10,12 @@ import (
 	"testing"
 )
 
-func TestPlistXMLNamesBothJobs(t *testing.T) {
+func TestPlistXMLNamesReactProbe(t *testing.T) {
 	spec := Spec{
 		Binary:   "/repo/bin/jevonsd",
 		Home:     "/Users/x",
 		StateDir: "/Users/x/.jevons",
 		PathEnv:  "/usr/bin:/bin:/opt/homebrew/bin",
-		Upstream: "127.0.0.1:13705",
 	}
 	react := ReactPlistXML(spec)
 	for _, want := range []string{
@@ -38,23 +37,6 @@ func TestPlistXMLNamesBothJobs(t *testing.T) {
 		t.Error("React plist must not be the Vite :5173 agent")
 	}
 
-	vanilla := VanillaPlistXML(spec)
-	for _, want := range []string{
-		VanillaLabel,
-		"-ui",
-		"vanilla",
-		"13706",
-		"127.0.0.1:13705",
-		"<key>KeepAlive</key>",
-		"/Users/x/.jevons/ui-vanilla.log",
-	} {
-		if !strings.Contains(vanilla, want) {
-			t.Errorf("vanilla plist missing %q:\n%s", want, vanilla)
-		}
-	}
-	if strings.Contains(vanilla, "npm") || strings.Contains(vanilla, "5173") {
-		t.Error("vanilla plist must not be the Vite :5173 agent")
-	}
 }
 
 func TestLooksLikeReactDocument(t *testing.T) {

@@ -9,10 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-
-	"github.com/marcelocantos/jevons/internal/config"
 )
 
 // ReactPlistXML is the StartInterval React-surface probe. KeepAlive is
@@ -23,22 +20,6 @@ func ReactPlistXML(spec Spec) string {
 	log := filepath.Join(spec.StateDir, "ui-react-probe.log")
 	args := []string{spec.Binary, "-ui", "probe"}
 	return plistXML(ReactLabel, args, spec.PathEnv, log, ReactProbeInterval, false)
-}
-
-// VanillaPlistXML is the KeepAlive UI-only vanilla server. It does not
-// open ~/.jevons — no second full daemon on DailyVanillaPort.
-func VanillaPlistXML(spec Spec) string {
-	up := spec.Upstream
-	if up == "" {
-		up = defaultUpstream()
-	}
-	log := filepath.Join(spec.StateDir, "ui-vanilla.log")
-	args := []string{
-		spec.Binary, "-ui", "vanilla",
-		"-port", strconv.Itoa(config.DailyVanillaPort),
-		"-upstream", up,
-	}
-	return plistXML(VanillaLabel, args, spec.PathEnv, log, 0, true)
 }
 
 func plistXML(label string, args []string, pathEnv, logPath string, interval int, keepAlive bool) string {

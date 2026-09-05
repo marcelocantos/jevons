@@ -8,7 +8,6 @@ import { normalizeDensity, type Density } from '../density';
 import { AgentTranscript } from './AgentTranscript';
 import { OverseerPhaseStrip } from './OverseerPhaseStrip';
 import { UserRequest } from './UserRequest';
-import { pixelFixtureActive } from '../visual/oldCockpitFixture';
 
 export function AgentInteraction(props: {
   mux: MuxClient | null;
@@ -86,7 +85,6 @@ export function AgentInteraction(props: {
       <UserRequest
         name={props.name}
         density={density}
-        disabled={pixelFixtureActive() ? false : undefined}
         onSend={(t) => conv.send(t)}
       />
     </div>

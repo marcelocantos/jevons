@@ -40,7 +40,6 @@ import {
   measuredSuffixFromEnd,
   nextHydrateOverscan,
 } from '../transcript/hydrateOverscan';
-import { pixelFixtureRowTop } from '../visual/oldCockpitFixture';
 
 export function AgentTranscript(props: {
   name: string;
@@ -334,7 +333,7 @@ export function AgentTranscript(props: {
               when={row.when}
               origin={row.origin}
               sealed={row.sealed === true}
-              start={pixelFixtureRowTop(item.start, item.index, density)}
+              start={item.start}
               measureRef={virtualizer.measureElement}
               isLatest={item.index === latestMsg}
               nearEnd={nearEnd}

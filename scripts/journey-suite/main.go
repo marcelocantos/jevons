@@ -115,6 +115,16 @@ func main() {
 		}
 	}
 
+	// Resolve before the daemon changes into its throwaway working directory.
+	daemon, err = exec.LookPath(daemon)
+	if err != nil {
+		fatal(err)
+	}
+	daemon, err = filepath.Abs(daemon)
+	if err != nil {
+		fatal(err)
+	}
+
 	p := *port
 	if p == 0 {
 		p, err = freePort()
@@ -136,6 +146,17 @@ func main() {
 	} else {
 		fmt.Println("KEEP state:", stateDir)
 	}
+	// Relocate the executable as well as cwd: an executable-relative lookup
+	// of ../ui/dist must not let a broken package borrow checkout assets.
+	packaged, err := os.ReadFile(daemon)
+	if err != nil {
+		fatal(err)
+	}
+	daemon = filepath.Join(stateDir, "jevonsd")
+	if err := os.WriteFile(daemon, packaged, 0o755); err != nil {
+		fatal(err)
+	}
+	packaged = nil
 
 	// MCP baseline: daily registration must survive the suite if present.
 	// (Daily chatlog mtime is *not* an oracle — a live daily-driver overseer
@@ -253,6 +274,7 @@ persona_notes: |
 	s.run("J20-plan-dest", s.j20PlanDest)
 	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
 	s.run("J29-tmux-anchor-spawn", s.j29TmuxAnchorSpawn)
+	s.run("J30-packaged-react-owner-turn", s.jPackagedReactOwnerTurn)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()
@@ -294,9 +316,8 @@ func assertIsolation(provider claudia.Provider, hadDailyMCP bool, stateDir strin
 	if absState == homeJevons || strings.HasPrefix(absState, homeJevons+string(os.PathSeparator)) {
 		return fmt.Errorf("state_dir is under daily ~/.jevons: %s", absState)
 	}
-	sandboxJournal := filepath.Join(absState, "chatlog", overseerName+".jsonl")
-	if st, err := os.Stat(sandboxJournal); err != nil || st.Size() == 0 {
-		return fmt.Errorf("sandbox journal missing under isolate: %s (%v)", sandboxJournal, err)
+	if err := assertIsolateTranscript(absState); err != nil {
+		return err
 	}
 	if mcpListedFor(provider, mcpName) {
 		return fmt.Errorf("MCP %s still registered after teardown", mcpName)

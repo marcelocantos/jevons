@@ -111,13 +111,16 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   LooksLikeMissingVisualVerdict; not a hard daemon block.
 
 ## Cockpit UI path (🎯T540)
-- Product owner-visible UI work lands in ui/ (Vite + React). web/ is
-  deprecated reference-only — parity oracle, not the place to ship
-  features. Development :13705 serves React (ui/dist, LaunchAgent
-  com.marcelocantos.jevons-ui); vanilla web/ is :13706 LaunchAgent
-  com.marcelocantos.jevons-ui-vanilla (🎯T540.4). make ui-dev is opt-in
-  HMR, not a standing agent. 🎯T505 / 🎯T553.1: development ui/dist is built
-  from committed HEAD, not the shared clone.
+
+Product UI work lands in ui/ (Vite + React). The daemon embeds the tracked
+ui/bundle.zip built from committed HEAD; no vanilla runtime or :13706
+comparison service remains. make ui-build type-checks and packages React;
+make ui-check-bundle rejects stale assets without repairing them. make ui-dev
+is optional HMR. Frozen reference: 8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab;
+reviewed map: docs/audits/react-fidelity-2026-09-05/. T540.3/T540.7 retain
+unfinished fidelity independently of retirement. Main and sidebar share
+AgentInteraction and main-derived behavior; do not recreate the old sidebar
+fork. T505 / T553.1: development serves committed assets, not shared WIP.
 
 ## Greenfield oracle elicitation (🎯T31.2)
 - For NEW software (no external reference), co-develop an oracle-coverage

@@ -7,7 +7,6 @@ import { transcriptChannel } from '../mux/protocol';
 import { applyConversationEvent, emptyConversation, type ConversationEvent } from './reduce';
 import { optimisticReceived } from './overseerPhase';
 import type { MuxEnvelope } from '../mux/protocol';
-import { pixelFixtureActive, pixelFixtureFrames } from '../visual/oldCockpitFixture';
 import { normalizeOwnerEchoText, shouldAckPendingSend } from './display';
 import { useDrafts } from '../store/drafts';
 
@@ -32,13 +31,11 @@ export function useConversation(mux: MuxClient | null, name: string) {
   const [state, dispatch] = useReducer(applyConversationEvent, undefined, emptyConversation);
   const stateRef = useRef(state);
   stateRef.current = state;
-  const fixture = pixelFixtureActive() && name === 'jevons';
 
   const frozenRef = useRef(false);
   const pendingSendRef = useRef<PendingSend | null>(null);
 
   useEffect(() => {
-    if (fixture) return;
     if (!mux || !name) return;
     frozenRef.current = false;
     pendingSendRef.current = null;
@@ -87,22 +84,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
       mux.closeTranscript(name);
       unsub();
     };
-  }, [mux, name, fixture]);
-
-  if (fixture) {
-    const frames = pixelFixtureFrames();
-    return {
-      frames,
-      meta: { start: 0, older: 0, total: frames.length },
-      error: '',
-      ready: true,
-      send: (_text: string) => {},
-      page: (_end: number, _limit: number) => {},
-      pageOlder: (_limit?: number) => {},
-      leaveLive: () => {},
-      rejoinLive: () => {},
-    };
-  }
+  }, [mux, name]);
 
   const rejoinLive = () => {
     frozenRef.current = false;

@@ -4,61 +4,111 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
-	"log/slog"
+	"io"
+	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
+	"net/url"
+	"path"
+	"strings"
+	"time"
+
+	"golang.org/x/net/html"
+
+	"github.com/marcelocantos/jevons/ui"
 )
 
-// ReactDistReady reports whether dir looks like a Vite `ui/dist` tree
-// (index.html present). Dist is not go:embed (🎯T360); a missing tree
-// is a build step, not a silent vanilla fallback on daily :13705.
-func ReactDistReady(dir string) bool {
-	st, err := os.Stat(filepath.Join(dir, "index.html"))
-	return err == nil && !st.IsDir()
+// RegisterProductUIRoutes serves the same embedded React build for development,
+// isolates and released binaries. Vite is a separate, opt-in editing tool.
+func RegisterProductUIRoutes(mux *http.ServeMux) error {
+	files, err := ui.Files()
+	if err != nil {
+		return fmt.Errorf("open React bundle: %w", err)
+	}
+	return RegisterReactUIRoutes(mux, files)
 }
 
-// RegisterReactUIRoutes serves the Vite React build from dist.
-// GET /{$} is the SPA document; /assets/ is the hashed bundle.
-func RegisterReactUIRoutes(mux *http.ServeMux, dist string) {
-	slog.Info("serving React cockpit from ui/dist (🎯T540.2)", "dir", dist)
-	index := filepath.Join(dist, "index.html")
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		noCache(w)
-		http.ServeFile(w, r, index)
-	})
-	files := http.FileServer(http.Dir(dist))
-	mux.Handle("GET /assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		noCache(w)
-		files.ServeHTTP(w, r)
-	}))
-	// Named root assets only — GET /{file} conflicts with /mcp (Go ServeMux).
-	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
-		p := filepath.Join(dist, "favicon.svg")
-		if st, err := os.Stat(p); err != nil || st.IsDir() {
+func noCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
+// RegisterReactUIRoutes validates the document's local assets before serving.
+// API routes registered on the mux remain authoritative; missing assets never
+// fall back to HTML. The immutable bundle cannot catch a half-written build.
+func RegisterReactUIRoutes(mux *http.ServeMux, files fs.FS) error {
+	index, err := fs.ReadFile(files, "index.html")
+	if err != nil {
+		return fmt.Errorf("React index: %w", err)
+	}
+	if !bytes.Contains(index, []byte(`id="root"`)) {
+		return fmt.Errorf("React bundle has no root mount")
+	}
+	parser := html.NewTokenizer(bytes.NewReader(index))
+	for {
+		kind := parser.Next()
+		if kind == html.ErrorToken {
+			if parser.Err() != io.EOF {
+				return fmt.Errorf("React index: %w", parser.Err())
+			}
+			break
+		}
+		if kind != html.StartTagToken && kind != html.SelfClosingTagToken {
+			continue
+		}
+		token := parser.Token()
+		if token.Data != "script" && token.Data != "link" && token.Data != "img" {
+			continue
+		}
+		for _, attr := range token.Attr {
+			if attr.Key != "src" && attr.Key != "href" {
+				continue
+			}
+			ref, err := url.Parse(attr.Val)
+			if err != nil {
+				return fmt.Errorf("React asset URL %q: %w", attr.Val, err)
+			}
+			if ref.IsAbs() || ref.Host != "" || ref.Path == "" {
+				continue
+			}
+			name := strings.TrimPrefix(ref.Path, "/")
+			if !fs.ValidPath(name) {
+				return fmt.Errorf("invalid React asset path %q", name)
+			}
+			if info, err := fs.Stat(files, name); err != nil || info.IsDir() {
+				return fmt.Errorf("React bundle missing asset %q", name)
+			}
+		}
+	}
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.NotFound(w, r)
 			return
 		}
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name == "" {
+			name = "index.html"
+		}
+		namespace, _, _ := strings.Cut(name, "/")
+		if !fs.ValidPath(name) || namespace == "api" || namespace == "ws" || namespace == "mcp" || namespace == "health" {
+			http.NotFound(w, r)
+			return
+		}
+		body, err := fs.ReadFile(files, name)
+		if err != nil {
+			// Only navigation requests get the SPA document. A missing bundle
+			// chunk must be a 404, not a successful response containing HTML.
+			if !strings.Contains(r.Header.Get("Accept"), "text/html") || path.Ext(name) != "" || strings.HasPrefix(name, "assets/") {
+				http.NotFound(w, r)
+				return
+			}
+			name, body = "index.html", index
+		}
 		noCache(w)
-		http.ServeFile(w, r, p)
+		http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(body))
 	})
-}
-
-// RegisterProductUIRoutes is the 🎯T540.2 product GET /:
-// React from ui/dist when the build exists. Daily (requireReact) fails
-// closed without dist — it must not silently serve vanilla web/. Isolates
-// without dist keep vanilla (named dual-path residual; journeys then use
-// the Vite proxy).
-func RegisterProductUIRoutes(mux *http.ServeMux, reactDir, webDir string, requireReact bool) (*DevServer, error) {
-	if ReactDistReady(reactDir) {
-		RegisterReactUIRoutes(mux, reactDir)
-		return nil, nil
-	}
-	if requireReact {
-		return nil, fmt.Errorf("daily GET / requires React build at %s (🎯T540.2); run make ui-build", reactDir)
-	}
-	slog.Info("isolate GET / has no ui/dist; serving vanilla (🎯T540.2 dual-path residual)",
-		"checked", reactDir)
-	return RegisterUIRoutes(mux, webDir), nil
+	return nil
 }

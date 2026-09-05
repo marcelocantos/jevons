@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Frozen legacy obligation blobs are verification inputs.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -22,8 +24,14 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Build React with TypeScript checking
-        run: make ui-build
+      - name: Type-check React and verify the committed bundle
+        run: make ui-check-bundle
+
+      - name: React unit and built-browser checks
+        run: |
+          make playwright-deps
+          cd scripts/browser-loop-test && npx playwright install --with-deps chromium && cd ../..
+          make test-web test-ui
 
       - name: Install tmux (required by the T36 clamp-down drill)
         run: sudo apt-get update && sudo apt-get install -y tmux

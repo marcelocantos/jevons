@@ -28,13 +28,16 @@ make ios          # Regenerate the iOS Xcode project (xcodegen)
 ```bash
 make run          # Build and run jevonsd (or: brew services start jevons)
 open http://localhost:13705/   # Daily React (LaunchAgent com.marcelocantos.jevons-ui)
-open http://localhost:13706/   # Vanilla reference (LaunchAgent com.marcelocantos.jevons-ui-vanilla)
 make ui-dev                    # opt-in Vite HMR; not a standing agent
 ```
 
-Product owner-visible UI work lands in `ui/` (Vite + React). `web/` is
-deprecated reference-only on `:13706` — use it to judge parity, not to
-ship new behaviour. Daily `:13705` serves the React build (`ui/dist`).
+Product UI work lands in `ui/` (Vite + React). The daemon embeds the tracked
+`ui/bundle.zip`; `make ui-build` regenerates it, and `make ui-check-bundle`
+rejects stale assets without modifying them. Development `:13705` serves that
+bundle, with no vanilla or checkout fallback. Historical reference:
+`8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab`; reviewed audit:
+`docs/audits/react-fidelity-2026-09-05.md`. There is no standing :13706 service.
+T540.3/T540.7 retain fidelity work independently of runtime retirement.
 
 ## Test
 
@@ -72,9 +75,9 @@ is intentional-only, not routine.
 ```bash
 make test         # All: Go + web hermetic + Playwright UI + Universe-B journeys (🎯T492)
 make test-go      # go test ./...
-make test-web     # node web/scripts/chat_events_test.js
+make test-web     # React unit tests (historical command alias)
 make test-ui      # Playwright perceptual chat UI (mocked WS)
-make test-ui-live # Same, against a running jevonsd
+make test-ui-live # Explicit UI_HOST isolate; real React owner send/reload
 make test-journey # Isolated owner-chat + orchestration journeys (Universe B; needs Grok)
 make test-live-suite  # Attaches to running daemon (often A — intentional only)
 make bullseye     # Standing invariants: build, test, vet, clean tree
@@ -97,8 +100,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   mirror drift.
 
 ### Web
-- `web/index.html` is self-contained; pure logic lives in
-  `web/scripts/*.js` (DOM-free where possible so Node tests can require it).
+- React components live in `ui/src`; main and sidebar use `AgentInteraction`.
+  Do not reintroduce a second transcript/composer implementation.
+- `ui/bundle.zip` is tracked so pristine `go build ./...` has every embed
+  input. Run `make ui-check-bundle` before acceptance; it must not repair
+  a stale bundle while claiming to check it.
 - **Green in the shared clone is not green on master (🎯T398):** many workers
   share one working copy, so `make test-web` there reads everyone's
   uncommitted edits. A suite held green by WIP is red for a fresh clone, a CI
@@ -107,9 +113,9 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   done, run the suite in a detached `git worktree` of HEAD; `scripts/docratchet`
   ratchets that (`TestT398CleanCheckoutWebTestsPass`), as it does the T360
   build. Same shared-clone family as 🎯T376 and 🎯T377.
-- Server↔client chat events go through the normalization layer
-  (`internal/server/chat_wire.go` + `web/scripts/chat_events.js`) — keep
-  both sides in sync and covered by the hermetic tests.
+- React conversation events use `/ws/mux` and `ui/src/conversation/`.
+  Preserve the canonical frame contract and exercise it through the shared
+  components. Server chat-wire normalization remains a backend concern.
 
 ### iOS
 - Thin client only: logic belongs server-side; the app wraps the web UI
@@ -492,7 +498,6 @@ jevons/
 ├── internal/             # server, butler, thread, fleet, mcpserver,
 │                         # cost, auth, discovery, transcript, cli
 ├── ui/                   # Product cockpit (Vite + React, 🎯T540)
-├── web/                  # Deprecated reference vanilla cockpit
 ├── ios/Jevon/            # iOS thin client (WKWebView + pigeon)
 ├── scripts/              # journey-suite, chat-smoke, chat-ui-test, …
 ├── docs/                 # charter, architecture-current, design docs

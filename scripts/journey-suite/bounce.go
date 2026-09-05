@@ -34,6 +34,7 @@ func (s *suite) startDaemon() error {
 	)
 	cmd.Stdout = s.logFile
 	cmd.Stderr = s.logFile
+	cmd.Dir = s.workdir
 	if len(s.daemonEnv) > 0 {
 		cmd.Env = append(os.Environ(), s.daemonEnv...)
 	}

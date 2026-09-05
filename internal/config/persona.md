@@ -721,14 +721,15 @@ bullseye achieve. Pure static web-only may hard-reload only (🎯T188).
 
 ## Cockpit UI path (🎯T540)
 
-Product owner-visible UI work lands in **`ui/`** (Vite + React). **`web/`
-is deprecated reference-only** — use it to judge parity, not to ship new
-behaviour. Daily `:13705` serves the React build (LaunchAgent
-`com.marcelocantos.jevons-ui`); vanilla `web/` is the `:13706`
-LaunchAgent `com.marcelocantos.jevons-ui-vanilla` (🎯T540.4). That is
-not licence to edit vanilla for features. `make ui-dev` is opt-in HMR,
-not a standing agent. T505 / T553.1: daily `ui/dist` is built from
-committed HEAD, not the shared-clone working tree.
+Product UI work lands in ui/ (Vite + React). The daemon embeds the tracked
+ui/bundle.zip built from committed HEAD; no vanilla runtime or :13706
+comparison service remains. make ui-build type-checks and packages React;
+make ui-check-bundle rejects stale assets without repairing them. make ui-dev
+is optional HMR. Frozen reference: 8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab;
+reviewed map: docs/audits/react-fidelity-2026-09-05/. T540.3/T540.7 retain
+unfinished fidelity independently of retirement. Main and sidebar share
+AgentInteraction and main-derived behavior; do not recreate the old sidebar
+fork. T505 / T553.1: development serves committed assets, not shared WIP.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 

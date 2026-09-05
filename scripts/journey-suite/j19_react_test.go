@@ -4,8 +4,12 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,12 +21,11 @@ func TestJ19HTMLIsVanilla(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	web, err := os.ReadFile(filepath.Join(root, "web", "index.html"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !j19HTMLIsVanilla(web) {
-		t.Fatal("web/index.html must classify as vanilla (residual until T540.2)")
+	// Tiny historical signatures, not a runnable copy of the old UI.
+	for _, old := range []string{"DEPRECATED REFERENCE", `<script src="boot_sentinel.js"></script>`} {
+		if !j19HTMLIsVanilla([]byte(old)) {
+			t.Fatal("legacy root accepted")
+		}
 	}
 	ui, err := os.ReadFile(filepath.Join(root, "ui", "index.html"))
 	if err != nil {
@@ -35,7 +38,7 @@ func TestJ19HTMLIsVanilla(t *testing.T) {
 		t.Fatal("bare #root is React, not vanilla")
 	}
 	if !j19HTMLIsVanilla([]byte(`<html><body>no mount</body></html>`)) {
-		t.Fatal("unknown HTML fails closed as vanilla so J19 uses the Vite proxy")
+		t.Fatal("unknown HTML must fail closed")
 	}
 }
 
@@ -51,27 +54,29 @@ func TestJ19RefuseDailyHost(t *testing.T) {
 	}
 }
 
-func TestJ19ViteConfigExistsAndRefusesDaily(t *testing.T) {
-	cfg, err := j19ViteConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := os.ReadFile(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(body)
-	if !strings.Contains(src, "5173") {
-		t.Error("vite config must name the :5173-style proxy")
-	}
-	if !strings.Contains(src, "13705") {
-		t.Error("vite config must refuse daily :13705")
-	}
-	if !strings.Contains(src, "T540.2") {
-		t.Error("vite config must name the vanilla GET / residual (T540.2)")
-	}
-	if !strings.Contains(src, "J19_ISOLATE") {
-		t.Error("vite config must proxy to the isolate, not a hardcoded daily port")
+func TestPackagedReactSurfaceNeverFallsBack(t *testing.T) {
+	for _, body := range []string{`<div id="root"></div>`, `<html>not React</html>`, `DEPRECATED REFERENCE`} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer server.Close()
+			u, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			port, err := strconv.Atoi(u.Port())
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := suite{host: u.Host, port: port}
+			surface, err := s.startJ19ReactSurface()
+			if j19HTMLIsVanilla([]byte(body)) {
+				if err == nil || surface != nil {
+					t.Fatal("bad packaged root must fail, never start a substitute server")
+				}
+			} else if err != nil || surface.host != u.Host || surface.via != "isolate" {
+				t.Fatalf("canonical surface: %v, %v", surface, err)
+			}
+		})
 	}
 }
 

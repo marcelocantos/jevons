@@ -10,7 +10,6 @@ import { applyThresholds, formatWindow } from '../plan/pace';
 import { InstantTip } from './InstantTip';
 import { tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
-import { pixelFixtureActive, pixelFixturePlanUsage } from '../visual/oldCockpitFixture';
 
 /** Vanilla: 60s once a reading exists; 5s only after a pending long-poll times out. */
 export const PLAN_POLL_MS = 60_000;
@@ -21,10 +20,8 @@ function hasNumericRemaining(snap: PlanSnapshot | undefined): boolean {
 }
 
 export function PlanUsageBar() {
-  const fixture = pixelFixtureActive();
   useQuery({
     queryKey: ['plan-usage-thresholds'],
-    enabled: !fixture,
     queryFn: async () => {
       const r = await fetch('/api/plan-usage/thresholds');
       if (!r.ok) throw new Error(String(r.status));
@@ -36,7 +33,6 @@ export function PlanUsageBar() {
   });
   const q = useQuery({
     queryKey: ['plan-usage'],
-    enabled: !fixture,
     queryFn: async ({ signal }) => {
       const r = await fetch('/api/plan-usage', { signal });
       if (!r.ok) throw new Error(String(r.status));
@@ -50,14 +46,14 @@ export function PlanUsageBar() {
     },
   });
   const last = useRef<PlanSnapshot | undefined>(undefined);
-  const incoming = fixture ? pixelFixturePlanUsage() : q.data;
+  const incoming = q.data;
   const snap = holdLastPlanSnapshot(last.current, incoming);
   last.current = snap;
   const groups = tickerGroups(snap);
   // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
   const tip = <PlanTipTable groups={groups} nowMs={now()} />;
   const inner = !groups.length ? (
-    <span className="plan-chip">{!fixture && q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
+    <span className="plan-chip">{q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
   ) : (
     groups.map((g) => (
       <span

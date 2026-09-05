@@ -28,8 +28,6 @@ func TestDaemonPlistIsKeepAliveOnJevonsd(t *testing.T) {
 		"/repo/bin/jevonsd",
 		"-port",
 		"13705",
-		"-vanilla-port",
-		"0",
 		"-workdir",
 		"/repo",
 		"<key>WorkingDirectory</key>",

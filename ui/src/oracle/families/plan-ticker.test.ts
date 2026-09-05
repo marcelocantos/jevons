@@ -4,7 +4,7 @@
 import { createElement, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 import { PlanUsageBar } from '../../components/PlanUsageBar';
 import { nativeTitleForbidden } from '../../components/InstantTip';
 import { classifyPace, PACE_AHEAD, PACE_HOT, PACE_OK } from '../../plan/pace';
@@ -12,12 +12,11 @@ import { tickerGroups, tickerTipBody } from '../../plan/tickerGroups';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
-afterEach(() => {
-  delete (globalThis as { __JEVONS_PIXEL_FIXTURE?: boolean }).__JEVONS_PIXEL_FIXTURE;
-});
-
 function withQuery(node: ReactNode) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+  qc.setQueryData(['plan-usage'], { windows: [
+    { provider: 'claude', name: 'weekly', remaining_percent: 36, resets_at: '2026-09-07T00:00:00Z' },
+  ] });
   return createElement(QueryClientProvider, { client: qc }, node);
 }
 
@@ -42,7 +41,6 @@ describeOracle(family('plan-ticker'), () => {
     expect(body).toMatch(/36% remaining/);
     expect(body).toMatch(/rollover/);
 
-    (globalThis as { __JEVONS_PIXEL_FIXTURE?: boolean }).__JEVONS_PIXEL_FIXTURE = true;
     const { container } = render(withQuery(createElement(PlanUsageBar)));
     const ticker = container.querySelector('#plan-ticker');
     expect(ticker).toBeTruthy();
@@ -64,7 +62,6 @@ describeOracle(family('plan-ticker'), () => {
   });
 
   itOracle('T175', 'plan-usage hover is InstantTip-class, not a delayed native title=', () => {
-    (globalThis as { __JEVONS_PIXEL_FIXTURE?: boolean }).__JEVONS_PIXEL_FIXTURE = true;
     const { container } = render(withQuery(createElement(PlanUsageBar)));
     const ticker = container.querySelector('#plan-ticker');
     expect(nativeTitleForbidden(ticker)).toBe(true);

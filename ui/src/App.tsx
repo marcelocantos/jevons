@@ -38,12 +38,7 @@ import { planTargetAskFocus } from './frontier/targetAsk';
 import { TargetAskContext, type TargetAskHost } from './frontier/targetAskContext';
 import { useCockpitKeys } from './keys/useCockpitKeys';
 import { focusMainComposer } from './keys/composerFocus';
-import {
-  pixelFixtureActive,
-  pixelFixtureAgents,
-  pixelFixtureFrontier,
-  PIXEL_FIXTURE_READY,
-} from './visual/oldCockpitFixture';
+
 
 const queryClient = new QueryClient();
 
@@ -169,24 +164,16 @@ function Cockpit() {
     },
     refetchInterval: 8000,
   });
-  const fixture = pixelFixtureActive();
-  useEffect(() => {
-    if (!fixture) return;
-    document.documentElement.setAttribute('data-pixel-fixture', '1');
-    return () => document.documentElement.removeAttribute('data-pixel-fixture');
-  }, [fixture]);
-  const agents = fixture
-    ? pixelFixtureAgents()
-    : agentsQ.data && agentsQ.data.length
-      ? agentsQ.data
-      : [{ name: 'jevons' }, { name: 'jevons-po' }];
-  const frontierRows = fixture ? pixelFixtureFrontier() : frontierQ.data || [];
+  const agents = agentsQ.data && agentsQ.data.length
+    ? agentsQ.data
+    : [{ name: 'jevons' }, { name: 'jevons-po' }];
+  const frontierRows = frontierQ.data || [];
   // 🎯T267: live target-ask → select owning PO (T253 rebinds Frontier) + highlight row.
   const [frontierHighlightId, setFrontierHighlightId] = useState('');
   const askHost = useMemo<TargetAskHost>(
     () => ({
       agents,
-      selectedAgent: fixture ? '' : agent,
+      selectedAgent: agent,
       onTargetAsk: (text: string) => {
         const plan = planTargetAskFocus({ text, agents, selectedAgent: agent });
         if (!plan) return;
@@ -194,7 +181,7 @@ function Cockpit() {
         navigate({ search: { agent: plan.po, tab: plan.tab } });
       },
     }),
-    [agents, agent, fixture, navigate],
+    [agents, agent, navigate],
   );
   const [theme, setTheme] = useState<ThemePref>('system');
   const [layout, setLayout] = useState<RhsLayoutState>(() => {
@@ -203,7 +190,7 @@ function Cockpit() {
     }
     return loadRhsLayout(window.localStorage).state;
   });
-  const [connected, setConnected] = useState(pixelFixtureActive());
+  const [connected, setConnected] = useState(false);
   const layoutRef = useRef(layout);
   const dragRef = useRef<{ kind: 'width' | 'fleet' } | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
@@ -328,7 +315,7 @@ function Cockpit() {
             >
               <AgentTree
                 agents={agents}
-                selected={fixture ? '' : agent}
+                selected={agent}
                 onSelect={(name) => navigate({ search: { agent: name, tab } })}
                 onDismiss={(name) => void dismissFleetAside(name)}
               />
@@ -347,7 +334,7 @@ function Cockpit() {
             />
             <SidebarPanel
               tab={tab}
-              readyCount={fixture ? PIXEL_FIXTURE_READY : frontierRows.length}
+              readyCount={frontierRows.length}
               onTab={(next) => {
                 navigate({ search: { agent, tab: next } });
                 queueMicrotask(() => focusMainComposer());
@@ -386,7 +373,7 @@ function Cockpit() {
                 )
               }
             >
-              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={fixture ? '' : agent} highlightId={frontierHighlightId} />
+              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={agent} highlightId={frontierHighlightId} />
             </SidebarPanel>
           </div>
           <div id="activity-header" style={{ marginTop: 0 }}>

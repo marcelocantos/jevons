@@ -15,8 +15,8 @@ func TestT553DailyStaysHEAD(t *testing.T) {
 	for _, m := range []string{
 		"🎯T553.1",
 		"committed HEAD snapshot",
-		"snap_ui=",
-		"$SNAP_DIR/ui",
+		"-target bin/jevonsd -artifact bin/jevonsd",
+		"React is built, type-checked and embedded",
 	} {
 		if !strings.Contains(body, m) {
 			t.Errorf("restart script missing T553.1 marker %q", m)

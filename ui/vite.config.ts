@@ -2,11 +2,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Daily :13705 GET / serves ui/dist (🎯T540.2). This Vite server is HMR
-// and the journey dual-path residual when an isolate has no dist.
+// Vite is opt-in HMR. Product and journey surfaces serve the bundled build.
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  base: '/',
   server: {
     host: '127.0.0.1',
     port: 5173,

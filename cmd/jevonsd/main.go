@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -61,11 +60,9 @@ import (
 func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
-	vanillaPort := flag.Int("vanilla-port", 0, "opt-in same-process vanilla sidecar (0 = off; 🎯T540.4 LaunchAgent owns :13706)")
-	uiMode := flag.String("ui", "", "empty=full daemon; vanilla=UI-only reference; probe=React surface check (🎯T540.4)")
-	upstream := flag.String("upstream", "127.0.0.1:13705", "vanilla UI-only reverse-proxy target")
-	installUIAgents := flag.Bool("install-ui-agents", false, "write and load the two daily UI LaunchAgents, then exit")
-	uninstallUIAgents := flag.Bool("uninstall-ui-agents", false, "unload the daily UI LaunchAgents, then exit")
+	uiMode := flag.String("ui", "", "empty=full daemon; probe=React surface check")
+	installUIAgents := flag.Bool("install-ui-agents", false, "write and load the React surface probe, then exit")
+	uninstallUIAgents := flag.Bool("uninstall-ui-agents", false, "unload the React surface probe, then exit")
 	installDaemonAgent := flag.Bool("install-daemon-agent", false, "write the daily jevonsd KeepAlive LaunchAgent (🎯T553.3), then exit")
 	uninstallDaemonAgent := flag.Bool("uninstall-daemon-agent", false, "unload the daily jevonsd KeepAlive LaunchAgent, then exit")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 â loopback only; remote devices use the pigeon relay)")
@@ -142,8 +139,6 @@ func main() {
 	switch strings.TrimSpace(*uiMode) {
 	case "probe":
 		runUIProbe()
-	case "vanilla":
-		runVanillaUI(*port, *bindAddr, *upstream)
 	case "", "full":
 	default:
 		slog.Error("unknown -ui", "ui", *uiMode)
@@ -218,7 +213,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := config.RefuseVanillaPortAsPrimary(cfg.Port); err != nil {
-		slog.Error("vanilla sidecar port", "err", err)
+		slog.Error("reserved historical comparison port", "err", err)
 		os.Exit(1)
 	}
 
@@ -577,13 +572,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// 🎯T540.2: daily GET / is the React build (ui/dist). Vanilla web/
-	// stays on the sidecar port. Routes register first so GET / is the
-	// document fallback; API/WS registered after take precedence.
-	webDir := repoSibling(os.Args[0], "web")
-	reactDir := repoSibling(os.Args[0], "ui", "dist")
-	devSrv, err := server.RegisterProductUIRoutes(mux, reactDir, webDir, cfg.Port == config.DailyPort)
-	if err != nil {
+	// Every environment serves the React bundle embedded in this binary.
+	if err := server.RegisterProductUIRoutes(mux); err != nil {
 		slog.Error("product UI", "err", err)
 		os.Exit(1)
 	}
@@ -591,13 +581,6 @@ func main() {
 	srv.RegisterRoutes(mux)
 	mcpSrv.RegisterRoutes(mux)
 	mcpSrv.SetToolCallObserver(srv.ObserveMCPToolCall)
-	if devSrv != nil {
-		go func() {
-			if err := devSrv.Watch(); err != nil {
-				slog.Error("dev server watch failed", "err", err)
-			}
-		}()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go watcher.Run(ctx)
@@ -1008,7 +991,6 @@ func main() {
 		handler = server.ClientCertMiddleware(handler, "/health", "/api/provision")
 	}
 	httpSrv := &http.Server{Addr: listenAddr, Handler: handler}
-	var vanillaHTTP *http.Server
 
 	// Start HTTP server before agents so the MCP endpoint is reachable.
 	ln, err := net.Listen("tcp", listenAddr)
@@ -1057,10 +1039,6 @@ func main() {
 			slog.Error("server failed", "err", err)
 		}
 	}()
-
-	if cfg.Port == config.DailyPort && *vanillaPort != 0 {
-		vanillaHTTP = startDailyVanillaSidecar(srv, mcpSrv, webDir, cfg.BindAddr, *vanillaPort, *enableTLS)
-	}
 
 	// Now start agents — MCP server is reachable.
 	// 🎯T40.2: every return adopts leftover processes, then resumes
@@ -1316,9 +1294,6 @@ func main() {
 			"stop_agents", mode.StopAgents())
 		cancel()
 		httpSrv.Close()
-		if vanillaHTTP != nil {
-			vanillaHTTP.Close()
-		}
 	}()
 
 	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,
@@ -1616,9 +1591,7 @@ func runInstallUIAgents() {
 		slog.Error("install UI LaunchAgents", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("installed UI LaunchAgents (🎯T540.4)",
-		"react", uidaemon.ReactLabel,
-		"vanilla", uidaemon.VanillaLabel)
+	slog.Info("installed React surface probe", "label", uidaemon.ReactLabel)
 	os.Exit(0)
 }
 
@@ -1639,76 +1612,6 @@ func runUIProbe() {
 	}
 	slog.Error("React surface failed and KeepAlive is not loaded — not invoking restart-daily (🎯T553.2)")
 	os.Exit(1)
-}
-
-func runVanillaUI(port int, bind, upstream string) {
-	if port == 0 || port == config.DailyPort {
-		port = config.DailyVanillaPort
-	}
-	if bind == "" {
-		bind = "127.0.0.1"
-	}
-	if !strings.Contains(upstream, "://") {
-		upstream = "http://" + upstream
-	}
-	u, err := url.Parse(upstream)
-	if err != nil {
-		slog.Error("vanilla UI upstream", "err", err)
-		os.Exit(1)
-	}
-	webDir := repoSibling(os.Args[0], "web")
-	mux := server.VanillaReferenceMux(webDir, u)
-	addr := fmt.Sprintf("%s:%d", bind, port)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		slog.Error("vanilla UI listen", "addr", addr, "err", err)
-		os.Exit(1)
-	}
-	slog.Info("vanilla reference UI (🎯T540.4)", "addr", addr, "upstream", u.String(), "web", webDir)
-	if err := http.Serve(ln, server.GuardCrossSite(mux)); err != nil {
-		slog.Error("vanilla UI failed", "err", err)
-		os.Exit(1)
-	}
-}
-
-// startDailyVanillaSidecar serves the frozen web/ reference on a second
-// port of the same process (opt-in; 🎯T540.4 LaunchAgent is the standing
-// vanilla path). Bind failure is non-fatal: React on DailyPort is the
-// product path.
-func startDailyVanillaSidecar(srv *server.Server, mcpSrv *mcpserver.Server, webDir, bind string, port int, enableTLS bool) *http.Server {
-	if port == config.DailyPort {
-		slog.Error("vanilla sidecar port equals daily React port; sidecar disabled", "port", port)
-		return nil
-	}
-	mux := http.NewServeMux()
-	dev := server.RegisterUIRoutes(mux, webDir)
-	srv.RegisterRoutes(mux)
-	mcpSrv.RegisterRoutes(mux)
-	if dev != nil {
-		go func() {
-			if err := dev.Watch(); err != nil {
-				slog.Error("vanilla sidecar watch failed", "err", err)
-			}
-		}()
-	}
-	addr := fmt.Sprintf("%s:%d", bind, port)
-	var handler http.Handler = server.GuardCrossSite(mux)
-	if enableTLS {
-		handler = server.ClientCertMiddleware(handler, "/health", "/api/provision")
-	}
-	httpSrv := &http.Server{Addr: addr, Handler: handler}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		slog.Error("vanilla sidecar listen failed — daily React still serves", "addr", addr, "err", err)
-		return nil
-	}
-	go func() {
-		if err := httpSrv.Serve(ln); err != http.ErrServerClosed {
-			slog.Error("vanilla sidecar failed", "err", err)
-		}
-	}()
-	slog.Info("vanilla reference cockpit (🎯T540.2 sidecar)", "addr", addr)
-	return httpSrv
 }
 
 func servedPort(addr net.Addr) int {

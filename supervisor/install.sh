@@ -23,7 +23,7 @@ if [ -z "${HOME:-}" ]; then
 fi
 mkdir -p "$CONF_DIR"
 mkdir -p "$HOME/.local/var/log"
-chmod +x "$REPO/supervisor/run-jevonsd.sh" "$REPO/supervisor/run-vanilla.sh"
+chmod +x "$REPO/supervisor/run-jevonsd.sh"
 
 render() {
   name="$1"
@@ -34,8 +34,12 @@ render() {
   echo "rendered $dest (from $template)"
 }
 
-render jevonsd
-render jevons-vanilla
+if [ "${SUPERVISOR_RETIRE_VANILLA_ONLY:-}" != 1 ]; then
+  render jevonsd
+fi
+# Retire the comparison program. supervisorctl update removes the old group;
+# there is no template left that can recreate it on the next installation.
+rm -f "$CONF_DIR/jevons-vanilla.ini"
 
 if [ "${SUPERVISOR_SKIP_CTL:-}" = 1 ]; then
   exit 0
@@ -46,14 +50,24 @@ if ! command -v supervisorctl >/dev/null 2>&1; then
   exit 1
 fi
 
-supervisorctl reread
-supervisorctl update
-
-# Vanilla :13706 — bootout the LaunchAgent so binds do not fight.
+# Retire the older launchd comparison job as well as its login-time plist.
 if command -v launchctl >/dev/null 2>&1; then
   launchctl bootout "gui/$(id -u)/com.marcelocantos.jevons-ui-vanilla" 2>/dev/null || true
 fi
-supervisorctl restart jevons-vanilla 2>/dev/null || supervisorctl start jevons-vanilla
+rm -f "$HOME/Library/LaunchAgents/com.marcelocantos.jevons-ui-vanilla.plist"
+
+changes="$(supervisorctl reread)"
+printf '%s\n' "$changes"
+case "$changes" in
+  *"jevons-vanilla: disappeared"*) supervisorctl update jevons-vanilla ;;
+esac
+
+# A retirement-only activation never updates or restarts the main program,
+# even if reread notices unrelated pending configuration changes.
+if [ "${SUPERVISOR_RETIRE_VANILLA_ONLY:-}" = 1 ]; then
+  echo "vanilla comparison service retired; development daemon left untouched"
+  exit 0
+fi
 
 if [ "${SUPERVISOR_NO_TAKEOVER:-}" = 1 ]; then
   # Rendered but not started. autostart=true means supervisord will still
@@ -91,4 +105,4 @@ else
   supervisorctl restart jevonsd 2>/dev/null || supervisorctl start jevonsd
 fi
 
-supervisorctl status jevonsd jevons-vanilla || true
+supervisorctl status jevonsd || true

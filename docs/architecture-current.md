@@ -25,20 +25,19 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
     QUIC relay)          └── cost clamp-down (usage.db, budget.json)
 ```
 
-- **`cmd/jevonsd`** — the daemon. HTTP/WS server, web/React asset serving,
+- **`cmd/jevonsd`** — the daemon. HTTP/WS server, embedded React assets,
   mTLS device provisioning, cost wiring, CLI flags.
-- **`ui/`** — the **product** cockpit (Vite + React 19, 🎯T540). Daily
-  `:13705` `GET /` serves `ui/dist` built from committed HEAD (🎯T540.2 /
-  T553.1). Process owner is launchd KeepAlive `com.marcelocantos.jevonsd`
-  (🎯T553.3). React document probe is LaunchAgent `com.marcelocantos.jevons-ui`
-  (StartInterval — not a second jevonsd; 🎯T540.4). `make ui-dev` is opt-in
-  HMR, not a standing agent. This is where owner-visible UI work lands.
-- **`web/`** — **deprecated reference** vanilla cockpit on `:13706`,
-  KeepAlive LaunchAgent `com.marcelocantos.jevons-ui-vanilla` (UI-only:
-  static `web/` + reverse-proxy to `:13705`; no second `~/.jevons`
-  writer). Keep for parity oracles; do not grow product behaviour here.
-  Not deleted (separate target). Dist is not `go:embed` (🎯T360);
-  brew/pristine without `make ui-build` cannot serve daily React.
+- **`ui/`** — the product cockpit (Vite + React 19, 🎯T540). The canonical
+  build type-checks React, writes `ui/dist`, then creates the deterministic,
+  tracked `ui/bundle.zip` embedded in the daemon. Root, assets and query deep
+  links work without the checkout. `make ui-check-bundle` rejects stale
+  committed assets without regenerating them. `make ui-dev` is optional HMR.
+  The document probe is `com.marcelocantos.jevons-ui`, not a second daemon.
+- **Historical vanilla reference** — frozen at
+  `8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab`, with the reviewed fidelity map
+  in `docs/audits/react-fidelity-2026-09-05/`. No current `web/` runtime,
+  vanilla fallback or standing :13706 comparison service remains. Runtime
+  retirement does not retire the open T540.3/T540.7 fidelity obligations.
 - **`ios/Jevon`** — thin client: wraps the daily URL in a WKWebView
   and routes transport over a paired [pigeon](https://github.com/marcelocantos/pigeon)
   QUIC relay (QR pairing artifact → credentials; 🎯T14.1). Daily
@@ -139,10 +138,11 @@ durability, not capability:
   control frames, fleet agents' ride MCP (`jevons_transcript_rewind`,
   `jevons_agent_stop`) and `POST /api/agents/engagement/stop`.
 
-Server↔client event normalization stays in one layer:
-`internal/server/chat_wire.go` ↔ `web/scripts/chat_events.js`. Overseer
-live frames carry chat-wire lines verbatim, so 🎯T240 silent-stream
-suppression and 🎯T223 stream ids are inherited, never re-implemented.
+The React cockpit consumes indexed `/ws/mux` conversation frames through
+`ui/src/conversation/` and shares `AgentInteraction` across roles.
+`internal/server/chat_wire.go` still normalizes backend chat-wire events;
+the removed vanilla `chat_events.js` is no longer a client-side runtime.
+Role/API consistency gaps remain tracked by T627.
 
 **Typed fleet envelopes (🎯T509).** Load-bearing agent-to-agent messages
 open at line 1 with a fenced `jevons` block of `jevons:` slots wrapping
@@ -152,9 +152,9 @@ load-bearing kind with missing slots is flagged, not silently passed.
 Existing classifiers (T31 oracle, T194 daily-path, T386 FALSE-GREEN,
 T176 status language) read envelope fields when present and fall back
 to prose only for unenveloped messages. Status-ping/ack chatter is
-deduped and rate-capped by kind. The cockpit (`web/scripts/jevons_envelope.js`)
-paints a compact header, not a raw fence dump. YAML front matter is not
-this format.
+deduped and rate-capped by kind. React envelope presentation is covered by
+the fidelity audit; the former vanilla renderer is not evidence that React
+has equivalent presentation. YAML front matter is not this format.
 
 ### One deliver path in the fleet layer (🎯T309.3)
 

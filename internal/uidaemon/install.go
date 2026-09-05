@@ -10,10 +10,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/supervise"
 )
 
-// Install writes both UI plists and asks launchd to hold them.
-// The vanilla job binds DailyVanillaPort; if that port is still the
-// in-process sidecar, bootstrap will fail to listen and KeepAlive will
-// retry — callers should bounce daily with -vanilla-port 0 first.
+// Install writes the React probe plist and asks launchd to hold it.
 func Install(spec Spec) error {
 	if spec.Binary == "" {
 		return fmt.Errorf("uidaemon: binary path is required")
@@ -33,26 +30,16 @@ func Install(spec Spec) error {
 	}
 
 	reactPath := reactPlistPath(spec.Home)
-	vanillaPath := vanillaPlistPath(spec.Home)
 	if err := writePlist(reactPath, ReactPlistXML(spec)); err != nil {
-		return err
-	}
-	if err := writePlist(vanillaPath, VanillaPlistXML(spec)); err != nil {
 		return err
 	}
 	if err := supervise.LoadAgent(reactPath, ReactLabel); err != nil {
 		return fmt.Errorf("uidaemon: load %s: %w", ReactLabel, err)
 	}
-	if err := supervise.LoadAgent(vanillaPath, VanillaLabel); err != nil {
-		return fmt.Errorf("uidaemon: load %s: %w", VanillaLabel, err)
-	}
 	return nil
 }
 
-// Uninstall unloads both UI jobs. Missing jobs are not an error.
+// Uninstall unloads the React probe. A missing job is not an error.
 func Uninstall() error {
-	if err := supervise.UnloadAgent(ReactLabel); err != nil {
-		return err
-	}
-	return supervise.UnloadAgent(VanillaLabel)
+	return supervise.UnloadAgent(ReactLabel)
 }

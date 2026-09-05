@@ -12,9 +12,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Frozen legacy obligation blobs are verification inputs.
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Verify the React assets embedded in the release binary
+        run: make ui-check-bundle
+      - name: Install browser dependencies for the clean-checkout UI gate
+        run: |
+          make playwright-deps
+          cd scripts/browser-loop-test && npx playwright install --with-deps chromium
       - name: Test
         env:
           CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"
@@ -39,9 +52,18 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Frozen legacy obligation blobs are verification inputs.
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Verify the React assets embedded in the release binary
+        run: make ui-check-bundle
 
       - name: Build
         env:

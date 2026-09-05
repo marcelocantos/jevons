@@ -10,7 +10,7 @@
 #
 # Steps:
 #   0. re-exec into our own session (🎯T405 SELF-DETACH below)
-#   1. make / rebuild bin/jevonsd and ui/dist (🎯T540.2 daily GET / is React)
+#   1. make / rebuild bin/jevonsd with its embedded React bundle
 #   2. decide whether a restart is needed at all (🎯T218 thrash policy below)
 #   3. brew services stop jevons (so Cellar KeepAlive cannot reclaim :13705)
 #   4. SIGHUP listeners on the daily port — 🎯T40 upgrade exit, so agent
@@ -477,28 +477,7 @@ kill_port_listeners() {
   fi
 }
 
-ensure_vanilla_ui_agent() {
-  # 🎯T540.4: vanilla is its own LaunchAgent. After a daily bounce the
-  # in-process sidecar is gone (-vanilla-port 0); load/kickstart the
-  # UI-only job so :13706 comes back without a second full daemon.
-  if [[ "$PORT" != "$DAILY_PORT" ]]; then
-    return 0
-  fi
-  local label="com.marcelocantos.jevons-ui-vanilla"
-  local plist="$HOME/Library/LaunchAgents/${label}.plist"
-  local domain="gui/$(id -u)"
-  if [[ ! -f "$plist" ]]; then
-    log "vanilla UI LaunchAgent plist absent; :13706 stays off until make ui-daemon-install"
-    return 0
-  fi
-  if launchctl print "${domain}/${label}" >/dev/null 2>&1; then
-    log "kickstart $label (vanilla :13706)"
-    launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true
-    return 0
-  fi
-  log "bootstrap $label (vanilla :13706)"
-  launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || true
-}
+
 
 stop_brew_jevons() {
   # Cellar launchd KeepAlive will reclaim :13705 if brew service is loaded.
@@ -538,9 +517,20 @@ start_or_adopt_daemon() {
       start_daemon_detached
       return 0
     fi
-    if launchctl print "${domain}/${label}" >/dev/null 2>&1; then
-      log "🎯T553.3 KeepAlive $label already loaded; kickstart after SIGHUP"
-      launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true
+    local loaded_job
+    if loaded_job="$(launchctl print "${domain}/${label}" 2>/dev/null)"; then
+      if [[ "$loaded_job" == *"-vanilla-port"* ]]; then
+        # The running job retains ProgramArguments even after its plist is
+        # rewritten. SIGHUP has already preserved the fleet and freed the
+        # port; reload this one obsolete job before adopting the new binary.
+        log "T540.2: migrate loaded KeepAlive arguments after upgrade exit"
+        "$BIN" -install-daemon-agent -workdir "$ROOT" || die "cannot write React-only daemon job"
+        launchctl bootout "${domain}/${label}" || die "cannot unload obsolete daemon arguments"
+        launchctl bootstrap "$domain" "$plist" || die "cannot load React-only daemon job"
+      else
+        log "🎯T553.3 KeepAlive $label already loaded; kickstart after SIGHUP"
+        launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true
+      fi
     else
       log "🎯T553.3 bootstrap KeepAlive $label (port is free)"
       launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || \
@@ -562,7 +552,7 @@ start_daemon_detached() {
     die "binary not executable: $BIN"
   fi
 
-  log "starting detached: $BIN -port $PORT -vanilla-port 0 -workdir $WORKDIR (log=$LOG)"
+  log "starting detached: $BIN -port $PORT -workdir $WORKDIR (log=$LOG)"
 
   # 🎯T442: the script exports JEVONS_RESTART_DETACHED=1 / _LOCKED=1 into its
   # own process before the re-execs that honour them. The daemon started here
@@ -583,12 +573,12 @@ start_daemon_detached() {
 
   if command -v setsid >/dev/null 2>&1; then
     # Linux: new session; still wrap with nohup for SIGHUP immunity.
-    nohup setsid "$BIN" -port "$PORT" -vanilla-port 0 -workdir "$WORKDIR" \
+    nohup setsid "$BIN" -port "$PORT" -workdir "$WORKDIR" \
       </dev/null >>"$LOG" 2>&1 &
   else
     # macOS (no setsid in stock userland): nohup + background is enough
     # for agent death survival when the *script* was also invoked under nohup.
-    nohup "$BIN" -port "$PORT" -vanilla-port 0 -workdir "$WORKDIR" \
+    nohup "$BIN" -port "$PORT" -workdir "$WORKDIR" \
       </dev/null >>"$LOG" 2>&1 &
   fi
   local pid=$!
@@ -660,7 +650,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
-  log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -vanilla-port 0 -workdir $WORKDIR >>$LOG"
+  log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
   log "[dry-run] would: wait for /health 200 and /api/frontier non-404"
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-daily-jevonsd.sh >>\$HOME/.jevons/restart-daily.log 2>&1 &"
   exit 0
@@ -702,41 +692,12 @@ if [[ "$SKIP_MAKE" != "1" ]]; then
     -dest "$ROOT/bin/jevons-watchdog" ||
     log "WARNING: the watchdog did not rebuild — the daemon is coming up supervised by whatever build is on disk"
 
-  # 🎯T553.1 / T505: ui/dist from committed HEAD in the same snapshot,
-  # never the shared clone. A dirty ui/src throw must not execute on
-  # :13705. node_modules is linked from the clone (not source WIP).
-  log "rebuild: ui/dist from committed HEAD snapshot (🎯T553.1; vite bundle, not tsc)"
-  snap_ui="$SNAP_DIR/ui"
-  if [[ ! -d "$snap_ui" ]]; then
-    if [[ -f "$ROOT/ui/dist/index.html" ]]; then
-      log "WARNING: snapshot has no ui/; keeping existing ui/dist"
-    else
-      die "snapshot has no ui/ and no ui/dist — daily GET / cannot serve React"
-    fi
-  else
-    if [[ -d "$ROOT/ui/node_modules" && ! -e "$snap_ui/node_modules" ]]; then
-      ln -s "$ROOT/ui/node_modules" "$snap_ui/node_modules" || \
-        log "WARNING: could not link ui/node_modules into snapshot"
-    fi
-    if (cd "$snap_ui" && npx vite build); then
-      mkdir -p "$ROOT/ui/dist"
-      if command -v rsync >/dev/null 2>&1; then
-        rsync -a --delete "$snap_ui/dist/" "$ROOT/ui/dist/"
-      else
-        rm -rf "$ROOT/ui/dist"
-        cp -R "$snap_ui/dist" "$ROOT/ui/dist"
-      fi
-      log "ui/dist installed from snapshot HEAD"
-    elif [[ -f "$ROOT/ui/dist/index.html" ]]; then
-      log "WARNING: snapshot ui-build failed; keeping existing ui/dist"
-    else
-      die "snapshot ui-build failed and no ui/dist — daily GET / cannot serve React (🎯T540.2)"
-    fi
-  fi
+  # 🎯T553.1: React is built, type-checked and embedded by bin/jevonsd in the
+  # same committed HEAD snapshot. There is no separately mutable UI to copy.
+
 else
   log "skip make (JEVONS_RESTART_SKIP_MAKE=1)"
   [[ -x "$BIN" ]] || die "no binary at $BIN"
-  [[ -f "$ROOT/ui/dist/index.html" ]] || die "no ui/dist — daily GET / cannot serve React (🎯T540.2); run make ui-build"
 fi
 
 # 🎯T448: prove the go.mod claudia pin against the sibling checkout.
@@ -840,7 +801,6 @@ fi
 start_or_adopt_daemon
 wait_until_serving
 record_active_identity
-ensure_vanilla_ui_agent
 
 log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR)"
 # 🎯T218: stamp successful restart to open the next thrash window.

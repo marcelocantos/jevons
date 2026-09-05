@@ -49,7 +49,7 @@ func TestJourneyDoctrineMarkers(t *testing.T) {
 			"13705",
 			"test-journey",
 			"must interact with an agent", // T107 definition
-			"alter ego",                 // T98 CEO identity link
+			"alter ego",                   // T98 CEO identity link
 			"ceo-alter-ego.md",
 			"T98",
 		}},
@@ -79,7 +79,8 @@ func TestJourneyDoctrineMarkers(t *testing.T) {
 func TestMakeTestRunsJourneys(t *testing.T) {
 	mk := readRepo(t, "Makefile")
 	// The default `test` recipe must invoke test-journey. A comment is
-	// not enough — the dependency line is the gate.
+	// not enough — require a dependency or an unconditional recursive make
+	// recipe. The latter permits checking immutable assets before rebuilding.
 	//
 	// Read as membership, not as an exact sequence. Matching the whole
 	// prerequisite list meant that ADDING a gate broke the ratchet:
@@ -96,7 +97,26 @@ func TestMakeTestRunsJourneys(t *testing.T) {
 	if testLine == "" {
 		t.Fatal("Makefile has no `test` target")
 	}
-	if !strings.Contains(testLine, "test-journey") {
+	hasJourney := false
+	for _, word := range strings.Fields(testLine) {
+		hasJourney = hasJourney || word == "test-journey"
+	}
+	inTest := false
+	for _, line := range strings.Split(mk, "\n") {
+		if strings.HasPrefix(line, "test:") {
+			inTest = true
+			continue
+		}
+		if inTest && line != "" && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "#") {
+			break
+		}
+		if inTest && strings.HasPrefix(line, "\t$(MAKE) ") && !strings.ContainsAny(line, ";|&") {
+			for _, word := range strings.Fields(line) {
+				hasJourney = hasJourney || word == "test-journey"
+			}
+		}
+	}
+	if !hasJourney {
 		t.Fatalf("Makefile `test` must run test-journey (🎯T492); a gate's dependency is not a reason to omit the gate:\n%s", testLine)
 	}
 	agents := readRepo(t, "AGENTS.md")
