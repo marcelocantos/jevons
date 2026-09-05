@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cli"
@@ -393,27 +394,19 @@ func (s *suite) jChatRoundTrip() error {
 	if n > maxReplayFrames {
 		return fmt.Errorf("fresh isolate replayed %d frames; want ≤%d (sealed)", n, maxReplayFrames)
 	}
-	token := fmt.Sprintf("journey-ping-%d", time.Now().Unix()%100000)
+	token := "journey-ping-" + uuid.NewString()
 	prompt := "Reply with exactly: " + token
 	if err := conn.Write(ctx, websocket.MessageText, []byte(prompt)); err != nil {
 		return err
 	}
-	gotUser, text, terminal, err := waitTurn(ctx, frames, token, true)
+	if err := waitExactReply(ctx, frames, prompt, token); err != nil {
+		return err
+	}
+	logs, err := os.ReadFile(s.logPath)
 	if err != nil {
 		return err
 	}
-	if !gotUser {
-		return fmt.Errorf("no user echo")
-	}
-	if !terminal {
-		return fmt.Errorf("no terminal")
-	}
-	// Prefer exact token; accept any completed turn (tool-only models).
-	if text != "" && !strings.Contains(text, token) && !strings.Contains(strings.ToLower(text), "journey") {
-		// Non-fatal if model paraphrases; require non-empty OR tool terminal already ok
-		_ = text
-	}
-	return nil
+	return queueJourneyProvider(logs, overseerName, string(s.provider))
 }
 
 func (s *suite) jCancelAndSend() error {
@@ -522,7 +515,12 @@ func dialChat(ctx context.Context, host string) (*websocket.Conn, <-chan []byte,
 				close(ch)
 				return
 			}
-			ch <- data
+			select {
+			case ch <- data:
+			case <-ctx.Done():
+				close(ch)
+				return
+			}
 		}
 	}()
 	return conn, ch, nil
@@ -624,12 +622,10 @@ func waitTurn(ctx context.Context, frames <-chan []byte, needle string, requireU
 				return gotUser, asst.String(), terminal, fmt.Errorf("wire error: %v", m["error"])
 			}
 			msg, _ := m["message"].(map[string]any)
-			if typ == "user" {
-				if s, ok := msg["content"].(string); ok {
-					if needle == "" || strings.Contains(s, needle) || strings.Contains(s, "Reply with exactly") {
-						gotUser = true
-						asst.Reset()
-					}
+			if typ == "user" && m["turn_origin"] != "agent" {
+				if text := journeyContentText(msg["content"]); text != "" && (needle == "" || strings.Contains(text, needle)) {
+					gotUser = true
+					asst.Reset()
 				}
 			}
 			if typ == "assistant" && (gotUser || !requireUser) {
@@ -637,17 +633,11 @@ func waitTurn(ctx context.Context, frames <-chan []byte, needle string, requireU
 					gotUser = true // allow tool-only without strict user match
 				}
 				stop, _ := msg["stop_reason"].(string)
-				if content, ok := msg["content"].([]any); ok {
-					for _, c := range content {
-						cm, _ := c.(map[string]any)
-						if cm["type"] == "text" {
-							if t, _ := cm["text"].(string); t != "" {
-								asst.WriteString(t)
-							}
-						}
-					}
+				asst.WriteString(journeyContentText(msg["content"]))
+				if stop == "max_tokens" {
+					return gotUser, asst.String(), false, fmt.Errorf("assistant reply truncated at max_tokens")
 				}
-				if stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens" {
+				if stop == "end_turn" || stop == "stop_sequence" {
 					if gotUser || !requireUser {
 						return gotUser, asst.String(), true, nil
 					}
@@ -657,6 +647,91 @@ func waitTurn(ctx context.Context, frames <-chan []byte, needle string, requireU
 			return gotUser, asst.String(), false, fmt.Errorf("timeout gotUser=%v text=%q", gotUser, trim(asst.String(), 80))
 		case <-ctx.Done():
 			return gotUser, asst.String(), false, ctx.Err()
+		}
+	}
+}
+
+// Read the public wire forms independently of the product normalizer, so a
+// regression in that normalizer cannot silently rewrite the oracle too.
+func journeyContentText(content any) string {
+	if text, ok := content.(string); ok {
+		return text
+	}
+	var text strings.Builder
+	if blocks, ok := content.([]any); ok {
+		for _, block := range blocks {
+			b, _ := block.(map[string]any)
+			if b["type"] == "text" {
+				if value, ok := b["text"].(string); ok {
+					text.WriteString(value)
+				}
+			}
+		}
+	}
+	return text.String()
+}
+
+// A restart notice can finish after the requested owner echo. Require the
+// request's own exact reply; do not count that unrelated terminal as success,
+// or concatenate its text with the next turn. The caller's deadline bounds
+// the entire operation, including time spent on unrelated activity.
+func waitExactReply(ctx context.Context, frames <-chan []byte, prompt, expected string) error {
+	sawOwner := false
+	streams := make(map[string]string)
+	ended := make(map[string]bool)
+	for {
+		select {
+		case data, ok := <-frames:
+			if !ok {
+				return fmt.Errorf("exact owner reply: connection closed (echo=%v)", sawOwner)
+			}
+			var event map[string]any
+			if json.Unmarshal(data, &event) != nil {
+				continue
+			}
+			if event["type"] == "error" {
+				return fmt.Errorf("exact owner reply: wire error: %v", event["error"])
+			}
+			msg, _ := event["message"].(map[string]any)
+			text := journeyContentText(msg["content"])
+			if event["type"] == "user" && event["turn_origin"] != "agent" && text == prompt {
+				sawOwner = true
+			}
+			if event["type"] != "assistant" || !sawOwner {
+				continue
+			}
+			// Current shipped owner output stamps every assistant fragment.
+			// Falling back to adjacency would let another stream's terminal
+			// certify this reply, so missing identity fails visibly here.
+			id, _ := event["stream_id"].(string)
+			if id == "" {
+				return fmt.Errorf("exact owner reply: assistant frame lacks stream_id")
+			}
+			if ended[id] {
+				continue
+			}
+			streams[id] += text
+			stop, _ := msg["stop_reason"].(string)
+			if stop != "end_turn" && stop != "stop_sequence" && stop != "max_tokens" {
+				continue
+			}
+			ended[id] = true
+			reply := streams[id]
+			delete(streams, id)
+			if outage := replyOutage("owner reply", reply); outage != nil {
+				return outage
+			}
+			if stop == "max_tokens" {
+				if strings.Contains(reply, expected) {
+					return fmt.Errorf("exact owner reply: requested stream was truncated at max_tokens")
+				}
+				continue
+			}
+			if strings.TrimSpace(reply) == expected {
+				return nil
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("exact owner reply (echo=%v): %w", sawOwner, ctx.Err())
 		}
 	}
 }

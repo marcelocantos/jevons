@@ -310,3 +310,28 @@ Go net also passed 3,210 tests with four skips (`c6a8b2ed`), run on the same cod
 before its commit; that gate truthfully records a dirty tree and does not claim
 to measure the preceding HEAD alone. The earlier combined J2/J17/J5 gate stays
 red; a focused green does not erase the owner-chat timeout.
+
+## Exact owner-chat round trip
+
+J2's timeout exposed a false negative in its wire reader: the product emits an
+owner echo as typed text blocks, while the journey recognized only strings.
+The baseline-compatible regression fails on the preceding code (`3c2f318d`).
+The shared reader now recognizes both public content forms and rejects the
+old generic `Reply with exactly` shortcut and agent-origin echoes.
+
+J2 submits a fresh UUID and requires its exact reply. Its strict reader keeps
+separate text and terminal state for each `stream_id`, as supplied by the
+shipped owner wire. Another stream's terminal cannot complete the requested
+fragment, interleaved streams cannot manufacture its text, and a late fragment
+cannot amend an already completed stream. Missing stream identity and a
+truncated requested reply fail visibly. Unrelated completed or truncated
+streams do not count as success or prevent the later requested reply from
+being observed within the original deadline. The named runtime launch must
+also match the selected provider.
+
+This exercises the supported `/ws/chat` owner endpoint and real provider. It
+does not replace React/mux rendering and browser journeys. The first typed-echo
+Grok experiment completed J2 and J5 (`13e0866b`), but preceded the stricter
+stream-identity reader and is not evidence for that final reader. Negative
+controls cover stale/agent echoes, generic replies, missing terminals, token
+mentions, interleaved streams, truncation, and cancellation.
