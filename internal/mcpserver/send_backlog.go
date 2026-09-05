@@ -67,11 +67,8 @@ func (s *Server) sendQueue() *sendq.Store {
 // fleet starts, so a message accepted by the previous daemon is already
 // readable when the first turn boundary arrives.
 //
-// A state directory that cannot be created is reported and the daemon keeps
-// running with a memory-backed queue — refusing to start over an undeliverable
-// backlog would trade a durability defect for an outage — but it is logged as
-// an error, not a notice, because the fleet is then back to the behaviour this
-// target exists to end.
+// An unusable directory remains the queue's configured destination. Enqueue
+// then fails visibly instead of accepting messages into a memory fallback.
 func (s *Server) SetSendQueueDir(stateDir string) {
 	stateDir = strings.TrimSpace(stateDir)
 	if strings.HasPrefix(stateDir, "~/") {
@@ -86,14 +83,14 @@ func (s *Server) SetSendQueueDir(stateDir string) {
 		return
 	}
 	dir := filepath.Join(stateDir, "sendq")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Error("🎯T418 send queue is memory-backed: state directory unusable",
-			"component", "agent_send", "dir", dir, "err", err)
-		return
-	}
 	s.mu.Lock()
 	s.agentSendQ = sendq.NewStore(dir)
 	s.mu.Unlock()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Error("send queue unavailable: state directory unusable; enqueue will fail",
+			"component", "agent_send", "dir", dir, "err", err)
+		return
+	}
 	slog.Info("send queue durable", "component", "agent_send", "dir", dir)
 }
 
@@ -130,9 +127,9 @@ func (s *Server) ReportRecoveredBacklog() {
 			"oldest_age", b.OldestAge(now).Round(time.Second).String())
 	}
 	s.notifyFleetHealth(fmt.Sprintf(
-		"Recovered %d queued message(s) the previous daemon had accepted but not delivered: %s. "+
-			"They survived the restart on disk and are offered again at each agent's next turn boundary, "+
-			"or reported here if they cannot be.",
+		"Recovered %d queued message(s) with outstanding delivery obligations: %s. "+
+			"Pending entries are offered at an agent's next turn boundary. Unresolved attempts remain held; "+
+			"their outcome is uncertain and they must be reconciled before any retry.",
 		total, strings.Join(lines, "; ")))
 }
 
@@ -162,6 +159,21 @@ func (s *Server) SweepSendBacklogs() {
 	now := s.sweepClock()
 	for _, b := range backlogs {
 		switch {
+		case b.Uncertain > 0:
+			// Never route, discard, or replay an attempt left by this daemon or
+			// its predecessor. The durable entry also drives agent_list status.
+			if pin, ok := s.sendqPinFor(b.Agent); ok && pin.AttemptID != "" {
+				s.mu.Lock()
+				if s.sendqAttemptNoticed == nil {
+					s.sendqAttemptNoticed = map[string]string{}
+				}
+				noticed := s.sendqAttemptNoticed[b.Agent] == pin.AttemptID
+				s.sendqAttemptNoticed[b.Agent] = pin.AttemptID
+				s.mu.Unlock()
+				if !noticed {
+					s.notifyFleetHealth(FormatSendqPinLine(b.Agent, pin))
+				}
+			}
 		case !s.agentIsRegistered(b.Agent):
 			// 🎯T401: a reaped seat is recoverable — gate feedback stays held
 			// until jevons_agent_start (or intent lift + start) recreates it.
@@ -251,19 +263,27 @@ func (s *Server) agentIsRegistered(name string) bool {
 // quoted: the point is that someone learns a message was never delivered, and
 // pasting an arbitrarily long payload into a health notice buries that.
 func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
-	slog.Error("🎯T418 backlog dropped: the agent it was addressed to is no longer registered",
-		"component", "agent_send",
-		"agent", b.Agent,
-		"queued", b.Depth,
-		"oldest_age", b.OldestAge(now).Round(time.Second).String())
-	s.notifyFleetHealth(fmt.Sprintf(
-		"UNDELIVERED: %d message(s) queued for %q were never delivered — that agent is no longer in the registry, "+
-			"so there is nothing to deliver them to. The oldest had been waiting %s. "+
-			"They are dropped now rather than held against a seat nobody will fill; re-send to a live agent if they still matter.",
-		b.Depth, b.Agent, b.OldestAge(now).Round(time.Second)))
-	if err := s.sendQueue().Clear(b.Agent); err != nil {
-		slog.Error("🎯T418 backlog for a departed agent could not be cleared",
-			"component", "agent_send", "agent", b.Agent, "err", err)
+	q := s.sendQueue()
+	for _, id := range b.EntryIDs {
+		e, claimed, err := q.ClaimFrontID(b.Agent, id)
+		if err != nil {
+			slog.Error("departed-agent backlog claim failed", "agent", b.Agent, "entry_id", id, "err", err)
+			return
+		}
+		if !claimed {
+			continue // A concurrent drain owns or already resolved this entry.
+		}
+		s.LogEvent("agent_send", "backlog_undelivered", map[string]any{
+			"agent": b.Agent, "entry_id": e.ID, "attempt_id": e.AttemptID,
+			"bytes": len(e.Text), "reason": "addressee no longer registered",
+		})
+		s.notifyFleetHealth(fmt.Sprintf("UNDELIVERED: queued message %s (%d bytes) for %q has no registered addressee. "+
+			"It waited %s and is being discarded with a terminal record; re-send to a live agent if still needed.",
+			e.ID, len(e.Text), b.Agent, e.Age(now).Round(time.Second)))
+		if err := q.Resolve(b.Agent, e, sendq.TerminalUndelivered, "addressee no longer registered; sender notified"); err != nil {
+			slog.Error("backlog terminal outcome not persisted; attempt remains held", "agent", b.Agent, "entry_id", e.ID, "err", err)
+			return
+		}
 	}
 }
 

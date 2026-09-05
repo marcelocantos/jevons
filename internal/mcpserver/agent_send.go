@@ -625,90 +625,92 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 // drainAgentSendQueue delivers the next queued message after a terminal
 // stop. Called from the agent event sink (🎯T111.1).
 func (s *Server) drainAgentSendQueue(name string) {
-	entry := s.dequeueAgentSend(name)
-	text := entry.Text
-	if text == "" {
-		return
+	for s.drainAgentSendQueueOnce(name) {
+		// A terminal arrived before its message's witness completed. Its first
+		// drain saw the held attempt; run that wakeup again after resolution.
+	}
+}
+
+func (s *Server) drainAgentSendQueueOnce(name string) bool {
+	q := s.sendQueue()
+	entry, claimed, err := q.ClaimFront(name)
+	if err != nil {
+		slog.Error("agent send queue: cannot persist delivery attempt", "name", name, "err", err)
+		return false
+	}
+	if !claimed {
+		return false // Empty, or an unresolved attempt which must never be replayed.
+	}
+	resolve := func(outcome sendq.AttemptOutcome, detail string) bool {
+		if err := q.Resolve(name, entry, outcome, detail); err != nil {
+			slog.Error("agent send queue: cannot record delivery outcome", "name", name,
+				"entry_id", entry.ID, "attempt_id", entry.AttemptID, "err", err)
+			s.notifyFleetHealth(fmt.Sprintf("Delivery outcome for %q message %s could not be recorded: %v. "+
+				"Reconcile the held attempt before sending another copy.", name, entry.ID, err))
+			return false
+		}
+		return true
 	}
 	proc, live := s.liveSender(name)
 	if !live {
-		// Put back at the HEAD, keeping the age it was accepted with (🎯T418):
-		// appending it would put a message behind ones accepted after it, and
-		// re-stamping it would reset the age a stalled queue is visible in.
-		if err := s.sendQueue().PushFront(name, entry); err != nil {
-			slog.Error("agent send queue: process not alive AND the message could not be returned to the queue",
-				"component", "agent_send", "name", name, "err", err, "bytes", len(text))
-			s.notifyFleetHealth(fmt.Sprintf(
-				"UNDELIVERED: a queued message (%d bytes) for %q could not be delivered (no live process) and could not be "+
-					"written back to the daemon's queue (%v). It is not held anywhere — re-send it.", len(text), name, err))
-			return
+		if resolve(sendq.DefinitelyNotSent, "no live process before send") {
+			s.noteSendqDeliveryFailure(name, entry, "no live process at drain")
 		}
-		slog.Warn("agent send queue: process not alive; re-queued", "name", name)
-		// 🎯T599: the same entry failing delivery repeatedly pins the seat —
-		// agent_list says PINNED instead of ordinary running/idle.
-		s.noteSendqDeliveryFailure(name, entry, "no live process at drain")
-		return
+		return false
 	}
-	// The drain runs on a turn boundary, so the agent is idle by construction
-	// and the strict answer applies — this is the one moment the daemon is
-	// certain what the agent was doing.
-	watch := s.watchAgentTurnFor(name, text)
-	if err := proc.Send(text); err != nil {
-		if isPromptInFlight(err) {
-			// Still busy (nested tool pause edge): put back at the front.
-			if perr := s.sendQueue().PushFront(name, entry); perr != nil {
-				slog.Error("agent send queue: agent still busy AND the message could not be returned to the queue",
-					"component", "agent_send", "name", name, "err", perr, "bytes", len(text))
-				s.notifyFleetHealth(fmt.Sprintf(
-					"UNDELIVERED: a queued message (%d bytes) for %q found it still busy and could not be written back to "+
-						"the daemon's queue (%v). It is not held anywhere — re-send it.", len(text), name, perr))
-			}
-			return
+	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
+	defer cancel()
+	generation := s.terminalGeneration(name)
+	sendErr := proc.Send(entry.Text)
+	if queueSendDefinitelyNotSent(sendErr) {
+		if resolve(sendq.DefinitelyNotSent, sendErr.Error()) && !isPromptInFlight(sendErr) {
+			s.noteSendqDeliveryFailure(name, entry, sendErr.Error())
 		}
-		if ClassifySendError(err).DisprovesDelivery() {
-			class := agenterr.Classify(err)
-			slog.Warn("agent send queue: drain send failed",
-				"name", name,
-				"err", err,
-				"failure_class", class.String(),
-				"transient", class.IsTransient(),
-			)
-			return
-		}
-		// 🎯T429: the transport could not verify the submission. On the drain
-		// that is the most dangerous place to believe it — the message has
-		// already left the daemon's queue, so treating an unverified submit as a
-		// failure both loses the message from the queue and tells the fleet a
-		// delivery that happened did not. Fall through to the receiver's own
-		// records, which is what the rest of this function already reads.
-		slog.Warn("agent send queue: drain send unverified by transport; reading the receiver",
-			"component", "agent_send",
-			"name", name,
-			"claim", ClassifySendError(err).String(),
-			"err", err,
-		)
+		return false
 	}
 	ev := watch()
-	if ClassifySendOutcome(FlightIdle, ev) != OutcomeBegun {
-		// 🎯T416 clause 4: a drained message that stuck is NOT re-queued. It is
-		// sitting in the agent's composer, and re-queueing would deliver a
-		// second copy the moment anything submits the first — the silent merge
-		// this target exists to end. The backlog becomes visible instead:
-		// pending count, the payload's fate, and a fleet-health notice, so an
-		// undelivered queue is something an operator is told about rather than
-		// something they infer from an agent that never answers.
-		//
-		// 🎯T447: which of the three things that reach here it actually is comes
-		// from what was read of the receiver, not from one sentence covering all
-		// of them. A payload the receiver's own queue records carry is WAITING,
-		// and saying "pasted and never became a turn" about it is how a message
-		// that had already landed was re-sent as a first delivery.
-		s.reportDrainedSendNotBegun(name, entry, ev, time.Now())
-		return
+	// Preserve the existing successful-send verdict in this durability slice.
+	// Its generic live-event branch is inherited receipt-quality residue under
+	// T623, not a new guarantee of correlated delivery. On an errored send only
+	// evidence of this payload may release the obligation; activity alone cannot.
+	begun := ClassifySendOutcome(FlightIdle, ev) == OutcomeBegun
+	if sendErr != nil && !ev.PayloadSeen && !ev.PayloadEnteredTurn {
+		begun = false
+	}
+	if !begun {
+		detail := evidenceDetail(ev)
+		if sendErr != nil {
+			detail = describeTransportClaim(sendErr) + "; " + detail
+		}
+		if resolve(sendq.Unverified, detail) {
+			s.reportDrainedSendNotBegun(name, entry, ev, time.Now())
+		}
+		return false
+	}
+	if !resolve(sendq.Confirmed, evidenceDetail(ev)) {
+		return false
 	}
 	s.markAgentTurnBegan(name)
-	s.noteTurnInFlight(name)
-	// 🎯T599: a delivered message un-pins the seat — the queue is moving.
+	ended := s.noteQueuedTurnBegan(name, generation)
 	s.clearSendqPin(name)
-	slog.Info("agent send queue: drained one message", "name", name, "remaining", s.pendingAgentSends(name))
+	slog.Info("agent send queue: drained one message", "name", name, "entry_id", entry.ID,
+		"remaining", s.pendingAgentSends(name))
+	return ended
+}
+
+// These exact pre-write refusals come from Claudia's Agent.Send and ACP / app-
+// server Prompt implementations. Unknown, canceled, EOF, and write errors may
+// follow submission. ClassifySendError's broader default is unsafe for retries.
+func queueSendDefinitelyNotSent(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.Error() {
+	case "claude process not running",
+		"grok acp: prompt already in flight", "cursor acp: prompt already in flight",
+		"codex app-server: turn already in flight":
+		return true
+	default:
+		return false
+	}
 }

@@ -213,6 +213,10 @@ type Server struct {
 	// busy (🎯T115), durable across a daemon restart once SetSendQueueDir has
 	// rooted it on disk (🎯T418). Nil until first use; see sendQueue().
 	agentSendQ *sendq.Store
+	// Terminal generations prevent a slow delivery witness from overwriting
+	// an already-observed turn end or losing that end's queue-drain wakeup.
+	agentTerminalGeneration map[string]uint64
+	sendqAttemptNoticed     map[string]string
 
 	// heldReapedNoticed remembers which reaped seats the overseer has already
 	// been told about (🎯T582). The sweep is a timer; without this the same

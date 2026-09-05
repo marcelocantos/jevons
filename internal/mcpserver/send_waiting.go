@@ -77,7 +77,7 @@ func (e TurnEvidence) Reading() turnev.Reading { return e.Fate().Reading() }
 // a message sitting in a composer that is re-queued is delivered twice the
 // moment anything submits the first copy (🎯T416 clause 4).
 func (s *Server) reportDrainedSendNotBegun(name string, entry sendq.Entry, ev TurnEvidence, now time.Time) {
-	behind := s.pendingAgentSends(name)
+	behind := max(0, s.pendingAgentSends(name)-1)
 	reading := ev.Reading()
 	if reading == turnev.ReadingInFlight {
 		slog.Info("🎯T447 drained message is waiting in the receiver's own queue",
@@ -90,17 +90,20 @@ func (s *Server) reportDrainedSendNotBegun(name string, entry sendq.Entry, ev Tu
 			"bytes", len(entry.Text),
 		)
 	} else {
-		slog.Error("agent send queue: drained message not submitted",
+		slog.Error("agent send queue: delivery outcome uncertain; attempt retained",
 			"component", "agent_send",
 			"name", name,
-			"status", "not_submitted",
+			"status", "uncertain",
+			"entry_id", entry.ID,
+			"attempt_id", entry.AttemptID,
 			"reading", reading.String(),
 			"evidence", ev.Detail,
 			"remaining", behind,
 			"bytes", len(entry.Text),
 		)
 	}
-	s.notifyFleetHealth(DrainedSendNotice(name, len(entry.Text), reading, evidenceDetail(ev), entry.Age(now), behind))
+	s.notifyFleetHealth(fmt.Sprintf("Held message %s (attempt %s): %s", entry.ID, entry.AttemptID,
+		DrainedSendNotice(name, len(entry.Text), reading, evidenceDetail(ev), entry.Age(now), behind)))
 }
 
 // DrainedSendNotice is the operator-facing account of a drained message that
@@ -118,7 +121,7 @@ func DrainedSendNotice(name string, size int, reading turnev.Reading, detail str
 		return fmt.Sprintf(
 			"WAITING, not lost: a queued message (%d bytes) for %q is in that agent's own queue — %s. "+
 				"It is position 1 of %d in the daemon's queue for %[2]q and has been waiting %s since the daemon accepted it. "+
-				"It becomes a turn when the agent's current one ends, and nothing is required of anyone until then. "+
+				"The daemon retains its delivery record without retrying while the receiver holds the payload. "+
 				"DO NOT re-send it and DO NOT flush that composer: a re-send stacks a duplicate behind the original, "+
 				"and a flush submits the whole accumulated backlog at once.",
 			size, name, detail, behind+1, age.Round(time.Second))
@@ -131,9 +134,9 @@ func DrainedSendNotice(name string, size int, reading turnev.Reading, detail str
 			size, name, detail, behind)
 	default:
 		return fmt.Sprintf(
-			"Undelivered backlog on %q: a queued message (%d bytes) was pasted after its turn ended and never became a turn — %s. "+
-				"It is in that agent's composer, not lost, and %d more are still queued behind it. "+
-				"It has NOT been re-queued: that would deliver a duplicate once anything submits the first copy.",
+			"Uncertain delivery on %q: the attempted message (%d bytes) has not been confirmed — %s. "+
+				"Its full payload remains held by the daemon, with %d more behind it. "+
+				"It will NOT be automatically retried; reconcile the receiver's records before sending another copy.",
 			name, size, detail, behind)
 	}
 }
