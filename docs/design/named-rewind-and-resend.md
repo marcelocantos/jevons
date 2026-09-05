@@ -301,3 +301,12 @@ The combined gate (`0ecde71f`) remains **RED** because the separate existing J2
 owner-chat round trip timed out. It is not a green journey-suite result. T625
 remains open for J2, tools-attached/directed-work, bounce/resume, and the remaining
 provider coverage; no React or rewind completion follows from this J17 slice.
+
+The committed repair then passed `queue-journey-clean-grok` (`c71e4cd6`,
+`clean@2806f863bc3d`): journey helper tests, a fresh daemon build, and J17 with a
+new real Grok acceptance `65e1fff3bbe0`. The worker produced the corresponding
+shell result after restart and the queue settled; teardown completed. The full
+Go net also passed 3,210 tests with four skips (`c6a8b2ed`), run on the same code
+before its commit; that gate truthfully records a dirty tree and does not claim
+to measure the preceding HEAD alone. The earlier combined J2/J17/J5 gate stays
+red; a focused green does not erase the owner-chat timeout.
