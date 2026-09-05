@@ -21,3 +21,12 @@ test target.
 
 One conversation API: WebSocket `/ws/mux`, channel `transcript:{name}`.
 Root, PO, and workers are the same `AgentInteraction`.
+
+`make ui-build` is the canonical acceptance build: it installs locked
+dependencies when needed and runs `npm run build` (TypeScript checking, then
+Vite). The full product command and CI run this build. `npm test` runs Vitest;
+it does not type-check. Use `make ui-dev` for fast local HMR, and the canonical
+build before accepting a change. Type-only cleanup under 🎯T624 preserves
+runtime behavior; its checks are the canonical build, existing React tests and
+a deliberately invalid TypeScript input rejected by that same build, rather
+than a new owner journey.

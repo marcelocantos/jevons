@@ -302,7 +302,7 @@ export function AgentTranscript(props: {
       new MutationObserver(() => {
         if (el.querySelector('code.language-mermaid')) paint();
       });
-    obs?.observe(el, { subtree: true, childList: true });
+    if (el) obs?.observe(el, { subtree: true, childList: true });
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);

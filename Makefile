@@ -277,10 +277,10 @@ test-go-raw:
 ui-dev:
 	cd ui && npm run dev
 
-# Vite bundle for daily GET / (🎯T540.2). tsc -b stays on `npm run build`
-# / `npm test`; a red typecheck must not block the serve path.
-ui-build:
-	cd ui && npx vite build
+# Canonical product bundle: TypeScript checking is part of acceptance (🎯T624).
+# `make ui-dev` is the fast HMR path; Vitest alone does not type-check.
+ui-build: ui-deps
+	cd ui && npm run build
 
 # Daily/dev servers (🎯T540.4 / vellum supervisor/ shape): tracked
 # supervisor/*.ini with @REPO@, rendered into Homebrew supervisor.d.
@@ -467,7 +467,7 @@ test-journey: jevonsd
 	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
 
 # Full product net (🎯T492): hermetic layers first, then Universe-B journeys.
-test: test-go test-web test-ui test-ui-react test-journey
+test: ui-build test-go test-web test-ui test-ui-react test-journey
 
 # ── Fleet spend (🎯T392.6) ──────────────────────────
 # Decomposes spend into the levers that act on it:

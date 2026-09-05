@@ -58,10 +58,8 @@ export function selectionAfterHomeEnd(
   const m = mods || {};
   if (m.altKey) return null;
   let goHome = false;
-  let goEnd = false;
   if (key === 'Home') goHome = true;
-  else if (key === 'End') goEnd = true;
-  else return null;
+  else if (key !== 'End') return null;
 
   const start = typeof selStart === 'number' ? selStart : 0;
   const end = typeof selEnd === 'number' ? selEnd : start;

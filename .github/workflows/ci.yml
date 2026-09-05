@@ -16,6 +16,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build React with TypeScript checking
+        run: make ui-build
 
       - name: Install tmux (required by the T36 clamp-down drill)
         run: sudo apt-get update && sudo apt-get install -y tmux

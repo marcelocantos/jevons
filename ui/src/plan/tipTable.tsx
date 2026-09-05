@@ -13,7 +13,7 @@
 import { now } from '../clock';
 import { formatWindow } from './pace';
 import { CompanyMark, companyOfProvider } from './companyMark';
-import { formatInstantParts, formatRolloverLocal } from './tickerGroups';
+import { formatInstantParts } from './tickerGroups';
 import type { PlanWindow, TickerGroup } from './tickerGroups';
 
 const SECONDS_PER_MINUTE = 60;

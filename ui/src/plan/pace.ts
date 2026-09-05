@@ -102,14 +102,11 @@ let dampLambda = PACE_DAMP_LAMBDA;
 let aheadMargin = PACE_AHEAD_MARGIN;
 let warmupElapsed = PACE_WARMUP_PERCENT;
 let earlyAlarmUsed = PACE_EARLY_ALARM_USED;
-let shrinkPriorK = PACE_SHRINK_PRIOR_K;
-let panicAmberLn = PACE_PANIC_AMBER_LN;
-let panicRedLn = PACE_PANIC_RED_LN;
-let wasteUnderLn = PACE_WASTE_UNDER_LN;
-let wasteLockedLn = PACE_WASTE_LOCKED_LN;
 
 /**
- * Every key this file knows how to honour. A served threshold outside this
+ * Recognized threshold keys, including the daemon's tuning parameters for
+ * the authoritative published pace bands. Those parameters do not drive
+ * the legacy browser fallback classifier. A served threshold outside this
  * set is REPORTED rather than dropped: silent swallowing is exactly how
  * 🎯T596 hid for a day — the daemon published shrink_prior_k and four other
  * vertices, applyThresholds ignored them without a word, and the ticker went
@@ -138,11 +135,6 @@ export function applyThresholds(doc: ThresholdsDoc | null | undefined): void {
   if (typeof doc.ahead_margin_percent === 'number') aheadMargin = doc.ahead_margin_percent;
   if (typeof doc.warmup_elapsed_percent === 'number') warmupElapsed = doc.warmup_elapsed_percent;
   if (typeof doc.early_alarm_used_percent === 'number') earlyAlarmUsed = doc.early_alarm_used_percent;
-  if (typeof doc.shrink_prior_k === 'number') shrinkPriorK = doc.shrink_prior_k;
-  if (typeof doc.panic_amber_ln === 'number') panicAmberLn = doc.panic_amber_ln;
-  if (typeof doc.panic_red_ln === 'number') panicRedLn = doc.panic_red_ln;
-  if (typeof doc.waste_under_ln === 'number') wasteUnderLn = doc.waste_under_ln;
-  if (typeof doc.waste_locked_ln === 'number') wasteLockedLn = doc.waste_locked_ln;
   for (const k of Object.keys(doc)) {
     if (KNOWN_THRESHOLD_KEYS.has(k) || unknownThresholdKeys.includes(k)) continue;
     unknownThresholdKeys.push(k);
@@ -342,7 +334,6 @@ export function formatWindow(w: PaceWindow, nowMs: number): FormattedWindow & {
   className: string;
 } {
   const remaining = typeof w.remaining_percent === 'number' ? w.remaining_percent : null;
-  const used = typeof w.used_percent === 'number' ? w.used_percent : null;
   const remainingTime = remainingTimePercent(w, nowMs);
   const pace = paceOfWindow(w, nowMs);
   const paceClass = paceClassName(pace);

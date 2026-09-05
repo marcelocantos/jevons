@@ -131,7 +131,7 @@ export function formatFleetProgress(agent: FleetAgent, maxLen = PROGRESS_MAX): s
       return phase === 'parked' ? 'parked' : 'idle';
     }
     if (step) return truncate(step, maxLen);
-    return phase === 'parked' ? 'parked' : phase === 'idle' ? 'idle' : '';
+    return '';
   }
   if (phase && step) return truncate(phaseRaw + ' · ' + step, maxLen);
   if (step) return truncate(step, maxLen);

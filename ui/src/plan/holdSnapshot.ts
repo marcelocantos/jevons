@@ -1,13 +1,10 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-/** A plan-usage snapshot we can paint bars from. */
-export type PlanSnap = {
-  pending?: boolean;
-  error?: string;
-  windows?: unknown[];
-  backends?: Array<{ windows?: unknown[] }>;
-};
+import type { PlanSnapshot } from './tickerGroups';
+
+/** Holding a reading preserves the same schema consumed by the ticker. */
+export type PlanSnap = PlanSnapshot;
 
 function hasNumericRemaining(snap: PlanSnap | undefined): boolean {
   if (!snap) return false;
