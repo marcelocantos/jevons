@@ -1493,19 +1493,16 @@ func (s *Server) persistChatLine(line string) {
 		return
 	}
 	name := s.overseerAgentName()
-	// 🎯T548.2: after statedb has rows, SQLite is the mux source of
-	// truth. JSONL is import-once history, not a second live log.
+	// 🎯T548.2: a configured SQLite store is canonical even when empty
+	// or temporarily unreadable. JSONL is import-once history.
 	if s.stateStore() != nil {
 		if s.mux == nil {
 			s.mux = newMuxHub()
 		}
 		durable := s.muxFanTranscript(name, line)
-		if s.statedbN(name) == 0 {
-			// Import-once history: the JSONL is still the durable store
-			// until statedb has rows, and it notes durability itself.
-			s.observeChatTurnGap(line, s.persistChatJSONL(line))
-			return
-		}
+		// A failed SQLite read also looks like N=0 to legacy callers. Do
+		// not switch stores: that JSONL append would mark SendJournaled
+		// true for a turn canonical replay will never recover.
 		// 🎯T593: SQLite is the durable store now, so it is what
 		// send-landed must be observed against. Before this, durability
 		// was only ever recorded on the JSONL append — a path 🎯T548.2

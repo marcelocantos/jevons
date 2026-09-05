@@ -136,6 +136,11 @@ Every canonical write advances that revision; a snapshot reads revision and rows
 from the same transaction. Legacy databases without revision metadata remain
 readable and advance on their next write.
 
+Owner-send durability follows the configured canonical store even when it is
+empty or fails. A failed SQLite write cannot become a successful durability
+claim through an obsolete JSONL append. The owner-health record retains the
+undurable state; durable queue/outbox recovery remains part of T623.
+
 Cache refresh, live folds and tool stamps share a per-agent journal lock through
 persistence. Without this coordination a reload could install an older database
 read over a newly arrived message, then reuse its index. Startup import is called
