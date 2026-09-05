@@ -25,9 +25,15 @@ callback to a provider operation.** It says that rewind is unavailable and refus
 primary submission in recall mode. Recall controls were integrated locally at
 `6526637ba45a` and activated in development; this does not complete T562 or enable
 provider rewind. The clean-tree gate `ac6f8813` passed the real Grok
-send/reload/recall/cancel slice, without exercising rewind. The final manual
-Firefox check remains pending because the host was locked. Paging beyond loaded
-owner history, queue traversal, and durable recall/attachment recovery remain open.
+send/reload/recall/cancel slice, without exercising rewind. A separate headless
+Chromium observation of development `:13705` passed main and sidebar Alt-Up,
+selected-turn highlighting, Escape draft restoration and Alt-Down draft
+restoration (`36e4744e`, 2026-09-06), without sending a message. This observes
+the running surface, not the dirty checkout recorded in that gate's metadata.
+The preceding attempt timed out waiting for the sidebar selection (`ef58704c`);
+the successful retry does not explain that intermittent failure. Native Firefox
+key handling remains unverified. Paging beyond loaded owner history, queue
+traversal, and durable recall/attachment recovery remain open.
 
 ## Why the old rewind handler cannot be connected
 
