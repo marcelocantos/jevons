@@ -11,9 +11,9 @@
 //
 // Journeys (live agent backend; owner chat + MCP orchestration):
 //  1. health
-//  2. chat round-trip (idle send → terminal)
+//  2. canonical mux round-trip (fresh owner send → exact terminal reply)
 //  3. cancel-and-send (interrupt mid-turn → replacement → terminal)
-//  4. reconnect sealed (second connect sees bounded sealed history)
+//  4. canonical mux reconnect (bounded replayed exchange → fresh reply)
 //  5. isolation (after teardown)
 //     6–11. orchestration: tool surface, overseer registry, two agents
 //     same workdir, thread spawn→direct→remove, worker shell tool (T97),
@@ -382,24 +382,21 @@ func (s *suite) jHealth() error {
 func (s *suite) jChatRoundTrip() error {
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	defer cancel()
-	conn, frames, err := dialChat(ctx, s.host)
+	conn, frames, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
 	defer conn.CloseNow()
-	n, err := drainReplay(frames, 800*time.Millisecond)
+	_, err = collectOwnerMuxReplay(ctx, frames)
 	if err != nil {
 		return err
 	}
-	if n > maxReplayFrames {
-		return fmt.Errorf("fresh isolate replayed %d frames; want ≤%d (sealed)", n, maxReplayFrames)
-	}
 	token := "journey-ping-" + uuid.NewString()
 	prompt := "Reply with exactly: " + token
-	if err := conn.Write(ctx, websocket.MessageText, []byte(prompt)); err != nil {
+	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": prompt}); err != nil {
 		return err
 	}
-	if err := waitExactReply(ctx, frames, prompt, token); err != nil {
+	if err := waitOwnerMuxReply(ctx, frames, prompt, token); err != nil {
 		return err
 	}
 	logs, err := os.ReadFile(s.logPath)
@@ -457,22 +454,22 @@ func (s *suite) jReconnectSealed() error {
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	defer cancel()
 	// Seed one turn.
-	conn1, frames1, err := dialChat(ctx, s.host)
+	conn1, frames1, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
-	n1, err := drainReplay(frames1, 800*time.Millisecond)
+	initial, err := collectOwnerMuxReplay(ctx, frames1)
 	if err != nil {
 		conn1.CloseNow()
 		return err
 	}
 	seedToken := "journey-seed-" + uuid.NewString()
 	seed := "Reply with exactly: " + seedToken
-	if err := conn1.Write(ctx, websocket.MessageText, []byte(seed)); err != nil {
+	if err := writeOwnerMux(ctx, conn1, "send", map[string]string{"text": seed}); err != nil {
 		conn1.CloseNow()
 		return err
 	}
-	if err := waitExactReply(ctx, frames1, seed, seedToken); err != nil {
+	if err := waitOwnerMuxReply(ctx, frames1, seed, seedToken); err != nil {
 		conn1.CloseNow()
 		return fmt.Errorf("seed turn: %w", err)
 	}
@@ -483,26 +480,26 @@ func (s *suite) jReconnectSealed() error {
 	defer cancel()
 
 	// Reconnect — sealed window must stay small.
-	conn2, frames2, err := dialChat(ctx, s.host)
+	conn2, frames2, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
 	defer conn2.CloseNow()
-	replay, err := collectReplay(ctx, frames2, 900*time.Millisecond, maxReplayFrames)
+	replay, err := collectOwnerMuxReplay(ctx, frames2)
 	if err != nil {
-		return fmt.Errorf("reconnect replay (first connect %d frames): %w", n1, err)
+		return fmt.Errorf("reconnect replay (first connect %d frames): %w", len(initial), err)
 	}
-	if err := assertRecordedOwnerReply(replay, seed, seedToken); err != nil {
+	if err := assertOwnerMuxReplay(replay, seed, seedToken); err != nil {
 		return fmt.Errorf("reconnect did not replay the seed exchange: %w", err)
 	}
 	// A small replay alone can also be an empty, dead socket. Require a
 	// new request-specific agent reply through the replacement connection.
 	reconnectToken := "journey-reconnect-" + uuid.NewString()
 	prompt := "Reply with exactly: " + reconnectToken
-	if err := conn2.Write(ctx, websocket.MessageText, []byte(prompt)); err != nil {
+	if err := writeOwnerMux(ctx, conn2, "send", map[string]string{"text": prompt}); err != nil {
 		return err
 	}
-	if err := waitExactReply(ctx, frames2, prompt, reconnectToken); err != nil {
+	if err := waitOwnerMuxReply(ctx, frames2, prompt, reconnectToken); err != nil {
 		return fmt.Errorf("reconnected owner turn: %w", err)
 	}
 	if err := assertStoredOwnerRoundTrip(s.stateDir, seed, seedToken); err != nil {
@@ -518,7 +515,11 @@ func (s *suite) jReconnectSealed() error {
 // ── wire helpers ─────────────────────────────────────────────────────
 
 func dialChat(ctx context.Context, host string) (*websocket.Conn, <-chan []byte, error) {
-	conn, _, err := websocket.Dial(ctx, "ws://"+host+"/ws/chat", nil)
+	return dialJourneySocket(ctx, "ws://"+host+"/ws/chat")
+}
+
+func dialJourneySocket(ctx context.Context, url string) (*websocket.Conn, <-chan []byte, error) {
+	conn, _, err := websocket.Dial(ctx, url, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -553,26 +554,6 @@ func drainReplay(frames <-chan []byte, quiet time.Duration) (int, error) {
 			n++
 		case <-time.After(quiet):
 			return n, nil
-		}
-	}
-}
-
-func collectReplay(ctx context.Context, frames <-chan []byte, quiet time.Duration, limit int) ([][]byte, error) {
-	var replay [][]byte
-	for {
-		select {
-		case body, ok := <-frames:
-			if !ok {
-				return nil, fmt.Errorf("connection closed during replay")
-			}
-			replay = append(replay, body)
-			if len(replay) > limit {
-				return nil, fmt.Errorf("replay exceeded %d frames", limit)
-			}
-		case <-time.After(quiet):
-			return replay, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
 		}
 	}
 }

@@ -319,38 +319,37 @@ red; a focused green does not erase the owner-chat timeout.
 
 ## Exact owner-chat round trip
 
-J2's timeout exposed a false negative in its wire reader: the product emits an
-owner echo as typed text blocks, while the journey recognized only strings.
-The baseline-compatible regression fails on the preceding code (`3c2f318d`).
-The shared reader now recognizes both public content forms and rejects the
-old generic `Reply with exactly` shortcut and agent-origin echoes.
+J2 and J4 use the canonical `/ws/mux` connection and `transcript:jevons`
+open/send envelopes used by React. Each sends a fresh UUID request and requires
+an exact, completed assistant reply after its matching owner echo, with the
+selected provider observed in the named runtime launch. The reader checks full
+coalesced event snapshots; it never concatenates snapshots or mixes a text
+fragment with another row's terminal. Both row-ID-to-index and index-to-row-ID
+identity stay stable. A row that preceded the owner request, a completed row
+rewritten later, an agent-origin echo, and a truncated requested reply cannot
+pass. Unrelated completed rows cannot substitute for the requested result.
 
-J2 submits a fresh UUID and requires its exact reply. Its strict reader keeps
-separate text and terminal state for each `stream_id`, as supplied by the
-shipped owner wire. Another stream's terminal cannot complete the requested
-fragment, interleaved streams cannot manufacture its text, and a late fragment
-cannot amend an already completed stream. Missing stream identity and a
-truncated requested reply fail visibly. Unrelated completed or truncated
-streams do not count as success or prevent the later requested reply from
-being observed within the original deadline. The named runtime launch must
-also match the selected provider.
+J4 requires its seed exchange in the actual bounded replay, another fresh reply
+through the replacement connection, and the seed exchange in the read-only
+canonical SQLite store. The replay boundary is complete tail-window metadata
+(`n/lo/hi/following`), not an arbitrary quiet period or an interleaved live
+status update. A later live answer cannot repair a missing replayed exchange.
+Each real exchange gets its own turn budget. Recorded-store checks start at the
+fresh seed owner boundary, so older failures do not taint that exchange.
 
-This exercises the supported `/ws/chat` owner endpoint and real provider. It
-does not replace React/mux rendering and browser journeys. The first typed-echo
-Grok experiment completed J2 and J5 (`13e0866b`), but preceded the stricter
-stream-identity reader and is not evidence for that final reader. Negative
-controls cover stale/agent echoes, generic replies, missing terminals, token
-mentions, interleaved streams, truncation, and cancellation.
+The typed-owner regression exposed the original false negative: the product
+emits typed text blocks, but the old journey only recognized strings. Its
+baseline-compatible control failed on old code (`3c2f318d`). Subsequent strict
+legacy `/ws/chat` experiments passed exact replies but failed replay on both
+Grok (`5ade09d8`) and Cursor (`43f7f569`), because that endpoint replays obsolete
+JSONL. This migration repairs the test's product-path selection; it does not
+restore the obsolete transport. The first canonical Grok J2/J4/J5 run passed
+(`33a9ecfe`) before the final metadata and reverse-identity guards; it is not
+completion evidence for the final reader.
 
-The final strict-reader experiment (`65bfe098`, clean `10fd31e58eb9`) completed
-J2 on Grok, but the combined gate stayed red: J4 still checked the retired JSONL
-journal. Canonical SQLite already held its seed request and complete reply.
-J4 now requires a fresh exact seed reply, that same exchange in the bounded
-reconnect replay, another fresh exact reply through the replacement socket,
-and the seed exchange in the read-only canonical store. Blank-but-live replay
-cannot pass. Each live exchange gets its own turn budget. Recorded-history
-checks start at the exact seed owner boundary, so failures in earlier history
-do not taint the fresh exchange. A missing database, another agent's exchange,
-an owner echo without an answer, or a stale answer fails persistence checking.
-J3 is still a generic cancellation smoke, not an exact-reply or cancellation
-ordering guarantee; its success must not be presented as the latter.
+These are real-provider wire journeys, not React-rendering or native-browser
+key evidence. React's hydration currently accepts any meta, including partial
+live status updates; the independent wire reader's complete-window boundary
+does not certify that behavior. J3 remains a generic legacy cancellation smoke,
+not an exact-reply or cancellation-ordering guarantee. T625 also remains open
+for tools-attached/directed-work, bounce/resume, and remaining provider coverage.
