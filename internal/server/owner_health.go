@@ -154,7 +154,7 @@ func (s *Server) NoteOwnerSend(text, echo string) {
 	h.sendAt = now
 	// With no durable log configured there is nothing to observe landing,
 	// so durability is not a gap the owner can suffer on this deployment.
-	h.sendJournaled = !s.hasChatLog()
+	h.sendJournaled = s.stateStore() == nil && !s.hasChatLog()
 	h.sendDelivered = false
 	h.ownerTurnAt = now
 	h.replySealedAt = time.Time{}

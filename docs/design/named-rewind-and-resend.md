@@ -138,8 +138,9 @@ readable and advance on their next write.
 
 Owner-send durability follows the configured canonical store even when it is
 empty or fails. A failed SQLite write cannot become a successful durability
-claim through an obsolete JSONL append. The owner-health record retains the
-undurable state; durable queue/outbox recovery remains part of T623.
+claim through an obsolete JSONL append, including SQLite-only configurations.
+The in-memory owner-health record retains the undurable state; durable
+queue/outbox recovery remains part of T623.
 
 Cache refresh, live folds and tool stamps share a per-agent journal lock through
 persistence. Without this coordination a reload could install an older database
@@ -161,3 +162,11 @@ This prerequisite does not expose a revision token on the wire, perform a
 compare-and-swap rewind, reset existing subscribers or enable provider rewind.
 A future token must also bind the provider session and daemon generation so an
 old daemon that predates revision tracking cannot validate a newer selection.
+
+Another recovery reader remains to fix before enabling rewind:
+`internal/mcpserver/open_intent.go:loadOpenIntentDialogueStateDB` currently falls
+back to JSONL on an empty or unreadable database. The mux fix above does not
+prevent that reader from recovering stale intent after restart. The existing
+owner-health resend path also does not repair missing canonical journal rows or
+provide durable duplicate prevention. These remain within T623/T627; the storage
+slice is not a claim that all recovery paths now honor empty history.

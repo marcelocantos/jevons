@@ -106,8 +106,8 @@ func TestDurableWriteFailureIsReportedAsNotDurable(t *testing.T) {
 }
 
 func TestOwnerPersistenceFailureDoesNotClaimLegacyFallbackAsDurable(t *testing.T) {
-	for _, populated := range []bool{false, true} {
-		t.Run(map[bool]string{false: "empty", true: "populated"}[populated], func(t *testing.T) {
+	for _, shape := range []string{"empty", "populated", "sqlite-only"} {
+		t.Run(shape, func(t *testing.T) {
 			dir := t.TempDir()
 			db, err := statedb.Open(filepath.Join(dir, "state.db"))
 			if err != nil {
@@ -121,9 +121,11 @@ func TestOwnerPersistenceFailureDoesNotClaimLegacyFallbackAsDurable(t *testing.T
 				t.Fatal(err)
 			}
 			defer clog.Close()
-			s.SetChatLog(clog)
+			if shape != "sqlite-only" {
+				s.SetChatLog(clog)
+			}
 			s.ImportTranscripts()
-			if populated {
+			if shape == "populated" {
 				s.persistChatLine(chatUserEcho("earlier request"))
 			}
 			if err := db.Close(); err != nil {
