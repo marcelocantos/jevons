@@ -102,6 +102,9 @@ else
       kill -9 "$holder" 2>/dev/null || true
     fi
   fi
+  # reread only discovers definitions; update registers a fresh group or
+  # replaces its loaded configuration. Scope this to the primary daemon.
+  supervisorctl update jevonsd
   supervisorctl restart jevonsd 2>/dev/null || supervisorctl start jevonsd
 fi
 

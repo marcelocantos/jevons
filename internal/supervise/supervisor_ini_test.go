@@ -147,3 +147,50 @@ func TestSupervisorRetirementOnlyTouchesComparisonGroup(t *testing.T) {
 		t.Fatalf("retirement touched unexpected service operations:\n%s", out)
 	}
 }
+
+// A reread does not register a new group or replace its loaded definition.
+func TestSupervisorInstallAppliesRenderedPrimaryDefinition(t *testing.T) {
+	for _, state := range []string{"fresh", "changed"} {
+		t.Run(state, func(t *testing.T) {
+			home, conf, fakeBin := t.TempDir(), t.TempDir(), t.TempDir()
+			loaded := filepath.Join(t.TempDir(), "loaded.ini")
+			calls := filepath.Join(t.TempDir(), "calls")
+			if state == "changed" {
+				if err := os.WriteFile(loaded, []byte("old loaded definition"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, body := range map[string]string{
+				"supervisorctl": `#!/bin/sh
+set -e
+printf '%s\n' "$*" >>"$CALLS"
+case "$*" in
+  reread) printf 'jevonsd: %s\nother: changed\n' "$INITIAL_STATE" ;;
+  'update jevonsd') cp "$SUPERVISOR_CONF_DIR/jevonsd.ini" "$LOADED" ;;
+  'restart jevonsd'|'start jevonsd') cmp "$LOADED" "$SUPERVISOR_CONF_DIR/jevonsd.ini" ;;
+  'status jevonsd') : ;;
+  *) echo "unexpected supervisor operation: $*" >&2; exit 1 ;;
+esac
+`,
+				"launchctl": "#!/bin/sh\nexit 0\n",
+				"brew":      "#!/bin/sh\nexit 0\n",
+				"lsof":      "#!/bin/sh\nexit 1\n",
+			} {
+				if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
+			cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
+				"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+				"PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls, "LOADED="+loaded, "INITIAL_STATE="+state)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("install %s: %v\n%s", state, err, out)
+			}
+			out, err := os.ReadFile(calls)
+			if err != nil || string(out) != "reread\nupdate jevonsd\nrestart jevonsd\nstatus jevonsd\n" {
+				t.Fatalf("primary definition not applied before restart: %s %v", out, err)
+			}
+		})
+	}
+}
