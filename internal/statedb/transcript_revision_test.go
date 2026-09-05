@@ -6,6 +6,7 @@ package statedb
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -212,6 +213,15 @@ func TestConcurrentTranscriptImportsHaveOneWinner(t *testing.T) {
 }
 
 func TestTranscriptSnapshotRowsAndRevisionStayConsistent(t *testing.T) {
+	for _, tail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tail=%v", tail), func(t *testing.T) {
+			testTranscriptSnapshotConsistency(t, tail)
+		})
+	}
+}
+
+func testTranscriptSnapshotConsistency(t *testing.T, tail bool) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
 	writer, err := Open(path)
 	if err != nil {
@@ -224,7 +234,20 @@ func TestTranscriptSnapshotRowsAndRevisionStayConsistent(t *testing.T) {
 	}
 	defer reader.Close()
 	const writes = 100
-	if err := writer.ReplaceAll("worker", []Event{{Index: 1, Body: "1"}}); err != nil {
+	const usersPerRevision = 2
+	const emptyEvery = 3
+	eventsForRevision := func(revision int) []Event {
+		if revision%emptyEvery == 0 {
+			return nil
+		}
+		// Changing boundaries catches a tail bound read outside the snapshot:
+		// an older bound would retain both requests, not only the newest one.
+		return []Event{
+			{Index: revision * usersPerRevision, Type: "user", Body: fmt.Sprint(revision)},
+			{Index: revision*usersPerRevision + 1, Type: "user", Body: fmt.Sprint(revision)},
+		}
+	}
+	if err := writer.ReplaceAll("worker", eventsForRevision(1)); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -245,11 +268,7 @@ func TestTranscriptSnapshotRowsAndRevisionStayConsistent(t *testing.T) {
 				done <- ctx.Err()
 				return
 			}
-			var events []Event
-			if revision%2 != 0 {
-				events = []Event{{Index: 1, Body: fmt.Sprint(revision)}}
-			}
-			if err := writer.ReplaceAll("worker", events); err != nil {
+			if err := writer.ReplaceAll("worker", eventsForRevision(revision)); err != nil {
 				done <- err
 				return
 			}
@@ -258,16 +277,27 @@ func TestTranscriptSnapshotRowsAndRevisionStayConsistent(t *testing.T) {
 	}()
 	var lastObserved int64
 	for lastObserved < writes {
-		snapshot, err := reader.Snapshot("worker")
+		var snapshot TranscriptSnapshot
+		var err error
+		if tail {
+			snapshot, err = reader.TailSnapshot("worker", 1)
+		} else {
+			snapshot, err = reader.Snapshot("worker")
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if snapshot.Revision%2 == 0 {
-			if len(snapshot.Events) != 0 {
-				t.Fatalf("empty revision contains rows from another commit: %+v", snapshot)
+		want := eventsForRevision(int(snapshot.Revision))
+		if tail && len(want) > 0 {
+			want = want[len(want)-1:]
+		}
+		if len(snapshot.Events) != len(want) {
+			t.Fatalf("boundary/rows/revision came from different commits: %+v; want %+v", snapshot, want)
+		}
+		for i, event := range snapshot.Events {
+			if event.Index != want[i].Index || event.Body != want[i].Body {
+				t.Fatalf("rows and revision came from different commits: %+v; want %+v", snapshot, want)
 			}
-		} else if len(snapshot.Events) != 1 || snapshot.Events[0].Body != fmt.Sprint(snapshot.Revision) {
-			t.Fatalf("rows and revision came from different commits: %+v", snapshot)
 		}
 		if snapshot.Revision != lastObserved {
 			if snapshot.Revision != lastObserved+1 {
@@ -279,5 +309,110 @@ func TestTranscriptSnapshotRowsAndRevisionStayConsistent(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTailSnapshotPreservesWholeRecentTurnsAndAgentBoundary(t *testing.T) {
+	s := testStore(t)
+	events := []Event{
+		{Index: 1, Type: "user", Body: "old request"},
+		{Index: 2, Type: "assistant", Body: "old reply"},
+		{Index: 3, Type: "user", Body: "recent request"},
+		{Index: 4, Type: "assistant", Body: "answer"},
+		{Index: 5, Type: "progress", Body: "tool"},
+		{Index: 6, Type: "assistant", Body: "completed"},
+		{Index: 7, Type: "progress", Body: "newest frame"},
+	}
+	for i := range events {
+		events[i].ID = fmt.Sprintf("e:%d", events[i].Index)
+	}
+	if err := s.Upsert("worker", events); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Upsert("other", []Event{{Index: 10, Type: "user", Body: "other agent"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ limit, first, count int }{{1, 3, 5}, {2, 1, 7}, {40, 1, 7}} {
+		snapshot, err := s.TailSnapshot("worker", tc.limit)
+		if err != nil || snapshot.Revision != 1 || len(snapshot.Events) != tc.count {
+			t.Fatalf("limit=%d snapshot=%+v err=%v", tc.limit, snapshot, err)
+		}
+		for i, event := range snapshot.Events {
+			if event != events[tc.first-1+i] {
+				t.Fatalf("limit=%d event %d changed: %+v", tc.limit, i, event)
+			}
+		}
+	}
+	if err := s.ReplaceAll("worker", []Event{{Index: 2, Type: "assistant"}, {Index: 9, Type: "progress"}, {Index: 20, Type: "progress"}}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := s.TailSnapshot("worker", 2)
+	if err != nil || snapshot.Revision != 2 || len(snapshot.Events) != 2 || snapshot.Events[0].Index != 9 || snapshot.Events[1].Index != 20 {
+		t.Fatalf("no-user tail=%+v err=%v", snapshot, err)
+	}
+	if _, err := s.TailSnapshot("worker", 0); err == nil {
+		t.Fatal("accepted an unbounded tail")
+	}
+}
+
+func TestReadOnlyRecoveryStoreNeverCreatesRepairsOrWrites(t *testing.T) {
+	// URI metacharacters must remain a literal filesystem path.
+	path := filepath.Join(t.TempDir(), "history ?#%.db")
+	if s, err := OpenReadOnly(path); err == nil {
+		s.Close()
+		t.Fatal("read-only open created a missing database")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("read-only open created a file: %v", err)
+	}
+	ordinaryPath := filepath.Join(t.TempDir(), "history.db")
+	writer, err := Open(ordinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Upsert("worker", []Event{{Index: 1, Type: "user", Body: "keep"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(ordinaryPath, path); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	snapshot, err := reader.TailSnapshot("worker", 1)
+	if err != nil || snapshot.Revision != 1 || len(snapshot.Events) != 1 || snapshot.Events[0].Body != "keep" {
+		t.Fatalf("read-only snapshot=%+v err=%v", snapshot, err)
+	}
+	if err := reader.ReplaceAll("worker", nil); err == nil {
+		t.Fatal("read-only recovery store allowed a write")
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A second database with a damaged schema must not be auto-repaired.
+	writer, err = Open(ordinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.db.Exec(`DROP TABLE transcript_events`); err != nil {
+		t.Fatal(err)
+	}
+	reader, err = OpenReadOnly(ordinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if _, err := reader.TailSnapshot("worker", 1); err == nil {
+		t.Fatal("recovery repaired the missing table or claimed an empty journal")
+	}
+	var tables int
+	if err := writer.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("recovery repaired the missing table: count=%d err=%v", tables, err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/statedb"
 )
 
@@ -23,6 +24,59 @@ import (
 func t592UserLine(text string, ts time.Time) string {
 	return `{"type":"user","timestamp":"` + ts.Format(time.RFC3339) +
 		`","message":{"role":"user","content":"` + text + `"}}`
+}
+
+// Exercise the restart delivery decision, not just Load+Format composition.
+// The ordinary restart notification must still arrive when intent is absent.
+func TestRestartBroadcastDoesNotResumeRemovedCanonicalIntent(t *testing.T) {
+	for _, state := range []string{"absent", "healthy", "cleared", "corrupt"} {
+		t.Run(state, func(t *testing.T) {
+			stateDir := t.TempDir()
+			now := time.Now().UTC().Truncate(time.Second)
+			legacy := "Please implement the legacy instruction for the previous conversation."
+			canonical := "Please implement the canonical instruction for this conversation."
+			t592WriteChatlog(t, stateDir, []string{t592UserLine(legacy, now)})
+			path := statedb.DefaultPath(stateDir)
+			if state == "corrupt" {
+				if err := os.WriteFile(path, []byte("damaged database"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if state != "absent" {
+				db, err := statedb.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := db.Upsert("jevons", []statedb.Event{{Index: 1, Type: "user", Body: t592UserLine(canonical, now)}}); err != nil {
+					t.Fatal(err)
+				}
+				if state == "cleared" {
+					if err := db.ReplaceAll("jevons", nil); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, inbox := t452Fixture(t, "jevons", "recovery-session", claudia.AgentDef{Name: "jevons", Purpose: claudia.PurposeOverseer})
+			s.NotifyDaemonRestarted("jevons", "", stateDir)
+			msgs := inbox.snapshot()["jevons"]
+			if len(msgs) != 1 {
+				t.Fatalf("restart delivered %d messages, want one: %v", len(msgs), msgs)
+			}
+			msg := msgs[0]
+			wantIntent := state == "absent" || state == "healthy"
+			if strings.Contains(msg, "[event: "+eventOwnerIntentResume+"]") != wantIntent {
+				t.Fatalf("state=%s wrong restart event: %s", state, msg)
+			}
+			if strings.Contains(msg, legacy) != (state == "absent") || strings.Contains(msg, canonical) != (state == "healthy") {
+				t.Fatalf("state=%s wrong recovered instruction: %s", state, msg)
+			}
+			if !wantIntent && !strings.Contains(msg, "[event: "+eventDaemonRestarted+"]") {
+				t.Fatalf("ordinary restart notification was lost: %s", msg)
+			}
+		})
+	}
 }
 
 func t592ProgressLine(ts time.Time) string {
@@ -163,5 +217,80 @@ func TestT592HealthyStatedbStillResumes(t *testing.T) {
 	got := LoadOpenOwnerIntent(stateDir, "jevons")
 	if !got.Recoverable() {
 		t.Fatalf("healthy statedb must resume, residual=%q", got.Residual)
+	}
+}
+
+// Rewind-to-zero leaves a real, authoritative empty journal. Neither an
+// empty journal nor an unreadable one permits reviving the old JSONL request.
+func TestOpenIntentCanonicalStateNeverFallsBackToRemovedRequest(t *testing.T) {
+	for _, state := range []string{"empty", "cleared", "other-agent-only", "corrupt", "directory", "uninitialized-file", "dangling-link", "unreadable-parent"} {
+		t.Run(state, func(t *testing.T) {
+			stateDir := t.TempDir()
+			now := time.Now().UTC().Truncate(time.Second)
+			t592WriteChatlog(t, stateDir, []string{
+				t592UserLine("Please implement the obsolete request that was removed.", now),
+			})
+			path := statedb.DefaultPath(stateDir)
+			wantResidual := ResidualNoUserTurns
+			switch state {
+			case "corrupt":
+				if err := os.WriteFile(path, []byte("not a SQLite database"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				wantResidual = ResidualUnreadableChatlog
+			case "directory":
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				wantResidual = ResidualUnreadableChatlog
+			case "uninitialized-file":
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				wantResidual = ResidualUnreadableChatlog
+			case "dangling-link":
+				if err := os.Symlink(filepath.Join(stateDir, "missing.db"), path); err != nil {
+					t.Fatal(err)
+				}
+				wantResidual = ResidualUnreadableChatlog
+			case "unreadable-parent":
+				// A filesystem lookup error is not proof of database absence.
+				if err := os.Chmod(stateDir, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) })
+				if _, err := os.Stat(path); !os.IsPermission(err) {
+					t.Skip("this identity can traverse a directory without permission")
+				}
+				wantResidual = ResidualUnreadableChatlog
+			default:
+				db, err := statedb.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state != "empty" {
+					agent := "jevons"
+					if state == "other-agent-only" {
+						agent = "worker"
+					}
+					if err := db.Upsert(agent, []statedb.Event{{Index: 1, Type: "user", Body: t592UserLine("Please implement the removed canonical request.", now)}}); err != nil {
+						t.Fatal(err)
+					}
+					if state == "cleared" {
+						if err := db.ReplaceAll(agent, nil); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The actual restart recovery entry point reopens the database.
+			got := LoadOpenOwnerIntent(stateDir, "jevons")
+			if got.Recoverable() || got.Text != "" || got.Residual != wantResidual {
+				t.Fatalf("%s canonical store recovered obsolete intent: %+v; want %s", state, got, wantResidual)
+			}
+		})
 	}
 }
