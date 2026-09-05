@@ -67,6 +67,13 @@ paths. Remove the standing `:13706` service from tracked and installed setup
 without disrupting the development daemon or fleet. A small frozen regression
 fixture may remain; a second runnable cockpit may not.
 
+**Owner clarification, 2026-09-05:** this is the browser cutover. Migrating
+the native iOS wrapper or Pigeon transport is separate work, not a condition
+of retiring the vanilla browser UI. The earlier iOS clause in 🎯T540.2
+overextended that scope and has been removed. 🎯T628 and its transport
+findings remain separately recorded; they do not block 🎯T540.2. The same
+separation applies to the independently discovered PO recovery gap, 🎯T629.
+
 The retained and replacement assertions and package/runtime checks must pass
 with recorded GREEN gates. A thin real-agent journey through the packaged
 React UI establishes that retirement leaves a usable product. Observe the
