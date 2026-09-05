@@ -82,8 +82,8 @@ open http://localhost:13705/
 ## Chat markdown (web UI)
 
 - **Mid-stream (🎯T150):** assistant bubbles paint progressive markdown via
-  vendored `streaming-markdown` (`web/scripts/smd.js` +
-  `streaming_markdown.js`). Closed emphasis (e.g. `**bold**`) becomes real
+  the `streaming-markdown` dependency through
+  `ui/src/conversation/streamingMarkdown.ts`. Closed emphasis (e.g. `**bold**`) becomes real
   bold as soon as both delimiters arrive — not raw source, and not delayed
   until end of turn.
 - **Seal:** full `marked` parse (plus mermaid 🎯T59 and highlight.js 🎯T74).
@@ -724,15 +724,16 @@ not script success.
 nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
 ```
 
-The script: re-exec into its own session (🎯T405) → HEAD snapshot build
-→ `brew services stop jevons` → SIGHUP `:13705` → prefer launchd
-KeepAlive **`com.marcelocantos.jevonsd`** (`make jevonsd-install`) else
-`nohup`/`setsid` start → wait `/health` + `/api/frontier` non-404.
-Pure static web-only may hard-reload only.
+The script detaches (🎯T405), builds a committed HEAD snapshot and requests
+SIGHUP upgrade exit through the supervisor that owns the development daemon.
+Current development uses supervisord program `jevonsd`. Legacy launchd
+KeepAlive installations remain supported; obsolete arguments are reloaded
+before adoption. The script then waits for `/health` and `/api/frontier`.
+React changes require a rebuilt and activated daemon; hard reload observes that bundle.
 
 **Supervision (🎯T405 / 🎯T553.3).** On 2026-08-10 a worker's restart
-killed the daemon and the script died with its invoker. The standing
-supervisor is KeepAlive on `jevonsd` itself. The interval job
+killed the daemon and the script died with its invoker. The historical fix
+was KeepAlive on `jevonsd` itself; current development uses supervisord. The interval job
 **`com.marcelocantos.jevons-watchdog`** (`make watchdog-install` /
 `make watchdog-status`) is not the product path and must not call the
 fat script when KeepAlive owns the process. An upgrade bounce still
@@ -786,8 +787,7 @@ is a real failure. The test is observation of the running surface
 (composer, transcript, a **live probe** of the owner path) — not
 `restart-daily-jevonsd` / GATE / HEAD snapshot. `HasDailyPathEvidence`
 (`internal/mcpserver`) is a seam classifier, not an achieve gate.
-hermetics alone do not close an owner-visible claim. Pure static web may
-hard-reload only (🎯T188).
+hermetics alone do not close an owner-visible claim. React changes require a rebuilt and activated daemon (🎯T540.2).
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 
@@ -821,10 +821,10 @@ ui/bundle.zip built from committed HEAD; no vanilla runtime or :13706
 comparison service remains. make ui-build type-checks and packages React;
 make ui-check-bundle rejects stale assets without repairing them. make ui-dev
 is optional HMR. Frozen reference: 8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab;
-reviewed map: docs/audits/react-fidelity-2026-09-05/. T540.3/T540.7 retain
+reviewed map: docs/audits/react-fidelity-2026-09-05/. 🎯T540.3/🎯T540.7 retain
 unfinished fidelity independently of retirement. Main and sidebar share
 AgentInteraction and main-derived behavior; do not recreate the old sidebar
-fork. T505 / T553.1: development serves committed assets, not shared WIP.
+fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP.
 
 ## Configuration
 

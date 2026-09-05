@@ -62,3 +62,12 @@ These packaging/browser runs measured the implementation working tree, not a
 clean final revision. Clean final gates, local integration, installed-service
 retirement and observed development activation remain required before T540.2
 can be achieved. No remote publication is part of this milestone.
+
+The clean real-provider run passed on `0e949424` (`7a444a23`). Its full clean
+Go run (`a90bcb58`) caught three fleet-brief formatting failures caused by
+new bare target IDs; these were corrected without weakening the tests.
+The follow-up also removes stale runtime guidance and makes the activation
+script use the existing supervisord owner's SIGHUP path instead of racing
+its replacement with a second daemon. Targeted brief and supervisor ownership
+negative controls passed (`1641c916`). Final clean verification is still
+required for the resulting revision.

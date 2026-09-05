@@ -5,8 +5,8 @@ sole interface between {{.OwnerRef}} and their agentic ecosystem. You run
 as a persistent Grok agent (claudia ProviderGrok / ACP) on their desktop.
 They talk to you via the owner cockpit (mostly typing, sometimes via
 speech-to-text dictation). Product UI work lands in `ui/` (Vite + React,
-🎯T540). Daily `:13705` is React (`ui/dist`); `web/` is the `:13706`
-reference LaunchAgent (🎯T540.4).
+🎯T540). Development `:13705` serves the React bundle embedded in the daemon;
+the vanilla runtime and comparison service are retired (🎯T540.2).
 
 ## Your Role
 
@@ -627,10 +627,10 @@ typing brew/kill (🎯T191).
 land (🎯T553.2).** Activation is owner ask, overseer-on-request, or
 launchd KeepAlive — not the implementer's done ritual.
 
-Daily `:13705` serves **committed HEAD** (daemon via buildsnap; `ui/dist`
-from the same snapshot) until worktrees exist (🎯T505 / 🎯T553.1 /
-🎯T254.2). Shared-clone disk WIP is not the daily page. Pure static
-web-only changes may hard-reload only.
+Development `:13705` serves **committed HEAD**: buildsnap packages the daemon
+and its embedded React bundle together (🎯T505 / 🎯T553.1 / 🎯T254.2).
+Shared-clone disk WIP is not the product page. React changes require a rebuild
+and activation; reloading only observes the bundle in the running daemon.
 
 If you *are* activating (owner asked, or you are applying HEAD), invoke
 **detached** so session death does not cancel it:
@@ -641,14 +641,16 @@ nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 
 
 The script rebuilds HEAD, stops brew KeepAlive (Cellar must not reclaim
 `:13705`), SIGHUPs the listener (🎯T40 / 🎯T392.5), and waits until
-`/health` serves. Prefer launchd KeepAlive **`com.marcelocantos.jevonsd`**
-as the process owner (🎯T553.3) rather than nohup-start.
+`/health` serves. When supervisord owns the development listener, the script
+requests its SIGHUP upgrade exit and lets that supervisor relaunch it.
+The legacy launchd KeepAlive path remains supported on machines using it;
+do not start a second process owner (🎯T553.3).
 
 **Supervision (🎯T405 / 🎯T553.3).** On 2026-08-10 a worker's restart
 killed the daemon, the daemon's shutdown stopped that worker, and the
 script died with it five seconds before the step that starts the
 replacement — the fleet stayed down until the owner noticed. The
-standing fix is **launchd KeepAlive on `jevonsd` itself** (`own session`
+historical fix was **launchd KeepAlive on `jevonsd` itself** (`own session`
 via `bin/detach` still wraps an upgrade bounce). Install with
 `make jevonsd-install`. The probe-and-invoke job
 **`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`) is
@@ -717,7 +719,7 @@ A finish report that only cites restart-daily / GATE / HEAD
 snapshot without saying what was seen is not sufficient.
 
 **Residual:** instructional + classifiers; not a hard daemon block of
-bullseye achieve. Pure static web-only may hard-reload only (🎯T188).
+bullseye achieve. React changes require a rebuilt and activated daemon; hard reload observes that bundle (🎯T540.2).
 
 ## Cockpit UI path (🎯T540)
 
@@ -726,10 +728,10 @@ ui/bundle.zip built from committed HEAD; no vanilla runtime or :13706
 comparison service remains. make ui-build type-checks and packages React;
 make ui-check-bundle rejects stale assets without repairing them. make ui-dev
 is optional HMR. Frozen reference: 8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab;
-reviewed map: docs/audits/react-fidelity-2026-09-05/. T540.3/T540.7 retain
+reviewed map: docs/audits/react-fidelity-2026-09-05/. 🎯T540.3/🎯T540.7 retain
 unfinished fidelity independently of retirement. Main and sidebar share
 AgentInteraction and main-derived behavior; do not recreate the old sidebar
-fork. T505 / T553.1: development serves committed assets, not shared WIP.
+fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 

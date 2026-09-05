@@ -27,7 +27,7 @@ make ios          # Regenerate the iOS Xcode project (xcodegen)
 
 ```bash
 make run          # Build and run jevonsd (or: brew services start jevons)
-open http://localhost:13705/   # Daily React (LaunchAgent com.marcelocantos.jevons-ui)
+open http://localhost:13705/   # Development React (supervisord program jevonsd)
 make ui-dev                    # opt-in Vite HMR; not a standing agent
 ```
 
@@ -375,15 +375,17 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   **Workers do not invoke it after every daemon-path land (T553.2).**
   Daily `:13705` serves committed HEAD until worktrees exist (T505 /
   T553.1). Observation of the running surface is the test (T552), not
-  script success. Prefer launchd KeepAlive `com.marcelocantos.jevonsd`
-  (`make jevonsd-install`). Script path: `scripts/restart-daily-jevonsd.sh`.
-  Pure static web-only may hard-reload only.
+  script success. The development owner is supervisord program `jevonsd`
+  (`supervisor/jevonsd.ini`). The restart script signals that owner with
+  SIGHUP; it supports legacy launchd installations without creating a
+  competing process owner. Script path: `scripts/restart-daily-jevonsd.sh`.
+  React changes require rebuilding and activating the embedded bundle before reloading.
 - **The process is supervised (🎯T405 / 🎯T553.3):** on 2026-08-10 a
   worker's restart killed the daemon, the script died with its invoker
   (own session was still a convention), and the fleet stayed down. The
-  standing supervisor is launchd KeepAlive **`com.marcelocantos.jevonsd`**
-  (`make jevonsd-install`): if the process dies, launchd relaunches the
-  same binary without calling the fat script. An upgrade bounce still
+  historical fix was launchd KeepAlive **`com.marcelocantos.jevonsd`**
+  (`make jevonsd-install`). Current development uses supervisord program
+  `jevonsd`; it relaunches the daemon without calling the fat script. An upgrade bounce still
   re-execs through `bin/detach` into its own session. The interval job
   **`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`,
   `make watchdog-status`) is **not** the product path — it must not
@@ -447,7 +449,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   test is observation of the running surface (composer, transcript, a
   live probe of the owner path), not restart-daily / GATE / HEAD
   snapshot. `HasDailyPathEvidence` is a seam classifier, not an achieve gate.
-  Pure web static may hard-reload only (T188). Persona +
+  React changes require an activated embedded bundle (T540.2). Persona +
   agents-guide + fleet standing brief.
 - **Visual cockpit finish is a prose look, not a green metric (🎯T493.1):**
   after any change that can affect what the owner sees in `#messages`

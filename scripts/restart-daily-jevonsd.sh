@@ -503,6 +503,28 @@ stop_brew_jevons() {
   fi
 }
 
+# T540.2: preserve the existing supervisor owner during React activation.
+# SIGHUP requests the daemon's fleet-preserving upgrade exit. Do not race
+# supervisord's replacement with the legacy kill-port/nohup adoption path.
+upgrade_with_supervisor() {
+  [[ "$PORT" == "$DAILY_PORT" ]] || return 1
+  command -v supervisorctl >/dev/null 2>&1 || return 1
+  local managed_pid listeners remaining
+  managed_pid="$(supervisorctl pid jevonsd 2>/dev/null)" || return 1
+  [[ "$managed_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  listeners="$(list_listen_pids)"
+  [[ "$listeners" == "$managed_pid" ]] || return 1
+  log "React upgrade through existing supervisord owner pid=$managed_pid"
+  supervisorctl signal HUP jevonsd || die "supervisor could not request upgrade exit"
+  remaining=$((STOP_WAIT_SEC * 5))
+  while kill -0 "$managed_pid" 2>/dev/null; do
+    [[ "$remaining" -gt 0 ]] || die "supervised daemon did not finish upgrade exit"
+    sleep 0.2
+    remaining=$((remaining - 1))
+  done
+  return 0
+}
+
 # 🎯T553.3: if KeepAlive owns jevonsd, SIGHUP is enough — launchd
 # relaunches the binary. Bootstrap the job when the plist exists but
 # launchd is not holding it (first adopt after write-only install).
@@ -786,6 +808,7 @@ fi
 await_min_interval
 
 stop_brew_jevons
+if ! upgrade_with_supervisor; then
 kill_port_listeners
 
 # 🎯T405 TEST SEAM. The window between freeing the port and starting the
@@ -799,6 +822,7 @@ if [[ "${JEVONS_RESTART_FAULT:-}" == "after-kill" ]]; then
 fi
 
 start_or_adopt_daemon
+fi
 wait_until_serving
 record_active_identity
 

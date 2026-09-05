@@ -32,7 +32,9 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
   tracked `ui/bundle.zip` embedded in the daemon. Root, assets and query deep
   links work without the checkout. `make ui-check-bundle` rejects stale
   committed assets without regenerating them. `make ui-dev` is optional HMR.
-  The document probe is `com.marcelocantos.jevons-ui`, not a second daemon.
+  Current development is supervised by Homebrew supervisord program
+  `jevonsd`, configured in `supervisor/jevonsd.ini`. The optional document
+  probe `com.marcelocantos.jevons-ui` is not a second daemon.
 - **Historical vanilla reference** — frozen at
   `8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab`, with the reviewed fidelity map
   in `docs/audits/react-fidelity-2026-09-05/`. No current `web/` runtime,

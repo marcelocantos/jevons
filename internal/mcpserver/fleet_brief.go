@@ -91,7 +91,7 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Workers do not invoke restart-daily after every land (🎯T553.2).
 - HasDailyPathEvidence is a seam classifier, not an achieve gate.
   hermetics alone do not close an owner-visible claim.
-- Pure static web-only may hard-reload only (🎯T188).
+- React changes require a rebuilt and activated daemon; hard reload observes that bundle (🎯T540.2).
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 - After any change that can affect what the owner sees in #messages /
@@ -117,10 +117,10 @@ ui/bundle.zip built from committed HEAD; no vanilla runtime or :13706
 comparison service remains. make ui-build type-checks and packages React;
 make ui-check-bundle rejects stale assets without repairing them. make ui-dev
 is optional HMR. Frozen reference: 8dd6e1694bbfb9ca1ac335f2c2d6ca939ce30fab;
-reviewed map: docs/audits/react-fidelity-2026-09-05/. T540.3/T540.7 retain
+reviewed map: docs/audits/react-fidelity-2026-09-05/. 🎯T540.3/🎯T540.7 retain
 unfinished fidelity independently of retirement. Main and sidebar share
 AgentInteraction and main-derived behavior; do not recreate the old sidebar
-fork. T505 / T553.1: development serves committed assets, not shared WIP.
+fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP.
 
 ## Greenfield oracle elicitation (🎯T31.2)
 - For NEW software (no external reference), co-develop an oracle-coverage
