@@ -43,15 +43,23 @@ const SendqPinFailureThreshold = 3
 // SendqPin names the message that is blocking a seat: which entry, why, and
 // how many delivery attempts have failed.
 type SendqPin struct {
-	EntryID string
-	Reason  string
-	Fails   int
-	At      time.Time
+	EntryID   string
+	Reason    string
+	Fails     int
+	At        time.Time
+	State     sendq.DeliveryState
+	AttemptID string
 }
 
 // FormatSendqPinLine is the operator-facing account of a pinned seat, shared
 // by agent_list and the fleet-health notice so the two never drift.
 func FormatSendqPinLine(name string, pin SendqPin) string {
+	if pin.State != sendq.Pending {
+		return fmt.Sprintf("PINNED %s: sendq message %s has an unresolved %s attempt %s (%s). "+
+			"The payload remains held. A start will not retry it; reconcile delivery before another send. "+
+			"An explicit overseer kill discards the held obligation without claiming non-delivery.",
+			name, pin.EntryID, pin.State, pin.AttemptID, pin.Reason)
+	}
 	fails := ""
 	if pin.Fails > 0 {
 		fails = fmt.Sprintf("; %d failed deliveries", pin.Fails)
@@ -66,6 +74,12 @@ func FormatSendqPinLine(name string, pin SendqPin) string {
 func (s *Server) sendqPinFor(name string) (SendqPin, bool) {
 	if s == nil || strings.TrimSpace(name) == "" {
 		return SendqPin{}, false
+	}
+	// Read durable attempts, including those left by a previous daemon. An
+	// in-memory pin alone disappears at exactly the restart that matters.
+	if e, blocked, err := s.sendQueue().BlockedHead(name); err == nil && blocked {
+		return SendqPin{EntryID: e.ID, AttemptID: e.AttemptID, State: e.State,
+			Reason: e.Detail, At: e.EnqueuedAt}, true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,6 +96,7 @@ func (s *Server) clearSendqPin(name string) {
 	s.mu.Lock()
 	delete(s.sendqPin, name)
 	delete(s.sendqPinFails, name)
+	delete(s.sendqAttemptNoticed, name)
 	s.mu.Unlock()
 }
 
@@ -146,17 +161,26 @@ func (s *Server) noteSendqDeliveryFailure(name string, e sendq.Entry, reason str
 // that could not be moved off a broken provider because the only drain would
 // deliver a message the overseer had ruled must not be delivered.
 func (s *Server) discardHeldSendqForOverseerKill(name, actor string) (int, error) {
-	count := s.pendingAgentSends(name)
-	if err := s.sendQueue().Clear(name); err != nil {
+	entries, err := s.sendQueue().Discard(name)
+	if err != nil {
 		return 0, err
+	}
+	count := len(entries)
+	ids := make([]string, 0, count)
+	states := make([]sendq.DeliveryState, 0, count)
+	for _, e := range entries {
+		ids = append(ids, e.ID)
+		states = append(states, e.State)
 	}
 	s.clearSendqPin(name)
 	s.logLifecycle(compAgentLifecycle, "kill_discard_sendq", "ok", map[string]any{
-		"name":      name,
-		"actor":     actor,
-		"discarded": count,
+		"name":            name,
+		"actor":           actor,
+		"discarded":       count,
+		"entry_ids":       ids,
+		"delivery_states": states,
 		"reason": "overseer kill overrides the 🎯T530 hold: held messages are " +
-			"discarded undelivered rather than pinning the seat (🎯T599)",
+			"explicitly discarded; unresolved attempts may already have reached the receiver (🎯T599)",
 	})
 	return count, nil
 }

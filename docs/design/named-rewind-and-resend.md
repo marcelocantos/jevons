@@ -194,3 +194,60 @@ cannot distinguish a pre-SQLite state directory from one whose entire database
 was deleted; the future durable rewind operation must preserve its own recovery
 receipt. These remain within T623/T627; this slice does not make provider rewind
 safe or prove that all recovery paths honor empty history.
+
+## Durable fleet-queue prerequisite
+
+The queue drain now persists an attempt before calling the provider. The full
+payload, acceptance time and stable entry ID remain present during submission.
+A matching attempt token is required to release the entry; stale completions
+cannot consume a later retry or recreate an explicitly discarded entry. Known
+pre-write refusals return the same entry to pending. Unknown errors and outcomes
+without the required evidence remain held, including across daemon death, and
+are never automatically replayed. A failed claim prevents submission; a failed
+resolution leaves the attempt held.
+
+Automatic missing-agent and finished-agent cleanup uses the same claim/resolve
+mechanism, so it cannot erase an in-progress delivery or clear concurrently
+appended messages with a whole-queue delete. Cleanup claims the entry IDs from
+its observed backlog, not a count that a newer message can silently fill.
+Rerouting retains explicit unconfirmed results and failed successor enqueues.
+Explicit overseer discard retains
+its authority and records entry IDs and prior delivery states; it does not label
+an uncertain attempt as definitely undelivered. Recovered attempts appear in
+agent-list pin status and recovery notices, with reconciliation advice rather
+than an instruction to start the agent to force a retry. An unusable configured
+queue directory rejects acceptance instead of falling back to memory.
+Current-process ownership keeps a healthy active attempt out of orphaned-attempt
+pin status; that ownership is deliberately absent after a store is reopened.
+
+A terminal received while submission is being witnessed must still wake the
+next drain after resolution. A per-agent terminal generation prevents a late
+confirmation from overwriting that observed end. Ordinary busy refusals remain
+waiting and do not accumulate failed-delivery pins.
+
+The standing Go tests exercise the production drain, terminate a separate test
+process inside its provider submission, reopen the real queue files, and check
+that the exact acceptance survives without another send. Additional cases cover
+disk failures at claim and resolution, opaque errors versus known pre-write
+refusals, concurrent drains and arrivals, late attempt tokens, authorized
+discard, cleanup bypasses, and terminal events arriving before confirmation.
+The boundary regression fails on the preceding implementation: the queue is
+empty during provider submission (`9586f158`, expected negative control).
+
+This slice deliberately preserves the existing **nil-error** successful-send
+classifier. Its generic live-session event can still be local acceptance or
+unrelated activity; it is not correlated receipt evidence. An errored send may
+release the obligation only on payload-specific evidence. This is a bounded
+durability improvement, not proof of exactly-once delivery and not completion of
+T623. Provider-correlated receipts, reconciliation of uncertain attempts,
+serialization with direct sends, durable overseer notifications, and recorded
+terminal-disposition guarantees remain open. Finished-seat forwarding also
+inherits the direct-send success contract rather than acquiring a new receipt.
+
+Journey exception: the crash-window and filesystem-failure assertions are
+decided by the production queue/drain with actual disk and process death; a
+model response cannot decide those interleavings. No provider process contract
+changes in this slice. A live-provider smoke run is additional compatibility
+evidence, not a replacement for those tests or proof of provider rewind. The
+existing J17 queue-bounce journey only checks that recovery is reported, so its
+green result must not be presented as receipt-correlated delivery evidence.

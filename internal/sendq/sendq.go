@@ -20,9 +20,10 @@
 // of acceptance clause 4: an in-memory queue moves the loss rather than
 // removing it.
 //
-// WHAT IS PERSISTED, and what deliberately is not. The payload and when it was
-// accepted — everything needed to deliver the message later, or to say how long
-// it has been waiting. Not persisted: whether a turn was in flight when it was
+// WHAT IS PERSISTED: the payload, acceptance time, and any unresolved delivery
+// attempt. A claim remains on disk while the provider is called; daemon death
+// leaves it held for reconciliation, never silently removed or replayed.
+// Not persisted: whether a turn was in flight when it was
 // accepted. That is a claim about a process that no longer exists (see
 // turn_flight.go on why FlightUnknown is a first-class answer), and writing it
 // to disk would resurrect a stale belief as a fact after exactly the event that
@@ -65,7 +66,32 @@ type Entry struct {
 	// EnqueuedAt is when the daemon accepted it. The age of the oldest entry
 	// is the number that says whether a queue is waiting or stalled.
 	EnqueuedAt time.Time `json:"enqueued_at"`
+	// Empty state is the legacy pending representation. Attempting/uncertain
+	// entries remain on disk but cannot be claimed by an automatic retry.
+	State     DeliveryState `json:"state,omitempty"`
+	AttemptID string        `json:"attempt_id,omitempty"`
+	Detail    string        `json:"detail,omitempty"`
 }
+
+type DeliveryState string
+
+const (
+	Pending    DeliveryState = ""
+	Attempting DeliveryState = "attempting"
+	Uncertain  DeliveryState = "uncertain"
+)
+
+// AttemptOutcome records what the caller established, not what a transport
+// return code happens to imply. Only DefinitelyNotSent permits another send.
+type AttemptOutcome string
+
+const (
+	Confirmed         AttemptOutcome = "confirmed"
+	DefinitelyNotSent AttemptOutcome = "not_sent"
+	Unverified        AttemptOutcome = "unverified"
+	// TerminalUndelivered requires a sender-visible recorded disposition.
+	TerminalUndelivered AttemptOutcome = "terminal_undelivered"
+)
 
 // Age is how long this entry has been waiting, as of now.
 func (e Entry) Age(now time.Time) time.Duration { return now.Sub(e.EnqueuedAt) }
@@ -79,6 +105,12 @@ type Backlog struct {
 	Agent  string
 	Depth  int
 	Oldest time.Time
+	// EntryIDs freezes the observed cohort for automatic cleanup. A later
+	// arrival must not replace an entry another drain has since removed.
+	EntryIDs []string
+	// Uncertain counts entries that must be reconciled rather than replayed.
+	// An attempt left by a dead daemon has the same conservative meaning.
+	Uncertain int
 }
 
 // OldestAge is how long the head of this queue has been waiting.
@@ -93,6 +125,10 @@ func (b Backlog) OldestAge(now time.Time) time.Duration {
 func (b Backlog) Describe(now time.Time) string {
 	if b.Depth == 0 {
 		return fmt.Sprintf("%s: queue empty", b.Agent)
+	}
+	if b.Uncertain > 0 {
+		return fmt.Sprintf("%s: %d held, %d delivery outcome(s) uncertain, oldest waiting %s",
+			b.Agent, b.Depth, b.Uncertain, b.OldestAge(now).Round(time.Second))
 	}
 	return fmt.Sprintf("%s: %d queued, oldest waiting %s",
 		b.Agent, b.Depth, b.OldestAge(now).Round(time.Second))
@@ -118,6 +154,9 @@ type Store struct {
 	// storeless daemon and the hermetic test share the durable store's code
 	// down to the last method; only where a record lands differs.
 	mem map[string][]Entry
+	// Ownership exists only in this process. A reopened store has no active
+	// owner for an attempting entry left by the preceding daemon.
+	active map[string]string
 }
 
 // NewStore roots a store at dir (conventionally <state_dir>/sendq). An empty
@@ -158,7 +197,7 @@ func (s *Store) load(agent string) (file, error) {
 		if name == "" {
 			return file{}, fmt.Errorf("sendq: agent name is required")
 		}
-		return file{Agent: name, Entries: s.mem[name]}, nil
+		return file{Agent: name, Entries: append([]Entry(nil), s.mem[name]...)}, nil
 	}
 	path, err := s.path(agent)
 	if err != nil {
@@ -174,6 +213,14 @@ func (s *Store) load(agent string) (file, error) {
 	var f file
 	if err := json.Unmarshal(data, &f); err != nil {
 		return file{}, fmt.Errorf("sendq: parse queue for %q (%s): %w", agent, path, err)
+	}
+	for _, e := range f.Entries {
+		if e.State != Pending && e.State != Attempting && e.State != Uncertain {
+			return file{}, fmt.Errorf("sendq: unknown delivery state %q for %q", e.State, agent)
+		}
+		if e.State != Pending && (e.ID == "" || e.AttemptID == "") {
+			return file{}, fmt.Errorf("sendq: incomplete delivery attempt for %q", agent)
+		}
 	}
 	f.Agent = agent
 	return f, nil
@@ -267,6 +314,9 @@ func (s *Store) PushFront(agent string, e Entry) error {
 	if err != nil {
 		return err
 	}
+	if len(f.Entries) > 0 && f.Entries[0].State != Pending {
+		return fmt.Errorf("sendq: cannot prepend past an unresolved delivery attempt for %q", agent)
+	}
 	f.Entries = append([]Entry{e}, f.Entries...)
 	return s.save(f)
 }
@@ -286,11 +336,111 @@ func (s *Store) PopFront(agent string) (Entry, bool, error) {
 		return Entry{}, false, nil
 	}
 	e := f.Entries[0]
+	if e.State != Pending {
+		return Entry{}, false, fmt.Errorf("sendq: %q has an unresolved delivery attempt", agent)
+	}
 	f.Entries = f.Entries[1:]
 	if err := s.save(f); err != nil {
 		return Entry{}, false, err
 	}
 	return e, true, nil
+}
+
+// ClaimFront durably retains the oldest entry while granting one attempt.
+// Another drain, including one after restart, cannot repeat an unresolved send.
+// ok=false with a nonempty entry means delivery needs reconciliation.
+func (s *Store) ClaimFront(agent string) (Entry, bool, error) {
+	return s.claimFront(agent, "", false)
+}
+
+// ClaimFrontID claims only an observed entry, so stale cleanup cannot consume
+// a replacement which arrived after its backlog snapshot.
+func (s *Store) ClaimFrontID(agent, id string) (Entry, bool, error) {
+	return s.claimFront(agent, id, true)
+}
+
+func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil || len(f.Entries) == 0 {
+		return Entry{}, false, err
+	}
+	e := f.Entries[0]
+	if e.State != Pending || (matchID && e.ID != id) {
+		return e, false, nil
+	}
+	if e.ID == "" {
+		e.ID = NewID()
+	}
+	e.State, e.AttemptID, e.Detail = Attempting, NewID(), ""
+	f.Entries[0] = e
+	if err := s.save(f); err != nil {
+		return Entry{}, false, err
+	}
+	if s.active == nil {
+		s.active = map[string]string{}
+	}
+	s.active[agent] = e.AttemptID
+	return e, true, nil
+}
+
+// BlockedHead atomically reads an unresolved attempt and its local ownership.
+// A healthy in-progress operation is not an orphan requiring reconciliation.
+func (s *Store) BlockedHead(agent string) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil || len(f.Entries) == 0 {
+		return Entry{}, false, err
+	}
+	e := f.Entries[0]
+	if e.State == Pending || (e.State == Attempting && s.active[agent] == e.AttemptID) {
+		return Entry{}, false, nil
+	}
+	return e, true, nil
+}
+
+// Resolve records one attempt's outcome. Unverified retains the payload without
+// offering it again. Both entry and attempt IDs guard late results.
+func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, detail string) error {
+	if s == nil {
+		return fmt.Errorf("sendq: no store")
+	}
+	if outcome != Confirmed && outcome != DefinitelyNotSent && outcome != Unverified && outcome != TerminalUndelivered {
+		return fmt.Errorf("sendq: invalid attempt outcome %q", outcome)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Even a failed persistence attempt ends this operation's ownership. Its
+	// durable claim remains unresolved and must become visible to recovery.
+	if s.active[agent] == attempt.AttemptID {
+		delete(s.active, agent)
+	}
+	f, err := s.load(agent)
+	if err != nil {
+		return err
+	}
+	if len(f.Entries) == 0 || attempt.ID == "" || attempt.AttemptID == "" ||
+		f.Entries[0].ID != attempt.ID || f.Entries[0].AttemptID != attempt.AttemptID || f.Entries[0].State == Pending {
+		return fmt.Errorf("sendq: stale delivery attempt for %q", agent)
+	}
+	if outcome == Confirmed || outcome == TerminalUndelivered {
+		f.Entries = f.Entries[1:]
+	} else {
+		f.Entries[0].State, f.Entries[0].Detail = Uncertain, detail
+		if outcome == DefinitelyNotSent {
+			f.Entries[0].State = Pending
+			f.Entries[0].AttemptID = ""
+		}
+	}
+	return s.save(f)
 }
 
 // Snapshot returns an agent's queue in order, without mutating it.
@@ -320,12 +470,28 @@ func (s *Store) Depth(agent string) (int, error) {
 // addressed to an agent that no longer exists has nowhere to be delivered,
 // and is reported by the caller rather than kept forever.
 func (s *Store) Clear(agent string) error {
+	_, err := s.Discard(agent)
+	return err
+}
+
+// Discard is an explicit authority override. Return the exact removed entries
+// under the same lock so the caller can record IDs and uncertain dispositions.
+// Automatic drains/reapers must use ClaimFront/Resolve instead.
+func (s *Store) Discard(agent string) ([]Entry, error) {
 	if s == nil {
-		return fmt.Errorf("sendq: no store")
+		return nil, fmt.Errorf("sendq: no store")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.save(file{Agent: agent})
+	f, err := s.load(agent)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.save(file{Agent: agent}); err != nil {
+		return nil, err
+	}
+	delete(s.active, agent)
+	return f.Entries, nil
 }
 
 // Agents lists every agent with a queue on disk, sorted. This is what makes
@@ -383,7 +549,14 @@ func (s *Store) Backlogs() ([]Backlog, error) {
 		if len(entries) == 0 {
 			continue
 		}
-		out = append(out, Backlog{Agent: name, Depth: len(entries), Oldest: entries[0].EnqueuedAt})
+		b := Backlog{Agent: name, Depth: len(entries), Oldest: entries[0].EnqueuedAt}
+		for _, e := range entries {
+			b.EntryIDs = append(b.EntryIDs, e.ID)
+			if e.State != Pending {
+				b.Uncertain++
+			}
+		}
+		out = append(out, b)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Oldest.Before(out[j].Oldest) })
 	return out, nil

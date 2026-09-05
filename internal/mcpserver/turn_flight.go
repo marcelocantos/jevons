@@ -203,7 +203,42 @@ func (s *Server) noteTurnInFlight(name string) { s.setFlight(name, FlightInFligh
 // noteTurnEnded records an observed terminal stop. Called from the agent event
 // sink, which is the same signal that drains the send queue and delivers the
 // reply — if it were unreliable, worker replies would not arrive either.
-func (s *Server) noteTurnEnded(name string) { s.setFlight(name, FlightIdle) }
+func (s *Server) noteTurnEnded(name string) {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agentTerminalGeneration == nil {
+		s.agentTerminalGeneration = map[string]uint64{}
+	}
+	s.agentTerminalGeneration[name]++
+	if s.agentFlight == nil {
+		s.agentFlight = map[string]TurnFlight{}
+	}
+	s.agentFlight[name] = FlightIdle
+}
+
+func (s *Server) terminalGeneration(name string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentTerminalGeneration[name]
+}
+
+// A terminal observed during submission/witnessing owns the later flight
+// state. Returning true preserves its drain request after the head is released.
+func (s *Server) noteQueuedTurnBegan(name string, generation uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agentTerminalGeneration[name] != generation {
+		return true
+	}
+	if s.agentFlight == nil {
+		s.agentFlight = map[string]TurnFlight{}
+	}
+	s.agentFlight[name] = FlightInFlight
+	return false
+}
 
 // Forgetting is clearAgentTurnBegan's job: a seat torn down drops its
 // turn-began mark and its flight record together, since both are claims about

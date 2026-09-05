@@ -146,17 +146,22 @@ func (s *Server) forgetReapedBacklogNotice(name string) {
 // eventlog — and tells the overseer once.
 func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record, now time.Time) {
 	age := b.OldestAge(now)
-	entries, err := s.sendQueue().Snapshot(b.Agent)
-	if err != nil {
-		slog.Error("🎯T582 held backlog unreadable; leaving it queued",
-			"component", "agent_send", "agent", b.Agent, "err", err)
-		return
-	}
+	q := s.sendQueue()
 	parent := s.parentOfReaped(b.Agent)
 	achieve := reapedOnAchieve(rec)
 
 	routed, dropped := 0, 0
-	for _, e := range entries {
+	for _, id := range b.EntryIDs {
+		e, claimed, err := q.ClaimFrontID(b.Agent, id)
+		if err != nil {
+			slog.Error("held backlog claim failed", "agent", b.Agent, "entry_id", id, "err", err)
+			break
+		}
+		if !claimed {
+			continue // A concurrent drain owns or already resolved this entry.
+		}
+		outcome := sendq.TerminalUndelivered
+
 		switch {
 		case achieve && looksLikeGateFeedback(e.Text):
 			// The target this feedback is about is the one the reap rode on.
@@ -164,6 +169,7 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 			s.LogEvent("agent_send", "held_backlog_dropped", map[string]any{
 				"target":     "T582",
 				"agent":      b.Agent,
+				"entry_id":   e.ID,
 				"reason":     "gate feedback about an already-achieved target",
 				"intent":     rec.Describe(),
 				"bytes":      len(e.Text),
@@ -174,35 +180,56 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 			tagged := fmt.Sprintf(
 				"[held backlog from %s — that seat was %s, so this is routed to you as its parent (🎯T582)]\n\n%s",
 				b.Agent, rec.Describe(), e.Text)
-			if _, derr := s.deliverByName(parent, tagged, OriginAgent, false); derr != nil {
+			res, derr := s.deliverByName(parent, tagged, OriginAgent, false)
+			if derr == nil {
+				switch res.Status {
+				case "sent", "interrupted_sent", "rehydrated_sent":
+					// Retains the existing direct-send success predicate.
+				case "queued", "interrupted_queued", StatusReapedHeld:
+					if res.Queued == 0 || !q.Durable() {
+						derr = fmt.Errorf("parent hold is not a confirmed durable successor: %s", res.Message)
+					}
+				default:
+					derr = fmt.Errorf("parent delivery remains %s: %s", res.Status, res.Message)
+				}
+			}
+			if derr != nil {
 				slog.Warn("🎯T582 held backlog could not be routed to the parent",
 					"component", "agent_send", "agent", b.Agent, "parent", parent, "err", derr)
-				s.LogEvent("agent_send", "held_backlog_dropped", map[string]any{
-					"target": "T582",
-					"agent":  b.Agent,
-					"parent": parent,
-					"reason": "parent delivery failed: " + derr.Error(),
-					"bytes":  len(e.Text),
+				s.LogEvent("agent_send", "held_backlog_uncertain", map[string]any{
+					"target":   "T582",
+					"agent":    b.Agent,
+					"entry_id": e.ID,
+					"parent":   parent,
+					"reason":   "parent delivery unverified; payload retained: " + derr.Error(),
+					"bytes":    len(e.Text),
 				})
-				dropped++
-				continue
+				if err := q.Resolve(b.Agent, e, sendq.Unverified, "parent delivery outcome uncertain: "+derr.Error()); err != nil {
+					slog.Error("held backlog route outcome not persisted", "agent", b.Agent, "entry_id", e.ID, "err", err)
+				}
+				s.notifyFleetHealth(fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
+				return
 			}
+			outcome = sendq.Confirmed
 			routed++
 		default:
 			s.LogEvent("agent_send", "held_backlog_dropped", map[string]any{
-				"target": "T582",
-				"agent":  b.Agent,
-				"reason": "reaped seat has no recorded parent to route to",
-				"intent": rec.Describe(),
-				"bytes":  len(e.Text),
+				"target":   "T582",
+				"agent":    b.Agent,
+				"entry_id": e.ID,
+				"reason":   "reaped seat has no recorded parent to route to",
+				"intent":   rec.Describe(),
+				"bytes":    len(e.Text),
 			})
 			dropped++
 		}
+		if err := q.Resolve(b.Agent, e, outcome, "recorded reaped-seat disposition"); err != nil {
+			slog.Error("held backlog route not persisted; attempt retained", "agent", b.Agent, "entry_id", e.ID, "err", err)
+			return
+		}
 	}
-
-	if err := s.sendQueue().Clear(b.Agent); err != nil {
-		slog.Error("🎯T582 routed backlog could not be cleared",
-			"component", "agent_send", "agent", b.Agent, "err", err)
+	if routed+dropped == 0 {
+		return
 	}
 
 	slog.Info("🎯T582 held backlog on a finished seat routed",

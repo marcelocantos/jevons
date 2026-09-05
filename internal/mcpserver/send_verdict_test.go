@@ -360,7 +360,7 @@ func TestDrainWithAnUnverifiedSubmitAndNoRecordsStillSurfaces(t *testing.T) {
 	if len(inbox.texts) != 1 {
 		t.Fatalf("an undelivered backlog was not surfaced to the overseer: %v", inbox.texts)
 	}
-	if !strings.Contains(inbox.texts[0], "Undelivered backlog") {
+	if !strings.Contains(inbox.texts[0], "Uncertain delivery") {
 		t.Errorf("fleet-health note does not name the failure: %q", inbox.texts[0])
 	}
 }

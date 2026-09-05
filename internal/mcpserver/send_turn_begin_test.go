@@ -517,14 +517,18 @@ func TestDrainedMessageThatSticksIsNotRequeuedAndIsSurfaced(t *testing.T) {
 	if len(agent.sent) != 1 {
 		t.Fatalf("drain sent %d times want 1", len(agent.sent))
 	}
-	if n := s.pendingAgentSends("w"); n != 0 {
-		t.Fatalf("stuck message re-queued (%d pending) — the next drain delivers a duplicate", n)
+	if n := s.pendingAgentSends("w"); n != 1 {
+		t.Fatalf("uncertain payload no longer retained: %d held", n)
+	}
+	s.drainAgentSendQueue("w")
+	if len(agent.sent) != 1 {
+		t.Fatal("a retained uncertain attempt was submitted twice")
 	}
 	if len(inbox.texts) != 1 {
 		t.Fatalf("undelivered backlog was not surfaced to the overseer: %v", inbox.texts)
 	}
 	note := inbox.texts[0]
-	for _, want := range []string{"Fleet health", "Undelivered backlog", "composer", "NOT been re-queued"} {
+	for _, want := range []string{"Fleet health", "Uncertain delivery", "full payload remains held", "NOT be automatically retried"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("fleet-health note missing %q: %q", want, note)
 		}

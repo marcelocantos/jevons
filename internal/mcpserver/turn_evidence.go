@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -316,11 +317,18 @@ func (s *Server) watchAgentTurnFor(name, payload string) turnWatch {
 // clause 10 forbids widening: it only ever shortens, and the send path still
 // passes turnConfirmWindow().
 func (s *Server) watchAgentTurnForWindow(name, payload string, window time.Duration) turnWatch {
+	watch, _ := s.watchAgentTurnForCancelable(name, payload, window)
+	return watch
+}
+
+// The queue can return on a pre-submit refusal without awaiting the witness.
+// Give that caller a cleanup path; ordinary awaited watches clean themselves.
+func (s *Server) watchAgentTurnForCancelable(name, payload string, window time.Duration) (turnWatch, func()) {
 	s.mu.Lock()
 	witness := s.observeTurnWitness
 	s.mu.Unlock()
 	if witness != nil {
-		return witness(name, payload)
+		return witness(name, payload), func() {}
 	}
 	var obs turnObserver
 	if s.registry != nil {
@@ -331,7 +339,7 @@ func (s *Server) watchAgentTurnForWindow(name, payload string, window time.Durat
 			}
 		}
 	}
-	return observeTurnFor(obs, payload, window)
+	return observeTurnForCancelable(obs, payload, window)
 }
 
 // providerKeepsClaudeTranscript reports whether this provider's backend
@@ -377,10 +385,15 @@ func observeTurn(obs turnObserver, window time.Duration) turnWatch {
 // for, until the agent shows any sign of life), the agent dies, or the window
 // closes.
 func observeTurnFor(obs turnObserver, payload string, window time.Duration) turnWatch {
+	watch, _ := observeTurnForCancelable(obs, payload, window)
+	return watch
+}
+
+func observeTurnForCancelable(obs turnObserver, payload string, window time.Duration) (turnWatch, func()) {
 	if obs == nil {
 		return func() TurnEvidence {
 			return TurnEvidence{Detail: "no live agent process to observe"}
-		}
+		}, func() {}
 	}
 
 	path := strings.TrimSpace(obs.JSONLPath())
@@ -415,10 +428,16 @@ func observeTurnFor(obs turnObserver, payload string, window time.Duration) turn
 		return e
 	}
 
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			if seen != nil {
+				obs.UnsubscribeEvents(token)
+			}
+		})
+	}
 	return func() TurnEvidence {
-		if seen != nil {
-			defer obs.UnsubscribeEvents(token)
-		}
+		defer cancel()
 		deadline := time.Now().Add(window)
 		grew := false
 		for {
@@ -471,7 +490,7 @@ func observeTurnFor(obs turnObserver, payload string, window time.Duration) turn
 			}
 			time.Sleep(turnEvidencePoll)
 		}
-	}
+	}, cancel
 }
 
 // fateEvidence turns one scan of the receiver's transcript into the answer
