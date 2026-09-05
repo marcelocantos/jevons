@@ -456,13 +456,15 @@ func (s *Server) overseerWorkingLevel() bool {
 // fleet backlog and interrupt a fleet-only in-flight prompt so the owner's
 // words are not deferred behind idle churn.
 func (s *Server) SendToOverseer(text string) error {
+	owner := isOwnerNotifyText(text)
 	// The owner talking to Jevons is the strongest owner-present signal —
 	// feed the budget dead-man's switch so it never stops a fleet the
-	// owner is actively directing.
-	if s.activityHook != nil {
+	// owner is actively directing. System notices are not owner contact:
+	// a budget notice can arrive while the enforcer owns its lock, and
+	// calling its heartbeat here would re-enter that lock (🎯T623.1).
+	if owner && s.activityHook != nil {
 		s.activityHook()
 	}
-	owner := isOwnerNotifyText(text)
 
 	s.mu.Lock()
 	if owner {

@@ -353,3 +353,42 @@ live status updates; the independent wire reader's complete-window boundary
 does not certify that behavior. J3 remains a generic legacy cancellation smoke,
 not an exact-reply or cancellation-ordering guarantee. T625 also remains open
 for tools-attached/directed-work, bounce/resume, and remaining provider coverage.
+
+## Budget-notice recursion found by the canonical journey
+
+The clean mux candidate `13ab69ff831e` passed helper race tests and a fresh
+daemon build (`e8d3237a`), then Grok J2/J4/J5 (`1a32fb33`). Cursor J2 passed,
+but J4's next seed echoed at index 3 and received no reply in 90 seconds
+(`8211056b`, red). Its store retained the request; its log had a preceding
+budget warning and no second notification-queue enqueue. A later identical
+Cursor run passed (`fcd76d52`, only ledger dirty), so retry success did not
+explain or resolve the failure.
+
+Source tracing and a deterministic regression establish a recursive lock:
+`Enforcer.Act` owns the budget mutex while delivering its warning; the agent
+notice reaches `SendToOverseer`, whose unconditional activity hook calls
+`Enforcer.Heartbeat` and reacquires that same mutex. Subsequent owner sends
+block after their journal echo and before queueing. Both the recursion and
+incorrect system-as-owner activity fail on the preceding code (`add318f0`).
+Attribution of the original Cursor timeout remains inferred: no goroutine dump
+was captured from that isolate.
+
+The T623.1 correction invokes the activity hook only for owner-marked turns.
+It preserves normal owner contact while excluding budget, worker, and system
+notices. Focused owner/notification race regressions pass (`981a5aca`). An
+initial corrected-code run failed a fixture expectation because the real
+enforcer prefixes the notice with `budget: `; that expectation was corrected,
+without changing product formatting. Automatic owner retries still count as
+owner-marked contact, and budget delivery remains synchronous; this correction
+does not claim to solve either broader concern.
+
+Journey exception for the exact warning trigger: the deterministic
+cross-component test uses the real enforcer and the production notification
+and heartbeat methods to decide the recursive-lock property without relying
+on incidental provider spend to trigger a warning. Fresh real-provider
+canonical send/reconnect journeys verify integration separately; a passing run
+without a warning is not presented as proof it exercised that trigger.
+
+The broader server race run remains red (`40f130e4`) for a separate existing
+`handleRemote` disconnect-log map race. Baseline `8ef4b57e` reproduces it in
+unchanged server source. It is tracked separately, not repaired in this slice.
