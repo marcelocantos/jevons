@@ -249,8 +249,8 @@ decided by the production queue/drain with actual disk and process death; a
 model response cannot decide those interleavings. No provider process contract
 changes in this slice. A live-provider smoke run is additional compatibility
 evidence, not a replacement for those tests or proof of provider rewind. The
-existing J17 queue-bounce journey only checks that recovery is reported, so its
-green result must not be presented as receipt-correlated delivery evidence.
+then-existing J17 queue-bounce journey only checked that recovery was reported,
+so its result could not establish receipt-correlated delivery.
 
 Verification at `df59db58969a`: `queue-attempt-clean` (`5c3e2e16`) ran from a
 fresh checkout and passed 3,191 Go tests (four skipped), the focused queue and
@@ -268,3 +268,45 @@ fresh request, establish its durable queue entry before bouncing, and verify
 the corresponding recovery outcome. The failed experiment is neither a live
 recovery pass nor evidence that this queue fix regressed a working journey.
 The development daemon has not been activated with this slice.
+
+## Request-specific queue recovery journey
+
+J17 now starts a worker explicitly on the selected provider. The agent runs a
+bounded shell wait and creates its own ready marker. The harness then submits
+one fresh follow-up through the same named-agent send API and reads the durable
+queue without modifying it. Exactly one matching pending entry must exist before
+restart. A queued reply, including `queued (0 pending)`, cannot substitute for
+that acceptance.
+
+The result file must be absent both before shutdown and after the old daemon
+exits. After restart, the worker must perform the queued request's shell action
+and write the fresh token. The named runtime launch must identify the selected
+provider on both sides of the restart, and the queue must settle. This proves
+the bounded post-restart action; returning at that point does not rule out a
+later duplicate or establish general exactly-once semantics. The independent
+review explicitly retains that limit.
+
+The first fixture revision failed (`ec264650`): it parsed daemon text logs as
+JSON and used thread-direct before a first named-agent send, whose fleet brief
+changes the queued envelope. Both were corrected. The provider parser is now
+tested against actual `slog.TextHandler` output and a captured-format launch;
+negative controls reject another worker, wrong/mixed providers, missing queue
+entries, duplicate acceptances, stale payloads, uncertain attempts, and any
+pre-restart result.
+
+In the corrected real Grok experiment, entry `20c27e5913fd` was held before the
+bounce, then its agent-created result appeared after restart and its queue
+settled. J17 and J5 isolation succeeded, and teardown stopped the isolate.
+The combined gate (`0ecde71f`) remains **RED** because the separate existing J2
+owner-chat round trip timed out. It is not a green journey-suite result. T625
+remains open for J2, tools-attached/directed-work, bounce/resume, and the remaining
+provider coverage; no React or rewind completion follows from this J17 slice.
+
+The committed repair then passed `queue-journey-clean-grok` (`c71e4cd6`,
+`clean@2806f863bc3d`): journey helper tests, a fresh daemon build, and J17 with a
+new real Grok acceptance `65e1fff3bbe0`. The worker produced the corresponding
+shell result after restart and the queue settled; teardown completed. The full
+Go net also passed 3,210 tests with four skips (`c6a8b2ed`), run on the same code
+before its commit; that gate truthfully records a dirty tree and does not claim
+to measure the preceding HEAD alone. The earlier combined J2/J17/J5 gate stays
+red; a focused green does not erase the owner-chat timeout.

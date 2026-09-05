@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -121,23 +123,32 @@ func (s *suite) jT3924CheckpointResume() error {
 	return nil
 }
 
-// jT418QueueBounce requires the second send to be queued, snapshots
-// logs, bounces, and asserts a NEW recover/undelivered/re-offer line.
+// jT418QueueBounce proves that one request, accepted while a real agent is
+// busy, produces its own shell effect after restart on the selected provider.
+// Recovery logs and a "queued" reply alone cannot establish this property.
 func (s *suite) jT418QueueBounce() error {
 	if err := portguard.RefuseDaily(s.port); err != nil {
 		return err
 	}
-	name := fmt.Sprintf("jv-t418q-%d", time.Now().Unix()%100000)
-	work := filepath.Join(s.stateDir, "t418-work")
-	if err := os.MkdirAll(work, 0o755); err != nil {
+	work, err := os.MkdirTemp(s.stateDir, "t418-work-")
+	if err != nil {
 		return err
 	}
+	name := "jv-" + filepath.Base(work)
+	token := "completed-" + filepath.Base(work)
+	ready := filepath.Join(work, "busy-ready")
+	release := filepath.Join(work, "release-busy")
+	result := filepath.Join(work, "queued-result")
 	defer func() {
+		// Release any surviving shell even when a precondition fails. The
+		// agent also has a bounded wait, independent of this cleanup.
+		_ = os.WriteFile(release, nil, 0o600)
 		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": name})
 	}()
 
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": name, "workdir": work, "description": "T418 queue-bounce worker",
+		"provider": string(s.provider),
 	})
 	if out := asOutage("spawn", err); out != nil {
 		return out
@@ -146,69 +157,191 @@ func (s *suite) jT418QueueBounce() error {
 		return fmt.Errorf("start: %w (%s)", err, trim(spawnOut, 80))
 	}
 
+	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", "'\"'\"'") + "'" }
+	const busyLimitSeconds = 180
+	busyCommand := fmt.Sprintf("printf 'ready\\n' > %s; n=0; while [ ! -f %s ] && [ \"$n\" -lt %d ]; do sleep 1; n=$((n+1)); done; test -f %s",
+		quote(ready), quote(release), busyLimitSeconds, quote(release))
+	busyDone := make(chan error, 1)
 	go func() {
-		_, _ = s.mcpText("jevons_thread_direct", map[string]any{
-			"id": name, "text": "Count slowly from 1 to 40 in your reply, then say DONE. Do not finish early.",
+		_, err := s.mcpText("jevons_agent_send", map[string]any{
+			"name": name, "actor": "jevons", "text": "Use your shell tool to run exactly this command and wait for it to return. Do not create the release file, background the command, or finish early. This bounded wait is part of a restart test:\n" + busyCommand,
 		})
+		busyDone <- err
 	}()
-
-	token := "QUEUED-TOKEN-T418-SURVIVE"
-	var queued string
-	deadline := time.Now().Add(25 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(800 * time.Millisecond)
-		out, err := s.mcpText("jevons_agent_send", map[string]any{
-			"name": name, "text": token + " after the bounce.", "actor": "jevons",
-		})
-		if asOutage("queue send", err) != nil {
-			return asOutage("queue send", err)
-		}
-		if err != nil {
-			// A busy in-flight send often returns queued as text, not err.
-			if strings.Contains(strings.ToLower(out+" "+err.Error()), "queued") {
-				queued = out + " " + err.Error()
-				break
-			}
-			continue
-		}
-		if strings.Contains(strings.ToLower(out), "queued") {
-			queued = out
+	deadline := time.Now().Add(turnTimeout)
+	for {
+		if body, err := os.ReadFile(ready); err == nil && string(body) == "ready\n" {
 			break
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("busy marker: %w", err)
 		}
+		select {
+		case err := <-busyDone:
+			if outage := asOutage("busy work", err); outage != nil {
+				return outage
+			}
+			if err != nil {
+				return fmt.Errorf("busy work submission: %w", err)
+			}
+			// Agent send acknowledges a started turn before its shell runs.
+			// A nil reply is neither the busy marker nor proof of completion.
+		default:
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("agent did not establish the busy-work marker")
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	if queued == "" || !strings.Contains(strings.ToLower(queued), "queued") {
-		return fmt.Errorf("second send never queued (need queued, not sent/delivered): last=%s", trim(queued, 240))
+	preLogs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
 	}
-	fmt.Println("T418 queued reply:", trim(queued, 240))
-
-	preEvents, _ := os.ReadFile(s.eventsPath())
-	preLogs, _ := os.ReadFile(s.logPath)
-
-	if err := s.bounceDrain(); err != nil {
-		return fmt.Errorf("bounce: %w", err)
+	if err := queueJourneyProvider(preLogs, name, string(s.provider)); err != nil {
+		return err
 	}
-
-	needles := []string{
-		"recovered a queued message",
-		"UNDELIVERED",
-		"backlog sweep: re-offering",
-		"🎯T418 recovered",
+	payload := fmt.Sprintf("Use your shell tool to run exactly: printf '%%s\\n' %s >> %s\nRun it once. Do not delegate. Then reply with only the value you wrote.", quote(token), quote(result))
+	// One acceptance only. Retrying until some reply says "queued" can
+	// accidentally prove a different send, or create duplicate obligations.
+	out, sendErr := s.mcpText("jevons_agent_send", map[string]any{
+		"name": name, "text": payload, "actor": "jevons",
+	})
+	if outage := asOutage("queue send", sendErr); outage != nil {
+		return outage
 	}
-	wait := time.Now().Add(45 * time.Second)
-	for time.Now().Before(wait) {
-		ev, _ := os.ReadFile(s.eventsPath())
-		lg, _ := os.ReadFile(s.logPath)
-		delta := newTail(preEvents, ev) + "\n" + newTail(preLogs, lg)
-		for _, n := range needles {
-			if strings.Contains(delta, n) {
-				printMatching("T418 post-bounce NEW lines", delta, needles...)
-				fmt.Println("T418 bounce-survive-or-tell: saw", n)
+	store := sendq.NewStore(filepath.Join(s.stateDir, "sendq"))
+	entries, err := store.Snapshot(name)
+	if err != nil {
+		return err
+	}
+	entry, err := queueJourneyAcceptance(entries, payload)
+	if err != nil {
+		return fmt.Errorf("%w (send reply: %s; error: %v)", err, trim(out, 240), sendErr)
+	}
+	if _, err := os.Stat(release); !os.IsNotExist(err) {
+		return fmt.Errorf("busy release appeared before the harness released it: %v", err)
+	}
+	if err := queueJourneyNoResult(result); err != nil {
+		return err
+	}
+	fmt.Printf("T418 accepted entry=%s provider=%s while shell work was held\n", entry.ID, s.provider)
+	if err := s.signalStop(8 * time.Second); err != nil {
+		return fmt.Errorf("stop before bounce: %w", err)
+	}
+	if err := queueJourneyNoResult(result); err != nil {
+		return fmt.Errorf("work completed before restart: %w", err)
+	}
+	// The replacement process must supply its own launch evidence.
+	preLogs, err = os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	if err := s.startDaemon(); err != nil {
+		return fmt.Errorf("restart: %w", err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		return err
+	}
+	deadline = time.Now().Add(turnTimeout)
+	for time.Now().Before(deadline) {
+		body, err := os.ReadFile(result)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil {
+			if string(body) != token+"\n" {
+				return fmt.Errorf("queued request produced a stale, unrelated, or duplicate result: %q", body)
+			}
+			logs, err := os.ReadFile(s.logPath)
+			if err != nil {
+				return err
+			}
+			if err := queueJourneyProvider([]byte(newTail(preLogs, logs)), name, string(s.provider)); err != nil {
+				return fmt.Errorf("replacement agent: %w", err)
+			}
+			entries, err := store.Snapshot(name)
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				fmt.Printf("T418 entry=%s completed its fresh shell effect after restart on %s; queue settled\n", entry.ID, s.provider)
 				return nil
 			}
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("no NEW post-bounce recover/UNDELIVERED/re-offer line (pre-bounce token does not count)")
+	return fmt.Errorf("entry=%s did not complete its fresh shell effect and settle after restart", entry.ID)
+}
+
+// The named runtime launch, not the requested default or another agent's
+// launch, establishes which provider actually executed this journey.
+func queueJourneyProvider(logs []byte, name, expected string) error {
+	found := false
+	for _, line := range strings.Split(string(logs), "\n") {
+		event, err := queueJourneyLogFields(line)
+		if err != nil || event["msg"] != "agent started" || event["name"] != name {
+			continue
+		}
+		if event["provider"] != expected {
+			return fmt.Errorf("agent %s launched on %q, requested %q", name, event["provider"], expected)
+		}
+		found = true
+	}
+	if !found {
+		return fmt.Errorf("no named runtime launch evidence for %s on %s", name, expected)
+	}
+	return nil
+}
+
+// jevonsd uses slog.TextHandler. Consume whole quoted values so a field-like
+// string inside a message cannot masquerade as the launch name or provider.
+func queueJourneyLogFields(line string) (map[string]string, error) {
+	fields := make(map[string]string)
+	for line = strings.TrimSpace(line); line != ""; line = strings.TrimSpace(line) {
+		key, rest, ok := strings.Cut(line, "=")
+		if !ok || key == "" || strings.ContainsAny(key, " \t\"\\") || rest == "" {
+			return nil, fmt.Errorf("malformed log field")
+		}
+		var value string
+		if rest[0] == '"' {
+			quoted, err := strconv.QuotedPrefix(rest)
+			if err != nil {
+				return nil, err
+			}
+			value, err = strconv.Unquote(quoted)
+			if err != nil {
+				return nil, err
+			}
+			line = rest[len(quoted):]
+			if line != "" && line[0] != ' ' && line[0] != '\t' {
+				return nil, fmt.Errorf("malformed quoted field separator")
+			}
+		} else {
+			value, line, _ = strings.Cut(rest, " ")
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, fmt.Errorf("duplicate log field")
+		}
+		fields[key] = value
+	}
+	return fields, nil
+}
+
+func queueJourneyAcceptance(entries []sendq.Entry, payload string) (sendq.Entry, error) {
+	if len(entries) != 1 || entries[0].ID == "" || entries[0].Text != payload || entries[0].State != sendq.Pending {
+		return sendq.Entry{}, fmt.Errorf("expected exactly one matching durable pending acceptance; got %d entries", len(entries))
+	}
+	return entries[0], nil
+}
+
+func queueJourneyNoResult(path string) error {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("queued result already exists before restart")
 }
 
 // jT418HandoverMute plants a stale pending handover and a queued send,
