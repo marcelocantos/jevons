@@ -413,3 +413,21 @@ the pane, the diagnostic exchanges sit at the bottom, spacing is modest, the
 composer is empty and Latest is absent. Yes, this looks like a normal chat
 transcript after a hard reload. This completes T623.1's bounded defect; T623,
 T625 and T540 remain open.
+
+## Directed-worker journey fidelity (T625)
+
+J9 previously accepted any nonempty reply and omitted the worker provider.
+It now sends a fresh request to a fresh named worker, requires the exact direct
+response, explicitly selects the provider and checks that worker's runtime
+launch. Removal must clear both the thread list and the agent registry.
+Adversarial tests exercise the whole journey against a controlled MCP peer;
+they reject generic, stale, truncated and merely mentioned answers, wrong or
+missing provider evidence, reused identities and surviving registry entries.
+These tests are oracle regressions, not live product journeys.
+
+The historical implementation fails the first negative controls (`e4c119cc`).
+The revised journey package passes with race detection (`741a49e9`). An initial
+real Grok J9 run passed (`5e7525f2`) before the final registry-removal assertion;
+fresh verification of the final committed slice remains required. J6c's
+independent tool effect, post-bounce action and full React owner-to-worker
+coverage remain open. This change does not enable rewind or close T625.
