@@ -245,6 +245,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    full-accent border (same 1px width → no reflow) + a box-shadow ring
    to "thicken" the border without shifting geometry. */
 .msg.user.editing { background: var(--user-bg-editing); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.cw-composer { flex-wrap: wrap; }
+.cw-composer textarea { min-width: 0; }
+.cw-composer .composer-images { flex-basis: 100%; order: -3; }
+.composer-recall { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-basis: 100%; order: -2; font-size: 12px; color: var(--text-dim); }
+.composer-recall > span { flex-basis: 100%; }
+.composer-recall button { border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; background: var(--bg); color: var(--text); cursor: pointer; }
+.composer-recall-error { flex-basis: 100%; order: -1; font-size: 12px; color: var(--red); }
 /* 🎯T106: assistant talk bubble — same geometry family as user, border only (no fill). */
 .msg.jevons { align-self: flex-start; background: transparent; color: var(--text); border: 1px solid var(--border); white-space: normal; word-wrap: break-word; }
 
@@ -1067,6 +1074,10 @@ body.rhs-resizing-row { cursor: row-resize; }
 #agent-inspect-send:disabled,
 .conversation-widget.density-compact .cw-composer button:disabled {
   opacity: 0.3; cursor: not-allowed;
+}
+.conversation-widget .cw-composer .composer-recall > button {
+  min-height: 0; padding: 5px 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font: inherit; letter-spacing: normal;
 }
 /* 🎯T131 / 🎯T173 / 🎯T174: frontier table — headerless; constrained to pane; name ellipsizes */
 #frontier-pane { flex: 1; min-height: 0; min-width: 0; }

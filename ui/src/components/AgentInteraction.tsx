@@ -1,13 +1,14 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { MuxClient } from '../mux/client';
 import { useConversation, type ConversationMeta } from '../conversation/useConversation';
 import { normalizeDensity, type Density } from '../density';
 import { AgentTranscript } from './AgentTranscript';
 import { OverseerPhaseStrip } from './OverseerPhaseStrip';
-import { UserRequest } from './UserRequest';
+import { UserRequest, type RecalledRequest } from './UserRequest';
+import { displayRows } from '../conversation/display';
 
 export function AgentInteraction(props: {
   mux: MuxClient | null;
@@ -22,11 +23,16 @@ export function AgentInteraction(props: {
   const conv = useConversation(props.mux, props.name);
   const [following, setFollowing] = useState(true);
   const [followEpoch, setFollowEpoch] = useState(0);
+  const [recalled, setRecalled] = useState<RecalledRequest | null>(null);
+  const history = useMemo(() => displayRows(conv.frames, { inspect: density === 'compact' })
+    .filter((row) => row.kind === 'user' && row.origin === 'owner' && !!row.id)
+    .map((row) => ({ id: row.id!, text: row.text })), [conv.frames, density]);
   useEffect(() => {
     props.onMeta?.(conv.meta);
   }, [conv.meta, props.onMeta]);
   useEffect(() => {
     setFollowing(true);
+    setRecalled(null);
   }, [props.name]);
   const comfortable = density === 'comfortable';
   return (
@@ -58,6 +64,7 @@ export function AgentInteraction(props: {
         onLeaveLive={conv.leaveLive}
         followEpoch={followEpoch}
         onFollowChange={setFollowing}
+        recalledId={recalled?.id}
       />
       {comfortable ? (
         <>
@@ -86,6 +93,8 @@ export function AgentInteraction(props: {
         name={props.name}
         density={density}
         onSend={(t) => conv.send(t)}
+        history={history}
+        onRecall={setRecalled}
       />
     </div>
   );

@@ -51,6 +51,7 @@ export function AgentTranscript(props: {
   onPageOlder?: () => void;
   onLeaveLive?: () => void;
   onFollowChange?: (following: boolean) => void;
+  recalledId?: string;
 }) {
   const density = normalizeDensity(props.density);
   const parentRef = useRef<HTMLDivElement>(null);
@@ -112,6 +113,15 @@ export function AgentTranscript(props: {
     if (props.ready && !wasReadyRef.current) followRef.current = true;
     wasReadyRef.current = !!props.ready;
   }, [props.ready]);
+
+  const recalledIndex = props.recalledId ? rows.findIndex((row) => row.id === props.recalledId) : -1;
+  useLayoutEffect(() => {
+    if (!props.recalledId) return;
+    if (recalledIndex < 0) return;
+    setFollow(false);
+    pinningRef.current = false;
+    virtualizer.scrollToIndex(recalledIndex, { align: 'center' });
+  }, [props.recalledId, recalledIndex, virtualizer]);
 
   const totalSize = virtualizer.getTotalSize();
   useLayoutEffect(() => {
@@ -332,6 +342,8 @@ export function AgentTranscript(props: {
               inject={row.inject}
               when={row.when}
               origin={row.origin}
+              eventId={row.id}
+              recalled={!!row.id && row.id === props.recalledId}
               sealed={row.sealed === true}
               start={item.start}
               measureRef={virtualizer.measureElement}
@@ -372,6 +384,8 @@ export function ClippedBubble(props: {
   when?: number;
   sealed?: boolean;
   origin?: TurnOrigin;
+  eventId?: string;
+  recalled?: boolean;
   start: number;
   measureRef?: (el: Element | null) => void;
   isLatest?: boolean;
@@ -502,12 +516,14 @@ export function ClippedBubble(props: {
   const roleClass = props.kind === 'user' ? 'user' : 'jevons';
   const originClass = props.kind === 'user' ? userBubbleClass(props.origin || 'owner') : '';
   const hasChrome = !!(chrome && chrome.show);
-  const base = ['msg', roleClass, originClass, hasChrome ? 'msg-has-context-tab' : ''].filter(Boolean).join(' ');
+  const base = ['msg', roleClass, originClass, props.recalled ? 'editing' : '', hasChrome ? 'msg-has-context-tab' : ''].filter(Boolean).join(' ');
   const cls = expanded ? base : clipClassName(base, fullH);
   return (
     <div
       data-index={props.index}
       data-kind={props.kind}
+      data-event-id={props.eventId}
+      aria-current={props.recalled ? 'true' : undefined}
       ref={props.measureRef}
       className={cls}
       style={{
