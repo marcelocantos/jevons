@@ -399,5 +399,17 @@ Real selected/effective Grok (`38541088`) and Cursor (`e79ec4ea`) then both
 passed J2, J4 and J5: exact reply, actual seed replay, a fresh reply through the
 replacement socket, canonical seed persistence and completed isolate teardown.
 The broader remote-provider race remains T604.1 in the shared target ledger.
-Development activation and observation remain separate from these isolate
-results; T623.1 has not been achieved on this evidence alone.
+The code was integrated into local master `41a51cfd` and activated through
+the existing supervisor. A real development React send returned the exact
+terminal reply, rendered it, acknowledged the composer and retained the reply
+after reload (`c8fd9cdf`). This observes the running surface; its gate's dirty
+checkout metadata does not claim to be a clean-source build test. The preceding
+probe (`7b47ca77`) had a false-negative selector: assistant groups do not retain
+individual event IDs in the DOM. The corrected check retains exact wire
+correlation and verifies the single rendered assistant reply by its fresh text.
+
+Visual verdict after hard reload: earlier owner and assistant turns populate
+the pane, the diagnostic exchanges sit at the bottom, spacing is modest, the
+composer is empty and Latest is absent. Yes, this looks like a normal chat
+transcript after a hard reload. This completes T623.1's bounded defect; T623,
+T625 and T540 remain open.
