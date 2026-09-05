@@ -5,11 +5,8 @@ import Pigeon
 import SwiftUI
 import WebKit
 
-/// Wraps the jevond web UI in a WKWebView with the native JS bridge.
-///
-/// The web UI is bundled in the app — the WKWebView loads it from
-/// the app bundle, and all transport flows through the native bridge
-/// (chat messages over pigeon QUIC, audio bytes via native handles).
+/// Presents the daemon's canonical cockpit. Direct connections use the
+/// browser's HTTP and WebSocket transport, just like desktop React.
 struct WebUIView: UIViewRepresentable {
     let mode: BridgeMode
 
@@ -42,32 +39,90 @@ struct WebUIView: UIViewRepresentable {
         // must tap the input to surface the keyboard.
 
         let webView = WKWebView(frame: .zero, configuration: config)
+        webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
 
-        // Attach the native bridge before any page load so the JS
-        // bridge is ready when the page evaluates.
-        context.coordinator.bridge.attach(to: webView)
-
-        // Load the bundled web UI. WKWebView needs read access to the
-        // enclosing directory so it can resolve scripts/transport.js.
-        if let indexURL = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "web") {
-            webView.loadFileURL(indexURL, allowingReadAccessTo: indexURL.deletingLastPathComponent())
+        switch mode {
+        case .direct(let serverURL):
+            context.coordinator.load(serverURL, in: webView)
+        case .relayArtifact:
+            // The paired transport replacement is tracked by T628. Keep
+            // this branch explicit until it can serve canonical HTTP/WS.
+            context.coordinator.bridge.attach(to: webView)
         }
 
         return webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {}
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        if case .direct(let serverURL) = mode {
+            context.coordinator.load(serverURL, in: webView)
+        }
+    }
+
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.cancelRetry()
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+    }
 
     @MainActor
-    class Coordinator {
+    class Coordinator: NSObject, WKNavigationDelegate {
         let bridge: JevonsBridge
+        private var loadedURL: URL?
+        private var retryTask: Task<Void, Never>?
+        private var retryDelay: TimeInterval = 1
+        private static let maximumRetryDelay: TimeInterval = 8
 
         init(mode: BridgeMode) {
             bridge = JevonsBridge(mode: mode)
+            super.init()
+        }
+
+        func load(_ url: URL, in webView: WKWebView) {
+            guard loadedURL != url else { return }
+            cancelRetry()
+            loadedURL = url
+            retryDelay = 1
+            webView.load(URLRequest(url: url))
+        }
+
+        func cancelRetry() {
+            retryTask?.cancel()
+            retryTask = nil
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            cancelRetry()
+            retryDelay = 1
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            retryNavigation(webView, error: error)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            retryNavigation(webView, error: error)
+        }
+
+        private func retryNavigation(_ webView: WKWebView, error: Error) {
+            guard (error as NSError).code != NSURLErrorCancelled,
+                  let url = loadedURL else { return }
+            cancelRetry()
+            let delay = retryDelay
+            retryDelay = min(retryDelay * 2, Self.maximumRetryDelay)
+            retryTask = Task { [weak self, weak webView] in
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    return
+                }
+                guard let self, let webView, self.loadedURL == url else { return }
+                webView.load(URLRequest(url: url))
+            }
         }
     }
 }

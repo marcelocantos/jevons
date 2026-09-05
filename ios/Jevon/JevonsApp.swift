@@ -23,7 +23,11 @@ struct JevonsApp: App {
                 .environment(voiceManager)
                 .task {
                     #if targetEnvironment(simulator)
-                    connection.connect(to: "localhost", port: 13705)
+                    // Isolated simulator journeys select their own daemon;
+                    // the normal simulator launch still uses development.
+                    let endpoint = ProcessInfo.processInfo.environment["JEVONS_SERVER_URL"]
+                        .flatMap(URL.init(string:))
+                    connection.connect(to: endpoint?.host ?? "localhost", port: endpoint?.port ?? 13705)
                     #endif
                 }
                 .onChange(of: connection.httpBaseURL) { _, url in

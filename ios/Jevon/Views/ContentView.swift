@@ -19,11 +19,13 @@ struct ContentView: View {
                 // PairingArtifact.
                 WebUIView(artifact: artifact)
                     .ignoresSafeArea()
-            } else if let mainView = connection.mainView {
-                // Server-driven UI — render the view tree from jevond.
-                ServerView(node: mainView) { action, value in
-                    handleAction(action, value: value)
-                }
+            } else if case .disconnected = connection.state {
+                // A remembered endpoint does not reconnect after an
+                // explicit disconnect.
+                ConnectView(onPaired: { pairingArtifact = $0 })
+            } else if let url = connection.httpBaseURL {
+                WebUIView(serverURL: url)
+                    .ignoresSafeArea()
             } else {
                 // Fallback to purpose-built views.
                 fallbackView
