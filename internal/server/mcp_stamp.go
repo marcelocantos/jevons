@@ -27,6 +27,9 @@ func (s *Server) ObserveMCPToolCall(name string, args map[string]any) {
 		s.mux = newMuxHub()
 	}
 	agent := s.overseerAgentName()
+	lock := s.mux.journalLock(agent)
+	lock.Lock()
+	defer lock.Unlock()
 	if folds, ok := s.mux.applyStampNow(agent, st); ok {
 		s.statedbUpsertFolds(agent, folds)
 		if line := chatToolStampLine(name, args); line != "" {

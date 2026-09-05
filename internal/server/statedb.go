@@ -6,6 +6,7 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -201,7 +202,7 @@ func (s *Server) importJSONL(agent, path string) {
 	if !ok {
 		return
 	}
-	lines, err := readImportLines(path)
+	lines, size, err := readImportLines(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Error("statedb: read jsonl failed", "agent", agent, "path", path, "err", err)
@@ -213,23 +214,37 @@ func (s *Server) importJSONL(agent, path string) {
 	for i, ev := range evs {
 		rows[i] = muxEventToRow(ev)
 	}
-	if err := db.ReplaceAll(agent, rows); err != nil {
-		slog.Error("statedb: import replace failed", "agent", agent, "err", err)
+	imported, err := db.ImportTranscript(agent, path, size, rows)
+	if err != nil {
+		slog.Error("statedb: atomic import failed", "agent", agent, "err", err)
 		return
 	}
-	if err := db.SetWatermark(agent, path, statedb.JSONLSize(path), len(rows)); err != nil {
-		slog.Error("statedb: import watermark failed", "agent", agent, "err", err)
+	if !imported {
+		return
 	}
 	slog.Info("statedb: imported transcript", "agent", agent, "n", len(rows), "path", path)
 }
 
-func readImportLines(path string) ([]string, error) {
+// Count the bytes read, not a later stat of a file that may have grown.
+type importReader struct {
+	io.Reader
+	n int64
+}
+
+func (r *importReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.n += int64(n)
+	return n, err
+}
+
+func readImportLines(path string) ([]string, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
+	reader := &importReader{Reader: f}
+	sc := bufio.NewScanner(reader)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	var lines []string
 	for sc.Scan() {
@@ -239,7 +254,7 @@ func readImportLines(path string) ([]string, error) {
 		}
 		lines = append(lines, ln)
 	}
-	return lines, sc.Err()
+	return lines, reader.n, sc.Err()
 }
 
 func (s *Server) projectAgents() {

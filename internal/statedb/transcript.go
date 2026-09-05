@@ -4,6 +4,7 @@
 package statedb
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -262,28 +263,16 @@ func (s *Store) Upsert(agent string, evs []Event) error {
 	if s == nil || len(evs) == 0 {
 		return nil
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO transcript_events
-		(agent, idx, id, ts, typ, kind, body) VALUES (?,?,?,?,?,?,?)`)
-	if err != nil {
+	if err := insertTranscriptRows(tx, agent, evs, true); err != nil {
 		return err
 	}
-	defer stmt.Close()
-	for _, ev := range evs {
-		if ev.Index < 1 {
-			continue
-		}
-		id := ev.ID
-		if id == "" {
-			id = fmt.Sprintf("e:%d", ev.Index)
-		}
-		if _, err := stmt.Exec(agent, ev.Index, id, ev.TS, ev.Type, ev.Kind, ev.Body); err != nil {
-			return fmt.Errorf("statedb: upsert idx=%d: %w", ev.Index, err)
-		}
+	if err := advanceTranscriptRevision(tx, agent); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -293,7 +282,7 @@ func (s *Store) ReplaceAll(agent string, evs []Event) error {
 	if s == nil {
 		return nil
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
 	}
@@ -301,25 +290,38 @@ func (s *Store) ReplaceAll(agent string, evs []Event) error {
 	if _, err := tx.Exec(`DELETE FROM transcript_events WHERE agent = ?`, agent); err != nil {
 		return fmt.Errorf("statedb: replace delete: %w", err)
 	}
-	stmt, err := tx.Prepare(`INSERT INTO transcript_events
-		(agent, idx, id, ts, typ, kind, body) VALUES (?,?,?,?,?,?,?)`)
+	if err := insertTranscriptRows(tx, agent, evs, false); err != nil {
+		return err
+	}
+	if err := advanceTranscriptRevision(tx, agent); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertTranscriptRows(tx *sql.Tx, agent string, evs []Event, upsert bool) error {
+	query := `INSERT INTO transcript_events (agent, idx, id, ts, typ, kind, body) VALUES (?,?,?,?,?,?,?)`
+	if upsert {
+		query = `INSERT OR REPLACE INTO transcript_events (agent, idx, id, ts, typ, kind, body) VALUES (?,?,?,?,?,?,?)`
+	}
+	stmt, err := tx.Prepare(query)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, ev := range evs {
 		if ev.Index < 1 {
-			continue
+			return fmt.Errorf("statedb: invalid transcript index %d", ev.Index)
 		}
 		id := ev.ID
 		if id == "" {
 			id = fmt.Sprintf("e:%d", ev.Index)
 		}
 		if _, err := stmt.Exec(agent, ev.Index, id, ev.TS, ev.Type, ev.Kind, ev.Body); err != nil {
-			return fmt.Errorf("statedb: replace idx=%d: %w", ev.Index, err)
+			return fmt.Errorf("statedb: insert idx=%d: %w", ev.Index, err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // GetWatermark returns the last import record, or nil when none.
@@ -358,13 +360,13 @@ func (s *Store) SetWatermark(agent, jsonlPath string, jsonlSize int64, importedN
 	return nil
 }
 
-// ShouldImport is true when this agent has no coalesced rows yet.
+// ShouldImport is true only before canonical history has been initialized.
+// An intentional empty replacement and a completed empty import stay empty.
 func (s *Store) ShouldImport(agent string) (bool, error) {
-	n, err := s.N(agent)
-	if err != nil {
-		return false, err
+	if s == nil {
+		return false, fmt.Errorf("statedb: no store for transcript initialization")
 	}
-	return n == 0, nil
+	return shouldImportTranscript(s.db, agent)
 }
 
 // JSONLSize is the current size of path, or 0 when missing.

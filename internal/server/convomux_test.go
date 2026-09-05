@@ -5,9 +5,11 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/marcelocantos/jevons/internal/chatlog"
@@ -812,6 +814,115 @@ func TestImportJSONLOnceThenPersist(t *testing.T) {
 	older := s.statedbBefore("jevons", 3, 50)
 	if len(older) != 2 || older[0].Index != 1 || older[1].Index != 2 {
 		t.Fatalf("page by index=%+v", older)
+	}
+}
+
+func TestMuxOpenEmptyCanonicalHistoryDoesNotResurrectJSONL(t *testing.T) {
+	for _, name := range []string{"jevons", "worker"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, agentChatLogDirName, name+".jsonl")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			obsolete := `{"type":"user","message":{"content":"removed request"}}` + "\n"
+			if err := os.WriteFile(path, []byte(obsolete), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			clog, err := chatlog.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clog.Close()
+			dbPath := filepath.Join(dir, "state.db")
+			for boot := range 2 {
+				db, err := statedb.Open(dbPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				s := New("test", dir)
+				s.overseerName = "jevons"
+				if name == "jevons" {
+					s.SetChatLog(clog)
+				}
+				s.SetStateDB(db)
+				s.ImportTranscripts()
+				if boot == 0 {
+					// Populate the actual replay cache and its absolute tail first.
+					if events := s.muxCoalesced(name, true); len(events) != 1 {
+						t.Fatalf("initial import: %+v", events)
+					}
+					if err := db.ReplaceAll(name, nil); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// New subscribers exercise the same open command as browser reload.
+				// Existing watchers need the separate coordinated rewind reset.
+				for reopen := range 2 {
+					buf := &replayBuf{}
+					sess := &muxSession{transcripts: make(map[string]*muxWatch)}
+					s.handleMuxEnvelope(t.Context(), buf, sess, muxEnvelope{
+						Ch: transcriptChannel(name), T: "open",
+					})
+					if len(buf.frames) != 1 || buf.frames[0]["t"] != "meta" {
+						t.Fatalf("boot %d reopen %d resurrected history: %+v", boot, reopen, buf.frames)
+					}
+					meta, ok := buf.frames[0]["body"].(map[string]any)
+					if !ok || meta["n"] != float64(0) || meta["total"] != float64(0) {
+						t.Fatalf("nonempty meta after removal: %+v", meta)
+					}
+					if n := s.mux.absoluteN(name); n != 0 {
+						t.Fatalf("stale cached tail: %d", n)
+					}
+					if n, err := db.N(name); err != nil || n != 0 {
+						t.Fatalf("reimported database rows: %d %v", n, err)
+					}
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestMuxRefreshConcurrentWithLiveWritesPreservesEveryRequest(t *testing.T) {
+	dir := t.TempDir()
+	db, err := statedb.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New("test", dir)
+	s.SetStateDB(db)
+	const requests = 100
+	start := make(chan struct{})
+	var refreshers sync.WaitGroup
+	for range 3 {
+		refreshers.Go(func() {
+			<-start
+			for range requests {
+				s.muxCoalesced("worker", true)
+			}
+		})
+	}
+	close(start)
+	for i := range requests {
+		line := fmt.Sprintf(`{"type":"user","turn_origin":"owner","message":{"content":"request %d"}}`, i)
+		if !s.muxFanTranscript("worker", line) {
+			t.Error("request was not durable", i)
+		}
+	}
+	refreshers.Wait()
+	rows, err := db.Range("worker", 1, requests+1)
+	if err != nil || len(rows) != requests {
+		t.Fatalf("concurrent refresh lost a request: rows=%d err=%v", len(rows), err)
+	}
+	for i, row := range rows {
+		if row.Index != i+1 || !strings.Contains(row.Body, fmt.Sprintf(`"request %d"`, i)) {
+			t.Fatalf("request %d was overwritten: %+v", i, row)
+		}
 	}
 }
 

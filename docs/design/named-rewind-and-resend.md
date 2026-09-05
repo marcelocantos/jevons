@@ -126,3 +126,33 @@ Still unresolved by the scout: native Claude boundary mapping, recoverable
 coordination across provider state and SQLite, and reconstruction support beyond
 Grok. These require implementation and focused live experiments before enabling
 rewind. Neither this design nor green recall controls close those gaps.
+
+## Canonical journal prerequisite
+
+The storage slice keeps an initialized empty journal authoritative, including
+after a database reopen and a mux `open`. Legacy imports now recheck initialization
+inside the transaction that installs rows, the import receipt and a revision.
+Every canonical write advances that revision; a snapshot reads revision and rows
+from the same transaction. Legacy databases without revision metadata remain
+readable and advance on their next write.
+
+Cache refresh, live folds and tool stamps share a per-agent journal lock through
+persistence. Without this coordination a reload could install an older database
+read over a newly arrived message, then reuse its index. Startup import is called
+before serving; future runtime imports and rewind replacements must also take
+this lock. It is not the provider-operation exclusion required above.
+
+The standing Go regressions exercise both named roles through mux `open`,
+database reopen, concurrent refresh and incoming requests, import failure rollback
+and consistent snapshots during writes. Restoring the old mux implementation
+caused the empty-history regression to fail and the concurrent refresh regression
+to retain only 40 of 100 requests in the observed negative control. This is a
+storage/replay exception to a new provider journey: those races are decided by
+real SQLite and production journal/replay entry points; adding a model response
+does not decide their interleaving. The existing isolated J30 remains the
+provider-backed send/reload smoke check, not rewind evidence.
+
+This prerequisite does not expose a revision token on the wire, perform a
+compare-and-swap rewind, reset existing subscribers or enable provider rewind.
+A future token must also bind the provider session and daemon generation so an
+old daemon that predates revision tracking cannot validate a newer selection.
