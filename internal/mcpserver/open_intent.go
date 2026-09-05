@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,6 +74,7 @@ const (
 
 	// Residual classes (named for acceptance / logs).
 	ResidualNoChatlog           = "no_chatlog"
+	ResidualUnreadableChatlog   = "unreadable_chatlog"
 	ResidualNoUserTurns         = "no_user_turns"
 	ResidualOnlyHarness         = "only_harness"
 	ResidualAckOnly             = "ack_only"
@@ -1013,9 +1015,9 @@ func ChatTurnsToOwnerIntentTurns(turns []rsi.ChatTurn) []OwnerIntentTurn {
 }
 
 // LoadOpenOwnerIntent extracts recoverable open owner intent from the
-// overseer transcript — the product statedb when it has rows (🎯T592 /
-// 🎯T548.2), else state_dir/chatlog/<overseer>.jsonl. Missing both →
-// residual no_chatlog.
+// overseer transcript — the product statedb whenever it exists, otherwise
+// state_dir/chatlog/<overseer>.jsonl. Empty or unreadable canonical history
+// must never resurrect removed instructions from the legacy file.
 // Loads user turns plus assistant excerpts for 🎯T344 / 🎯T477 / 🎯T512 / 🎯T568
 // disposition (product evidence, explanation answers, fleet ops, later
 // substantive replies, TargetID-naming turns).
@@ -1036,13 +1038,17 @@ func LoadOpenOwnerIntentWithLedger(stateDir, overseer, ledgerCwd string) OpenOwn
 	if stateDir == "" {
 		return OpenOwnerIntent{Residual: ResidualNoChatlog}
 	}
-	// 🎯T592 / 🎯T548.2: statedb is where turns live once it has rows —
+	// 🎯T592 / 🎯T548.2: statedb is where turns live —
 	// the chatlog JSONL froze at its last pre-SQLite record, and sourcing
 	// a MANDATORY resume from it re-issued a five-day-old instruction
-	// after every daemon bounce. The JSONL is fallback only (isolates,
-	// pre-statedb state dirs).
+	// after every daemon bounce. JSONL is fallback only for pre-statedb
+	// state dirs; empty canonical history is still authoritative.
 	path := filepath.Join(stateDir, "chatlog", overseer+".jsonl")
-	turns, newestFrame, fromDB := loadOpenIntentDialogueStateDB(stateDir, overseer, DefaultOpenIntentLookback, DefaultOpenIntentAssistantCap)
+	turns, newestFrame, fromDB, err := loadOpenIntentDialogueStateDB(stateDir, overseer, DefaultOpenIntentLookback, DefaultOpenIntentAssistantCap)
+	if err != nil {
+		slog.Warn("owner intent recovery could not read canonical history", "overseer", overseer, "err", err)
+		return OpenOwnerIntent{Residual: ResidualUnreadableChatlog}
+	}
 	if !fromDB {
 		var err error
 		turns, newestFrame, err = loadOpenIntentDialogue(path, DefaultOpenIntentLookback, DefaultOpenIntentAssistantCap)
@@ -1058,7 +1064,7 @@ func LoadOpenOwnerIntentWithLedger(stateDir, overseer, ledgerCwd string) OpenOwn
 	}
 	if len(turns) == 0 {
 		if fromDB {
-			// The store exists and has rows, just no owner turns.
+			// An empty store also establishes that there is no owner intent.
 			return OpenOwnerIntent{Residual: ResidualNoUserTurns}
 		}
 		// Distinguish missing file vs empty / assistant-only.
@@ -1126,36 +1132,30 @@ func loadOpenIntentDialogue(path string, maxUser, maxAssistant int) ([]OwnerInte
 }
 
 // loadOpenIntentDialogueStateDB reads the overseer dialogue from the
-// product statedb (🎯T592). Since 🎯T548.2 SQLite holds the live turns;
-// ok=false — missing db file, open failure, or no rows for the overseer —
-// means the caller falls back to the JSONL import-once history. The db
-// file must already exist: this path never mints a store into a state
-// dir that has none.
-func loadOpenIntentDialogueStateDB(stateDir, overseer string, maxUser, maxAssistant int) ([]OwnerIntentTurn, time.Time, bool) {
+// product statedb (🎯T592). Only an absent database permits JSONL fallback.
+// Opening read-only prevents a stat/open race from creating a replacement
+// store and prevents recovery from applying schema repairs to its evidence.
+func loadOpenIntentDialogueStateDB(stateDir, overseer string, maxUser, maxAssistant int) ([]OwnerIntentTurn, time.Time, bool, error) {
 	dbPath := statedb.DefaultPath(stateDir)
-	if _, err := os.Stat(dbPath); err != nil {
-		return nil, time.Time{}, false
+	if _, err := os.Lstat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, time.Time{}, false, nil
+		}
+		return nil, time.Time{}, true, err
 	}
-	db, err := statedb.Open(dbPath)
+	db, err := statedb.OpenReadOnly(dbPath)
 	if err != nil {
-		return nil, time.Time{}, false
+		return nil, time.Time{}, true, err
 	}
 	defer db.Close()
-	n, err := db.N(overseer)
-	if err != nil || n == 0 {
-		return nil, time.Time{}, false
-	}
 	if maxUser <= 0 {
 		maxUser = DefaultOpenIntentLookback
 	}
-	lo, err := db.TailStart(overseer, maxUser)
+	snapshot, err := db.TailSnapshot(overseer, maxUser)
 	if err != nil {
-		return nil, time.Time{}, false
+		return nil, time.Time{}, true, err
 	}
-	rows, err := db.Range(overseer, lo, n+1)
-	if err != nil {
-		return nil, time.Time{}, false
-	}
+	rows := snapshot.Events
 	turns, newestFrame := foldOpenIntentDialogue(func(yield func(string) bool) {
 		for _, r := range rows {
 			if !yield(r.Body) {
@@ -1170,7 +1170,7 @@ func loadOpenIntentDialogueStateDB(stateDir, overseer string, maxUser, maxAssist
 			newestFrame = ts
 		}
 	}
-	return turns, newestFrame, true
+	return turns, newestFrame, true, nil
 }
 
 // foldOpenIntentDialogue folds a stream of chat event lines — chatlog

@@ -22,9 +22,12 @@ The first frontend slice implements recall within the loaded window, selected
 turn highlighting, cancellation, an explicit append action, and an asynchronous
 rewind callback with failure handling. **AgentInteraction does not yet bind that
 callback to a provider operation.** It says that rewind is unavailable and refuses
-primary submission in recall mode. This is preparatory work, not a T562 completion
-or an activation of the fix in development. Paging beyond loaded owner history,
-queue traversal, and durable recall/attachment recovery remain open.
+primary submission in recall mode. Recall controls were integrated locally at
+`6526637ba45a` and activated in development; this does not complete T562 or enable
+provider rewind. The clean-tree gate `ac6f8813` passed the real Grok
+send/reload/recall/cancel slice, without exercising rewind. The final manual
+Firefox check remains pending because the host was locked. Paging beyond loaded
+owner history, queue traversal, and durable recall/attachment recovery remain open.
 
 ## Why the old rewind handler cannot be connected
 
@@ -163,10 +166,31 @@ compare-and-swap rewind, reset existing subscribers or enable provider rewind.
 A future token must also bind the provider session and daemon generation so an
 old daemon that predates revision tracking cannot validate a newer selection.
 
-Another recovery reader remains to fix before enabling rewind:
-`internal/mcpserver/open_intent.go:loadOpenIntentDialogueStateDB` currently falls
-back to JSONL on an empty or unreadable database. The mux fix above does not
-prevent that reader from recovering stale intent after restart. The existing
-owner-health resend path also does not repair missing canonical journal rows or
-provide durable duplicate prevention. These remain within T623/T627; the storage
-slice is not a claim that all recovery paths now honor empty history.
+Restart recovery now treats an existing canonical database as authoritative,
+including an empty history after reopen. An unreadable database yields an
+explicit `unreadable_chatlog` residual and logs its cause; only an absent database
+permits legacy JSONL recovery. A read-only open never creates or repairs the
+database. A tail snapshot reads revision, user-turn boundary and subsequent
+events within one transaction, preserving later disposition evidence and
+staleness checks. The ordinary restart notification still reaches the overseer
+when no recoverable intent exists.
+
+The regression reaches `NotifyDaemonRestarted` and records what its destination
+receives, alongside real SQLite empty/reopen/corruption and concurrent snapshot
+tests. This is a journey exception for the recovery-source decision: the changed
+mechanism decides whether to compose a mandatory resume before a provider sees
+anything. No provider process contract changes, and no rewind journey is claimed.
+
+The original reader failed all five initial canonical-history regressions
+(`377ab942`). Broader race checking also exposed an independent existing test
+collector race (`slogCapture` in `TestT426ALaunchInFlightIsNotADarkStream`),
+reproduced on clean pre-change `15a33be1f965` by `f9df4bec`. It remains a test-net
+gap relevant to T604; a focused recovery race pass must not be reported as a
+whole-package race pass.
+
+The existing owner-health resend path still does not repair missing canonical
+journal rows or provide durable duplicate prevention. A missing database alone
+cannot distinguish a pre-SQLite state directory from one whose entire database
+was deleted; the future durable rewind operation must preserve its own recovery
+receipt. These remain within T623/T627; this slice does not make provider rewind
+safe or prove that all recovery paths honor empty history.

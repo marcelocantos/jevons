@@ -74,6 +74,20 @@ func shouldImportTranscript(q transcriptQuerier, agent string) (bool, error) {
 // Snapshot returns rows and revision from the same SQLite read transaction.
 // A tail index is not a revision: replacement can reuse every index and ID.
 func (s *Store) Snapshot(agent string) (TranscriptSnapshot, error) {
+	return s.snapshot(agent, 0)
+}
+
+// TailSnapshot reads the last userTurns user rows and all subsequent events
+// in one revision. With no user rows it returns the last userTurns events.
+// This bounds the user lookback without dropping later disposition evidence.
+func (s *Store) TailSnapshot(agent string, userTurns int) (TranscriptSnapshot, error) {
+	if userTurns <= 0 {
+		return TranscriptSnapshot{}, fmt.Errorf("statedb: tail snapshot requires a positive user-turn limit")
+	}
+	return s.snapshot(agent, userTurns)
+}
+
+func (s *Store) snapshot(agent string, userTurns int) (TranscriptSnapshot, error) {
 	if s == nil {
 		return TranscriptSnapshot{}, fmt.Errorf("statedb: no store for transcript snapshot")
 	}
@@ -86,10 +100,27 @@ func (s *Store) Snapshot(agent string) (TranscriptSnapshot, error) {
 	if err != nil {
 		return TranscriptSnapshot{}, err
 	}
+	lo := 1
+	if userTurns > 0 {
+		// The boundary and rows share the revision read's SQLite snapshot.
+		// The fallback selects actual rows, including journals with gaps.
+		err := tx.QueryRow(`SELECT COALESCE(
+			(SELECT MIN(idx) FROM (
+				SELECT idx FROM transcript_events
+				WHERE agent = ? AND typ = 'user'
+				ORDER BY idx DESC LIMIT ?)),
+			(SELECT MIN(idx) FROM (
+				SELECT idx FROM transcript_events
+				WHERE agent = ? ORDER BY idx DESC LIMIT ?)), 1)`,
+			agent, userTurns, agent, userTurns).Scan(&lo)
+		if err != nil {
+			return TranscriptSnapshot{}, fmt.Errorf("statedb: snapshot tail: %w", err)
+		}
+	}
 	rows, err := tx.Query(`SELECT idx, id, ts, typ, kind, body
 		FROM transcript_events
-		WHERE agent = ?
-		ORDER BY idx`, agent)
+		WHERE agent = ? AND idx >= ?
+		ORDER BY idx`, agent, lo)
 	if err != nil {
 		return TranscriptSnapshot{}, err
 	}

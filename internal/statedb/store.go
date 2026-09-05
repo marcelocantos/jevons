@@ -14,6 +14,7 @@ package statedb
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -107,6 +108,26 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// OpenReadOnly reads an existing product database without creating it or
+// applying schema changes. Recovery must not repair or replace its evidence.
+func OpenReadOnly(path string) (*Store, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("statedb: absolute path: %w", err)
+	}
+	uri := url.URL{Scheme: "file", Path: absPath, RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", uri.String())
+	if err != nil {
+		return nil, fmt.Errorf("statedb: open read-only: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("statedb: open read-only: %w", err)
+	}
+	return &Store{db: db, path: path}, nil
 }
 
 func (s *Store) ensureSchemaVersion() error {
