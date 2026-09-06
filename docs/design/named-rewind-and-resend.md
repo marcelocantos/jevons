@@ -593,3 +593,10 @@ oracle refinements: read registry snapshots strictly instead of inheriting
 Claudia's empty-registry fallback on file-read failure, and explicitly reject
 outage classification in the rotation-plus-timeout control. An unreadable
 registry now reports failed observation, not an inferred session change.
+
+Final reviewed code `35f8d2381372` passes the clean complete journey-package
+race suite (`046124b3`) and real Cursor J2/J14/J5 (`f5e49a9f`). Independent
+source review found no further bounded issue. These are the final oracle
+refinements' activated results. Grok was not rerun after this strict-read and
+diagnostic-only refinement; its reproducible product failure at `de414c4347fc`
+remains open under 🎯T627.1. No product recovery code changed in this slice.
