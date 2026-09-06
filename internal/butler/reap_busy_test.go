@@ -4,13 +4,81 @@
 package butler_test
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/thread"
+	"github.com/marcelocantos/jevons/internal/transcript"
 )
+
+type unsupportedTranscriptFleet struct{ *fakeFleet }
+
+func (f unsupportedTranscriptFleet) IdleTranscript(*thread.Thread, int) ([]transcript.Entry, error) {
+	return nil, fmt.Errorf("current successor has no supported JSONL transcript")
+}
+
+func TestReapIdleDoesNotFallBackToPredecessorHistory(t *testing.T) {
+	dir := t.TempDir()
+	mint := "eeeeeeee-ffff-0000-1111-333333333333"
+	writeSessionTranscript(t, filepath.Join(dir, "projects"), mint, fixedNow.Add(-30*time.Minute))
+	f := unsupportedTranscriptFleet{newFakeFleet()}
+	f.mintID = mint
+	b := newLifecycleButler(t, dir, f)
+	if _, err := b.Spawn(butler.SpawnArgs{ID: "w", WorkDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.ReapIdle(); len(got) != 0 {
+		t.Fatalf("used predecessor history after provider rejected it: %v", got)
+	}
+	if !f.Alive("w") {
+		t.Fatal("stopped successor using old transcript")
+	}
+}
+
+// Canonical browser sends need not pass through Butler.Direct. In particular,
+// Cursor can be working while this JSONL reader has no usable transcript.
+func TestReapIdleRequiresKnownActivity(t *testing.T) {
+	for _, state := range []string{"missing", "empty", "unreadable-shape", "unknown-time"} {
+		t.Run(state, func(t *testing.T) {
+			dir := t.TempDir()
+			mint := "eeeeeeee-ffff-0000-1111-222222222222"
+			projects := filepath.Join(dir, "projects")
+			if state != "missing" {
+				writeSessionTranscript(t, projects, mint, fixedNow.Add(-30*time.Minute))
+				files, err := filepath.Glob(filepath.Join(projects, "*", mint, "chat_history.jsonl"))
+				if err != nil || len(files) != 1 {
+					t.Fatalf("fixture: %v %v", files, err)
+				}
+				contents := ""
+				if state == "unreadable-shape" {
+					contents = "not a transcript\n"
+				}
+				if state == "unknown-time" {
+					contents = `{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":"finished"}}` + "\n"
+				}
+				if err := os.WriteFile(files[0], []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f := newFakeFleet() // No synchronous Direct counter: mirrors the bypass.
+			f.mintID = mint
+			b := newLifecycleButler(t, dir, f)
+			if _, err := b.Spawn(butler.SpawnArgs{ID: "w", WorkDir: dir}); err != nil {
+				t.Fatal(err)
+			}
+			if got := b.ReapIdle(); len(got) != 0 {
+				t.Fatalf("reaped %v without known idle activity", got)
+			}
+			if !f.Alive("w") {
+				t.Fatal("stopped a process without idle evidence")
+			}
+		})
+	}
+}
 
 // busyFleet is a fakeFleet that reports turns in flight (butler.BusyFleet)
 // and runs a hook while a Send is outstanding, so a test can observe the

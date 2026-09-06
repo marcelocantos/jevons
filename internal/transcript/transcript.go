@@ -125,6 +125,13 @@ func (r *Reader) Tail(sessionID string, n int) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	return TailPath(path, n)
+}
+
+// TailPath reads a JSONL path supplied by the live provider. Lifecycle callers
+// must establish that this is the current provider's transcript, not discover
+// an unrelated file solely by a matching session ID.
+func TailPath(path string, n int) ([]Entry, error) {
 	entries, err := parseEntries(path)
 	if err != nil {
 		return nil, err

@@ -12,6 +12,7 @@ package butler
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,6 +58,13 @@ type Fleet interface {
 type BusyFleet interface {
 	// Busy reports whether a directed turn is awaiting a reply for id.
 	Busy(id string) bool
+}
+
+// IdleTranscriptFleet binds GC observations to the actual live provider.
+// A missing/unsupported observation defers reclamation. The production fleet
+// implements this; legacy test fleets may use the Butler's configured reader.
+type IdleTranscriptFleet interface {
+	IdleTranscript(t *thread.Thread, n int) ([]transcript.Entry, error)
 }
 
 // Participants is the optional secondary lookup for fleet agents that are
@@ -453,6 +461,13 @@ func (b *Butler) ReapIdle() []string {
 	}
 	busy, _ := b.fleet.(BusyFleet)
 	var reaped []string
+	var unknown, working []string
+	defer func() {
+		// No conversation content: a journey can observe that the real sweep
+		// evaluated its disposable thread, including when nothing was reaped.
+		slog.Info("idle thread sweep completed", "reaped", reaped,
+			"kept_unknown", unknown, "kept_busy", working)
+	}()
 	for _, t := range b.store.List() {
 		if t.Kind != thread.KindSpawned || !b.fleet.Alive(t.ID) {
 			continue
@@ -461,11 +476,35 @@ func (b *Butler) ReapIdle() []string {
 		// worker whose first turn has not produced transcript output yet
 		// reads as idle, and stopping it there kills the turn (🎯T282).
 		if busy != nil && busy.Busy(t.ID) {
+			working = append(working, t.ID)
 			continue
 		}
-		if b.deriveStatus(t).State == thread.StateIdle {
+		var entries []transcript.Entry
+		var err error
+		if source, ok := b.fleet.(IdleTranscriptFleet); ok {
+			entries, err = source.IdleTranscript(t, b.tailN)
+		} else {
+			entries, err = b.reader.Tail(t.SessionID, b.tailN)
+		}
+		if err != nil {
+			unknown = append(unknown, t.ID)
+			continue
+		}
+		status := b.statusFromEntries(t, entries)
+		// Status is best-effort: no readable activity is displayed as idle.
+		// That is not evidence permitting a destructive process decision.
+		// Cursor's canonical stream, for example, is not this reader's JSONL.
+		// Keep unsupported/unreadable seats until GC has an authoritative
+		// activity source; do not invent elapsed idleness from an empty tail.
+		if status.LastActivity.IsZero() {
+			unknown = append(unknown, t.ID)
+			continue
+		}
+		if status.State == thread.StateIdle {
 			b.fleet.Stop(t.ID)
 			reaped = append(reaped, t.ID)
+		} else {
+			working = append(working, t.ID)
 		}
 	}
 	return reaped
@@ -506,7 +545,10 @@ func (b *Butler) deriveStatus(t *thread.Thread) thread.Status {
 	if e, err := b.reader.Tail(t.SessionID, b.tailN); err == nil {
 		entries = e
 	}
+	return b.statusFromEntries(t, entries)
+}
 
+func (b *Butler) statusFromEntries(t *thread.Thread, entries []transcript.Entry) thread.Status {
 	processUp := b.fleet != nil && b.fleet.Alive(t.ID)
 
 	return thread.DeriveStatus(thread.StatusInput{

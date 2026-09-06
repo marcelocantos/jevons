@@ -198,3 +198,63 @@ of one event. J31 now also counts distinct canonical response IDs across both
 pane checks. Clean-revision verification, delayed-recovery repair and observed
 development acceptance remain pending. T569's conversation-wide equal-text
 suppression is unchanged while awaiting the owner's decision.
+
+### Clean owner-boundary evidence
+
+Local integration `bc181660ab38` has the same tree as clean worker
+`0efbde25c014`; 114 unrelated working files and the two overlapping files'
+other edits were preserved. This composition uses clean Claudia `d42194c`.
+React tests `26fa4e77` (358 passed, 49 existing skips), bundle freshness
+`57f99768`, packaged browser checks `07fc8d60`, and real Cursor J31/J5
+`b8a9c6eb` are GREEN. Running J31 against the previous clean daemon failed
+at "POST must have a new index below the owner" (`cc280952`, RED), so the
+journey detects the original product defect. The full Go net and development
+activation are recorded separately when complete.
+
+Fresh screenshots show separate PRE, owner follow-up, POST and ACK bubbles.
+The main pane remains populated after the sidebar check; its additional
+restart-status prose is distinct activity, not repeated execution. The sidebar
+shows its newest request and replies, with earlier content above the viewport.
+Latest is absent. This is a normal short transcript after reload, with the
+expected unused space below a small conversation; it is not a long-history
+layout verdict. The separate T569 owner decision and conditional recovery
+limitations remain open.
+
+The full clean Go net passed (`0a710ac5`: 3410 tests, four existing skips,
+88 packages). Development activation used that exact binary, SHA-256
+`516ab0f6d025305e47867284491b97b29d49433c1702d7f1bbfb55f1a3194444`,
+through the existing supervisor. It resumed the same saved Cursor identity
+in 42.2 seconds; both registered session IDs were unchanged. Registry requests
+remained responsive during recovery (largest sampled latency 1.39 seconds).
+The previously stopped PO remained stopped. This is activation evidence;
+the disposable development interaction is recorded separately below.
+
+The development interaction failed (`efbdb8ef`, RED). Its disposable Cursor
+aside emitted PRE, entered its real tool, and accepted the owner follow-up,
+then the periodic Butler sweep stopped it before POST. Logs name the same
+synthetic thread at 15:17:49. The process-only busy counter does not cover
+canonical mux/MCP sends, and the JSONL reader cannot read Cursor's transcript;
+its missing-history result was mistaken for idleness. T627.4 records this
+lifecycle defect. The shorter isolated checks never crossed the actual
+two-minute cleanup cycle. Development acceptance remains open; activation
+success and the earlier isolated greens do not establish it.
+
+The bounded T627.4 containment requires a current registry/live-session match
+and uses the actual Claude JSONL path. ACP/app-server stores are explicitly
+unsupported by this legacy GC observer; those processes are retained rather
+than judged idle from missing or predecessor history. Read errors and unknown
+activity also defer reclamation. This deliberately trades automatic reclamation
+of Cursor/Codex/Grok thread processes for preserving ongoing conversations.
+It does not fix concurrent send/reap admission, and T627.4 remains open for
+that work and supported reclamation of those stores.
+
+The missing/empty/unreadable-history controls fail on the previous code
+(`403a64b1`, RED). The production observation function's readable stale-file
+matrix covers unsupported providers, each session mismatch, unknown identity,
+and the matching Claude positive control; lifecycle/race tests pass
+(`e4c284af`, GREEN). Existing known-idle reclamation and rehydration still pass.
+J31 now waits for a recorded actual periodic sweep while holding a real tool
+and the durable follow-up, then requires POST, ACK and reload order. Its first
+attempt had an invalid test-side assumption that `/api/agents` exposed a SID
+(`ba5b9ea8`, RED); that assertion now reads the isolated registry and uses the
+API's `running` field for liveness. Fresh product evidence follows below.
