@@ -101,6 +101,13 @@ export const CATALOG: readonly OracleFamily[] = [
     covers: covers('frontier', ['T131', 'T168', 'T173', 'T175', 'T179', 'T181', 'T184', 'T186', 'T187', 'T189', 'T203', 'T230', 'T231', 'T248', 'T271', 'T280', 'T294', 'T326', 'T340', 'T485']),
   },
   {
+    id: 'coach',
+    title: 'Coach tab — RSI judgments and dispositions',
+    file: 'coach.test.ts',
+    layer: 'hermetic',
+    covers: covers('coach', ['T354']),
+  },
+  {
     id: 'journey-connect',
     title: 'Journey — isolate connect tail (J19) retargeted at React',
     file: 'journey-connect.test.ts',

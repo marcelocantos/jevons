@@ -281,3 +281,34 @@ owner conversations and requested explicit activation permission. The owner
 has been asked; no restart or workaround followed that rejection. The prepared
 development-only probe uses a disposable synthetic aside, checks the actual
 sweep and durable queue, and never submits to the owner's main conversation.
+
+### Graph packs and Coach list (2026-09-06)
+
+React now opens Frontier Graph from `diagrams[]` and packs every component
+instead of feeding the joined mermaid blob to one render. HTTP 200 payloads
+with an `error` field use the loud fetch-failure panel, not the empty paste
+shell. The Coach tab fetches `GET /api/rsi/dispositions` and lists pending,
+filed and ignored judgments; empty is calm and a fetch failure is not
+"nothing found."
+
+Hermetic React tests: 369 passed, 48 existing skips. Built-app Playwright
+`scripts/react-ui-test/t294-graph.cjs` and `t354-coach.cjs` passed against
+the packaged `ui/dist`. T294 observed seven packed SVGs, a
+`reflow-readable` or `pack-scale-to-fill` fit, readable labels, and the
+panic error marker. T354 requested the dispositions API and painted the
+three-row fixture including the filed target and pending chip.
+
+Visual verdict for the T294 fill screenshot: seven labelled components
+occupy the large overlay, with the wide primary across the top and six
+smaller diagrams in a second row. Node text is readable without zoom.
+Empty canvas remains below that short pack; it is unused pane below a
+small fixture, not a single-primary micro-strip. The right edge of the
+wide primary is clipped in the still — overflow/scroll is allowed. Latest
+is not applicable (graph overlay, not a transcript). This looks like a
+packed frontier graph, not the T280 strip. The paired error screenshot
+shows "Unachieved graph could not load" with `panic graph.rs:704` and no
+"No graph loaded" paste shell.
+
+This does not complete T540, T540.3, T562, T627 or provider rewind.
+Development activation of the T627.4 containment remains held for owner
+approval. T569 equal-text suppression is unchanged.

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createElement, useRef } from 'react';
-import { fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -30,6 +30,8 @@ import {
 } from '../../frontier/table';
 import { playChromeSpec, playKickoffRequest, resolvePlayPO } from '../../frontier/play';
 import { copyImageStatus, imageCopyPlan } from '../../conversation/mermaidClipboard';
+import { normalizeGraphPayload, resolveFrontierGraphOpenPlan } from '../../frontier/graphPack';
+import { productFetchFailureFromError } from '../../conversation/graphFit';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
@@ -273,7 +275,77 @@ describeOracle(family('frontier'), () => {
 
   itOracle.skip('T248', 'owner can drag-resize RHS width and the sidebar split', 'journey is the arbiter (J28 handle)');
   itOracle.skip('T280', 'Frontier Graph is owner-readable in one glance after hard-reload', 'named residual: pixel-identical chrome');
-  itOracle.skip('T294', 'Frontier Graph fills the pane with legible nodes', 'named residual: pixel-identical chrome');
+  itOracle('T294', 'Frontier Graph packs diagrams[] and fails loudly, never a joined source or paste shell', async () => {
+    const diagrams = [];
+    for (let i = 0; i < 7; i++) {
+      diagrams.push({
+        id: 'c' + i,
+        kind: 'component',
+        title: 'Component ' + i,
+        mermaid: 'flowchart TB\nA' + i + '-->B' + i + '\n',
+        node_count: i === 0 ? 24 : 4,
+        edge_count: 2,
+      });
+    }
+    const payload = {
+      available: true,
+      pack: 'wrap-grid',
+      diagrams,
+      mermaid: '%% jevons-frontier-pack pack=wrap-grid diagrams=7 %%\n' + diagrams.map((d) => d.mermaid).join('\n'),
+    };
+    const model = normalizeGraphPayload(payload);
+    const plan = resolveFrontierGraphOpenPlan(model);
+    expect(plan.mode).toBe('pack');
+    expect(plan.diagramCount).toBe(7);
+
+    const panic = productFetchFailureFromError(
+      { message: 'bullseye open: exit status 101 — panic graph.rs:704' },
+      { resource: 'Unachieved graph' },
+    );
+    expect(panic.bodyHtml).toMatch(/data-mvp-fetch-error="1"/);
+    expect(panic.bodyHtml).not.toMatch(/No graph loaded/);
+
+    const rendered: string[] = [];
+    const fetchGraph = (async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(payload),
+    })) as unknown as typeof fetch;
+    const { container } = render(
+      createElement(MermaidVizPanel, {
+        open: true,
+        graphNonce: 2,
+        onClose: () => {},
+        fetchGraph,
+        renderSource: async (src) => {
+          rendered.push(src);
+          expect(src).not.toMatch(/jevons-frontier-pack/);
+          return '<svg viewBox="0 0 400 200" width="400" height="200"><text class="nodeLabel">ok</text></svg>';
+        },
+      }),
+    );
+    await waitFor(() => expect(container.querySelectorAll('.mvp-pack-block').length).toBe(7));
+    expect(rendered.length).toBe(7);
+    expect(container.querySelector('#mvp-body')?.classList.contains('mvp-pack')).toBe(true);
+    cleanup();
+
+    const panicFetch = (async () => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          available: false,
+          error: 'bullseye open: exit status 101 — panic graph.rs:704',
+        }),
+    })) as unknown as typeof fetch;
+    const errView = render(
+      createElement(MermaidVizPanel, { open: true, graphNonce: 3, onClose: () => {}, fetchGraph: panicFetch }),
+    );
+    await waitFor(() => expect(errView.container.querySelector('[data-mvp-fetch-error="1"]')).toBeTruthy());
+    expect(errView.container.textContent).toMatch(/panic graph\.rs:704/);
+    expect(errView.container.querySelector('[data-mvp-empty]')).toBeNull();
+    expect(errView.container.textContent).not.toMatch(/No graph loaded/);
+  });
   itOracle.skip('T340', 'hierarchical ids fit without ellipsis; gutters are even', 'named residual: pixel-identical chrome');
   itOracle.skip('T174', 'Frontier table width is constrained to the RHS', 'named residual: pixel-identical chrome (with T340)');
   itOracle.skip('T177', 'Frontier columns do not overlap', 'named residual: pixel-identical chrome (with T340)');

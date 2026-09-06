@@ -7,6 +7,7 @@
 // Vite ESM interop of mermaid.min.js crashes (`this.mermaid` is undefined);
 // a script tag matches the daily cockpit and Playwright Chromium smoke.
 import mermaidUrl from 'mermaid/dist/mermaid.min.js?url';
+import { stripMermaidFence } from './graphFit';
 
 type MermaidAPI = {
   initialize: (opts: Record<string, unknown>) => void;
@@ -63,6 +64,24 @@ async function ensureMermaid(): Promise<MermaidAPI> {
     started = true;
   }
   return api;
+}
+
+/** Render one Mermaid source to SVG markup (Frontier Graph pack blocks). */
+export async function renderMermaidSource(src: string): Promise<string> {
+  const api = await ensureMermaid();
+  const cleaned = stripMermaidFence(src);
+  if (!cleaned) throw new Error('empty mermaid source');
+  const id = 'mmd-' + ++seq;
+  try {
+    const { svg } = await api.render(id, cleaned);
+    if (!svg || !/<(svg|SVG)\b/.test(svg)) {
+      throw new Error('mermaid.render returned no SVG');
+    }
+    return svg;
+  } catch (err) {
+    [id, 'd' + id].forEach((x) => document.getElementById(x)?.remove());
+    throw err;
+  }
 }
 
 export async function renderMermaidIn(container: ParentNode | null): Promise<void> {

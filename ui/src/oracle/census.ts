@@ -275,7 +275,7 @@ export const CENSUS: readonly CensusRow[] = [
   { id: "T350", kind: "visible", surface: "transcript", name: "Main chat text does not randomly jiggle ~1px — T341 regression restored under live pin/virtualize thrash", journeys: ["connect"], families: ["fold", "transcript-geom"] },
   { id: "T351", kind: "visible", surface: "transcript", name: "Main chat has zero residual vertical jiggle in daily use after T350 — product path not hermetic-only", journeys: ["connect"], families: ["fold", "transcript-geom"] },
   { id: "T353", kind: "exception", surface: "other", name: "RSI coach retrospectively mines history (transcripts, git, eventlog) — not only forward drip of new appends", reason: "RSI coach retrospective mine — ops, not cockpit chrome" },
-  { id: "T354", kind: "visible", surface: "other", name: "Owner can see RSI coach judgments and their dispositions in the daily UI — bare list is enough for v1", journeys: ["ticker"] },
+  { id: "T354", kind: "visible", surface: "other", name: "Owner can see RSI coach judgments and their dispositions in the daily UI — bare list is enough for v1", journeys: ["ticker"], families: ["coach"] },
   { id: "T355", kind: "visible", surface: "other", name: "Owner interaction converges: level-triggered healthy chat with recovery generalized from post-restart dual-path", journeys: ["ticker"] },
   { id: "T361", kind: "visible", surface: "transcript", name: "A degraded owner interaction is visible and self-healing in the client, not only on the server", journeys: ["connect"], families: ["fold", "transcript-geom"] },
   { id: "T362", kind: "visible", surface: "transcript", name: "ux_state frames never appear as owner chat bubbles", journeys: ["connect"], families: ["fold", "transcript-geom"] },
