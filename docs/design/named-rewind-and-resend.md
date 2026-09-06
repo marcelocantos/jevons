@@ -35,6 +35,12 @@ the successful retry does not explain that intermittent failure. Native Firefox
 key handling remains unverified. Paging beyond loaded owner history, queue
 traversal, and durable recall/attachment recovery remain open.
 
+A fresh development check on 2026-09-06 (`8e3933a9`) again passed main and
+sidebar Alt-Up, exact selected-turn text, highlighting, Escape and Alt-Down
+draft restoration. It used separate headless Chromium state and sent no
+messages. It observes the running committed development build, not the dirty
+checkout recorded in gate metadata, and does not close the Firefox residue.
+
 ## Why the old rewind handler cannot be connected
 
 Read-only scout of committed `a9a20813570b740aab2c78fe0db63905986a697f`:
@@ -459,5 +465,66 @@ journey race tests and a fresh daemon build (`ce555b43`). Grok J9/J5 passed
 is not owner-turn evidence. Cursor J2/J9/J5 passed (`4e445986`), including the
 owner-store precondition. Both provider runs required their exact fresh reply
 with embedded numeric status fragments and verified thread/registry cleanup.
-Development activation and observation remain outstanding for these product
-fixes; T625.3 and T625.4 are not yet claimed achieved.
+Development activation and observation were completed afterward against
+activated local master `50faa6f63f71`.
+Development observation `f351ba1b` passed an exact Cursor direct reply containing
+all tested numeric status fragments, named runtime-provider verification,
+React sidebar rendering after reload and thread/registry cleanup. The temporary
+worker belonged under `jevons-po`. The first probe (`97a5e57e`) returned its
+exact reply but then read the retired log location; the corrected probe reads
+the supervisor's actual `~/.local/var/log/jevonsd.log`.
+
+Visual verdict: the main pane contains preceding exchanges, modest gaps and
+an empty composer, with no Latest button. Yes, it looks like a normal chat
+transcript after hard reload. The sidebar contains one diagnostic output with
+substantial empty space and no displayed incoming request. This verifies the
+reply's rendering, not complete sidebar history or conversation parity; that
+residue remains under T627/T540. T625.3 and T625.4's bounded reply defects are
+achieved; neither the complete migration nor T625 is achieved.
+
+## Tool round-trip journey (T625)
+
+J6c now asks the real overseer, over canonical mux, to capture one disposable
+idea with a fresh nonce. The harness requires an observed matching MCP call,
+one matching public API record, the same identity in the durable idea store,
+and a completed reply carrying that handler-generated identity. The harness
+does not create the effect or tell the agent its identity. It checks the named
+overseer's actual launch provider. The existing idea feature is only a fixture;
+this adds no idea-management or fleet-spawning product scope.
+
+The first Grok attempt (`74aa59e5`) captured the record but timed out on an
+overly strict whole-reply condition. It also exposed Grok's discovered-tool
+dispatch envelope, now matched by both its tool name and nested arguments.
+The next attempt (`dbba48b6`) returned the correct generated ID but still timed
+out: canonical folding retains pre-tool narration and the final answer in one
+assistant snapshot, without a separating newline. Independent review confirmed
+that J6 should decide the tool round trip, not narration style. Its final proof
+therefore requires exactly one nonce followed by the returned ID through the
+end of a completed snapshot; commentary may precede it. API and disk must both
+confirm that exact identity. J2, J4 and J9 keep their exact-reply contracts.
+
+Whole-J6 adversarial peers test missing calls/effects, API-only writes, differing
+API/disk/reply identities, nonce-only echoes, malformed pre-state, trailing
+JSON, reused nonces, duplicate/quoted/nonterminal/truncated proofs and trailing
+commentary. These are oracle tests, not product journeys. Fresh clean-source
+provider evidence remains required before this slice is accepted. Rewind,
+full React orchestration, and the remaining T625 requirements stay open.
+
+Clean `d4fa4d34274b` passes the journey package with race detection (`cbfca318`)
+and real Grok J6c/J5 (`73abfb30`). The first concurrent Cursor attempt refused
+the port already occupied by the Grok isolate before starting (`120a7f79`);
+subsequent standalone runs use an ephemeral port. Cursor `afa735ce` captured
+the record and returned its correct identity, but failed the tool-call match.
+Its canonical event retains a distinct MCP dispatch envelope: the outer name,
+providerIdentifier, toolName and nested args must all match. That observed
+shape is now covered alongside Grok, with wrong-dispatch and malformed-input
+negative controls. Fresh final-shape evidence remains pending.
+
+Final code `43473c769541` passes the clean journey package with race detection
+(`227b76a0`) and fresh real Grok (`e0b1b521`) and Cursor (`ef68b7c3`) J6c/J5
+runs on separate ephemeral ports. Both require the exact fresh nonce, matching
+MCP dispatch, returned capture identity, API/disk agreement and named runtime
+provider; both complete isolation teardown. The isolates use the unchanged
+production daemon built from clean `6b16ef21f636`, whose full Go/build gate is
+recorded above. This activates the bounded J6c evidence; it does not certify
+React rendering, provider rewind, all core journeys or the complete migration.

@@ -35,30 +35,82 @@ import (
 func (s *suite) jOverseerToolsAttached() error {
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	defer cancel()
-	conn, frames, err := dialChat(ctx, s.host)
+	conn, frames, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
 	defer conn.CloseNow()
-	if _, err := drainReplay(frames, 800*time.Millisecond); err != nil {
+	if _, err := collectOwnerMuxReplay(ctx, frames); err != nil {
 		return err
 	}
-	prompt := "Call the jevons_agent_list tool now, then reply with only the name of the overseer agent it lists."
-	if err := conn.Write(ctx, websocket.MessageText, []byte(prompt)); err != nil {
+	token := "journey-tool-effect-" + uuid.NewString()
+	before, err := s.journeyIdeas(ctx)
+	if err != nil {
 		return err
 	}
-	_, text, terminal, err := waitTurn(ctx, frames, "jevons_agent_list", true)
+	for _, record := range before {
+		if record.Text == token {
+			return fmt.Errorf("tool effect exists before the request")
+		}
+	}
+	prompt := "Use the attached jevons_idea_capture MCP tool exactly once with text " +
+		fmt.Sprintf("%q", token) + " and source mcp. This is a disposable verification record; do not triage it, spawn work, use a shell, or call the HTTP API. Do not narrate or announce your actions. After the tool succeeds, your only visible reply must be exactly two words separated by one space: the text token, then the idea ID returned by the capture tool."
+	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": prompt}); err != nil {
+		return err
+	}
+	sawCall := false
+	var returnedID string
+	err = waitOwnerMuxReplyMatching(ctx, frames, prompt, token, func(text string) bool {
+		// Canonical assistant snapshots can include pre-tool commentary in the
+		// same row as the final answer. Require one exact terminal proof suffix;
+		// API/disk identity decides success, not obedience to a prose-style rule.
+		_, id, ok := strings.Cut(text, token+" ")
+		if !ok || strings.Count(text, token) != 1 || id == "" || strings.ContainsAny(id, " \t\r\n") {
+			return false
+		}
+		returnedID = id
+		return true
+	}, func(frame ownerMuxFrame) {
+		if matchingIdeaToolCall(frame, token) {
+			sawCall = true
+		}
+	})
 	if err != nil {
 		return fmt.Errorf("tool turn: %w", err)
 	}
-	if !terminal {
-		return fmt.Errorf("tool turn never completed")
+	if !sawCall {
+		return fmt.Errorf("completed reply had no matching jevons_idea_capture MCP call")
 	}
-	if !strings.Contains(strings.ToLower(text), overseerName) {
-		return fmt.Errorf("overseer could not report its own registry row (tools likely not attached): %s",
-			trim(text, 200))
+	after, err := s.journeyIdeas(ctx)
+	if err != nil {
+		return err
 	}
-	return nil
+	id, err := uniqueIdeaEffect(after, token)
+	if err != nil {
+		return fmt.Errorf("tool effect API: %w", err)
+	}
+	if returnedID != id {
+		return fmt.Errorf("tool reply identity %q differs from captured identity %q", returnedID, id)
+	}
+	data, err := os.ReadFile(filepath.Join(s.stateDir, "ideas.json"))
+	if err != nil {
+		return fmt.Errorf("durable tool effect: %w", err)
+	}
+	var disk struct {
+		Ideas []journeyIdeaRecord `json:"ideas"`
+	}
+	if err := json.Unmarshal(data, &disk); err != nil {
+		return err
+	}
+	durableID, err := uniqueIdeaEffect(disk.Ideas, token)
+	if err != nil || durableID != id {
+		return fmt.Errorf("tool effect not durable under its API identity: id=%q err=%v", durableID, err)
+	}
+	logs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	return queueJourneyProvider(logs, overseerName, string(s.provider))
 }
 
 func (s *suite) jMCPToolSurface() error {
