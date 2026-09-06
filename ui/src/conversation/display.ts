@@ -314,14 +314,16 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
     }
     if (isUserFrame(f)) {
       const raw = proseText(f);
+      const explicitOwner = rec.turn_origin === 'owner';
       // 🎯T233: harness injects fold to a compact ⋯ nugget with hover detail.
-      const nug = classifyInjectUserText(raw);
+      // Canonical owner provenance wins even when the owner quotes a report.
+      const nug = explicitOwner ? null : classifyInjectUserText(raw);
       if (nug) {
         flush();
         out.push({ kind: 'steps', text: nug.label, steps: 0, inject: nug.injectKind, items: [{ cls: 'inject-detail', text: nug.detail }], when });
         continue;
       }
-      if (isNonBoundaryUserText(raw)) continue;
+      if (!explicitOwner && isNonBoundaryUserText(raw)) continue;
       const text = normalizeOwnerEchoText(raw);
       if (!text) continue;
       const frameId = asRec(f).id;

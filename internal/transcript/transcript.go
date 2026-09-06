@@ -33,6 +33,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/turnev"
+	"github.com/marcelocantos/jevons/internal/userturn"
 )
 
 // Turn represents a single user→assistant exchange extracted from a transcript.
@@ -369,48 +370,6 @@ func describeLines(lines []jsonlLine) string {
 	return "records seen: " + strings.Join(parts, " ")
 }
 
-// isNonBoundaryUserText reports harness/fleet inject user bodies that must
-// not open a new owner turn (🎯T329). Mirrors ChatEvents.isNonBoundaryUserText
-// and AgentTranscript.classifyInspectUserLine inject kinds so sealed RHS
-// history matches live coalesce (one assistant bubble per real owner turn).
-func isNonBoundaryUserText(text string) bool {
-	raw := strings.TrimSpace(text)
-	if raw == "" {
-		return false
-	}
-	display := raw
-	// Unwrap a single outer <user_query>…</user_query> for inject checks.
-	if strings.HasPrefix(display, "<user_query") {
-		if i := strings.Index(display, ">"); i >= 0 {
-			inner := display[i+1:]
-			if j := strings.LastIndex(inner, "</user_query>"); j >= 0 {
-				display = strings.TrimSpace(inner[:j])
-			}
-		}
-	}
-	low := strings.ToLower(display)
-	if strings.Contains(low, "<system-reminder") || strings.Contains(low, "system-reminder") {
-		return true
-	}
-	if strings.HasPrefix(display, "[Jevons fleet standing brief") ||
-		strings.Contains(display, "Jevons fleet standing brief") {
-		return true
-	}
-	if strings.HasPrefix(display, "[event:") || strings.HasPrefix(strings.ToLower(display), "[event:") {
-		return true
-	}
-	if strings.HasPrefix(display, "[Daemon restart") {
-		return true
-	}
-	if strings.HasPrefix(strings.ToLower(display), "background task") {
-		return true
-	}
-	if strings.Contains(low, "background task") && strings.Contains(low, "completed") {
-		return true
-	}
-	return false
-}
-
 // extractTurns groups JSONL lines into user→assistant turns.
 // tool_result / reasoning lines are ignored for turn text (v1).
 // 🎯T329: system-reminder / standing-brief / background-task user lines are
@@ -437,7 +396,7 @@ func extractTurns(lines []jsonlLine, keepInject bool) []Turn {
 		if l.isUserTurn {
 			text := l.rec.Text
 			// 🎯T329: harness inject is not an owner turn boundary.
-			if !keepInject && isNonBoundaryUserText(text) {
+			if !keepInject && userturn.LegacyInjectionText(text) {
 				continue
 			}
 			// Flush previous turn.

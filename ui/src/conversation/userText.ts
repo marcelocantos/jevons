@@ -69,6 +69,8 @@ export function isUserLikeFrame(frame: unknown): boolean {
 /** Real owner user seals open streams (🎯T504). T329 inject / protocol frames do not. */
 export function isOwnerUserBarrierFrame(frame: unknown): boolean {
   if (!isUserLikeFrame(frame)) return false;
+  const origin = rec(frame).turn_origin;
+  if (typeof origin === 'string' && origin) return origin === 'owner';
   const text = userContentText(frame);
   if (!String(text).trim()) return false;
   return !isNonBoundaryUserText(text);

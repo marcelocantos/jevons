@@ -56,6 +56,61 @@ func toolAsst(name string) string {
 	return string(b)
 }
 
+func TestOwnerTurnBarrierOnLiveAndReplay(t *testing.T) {
+	for _, sid := range []string{"active-stream", ""} {
+		for _, tc := range []struct {
+			name, origin, text string
+			barrier            bool
+		}{
+			{"owner", "owner", "new question", true},
+			{"owner quotes injection", "owner", "[event: report] is this correct?", true},
+			{"owner quotes protocol", "owner", `{"type":"permission_request"}`, true},
+			{"owner image-only", "owner", "", true},
+			{"agent injection", "agent", "new question", false},
+			{"legacy owner", "", "new question", true},
+			{"legacy injection", "", "[event: report] background result", false},
+			{"legacy protocol", "", `{"type":"permission_request"}`, false},
+		} {
+			t.Run(sid+"/"+tc.name, func(t *testing.T) {
+				body, err := json.Marshal(map[string]any{
+					"type": "user", "turn_origin": tc.origin,
+					"message": map[string]any{"role": "user", "content": tc.text},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				lines := []string{tok(sid, "before", ""), string(body), tok(sid, "after", "end_turn")}
+				var live []Event
+				var folds []LiveFold
+				for _, line := range lines {
+					live, folds = ApplyLiveAll(live, line)
+				}
+				for label, events := range map[string][]Event{"live": live, "replay": EventsFromLines(lines)} {
+					if tc.barrier {
+						if len(events) != 3 || prose(events[0]) != "before" || events[1].Type != "user" || prose(events[2]) != "after" {
+							t.Errorf("%s moved continuation across owner: %+v", label, events)
+						}
+					} else if len(events) != 2 || prose(events[0]) != "beforeafter" {
+						t.Errorf("%s split a non-owner injection: %+v", label, events)
+					}
+				}
+				if tc.barrier && (len(folds) != 1 || folds[0].Op != "put" || folds[0].Event.Index != 3) {
+					t.Errorf("continuation must mint a new indexed row, got %+v", folds)
+				}
+			})
+		}
+	}
+}
+
+func TestOwnerBarrierAfterTypelessStoredUser(t *testing.T) {
+	prev := EventsFromLines([]string{tok("active", "before", ""), user("question")})
+	prev[1].Body = json.RawMessage(`{"turn_origin":"owner","message":{"content":[{"text":"question"}]}}`)
+	next, folds := ApplyLiveAll(prev, tok("active", "after", "end_turn"))
+	if len(next) != 3 || prose(next[0]) != "before" || prose(next[2]) != "after" || len(folds) != 1 || folds[0].Op != "put" {
+		t.Fatalf("continuation crossed stored owner type: next=%+v folds=%+v", next, folds)
+	}
+}
+
 func TestApplyLiveAllContinuesAbsoluteIndexOnSuffix(t *testing.T) {
 	// statedb first-paint is a suffix: 30 events whose indexes are
 	// journal-absolute, not 1..len. A cache-relative mint (31) is
