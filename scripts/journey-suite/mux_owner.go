@@ -27,8 +27,10 @@ type ownerMuxFrame struct {
 	Op    string `json:"op"`
 	Type  string `json:"type"`
 	Event struct {
-		Type    string `json:"type"`
-		Origin  string `json:"turn_origin"`
+		Type    string         `json:"type"`
+		Origin  string         `json:"turn_origin"`
+		Name    string         `json:"name"`
+		Input   map[string]any `json:"input"`
 		Message struct {
 			Content any    `json:"content"`
 			Stop    string `json:"stop_reason"`
@@ -143,6 +145,19 @@ func collectOwnerMuxReplay(ctx context.Context, frames <-chan []byte) ([][]byte,
 }
 
 func waitOwnerMuxReply(ctx context.Context, frames <-chan []byte, prompt, expected string) error {
+	return waitOwnerMuxReplyObserved(ctx, frames, prompt, expected, nil)
+}
+
+// An observer sees only validated frames after this request's owner echo.
+// This lets tool-effect journeys retain the same strict reply correlation.
+func waitOwnerMuxReplyObserved(ctx context.Context, frames <-chan []byte, prompt, expected string, observe func(ownerMuxFrame)) error {
+	return waitOwnerMuxReplyMatching(ctx, frames, prompt, expected, func(text string) bool { return text == expected }, observe)
+}
+
+// Tool-effect replies include an identity minted by the handler, so their
+// complete text cannot be known in advance. The caller validates that identity
+// against the independently observed effect after this request ends.
+func waitOwnerMuxReplyMatching(ctx context.Context, frames <-chan []byte, prompt, expected string, accept func(string) bool, observe func(ownerMuxFrame)) error {
 	ownerIndex := 0
 	ended := make(map[string]bool)
 	indices := make(map[string]int)
@@ -169,12 +184,15 @@ func waitOwnerMuxReply(ctx context.Context, frames <-chan []byte, prompt, expect
 			}
 			indices[frame.ID] = frame.Index
 			ids[frame.Index] = frame.ID
-			if ownerIndex == 0 && frame.Type == "assistant" {
+			if ownerIndex == 0 && frame.Type != "user" {
 				beforeOwner[frame.ID] = true
 			}
 			text := journeyContentText(frame.Event.Message.Content)
 			if frame.Type == "user" && (frame.Event.Origin == "owner" || frame.Event.Origin == "") && text == prompt {
 				ownerIndex = frame.Index
+			}
+			if observe != nil && ownerIndex > 0 && frame.Index > ownerIndex && !beforeOwner[frame.ID] {
+				observe(frame)
 			}
 			if frame.Type != "assistant" || ownerIndex == 0 || frame.Index <= ownerIndex || ended[frame.ID] || beforeOwner[frame.ID] {
 				continue
@@ -193,7 +211,7 @@ func waitOwnerMuxReply(ctx context.Context, frames <-chan []byte, prompt, expect
 				}
 				continue
 			}
-			if strings.TrimSpace(text) == expected {
+			if accept(strings.TrimSpace(text)) {
 				return nil
 			}
 		case <-ctx.Done():
