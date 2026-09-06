@@ -104,7 +104,7 @@ type Server struct {
 
 	startMu sync.Mutex
 	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
-	launchAgentFn func(name string) (*claudia.Agent, error)
+	launchAgentFn func(ctx context.Context, name string) (*claudia.Agent, error)
 	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a
 	// short value so a hung Launch cannot sit for the product timeout.
 	launchDeadline time.Duration

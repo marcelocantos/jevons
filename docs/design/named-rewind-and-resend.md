@@ -755,9 +755,9 @@ startup cancellation; runtime model switching retains its previous behavior.
 
 The five-minute default is a conservative initial bound for the observed
 multi-minute full-MCP load, not a measured readiness guarantee. The public
-Start path still supplies a background context. Caller cancellation through
-the registry, a configurable bound and per-agent startup state remain to be
-wired. No development activation is claimed.
+`Start` convenience path supplies a background context. The follow-up below
+adds caller cancellation through `StartContext` and the registry. No
+development activation is claimed.
 
 The full local gate passed on the exact clean commit (`04868494`), including
 race tests, vet, stability checks and standing mutation checks. The earlier
@@ -765,19 +765,51 @@ working-tree run also passed (`ccacb379`). Independent review found no new
 source-level blocker after its two corrections. The
 handoff control now observes a complete fresh reply after cancellation;
 retaining the startup callback makes it fail (`2c4a96a1`, RED). The saved
-Cursor session restart journey is wired into `make live`, but authenticated
-verification is pending: automatic approval review rejected both the original
-Cursor batch containing Mnemo and the reduced synthetic-only batch. Explicit
-approval was requested for disposable sessions and synthetic data, excluding
-private Mnemo/history access. Neither rejection is a product test result.
+Cursor session restart journey is wired into `make live`. The owner approved
+disposable sessions and synthetic data after automatic approval review rejected
+both the original batch containing Mnemo and a reduced synthetic-only batch.
+The approved exact-commit batch passed (`40c66672`): saved-session identity and
+secret recall, task/session smoke, goal continuation and exclusive MCP
+round-trip. Private Mnemo/history access remains excluded. Neither earlier
+approval rejection was a product test result.
 
-The remaining lifecycle repair must keep provider calls outside the global
-registry mutex while reserving each agent name until startup and cleanup both
-finish. Stop/remove must cancel and fence late completion; metadata updates
-must survive, and launch-affecting changes must not create overlapping writers.
-Jevons must register both signal consumption and exit policy before fleet
-reattachment and propagate cancellation into that operation. Abandoning a
-Launch goroutine on a timer is insufficient: it leaves the lock, provider and
-late publication behind. These requirements came from the captured startup
-stack and independent review, not from assuming that health HTTP success means
-the fleet is ready.
+### Registry and daemon startup repair (2026-09-06)
+
+Claudia commit `d42194c` keeps provider calls outside the global registry mutex
+and reserves each agent name through startup and cleanup. Stop/remove cancel
+and fence late completion; metadata updates survive publication, conflicting
+process configuration fails explicitly, and nested definition data is copied.
+Queued starts cannot resurrect a stopped or removed seat. Adoption and new
+process logs remain distinct so restart evidence cannot count adoption as a
+replacement process. Full working-tree gate `57638e78` and the repeated approved
+Cursor batch `71f7ddf8` passed; clean-commit verification follows separately.
+
+Jevons now installs both signal consumption and exit policy before fleet
+reattachment and propagates cancellation into that operation. The MCP launch
+wrapper joins startup instead of abandoning a goroutine. It preserves a
+successful existing handle even if the caller deadline elapsed: only the
+registry has the ownership information needed to clean up startup. Independent
+review found and corrected that cleanup mistake (`02905664`, GREEN).
+
+The whole-daemon withheld-load control passed (`a6bb3fa0`): fleet HTTP reads
+respond while Cursor withholds session/load; SIGINT drains, SIGHUP writes an
+upgrade handoff, both exit promptly, the child is reaped and the exact saved
+identity survives. Restoring the old late signal ordering failed on both
+signals (`2be66c43`, RED). This is a hermetic outage control, not a live journey
+or proof that running adoptable providers survive an upgrade.
+
+The real Cursor isolate passed J14, J30 and J5 (`9e9bea0c`, GREEN): a saved
+aside survives normal daemon drain/restart with identity and secret recall;
+the packaged React main/sidebar paths send, replay direct request/reply
+history, reload and recall/cancel owner requests. Actual rewind is not exercised.
+These are working-tree results. The broad Go run (`bab4958f`, RED) found one
+outdated source guard and fourteen test-isolation failures caused by exporting
+an explicit GOWORK into unrelated temporary modules. The source guard now names
+the contextual call; clean self-contained workspace verification is pending.
+
+Residue: the published Claudia dependency predates these APIs. Compatibility
+fallbacks remain synchronous and warn; the full cancellation guarantee requires
+the new local dependency. Cancellation outside Cursor remains cooperative and
+may finish after a deadline. Private-history MCP tests and other affected
+provider live checks have not run in this slice. The development MCP-map
+saved-session restart and activation are still pending. No target is retired.

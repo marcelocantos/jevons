@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +16,11 @@ import (
 func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 	s, _ := t541Server(t)
 	s.launchDeadline = 50 * time.Millisecond
-	block := make(chan struct{})
-	t.Cleanup(func() { close(block) })
-	s.launchAgentFn = func(string) (*claudia.Agent, error) {
-		<-block
-		return nil, nil
+	cleaned := make(chan struct{})
+	s.launchAgentFn = func(ctx context.Context, _ string) (*claudia.Agent, error) {
+		<-ctx.Done()
+		close(cleaned)
+		return nil, ctx.Err()
 	}
 
 	req := mcp.CallToolRequest{}
@@ -30,6 +31,13 @@ func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 		"parent":   "jevons-po",
 		"purpose":  "work",
 	}
+	t.Cleanup(func() {
+		select {
+		case <-cleaned:
+		default:
+			t.Error("startup cleanup was abandoned")
+		}
+	})
 	start := time.Now()
 	res, err := s.handleAgentStart(t.Context(), req)
 	elapsed := time.Since(start)
@@ -49,8 +57,7 @@ func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 	if s.startMutexHeld() {
 		t.Fatal("start mutex still held after launch timeout")
 	}
-	// A later start must be able to take startMu immediately — the abandoned
-	// Launch goroutine must not keep the mutex.
+	// A later start can take startMu immediately after cleanup completed.
 	taken := make(chan struct{})
 	go func() {
 		s.startMu.Lock()
@@ -67,12 +74,19 @@ func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 func TestT541_2LaunchAgentBoundedTimesOut(t *testing.T) {
 	s, _ := t541Server(t)
 	s.launchDeadline = 40 * time.Millisecond
-	block := make(chan struct{})
-	t.Cleanup(func() { close(block) })
-	s.launchAgentFn = func(string) (*claudia.Agent, error) {
-		<-block
-		return nil, nil
+	cleaned := make(chan struct{})
+	s.launchAgentFn = func(ctx context.Context, _ string) (*claudia.Agent, error) {
+		<-ctx.Done()
+		close(cleaned)
+		return nil, ctx.Err()
 	}
+	t.Cleanup(func() {
+		select {
+		case <-cleaned:
+		default:
+			t.Error("startup cleanup was abandoned")
+		}
+	})
 	start := time.Now()
 	_, err := s.launchAgentBounded(t.Context(), "jv-t541.2")
 	if err == nil || !strings.Contains(err.Error(), "T541.2") {
@@ -80,5 +94,21 @@ func TestT541_2LaunchAgentBoundedTimesOut(t *testing.T) {
 	}
 	if time.Since(start) > 400*time.Millisecond {
 		t.Fatalf("bounded launch waited %s", time.Since(start))
+	}
+}
+
+func TestT541_2LaunchDeadlinePreservesExistingHandle(t *testing.T) {
+	s, _ := t541Server(t)
+	s.launchDeadline = time.Millisecond
+	existing := &claudia.Agent{}
+	s.launchAgentFn = func(ctx context.Context, _ string) (*claudia.Agent, error) {
+		// A legacy registry lock or an existing handle's Alive probe can
+		// finish after cancellation. This caller owns neither process.
+		<-ctx.Done()
+		return existing, nil
+	}
+	got, err := s.launchAgentBounded(t.Context(), "already-running")
+	if err != nil || got != existing {
+		t.Fatalf("existing handle discarded after deadline: got=%p err=%v", got, err)
 	}
 }
