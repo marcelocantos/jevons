@@ -283,6 +283,8 @@ type Server struct {
 	// agentSendHook overrides live registry Send for POST /api/agents/{name}/send
 	// hermetic tests (🎯T182). Nil = Launch + Agent.Send on the registry.
 	agentSendHook func(name, text string) (status string, err error)
+	// The product hook owns admission and retains the speaker's origin.
+	agentSendOriginHook func(name, text, origin string) (status string, err error)
 
 	// portfolios is the declarative domain portfolio registry (🎯T200).
 	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).

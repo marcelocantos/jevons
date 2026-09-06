@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
@@ -37,18 +39,26 @@ func (s *suite) jPackagedReactOwnerTurn() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", "test.cjs"), "--host", surface.host, "--provider", provider)
+	aside := "react-aside-" + uuid.NewString()
+	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", "test.cjs"), "--host", surface.host, "--provider", provider, "--workdir", s.stateDir, "--aside", aside)
 	// The browser needs no checkout as its working directory. Assets come
 	// exclusively from the isolated daemon's embedded bundle.
 	cmd.Dir = s.stateDir
 	out, err := cmd.CombinedOutput()
 	fmt.Fprint(os.Stdout, string(out))
 	if err != nil {
-		failure := fmt.Errorf("packaged React owner journey: %w\n%s", err, out)
-		if outage := asOutage("J30 real provider", failure); outage != nil {
-			return outage
+		// A browser assertion timeout is a failed product observation, not
+		// proof that the provider was unavailable. Prerequisites are above.
+		return fmt.Errorf("packaged React conversation journey: %w\n%s", err, out)
+	}
+	logs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return fmt.Errorf("read runtime provider evidence: %w", err)
+	}
+	for _, name := range []string{"jevons", aside} {
+		if err := queueJourneyProvider(logs, name, provider); err != nil {
+			return err
 		}
-		return failure
 	}
 	return nil
 }

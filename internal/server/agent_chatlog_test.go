@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/muxwin"
+	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
 
@@ -175,6 +177,151 @@ func TestSidebarJournalDedupesProviderEcho(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("owner turn appears %d times: %v", n, rows)
+	}
+}
+
+// Provider user turns must take the canonical path even after SQLite has
+// imported a journal. Reimporting JSONL cannot repair a missing live row.
+func TestT627ProviderRequestsReachPopulatedCanonicalHistory(t *testing.T) {
+	for _, name := range []string{"jevons-po", "worker", "aside"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			f := newSidebarFixture(t, dir, name, "session-history")
+			def := f.srv.registry.Def(f.name)
+			if name != "aside" {
+				def.Purpose = claudia.PurposeWork
+			}
+			if err := f.srv.registry.Register(*def); err != nil {
+				t.Fatal(err)
+			}
+			dbPath := filepath.Join(dir, "state.db")
+			db, err := statedb.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close(); f.srv.CloseAgentJournals() })
+			f.srv.journalAgentUserTurn(f.name, "earlier request")
+			f.srv.DeliverInspectLive(f.name, claudia.Event{Type: "assistant", Text: "earlier reply", StopReason: "end_turn"})
+			// Startup attaches SQLite before any replay cache exists.
+			f.srv.CloseAgentJournals()
+			f = newSidebarFixture(t, dir, name, "session-history")
+			f.srv.SetStateDB(db)
+			if err := f.srv.RecordAgentRequest(f.name, "first canonical request", sendOriginOwner); err != nil {
+				t.Fatal(err)
+			}
+			if f.srv.statedbN(f.name) == 0 {
+				t.Fatal("fixture must populate SQLite before provider input")
+			}
+			legacyPath := filepath.Join(dir, agentChatLogDirName, name+".jsonl")
+			legacySize := statedb.JSONLSize(legacyPath)
+			for _, origin := range []string{sendOriginOwner, sendOriginAgent} {
+				text := origin + " incoming request"
+				f.srv.DeliverInspectLive(f.name, claudia.Event{Type: "user", Raw: []byte(chatUserEchoAs(text, origin))})
+				f.srv.DeliverInspectLive(f.name, claudia.Event{Type: "assistant", Text: origin + " reply", StopReason: "end_turn"})
+			}
+			if rr := f.send(t, "HTTP owner request"); rr.Code != http.StatusOK {
+				t.Fatal(rr.Body.String())
+			}
+			f.srv.DeliverInspectLive(f.name, claudia.Event{Type: "user", Text: "HTTP owner request"})
+			check := func(s *Server) {
+				t.Helper()
+				counts := map[string]int{}
+				events := s.muxCoalesced(f.name, true)
+				if len(events) != 8 {
+					t.Fatalf("history has %d rows, want 8", len(events))
+				}
+				for i, ev := range events {
+					if ev.Index != i+1 {
+						t.Fatalf("row %d has absolute index %d", i, ev.Index)
+					}
+					if ev.Type != "user" {
+						continue
+					}
+					var frame struct {
+						Origin string `json:"turn_origin"`
+					}
+					if err := json.Unmarshal(ev.Body, &frame); err != nil {
+						t.Fatal(err)
+					}
+					text, ok := userTurnText(claudia.Event{Type: "user", Raw: ev.Body})
+					if !ok {
+						t.Fatalf("non-prose request: %s", ev.Body)
+					}
+					counts[text]++
+					wantOrigin := sendOriginOwner
+					if text == "agent incoming request" {
+						wantOrigin = sendOriginAgent
+					}
+					if frame.Origin != wantOrigin {
+						t.Fatalf("%q origin=%q want %q", text, frame.Origin, wantOrigin)
+					}
+				}
+				for _, text := range []string{"earlier request", "first canonical request", "owner incoming request", "agent incoming request", "HTTP owner request"} {
+					if counts[text] != 1 {
+						t.Fatalf("%q appears %d times: %v", text, counts[text], counts)
+					}
+				}
+			}
+			check(f.srv)
+			if size := statedb.JSONLSize(legacyPath); size != legacySize {
+				t.Fatalf("canonical writes grew legacy history from %d to %d", legacySize, size)
+			}
+			rows := replayRoleRows(inspectReplay(t, f.srv, name))
+			if !containsRow(rows, "user: agent incoming request") {
+				t.Fatalf("named replay omitted canonical request: %v", rows)
+			}
+			f.srv.CloseAgentJournals()
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = statedb.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopened := New("reopened", dir)
+			reopened.SetStateDB(db)
+			t.Cleanup(reopened.CloseAgentJournals)
+			check(reopened)
+		})
+	}
+}
+
+func TestT627AdmissionRetainsIdenticalRequestsAndRefusesStorageFailure(t *testing.T) {
+	dir := t.TempDir()
+	s := New("test", dir)
+	db, err := statedb.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetStateDB(db)
+	t.Cleanup(func() { _ = db.Close(); s.CloseAgentJournals() })
+	for i := 0; i < 2; i++ {
+		if err := s.RecordAgentRequest("worker", "same request", sendOriginOwner); err != nil {
+			t.Fatal(err)
+		}
+		s.DeliverInspectLive("worker", claudia.Event{Type: "user", Text: "same request"})
+	}
+	if n := s.statedbN("worker"); n != 2 {
+		t.Fatalf("identical requests and their echoes produced %d rows, want 2", n)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	watch := &muxWatch{sent: map[string]struct{}{}}
+	watch.subscribeTo(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, muxwin.Resolved{Lo: 1, Hi: 0, Following: true})
+	client := &muxSession{send: make(chan []byte, 16), transcripts: map[string]*muxWatch{"worker": watch}}
+	s.mux.add(client)
+	if err := s.RecordAgentRequest("worker", "must not submit", sendOriginAgent); err == nil {
+		t.Fatal("unwritable canonical store accepted a request")
+	}
+	if len(client.send) != 0 {
+		t.Fatal("failed admission emitted an echo that would clear the draft")
+	}
+	if len(s.mux.eventsFor("worker")) != 0 {
+		t.Fatal("failed admission left speculative rows in the cache")
+	}
+	if err := s.RecordAgentRequest("worker", "bad provenance", "invented"); err == nil {
+		t.Fatal("invalid provenance accepted")
 	}
 }
 

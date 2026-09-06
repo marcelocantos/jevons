@@ -14,6 +14,7 @@ const { chromium } = require('../browser-loop-test/node_modules/playwright');
 
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, screenshot: { type: 'string' },
+  workdir: { type: 'string' }, aside: { type: 'string' },
 } });
 const dist = path.resolve(__dirname, '../../ui/dist');
 const live = Boolean(values.host);
@@ -118,9 +119,9 @@ async function main() {
   if (live) {
     const agents = await page.evaluate(async () => (await fetch('/api/agents')).json());
     const root = agents.find(agent => agent.name === 'jevons');
-    assert(root?.provider, 'effective overseer provider is unavailable');
-    if (values.provider) assert.equal(root.provider, values.provider, 'effective provider differs from the journey request');
-    console.log(`Effective provider: ${root.provider}`);
+    assert(root?.provider, 'selected overseer provider is unavailable');
+    if (values.provider) assert.equal(root.provider, values.provider, 'selected provider differs from the journey request');
+    console.log(`Selected provider: ${root.provider}`);
   }
 
   async function sendAndReload({ input, button, transcript, agent }) {
@@ -211,11 +212,70 @@ async function main() {
     await page.locator('#agent-inspect[data-agent-id="jevons-po"]').waitFor({ state: 'visible' });
     const sidePrompt = await sendAndReload({ input: '#agent-inspect-input', button: '#agent-inspect-send', transcript: '#agent-inspect-body', agent: 'jevons-po' });
     await recallAndCancel({ input: '#agent-inspect-input', transcript: '#agent-inspect-body', prompt: sidePrompt, agent: 'jevons-po' });
+  } else {
+    // Fixture creation and agent-to-agent directs use real MCP. The owner's
+    // side request uses the same React composer as the main request above.
+    assert(values.workdir, 'live side-conversation check requires an isolated workdir');
+    const mcp = async (name, args) => {
+      const response = await fetch(new URL('/mcp', base), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: args } }),
+      });
+      assert(response.ok, `MCP ${name}: HTTP ${response.status}`);
+      const data = await response.json();
+      assert(!data.error && !data.result?.isError, `MCP ${name}: ${JSON.stringify(data)}`);
+      return (data.result?.content || []).filter(item => item.type === 'text').map(item => item.text).join('\n');
+    };
+    const name = values.aside || `react-aside-${randomUUID()}`;
+    const workdir = await fs.mkdtemp(path.join(values.workdir, 'react-aside-'));
+    await mcp('jevons_thread_spawn', { id: name, workdir, provider: values.provider, description: 'isolated React conversation check' });
+    try {
+      const direct = async () => {
+        const token = `direct-${randomUUID()}`;
+        const prompt = `Reply with exactly: ${token}`;
+        const reply = await mcp('jevons_thread_direct', { id: name, text: prompt });
+        assert.equal(reply.trim(), token, 'direct returns its exact fresh answer');
+        return { prompt, token };
+      };
+      const first = await direct();
+      const agents = await (await fetch(new URL('/api/agents', base))).json();
+      assert.equal(agents.find(agent => agent.name === name)?.provider, values.provider, 'aside selected provider matches the journey');
+      await page.goto(new URL(`/?agent=${encodeURIComponent(name)}&tab=transcript`, base).href);
+      await page.locator(`#agent-inspect[data-agent-id="${name}"]`).waitFor({ state: 'visible' });
+      const assertPair = async ({ prompt, token }) => {
+        const transcript = '#agent-inspect-body';
+        try {
+          await page.waitForFunction(({ prompt, token }) => {
+            const bodies = kind => [...document.querySelectorAll(`#agent-inspect-body [data-kind="${kind}"] .msg-body`)].map(el => el.textContent.trim());
+            return bodies('user').includes(prompt) && bodies('assistant').some(text => text.includes(token));
+          }, { prompt, token });
+        } catch (error) {
+          await page.screenshot({ path: screenshot });
+          console.error('Aside observation:', await page.locator('#agent-inspect-body').innerText());
+          console.error(`Failure screenshot: ${screenshot}`);
+          throw error;
+        }
+        assert.equal(await page.locator(`${transcript} [data-kind="user"] .msg-body`).filter({ hasText: prompt }).count(), 1, 'direct request appears once');
+        assert.equal(await page.locator(`${transcript} [data-kind="assistant"] .msg-body`).filter({ hasText: token }).count(), 1, 'direct reply appears once');
+      };
+      await assertPair(first);
+      const sidePrompt = await sendAndReload({ input: '#agent-inspect-input', button: '#agent-inspect-send', transcript: '#agent-inspect-body', agent: name });
+      const later = await direct();
+      await assertPair(later);
+      await page.reload();
+      await assertPair(first);
+      await assertPair(later);
+      await recallAndCancel({ input: '#agent-inspect-input', transcript: '#agent-inspect-body', prompt: sidePrompt, agent: name });
+    } finally {
+      await mcp('jevons_thread_remove', { id: name });
+      const agents = await (await fetch(new URL('/api/agents', base))).json();
+      assert(!agents.some(agent => agent.name === name), 'aside is removed from the registry');
+    }
   }
   assert.deepEqual(errors, [], 'React has no uncaught browser errors');
   await page.screenshot({ path: screenshot });
   console.log(`Screenshot: ${screenshot}`);
-  console.log(live ? 'PASS: packaged React owner send, correlated terminal reply, reload and recall/cancel (real provider; rewind not exercised)' : 'PASS: built React main/sidebar send, real query deep link, reload and recall/cancel (mocked transport; not a live journey; rewind not exercised)');
+  console.log(live ? 'PASS: packaged React main/sidebar send, direct request/reply history, reload and owner-only recall/cancel (real provider; rewind not exercised)' : 'PASS: built React main/sidebar send, real query deep link, reload and recall/cancel (mocked transport; not a live journey; rewind not exercised)');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

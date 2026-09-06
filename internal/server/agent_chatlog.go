@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -152,8 +153,7 @@ func (j *agentJournals) logFor(name string) *chatlog.Log {
 	return l
 }
 
-// appendUser journals a user-role turn, skipping a repeat of the text last
-// journaled for this agent (the provider's ACP echo of our own send).
+// appendUser writes an owner-default turn to the legacy journal.
 func (j *agentJournals) appendUser(name, text string) {
 	j.appendUserAs(name, text, sendOriginOwner)
 }
@@ -170,13 +170,6 @@ func (j *agentJournals) appendUserAs(name, text, origin string) (line string, ok
 	if l == nil {
 		return "", false
 	}
-	j.mu.Lock()
-	if j.lastUser[name] == text {
-		j.mu.Unlock()
-		return "", false
-	}
-	j.lastUser[name] = text
-	j.mu.Unlock()
 	line = chatUserEchoAs(text, origin)
 	if err := l.Append(line); err != nil {
 		slog.Warn("agent_chatlog_append_failed",
@@ -187,6 +180,9 @@ func (j *agentJournals) appendUserAs(name, text, origin string) (line string, ok
 		)
 		return line, false
 	}
+	j.mu.Lock()
+	j.lastUser[name] = text
+	j.mu.Unlock()
 	return line, true
 }
 
@@ -329,14 +325,63 @@ func (s *Server) journalAgentUserTurn(name, text string) {
 // same way main chat does (🎯T381). A turn addressed to a fleet agent carries
 // no userTurnPrefix marker, so provenance has to travel on the line itself.
 func (s *Server) journalAgentUserTurnAs(name, text, origin string) {
+	s.recordAgentUserTurnAs(name, text, origin, false)
+}
+
+// RecordAgentRequest is the admission journal shared by directed and queued
+// fleet delivery. Recording is not a claim that the provider received it.
+func (s *Server) RecordAgentRequest(name, text, origin string) error {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(text) == "" {
+		return fmt.Errorf("name and text are required")
+	}
+	if origin != sendOriginOwner && origin != sendOriginAgent {
+		return fmt.Errorf("invalid message origin %q", origin)
+	}
+	if !s.recordAgentUserTurnAs(name, text, origin, false) {
+		return fmt.Errorf("request for %q could not be recorded; not submitted", name)
+	}
+	return nil
+}
+
+func (s *Server) recordAgentUserTurnAs(name, text, origin string, providerEcho bool) bool {
 	if s.isOverseerAgent(name) {
 		// The overseer's durable record is the owner chat journal; a second
 		// copy here would double-paint main chat's own history.
-		return
+		return false
 	}
-	if line, ok := s.agentJournalsFor().appendUserAs(name, text, origin); ok {
-		s.muxFanTranscript(name, line)
+	text = strings.TrimSpace(text)
+	if text == "" || s.mux == nil {
+		return false
 	}
+	lock := s.mux.journalLock(name)
+	lock.Lock()
+	defer lock.Unlock()
+	// Import the old prefix before adding this turn. Appending to JSONL
+	// first lets initial import and live ingestion record the same turn twice.
+	s.muxEnsureLiveLocked(name)
+	j := s.agentJournalsFor()
+	if providerEcho && j != nil {
+		j.mu.Lock()
+		repeated := j.lastUser[name] == text
+		j.mu.Unlock()
+		if repeated {
+			return true
+		}
+	}
+	if s.stateStore() != nil {
+		durable := s.muxFanTranscriptLocked(name, chatUserEchoAs(text, origin))
+		if durable && j != nil {
+			j.mu.Lock()
+			j.lastUser[name] = text
+			j.mu.Unlock()
+		}
+		return durable
+	}
+	if line, ok := j.appendUserAs(name, text, origin); ok {
+		s.muxFanTranscriptLocked(name, line)
+		return true
+	}
+	return false
 }
 
 // journalAgentEvent records one agent event in that agent's durable journal.
@@ -349,10 +394,16 @@ func (s *Server) journalAgentEvent(name string, ev claudia.Event) {
 	// 🎯T367.2 / 🎯T522: the ACP echo of a turn we journaled on the send path
 	// must not paint a second owner bubble. Fleet agents carry no
 	// userTurnPrefix marker (unlike the overseer wire), so the echo has to
-	// go through appendUser's lastUser latch instead of appendLine.
+	// go through the provider-echo latch instead of appendLine.
 	if ev.Type == "user" {
 		if text, prose := userTurnText(ev); prose && strings.TrimSpace(text) != "" {
-			s.agentJournalsFor().appendUser(name, text)
+			var provenance struct {
+				Origin string `json:"turn_origin"`
+			}
+			// Preserve explicit host provenance when present. Unstamped legacy
+			// provider events retain their existing owner-default behavior.
+			_ = json.Unmarshal(ev.Raw, &provenance)
+			s.recordAgentUserTurnAs(name, text, provenance.Origin, true)
 			return
 		}
 	}
@@ -370,7 +421,9 @@ func (s *Server) journalAgentEvent(name string, ev claudia.Event) {
 	if ev.Type == "assistant" {
 		s.agentJournalsFor().clearLastUser(name)
 	}
-	s.agentJournalsFor().appendLine(name, string(line))
+	if s.stateStore() == nil {
+		s.agentJournalsFor().appendLine(name, string(line))
+	}
 	s.muxFanTranscript(name, string(line))
 }
 

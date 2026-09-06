@@ -542,9 +542,24 @@ func (s *Server) muxFanTranscript(name, frameJSON string) bool {
 	lock := s.mux.journalLock(name)
 	lock.Lock()
 	defer lock.Unlock()
+	return s.muxFanTranscriptLocked(name, frameJSON)
+}
+
+// Caller holds the selected agent's journal lock, including when importing
+// legacy history before admitting a new named request.
+func (s *Server) muxFanTranscriptLocked(name, frameJSON string) bool {
 	s.muxEnsureLiveLocked(name)
 	folds, stamps := s.mux.applyLine(name, frameJSON)
 	durable := s.statedbUpsertFolds(name, folds)
+	if s.stateStore() != nil && !durable {
+		// Do not acknowledge a failed admission through its transcript echo.
+		// Drop speculative cache state so a later write reloads durable indexes.
+		s.mux.replaceCacheN(name, nil, 0, false, 0)
+		s.mux.mu.Lock()
+		delete(s.mux.stamps, name)
+		s.mux.mu.Unlock()
+		return false
+	}
 	if len(folds) > 0 {
 		s.mux.mu.Lock()
 		s.mux.fanFoldsLocked(name, folds)
@@ -723,12 +738,12 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		// prompt-in-flight (that wedged heartbeats and the next send).
 		if sess != nil {
 			if w := sess.watchGet(name); w != nil {
-				sess.mu.Lock()
+				w.mu.Lock()
 				w.visible.Following = true
 				w.visible.Hi = 0
 				w.sub.Following = true
 				w.sub.Hi = 0
-				sess.mu.Unlock()
+				w.mu.Unlock()
 			}
 		}
 		ch := env.Ch

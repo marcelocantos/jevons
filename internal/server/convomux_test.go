@@ -30,6 +30,45 @@ func TestParseTranscriptChannel(t *testing.T) {
 	}
 }
 
+func TestT627MuxSendUnfreezesWatchDuringConcurrentFanout(t *testing.T) {
+	s := New("test", t.TempDir())
+	const sends = 100
+	delivered := make(chan struct{}, sends)
+	s.SetAgentSendOriginHook(func(string, string, string) (string, error) {
+		delivered <- struct{}{}
+		return "sent", nil
+	})
+	sess := &muxSession{transcripts: make(map[string]*muxWatch)}
+	w := sess.ensure("worker")
+	w.subscribeTo(muxwin.Resolved{Lo: 1, Hi: 2}, muxwin.Resolved{Lo: 1, Hi: 2})
+	var readers sync.WaitGroup
+	start := make(chan struct{})
+	readers.Go(func() {
+		<-start
+		for range sends * 100 {
+			w.window()
+		}
+	})
+	close(start)
+	for range sends {
+		s.handleMuxEnvelope(t.Context(), nil, sess, muxEnvelope{
+			Ch: transcriptChannel("worker"), T: "send", Body: json.RawMessage(`{"text":"request"}`),
+		})
+	}
+	for range sends {
+		select {
+		case <-delivered:
+		case <-t.Context().Done():
+			t.Fatal("send did not reach admission")
+		}
+	}
+	readers.Wait()
+	sub, subscribed := w.window()
+	if !subscribed || !sub.Following || sub.Hi != 0 {
+		t.Fatalf("send left the watcher frozen: %+v subscribed=%v", sub, subscribed)
+	}
+}
+
 func TestEncodeMuxEnvelope(t *testing.T) {
 	b, err := encodeMux("transcript:jevons", "meta", map[string]any{"older": 0, "total": 3})
 	if err != nil {

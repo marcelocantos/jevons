@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,41 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+func TestT627CursorOpeningBriefRecordsBeforeSubmission(t *testing.T) {
+	s, _ := t541Server(t)
+	const name = "cursor-history"
+	var recorded string
+	var submitted int
+	s.SetAgentRequestRecorder(func(gotName, text string, origin SendOrigin) error {
+		if gotName != name || origin != OriginAgent || submitted != 0 {
+			t.Fatalf("invalid admission name=%q origin=%q submitted=%d", gotName, origin, submitted)
+		}
+		recorded = text
+		return nil
+	})
+	s.cursorSubmit = func(gotName, text string) error {
+		if gotName != name || text != recorded || !strings.Contains(text, "opening request") {
+			t.Fatalf("submitted a different brief: %q", text)
+		}
+		submitted++
+		return nil
+	}
+	if err := s.submitCursorStartBrief(name, "opening request"); err != nil {
+		t.Fatal(err)
+	}
+	if submitted != 1 {
+		t.Fatalf("submitted %d times", submitted)
+	}
+	failure := errors.New("journal unavailable")
+	s.SetAgentRequestRecorder(func(string, string, SendOrigin) error { return failure })
+	if err := s.submitCursorStartBrief(name, "must not submit"); !errors.Is(err, failure) {
+		t.Fatalf("failed record returned %v", err)
+	}
+	if submitted != 1 {
+		t.Fatal("submitted after admission failure")
+	}
+}
 
 func TestT541CursorSeatMaterializedOracle(t *testing.T) {
 	t.Parallel()
@@ -154,9 +190,9 @@ func TestT541HandleAgentStartReleasesMutexBeforePrompt(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"name":      "jv-t541-start",
-		"workdir":   t.TempDir(),
-		"provider":  string(claudia.ProviderCursor),
+		"name":     "jv-t541-start",
+		"workdir":  t.TempDir(),
+		"provider": string(claudia.ProviderCursor),
 		"parent":   "jevons-po",
 		"purpose":  "work",
 		"prompt":   "Execute 🎯T541.",
