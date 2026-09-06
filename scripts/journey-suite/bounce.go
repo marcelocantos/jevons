@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -146,6 +147,30 @@ func (s *suite) handoverPath(name string) string {
 	return filepath.Join(s.stateDir, "handover", name+".json")
 }
 
+// The normal registry loader treats read failures as an empty registry. An
+// oracle must distinguish failed observation from an actual missing seat.
+func bounceRegistrySnapshot(path string) (map[string]claudia.AgentDef, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var defs []claudia.AgentDef
+	if err := json.Unmarshal(body, &defs); err != nil {
+		return nil, err
+	}
+	if defs == nil {
+		return nil, fmt.Errorf("registry is null, not an agent list")
+	}
+	out := make(map[string]claudia.AgentDef, len(defs))
+	for _, def := range defs {
+		if _, duplicate := out[def.Name]; duplicate || def.Name == "" {
+			return nil, fmt.Errorf("duplicate or empty registry name %q", def.Name)
+		}
+		out[def.Name] = def
+	}
+	return out, nil
+}
+
 // J14 exercises a normal SIGINT drain and restart, not crash or SIGHUP adoption.
 // Stable registry IDs alone cannot prove an agent resumed: require a fresh
 // post-restart answer that uses a fact supplied only before the restart.
@@ -190,13 +215,9 @@ func (s *suite) jBounceResume() error {
 		return fmt.Errorf("pre-bounce seed turn: %w", err)
 	}
 
-	registry, err := claudia.NewRegistry(s.agentsPath())
+	before, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
 		return fmt.Errorf("snapshot before bounce: %w", err)
-	}
-	before := make(map[string]claudia.AgentDef)
-	for _, agent := range registry.List() {
-		before[agent.Name] = agent
 	}
 	if before[id].SessionID == "" || before[id].Provider != s.provider {
 		return fmt.Errorf("bounce fixture lacks its selected provider/session identity")
@@ -252,13 +273,9 @@ func (s *suite) jBounceResume() error {
 	directErr := direct(prompt, expected)
 	// Check identity even when the provider call failed. A timeout must not
 	// disguise an observed session replacement as an external outage.
-	registry, err = claudia.NewRegistry(s.agentsPath())
+	after, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
 		return fmt.Errorf("snapshot after bounce: %w", err)
-	}
-	after := make(map[string]claudia.AgentDef)
-	for _, agent := range registry.List() {
-		after[agent.Name] = agent
 	}
 	for name, agent := range before {
 		if next, ok := after[name]; !ok || next.SessionID != agent.SessionID || next.Provider != agent.Provider {

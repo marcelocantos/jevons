@@ -584,3 +584,12 @@ These results use the committed published Claudia v0.29.0 dependency, not the
 uncommitted dependency changes in the shared checkout. No development daemon
 activation was performed for this harness-only slice. Grok continuity remains
 unproved; neither T625 nor the migration is complete.
+
+The diagnostic ordering correction at `de414c4347fc` passed clean race checks
+(`07583e52`) and another real Cursor J2/J14/J5 run (`62f368bc`). Grok
+reproduced session loss (`92ab1632`), now correctly reported as a product
+failure rather than an outage. Independent review identified two further
+oracle refinements: read registry snapshots strictly instead of inheriting
+Claudia's empty-registry fallback on file-read failure, and explicitly reject
+outage classification in the rotation-plus-timeout control. An unreadable
+registry now reports failed observation, not an inferred session change.

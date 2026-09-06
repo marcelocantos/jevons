@@ -156,6 +156,12 @@ func runBounceOraclePeer() error {
 				state.Post = challenge
 				reply = state.Secret + " " + challenge
 				switch mode {
+				case "unreadable registry":
+					registryPath := filepath.Join(*stateDir, "agents.json")
+					callErr = os.Rename(registryPath, registryPath+".saved")
+					if callErr == nil {
+						callErr = os.Mkdir(registryPath, 0o700)
+					}
 				case "session rotation then outage":
 					callErr = register(state.ID, "rotated-before-timeout", claudia.ProviderGrok)
 					if callErr == nil {
@@ -227,7 +233,7 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 	identities := map[string]bool{}
 	for _, mode := range []string{"valid", "valid again", "no post reply", "unrelated reply", "lost retained fact",
 		"stale pre-restart reply", "truncated reply", "wrong provider", "missing replacement launch",
-		"late session rotation", "late provider rotation", "session rotation then outage", "new handover", "registry survives cleanup",
+		"late session rotation", "late provider rotation", "session rotation then outage", "unreadable registry", "new handover", "registry survives cleanup",
 		"bad exit", "upgrade stop", "forced stop"} {
 		t.Run(mode, func(t *testing.T) {
 			state := t.TempDir()
@@ -255,6 +261,9 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 			if (err == nil) != wantOK {
 				t.Errorf("J14 error=%v, want success=%v", err, wantOK)
 			}
+			if mode == "session rotation then outage" && isOutage(err) {
+				t.Errorf("observed session drift misclassified as outage: %v", err)
+			}
 			if !wantOK && err != nil {
 				wantFailure := "post-bounce aside turn"
 				switch mode {
@@ -262,6 +271,8 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 					wantFailure = "replacement aside"
 				case "late session rotation", "late provider rotation", "session rotation then outage":
 					wantFailure = "changed existing session/provider"
+				case "unreadable registry":
+					wantFailure = "snapshot after bounce"
 				case "new handover":
 					wantFailure = "new T285 handover"
 				case "registry survives cleanup":
