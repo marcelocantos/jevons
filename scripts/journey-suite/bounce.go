@@ -249,20 +249,9 @@ func (s *suite) jBounceResume() error {
 	challenge := "bounce-now-" + uuid.NewString()
 	prompt := "What journey continuity secret did I give you before the restart? Reply with exactly two words separated by one space: the saved secret, then " + challenge + ". No labels or punctuation."
 	expected := secret + " " + challenge
-	if err := direct(prompt, expected); err != nil {
-		return fmt.Errorf("post-bounce aside turn: %w", err)
-	}
-	logs, err := os.ReadFile(s.logPath)
-	if err != nil {
-		return err
-	}
-	if !bytes.HasPrefix(logs, preLogs) {
-		return fmt.Errorf("daemon launch log was replaced during bounce")
-	}
-	if err := queueJourneyProvider(logs[len(preLogs):], id, string(s.provider)); err != nil {
-		return fmt.Errorf("replacement aside: %w", err)
-	}
-
+	directErr := direct(prompt, expected)
+	// Check identity even when the provider call failed. A timeout must not
+	// disguise an observed session replacement as an external outage.
 	registry, err = claudia.NewRegistry(s.agentsPath())
 	if err != nil {
 		return fmt.Errorf("snapshot after bounce: %w", err)
@@ -276,6 +265,20 @@ func (s *suite) jBounceResume() error {
 			return fmt.Errorf("bounce changed existing session/provider for %s", name)
 		}
 	}
+	if directErr != nil {
+		return fmt.Errorf("post-bounce aside turn: %w", directErr)
+	}
+	logs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	if !bytes.HasPrefix(logs, preLogs) {
+		return fmt.Errorf("daemon launch log was replaced during bounce")
+	}
+	if err := queueJourneyProvider(logs[len(preLogs):], id, string(s.provider)); err != nil {
+		return fmt.Errorf("replacement aside: %w", err)
+	}
+
 	for name := range before {
 		body, err := os.ReadFile(s.handoverPath(name))
 		previous, existed := handovers[name]

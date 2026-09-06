@@ -564,3 +564,23 @@ only at test-peer teardown: its one-second timeout collided with the race
 runtime's intentional exit delay. Fixture teardown now uses the journey's
 existing eight-second drain budget; the product timeout is unchanged. Final
 clean and real-provider results are still required.
+
+Clean `1fe684f3339e` passed the complete journey package with race detection
+(`db9b72b9`) and the daemon build (`bb59d81d`). Its real Cursor
+J2/J14/J5 run passed (`36575d40`): the named aside retained its session,
+remembered the pre-restart secret and answered the fresh post-restart challenge.
+
+The matching Grok run failed (`84b296a0`). Both the overseer and the aside
+changed session IDs after a normal drain, despite having completed pre-restart
+turns; the post-restart direct then timed out. The timeout classifier called
+this an outage, but it does not explain the observed identity loss. The oracle
+now checks persisted identity even when the direct fails, so a provider timeout
+cannot conceal that earlier product defect. A new adversarial peer covers
+session rotation followed by a tool timeout. Final verification of that
+ordering correction remains pending. The product gap is tracked under
+🎯T627.1, distinct from the never-materialized Cursor case 🎯T629.
+
+These results use the committed published Claudia v0.29.0 dependency, not the
+uncommitted dependency changes in the shared checkout. No development daemon
+activation was performed for this harness-only slice. Grok continuity remains
+unproved; neither T625 nor the migration is complete.

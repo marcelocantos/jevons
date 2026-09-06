@@ -156,6 +156,12 @@ func runBounceOraclePeer() error {
 				state.Post = challenge
 				reply = state.Secret + " " + challenge
 				switch mode {
+				case "session rotation then outage":
+					callErr = register(state.ID, "rotated-before-timeout", claudia.ProviderGrok)
+					if callErr == nil {
+						_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]string{"message": "jevons_thread_direct timed out or cancelled after 30s"}})
+						return
+					}
 				case "no post reply":
 					reply = ""
 				case "unrelated reply":
@@ -221,7 +227,7 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 	identities := map[string]bool{}
 	for _, mode := range []string{"valid", "valid again", "no post reply", "unrelated reply", "lost retained fact",
 		"stale pre-restart reply", "truncated reply", "wrong provider", "missing replacement launch",
-		"late session rotation", "late provider rotation", "new handover", "registry survives cleanup",
+		"late session rotation", "late provider rotation", "session rotation then outage", "new handover", "registry survives cleanup",
 		"bad exit", "upgrade stop", "forced stop"} {
 		t.Run(mode, func(t *testing.T) {
 			state := t.TempDir()
@@ -254,7 +260,7 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 				switch mode {
 				case "wrong provider", "missing replacement launch":
 					wantFailure = "replacement aside"
-				case "late session rotation", "late provider rotation":
+				case "late session rotation", "late provider rotation", "session rotation then outage":
 					wantFailure = "changed existing session/provider"
 				case "new handover":
 					wantFailure = "new T285 handover"
