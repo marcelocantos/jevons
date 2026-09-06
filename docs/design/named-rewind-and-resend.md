@@ -443,9 +443,9 @@ treated Cursor append chunks as paragraph blocks. That run also failed J5
 because the J9-only fixture had made no owner turn; subsequent subsets include
 J2 to establish the owner-store precondition.
 
-T625.1 narrows numeric failure markers to whole status tokens, preserving
+T625.3 narrows numeric failure markers to whole status tokens, preserving
 identifier punctuation instead of matching numeric substrings. Real status
-messages retain their classes. T625.2 concatenates Cursor append chunks
+messages retain their classes. T625.4 concatenates Cursor append chunks
 verbatim, including provider-authored newlines, while retaining existing
 Claude/Codex block behavior. Captured failures reproduce before the fixes
 (`38e3fb2b`, `aae656f7`); affected classifier, fleet, MCP and journey suites
@@ -453,5 +453,11 @@ pass afterward (`7be65319`). An earlier Cursor regression attempt failed to
 compile because its new test lacked an import (`111c3a17`); it was corrected
 before obtaining the actual red reproduction. The strict J9 now deliberately
 includes numeric status-shaped fragments before its fresh UUID on every run.
-Clean real-provider verification and development activation remain outstanding
-for these product fixes.
+Clean code `6b16ef21f636` passed the full Go suite, focused classifier/fleet/
+journey race tests and a fresh daemon build (`ce555b43`). Grok J9/J5 passed
+(`4b83c5c6`); that invocation's J2 filter was misspelled and did not run, so it
+is not owner-turn evidence. Cursor J2/J9/J5 passed (`4e445986`), including the
+owner-store precondition. Both provider runs required their exact fresh reply
+with embedded numeric status fragments and verified thread/registry cleanup.
+Development activation and observation remain outstanding for these product
+fixes; T625.3 and T625.4 are not yet claimed achieved.

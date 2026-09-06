@@ -397,7 +397,7 @@ func (s *suite) jThreadSpawnDirectRemove() error {
 	// A fresh request-specific answer must survive the full direct path.
 	// Generic activity and token fragments are not successful delivery.
 	// Numeric status-shaped fragments deliberately exercise the classifier
-	// defect exposed by a UUID containing "500" (T625.1), on every run.
+	// defect exposed by a UUID containing "500" (T625.3), on every run.
 	token := "orch-direct-400-401-402-403-429-500-502-503-504-" + uuid.NewString()
 	directOut, err := s.mcpText("jevons_thread_direct", map[string]any{
 		"id": id, "text": "Reply with exactly: " + token,
