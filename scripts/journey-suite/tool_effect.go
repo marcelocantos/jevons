@@ -68,6 +68,16 @@ func matchingIdeaToolCall(frame ownerMuxFrame, token string) bool {
 		if !ok {
 			return false
 		}
+	case mcpName + ": " + tool:
+		// Cursor preserves its MCP dispatch arguments in the canonical event.
+		if input["providerIdentifier"] != mcpName || input["toolName"] != tool {
+			return false
+		}
+		var ok bool
+		input, ok = input["args"].(map[string]any)
+		if !ok {
+			return false
+		}
 	default:
 		return false
 	}

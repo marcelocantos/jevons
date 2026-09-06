@@ -503,3 +503,13 @@ JSON, reused nonces, duplicate/quoted/nonterminal/truncated proofs and trailing
 commentary. These are oracle tests, not product journeys. Fresh clean-source
 provider evidence remains required before this slice is accepted. Rewind,
 full React orchestration, and the remaining T625 requirements stay open.
+
+Clean `d4fa4d34274b` passes the journey package with race detection (`cbfca318`)
+and real Grok J6c/J5 (`73abfb30`). The first concurrent Cursor attempt refused
+the port already occupied by the Grok isolate before starting (`120a7f79`);
+subsequent standalone runs use an ephemeral port. Cursor `afa735ce` captured
+the record and returned its correct identity, but failed the tool-call match.
+Its canonical event retains a distinct MCP dispatch envelope: the outer name,
+providerIdentifier, toolName and nested args must all match. That observed
+shape is now covered alongside Grok, with wrong-dispatch and malformed-input
+negative controls. Fresh final-shape evidence remains pending.
