@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -178,7 +179,7 @@ func TestT541EmptyPromptWritesRemintSeed(t *testing.T) {
 func TestT541HandleAgentStartReleasesMutexBeforePrompt(t *testing.T) {
 	s, _ := t541Server(t)
 	var heldDuringLaunch, heldDuringSubmit atomic.Bool
-	s.launchAgentFn = func(string) (*claudia.Agent, error) {
+	s.launchAgentFn = func(context.Context, string) (*claudia.Agent, error) {
 		heldDuringLaunch.Store(s.startMutexHeld())
 		return nil, nil
 	}
@@ -218,7 +219,7 @@ func TestT541HandleAgentStartReleasesMutexBeforePrompt(t *testing.T) {
 
 func TestT541HandleAgentStartReapsUnmaterialized(t *testing.T) {
 	s, reg := t541Server(t)
-	s.launchAgentFn = func(string) (*claudia.Agent, error) { return nil, nil }
+	s.launchAgentFn = func(context.Context, string) (*claudia.Agent, error) { return nil, nil }
 	s.cursorSubmit = func(string, string) error { return nil }
 	s.cursorObserve = func(string) (bool, bool) { return false, true } // process, no store
 

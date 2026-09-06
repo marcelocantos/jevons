@@ -4,7 +4,9 @@
 package upgrade
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/marcelocantos/claudia"
 )
@@ -17,6 +19,13 @@ import (
 // Upgrade handoff is no longer what chooses the start method — it is
 // only consumed so a later drain start is not mistaken for an upgrade.
 func ReattachFleet(reg *claudia.Registry) []string {
+	return ReattachFleetContext(context.Background(), reg)
+}
+
+// ReattachFleetContext cooperates with startup cancellation when provided by
+// Claudia. The compatibility path preserves the published dependency until its
+// next release; activation gates must exercise the contextual implementation.
+func ReattachFleetContext(ctx context.Context, reg *claudia.Registry) []string {
 	if reg == nil {
 		return nil
 	}
@@ -25,7 +34,15 @@ func ReattachFleet(reg *claudia.Registry) []string {
 	// so the successor opens exactly one client per store.db (🎯T541.1).
 	ReapCursorFleetLeftovers(reg)
 	reapOrphanCursorACP()
-	reg.StartAllPreferAdopt()
+	if ctx.Err() != nil {
+		return nil
+	}
+	if contextual, ok := any(reg).(interface{ StartAllPreferAdoptContext(context.Context) }); ok {
+		contextual.StartAllPreferAdoptContext(ctx)
+	} else {
+		slog.Warn("Claudia dependency lacks cancellable fleet startup; legacy startup may delay shutdown")
+		reg.StartAllPreferAdopt()
+	}
 	return SessionDriftNames(before, SessionSnapshot(reg))
 }
 

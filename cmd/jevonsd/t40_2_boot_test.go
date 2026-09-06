@@ -15,7 +15,7 @@ func TestBootAlwaysReattachFleet(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	if !strings.Contains(body, "upgrade.ReattachFleet(registry)") {
+	if !strings.Contains(body, "upgrade.ReattachFleetContext(ctx, registry)") {
 		t.Fatal("boot does not call ReattachFleet — crash/drain will Launch-only")
 	}
 	if strings.Contains(body, "registry.StartAll()") {

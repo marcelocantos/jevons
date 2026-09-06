@@ -28,11 +28,9 @@ const cursorRemintSeed = "[jevons] materialize ACP session"
 
 const defaultCursorMaterializeWait = 2 * time.Second
 
-// defaultLaunchDeadline is the hard cap on registry.Launch while startMu
-// is held. Cursor session/load that will ever succeed does so in seconds;
-// a remint that sits on "existing conversation; refusing to mint" must
-// return an MCP error so the PO turn can finish (🎯T541.2).
-const defaultLaunchDeadline = 30 * time.Second
+// Full saved-session loads with many MCP servers can take minutes. Explicit
+// caller cancellation still interrupts supported startup immediately.
+const defaultLaunchDeadline = 5 * time.Minute
 
 // deferStartPrompt reports whether this provider must use start-then-send
 // instead of waiting for turn confirmation on the start RPC.
@@ -47,13 +45,21 @@ func CursorSeatMaterialized(storeExists, processBound bool) bool {
 	return storeExists && processBound
 }
 
-func (s *Server) launchAgent(name string) (*claudia.Agent, error) {
+func (s *Server) launchAgent(ctx context.Context, name string) (*claudia.Agent, error) {
 	if s != nil && s.launchAgentFn != nil {
-		return s.launchAgentFn(name)
+		return s.launchAgentFn(ctx, name)
 	}
 	if s == nil || s.registry == nil {
 		return nil, fmt.Errorf("no agent registry")
 	}
+	if contextual, ok := any(s.registry).(interface {
+		LaunchContext(context.Context, string) (*claudia.Agent, error)
+	}); ok {
+		return contextual.LaunchContext(ctx, name)
+	}
+	// The published Claudia pin predates cancellation. Keep it buildable,
+	// but do not pretend its synchronous legacy operation has a hard deadline.
+	slog.Warn("Claudia dependency lacks cancellable agent startup", "name", name)
 	return s.registry.Launch(name)
 }
 
@@ -64,10 +70,9 @@ func (s *Server) launchWait() time.Duration {
 	return defaultLaunchDeadline
 }
 
-// launchAgentBounded runs Launch under a hard deadline so a hung
-// session/load cannot hold startMu (and the MCP tools/call) forever.
-// The in-flight Launch goroutine is abandoned on timeout — leftover
-// cursor-agent adopt is 🎯T541.1, not this target.
+// launchAgentBounded joins cooperative startup cancellation. The registry owns
+// cleanup: a returned handle may already have been running before this call.
+// Legacy or non-cooperative success is preserved even after the deadline.
 func (s *Server) launchAgentBounded(ctx context.Context, name string) (*claudia.Agent, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -75,24 +80,11 @@ func (s *Server) launchAgentBounded(ctx context.Context, name string) (*claudia.
 	wait := s.launchWait()
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-
-	type outcome struct {
-		proc *claudia.Agent
-		err  error
+	proc, err := s.launchAgent(ctx, name)
+	if err != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("launch timed out or canceled after %s (T541.2): %w", wait, ctx.Err())
 	}
-	ch := make(chan outcome, 1)
-	go func() {
-		proc, err := s.launchAgent(name)
-		ch <- outcome{proc, err}
-	}()
-	select {
-	case out := <-ch:
-		return out.proc, out.err
-	case <-ctx.Done():
-		slog.Warn("agent launch deadline",
-			"name", name, "deadline", wait, "err", ctx.Err())
-		return nil, fmt.Errorf("launch timed out after %s (ACP session/load hung) — start mutex released (🎯T541.2)", wait)
-	}
+	return proc, err
 }
 
 // startMutexHeld reports whether startMu is currently locked. Tests use

@@ -621,6 +621,7 @@ func main() {
 	// SIGTERM/SIGINT as upgrade when launchd cannot send SIGHUP.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
 
 	// ð¯T40: default Grok connect-mode so agents use detached `grok agent
 	// serve` + WebSocket and survive coordinator-only upgrades. Override
@@ -1046,23 +1047,6 @@ func main() {
 		}
 	}()
 
-	// Now start agents — MCP server is reachable.
-	// 🎯T40.2: every return adopts leftover processes, then resumes
-	// what exited. Launch itself still only creates; leftovers are
-	// not reaped. Upgrade handoff is consumed so a later drain start
-	// is not mistaken for an upgrade — it no longer chooses the start
-	// method.
-	if reminted := upgrade.ReattachFleet(registry); len(reminted) > 0 {
-		slog.Error("bounce reminted session_ids — skipping full_brief on those seats",
-			"agents", reminted)
-		mcpSrv.NoteBounceRemint(reminted)
-	}
-	if upgradeSnap != nil {
-		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
-			slog.Warn("could not consume upgrade handoff", "err", err)
-		}
-	}
-
 	// Exit policy: normal â StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) â leave
 	// agents alone and write handles. See docs/design/upgrade-without-drain.md.
 	// Written from the signal goroutine; read from defer â use atomic.
@@ -1095,6 +1079,42 @@ func main() {
 				"path", path, "agents", len(handles), "residual", snap.Residual)
 		}
 	}()
+
+	// Graceful shutdown on signal (ð¯T40: SIGHUP â upgrade exit).
+	go func() {
+		sig := <-sigCh
+		if sig == syscall.SIGHUP || upgrade.EnvRequestsUpgrade() {
+			exitUpgrade.Store(true)
+		}
+		mode := upgrade.ModeNormal
+		if exitUpgrade.Load() {
+			mode = upgrade.ModeUpgrade
+		}
+		slog.Info("shutting down", "signal", sig, "exit_mode", mode.String(),
+			"stop_agents", mode.StopAgents())
+		cancel()
+		httpSrv.Close()
+	}()
+
+	// Now start agents — MCP server is reachable.
+	// 🎯T40.2: every return adopts leftover processes, then resumes
+	// what exited. Launch itself still only creates; leftovers are
+	// not reaped. Upgrade handoff is consumed so a later drain start
+	// is not mistaken for an upgrade — it no longer chooses the start
+	// method.
+	if reminted := upgrade.ReattachFleetContext(ctx, registry); len(reminted) > 0 {
+		slog.Error("bounce reminted session_ids — skipping full_brief on those seats",
+			"agents", reminted)
+		mcpSrv.NoteBounceRemint(reminted)
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if upgradeSnap != nil {
+		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
+			slog.Warn("could not consume upgrade handoff", "err", err)
+		}
+	}
 
 	if jevonProc := registry.Get(cfg.OverseerName); jevonProc != nil {
 		// AttachOverseer sets the process and subscribes its event stream
@@ -1284,22 +1304,6 @@ func main() {
 				"error": "overseer has no jevons tools (or failed to launch) â actions will not work",
 			})
 		}
-	}()
-
-	// Graceful shutdown on signal (ð¯T40: SIGHUP â upgrade exit).
-	go func() {
-		sig := <-sigCh
-		if sig == syscall.SIGHUP || upgrade.EnvRequestsUpgrade() {
-			exitUpgrade.Store(true)
-		}
-		mode := upgrade.ModeNormal
-		if exitUpgrade.Load() {
-			mode = upgrade.ModeUpgrade
-		}
-		slog.Info("shutting down", "signal", sig, "exit_mode", mode.String(),
-			"stop_agents", mode.StopAgents())
-		cancel()
-		httpSrv.Close()
 	}()
 
 	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,

@@ -20,6 +20,7 @@ func TestT625QueueProviderRejectsWrongAndUnrelatedLaunches(t *testing.T) {
 	}{
 		{"matching captured format", `time=2026-09-06T08:52:02.532+10:00 level=INFO msg="agent started" name=worker provider=grok session=fixture connect_pid=2916 connect_url_set=true materialized=false`, true},
 		{"wrong provider", `msg="agent started" name=worker provider=claude`, false},
+		{"adoption is not a replacement process", `msg="agent adopted" name=worker provider=grok`, false},
 		{"another worker", `msg="agent started" name=other provider=grok`, false},
 		{"generic recovery", `msg="recovered a queued message" name=worker provider=grok`, false},
 		{"missing provider", `msg="agent started" name=worker`, false},
