@@ -528,3 +528,39 @@ provider; both complete isolation teardown. The isolates use the unchanged
 production daemon built from clean `6b16ef21f636`, whose full Go/build gate is
 recorded above. This activates the bounded J6c evidence; it does not certify
 React rendering, provider rewind, all core journeys or the complete migration.
+
+## Normal-drain restart journey (T625)
+
+J14 formerly checked only registry session IDs and whether new handover files
+appeared. The repair creates a fresh aside on the explicitly selected provider,
+has it remember a fresh secret and acknowledge a separate nonce, then stops and
+restarts the isolate. Only after restart does the harness generate a new
+challenge. The same aside must return its remembered secret plus that challenge
+exactly. The later request does not supply the secret. Session and provider
+identities are compared after the response, and launch evidence must come from
+the replacement daemon's log segment. Cleanup must remove the fixture from
+both the thread list and registry.
+
+A dedicated aside avoids an existing suite-ordering trap: J13 intentionally
+migrates the overseer to another provider. This probe actively exercises only
+the selected aside, while retaining registry comparisons for existing seats.
+It tests normal SIGINT drain/restart, not SIGHUP adoption or crash recovery.
+Abnormal exit, forced kill, or an upgrade-mode shutdown cannot pass as a normal
+drain. Existing handover records from older migrations may advance or be reaped;
+that change is explicitly reported as outside this fresh-seat probe. New
+handover records fail. File absence alone is not a receipt proving that no seed
+was delivered.
+
+Whole-journey adversarial subprocess peers exercise the actual stop/start and
+direct calls, including stale/missing replies, lost context, provider and late
+session changes, new handovers and failed shutdowns. These test the oracle and
+are not product journeys. Real selected-provider checks and clean-source
+verification remain pending. This slice does not establish React rendering,
+rewind, every fleet seat's recovery, or overall migration completion.
+
+The original J14 fails the new whole-journey controls (`cfdd2bb7`); the restored
+implementation passes them (`92c53992`). A first race run (`89f62378`) failed
+only at test-peer teardown: its one-second timeout collided with the race
+runtime's intentional exit delay. Fixture teardown now uses the journey's
+existing eight-second drain budget; the product timeout is unchanged. Final
+clean and real-provider results are still required.
