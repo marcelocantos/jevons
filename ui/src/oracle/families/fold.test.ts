@@ -59,7 +59,7 @@ describeOracle(family('fold'), () => {
     });
     const tape = [streaming('leftover reply'), userTurn('a question'), streaming('the answer')];
 
-    // Live mux append path: one frame event at a time.
+    // Raw compatibility path (not the canonical indexed mux): one frame at a time.
     let state = emptyConversation();
     for (const b of tape) state = applyConversationEvent(state, { t: 'frame', body: b });
     const live = displayRows(state.frames);

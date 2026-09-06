@@ -813,3 +813,40 @@ the new local dependency. Cancellation outside Cursor remains cooperative and
 may finish after a deadline. Private-history MCP tests and other affected
 provider live checks have not run in this slice. The development MCP-map
 saved-session restart and activation are still pending. No target is retired.
+
+### Clean verification and observed development activation (2026-09-06)
+
+The preceding pending-activation notes are historical. Clean Jevons
+`710713b9cfaa` with clean Claudia `d42194c` passed the full Go net
+(`596f1afb`: 3372 passed, four skipped), bundle freshness (`ff005325`), and
+Cursor J14/J30/J5 (`4dff48d1`). Claudia's exact clean full gate passed
+(`79dd83ab`), as did the approved synthetic Cursor matrix (`82d3c920`) and
+Grok/Codex live matrix (`95e7e7d0`). Claude reported its monthly spend limit
+in the combined run (`e066395f`, RED); that provider remains unverified.
+Private Mnemo/history tests were excluded.
+
+These changes are integrated into local Jevons `cb9f3c7bd1cb` and Claudia
+`1e71133077f7`; the latter uses canonical registry target T60 (worker T59).
+Unrelated working changes were preserved. The development supervisor was
+signalled with the independently built clean-composition binary, SHA-256
+`34a2e54b5817841efba4c2641cd23020625f1397d02aaa83eaa8d36cc6b8a84e`.
+The existing Cursor overseer resumed with its 18-server development MCP map
+in 21.6 seconds. Both saved session identities remained unchanged; sampled
+agent-list requests took under one second during startup and 18 ms afterward.
+The previously stopped PO remained stopped. No dirty sibling dependency was
+included in this binary, and the old restart identity stamp was not rewritten
+as substitute evidence.
+
+Development probe `26421edb` passed direct and owner request/reply history,
+reload, owner-only Alt-Up recall, Escape draft restoration and disposable
+aside removal. The earlier probe `ca8df4ee` raced a later direct against the
+provider's nonterminal visible reply. Waiting for the correlated terminal,
+as the standing J30 already does, corrected the fixture. This was not proof
+of a first-request initialization race. The screenshot was inspected; it
+contains diagnostic traffic and post-recall scrolling, so it is not broad
+normal-transcript visual acceptance. Actual rewind remains unbound.
+
+T627.2 remains open: non-Cursor cancellation is cooperative, the published
+Claudia fallback is synchronous, and Claude verification is blocked by quota.
+The separate legacy Grok adoption constraint under T627.1 also remains open;
+this Cursor-only development activation did not exercise it.

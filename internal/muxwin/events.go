@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/userturn"
 )
 
 // DefaultFollow is the connect visible window: last N *user turns*
@@ -283,6 +285,12 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 		}
 		return next, folds
 	}
+	if h.Type == "user" && userturn.IsOwnerFrame([]byte(line)) {
+		// A continuation cannot grow an earlier bubble across this owner
+		// request. Do not invent a provider stop event; retire only the fold
+		// mapping. The live backward scan enforces the same boundary below.
+		clear(open)
+	}
 	ev := parseEvent(line, nextIndex(next))
 	return append(next, ev), []LiveFold{{Event: ev, Op: "put"}}
 }
@@ -520,6 +528,9 @@ func openAssistant(evs []Event, sid string, open map[string]int) (int, bool) {
 		return i, true
 	}
 	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type == "user" && userturn.IsOwnerFrame(evs[i].Body) {
+			return 0, false
+		}
 		if evs[i].Type != "assistant" {
 			continue
 		}

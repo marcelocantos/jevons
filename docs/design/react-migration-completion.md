@@ -164,3 +164,37 @@ retire the running service or authorize publication. Local implementation and
 its evidence can complete the targets without a push or release. Unrelated
 voice, mobile onboarding, provider expansion and the rest of daily-driver
 readiness remain outside this migration contract.
+
+## Owner-boundary implementation checkpoint (2026-09-06)
+
+The indexed defect is reproduced, not inferred from the raw reducer. Before
+repair, `8340bd53` (RED) demonstrated the wrong append ID and persisted order
+through mux fanout and SQLite reopen for overseer, PO, worker and aside.
+`b4e742ad` (RED) reproduced the same live/replay folding mechanism.
+
+The shared backend coalescer now retires open assistant mappings at an owner
+row. Explicit provenance wins over text; unmarked legacy injections and
+protocol controls retain compatibility behavior. Existing typeless SQLite
+payloads use the authoritative event type. The change does not fabricate a
+provider terminal or repair already-coalesced corrupt history. Raw React
+compatibility and owner quotations use the same provenance priority. Main and
+sidebar still mount the same interaction/transcript/composer components.
+
+Working-tree checks: core race checks `565c5d0d`, React `82e4a8c3` (358 passed,
+49 existing skips), and server/journey harness `12f4aaf1` are GREEN. Mounted
+quoted-owner controls failed before the display correction (`4eece342`, RED).
+The unrelated remote-client map race reproduces on the clean baseline
+(`de4f6a10`, RED) and is tracked separately as T630, outside browser migration.
+
+J31 is now part of the standing journey suite. It uses an actual provider tool
+held by a bounded file handshake, sends a second owner request through each
+React composer while the first reply is nonterminal, then checks indexed
+PRE/owner/POST order and correlated second-request completion through reload.
+Its first Cursor run (`b130e637`, GREEN) passed those checks, but screenshot
+review rejected it as completion evidence: the main pane later gained a second
+execution of PRE/POST. Logs and SQLite identify delayed startup recovery
+reissuing a request first received after startup (T627.3), not a duplicate paint
+of one event. J31 now also counts distinct canonical response IDs across both
+pane checks. Clean-revision verification, delayed-recovery repair and observed
+development acceptance remain pending. T569's conversation-wide equal-text
+suppression is unchanged while awaiting the owner's decision.

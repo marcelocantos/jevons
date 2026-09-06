@@ -30,6 +30,78 @@ func TestParseTranscriptChannel(t *testing.T) {
 	}
 }
 
+func TestOwnerBarrierPersistsThroughIndexedMuxAndReload(t *testing.T) {
+	for _, name := range []string{"jevons", "jevons-po", "worker", "aside"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			dbPath := filepath.Join(dir, "state.db")
+			db, err := statedb.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			s := New("test", dir)
+			s.overseerName = "jevons"
+			s.SetStateDB(db)
+			sess := &muxSession{send: make(chan []byte, 32), transcripts: make(map[string]*muxWatch)}
+			s.mux.add(sess)
+			if err := s.writeMuxWindow(t.Context(), &replayBuf{}, sess, name, -30, 0, true); err != nil {
+				t.Fatal(err)
+			}
+			sid := ""
+			if name == "jevons" {
+				sid = "active-stream"
+			}
+			assistant := func(text, stop string) string {
+				return fmt.Sprintf(`{"type":"assistant","stream_id":%q,"message":{"content":[{"type":"text","text":%q}],"stop_reason":%q}}`, sid, text, stop)
+			}
+			for _, line := range []string{
+				chatUserEchoAs("earlier request", sendOriginOwner), assistant("earlier answer", "end_turn"),
+				assistant("before", ""), chatUserEchoAs("question", sendOriginOwner), assistant("after", "end_turn"),
+			} {
+				if !s.muxFanTranscript(name, line) {
+					t.Fatal("event was not stored")
+				}
+			}
+			var last map[string]any
+			for len(sess.send) > 0 {
+				var env map[string]any
+				if err := json.Unmarshal(<-sess.send, &env); err != nil {
+					t.Fatal(err)
+				}
+				if env["t"] == "frame" {
+					last = env["body"].(map[string]any)
+				}
+			}
+			if last == nil || last["op"] != "put" || last["id"] != "e:5" {
+				t.Errorf("live continuation reused a row above the owner: %+v", last)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = statedb.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reloaded := New("test", dir)
+			reloaded.overseerName = "jevons"
+			reloaded.SetStateDB(db)
+			buf := &replayBuf{}
+			reloaded.handleMuxEnvelope(t.Context(), buf, &muxSession{transcripts: make(map[string]*muxWatch)}, muxEnvelope{Ch: transcriptChannel(name), T: "open"})
+			var text []string
+			for _, env := range buf.frames {
+				if env["t"] == "frame" {
+					body := env["body"].(map[string]any)
+					text = append(text, proseFromEvent(body["event"].(map[string]any)))
+				}
+			}
+			if strings.Join(text, "|") != "earlier request|earlier answer|before|question|after" {
+				t.Errorf("durable replay reordered owner boundary: %q", text)
+			}
+		})
+	}
+}
+
 func TestT627MuxSendUnfreezesWatchDuringConcurrentFanout(t *testing.T) {
 	s := New("test", t.TempDir())
 	const sends = 100

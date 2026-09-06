@@ -19,6 +19,15 @@ import (
 // J30 exercises the actual packaged React composer and mux wire. No direct
 // chat injection, Vite substitute, seeded reply, or API/transport interception.
 func (s *suite) jPackagedReactOwnerTurn() error {
+	return s.jPackagedReactScript("test.cjs", 4*time.Minute)
+}
+
+// J31 holds an actual provider tool while the owner submits a follow-up.
+func (s *suite) jPackagedReactOwnerBoundary() error {
+	return s.jPackagedReactScript("boundary.cjs", 8*time.Minute)
+}
+
+func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error {
 	provider := string(s.provider)
 	var ready error
 	if provider == "cursor" {
@@ -37,10 +46,10 @@ func (s *suite) jPackagedReactOwnerTurn() error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	aside := "react-aside-" + uuid.NewString()
-	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", "test.cjs"), "--host", surface.host, "--provider", provider, "--workdir", s.stateDir, "--aside", aside)
+	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", script), "--host", surface.host, "--provider", provider, "--workdir", s.stateDir, "--aside", aside)
 	// The browser needs no checkout as its working directory. Assets come
 	// exclusively from the isolated daemon's embedded bundle.
 	cmd.Dir = s.stateDir
