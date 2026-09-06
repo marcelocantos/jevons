@@ -91,6 +91,10 @@ const (
 	// "newest owner instruction" it can offer is not the newest one
 	// (🎯T592).
 	ResidualStaleChatlog = "stale_chatlog"
+	// Restart recovery needs evidence that this instruction predates boot.
+	// These do not suppress ordinary owner delivery or non-restart recovery.
+	ResidualPostBootIntent         = "post_boot_intent"
+	ResidualUnknownRestartBoundary = "unknown_restart_boundary"
 )
 
 // OpenIntentStaleWindow is how far the newest journaled turn may lag the

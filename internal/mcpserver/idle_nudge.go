@@ -1603,24 +1603,31 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	s.SweepHandovers()
 	s.reportFleetMuteIfNeeded()
 
-	// 🎯T328: recover open owner instruction for overseer resume (chatlog I/O).
-	// 🎯T528: ledgerCwd from workerWD so Goal TargetIDs already achieved
-	// yield answered_or_closed (no Continue / owner-intent-resume).
-	openIntent := LoadOpenOwnerIntentWithLedger(stateDir, overseer, s.workerWD)
-	if openIntent.Recoverable() {
-		slog.Info("open owner intent recovered for post-restart resume",
-			"overseer", overseer, "runes", utf8RuneCount(openIntent.Text),
-			"source", openIntent.Source)
-	} else {
-		slog.Info("no recoverable open owner intent after restart",
-			"overseer", overseer, "residual", openIntent.Residual)
-	}
-
 	for _, target := range targets {
+		var openIntent OpenOwnerIntent
 		kids := byParent[target]
 		if target == overseer {
 			// Cockpit gets the full reattached fleet summary.
 			kids = allKids
+			// Read after any slower PO sends: owner work may have completed,
+			// changed or been removed while those notifications were delivered.
+			// T627.3: recovery may resume only work interrupted by this boot,
+			// never a new request accepted during the startup settle delay.
+			openIntent = LoadOpenOwnerIntentWithLedger(stateDir, overseer, s.workerWD)
+			if openIntent.Recoverable() {
+				if s.bootAt.IsZero() || openIntent.TS.IsZero() {
+					openIntent = OpenOwnerIntent{Residual: ResidualUnknownRestartBoundary}
+				} else if !openIntent.TS.Before(s.bootAt) {
+					openIntent = OpenOwnerIntent{Residual: ResidualPostBootIntent}
+				}
+			}
+			if openIntent.Recoverable() {
+				slog.Info("open owner intent recovered for post-restart resume",
+					"overseer", overseer, "runes", utf8RuneCount(openIntent.Text), "source", openIntent.Source)
+			} else {
+				slog.Info("no recoverable open owner intent after restart",
+					"overseer", overseer, "residual", openIntent.Residual)
+			}
 		}
 		event := eventDaemonRestarted
 		text := FormatDaemonRestartedText(target, kids)

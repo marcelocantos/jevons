@@ -850,3 +850,38 @@ T627.2 remains open: non-Cursor cancellation is cooperative, the published
 Claudia fallback is synchronous, and Claude verification is blocked by quota.
 The separate legacy Grok adoption constraint under T627.1 also remains open;
 this Cursor-only development activation did not exercise it.
+
+### Fresh requests during startup recovery (T627.3)
+
+The new interleaving journey caught an independent recovery defect. After a
+fresh isolate accepted a request, the delayed startup sweep loaded it as open
+intent and queued an owner-intent-resume event. The agent consequently ran the
+same tool a second time after answering the queued follow-up. This is a real
+extra execution, visible in distinct SQLite assistant and tool IDs, rather
+than repeated rendering of one response.
+
+Restart recovery now requires an instruction timestamp strictly before the
+MCP server's immutable construction time. Unknown instruction or boot time
+falls back to ordinary restart status. The intent read occurs immediately
+before overseer notification, after any slower PO notifications, so a removed,
+replaced or answered request is reconsidered. Ordinary owner delivery and
+non-restart recovery retain their prior behavior. Hermetic controls failed
+before the correction (`e775d121`, RED); the MCP suite passed afterward
+(`6ef0ffbe`, GREEN). The strengthened synthetic Cursor J31/J5 passed
+(`cb8b4a44`) with distinct PRE/owner/POST rows, request-specific terminal ACKs,
+reload and no delayed duplicate response across both panes.
+
+Visual review of the second run: the main pane shows the original request,
+PRE, a tool step, the follow-up, separate POST and ACK bubbles, then ordinary
+restart-status activity. The lower part of the pane is empty because this is
+a short synthetic conversation. The compact pane shows the newest follow-up
+and two replies with earlier PRE clipped above its viewport. Latest is absent.
+This looks like a normal short chat after hard reload, with no combined duplicate
+bubble. Long-history layout acceptance remains separate.
+
+This cutoff fixes the observed postboot-request mechanism; it is not exactly-once
+recovery. A new turn can arrive between the final read and enqueue, a queued
+recovery may become stale before drain, and a postboot "continue" may expose a
+preboot instruction under the existing extractor. These conditional-delivery
+limitations remain open, as does clean-revision/development acceptance of this
+slice. No migration or recovery umbrella is achieved here.

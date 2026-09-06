@@ -112,6 +112,7 @@ func t452Fixture(t *testing.T, overseerName, overseerSession string, defs ...cla
 	inbox := newT452Inbox()
 	s := &Server{
 		registry:     reg,
+		bootAt:       time.Now(),
 		fleetBriefed: map[string]bool{},
 		transcript:   &TranscriptOps{GetID: func() string { return overseerSession }},
 	}
