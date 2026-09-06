@@ -50,6 +50,11 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	defer cancel()
 	aside := "react-aside-" + uuid.NewString()
 	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", script), "--host", surface.host, "--provider", provider, "--workdir", s.stateDir, "--aside", aside)
+	if script == "boundary.cjs" {
+		// The real sweep is every two minutes. Observe its completion, rather
+		// than sleeping and assuming it happened; four minutes bounds outage.
+		cmd.Args = append(cmd.Args, "--daemon-log", s.logPath, "--sweep-deadline-ms", fmt.Sprint((4 * time.Minute).Milliseconds()))
+	}
 	// The browser needs no checkout as its working directory. Assets come
 	// exclusively from the isolated daemon's embedded bundle.
 	cmd.Dir = s.stateDir

@@ -11,11 +11,15 @@ const { parseArgs } = require('node:util');
 const { chromium } = require('../browser-loop-test/node_modules/playwright');
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
+  'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' },
 } });
 const base = new URL(`http://${values.host}`);
 assert(['localhost', '127.0.0.1', '[::1]'].includes(base.hostname));
 assert(base.port && !['13705', '13706'].includes(base.port), 'isolate only');
 assert(values.workdir && values.aside && values.provider);
+assert(values['daemon-log'], 'actual daemon sweep evidence is required');
+const sweepDeadline = Number(values['sweep-deadline-ms']);
+assert(Number.isSafeInteger(sweepDeadline) && sweepDeadline > 0);
 let browser;
 const frames = [];
 const releases = [];
@@ -25,8 +29,8 @@ const content = body => {
   return typeof c === 'string' ? c : (c || []).filter(b => b.type === 'text' || !b.type).map(b => b.text || '').join('');
 };
 const terminal = body => ['end_turn', 'stop_sequence'].includes(body?.event?.message?.stop_reason);
-async function until(check, label) {
-  const deadline = Date.now() + 90000;
+async function until(check, label, timeout = 90000) {
+  const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const found = await check();
     if (found) return found;
@@ -75,7 +79,8 @@ async function main() {
     // This independent bounded helper is the agent's real tool workload. Its
     // clock is a failure bound; release occurs only after the observed owner echo.
     const helper = path.join(work, 'wait.cjs');
-    await fs.writeFile(helper, `const fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(ready)}, ${JSON.stringify(nonce)});\nconst limit = setTimeout(() => { console.error('owner boundary was not released'); process.exit(2); }, 90000);\nconst poll = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(poll); clearTimeout(limit); fs.writeFileSync(${JSON.stringify(completed)}, ${JSON.stringify(nonce)}); console.log('released'); } }, 25);\n`);
+    const holdLimit = main ? 90000 : sweepDeadline + 90000;
+    await fs.writeFile(helper, `const fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(ready)}, ${JSON.stringify(nonce)});\nconst limit = setTimeout(() => { console.error('owner boundary was not released'); process.exit(2); }, ${holdLimit});\nconst poll = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(poll); clearTimeout(limit); fs.writeFileSync(${JSON.stringify(completed)}, ${JSON.stringify(nonce)}); console.log('released'); } }, 25);\n`);
     const prompt = `Perform this short interaction check in order. First emit ${pre} as a visible commentary message, not just tool input. Then run exactly this shell command using your tool: node ${helper}. Wait for it to finish. Then reply with exactly ${post}. Do not read or change the helper or its files; the test harness releases it. Do not spawn agents.`;
     const owner = `Reply with exactly: ${ack}`;
     const start = frames.length;
@@ -94,6 +99,49 @@ async function main() {
       const echo = await until(() => events().find(f => f.body?.event?.turn_origin === 'owner' && content(f.body).includes(owner)), 'interleaved canonical owner echo');
       assert(echo.body.index > first.body.index, 'owner must follow PRE');
       assert(!assistants().some(f => terminal(f.body)), 'first response ended before second owner echo');
+      if (!main) {
+        const identity = async () => {
+          const records = JSON.parse(await fs.readFile(path.join(values.workdir, 'agents.json'), 'utf8'));
+          assert(Array.isArray(records), 'registry snapshot shape');
+          return records.find(a => a.name === name);
+        };
+        const running = async () => (await (await fetch(new URL('/api/agents', base))).json()).find(a => a.name === name)?.running;
+        const before = await identity();
+        assert(before?.session_id, 'the running aside must have a session identity');
+        assert.equal(await running(), true, 'the aside must be running before cleanup');
+        const queued = async () => {
+          try {
+            const queue = JSON.parse(await fs.readFile(path.join(values.workdir, 'sendq', `${name}.json`), 'utf8'));
+            assert.equal(queue.agent, name);
+            assert(Array.isArray(queue.entries));
+            return queue.entries.find(entry => entry.text.includes(ack));
+          } catch (error) {
+            if (error.code === 'ENOENT') return undefined;
+            throw error;
+          }
+        };
+        const obligation = await until(queued, 'durable queued follow-up');
+        assert(obligation.id, 'the queued request must have a durable identity');
+        const logStart = (await fs.readFile(values['daemon-log'], 'utf8')).length;
+        await until(async () => {
+          const lines = (await fs.readFile(values['daemon-log'], 'utf8')).slice(logStart).split('\n');
+          const members = (line, key) => {
+            const field = line.match(new RegExp(`${key}=("[^\"]*"|\\[[^\\]]*\\])`))?.[1] || '';
+            return field.replaceAll('"', '').replace(/^\[|\]$/g, '').split(' ');
+          };
+          for (const line of lines.filter(line => line.includes('idle thread sweep completed'))) {
+            assert(!members(line, 'reaped').includes(name), 'cleanup stopped the active aside');
+            if (['kept_unknown', 'kept_busy'].some(key => members(line, key).includes(name))) return true;
+          }
+          return false;
+        }, 'actual periodic cleanup evaluated and kept the aside', sweepDeadline);
+        const after = await identity();
+        assert.equal(after?.session_id, before.session_id, 'cleanup must preserve session identity');
+        assert.equal(await running(), true, 'cleanup must preserve the active process');
+        assert.equal((await queued())?.id, obligation.id, 'cleanup must preserve the queued obligation');
+        assert(!assistants().some(f => terminal(f.body)), 'tool hold must span the cleanup cycle');
+        console.log(`PASS ${name}: actual periodic sweep retained the held turn and queued follow-up`);
+      }
       await fs.writeFile(release, nonce);
       const later = await until(() => assistants().find(f => content(f.body).includes(post)), 'continuation POST');
       assert(later.body.index > echo.body.index, 'POST must have a new index below the owner');

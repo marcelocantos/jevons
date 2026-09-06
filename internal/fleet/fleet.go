@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/thread"
+	"github.com/marcelocantos/jevons/internal/transcript"
 )
 
 // Default timeouts for the launch handshake and a directed turn's reply.
@@ -512,6 +513,41 @@ func (f *Claudia) Busy(id string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.inFlight[id] > 0
+}
+
+// IdleTranscript supplies only a provider-bound JSONL observation. ACP and
+// app-server agents can advertise a vestigial Claude-shaped JSONL path; their
+// actual streams/stores are not evidence this legacy GC reader can interpret.
+// Defer their automatic reclamation until canonical activity and admission
+// are coordinated (T627.4), even if another provider has the same session ID.
+func (f *Claudia) IdleTranscript(t *thread.Thread, n int) ([]transcript.Entry, error) {
+	if f == nil || f.reg == nil {
+		return nil, fmt.Errorf("idle transcript: no registry")
+	}
+	ag := f.reg.Get(t.ID)
+	def := f.reg.Def(t.ID)
+	if ag == nil || def == nil {
+		return nil, fmt.Errorf("idle transcript: no current process or definition")
+	}
+	return readIdleTranscript(t, def, ag, n)
+}
+
+// Keep this observation bound to the live handle and registry definition,
+// independently of the thread's possibly pre-migration provider metadata.
+func readIdleTranscript(t *thread.Thread, def *claudia.AgentDef, ag interface {
+	SessionID() string
+	JSONLPath() string
+}, n int) ([]transcript.Entry, error) {
+	if t.SessionID == "" || ag.SessionID() != t.SessionID || def.SessionID != t.SessionID {
+		return nil, fmt.Errorf("idle transcript: no matching live session")
+	}
+	if p := def.Provider; p != "" && p != claudia.ProviderClaude {
+		return nil, fmt.Errorf("idle transcript: provider %q has no supported GC transcript", p)
+	}
+	if ag.JSONLPath() == "" {
+		return nil, fmt.Errorf("idle transcript: provider path unavailable")
+	}
+	return transcript.TailPath(ag.JSONLPath(), n)
 }
 
 // Alive reports whether a live process currently exists for the thread.
