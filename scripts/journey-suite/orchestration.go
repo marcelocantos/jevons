@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
@@ -358,9 +359,9 @@ func (s *suite) jPOWorkerLineageFanout() error {
 // jThreadSpawnDirectRemove is a moderate orchestration path: spawn a
 // owned thread, direct a short turn, then remove it cleanly.
 func (s *suite) jThreadSpawnDirectRemove() error {
-	id := fmt.Sprintf("orch-worker-%d", time.Now().Unix()%100000)
-	work := filepath.Join(s.stateDir, "thread-work")
-	if err := os.MkdirAll(work, 0o755); err != nil {
+	id := "orch-worker-" + uuid.NewString()
+	work, err := os.MkdirTemp(s.stateDir, "thread-work-")
+	if err != nil {
 		return err
 	}
 	defer func() {
@@ -369,7 +370,11 @@ func (s *suite) jThreadSpawnDirectRemove() error {
 
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey orchestration worker",
+		"provider": string(s.provider),
 	})
+	if outage := asOutage("spawn", err); outage != nil {
+		return outage
+	}
 	if err != nil {
 		return fmt.Errorf("spawn: %w (%s)", err, trim(spawnOut, 80))
 	}
@@ -389,25 +394,32 @@ func (s *suite) jThreadSpawnDirectRemove() error {
 		return fmt.Errorf("thread_list missing %q: %s", id, trim(list, 160))
 	}
 
-	token := "orch-direct-ok"
+	// A fresh request-specific answer must survive the full direct path.
+	// Generic activity and token fragments are not successful delivery.
+	// Numeric status-shaped fragments deliberately exercise the classifier
+	// defect exposed by a UUID containing "500" (T625.3), on every run.
+	token := "orch-direct-400-401-402-403-429-500-502-503-504-" + uuid.NewString()
 	directOut, err := s.mcpText("jevons_thread_direct", map[string]any{
 		"id": id, "text": "Reply with exactly: " + token,
 	})
+	if outage := asOutage("direct", err); outage != nil {
+		return outage
+	}
 	if err != nil {
 		return fmt.Errorf("direct: %w", err)
 	}
-	// Model may paraphrase or be tool-only; require non-empty delivery.
-	if strings.TrimSpace(directOut) == "" {
-		return fmt.Errorf("direct returned empty reply")
+	if outage := replyOutage("direct reply", directOut); outage != nil {
+		return outage
 	}
-	norm := strings.ToLower(strings.NewReplacer(" ", "", "-", "", "\n", "", "_", "").Replace(directOut))
-	tokNorm := strings.ToLower(strings.NewReplacer(" ", "", "-", "", "_", "").Replace(token))
-	if !strings.Contains(norm, tokNorm) && !strings.Contains(norm, "orch") && !strings.Contains(norm, "direct") {
-		// Soft accept: non-empty reply with a completed turn is enough
-		// when the model ignores exact-match instructions.
-		if len(strings.TrimSpace(directOut)) < 1 {
-			return fmt.Errorf("direct reply unexpected: %s", trim(directOut, 100))
-		}
+	if strings.TrimSpace(directOut) != token {
+		return fmt.Errorf("direct did not return its exact requested reply: got %q, want %q", trim(directOut, 200), token)
+	}
+	logs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return fmt.Errorf("read runtime provider evidence: %w", err)
+	}
+	if err := queueJourneyProvider(logs, id, string(s.provider)); err != nil {
+		return err
 	}
 
 	if _, err := s.mcpText("jevons_thread_remove", map[string]any{"id": id}); err != nil {
@@ -419,6 +431,15 @@ func (s *suite) jThreadSpawnDirectRemove() error {
 	}
 	if strings.Contains(list2, id) {
 		return fmt.Errorf("thread still listed after remove: %s", trim(list2, 160))
+	}
+	agents, err := s.ListAgentsHTTP()
+	if err != nil {
+		return fmt.Errorf("registry after remove: %w", err)
+	}
+	for _, agent := range agents {
+		if agent.Name == id {
+			return fmt.Errorf("worker %s remains in the agent registry after remove", id)
+		}
 	}
 	return nil
 }

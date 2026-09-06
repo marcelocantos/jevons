@@ -6,6 +6,7 @@ package agenterr
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // Class is a structured provider/ACP failure class (🎯T237).
@@ -284,9 +285,23 @@ func isBusyMessage(lower string) bool {
 
 func containsAny(low string, needles ...string) bool {
 	for _, n := range needles {
-		if strings.Contains(low, n) {
-			return true
+		if !strings.Contains(low, n) {
+			continue
 		}
+		if n != "" && strings.Trim(n, "0123456789") == "" {
+			// HTTP codes are tokens, not arbitrary digit sequences inside
+			// IDs, filenames, paths or numbers. Keep identifier punctuation
+			// inside each token; only trailing sentence periods are ignored.
+			for _, token := range strings.FieldsFunc(low, func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("_-./", r)
+			}) {
+				if strings.TrimRight(token, ".") == n {
+					return true
+				}
+			}
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -395,9 +410,6 @@ var backendUnavailableMarkers = []string{
 	"503",
 	"502",
 	"504",
-	"status 503",
-	"status 502",
-	"status 504",
 	"econnrefused",
 	"econnreset",
 	"enotfound",
