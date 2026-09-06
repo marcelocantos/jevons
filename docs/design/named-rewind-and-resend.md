@@ -600,3 +600,48 @@ source review found no further bounded issue. These are the final oracle
 refinements' activated results. Grok was not rerun after this strict-read and
 diagnostic-only refinement; its reproducible product failure at `de414c4347fc`
 remains open under 🎯T627.1. No product recovery code changed in this slice.
+
+### Grok restart storage repair and remaining consumer failure (2026-09-06)
+
+The materialization flag was not the complete cause. Published Claudia v0.29.0
+and v0.30.0 created a temporary exclusive `GROK_HOME` per process and deleted it
+on `Stop`, including Grok's conversation store. In diagnostic `68e9cd25` (RED),
+marking the completed conversations materialized after the daemon stopped
+prevented replacement IDs, but both provider loads failed with missing paths.
+The diagnostic was removed; no injected flag is part of the implementation.
+
+Claudia now keeps a durable managed home per conversation and publishes the
+actual provider-returned session ID before `Start` returns. Its common registry
+requires disk-loaded Grok IDs to resume even without a `Materialized` flag;
+fresh first mint in the registering process remains allowed. Missing homes or
+rejected loads fail explicitly. Configuration refresh preserves provider data
+and refuses redirected configuration leaves. This is local Claudia master
+`e96baa1154f785c7754d076c06b6d67ec078327b`, with the same tree as reviewed
+worker `74160f825e9575fca6b7fc02d6560b82e45622cd`.
+
+Final executable source `f03b89e7ae5801aee6ff9e6f3a1d794683dc8ca5` passed the
+full Claudia hermetic gate (`7c89b11a`) and required real Grok gate
+(`cfae6564`), including retained-context restart over stdio and detached serve
+and existing MCP exclusivity checks. Restoring the original home lifecycle or
+registry guard makes the new focused controls fail (`05e9a564` and `475358ab`,
+both RED). The subsequent commit changes only documentation and one comment.
+
+The unchanged Jevons consumer at `e90a076834d169ad9e82b26af9356e37e57475c9`
+was built with an explicit scratch workspace selecting that clean Claudia
+source (`c941a2ce`, GREEN). **Its final J2/J14/J5 gate is RED (`3387f08e`).**
+J2 and isolation passed. J14 preserved the registry identities, the original
+provider seed and acknowledgement, and eventually produced the exact retained
+secret plus fresh challenge. However, the reply also contained unsolicited
+tool-search commentary, so it failed the unchanged whole-reply comparison.
+The searches did not recover the secret from another store. This is evidence
+for the persistence repair, not a green consumer acceptance result. An earlier
+consumer run against Claudia `ce90a526` passed (`113b0f51`); that does not
+override the final failure or prove reliable response behavior.
+
+Claudia 🎯T57 and Jevons 🎯T627.1 remain open. The independent reviewer accepted
+local integration with this explicit residue. Jevons' committed dependency is
+still published v0.29.0; no committed replacement, invented version, release,
+or development activation was performed. The repair cannot recover temporary
+homes already deleted. Seats saved before their first successful launch are
+not recovered by this change; same-process `ConnectURL` adoption, SIGHUP,
+crash recovery and React rendering are not covered by these restart results.
