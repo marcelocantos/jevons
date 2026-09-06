@@ -460,4 +460,18 @@ is not owner-turn evidence. Cursor J2/J9/J5 passed (`4e445986`), including the
 owner-store precondition. Both provider runs required their exact fresh reply
 with embedded numeric status fragments and verified thread/registry cleanup.
 Development activation and observation remain outstanding for these product
-fixes; T625.3 and T625.4 are not yet claimed achieved.
+fixes was completed afterward against activated local master `50faa6f63f71`.
+Development observation `f351ba1b` passed an exact Cursor direct reply containing
+all tested numeric status fragments, named runtime-provider verification,
+React sidebar rendering after reload and thread/registry cleanup. The temporary
+worker belonged under `jevons-po`. The first probe (`97a5e57e`) returned its
+exact reply but then read the retired log location; the corrected probe reads
+the supervisor's actual `~/.local/var/log/jevonsd.log`.
+
+Visual verdict: the main pane contains preceding exchanges, modest gaps and
+an empty composer, with no Latest button. Yes, it looks like a normal chat
+transcript after hard reload. The sidebar contains one diagnostic output with
+substantial empty space and no displayed incoming request. This verifies the
+reply's rendering, not complete sidebar history or conversation parity; that
+residue remains under T627/T540. T625.3 and T625.4's bounded reply defects are
+achieved; neither the complete migration nor T625 is achieved.
