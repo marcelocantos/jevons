@@ -742,3 +742,42 @@ workspace build (`0ad1a094`) selected the reviewed dependency; the attempted
 development activation instead used committed published v0.29.0. Runtime
 identity must come from the build's actual dependencies, not the restart
 script's current-checkout identity stamp.
+
+### Cursor startup transport slice (2026-09-06)
+
+Clean Claudia worker commit `2fdb7232d83a` implements the first T627.2
+repair, tracked there as T58. Initialize, authentication and session opening
+share a five-minute startup bound. Cancellation closes the transport without
+waiting behind its write mutex, stops and waits for the owned process, and
+joins cleanup before returning. A canceled or timed-out load does not mint a
+replacement or become a latched provider refusal. Successful handoff disarms
+startup cancellation; runtime model switching retains its previous behavior.
+
+The five-minute default is a conservative initial bound for the observed
+multi-minute full-MCP load, not a measured readiness guarantee. The public
+Start path still supplies a background context. Caller cancellation through
+the registry, a configurable bound and per-agent startup state remain to be
+wired. No development activation is claimed.
+
+The full local gate passed on the exact clean commit (`04868494`), including
+race tests, vet, stability checks and standing mutation checks. The earlier
+working-tree run also passed (`ccacb379`). Independent review found no new
+source-level blocker after its two corrections. The
+handoff control now observes a complete fresh reply after cancellation;
+retaining the startup callback makes it fail (`2c4a96a1`, RED). The saved
+Cursor session restart journey is wired into `make live`, but authenticated
+verification is pending: automatic approval review rejected both the original
+Cursor batch containing Mnemo and the reduced synthetic-only batch. Explicit
+approval was requested for disposable sessions and synthetic data, excluding
+private Mnemo/history access. Neither rejection is a product test result.
+
+The remaining lifecycle repair must keep provider calls outside the global
+registry mutex while reserving each agent name until startup and cleanup both
+finish. Stop/remove must cancel and fence late completion; metadata updates
+must survive, and launch-affecting changes must not create overlapping writers.
+Jevons must register both signal consumption and exit policy before fleet
+reattachment and propagate cancellation into that operation. Abandoning a
+Launch goroutine on a timer is insufficient: it leaves the lock, provider and
+late publication behind. These requirements came from the captured startup
+stack and independent review, not from assuming that health HTTP success means
+the fleet is ready.
