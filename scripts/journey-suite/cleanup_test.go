@@ -32,6 +32,12 @@ const childEnv = "JOURNEY_CLEANUP_CHILD"
 // TestMain lets this test binary act as its own subprocess fixture.
 func TestMain(m *testing.M) {
 	switch os.Getenv(childEnv) {
+	case "bounce-peer":
+		if err := runBounceOraclePeer(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	case "":
 		os.Exit(m.Run())
 

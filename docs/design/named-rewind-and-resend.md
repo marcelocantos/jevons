@@ -528,3 +528,75 @@ provider; both complete isolation teardown. The isolates use the unchanged
 production daemon built from clean `6b16ef21f636`, whose full Go/build gate is
 recorded above. This activates the bounded J6c evidence; it does not certify
 React rendering, provider rewind, all core journeys or the complete migration.
+
+## Normal-drain restart journey (T625)
+
+J14 formerly checked only registry session IDs and whether new handover files
+appeared. The repair creates a fresh aside on the explicitly selected provider,
+has it remember a fresh secret and acknowledge a separate nonce, then stops and
+restarts the isolate. Only after restart does the harness generate a new
+challenge. The same aside must return its remembered secret plus that challenge
+exactly. The later request does not supply the secret. Session and provider
+identities are compared after the response, and launch evidence must come from
+the replacement daemon's log segment. Cleanup must remove the fixture from
+both the thread list and registry.
+
+A dedicated aside avoids an existing suite-ordering trap: J13 intentionally
+migrates the overseer to another provider. This probe actively exercises only
+the selected aside, while retaining registry comparisons for existing seats.
+It tests normal SIGINT drain/restart, not SIGHUP adoption or crash recovery.
+Abnormal exit, forced kill, or an upgrade-mode shutdown cannot pass as a normal
+drain. Existing handover records from older migrations may advance or be reaped;
+that change is explicitly reported as outside this fresh-seat probe. New
+handover records fail. File absence alone is not a receipt proving that no seed
+was delivered.
+
+Whole-journey adversarial subprocess peers exercise the actual stop/start and
+direct calls, including stale/missing replies, lost context, provider and late
+session changes, new handovers and failed shutdowns. These test the oracle and
+are not product journeys. Real selected-provider checks and clean-source
+verification remain pending. This slice does not establish React rendering,
+rewind, every fleet seat's recovery, or overall migration completion.
+
+The original J14 fails the new whole-journey controls (`cfdd2bb7`); the restored
+implementation passes them (`92c53992`). A first race run (`89f62378`) failed
+only at test-peer teardown: its one-second timeout collided with the race
+runtime's intentional exit delay. Fixture teardown now uses the journey's
+existing eight-second drain budget; the product timeout is unchanged. Final
+clean and real-provider results are still required.
+
+Clean `1fe684f3339e` passed the complete journey package with race detection
+(`db9b72b9`) and the daemon build (`bb59d81d`). Its real Cursor
+J2/J14/J5 run passed (`36575d40`): the named aside retained its session,
+remembered the pre-restart secret and answered the fresh post-restart challenge.
+
+The matching Grok run failed (`84b296a0`). Both the overseer and the aside
+changed session IDs after a normal drain, despite having completed pre-restart
+turns; the post-restart direct then timed out. The timeout classifier called
+this an outage, but it does not explain the observed identity loss. The oracle
+now checks persisted identity even when the direct fails, so a provider timeout
+cannot conceal that earlier product defect. A new adversarial peer covers
+session rotation followed by a tool timeout. Final verification of that
+ordering correction remains pending. The product gap is tracked under
+🎯T627.1, distinct from the never-materialized Cursor case 🎯T629.
+
+These results use the committed published Claudia v0.29.0 dependency, not the
+uncommitted dependency changes in the shared checkout. No development daemon
+activation was performed for this harness-only slice. Grok continuity remains
+unproved; neither T625 nor the migration is complete.
+
+The diagnostic ordering correction at `de414c4347fc` passed clean race checks
+(`07583e52`) and another real Cursor J2/J14/J5 run (`62f368bc`). Grok
+reproduced session loss (`92ab1632`), now correctly reported as a product
+failure rather than an outage. Independent review identified two further
+oracle refinements: read registry snapshots strictly instead of inheriting
+Claudia's empty-registry fallback on file-read failure, and explicitly reject
+outage classification in the rotation-plus-timeout control. An unreadable
+registry now reports failed observation, not an inferred session change.
+
+Final reviewed code `35f8d2381372` passes the clean complete journey-package
+race suite (`046124b3`) and real Cursor J2/J14/J5 (`f5e49a9f`). Independent
+source review found no further bounded issue. These are the final oracle
+refinements' activated results. Grok was not rerun after this strict-read and
+diagnostic-only refinement; its reproducible product failure at `de414c4347fc`
+remains open under 🎯T627.1. No product recovery code changed in this slice.

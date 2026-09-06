@@ -4,12 +4,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/upgrade"
@@ -56,7 +61,7 @@ func (s *suite) signalStop(timeout time.Duration) error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return nil
 	}
-	_ = s.cmd.Process.Signal(os.Interrupt)
+	signalErr := s.cmd.Process.Signal(os.Interrupt)
 	waitCh := s.cmdWait
 	if waitCh == nil {
 		waitCh = make(chan error, 1)
@@ -64,9 +69,15 @@ func (s *suite) signalStop(timeout time.Duration) error {
 		go func() { waitCh <- cmd.Wait() }()
 	}
 	select {
-	case <-waitCh:
+	case err := <-waitCh:
 		s.cmd = nil
 		s.cmdWait = nil
+		if signalErr != nil {
+			return fmt.Errorf("signal daemon: %w", signalErr)
+		}
+		if err != nil {
+			return fmt.Errorf("daemon exited while draining: %w", err)
+		}
 		return nil
 	case <-time.After(timeout):
 		_ = s.cmd.Process.Kill()
@@ -136,40 +147,196 @@ func (s *suite) handoverPath(name string) string {
 	return filepath.Join(s.stateDir, "handover", name+".json")
 }
 
-// jBounceResume is the 🎯T40.2 isolate oracle: after a SIGTERM drain+start,
-// every unchanged-provider row keeps its session_id and receives no T285 seed.
+// The normal registry loader treats read failures as an empty registry. An
+// oracle must distinguish failed observation from an actual missing seat.
+func bounceRegistrySnapshot(path string) (map[string]claudia.AgentDef, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var defs []claudia.AgentDef
+	if err := json.Unmarshal(body, &defs); err != nil {
+		return nil, err
+	}
+	if defs == nil {
+		return nil, fmt.Errorf("registry is null, not an agent list")
+	}
+	out := make(map[string]claudia.AgentDef, len(defs))
+	for _, def := range defs {
+		if _, duplicate := out[def.Name]; duplicate || def.Name == "" {
+			return nil, fmt.Errorf("duplicate or empty registry name %q", def.Name)
+		}
+		out[def.Name] = def
+	}
+	return out, nil
+}
+
+// J14 exercises a normal SIGINT drain and restart, not crash or SIGHUP adoption.
+// Stable registry IDs alone cannot prove an agent resumed: require a fresh
+// post-restart answer that uses a fact supplied only before the restart.
 func (s *suite) jBounceResume() error {
-	before, err := upgrade.SessionSnapshotFromFile(s.agentsPath())
+	// J13 intentionally migrates the overseer. Use a fresh explicitly selected
+	// aside so full-suite ordering cannot certify that other backend as ours.
+	id := "bounce-aside-" + uuid.NewString()
+	work, err := os.MkdirTemp(s.stateDir, "bounce-work-")
+	if err != nil {
+		return err
+	}
+	defer func() { _, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id}) }()
+	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": id, "workdir": work, "provider": string(s.provider),
+		"description": "disposable normal-drain continuity probe",
+	}); err != nil {
+		if outage := asOutage("bounce fixture spawn", err); outage != nil {
+			return outage
+		}
+		return fmt.Errorf("bounce fixture spawn: %w", err)
+	}
+	direct := func(prompt, expected string) error {
+		out, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": prompt})
+		if outage := asOutage("bounce direct", err); outage != nil {
+			return outage
+		}
+		if err != nil {
+			return err
+		}
+		if outage := replyOutage("bounce direct reply", out); outage != nil {
+			return outage
+		}
+		if strings.TrimSpace(out) != expected {
+			return fmt.Errorf("direct reply %q differs from requested %q", trim(out, 200), expected)
+		}
+		return nil
+	}
+	secret := "bounce-memory-" + uuid.NewString()
+	ack := "bounce-stored-" + uuid.NewString()
+	seed := "Remember this journey continuity secret for my next question: " + secret + ". Reply with exactly: " + ack
+	if err := direct(seed, ack); err != nil {
+		return fmt.Errorf("pre-bounce seed turn: %w", err)
+	}
+
+	before, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
 		return fmt.Errorf("snapshot before bounce: %w", err)
 	}
-	if len(before) == 0 {
-		return fmt.Errorf("agents.json empty before bounce")
+	if before[id].SessionID == "" || before[id].Provider != s.provider {
+		return fmt.Errorf("bounce fixture lacks its selected provider/session identity")
 	}
-	hadHandover := map[string]bool{}
+	preLogs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	if err := queueJourneyProvider(preLogs, id, string(s.provider)); err != nil {
+		return fmt.Errorf("original aside: %w", err)
+	}
+	handovers := map[string]string{}
 	for name := range before {
-		if _, err := os.Stat(s.handoverPath(name)); err == nil {
-			hadHandover[name] = true
+		body, err := os.ReadFile(s.handoverPath(name))
+		if err == nil {
+			if name == id {
+				return fmt.Errorf("fresh bounce fixture already has a handover")
+			}
+			handovers[name] = string(body)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("pre-bounce handover %s: %w", name, err)
 		}
 	}
 
-	if err := s.bounceDrain(); err != nil {
-		return fmt.Errorf("bounce: %w", err)
+	if err := s.signalStop(8 * time.Second); err != nil {
+		return fmt.Errorf("normal drain failed: %w", err)
 	}
-
-	after, err := upgrade.SessionSnapshotFromFile(s.agentsPath())
+	// Only the replacement process may supply post-bounce launch evidence.
+	drainedLogs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	if !bytes.HasPrefix(drainedLogs, preLogs) {
+		return fmt.Errorf("daemon log changed during drain")
+	}
+	normalDrain := false
+	for _, line := range strings.Split(string(drainedLogs[len(preLogs):]), "\n") {
+		fields, err := queueJourneyLogFields(line)
+		if err == nil && fields["msg"] == "shutting down" && fields["exit_mode"] == "normal" && fields["stop_agents"] == "true" {
+			normalDrain = true
+		}
+	}
+	if !normalDrain {
+		return fmt.Errorf("drain lacks normal stop-agents evidence; upgrade exit is not this journey")
+	}
+	preLogs = drainedLogs
+	if err := s.startDaemon(); err != nil {
+		return fmt.Errorf("restart: %w", err)
+	}
+	challenge := "bounce-now-" + uuid.NewString()
+	prompt := "What journey continuity secret did I give you before the restart? Reply with exactly two words separated by one space: the saved secret, then " + challenge + ". No labels or punctuation."
+	expected := secret + " " + challenge
+	directErr := direct(prompt, expected)
+	// Check identity even when the provider call failed. A timeout must not
+	// disguise an observed session replacement as an external outage.
+	after, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
 		return fmt.Errorf("snapshot after bounce: %w", err)
 	}
-	if drift := upgrade.SessionDrift(before, after); len(drift) != 0 {
-		return fmt.Errorf("bounce minted or dropped sessions: %v", drift)
+	for name, agent := range before {
+		if next, ok := after[name]; !ok || next.SessionID != agent.SessionID || next.Provider != agent.Provider {
+			return fmt.Errorf("bounce changed existing session/provider for %s", name)
+		}
 	}
+	if directErr != nil {
+		return fmt.Errorf("post-bounce aside turn: %w", directErr)
+	}
+	logs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	if !bytes.HasPrefix(logs, preLogs) {
+		return fmt.Errorf("daemon launch log was replaced during bounce")
+	}
+	if err := queueJourneyProvider(logs[len(preLogs):], id, string(s.provider)); err != nil {
+		return fmt.Errorf("replacement aside: %w", err)
+	}
+
 	for name := range before {
-		if hadHandover[name] {
+		body, err := os.ReadFile(s.handoverPath(name))
+		previous, existed := handovers[name]
+		if existed {
+			// An older pending migration may legitimately advance or be reaped.
+			// Report that residue; this fixture requires no handover record for
+			// its fresh aside and no new records for the other seats. File
+			// absence alone does not prove that no seed was ever delivered.
+			if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("post-bounce handover %s: %w", name, err)
+			}
+			if err != nil || string(body) != previous {
+				fmt.Printf("J14 pre-existing handover changed for %s; prior migration is outside this drain-only probe\n", name)
+			}
 			continue
 		}
-		if _, err := os.Stat(s.handoverPath(name)); err == nil {
-			return fmt.Errorf("bounce wrote a T285 handover for %s", name)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("post-bounce handover %s: %w", name, err)
+		}
+		return fmt.Errorf("bounce wrote a new T285 handover for %s", name)
+	}
+	if _, err := s.mcpText("jevons_thread_remove", map[string]any{"id": id}); err != nil {
+		return fmt.Errorf("remove bounce fixture: %w", err)
+	}
+	list, err := s.mcpText("jevons_thread_list", nil)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(list, id) {
+		return fmt.Errorf("bounce fixture remains in thread list")
+	}
+	agents, err := s.ListAgentsHTTP()
+	if err != nil {
+		return err
+	}
+	for _, agent := range agents {
+		if agent.Name == id {
+			return fmt.Errorf("bounce fixture remains in agent registry")
 		}
 	}
 	return nil

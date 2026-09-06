@@ -81,6 +81,9 @@ development surface after activation. Missing feature obligations may remain
 open under 🎯T540.3/🎯T540.7; deleting an obsolete test cannot erase them.
 Historical two-UI staging attestations under 🎯T540.1/🎯T540.4 remain history and
 do not require keeping the comparison service alive.
+The obsolete 🎯T540.4 two-UI desired state is explicitly set aside as superseded
+by 🎯T540.2. Its historical evidence does not become a requirement to restore
+vanilla while completing the remaining fidelity work.
 
 ## Workstreams established by the audit
 
