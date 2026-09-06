@@ -258,3 +258,26 @@ and the durable follow-up, then requires POST, ACK and reload order. Its first
 attempt had an invalid test-side assumption that `/api/agents` exposed a SID
 (`ba5b9ea8`, RED); that assertion now reads the isolated registry and uses the
 API's `running` field for liveness. Fresh product evidence follows below.
+
+Clean commit `f9b6adb3c0da` is integrated as local master `f347573cb290`,
+with identical trees and 114 unrelated working files preserved. Full Go
+verification is GREEN (`e3234e2c`: 3425 tests, four existing skips), as are
+React tests (`3f168865`), bundle freshness (`4328764c`), the binary build
+(`d6a1e0d6`), and the actual Cursor J31 journey (`2c409695`). J31 observed a
+real periodic sweep retaining the aside while its tool remained held; the
+same queued obligation and session survived, and POST/ACK appeared in order
+before and after reload. Earlier setup runs recorded temporary dependency
+links; only the clean records above are the acceptance evidence.
+
+Screenshots retain the initial request, PRE, follow-up, POST and ACK in the
+main pane, and the newest request and replies in the compact pane, with
+earlier content above its viewport. Latest is absent. The deliberately short
+fixture leaves substantial empty space in the main pane; this verifies the
+conversation sequence, not long-history transcript layout or migration finish.
+
+Development still serves the earlier `0efbde25` binary. Automatic approval
+review rejected the prepared supervisor activation because it may interrupt
+owner conversations and requested explicit activation permission. The owner
+has been asked; no restart or workaround followed that rejection. The prepared
+development-only probe uses a disposable synthetic aside, checks the actual
+sweep and durable queue, and never submits to the owner's main conversation.
