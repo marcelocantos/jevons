@@ -692,3 +692,53 @@ provider echoes; admission is not receiver confirmation or a durable delivery
 obligation. Fleet `Deliver`/handover and legacy remote/voice entry points are
 outside this slice. Full correlated outcomes, recovery policy, phase projection
 and provider-aware rewind still require implementation and product evidence.
+
+Reviewed source `5e34d388c4d0` is integrated locally as `129238f16765`, with
+identical committed trees and unrelated shared-checkout changes preserved.
+Clean full Go (`f30b7c64`), bundle/React/browser (`dce320cd`), focused race
+(`9ff141b2`), real Grok J30/J5 (`6a827b77`) and real Cursor J30/J5 (`af479cd0`)
+all passed. The corrected original-provider-path negative control fails with
+two missing request rows (`f7ec986d`, RED); its preceding control did not
+compile and is not evidence for that property. Independent review found no
+further bounded issue in the request-history changes.
+
+### Activation exposed unbounded saved-session startup (2026-09-06)
+
+**The request-history repair is not accepted on development.** Its activation
+was rolled back. A published-dependency build of local `129238f16765`
+(`af3e78b2`, GREEN) served health successfully, but the real development
+observation timed out reading the agent list (`4fb8517c`, RED). The diagnostic
+never reached its disposable-aside send. Isolated fresh-session success did
+not cover loading the existing Cursor session with the development MCP map.
+
+The captured goroutine stack identifies the mechanism: `Registry.Launch`
+holds the global registry mutex while `cursorACPClient.request` waits without
+a deadline for `session/load`. Registry reads, including the agent-list
+endpoint, block behind it. Its read loop was waiting for provider stdout,
+not blocked in a Jevons event callback. The daemon installs its signal handler
+after `ReattachFleet`; therefore SIGHUP could not complete rollback during
+this startup wait either.
+
+The previous binary was restored. SIGQUIT collected a private diagnostic and
+let the existing supervisor restart it. That runtime also took minutes loading
+the saved session, so a dependency-version incompatibility is not established.
+Recovery was then observed: the overseer was running on Cursor, the PO was
+stopped as before, and the agent endpoint returned in 25 ms. No saved session
+ID or conversation content was replaced. This is now 🎯T627.2: bounded
+provider startup, responsive registry reads, safe concurrent lifecycle handling,
+and shutdown availability throughout boot.
+
+A second activation limitation was found before deployment: the new Grok
+storage repair requires a managed home before dialing a saved `ConnectURL`.
+It consequently refuses an already-running legacy server whose only home is
+temporary. Creating an empty managed home does not migrate that process's
+ongoing writes. Fresh Jevons `129238f16765` plus clean Claudia `74160f825e95`
+passed J30/J5 (`731e275d`), but that is not legacy-adoption evidence. The repair
+remains unactivated under T627.1 pending a verified migration strategy.
+
+The initial snapshot build also selected the dirty Claudia sibling despite
+excluding Jevons WIP. That binary was not activated. The explicit clean
+workspace build (`0ad1a094`) selected the reviewed dependency; the attempted
+development activation instead used committed published v0.29.0. Runtime
+identity must come from the build's actual dependencies, not the restart
+script's current-checkout identity stamp.
