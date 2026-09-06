@@ -35,6 +35,12 @@ the successful retry does not explain that intermittent failure. Native Firefox
 key handling remains unverified. Paging beyond loaded owner history, queue
 traversal, and durable recall/attachment recovery remain open.
 
+A fresh development check on 2026-09-06 (`8e3933a9`) again passed main and
+sidebar Alt-Up, exact selected-turn text, highlighting, Escape and Alt-Down
+draft restoration. It used separate headless Chromium state and sent no
+messages. It observes the running committed development build, not the dirty
+checkout recorded in gate metadata, and does not close the Firefox residue.
+
 ## Why the old rewind handler cannot be connected
 
 Read-only scout of committed `a9a20813570b740aab2c78fe0db63905986a697f`:
@@ -513,3 +519,12 @@ Its canonical event retains a distinct MCP dispatch envelope: the outer name,
 providerIdentifier, toolName and nested args must all match. That observed
 shape is now covered alongside Grok, with wrong-dispatch and malformed-input
 negative controls. Fresh final-shape evidence remains pending.
+
+Final code `43473c769541` passes the clean journey package with race detection
+(`227b76a0`) and fresh real Grok (`e0b1b521`) and Cursor (`ef68b7c3`) J6c/J5
+runs on separate ephemeral ports. Both require the exact fresh nonce, matching
+MCP dispatch, returned capture identity, API/disk agreement and named runtime
+provider; both complete isolation teardown. The isolates use the unchanged
+production daemon built from clean `6b16ef21f636`, whose full Go/build gate is
+recorded above. This activates the bounded J6c evidence; it does not certify
+React rendering, provider rewind, all core journeys or the complete migration.
