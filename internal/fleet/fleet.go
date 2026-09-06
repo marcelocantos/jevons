@@ -57,6 +57,8 @@ type Claudia struct {
 	defaultProvider claudia.Provider
 	readyTimeout    time.Duration
 	replyTimeout    time.Duration
+	// Installed at startup; synchronous directs are agent-origin requests.
+	recordRequest func(name, text string) error
 
 	// inFlight counts turns currently awaiting a reply, per agent id.
 	// Idle-derived reaping consults it (Busy) so a worker mid-turn is
@@ -150,6 +152,12 @@ func (f *Claudia) SetLaunchHook(fn func(name string) func()) {
 		return
 	}
 	f.onLaunch = fn
+}
+
+func (f *Claudia) SetRequestRecorder(fn func(name, text string) error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordRequest = fn
 }
 
 // launching tells the host a launch has begun for name and returns the
@@ -456,6 +464,14 @@ func (f *Claudia) Send(id, text string) (string, error) {
 		return "", fmt.Errorf("no live process for thread %q", id)
 	}
 	defer f.enterTurn(id)()
+	f.mu.Lock()
+	record := f.recordRequest
+	f.mu.Unlock()
+	if record != nil {
+		if err := record(id, text); err != nil {
+			return "", err
+		}
+	}
 	reply, err := f.awaitReply(ag, f.providerOf(id), text)
 	if err != nil {
 		return "", fmt.Errorf("direct turn to %q: %w", id, err)

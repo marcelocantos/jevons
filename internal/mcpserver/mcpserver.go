@@ -146,8 +146,9 @@ type Server struct {
 	observeTurnWitness turnWitness
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
-	agentEventHook func(name string, ev claudia.Event)
-	costSnapshot   func() (*cost.Snapshot, error)
+	agentEventHook       func(name string, ev claudia.Event)
+	agentRequestRecorder func(name, text string, origin SendOrigin) error
+	costSnapshot         func() (*cost.Snapshot, error)
 	// planUsage is GET /api/plan-usage as an overseer tool (🎯T390.1.4).
 	planUsage func() planusage.Snapshot
 

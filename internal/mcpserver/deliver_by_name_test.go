@@ -117,6 +117,41 @@ func TestDeliverByNameWorkerToPOToOverseerChain(t *testing.T) {
 	}
 }
 
+func TestT627AdmissionPrecedesDeliveryAndCarriesOrigin(t *testing.T) {
+	for _, origin := range []SendOrigin{OriginOwner, OriginAgent} {
+		t.Run(string(origin), func(t *testing.T) {
+			worker := &fakeSender{alive: true}
+			s, _ := chainServer(t, map[string]*fakeSender{"worker": worker})
+			recorded := 0
+			s.SetAgentRequestRecorder(func(name, text string, gotOrigin SendOrigin) error {
+				if len(worker.sent) != 0 {
+					t.Fatal("submitted before journal admission")
+				}
+				if name != "worker" || text != "record these words" || gotOrigin != origin {
+					t.Fatalf("admission=%q %q %q", name, text, gotOrigin)
+				}
+				recorded++
+				return nil
+			})
+			if _, err := s.DeliverAgentMessageAs("worker", "record these words", origin, false); err != nil {
+				t.Fatal(err)
+			}
+			if recorded != 1 || len(worker.sent) != 1 {
+				t.Fatalf("recorded=%d sent=%d", recorded, len(worker.sent))
+			}
+		})
+	}
+	worker := &fakeSender{alive: true}
+	s, _ := chainServer(t, map[string]*fakeSender{"worker": worker})
+	s.SetAgentRequestRecorder(func(_, _ string, _ SendOrigin) error { return fmt.Errorf("canonical store unavailable") })
+	if _, err := s.DeliverAgentMessage("worker", "must not submit", false); err == nil {
+		t.Fatal("record failure ignored")
+	}
+	if len(worker.sent) != 0 {
+		t.Fatalf("record failure still submitted: %v", worker.sent)
+	}
+}
+
 // Case-insensitive name resolution reaches the overseer arm, not the registry
 // arm — otherwise "Jevons" would be looked up as a fleet agent and 404.
 func TestDeliverByNameOverseerCaseInsensitive(t *testing.T) {

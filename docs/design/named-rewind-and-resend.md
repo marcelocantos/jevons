@@ -645,3 +645,50 @@ or development activation was performed. The repair cannot recover temporary
 homes already deleted. Seats saved before their first successful launch are
 not recovered by this change; same-process `ConnectURL` adoption, SIGHUP,
 crash recovery and React rendering are not covered by these restart results.
+
+### Named request history and admission (2026-09-06)
+
+The next T627 slice repairs two concrete omissions: provider `user` events
+previously stopped at legacy JSONL, and synchronous direct requests could be
+absent entirely when the provider did not echo them. Named HTTP/MCP requests,
+thread directs and Cursor opening briefs now record their explicit origin before
+submission. SQLite is authoritative when configured; live writes no longer grow
+the retired named JSONL journal. Import happens before the new request is
+applied, avoiding a duplicate on first admission. Legacy inspect replay reads
+the same canonical rows as mux.
+
+Failed canonical writes refuse submission, discard speculative cache rows and
+emit no echo that could clear a browser draft. Explicit identical consecutive
+requests remain separate. The mux send handler also uses the watch's own mutex
+when unfreezing its window, matching fan-out and replay readers.
+
+Pre-commit checks passed the full Go suite (`e678107d`) and the final focused
+race suite (`64975dfd`). Restoring the Cursor admission bypass makes its new
+control fail (`5a15b7bd`, RED); restoring the mux handler's old lock produces a
+detected data race (`512ff21e`, RED). Cold-start import checks retain the legacy
+prefix and new request exactly once at stable absolute indexes after reopening
+SQLite. Attaching SQLite to an already-running legacy cache is not the product
+startup sequence and is not claimed here.
+
+The expanded real Grok J30 run passed (`bbee136e`) on intermediate uncommitted
+source: main and sidebar owner sends, correlated terminal replies, direct
+request/reply pairs before and after history exists, reload and owner-only
+Alt-Up recall. Its initial failure was an overly strict DOM whitespace assertion;
+SQLite already contained both correctly attributed rows. Browser assertion
+timeouts now remain product failures rather than generic provider outages.
+The final oracle also verifies named provider launch records, beyond the
+registry's selected-provider field. Clean-revision/provider results follow;
+these preliminary runs do not establish development activation.
+
+Visual residue: the observed sidebar highlights the intervening owner request
+while agent-origin directs remain visible. The small fixture leaves most of the
+main pane empty, and the final screenshot after removing the aside still shows
+its old panel. This is not a normal populated-transcript visual acceptance
+verdict. J30 proves the named interaction assertions, not overall layout or
+retirement of T493.1/T540.7.
+
+T627 remains open. Text-only echo matching cannot correlate delayed/interleaved
+provider echoes; admission is not receiver confirmation or a durable delivery
+obligation. Fleet `Deliver`/handover and legacy remote/voice entry points are
+outside this slice. Full correlated outcomes, recovery policy, phase projection
+and provider-aware rewind still require implementation and product evidence.

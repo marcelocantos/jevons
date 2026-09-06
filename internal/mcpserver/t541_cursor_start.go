@@ -147,6 +147,9 @@ func slogCursorMaterialize(name string, err error) {
 
 func (s *Server) submitCursorStartBrief(name, prompt string) error {
 	text := s.composeStartBrief(name, prompt)
+	if err := s.recordAgentRequest(name, text, OriginAgent); err != nil {
+		return err
+	}
 	if s != nil && s.cursorSubmit != nil {
 		return s.cursorSubmit(name, text)
 	}

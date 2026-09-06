@@ -77,6 +77,27 @@ func (s *Server) SetOverseerDeliver(fn OverseerDeliverFunc) {
 	s.overseerDeliver = fn
 }
 
+// SetAgentRequestRecorder attaches the canonical journal for non-overseer
+// admission. A failed record refuses submission; it never claims delivery.
+func (s *Server) SetAgentRequestRecorder(fn func(name, text string, origin SendOrigin) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentRequestRecorder = fn
+}
+
+func (s *Server) recordAgentRequest(name, text string, origin SendOrigin) error {
+	if s == nil {
+		return fmt.Errorf("no agent server")
+	}
+	s.mu.Lock()
+	record := s.agentRequestRecorder
+	s.mu.Unlock()
+	if record != nil {
+		return record(name, text, origin)
+	}
+	return nil
+}
+
 // senderResolver returns a live sender for a fleet agent, rehydrating a
 // registered-but-stopped one. The seam lets hermetic tests drive the whole
 // deliver path without launching provider processes (same pattern as
@@ -264,6 +285,9 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 
 	if overseerArm {
 		return s.deliverToOverseer(name, text, origin)
+	}
+	if err := s.recordAgentRequest(name, text, origin); err != nil {
+		return agentSendResult{}, err
 	}
 
 	// 🎯T401: an auto-reaped name is still a reachable address. Detect it

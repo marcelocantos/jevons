@@ -960,12 +960,18 @@ func main() {
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
 	// terminal stop is wired in mcpserver agentEventSink (ð¯T111.1).
-	srv.SetAgentSendHook(func(name, text string) (string, error) {
-		res, err := mcpSrv.DeliverAgentMessage(name, text, false)
+	srv.SetAgentSendOriginHook(func(name, text, origin string) (string, error) {
+		res, err := mcpSrv.DeliverAgentMessageAs(name, text, mcpserver.SendOrigin(origin), false)
 		if err != nil {
 			return "", err
 		}
 		return res.Status, nil
+	})
+	mcpSrv.SetAgentRequestRecorder(func(name, text string, origin mcpserver.SendOrigin) error {
+		return srv.RecordAgentRequest(name, text, string(origin))
+	})
+	fleetAdapter.SetRequestRecorder(func(name, text string) error {
+		return srv.RecordAgentRequest(name, text, string(mcpserver.OriginAgent))
 	})
 	// ð¯T309.3: the overseer arm of the fleet's single deliver-by-name path.
 	// Without this, an overseer-addressed send from the fleet layer (a worker

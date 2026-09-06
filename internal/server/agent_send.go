@@ -53,6 +53,12 @@ func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err
 	s.agentSendHook = fn
 }
 
+func (s *Server) SetAgentSendOriginHook(fn func(name, text, origin string) (status string, err error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentSendOriginHook = fn
+}
+
 // sendToNamedAgent rehydrates a registered fleet agent if needed and sends
 // text fire-and-forget (no WaitForResponse). Returns status from the product
 // hook (sent | queued | rehydrated_sent | …) or bare registry "sent".
@@ -70,6 +76,18 @@ func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
 	text = strings.TrimSpace(text)
 	if name == "" || text == "" {
 		return "", fmt.Errorf("name and text are required")
+	}
+	if origin == "" {
+		origin = sendOriginOwner
+	}
+	if origin != sendOriginOwner && origin != sendOriginAgent {
+		return "", fmt.Errorf("invalid message origin %q", origin)
+	}
+	s.mu.RLock()
+	originHook := s.agentSendOriginHook
+	s.mu.RUnlock()
+	if originHook != nil {
+		return originHook(name, text, origin)
 	}
 
 	if s.isOverseerAgent(name) {

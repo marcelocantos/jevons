@@ -137,6 +137,14 @@ func (s *Server) writeInspectReplay(ctx context.Context, conn inspectWriter, nam
 		defer cancel()
 		return conn.Write(wctx, websocket.MessageText, []byte(frame))
 	}
+	if s.stateStore() != nil {
+		for _, event := range s.muxCoalesced(name, true) {
+			if err := writeLine(string(event.Body)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if s.isOverseerAgent(name) {
 		s.mu.RLock()
 		clog := s.chatLog
