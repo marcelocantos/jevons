@@ -59,8 +59,8 @@ export function CompanyMark(props: { provider?: string; company?: string }) {
 
 export function windowAbbrev(name: string): string {
   const n = String(name || '').toLowerCase();
-  if (n === 'session') return 's';
-  if (n === 'weekly') return 'w';
-  if (n === 'monthly') return 'm';
-  return n ? n.charAt(0) : '?';
+  if (n === 'session') return 'S';
+  if (n === 'weekly') return 'W';
+  if (n === 'monthly') return 'M';
+  return n ? n.charAt(0).toUpperCase() : '?';
 }

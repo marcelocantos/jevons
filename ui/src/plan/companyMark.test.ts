@@ -13,8 +13,8 @@ describe('plan company marks', () => {
   });
 
   it('abbreviates windows as s / w / m', () => {
-    expect(windowAbbrev('session')).toBe('s');
-    expect(windowAbbrev('weekly')).toBe('w');
-    expect(windowAbbrev('monthly')).toBe('m');
+    expect(windowAbbrev('session')).toBe('S');
+    expect(windowAbbrev('weekly')).toBe('W');
+    expect(windowAbbrev('monthly')).toBe('M');
   });
 });
