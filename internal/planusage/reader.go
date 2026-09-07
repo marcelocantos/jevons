@@ -57,6 +57,10 @@ type ReaderArgs struct {
 	// of the last fetch (isolate journeys, 🎯T390.1.5). Env
 	// JEVONS_PLAN_USAGE_FIXTURE is used when this is empty.
 	FixturePath string
+	// OnUpdate runs after every Refresh returns (success or failure),
+	// without holding the reader lock. Mux fans the restamped snapshot
+	// so the cockpit is not a second poll behind the producer (🎯T631).
+	OnUpdate func()
 }
 
 // Reader keeps the last round of plan-usage readings and re-shapes them on
@@ -127,16 +131,26 @@ func (r *Reader) Refresh(ctx context.Context) error {
 
 	readings, err := r.args.Fetch(ctx)
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err != nil {
 		r.lastErr = err.Error()
+		r.mu.Unlock()
+		r.emit()
 		return err
 	}
 	r.readings = readings
 	r.fetched = true
 	r.lastErr = ""
 	r.readyOnce.Do(func() { close(r.ready) })
+	r.mu.Unlock()
+	r.emit()
 	return nil
+}
+
+func (r *Reader) emit() {
+	if r == nil || r.args.OnUpdate == nil {
+		return
+	}
+	r.args.OnUpdate()
 }
 
 // Snapshot re-shapes the cached readings as of now.

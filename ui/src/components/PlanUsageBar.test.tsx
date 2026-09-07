@@ -1,24 +1,62 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from 'vitest';
+import { createElement, type ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PlanUsageBar } from './PlanUsageBar';
 import { companyOfProvider } from '../plan/companyMark';
+import type { MuxClient } from '../mux/client';
+import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-describe('PlanUsageBar long-poll wiring', () => {
-  it('passes AbortSignal and skips refetch while a request is in flight', () => {
+describe('PlanUsageBar mux wiring', () => {
+  it('subscribes to plan-usage mux and does not 60s-poll when mux is connected', () => {
     const src = readFileSync(join(here, 'PlanUsageBar.tsx'), 'utf8');
+    expect(src).toContain('PLAN_USAGE_CHANNEL');
+    expect(src).toContain('openChannel');
+    expect(src).toContain('enabled: !props.mux');
+    expect(src).toContain('if (props.mux) return false');
     expect(src).toContain("fetch('/api/plan-usage', { signal })");
-    expect(src).toContain("fetchStatus === 'fetching'");
-    expect(src).toContain('PLAN_POLL_PENDING_MS');
     expect(src).toContain('CompanyMark');
   });
 
   it('maps cursor through the shared company mark', () => {
     expect(companyOfProvider('cursor')).toBe('cursor');
+  });
+
+  it('paints a mux frame without HTTP polling', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    expect(mux.openChannel).toHaveBeenCalledWith(PLAN_USAGE_CHANNEL);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'claude',
+            status: 'available',
+            windows: [{ name: 'weekly', remaining_percent: 36 }],
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(container.querySelector('[data-provider="claude"]')).toBeTruthy());
   });
 });

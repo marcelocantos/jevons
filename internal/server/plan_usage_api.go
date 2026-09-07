@@ -109,6 +109,41 @@ func (s *Server) handlePlanUsageThresholds(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// planUsageSnapshotNow is the same payload GET /api/plan-usage encodes.
+func (s *Server) planUsageSnapshotNow() any {
+	if s == nil || s.planUsageSource == nil {
+		return map[string]any{"disabled": true, "error": "plan usage not enabled"}
+	}
+	snap := s.planUsageSource()
+	if snap == nil {
+		return map[string]any{"disabled": true, "error": "no plan usage snapshot yet"}
+	}
+	return planUsageWithBands(snap, time.Now())
+}
+
+func (s *Server) writePlanUsage(ctx context.Context, conn muxConn) {
+	s.muxWrite(ctx, conn, planUsageChannel, "frame", s.planUsageSnapshotNow())
+}
+
+// FanPlanUsage pushes the current snapshot to mux watchers after a producer
+// refresh so the ticker is not a second poll behind (🎯T631).
+func (s *Server) FanPlanUsage() {
+	if s == nil || s.mux == nil {
+		return
+	}
+	payload, err := encodeMux(planUsageChannel, "frame", s.planUsageSnapshotNow())
+	if err != nil {
+		return
+	}
+	s.mux.mu.Lock()
+	defer s.mux.mu.Unlock()
+	for sess := range s.mux.conns {
+		if sess.watchingPlanUsage() {
+			sess.enqueue(payload)
+		}
+	}
+}
+
 func (s *Server) handlePlanUsageSweep(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.planSweep == nil {

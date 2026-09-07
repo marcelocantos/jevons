@@ -34,6 +34,9 @@ export function transcriptChannel(name: string): string {
   return `transcript:${name.trim()}`;
 }
 
+/** Snapshot channel for the header plan-usage ticker (🎯T631). */
+export const PLAN_USAGE_CHANNEL = 'plan-usage';
+
 export function encodeMux(ch: string, t: MuxType, body?: unknown): string {
   const env: MuxEnvelope = { v: MUX_VERSION, ch, t };
   if (body !== undefined) env.body = body;

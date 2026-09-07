@@ -254,7 +254,7 @@ function Cockpit() {
           <span className="voice-dot" />
           <span id="voice-status-text">listening</span>
         </span>
-        <PlanUsageBar />
+        <PlanUsageBar mux={mux} />
         <div id="theme-toggle">
           {(['light', 'system', 'dark'] as ThemePref[]).map((p) => (
             <button

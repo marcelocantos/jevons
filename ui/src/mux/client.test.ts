@@ -70,6 +70,22 @@ describe('MuxClient transcript watch refcount', () => {
   });
 });
 
+describe('MuxClient snapshot channels (T631)', () => {
+  it('re-opens plan-usage on reconnect', () => {
+    const { client, ws } = connectClient();
+    client.openChannel('plan-usage');
+    expect(ws.sent.some((s) => s.includes('"ch":"plan-usage"') && s.includes('"t":"open"'))).toBe(true);
+    ws.close();
+    vi.advanceTimersByTime(500);
+    const next = FakeWebSocket.instances[1];
+    if (!next) throw new Error('reconnect did not construct a socket');
+    next.open();
+    const opens = next.sent.filter((s) => s.includes('"ch":"plan-usage"') && s.includes('"t":"open"'));
+    expect(opens).toHaveLength(1);
+    client.close();
+  });
+});
+
 describe('MuxClient heartbeat (T537.2.1)', () => {
   it('sends the vanilla chat ping on open and every heartbeat interval', () => {
     const { client, ws } = connectClient();

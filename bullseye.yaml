@@ -14347,6 +14347,24 @@ targets:
     - out-of-scope
     origin: T540.7.1 regression verification
     discovered: 2026-09-06
+  T631:
+    name: Plan-usage ticker paints a mux push at provider-refresh time, without a second poll delay
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'The cockpit plan-usage ticker receives the same snapshot as GET /api/plan-usage over mux channel plan-usage: open returns the current snapshot as a frame; each Reader.Refresh fans that snapshot to watchers.'
+    - The React ticker does not HTTP-poll /api/plan-usage on a 60s timer when mux is connected. A new reading is painted from the mux frame, so UI delay is not stacked on the 5-minute producer interval.
+    - Reconnect re-opens plan-usage and delivers a current snapshot without blanking the last reading. GET /api/plan-usage remains for non-mux callers.
+    - Hermetic tests cover open/fan/unknown-channel, Reader OnUpdate after refresh (including failed fetch), MuxClient re-open of plan-usage, and the ticker using mux frames rather than PLAN_POLL_MS.
+    context: 'Owner 2026-09-07: two independent polls (daemon 5min, UI 60s) can chain to a ~6-minute worst-case delay. Mux already exists; push on refresh removes the second wait. Not a live spend stream — Claudia still polls every DefaultRefresh.'
+    tags:
+    - product
+    - ui
+    - plan-usage
+    - mux
+    origin: owner
+    discovered: 2026-09-07
   T64:
     name: Activity-strip tool steps show a short argument summary, not just the tool name
     status: achieved

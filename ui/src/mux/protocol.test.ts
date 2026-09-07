@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { decodeMux, encodeMux, transcriptChannel } from './protocol';
+import { decodeMux, encodeMux, PLAN_USAGE_CHANNEL, transcriptChannel } from './protocol';
 
 describe('mux protocol', () => {
   it('round-trips an envelope', () => {
@@ -18,6 +18,7 @@ describe('mux protocol', () => {
     expect(transcriptChannel('jevons')).toBe('transcript:jevons');
     expect(transcriptChannel('jevons-po')).toBe('transcript:jevons-po');
     expect(transcriptChannel('jv-t537-worker')).toBe('transcript:jv-t537-worker');
+    expect(PLAN_USAGE_CHANNEL).toBe('plan-usage');
   });
 
   it('rejects junk', () => {

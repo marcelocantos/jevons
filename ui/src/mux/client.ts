@@ -15,6 +15,7 @@ export class MuxClient {
   private readonly pending: string[] = [];
   private readonly watched = new Set<string>();
   private readonly watchRefs = new Map<string, number>();
+  private readonly channels = new Set<string>();
   private generation = 0;
   private reconnectTimer = 0;
   private heartbeatTimer = 0;
@@ -43,6 +44,10 @@ export class MuxClient {
         for (const name of this.watched) {
           this.dispatch({ v: 1, ch: transcriptChannel(name), t: 'reset' });
           ws.send(encodeMux(transcriptChannel(name), 'open', { lo: -30, hi: 0 }));
+        }
+        for (const ch of this.channels) {
+          this.dispatch({ v: 1, ch, t: 'reset' });
+          ws.send(encodeMux(ch, 'open'));
         }
       }
       this.everOpened = true;
@@ -137,6 +142,21 @@ export class MuxClient {
 
   sendTranscript(name: string, text: string): void {
     this.send(encodeMux(transcriptChannel(name), 'send', { text }));
+  }
+
+  /** Open a non-transcript snapshot channel (plan-usage, 🎯T631). Re-opens on reconnect. */
+  openChannel(ch: string): void {
+    const name = ch.trim();
+    if (!name) return;
+    this.channels.add(name);
+    this.send(encodeMux(name, 'open'));
+  }
+
+  closeChannel(ch: string): void {
+    const name = ch.trim();
+    if (!name) return;
+    this.channels.delete(name);
+    this.send(encodeMux(name, 'close'));
   }
 
   private send(raw: string): void {

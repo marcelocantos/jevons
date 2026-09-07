@@ -36,6 +36,7 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		// (undocumented dashboard RPC). Cockpit opts in so a Cursor seat
 		// paints a real bar; failure stays unavailable with a reason.
 		CursorUnstableUsage: true,
+		OnUpdate:            srv.FanPlanUsage,
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
 	srv.SetPlanUsageWaitReady(reader.WaitReady)

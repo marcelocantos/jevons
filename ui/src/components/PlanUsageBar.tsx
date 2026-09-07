@@ -1,9 +1,11 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { now } from '../clock';
+import type { MuxClient } from '../mux/client';
+import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMark';
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
@@ -11,7 +13,7 @@ import { InstantTip } from './InstantTip';
 import { tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
 
-/** Vanilla: 60s once a reading exists; 5s only after a pending long-poll times out. */
+/** HTTP fallback only when mux is not connected (tests / non-cockpit). */
 export const PLAN_POLL_MS = 60_000;
 export const PLAN_POLL_PENDING_MS = 5_000;
 
@@ -19,7 +21,7 @@ function hasNumericRemaining(snap: PlanSnapshot | undefined): boolean {
   return tickerGroups(snap).some((g) => g.windows.some((w) => typeof w.remaining_percent === 'number'));
 }
 
-export function PlanUsageBar() {
+export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
   useQuery({
     queryKey: ['plan-usage-thresholds'],
     queryFn: async () => {
@@ -31,6 +33,20 @@ export function PlanUsageBar() {
     },
     staleTime: Infinity,
   });
+  const [muxSnap, setMuxSnap] = useState<PlanSnapshot | undefined>(undefined);
+  useEffect(() => {
+    const mux = props.mux;
+    if (!mux) return;
+    const unsub = mux.subscribe(PLAN_USAGE_CHANNEL, (env) => {
+      if (env.t !== 'frame' || env.body == null || typeof env.body !== 'object') return;
+      setMuxSnap(env.body as PlanSnapshot);
+    });
+    mux.openChannel(PLAN_USAGE_CHANNEL);
+    return () => {
+      unsub();
+      mux.closeChannel(PLAN_USAGE_CHANNEL);
+    };
+  }, [props.mux]);
   const q = useQuery({
     queryKey: ['plan-usage'],
     queryFn: async ({ signal }) => {
@@ -38,15 +54,17 @@ export function PlanUsageBar() {
       if (!r.ok) throw new Error(String(r.status));
       return (await r.json()) as PlanSnapshot;
     },
+    enabled: !props.mux,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
     refetchInterval: (query) => {
+      if (props.mux) return false;
       if (query.state.fetchStatus === 'fetching') return false;
       return hasNumericRemaining(query.state.data) ? PLAN_POLL_MS : PLAN_POLL_PENDING_MS;
     },
   });
   const last = useRef<PlanSnapshot | undefined>(undefined);
-  const incoming = q.data;
+  const incoming = muxSnap ?? q.data;
   const snap = holdLastPlanSnapshot(last.current, incoming);
   last.current = snap;
   const groups = tickerGroups(snap);

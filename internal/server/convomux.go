@@ -26,6 +26,9 @@ import (
 
 const muxVersion = 1
 
+// planUsageChannel is the mux snapshot feed for the header ticker (🎯T631).
+const planUsageChannel = "plan-usage"
+
 type muxEnvelope struct {
 	V    int             `json:"v"`
 	Ch   string          `json:"ch"`
@@ -38,7 +41,7 @@ type muxEnvelope struct {
 // replay/paging handler (no hub lock, because it does network writes and
 // must not hold the hub while it blocks). They both touch `sent`, and on
 // 2026-08-31 that killed the daemon outright — `fatal error: concurrent
-// map writes` in writeMuxWindow, on the owner's daily path, triggered by
+// map writes` in writeMuxWindow, on the owner's development surface, triggered by
 // nothing more exotic than a reconnect landing while the fleet was
 // talking.
 //
@@ -136,6 +139,7 @@ type muxSession struct {
 	send        chan []byte
 	mu          sync.Mutex
 	transcripts map[string]*muxWatch
+	planUsage   bool
 }
 
 func newMuxHub() *muxHub {
@@ -308,6 +312,24 @@ func (sess *muxSession) watchGet(name string) *muxWatch {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	return sess.transcripts[name]
+}
+
+func (sess *muxSession) setPlanUsage(on bool) {
+	if sess == nil {
+		return
+	}
+	sess.mu.Lock()
+	sess.planUsage = on
+	sess.mu.Unlock()
+}
+
+func (sess *muxSession) watchingPlanUsage() bool {
+	if sess == nil {
+		return false
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.planUsage
 }
 
 func (sess *muxSession) enqueue(payload []byte) bool {
@@ -645,7 +667,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 
 // handleMuxRaw consumes one client→server mux frame. Vanilla chat ping
 // ({"type":"ping"}) is accepted on this socket too (🎯T537.2.1): React's
-// daily driver talks /ws/mux, not /ws/chat, and owner_health heartbeat
+// development React cockpit talks /ws/mux, not /ws/chat, and owner_health heartbeat
 // must still tick.
 func (s *Server) handleMuxRaw(ctx context.Context, conn muxConn, sess *muxSession, data []byte) {
 	msg := strings.TrimSpace(string(data))
@@ -674,6 +696,11 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 	name, isTranscript := parseTranscriptChannel(env.Ch)
 	switch env.T {
 	case "open":
+		if env.Ch == planUsageChannel {
+			sess.setPlanUsage(true)
+			s.writePlanUsage(ctx, conn)
+			return
+		}
 		if !isTranscript {
 			s.muxWrite(ctx, conn, env.Ch, "error", map[string]any{"error": "unknown channel"})
 			return
@@ -697,6 +724,10 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			slog.Warn("mux: window failed", "name", name, "err", err)
 		}
 	case "close":
+		if env.Ch == planUsageChannel {
+			sess.setPlanUsage(false)
+			return
+		}
 		if isTranscript {
 			sess.unwatch(name)
 		}
@@ -786,7 +817,7 @@ func (s *Server) muxWrite(ctx context.Context, conn muxConn, ch, t string, body 
 	_ = conn.Write(wctx, websocket.MessageText, payload)
 }
 
-// First-paint journal read. A full Replay of the daily overseer log
+// First-paint journal read. A full Replay of the development overseer log
 // (~87MB / 350k lines) is what made the first screen wait on fold+index.
 // Grow only when the tail does not yet hold DefaultFollow events.
 const muxFirstPaintBytesMax = 8 << 20
