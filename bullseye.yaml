@@ -14365,6 +14365,24 @@ targets:
     - mux
     origin: owner
     discovered: 2026-09-07
+  T632:
+    name: Owner-visible product is activated on the running surface as soon as it lands, unless activation would be destructive
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - After landing owner-visible daemon or React work, the implementer activates development :13705 in the same turn (committed HEAD snapshot via restart-daily / supervisor SIGHUP) so the owner can see the change without asking.
+    - 'Skip activation only when it would be destructive: data loss, a known path that kills in-flight owner turns despite T392.5 SIGHUP, or an explicit owner hold. Concurrent bounces still coalesce under T218; a no-op when the new binary is already serving is success.'
+    - 'T553.2 remains: a restart citation is not the achieve gate. Observation of the running surface (T552) is. T505 still forbids serving the dirty shared clone.'
+    - Persona, AGENTS.md, agents-guide, fleet brief, and help_agent state the activate-unless-destructive default. The T553.2 docratchet is updated to that wording.
+    context: 'Owner 2026-09-07: every change should be visible as soon as it is done unless there is a risk of a destructive outcome. This was the missing prompt after uppercase ticker letters landed but development still served the previous bundle. Supersedes the T553.2 reading that workers must not activate; keeps T553.2 observation-not-script-success gate.'
+    tags:
+    - process
+    - doctrine
+    - daemon
+    - product
+    origin: owner
+    discovered: 2026-09-07
   T64:
     name: Activity-strip tool steps show a short argument summary, not just the tool name
     status: achieved

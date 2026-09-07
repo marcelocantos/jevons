@@ -712,11 +712,13 @@ the owner **explicitly** asks to ship/push/PR.
 
 ## Daemon activation (🎯T188 / 🎯T191 / 🎯T553)
 
-The owner never restarts by hand. A committed script exists for owner-ask
-or overseer activation. **Workers do not invoke it after every
-daemon-path land (🎯T553.2).** Daily `:13705` serves committed HEAD until
-worktrees exist (🎯T505 / 🎯T553.1). Observation is the test (🎯T552),
-not script success.
+The owner never restarts by hand. After landing owner-visible daemon or
+React work, **activate in the same turn** (🎯T632) so development `:13705`
+shows it. Skip only when activation would be destructive (data loss, a
+known in-flight kill that T392.5 SIGHUP does not protect, or an explicit
+owner hold). T218 coalesces concurrent bounces. T553.2 remains: a restart
+citation is not the achieve gate — observation is (🎯T552). Development
+serves committed HEAD (🎯T505 / 🎯T553.1), never the dirty shared clone.
 
 **BLESSED INVOKE** (when you *are* activating — 🎯T191):
 

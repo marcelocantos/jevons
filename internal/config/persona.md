@@ -623,9 +623,11 @@ The owner never restarts by hand (🎯T188). A committed script exists so
 an overseer or owner-requested activation can bounce without the owner
 typing brew/kill (🎯T191).
 
-**Workers do not invoke `restart-daily-jevonsd` after every daemon-path
-land (🎯T553.2).** Activation is owner ask, overseer-on-request, or
-launchd KeepAlive — not the implementer's done ritual.
+**Owner-visible product is activated in the same turn it lands (🎯T632)**
+unless activation would be destructive (data loss, a known in-flight kill
+that T392.5 SIGHUP does not protect, or an explicit owner hold). T218
+coalesces concurrent bounces. T553.2 remains: a restart citation is not
+the achieve gate — observation of the running surface is (🎯T552).
 
 Development `:13705` serves **committed HEAD**: buildsnap packages the daemon
 and its embedded React bundle together (🎯T505 / 🎯T553.1 / 🎯T254.2).

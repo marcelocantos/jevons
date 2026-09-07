@@ -88,7 +88,7 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - A stale binary still serving is a real failure. The test is observation
   of the running surface (composer, transcript, a **live probe** of the
   owner path) — not restart-daily-jevonsd.sh / GATE / HEAD snapshot.
-- Workers do not invoke restart-daily after every land (🎯T553.2).
+- Owner-visible product is activated in the same turn it lands (🎯T632) unless destructive; T553.2 remains: restart citation is not the achieve gate.
 - HasDailyPathEvidence is a seam classifier, not an achieve gate.
   hermetics alone do not close an owner-visible claim.
 - React changes require a rebuilt and activated daemon; hard reload observes that bundle (🎯T540.2).

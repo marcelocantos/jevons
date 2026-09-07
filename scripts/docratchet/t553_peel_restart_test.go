@@ -54,8 +54,10 @@ func TestT553KeepAliveOwnsDaemon(t *testing.T) {
 	}
 }
 
-// TestT553WorkersDoNotAutoBounce ratchets T553.2 doctrine.
-func TestT553WorkersDoNotAutoBounce(t *testing.T) {
+// TestT632ActivateUnlessDestructive ratchets T632: owner-visible work is
+// activated in the same turn unless destructive. T553.2 remains as the
+// observation-not-script-success gate.
+func TestT632ActivateUnlessDestructive(t *testing.T) {
 	for _, path := range []string{
 		"internal/config/persona.md",
 		"AGENTS.md",
@@ -63,11 +65,14 @@ func TestT553WorkersDoNotAutoBounce(t *testing.T) {
 		"internal/mcpserver/fleet_brief.go",
 	} {
 		body := readRepo(t, path)
-		if !strings.Contains(body, "T553.2") {
-			t.Errorf("%s missing T553.2", path)
+		if !strings.Contains(body, "T632") {
+			t.Errorf("%s missing T632", path)
 		}
-		if !strings.Contains(body, "do not invoke") && !strings.Contains(body, "Workers do not invoke") {
-			t.Errorf("%s missing workers-do-not-invoke doctrine", path)
+		if !strings.Contains(body, "T553.2") {
+			t.Errorf("%s missing T553.2 observation gate", path)
+		}
+		if !strings.Contains(body, "destructive") {
+			t.Errorf("%s missing destructive skip", path)
 		}
 	}
 }
