@@ -896,7 +896,7 @@ func main() {
 	// tick so owner turns and open Build missions keep their room.
 	// 🎯T390: subscription plan remaining, per backend, for the cockpit and
 	// as capacity's one honest budget dimension under a flat subscription.
-	plans := startPlanUsage(ctx, mcpSrv, srv)
+	plans := startPlanUsage(ctx, mcpSrv, srv, cfg.StateDir)
 
 	capGov := startCapacityGovernor(cfg, watcher, guard, plans, mcpSrv, srv)
 

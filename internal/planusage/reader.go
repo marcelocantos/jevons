@@ -61,6 +61,12 @@ type ReaderArgs struct {
 	// without holding the reader lock. Mux fans the restamped snapshot
 	// so the cockpit is not a second poll behind the producer (🎯T631).
 	OnUpdate func()
+	// History, when set, appends each successful Refresh's published
+	// remaining_percent and attaches the current-period series to Snapshot
+	// (🎯T634). Nil means no persist — tests and a failed store open.
+	// Isolates pass their own state_dir path so they never read development
+	// readings.
+	History History
 }
 
 // Reader keeps the last round of plan-usage readings and re-shapes them on
@@ -142,8 +148,22 @@ func (r *Reader) Refresh(ctx context.Context) error {
 	r.lastErr = ""
 	r.readyOnce.Do(func() { close(r.ready) })
 	r.mu.Unlock()
+	r.appendHistory(readings)
 	r.emit()
 	return nil
+}
+
+func (r *Reader) appendHistory(readings []claudia.PlanUsage) {
+	if r == nil || r.args.History == nil {
+		return
+	}
+	samples := samplesFromReadings(readings, r.args.Now())
+	if len(samples) == 0 {
+		return
+	}
+	if err := r.args.History.Append(samples); err != nil {
+		slog.Warn("plan usage history append", "err", err)
+	}
 }
 
 func (r *Reader) emit() {
@@ -193,7 +213,7 @@ func (r *Reader) Snapshot() Snapshot {
 	if lastErr != "" && !fetched {
 		snap.Error = lastErr
 	}
-	return snap
+	return AttachHistory(snap, r.args.History)
 }
 
 // WaitReady blocks until the first successful Refresh completes, or until

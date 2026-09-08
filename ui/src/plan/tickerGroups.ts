@@ -3,6 +3,11 @@
 
 /** Same bar-membership rules as web/scripts/plan_usage.js (🎯T390.1). */
 
+export type PlanHistoryPoint = {
+  at: string;
+  remaining_percent: number;
+};
+
 export type PlanWindow = {
   provider?: string;
   name?: string;
@@ -12,6 +17,8 @@ export type PlanWindow = {
   limit_window_seconds?: number | null;
   status?: string;
   pace?: string;
+  /** Stored vendor remaining samples for this period (🎯T634). */
+  history?: PlanHistoryPoint[] | null;
 };
 
 export type PlanBackend = {

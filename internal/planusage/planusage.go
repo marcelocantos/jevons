@@ -102,6 +102,16 @@ type Window struct {
 	// Empty when the window carries no usable numbers, which is a real
 	// state and not the same as "ok".
 	Band string `json:"band,omitempty"`
+	// History is stored vendor remaining samples for this window's current
+	// period (🎯T634). Omitted when none have been recorded. Never a
+	// reconstructed spend curve and never a fabricated 100% at t=0.
+	History []HistoryPoint `json:"history,omitempty"`
+}
+
+// HistoryPoint is one stored vendor remaining reading (🎯T634).
+type HistoryPoint struct {
+	At        time.Time `json:"at"`
+	Remaining float64   `json:"remaining_percent"`
 }
 
 // Backend is one provider's plan-usage picture.

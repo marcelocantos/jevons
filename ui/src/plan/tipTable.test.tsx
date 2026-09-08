@@ -89,7 +89,7 @@ describe('plan tooltip table (🎯T588.1)', () => {
   it('paints one row per measure, one column per window', () => {
     const { container } = render(<PlanTipTable groups={FLEET} nowMs={NOW} timeZone="UTC" />);
     const rowLabels = [...container.querySelectorAll('th[scope="row"]')].map((e) => e.textContent);
-    expect(rowLabels).toEqual(['available', 'time left', 'consumed', 'rollover']);
+    expect(rowLabels).toEqual(['available', 'time left', 'consumed', 'rollover', 'burn']);
     const firstRow = [...container.querySelectorAll('tbody tr')][0];
     expect([...firstRow.querySelectorAll('td')].map((e) => e.textContent)).toEqual(['76%', '25%', '85%']);
     // The single-window provider's mark spans both header rows, so the
@@ -129,5 +129,51 @@ describe('available wears the bar colour (🎯T588.2)', () => {
     expect(avail?.className).toBe(('plan-avail ' + expected).trim());
     // Only the available row is marked; consumed and rollover stay plain.
     expect(container.querySelectorAll('td.plan-avail')).toHaveLength(1);
+    const burn = container.querySelector('td.plan-burn');
+    expect(burn?.className).toBe(('plan-burn ' + expected).trim());
+    expect(burn?.querySelector('svg.plan-burn-svg')).toBeNull();
+  });
+});
+
+describe('burn-down row (🎯T634)', () => {
+  it('plots only fixture samples and leaves an empty cell when there are none', () => {
+    const reset = hoursOut(7 * 24);
+    const start = NOW;
+    const withHist = [
+      {
+        provider: 'claude',
+        available: true,
+        windows: [
+          {
+            name: 'weekly',
+            remaining_percent: 50,
+            used_percent: 50,
+            resets_at: reset,
+            limit_window_seconds: 7 * 24 * 3600,
+            history: [
+              { at: new Date(start + 2 * 3600_000).toISOString(), remaining_percent: 80 },
+              { at: new Date(start + 4 * 3600_000).toISOString(), remaining_percent: 50 },
+            ],
+          },
+        ],
+      },
+    ] as unknown as TickerGroup[];
+    const empty = [
+      {
+        provider: 'codex',
+        available: true,
+        windows: [{ name: 'weekly', remaining_percent: 85, used_percent: 15, resets_at: reset }],
+      },
+    ] as unknown as TickerGroup[];
+
+    const painted = render(<PlanTipTable groups={withHist} nowMs={NOW} timeZone="UTC" />);
+    const svg = painted.container.querySelector('td.plan-burn svg.plan-burn-svg');
+    expect(svg).toBeTruthy();
+    const line = svg?.querySelector('path.plan-burn-line')?.getAttribute('d') || '';
+    expect(line.startsWith('M')).toBe(true);
+    expect(line.split(/[ML]/).filter(Boolean)).toHaveLength(2);
+
+    const blank = render(<PlanTipTable groups={empty} nowMs={NOW} timeZone="UTC" />);
+    expect(blank.container.querySelector('td.plan-burn svg')).toBeNull();
   });
 });

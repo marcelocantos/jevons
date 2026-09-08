@@ -1560,6 +1560,34 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table td.plan-avail.plan-under { color: var(--plan-under); }
 .plan-tip-table td.plan-avail.plan-locked { color: var(--plan-locked); }
 
+/* 🎯T634: fifth-row sparkline inherits the same pace colour as available. */
+.plan-tip-table td.plan-burn {
+  color: var(--green);
+  min-width: 48px;
+  padding: 2px 4px;
+  vertical-align: bottom;
+}
+.plan-tip-table td.plan-burn.plan-ahead { color: var(--amber); }
+.plan-tip-table td.plan-burn.plan-hot,
+.plan-tip-table td.plan-burn.plan-crit { color: var(--red); }
+.plan-tip-table td.plan-burn.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-burn.plan-locked { color: var(--plan-locked); }
+.plan-tip-table td.plan-burn .plan-burn-svg {
+  display: block;
+  width: 100%;
+  height: 28px;
+}
+.plan-tip-table td.plan-burn .plan-burn-fill {
+  fill: currentColor;
+  opacity: 0.4;
+}
+.plan-tip-table td.plan-burn .plan-burn-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
 /* 🎯T588.1: the provider mark is a column head, not a picture. CompanyMark
    carries no intrinsic size, and an unsized svg in a table cell expands to
    fill the column — the first render put ~150px marks across the card and

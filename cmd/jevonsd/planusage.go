@@ -23,9 +23,23 @@ import (
 // cost guard, because the cost guard is switched off (budget.json
 // disabled=true, owner, 2026-08-03) and plan remaining is exactly the number
 // that stays meaningful when dollars do not.
-func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.Server) *planusage.Reader {
+func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.Server, stateDir string) *planusage.Reader {
+	var hist planusage.History
+	if path := planusage.DefaultReadingsPath(stateDir); path != "" {
+		store, err := planusage.OpenReadingStore(path)
+		if err != nil {
+			slog.Warn("plan usage readings store", "err", err, "path", path)
+		} else {
+			hist = store
+			go func() {
+				<-ctx.Done()
+				_ = store.Close()
+			}()
+		}
+	}
 	reader := planusage.NewReader(planusage.ReaderArgs{
-		Load: mcpSrv.HarnessLoad,
+		Load:    mcpSrv.HarnessLoad,
+		History: hist,
 		// 🎯T390.1: SuperGrok weekly remaining lives on an undocumented
 		// billing surface. claudia keeps the library default off; the
 		// cockpit opts in so the owner sees a real Grok bar. A fetch or
@@ -60,6 +74,7 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		"api", "GET /api/plan-usage",
 		"refresh", planusage.DefaultRefresh,
 		"stale_after", planusage.DefaultStaleAfter,
+		"readings", planusage.DefaultReadingsPath(stateDir),
 		"grok_usage", true,
 		"grok_opt_in_env", planusage.GrokUsageEnv,
 		"cursor_usage", true,

@@ -15,6 +15,7 @@ import { formatWindow } from './pace';
 import { CompanyMark, companyOfProvider } from './companyMark';
 import { formatInstantParts } from './tickerGroups';
 import type { PlanWindow, TickerGroup } from './tickerGroups';
+import { BurnChart } from './BurnChart';
 
 const SECONDS_PER_MINUTE = 60;
 const MINUTES_PER_HOUR = 60;
@@ -200,6 +201,19 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
           {row('time left', (c) => timeLeft(c.window, nowMs))}
           {row('consumed', (c) => pct(c.window.used_percent))}
           {row('rollover', (c) => rolloverCell(c.window.resets_at, nowMs, props.timeZone))}
+          <tr>
+            <th scope="row">burn</th>
+            {cols.map((c) => (
+              <td
+                key={`${c.provider}:${c.label}`}
+                className={('plan-burn ' + paceClass(c)).trim()}
+                data-provider={c.provider}
+                data-window={c.label}
+              >
+                <BurnChart window={c.window} />
+              </td>
+            ))}
+          </tr>
         </tbody>
       </table>
       {notes.length ? <div className="plan-tip-notes">{notes.join('\n')}</div> : null}
