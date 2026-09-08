@@ -67,4 +67,19 @@ describe('burn chart geometry (🎯T634)', () => {
     expect(spec?.fill.endsWith('Z')).toBe(true);
     expect(spec?.points[0].y).toBeLessThan(spec!.points[1].y);
   });
+
+  it('gives a single sample a visible stem, not a zero-width sliver', () => {
+    const mid = new Date(START + WEEK * 1000 * 0.25).toISOString();
+    const spec = burnPaths(
+      win({
+        history: [{ at: mid, remaining_percent: 71 }],
+      }),
+    );
+    expect(spec?.line).toMatch(/^M/);
+    expect(spec?.line).toContain(' L');
+    expect(spec?.fill.endsWith('Z')).toBe(true);
+    const xs = spec!.fill.match(/M([\d.]+),/)?.[1];
+    const x1 = spec!.fill.match(/L([\d.]+),/)?.[1];
+    expect(xs).not.toBe(x1);
+  });
 });

@@ -71,6 +71,18 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
 export function burnPaths(w: PlanWindow): BurnPaths | null {
   const points = burnPoints(w);
   if (!points.length) return null;
+  // One sample is a sliver of zero width if we only close the area on
+  // itself — the live ticker looked empty after the first Refresh.
+  // Give that point a visible stem down to the axis.
+  if (points.length === 1) {
+    const p = points[0];
+    const half = 3.5;
+    const x0 = clamp(p.x - half, 0, BURN_WIDTH);
+    const x1 = clamp(p.x + half, 0, BURN_WIDTH);
+    const line = `M${round(p.x)},${round(p.y)} L${round(p.x)},${BURN_HEIGHT}`;
+    const fill = `M${round(x0)},${round(p.y)} L${round(x1)},${round(p.y)} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
+    return { fill, line, points };
+  }
   const line = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
     .join(' ');
