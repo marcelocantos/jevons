@@ -66,11 +66,11 @@ export const PACE_AHEAD_MARGIN = 2;
  * deviation is both weak evidence and cheap to correct, and those stop
  * being true together.
  */
-export const PACE_SHRINK_PRIOR_K = 40;
-export const PACE_PANIC_AMBER_LN = 0.25;
-export const PACE_PANIC_RED_LN = 0.85;
+export const PACE_SHRINK_PRIOR_K = 100;
+export const PACE_PANIC_AMBER_LN = 0.49;
+export const PACE_PANIC_RED_LN = 1.00;
 export const PACE_WASTE_UNDER_LN = -0.6;
-export const PACE_WASTE_LOCKED_LN = -2;
+export const PACE_WASTE_LOCKED_LN = -1.5;
 export const LOW_PERCENT = 15;
 export const CRITICAL_PERCENT = 5;
 

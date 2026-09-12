@@ -38,8 +38,11 @@ func TestServedBandIsTheDaemonsVerdict(t *testing.T) {
 
 	got := WithBands(snap, now, th)
 	band := got.Backends[0].Windows[0].Band
-	if band != string(BandAhead) {
-		t.Fatalf("36%% used at ~18%% elapsed served as %q, want %q", band, BandAhead)
+	// 🎯T641: the same specimen is ok under the owner-tuned vertices
+	// (pressure 0.41 < amber 0.49). The T610 claim is that we serve the
+	// daemon verdict, not that this window stays amber forever.
+	if band != string(BandOK) {
+		t.Fatalf("36%% used at ~18%% elapsed served as %q, want %q", band, BandOK)
 	}
 	// The control that makes the case mean something: the old ratio model
 	// really would have called this hot, so a browser computing 36/18 = 2.0

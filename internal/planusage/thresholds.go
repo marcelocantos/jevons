@@ -87,17 +87,16 @@ type Thresholds struct {
 	WasteLockedLn float64 `json:"waste_locked_ln,omitempty"`
 }
 
-// 🎯T596 defaults, calibrated against real windows: a five-minute fan-out
-// sprint reads 0.10; identical conduct sustained reads 0.16 on day 2, 0.40
-// on day 4, 1.02 on day 6 — same behaviour, rising alarm as the runway
-// shortens. 80/50 reads 1.27; a window 2% from dry with 5% of its time
-// left reads 0.95, which the old statistic scored 1.03 and painted green.
+// 🎯T641 defaults, owner-tuned on the Spend Pressure Map (2026-09-12):
+// k=100, amber 0.49, red 1.00, under −0.60, locked −1.50. Same pressure
+// field as 🎯T596; vertices only. Week-start Codex/Grok stay green;
+// mid-week 70/50 stays ahead and 80/50 stays hot.
 const (
-	DefaultShrinkPriorK  = 40.0
-	DefaultPanicAmberLn  = 0.25
-	DefaultPanicRedLn    = 0.85
+	DefaultShrinkPriorK  = 100.0
+	DefaultPanicAmberLn  = 0.49
+	DefaultPanicRedLn    = 1.00
 	DefaultWasteUnderLn  = -0.60
-	DefaultWasteLockedLn = -2.00
+	DefaultWasteLockedLn = -1.50
 )
 
 // DefaultThresholds matches the vertices the cockpit already used

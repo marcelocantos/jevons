@@ -43,14 +43,14 @@ func TestWeeklyBandTable(t *testing.T) {
 	// 🎯T596 moved this vertex deliberately. Burn 1.1 — 55% used at 50%
 	// elapsed — is a 10% overspend with half the window still to run, and
 	// the owner's instruction was explicit: "Dipping microscopically below
-	// 1 shouldn't trigger orange." Under the pressure model it reads 0.17,
-	// inside the 0.25 amber vertex, because a deviation that small this
-	// early demands no correction worth a colour.
+	// 1 shouldn't trigger orange." Under the pressure model it reads 0.15
+	// (🎯T641, k=100), inside the 0.49 amber vertex, because a deviation
+	// that small this early demands no correction worth a colour.
 	if got := WeeklyBandOf(weekly(45, 55), now, th); got != BandOK {
 		t.Fatalf("burn 1.1 at mid-window → ok, got %s", got)
 	}
 	// Ahead still exists, and is still reached — by a window that actually
-	// demands a correction: 70% used at 50% elapsed reads 0.76.
+	// demands a correction: 70% used at 50% elapsed reads 0.69.
 	if got := WeeklyBandOf(weekly(30, 70), now, th); got != BandAhead {
 		t.Fatalf("burn 1.4 → ahead, got %s", got)
 	}
@@ -124,8 +124,8 @@ func TestT390_1_6_1EarlyWindowDamping(t *testing.T) {
 	}
 
 	weekStart := weeklyAt(91, 9, 94.4)
-	if got := WeeklyBandOf(weekStart, now, th); got != BandOK && got != BandAhead {
-		t.Fatalf("week start must be ok or ahead, got %s", got)
+	if got := WeeklyBandOf(weekStart, now, th); got != BandOK {
+		t.Fatalf("week start must be ok, got %s", got)
 	}
 	if MigrateOff(weekStart, now, th) {
 		t.Fatal("a 91%%-remaining week start must not migrate off")
@@ -194,21 +194,14 @@ func TestT390_1_6_2NoElapsedCutoff(t *testing.T) {
 		}
 	}
 
-	// 🎯T596 moved this specimen deliberately, and it is the one the owner
-	// pointed at: "It makes no sense for it to be red at this point."
-	// Codex 26% used at 4.9% elapsed is a real overspend, but with 95% of
-	// the window left it is also trivially correctable — five quiet hours
-	// undo it. Pressure reads 0.65: amber, not red. The same conduct
-	// sustained climbs on its own as the runway shortens, which is the
-	// whole point of scaling the prior by time left.
+	// 🎯T641: Codex 26% used at 4.9% elapsed is a real overspend, but with
+	// 95% of the window left it is cheap to correct. Owner-tuned vertices
+	// (k=100, amber 0.49) read 0.44: ok, not amber. The same conduct
+	// sustained climbs on its own as the runway shortens.
 	codex := weeklyAt(74, 26, 95.1)
-	if got := WeeklyBandOf(codex, now, th); got != BandAhead {
-		t.Fatalf("Codex 26%% used at ~4.9%% elapsed is ahead, not red: got %s", got)
+	if got := WeeklyBandOf(codex, now, th); got != BandOK {
+		t.Fatalf("Codex 26%% used at ~4.9%% elapsed is ok, not amber: got %s", got)
 	}
-	// 🎯T596: an ahead window is not evicted. Overspending early is a
-	// thing to watch, not a thing to flee — the correction is available
-	// for as long as the runway is long, and moving seats off a backend
-	// that still has 74% of its allowance is the more expensive mistake.
 	if MigrateOff(codex, now, th) {
 		t.Fatal("an early overspend with three quarters left must not evict seats")
 	}
@@ -398,5 +391,37 @@ func TestT543PlanActionsSkipsAsideCompactSeat(t *testing.T) {
 	}, now, th)
 	if len(acts) != 1 || acts[0].Name != "jv-t543-worker" {
 		t.Fatalf("compact aside must be invisible to PlanActions, got %+v", acts)
+	}
+}
+
+// 🎯T641: owner-tuned Spend Pressure Map vertices keep a real week-start
+// clip green. No warmup gate — the field itself is wide early.
+func TestT641WeekStartStaysOK(t *testing.T) {
+	th := DefaultThresholds()
+	if th.ShrinkPriorK != 100 || th.PanicAmberLn != 0.49 || th.PanicRedLn != 1.00 || th.WasteLockedLn != -1.50 {
+		t.Fatalf("defaults moved: k=%v amber=%v red=%v locked=%v", th.ShrinkPriorK, th.PanicAmberLn, th.PanicRedLn, th.WasteLockedLn)
+	}
+	now := time.Date(2026, 9, 12, 11, 26, 0, 0, time.UTC)
+	lim := DefaultWeeklyWindowSeconds
+	pct := func(v float64) *float64 { return &v }
+	weeklyAt := func(provider string, rem, used, remTimePct float64) Backend {
+		resets := now.Add(time.Duration(remTimePct/100*float64(lim)) * time.Second)
+		return Backend{
+			Provider: provider,
+			Status:   StatusAvailable,
+			Windows: []Window{{
+				Name: WindowWeekly, RemainingPercent: pct(rem), UsedPercent: pct(used),
+				ResetsAt: &resets, LimitWindowSeconds: &lim,
+			}},
+		}
+	}
+
+	codex := weeklyAt("codex", 88, 12, 98.06)
+	if got := WeeklyBandOf(codex, now, th); got != BandOK {
+		t.Fatalf("Codex 12%% used at 1.94%% elapsed → %s, want ok", got)
+	}
+	grok := weeklyAt("grok", 85, 15, 94.32)
+	if got := WeeklyBandOf(grok, now, th); got != BandOK {
+		t.Fatalf("Grok 15%% used at 5.68%% elapsed → %s, want ok", got)
 	}
 }

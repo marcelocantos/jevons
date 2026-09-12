@@ -1,0 +1,552 @@
+<title>Spend Pressure Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --paper: #f4f6f8;
+    --card: #ffffff;
+    --ink: #12161c;
+    --ink-2: #4a5563;
+    --ink-3: #78838f;
+    --rule: #d9dfe6;
+    --rule-2: #eceff3;
+    --hot: #d6453d;
+    --ahead: #d98a1f;
+    --ok: #2f8f5b;
+    --under: #2e6fb8;
+    --locked: #6b4fb8;
+    --grid: rgba(18, 22, 28, 0.10);
+    --diag: rgba(18, 22, 28, 0.55);
+    --shadow: 0 1px 2px rgba(18, 22, 28, .06), 0 8px 24px rgba(18, 22, 28, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0e1116;
+      --card: #161b22;
+      --ink: #e6eaf0;
+      --ink-2: #a7b1bd;
+      --ink-3: #7b8794;
+      --rule: #2a323c;
+      --rule-2: #1d242c;
+      --hot: #f0665e;
+      --ahead: #e8a441;
+      --ok: #48b47a;
+      --under: #5591d6;
+      --locked: #9377d8;
+      --grid: rgba(230, 234, 240, 0.12);
+      --diag: rgba(230, 234, 240, 0.6);
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0e1116;
+    --card: #161b22;
+    --ink: #e6eaf0;
+    --ink-2: #a7b1bd;
+    --ink-3: #7b8794;
+    --rule: #2a323c;
+    --rule-2: #1d242c;
+    --hot: #f0665e;
+    --ahead: #e8a441;
+    --ok: #48b47a;
+    --under: #5591d6;
+    --locked: #9377d8;
+    --grid: rgba(230, 234, 240, 0.12);
+    --diag: rgba(230, 234, 240, 0.6);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 28px 72px; }
+
+  header { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 10px;
+  }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 8px; text-wrap: balance; }
+  .lede { margin: 0; color: var(--ink-2); max-width: 66ch; }
+  .lede code { font-family: "IBM Plex Mono", monospace; font-size: .92em; color: var(--ink); }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 28px; align-items: start; }
+  @media (max-width: 940px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .panel {
+    background: var(--card); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 20px; box-shadow: var(--shadow);
+  }
+  .panel + .panel { margin-top: 20px; }
+  .panel h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 14px; font-family: "IBM Plex Mono", monospace;
+  }
+
+  /* ── plot ─────────────────────────────────────────── */
+  .plotwrap { display: grid; grid-template-columns: 34px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 30px; gap: 6px; }
+  .ylab, .xlab {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-3); display: flex; align-items: center; justify-content: center;
+  }
+  .ylab { writing-mode: vertical-rl; transform: rotate(180deg); }
+  .xlab { grid-column: 2; }
+  .canvasbox { position: relative; aspect-ratio: 1 / 1; }
+  canvas { width: 100%; height: 100%; display: block; border: 1px solid var(--rule); border-radius: 4px; cursor: crosshair; }
+
+  .readout {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+    background: var(--rule); border: 1px solid var(--rule); border-radius: 6px;
+    overflow: hidden; margin-top: 16px;
+  }
+  .readout div { background: var(--card); padding: 9px 12px; }
+  .readout dt {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0 0 3px;
+  }
+  .readout dd { margin: 0; font-family: "IBM Plex Mono", monospace; font-size: 17px; font-variant-numeric: tabular-nums; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 16px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-2); }
+  .sw { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+
+  /* ── controls ─────────────────────────────────────── */
+  .ctl { margin-bottom: 16px; }
+  .ctl:last-child { margin-bottom: 0; }
+  .ctl label { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 5px; }
+  .ctl .name { font-size: 13px; }
+  .ctl .val {
+    font-family: "IBM Plex Mono", monospace; font-size: 13px; font-variant-numeric: tabular-nums;
+    color: var(--ink); background: var(--rule-2); padding: 1px 7px; border-radius: 4px;
+  }
+  .ctl .hint { font-size: 11.5px; color: var(--ink-3); margin: 3px 0 0; line-height: 1.4; }
+  input[type=range] { width: 100%; accent-color: var(--ink-2); }
+  input[type=range]:focus-visible { outline: 2px solid var(--under); outline-offset: 3px; }
+
+  .modes { display: flex; gap: 0; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; margin-bottom: 18px; }
+  .modes button {
+    flex: 1; appearance: none; border: 0; background: var(--card); color: var(--ink-2);
+    font: inherit; font-size: 12.5px; padding: 7px 4px; cursor: pointer;
+  }
+  .modes button + button { border-left: 1px solid var(--rule); }
+  .modes button[aria-pressed="true"] { background: var(--ink); color: var(--card); }
+  .modes button:focus-visible { outline: 2px solid var(--under); outline-offset: -2px; }
+
+  .reset {
+    appearance: none; width: 100%; margin-top: 4px; padding: 7px; cursor: pointer;
+    background: transparent; border: 1px solid var(--rule); border-radius: 7px;
+    color: var(--ink-2); font: inherit; font-size: 12.5px;
+  }
+  .reset:hover { border-color: var(--ink-3); color: var(--ink); }
+
+  /* ── specimens ────────────────────────────────────── */
+  .tablewrap { overflow-x: auto; margin-top: 28px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  caption { text-align: left; color: var(--ink-2); font-size: 13px; margin-bottom: 12px; max-width: 74ch; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule-2); white-space: nowrap; }
+  th {
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500; border-bottom-color: var(--rule);
+  }
+  td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  td.what { white-space: normal; color: var(--ink-2); min-width: 24ch; }
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+    font-family: "IBM Plex Mono", monospace; letter-spacing: .04em; color: #fff;
+  }
+  .pill.old { opacity: .55; }
+
+  footer { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--rule); color: var(--ink-2); font-size: 14px; }
+  footer p { max-width: 72ch; }
+  footer strong { color: var(--ink); font-weight: 600; }
+  code { font-family: "IBM Plex Mono", monospace; font-size: .9em; }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Jevons · plan usage · 🎯T596</p>
+    <h1>Spend Pressure Map</h1>
+    <p class="lede">
+      Every possible state of an allowance window, coloured by the band the daemon
+      would assign it. Horizontal is how much of the window has passed; vertical is
+      how much of the allowance is gone. The diagonal is exactly on pace.
+      Drag the vertices to see the bands move.
+    </p>
+  </header>
+
+  <div class="layout">
+    <div>
+      <div class="panel">
+        <h2>Phase diagram</h2>
+        <div class="plotwrap">
+          <div class="ylab">Allowance consumed →</div>
+          <div class="canvasbox"><canvas id="plot" width="900" height="900"></canvas></div>
+          <div class="xlab">Window elapsed →</div>
+        </div>
+
+        <dl class="readout">
+          <div><dt>Elapsed</dt><dd id="r-el">—</dd></div>
+          <div><dt>Used</dt><dd id="r-us">—</dd></div>
+          <div><dt>Pressure</dt><dd id="r-p">—</dd></div>
+          <div><dt>Band</dt><dd id="r-b">—</dd></div>
+        </dl>
+
+        <div class="legend" id="legend"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>View</h2>
+        <div class="modes" id="modes">
+          <button data-mode="new" aria-pressed="true">Pressure</button>
+          <button data-mode="old" aria-pressed="false">Old ratio</button>
+          <button data-mode="diff" aria-pressed="false">Disagreement</button>
+        </div>
+        <p class="hint" id="modehint" style="font-size:12px;color:var(--ink-3);margin:0"></p>
+      </div>
+
+      <div class="panel">
+        <h2>Vertices</h2>
+        <div class="ctl">
+          <label for="k"><span class="name">Shrink prior <em>k</em></span><span class="val" id="k-v">100</span></label>
+          <input type="range" id="k" min="0" max="120" step="1" value="100">
+          <p class="hint">How hard early evidence is pulled toward nominal. Scales with time left, so it fades as the deadline nears.</p>
+        </div>
+        <div class="ctl">
+          <label for="amber"><span class="name">Amber</span><span class="val" id="amber-v">0.49</span></label>
+          <input type="range" id="amber" min="0.05" max="2" step="0.01" value="0.49">
+        </div>
+        <div class="ctl">
+          <label for="red"><span class="name">Red</span><span class="val" id="red-v">1.00</span></label>
+          <input type="range" id="red" min="0.1" max="3" step="0.01" value="1.00">
+        </div>
+        <div class="ctl">
+          <label for="under"><span class="name">Under</span><span class="val" id="under-v">−0.60</span></label>
+          <input type="range" id="under" min="-3" max="-0.05" step="0.01" value="-0.6">
+        </div>
+        <div class="ctl">
+          <label for="locked"><span class="name">Locked</span><span class="val" id="locked-v">−1.50</span></label>
+          <input type="range" id="locked" min="-5" max="-0.1" step="0.01" value="-1.5">
+          <p class="hint">Waste sits further out than panic on purpose: running dry costs more than leaving allowance unspent.</p>
+        </div>
+        <button class="reset" id="reset">Reset to shipped values</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <caption>
+        Specimens the model was calibrated against. Pressure is computed by this page from
+        the coordinates, not copied from the source — so if a figure here disagrees with the
+        Go comments, the port is wrong.
+      </caption>
+      <thead>
+        <tr>
+          <th>Window</th><th>Elapsed</th><th>Used</th><th>Pressure</th>
+          <th>Band</th><th>Old model</th><th>What it is</th>
+        </tr>
+      </thead>
+      <tbody id="specimens"></tbody>
+    </table>
+  </div>
+
+  <footer>
+    <p>
+      <strong>Why this exists.</strong> The daemon computes these bands in
+      <code>internal/planusage</code>; the cockpit computed its own in
+      <code>ui/src/plan/pace.ts</code> and was never updated when the model changed.
+      The two disagreed on a real window — Claude at 36% used, 18% elapsed — which the
+      browser painted red and the daemon did not consider hot, so the migrate-off actuator
+      correctly never fired while the bar said it should have. Switch to
+      <em>Disagreement</em> to see the whole region where that happens.
+    </p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SHIPPED = { k: 100, amber: 0.49, red: 1.00, under: -0.6, locked: -1.5 };
+  var th = Object.assign({}, SHIPPED);
+  var mode = 'new';
+
+  var BANDS = {
+    hot:    { label: 'hot',    css: '--hot' },
+    ahead:  { label: 'ahead',  css: '--ahead' },
+    ok:     { label: 'ok',     css: '--ok' },
+    under:  { label: 'under',  css: '--under' },
+    locked: { label: 'locked', css: '--locked' }
+  };
+
+  function readVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  // ── the model, as a faithful reading of internal/planusage ──────────
+  // lambda   = k * (timeLeft / 100)
+  // current  = (used + lambda) / (elapsed + lambda)
+  // required = remaining / timeLeft
+  // pressure = ln(current / required)
+  function pressure(used, elapsed) {
+    var remaining = 100 - used;
+    var timeLeft = 100 - elapsed;
+    if (timeLeft <= 0) timeLeft = 0.0001;      // the last instant, not a divide by zero
+    if (remaining <= 0) return Infinity;       // spent: no correction can fix it
+    var lambda = th.k * (timeLeft / 100);
+    var current = (used + lambda) / (elapsed + lambda);
+    var required = remaining / timeLeft;
+    return Math.log(current / required);
+  }
+
+  function bandOf(p) {
+    if (p >= th.red) return 'hot';
+    if (p >= th.amber) return 'ahead';
+    if (p <= th.locked) return 'locked';
+    if (p <= th.under) return 'under';
+    return 'ok';
+  }
+
+  // The superseded model, for comparison: a damped burn ratio with two
+  // reachability guards (🎯T591 margin, 🎯T595 warmup).
+  var OLD = { lambda: 5, ahead: 1.0, hot: 1.5, margin: 2, warmup: 5, earlyAlarm: 25, underWaste: 15, lockedWaste: 15 };
+  function oldBand(used, elapsed) {
+    var remaining = 100 - used, timeLeft = 100 - elapsed;
+    if (remaining <= 0) return 'hot';
+    var reachable = (used - elapsed > OLD.margin) &&
+                    (elapsed >= OLD.warmup || used >= OLD.earlyAlarm);
+    if (reachable) {
+      var burn = (used + OLD.lambda) / (elapsed + OLD.lambda);
+      if (burn > OLD.hot) return 'hot';
+      if (burn > OLD.ahead) return 'ahead';
+    }
+    var locked = Math.max(0, remaining - OLD.hot * timeLeft);
+    if (locked >= OLD.lockedWaste) return 'locked';
+    var cont = elapsed > 0 ? Math.max(0, 100 - (used / elapsed) * 100) : 0;
+    if (cont >= OLD.underWaste) return 'under';
+    return 'ok';
+  }
+
+  // ── drawing ─────────────────────────────────────────────────────────
+  var canvas = document.getElementById('plot');
+  var ctx = canvas.getContext('2d');
+  var N = canvas.width; // square
+
+  function rgb(cssVar) {
+    var c = readVar(cssVar);
+    var probe = document.createElement('canvas').getContext('2d');
+    probe.fillStyle = c;
+    var hex = probe.fillStyle;
+    if (hex[0] === '#') {
+      return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+    }
+    var m = hex.match(/\d+/g) || [128, 128, 128];
+    return [+m[0], +m[1], +m[2]];
+  }
+
+  function draw() {
+    var colors = {};
+    Object.keys(BANDS).forEach(function (k) { colors[k] = rgb(BANDS[k].css); });
+    var img = ctx.createImageData(N, N);
+    var d = img.data;
+
+    for (var py = 0; py < N; py++) {
+      // y axis: used 0 at bottom, 100 at top
+      var used = (1 - py / (N - 1)) * 100;
+      for (var px = 0; px < N; px++) {
+        var elapsed = (px / (N - 1)) * 100;
+        var i = (py * N + px) * 4;
+        var nb = bandOf(pressure(used, elapsed));
+        var col, alpha;
+        if (mode === 'old') {
+          col = colors[oldBand(used, elapsed)]; alpha = 210;
+        } else if (mode === 'diff') {
+          var ob = oldBand(used, elapsed);
+          if (ob === nb) { col = [128, 132, 138]; alpha = 26; }
+          else { col = colors[ob]; alpha = 235; }
+        } else {
+          col = colors[nb]; alpha = 210;
+        }
+        d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = alpha;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // grid every 10%
+    ctx.strokeStyle = readVar('--grid');
+    ctx.lineWidth = 1;
+    for (var g = 1; g < 10; g++) {
+      var t = Math.round((g / 10) * N) + 0.5;
+      ctx.beginPath(); ctx.moveTo(t, 0); ctx.lineTo(t, N); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, t); ctx.lineTo(N, t); ctx.stroke();
+    }
+
+    // the on-pace diagonal: used == elapsed, where pressure is exactly 0
+    ctx.strokeStyle = readVar('--diag');
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    ctx.beginPath(); ctx.moveTo(0, N); ctx.lineTo(N, 0); ctx.stroke();
+    ctx.setLineDash([]);
+
+    drawSpecimenDots();
+  }
+
+  function toPx(elapsed, used) {
+    return { x: (elapsed / 100) * (N - 1), y: (1 - used / 100) * (N - 1) };
+  }
+
+  function drawSpecimenDots() {
+    ctx.save();
+    SPECIMENS.forEach(function (s) {
+      var pt = toPx(s.elapsed, s.used);
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = readVar('--card');
+      ctx.fill();
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = readVar('--ink');
+      ctx.stroke();
+      ctx.fillStyle = readVar('--ink');
+      ctx.font = '600 26px "IBM Plex Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(s.tag, pt.x, pt.y + 1);
+    });
+    ctx.restore();
+  }
+
+  // ── specimens ───────────────────────────────────────────────────────
+  var SPECIMENS = [
+    { tag: 'A', elapsed: 18, used: 36, what: 'Claude weekly, the window that started this' },
+    { tag: 'B', elapsed: 4.9, used: 26, what: 'Codex early overspend — correctable, so amber not red' },
+    { tag: 'C', elapsed: 50, used: 80, what: 'Genuinely spent mid-week' },
+    { tag: 'D', elapsed: 95, used: 98, what: '2% from dry with 5% of the week left' },
+    { tag: 'E', elapsed: 50, used: 55, what: 'Burn 1.1 — the margin the owner asked for' },
+    { tag: 'F', elapsed: 50, used: 42, what: '16% behind pace: no correction worth a colour' },
+    { tag: 'G', elapsed: 70, used: 40, what: 'Allowance that will not be spent' },
+    { tag: 'H', elapsed: 3, used: 0, what: 'Untouched week start — nothing wrong yet' },
+    { tag: 'I', elapsed: 1.94, used: 12, what: 'Codex week-start 2026-09-12 — must stay green' },
+    { tag: 'J', elapsed: 5.68, used: 15, what: 'Grok week-start 2026-09-12 — must stay green' }
+  ];
+
+  function pill(band, old) {
+    var b = BANDS[band];
+    return '<span class="pill' + (old ? ' old' : '') + '" style="background:var(' + b.css + ')">' + b.label + '</span>';
+  }
+
+  function renderSpecimens() {
+    var rows = SPECIMENS.map(function (s) {
+      var p = pressure(s.used, s.elapsed);
+      var nb = bandOf(p);
+      var ob = oldBand(s.used, s.elapsed);
+      return '<tr>' +
+        '<td class="num">' + s.tag + '</td>' +
+        '<td class="num">' + s.elapsed.toFixed(1) + '%</td>' +
+        '<td class="num">' + s.used.toFixed(1) + '%</td>' +
+        '<td class="num">' + (isFinite(p) ? p.toFixed(2) : '∞') + '</td>' +
+        '<td>' + pill(nb) + '</td>' +
+        '<td>' + pill(ob, true) + (ob !== nb ? ' <span style="color:var(--ink-3);font-size:11.5px">≠</span>' : '') + '</td>' +
+        '<td class="what">' + s.what + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('specimens').innerHTML = rows;
+  }
+
+  function renderLegend() {
+    document.getElementById('legend').innerHTML = Object.keys(BANDS).map(function (k) {
+      return '<span><i class="sw" style="background:var(' + BANDS[k].css + ')"></i>' + BANDS[k].label + '</span>';
+    }).join('') + '<span><i class="sw" style="background:transparent;border:1px dashed var(--diag)"></i>exactly on pace</span>';
+  }
+
+  // ── interaction ─────────────────────────────────────────────────────
+  var el = { el: document.getElementById('r-el'), us: document.getElementById('r-us'),
+             p: document.getElementById('r-p'), b: document.getElementById('r-b') };
+
+  canvas.addEventListener('mousemove', function (e) {
+    var r = canvas.getBoundingClientRect();
+    var elapsed = ((e.clientX - r.left) / r.width) * 100;
+    var used = (1 - (e.clientY - r.top) / r.height) * 100;
+    elapsed = Math.max(0, Math.min(100, elapsed));
+    used = Math.max(0, Math.min(100, used));
+    var p = pressure(used, elapsed);
+    var b = bandOf(p);
+    el.el.textContent = elapsed.toFixed(1) + '%';
+    el.us.textContent = used.toFixed(1) + '%';
+    el.p.textContent = isFinite(p) ? (p >= 0 ? '+' : '') + p.toFixed(2) : '∞';
+    el.b.innerHTML = pill(b);
+  });
+  canvas.addEventListener('mouseleave', function () {
+    el.el.textContent = el.us.textContent = el.p.textContent = '—';
+    el.b.textContent = '—';
+  });
+
+  var MODE_HINT = {
+    'new': 'The shipped model. Bands are wide early and pinch late, because the same deviation is cheap to correct at the start of a window and impossible at the end.',
+    'old': 'The superseded burn ratio, used/elapsed with damping. Its boundaries are straight lines through the origin, so a small overspend early lands in the same band as a large one late.',
+    'diff': 'Coloured wherever the two models disagree, shaded by what the OLD model said. This is the region where the cockpit and the daemon painted different colours for the same window.'
+  };
+
+  document.getElementById('modes').addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    mode = btn.dataset.mode;
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String(b === btn));
+    });
+    document.getElementById('modehint').textContent = MODE_HINT[mode];
+    draw();
+  });
+
+  function bindSlider(id, key, fmt) {
+    var input = document.getElementById(id);
+    var out = document.getElementById(id + '-v');
+    input.addEventListener('input', function () {
+      th[key] = parseFloat(input.value);
+      out.textContent = fmt(th[key]);
+      draw(); renderSpecimens();
+    });
+  }
+  var f2 = function (v) { return (v < 0 ? '−' : '') + Math.abs(v).toFixed(2); };
+  bindSlider('k', 'k', function (v) { return String(v); });
+  bindSlider('amber', 'amber', f2);
+  bindSlider('red', 'red', f2);
+  bindSlider('under', 'under', f2);
+  bindSlider('locked', 'locked', f2);
+
+  document.getElementById('reset').addEventListener('click', function () {
+    th = Object.assign({}, SHIPPED);
+    document.getElementById('k').value = SHIPPED.k;
+    document.getElementById('amber').value = SHIPPED.amber;
+    document.getElementById('red').value = SHIPPED.red;
+    document.getElementById('under').value = SHIPPED.under;
+    document.getElementById('locked').value = SHIPPED.locked;
+    document.getElementById('k-v').textContent = '100';
+    document.getElementById('amber-v').textContent = '0.49';
+    document.getElementById('red-v').textContent = '1.00';
+    document.getElementById('under-v').textContent = '−0.60';
+    document.getElementById('locked-v').textContent = '−1.50';
+    draw(); renderSpecimens();
+  });
+
+  document.getElementById('modehint').textContent = MODE_HINT['new'];
+  renderLegend();
+  renderSpecimens();
+  draw();
+
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', function () { renderLegend(); draw(); });
+  }
+})();
+</script>
