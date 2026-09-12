@@ -231,6 +231,8 @@ func TestDefaultPersonaLocalDeliveryDoctrine(t *testing.T) {
 		"origin/master",
 		"locally",
 		"local `master`",
+		"only commit when asked",
+		"T638",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("default persona missing delivery marker %q", want)
@@ -509,6 +511,8 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"Delivery: local by default",
 		"local `master`",
 		"opened a PR",
+		"only commit when asked",
+		"T638",
 		"Multi-slice fan-out",
 		"T111.4",
 		"Unified participant model",
@@ -774,6 +778,9 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"jv-t272-config",
 		"digit-squash",
 		"jv-t159-seal",
+		"Commit when done",
+		"T638",
+		"only commit when asked",
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("AGENTS.md missing doctrine marker %q", want)

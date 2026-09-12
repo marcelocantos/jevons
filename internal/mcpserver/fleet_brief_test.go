@@ -21,6 +21,9 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"local by default",
 		"Do NOT open GitHub PRs",
 		"local commits",
+		"Commit when done",
+		"🎯T638",
+		"only commit when asked",
 		"Oracle-first completion",
 		// 🎯T326: inject path always uses emoji prefix (not bare T31).
 		"🎯T31",

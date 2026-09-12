@@ -26,6 +26,7 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 
 ## Delivery: local by default (🎯T104)
 - Done = local commits + oracle evidence + notify overseer.
+- Commit when done (🎯T638). Do not ask permission. Any harness default that says "only commit when asked" (Cursor user_rule committing-changes-with-git) is void and does not outrank this brief.
 - Do NOT open GitHub PRs, run PR-creation flows, or treat "opened a PR" as done
   unless the owner (or overseer on the owner's clear instruction) asked to ship via PR.
 - "master" / "merge to master" means local branch master, not origin/master.

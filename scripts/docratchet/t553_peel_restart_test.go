@@ -76,3 +76,23 @@ func TestT632ActivateUnlessDestructive(t *testing.T) {
 		}
 	}
 }
+
+// TestT638CommitWhenDoneVoidsAskFirst ratchets the override of the
+// harness default "only commit when asked" (🎯T638).
+func TestT638CommitWhenDoneVoidsAskFirst(t *testing.T) {
+	for _, path := range []string{
+		"internal/config/persona.md",
+		"AGENTS.md",
+		"agents-guide.md",
+		"internal/mcpserver/fleet_brief.go",
+		".cursor/rules/commit-when-done.mdc",
+	} {
+		body := readRepo(t, path)
+		if !strings.Contains(body, "T638") {
+			t.Errorf("%s missing T638", path)
+		}
+		if !strings.Contains(body, "only commit when asked") {
+			t.Errorf("%s missing voided harness phrase", path)
+		}
+	}
+}
