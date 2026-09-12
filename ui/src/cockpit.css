@@ -1576,6 +1576,12 @@ body.rhs-resizing-row { cursor: row-resize; }
   display: block;
   width: 100%;
   height: 28px;
+  overflow: hidden;
+}
+.plan-tip-table td.plan-burn .plan-burn-plot {
+  /* Slightly lighter than the tip (surface-raised) so the published
+     period × remaining 0–100 box is visible even when the line is a stem. */
+  fill: color-mix(in srgb, #fff 14%, var(--surface-raised));
 }
 .plan-tip-table td.plan-burn .plan-burn-fill {
   fill: currentColor;

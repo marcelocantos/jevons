@@ -131,12 +131,13 @@ describe('available wears the bar colour (🎯T588.2)', () => {
     expect(container.querySelectorAll('td.plan-avail')).toHaveLength(1);
     const burn = container.querySelector('td.plan-burn');
     expect(burn?.className).toBe(('plan-burn ' + expected).trim());
-    expect(burn?.querySelector('svg.plan-burn-svg')).toBeNull();
+    expect(burn?.querySelector('rect.plan-burn-plot')).toBeTruthy();
+    expect(burn?.querySelector('path.plan-burn-line')).toBeNull();
   });
 });
 
 describe('burn-down row (🎯T634)', () => {
-  it('plots only fixture samples and leaves an empty cell when there are none', () => {
+  it('plots only fixture samples and keeps an empty plot frame when there are none', () => {
     const reset = hoursOut(7 * 24);
     const start = NOW;
     const withHist = [
@@ -169,11 +170,17 @@ describe('burn-down row (🎯T634)', () => {
     const painted = render(<PlanTipTable groups={withHist} nowMs={NOW} timeZone="UTC" />);
     const svg = painted.container.querySelector('td.plan-burn svg.plan-burn-svg');
     expect(svg).toBeTruthy();
+    const plot = svg?.querySelector('rect.plan-burn-plot');
+    expect(plot).toBeTruthy();
+    expect(plot?.getAttribute('width')).toBe('100');
+    expect(plot?.getAttribute('height')).toBe('32');
     const line = svg?.querySelector('path.plan-burn-line')?.getAttribute('d') || '';
     expect(line.startsWith('M')).toBe(true);
     expect(line.split(/[ML]/).filter(Boolean)).toHaveLength(2);
 
     const blank = render(<PlanTipTable groups={empty} nowMs={NOW} timeZone="UTC" />);
-    expect(blank.container.querySelector('td.plan-burn svg')).toBeNull();
+    const emptySvg = blank.container.querySelector('td.plan-burn svg.plan-burn-svg');
+    expect(emptySvg?.querySelector('rect.plan-burn-plot')).toBeTruthy();
+    expect(emptySvg?.querySelector('path.plan-burn-line')).toBeNull();
   });
 });

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { burnPaths, burnPoints, periodBounds } from './burnGeom';
+import { BURN_STEM_MIN, burnPaths, burnPoints, periodBounds, stemBand } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 const START = Date.parse('2026-09-01T00:00:00Z');
@@ -19,7 +19,7 @@ function win(partial: Partial<PlanWindow>): PlanWindow {
   };
 }
 
-describe('burn chart geometry (🎯T634)', () => {
+describe('burn chart geometry (🎯T634 / T637)', () => {
   it('spans the published period on x and remaining on y', () => {
     const bounds = periodBounds(win({}));
     expect(bounds).toEqual({ start: START, end: START + WEEK * 1000 });
@@ -78,8 +78,42 @@ describe('burn chart geometry (🎯T634)', () => {
     expect(spec?.line).toMatch(/^M/);
     expect(spec?.line).toContain(' L');
     expect(spec?.fill.endsWith('Z')).toBe(true);
-    const xs = spec!.fill.match(/M([\d.]+),/)?.[1];
-    const x1 = spec!.fill.match(/L([\d.]+),/)?.[1];
-    expect(xs).not.toBe(x1);
+    const ext = fillExtent(spec!.fill);
+    expect(ext.x1 - ext.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
+  });
+
+  it('keeps a just-reset cluster as an inward stem, not a 1px left border (🎯T637)', () => {
+    const a = new Date(START).toISOString();
+    const b = new Date(START + 5 * 60_000).toISOString();
+    const spec = burnPaths(
+      win({
+        remaining_percent: 100,
+        history: [
+          { at: a, remaining_percent: 100 },
+          { at: b, remaining_percent: 100 },
+        ],
+      }),
+    );
+    expect(spec?.points).toHaveLength(2);
+    expect(spec?.points[0].x).toBe(0);
+    const ext = fillExtent(spec!.fill);
+    expect(ext.x0).toBeGreaterThan(0);
+    expect(ext.x1 - ext.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
+    const lineX = Number(spec!.line.match(/^M([\d.]+),/)?.[1]);
+    expect(lineX).toBeGreaterThan(0);
+  });
+
+  it('shifts a period-start stem inward instead of sitting on x=0', () => {
+    const band = stemBand(0);
+    expect(band.x0).toBeGreaterThan(0);
+    expect(band.x1 - band.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
+    expect(band.lineX).toBeGreaterThan(0);
+    expect(band.lineX).toBeGreaterThanOrEqual(band.x0);
+    expect(band.lineX).toBeLessThanOrEqual(band.x1);
   });
 });
+
+function fillExtent(d: string): { x0: number; x1: number } {
+  const xs = [...d.matchAll(/[ML]([\d.]+),/g)].map((m) => Number(m[1]));
+  return { x0: Math.min(...xs), x1: Math.max(...xs) };
+}

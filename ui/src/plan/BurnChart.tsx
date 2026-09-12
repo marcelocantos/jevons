@@ -4,10 +4,9 @@
 import { burnPaths, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
-/** Tiny area sparkline for one tooltip column (🎯T634). Empty when no samples. */
+/** Tiny area sparkline for one tooltip column (🎯T634 / T637). Plot frame always paints. */
 export function BurnChart(props: { window: PlanWindow }) {
   const spec = burnPaths(props.window);
-  if (!spec) return null;
   return (
     <svg
       className="plan-burn-svg"
@@ -15,8 +14,15 @@ export function BurnChart(props: { window: PlanWindow }) {
       preserveAspectRatio="none"
       aria-hidden="true"
     >
-      <path className="plan-burn-fill" d={spec.fill} />
-      <path className="plan-burn-line" d={spec.line} />
+      <rect
+        className="plan-burn-plot"
+        x="0"
+        y="0"
+        width={BURN_WIDTH}
+        height={BURN_HEIGHT}
+      />
+      {spec ? <path className="plan-burn-fill" d={spec.fill} /> : null}
+      {spec ? <path className="plan-burn-line" d={spec.line} /> : null}
     </svg>
   );
 }

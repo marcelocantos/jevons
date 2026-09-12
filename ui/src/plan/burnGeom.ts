@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Plan-usage burn-down sparkline (🎯T634).
+ * Plan-usage burn-down sparkline (🎯T634 / T637).
  *
  * X is the published window period; Y is remaining 0–100. The line starts
- * at the first stored sample — never a fabricated 100% at t=0.
+ * at the first stored sample — never a fabricated 100% at t=0. A cluster
+ * whose x-span is below the stem minimum (just-reset week, second Refresh)
+ * keeps a visible inward stem so it is not a 1px line on the column border.
  */
 
 import { limitSecondsFor } from './windowGeom';
@@ -13,6 +15,11 @@ import type { PlanHistoryPoint, PlanWindow } from './tickerGroups';
 
 export const BURN_WIDTH = 100;
 export const BURN_HEIGHT = 32;
+/** Half-width of a zero-span stem in viewBox units (🎯T637). */
+export const BURN_STEM_HALF = 3.5;
+export const BURN_STEM_MIN = BURN_STEM_HALF * 2;
+/** Keep the stem and stroke inside the viewBox so x=0 is not the cell border. */
+const BURN_EDGE_INSET = 1;
 
 export type BurnPoint = { x: number; y: number };
 
@@ -68,20 +75,58 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
   });
 }
 
+/** Place a stem of at least BURN_STEM_MIN fully inside the viewBox. */
+export function stemBand(x: number): { x0: number; x1: number; lineX: number } {
+  const lo = BURN_EDGE_INSET;
+  const hi = BURN_WIDTH - BURN_EDGE_INSET;
+  let x0 = x - BURN_STEM_HALF;
+  let x1 = x + BURN_STEM_HALF;
+  if (x0 < lo) {
+    x1 = Math.min(hi, x1 + (lo - x0));
+    x0 = lo;
+  }
+  if (x1 > hi) {
+    x0 = Math.max(lo, x0 - (x1 - hi));
+    x1 = hi;
+  }
+  if (x1 - x0 < BURN_STEM_MIN) {
+    if (x0 <= lo) x1 = Math.min(hi, x0 + BURN_STEM_MIN);
+    else if (x1 >= hi) x0 = Math.max(lo, x1 - BURN_STEM_MIN);
+  }
+  const lineX = clamp(x, x0, x1);
+  return { x0, x1, lineX };
+}
+
+function stemPaths(points: BurnPoint[]): BurnPaths {
+  const first = points[0];
+  const last = points[points.length - 1];
+  const midX = (first.x + last.x) / 2;
+  const { x0, x1, lineX } = stemBand(midX);
+  if (points.length === 1) {
+    const topY = first.y;
+    const line = `M${round(lineX)},${round(topY)} L${round(lineX)},${BURN_HEIGHT}`;
+    const fill = `M${round(x0)},${round(topY)} L${round(x1)},${round(topY)} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
+    return { fill, line, points };
+  }
+  // Keep the real slope; only the fill is fattened and the stroke is
+  // kept inside the stem so a week-start cluster is not the cell border.
+  const drawn = points.map((p) => ({ x: clamp(p.x, x0, x1), y: p.y }));
+  const line = drawn
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
+    .join(' ');
+  const fill = `${line} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
+  return { fill, line, points };
+}
+
 export function burnPaths(w: PlanWindow): BurnPaths | null {
   const points = burnPoints(w);
   if (!points.length) return null;
-  // One sample is a sliver of zero width if we only close the area on
-  // itself — the live ticker looked empty after the first Refresh.
-  // Give that point a visible stem down to the axis.
-  if (points.length === 1) {
-    const p = points[0];
-    const half = 3.5;
-    const x0 = clamp(p.x - half, 0, BURN_WIDTH);
-    const x1 = clamp(p.x + half, 0, BURN_WIDTH);
-    const line = `M${round(p.x)},${round(p.y)} L${round(p.x)},${BURN_HEIGHT}`;
-    const fill = `M${round(x0)},${round(p.y)} L${round(x1)},${round(p.y)} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
-    return { fill, line, points };
+  // A single sample — or several minutes of samples still sitting on the
+  // same pixel of a week — is a sliver if we only close the area on itself
+  // (🎯T637: the just-reset Codex hover). Give that cluster a visible stem.
+  const span = points[points.length - 1].x - points[0].x;
+  if (points.length === 1 || span < BURN_STEM_MIN) {
+    return stemPaths(points);
   }
   const line = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
