@@ -167,14 +167,20 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 	if reclaimed.SessionID() != sid {
 		t.Fatalf("reclaim reminted: %s → %s", sid, reclaimed.SessionID())
 	}
-	if err := reclaimed.Send("Reply with exactly: pong"); err != nil {
-		t.Fatalf("reclaim Send: %v", err)
+	waitPong := func() (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		return reclaimed.WaitForResponse(ctx)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	text, err := reclaimed.WaitForResponse(ctx)
-	if err != nil {
-		t.Fatalf("WaitForResponse after reclaim: %v", err)
+	text, waitErr := waitPong()
+	if waitErr != nil || !strings.Contains(strings.ToLower(text), "pong") {
+		if err := reclaimed.Send("Reply with exactly: pong"); err != nil && !strings.Contains(err.Error(), "in flight") {
+			t.Fatalf("reclaim Send: %v (prior WaitForResponse %q, %v)", err, text, waitErr)
+		}
+		text, waitErr = waitPong()
+	}
+	if waitErr != nil {
+		t.Fatalf("WaitForResponse after reclaim: %v", waitErr)
 	}
 	if !strings.Contains(strings.ToLower(text), "pong") {
 		t.Fatalf("reclaimed turn = %q, want pong", text)
