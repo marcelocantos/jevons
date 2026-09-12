@@ -153,6 +153,7 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 		t.Fatalf("after SIGHUP restart: session %s → %s", sid, got)
 	}
 	stop(third, thirdDone, syscall.SIGHUP)
+	t63WaitUnowned(t, name)
 
 	t.Setenv("CLAUDIA_BROKER_SOCKET", sock)
 	t.Setenv("CLAUDIA_NO_BROKER", "")
@@ -303,7 +304,51 @@ func t63AgentRunning(t *testing.T, port int, name string) bool {
 	return false
 }
 
+func t63WaitUnowned(t *testing.T, name string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		owned, alive, ok := t63GrantFlags(t, name)
+		if ok && alive && !owned {
+			return
+		}
+		if ok && !alive {
+			t.Fatalf("seat %s died before reclaim", name)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	owned, alive, ok := t63GrantFlags(t, name)
+	t.Fatalf("seat %s still owned after SIGHUP (ok=%v owned=%v alive=%v)", name, ok, owned, alive)
+}
+
+func t63GrantFlags(t *testing.T, name string) (owned, alive, ok bool) {
+	t.Helper()
+	for _, line := range strings.Split(t63GrantsOutput(t), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[0] != name {
+			continue
+		}
+		for i := 2; i < len(f)-1; i++ {
+			if (f[i] == "true" || f[i] == "false") && (f[i+1] == "true" || f[i+1] == "false") {
+				return f[i] == "true", f[i+1] == "true", true
+			}
+		}
+	}
+	return false, false, false
+}
+
 func t63GrantCount(t *testing.T, name string) int {
+	t.Helper()
+	n := 0
+	for _, line := range strings.Split(t63GrantsOutput(t), "\n") {
+		if strings.HasPrefix(line, name+"\t") || strings.HasPrefix(line, name+" ") {
+			n++
+		}
+	}
+	return n
+}
+
+func t63GrantsOutput(t *testing.T) string {
 	t.Helper()
 	bin := "/opt/homebrew/bin/claudia"
 	if _, err := os.Stat(bin); err != nil {
@@ -317,11 +362,5 @@ func t63GrantCount(t *testing.T, name string) int {
 	if err != nil {
 		t.Fatalf("claudia broker grants: %v\n%s", err, out)
 	}
-	n := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, name+"\t") || strings.HasPrefix(line, name+" ") {
-			n++
-		}
-	}
-	return n
+	return string(out)
 }
