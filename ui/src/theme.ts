@@ -7,7 +7,7 @@ export type ThemeAppearance = 'light' | 'dark';
 /** Color emoji — the old ☼/◐/☾ dingbats read as blank circles at 11px. */
 export const THEME_GLYPH: Record<ThemePref, string> = {
   light: '☀️',
-  system: '💻',
+  system: '☯️',
   dark: '🌙',
 };
 

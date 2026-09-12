@@ -34,7 +34,7 @@ describe('🎯T642 theme cycle', () => {
 
   it('uses distinct color-emoji glyphs, not dingbats', () => {
     expect(THEME_GLYPH.light).toBe('☀️');
-    expect(THEME_GLYPH.system).toBe('💻');
+    expect(THEME_GLYPH.system).toBe('☯️');
     expect(THEME_GLYPH.dark).toBe('🌙');
     expect(new Set(Object.values(THEME_GLYPH)).size).toBe(3);
   });
