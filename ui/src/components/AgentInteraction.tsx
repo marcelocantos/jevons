@@ -92,7 +92,8 @@ export function AgentInteraction(props: {
       <UserRequest
         name={props.name}
         density={density}
-        onSend={(t) => conv.send(t)}
+        onSend={(t, opts) => conv.send(t, opts)}
+        onInterrupt={() => conv.send('', { interrupt: true })}
         history={history}
         onRecall={setRecalled}
       />

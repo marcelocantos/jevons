@@ -13,13 +13,15 @@ import {
   type PendingImage,
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
+import { classifyEnterAction } from '../keys/composerEnter';
 
 export type RecalledRequest = { id: string; text: string };
 
 type UserRequestProps = {
   name: string;
   density?: Density;
-  onSend: (text: string) => void;
+  onSend: (text: string, opts?: { interrupt?: boolean }) => void;
+  onInterrupt?: () => void;
   disabled?: boolean;
   history?: RecalledRequest[];
   onRecall?: (request: RecalledRequest | null) => void;
@@ -113,9 +115,10 @@ function NamedUserRequest(props: UserRequestProps) {
     };
   }, []);
 
-  const submit = async (e: FormEvent, append = false) => {
+  const submit = async (e: FormEvent, append = false, opts?: { interrupt?: boolean }) => {
     e.preventDefault();
-    if (rewinding || props.disabled) return;
+    if (rewinding) return;
+    if (props.disabled && !opts?.interrupt) return;
     const payload = composeSendText(raw, pending);
     if (!payload) return;
     if (recalled && !append) {
@@ -142,7 +145,8 @@ function NamedUserRequest(props: UserRequestProps) {
       queueMicrotask(() => boxRef.current?.focus());
       return;
     } else {
-      props.onSend(payload);
+      if (opts?.interrupt) props.onSend(payload, { interrupt: true });
+      else props.onSend(payload);
       if (recalled) {
         setDraft(props.name, payload);
         leaveRecall(false);
@@ -242,9 +246,23 @@ function NamedUserRequest(props: UserRequestProps) {
             return;
           }
           if (applyComposerHomeEnd(e.currentTarget, e)) return;
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            submit(e);
+          const action = classifyEnterAction(e.key, e, {
+            composerEmpty: !canSend,
+            code: e.code,
+          });
+          if (action == null || action === 'newline') return;
+          e.preventDefault();
+          if (action === 'send') {
+            void submit(e);
+            return;
+          }
+          if (action === 'interrupt') {
+            if (canSend) void submit(e, !!recalled, { interrupt: true });
+            else props.onInterrupt?.();
+            return;
+          }
+          if (action === 'force_send' && canSend) {
+            void submit(e, !!recalled, { interrupt: true });
           }
         }}
       />

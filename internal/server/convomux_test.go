@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/muxwin"
@@ -106,7 +107,7 @@ func TestT627MuxSendUnfreezesWatchDuringConcurrentFanout(t *testing.T) {
 	s := New("test", t.TempDir())
 	const sends = 100
 	delivered := make(chan struct{}, sends)
-	s.SetAgentSendOriginHook(func(string, string, string) (string, error) {
+	s.SetAgentSendOriginHook(func(string, string, string, bool) (string, error) {
 		delivered <- struct{}{}
 		return "sent", nil
 	})
@@ -138,6 +139,84 @@ func TestT627MuxSendUnfreezesWatchDuringConcurrentFanout(t *testing.T) {
 	sub, subscribed := w.window()
 	if !subscribed || !sub.Following || sub.Hi != 0 {
 		t.Fatalf("send left the watcher frozen: %+v subscribed=%v", sub, subscribed)
+	}
+}
+
+func TestT644MuxSendInterruptReachesHook(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	got := make(chan bool, 1)
+	s.SetAgentSendOriginHook(func(_ string, text string, _ string, interrupt bool) (string, error) {
+		if text != "now" {
+			t.Errorf("text=%q", text)
+		}
+		got <- interrupt
+		return "sent", nil
+	})
+	s.handleMuxEnvelope(t.Context(), nil, &muxSession{transcripts: make(map[string]*muxWatch)}, muxEnvelope{
+		Ch:   transcriptChannel("jevons"),
+		T:    "send",
+		Body: json.RawMessage(`{"text":"now","interrupt":true}`),
+	})
+	select {
+	case interrupt := <-got:
+		if !interrupt {
+			t.Fatal("hook did not see interrupt=true")
+		}
+	case <-t.Context().Done():
+		t.Fatal("send did not reach hook")
+	}
+}
+
+func TestT644MuxInterruptEmptyDoesNotSend(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	called := make(chan struct{}, 1)
+	s.SetAgentSendOriginHook(func(string, string, string, bool) (string, error) {
+		called <- struct{}{}
+		return "sent", nil
+	})
+	sess := &muxSession{transcripts: make(map[string]*muxWatch)}
+	s.handleMuxEnvelope(t.Context(), nil, sess, muxEnvelope{
+		Ch:   transcriptChannel("jevons"),
+		T:    "send",
+		Body: json.RawMessage(`{"text":"","interrupt":true}`),
+	})
+	s.handleMuxEnvelope(t.Context(), nil, sess, muxEnvelope{
+		Ch: transcriptChannel("jevons"),
+		T:  "interrupt",
+	})
+	select {
+	case <-called:
+		t.Fatal("empty interrupt called send hook")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestT644MuxInterruptSettlesOwnerTurn(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	frames := make(chan string, 8)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, frames)
+	s.waiting = true
+	s.overseerOwnerTurn = true
+	s.mu.Unlock()
+	s.handleMuxEnvelope(t.Context(), nil, &muxSession{transcripts: make(map[string]*muxWatch)}, muxEnvelope{
+		Ch: transcriptChannel("jevons"),
+		T:  "interrupt",
+	})
+	select {
+	case line := <-frames:
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["type"] != "status" || m["state"] != "cancel_settled" {
+			t.Fatalf("settle=%s", line)
+		}
+	case <-t.Context().Done():
+		t.Fatal("interrupt did not settle")
 	}
 }
 

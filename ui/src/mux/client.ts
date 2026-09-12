@@ -140,8 +140,15 @@ export class MuxClient {
     this.send(encodeMux(transcriptChannel(name), 'page', body));
   }
 
-  sendTranscript(name: string, text: string): void {
-    this.send(encodeMux(transcriptChannel(name), 'send', { text }));
+  sendTranscript(name: string, text: string, opts?: { interrupt?: boolean }): void {
+    const body: { text: string; interrupt?: boolean } = { text };
+    if (opts?.interrupt) body.interrupt = true;
+    this.send(encodeMux(transcriptChannel(name), 'send', body));
+  }
+
+  /** Empty Cmd+Enter: cancel the in-flight turn without sending (🎯T644). */
+  interruptTranscript(name: string): void {
+    this.send(encodeMux(transcriptChannel(name), 'interrupt'));
   }
 
   /** Open a non-transcript snapshot channel (plan-usage, 🎯T631). Re-opens on reconnect. */

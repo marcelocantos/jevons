@@ -3,8 +3,8 @@
 
 import '../../composer/ensureLocalStorage';
 import { createElement } from 'react';
-import { fireEvent, render } from '@testing-library/react';
-import { afterEach, expect } from 'vitest';
+import { createEvent, fireEvent, render } from '@testing-library/react';
+import { afterEach, expect, vi } from 'vitest';
 import { decideSend } from '../../composer/sendQueue';
 import { UserRequest } from '../../components/UserRequest';
 import { classifyEnterAction } from '../../keys/composerEnter';
@@ -84,10 +84,47 @@ describeOracle(family('composer-keys'), () => {
     expect(shouldFocusComposer('/', {}, { tagName: 'TEXTAREA' })).toBe(false);
   });
 
-  itOracle('T132', 'Ctrl+Enter sends now; Alt+Enter empty is queue/noop, not a newline', () => {
-    expect(classifyEnterAction('Enter', { ctrlKey: true })).toBe('interrupt');
+  itOracle('T132', 'Cmd+Enter interrupts; Ctrl+Enter is not hooked; Alt+Enter empty is queue/noop', () => {
+    expect(classifyEnterAction('Enter', { metaKey: true })).toBe('interrupt');
+    expect(classifyEnterAction('Enter', { ctrlKey: true })).toBeNull();
     expect(classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true, queueLen: 0 })).toBe('noop');
     expect(classifyEnterAction('Enter', { shiftKey: true })).toBe('newline');
+  });
+
+  itOracle('T644', 'UserRequest: Cmd+Enter interrupts, Ctrl+Enter is left to the browser', () => {
+    const onSend = vi.fn();
+    const onInterrupt = vi.fn();
+    const { container } = render(
+      createElement(UserRequest, { name: 'jevons', onSend, onInterrupt }),
+    );
+    const box = container.querySelector('#input') as HTMLTextAreaElement;
+    expect(box).toBeTruthy();
+
+    const ctrl = createEvent.keyDown(box, { key: 'Enter', ctrlKey: true, cancelable: true });
+    fireEvent(box, ctrl);
+    expect(ctrl.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onInterrupt).not.toHaveBeenCalled();
+
+    fireEvent.change(box, { target: { value: 'cut in' } });
+    const cmd = createEvent.keyDown(box, { key: 'Enter', metaKey: true, cancelable: true });
+    fireEvent(box, cmd);
+    expect(cmd.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenCalledWith('cut in', { interrupt: true });
+
+    const alt = createEvent.keyDown(box, { key: 'Enter', altKey: true, cancelable: true });
+    fireEvent(box, alt);
+    expect(onSend).toHaveBeenLastCalledWith('cut in', { interrupt: true });
+
+    const plain = createEvent.keyDown(box, { key: 'Enter', cancelable: true });
+    fireEvent(box, plain);
+    expect(onSend).toHaveBeenLastCalledWith('cut in');
+
+    fireEvent.change(box, { target: { value: '' } });
+    const emptyCmd = createEvent.keyDown(box, { key: 'Enter', metaKey: true, cancelable: true });
+    fireEvent(box, emptyCmd);
+    expect(emptyCmd.defaultPrevented).toBe(true);
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
   itOracle('T241', 'Alt+Enter force-sends draft if non-empty, else the send-queue head', () => {

@@ -86,6 +86,27 @@ describe('MuxClient snapshot channels (T631)', () => {
   });
 });
 
+describe('MuxClient interrupt (T644)', () => {
+  it('sendTranscript carries interrupt; empty cancel is t=interrupt', () => {
+    const { client, ws } = connectClient();
+    client.sendTranscript('jevons', 'cut in', { interrupt: true });
+    const send = ws.sent.find((s) => s.includes('"t":"send"'));
+    expect(send).toBeTruthy();
+    expect(JSON.parse(send!)).toMatchObject({
+      t: 'send',
+      ch: 'transcript:jevons',
+      body: { text: 'cut in', interrupt: true },
+    });
+    client.interruptTranscript('jevons');
+    const cancel = ws.sent.find((s) => s.includes('"t":"interrupt"'));
+    expect(JSON.parse(cancel!)).toMatchObject({
+      t: 'interrupt',
+      ch: 'transcript:jevons',
+    });
+    client.close();
+  });
+});
+
 describe('MuxClient heartbeat (T537.2.1)', () => {
   it('sends the vanilla chat ping on open and every heartbeat interval', () => {
     const { client, ws } = connectClient();

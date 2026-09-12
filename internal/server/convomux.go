@@ -751,23 +751,29 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			lo = 1
 		}
 		s.writeMuxWindow(ctx, conn, sess, name, lo, body.End, false)
+	case "interrupt":
+		if !isTranscript {
+			return
+		}
+		go s.interruptMuxSeat(name)
 	case "send":
 		if !isTranscript {
 			return
 		}
 		var body struct {
-			Text string `json:"text"`
+			Text      string `json:"text"`
+			Interrupt bool   `json:"interrupt"`
 		}
 		_ = json.Unmarshal(env.Body, &body)
 		text := strings.TrimSpace(body.Text)
-		if text == "" {
+		if text == "" && !body.Interrupt {
 			return
 		}
 		// A send is a request to see the echo: unfreeze this session's
 		// watch so a statedb-suffix following window still Contains the
 		// new absolute index. Do not block the mux read loop on ACP
 		// prompt-in-flight (that wedged heartbeats and the next send).
-		if sess != nil {
+		if text != "" && sess != nil {
 			if w := sess.watchGet(name); w != nil {
 				w.mu.Lock()
 				w.visible.Following = true
@@ -779,10 +785,52 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		}
 		ch := env.Ch
 		go func() {
-			if _, err := s.sendToNamedAgentAs(name, text, sendOriginOwner); err != nil {
+			if body.Interrupt {
+				s.interruptMuxSeat(name)
+			}
+			if text == "" {
+				return
+			}
+			if _, err := s.sendToNamedAgentInterrupt(name, text, sendOriginOwner, body.Interrupt); err != nil {
 				s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": err.Error()})
 			}
 		}()
+	}
+}
+
+// interruptMuxSeat cancels an in-flight turn on the named seat (🎯T644).
+// Overseer owner-chat cancel reuses the /ws/chat interrupt settle so the
+// thinking chrome drops even when the provider emits no terminal event.
+func (s *Server) interruptMuxSeat(name string) {
+	if s.isOverseerAgent(name) {
+		s.interruptOwnerTurn()
+		return
+	}
+	if s.registry == nil {
+		return
+	}
+	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
+		if err := proc.Interrupt(); err != nil {
+			slog.Error("mux: interrupt failed", "name", name, "err", err)
+		}
+	}
+}
+
+// interruptOwnerTurn cancels the overseer owner turn when one is actually
+// in flight. Idle Cmd+Enter must not flash cancel_settled.
+func (s *Server) interruptOwnerTurn() {
+	proc := s.CurrentProcess()
+	alive := proc != nil && proc.Alive()
+	if alive {
+		if err := proc.Interrupt(); err != nil {
+			slog.Error("mux: interrupt failed", "name", s.overseerAgentName(), "err", err)
+		}
+	}
+	s.mu.RLock()
+	inFlight := s.waiting || s.overseerOwnerTurn
+	s.mu.RUnlock()
+	if alive || inFlight {
+		s.settleCancel()
 	}
 }
 

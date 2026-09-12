@@ -96,10 +96,15 @@ export function useConversation(mux: MuxClient | null, name: string) {
     meta: state.meta,
     error: state.error,
     ready: state.ready,
-    send: (text: string) => {
+    send: (text: string, opts?: { interrupt?: boolean }) => {
       const t = String(text || '').trim();
-      if (!t) return;
+      const interrupt = !!opts?.interrupt;
+      if (!t && !interrupt) return;
       if (frozenRef.current) rejoinLive();
+      if (!t) {
+        mux?.interruptTranscript(name);
+        return;
+      }
       pendingSendRef.current = { text: t, at: stateRef.current.frames.length };
       // Optimistic received on send; the next interleaved progress/meta frame wins (🎯T555.2).
       if (name === 'jevons') {
@@ -113,7 +118,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
         stateRef.current = next;
         dispatch(env);
       }
-      mux?.sendTranscript(name, t);
+      mux?.sendTranscript(name, t, interrupt ? { interrupt: true } : undefined);
     },
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),
     pageOlder: (limit = 50) => {

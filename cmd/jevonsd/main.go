@@ -961,8 +961,8 @@ func main() {
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
 	// terminal stop is wired in mcpserver agentEventSink (ð¯T111.1).
-	srv.SetAgentSendOriginHook(func(name, text, origin string) (string, error) {
-		res, err := mcpSrv.DeliverAgentMessageAs(name, text, mcpserver.SendOrigin(origin), false)
+	srv.SetAgentSendOriginHook(func(name, text, origin string, interrupt bool) (string, error) {
+		res, err := mcpSrv.DeliverAgentMessageAs(name, text, mcpserver.SendOrigin(origin), interrupt)
 		if err != nil {
 			return "", err
 		}

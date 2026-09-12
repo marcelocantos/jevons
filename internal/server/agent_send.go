@@ -53,7 +53,7 @@ func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err
 	s.agentSendHook = fn
 }
 
-func (s *Server) SetAgentSendOriginHook(fn func(name, text, origin string) (status string, err error)) {
+func (s *Server) SetAgentSendOriginHook(fn func(name, text, origin string, interrupt bool) (status string, err error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.agentSendOriginHook = fn
@@ -72,6 +72,13 @@ func (s *Server) sendToNamedAgent(name, text string) (string, error) {
 // to the same queue-on-busy delivery /ws/chat uses (never a silent drop), so
 // no send capability is exclusive to the owner wire.
 func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
+	return s.sendToNamedAgentInterrupt(name, text, origin, false)
+}
+
+// sendToNamedAgentInterrupt is sendToNamedAgentAs with an owner-turn cancel
+// flag (🎯T644). Empty text is still refused here — mux cancel-only uses
+// interruptMuxSeat.
+func (s *Server) sendToNamedAgentInterrupt(name, text, origin string, interrupt bool) (string, error) {
 	name = strings.TrimSpace(name)
 	text = strings.TrimSpace(text)
 	if name == "" || text == "" {
@@ -87,7 +94,7 @@ func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
 	originHook := s.agentSendOriginHook
 	s.mu.RUnlock()
 	if originHook != nil {
-		return originHook(name, text, origin)
+		return originHook(name, text, origin, interrupt)
 	}
 
 	if s.isOverseerAgent(name) {

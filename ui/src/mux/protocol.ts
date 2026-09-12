@@ -12,6 +12,7 @@ export type MuxType =
   | 'page'
   | 'window'
   | 'send'
+  | 'interrupt'
   | 'error'
   | 'reset';
 
