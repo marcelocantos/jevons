@@ -38,19 +38,9 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		}
 	}
 	reader := planusage.NewReader(planusage.ReaderArgs{
-		Load:    mcpSrv.HarnessLoad,
-		History: hist,
-		// 🎯T390.1: SuperGrok weekly remaining lives on an undocumented
-		// billing surface. claudia keeps the library default off; the
-		// cockpit opts in so the owner sees a real Grok bar. A fetch or
-		// parse failure still comes back unavailable with a reason —
-		// never a fabricated percent.
-		GrokUnstableUsage: true,
-		// claudia v0.26: Cursor period usage is the same shape of opt-in
-		// (undocumented dashboard RPC). Cockpit opts in so a Cursor seat
-		// paints a real bar; failure stays unavailable with a reason.
-		CursorUnstableUsage: true,
-		OnUpdate:            srv.FanPlanUsage,
+		Load:     mcpSrv.HarnessLoad,
+		History:  hist,
+		OnUpdate: srv.FanPlanUsage,
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
 	srv.SetPlanUsageWaitReady(reader.WaitReady)
@@ -75,10 +65,6 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		"refresh", planusage.DefaultRefresh,
 		"stale_after", planusage.DefaultStaleAfter,
 		"readings", planusage.DefaultReadingsPath(stateDir),
-		"grok_usage", true,
-		"grok_opt_in_env", planusage.GrokUsageEnv,
-		"cursor_usage", true,
-		"cursor_opt_in_env", planusage.CursorUsageEnv,
 	)
 	return reader
 }

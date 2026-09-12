@@ -14,17 +14,6 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// GrokUsageEnv is claudia's opt-in for the undocumented Grok billing surface.
-// The daemon reads it here as well as passing it down, because a detached
-// daemon does not always inherit the shell that set it, and an opt-in that
-// silently fails to apply looks identical to a backend that publishes nothing.
-const GrokUsageEnv = "CLAUDIA_GROK_USAGE"
-
-// CursorUsageEnv is claudia's opt-in for the undocumented Cursor dashboard
-// usage surface (CLAUDIA_CURSOR_USAGE). Same detach/inherit rationale as
-// GrokUsageEnv.
-const CursorUsageEnv = "CLAUDIA_CURSOR_USAGE"
-
 // FetchFunc is the producer seam: one round of readings, one per backend.
 // The real implementation is claudia.QueryAllPlanUsage; the oracle supplies
 // fixtures. Nothing else in this package knows an endpoint exists.
@@ -47,10 +36,6 @@ type ReaderArgs struct {
 	StaleAfter time.Duration
 	// Now overrides the clock (tests). Nil uses time.Now.
 	Now func() time.Time
-	// GrokUnstableUsage opts into claudia's undocumented Grok billing read.
-	GrokUnstableUsage bool
-	// CursorUnstableUsage opts into claudia's undocumented Cursor usage read.
-	CursorUnstableUsage bool
 	// FetchTimeout bounds one round of provider calls. Zero uses 20s.
 	FetchTimeout time.Duration
 	// FixturePath, when set, makes Snapshot read that JSON file instead
@@ -94,8 +79,6 @@ type Reader struct {
 // NewReader builds a Reader. It does not fetch — call Refresh or Run.
 func NewReader(args ReaderArgs) *Reader {
 	if args.Fetch == nil {
-		grok := args.GrokUnstableUsage || os.Getenv(GrokUsageEnv) == "1"
-		cursor := args.CursorUnstableUsage || os.Getenv(CursorUsageEnv) == "1"
 		args.Fetch = func(ctx context.Context) ([]claudia.PlanUsage, error) {
 			tok := strings.TrimSpace(os.Getenv(CursorAPIKeyEnv))
 			if tok == "" {
@@ -110,10 +93,8 @@ func NewReader(args ReaderArgs) *Reader {
 			// way jevonsd never races another process to a vendor endpoint.
 			return claudia.LoadPlanUsage(ctx, &claudia.PlanUsageCacheArgs{
 				All: &claudia.AllPlanUsageArgs{
-					Providers:           SupportedProviders(),
-					GrokUnstableUsage:   grok,
-					CursorUnstableUsage: cursor,
-					CursorAccessToken:   tok,
+					Providers:         SupportedProviders(),
+					CursorAccessToken: tok,
 				},
 			})
 		}

@@ -31,8 +31,8 @@ func ShowOnBar(b Backend) bool {
 
 // CockpitSnapshot copies snap and rewrites 429/rate_limit backends the
 // way the header ticker paints them: available, session+weekly at 0%.
-// Unpublished Grok is left unavailable with its reason. The reader's
-// stored snapshot is not mutated.
+// A backend that publishes no remaining is left unavailable with its
+// reason. The reader's stored snapshot is not mutated.
 func CockpitSnapshot(snap Snapshot) Snapshot {
 	out := snap
 	out.Backends = make([]Backend, len(snap.Backends))

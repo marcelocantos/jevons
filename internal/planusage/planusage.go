@@ -21,12 +21,11 @@
 //   - Unavailable is a first-class answer, never a zero. A backend that
 //     publishes nothing renders as "unavailable" with the provider's own
 //     reason attached. A blank or a 0% would read as "you have nothing
-//     left", which is a different and false statement. 🎯T390.1: jevonsd
-//     opts into claudia's undocumented Grok billing surface so SuperGrok
-//     weekly remaining is a real bar when the surface answers; a break
-//     degrades to unavailable with a reason, never a fabricated percent.
-//     Bedrock still has no subscription window and stays off the bar
-//     unless a fleet agent is running on it.
+//     left", which is a different and false statement. Grok and Cursor
+//     unofficial billing surfaces are always fetched; a break degrades
+//     to unavailable with a reason, never a fabricated percent. Bedrock
+//     still has no subscription window and stays off the bar unless a
+//     fleet agent is running on it.
 //   - A cached reading that has aged out is marked stale rather than served
 //     as current. A number that was true forty minutes ago is not a lie, but
 //     presenting it as now is.
@@ -176,9 +175,9 @@ func (s Snapshot) Backend(provider string) (Backend, bool) {
 }
 
 // SupportedProviders are the backends claudia can be asked about. Grok and
-// Cursor are included because jevonsd opts into their undocumented billing
-// surfaces (🎯T390.1 / claudia v0.26). Bedrock is included so a running
-// Bedrock fleet still has a named row; idle Bedrock stays off the cockpit bar.
+// Cursor unofficial billing surfaces are always fetched. Bedrock is included
+// so a running Bedrock fleet still has a named row; idle Bedrock stays off
+// the cockpit bar.
 func SupportedProviders() []claudia.Provider {
 	return []claudia.Provider{
 		claudia.ProviderClaude,
