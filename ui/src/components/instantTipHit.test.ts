@@ -6,10 +6,14 @@ import {
   HIDE_GRACE_MS,
   bridgeCorridorBetween,
   computeHitParts,
+  hitRectIsDegenerate,
   placeCardRect,
   pointInHitParts,
   pointInHitRect,
+  samePointerSample,
   shouldDismissOutsideHitParts,
+  shouldDismissPointerSample,
+  stickCardRect,
   unionHitRect,
 } from './instantTipHit';
 
@@ -63,5 +67,31 @@ describe('InstantTip hit geometry (🎯T231 / T271)', () => {
     expect(pos.left).toBeGreaterThanOrEqual(8);
     expect(pos.top).toBeGreaterThan(8);
     expect(pos.top + 260).toBeLessThanOrEqual(1080 - 8);
+  });
+
+  it('T648: same clientXY is not a leave; mermaid-grown card does not recenter as a dismiss', () => {
+    expect(samePointerSample({ x: 200, y: 100 }, 200, 100)).toBe(true);
+    expect(samePointerSample({ x: 200, y: 100 }, 201, 100)).toBe(false);
+    expect(hitRectIsDegenerate({ left: 0, top: 0, right: 4, bottom: 4 })).toBe(true);
+    const before = computeHitParts({ cardRect: card, hostRects: [id] });
+    const jumped = computeHitParts({
+      cardRect: { left: 100, top: 0, right: 300, bottom: 80 },
+      hostRects: [id],
+    });
+    expect(shouldDismissPointerSample({ x: 200, y: 100, lastXY: { x: 200, y: 100 }, parts: jumped })).toBe(
+      false,
+    );
+    expect(
+      shouldDismissPointerSample({
+        x: 50,
+        y: 10,
+        lastXY: { x: 200, y: 100 },
+        parts: jumped,
+        lastParts: before,
+      }),
+    ).toBe(true);
+    const stuck = stickCardRect({ left: 120, top: 80, tipW: 400, tipH: 500, viewW: 800, viewH: 600 });
+    expect(stuck.left).toBe(120);
+    expect(stuck.top + 500).toBeLessThanOrEqual(600 - 8);
   });
 });

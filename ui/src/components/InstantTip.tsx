@@ -5,8 +5,11 @@ import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } f
 import {
   HIDE_GRACE_MS,
   computeHitParts,
+  hitRectIsDegenerate,
   placeCardRect,
-  shouldDismissOutsideHitParts,
+  shouldDismissPointerSample,
+  stickCardRect,
+  type HitParts,
 } from './instantTipHit';
 
 export { HIDE_GRACE_MS };
@@ -56,12 +59,19 @@ export function InstantTip(props: {
 
   const wrapRef = useRef<HTMLSpanElement>(null);
   const cardRef = useRef<HTMLElement>(null);
+  const groupHostsRef = useRef(props.groupHosts);
+  groupHostsRef.current = props.groupHosts;
+  const persistHostsRef = useRef(props.persistHosts);
+  persistHostsRef.current = props.persistHosts;
+  const stickyRef = useRef<{ left: number; top: number } | null>(null);
+  const lastXYRef = useRef<{ x: number; y: number } | null>(null);
+  const lastPartsRef = useRef<HitParts | null>(null);
 
   const collectOpenHosts = (): Element[] => {
     const out: Element[] = [];
     const wrap = wrapRef.current;
     if (wrap) out.push(wrap);
-    for (const h of props.groupHosts?.() || []) {
+    for (const h of groupHostsRef.current?.() || []) {
       if (h && out.indexOf(h) < 0) out.push(h);
     }
     return out;
@@ -69,7 +79,7 @@ export function InstantTip(props: {
 
   const collectHitHosts = (): Element[] => {
     const out = collectOpenHosts();
-    for (const h of props.persistHosts?.() || []) {
+    for (const h of persistHostsRef.current?.() || []) {
       if (h && out.indexOf(h) < 0) out.push(h);
     }
     return out;
@@ -107,15 +117,22 @@ export function InstantTip(props: {
         }
       }
     }
-    const pos = placeCardRect({
-      placement: props.placement || 'left-of-host',
-      host: host.getBoundingClientRect(),
-      tipW: card.offsetWidth || 360,
-      tipH: card.offsetHeight || 80,
-      viewW: typeof window !== 'undefined' ? window.innerWidth : 0,
-      viewH: typeof window !== 'undefined' ? window.innerHeight : 0,
-      clampRight,
-    });
+    const viewW = typeof window !== 'undefined' ? window.innerWidth : 0;
+    const viewH = typeof window !== 'undefined' ? window.innerHeight : 0;
+    const tipW = card.offsetWidth || 360;
+    const tipH = card.offsetHeight || 80;
+    const pos = stickyRef.current
+      ? { ...stickCardRect({ ...stickyRef.current, tipW, tipH, viewW, viewH }), maxWidth: undefined }
+      : placeCardRect({
+          placement: props.placement || 'left-of-host',
+          host: host.getBoundingClientRect(),
+          tipW,
+          tipH,
+          viewW,
+          viewH,
+          clampRight,
+        });
+    stickyRef.current = { left: pos.left, top: pos.top };
     const left = pos.left + 'px';
     const top = pos.top + 'px';
     if (card.style.left !== left) card.style.left = left;
@@ -127,7 +144,12 @@ export function InstantTip(props: {
   };
 
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open) {
+      stickyRef.current = null;
+      lastXYRef.current = null;
+      lastPartsRef.current = null;
+      return;
+    }
     applyPlace();
   }, [open, props.content, props.placement, props.clampSelectors]);
 
@@ -150,12 +172,16 @@ export function InstantTip(props: {
         cardRect: card.getBoundingClientRect(),
         hostRects: hosts.map((h) => h.getBoundingClientRect()),
       });
-      if (shouldDismissOutsideHitParts(x, y, parts)) setOpen(false);
+      const lastXY = lastXYRef.current;
+      const lastParts = lastPartsRef.current;
+      if (!hitRectIsDegenerate(parts.card)) lastPartsRef.current = parts;
+      lastXYRef.current = { x, y };
+      if (shouldDismissPointerSample({ x, y, lastXY, parts, lastParts })) setOpen(false);
     };
     const onMove = (e: PointerEvent) => sample(e.clientX, e.clientY);
     document.addEventListener('pointermove', onMove);
     return () => document.removeEventListener('pointermove', onMove);
-  }, [open, props.content, props.groupHosts, props.persistHosts]);
+  }, [open]);
 
   const card = (
     <aside

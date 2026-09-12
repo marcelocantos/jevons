@@ -119,6 +119,56 @@ export function shouldDismissOutsideHitParts(
   return !pointInHitParts(x, y, parts);
 }
 
+export function samePointerSample(
+  prev: { x: number; y: number } | null | undefined,
+  x: number,
+  y: number,
+): boolean {
+  return !!prev && prev.x === x && prev.y === y;
+}
+
+export function hitRectIsDegenerate(r: HitRect | null | undefined): boolean {
+  if (!r) return true;
+  return r.right - r.left < 8 || r.bottom - r.top < 8;
+}
+
+/** 🎯T648: layout/mermaid resize is not a leave. Same clientXY is not a leave. */
+export function shouldDismissPointerSample(args: {
+  x: number;
+  y: number;
+  lastXY?: { x: number; y: number } | null;
+  parts: HitParts;
+  lastParts?: HitParts | null;
+}): boolean {
+  if (samePointerSample(args.lastXY, args.x, args.y)) return false;
+  const parts =
+    hitRectIsDegenerate(args.parts.card) && args.lastParts ? args.lastParts : args.parts;
+  return shouldDismissOutsideHitParts(args.x, args.y, parts);
+}
+
+export function stickCardRect(args: {
+  left: number;
+  top: number;
+  tipW: number;
+  tipH: number;
+  viewW: number;
+  viewH: number;
+  pad?: number;
+}): { left: number; top: number } {
+  const pad = args.pad != null ? args.pad : 8;
+  let left = args.left;
+  let top = args.top;
+  const tw = Math.max(0, Number(args.tipW) || 0);
+  const th = Math.max(0, Number(args.tipH) || 0);
+  const vw = Math.max(0, Number(args.viewW) || 0);
+  const vh = Math.max(0, Number(args.viewH) || 0);
+  if (vw > 0 && left + tw > vw - pad) left = Math.max(pad, vw - pad - tw);
+  if (left < pad) left = pad;
+  if (vh > 0 && top + th > vh - pad) top = Math.max(pad, vh - pad - th);
+  if (top < pad) top = pad;
+  return { left: Math.round(left), top: Math.round(top) };
+}
+
 export type CardPlacement = 'left-of-host' | 'right-of-host' | 'below-host';
 
 export type PlaceCardResult = {

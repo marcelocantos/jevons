@@ -186,6 +186,29 @@ describeOracle(family('frontier'), () => {
     expect(tipSrc).toMatch(/clampSelectors/);
   });
 
+  itOracle('T648', 'layout/mermaid resize is not a leave — no hide timer', () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../components/InstantTip.tsx'),
+      'utf8',
+    );
+    expect(src).not.toMatch(/setTimeout|setInterval/);
+    expect(src).toMatch(/shouldDismissPointerSample/);
+    expect(src).toMatch(/stickCardRect/);
+    expect(HIDE_GRACE_MS).toBe(0);
+    const { container } = render(createElement(FrontierTable, { rows: [sample] }));
+    const host = container.querySelector('.ft-id [data-instant-tip-host]')!;
+    fireEvent.pointerEnter(host);
+    const card = container.querySelector('.instant-tip-show') as HTMLElement;
+    expect(card).toBeTruthy();
+    mockRect(host, { left: 320, top: 200, right: 360, bottom: 226 });
+    mockRect(card, { left: 100, top: 50, right: 300, bottom: 180 });
+    fireEvent.pointerMove(document, { clientX: 200, clientY: 100 });
+    expect(container.querySelector('.instant-tip-show')).toBeTruthy();
+    mockRect(card, { left: 100, top: 0, right: 300, bottom: 90 });
+    fireEvent.pointerMove(document, { clientX: 200, clientY: 100 });
+    expect(container.querySelector('.instant-tip-show')).toBeTruthy();
+  });
+
   itOracle(['T186', 'T187', 'T230'], 'card stays open on the card — no idle timeout, no hide grace', () => {
     const src = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), '../../components/InstantTip.tsx'),

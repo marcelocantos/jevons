@@ -42,7 +42,13 @@ export function TargetHotspotTips(props: {
   });
 
   useLayoutEffect(() => {
-    if (active && !active.isConnected) setActive(null);
+    if (!active || active.isConnected) return;
+    const id = normalizeTargetID(active.getAttribute('data-target-id') || '');
+    const root = props.containerRef.current;
+    const next = id
+      ? root?.querySelector<HTMLElement>('.target-hotspot[data-target-id="' + CSS.escape(id) + '"]')
+      : null;
+    setActive(next && next.isConnected ? next : null);
   });
 
   const tid = normalizeTargetID(active?.getAttribute('data-target-id') || '');
