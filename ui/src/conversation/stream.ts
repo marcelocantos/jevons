@@ -48,7 +48,11 @@ export function coalesceAssistantText(
 export function joinAssistantTexts(
   parts: Array<string | null | undefined> | null | undefined,
 ): string {
-  return (parts || []).reduce((acc, p) => coalesceAssistantText(acc, p), '');
+  let acc = '';
+  for (const p of parts || []) {
+    acc = coalesceAssistantText(acc, p);
+  }
+  return acc;
 }
 
 export function appendAssistantStream(prev: string, next: string): string {
