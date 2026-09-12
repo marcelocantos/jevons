@@ -40,7 +40,13 @@ const (
 )
 
 // StopAgents reports whether exit should call registry.StopAll().
+// A reachable claudia daemon owns every seat, so SIGTERM must not
+// release them (🎯T63). Hermetic suites set CLAUDIA_NO_BROKER=1 and
+// keep the historical ModeNormal == stop behaviour.
 func (m Mode) StopAgents() bool {
+	if brokerAvailable() {
+		return false
+	}
 	return m != ModeUpgrade
 }
 

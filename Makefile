@@ -428,6 +428,14 @@ spend-baseline:
 # the target was this recipe's sibling running `go test -race ./... | tail -n 5
 # && echo "✓ tests"`, which printed the tick over a failed suite. Cite the
 # GATE line this prints, not the tick.
+# 🎯T63: jevonsd restart against a clean-tree binary that depends on the
+# published claudia daemon. Requires `claudia broker serve` (or brew
+# services) and one live Session backend. Builds from HEAD in a worktree
+# so the dirty daily checkout is not the oracle.
+.PHONY: t63-daemon-reclaim
+t63-daemon-reclaim:
+	@scripts/t63-daemon-reclaim.sh
+
 .PHONY: bullseye
 bullseye: bin/gate
 	@go build ./... && echo "✓ build"

@@ -19,6 +19,18 @@ func TestModeUpgradeDoesNotStopAgents(t *testing.T) {
 	}
 }
 
+func TestDaemonPresentSkipsStopAllOnSIGTERM(t *testing.T) {
+	prev := brokerAvailable
+	t.Cleanup(func() { brokerAvailable = prev })
+	brokerAvailable = func() bool { return true }
+	if ModeNormal.StopAgents() {
+		t.Fatal("daemon-held seats must survive SIGTERM")
+	}
+	if ModeUpgrade.StopAgents() {
+		t.Fatal("upgrade exit must still skip StopAll")
+	}
+}
+
 func TestModeString(t *testing.T) {
 	if ModeUpgrade.String() != "upgrade" {
 		t.Fatalf("upgrade string = %q", ModeUpgrade.String())
