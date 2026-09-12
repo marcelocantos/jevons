@@ -547,6 +547,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec) // 🎯T335 writ vertical
 	mux.HandleFunc("GET /api/portfolios", s.handleListPortfolios)            // 🎯T200: domain portfolio groups
 	mux.HandleFunc("GET /api/frontier", s.handleFrontier)                    // 🎯T131: live bullseye frontier table
+	mux.HandleFunc("GET /api/frontier/target", s.handleFrontierTarget)       // 🎯T647: any ledger row for chat hover
 	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)         // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)

@@ -249,6 +249,135 @@ func extractTargetExtra(raw map[string]any) map[string]string {
 	return out
 }
 
+// normalizeLedgerTargetID strips 🎯 and canonicalizes a leading t → T.
+func normalizeLedgerTargetID(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "🎯")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if s[0] == 't' && (len(s) == 1 || (s[1] >= '0' && s[1] <= '9')) {
+		return "T" + s[1:]
+	}
+	return s
+}
+
+func readBullseyeLedger(ledgerPath string) (bullseyeLedger, map[string]map[string]string, error) {
+	data, err := os.ReadFile(ledgerPath)
+	if err != nil {
+		return bullseyeLedger{}, nil, err
+	}
+	var doc bullseyeLedger
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return bullseyeLedger{}, nil, fmt.Errorf("parse ledger: %w", err)
+	}
+	extraByID := make(map[string]map[string]string)
+	var rawDoc bullseyeLedgerRaw
+	if err := yaml.Unmarshal(data, &rawDoc); err == nil && rawDoc.Targets != nil {
+		for id, m := range rawDoc.Targets {
+			if ex := extractTargetExtra(m); len(ex) > 0 {
+				extraByID[id] = ex
+			}
+		}
+	}
+	return doc, extraByID, nil
+}
+
+func frontierRowFromTarget(
+	id string,
+	t bullseyeTarget,
+	extra map[string]string,
+	nameOf map[string]string,
+	dependents []FrontierDependent,
+) FrontierRow {
+	acc := t.Acceptance
+	if acc == nil {
+		acc = []string{}
+	}
+	tags := t.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	deps := dependents
+	if deps == nil {
+		deps = []FrontierDependent{}
+	}
+	return FrontierRow{
+		ID:          id,
+		Name:        t.Name,
+		Status:      displayStatus(t.Status),
+		Fanout:      len(deps),
+		Dependents:  deps,
+		DependsOn:   resolveDependsOn(t.DependsOn, nameOf),
+		Value:       t.Value,
+		Cost:        t.Cost,
+		ActualCost:  t.ActualCost,
+		Acceptance:  acc,
+		Context:     strings.TrimSpace(t.Context),
+		Tags:        tags,
+		Attestation: strings.TrimSpace(t.Attestation),
+		Origin:      strings.TrimSpace(t.Origin),
+		Discovered:  strings.TrimSpace(t.Discovered),
+		Achieved:    strings.TrimSpace(t.Achieved),
+		Extra:       extra,
+	}
+}
+
+func ledgerNameMap(targets map[string]bullseyeTarget) map[string]string {
+	nameOf := make(map[string]string, len(targets))
+	for id, t := range targets {
+		nameOf[id] = t.Name
+	}
+	return nameOf
+}
+
+// ledgerDependents lists targets that depends_on focus. activeOnly matches
+// the frontier table (🎯T179). The single-target card includes every status
+// so an achieved row still shows who listed it.
+func ledgerDependents(targets map[string]bullseyeTarget, nameOf map[string]string, focus string, activeOnly bool) []FrontierDependent {
+	var out []FrontierDependent
+	for id, t := range targets {
+		if activeOnly && !isActiveStatus(t.Status) {
+			continue
+		}
+		for _, dep := range t.DependsOn {
+			if strings.TrimSpace(dep) != focus {
+				continue
+			}
+			out = append(out, FrontierDependent{ID: id, Name: nameOf[id]})
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return targetIDLess(out[i].ID, out[j].ID)
+	})
+	return out
+}
+
+// computeTargetFromLedger returns one ledger row at any status (🎯T647).
+// Unknown id → found=false, not a synthetic row.
+func computeTargetFromLedger(ledgerPath, id string) (FrontierRow, bool, error) {
+	id = normalizeLedgerTargetID(id)
+	if id == "" {
+		return FrontierRow{}, false, nil
+	}
+	doc, extraByID, err := readBullseyeLedger(ledgerPath)
+	if err != nil {
+		return FrontierRow{}, false, err
+	}
+	if doc.Targets == nil {
+		return FrontierRow{}, false, nil
+	}
+	t, ok := doc.Targets[id]
+	if !ok {
+		return FrontierRow{}, false, nil
+	}
+	nameOf := ledgerNameMap(doc.Targets)
+	deps := ledgerDependents(doc.Targets, nameOf, id, false)
+	return frontierRowFromTarget(id, t, extraByID[id], nameOf, deps), true, nil
+}
+
 // resolveDependsOn builds outgoing edges with names when the dep id is known.
 func resolveDependsOn(ids []string, nameOf map[string]string) []FrontierDependent {
 	if len(ids) == 0 {
@@ -277,26 +406,12 @@ func resolveDependsOn(ids []string, nameOf map[string]string) []FrontierDependen
 // rows: active targets whose depends_on are all done (or absent). Fanout is
 // the count of active dependents that list this id. Ordered by fanout desc, id.
 func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
-	data, err := os.ReadFile(ledgerPath)
+	doc, extraByID, err := readBullseyeLedger(ledgerPath)
 	if err != nil {
 		return nil, err
 	}
-	var doc bullseyeLedger
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parse ledger: %w", err)
-	}
 	if doc.Targets == nil {
 		return []FrontierRow{}, nil
-	}
-	// Raw pass for Extra (unknown keys) — best-effort; ignore parse errors.
-	extraByID := make(map[string]map[string]string)
-	var rawDoc bullseyeLedgerRaw
-	if err := yaml.Unmarshal(data, &rawDoc); err == nil && rawDoc.Targets != nil {
-		for id, m := range rawDoc.Targets {
-			if ex := extractTargetExtra(m); len(ex) > 0 {
-				extraByID[id] = ex
-			}
-		}
 	}
 
 	// Precompute active set and reverse edges for fanout / dependents (🎯T179).
@@ -364,34 +479,7 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 		if deps == nil {
 			deps = []FrontierDependent{}
 		}
-		acc := t.Acceptance
-		if acc == nil {
-			acc = []string{}
-		}
-		tags := t.Tags
-		if tags == nil {
-			tags = []string{}
-		}
-		dependsOn := resolveDependsOn(t.DependsOn, nameOf)
-		rows = append(rows, FrontierRow{
-			ID:          id,
-			Name:        t.Name,
-			Status:      displayStatus(t.Status),
-			Fanout:      len(deps),
-			Dependents:  deps,
-			DependsOn:   dependsOn,
-			Value:       t.Value,
-			Cost:        t.Cost,
-			ActualCost:  t.ActualCost,
-			Acceptance:  acc,
-			Context:     strings.TrimSpace(t.Context),
-			Tags:        tags,
-			Attestation: strings.TrimSpace(t.Attestation),
-			Origin:      strings.TrimSpace(t.Origin),
-			Discovered:  strings.TrimSpace(t.Discovered),
-			Achieved:    strings.TrimSpace(t.Achieved),
-			Extra:       extraByID[id],
-		})
+		rows = append(rows, frontierRowFromTarget(id, t, extraByID[id], nameOf, deps))
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Fanout != rows[j].Fanout {
@@ -604,6 +692,76 @@ func (s *Server) handleFrontier(w http.ResponseWriter, r *http.Request) {
 		s.ensureFrontierWatch(resp.Ledger)
 	}
 	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// TargetResponse is GET /api/frontier/target JSON (🎯T647).
+type TargetResponse struct {
+	Available bool         `json:"available"`
+	Found     bool         `json:"found"`
+	Ledger    string       `json:"ledger,omitempty"`
+	Cwd       string       `json:"cwd,omitempty"`
+	Target    *FrontierRow `json:"target,omitempty"`
+	Error     string       `json:"error,omitempty"`
+}
+
+func loadFrontierTarget(cwd, id string) (TargetResponse, int) {
+	id = normalizeLedgerTargetID(id)
+	resp := TargetResponse{}
+	if id == "" {
+		resp.Error = "id is required"
+		return resp, http.StatusBadRequest
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		resp.Error = "no workdir for bullseye discovery"
+		return resp, http.StatusOK
+	}
+	if strings.HasPrefix(cwd, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			cwd = filepath.Join(home, cwd[2:])
+		}
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		resp.Error = fmt.Sprintf("cwd: %v", err)
+		return resp, http.StatusOK
+	}
+	resp.Cwd = abs
+	ledger, notInit, err := discoverLedgerPath(abs)
+	if notInit {
+		resp.Error = "no bullseye ledger for this workdir"
+		return resp, http.StatusOK
+	}
+	if err != nil {
+		resp.Error = err.Error()
+		return resp, http.StatusOK
+	}
+	resp.Ledger = ledger
+	row, found, err := computeTargetFromLedger(ledger, id)
+	if err != nil {
+		resp.Error = fmt.Sprintf("read ledger: %v", err)
+		return resp, http.StatusOK
+	}
+	resp.Available = true
+	resp.Found = found
+	if !found {
+		resp.Error = "target not in ledger"
+		return resp, http.StatusNotFound
+	}
+	resp.Target = &row
+	return resp, http.StatusOK
+}
+
+// handleFrontierTarget serves GET /api/frontier/target?id= — any ledger row (🎯T647).
+func (s *Server) handleFrontierTarget(w http.ResponseWriter, r *http.Request) {
+	cwd := s.frontierCwdOr(r.URL.Query().Get("cwd"))
+	resp, code := loadFrontierTarget(cwd, r.URL.Query().Get("id"))
+	if resp.Available && resp.Ledger != "" {
+		s.ensureFrontierWatch(resp.Ledger)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 

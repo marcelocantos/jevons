@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createElement, useRef } from 'react';
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +20,9 @@ import { linkifyTargetIDsInHTML } from '../../frontier/targetHotspot';
 import {
   FANOUT_MARK,
   FRONTIER_API_PATH,
+  clearFrontierTargetCache,
   formatDepMinigraph,
+  formatMissingTargetMarkdown,
   formatStatus,
   formatTargetCardMarkdown,
   hoverCardMarkdown,
@@ -259,6 +261,64 @@ describeOracle(family('frontier'), () => {
     const fill = css.match(/#frontier-table \.ft-id > \.has-instant-tip\s*\{[^}]*\}/);
     expect(fill?.[0]).toMatch(/height:\s*100%/);
     expect(fill?.[0]).toMatch(/width:\s*100%/);
+  });
+
+  itOracle('T647', 'chat hover of a closed target paints ledger fields, not a phantom mermaid', async () => {
+    expect(formatTargetCardMarkdown({ id: 'T6433', name: '', status: '' })).toBe(
+      formatMissingTargetMarkdown('T6433'),
+    );
+    expect(formatTargetCardMarkdown({ id: 'T6433', name: '', status: '' })).not.toMatch(/mermaid/);
+    expect(formatDepMinigraph({ id: 'T6433', name: '', status: '' })).toBe('');
+    const achieved = toFrontierRows({
+      targets: [
+        {
+          id: 'T1',
+          name: 'Done base',
+          status: 'achieved',
+          acceptance: ['Closed still has text'],
+          context: 'Still on disk.',
+          attestation: 'SHA deadbeef',
+          achieved: '2026-09-12',
+        },
+      ],
+    })[0];
+    expect(formatTargetCardMarkdown(achieved)).toMatch(/Status/);
+    expect(formatTargetCardMarkdown(achieved)).toMatch(/Closed still has text/);
+    expect(formatTargetCardMarkdown(achieved)).toMatch(/Still on disk/);
+    const prev = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.includes('/api/frontier/target') && u.includes('T1')) {
+        return new Response(JSON.stringify({ available: true, found: true, target: achieved }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (u.includes('/api/frontier/target')) {
+        return new Response(JSON.stringify({ available: true, found: false }), { status: 404 });
+      }
+      return new Response('no', { status: 500 });
+    }) as typeof fetch;
+    try {
+      const { container } = render(createElement(HotspotProbe, { text: 'see 🎯T1 please', rows: [] }));
+      fireEvent.pointerEnter(container.querySelector('.target-hotspot')!);
+      await waitFor(() => {
+        const tip = container.querySelector('.instant-tip-show')?.textContent || '';
+        expect(tip).toMatch(/Status/);
+        expect(tip).toMatch(/Closed still has text/);
+        expect(tip).toMatch(/Still on disk/);
+      });
+      const miss = render(createElement(HotspotProbe, { text: 'see 🎯T6433 please', rows: [] }));
+      fireEvent.pointerEnter(miss.container.querySelector('.target-hotspot')!);
+      await waitFor(() => {
+        const tip = miss.container.querySelector('.instant-tip-show')?.textContent || '';
+        expect(tip).toMatch(/Not in this ledger/);
+        expect(tip).not.toMatch(/Dependencies/);
+      });
+    } finally {
+      globalThis.fetch = prev;
+      clearFrontierTargetCache();
+    }
   });
 
   itOracle('T326', 'chat 🎯Tn hotspots use the same InstantTip frontier-card chrome', () => {

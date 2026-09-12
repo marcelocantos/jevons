@@ -302,6 +302,119 @@ func TestLoadFrontierUnavailableWhenNotInitialized(t *testing.T) {
 	}
 }
 
+func TestComputeTargetFromLedgerIncludesAchieved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bullseye.yaml")
+	yaml := `
+targets:
+  T1:
+    name: Done base
+    status: achieved
+    acceptance:
+      - Closed still has text
+    context: Still on disk.
+    attestation: SHA deadbeef
+    achieved: "2026-09-12"
+  T2:
+    name: Ready leaf
+    status: converging
+    depends_on: [T1]
+  T3:
+    name: Blocked
+    status: identified
+    depends_on: [T2]
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	front, err := computeFrontierFromLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range front {
+		if r.ID == "T1" {
+			t.Fatal("achieved T1 must not be on the frontier list")
+		}
+	}
+	row, found, err := computeTargetFromLedger(path, "🎯T1")
+	if err != nil || !found {
+		t.Fatalf("want T1 found, err=%v found=%v", err, found)
+	}
+	if row.Name != "Done base" || row.Status != "Achieved" {
+		t.Fatalf("row=%+v", row)
+	}
+	if len(row.Acceptance) != 1 || row.Acceptance[0] != "Closed still has text" {
+		t.Fatalf("acceptance=%v", row.Acceptance)
+	}
+	if row.Context != "Still on disk." || row.Attestation != "SHA deadbeef" {
+		t.Fatalf("context/attestation=%q/%q", row.Context, row.Attestation)
+	}
+	if row.Achieved != "2026-09-12" {
+		t.Fatalf("achieved=%q", row.Achieved)
+	}
+	if len(row.Dependents) != 1 || row.Dependents[0].ID != "T2" {
+		t.Fatalf("dependents=%+v", row.Dependents)
+	}
+	blocked, found, err := computeTargetFromLedger(path, "T3")
+	if err != nil || !found || blocked.Name != "Blocked" {
+		t.Fatalf("blocked T3: found=%v err=%v row=%+v", found, err, blocked)
+	}
+	_, found, err = computeTargetFromLedger(path, "T6433")
+	if err != nil || found {
+		t.Fatalf("unknown id must not mint a row: found=%v err=%v", found, err)
+	}
+}
+
+func TestHandleFrontierTargetHTTP(t *testing.T) {
+	prev := runBullseyeCLI
+	t.Cleanup(func() { runBullseyeCLI = prev })
+
+	dir := t.TempDir()
+	ledger := filepath.Join(dir, "bullseye.yaml")
+	if err := os.WriteFile(ledger, []byte(`
+targets:
+  T1:
+    name: Done base
+    status: achieved
+    context: Still on disk.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runBullseyeCLI = func(args ...string) (string, error) {
+		return "File: " + ledger + "\n", nil
+	}
+	s := New("test", t.TempDir())
+	s.SetFrontierCwd(dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/frontier/target?id=T1", nil)
+	rr := httptest.NewRecorder()
+	s.handleFrontierTarget(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("status %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp TargetResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Available || !resp.Found || resp.Target == nil || resp.Target.Name != "Done base" {
+		t.Fatalf("resp=%+v", resp)
+	}
+
+	miss := httptest.NewRequest(http.MethodGet, "/api/frontier/target?id=T6433", nil)
+	missRR := httptest.NewRecorder()
+	s.handleFrontierTarget(missRR, miss)
+	if missRR.Code != 404 {
+		t.Fatalf("unknown id status %d body=%s", missRR.Code, missRR.Body.String())
+	}
+	var missResp TargetResponse
+	if err := json.Unmarshal(missRR.Body.Bytes(), &missResp); err != nil {
+		t.Fatal(err)
+	}
+	if missResp.Found || missResp.Target != nil {
+		t.Fatalf("unknown must not mint a target: %+v", missResp)
+	}
+}
+
 func TestHandleFrontierHTTP(t *testing.T) {
 	prev := runBullseyeCLI
 	t.Cleanup(func() { runBullseyeCLI = prev })

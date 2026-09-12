@@ -5,6 +5,7 @@
 
 export const FRONTIER_API_PATH = '/api/frontier';
 export const FRONTIER_GRAPH_API_PATH = '/api/frontier/graph';
+export const FRONTIER_TARGET_API_PATH = '/api/frontier/target';
 export const FANOUT_MARK = '\u169B';
 
 export type FrontierDependent = { id: string; name?: string };
@@ -22,6 +23,9 @@ export type FrontierRow = {
   depends_on?: Array<FrontierDependent | string>;
   dependents?: Array<FrontierDependent | string>;
   attestation?: string;
+  origin?: string;
+  discovered?: string;
+  achieved?: string;
   extra?: Record<string, unknown>;
 };
 
@@ -130,6 +134,9 @@ export function toFrontierRow(raw: unknown): FrontierRow | null {
   if (Array.isArray(t.depends_on)) row.depends_on = t.depends_on as FrontierRow['depends_on'];
   if (Array.isArray(t.dependents)) row.dependents = t.dependents as FrontierRow['dependents'];
   if (t.attestation != null) row.attestation = String(t.attestation);
+  if (t.origin != null) row.origin = String(t.origin);
+  if (t.discovered != null) row.discovered = String(t.discovered);
+  if (t.achieved != null) row.achieved = String(t.achieved);
   const extra = extraRecord(t.extra);
   if (extra) row.extra = extra;
   return row;
@@ -194,9 +201,61 @@ function mermaidLabel(id: string, name?: string): string {
   return label.replace(/"/g, "'").replace(/\n/g, ' ');
 }
 
+/** True when the row came from the ledger, not a chat-id stub (🎯T647). */
+export function rowHasLedgerBody(row?: Partial<FrontierRow> | null): boolean {
+  if (!row || !String(row.id || '').trim()) return false;
+  if (String(row.name || '').trim()) return true;
+  if (String(row.status || '').trim()) return true;
+  if (String(row.context || '').trim()) return true;
+  if (String(row.attestation || '').trim()) return true;
+  if (String(row.origin || '').trim()) return true;
+  if (String(row.discovered || '').trim()) return true;
+  if (String(row.achieved || '').trim()) return true;
+  if (normalizeStringList(row.acceptance).length) return true;
+  if (normalizeStringList(row.tags).length) return true;
+  if (normalizeDependents(row.depends_on).length) return true;
+  if (normalizeDependents(row.dependents).length) return true;
+  return false;
+}
+
+export function formatMissingTargetMarkdown(id: string): string {
+  const tid = String(id || '').trim();
+  if (!tid) return '';
+  return '**🎯' + tid + '**\n\nNot in this ledger.';
+}
+
+const targetRowCache = new Map<string, FrontierRow | null>();
+
+export function clearFrontierTargetCache(): void {
+  targetRowCache.clear();
+}
+
+export async function fetchFrontierTarget(
+  id: string,
+  signal?: AbortSignal,
+): Promise<FrontierRow | null> {
+  const tid = normalizeTargetID(id);
+  if (!tid) return null;
+  if (targetRowCache.has(tid)) return targetRowCache.get(tid) ?? null;
+  const r = await fetch(FRONTIER_TARGET_API_PATH + '?id=' + encodeURIComponent(tid), { signal });
+  if (r.status === 404) {
+    targetRowCache.set(tid, null);
+    return null;
+  }
+  if (!r.ok) throw new Error(String(r.status));
+  const data = (await r.json()) as { found?: boolean; target?: unknown };
+  if (!data || data.found === false || data.target == null) {
+    targetRowCache.set(tid, null);
+    return null;
+  }
+  const row = toFrontierRow(data.target);
+  targetRowCache.set(tid, row);
+  return row;
+}
+
 /** Focus + incoming dependents + outgoing depends_on (🎯T184). */
 export function formatDepMinigraph(row?: Partial<FrontierRow> | null): string {
-  if (!row || !row.id) return '';
+  if (!row || !row.id || !rowHasLedgerBody(row)) return '';
   const focusId = String(row.id).trim();
   const focusNode = mermaidNodeId(focusId);
   const depsOn = normalizeDependents(row.depends_on);
@@ -224,11 +283,16 @@ export function formatDepMinigraph(row?: Partial<FrontierRow> | null): string {
 export function formatTargetCardMarkdown(row?: Partial<FrontierRow> | null): string {
   if (!row || !row.id) return '';
   const id = String(row.id).trim();
+  if (!rowHasLedgerBody(row)) return formatMissingTargetMarkdown(id);
   const name = String(row.name || '').trim();
   const lines = ['**🎯' + id + '**' + (name ? ' — ' + name : '')];
   const st = statusTitle(row.status) || String(row.status || '').trim();
   if (st) {
     lines.push('', '**Status:** ' + st);
+  }
+  const achieved = row.achieved != null ? String(row.achieved).trim() : '';
+  if (achieved) {
+    lines.push('', '**Achieved:** ' + achieved);
   }
   const val = row.value != null && Number.isFinite(row.value) ? String(row.value) : '';
   const cost = row.cost != null && Number.isFinite(row.cost) ? String(row.cost) : '';
@@ -310,6 +374,9 @@ export function cardSourceFingerprint(row?: Partial<FrontierRow> | null): string
     acceptance: normalizeStringList(row.acceptance),
     context: row.context != null ? String(row.context) : '',
     attestation: row.attestation != null ? String(row.attestation) : '',
+    origin: row.origin != null ? String(row.origin) : '',
+    discovered: row.discovered != null ? String(row.discovered) : '',
+    achieved: row.achieved != null ? String(row.achieved) : '',
   });
 }
 
