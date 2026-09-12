@@ -40,7 +40,9 @@ func (s *Server) registerAgentMigrate() {
 					"rotated onto a fresh work session and seeded with a predecessor brief (live "+
 					"self-brief if the outgoing session is still up, otherwise Distill from disk; a "+
 					"model read of the predecessor is a throwaway compact session on the new provider, "+
-					"never the work session) (🎯T285 / 🎯T285.1). The owner-visible chat log is untouched. "+
+					"never the work session). When the live session supports it, claudia Agent.Migrate "+
+					"remaps the process (🎯T622) — Distill stays host-side. "+
+					"(🎯T285 / 🎯T285.1). The owner-visible chat log is untouched. "+
 					"Refuses when the predecessor's transcript cannot be found — pass force=true to "+
 					"switch cold on purpose. Same-provider is refused (that is a resume, not a migrate). "+
 					"Use this instead of stopping and re-creating an agent, which starts it with no history at all. "+
@@ -95,6 +97,11 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 	pending, err := s.migrator.PrepareMigration(name, claudia.Provider(target), force)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if pending.Remap == handover.RemapClaudiaMigrate {
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"%s migrated %s → %s via claudia Agent.Migrate. Host brief (%s) was gathered before the swap; the destination already received the inert seed.\n%s",
+			name, pending.From, pending.To, pending.BriefSource, pending.Describe())), nil
 	}
 	pending, err = s.migrator.CompleteThinBrief(pending)
 	if err != nil {

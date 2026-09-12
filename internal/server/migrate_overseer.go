@@ -64,7 +64,7 @@ func (s *Server) MigrateOverseerModel(to claudia.Provider, model string, force b
 		return handover.Pending{}, fmt.Errorf("migrate overseer: target provider is required")
 	}
 	return s.rotateOverseer("migrate", model, func(mig OverseerMigrator, name string) (handover.Pending, error) {
-		pending, err := mig.PrepareMigration(name, target, force)
+		pending, err := prepareAgentMigration(mig, name, target, model, force)
 		if err != nil {
 			return pending, err
 		}
@@ -142,6 +142,18 @@ func (s *Server) rotateOverseer(kind, model string,
 	pending, err := prepare(mig, name)
 	if err != nil {
 		return handover.Pending{}, err
+	}
+	if pending.Remap == handover.RemapClaudiaMigrate {
+		if agent := reg.Get(name); agent != nil {
+			s.AttachOverseer(agent)
+		}
+		s.SetOverseerDownReason("")
+		s.NotifyAgentsChanged()
+		if !pending.Delivered {
+			s.ResumePendingHandover()
+		}
+		slog.Info("overseer remapped via claudia Migrate", "detail", pending.Describe())
+		return pending, nil
 	}
 
 	if model = strings.TrimSpace(model); model != "" {

@@ -1001,12 +1001,19 @@ type IdleNudgeLoopArgs struct {
 	Now          func() time.Time
 }
 
-// StartIdleNudgeLoop wires enter-idle tracking and, after settle, runs 🎯T171 dual path:
+// brokerHoldsFleet is a seam over claudia.BrokerAvailable. When the
+// claudia daemon parents the fleet, a jevonsd bounce is a reclaim, not
+// a fleet restart: T171 dual-path must not fire (🎯T646).
+var brokerHoldsFleet = claudia.BrokerAvailable
+
+// StartIdleNudgeLoop wires enter-idle tracking and, after settle, runs 🎯T171 dual path
+// only when the claudia broker is not holding the seats:
 //
 //  1. daemon-restarted → each parent PO + overseer
 //  2. short fire-and-forget resume → open-mission work agents (T207 brief-or-verify)
 //  3. steady-state worker-idle remains transition-only via emitWorkerIdleToParent
 //
+// A broker-held fleet stays silent across a jevonsd bounce (🎯T646).
 // Does NOT periodic-poll nudge. Does NOT blast missionless/aside/overseer.
 func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	if args.Server == nil || args.Server.registry == nil {
@@ -1077,14 +1084,19 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	}
 	args.Server.mu.Unlock()
 
-	// After settle: dual path (events to PO+overseer, short resume to open-mission workers).
-	// 🎯T328: overseer also gets owner-intent-resume when chatlog has open work.
+	// After settle: T171 dual path only when jevonsd still parents the
+	// processes. Broker-held seats stay up; a reconnect indication is
+	// meaningless and an interrupt=true resume jams ACP (🎯T646).
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(postDelay):
-		args.Server.NotifyDaemonRestarted(overseer, defaultPO, stateDir)
-		args.Server.ResumeOpenMissionWorkers(overseer, stateDir, activity)
+		if brokerHoldsFleet() {
+			slog.Info("claudia daemon holds fleet; jevonsd bounce is silent")
+		} else {
+			args.Server.NotifyDaemonRestarted(overseer, defaultPO, stateDir)
+			args.Server.ResumeOpenMissionWorkers(overseer, stateDir, activity)
+		}
 	}
 
 	// Periodic fleet health + 🎯T315 open-mission idle re-pressure.

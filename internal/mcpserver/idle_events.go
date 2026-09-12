@@ -16,12 +16,14 @@ import (
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
-// 🎯T171 dual-path post-restart recovery (builds on 🎯T207 event path):
+// 🎯T171 dual-path post-restart recovery (builds on 🎯T207 event path),
+// only when jevonsd still parents the processes (CLAUDIA_NO_BROKER):
 //
 //  1. daemon-restarted → each durable parent PO + overseer (reattached summary)
 //  2. short fire-and-forget resume → open-mission work agents only (T207 brief-or-verify path)
 //  3. worker-idle → parent PO only on working→idle transition (debounced; not a poll)
 //
+// When the claudia daemon holds the seats, a jevonsd bounce is silent (🎯T646).
 // Rejected: only-PO hope, only-blast-everyone. Mechanical floor (dead/stuck) stays T204/T85.
 
 const (

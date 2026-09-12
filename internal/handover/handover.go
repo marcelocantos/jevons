@@ -31,7 +31,7 @@ func TranscriptFormat(fromProvider string) string {
 	case "claude":
 		return "Claude Code session JSONL — one JSON object per line, newest last"
 	case "grok":
-		return "Grok chat history JSONL — one JSON object per line, newest last"
+		return "Grok updates.jsonl — ACP session/update stream, one JSON object per line, newest last"
 	case "":
 		return "JSONL — one JSON object per line, newest last"
 	default:
@@ -157,7 +157,16 @@ type Pending struct {
 	TargetID     string `json:"target_id,omitempty"`
 	Goal         string `json:"goal,omitempty"`
 	NewSessionID string `json:"new_session_id,omitempty"`
+
+	// Remap names how the Session process was swapped (🎯T622). Empty is
+	// the T285 Stop+Register+Launch path. RemapClaudiaMigrate means
+	// claudia Agent.Migrate already remapped the live Session and sent
+	// its inert seed — the host must not Launch+SeedSuccessor again.
+	Remap string `json:"remap,omitempty"`
 }
+
+// RemapClaudiaMigrate is Pending.Remap when Agent.Migrate did the swap.
+const RemapClaudiaMigrate = "claudia-migrate"
 
 // EffectiveKind is compact whenever the providers do not differ.
 func (p Pending) EffectiveKind() string {

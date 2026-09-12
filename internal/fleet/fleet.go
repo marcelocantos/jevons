@@ -94,6 +94,11 @@ type Claudia struct {
 	selfBrief    func(p handover.Pending) (string, error)
 	compactBrief func(p handover.Pending) (sessionID, text string, err error)
 
+	// liveMigrate is the 🎯T622 seam for claudia Agent.Migrate. Nil is the
+	// product path (reg.Get(name).Migrate). Tests inject a recorder so the
+	// primitive is asserted without a live provider process.
+	liveMigrate func(args *claudia.MigrateArgs) error
+
 	// onLaunch brackets a launch this adapter performs (🎯T426). It is called
 	// BEFORE the process comes up and returns the function to call once it
 	// has. The host attaches whatever must ride EVERY launch — today the

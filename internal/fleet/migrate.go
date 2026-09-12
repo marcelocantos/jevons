@@ -80,6 +80,14 @@ func (f *Claudia) ClearHandover(name string) error {
 // refuses, because silently discarding an agent's history is exactly the
 // outcome this path exists to prevent.
 func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error) {
+	return f.PrepareMigrationPinned(name, to, "", force)
+}
+
+// PrepareMigrationPinned is PrepareMigration with a destination model pin
+// for the live claudia Agent.Migrate path (🎯T622). Empty model keeps the
+// target provider default. The rotate fallback still binds the default;
+// HTTP/overseer re-apply a pin after rotate when they Launch.
+func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model string, force bool) (handover.Pending, error) {
 	if f == nil || f.reg == nil {
 		return handover.Pending{}, fmt.Errorf("migrate: no agent registry")
 	}
@@ -126,6 +134,10 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	draft.BriefSource = string(brief.Source)
 	draft.CompactSessionID = brief.CompactSessionID
 
+	if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
+		return pending, err
+	}
+
 	pending, err := f.rotate(name, target, force, "migrate")
 	if err != nil {
 		return pending, err
@@ -160,6 +172,9 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 // stall. The work session id on the registry row is kept distinct from
 // the compact session (🎯T285.1).
 func (f *Claudia) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
+	if p.Remap == handover.RemapClaudiaMigrate {
+		return p, nil
+	}
 	if !handover.ProviderSwitch(p.From, p.To) {
 		return p, nil
 	}
@@ -368,7 +383,9 @@ func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 	if err != nil || !ok {
 		return handover.Pending{}, false, err
 	}
-	if !pending.Usable() {
+	if pending.Remap == handover.RemapClaudiaMigrate || !pending.Usable() {
+		// RemapClaudiaMigrate: Claudia already continued the destination
+		// (🎯T646.1). Usable=false includes already-delivered records.
 		return pending, false, nil
 	}
 	ag := f.reg.Get(name)
@@ -399,6 +416,12 @@ func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 // is deliberately not a new clock: one scan before, one scan after, and clause
 // 10's prohibition on widening either existing clock is untouched.
 func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
+	if pending.Remap == handover.RemapClaudiaMigrate {
+		// Claudia already Send the inert continue seed. A second host
+		// Deliver is the bounce-nudge bug in another costume (🎯T646.1).
+		slog.Info("handover seed skipped; claudia Migrate already continued the seat", "name", name)
+		return
+	}
 	seed := pending.Seed()
 	look := f.watchSeedArrival(name, seed)
 
@@ -617,6 +640,109 @@ func (f *Claudia) launchThrowawayCompact(p handover.Pending) (string, string, er
 		return sid, "", err
 	}
 	return sid, strings.TrimSpace(text), nil
+}
+
+var errNoLiveAgent = errors.New("migrate: no live session to remap")
+
+// remapViaClaudia is the 🎯T622 live path: claudia Agent.Migrate does the
+// Session remapping. Distill / GatherBrief stay host-side and are already
+// on draft. ok is false when the caller should fall through to rotate.
+func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model string, force bool, draft handover.Pending) (handover.Pending, bool, error) {
+	if f == nil || f.reg == nil {
+		return handover.Pending{}, false, nil
+	}
+	if f.liveMigrate == nil && f.reg.Get(name) == nil {
+		return handover.Pending{}, false, nil
+	}
+	args := &claudia.MigrateArgs{Provider: target, Model: model, Force: force, Reason: "explicit"}
+	if err := f.invokeMigrate(name, args); err != nil {
+		if isLiveMigrateFallback(err) {
+			return handover.Pending{}, false, nil
+		}
+		return handover.Pending{}, true, err
+	}
+	def := f.reg.Def(name)
+	if def == nil {
+		return handover.Pending{}, true, fmt.Errorf("migrate %q: registry row vanished after Agent.Migrate", name)
+	}
+	next := *def
+	next.Provider = target
+	next.ConnectURL = ""
+	next.ConnectPID = 0
+	if model != "" {
+		next.Model = cli.BindSessionModel(model, target)
+	} else if target != def.Provider {
+		next.Model = cli.BindSessionModel("", target)
+	}
+	nextSession := uuid.NewString()
+	if live := f.reg.Get(name); live != nil {
+		if sid := strings.TrimSpace(live.SessionID()); sid != "" && sid != def.SessionID {
+			nextSession = sid
+		}
+		if m := strings.TrimSpace(live.Model()); m != "" && model == "" {
+			next.Model = m
+		}
+	}
+	next.SessionID = nextSession
+	next.Materialized = true
+	if err := f.reg.Register(next); err != nil {
+		return handover.Pending{}, true, fmt.Errorf("migrate %q: record remapped row: %w", name, err)
+	}
+	pending := draft
+	pending.To = string(target)
+	pending.NewSessionID = nextSession
+	pending.Remap = handover.RemapClaudiaMigrate
+	pending.Purpose = next.Purpose
+	pending.WorkDir = next.WorkDir
+	pending.Parent = next.Parent
+	pending.Model = next.Model
+	pending.TargetID = next.TargetID
+	pending.Goal = next.Goal
+	if f.handovers != nil {
+		if err := f.handovers.Put(pending); err != nil {
+			return pending, true, fmt.Errorf("migrate %q: persist remapped brief: %w", name, err)
+		}
+		if err := f.handovers.MarkDelivered(name); err != nil {
+			slog.Error("claudia migrate seeded but handover not marked delivered",
+				"name", name, "err", err)
+		} else {
+			pending.Delivered = true
+		}
+	}
+	if f.rotations != nil {
+		_ = f.rotations.Put(handover.Rotation{Agent: name, Kind: "migrate"})
+	}
+	slog.Info("agent session remapped via claudia Migrate",
+		"name", name, "from", pending.From, "to", pending.To,
+		"old_session", pending.OldSessionID, "new_session", nextSession)
+	return pending, true, nil
+}
+
+func (f *Claudia) invokeMigrate(name string, args *claudia.MigrateArgs) error {
+	if f.liveMigrate != nil {
+		return f.liveMigrate(args)
+	}
+	live := f.reg.Get(name)
+	if live == nil {
+		return errNoLiveAgent
+	}
+	return live.Migrate(args)
+}
+
+func isLiveMigrateFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errNoLiveAgent) {
+		return true
+	}
+	var capErr *claudia.CapabilityError
+	if errors.As(err, &capErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "agent process not running") ||
+		strings.Contains(msg, "agent not ready")
 }
 
 func throwawayCompactDef(source claudia.AgentDef, name, sessionID string, provider claudia.Provider) claudia.AgentDef {

@@ -39,6 +39,23 @@ type FleetMigrator interface {
 	PinModel(name, model string) error
 }
 
+// migratePinner is the 🎯T622 model-pin seam on PrepareMigration. fleet.Claudia
+// implements it; test fakes do not, and fall through to PrepareMigration.
+type migratePinner interface {
+	PrepareMigrationPinned(name string, to claudia.Provider, model string, force bool) (handover.Pending, error)
+}
+
+type migrationPreparer interface {
+	PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error)
+}
+
+func prepareAgentMigration(mig migrationPreparer, name string, to claudia.Provider, model string, force bool) (handover.Pending, error) {
+	if p, ok := mig.(migratePinner); ok {
+		return p.PrepareMigrationPinned(name, to, model, force)
+	}
+	return mig.PrepareMigration(name, to, force)
+}
+
 // SetFleetMigrator wires the fleet migrate capability for
 // POST /api/agents/migrate.
 func (s *Server) SetFleetMigrator(m FleetMigrator) {
@@ -252,9 +269,22 @@ func (s *Server) handleAgentMigrateHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	pending, err := mig.PrepareMigration(name, claudia.Provider(provider), body.Force)
+	pending, err := prepareAgentMigration(mig, name, claudia.Provider(provider), model, body.Force)
 	if err != nil {
 		writeJSONError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if pending.Remap == handover.RemapClaudiaMigrate {
+		resp := map[string]any{
+			"ok": true, "name": name, "provider": provider, "kind": "migrate",
+			"remap": pending.Remap, "from": pending.From, "to": pending.To,
+			"handover": pending.BriefSource,
+		}
+		if model != "" {
+			resp["model"] = model
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+		s.NotifyAgentsChanged()
 		return
 	}
 	pending, err = mig.CompleteThinBrief(pending)
