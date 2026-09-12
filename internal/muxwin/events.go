@@ -647,6 +647,31 @@ func toolUseEvent(index int, blk map[string]any, ts string) Event {
 	}
 }
 
+// coalesceAssistantText is the React 🎯T147 / 🎯T645 join-time helper.
+// Fence opener with no boundary newline → blank line. Sentence punct +
+// ASCII capital → a space. Otherwise bare concat (intra-token streams).
+func coalesceAssistantText(prev, next string) string {
+	if prev == "" {
+		return next
+	}
+	if next == "" {
+		return prev
+	}
+	if strings.HasSuffix(prev, "\n") || strings.HasSuffix(prev, "\r") ||
+		strings.HasPrefix(next, "\n") || strings.HasPrefix(next, "\r") {
+		return prev + next
+	}
+	if strings.HasPrefix(next, "```") {
+		return prev + "\n\n" + next
+	}
+	last := prev[len(prev)-1]
+	first := next[0]
+	if (last == '.' || last == '!' || last == '?') && first >= 'A' && first <= 'Z' {
+		return prev + " " + next
+	}
+	return prev + next
+}
+
 func contentText(msg *struct {
 	Content    any    `json:"content"`
 	StopReason string `json:"stop_reason"`
@@ -658,7 +683,7 @@ func contentText(msg *struct {
 	case string:
 		return c
 	case []any:
-		var b strings.Builder
+		acc := ""
 		for _, raw := range c {
 			m, ok := raw.(map[string]any)
 			if !ok {
@@ -669,9 +694,9 @@ func contentText(msg *struct {
 				continue
 			}
 			s, _ := m["text"].(string)
-			b.WriteString(s)
+			acc = coalesceAssistantText(acc, s)
 		}
-		return b.String()
+		return acc
 	default:
 		return ""
 	}
@@ -689,7 +714,7 @@ func appendAssistant(ev Event, text, stop, ts string) Event {
 	if text != "" {
 		switch c := msg["content"].(type) {
 		case string:
-			msg["content"] = c + text
+			msg["content"] = coalesceAssistantText(c, text)
 		case []any:
 			joined := false
 			for i := range c {
@@ -699,7 +724,7 @@ func appendAssistant(ev Event, text, stop, ts string) Event {
 				}
 				t, _ := blk["type"].(string)
 				if t == "text" || t == "output_text" {
-					blk["text"] = fmt.Sprint(blk["text"]) + text
+					blk["text"] = coalesceAssistantText(fmt.Sprint(blk["text"]), text)
 					c[i] = blk
 					joined = true
 				}

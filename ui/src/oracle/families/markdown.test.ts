@@ -4,6 +4,7 @@
 import { expect } from 'vitest';
 import { ensureFenceNewlines, parseAssistantMarkdown } from '../../conversation/markdown';
 import { bubblePaintsMarkdown, paintUserHTML } from '../../conversation/paint';
+import { coalesceAssistantText, joinAssistantTexts } from '../../conversation/stream';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
 
@@ -14,8 +15,25 @@ describeOracle(family('markdown'), () => {
     expect(html).toContain('const x = 1');
   });
 
-  itOracle('T147', 'coalesce inserts a newline before a fence opener at a segment boundary', () => {
+  itOracle('T145', 'display-time fence normalize still lifts a smushed opener', () => {
     expect(ensureFenceNewlines('see:```js\nconst x = 1\n```')).toBe('see:\n\n```js\nconst x = 1\n```');
+  });
+
+  itOracle('T147', 'join-time coalesce inserts a newline before a fence opener at a segment boundary', () => {
+    const out = coalesceAssistantText('Intro.', '```cpp\ncode\n```');
+    expect(out).toBe('Intro.\n\n```cpp\ncode\n```');
+    expect(out).not.toContain('.```');
+    expect(joinAssistantTexts(['See:', '```js\n1\n```'])).toBe('See:\n\n```js\n1\n```');
+  });
+
+  itOracle('T645', 'React join helper separates fence and sentence ACP edges, not T145 display repair', () => {
+    const fence = coalesceAssistantText('finish-report.', '```jevons\nk: v\n```');
+    expect(fence).toBe('finish-report.\n\n```jevons\nk: v\n```');
+    expect(fence).not.toContain('.```');
+    const sentence = coalesceAssistantText('idle.', 'The reminted');
+    expect(sentence).toBe('idle. The reminted');
+    expect(sentence).not.toContain('idle.The');
+    expect(coalesceAssistantText('Hello', '.')).toBe('Hello.');
   });
 
   itOracle('T150', 'streaming emphasis is complete structure, not raw asterisks', () => {

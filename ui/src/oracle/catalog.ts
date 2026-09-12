@@ -49,7 +49,7 @@ export const CATALOG: readonly OracleFamily[] = [
     title: 'Markdown, mermaid, streaming emphasis, agent-report paint',
     file: 'markdown.test.ts',
     layer: 'hermetic',
-    covers: covers('markdown', ['T59', 'T74', 'T147', 'T150', 'T381']),
+    covers: covers('markdown', ['T59', 'T74', 'T145', 'T147', 'T150', 'T381', 'T645']),
   },
   {
     id: 'composer-keys',

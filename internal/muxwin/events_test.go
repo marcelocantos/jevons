@@ -423,6 +423,45 @@ func TestWindowThenLiveAppendThenBeforeKeepsOrder(t *testing.T) {
 	}
 }
 
+func TestT645JoinCoalesceFenceAndSentence(t *testing.T) {
+	// Live append and hydrate share join-time coalesce (React cockpit
+	// hard-reload path is EventsFromLines; live is ApplyLive).
+	fenceLive, _, _ := ApplyLive(nil, tok("s3", "finish-report.", ""))
+	_, fenceChanged, fenceOp := ApplyLive(fenceLive, tok("s3", "```jevons\nk: v\n```", ""))
+	if fenceOp != "append" {
+		t.Fatalf("fence live op=%s", fenceOp)
+	}
+	if prose(fenceChanged) != "finish-report.\n\n```jevons\nk: v\n```" {
+		t.Fatalf("fence live %q", prose(fenceChanged))
+	}
+	if strings.Contains(prose(fenceChanged), ".```") {
+		t.Fatalf("fence live smushed: %q", prose(fenceChanged))
+	}
+	hydratedFence := EventsFromLines([]string{
+		tok("s3", "finish-report.", ""),
+		tok("s3", "```jevons\nk: v\n```", "end_turn"),
+	})
+	if len(hydratedFence) != 1 || prose(hydratedFence[0]) != prose(fenceChanged) {
+		t.Fatalf("hydrate fence %q live %q n=%d", prose(hydratedFence[0]), prose(fenceChanged), len(hydratedFence))
+	}
+
+	sentLive, _, _ := ApplyLive(nil, tok("s4", "idle.", ""))
+	_, sentChanged, sentOp := ApplyLive(sentLive, tok("s4", "The reminted", ""))
+	if sentOp != "append" {
+		t.Fatalf("sentence live op=%s", sentOp)
+	}
+	if prose(sentChanged) != "idle. The reminted" {
+		t.Fatalf("sentence live %q", prose(sentChanged))
+	}
+	hydratedSent := EventsFromLines([]string{
+		tok("s4", "idle.", ""),
+		tok("s4", "The reminted", "end_turn"),
+	})
+	if len(hydratedSent) != 1 || prose(hydratedSent[0]) != "idle. The reminted" {
+		t.Fatalf("hydrate sentence %q n=%d", prose(hydratedSent[0]), len(hydratedSent))
+	}
+}
+
 func TestBeforeUnsentWalksPastAlreadyHave(t *testing.T) {
 	evs := EventsFromLines([]string{
 		user("u0"), user("u1"), user("u2"), user("u3"), user("u4"),

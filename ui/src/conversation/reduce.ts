@@ -8,6 +8,7 @@ export type ConversationEvent = Omit<MuxEnvelope, 't'> & {
 };
 import {
   applyTranscriptFrame,
+  coalesceAssistantText,
   emptyStream,
   offsetStream,
   reduceTranscriptBodies,
@@ -101,7 +102,7 @@ function appendTextToFrame(frame: unknown, text: string): unknown {
   const msg = rec(f.message);
   const content = msg.content;
   if (typeof content === 'string') {
-    return { ...f, message: { ...msg, content: content + text } };
+    return { ...f, message: { ...msg, content: coalesceAssistantText(content, text) } };
   }
   if (Array.isArray(content)) {
     let joined = false;
@@ -109,7 +110,7 @@ function appendTextToFrame(frame: unknown, text: string): unknown {
       const blk = rec(b);
       if (joined || (blk.type !== 'text' && blk.type !== 'output_text')) return b;
       joined = true;
-      return { ...blk, text: String(blk.text || '') + text };
+      return { ...blk, text: coalesceAssistantText(String(blk.text || ''), text) };
     });
     if (!joined) next.push({ type: 'text', text });
     return { ...f, message: { ...msg, content: next } };

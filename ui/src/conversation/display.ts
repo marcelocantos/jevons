@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { classifyInjectUserText } from './inject';
-import { isSealedAssistant } from './stream';
+import { isSealedAssistant, joinAssistantTexts } from './stream';
 import { turnOriginOf, type TurnOrigin } from './paint';
 import { isGenericToolName, summariseInput } from './toolSummary';
 
@@ -83,10 +83,11 @@ export function proseText(frame: unknown): string {
   const msg = message(frame);
   const content = msg?.content ?? f.content ?? f.text;
   if (typeof content === 'string') return content;
-  return blocks(frame)
-    .filter((b) => isProseBlock(b))
-    .map((b) => String(b.text || ''))
-    .join('');
+  return joinAssistantTexts(
+    blocks(frame)
+      .filter((b) => isProseBlock(b))
+      .map((b) => String(b.text || '')),
+  );
 }
 
 /** Strip journal echo markers so owner text matches the live bubble (🎯T537.1.2). */

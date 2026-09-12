@@ -25,8 +25,34 @@ export function emptyStream(): StreamJoin {
   };
 }
 
+/**
+ * Join-time ACP segment repair (vanilla 🎯T147; React restore 🎯T645).
+ * T145 ensureFenceNewlines is display-only; this is the join helper.
+ * Fence opener with no boundary newline → blank line. Sentence punct +
+ * capital → a space. Otherwise bare concat (intra-token streams).
+ */
+export function coalesceAssistantText(
+  prev: string | null | undefined,
+  next: string | null | undefined,
+): string {
+  const a = String(prev ?? '');
+  const b = String(next ?? '');
+  if (!a) return b;
+  if (!b) return a;
+  if (/[\n\r]$/.test(a) || /^[\n\r]/.test(b)) return a + b;
+  if (/^```/.test(b)) return a + '\n\n' + b;
+  if (/[.!?]$/.test(a) && /^[A-Z]/.test(b)) return a + ' ' + b;
+  return a + b;
+}
+
+export function joinAssistantTexts(
+  parts: Array<string | null | undefined> | null | undefined,
+): string {
+  return (parts || []).reduce((acc, p) => coalesceAssistantText(acc, p), '');
+}
+
 export function appendAssistantStream(prev: string, next: string): string {
-  return String(prev || '') + String(next || '');
+  return coalesceAssistantText(prev, next);
 }
 
 export function joinAssistantSegments(prev: string, next: string): string {

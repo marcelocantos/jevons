@@ -186,6 +186,34 @@ describe('applyConversationEvent', () => {
     expect(rows[0].sealed).toBe(false);
   });
 
+  it('mux append coalesces T645 fence and sentence edges, not glue', () => {
+    const asst = (id: string, index: number, text: string, op: 'put' | 'append') => ({
+      id,
+      index,
+      op,
+      type: 'assistant',
+      ...(op === 'put'
+        ? { event: { type: 'assistant', message: { content: [{ type: 'text', text }] } } }
+        : { text }),
+    });
+    let s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: asst('e:1', 1, 'finish-report.', 'put'),
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: asst('e:1', 1, '```jevons\nk: v\n```', 'append'),
+    });
+    expect(displayRows(s.frames)[0].text).toBe('finish-report.\n\n```jevons\nk: v\n```');
+    s = emptyConversation();
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: asst('e:2', 2, 'idle.', 'put'),
+    });
+    s = applyConversationEvent(s, {
+      v: 1, ch: 'transcript:jevons', t: 'frame', body: asst('e:2', 2, 'The reminted', 'append'),
+    });
+    expect(displayRows(s.frames)[0].text).toBe('idle. The reminted');
+  });
+
   it('mux append copies terminal stop_reason onto the growing frame (🎯T64.4)', () => {
     let s = emptyConversation();
     s = applyConversationEvent(s, {
