@@ -103,11 +103,18 @@ func NewReader(args ReaderArgs) *Reader {
 					tok = t
 				}
 			}
-			return claudia.QueryAllPlanUsage(ctx, &claudia.AllPlanUsageArgs{
-				Providers:           SupportedProviders(),
-				GrokUnstableUsage:   grok,
-				CursorUnstableUsage: cursor,
-				CursorAccessToken:   tok,
+			// The claudia daemon is the one plan-usage evaluator on the
+			// host when it is running; LoadPlanUsage reads its snapshot
+			// and falls back to the host-wide filesystem cache (shared
+			// with every other claudia consumer) when it is not. Either
+			// way jevonsd never races another process to a vendor endpoint.
+			return claudia.LoadPlanUsage(ctx, &claudia.PlanUsageCacheArgs{
+				All: &claudia.AllPlanUsageArgs{
+					Providers:           SupportedProviders(),
+					GrokUnstableUsage:   grok,
+					CursorUnstableUsage: cursor,
+					CursorAccessToken:   tok,
+				},
 			})
 		}
 	}

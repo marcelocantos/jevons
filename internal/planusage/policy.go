@@ -4,9 +4,10 @@
 package planusage
 
 import (
-	"math"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // WeeklyBand is the daemon policy class for one provider's weekly window.
@@ -69,18 +70,7 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 // one. One rule, one implementation, reached from both paths — the whole
 // point of serving the band is that nothing downstream re-derives it.
 func BandOfWindow(w Window, now time.Time, th Thresholds) WeeklyBand {
-	if w.RemainingPercent != nil && *w.RemainingPercent <= 0 {
-		return BandExhausted
-	}
-	used := usedPercent(w)
-	rtp, hasTime := remainingTimePercent(w, now)
-	if !hasTime || used == nil {
-		return BandOK
-	}
-	elapsed := 100 - rtp
-	// 🎯T596: colour answers "how much must we change what we are doing",
-	// not "where do we end up if nothing changes".
-	return BandOfPressure(Pressure(*used, elapsed, th), th)
+	return WeeklyBand(claudia.ClassifyWindow(windowToClaudia(w), now, thresholdsToClaudia(th)))
 }
 
 // SessionStatus is the session-window eligibility class (🎯T390.1.5.1).
@@ -387,27 +377,7 @@ func burningFastReachable(used, elapsed float64, th Thresholds) bool {
 // start of a window, where used/elapsed divides one near-zero number by
 // another and produced the red bar on a 94%-remaining week.
 func Pressure(used, elapsed float64, th Thresholds) float64 {
-	remaining := 100 - used
-	timeLeft := 100 - elapsed
-	if timeLeft <= 0 {
-		timeLeft = 0.0001 // the last instant, not a division by zero
-	}
-	if remaining <= 0 {
-		return math.Inf(1) // spent: no correction can fix it
-	}
-	// Zero means "unset, use the default", consistent with every other
-	// vertex here and robust to a config that omits the key. The cost is
-	// that zero cannot express "no prior at all"; pass a negligible k for
-	// that (a test isolating the prior's effect is the only caller that
-	// wants it).
-	k := th.ShrinkPriorK
-	if k <= 0 {
-		k = DefaultShrinkPriorK
-	}
-	lambda := k * (timeLeft / 100)
-	current := (used + lambda) / (elapsed + lambda)
-	required := remaining / timeLeft
-	return math.Log(current / required)
+	return claudia.Pressure(used, elapsed, thresholdsToClaudia(th))
 }
 
 // BandOfPressure maps pressure onto the owner-visible bands (🎯T596).
@@ -415,32 +385,7 @@ func Pressure(used, elapsed float64, th Thresholds) float64 {
 // leaving allowance unspent, so the waste side is given more room before
 // it says anything.
 func BandOfPressure(p float64, th Thresholds) WeeklyBand {
-	red, amber := th.PanicRedLn, th.PanicAmberLn
-	locked, under := th.WasteLockedLn, th.WasteUnderLn
-	if red <= 0 {
-		red = DefaultPanicRedLn
-	}
-	if amber <= 0 {
-		amber = DefaultPanicAmberLn
-	}
-	if locked >= 0 {
-		locked = DefaultWasteLockedLn
-	}
-	if under >= 0 {
-		under = DefaultWasteUnderLn
-	}
-	switch {
-	case p >= red:
-		return BandHot
-	case p >= amber:
-		return BandAhead
-	case p <= locked:
-		return BandLocked
-	case p <= under:
-		return BandUnder
-	default:
-		return BandOK
-	}
+	return WeeklyBand(claudia.BandOfPressure(p, thresholdsToClaudia(th)))
 }
 
 // destPressureIndifference is the headroom gap below which two backends

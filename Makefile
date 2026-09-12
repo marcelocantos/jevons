@@ -187,7 +187,7 @@ bin/gotest: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/gotest ./cmd/gotest
 
-# 🎯T254.2: builds the daily daemon from committed HEAD in a throwaway
+# 🎯T254.2: builds the development daemon from committed HEAD in a throwaway
 # worktree, so one worker's uncommitted edits cannot stop another rebuilding.
 .PHONY: buildsnap
 buildsnap: bin/buildsnap
@@ -266,6 +266,10 @@ export GOMAXPROCS = $(TEST_CPUS)
 TEST_PKG_PAR ?= 4
 
 .PHONY: test test-go test-go-raw test-web test-ui
+# Hermetic Go tests never reach a claudia daemon installed on this machine:
+# with one reachable, every Registry launch in a fixture would be granted a
+# real seat with a real provider process behind it.
+test-go test-go-raw: export CLAUDIA_NO_BROKER = 1
 test-go: bin/gotest
 	@bin/gotest -p $(TEST_PKG_PAR) ./...
 
@@ -380,7 +384,7 @@ test-live-suite:
 	go run ./scripts/live-suite -skip-overseer
 
 # Isolated owner-chat user journeys (separate port + state dir + MCP name).
-# Does NOT touch daily-driver stream. Part of `make test` (🎯T492): needing
+# Does NOT touch the development stream. Part of `make test` (🎯T492): needing
 # a signed-in provider CLI is a dependency of the suite, not a reason to
 # omit the owner-visible net. Missing provider is OUTAGE (exit 2), not skip.
 #

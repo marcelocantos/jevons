@@ -32,8 +32,15 @@ func ReattachFleetContext(ctx context.Context, reg *claudia.Registry) []string {
 	before := SessionSnapshot(reg)
 	// Cursor ACP leftovers cannot be adopted. Reap them before Launch
 	// so the successor opens exactly one client per store.db (🎯T541.1).
-	ReapCursorFleetLeftovers(reg)
-	reapOrphanCursorACP()
+	// Unless the claudia daemon holds the fleet: then those processes
+	// are the daemon's live seats, and Launch below reclaims them by
+	// name over the socket instead of stacking a second client.
+	if !brokerAvailable() {
+		ReapCursorFleetLeftovers(reg)
+		reapOrphanCursorACP()
+	} else {
+		slog.Info("claudia daemon present; fleet seats are reclaimed, not reaped")
+	}
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -48,6 +55,11 @@ func ReattachFleetContext(ctx context.Context, reg *claudia.Registry) []string {
 
 // reapOrphanCursorACP is a seam so hermetics never signal live leftovers.
 var reapOrphanCursorACP = claudia.ReapOrphanCursorACP
+
+// brokerAvailable is a seam over claudia.BrokerAvailable: when the claudia
+// daemon runs, it owns every seat's process and its survival across a
+// jevonsd restart; jevonsd only reconnects by name.
+var brokerAvailable = claudia.BrokerAvailable
 
 // ReapCursorFleetLeftovers kills leftover writers on every registered
 // Cursor session store (persisted ConnectPID + anyone holding store.db).
@@ -67,6 +79,11 @@ func ReapCursorFleetLeftovers(reg *claudia.Registry) {
 // exit. Grok connect-mode and Claude tmux stay running for reattach.
 func StopNonAdoptable(reg *claudia.Registry) int {
 	if reg == nil {
+		return 0
+	}
+	if brokerAvailable() {
+		// Every seat is adoptable when the daemon parents it: the next
+		// jevonsd grants by name and gets the running process back.
 		return 0
 	}
 	n := 0

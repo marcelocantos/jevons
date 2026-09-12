@@ -6,6 +6,8 @@ package planusage
 import (
 	"fmt"
 	"strings"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // IsExhaustedReason reports whether an unavailable reason is the
@@ -14,14 +16,7 @@ import (
 // (🎯T390.1.3): that case paints 0% session+weekly bars, not a collapsed
 // icon.
 func IsExhaustedReason(reason string) bool {
-	s := strings.ToLower(reason)
-	if s == "" {
-		return false
-	}
-	return strings.Contains(s, "429") ||
-		strings.Contains(s, "rate_limit") ||
-		strings.Contains(s, "rate-limit") ||
-		strings.Contains(s, "rate limited")
+	return claudia.IsExhaustedReason(reason)
 }
 
 // ShowOnBar is the cockpit filter: idle Bedrock stays off the ticker

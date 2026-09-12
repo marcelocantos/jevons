@@ -111,10 +111,10 @@ func TestShutdownPlanSkipsStopAllOnUpgrade(t *testing.T) {
 	}
 
 	cases := []struct {
-		name       string
-		sighup     bool
-		env        bool
-		wantStop   bool
+		name        string
+		sighup      bool
+		env         bool
+		wantStop    bool
 		wantUpgrade bool
 	}{
 		{"sigterm_default", false, false, true, false},
