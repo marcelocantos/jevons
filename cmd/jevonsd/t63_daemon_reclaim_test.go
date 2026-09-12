@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 )
@@ -38,7 +37,6 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 	}
 	provider, gate := t63LiveProvider(t)
 	name := "t63-" + string(provider) + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
-	wantSID := uuid.NewString()
 	root := t.TempDir()
 	state, home := filepath.Join(root, "state"), filepath.Join(root, "home")
 	for _, dir := range []string{state, home} {
@@ -46,6 +44,7 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	wantSID := t63PrimeSeat(t, name, root, provider)
 	cfg := filepath.Join(root, "config.yaml")
 	body := fmt.Sprintf("owner_name: T63\noverseer_name: %s\nstate_dir: %q\nworkdir: %q\nprovider: %s\nmcp_server_name: t63-journey\nfrontier_consume:\n  disabled: true\n", name, state, root, provider)
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
@@ -183,6 +182,55 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 	if n := t63GrantCount(t, name); n != 1 {
 		t.Fatalf("after reclaim WaitForResponse: grants = %d, want 1", n)
 	}
+}
+
+// TestT63PrimeSeat is a subprocess helper: grant a daemon seat and exit
+// without Stop so the seat stays held and unowned for jevonsd to reclaim.
+func TestT63PrimeSeat(t *testing.T) {
+	if os.Getenv("T63_PRIME") != "1" {
+		t.Skip("helper for TestT63DaemonReclaimJourney")
+	}
+	t.Setenv("CLAUDIA_NO_BROKER", "")
+	a, err := claudia.Start(claudia.Config{
+		Name:     os.Getenv("T63_PRIME_NAME"),
+		Provider: claudia.Provider(os.Getenv("T63_PRIME_PROVIDER")),
+		WorkDir:  os.Getenv("T63_PRIME_WORKDIR"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "prime Start: %v\n", err)
+		os.Exit(1)
+	}
+	if err := a.WaitReady(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "prime WaitReady: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(os.Getenv("T63_PRIME_OUT"), []byte(a.SessionID()), 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "prime write sid: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+func t63PrimeSeat(t *testing.T, name, workdir string, provider claudia.Provider) string {
+	t.Helper()
+	outPath := filepath.Join(t.TempDir(), "sid")
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestT63PrimeSeat$", "-test.v=false")
+	cmd.Env = append(os.Environ(),
+		"T63_PRIME=1",
+		"T63_PRIME_NAME="+name,
+		"T63_PRIME_WORKDIR="+workdir,
+		"T63_PRIME_PROVIDER="+string(provider),
+		"T63_PRIME_OUT="+outPath,
+		"CLAUDIA_NO_BROKER=",
+	)
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("prime seat: %v\n%s", err, raw)
+	}
+	sid, err := os.ReadFile(outPath)
+	if err != nil || strings.TrimSpace(string(sid)) == "" {
+		t.Fatalf("prime seat wrote no session id: %v", err)
+	}
+	return strings.TrimSpace(string(sid))
 }
 
 func t63LiveProvider(t *testing.T) (claudia.Provider, string) {
