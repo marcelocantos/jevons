@@ -4,11 +4,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -129,8 +127,6 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 	if n := t63GrantCount(t, name); n != 1 {
 		t.Fatalf("after start: daemon grants for %s = %d, want 1", name, n)
 	}
-	t63Send(t, port, name, "Reply with exactly: pong")
-
 	stop(first, firstDone, syscall.SIGTERM)
 	if n := t63GrantCount(t, name); n != 1 {
 		t.Fatalf("after SIGTERM: daemon grants for %s = %d, want 1 (StopAll released the seat)", name, n)
@@ -202,6 +198,10 @@ func TestT63PrimeSeat(t *testing.T) {
 	}
 	if err := a.WaitReady(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "prime WaitReady: %v\n", err)
+		os.Exit(1)
+	}
+	if err := a.Send("Reply with exactly: pong"); err != nil {
+		fmt.Fprintf(os.Stderr, "prime Send: %v\n", err)
 		os.Exit(1)
 	}
 	if err := os.WriteFile(os.Getenv("T63_PRIME_OUT"), []byte(a.SessionID()), 0o600); err != nil {
@@ -301,20 +301,6 @@ func t63AgentRunning(t *testing.T, port int, name string) bool {
 		}
 	}
 	return false
-}
-
-func t63Send(t *testing.T, port int, name, text string) {
-	t.Helper()
-	body, _ := json.Marshal(map[string]string{"text": text})
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/agents/%s/send", port, name), "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		t.Fatalf("send status %d: %s", resp.StatusCode, raw)
-	}
 }
 
 func t63GrantCount(t *testing.T, name string) int {
