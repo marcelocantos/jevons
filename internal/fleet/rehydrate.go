@@ -6,6 +6,7 @@ package fleet
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -93,27 +94,41 @@ const StatusDeadUnmaterialized = "dead_unmaterialized"
 
 // SessionLost reports whether def demands a resume that cannot succeed:
 // the row is Materialized (so Launch will pass RequireResume) but the
-// Claude transcript backing its session id is not on disk.
+// provider transcript backing its session id is not on disk.
 //
-// Only Claude is decidable here. Grok and Codex keep their sessions in
-// provider-owned stores that jevons does not stat, and their resume
-// semantics live behind ACP session/load — guessing "lost" from a file
-// that was never expected to exist would rotate healthy agents onto
-// blank sessions, which is the exact harm this path is meant to avoid.
+// Claude is decidable via JSONL. Cursor is decidable via store.db
+// (~/.cursor/acp-sessions/<id>/store.db). A Cursor row with only
+// meta.json is the jevons-po 2026-09 dead-end: session/load returns
+// Invalid params and fail-closed leaves the standing seat down.
+// Grok and Codex stay undecidable here — their stores are not statted,
+// and a missing Claude JSONL says nothing about them.
 func SessionLost(def *claudia.AgentDef) bool {
 	if def == nil || !def.Materialized || def.SessionID == "" {
 		return false
 	}
-	if p := def.Provider; p != "" && p != claudia.ProviderClaude {
+	switch def.Provider {
+	case "", claudia.ProviderClaude:
+		exists, err := claudia.SessionExists(def.SessionID, def.WorkDir)
+		if err != nil {
+			// A stat error (permission denied, unreadable mount) is not
+			// evidence of absence. Leave it to claudia to fail closed.
+			return false
+		}
+		return !exists
+	case claudia.ProviderCursor:
+		return !cursorACPStoreExists(def.SessionID)
+	default:
 		return false
 	}
-	exists, err := claudia.SessionExists(def.SessionID, def.WorkDir)
-	if err != nil {
-		// A stat error (permission denied, unreadable mount) is not
-		// evidence of absence. Leave it to claudia to fail closed.
+}
+
+func cursorACPStoreExists(sessionID string) bool {
+	p := claudia.CursorACPStorePath(sessionID)
+	if p == "" {
 		return false
 	}
-	return !exists
+	st, err := os.Stat(p)
+	return err == nil && st.Size() > 0
 }
 
 // RehydratedDef returns def rotated onto newSessionID: a fresh
@@ -171,7 +186,18 @@ func RehydrateLostSessionIn(reg *claudia.Registry, name string) (LostSession, bo
 	if !SessionLost(def) {
 		return LostSession{}, false, nil
 	}
+	lost, err := rotateOntoFreshSession(reg, def)
+	if err != nil {
+		return LostSession{}, false, err
+	}
+	return lost, true, nil
+}
 
+// rotateOntoFreshSession is the T313 rotation: new session id, same
+// identity, Materialized cleared so the next Launch mints. Callers that
+// already have a definitive resume refusal (Cursor Invalid params) use
+// this even when SessionLost cannot see the provider store.
+func rotateOntoFreshSession(reg *claudia.Registry, def *claudia.AgentDef) (LostSession, error) {
 	lost := LostSession{
 		Name:       def.Name,
 		WorkDir:    def.WorkDir,
@@ -188,17 +214,17 @@ func RehydrateLostSessionIn(reg *claudia.Registry, name string) (LostSession, bo
 	// Stop any half-alive process before rotating: the row is about to
 	// point somewhere else, and a survivor would keep writing under the
 	// id we just abandoned.
-	reg.Stop(name)
+	reg.Stop(def.Name)
 
 	if err := reg.Register(RehydratedDef(*def, lost.NewSession)); err != nil {
-		return LostSession{}, false, fmt.Errorf("rehydrate %q: register fresh session: %w", name, err)
+		return LostSession{}, fmt.Errorf("rehydrate %q: register fresh session: %w", def.Name, err)
 	}
 
 	slog.Warn("agent session lost; rehydrated on a fresh conversation",
-		"name", name, "old_session", lost.OldSession, "new_session", lost.NewSession,
+		"name", def.Name, "old_session", lost.OldSession, "new_session", lost.NewSession,
 		"jsonl", lost.JSONLPath, "parent", lost.Parent, "purpose", lost.Purpose,
 		"provider", string(lost.Provider), "target_id", lost.TargetID)
-	return lost, true, nil
+	return lost, nil
 }
 
 // LaunchRecovering is registry.Launch with lost-session recovery in
@@ -227,5 +253,20 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 	} else if ok {
 		slog.Info("launch rehydrated lost session", "name", name, "detail", lost.Describe())
 	}
-	return reg.Launch(name)
+	agent, err := reg.Launch(name)
+	if err != nil && claudia.IsCursorResumeDenied(err) {
+		def := reg.Def(name)
+		if def == nil {
+			return nil, err
+		}
+		rotated, rerr := rotateOntoFreshSession(reg, def)
+		if rerr != nil {
+			slog.Warn("resume-denied rehydrate failed", "name", name, "err", rerr)
+			return nil, err
+		}
+		slog.Warn("launch reminted after provider resume refusal",
+			"name", name, "detail", rotated.Describe())
+		return reg.Launch(name)
+	}
+	return agent, err
 }
