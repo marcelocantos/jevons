@@ -32,9 +32,9 @@ describe('🎯T642 theme cycle', () => {
     expect(walk('system', 'dark')).toEqual(['light', 'dark', 'system']);
   });
 
-  it('uses distinct color-emoji glyphs, not dingbats', () => {
+  it('keeps sun and moon; system is the two-tone circle', () => {
     expect(THEME_GLYPH.light).toBe('☀️');
-    expect(THEME_GLYPH.system).toBe('☯️');
+    expect(THEME_GLYPH.system).toBe('◐');
     expect(THEME_GLYPH.dark).toBe('🌙');
     expect(new Set(Object.values(THEME_GLYPH)).size).toBe(3);
   });

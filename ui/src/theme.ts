@@ -4,10 +4,10 @@
 export type ThemePref = 'light' | 'dark' | 'system';
 export type ThemeAppearance = 'light' | 'dark';
 
-/** Color emoji — the old ☼/◐/☾ dingbats read as blank circles at 11px. */
+/** Sun/moon stay color emoji. System is the two-tone circle (◐), not a computer or yin-yang. */
 export const THEME_GLYPH: Record<ThemePref, string> = {
   light: '☀️',
-  system: '☯️',
+  system: '◐',
   dark: '🌙',
 };
 
