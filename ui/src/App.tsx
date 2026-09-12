@@ -22,7 +22,16 @@ import { FrontierRowsContext } from './frontier/rows';
 import { toFrontierRows } from './frontier/table';
 import { PlanUsageBar } from './components/PlanUsageBar';
 import { MermaidVizPanel } from './components/MermaidVizPanel';
-import { applyTheme, persistTheme, readThemePref, type ThemePref } from './theme';
+import {
+  applyTheme,
+  nextThemePref,
+  persistTheme,
+  readThemePref,
+  systemAppearance,
+  themeLabel,
+  THEME_GLYPH,
+  type ThemePref,
+} from './theme';
 import {
   DEFAULT_FLEET_FRACTION,
   DEFAULT_SIDEBAR_WIDTH,
@@ -255,24 +264,21 @@ function Cockpit() {
           <span id="voice-status-text">listening</span>
         </span>
         <PlanUsageBar mux={mux} />
-        <div id="theme-toggle">
-          {(['light', 'system', 'dark'] as ThemePref[]).map((p) => (
-            <button
-              key={p}
-              type="button"
-              data-t={p}
-              title={p === 'light' ? 'Light' : p === 'dark' ? 'Dark' : 'System'}
-              className={theme === p ? 'active' : ''}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                persistTheme(p);
-                setTheme(p);
-              }}
-            >
-              {p === 'light' ? '\u263C' : p === 'system' ? '\u25D0' : '\u263E'}
-            </button>
-          ))}
-        </div>
+        <button
+          id="theme-toggle"
+          type="button"
+          data-t={theme}
+          title={`${themeLabel(theme)} — click for ${themeLabel(nextThemePref(theme, systemAppearance()))}`}
+          aria-label={`Theme: ${themeLabel(theme)}`}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const next = nextThemePref(theme, systemAppearance());
+            persistTheme(next);
+            setTheme(next);
+          }}
+        >
+          {THEME_GLYPH[theme]}
+        </button>
       </div>
       <div id="degraded-banner" className={degraded ? 'visible' : undefined} role="status" aria-live="polite">
         {degraded}

@@ -2,6 +2,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 export type ThemePref = 'light' | 'dark' | 'system';
+export type ThemeAppearance = 'light' | 'dark';
+
+/** Glyphs match the old three-button control (sun / half / moon). */
+export const THEME_GLYPH: Record<ThemePref, string> = {
+  light: '\u263C',
+  system: '\u25D0',
+  dark: '\u263E',
+};
+
+export function themeLabel(pref: ThemePref): string {
+  if (pref === 'light') return 'Light';
+  if (pref === 'dark') return 'Dark';
+  return 'System';
+}
+
+/** Live OS appearance. Dark unless the light media query matches. */
+export function systemAppearance(media?: Pick<Window, 'matchMedia'>): ThemeAppearance {
+  const src = media ?? (typeof window !== 'undefined' ? window : undefined);
+  if (!src || typeof src.matchMedia !== 'function') return 'dark';
+  return src.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+/**
+ * Click order depends on the OS so the first click from system leaves it.
+ * Light OS: system → dark → light. Dark OS: system → light → dark.
+ */
+export function themeCycle(system: ThemeAppearance): ThemePref[] {
+  return system === 'light' ? ['system', 'dark', 'light'] : ['system', 'light', 'dark'];
+}
+
+export function nextThemePref(current: ThemePref, system: ThemeAppearance): ThemePref {
+  const cycle = themeCycle(system);
+  const i = cycle.indexOf(current);
+  return cycle[(i < 0 ? 0 : i + 1) % cycle.length];
+}
 
 export function readThemePref(): ThemePref {
   const m = document.cookie.match(/(?:^|; )theme=([^;]*)/);

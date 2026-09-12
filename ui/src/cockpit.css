@@ -927,11 +927,19 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker.plan-under { color: var(--plan-under); }
 #plan-ticker.plan-locked { color: var(--plan-locked); }
 
-/* Theme toggle */
-#theme-toggle { display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; flex-shrink: 0; }
-#theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
-#theme-toggle button:hover { color: var(--text-dim); }
-#theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
+/* Theme toggle — one cycling icon (🎯T642). */
+#theme-toggle {
+  flex-shrink: 0;
+  border: none;
+  background: var(--surface-raised);
+  color: var(--accent);
+  font-size: 11px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  line-height: 1;
+}
+#theme-toggle:hover { color: var(--text); }
 /* 🎯T138: stable degraded cockpit banner (overseer down / budget pause) */
 #degraded-banner {
   display: none; flex-shrink: 0; padding: 8px 20px; font-size: 12px; font-weight: 500;
