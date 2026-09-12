@@ -69,13 +69,6 @@ func (s *Server) toolCallWait(name string) time.Duration {
 	if s != nil && s.toolDeadline > 0 {
 		return s.toolDeadline
 	}
-	// Cursor ACP remint is Launch (up to launchWait) then store.db
-	// after the first prompt (cursorWait). The 30s spawn-class bound
-	// is what made jevons-po start "fail" and fall back to Grok
-	// while the mint was still writing meta.json.
-	if name == "jevons_agent_start" || name == "jevons_thread_spawn" {
-		return s.launchWait() + s.cursorWait()
-	}
 	if spawnClassTool(name) {
 		return defaultSpawnClassToolDeadline
 	}

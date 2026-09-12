@@ -7,31 +7,24 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 )
 
-// 🎯T541 — Cursor ACP remints must materialize a live conversation
-// (store.db + bound cursor-agent) without holding the start mutex across
-// prompt delivery. The incident: jevons_agent_start with a Cursor prompt
-// waited for ACP confirmation while start was serialized, so
-// agent_list/send/kill/event_push timed out. The workaround that is now
-// product: Launch, release startMu, then send the brief.
+// 🎯T541 — Cursor ACP starts must not wait for prompt confirmation
+// while anything that serializes MCP start is held. The incident:
+// jevons_agent_start with a Cursor prompt waited for ACP confirmation
+// while start was serialized, so agent_list/send/kill/event_push timed
+// out. Product: Launch, release startMu, then send the brief.
+//
+// Claudia owns whether a Cursor conversation is resumable. This file
+// must not stat provider-private session files.
 
-// cursorRemintSeed is written when start has no opening prompt so
-// session/new (first mint or load-fail remint) still hosts a conversation
-// the next Launch can resume.
+// cursorRemintSeed is written when start has no opening prompt so the
+// new session hosts a first user turn.
 const cursorRemintSeed = "[jevons] materialize ACP session"
-
-// Cursor writes store.db after session/new + the first prompt, not at
-// process bind. Two seconds is enough for a hermetic observe seam and
-// not enough for a live ACP mint: 2026-09-12 jevons-po remints bound
-// a cursor-agent, wrote only meta.json, then T433 reaped them as
-// idle-zombies at +2s. Wait long enough for the first prompt to land.
-const defaultCursorMaterializeWait = 90 * time.Second
 
 // Full saved-session loads with many MCP servers can take minutes. Explicit
 // caller cancellation still interrupts supported startup immediately.
@@ -41,13 +34,6 @@ const defaultLaunchDeadline = 5 * time.Minute
 // instead of waiting for turn confirmation on the start RPC.
 func deferStartPrompt(p claudia.Provider) bool {
 	return p == claudia.ProviderCursor
-}
-
-// CursorSeatMaterialized is the hermetic oracle: a seat is materialized
-// only when store.db (or equivalent) exists AND a process is bound.
-// Meta-only registry rows fail this.
-func CursorSeatMaterialized(storeExists, processBound bool) bool {
-	return storeExists && processBound
 }
 
 func (s *Server) launchAgent(ctx context.Context, name string) (*claudia.Agent, error) {
@@ -106,8 +92,8 @@ func (s *Server) startMutexHeld() bool {
 }
 
 // finishCursorStart runs AFTER startMu is released. It writes the opening
-// conversation (brief or remint seed) without waiting for ACP prompt
-// confirmation, then requires store.db + a bound process or fails loud.
+// brief without waiting for ACP prompt confirmation. A bound process
+// after Launch is a created seat. Resume-worthiness stays in Claudia.
 func (s *Server) finishCursorStart(name string, existed bool, prompt string) (briefNote string, err error) {
 	_ = existed
 	if s.startMutexHeld() {
@@ -118,28 +104,15 @@ func (s *Server) finishCursorStart(name string, existed bool, prompt string) (br
 		text = cursorRemintSeed
 	}
 	if err := s.submitCursorStartBrief(name, text); err != nil {
-		return "", fmt.Errorf("cursor ACP remint did not write a conversation: %w", err)
+		return "", fmt.Errorf("cursor ACP start did not write a conversation: %w", err)
 	}
-	store, bound := s.waitCursorMaterialized(name)
-	if !CursorSeatMaterialized(store, bound) {
-		return "", fmt.Errorf("cursor ACP seat unmaterialized (store.db=%v process_bound=%v) — refusing idle-zombie", store, bound)
-	}
-	if s.registry != nil {
-		if merr := s.registry.MarkMaterialized(name); merr != nil {
-			slog.Warn("cursor MarkMaterialized after store+bound", "name", name, "err", merr)
-		}
+	if !s.cursorProcessBound(name) {
+		return "", fmt.Errorf("cursor ACP seat has no bound process")
 	}
 	if strings.TrimSpace(prompt) != "" {
 		return " Opening brief sent after Launch (🎯T541): start mutex released before ACP prompt delivery.", nil
 	}
 	return "", nil
-}
-
-func slogCursorMaterialize(name string, err error) {
-	// MarkMaterialized can fail for a missing row in hermetics; the
-	// store+bound check already decided the seat is real.
-	_ = name
-	_ = err
 }
 
 func (s *Server) submitCursorStartBrief(name, prompt string) error {
@@ -167,7 +140,7 @@ func (s *Server) composeStartBrief(name, prompt string) string {
 		return strings.TrimSpace(prompt)
 	}
 	// roleDisplay / withIdentity take s.mu — do not hold it across them
-	// (that deadlock hung TestT541FinishCursorStartReapsMetaOnly and
+	// (that deadlock hung TestT541FinishCursorStartReapsUnbound and
 	// deafens jevons-po on a successful Cursor remint).
 	roleBody := ""
 	if s.registry != nil {
@@ -187,59 +160,13 @@ func (s *Server) composeStartBrief(name, prompt string) string {
 	return s.withIdentity(name, text)
 }
 
-func (s *Server) waitCursorMaterialized(name string) (store, bound bool) {
-	wait := s.cursorWait()
-	deadline := time.Now().Add(wait)
-	for {
-		store, bound = s.observeCursorSeat(name)
-		if CursorSeatMaterialized(store, bound) || !time.Now().Before(deadline) {
-			return store, bound
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
-func (s *Server) cursorWait() time.Duration {
-	if s != nil && s.cursorObserve != nil {
-		return 0
-	}
-	if s != nil && s.cursorMaterializeWait > 0 {
-		return s.cursorMaterializeWait
-	}
-	return defaultCursorMaterializeWait
-}
-
-func (s *Server) observeCursorSeat(name string) (store, bound bool) {
-	if s != nil && s.cursorObserve != nil {
-		return s.cursorObserve(name)
+func (s *Server) cursorProcessBound(name string) bool {
+	if s != nil && s.cursorBound != nil {
+		return s.cursorBound(name)
 	}
 	if s == nil || s.registry == nil {
-		return false, false
+		return false
 	}
 	proc := s.registry.Get(name)
-	bound = proc != nil && proc.Alive()
-	var sids []string
-	if d := s.registry.Def(name); d != nil && d.SessionID != "" {
-		sids = append(sids, d.SessionID)
-	}
-	// session/new mints a different id than the remint UUID written
-	// before Launch. store.db lives under the live process SID.
-	if proc != nil {
-		if sid := proc.SessionID(); sid != "" {
-			sids = append(sids, sid)
-		}
-	}
-	seen := map[string]bool{}
-	for _, sid := range sids {
-		if seen[sid] {
-			continue
-		}
-		seen[sid] = true
-		p := claudia.CursorACPStorePath(sid)
-		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
-			store = true
-			break
-		}
-	}
-	return store, bound
+	return proc != nil && proc.Alive()
 }

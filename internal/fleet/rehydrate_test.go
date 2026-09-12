@@ -177,22 +177,10 @@ func TestSessionLostGate(t *testing.T) {
 		t.Fatal("grok row judged lost from a Claude transcript path")
 	}
 
-	cursorLost := *claudeLost
-	cursorLost.Provider = claudia.ProviderCursor
-	if !SessionLost(&cursorLost) {
-		t.Fatal("materialized cursor row with no store.db not reported lost")
-	}
-	cursorOK := cursorLost
-	cursorOK.SessionID = "cursor-present"
-	store := claudia.CursorACPStorePath(cursorOK.SessionID)
-	if err := os.MkdirAll(filepath.Dir(store), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(store, []byte("db"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if SessionLost(&cursorOK) {
-		t.Fatal("cursor row with store.db reported lost")
+	cursor := *claudeLost
+	cursor.Provider = claudia.ProviderCursor
+	if SessionLost(&cursor) {
+		t.Fatal("cursor row judged lost from a provider-private store")
 	}
 
 	// Empty provider means Claude, and the transcript exists.
@@ -237,11 +225,9 @@ func TestRehydratedDefClearsLivenessOnly(t *testing.T) {
 	}
 }
 
-// A Cursor row whose store.db is gone is the same dead-end as a missing
-// Claude JSONL: rehydrate before Launch, do not wait for the owner.
-func TestRehydrateLostCursorSessionWithoutStore(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+// Cursor resume refusal is Claudia's; Jevons does not pre-rotate by
+// stating a provider-private store.
+func TestRehydrateDoesNotStatCursorStore(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -255,23 +241,17 @@ func TestRehydrateLostCursorSessionWithoutStore(t *testing.T) {
 	if err := reg.Register(def); err != nil {
 		t.Fatal(err)
 	}
-	lost, ok, err := RehydrateLostSessionIn(reg, "jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("cursor without store.db: ok=%v err=%v", ok, err)
+	if _, ok, err := RehydrateLostSessionIn(reg, "jevons-po"); err != nil || ok {
+		t.Fatalf("cursor pre-rotate: ok=%v err=%v", ok, err)
 	}
-	if lost.OldSession != def.SessionID || lost.NewSession == def.SessionID {
-		t.Fatalf("rotation did not move the session: %+v", lost)
-	}
-	if after := reg.Def("jevons-po"); after.Materialized || after.SessionID == def.SessionID {
-		t.Fatalf("row not reminted: %+v", after)
+	if after := reg.Def("jevons-po"); after.SessionID != def.SessionID {
+		t.Fatalf("row reminted without a provider refusal: %+v", after)
 	}
 }
 
-// Provider already refused session/load (store.db may still exist).
-// Rotate anyway — stacking a second writer on the same id is T541.1.
+// Provider already refused session/load. Rotate — stacking a second
+// writer on the same id is T541.1. Disk layout is Claudia's.
 func TestRotateOntoFreshSessionAfterResumeDenied(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -280,18 +260,8 @@ func TestRotateOntoFreshSessionAfterResumeDenied(t *testing.T) {
 		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: "cursor-present",
 		Materialized: true, Provider: claudia.ProviderCursor,
 	}
-	store := claudia.CursorACPStorePath(def.SessionID)
-	if err := os.MkdirAll(filepath.Dir(store), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(store, []byte("db"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	if err := reg.Register(def); err != nil {
 		t.Fatal(err)
-	}
-	if SessionLost(reg.Def("jevons-po")) {
-		t.Fatal("store.db present should not look lost before the provider refuses")
 	}
 	lost, err := rotateOntoFreshSession(reg, reg.Def("jevons-po"))
 	if err != nil {

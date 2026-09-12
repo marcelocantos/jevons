@@ -6,7 +6,6 @@ package fleet
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -96,12 +95,10 @@ const StatusDeadUnmaterialized = "dead_unmaterialized"
 // the row is Materialized (so Launch will pass RequireResume) but the
 // provider transcript backing its session id is not on disk.
 //
-// Claude is decidable via JSONL. Cursor is decidable via store.db
-// (~/.cursor/acp-sessions/<id>/store.db). A Cursor row with only
-// meta.json is the jevons-po 2026-09 dead-end: session/load returns
-// Invalid params and fail-closed leaves the standing seat down.
-// Grok and Codex stay undecidable here — their stores are not statted,
-// and a missing Claude JSONL says nothing about them.
+// Claude is decidable via JSONL. Cursor, Grok and Codex keep their
+// stores in provider-private paths — Jevons does not stat them.
+// A Cursor resume refusal is Claudia's ErrCursorResumeDenied;
+// LaunchRecovering remints after that, not after a disk probe.
 func SessionLost(def *claudia.AgentDef) bool {
 	if def == nil || !def.Materialized || def.SessionID == "" {
 		return false
@@ -115,20 +112,9 @@ func SessionLost(def *claudia.AgentDef) bool {
 			return false
 		}
 		return !exists
-	case claudia.ProviderCursor:
-		return !cursorACPStoreExists(def.SessionID)
 	default:
 		return false
 	}
-}
-
-func cursorACPStoreExists(sessionID string) bool {
-	p := claudia.CursorACPStorePath(sessionID)
-	if p == "" {
-		return false
-	}
-	st, err := os.Stat(p)
-	return err == nil && st.Size() > 0
 }
 
 // RehydratedDef returns def rotated onto newSessionID: a fresh

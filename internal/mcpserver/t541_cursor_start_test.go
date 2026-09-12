@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -51,31 +50,6 @@ func TestT627CursorOpeningBriefRecordsBeforeSubmission(t *testing.T) {
 	}
 }
 
-func TestT541CursorMaterializeWaitOutlastsMetaOnlyMint(t *testing.T) {
-	t.Parallel()
-	if defaultCursorMaterializeWait < 30*time.Second {
-		t.Fatalf("defaultCursorMaterializeWait = %s; live Cursor remints write store.db after the first prompt, not at bind", defaultCursorMaterializeWait)
-	}
-}
-
-func TestT541CursorSeatMaterializedOracle(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		store, bound, want bool
-	}{
-		{false, false, false}, // meta-only registry row
-		{true, false, false},  // store without a bound process
-		{false, true, false},  // process without a conversation
-		{true, true, true},
-	}
-	for _, tc := range cases {
-		if got := CursorSeatMaterialized(tc.store, tc.bound); got != tc.want {
-			t.Errorf("CursorSeatMaterialized(store=%v, bound=%v) = %v, want %v",
-				tc.store, tc.bound, got, tc.want)
-		}
-	}
-}
-
 func TestT541DeferStartPromptIsCursorOnly(t *testing.T) {
 	t.Parallel()
 	if !deferStartPrompt(claudia.ProviderCursor) {
@@ -102,7 +76,7 @@ func t541Server(t *testing.T) (*Server, *claudia.Registry) {
 	return s, reg
 }
 
-func TestT541FinishCursorStartReapsMetaOnly(t *testing.T) {
+func TestT541FinishCursorStartReapsUnbound(t *testing.T) {
 	s, reg := t541Server(t)
 	const name = "jv-t541-meta"
 	if err := reg.Register(claudia.AgentDef{
@@ -123,28 +97,28 @@ func TestT541FinishCursorStartReapsMetaOnly(t *testing.T) {
 		submitted.Store(true)
 		return nil
 	}
-	s.cursorObserve = func(string) (bool, bool) { return false, false }
+	s.cursorBound = func(string) bool { return false }
 
 	_, err := s.finishCursorStart(name, false, "Execute 🎯T541.")
 	if err == nil {
-		t.Fatal("meta-only seat must fail loud")
+		t.Fatal("unbound seat must fail loud")
 	}
-	if !strings.Contains(err.Error(), "unmaterialized") {
-		t.Fatalf("error %q should name unmaterialized", err)
+	if !strings.Contains(err.Error(), "no bound process") {
+		t.Fatalf("error %q should name the missing process", err)
 	}
 	if !submitted.Load() {
-		t.Fatal("remint must attempt to write a conversation")
+		t.Fatal("start must attempt to write a conversation")
 	}
 	released, kept := s.startBriefFailureTeardown(name, false, err)
 	if !released || kept {
 		t.Fatalf("teardown released=%v kept=%v, want reap", released, kept)
 	}
 	if reg.Def(name) != nil {
-		t.Fatal("unmaterialized seat left registered as idle-zombie")
+		t.Fatal("unbound seat left registered")
 	}
 }
 
-func TestT541FinishCursorStartMaterializes(t *testing.T) {
+func TestT541FinishCursorStartKeepsBoundMint(t *testing.T) {
 	s, reg := t541Server(t)
 	const name = "jv-t541-ok"
 	if err := reg.Register(claudia.AgentDef{
@@ -154,17 +128,17 @@ func TestT541FinishCursorStartMaterializes(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.cursorSubmit = func(string, string) error { return nil }
-	s.cursorObserve = func(string) (bool, bool) { return true, true }
+	s.cursorBound = func(string) bool { return true }
 
 	note, err := s.finishCursorStart(name, false, "Execute 🎯T541.")
 	if err != nil {
-		t.Fatalf("materialized seat: %v", err)
+		t.Fatalf("bound seat: %v", err)
 	}
 	if !strings.Contains(note, "🎯T541") {
 		t.Fatalf("note %q should cite T541 start-then-send", note)
 	}
-	if d := reg.Def(name); d == nil || !d.Materialized {
-		t.Fatal("MarkMaterialized not persisted after store+bound")
+	if d := reg.Def(name); d == nil {
+		t.Fatal("bound mint was removed")
 	}
 }
 
@@ -175,7 +149,7 @@ func TestT541EmptyPromptWritesRemintSeed(t *testing.T) {
 		got = text
 		return nil
 	}
-	s.cursorObserve = func(string) (bool, bool) { return true, true }
+	s.cursorBound = func(string) bool { return true }
 	if _, err := s.finishCursorStart("jv-t541-seed", false, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +169,7 @@ func TestT541HandleAgentStartReleasesMutexBeforePrompt(t *testing.T) {
 		heldDuringSubmit.Store(s.startMutexHeld())
 		return nil
 	}
-	s.cursorObserve = func(string) (bool, bool) { return true, true }
+	s.cursorBound = func(string) bool { return true }
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -225,15 +199,15 @@ func TestT541HandleAgentStartReleasesMutexBeforePrompt(t *testing.T) {
 	}
 }
 
-func TestT541HandleAgentStartReapsUnmaterialized(t *testing.T) {
+func TestT541HandleAgentStartKeepsBoundMint(t *testing.T) {
 	s, reg := t541Server(t)
 	s.launchAgentFn = func(context.Context, string) (*claudia.Agent, error) { return nil, nil }
 	s.cursorSubmit = func(string, string) error { return nil }
-	s.cursorObserve = func(string) (bool, bool) { return false, true } // process, no store
+	s.cursorBound = func(string) bool { return true }
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
-		"name":     "jv-t541-zombie",
+		"name":     "jv-t541-bound",
 		"workdir":  t.TempDir(),
 		"provider": string(claudia.ProviderCursor),
 		"parent":   "jevons-po",
@@ -243,13 +217,10 @@ func TestT541HandleAgentStartReapsUnmaterialized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res == nil || !res.IsError {
-		t.Fatal("unmaterialized start must fail loud")
+	if res == nil || res.IsError {
+		t.Fatalf("bound Cursor mint must succeed: %v", toolText(res))
 	}
-	if !strings.Contains(toolText(res), "unmaterialized") {
-		t.Fatalf("error %q", toolText(res))
-	}
-	if reg.Def("jv-t541-zombie") != nil {
-		t.Fatal("unmaterialized mint left as idle-zombie")
+	if reg.Def("jv-t541-bound") == nil {
+		t.Fatal("bound Cursor mint was reaped")
 	}
 }

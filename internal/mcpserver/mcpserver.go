@@ -114,11 +114,11 @@ type Server struct {
 	mcpFlightMu  sync.Mutex
 	mcpFlightSeq uint64
 	mcpFlights   map[string][]mcpFlight
-	// cursorSubmit / cursorObserve / cursorMaterializeWait are 🎯T541 seams.
-	cursorSubmit          func(name, text string) error
-	cursorObserve         func(name string) (store, bound bool)
-	cursorMaterializeWait time.Duration
-	notifyJevon           NotifyFunc
+	// cursorSubmit / cursorBound are 🎯T541 seams. Bound means a live
+	// process; Claudia owns whether the conversation is resumable.
+	cursorSubmit func(name, text string) error
+	cursorBound  func(name string) bool
+	notifyJevon  NotifyFunc
 	// overseerDeliver is the overseer arm of the single deliver-by-name path
 	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
 	// overseer-addressed send reuses the owner chat journal and notify queue.
