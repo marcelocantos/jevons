@@ -26,7 +26,12 @@ import (
 // the next Launch can resume.
 const cursorRemintSeed = "[jevons] materialize ACP session"
 
-const defaultCursorMaterializeWait = 2 * time.Second
+// Cursor writes store.db after session/new + the first prompt, not at
+// process bind. Two seconds is enough for a hermetic observe seam and
+// not enough for a live ACP mint: 2026-09-12 jevons-po remints bound
+// a cursor-agent, wrote only meta.json, then T433 reaped them as
+// idle-zombies at +2s. Wait long enough for the first prompt to land.
+const defaultCursorMaterializeWait = 90 * time.Second
 
 // Full saved-session loads with many MCP servers can take minutes. Explicit
 // caller cancellation still interrupts supported startup immediately.
@@ -213,10 +218,27 @@ func (s *Server) observeCursorSeat(name string) (store, bound bool) {
 	}
 	proc := s.registry.Get(name)
 	bound = proc != nil && proc.Alive()
+	var sids []string
 	if d := s.registry.Def(name); d != nil && d.SessionID != "" {
-		p := claudia.CursorACPStorePath(d.SessionID)
+		sids = append(sids, d.SessionID)
+	}
+	// session/new mints a different id than the remint UUID written
+	// before Launch. store.db lives under the live process SID.
+	if proc != nil {
+		if sid := proc.SessionID(); sid != "" {
+			sids = append(sids, sid)
+		}
+	}
+	seen := map[string]bool{}
+	for _, sid := range sids {
+		if seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		p := claudia.CursorACPStorePath(sid)
 		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
 			store = true
+			break
 		}
 	}
 	return store, bound

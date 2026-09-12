@@ -13,6 +13,19 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+func TestT254_5_1AgentStartDeadlineCoversCursorMaterialize(t *testing.T) {
+	t.Parallel()
+	s := New(t.TempDir(), nil, nil)
+	got := s.toolCallWait("jevons_agent_start")
+	want := defaultLaunchDeadline + defaultCursorMaterializeWait
+	if got != want {
+		t.Fatalf("jevons_agent_start wait = %s, want launch+materialize %s (not the 30s spawn-class bound)", got, want)
+	}
+	if s.toolCallWait("jevons_agent_list") != defaultSpawnClassToolDeadline {
+		t.Fatalf("list must stay on the short spawn-class bound")
+	}
+}
+
 func TestT254_5_1BoundToolDeadline(t *testing.T) {
 	s := New(t.TempDir(), nil, nil)
 	s.toolDeadline = 40 * time.Millisecond

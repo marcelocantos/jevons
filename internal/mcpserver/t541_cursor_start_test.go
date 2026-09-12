@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -47,6 +48,13 @@ func TestT627CursorOpeningBriefRecordsBeforeSubmission(t *testing.T) {
 	}
 	if submitted != 1 {
 		t.Fatal("submitted after admission failure")
+	}
+}
+
+func TestT541CursorMaterializeWaitOutlastsMetaOnlyMint(t *testing.T) {
+	t.Parallel()
+	if defaultCursorMaterializeWait < 30*time.Second {
+		t.Fatalf("defaultCursorMaterializeWait = %s; live Cursor remints write store.db after the first prompt, not at bind", defaultCursorMaterializeWait)
 	}
 }
 
