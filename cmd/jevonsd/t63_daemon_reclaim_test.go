@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 )
@@ -37,6 +38,7 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 	}
 	provider, gate := t63LiveProvider(t)
 	name := "t63-" + string(provider) + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	wantSID := uuid.NewString()
 	root := t.TempDir()
 	state, home := filepath.Join(root, "state"), filepath.Join(root, "home")
 	for _, dir := range []string{state, home} {
@@ -50,7 +52,7 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 		t.Fatal(err)
 	}
 	defs, err := json.Marshal([]claudia.AgentDef{{
-		Name: name, WorkDir: root, Provider: provider,
+		Name: name, WorkDir: root, Provider: provider, SessionID: wantSID,
 		AutoStart: true, Purpose: claudia.PurposeWork,
 	}})
 	if err != nil {
@@ -67,20 +69,34 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 		sock = filepath.Join(os.Getenv("HOME"), ".local/state/claudia/broker.sock")
 	}
 
-	start := func() *exec.Cmd {
+	logPath := filepath.Join(root, "jevonsd.log")
+	start := func() (*exec.Cmd, chan error) {
+		logs, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = logs.Close() })
 		cmd := exec.Command(bin, "-config", cfg, "-port", fmt.Sprint(port), "-bind", "127.0.0.1", "-workdir", root)
 		cmd.Dir = root
 		cmd.Env = t63IsolateEnv(home, sock)
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		cmd.Stdout, cmd.Stderr = logs, logs
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		return cmd
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		return cmd, done
 	}
-	waitRunning := func() string {
+	waitRunning := func(done <-chan error) string {
 		t.Helper()
 		deadline := time.Now().Add(90 * time.Second)
 		for time.Now().Before(deadline) {
+			select {
+			case err := <-done:
+				raw, _ := os.ReadFile(logPath)
+				t.Fatalf("jevonsd exited before the worker came up: %v\n%s", err, raw)
+			default:
+			}
 			if snap, err := upgrade.SessionSnapshotFromFile(filepath.Join(state, "agents.json")); err == nil {
 				if sid := snap[name]; sid != "" && t63AgentRunning(t, port, name) {
 					return sid
@@ -88,16 +104,15 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
-		t.Fatalf("worker %s did not come up on %s (gate %s)", name, provider, gate)
+		raw, _ := os.ReadFile(logPath)
+		t.Fatalf("worker %s did not come up on %s (gate %s)\n%s", name, provider, gate, raw)
 		return ""
 	}
-	stop := func(cmd *exec.Cmd, sig syscall.Signal) {
+	stop := func(cmd *exec.Cmd, done <-chan error, sig syscall.Signal) {
 		t.Helper()
 		if err := cmd.Process.Signal(sig); err != nil {
 			t.Fatal(err)
 		}
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
 		select {
 		case <-done:
 		case <-time.After(20 * time.Second):
@@ -107,14 +122,17 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 		}
 	}
 
-	first := start()
-	sid := waitRunning()
+	first, firstDone := start()
+	sid := waitRunning(firstDone)
+	if sid != wantSID {
+		t.Fatalf("first boot reminted session: %s → %s", wantSID, sid)
+	}
 	if n := t63GrantCount(t, name); n != 1 {
 		t.Fatalf("after start: daemon grants for %s = %d, want 1", name, n)
 	}
 	t63Send(t, port, name, "Reply with exactly: pong")
 
-	stop(first, syscall.SIGTERM)
+	stop(first, firstDone, syscall.SIGTERM)
 	if n := t63GrantCount(t, name); n != 1 {
 		t.Fatalf("after SIGTERM: daemon grants for %s = %d, want 1 (StopAll released the seat)", name, n)
 	}
@@ -122,24 +140,24 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 		t.Fatalf("SIGTERM reminted session: %s → %s", sid, snap[name])
 	}
 
-	second := start()
-	if got := waitRunning(); got != sid {
+	second, secondDone := start()
+	if got := waitRunning(secondDone); got != sid {
 		t.Fatalf("after SIGTERM restart: session %s → %s", sid, got)
 	}
 	if n := t63GrantCount(t, name); n != 1 {
 		t.Fatalf("after SIGTERM restart: grants = %d, want 1", n)
 	}
 
-	stop(second, syscall.SIGHUP)
+	stop(second, secondDone, syscall.SIGHUP)
 	if n := t63GrantCount(t, name); n != 1 {
 		t.Fatalf("after SIGHUP: daemon grants for %s = %d, want 1", name, n)
 	}
 
-	third := start()
-	if got := waitRunning(); got != sid {
+	third, thirdDone := start()
+	if got := waitRunning(thirdDone); got != sid {
 		t.Fatalf("after SIGHUP restart: session %s → %s", sid, got)
 	}
-	stop(third, syscall.SIGHUP)
+	stop(third, thirdDone, syscall.SIGHUP)
 
 	t.Setenv("CLAUDIA_BROKER_SOCKET", sock)
 	t.Setenv("CLAUDIA_NO_BROKER", "")
