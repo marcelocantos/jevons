@@ -932,14 +932,13 @@ body.rhs-resizing-row { cursor: row-resize; }
   flex-shrink: 0;
   border: none;
   background: var(--surface-raised);
-  color: var(--accent);
-  font-size: 11px;
-  padding: 4px 7px;
+  font-size: 14px;
+  padding: 2px 6px;
   border-radius: 5px;
   cursor: pointer;
-  line-height: 1;
+  line-height: 1.2;
 }
-#theme-toggle:hover { color: var(--text); }
+#theme-toggle:hover { filter: brightness(1.15); }
 /* 🎯T138: stable degraded cockpit banner (overseer down / budget pause) */
 #degraded-banner {
   display: none; flex-shrink: 0; padding: 8px 20px; font-size: 12px; font-weight: 500;

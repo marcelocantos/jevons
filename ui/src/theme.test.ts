@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { nextThemePref, themeCycle, type ThemePref } from './theme';
+import { nextThemePref, THEME_GLYPH, themeCycle, type ThemePref } from './theme';
 
 describe('🎯T642 theme cycle', () => {
   it('OS light: system, dark, light', () => {
@@ -30,5 +30,12 @@ describe('🎯T642 theme cycle', () => {
     };
     expect(walk('system', 'light')).toEqual(['dark', 'light', 'system']);
     expect(walk('system', 'dark')).toEqual(['light', 'dark', 'system']);
+  });
+
+  it('uses distinct color-emoji glyphs, not dingbats', () => {
+    expect(THEME_GLYPH.light).toBe('☀️');
+    expect(THEME_GLYPH.system).toBe('💻');
+    expect(THEME_GLYPH.dark).toBe('🌙');
+    expect(new Set(Object.values(THEME_GLYPH)).size).toBe(3);
   });
 });

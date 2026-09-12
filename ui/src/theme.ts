@@ -4,11 +4,11 @@
 export type ThemePref = 'light' | 'dark' | 'system';
 export type ThemeAppearance = 'light' | 'dark';
 
-/** Glyphs match the old three-button control (sun / half / moon). */
+/** Color emoji — the old ☼/◐/☾ dingbats read as blank circles at 11px. */
 export const THEME_GLYPH: Record<ThemePref, string> = {
-  light: '\u263C',
-  system: '\u25D0',
-  dark: '\u263E',
+  light: '☀️',
+  system: '💻',
+  dark: '🌙',
 };
 
 export function themeLabel(pref: ThemePref): string {
