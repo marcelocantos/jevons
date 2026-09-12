@@ -167,6 +167,9 @@ func TestT63DaemonReclaimJourney(t *testing.T) {
 	if reclaimed.SessionID() != sid {
 		t.Fatalf("reclaim reminted: %s → %s", sid, reclaimed.SessionID())
 	}
+	if err := reclaimed.Send("Reply with exactly: pong"); err != nil {
+		t.Fatalf("reclaim Send: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	text, err := reclaimed.WaitForResponse(ctx)
