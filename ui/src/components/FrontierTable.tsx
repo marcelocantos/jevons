@@ -74,7 +74,7 @@ function FrontierRowView(props: {
   onPlay: (row: PlayRow) => void;
   onStop: (row: PlayRow) => void;
 }) {
-  const [nameEl, setNameEl] = useState<HTMLTableCellElement | null>(null);
+  const [idEl, setIdEl] = useState<HTMLTableCellElement | null>(null);
   const md = hoverCardMarkdown(props.cache, props.row);
   const engaged = props.row.engaged ? props.row.engaged_agents || [] : [];
   // 🎯T267: the target-ask row is emphasized and scrolled into view.
@@ -94,16 +94,17 @@ function FrontierRowView(props: {
       data-frontier-highlight={props.highlighted ? '1' : undefined}
       aria-selected={props.highlighted ? true : undefined}
     >
-      <td className="ft-id">
+      <td className="ft-id" ref={setIdEl}>
         <InstantTip
-          groupHosts={() => [nameEl]}
+          groupHosts={() => [idEl]}
+          persistHosts={() => [trRef.current]}
           clampSelectors={['#frontier-table', '#frontier-body']}
           content={<TargetHoverCard markdown={md} id={props.row.id} name={props.row.name} />}
         >
           {'🎯' + props.row.id}
         </InstantTip>
       </td>
-      <td className="ft-name" ref={setNameEl}>
+      <td className="ft-name">
         {shortName(props.row.name, 72)}
       </td>
       <td className="ft-status">{formatStatus(props.row.status)}</td>

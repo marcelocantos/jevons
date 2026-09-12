@@ -98,7 +98,7 @@ export const CATALOG: readonly OracleFamily[] = [
     title: 'Frontier tab — table, InstantTip, graph, play chrome',
     file: 'frontier.test.ts',
     layer: 'hermetic',
-    covers: covers('frontier', ['T131', 'T168', 'T173', 'T175', 'T179', 'T181', 'T184', 'T186', 'T187', 'T189', 'T203', 'T230', 'T231', 'T248', 'T271', 'T280', 'T294', 'T326', 'T340', 'T485']),
+    covers: covers('frontier', ['T131', 'T168', 'T173', 'T175', 'T179', 'T181', 'T184', 'T186', 'T187', 'T189', 'T203', 'T230', 'T231', 'T248', 'T271', 'T280', 'T294', 'T326', 'T340', 'T485', 'T643']),
   },
   {
     id: 'journey-connect',
@@ -147,7 +147,7 @@ export const CATALOG: readonly OracleFamily[] = [
     title: 'Journey — frontier table + graph (J27)',
     file: 'journey-frontier.test.ts',
     layer: 'journey',
-    covers: covers('journey-frontier', ['T168', 'T173', 'T175', 'T181', 'T184', 'T186', 'T230'], ['frontier']),
+    covers: covers('journey-frontier', ['T168', 'T173', 'T175', 'T181', 'T184', 'T186', 'T230', 'T643'], ['frontier']),
   },
   {
     id: 'journey-ticker',

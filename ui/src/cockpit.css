@@ -1165,9 +1165,20 @@ body.rhs-resizing-row { cursor: row-resize; }
   width: 1%;
   max-width: none;
   overflow: visible;
-  /* left edge inset only; H gutter shares the 4px from #frontier-table td */
-  padding-left: 8px;
+  /* 🎯T643: padding lives on the InstantTip host so the hit box is the
+     full cell, not glyph ink. Left inset 8px; H gutter still 4px. */
+  padding: 0;
   min-width: 77px;
+}
+/* 🎯T643: ID InstantTip host fills the cell (full row height), not glyph ink. */
+#frontier-table .ft-id > .has-instant-tip {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 26px;
+  padding: 5px 4px 4px 8px;
 }
 /* Name takes remainder; max-width:0 + width:100% is the auto-table fill trick. */
 #frontier-table .ft-name {

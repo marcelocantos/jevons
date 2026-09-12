@@ -334,6 +334,7 @@ export const CENSUS: readonly CensusRow[] = [
   { id: "T517", kind: "exception", surface: "other", name: "Plan-usage force-migrate does not bounce the product owner onto a new provider", reason: "PO force-migrate veto — routing, not ticker paint" },
   { id: "T522", kind: "exception", surface: "doctrine", name: "TestSidebarJournalDedupesProviderEcho passes on a clean checkout of master", reason: "TestSidebarJournalDedupesProviderEcho hermetic — product is T281" },
   { id: "T571", kind: "visible", surface: "composer", name: "React Tab locks on the visible message boxes — stay-main when the sidebar stop is hidden", journeys: ["composer"], families: ["composer-keys", "composer-chrome"] },
+  { id: "T643", kind: "visible", surface: "frontier", name: "Frontier hovercard opens from the target number only; the hit box is the full row height", journeys: ["frontier"], families: ["frontier"] },
 ];
 
 export function censusVisible(): CensusRow[] {

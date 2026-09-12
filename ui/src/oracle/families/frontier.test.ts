@@ -206,21 +206,59 @@ describeOracle(family('frontier'), () => {
 
   itOracle(['T231', 'T271'], 'host→card along the corridor stays; vertical leave dismisses immediately', () => {
     const { container } = render(createElement(FrontierTable, { rows: [sample] }));
-    const host = container.querySelector('.ft-id [data-instant-tip-host]')!;
-    const name = container.querySelector('.ft-name')!;
+    const host = container.querySelector('.ft-id > [data-instant-tip-host]')!;
+    const idCell = container.querySelector('.ft-id')!;
+    const row = host.closest('tr')!;
+    expect(row).toBeTruthy();
     fireEvent.pointerEnter(host);
     const card = container.querySelector('.instant-tip-show') as HTMLElement;
     expect(card).toBeTruthy();
-    mockRect(host, { left: 320, top: 200, right: 360, bottom: 220 });
-    mockRect(name, { left: 360, top: 200, right: 500, bottom: 220 });
+    mockRect(host, { left: 320, top: 200, right: 360, bottom: 226 });
+    mockRect(idCell, { left: 312, top: 200, right: 408, bottom: 226 });
+    mockRect(row, { left: 312, top: 200, right: 800, bottom: 226 });
     mockRect(card, { left: 100, top: 50, right: 300, bottom: 400 });
     fireEvent.pointerMove(document, { clientX: 310, clientY: 210 });
     expect(container.querySelector('.instant-tip-show')).toBeTruthy();
-    fireEvent.pointerEnter(name);
     fireEvent.pointerMove(document, { clientX: 400, clientY: 210 });
     expect(container.querySelector('.instant-tip-show')).toBeTruthy();
     fireEvent.pointerMove(document, { clientX: 310, clientY: 30 });
     expect(container.querySelector('.instant-tip-show')).toBeFalsy();
+  });
+
+  itOracle('T643', 'number-only open; full row-height hit box keeps the card', () => {
+    const { container } = render(createElement(FrontierTable, { rows: [sample] }));
+    const host = container.querySelector('.ft-id > [data-instant-tip-host]')!;
+    const idCell = container.querySelector('.ft-id')!;
+    const name = container.querySelector('.ft-name')!;
+    const row = idCell.closest('tr')!;
+    expect(row).toBeTruthy();
+    expect(name.hasAttribute('data-instant-tip-host')).toBe(false);
+    fireEvent.pointerEnter(name);
+    expect(container.querySelector('.instant-tip-show')).toBeFalsy();
+    fireEvent.pointerEnter(row);
+    expect(container.querySelector('.instant-tip-show')).toBeFalsy();
+    fireEvent.pointerEnter(idCell);
+    const card = container.querySelector('.instant-tip-show') as HTMLElement;
+    expect(card).toBeTruthy();
+    // Ink is shorter than the row; cell and row share the full band.
+    mockRect(host, { left: 320, top: 206, right: 400, bottom: 218 });
+    mockRect(idCell, { left: 312, top: 200, right: 408, bottom: 226 });
+    mockRect(name, { left: 408, top: 200, right: 640, bottom: 226 });
+    mockRect(row, { left: 312, top: 200, right: 800, bottom: 226 });
+    mockRect(card, { left: 100, top: 50, right: 300, bottom: 400 });
+    fireEvent.pointerMove(document, { clientX: 340, clientY: 201 });
+    expect(container.querySelector('.instant-tip-show')).toBeTruthy();
+    fireEvent.pointerMove(document, { clientX: 500, clientY: 201 });
+    expect(container.querySelector('.instant-tip-show')).toBeTruthy();
+    fireEvent.pointerMove(document, { clientX: 340, clientY: 228 });
+    expect(container.querySelector('.instant-tip-show')).toBeFalsy();
+    const css = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../cockpit.css'),
+      'utf8',
+    );
+    const fill = css.match(/#frontier-table \.ft-id > \.has-instant-tip\s*\{[^}]*\}/);
+    expect(fill?.[0]).toMatch(/height:\s*100%/);
+    expect(fill?.[0]).toMatch(/width:\s*100%/);
   });
 
   itOracle('T326', 'chat 🎯Tn hotspots use the same InstantTip frontier-card chrome', () => {

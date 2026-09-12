@@ -20,6 +20,7 @@ export type InstantTipPlacement = 'left-of-host' | 'right-of-host' | 'below-host
  * 🎯T271: hit region = card ∪ hosts ∪ horizontal corridor. HIDE_GRACE_MS=0.
  * Leave the region (including up/down off the row band) dismisses immediately.
  * Flicker → fix geometry, never a timeout. T186/T187/T231 are this path.
+ * 🎯T643: persistHosts join the hit region without opening on enter.
  */
 export function InstantTip(props: {
   id?: string;
@@ -27,8 +28,10 @@ export function InstantTip(props: {
   children?: ReactNode;
   className?: string;
   cardClassName?: string;
-  /** Extra hosts in the same hit-group (frontier id+name, 🎯T231). */
+  /** Extra hosts that both open and persist (🎯T231). */
   groupHosts?: () => Array<Element | null | undefined>;
+  /** Hit-region only — pointerenter does not open (🎯T643 row band). */
+  persistHosts?: () => Array<Element | null | undefined>;
   placement?: InstantTipPlacement;
   /** T186: clamp card right edge left of these nodes (frontier table). */
   clampSelectors?: readonly string[];
@@ -54,7 +57,7 @@ export function InstantTip(props: {
   const wrapRef = useRef<HTMLSpanElement>(null);
   const cardRef = useRef<HTMLElement>(null);
 
-  const collectHosts = (): Element[] => {
+  const collectOpenHosts = (): Element[] => {
     const out: Element[] = [];
     const wrap = wrapRef.current;
     if (wrap) out.push(wrap);
@@ -64,8 +67,16 @@ export function InstantTip(props: {
     return out;
   };
 
+  const collectHitHosts = (): Element[] => {
+    const out = collectOpenHosts();
+    for (const h of props.persistHosts?.() || []) {
+      if (h && out.indexOf(h) < 0) out.push(h);
+    }
+    return out;
+  };
+
   useLayoutEffect(() => {
-    const hosts = collectHosts();
+    const hosts = collectOpenHosts();
     const enter = () => setOpen(true);
     for (const h of hosts) {
       h.classList.add('has-instant-tip');
@@ -82,7 +93,7 @@ export function InstantTip(props: {
   });
 
   const applyPlace = () => {
-    const hosts = collectHosts();
+    const hosts = collectOpenHosts();
     const host = hosts[0];
     const card = cardRef.current;
     if (!host || !card) return;
@@ -133,7 +144,7 @@ export function InstantTip(props: {
     if (!open) return;
     const sample = (x: number, y: number) => {
       const card = cardRef.current;
-      const hosts = collectHosts();
+      const hosts = collectHitHosts();
       if (!card || !hosts.length) return;
       const parts = computeHitParts({
         cardRect: card.getBoundingClientRect(),
@@ -144,7 +155,7 @@ export function InstantTip(props: {
     const onMove = (e: PointerEvent) => sample(e.clientX, e.clientY);
     document.addEventListener('pointermove', onMove);
     return () => document.removeEventListener('pointermove', onMove);
-  }, [open, props.content, props.groupHosts]);
+  }, [open, props.content, props.groupHosts, props.persistHosts]);
 
   const card = (
     <aside

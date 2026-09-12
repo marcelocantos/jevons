@@ -267,6 +267,30 @@ async function scenarioFrontier(page) {
     const p = document.getElementById('mermaid-viz-panel');
     return p && !p.classList.contains('open');
   }, null, { timeout: 8000 });
+  const firstRow = page.locator('#frontier-table tbody tr').first();
+  const idCell = firstRow.locator('.ft-id');
+  const nameCell = firstRow.locator('.ft-name');
+  const idHost = firstRow.locator('.ft-id > [data-instant-tip-host]');
+  const idBox = await idCell.boundingBox();
+  const nameBox = await nameCell.boundingBox();
+  const rowBox = await firstRow.boundingBox();
+  const hostBox = await idHost.boundingBox();
+  if (!idBox || !nameBox || !rowBox || !hostBox) fail('T643', 'frontier row ID/name/host must have boxes');
+  if (hostBox.height + 1 < rowBox.height) {
+    fail('T643', 'ID InstantTip host height must match the row (full row-height hit box); host=' + hostBox.height + ' row=' + rowBox.height);
+  }
+  const nameX = nameBox.x + Math.min(20, Math.max(4, nameBox.width / 3));
+  await page.mouse.move(nameX, nameBox.y + nameBox.height / 2);
+  if ((await page.locator('.instant-tip-show').count()) > 0) {
+    fail('T643', 'hovering the description/name must not open the hovercard');
+  }
+  await page.mouse.move(hostBox.x + hostBox.width / 2, hostBox.y + 1);
+  const openedPad = await page.locator('.instant-tip-show').waitFor({ state: 'visible', timeout: 4000 }).then(() => true).catch(() => false);
+  if (!openedPad) fail('T643', '1px below the ID host top (still in the row) must open the hovercard');
+  await page.mouse.move(nameX, nameBox.y + 1, { steps: 6 });
+  if ((await page.locator('.instant-tip-show').count()) < 1) {
+    fail('T643', '1px below the name cell top (still in the row) must keep the hovercard open');
+  }
   const host = page.locator('#frontier-table .ft-id [data-instant-tip-host], #frontier-table .ft-id').first();
   if ((await host.count()) < 1) fail('T181', 'Frontier table has no ID cell to hover');
   await host.hover();
