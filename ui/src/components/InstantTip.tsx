@@ -17,7 +17,7 @@ export { HIDE_GRACE_MS };
 /** Product-wide singleton (🎯T203): one InstantTip panel visible. */
 let openCloser: (() => void) | null = null;
 
-export type InstantTipPlacement = 'left-of-host' | 'right-of-host' | 'below-host';
+export type InstantTipPlacement = 'left-of-host' | 'right-of-host' | 'toward-mid' | 'below-host';
 
 /**
  * 🎯T271: hit region = card ∪ hosts ∪ horizontal corridor. HIDE_GRACE_MS=0.
@@ -63,7 +63,7 @@ export function InstantTip(props: {
   groupHostsRef.current = props.groupHosts;
   const persistHostsRef = useRef(props.persistHosts);
   persistHostsRef.current = props.persistHosts;
-  const stickyRef = useRef<{ left: number; top: number } | null>(null);
+  const stickyRef = useRef<{ left: number; top: number; side: 'left' | 'right'; width: number } | null>(null);
   const lastXYRef = useRef<{ x: number; y: number } | null>(null);
   const lastPartsRef = useRef<HitParts | null>(null);
 
@@ -107,40 +107,64 @@ export function InstantTip(props: {
     const host = hosts[0];
     const card = cardRef.current;
     if (!host || !card) return;
+    const hostRect = host.getBoundingClientRect();
+    // jsdom / first paint: do not pin a zero card over the trigger.
+    if (hostRect.width < 8 && hostRect.height < 8) return;
     let clampRight: number | null = null;
-    if (props.placement === 'left-of-host' && props.clampSelectors && typeof document !== 'undefined') {
+    if (props.clampSelectors && typeof document !== 'undefined') {
       for (const sel of props.clampSelectors) {
         const el = document.querySelector(sel);
-        if (el) {
-          clampRight = el.getBoundingClientRect().left - 8;
-          break;
-        }
+        if (!el) continue;
+        const box = el.getBoundingClientRect();
+        if (box.width < 16) continue;
+        clampRight = box.left - 8;
+        break;
       }
     }
     const viewW = typeof window !== 'undefined' ? window.innerWidth : 0;
     const viewH = typeof window !== 'undefined' ? window.innerHeight : 0;
     const tipW = card.offsetWidth || 360;
     const tipH = card.offsetHeight || 80;
-    const pos = stickyRef.current
-      ? { ...stickCardRect({ ...stickyRef.current, tipW, tipH, viewW, viewH }), maxWidth: undefined }
+    const placed = stickyRef.current
+      ? {
+          ...stickCardRect({
+            left: stickyRef.current.left,
+            top: stickyRef.current.top,
+            side: stickyRef.current.side,
+            prevW: stickyRef.current.width,
+            tipW,
+            tipH,
+            viewW,
+            viewH,
+            clampRight,
+          }),
+          side: stickyRef.current.side,
+        }
       : placeCardRect({
           placement: props.placement || 'left-of-host',
-          host: host.getBoundingClientRect(),
+          host: hostRect,
           tipW,
           tipH,
           viewW,
           viewH,
           clampRight,
         });
-    stickyRef.current = { left: pos.left, top: pos.top };
-    const left = pos.left + 'px';
-    const top = pos.top + 'px';
+    const usedW = placed.maxWidth != null ? Math.min(tipW, placed.maxWidth) : tipW;
+    stickyRef.current = {
+      left: placed.left,
+      top: placed.top,
+      side: placed.side,
+      width: usedW,
+    };
+    const left = placed.left + 'px';
+    const top = placed.top + 'px';
     if (card.style.left !== left) card.style.left = left;
     if (card.style.top !== top) card.style.top = top;
-    if (pos.maxWidth != null) {
-      const mw = pos.maxWidth + 'px';
+    if (placed.maxWidth != null) {
+      const mw = placed.maxWidth + 'px';
       if (card.style.maxWidth !== mw) card.style.maxWidth = mw;
     }
+    if (card.dataset.tipSide !== placed.side) card.dataset.tipSide = placed.side;
   };
 
   useLayoutEffect(() => {

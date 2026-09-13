@@ -184,6 +184,12 @@ describeOracle(family('frontier'), () => {
     );
     expect(tipSrc).toMatch(/placeCardRect/);
     expect(tipSrc).toMatch(/clampSelectors/);
+    expect(tipSrc).toMatch(/props\.clampSelectors/);
+    const tableSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../components/FrontierTable.tsx'),
+      'utf8',
+    );
+    expect(tableSrc).toMatch(/placement="left-of-host"/);
   });
 
   itOracle('T648', 'layout/mermaid resize is not a leave — no hide timer', () => {
@@ -194,6 +200,8 @@ describeOracle(family('frontier'), () => {
     expect(src).not.toMatch(/setTimeout|setInterval/);
     expect(src).toMatch(/shouldDismissPointerSample/);
     expect(src).toMatch(/stickCardRect/);
+    expect(src).toMatch(/stickyRef\.current\.side/);
+    expect(src).not.toMatch(/props\.placement === 'left-of-host' && props\.clampSelectors/);
     expect(HIDE_GRACE_MS).toBe(0);
     const { container } = render(createElement(FrontierTable, { rows: [sample] }));
     const host = container.querySelector('.ft-id [data-instant-tip-host]')!;
@@ -355,6 +363,11 @@ describeOracle(family('frontier'), () => {
     const tip = container.querySelector('.instant-tip-show');
     expect(tip).toBeTruthy();
     expectFullSemanticCard(tip?.textContent || '');
+    const tipSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../components/TargetHotspotTips.tsx'),
+      'utf8',
+    );
+    expect(tipSrc).toMatch(/placement="toward-mid"/);
   });
 
   itOracle('T189', 'Escape closes the Frontier Graph panel', () => {

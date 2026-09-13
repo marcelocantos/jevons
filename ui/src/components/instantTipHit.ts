@@ -149,27 +149,70 @@ export function shouldDismissPointerSample(args: {
 export function stickCardRect(args: {
   left: number;
   top: number;
+  /** Host-facing side from the first place. Left-of-host cards grow left. */
+  side?: 'left' | 'right';
+  /** Width at the last place — used to keep the host-facing edge still. */
+  prevW?: number;
   tipW: number;
   tipH: number;
   viewW: number;
   viewH: number;
   pad?: number;
-}): { left: number; top: number } {
+  clampRight?: number | null;
+}): { left: number; top: number; maxWidth?: number } {
   const pad = args.pad != null ? args.pad : 8;
-  let left = args.left;
-  let top = args.top;
-  const tw = Math.max(0, Number(args.tipW) || 0);
+  let tw = Math.max(0, Number(args.tipW) || 0);
   const th = Math.max(0, Number(args.tipH) || 0);
   const vw = Math.max(0, Number(args.viewW) || 0);
   const vh = Math.max(0, Number(args.viewH) || 0);
-  if (vw > 0 && left + tw > vw - pad) left = Math.max(pad, vw - pad - tw);
-  if (left < pad) left = pad;
+  const prevW = args.prevW != null && args.prevW > 0 ? args.prevW : tw;
+  let maxWidth: number | undefined;
+  let left = args.left;
+
+  if (args.side === 'left') {
+    // Pin the host-facing (right) edge so growth expands away from the trigger.
+    let pinnedRight = args.left + prevW;
+    if (args.clampRight != null && Number.isFinite(args.clampRight)) {
+      pinnedRight = Math.min(pinnedRight, Number(args.clampRight));
+    }
+    left = pinnedRight - tw;
+    if (left < pad) {
+      const avail = Math.max(0, pinnedRight - pad);
+      if (avail < tw) {
+        maxWidth = Math.floor(avail);
+        tw = maxWidth;
+      }
+      left = pinnedRight - tw;
+    }
+  } else {
+    if (args.clampRight != null && Number.isFinite(args.clampRight) && left + tw > args.clampRight) {
+      const avail = Math.max(0, Number(args.clampRight) - left);
+      if (avail < tw) {
+        maxWidth = Math.floor(avail);
+        tw = maxWidth;
+      }
+    }
+    if (vw > 0 && left + tw > vw - pad) {
+      const avail = Math.max(0, vw - pad - left);
+      if (avail < tw) {
+        maxWidth = Math.floor(avail);
+        tw = maxWidth;
+      }
+    }
+  }
+
+  let top = args.top;
   if (vh > 0 && top + th > vh - pad) top = Math.max(pad, vh - pad - th);
   if (top < pad) top = pad;
-  return { left: Math.round(left), top: Math.round(top) };
+  const out: { left: number; top: number; maxWidth?: number } = {
+    left: Math.round(left),
+    top: Math.round(top),
+  };
+  if (maxWidth != null) out.maxWidth = maxWidth;
+  return out;
 }
 
-export type CardPlacement = 'left-of-host' | 'right-of-host' | 'below-host';
+export type CardPlacement = 'left-of-host' | 'right-of-host' | 'toward-mid' | 'below-host';
 
 export type PlaceCardResult = {
   left: number;
@@ -177,6 +220,96 @@ export type PlaceCardResult = {
   side: 'left' | 'right';
   maxWidth?: number;
 };
+
+/** Card sits on the trigger — the pointer cannot walk adjacent hosts (T181/T186/T326/T648). */
+export function cardCoversHost(
+  card: { left: number; width?: number; right?: number },
+  host: Partial<HitRect>,
+  gap = 8,
+): boolean {
+  const h = normalizeRect(host);
+  if (!h) return false;
+  const right = card.right != null ? Number(card.right) : card.left + (Number(card.width) || 0);
+  if (!Number.isFinite(card.left) || !Number.isFinite(right)) return false;
+  return card.left < h.right + gap && right > h.left - gap;
+}
+
+/** Transcript: open on the side that puts the card closer to the pane middle. */
+export function sideTowardMid(host: Partial<HitRect>, viewW: number): 'left' | 'right' {
+  const h = normalizeRect(host);
+  const hx = h ? (h.left + h.right) / 2 : 0;
+  const mid = viewW / 2;
+  return hx <= mid ? 'right' : 'left';
+}
+
+function placeVertical(hy: number, th: number, vh: number, pad: number): number {
+  let top = hy - th / 2;
+  if (vh > 0) {
+    if (top + th > vh - pad) top = Math.max(pad, vh - pad - th);
+    if (top < pad) top = pad;
+  } else if (top < pad) {
+    top = pad;
+  }
+  return Math.round(top);
+}
+
+/** Sit entirely on one side of the host. Never overlay. Shrink if the gutter is tight. */
+function placeBesideHost(args: {
+  side: 'left' | 'right';
+  host: HitRect | null;
+  hx: number;
+  hy: number;
+  tw: number;
+  th: number;
+  vw: number;
+  vh: number;
+  pad: number;
+  gap: number;
+  clampRight?: number | null;
+}): PlaceCardResult {
+  const host = args.host;
+  let tw = args.tw;
+  let maxWidth: number | undefined;
+  let left: number;
+
+  if (args.side === 'left') {
+    const hostClamp = (host ? host.left : args.hx) - args.gap;
+    const maxRight =
+      args.clampRight != null && Number.isFinite(args.clampRight)
+        ? Math.min(Number(args.clampRight), hostClamp)
+        : hostClamp;
+    left = maxRight - tw;
+    if (left < args.pad) {
+      const avail = Math.max(0, maxRight - args.pad);
+      if (avail < tw) {
+        maxWidth = Math.floor(avail);
+        tw = maxWidth;
+      }
+      left = maxRight - tw;
+      if (left < args.pad) left = args.pad;
+    }
+  } else {
+    const minLeft = (host ? host.right : args.hx) + args.gap;
+    left = minLeft;
+    if (args.vw > 0 && left + tw > args.vw - args.pad) {
+      const avail = Math.max(0, args.vw - args.pad - minLeft);
+      if (avail < tw) {
+        maxWidth = Math.floor(avail);
+        tw = maxWidth;
+      }
+      left = minLeft;
+    }
+    if (left < args.pad) left = args.pad;
+  }
+
+  const out: PlaceCardResult = {
+    left: Math.round(left),
+    top: placeVertical(args.hy, args.th, args.vh, args.pad),
+    side: args.side,
+  };
+  if (maxWidth != null) out.maxWidth = maxWidth;
+  return out;
+}
 
 /** Vanilla T181/T186: left of host, right edge clamped off #frontier-table; top centered. */
 export function placeCardRect(args: {
@@ -193,7 +326,7 @@ export function placeCardRect(args: {
   const host = normalizeRect(args.host);
   const pad = args.pad != null ? args.pad : 8;
   const gap = args.gap != null ? args.gap : 8;
-  let tw = Math.max(0, Number(args.tipW) || 0);
+  const tw = Math.max(0, Number(args.tipW) || 0);
   const th = Math.max(0, Number(args.tipH) || 0);
   const vw = Math.max(0, Number(args.viewW) || 0);
   const vh = Math.max(0, Number(args.viewH) || 0);
@@ -218,63 +351,40 @@ export function placeCardRect(args: {
     return { left: Math.round(left), top: Math.round(top), side: 'left' };
   }
 
+  const beside = (side: 'left' | 'right') =>
+    placeBesideHost({
+      side,
+      host,
+      hx,
+      hy,
+      tw,
+      th,
+      vw,
+      vh,
+      pad,
+      gap,
+      clampRight: args.clampRight,
+    });
+
   if (placement === 'right-of-host') {
-    let side: 'left' | 'right' = 'right';
-    let left = (host ? host.right : hx) + gap;
-    if (vw > 0 && left + tw > vw - pad) {
-      const hostLeft = host ? host.left : hx;
-      const flip = hostLeft - gap - tw;
-      if (flip >= pad) {
-        side = 'left';
-        left = flip;
-      } else {
-        left = Math.max(pad, vw - pad - tw);
-      }
+    const right = beside('right');
+    if (right.maxWidth != null && right.maxWidth < tw) {
+      const left = beside('left');
+      if (left.maxWidth == null || (left.maxWidth ?? 0) >= (right.maxWidth ?? 0)) return left;
     }
-    if (left < pad) left = pad;
-    let top = hy - th / 2;
-    if (vh > 0) {
-      if (top + th > vh - pad) top = Math.max(pad, vh - pad - th);
-      if (top < pad) top = pad;
+    return right;
+  }
+
+  if (placement === 'toward-mid') {
+    const prefer = sideTowardMid(host || { left: hx, top: 0, right: hx, bottom: 0 }, vw);
+    const first = beside(prefer);
+    if (first.maxWidth != null && first.maxWidth < tw) {
+      const alt = beside(prefer === 'left' ? 'right' : 'left');
+      if (alt.maxWidth == null || (alt.maxWidth ?? 0) > (first.maxWidth ?? 0)) return alt;
     }
-    return { left: Math.round(left), top: Math.round(top), side };
+    return first;
   }
 
-  let side: 'left' | 'right' = 'left';
-  let left = hx - gap - tw;
-  let maxWidth: number | undefined;
-  const maxRight = args.clampRight != null && Number.isFinite(args.clampRight) ? Number(args.clampRight) : null;
-
-  if (maxRight != null) {
-    if (left + tw > maxRight) left = maxRight - tw;
-    if (left < pad) {
-      left = pad;
-      const avail = Math.max(0, maxRight - pad);
-      if (avail > 0 && (tw <= 0 || avail < tw)) {
-        maxWidth = Math.floor(avail);
-        tw = maxWidth;
-        left = maxRight - tw;
-        if (left < pad) left = pad;
-      }
-    }
-  } else if (left < pad) {
-    side = 'right';
-    left = (host ? host.right : hx) + gap;
-  }
-  if (vw > 0) {
-    if (left + tw > vw - pad) left = Math.max(pad, vw - pad - tw);
-    if (left < pad) left = pad;
-  }
-
-  let top = hy - th / 2;
-  if (vh > 0) {
-    if (top + th > vh - pad) top = Math.max(pad, vh - pad - th);
-    if (top < pad) top = pad;
-  } else if (top < pad) {
-    top = pad;
-  }
-
-  const out: PlaceCardResult = { left: Math.round(left), top: Math.round(top), side };
-  if (maxWidth != null) out.maxWidth = maxWidth;
-  return out;
+  // left-of-host (frontier): never flip over the ID column (T186 / T648).
+  return beside('left');
 }

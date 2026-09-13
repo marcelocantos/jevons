@@ -95,7 +95,7 @@ export function TargetHotspotTips(props: {
       key={tid}
       defaultOpen
       groupHosts={() => [active]}
-      placement="right-of-host"
+      placement="toward-mid"
       cardClassName="target-card-tip"
       content={<TargetHoverCard markdown={md} id={cardId} name={cardName} />}
     />

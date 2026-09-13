@@ -1362,7 +1362,7 @@ body.rhs-resizing-row { cursor: row-resize; }
   border-bottom-style: solid;
   outline: none;
 }
-/* Shared card chrome: small left finger pointing at the hotspot (card opens right). */
+/* Shared card chrome: finger on the host-facing edge (T326 toward-mid). */
 .instant-tip.instant-tip-card.target-card-tip {
   /* slightly tighter than frontier cards — finger is the small host span */
   max-width: min(440px, 92vw);
@@ -1370,14 +1370,21 @@ body.rhs-resizing-row { cursor: row-resize; }
 .instant-tip.instant-tip-card.target-card-tip::before {
   content: '';
   position: absolute;
-  left: -6px;
   top: 12px;
   width: 0;
   height: 0;
   border-top: 5px solid transparent;
   border-bottom: 5px solid transparent;
-  border-right: 6px solid var(--border);
   pointer-events: none;
+}
+.instant-tip.instant-tip-card.target-card-tip[data-tip-side="right"]::before,
+.instant-tip.instant-tip-card.target-card-tip:not([data-tip-side])::before {
+  left: -6px;
+  border-right: 6px solid var(--border);
+}
+.instant-tip.instant-tip-card.target-card-tip[data-tip-side="left"]::before {
+  right: -6px;
+  border-left: 6px solid var(--border);
 }
 .instant-tip.instant-tip-card.target-card-tip {
   position: fixed; /* keep fixed from .instant-tip; absolute finger anchors here */
