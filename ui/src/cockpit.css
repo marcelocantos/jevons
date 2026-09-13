@@ -875,7 +875,10 @@ body.rhs-resizing-row { cursor: row-resize; }
    next to the theme toggle. Never display:none — a missing fetch is not a
    reason to hide the slot. One group per provider: T287 company mark +
    boxed session/weekly remaining bars. Triangle under each bar is remaining
-   time; orange when spend outstrips time, red when it outstrips by a lot.
+   time in that window's period. Its colour is the remaining-period scale
+   (red at the start → orange → green → blue → purple on the home stretch),
+   not the bar's spend-vs-time pace. Bar fill still paints pace:
+   orange when spend outstrips time, red when it outstrips by a lot.
    Weekly only (🎯T390.1.1): blue = on track to leave ≥15% unused,
    purple = ≥15% already unrecoverable even at 1.5×. */
 #plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
@@ -898,17 +901,11 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--green); transform: translateX(-50%); pointer-events: none; }
 #plan-ticker .plan-win-label { font-size: 9px; line-height: 1; color: var(--text-muted); padding-bottom: 5px; }
 #plan-ticker .plan-win.plan-ahead .plan-bar-fill { background: var(--amber); }
-#plan-ticker .plan-win.plan-ahead .plan-tri { border-bottom-color: var(--amber); }
 #plan-ticker .plan-win.plan-hot .plan-bar-fill,
 #plan-ticker .plan-win.plan-crit .plan-bar-fill { background: var(--red); }
-#plan-ticker .plan-win.plan-hot .plan-tri,
-#plan-ticker .plan-win.plan-crit .plan-tri { border-bottom-color: var(--red); }
 #plan-ticker .plan-win.plan-under .plan-bar-fill { background: var(--plan-under); }
-#plan-ticker .plan-win.plan-under .plan-tri { border-bottom-color: var(--plan-under); }
 #plan-ticker .plan-win.plan-locked .plan-bar-fill { background: var(--plan-locked); }
-#plan-ticker .plan-win.plan-locked .plan-tri { border-bottom-color: var(--plan-locked); }
 #plan-ticker .plan-win.plan-low .plan-bar-fill { background: var(--amber); }
-#plan-ticker .plan-win.plan-low .plan-tri { border-bottom-color: var(--amber); }
 /* 🎯T390.1.3: rock bottom (published 0% or 429) — bright red bar chrome,
    weekly and session, every provider. Fill is already empty so the
    inset stroke is the signal. */

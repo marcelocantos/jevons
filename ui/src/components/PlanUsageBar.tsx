@@ -9,6 +9,7 @@ import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMark';
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
+import { triangleColorForRemaining } from '../plan/triColor';
 import { InstantTip } from './InstantTip';
 import { tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
@@ -106,7 +107,11 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
                       <span className="plan-bar-fill" style={{ width: rem + '%' }} />
                     </span>
                     {t != null ? (
-                      <span className="plan-tri" aria-hidden="true" style={{ left: t + '%' }} />
+                      <span
+                        className="plan-tri"
+                        aria-hidden="true"
+                        style={{ left: t + '%', borderBottomColor: triangleColorForRemaining(t) }}
+                      />
                     ) : null}
                   </span>
                   <span className="plan-win-label">{windowAbbrev(w.name || '')}</span>
