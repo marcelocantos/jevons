@@ -69,12 +69,27 @@ Hard vocabulary when reporting fleet / worker status to the owner:
 - Never call a registered or running worker **"live"** — that word implies the
   product is on the wire for the owner.
 - Reserve **"live"**, **"landed"**, and **"shipped"** for product evidence only:
-  commit SHA + hard-reloadable UI, or a proven API path on the daily
-  (owner-visible) path.
+  commit SHA + hard-reloadable UI, or a proven API path on the
+  development or released surface.
 
 Residual: technical uses of "live" elsewhere (journey suite, `make test-ui-live`,
-daemon attach, universe A/B labels) stay as lab/test jargon — not overseer
-status language about workers.
+daemon attach) stay as lab/test jargon — not overseer status language
+about workers.
+
+### Environments: development vs released (🎯T572)
+
+There is no third environment. Two words only:
+
+- **development** — the always-on jevonsd built from this machine's
+  development source tree (`:13705`, `~/.jevons`). Not a scheduled build
+  and not a separately named cockpit.
+- **released** — Homebrew / shipped product.
+
+Do not mint another name for that surface. `restart-daily-jevonsd.sh` is a
+legacy filename; speech is "restart the development daemon".
+`daily_token_budget` is a 24-hour spend key, not an environment.
+Informal talk about preferring this orchestrator over other harnesses is
+not a product name and is not used in code.
 
 ## Impatience & bias to act (🎯T87 thin)
 
@@ -128,6 +143,8 @@ If you catch yourself saying (or meaning any of):
 Use **`jevons_target_file`** (cwd + name + acceptance) and/or bullseye MCP (`bullseye_commit` op=track / file tools). Owner path remains the `target:` aside. Propose a 🎯 with acceptance and file (or prompt-file) in that turn. Harness coach path: **`jevons_rsi_coach_cycle`** (judgments to you); you file when warranted. Residual mint: **`jevons_rsi_cycle`** only when explicitly enabled.
 
 **Ledger file is tool-only (🎯T546):** do **not** Read, Write, Edit, or StrReplace `bullseye.yaml`. File, status, achieve, and query go through those tools only. A mutating tool call on that path is refused (including Cursor `StrReplace`). Residual: Grep of a target id; owner/human editors; the bullseye process is the writer. The banner comment is not a gate.
+
+**Ledger fields are markdown (🎯T650):** name, acceptance, context, and attestation paint through the same HTML-capable markdown renderer as chat. Bullseye stores what you write — it does not escape. Cite tags as `&lt;strong&gt;` or backtick/`code` spans; a raw `<table>` or `<pre>` is interpreted and can smash a hovercard.
 
 **Dotted families are umbrellas:** filing `child_of: T540` or `id: T540.3` while T540 exists appends the child to the parent's `depends_on`. The parent is not retireable and must not be treated as frontier-ready until every direct child is achieved or set_aside. Prefer `child_of` or `split aggregate`. `split add` with default child IDs also wires the parent. Graph `expand: children` walks the ID prefix for display only — that is not an edge. Do not achieve a parent on its own weak acceptance while dotted children are open.
 
@@ -708,7 +725,7 @@ reports gets skimmed past, which launders the next real false green).
 
 ## Owner-visible claims are observed (🎯T552 / 🎯T553.2) — was 🎯T194
 
-A target whose **product path is served by daily jevonsd** (HTTP API,
+A target whose **product path is served by development jevonsd** (HTTP API,
 compiled server, non-static) is **not achieved on hermetics alone**.
 **Hermetic unit green is necessary, not sufficient** — a **stale binary**
 still serving is a real failure.
@@ -758,8 +775,8 @@ pane, Latest on a hard reload, or more empty canvas than bubbles is an
 **automatic no**.
 
 If the prose says **no** and a journey is green, the journey is a **false
-green** — fix the oracle in the same turn; daily is not a universe the
-test cannot see. Refuse to achieve visual cockpit work whose finish
+green** — fix the oracle in the same turn; the running cockpit is not a
+universe the test cannot see. Refuse to achieve visual cockpit work whose finish
 report lacks the look.
 
 Pure helpers: `HasVisualProseVerdict` / `LooksLikeMissingVisualVerdict`

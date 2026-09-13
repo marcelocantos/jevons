@@ -52,7 +52,7 @@ Same-machine browser use is the supported docs-only path today.
    (🎯T156).
 6. **MCP attach**: fleet seats get `jevonsmcp` on `AgentDef.MCPServers`
    at Claudia mint/Launch (served URL, 🎯T379; T520 owner-map HTTP uses
-   the same list). Daily and isolate boot do **not** write
+   the same list). Development and isolate boot do **not** write
    `~/.claude.json`, `~/.cursor/mcp.json`, `~/.codex/config.toml`,
    `~/.grok/config.toml`, or isolate `state_dir/mcp`. Do not hand-roll
    `claude mcp add` / `grok mcp add` for fleet seats. An external client
@@ -480,6 +480,12 @@ above. A mutating call on that path is refused (Cursor `StrReplace`
 included). Residual: Grep of a target id; owner/human editors; the
 bullseye process writes the file. The banner comment is not a gate.
 
+**Ledger fields are markdown (🎯T650):** name, acceptance, context, and
+attestation paint through the same HTML-capable markdown renderer as
+chat. Bullseye stores what you write — it does not escape. Cite tags as
+`&lt;strong&gt;` or backtick/`code` spans; a raw `<table>` or `<pre>` is
+interpreted and can smash a hovercard.
+
 **Dotted families are umbrellas:** `child_of` / `id: T540.3` under T540
 appends the child to the parent's `depends_on`. The parent is not
 retireable and is not frontier-ready until every direct child is
@@ -593,11 +599,23 @@ voice; workers use the same words in finish reports):
 | Say | When |
 |---|---|
 | **in progress** | Worker is registered or running, but product is **not yet owner-visible** |
-| **live** / **landed** / **shipped** | Only with product evidence: commit SHA + hard-reloadable UI, or proven API on the daily path |
+| **live** / **landed** / **shipped** | Only with product evidence: commit SHA + hard-reloadable UI, or proven API on the development or released surface |
 
 Never call a registered or running worker **"live"** — that implies product
 on the wire. Residual: journey-suite / `test-ui-live` / daemon-attach uses of
 "live" stay lab jargon, not status language about workers.
+
+## Environments: development vs released (🎯T572)
+
+There is no third environment. Say **development** for the always-on
+jevonsd built from this machine's development source tree (`:13705` /
+`~/.jevons`) and **released** for Homebrew / shipped. That surface is
+not a scheduled build and not a separately named cockpit. Do not mint
+another name for it.
+`restart-daily-jevonsd.sh` is a legacy filename; speech is "restart the
+development daemon". `daily_token_budget` is a 24-hour spend key.
+Informal talk about preferring this orchestrator over other harnesses is
+not a product name and is not used in code.
 
 ## Delivery: local by default (🎯T104)
 
@@ -817,8 +835,8 @@ are not answers. One leftover bubble in a tall pane, Latest on a hard
 reload, or more empty canvas than bubbles is an **automatic no**.
 
 If the prose says **no** and a journey is green, the journey is a **false
-green** — fix the oracle in the same turn; daily is not a universe the
-test cannot see.
+green** — fix the oracle in the same turn; the running cockpit is not a
+universe the test cannot see.
 
 Pure helpers: `HasVisualProseVerdict` / `LooksLikeMissingVisualVerdict`
 (`internal/mcpserver`). **Residual:** instructional + pure classifier;

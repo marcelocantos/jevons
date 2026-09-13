@@ -27,8 +27,9 @@ make ios          # Regenerate the iOS Xcode project (xcodegen)
 
 ```bash
 make run          # Build and run jevonsd (or: brew services start jevons)
-open http://localhost:13705/   # Development React (supervisord program jevonsd)
-make ui-dev                    # opt-in Vite HMR; not a standing agent
+open http://localhost:13705/   # Development React (supervisor/jevonsd.ini; Homebrew supervisord)
+make supervisor-install        # Render tracked supervisor/*.ini into Homebrew supervisor.d (vellum shape)
+make ui-dev                    # opt-in Vite HMR; not a standing program
 ```
 
 Product UI work lands in `ui/` (Vite + React). The daemon embeds the tracked
@@ -41,12 +42,15 @@ T540.3/T540.7 retain fidelity work independently of runtime retirement.
 
 ## Test
 
-Two universes for live owner-chat work — keep them distinct:
+Two surfaces for live owner-chat work — keep them distinct (🎯T572):
 
-- **A (daily):** `:13705` / `~/.jevons` / `jevonsmcp` — real owner session.
-  Touch only when diagnosis needs that context.
-- **B (isolated):** `make test-journey` — throwaway port/state/MCP.
+- **Development:** `:13705` / `~/.jevons` / `jevonsmcp` — this machine's
+  running instance. Touch only when diagnosis needs that context.
+- **Isolate:** `make test-journey` — throwaway port/state/MCP.
   The **preferred E2E net** for owner-visible chat/fleet behaviour (🎯T101).
+
+**Released** is Homebrew / shipped (`brew services start jevons`). There
+is no third environment.
 
 A **user journey** maps a real owner interaction and runs **end-to-end**;
 it **must interact with an agent** (overseer and/or fleet). Hermetic unit
@@ -55,7 +59,7 @@ tests and doc greps are not journeys (see `scripts/docratchet/`,
 the agent interaction for replay is allowed (🎯T107).
 
 `make test` is the full product net (🎯T492): hermetic Go + Node +
-Playwright UI, then Universe-B journeys. Hermetic layers are **distinct from**
+Playwright UI, then isolate journeys. Hermetic layers are **distinct from**
 journeys (no Grok, no daemon) but they are not a substitute — both run.
 A journey's need for a signed-in provider CLI, a throwaway daemon, or
 network is a **dependency of the suite**, not a reason to omit the gate.
@@ -68,17 +72,17 @@ diff/PR notes naming why unit/hermetic coverage is enough. Do not treat
 unit green alone as the standing net for chat/fleet regressions that only
 show up on the real path.
 
-Universe B never defaults to daily `:13705` — the suite refuses that port.
-Attaching to a running daily daemon (`make test-live-suite`, chat-smoke*)
+Isolates never default to development `:13705` — the suite refuses that port.
+Attaching to a running development daemon (`make test-live-suite`, chat-smoke*)
 is intentional-only, not routine.
 
 ```bash
-make test         # All: Go + web hermetic + Playwright UI + Universe-B journeys (🎯T492)
+make test         # All: Go + web hermetic + Playwright UI + isolate journeys (🎯T492)
 make test-go      # go test ./...
 make test-web     # React unit tests (historical command alias)
 make test-ui      # Playwright perceptual chat UI (mocked WS)
 make test-ui-live # Explicit UI_HOST isolate; real React owner send/reload
-make test-journey # Isolated owner-chat + orchestration journeys (Universe B; needs Grok)
+make test-journey # Isolated owner-chat + orchestration journeys (needs Grok)
 make test-live-suite  # Attaches to running daemon (often A — intentional only)
 make bullseye     # Standing invariants: build, test, vet, clean tree
 ```
@@ -173,6 +177,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   **Ledger file is tool-only (🎯T546):** do not Read/Write/Edit/StrReplace
   `bullseye.yaml`; mutating calls on that path are refused (including
   Cursor `StrReplace`). The banner comment is not a gate.
+  **Ledger fields are markdown (🎯T650):** name, acceptance, context, and
+  attestation paint through the same HTML-capable renderer as chat.
+  Bullseye stores what you write — it does not escape. Cite tags as
+  `&lt;strong&gt;` or code spans; a raw `<table>` or `<pre>` is interpreted
+  and can smash a hovercard.
   **Dotted families are umbrellas:** `child_of` / `T540.3` under `T540`
   is a `depends_on` edge, not a display prefix. Do not treat a parent as
   retireable or frontier-ready while dotted children are open. Prefer
@@ -271,22 +280,24 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   **`parent=jevons-po`** in the same operational cycle — kick off all
   non-design frontier work continuously; do not wait for the owner.
   Skip design-gated (T112 / T67 / T29-class) and blocked targets until
-  unblocked or owner opens design. Host saturation (🎯T460) is also
-  blocking: do not spawn when capacity pressure is critical.
+  unblocked or owner opens design. Load-average is not a sleep or
+  spawn-stop (🎯T566.1). Halt on memory grind or seat-count (🎯T566.2);
+  remint stopped seats first (🎯T566.3).
   Instructional residual. Persona + agents-guide + fleet standing brief.
 - **File→spawn same turn (🎯T193):** when a **Build-plane** target is filed
   (owner `target:` aside / mid-session), **PO spawns a named worker** under
   **`parent=jevons-po`** in the **same turn** as filing — not ledger-only.
   T130 files; T193 spawns. Skip design-gated / blocked-on-human /
-  parked-for-design / pure documentation / host saturation (🎯T460).
+  parked-for-design / pure documentation. Load-average is not a skip
+  (🎯T566.1); memory grind and seat-count refuse a new pane (🎯T566.2).
   Related: 🎯T155 continuous frontier kick-off. Instructional residual.
   Persona + agents-guide + fleet standing brief.
 - **PO proactive-until-empty-then-sleep (🎯T325.1):** when the
   product-scoped frontier has unblocked ready leaves, the PO continues
   spawn/brief until empty or blocked — not a one-shot pass that strands
-  work. Host saturation (🎯T460) is blocked, same as a design gate.
+  work. Load-average is not a sleep gate (🎯T566.1).
   When empty (or only design-gated / blocked / parked /
-  already-engaged / host-saturated leaves remain), the PO sleeps/idles without open-mission
+  already-engaged leaves remain), the PO sleeps/idles without open-mission
   thrash; stays interruptible for owner/overseer directs. Pure helpers:
   `ClassifyPOProactive` / `ClassifyFrontierLeaf` /
   `POOpenMissionForProactive`. Design:
@@ -366,9 +377,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
   **shipped** for product evidence only (commit SHA + hard-reloadable UI, or
-  proven API on the daily path). Lab/test uses of "live" (journeys,
+  proven API on the development or released surface). Lab/test uses of "live" (journeys,
   `test-ui-live`) stay technical jargon. Persona Communication Style +
   agents-guide + fleet standing brief.
+- **Environments: development vs released (🎯T572):** say **development**
+  for the always-on jevonsd built from this machine's development source
+  tree (`:13705` / `~/.jevons`) and **released** for Homebrew / shipped.
+  That surface is not a scheduled build and not a separately named
+  cockpit. Do not mint a third environment.
+  `restart-daily-jevonsd.sh` is a legacy filename; speech is "restart the
+  development daemon". `daily_token_budget` is a 24-hour spend key.
+  Informal talk about preferring this orchestrator over other harnesses
+  is not a product name and is not used in code.
 - **Commit when done (🎯T638):** implementation that is ready to land is
   committed in the same turn. Do not ask permission. Do not stop to show
   a draft. The owner already authorized this (`~/CLAUDE.md`). Cursor
@@ -390,9 +410,10 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   not the achieve gate — observation of the running surface is (T552).
   Development `:13705` serves committed HEAD (T505 / T553.1), never the
   dirty shared clone. The development owner is supervisord program
-  `jevonsd` (`supervisor/jevonsd.ini`). The restart script signals that
-  owner with SIGHUP. Script path: `scripts/restart-daily-jevonsd.sh`.
-  React changes require rebuilding and activating the embedded bundle before reloading.
+  `jevonsd` (`supervisor/jevonsd.ini`; `make supervisor-install` renders
+  the template). The restart script signals that owner with SIGHUP.
+  Script path: `scripts/restart-daily-jevonsd.sh`. React changes require
+  rebuilding and activating the embedded bundle before reloading.
 - **The process is supervised (🎯T405 / 🎯T553.3):** on 2026-08-10 a
   worker's restart killed the daemon, the script died with its invoker
   (own session was still a convention), and the fleet stayed down. The
@@ -456,7 +477,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   PATH the installer writes (restarts a throwaway daemon) — each is the
   other's control: `cmd/jevons-watchdog/t434_toolchain_test.go`.
 - **Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194):**
-  a target whose product path is served by daily jevonsd is **not
+  a target whose product path is served by development jevonsd is **not
   achieved on hermetics alone**. Hermetic unit green is **necessary not sufficient**
   — a stale binary still serving is a real failure. The
   test is observation of the running surface (composer, transcript, a
@@ -476,7 +497,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   leftover bubble in a tall pane, Latest on a hard reload, or more
   empty canvas than bubbles is an automatic no. If the prose says no
   and a journey is green, the journey is a false green — fix the oracle
-  in the same turn; daily is not a universe the test cannot see. Pure
+  in the same turn; the running cockpit is not a universe the test cannot see. Pure
   helpers: `HasVisualProseVerdict` / `LooksLikeMissingVisualVerdict`.
   Residual: instructional + pure classifier; not a hard achieve block.
   Persona + agents-guide + fleet standing brief.
@@ -485,7 +506,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `AgentDef.MCPServers` (LoadMCP + this daemon's HTTP URL; T520
   loopbacks stamped on that list), not because
   `~/.claude.json` / `~/.cursor/mcp.json` / `~/.codex` / `~/.grok`
-  contain `jevonsmcp`. Daily boot **must not** write those HOME files;
+  contain `jevonsmcp`. Development boot **must not** write those HOME files;
   it scrubs leftover `jevonsmcp` keys. Isolates do not write
   `state_dir/mcp` either — `SessionServers` is enough. Isolate LoadMCP
   paths point at missing fixture files so a journey does not inherit
@@ -493,12 +514,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Bash-channel answer when tools are gone: `out_of_scope` vs `down`
   vs `unknown`.   Residual: Codex exclusive writes `CODEX_HOME` from
   `MCPServers` (app-server has no thread/start MCP field).
-  Published pin is claudia v0.27.0 (hermetic Session MCP; no EnsureMCP).
+  Published pin is claudia v0.30.0 (Agent.Migrate; hermetic Session MCP; no EnsureMCP).
 - **Claudia pin seam (🎯T448):** `go.mod` pins the last *published*
   claudia release. Local-master claudia (🎯T104) is consumed via
   `../go.work` and buildsnap's snapshot sibling inject — not a committed
   `replace` in `go.mod` (that breaks pristine clones and T254.2
-  snapshots). `bin/claudiapin` runs on the daily restart path: it names
+  snapshots). `bin/claudiapin` runs on the development restart path: it names
   the pin SHA and any sibling commits the pin is missing, and hard-fails
   when required fleet commits (T28 send-submit, squash `a27d3fd` of
   `2017074`/`aa71680`) are absent from the pin. Ship/push of claudia is

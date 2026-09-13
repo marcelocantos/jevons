@@ -127,6 +127,7 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T546",
+		"T650",
 		"StrReplace",
 		"T92",
 		"T129",
@@ -434,7 +435,8 @@ func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 		"commit SHA",
 		"hard-reloadable UI",
 		"proven API path",
-		"daily",
+		"development or released",
+		"T572",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("default persona missing T176 marker %q", want)
@@ -442,7 +444,7 @@ func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 	}
 }
 
-// 🎯T194: daemon/API achieve requires activated daily path (restart-daily + live probe).
+// 🎯T194 / T572: daemon/API achieve requires the development surface (restart script + live probe).
 func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
 	p, err := Default().Persona()
 	if err != nil {
@@ -535,6 +537,7 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T546",
+		"T650",
 		"StrReplace",
 		"T92",
 		// 🎯T262.1 frontier = ready set
@@ -614,7 +617,8 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"shipped",
 		"hard-reloadable UI",
 		"proven API",
-		"daily path",
+		"development or released",
+		"T572",
 		// 🎯T552 / T553.2 owner-visible observation (was T194)
 		"Owner-visible claims are observed",
 		"T552",
@@ -679,6 +683,7 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"jevons_target_file",
 		"bullseye_commit",
 		"T546",
+		"T650",
 		"StrReplace",
 		"T92",
 		"same turn",
@@ -750,7 +755,8 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"shipped",
 		"hard-reloadable UI",
 		"proven API",
-		"daily path",
+		"development or released",
+		"T572",
 		// 🎯T552 / T553.2 owner-visible observation (was T194)
 		"Owner-visible claims are observed",
 		"T552",
@@ -794,6 +800,50 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 	}
 	if !strings.Contains(string(cb), "AGENTS.md") {
 		t.Error("CLAUDE.md must import AGENTS.md so T125/T129/T130/T155/T193 doctrine is on the instruction surface")
+	}
+}
+
+// 🎯T572: instruction surfaces must not mint a third environment called daily.
+func TestInstructionSurfacesDoNotMintDailyUniverse(t *testing.T) {
+	banned := []string{
+		"daily path",
+		"daily cockpit",
+		"daily build",
+		"daily driver",
+		"daily API",
+		"A (daily)",
+		"Daily `:",
+		"daily jevonsd",
+		"Universe A (daily)",
+	}
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	bodies := map[string]string{"persona.md": p}
+	for _, rel := range []struct{ name, path string }{
+		{"AGENTS.md", filepath.Join("..", "..", "AGENTS.md")},
+		{"agents-guide.md", filepath.Join("..", "..", "agents-guide.md")},
+		{"fleet_brief.go", filepath.Join("..", "mcpserver", "fleet_brief.go")},
+	} {
+		b, err := os.ReadFile(rel.path)
+		if err != nil {
+			t.Fatalf("%s: %v", rel.name, err)
+		}
+		bodies[rel.name] = string(b)
+	}
+	for name, body := range bodies {
+		if !strings.Contains(body, "development") || !strings.Contains(body, "released") {
+			t.Errorf("%s missing development/released vocabulary (T572)", name)
+		}
+		if !strings.Contains(body, "T572") && !strings.Contains(body, "🎯T572") {
+			t.Errorf("%s missing T572 marker", name)
+		}
+		for _, phrase := range banned {
+			if strings.Contains(body, phrase) {
+				t.Errorf("%s reminted %q", name, phrase)
+			}
+		}
 	}
 }
 
