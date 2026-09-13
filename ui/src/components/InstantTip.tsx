@@ -23,7 +23,8 @@ export type InstantTipPlacement = 'left-of-host' | 'right-of-host' | 'toward-mid
  * 🎯T271: hit region = card ∪ hosts ∪ horizontal corridor. HIDE_GRACE_MS=0.
  * Leave the region (including up/down off the row band) dismisses immediately.
  * Flicker → fix geometry, never a timeout. T186/T187/T231 are this path.
- * 🎯T643: persistHosts join the hit region without opening on enter.
+ * 🎯T643 / T649: persistHosts join the hit region without opening on enter.
+ * Frontier does not persist the whole row — finger is the ID column only.
  */
 export function InstantTip(props: {
   id?: string;
@@ -33,7 +34,7 @@ export function InstantTip(props: {
   cardClassName?: string;
   /** Extra hosts that both open and persist (🎯T231). */
   groupHosts?: () => Array<Element | null | undefined>;
-  /** Hit-region only — pointerenter does not open (🎯T643 row band). */
+  /** Hit-region only — pointerenter does not open (🎯T643 ID-column band). */
   persistHosts?: () => Array<Element | null | undefined>;
   placement?: InstantTipPlacement;
   /** T186: clamp card right edge left of these nodes (frontier table). */

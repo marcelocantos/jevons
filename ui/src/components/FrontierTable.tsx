@@ -97,7 +97,6 @@ function FrontierRowView(props: {
       <td className="ft-id" ref={setIdEl}>
         <InstantTip
           groupHosts={() => [idEl]}
-          persistHosts={() => [trRef.current]}
           placement="left-of-host"
           clampSelectors={['#frontier-table', '#frontier-body']}
           content={<TargetHoverCard markdown={md} id={props.row.id} name={props.row.name} />}
