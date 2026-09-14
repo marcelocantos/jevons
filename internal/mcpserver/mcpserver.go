@@ -118,7 +118,7 @@ type Server struct {
 	// process; Claudia owns whether the conversation is resumable.
 	cursorSubmit func(name, text string) error
 	cursorBound  func(name string) bool
-	notifyJevon  NotifyFunc
+	notifyJevon           NotifyFunc
 	// overseerDeliver is the overseer arm of the single deliver-by-name path
 	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
 	// overseer-addressed send reuses the owner chat journal and notify queue.
@@ -326,6 +326,9 @@ type Server struct {
 	// pendingSpawnRole is set by handleAgentStart before stitchAgentStart so
 	// hermetic callers of the 9-arg stitch keep compiling (role defaults inside).
 	pendingSpawnRole string
+	// pendingOwnerAsked is set with pendingSpawnRole: an ineligible
+	// provider= pin sticks only when the owner named that dest (🎯T652).
+	pendingOwnerAsked bool
 
 	// autoSpawnPaused is config frontier_consume.disabled (🎯T407). The
 	// sentinel reads this as daemon-held evidence the fleet cannot run —
@@ -577,13 +580,16 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 // 🎯T475: omit-task_type derivation uses the agent name so product-owner
 // seats (suffix -po) get ceo even when purpose=work — they must not
 // inherit work→code_implement→Claude/Opus.
-func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose, name string) cost.MintProviderPick {
+func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose, name string, ownerAsked bool) cost.MintProviderPick {
 	tt := cost.TaskTypeForMint(name, purpose, taskTypeArg)
 	dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
 	_, fromFile := s.llmPortfolioSource()
 	cfg := string(s.resolvedDefaultProvider())
 	var feedOK, destOK bool
 	var dest string
+	var cands []planusage.DestCand
+	var now time.Time
+	var th planusage.Thresholds
 	var claudeFirst planusage.ClaudeFirstDecision
 	if _, cands, now, th, ok := s.planPolicyInputs(); ok && len(cands) > 0 {
 		feedOK = true
@@ -593,8 +599,51 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		// mint lands on Claude whenever Claude has plan headroom.
 		claudeFirst = planusage.ClaudeFirst(cands, now, th)
 	}
+	explicit := strings.ToLower(strings.TrimSpace(providerArg))
+	// 🎯T652: a PO habit pin on a depleted dest is not a decision — drop
+	// it so Claudia Resolve / the omit path can choose. Resume, an
+	// eligible explicit, and owner_asked still win (🎯T148 / 🎯T583 tape 3).
+	if explicit != "" && !existed && !ownerAsked && !s.providerDestEligible(explicit) {
+		explicit = ""
+	}
+	if explicit == "" && !existed && feedOK {
+		args := cost.MintProviderArgs{
+			ConfigProvider:    cfg,
+			Portfolio:         dec,
+			PortfolioFromFile: fromFile,
+			PlanFeedOK:        true,
+			PlanDest:          dest,
+			PlanDestOK:        destOK,
+			ClaudeFirstOK:     claudeFirst.OK,
+			ClaudeHeadroom:    claudeFirst.Headroom,
+			OwnerAsked:        ownerAsked,
+		}
+		if claudeFirst.OK {
+			return cost.PickMintProvider(args)
+		}
+		if !destOK {
+			return cost.PickMintProvider(args)
+		}
+		if resolved, err := planusage.ResolveMint(context.Background(), cands, now, th); err == nil && resolved.Provider != "" {
+			p := strings.ToLower(string(resolved.Provider))
+			if p == dest {
+				return cost.PickMintProvider(args)
+			}
+			// Catalog rows with no usage stay candidates in Resolve;
+			// only a published, dest-eligible pick may override dest.
+			if publishedDestEligible(cands, p, now, th) {
+				return cost.MintProviderPick{
+					Provider: p,
+					Knob:     cost.KnobClaudia,
+					Detail:   strings.TrimSpace(resolved.Reason),
+					TaskType: dec.TaskType,
+				}
+			}
+		}
+		return cost.PickMintProvider(args)
+	}
 	return cost.PickMintProvider(cost.MintProviderArgs{
-		ProviderArg:       providerArg,
+		ProviderArg:       explicit,
 		Existed:           existed,
 		StoredProvider:    stored,
 		ConfigProvider:    cfg,
@@ -605,7 +654,18 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		PlanDestOK:        destOK,
 		ClaudeFirstOK:     claudeFirst.OK,
 		ClaudeHeadroom:    claudeFirst.Headroom,
+		OwnerAsked:        ownerAsked,
 	})
+}
+
+func publishedDestEligible(cands []planusage.DestCand, harness string, now time.Time, th planusage.Thresholds) bool {
+	want := strings.ToLower(strings.TrimSpace(harness))
+	for _, c := range cands {
+		if strings.ToLower(strings.TrimSpace(c.Provider)) == want {
+			return planusage.DestEligible(c.Backend, now, th)
+		}
+	}
+	return false
 }
 
 func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, time.Time, planusage.Thresholds, bool) {

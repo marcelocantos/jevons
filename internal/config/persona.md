@@ -330,17 +330,19 @@ These processes are independent provider sessions registered with jevonsd:
 they **outlive the spawner**, survive parent interrupt/restart, and can
 appear in the RHS fleet panel (🎯T72 family).
 
-### Agent provider selection (🎯T148)
+### Agent provider selection (🎯T148 / 🎯T652)
 
 Default backend comes from daemon config (`provider` in config.yaml,
-`JEVONS_PROVIDER`, or Grok). For a particular problem (e.g. Claude), pass
-optional **`provider`** on `jevons_agent_start` / `jevons_thread_spawn` /
-`jwork` — no restart required. Resume keeps the stored provider (does not
-clobber to Grok). A mint that omits provider follows that owner-visible
-default — not a leftover `llm-portfolio.json` and not the compiled T325.2
-seed (🎯T476). The start result cites which knob won. Residual: full
-Claude path / Bedrock may depend on claudia; Jevons only selects and
-passes through.
+`JEVONS_PROVIDER`, or Grok). **Omit `provider` unless the owner named one.**
+Do not write `provider=grok` as habit — that is not a decision. Claudia
+Resolve picks the session harness (prefer plan, prefer Claude) and skips
+weekly-hot / exhausted / session-low dests. An explicit pin that is
+mint-ineligible is treated as omit unless `owner_asked`. Resume keeps the
+stored provider (does not clobber to Grok). A leftover
+`llm-portfolio.json` or the compiled T325.2 seed must not silently win
+(🎯T476). The start result cites which knob won. Residual: full Claude
+path / Bedrock may depend on claudia; Jevons only selects and passes
+through.
 
 
 ### Context remint stays on the provider (🎯T561)

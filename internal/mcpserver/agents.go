@@ -56,11 +56,12 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.addTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend: default from config/env, usually Grok). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Optional provider selects the claudia backend ad hoc (🎯T148). When provider is omitted on mint, the owner-visible default (config.yaml provider, then JEVONS_PROVIDER, then grok) wins — a leftover llm-portfolio.json or the compiled T325.2 seed must not silently override it (🎯T476). The start result cites which knob selected the provider. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Omit provider unless the owner named one (🎯T652) — Claudia Resolve picks the session harness (prefer plan, prefer Claude) and skips weekly-hot / exhausted / session-low dests; do not write provider=grok as habit. An explicit provider= that is mint-ineligible is treated as omit unless owner_asked. Resume keeps the stored provider. A leftover llm-portfolio.json or the compiled T325.2 seed must not silently override the dest (🎯T476). The start result cites which knob selected the provider. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
-			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Empty = keep stored provider on resume; on mint follow config.yaml / daemon default (🎯T476). The start result cites which knob won (explicit vs config vs leftover portfolio file). 🎯T148.")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Omit unless the owner named one (🎯T652). Empty = keep stored provider on resume; on mint Claudia Resolve / claude-first / plan dest choose — not a habitual grok pin. An ineligible dest is dropped unless owner_asked. 🎯T148.")),
+			mcp.WithBoolean("owner_asked", mcp.Description("If true, keep an explicit provider= even when that dest is weekly-hot / exhausted / session-low (🎯T652). Pass only when the owner named that dest. Default false.")),
 			mcp.WithString("task_type", mcp.Description("LLM portfolio task class (🎯T325.2 / T325.2.1 / T475): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. mechanical/ops_classify (and nudge/ack/small_edit aliases) auto-pin a fast-cheap model (Codex Spark or Grok grok-build) when model= is omitted. Recorded for capacity tables and loser-knob citation; omitted provider on mint follows config.yaml (🎯T476), not this class. Empty = derive from name/purpose (product-owner name→ceo, work→code_implement, aside→ideation, overseer→ceo).")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
@@ -379,10 +380,12 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 
 	s.mu.Lock()
 	s.pendingSpawnRole = resolved.Name
+	s.pendingOwnerAsked = boolArg(args["owner_asked"])
 	s.mu.Unlock()
 	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt)
 	s.mu.Lock()
 	s.pendingSpawnRole = ""
+	s.pendingOwnerAsked = false
 	s.mu.Unlock()
 	if err != nil {
 		life["err"] = err.Error()
@@ -583,18 +586,19 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def = d
 	}
 
-	// 🎯T148 + 🎯T476 provider selection:
-	//   1. non-empty providerArg → ad hoc override (knob=explicit)
-	//   2. resume with stored provider → keep (knob=resume)
-	//   3. mint with empty provider → config.yaml / daemon default
-	//      (knob=config). Leftover llm-portfolio.json and the compiled
-	//      T325.2 seed are named as losers when they would have disagreed.
-	//      Portfolio model pins do not apply when config won.
+	// 🎯T148 + 🎯T476 + 🎯T652 provider selection:
+	//   1. eligible providerArg, or owner_asked → explicit
+	//   2. resume with stored provider → keep
+	//   3. omit (or dropped ineligible pin) + live plan feed → Claude
+	//      Resolve / claude-first / plan dest — not a grok default
 	stored := ""
 	if def != nil {
 		stored = string(def.Provider)
 	}
-	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose, name)
+	s.mu.Lock()
+	ownerAsked := s.pendingOwnerAsked
+	s.mu.Unlock()
+	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose, name, ownerAsked)
 	if pick.Knob == cost.KnobPlanDest && strings.TrimSpace(pick.Provider) == "" {
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")

@@ -485,6 +485,25 @@ func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 	}
 }
 
+// 🎯T652: omit-provider mint — Claudia decides dest; no habitual grok pin.
+func TestDefaultPersonaT652OmitProvider(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"T652",
+		"Omit `provider` unless the owner named one",
+		"provider=grok",
+		"as habit",
+		"owner_asked",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T652 marker %q", want)
+		}
+	}
+}
+
 // 🎯T194 / T572: daemon/API achieve requires the development surface (restart script + live probe).
 func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
 	p, err := Default().Persona()
@@ -687,6 +706,12 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"jv-t272-config",
 		"digit-squash",
 		"jv-t159-seal",
+		// 🎯T652 omit-provider mint
+		"T652",
+		"omit `provider` unless the owner named one",
+		"provider=grok",
+		"as habit",
+		"owner_asked",
 	} {
 		if !strings.Contains(g, want) {
 			t.Errorf("agents-guide.md missing doctrine marker %q", want)

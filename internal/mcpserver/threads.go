@@ -63,12 +63,13 @@ func (s *Server) SetButler(b *butler.Butler) {
 
 	s.addTool(
 		mcp.NewTool("jevons_thread_spawn",
-			mcp.WithDescription("Spawn a new durable thread the butler owns end-to-end (claudia backend: default from config/env). Idle process is stopped and rehydrated on demand. Records fleet parent lineage (actor/parent, default overseer) so /api/agents nests correctly (🎯T111.3). Optional provider selects the backend ad hoc (🎯T148)."),
+			mcp.WithDescription("Spawn a new durable thread the butler owns end-to-end (claudia backend). Idle process is stopped and rehydrated on demand. Records fleet parent lineage (actor/parent, default overseer) so /api/agents nests correctly (🎯T111.3). Omit provider unless the owner named one (🎯T652) — Claudia Resolve picks the harness; do not write provider=grok as habit."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Unique thread handle (e.g. 'tern-po', 'maze-rebuild')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (absolute or ~-relative repo path)")),
 			mcp.WithString("description", mcp.Description("The owner's work-language label")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
-			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Empty = daemon default. 🎯T148.")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Omit unless the owner named one (🎯T652); empty = Claudia Resolve / claude-first / plan dest. An ineligible dest is dropped unless owner_asked. 🎯T148.")),
+			mcp.WithBoolean("owner_asked", mcp.Description("If true, keep an explicit provider= even when that dest is mint-ineligible (🎯T652). Pass only when the owner named that dest. Default false.")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is spawning). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer).")),
 		),
@@ -222,7 +223,7 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 			stored, existed = string(d.Provider), true
 		}
 	}
-	pick := s.mintProviderPick(strings.TrimSpace(str(args["provider"])), stored, existed, "", string(claudia.PurposeWork), id)
+	pick := s.mintProviderPick(strings.TrimSpace(str(args["provider"])), stored, existed, "", string(claudia.PurposeWork), id, boolArg(args["owner_asked"]))
 	if strings.TrimSpace(pick.Provider) == "" {
 		life["err"] = "plan dest empty"
 		s.logLifecycle(compThread, "spawn", "error", life)
