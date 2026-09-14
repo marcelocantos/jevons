@@ -67,7 +67,9 @@ func TestT396SucceedingCommandSurfacesZeroAndGreen(t *testing.T) {
 // relays the command's own status and does not add a masking layer of its
 // own (🎯T396 acceptance 2, pipeline case).
 func TestT396CorrectPipelineStatusSurvivesTheGate(t *testing.T) {
-	rec, _ := runIn(t, "sh", "-c", "set -o pipefail; exit 7 | cat")
+	// pipefail is bash; Ubuntu CI's /bin/sh is dash and rejects the option
+	// with exit 2, which is not the pipeline status this oracle measures.
+	rec, _ := runIn(t, "bash", "-c", "set -o pipefail; exit 7 | cat")
 
 	if rec.Status() != "7" {
 		t.Fatalf("exit status = %s, want 7 — the gate lost the pipeline's status", rec.Status())

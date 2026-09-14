@@ -640,9 +640,10 @@ into continuous origin delivery after a PO opens remotes.
 
 ## Daemon activation (🎯T188 / 🎯T191 / 🎯T553) — hard rule
 
-The owner never restarts by hand (🎯T188). A committed script exists so
-an overseer or owner-requested activation can bounce without the owner
-typing brew/kill (🎯T191).
+The owner never restarts by hand (🎯T188). After daemon-path Build, invoke
+the restart script detached; a committed script exists so an overseer or
+owner-requested activation can bounce without the owner typing brew/kill
+(🎯T191).
 
 **Owner-visible product is activated in the same turn it lands (🎯T632)**
 unless activation would be destructive (data loss, a known in-flight kill

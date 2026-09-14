@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/gate"
 )
 
 // 🎯T446 fixtures: jv-t439-reap-request's two actual stored terminal reports,
@@ -103,11 +105,43 @@ func TestT446MetaMentionReportReaps(t *testing.T) {
 		t.Fatal("🎯T446: a finished report that names the ask vocabulary is a finished-work report")
 	}
 
+	// The verbatim fixture cites GATE ids from the incident machine. On CI
+	// those records are absent, and 🎯T470 would veto the reap as
+	// attestation_unknown — a different target. Plant only missing greens
+	// so this oracle stays about the mention classifier.
+	plantMissingGreenAttestations(t, report)
+
 	reg := t439Registry(t, "jv-t439-reap-request")
 	s := &Server{registry: reg}
 	s.maybeReapDoneWorkAgent("jv-t439-reap-request", report)
 	if reg.Def("jv-t439-reap-request") != nil {
 		t.Fatal("🎯T165 / 🎯T195: the finished worker stayed in the fleet")
+	}
+}
+
+// plantMissingGreenAttestations writes a green record for each GATE id the
+// report cites that this machine has never run. Existing records are left
+// alone so a developer store is not overwritten.
+func plantMissingGreenAttestations(t *testing.T, report string) {
+	t.Helper()
+	store := gateStore()
+	if store == nil {
+		return
+	}
+	for _, c := range gate.ParseAttestations(report) {
+		if _, ok := store.Lookup(c.ID); ok {
+			continue
+		}
+		rec := &gate.Record{
+			ID:          c.ID,
+			Name:        c.Name,
+			StatusKnown: true,
+			ExitStatus:  0,
+			Verdict:     gate.VerdictGreen,
+		}
+		if err := store.Save(rec); err != nil {
+			t.Fatalf("plant gate %s: %v", c.ID, err)
+		}
 	}
 }
 

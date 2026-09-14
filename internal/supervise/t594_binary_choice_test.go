@@ -63,6 +63,9 @@ func TestReleaseRunsWhenNoDevRepoIsConfigured(t *testing.T) {
 
 	out, err := runJevonsd(t, "PATH="+brewDir+":/usr/bin:/bin")
 	if err != nil {
+		if strings.Contains(out, "no jevonsd on PATH and no Homebrew install found") {
+			t.Skip("no Homebrew jevonsd on this machine; the default release path is the macOS install")
+		}
 		t.Fatalf("run failed: %v\n%s", err, out)
 	}
 	// With no dev repo the script searches its own hardcoded PATH (🎯T434),
