@@ -216,7 +216,11 @@ func TestScrubbedPathRestartFailsClosedAndTheOwnerHearsWhy(t *testing.T) {
 	// notifier being gone.
 	path := filepath.Join(r.dir, "bin") + ":" + supervise.LaunchdDefaultPATH
 	if _, err := lookPathIn(path, "go"); err == nil {
-		t.Fatalf("launchd's default PATH reached a toolchain on this machine; the test proves nothing")
+		// Linux CI images (and some workstations) ship /usr/bin/go, so
+		// launchd's default PATH is not a scrubbed toolchain. The
+		// oracle is the macOS LaunchAgent case; skip when the premise
+		// does not hold.
+		t.Skip("launchd's default PATH reached a toolchain on this machine; the test proves nothing")
 	}
 
 	if r.serving() {
