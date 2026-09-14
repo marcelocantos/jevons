@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { TRI_PERIOD_STOPS, triangleColorForRemaining } from './triColor';
+import { TRI_PERIOD_STOPS, triangleColorChroma, triangleColorForRemaining } from './triColor';
 
 function rgb(c: readonly [number, number, number]): string {
   return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
@@ -35,5 +35,10 @@ describe('remaining-period triangle colour', () => {
     expect(a).not.toBe(b);
     expect(a).not.toBe(rgb(TRI_PERIOD_STOPS[4].rgb));
     expect(b).not.toBe(rgb(TRI_PERIOD_STOPS[0].rgb));
+  });
+
+  it('keeps the home-stretch mix bright, not a muddy blue-violet', () => {
+    expect(triangleColorChroma(triangleColorForRemaining(8))).toBeGreaterThan(120);
+    expect(triangleColorForRemaining(0)).toBe('rgb(232, 121, 249)');
   });
 });
