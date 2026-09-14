@@ -192,6 +192,42 @@ describeOracle(family('frontier'), () => {
     expect(tableSrc).toMatch(/placement="left-of-host"/);
   });
 
+  itOracle('T650', 'ledger fields pass through as written; hover stays HTML-capable; T216 cites entities', () => {
+    const raw = '<strong data-t650="1">interpreted</strong>';
+    const row: FrontierRow = {
+      id: 'T650',
+      name: 'Ledger markdown',
+      status: 'identified',
+      acceptance: ['cite ' + raw],
+    };
+    const md = formatTargetCardMarkdown(row);
+    expect(md).toContain(raw);
+    expect(md).not.toMatch(/&lt;strong data-t650/);
+
+    const { container } = render(createElement(FrontierTable, { rows: [row] }));
+    fireEvent.pointerEnter(container.querySelector('.ft-id [data-instant-tip-host]')!);
+    const tip = container.querySelector('.instant-tip-show');
+    expect(tip?.querySelector('strong[data-t650="1"]')?.textContent).toBe('interpreted');
+
+    const tableSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../frontier/table.ts'),
+      'utf8',
+    );
+    expect(tableSrc).not.toMatch(/escapeHtml|sanitizeHtml|htmlEscape/i);
+    expect(tableSrc).not.toMatch(/function\s+escape[A-Z]/);
+
+    const yaml = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../../../bullseye.yaml'),
+      'utf8',
+    );
+    const t216 = yaml.split(/\n  (?=T\d)/).find((b) => /^T216:/.test(b.trim()));
+    expect(t216, 'T216 ledger block').toBeTruthy();
+    const acc = /\n    acceptance:\n((?:    - [^\n]+\n)+)/.exec('\n' + t216);
+    expect(acc, 'T216 acceptance').toBeTruthy();
+    expect(acc![1]).not.toMatch(/<(strong|table|pre|code|h[1-6])\b/i);
+    expect(acc![1]).toMatch(/&lt;strong&gt;/);
+  });
+
   itOracle('T648', 'layout/mermaid resize is not a leave — no hide timer', () => {
     const src = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), '../../components/InstantTip.tsx'),

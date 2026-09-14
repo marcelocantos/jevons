@@ -149,6 +149,47 @@ func TestDefaultPersonaImpatienceAndRSI(t *testing.T) {
 	}
 }
 
+// 🎯T650: ledger fields are markdown whose HTML will be interpreted.
+func TestT650LedgerMarkdownDoctrine(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	guide := readRepoDoc(t, "agents-guide.md")
+	agents := readRepoDoc(t, "AGENTS.md")
+	want := []string{
+		"T650",
+		"Ledger fields are markdown",
+		"does not escape",
+		"smash a hovercard",
+		"&lt;strong&gt;",
+	}
+	for name, body := range map[string]string{
+		"persona":      p,
+		"agents-guide": guide,
+		"AGENTS.md":    agents,
+	} {
+		for _, marker := range want {
+			if !strings.Contains(body, marker) {
+				t.Errorf("%s missing T650 marker %q", name, marker)
+			}
+		}
+	}
+}
+
+func readRepoDoc(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join("..", "..", name)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		b, err = os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	return string(b)
+}
+
 // 🎯T98: persona carries alter-ego identity pointer (draft doctrine linked).
 func TestDefaultPersonaCEOAlterEgo(t *testing.T) {
 	p, err := Default().Persona()
