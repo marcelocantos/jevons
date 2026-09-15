@@ -190,6 +190,7 @@ func TestT3927RelayReportSkipsPOHop(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = journal.Close() })
 	s.SetEventJournal(journal)
+	s.SetAgentReportDir(t.TempDir()) // 🎯T658: a skipped hop needs a stored report
 	s.fleetBriefed = map[string]bool{"jevons-po": true}
 
 	text := "Blocked: needs owner verdict on the provider spend cap before I can proceed.\nDetails stay with the overseer."
@@ -316,6 +317,7 @@ func TestT515EnvelopeDoesNotFakeRouteOrPolluteSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
+	s.SetAgentReportDir(t.TempDir()) // 🎯T658: a skipped hop needs a stored report
 	s.SetEventJournal(journal)
 
 	// Routine parent-bound report: must stay on the PO even though the

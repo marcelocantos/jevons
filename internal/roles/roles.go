@@ -89,6 +89,10 @@ func DefaultForPurpose(purpose, agentName string) string {
 	return Worker
 }
 
+// DoctrineMarker opens the role-doctrine section Assemble injects between
+// the universal brief and the mission. StripDoctrine is its inverse.
+const DoctrineMarker = "[Jevons role doctrine]"
+
 // Assemble builds spawn instructions: universal brief + role body + mission.
 // Role body is wrapped with a marker so callers can detect role injection.
 func Assemble(universal, roleBody, mission string) string {
@@ -97,12 +101,32 @@ func Assemble(universal, roleBody, mission string) string {
 		parts = append(parts, u)
 	}
 	if b := strings.TrimSpace(roleBody); b != "" {
-		parts = append(parts, "[Jevons role doctrine]\n\n"+b)
+		parts = append(parts, DoctrineMarker+"\n\n"+b)
 	}
 	if m := strings.TrimSpace(mission); m != "" {
 		parts = append(parts, m)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// StripDoctrine removes the role-doctrine section Assemble injected ahead of
+// a mission, given the same role body, and returns the mission that follows
+// it. Text that does not open with the marker is returned unchanged with
+// ok=true. Text that opens with the marker but whose doctrine cannot be
+// bounded — the body is unknown or differs from what was injected — returns
+// ok=false: the caller cannot tell where the doctrine ends and the sender's
+// own words begin (🎯T658).
+func StripDoctrine(text, roleBody string) (mission string, ok bool) {
+	rest := strings.TrimLeft(text, " \t\r\n")
+	if !strings.HasPrefix(rest, DoctrineMarker) {
+		return text, true
+	}
+	rest = strings.TrimLeft(rest[len(DoctrineMarker):], " \t\r\n")
+	body := strings.TrimSpace(roleBody)
+	if body == "" || !strings.HasPrefix(rest, body) {
+		return "", false
+	}
+	return strings.TrimLeft(rest[len(body):], " \t\r\n"), true
 }
 
 // DeleteRefused explains why a role cannot be removed.

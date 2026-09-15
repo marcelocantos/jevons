@@ -139,3 +139,29 @@ func TestT5362ListIncludesAuditorBuiltin(t *testing.T) {
 		t.Fatalf("auditor builtin missing from list: %+v", list)
 	}
 }
+
+// 🎯T658: StripDoctrine is Assemble's inverse for the doctrine section, so
+// the relay can find the sender's mission behind a first-send wrap. An
+// unbounded doctrine (unknown or different body) is refused rather than
+// guessed.
+func TestT658StripDoctrineInvertsAssemble(t *testing.T) {
+	body := "# Product-owner role\n\nRefuse bare done without oracle evidence."
+	mission := "```jevons\njevons: kind scout-report\n```\n\nScout done."
+	wrapped := roles.Assemble("", body, mission)
+	if !strings.HasPrefix(wrapped, roles.DoctrineMarker) {
+		t.Fatalf("Assemble did not open with the marker: %q", wrapped)
+	}
+	got, ok := roles.StripDoctrine(wrapped, body)
+	if !ok || got != mission {
+		t.Fatalf("StripDoctrine=%q ok=%v want mission", got, ok)
+	}
+	if got, ok := roles.StripDoctrine(mission, body); !ok || got != mission {
+		t.Fatalf("no marker: got %q ok=%v want unchanged", got, ok)
+	}
+	if _, ok := roles.StripDoctrine(wrapped, ""); ok {
+		t.Fatal("unknown body must not bound the doctrine")
+	}
+	if _, ok := roles.StripDoctrine(wrapped, "# A different role"); ok {
+		t.Fatal("a different body must not bound the doctrine")
+	}
+}

@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/relayroute"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
 // 🎯T309.3: ONE deliver-by-name path for every agent in the fleet layer.
@@ -235,9 +237,10 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	}
 
 	// The first MCP send can carry a daemon-authored identity + standing-brief
-	// envelope. Routing and its summary belong to the sender's report, not to
-	// doctrine that happens to contain phrases such as "needs-owner" / "oracle".
-	report := relayReportBody(text)
+	// + role-doctrine envelope. Routing and its summary belong to the sender's
+	// report, not to doctrine that happens to contain phrases such as
+	// "needs-owner" / "oracle" (🎯T515 / 🎯T658).
+	report := relayReportBodyWithRole(text, s.roleBodyForAgent(dest))
 
 	// 🎯T392.7: a named worker report that needs no product judgement skips the
 	// PO hop. The PO still gets a one-line record. Owner directs and daemon-
@@ -254,7 +257,8 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
 		who != "" && who != ActorOwnerSurface &&
 		!s.isOverseerAgent(who) && !strings.EqualFold(who, dest) &&
-		relayroute.Classify(report) == relayroute.RouteOverseer {
+		relayroute.Classify(report) == relayroute.RouteOverseer &&
+		s.storeRelayedReport(who, report) {
 		po := dest
 		reason := relayroute.Reason(report)
 		summary := relayroute.ReportSummary(report)
@@ -328,10 +332,68 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 // brief and the 🎯T425 identity doctrine both contain classifier bait
 // ("needs-owner", "oracle", "done").
 func relayReportBody(text string) string {
+	return relayReportBodyWithRole(text, "")
+}
+
+// relayReportBodyWithRole is relayReportBody for a first send that also
+// carried the receiver's role doctrine (EnsureFleetBriefWithRole). The
+// doctrine has no end marker of its own, so it is bounded by the same role
+// body the wrap injected. A doctrine that cannot be bounded yields an empty
+// report, which classifies as parent: the daemon cannot tell the sender's
+// words from its own, and the PO seeing a report first is the safe default
+// (🎯T658 — on 2026-09-15 the product-owner doctrine was summarized as the
+// worker's report and scanned for its finish).
+func relayReportBodyWithRole(text, roleBody string) string {
 	if i := strings.Index(text, FleetStandingBrief); i >= 0 {
-		return text[i+len(FleetStandingBrief):]
+		mission, ok := roles.StripDoctrine(text[i+len(FleetStandingBrief):], roleBody)
+		if !ok {
+			return ""
+		}
+		return mission
 	}
 	return stripLeadingIdentityEnvelope(text)
+}
+
+// roleBodyForAgent resolves the doctrine body a first send to name carries,
+// the same way handleAgentSend chose it. Empty when the agent is unknown.
+func (s *Server) roleBodyForAgent(name string) string {
+	if s == nil || s.registry == nil {
+		return ""
+	}
+	d := s.registry.Def(name)
+	if d == nil {
+		return ""
+	}
+	def, err := s.resolveRoleDef(s.roleDisplay(*d))
+	if err != nil {
+		return ""
+	}
+	return def.Body
+}
+
+// storeRelayedReport persists the report a 🎯T392.7 reroute is about to
+// summarize for the PO, and confirms it reads back. The record line tells
+// the PO a report skipped past it; jevons_agent_report_read is where the PO
+// goes to read that report, so a record with nothing behind it is a claim
+// without evidence — on 2026-09-15 the PO followed one and found "no stored
+// reports" (🎯T658). No stored report, no skipped hop: the send falls
+// through to ordinary parent delivery.
+func (s *Server) storeRelayedReport(agent, report string) bool {
+	if strings.TrimSpace(report) == "" {
+		return false
+	}
+	handle := s.storeAgentReport(agent, report)
+	if handle.Empty() {
+		slog.Warn("T392.7 reroute refused: report store did not confirm a stored report",
+			"agent", agent, "len", len(report))
+		return false
+	}
+	if _, err := agentreport.Load(s.agentReportStateDir(), agent, handle.ReportID); err != nil {
+		slog.Warn("T392.7 reroute refused: stored report does not read back",
+			"agent", agent, "report_id", handle.ReportID, "err", err)
+		return false
+	}
+	return true
 }
 
 // identityDoctrineCloser is the last fixed sentence FormatIdentityHeader
