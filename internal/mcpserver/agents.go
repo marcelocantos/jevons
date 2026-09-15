@@ -193,6 +193,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if pinned {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
 		}
+		// 🎯T661: a session the broker wire cannot carry is named on the row,
+		// so a PO sees why sends to it fail before trying one.
+		if lines := s.seatOversized(d, DefaultSessionRoots()); len(lines) > 0 {
+			fmt.Fprintf(&b, "  ^ %s\n", FormatOversizedSeatLine(d.Name, lines))
+		}
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
 	// missions should have fan-out — visible without only RHS eyeballing.

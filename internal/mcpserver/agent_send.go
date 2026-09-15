@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -597,6 +598,19 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 			ev := watch()
 			outcome := s.classifySend(name, text, flight, ev)
 			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, err, mm)
+		}
+		// 🎯T661: a broker refusal of the line is about the receiver's session,
+		// not this payload — say which records, and how to recover.
+		if IsBrokerLineLimitError(err) && s.registry != nil {
+			if d := s.registry.Def(name); d != nil {
+				if lines := s.seatOversized(*d, DefaultSessionRoots()); len(lines) > 0 {
+					advice := OversizedSendAdvice(name, len(text), lines, err)
+					slog.Warn("agent_send", "component", "agent_send", "name", name,
+						"status", "failed", "mode", string(mode), "failure_class", "oversized_session",
+						"oversized_records", len(lines), "err", err.Error())
+					return agentSendResult{}, errors.New(advice)
+				}
+			}
 		}
 		// 🎯T237: structured class + owner-visible copy (not bare Internal error).
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
