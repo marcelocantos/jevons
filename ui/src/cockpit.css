@@ -1675,3 +1675,26 @@ body.rhs-resizing-row { cursor: row-resize; }
   opacity: 0.8;
   white-space: pre-wrap;
 }
+
+/* 🎯T662: fleet mass-stop alert and per-row stop reasons in the RHS tree. */
+.fleet-mass-stop {
+  margin: 4px 6px 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.12);
+  color: inherit;
+  font-size: 0.85em;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.agent-node .agent-stop-reason {
+  margin-left: 6px;
+  font-size: 0.8em;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}

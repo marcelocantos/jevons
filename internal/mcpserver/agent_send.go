@@ -157,7 +157,7 @@ func (s *Server) sendToAgentAs(actor, name, text string, interrupt bool) (agentS
 // but stopped/dead.
 func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	if s.registry != nil {
-		if reps := SweepDeadAgents(s.registry, s.RemovalAccount(), s.overseerName(), s.fleetIntent()); len(reps) > 0 {
+		if reps := s.sweepDeadAccounted(); len(reps) > 0 {
 			line := FormatDeadAgentReport(reps)
 			slog.Info(line)
 			s.notifyFleetHealth(line)
@@ -274,7 +274,7 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 		case interrupted:
 			msg = fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
 		case rehydrated:
-			msg += " (rehydrated after dead/stopped process)"
+			msg += s.rehydratedAfter(name) // 🎯T662: the recorded reason, not a bare "dead/stopped"
 		}
 		if claim != "" {
 			// The false negative, caught in the act and counted. This line is

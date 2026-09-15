@@ -873,6 +873,51 @@ type agentInfo struct {
 	// known default and nothing has been observed yet.
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
+	// StopReason / StoppedAt: why a not-running seat last stopped, from the
+	// daemon's seat-stop ledger (🎯T662). MassStop is the fleet-wide alert
+	// when three or more seats stopped within a minute with no daemon
+	// restart; carried on every row so the RHS can show it once.
+	StopReason string `json:"stop_reason,omitempty"`
+	StoppedAt  string `json:"stopped_at,omitempty"`
+	MassStop   string `json:"mass_stop,omitempty"`
+}
+
+// SetSeatStopReader installs the 🎯T662 seat-stop lookup the /api/agents
+// rows are decorated with (mcpserver.SeatStopReason in production).
+func (s *Server) SetSeatStopReader(fn func(name string) (reason string, at time.Time, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seatStopReader = fn
+}
+
+// SetMassStopReader installs the 🎯T662 mass-stop line source
+// (mcpserver.MassStopLine in production).
+func (s *Server) SetMassStopReader(fn func() string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.massStopReader = fn
+}
+
+// decorateSeatStops applies the 🎯T662 fields to the rows.
+func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
+	s.mu.RLock()
+	stopReader := s.seatStopReader
+	massReader := s.massStopReader
+	s.mu.RUnlock()
+	mass := ""
+	if massReader != nil {
+		mass = massReader()
+	}
+	for i := range agents {
+		if stopReader != nil && !agents[i].Running {
+			if reason, at, ok := stopReader(agents[i].Name); ok {
+				agents[i].StopReason = reason
+				agents[i].StoppedAt = at.UTC().Format(time.RFC3339)
+			}
+		}
+		agents[i].MassStop = mass
+	}
+	return agents
 }
 
 // listFleetAgents returns the RHS panel source of truth: every agent
@@ -1085,7 +1130,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
 	}, s.agentProgress, models)
-	_ = json.NewEncoder(w).Encode(agents)
+	_ = json.NewEncoder(w).Encode(s.decorateSeatStops(agents))
 }
 
 // handleChatControlFrame consumes a client→server protocol frame arriving on

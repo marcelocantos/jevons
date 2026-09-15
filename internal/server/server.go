@@ -289,6 +289,10 @@ type Server struct {
 	agentSendHook func(name, text string) (status string, err error)
 	// The product hook owns admission and retains the speaker's origin.
 	agentSendOriginHook func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)
+	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
+	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
+	seatStopReader func(name string) (reason string, at time.Time, ok bool)
+	massStopReader func() string
 
 	// portfolios is the declarative domain portfolio registry (🎯T200).
 	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).

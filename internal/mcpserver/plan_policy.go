@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"log/slog"
 	"strings"
 
@@ -65,6 +66,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			if err != nil {
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
 				s.MarkAgentParked(a.Name, "jevons", a.Reason+": migrate failed, parked")
+				s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason+": migrate failed, parked"), "jevons", "")
 				continue
 			}
 			if !prepared.Usable() {
@@ -83,6 +85,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			continue
 		}
 		s.MarkAgentParked(a.Name, "jevons", a.Reason)
+		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason), "jevons", "")
 		if s.registry != nil {
 			s.registry.Stop(a.Name)
 		}
@@ -114,6 +117,7 @@ func (s *Server) abortColdPlanMigrate(a planusage.PlanAction, why string) {
 	}
 	slog.Info("🎯T542 COLD plan migrate aborted", "name", a.Name, "to", a.To, "reason", why)
 	s.MarkAgentParked(a.Name, "jevons", a.Reason+": "+why)
+	s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason+": "+why), "jevons", "")
 	if s.registry != nil {
 		s.registry.Stop(a.Name)
 	}

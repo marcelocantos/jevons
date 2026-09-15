@@ -19,7 +19,21 @@ export type AgentRow = {
   workdir?: string;
   target_id?: string;
   ledger?: string;
+  /** 🎯T662: why a not-running seat last stopped, from the daemon's seat-stop ledger. */
+  stop_reason?: string;
+  stopped_at?: string;
+  /** 🎯T662: the fleet-wide mass-stop line; identical on every row when present. */
+  mass_stop?: string;
 };
+
+/** 🎯T662: one alert for the fleet, read off the rows (the daemon puts the same line on each). */
+export function massStopLine(agents: AgentRow[]): string {
+  for (const a of agents || []) {
+    const m = a && a.mass_stop ? String(a.mass_stop).trim() : '';
+    if (m) return m;
+  }
+  return '';
+}
 
 export type AgentNode = AgentRow & { children: AgentNode[] };
 
@@ -130,6 +144,11 @@ function Row(props: {
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
         <span className="agent-name">{props.node.name}</span>
         <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
+        {!props.node.running && props.node.stop_reason ? (
+          <span className="agent-stop-reason" title={props.node.stop_reason}>
+            {'⛔ ' + props.node.stop_reason}
+          </span>
+        ) : null}
         {isAside ? (
           <button
             type="button"
@@ -174,8 +193,14 @@ export function AgentTree(props: {
   onDismiss?: (name: string) => void;
 }) {
   const roots = buildAgentForest(props.agents);
+  const mass = massStopLine(props.agents);
   return (
     <>
+      {mass ? (
+        <div className="fleet-mass-stop" role="alert" title={mass}>
+          {mass}
+        </div>
+      ) : null}
       {roots.map((n) => (
         <Row
           key={n.name}

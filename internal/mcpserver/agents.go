@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -142,7 +143,7 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
 	// (and overseer notify), not only logs.
-	reps := SweepDeadAgents(s.registry, s.RemovalAccount(), s.overseerName(), s.fleetIntent())
+	reps := s.sweepDeadAccounted()
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)
@@ -162,7 +163,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 			body += "\n" + extra
 		}
 		return mcp.NewToolResultText(fleetlog.PrependNotices(
-			PrependFleetHealth(body, reps), notices)), nil
+			s.withMassStop(PrependFleetHealth(body, reps)), notices)), nil
 	}
 
 	var b strings.Builder
@@ -216,7 +217,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		b.WriteString(extra)
 	}
 	return mcp.NewToolResultText(fleetlog.PrependNotices(
-		PrependFleetHealth(b.String(), reps), notices)), nil
+		s.withMassStop(PrependFleetHealth(b.String(), reps)), notices)), nil
 }
 
 // notifyFleetHealth delivers a fleet outage/recovery note to the overseer
@@ -923,6 +924,12 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 	reason, _ := args["reason"].(string)
 	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
+	// 🎯T662: the stop is a recorded reason on the seat, not a bare handle.
+	stopWhy := "jevons_agent_stop by " + actor
+	if r := strings.TrimSpace(reason); r != "" {
+		stopWhy += ": " + r
+	}
+	s.noteSeatStop(name, seatstop.SourceSupervisor, stopWhy, actor, "")
 	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
 	// 🎯T418 clause 6: if this stop left the fleet with queued work and
 	// nobody live to press Enter, say so now — the cockpit may relaunch
@@ -1044,6 +1051,10 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	// removes the one seat and leaves its workers registered under its name.
 	var killErr error
 	if subtree {
+		// 🎯T662: every seat this kill takes records the actor that took it.
+		for _, n := range append(append([]string{}, desc...), name) {
+			s.noteSeatStop(n, seatstop.SourceSupervisor, "jevons_agent_kill by "+actor, actor, "")
+		}
 		killErr = s.killSubtreeAndClearTurns(name)
 	} else {
 		killErr = s.killRootAndClearTurns(name)

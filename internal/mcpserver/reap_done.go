@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"log/slog"
 	"strings"
 
@@ -266,6 +267,8 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		}
 		return
 	}
+	// 🎯T662: a reap is a recorded reason on the seat.
+	s.noteSeatStop(name, seatstop.SourceReap, "reaped as finished work ("+reason+")", "daemon", "")
 	if err := killSubtree(s.registry, s.RemovalAccount(), name, reapDoneRemoval(reason)); err != nil {
 		slog.Warn("T165/T195 auto-reap failed", "agent", name, "reason", reason, "err", err)
 		fields := reapDecisionFields(name, reason, report)

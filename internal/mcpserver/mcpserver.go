@@ -41,6 +41,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/turndepth"
@@ -152,6 +153,10 @@ type Server struct {
 	// oversizedSessions caches the per-session census of records over the
 	// broker line limit, keyed by session path (🎯T661). Guarded by mu.
 	oversizedSessions map[string]oversizedEntry
+	// seatStopLedger records why each seat last stopped (🎯T662); massStopNotified
+	// is the burst key already delivered to the overseer. Guarded by mu.
+	seatStopLedger   *seatstop.Ledger
+	massStopNotified string
 	// resolveProc overrides which claudia process carries an agent's event
 	// sink (🎯T426). Nil — the product path — reads the live registry.
 	resolveProc agentProcResolver

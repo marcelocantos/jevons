@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"log/slog"
 	"os"
 	"strings"
@@ -543,6 +544,8 @@ func (s *Server) releaseUnbriefedSeat(name string, existed bool) bool {
 		return false
 	}
 	s.registry.Stop(name)
+	// 🎯T662: the release is a recorded reason on the seat.
+	s.noteSeatStop(name, seatstop.SourceUnbriefed, "opening brief proven undelivered; seat released (🎯T387)", "daemon", "")
 	if existed {
 		return false
 	}
