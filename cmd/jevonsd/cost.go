@@ -126,10 +126,10 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 	}
 
 	monitor := cost.NewMonitor(&cost.MonitorArgs{
-		Store:             store,
-		Config:            config,
-		IsOrphan:          isOrphan,
-		CollectorLastPoll: collector.LastPoll,
+		Store:           store,
+		Config:          config,
+		IsOrphan:        isOrphan,
+		CollectorHealth: collector.Health,
 	})
 
 	// Notify: UI cost_alert + overseer-visible alert (🎯T334). Structured

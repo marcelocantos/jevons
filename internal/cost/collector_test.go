@@ -4,10 +4,13 @@
 package cost
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -435,5 +438,105 @@ func TestCollectorEndToEnd(t *testing.T) {
 	want := 2 * EstimateCostUSD("claude-sonnet-5", u)
 	if math.Abs(spent-want) > 1e-12 {
 		t.Fatalf("total spend %v, want %v (no double-counting)", spent, want)
+	}
+}
+
+// TestCollectorScanDoesNotStarvePoll (🎯T654): a scan that blocks — the
+// development host's sessions tree is a quarter of a million files, and
+// a walk under IO pressure can take minutes — must not hold the poll
+// loop behind it, or the monitor reports a blind collector for a
+// collector that is merely waiting on a directory walk.
+func TestCollectorScanDoesNotStarvePoll(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenStore(filepath.Join(dir, "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	c := NewCollector(&CollectorArgs{Store: s, ProjectsRoot: dir})
+
+	release := make(chan struct{})
+	var scans atomic.Int32
+	c.scan = func() ([]string, error) {
+		if scans.Add(1) == 1 {
+			return nil, nil // the initial synchronous scan returns at once
+		}
+		<-release // every later scan wedges until the test lets it go
+		return nil, nil
+	}
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx, 5*time.Millisecond, 5*time.Millisecond)
+
+	// Wait for the blocking scan to be entered, note the poll clock, then
+	// require it to advance while that scan is still wedged.
+	deadline := time.Now().Add(5 * time.Second)
+	for scans.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if scans.Load() < 2 {
+		t.Fatal("scan loop never entered its second (blocking) scan")
+	}
+	mark := c.LastPoll()
+	for time.Now().Before(deadline) {
+		if c.LastPoll().After(mark) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("polls did not advance while a scan was in flight: mark=%v last=%v", mark, c.LastPoll())
+}
+
+// TestCollectorHealthStampsPasses (🎯T654): a clean pass stamps LastPoll /
+// LastScan and clears the in-flight marks; a pass that dies in the store
+// leaves LastPoll where it was and records the error, so the monitor's
+// staleness alarm can say why.
+func TestCollectorHealthStampsPasses(t *testing.T) {
+	dir := t.TempDir()
+	proj := filepath.Join(dir, "projects", "-work-repo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(proj, "11111111-2222-3333-4444-555555555555.jsonl")
+	if err := os.WriteFile(path, []byte(assistantLine("", "req_a", "claude-sonnet-5", testNow, Usage{Input: 1, Output: 1})+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenStore(filepath.Join(dir, "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewCollector(&CollectorArgs{Store: s, ProjectsRoot: filepath.Join(dir, "projects")})
+
+	if h := c.Health(); !h.LastPoll.IsZero() || !h.LastScan.IsZero() {
+		t.Fatalf("health stamped before any pass: %+v", h)
+	}
+	if _, err := c.ScanOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PollOnce(); err != nil {
+		t.Fatal(err)
+	}
+	h := c.Health()
+	if h.LastPoll.IsZero() || h.LastScan.IsZero() || !h.PollStarted.IsZero() || !h.ScanStarted.IsZero() || h.LastPollErr != "" || h.LastScanErr != "" {
+		t.Fatalf("clean passes mis-stamped: %+v", h)
+	}
+	if d := h.Describe(h.LastPoll.Add(time.Second)); !strings.Contains(d, "last scan completed") {
+		t.Fatalf("Describe = %q", d)
+	}
+
+	// Kill the store: the next poll must fail loudly, not stamp LastPoll.
+	s.Close()
+	before := h.LastPoll
+	if _, err := c.PollOnce(); err == nil {
+		t.Fatal("poll over a closed store succeeded")
+	}
+	h = c.Health()
+	if !h.LastPoll.Equal(before) || h.LastPollErr == "" || !h.PollStarted.IsZero() {
+		t.Fatalf("failed pass mis-stamped: %+v", h)
+	}
+	if d := h.Describe(before.Add(time.Second)); !strings.Contains(d, "last poll error: ") {
+		t.Fatalf("Describe = %q", d)
 	}
 }
