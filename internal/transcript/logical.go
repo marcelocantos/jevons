@@ -16,6 +16,10 @@ import (
 type Logical struct {
 	Turns    []Turn
 	Warnings []string
+	// Oversized names the records over BrokerLineLimit (🎯T661). The turns
+	// still render; the census is what the transcript tool, the send path and
+	// agent_list say about the seat.
+	Oversized []OversizedLine
 }
 
 const (
@@ -27,10 +31,12 @@ const (
 // ReadLogical parses a transcript file into the predecessor's logical
 // conversation. Unknown / linear files fall through to extractTurns.
 func ReadLogical(path string) (Logical, error) {
-	raws, err := readRawLines(path)
+	numbered, err := readNumberedLines(path)
 	if err != nil {
 		return Logical{}, err
 	}
+	oversized := Oversized(numbered)
+	raws := rawsOf(numbered)
 	kept, warnings := reconstructRaw(path, raws)
 	lines := parseLines(kept)
 	turns := turnsFromLines(lines)
@@ -40,7 +46,7 @@ func ReadLogical(path string) (Logical, error) {
 			path, len(lines), describeLines(lines),
 		)
 	}
-	return Logical{Turns: turns, Warnings: warnings}, nil
+	return Logical{Turns: turns, Warnings: warnings, Oversized: oversized}, nil
 }
 
 func reconstructRaw(path string, raws []string) (kept []string, warnings []string) {
