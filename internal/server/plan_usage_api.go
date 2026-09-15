@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -28,6 +29,27 @@ func (s *Server) SetPlanUsageSource(f func() any) { s.planUsageSource = f }
 // the first successful fetch (or the request/long-poll deadline).
 func (s *Server) SetPlanUsageWaitReady(f func(context.Context) error) {
 	s.planUsageWaitReady = f
+}
+
+// SetPlanUsageRefresh registers the cockpit-reload poll (🎯T653).
+func (s *Server) SetPlanUsageRefresh(f func(ctx context.Context) error) {
+	s.planUsageRefresh = f
+}
+
+func wantsPlanUsageRefresh(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	v := strings.TrimSpace(r.URL.Query().Get("refresh"))
+	if v == "" {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "0", "false", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 // SetPlanSweep registers the hot/exhausted migrate-or-park actuator
@@ -51,6 +73,11 @@ func (s *Server) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 	if s.planUsageSource == nil {
 		w.Write([]byte(`{"disabled":true,"error":"plan usage not enabled"}`))
 		return
+	}
+	if wantsPlanUsageRefresh(r) && s.planUsageRefresh != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), planUsageLongPoll)
+		_ = s.planUsageRefresh(ctx)
+		cancel()
 	}
 	snap := s.planUsageSource()
 	if snap == nil {
@@ -125,8 +152,20 @@ func (s *Server) writePlanUsage(ctx context.Context, conn muxConn) {
 	s.muxWrite(ctx, conn, planUsageChannel, "frame", s.planUsageSnapshotNow())
 }
 
-// FanPlanUsage pushes the current snapshot to mux watchers after a producer
-// refresh so the ticker is not a second poll behind (🎯T631).
+// kickPlanUsageRefresh starts a forced producer poll so a mux open
+// (cockpit reload) is not the 5-minute cache (🎯T653). The first frame
+// already went out; FanPlanUsage follows OnUpdate.
+func (s *Server) kickPlanUsageRefresh() {
+	if s == nil || s.planUsageRefresh == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), planUsageLongPoll)
+		defer cancel()
+		_ = s.planUsageRefresh(ctx)
+	}()
+}
+
 func (s *Server) FanPlanUsage() {
 	if s == nil || s.mux == nil {
 		return

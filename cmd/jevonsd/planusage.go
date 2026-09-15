@@ -44,6 +44,7 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
 	srv.SetPlanUsageWaitReady(reader.WaitReady)
+	srv.SetPlanUsageRefresh(reader.RefreshNow)
 	mcpSrv.SetPlanUsageSource(func() planusage.Snapshot { return reader.Snapshot() })
 	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
 	go reader.Run(ctx)
