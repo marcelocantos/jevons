@@ -662,18 +662,35 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	defer cancel()
 	generation := s.terminalGeneration(name)
 	sendErr := proc.Send(entry.Text)
+	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
+	// Watch before treating the attempt as failed — broker-wrapped errors miss
+	// queueSendDefinitelyNotSent's exact-string match and would otherwise land
+	// as uncertain/PINNED even when the transcript shows PayloadQueued.
+	ev := watch()
+	outcome := ClassifySendOutcome(FlightIdle, ev)
+	if outcome == OutcomeQueuedBehindTurn {
+		detail := evidenceDetail(ev)
+		if sendErr != nil {
+			detail = describeTransportClaim(sendErr) + "; " + detail
+		}
+		if resolve(sendq.Confirmed, detail) {
+			s.clearSendqPin(name)
+			slog.Info("agent send queue: message waiting in receiver queue behind live turn",
+				"name", name, "entry_id", entry.ID, "detail", detail)
+		}
+		return false
+	}
 	if queueSendDefinitelyNotSent(sendErr) {
 		if resolve(sendq.DefinitelyNotSent, sendErr.Error()) && !isPromptInFlight(sendErr) {
 			s.noteSendqDeliveryFailure(name, entry, sendErr.Error())
 		}
 		return false
 	}
-	ev := watch()
 	// Preserve the existing successful-send verdict in this durability slice.
 	// Its generic live-event branch is inherited receipt-quality residue under
 	// T623, not a new guarantee of correlated delivery. On an errored send only
 	// evidence of this payload may release the obligation; activity alone cannot.
-	begun := ClassifySendOutcome(FlightIdle, ev) == OutcomeBegun
+	begun := outcome == OutcomeBegun
 	if sendErr != nil && !ev.PayloadSeen && !ev.PayloadEnteredTurn {
 		begun = false
 	}
