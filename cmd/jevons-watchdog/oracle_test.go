@@ -202,7 +202,10 @@ func (r *rig) killDaemon() {
 	// the scratch dir — the same leak t218/t434 used to leave behind.
 	prefix := r.dir + string(os.PathSeparator)
 	live := func() []string {
-		out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
+		// args=, not comm=: Linux comm is a 15-char name, so a prefix
+		// match on the scratch dir never hits stubdaemon and cleanup
+		// races the leftover writer (TempDir "directory not empty").
+		out, err := exec.Command("ps", "-Ao", "pid=,args=").Output()
 		if err != nil {
 			return nil
 		}
@@ -413,9 +416,18 @@ func t405ForegroundKill(t *testing.T, detached bool) {
 
 	// Wait until the bounce is genuinely under way — killing before the
 	// re-exec would prove nothing either way — then kill the caller.
-	if !t405WaitForLog(callerLog, "restart-daily-jevonsd: root=", 60*time.Second) {
+	//
+	// When detached, watch the child's own log. callerLog is a 100ms tail
+	// of that file (cmd/detach), so waiting on it lets a fast stub bounce
+	// finish before SIGKILL; Wait is then nil and the oracle proves
+	// nothing (Linux CI, 🎯T405).
+	markerLog := callerLog
+	if detached {
+		markerLog = r.restartLog()
+	}
+	if !t405WaitForLog(markerLog, "restart-daily-jevonsd: root=", 60*time.Second) {
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		t.Fatalf("restart never started; log:\n%s", t405ReadFile(callerLog))
+		t.Fatalf("restart never started; log:\n%s", t405ReadFile(markerLog))
 	}
 	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
 		t.Fatalf("killing the caller's process group: %v", err)
@@ -568,7 +580,7 @@ func t405WaitForLog(path, want string, within time.Duration) bool {
 		if strings.Contains(t405ReadFile(path), want) {
 			return true
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 	return false
 }

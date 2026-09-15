@@ -364,14 +364,18 @@ func TestAnUndeliveredNoticeIsNotRecordedAsTold(t *testing.T) {
 	told := make(chan string, 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go supervise.WatchAgentLoop(ctx,
-		supervise.AgentPaths{StateDir: stateDir, Home: t.TempDir(), Repo: t.TempDir()},
-		supervise.AgentConfig{Stale: 10 * time.Millisecond, Retry: time.Hour},
-		20*time.Millisecond,
-		func(subject, kind, text string) bool {
-			told <- text
-			return false // no journal to write to
-		})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		supervise.WatchAgentLoop(ctx,
+			supervise.AgentPaths{StateDir: stateDir, Home: t.TempDir(), Repo: t.TempDir()},
+			supervise.AgentConfig{Stale: 10 * time.Millisecond, Retry: time.Hour},
+			20*time.Millisecond,
+			func(subject, kind, text string) bool {
+				told <- text
+				return false // no journal to write to
+			})
+	}()
 
 	select {
 	case text := <-told:
@@ -389,6 +393,11 @@ func TestAnUndeliveredNoticeIsNotRecordedAsTold(t *testing.T) {
 		t.Fatal("an undelivered notice was recorded as told")
 	}
 	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WatchAgentLoop did not stop")
+	}
 
 	// And it kept no claim to have told anyone.
 	st, err := supervise.LoadAgentState(dir)

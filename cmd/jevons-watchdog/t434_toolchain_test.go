@@ -125,7 +125,9 @@ func reapUnder(t *testing.T, dir string) {
 	t.Helper()
 	prefix := dir + string(os.PathSeparator)
 	live := func() []int {
-		out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
+		// args=, not comm=: Linux comm is a 15-char name and never
+		// carries the scratch-dir path this sweep matches on.
+		out, err := exec.Command("ps", "-Ao", "pid=,args=").Output()
 		if err != nil {
 			return nil
 		}
