@@ -12,6 +12,9 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/staffops"
 )
 
@@ -294,5 +297,75 @@ func TestSentinelDeadPOIsNotFanoutFault(t *testing.T) {
 	past := t0.Add(DefaultSentinelMechanicalGrace + time.Minute)
 	if sig := findPOFanout(sampleAt(s, dir, alive, past), "jevons-po"); sig != nil {
 		t.Fatalf("dead PO is the dead_agent class, not a fan-out fault: %+v", sig)
+	}
+}
+
+// t586Pct is a percentage pointer for a plan-usage window.
+func t586Pct(v float64) *float64 { return &v }
+
+// 🎯T586 harness tape: the 2026-08-29 shape through the real sentinel sample.
+// Ready leaves the PO could engage, a fleet already at the seat cap so the
+// governor refuses a new pane, and a provider whose weekly allowance is gone.
+// The PO was correctly declining to mint, so no fan-out fault may surface.
+func TestT586BlockedPOProducesNoFanoutFault(t *testing.T) {
+	s, dir := poFanoutFixture(t, readyLedger)
+	setPhase(s, "jevons-po", "idle", time.Time{})
+	alive := map[string]bool{"jevons-po": true}
+	t0 := time.Date(2026, 8, 29, 23, 50, 0, 0, time.UTC)
+	past := t0.Add(DefaultSentinelMechanicalGrace + time.Minute)
+	// The first sample starts the grace clock; it never fires.
+	sampleAt(s, dir, alive, t0)
+
+	// Control first: with no governor and no plan feed, this fixture is the
+	// 🎯T380 fault — which is what the capacity reading must then silence.
+	if sig := findPOFanout(sampleAt(s, dir, alive, past), "jevons-po"); sig == nil {
+		t.Fatal("control: an idle PO on ready leaves must fault before capacity is read")
+	}
+
+	// Six live seats against a cap of six: the governor refuses a worker pane
+	// (🎯T566.2), which is the same refusal jevons_agent_start would return.
+	s.SetCapacityGovernor(capacity.NewGovernor(capacity.GovernorArgs{
+		Snapshot: func() capacity.Snapshot {
+			return capacity.Snapshot{ActiveSessions: 6, MaxSessions: 6}
+		},
+	}))
+	if d := s.CapacityGovernor().AdmitSpawn(capacity.SpawnWorker, "probe"); d.Admitted() {
+		t.Fatalf("fixture must refuse a worker pane, got %+v", d)
+	}
+	if sig := findPOFanout(sampleAt(s, dir, alive, past), "jevons-po"); sig != nil {
+		t.Fatalf("host-refused PO surfaced as a fan-out fault: %s", sig.Detail)
+	}
+
+	// Provider arm on its own: capacity admits, the weekly allowance is gone.
+	s.SetCapacityGovernor(capacity.NewGovernor(capacity.GovernorArgs{
+		Snapshot: func() capacity.Snapshot { return capacity.Snapshot{} },
+	}))
+	if sig := findPOFanout(sampleAt(s, dir, alive, past), "jevons-po"); sig == nil {
+		t.Fatal("with capacity admitting again the fault must return")
+	}
+	s.planUsage = func() planusage.Snapshot {
+		return planusage.Snapshot{At: past, Backends: []planusage.Backend{{
+			Provider: "claude", Status: planusage.StatusAvailable,
+			Windows: []planusage.Window{{
+				Name: planusage.WindowWeekly, RemainingPercent: t586Pct(0), UsedPercent: t586Pct(100),
+			}},
+		}}}
+	}
+	if sig := findPOFanout(sampleAt(s, dir, alive, past), "jevons-po"); sig != nil {
+		t.Fatalf("spend-limited provider surfaced as a fan-out fault: %s", sig.Detail)
+	}
+
+	// And 🎯T406 fleet intent standing at blocked_provider says the same.
+	s.planUsage = nil
+	st, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(st)
+	if err := s.SetFleetIntent(fleetintent.BlockedProvider, "test", "spend limit"); err != nil {
+		t.Fatal(err)
+	}
+	if sig := findPOFanout(sampleAt(s, dir, alive, past), "jevons-po"); sig != nil {
+		t.Fatalf("blocked_provider intent surfaced as a fan-out fault: %s", sig.Detail)
 	}
 }
