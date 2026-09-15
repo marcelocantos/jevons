@@ -135,10 +135,10 @@ parameter throughout, so the whole lifecycle is hermetic.
 
 ## Residual
 
-- The model is pure. Nothing in this commit makes the daily daemon
+- The model is pure. Nothing in this commit makes the development daemon
   impatient — the reconcile set has to be driven from the converge loop
   before any of this is owner-visible, and that wiring rides 🎯T315 /
-  🎯T317 with 🎯T194 daily-path evidence.
+  🎯T317 with 🎯T194 development-surface evidence.
 - `MissionOpen` is supplied by the caller. The heuristic for an unbound
   implementer (open until accounted for) currently lives in
   `internal/mcpserver` (`HasOpenMissionForIdle`, 🎯T244); this package

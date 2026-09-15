@@ -1,5 +1,5 @@
 #!/bin/sh
-# Start daily jevonsd for supervisord (vellum run-view.sh shape).
+# Start development jevonsd for supervisord (vellum run-view.sh shape).
 # Repo-root bin/jevonsd only — never Homebrew Cellar (🎯T553.3 Cellar reclaim).
 set -e
 

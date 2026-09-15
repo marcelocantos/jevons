@@ -8,7 +8,40 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/marcelocantos/jevons/internal/gate"
 )
+
+// plantT446GateRecords makes the three GREEN gate ids the fixture cites
+// resolvable from a hermetic store. On the machine that ran them the
+// records sit in ~/.jevons/gates; anywhere else (a CI runner) the T470
+// false-green check would find no record behind the id and veto the reap,
+// which is that check working — but this test is about the ask classifier,
+// not about where the evidence lives.
+func plantT446GateRecords(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv(gate.StoreDirEnv, root)
+	st, err := gate.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 14, 22, 50, 0, 0, time.UTC)
+	for id, name := range map[string]string{
+		"c1c07bdc": "t439-mcpserver",
+		"0f1d4204": "t439-clean-checkout",
+		"af143180": "t439-head-build",
+	} {
+		if err := st.Save(&gate.Record{
+			ID: id, Name: name, Command: []string{"go", "test", "./..."},
+			Started: at, Ended: at.Add(time.Minute),
+			StatusKnown: true, ExitStatus: 0, Verdict: gate.VerdictGreen,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // 🎯T446 fixtures: jv-t439-reap-request's two actual stored terminal reports,
 // copied verbatim out of the agent-report store —
@@ -93,6 +126,7 @@ func TestT446MentionsNoLongerReadAsRequests(t *testing.T) {
 // daemon actually takes: a finished worker whose report described the ask
 // vocabulary leaves the fleet.
 func TestT446MetaMentionReportReaps(t *testing.T) {
+	plantT446GateRecords(t)
 	report := t446MetaMentionReport(t)
 
 	if got := ClassifyReportAsk(report); got != AskNone {

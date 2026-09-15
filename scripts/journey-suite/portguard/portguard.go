@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package portguard keeps the journey isolate off the daily-driver port.
+// Package portguard keeps the journey isolate off the development port.
 // This is harness safety, not a user journey.
 package portguard
 
@@ -14,20 +14,20 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 )
 
-// DailyPort is the live owner-driver bind (Universe A).
+// DailyPort is the development bind (legacy name; Universe A).
 const DailyPort = config.DailyPort
 
 // DefaultPort is the default Universe B isolate bind.
 const DefaultPort = config.JourneyPort
 
-// RefuseDaily returns an error when p is the daily React port or the
-// daily vanilla sidecar so the journey suite never binds the owner stream.
+// RefuseDaily returns an error when p is the development React port or the
+// development vanilla sidecar so the journey suite never binds the owner stream.
 func RefuseDaily(p int) error {
 	if p == DailyPort {
-		return fmt.Errorf("refusing port %d (daily-driver); use %d or -port 0", DailyPort, DefaultPort)
+		return fmt.Errorf("refusing port %d (development); use %d or -port 0", DailyPort, DefaultPort)
 	}
 	if p == config.DailyVanillaPort {
-		return fmt.Errorf("refusing port %d (daily vanilla sidecar LaunchAgent); use %d or -port 0", config.DailyVanillaPort, DefaultPort)
+		return fmt.Errorf("refusing port %d (development vanilla sidecar LaunchAgent); use %d or -port 0", config.DailyVanillaPort, DefaultPort)
 	}
 	return nil
 }

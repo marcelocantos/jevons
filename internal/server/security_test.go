@@ -32,7 +32,7 @@ func TestSecurityStatusAndConfinedExec(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	// Status probe (T194 daily path shape).
+	// Status probe (T194 development-surface shape).
 	resp, err := http.Get(ts.URL + "/api/security/status")
 	if err != nil {
 		t.Fatal(err)

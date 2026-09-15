@@ -699,6 +699,7 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		if env.Ch == planUsageChannel {
 			sess.setPlanUsage(true)
 			s.writePlanUsage(ctx, conn)
+			s.kickPlanUsageRefresh()
 			return
 		}
 		if !isTranscript {

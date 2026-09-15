@@ -33,8 +33,8 @@ Keep them distinct. Most agent/automated work lives in **B**.
 
 **Policy:** do not drive Universe A unless the bug genuinely requires the
 owner’s session, journal, or MCP surface. Prefer this suite. The suite
-**refuses** port `13705` so journeys cannot silently bind the daily
-driver. Scripts that still attach to a running daemon
+**refuses** port `13705` so journeys cannot silently bind the
+development surface. Scripts that still attach to a running daemon
 (`make test-live-suite`, `chat-smoke`, `chat-smoke-cancel`) default to
 `:13705` — use them on purpose, not as the routine path.
 
@@ -53,7 +53,7 @@ go run ./scripts/journey-suite -port 0        # ephemeral port
 go run ./scripts/journey-suite -bin ./bin/jevonsd
 ```
 
-Needs: Grok CLI signed in (same as daily jevonsd). Part of `make test` (🎯T492).
+Needs: Grok CLI signed in (same as development jevonsd). Part of `make test` (🎯T492).
 
 Hermetic meta-checks (doc inventory, port guard) live outside this section:
 `scripts/docratchet/` and `scripts/journey-suite/portguard/` — **not** journeys.

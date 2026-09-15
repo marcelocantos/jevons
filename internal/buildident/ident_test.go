@@ -100,7 +100,7 @@ func TestSiblingHEADChangesIdentity(t *testing.T) {
 }
 
 // A sibling edit that is not yet committed changes the build too: the
-// daily path consumes local-master claudia through go.work (🎯T448), so
+// development builds consume local-master claudia through go.work (🎯T448), so
 // the working tree is what gets compiled.
 func TestSiblingDirtyStateChangesIdentity(t *testing.T) {
 	w := newWorkspace(t)

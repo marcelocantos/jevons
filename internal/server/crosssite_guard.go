@@ -10,7 +10,7 @@ import (
 
 // Structural cross-site enforcement (🎯T385).
 //
-// The daily daemon listens on localhost with no TLS and no authentication, so
+// The development daemon listens on localhost with no TLS and no authentication, so
 // the check in isCrossSite is the only thing standing between an ordinary web
 // page open in the owner's browser and a state-changing API call. Relying on
 // each handler to call rejectCrossSite had already failed: nine of the

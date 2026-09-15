@@ -26,6 +26,9 @@ func TestMuxOmitsAgentTranscriptRoute(t *testing.T) {
 	}
 }
 
+// chat_history.jsonl is never the conversation source (🎯T621). A fixture
+// that plants only that file must not paint inspect; updates.jsonl /
+// Claude JSONL reconstruction is the hydrate path (see T621 inspect tests).
 func TestProviderSessionDoesNotHydrateInspect(t *testing.T) {
 	dir := t.TempDir()
 	sessRoot := filepath.Join(dir, "sessions")

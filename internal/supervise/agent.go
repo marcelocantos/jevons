@@ -176,7 +176,7 @@ func AgentNoticeText(d AgentDecision) string {
 	if d.Notify == NotifyOK {
 		return "watchdog restored: the daemon's own supervisor is loaded and probing again. " + d.Reason
 	}
-	msg := "watchdog gap: nothing was supervising the daily jevonsd — " + d.Reason + "."
+	msg := "watchdog gap: nothing was supervising the development jevonsd — " + d.Reason + "."
 	if d.Silent > 0 {
 		msg += fmt.Sprintf(" The last probe was %s ago; while that held, a failed restart would have left the fleet down until you noticed.", d.Silent.Round(time.Second))
 	}

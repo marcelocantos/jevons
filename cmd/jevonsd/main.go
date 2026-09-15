@@ -63,8 +63,8 @@ func main() {
 	uiMode := flag.String("ui", "", "empty=full daemon; probe=React surface check")
 	installUIAgents := flag.Bool("install-ui-agents", false, "write and load the React surface probe, then exit")
 	uninstallUIAgents := flag.Bool("uninstall-ui-agents", false, "unload the React surface probe, then exit")
-	installDaemonAgent := flag.Bool("install-daemon-agent", false, "write the daily jevonsd KeepAlive LaunchAgent (🎯T553.3), then exit")
-	uninstallDaemonAgent := flag.Bool("uninstall-daemon-agent", false, "unload the daily jevonsd KeepAlive LaunchAgent, then exit")
+	installDaemonAgent := flag.Bool("install-daemon-agent", false, "write the development jevonsd KeepAlive LaunchAgent (🎯T553.3), then exit")
+	uninstallDaemonAgent := flag.Bool("uninstall-daemon-agent", false, "unload the development jevonsd KeepAlive LaunchAgent, then exit")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 â loopback only; remote devices use the pigeon relay)")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
@@ -205,8 +205,8 @@ func main() {
 	// ð¯T148: resolve once at boot (config â JEVONS_PROVIDER â grok).
 	defaultProvider := cli.ResolveProvider("", cfg.Provider)
 
-	// 🎯T526: journey default port must never share daily ~/.jevons.
-	// `jevonsd -port 13715 -workdir <repo>` otherwise loads the daily
+	// 🎯T526: journey default port must never share development ~/.jevons.
+	// `jevonsd -port 13715 -workdir <repo>` otherwise loads the development
 	// config and mints fixture agents into the owner's registry.
 	if err := config.RefuseJourneyDailyState(cfg.Port, cfg.StateDir); err != nil {
 		slog.Error("journey port isolation", "err", err)
@@ -443,7 +443,7 @@ func main() {
 		Locate: func(sessionID string) (string, []string) {
 			var searched []string
 			if sessionRoots.GrokSessions != "" {
-				if p := discovery.ChatHistoryPath(sessionRoots.GrokSessions, sessionID); p != "" {
+				if p := discovery.UpdatesPath(sessionRoots.GrokSessions, sessionID); p != "" {
 					searched = append(searched, p)
 				}
 			}
@@ -1243,10 +1243,9 @@ func main() {
 	// unavailable; the deterministic notice above does not depend on it.
 	mcpSrv.SetRecoverBin(filepath.Join(cfg.WorkDir, "bin", "recover"), cfg.StateDir)
 
-	// ð¯T171 dual-path: daemon-restarted â POs+overseer; short resume â
-	// open-mission workers (T207 brief-or-verify); worker-idle transition â PO.
-	// Also wires fleet-health hook for cockpit (T204).
-	// idlePressureSweep (via this loop) drives the T317 ladder when installed.
+	// 🎯T171 dual-path when jevonsd still parents processes; silent when
+	// the claudia broker holds the seats (🎯T646). Also wires fleet-health
+	// for cockpit (T204). idlePressureSweep drives the T317 ladder.
 	go mcpserver.StartIdleNudgeLoop(ctx, mcpserver.IdleNudgeLoopArgs{
 		Server:       mcpSrv,
 		StateDir:     cfg.StateDir,

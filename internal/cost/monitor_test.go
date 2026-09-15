@@ -280,11 +280,113 @@ func TestMonitorCollectorStaleness(t *testing.T) {
 		t.Fatalf("fresh collector alerted: %+v", snap.Alerts)
 	}
 
-	// A collector that stops polling becomes an alarm, not silence.
+	// A collector that stops polling becomes an alarm, not silence — on
+	// the second pass that finds it stale (🎯T654): the first pass alone
+	// cannot tell a blind collector from a host stall the monitor was
+	// itself part of.
 	lastPoll = now.Add(-5 * time.Minute)
 	snap, _ = m.Snapshot()
+	if len(snap.Alerts) != 0 {
+		t.Fatalf("first stale observation alarmed before confirmation: %+v", snap.Alerts)
+	}
+	snap, _ = m.Snapshot()
 	if len(snap.Alerts) != 1 || snap.Alerts[0].Kind != AlertCollectorStale {
-		t.Fatalf("stale collector did not alarm: %+v", snap.Alerts)
+		t.Fatalf("stale collector did not alarm on the confirming pass: %+v", snap.Alerts)
+	}
+
+	// Recovery clears the alarm and the confirmation state: a later
+	// stale observation is a first observation again.
+	lastPoll = now.Add(-time.Second)
+	if snap, _ = m.Snapshot(); len(snap.Alerts) != 0 {
+		t.Fatalf("recovered collector still alerted: %+v", snap.Alerts)
+	}
+	lastPoll = now.Add(-5 * time.Minute)
+	if snap, _ = m.Snapshot(); len(snap.Alerts) != 0 {
+		t.Fatalf("confirmation state leaked across a recovery: %+v", snap.Alerts)
+	}
+}
+
+// TestMonitorCollectorStalenessHostStall replays 2026-09-15 19:15–19:17
+// (🎯T654): the whole daemon was starved for two minutes, the collector's
+// last poll was 2m03s old when the monitor woke, and the collector
+// polled seconds later. That must not alarm.
+func TestMonitorCollectorStalenessHostStall(t *testing.T) {
+	now := time.Date(2026, 9, 15, 19, 15, 50, 0, time.UTC)
+	s := seedStore(t, now)
+	cfg := &BudgetConfig{Window: Duration(5 * time.Minute)}
+	lastPoll := now.Add(-time.Second)
+	m := NewMonitor(&MonitorArgs{
+		Store:             s,
+		Config:            func() *BudgetConfig { return cfg },
+		CollectorLastPoll: func() time.Time { return lastPoll },
+		Now:               func() time.Time { return now },
+	})
+	if snap, _ := m.Snapshot(); len(snap.Alerts) != 0 {
+		t.Fatalf("pre-stall pass alerted: %+v", snap.Alerts)
+	}
+
+	// The host stalls: nothing in the process runs for 2m03s, then the
+	// monitor's tick fires before the collector's does.
+	now = now.Add(2*time.Minute + 3*time.Second)
+	if snap, _ := m.Snapshot(); len(snap.Alerts) != 0 {
+		t.Fatalf("first pass after a host stall alarmed: %+v", snap.Alerts)
+	}
+	// The collector's poll tick fires right after; the next monitor pass
+	// finds it fresh.
+	lastPoll = now.Add(time.Second)
+	now = now.Add(15 * time.Second)
+	if snap, _ := m.Snapshot(); len(snap.Alerts) != 0 {
+		t.Fatalf("recovered collector alarmed: %+v", snap.Alerts)
+	}
+}
+
+// TestMonitorCollectorStalenessDeadBound: past collectorDeadAfter the
+// alarm needs no confirming pass — a rarely consulted monitor must not
+// sit on a collector that has been silent for ten minutes.
+func TestMonitorCollectorStalenessDeadBound(t *testing.T) {
+	now := time.Date(2026, 9, 15, 19, 30, 0, 0, time.UTC)
+	s := seedStore(t, now)
+	cfg := &BudgetConfig{Window: Duration(5 * time.Minute)}
+	m := NewMonitor(&MonitorArgs{
+		Store:             s,
+		Config:            func() *BudgetConfig { return cfg },
+		CollectorLastPoll: func() time.Time { return now.Add(-collectorDeadAfter - time.Second) },
+		Now:               func() time.Time { return now },
+	})
+	snap, _ := m.Snapshot()
+	if len(snap.Alerts) != 1 || snap.Alerts[0].Kind != AlertCollectorStale {
+		t.Fatalf("dead collector did not alarm on first sight: %+v", snap.Alerts)
+	}
+}
+
+// TestMonitorCollectorStalenessDetail: the alarm says what the collector
+// is doing (a wedged pass, a store error), not only that it is stale.
+func TestMonitorCollectorStalenessDetail(t *testing.T) {
+	now := time.Date(2026, 9, 15, 19, 30, 0, 0, time.UTC)
+	s := seedStore(t, now)
+	cfg := &BudgetConfig{Window: Duration(5 * time.Minute)}
+	health := CollectorHealth{
+		LastPoll:    now.Add(-3 * time.Minute),
+		LastScan:    now.Add(-4 * time.Minute),
+		PollStarted: now.Add(-3 * time.Minute),
+		LastPollErr: "database is locked",
+	}
+	m := NewMonitor(&MonitorArgs{
+		Store:           s,
+		Config:          func() *BudgetConfig { return cfg },
+		CollectorHealth: func() CollectorHealth { return health },
+		Now:             func() time.Time { return now },
+	})
+	m.Snapshot() // first observation: noted, not alarmed
+	snap, _ := m.Snapshot()
+	if len(snap.Alerts) != 1 {
+		t.Fatalf("want one alert, got %+v", snap.Alerts)
+	}
+	d := snap.Alerts[0].Detail
+	for _, want := range []string{"poll pass in flight for 3m0s", "last poll error: database is locked", "last scan completed 4m0s ago", "burn figures may be blind"} {
+		if !strings.Contains(d, want) {
+			t.Fatalf("detail %q lacks %q", d, want)
+		}
 	}
 }
 

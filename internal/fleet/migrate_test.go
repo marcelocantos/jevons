@@ -30,8 +30,8 @@ func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claud
 		if err := os.MkdirAll(bucket, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		transcript = filepath.Join(bucket, "chat_history.jsonl")
-		if err := os.WriteFile(transcript, []byte(`{"role":"user","content":"hello"}`+"\n"), 0o644); err != nil {
+		transcript = filepath.Join(bucket, "updates.jsonl")
+		if err := os.WriteFile(transcript, []byte(`{"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"}}}}`+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

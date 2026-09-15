@@ -29,7 +29,7 @@
 // and 404s the rest. That is deliberate: the live fault was invisible to a
 // serve-from-disk test because dev mode reads the working tree, while the
 // released daemon reads the embedded FS. Gating on the embed list makes this
-// test reproduce the daily path, so a script tag added without its //go:embed
+// test reproduce the development surface, so a script tag added without its //go:embed
 // line fails here as a cascade of real errors rather than passing quietly.
 //
 // Hermetic: static server over web/ + mocked agents/WS. No live daemon.
@@ -134,7 +134,7 @@ function startStaticServer(logPosts) {
       const file = path.normalize(path.join(webRoot, rel));
       if (!file.startsWith(webRoot)) { res.writeHead(403); res.end(); return; }
       // Embedded-FS fidelity: a script the released binary cannot serve must
-      // 404 here too, exactly as it does on the daily daemon.
+      // 404 here too, exactly as it does on the development daemon.
       const relPosix = rel.replace(/^\//, '');
       if (relPosix.startsWith('scripts/') && !embedded.has(relPosix)) {
         res.writeHead(404);

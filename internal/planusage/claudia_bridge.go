@@ -4,10 +4,26 @@
 package planusage
 
 import (
+	"context"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 )
+
+// ResolveMint is the omit-provider dest pick (🎯T652): Claudia chooses a
+// session harness. PreferPlan + prefer Claude; exhausted / weekly-hot /
+// session-low rows are skipped. Jevons does not default that mint to grok.
+func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds) (claudia.ModelPick, error) {
+	ct := thresholdsToClaudia(th)
+	return claudia.Resolve(ctx, claudia.ModelPredicates{
+		Mode:           claudia.CapabilitySession,
+		PreferPlan:     true,
+		PreferProvider: claudia.ProviderClaude,
+		Now:            now,
+		Usage:          backendsToPlanUsage(cands),
+		Thresholds:     &ct,
+	})
+}
 
 func windowToClaudia(w Window) claudia.PlanWindow {
 	pw := claudia.PlanWindow{

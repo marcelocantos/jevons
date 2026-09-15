@@ -9,7 +9,7 @@
 //
 // Everything runs against a scratch port, a scratch HOME and a stub
 // daemon, because the subject matter is the restart path itself and a
-// botched exercise of it takes the daily fleet down. The daily port is
+// botched exercise of it takes the development fleet down. The development port is
 // refused outright.
 package main
 
@@ -472,7 +472,7 @@ func t405FreePort(t *testing.T) int {
 	defer l.Close()
 	port := l.Addr().(*net.TCPAddr).Port
 	if port == dailyPort {
-		t.Fatalf("refusing to test against the daily port %d", dailyPort)
+		t.Fatalf("refusing to test against the development port %d", dailyPort)
 	}
 	return port
 }

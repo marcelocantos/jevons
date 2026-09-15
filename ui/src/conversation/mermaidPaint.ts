@@ -5,7 +5,7 @@
 
 // Load the same UMD browser bundle vanilla pulls from the mermaid 11 CDN.
 // Vite ESM interop of mermaid.min.js crashes (`this.mermaid` is undefined);
-// a script tag matches the daily cockpit and Playwright Chromium smoke.
+// a script tag matches the development cockpit and Playwright Chromium smoke.
 import mermaidUrl from 'mermaid/dist/mermaid.min.js?url';
 
 type MermaidAPI = {

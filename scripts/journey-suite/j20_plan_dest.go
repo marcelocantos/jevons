@@ -44,7 +44,7 @@ func (s *suite) writePlanFixture(rem, used float64) (string, error) {
 
 func (s *suite) j20PlanDest() error {
 	if s.host == "" || strings.HasSuffix(s.host, ":13705") {
-		return fmt.Errorf("J20 refuses daily port")
+		return fmt.Errorf("J20 refuses development port")
 	}
 	// Ahead: burn 55/50 = 1.1. No dest → omit-provider must refuse.
 	path, err := s.writePlanFixture(45, 55)

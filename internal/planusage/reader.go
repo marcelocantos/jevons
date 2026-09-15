@@ -52,6 +52,9 @@ type ReaderArgs struct {
 	// Isolates pass their own state_dir path so they never read development
 	// readings.
 	History History
+	// ForceFetch is the producer used by RefreshNow (cockpit reload,
+	// 🎯T653). Nil uses Fetch, or the default LoadPlanUsage with Refresh.
+	ForceFetch FetchFunc
 }
 
 // Reader keeps the last round of plan-usage readings and re-shapes them on
@@ -74,29 +77,22 @@ type Reader struct {
 	// can long-poll until the first batch lands instead of returning pending.
 	ready     chan struct{}
 	readyOnce sync.Once
+
+	refreshing chan struct{}
+	lastKick   error
 }
 
 // NewReader builds a Reader. It does not fetch — call Refresh or Run.
 func NewReader(args ReaderArgs) *Reader {
+	usedCustom := args.Fetch != nil
 	if args.Fetch == nil {
-		args.Fetch = func(ctx context.Context) ([]claudia.PlanUsage, error) {
-			tok := strings.TrimSpace(os.Getenv(CursorAPIKeyEnv))
-			if tok == "" {
-				if t, err := loadCursorAccessToken(""); err == nil {
-					tok = t
-				}
-			}
-			// The claudia daemon is the one plan-usage evaluator on the
-			// host when it is running; LoadPlanUsage reads its snapshot
-			// and falls back to the host-wide filesystem cache (shared
-			// with every other claudia consumer) when it is not. Either
-			// way jevonsd never races another process to a vendor endpoint.
-			return claudia.LoadPlanUsage(ctx, &claudia.PlanUsageCacheArgs{
-				All: &claudia.AllPlanUsageArgs{
-					Providers:         SupportedProviders(),
-					CursorAccessToken: tok,
-				},
-			})
+		args.Fetch = defaultPlanUsageFetch(false)
+	}
+	if args.ForceFetch == nil {
+		if usedCustom {
+			args.ForceFetch = args.Fetch
+		} else {
+			args.ForceFetch = defaultPlanUsageFetch(true)
 		}
 	}
 	if args.Refresh <= 0 {
@@ -114,16 +110,82 @@ func NewReader(args ReaderArgs) *Reader {
 	return &Reader{args: args, ready: make(chan struct{})}
 }
 
+func defaultPlanUsageFetch(refresh bool) FetchFunc {
+	return func(ctx context.Context) ([]claudia.PlanUsage, error) {
+		tok := strings.TrimSpace(os.Getenv(CursorAPIKeyEnv))
+		if tok == "" {
+			if t, err := loadCursorAccessToken(""); err == nil {
+				tok = t
+			}
+		}
+		// The claudia daemon is the one plan-usage evaluator on the
+		// host when it is running; LoadPlanUsage reads its snapshot
+		// and falls back to the host-wide filesystem cache (shared
+		// with every other claudia consumer) when it is not. Either
+		// way jevonsd never races another process to a vendor endpoint.
+		// Refresh=true is the cockpit-reload path (🎯T653).
+		return claudia.LoadPlanUsage(ctx, &claudia.PlanUsageCacheArgs{
+			Refresh: refresh,
+			All: &claudia.AllPlanUsageArgs{
+				Providers:         SupportedProviders(),
+				CursorAccessToken: tok,
+			},
+		})
+	}
+}
+
 // Refresh performs one round of readings and replaces the cache.
 //
 // A whole-query failure keeps the previous readings: a stale number the owner
 // can see aged is worth more than a blank panel, and the staleness marking is
 // what stops it from lying. Only the never-fetched case reports Pending.
 func (r *Reader) Refresh(ctx context.Context) error {
+	return r.refresh(ctx, false)
+}
+
+// RefreshNow forces a producer poll even when the cache is still fresh
+// (🎯T653). Concurrent callers wait for the in-flight round.
+func (r *Reader) RefreshNow(ctx context.Context) error {
+	return r.refresh(ctx, true)
+}
+
+func (r *Reader) refresh(ctx context.Context, force bool) error {
+	r.mu.Lock()
+	if ch := r.refreshing; ch != nil {
+		r.mu.Unlock()
+		select {
+		case <-ch:
+			r.mu.Lock()
+			err := r.lastKick
+			r.mu.Unlock()
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	r.refreshing = done
+	r.mu.Unlock()
+
+	err := r.doRefresh(ctx, force)
+
+	r.mu.Lock()
+	r.lastKick = err
+	r.refreshing = nil
+	close(done)
+	r.mu.Unlock()
+	return err
+}
+
+func (r *Reader) doRefresh(ctx context.Context, force bool) error {
 	ctx, cancel := context.WithTimeout(ctx, r.args.FetchTimeout)
 	defer cancel()
 
-	readings, err := r.args.Fetch(ctx)
+	fetch := r.args.Fetch
+	if force && r.args.ForceFetch != nil {
+		fetch = r.args.ForceFetch
+	}
+	readings, err := fetch(ctx)
 	r.mu.Lock()
 	if err != nil {
 		r.lastErr = err.Error()

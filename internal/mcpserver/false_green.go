@@ -28,13 +28,30 @@ import (
 // opened degrades to textual checking, which needs no disk: the flags that
 // matter most (pipeline masking, the zsh array trap, output that contradicts
 // the claim) are all decidable from the report alone.
-var gateStore = sync.OnceValue(func() *gate.Store {
-	store, err := gate.OpenStore("")
+var (
+	gateStoreMu     sync.Mutex
+	gateStoreCached *gate.Store
+)
+
+// gateStore opens the record store at gate.DefaultStoreRoot, reusing the
+// handle while that root is unchanged. Keyed by root rather than latched once
+// per process, so a test that points JEVONS_GATE_DIR at a hermetic store is
+// honoured even when an earlier test in the same binary resolved the default
+// first — otherwise the check reads whatever ~/.jevons/gates the host has.
+func gateStore() *gate.Store {
+	root := gate.DefaultStoreRoot()
+	gateStoreMu.Lock()
+	defer gateStoreMu.Unlock()
+	if gateStoreCached != nil && gateStoreCached.Root == root {
+		return gateStoreCached
+	}
+	store, err := gate.OpenStore(root)
 	if err != nil {
 		return nil
 	}
+	gateStoreCached = store
 	return store
-})
+}
 
 // FalseGreenFlags reports the ways a worker's finish report fails to support
 // the pass it claims. Empty for the overwhelming majority of reports.

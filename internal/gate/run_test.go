@@ -67,7 +67,7 @@ func TestT396SucceedingCommandSurfacesZeroAndGreen(t *testing.T) {
 // relays the command's own status and does not add a masking layer of its
 // own (🎯T396 acceptance 2, pipeline case).
 func TestT396CorrectPipelineStatusSurvivesTheGate(t *testing.T) {
-	rec, _ := runIn(t, "sh", "-c", "set -o pipefail; exit 7 | cat")
+	rec, _ := runIn(t, "bash", "-c", "set -o pipefail; exit 7 | cat")
 
 	if rec.Status() != "7" {
 		t.Fatalf("exit status = %s, want 7 — the gate lost the pipeline's status", rec.Status())

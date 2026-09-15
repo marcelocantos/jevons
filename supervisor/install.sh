@@ -1,6 +1,6 @@
 #!/bin/sh
 # Render supervisor/*.ini into supervisor.d (vellum supervisor/install.sh)
-# and make supervisord the owner of the daily daemon's lifecycle (🎯T594).
+# and make supervisord the owner of the development daemon's lifecycle (🎯T594).
 #
 # Exactly one thing may own :13705. This installer therefore evicts the
 # other two claimants before starting its own: the launchd KeepAlive job,

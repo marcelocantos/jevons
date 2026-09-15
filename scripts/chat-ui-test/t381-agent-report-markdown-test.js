@@ -90,7 +90,7 @@ const REPORT = [
   // out narrower than that — which is precisely how a report shoves the whole
   // transcript sideways when nothing gives it a scroll port.
   '| 1 — loopback is never advertised to a pad | /Users/marcelo/work/github.com/marcelocantos/jevons/internal/advertise/loopback_never_advertised_darwin_arm64_test.go | green |',
-  '| 2 — the daily daemon serves the fixed path | live probe `curl -sS http://127.0.0.1:13705/api/discovery` returns non-404 | green |',
+  '| 2 — the development daemon serves the fixed path | live probe `curl -sS http://127.0.0.1:13705/api/discovery` returns non-404 | green |',
   '',
   '```sh',
   'go test ./internal/advertise -run TestLoopback',

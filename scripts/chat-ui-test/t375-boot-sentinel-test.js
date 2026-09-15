@@ -97,7 +97,7 @@ function contentType(p) {
 }
 
 // The scripts/… paths named by //go:embed in web/embed.go — exactly what a
-// released jevonsd can serve. Gating on it keeps this test on the daily path
+// released jevonsd can serve. Gating on it keeps this test on the development surface
 // rather than on a working tree the released binary would not reproduce.
 function embeddedScripts() {
   const src = fs.readFileSync(path.join(WEB_ROOT, 'embed.go'), 'utf8');

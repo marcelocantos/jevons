@@ -5,6 +5,8 @@ package cost
 
 import (
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -55,7 +57,22 @@ const (
 // collectorStaleAfter: a collector that hasn't completed a poll pass in
 // this long means the monitor may be blind, which must itself be an
 // alarm — the incident's core failure was silent invisibility.
-const collectorStaleAfter = 2 * time.Minute
+//
+// One stale observation is not yet an alarm (🎯T654). On 2026-09-15
+// the whole daemon was starved for two minutes under a load average of
+// 32 — every ticker in the process slipped, not just the collector's —
+// and the first monitor pass after the stall found a poll two minutes
+// old that the collector completed seconds later. A monitor that has
+// itself just woken cannot tell a wedged collector from a stalled
+// host, so it notes the staleness and lets the NEXT pass decide: a
+// collector still stale when the monitor is demonstrably running is
+// blind and alarms. collectorDeadAfter is the bound past which the
+// alarm fires regardless — a monitor that is only consulted rarely must
+// still not sit on a collector that has been silent this long.
+const (
+	collectorStaleAfter = 2 * time.Minute
+	collectorDeadAfter  = 5 * collectorStaleAfter
+)
 
 // Alert is one tripped runaway signal.
 type Alert struct {
@@ -102,7 +119,10 @@ type MonitorArgs struct {
 	// a broken collector becomes an alarm rather than silent blindness.
 	// nil disables the staleness check (pure-store tests).
 	CollectorLastPoll func() time.Time
-	Now               func() time.Time
+	// CollectorHealth, when set, supersedes CollectorLastPoll and lets the
+	// staleness alarm say what the collector is doing (🎯T654).
+	CollectorHealth func() CollectorHealth
+	Now             func() time.Time
 }
 
 // Monitor computes burn-rates and runaway signals from the store.
@@ -111,13 +131,22 @@ type Monitor struct {
 	config            func() *BudgetConfig
 	isOrphan          func(BurnRow) bool
 	collectorLastPoll func() time.Time
+	collectorHealth   func() CollectorHealth
 	now               func() time.Time
+
+	// staleMu guards staleSeen: whether the previous Snapshot found the
+	// collector stale (the confirm-on-second-observation rule above).
+	staleMu   sync.Mutex
+	staleSeen bool
 }
 
 // NewMonitor constructs a Monitor.
 func NewMonitor(args *MonitorArgs) *Monitor {
 	m := &Monitor{store: args.Store, config: args.Config, isOrphan: args.IsOrphan,
-		collectorLastPoll: args.CollectorLastPoll, now: args.Now}
+		collectorLastPoll: args.CollectorLastPoll, collectorHealth: args.CollectorHealth, now: args.Now}
+	if m.collectorHealth != nil {
+		m.collectorLastPoll = func() time.Time { return m.collectorHealth().LastPoll }
+	}
 	if m.isOrphan == nil {
 		m.isOrphan = func(BurnRow) bool { return false }
 	}
@@ -198,13 +227,44 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 
 	// The watchdog's own watchdog: a stale collector means everything
 	// above may be an undercount, and that must be loud.
-	if m.collectorLastPoll != nil {
-		if lp := m.collectorLastPoll(); lp.IsZero() || now.Sub(lp) > collectorStaleAfter {
-			snap.Alerts = append(snap.Alerts, Alert{Kind: AlertCollectorStale, Level: LevelWarn,
-				Detail: fmt.Sprintf("cost collector has not polled since %s — burn figures may be blind", lp.Format(time.RFC3339))})
-		}
+	if alert, ok := m.collectorStale(now); ok {
+		snap.Alerts = append(snap.Alerts, alert)
 	}
 	return snap, nil
+}
+
+// collectorStale decides the collector-stale alarm (🎯T654): stale on two
+// consecutive passes, or stale past collectorDeadAfter, alarms; a first
+// stale observation is noted and logged, because the monitor cannot yet
+// tell a blind collector from a host stall it was itself part of.
+func (m *Monitor) collectorStale(now time.Time) (Alert, bool) {
+	if m.collectorLastPoll == nil {
+		return Alert{}, false
+	}
+	lp := m.collectorLastPoll()
+	stale := lp.IsZero() || now.Sub(lp) > collectorStaleAfter
+	m.staleMu.Lock()
+	confirmed := m.staleSeen
+	m.staleSeen = stale
+	m.staleMu.Unlock()
+	if !stale {
+		return Alert{}, false
+	}
+	since := "never"
+	if !lp.IsZero() {
+		since = lp.Format(time.RFC3339)
+	}
+	detail := fmt.Sprintf("cost collector has not polled since %s", since)
+	if m.collectorHealth != nil {
+		detail += " (" + m.collectorHealth().Describe(now) + ")"
+	}
+	dead := !lp.IsZero() && now.Sub(lp) > collectorDeadAfter
+	if !confirmed && !dead {
+		slog.Info("cost monitor: collector poll overdue — confirming on the next pass before alarming (🎯T654)", "detail", detail)
+		return Alert{}, false
+	}
+	return Alert{Kind: AlertCollectorStale, Level: LevelWarn,
+		Detail: detail + " — burn figures may be blind"}, true
 }
 
 // evaluate applies the budget policy to a computed snapshot. Split out

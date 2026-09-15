@@ -21,7 +21,7 @@ import (
 // 🎯T218 — executable oracle for the restart thrash policy.
 //
 // This is not a prose ratchet: it runs the committed restart script against
-// a fake daemon on a throwaway port and asserts what the daily port actually
+// a fake daemon on a throwaway port and asserts what the development port actually
 // experiences. The motivating incident (~/.jevons/restart-daily.log,
 // 2026-08-05T19:15–19:19) was five restarts in four minutes, every one of
 // them rebuilding nothing — a healthy daemon SIGTERMed and replaced by the
@@ -124,10 +124,10 @@ type thrashEnv struct {
 func newThrashEnv(t *testing.T) *thrashEnv {
 	t.Helper()
 
-	// Universe B discipline: never the daily port, whatever the OS hands us.
+	// Universe B discipline: never the development port, whatever the OS hands us.
 	port := freeTCPPort(t)
 	if port == 13705 {
-		t.Fatalf("refusing daily port %d", port)
+		t.Fatalf("refusing development port %d", port)
 	}
 
 	root := t.TempDir()
@@ -458,7 +458,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cold start failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "OK: daily jevonsd serving") {
+	if !strings.Contains(out, "OK: development jevonsd serving") {
 		t.Fatalf("cold start did not reach serving state:\n%s", out)
 	}
 	first := e.listenerPID()
@@ -520,7 +520,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 	if !strings.Contains(out, wantWait) {
 		t.Errorf("changed build inside the window did not report waiting %q:\n%s", wantWait, out)
 	}
-	if !strings.Contains(out, "OK: daily jevonsd serving") {
+	if !strings.Contains(out, "OK: development jevonsd serving") {
 		t.Fatalf("changed build was skipped instead of activated — a stale binary would keep serving:\n%s", out)
 	}
 	// A real `sleep thrashRemainSec` cannot come back early, so this bound is
@@ -557,7 +557,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 		if errs[i] != nil {
 			t.Fatalf("concurrent caller %d failed: %v\n%s", i, errs[i], o)
 		}
-		if strings.Contains(o, "OK: daily jevonsd serving") {
+		if strings.Contains(o, "OK: development jevonsd serving") {
 			restarts++
 		}
 		if strings.Contains(o, "already activated") || strings.Contains(o, "coalesced") {
@@ -635,7 +635,7 @@ func TestRestartThrashPolicyDocumented(t *testing.T) {
 
 // TestScrubRestartControlEnv is the hermetic half of the 🎯T442/T529 env-leak
 // fix: a parent that exports the script's re-exec flags or a fleet
-// JEVONS_RESTART_LOCK* path (the daily daemon used to) must not be able to
+// JEVONS_RESTART_LOCK* path (the development daemon used to) must not be able to
 // make the oracle skip detach/lock or share the fleet lock file.
 func TestScrubRestartControlEnv(t *testing.T) {
 	in := []string{

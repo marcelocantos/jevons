@@ -24,7 +24,7 @@ import (
 // idle is a FAIL.
 func (s *suite) j21GoalContinuesAllBackends() error {
 	if s.host == "" || strings.HasSuffix(s.host, ":13705") {
-		return fmt.Errorf("J21 refuses daily port")
+		return fmt.Errorf("J21 refuses development port")
 	}
 
 	type backend struct {

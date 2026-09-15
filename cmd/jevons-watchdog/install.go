@@ -18,7 +18,7 @@ import (
 //
 // It deliberately does not touch `brew services`. The Cellar install has
 // its own launchd job with KeepAlive and is already supervised; this one
-// watches the daily repo daemon on the same port, and the restart script
+// watches the development repo daemon on the same port, and the restart script
 // it invokes stops the brew service before taking the port, exactly as
 // it always has. Installing this changes nothing about the brew path.
 func installAgent(repo string, port int, state string) int {

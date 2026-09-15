@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package transcript provides read, truncate, and fork operations on
-// provider session transcripts (Grok chat_history.jsonl and Claude
-// session JSONL under ~/.claude/projects — 🎯T213).
+// provider session transcripts (Grok updates.jsonl and Claude
+// session JSONL under ~/.claude/projects — 🎯T213 / 🎯T621).
 //
 // 🎯T422 — IT DOES NOT DECODE THOSE FILES ITSELF. Every line goes through
 // turnev.Decode, the one decoder, because this package and the send
@@ -82,29 +82,13 @@ func (r *Reader) Read(sessionID string) ([]map[string]any, error) {
 		return nil, err
 	}
 
-	lines, err := readLines(path)
+	// 🎯T621: same reconstruction Distill uses, so inspect/MCP turns omit
+	// compacted-away history. findJSONL already prefers Grok updates.jsonl.
+	got, err := ReadLogical(path)
 	if err != nil {
 		return nil, err
 	}
-
-	// 🎯T422 clause 7: a session with content is never reported empty. The
-	// strict pass is the 🎯T329 owner-chat shape; when it finds nothing the
-	// injects are rendered, and when there are no prompts to render at all the
-	// replies are. Only a file whose lines this decoder genuinely cannot
-	// interpret produces an error, and that error names the shapes it saw.
-	turns := extractTurns(lines, false)
-	if len(turns) == 0 {
-		turns = extractTurns(lines, true)
-	}
-	if len(turns) == 0 {
-		turns = assistantOnlyTurns(lines)
-	}
-	if len(turns) == 0 && hasTranscriptPayload(lines) {
-		return nil, fmt.Errorf(
-			"transcript for session %q has %d lines and no readable turns — %s",
-			sessionID, len(lines), describeLines(lines),
-		)
-	}
+	turns := got.Turns
 
 	result := make([]map[string]any, len(turns))
 	for i, t := range turns {
@@ -198,7 +182,7 @@ func entryFrom(rec turnev.Record) Entry {
 // transcript (clause 3). turnev.Decode has already made that distinction; this
 // function only reads it.
 func isTurnBoundary(rec turnev.Record) bool {
-	if rec.IsSidechain {
+	if rec.IsSidechain || rec.IsMeta {
 		return false
 	}
 	switch rec.Kind {
@@ -254,7 +238,7 @@ func (r *Reader) Fork(sessionID string, keepTurns int) (string, error) {
 }
 
 // findJSONL locates the transcript JSONL for a session id across Grok and
-// Claude roots (🎯T213). Preference: Grok chat_history, else Claude session file.
+// Claude roots (🎯T213). Preference: Grok updates.jsonl, else Claude session file.
 func (r *Reader) findJSONL(sessionID string) (string, error) {
 	if !discovery.IsSessionID(sessionID) {
 		return "", fmt.Errorf("invalid session ID: %q", sessionID)
@@ -286,22 +270,36 @@ type jsonlLine struct {
 
 // readLines reads and parses all JSONL lines from a transcript file.
 func readLines(path string) ([]jsonlLine, error) {
+	raws, err := readRawLines(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseLines(raws), nil
+}
+
+func readRawLines(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open transcript: %w", err)
 	}
 	defer f.Close()
 
-	var lines []jsonlLine
+	var raws []string
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1MB line buffer
-
 	for scanner.Scan() {
 		raw := scanner.Text()
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
+		raws = append(raws, raw)
+	}
+	return raws, scanner.Err()
+}
 
+func parseLines(raws []string) []jsonlLine {
+	var lines []jsonlLine
+	for _, raw := range raws {
 		rec, ok := turnev.Decode([]byte(raw))
 		if !ok {
 			// Keep unparseable lines as-is: truncate/fork must not drop them,
@@ -316,7 +314,18 @@ func readLines(path string) ([]jsonlLine, error) {
 			isUserTurn: isTurnBoundary(rec),
 		})
 	}
-	return lines, scanner.Err()
+	return lines
+}
+
+func turnsFromLines(lines []jsonlLine) []Turn {
+	turns := extractTurns(lines, false)
+	if len(turns) == 0 {
+		turns = extractTurns(lines, true)
+	}
+	if len(turns) == 0 {
+		turns = assistantOnlyTurns(lines)
+	}
+	return turns
 }
 
 // hasTranscriptPayload reports whether the file looks like a real chat
@@ -398,6 +407,9 @@ func extractTurns(lines []jsonlLine, keepInject bool) []Turn {
 
 	for _, l := range lines {
 		if !l.decoded {
+			continue
+		}
+		if l.rec.IsMeta || l.rec.IsSidechain {
 			continue
 		}
 		if l.isUserTurn {

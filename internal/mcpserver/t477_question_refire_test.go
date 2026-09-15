@@ -149,7 +149,7 @@ func TestT477UnrelatedExplanationDoesNotCloseQuestion(t *testing.T) {
 // TestT477LoadAnsweredQuestionFromChatlog is the restart-resume half: the
 // explanation answer carries no product-evidence markers, so before T477 the
 // chatlog loader dropped it and the extractor saw only the question — the
-// re-fire happened on the daily path even if extraction were fixed.
+// re-fire happened on the development surface even if extraction were fixed.
 func TestT477LoadAnsweredQuestionFromChatlog(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

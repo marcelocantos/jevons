@@ -48,6 +48,11 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
       mux.closeChannel(PLAN_USAGE_CHANNEL);
     };
   }, [props.mux]);
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch('/api/plan-usage?refresh=1', { signal: ac.signal }).catch(() => {});
+    return () => ac.abort();
+  }, []);
   const q = useQuery({
     queryKey: ['plan-usage'],
     queryFn: async ({ signal }) => {

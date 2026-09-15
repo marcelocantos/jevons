@@ -40,14 +40,16 @@ surfaces, the MCP tools the CEO drives, durable state, and cost governance.
   in `docs/audits/react-fidelity-2026-09-05/`. No current `web/` runtime,
   vanilla fallback or standing :13706 comparison service remains. Runtime
   retirement does not retire the open T540.3/T540.7 fidelity obligations.
-- **`ios/Jevon`** — thin client: wraps the daily URL in a WKWebView
+- **`ios/Jevon`** — thin client: wraps the development URL in a WKWebView
   and routes transport over a paired [pigeon](https://github.com/marcelocantos/pigeon)
-  QUIC relay (QR pairing artifact → credentials; 🎯T14.1). Daily
+  QUIC relay (QR pairing artifact → credentials; 🎯T14.1). Development
   `:13705` is React after cutover.
 - **[claudia](https://github.com/marcelocantos/claudia)** — the agent
-  harness library: process spawn, Grok ACP (session/new, session/load,
-  session/prompt), Task one-shots, tmux-backed fleets, the agent registry.
-  Default agent provider is Grok via claudia; selection is pluggable (🎯T148).
+  harness library and host broker daemon: process spawn, Grok ACP
+  (session/new, session/load, session/prompt), Task one-shots, the agent
+  registry. When the broker is up it parents every seat; a jevonsd bounce
+  reclaims by name and does not nudge surviving workers (🎯T646). Default
+  agent provider is Grok via claudia; selection is pluggable (🎯T148).
 - **[pigeon](https://github.com/marcelocantos/pigeon)** — relay, pairing,
   and crypto primitives (PairingArtifact / PairingHost / CredentialStore).
 
@@ -57,8 +59,11 @@ Three concepts, one durable spine:
 
 - **Thread** (`internal/thread`, `internal/butler`) — the durable unit:
   a provider conversation (session id) + workdir + status. Threads survive
-  restarts; **the process is a disposable cache** — spun up on `Direct`,
-  reaped when idle (GC every ~2 min), rehydrated via session resume.
+  restarts. When the claudia broker is present the provider process is
+  not disposable across a jevonsd bounce — the daemon holds it unowned
+  and jevonsd reclaims by name (🎯T639 / 🎯T646). Without the broker the
+  process is still a cache: spun up on `Direct`, reaped when idle,
+  rehydrated via session resume.
   Lifecycle: `Adopt` (observe-only, non-invasive) → `TakeOver`
   (two-writer-guarded) → `Spawn` / `Direct` / `Remove`. Invariants with
   enforcement: no silent-fail direct; never drive a session another
@@ -107,10 +112,22 @@ Turns share one shape (`turn_number`, `role`, `text`) whatever their
 origin; the payload names that origin in `source`:
 
 - `session` — a provider session transcript (fleet agents), read through
-  `internal/transcript`.
+  `internal/transcript`. Distill and inspect reconstruct the logical
+  conversation (Claude compact/snip/`parentUuid`, Codex
+  `replacement_history` / rollback, Grok `updates.jsonl` — never
+  `chat_history.jsonl`; 🎯T621).
 - `chatlog` — the owner chat journal, which is the overseer's durable
   conversation record. Addressing the overseer by name returns its turns
   from there; the 🎯T124 refusal ("overseer uses main chat") is gone.
+  Fleet inspect prefers the reconstructed session; the journal is the
+  fallback when that read is empty.
+
+Provider migrate (`jevons_agent_migrate` / HTTP) calls claudia
+`Agent.Migrate` for the live Session swap when the capability exists;
+GatherBrief / Distill stay host-side. Claudia's inert seed is the
+continue after switchover — Jevons does not Deliver a second handover
+seed when the broker remapped (🎯T622 / 🎯T646.1). A second Stop+Start
+remapper is only the no-capability fallback.
 
 **React mux (🎯T537.1 / T537.1.3).** The product cockpit talks `/ws/mux`.
 Each `transcript:{name}` channel is one windowed CQRS stream: the client
@@ -151,7 +168,7 @@ open at line 1 with a fenced `jevons` block of `jevons:` slots wrapping
 English payload. Schema and enums live in `internal/envelope`. The
 daemon validates on `deliverByName` and `chat_wire`: a claimed
 load-bearing kind with missing slots is flagged, not silently passed.
-Existing classifiers (T31 oracle, T194 daily-path, T386 FALSE-GREEN,
+Existing classifiers (T31 oracle, T194 development-surface, T386 FALSE-GREEN,
 T176 status language) read envelope fields when present and fall back
 to prose only for unenveloped messages. Status-ping/ack chatter is
 deduped and rate-capped by kind. React envelope presentation is covered by
@@ -272,7 +289,7 @@ with soft degrade). Not an enforcement plane — see
 | `~/.jevons/budget.json` | clamp-down policy | yes |
 | `~/.jevons/credential.json` | pigeon pairing (single device) | yes |
 | `~/.jevons/chatlog/<overseer>.jsonl` | jevons-owned append-only conversation journal (🎯T30.1) | yes |
-| `~/.grok/sessions/…/chat_history.jsonl` | provider transcripts | yes (provider-owned) |
+| `~/.grok/sessions/…/updates.jsonl` | Grok conversation log (append-only; `chat_history.jsonl` is compact-lossy and is never the source — 🎯T621) | yes (provider-owned) |
 | process state, voice FSM, broadcast fan-out | in-memory | no — by design |
 
 UI history replays from the jevons-owned chatlog so conversation display

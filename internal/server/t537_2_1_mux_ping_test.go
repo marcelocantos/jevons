@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// React daily driver talks /ws/mux, not /ws/chat. Vanilla ping must still
+// React development cockpit talks /ws/mux, not /ws/chat. Vanilla ping must still
 // tick owner_health so a connected React tab is not ui_heartbeat_stale (🎯T537.2.1).
 func TestMuxPingNotesOwnerUIHeartbeat(t *testing.T) {
 	s, _, clk := ownerHealthServer(t, func(string) error { return nil })

@@ -29,7 +29,7 @@ const ownerSession = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 var fixedNow = time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
 
 // writeOwnerTranscript writes a Grok-style session under sessionsDir
-// (chat_history.jsonl) that the butler will adopt observe-only.
+// (updates.jsonl — 🎯T621) that the butler will adopt observe-only.
 func writeOwnerTranscript(t *testing.T, sessionsDir string) string {
 	t.Helper()
 	recent := fixedNow.Add(-1 * time.Minute).Format(time.RFC3339)
@@ -45,7 +45,7 @@ func writeOwnerTranscript(t *testing.T, sessionsDir string) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
-	path := filepath.Join(dir, "chat_history.jsonl")
+	path := filepath.Join(dir, "updates.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatalf("write fixture transcript: %v", err)
 	}

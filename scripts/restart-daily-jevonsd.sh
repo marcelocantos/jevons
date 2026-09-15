@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 🎯T191 / 🎯T553 — rebuild + activate the daily jevonsd on :13705.
+# 🎯T191 / 🎯T553 — rebuild + activate the development jevonsd on :13705.
 # Workers do not auto-invoke this (🎯T553.2). Prefer KeepAlive
 # com.marcelocantos.jevonsd as the process owner (🎯T553.3).
 #
@@ -13,7 +13,7 @@
 #   1. make / rebuild bin/jevonsd with its embedded React bundle
 #   2. decide whether a restart is needed at all (🎯T218 thrash policy below)
 #   3. brew services stop jevons (so Cellar KeepAlive cannot reclaim :13705)
-#   4. SIGHUP listeners on the daily port — 🎯T40 upgrade exit, so agent
+#   4. SIGHUP listeners on the development port — 🎯T40 upgrade exit, so agent
 #      turns in flight are NOT cancelled by the bounce (🎯T392.5)
 #   5. start $REPO/bin/jevonsd with workdir set (detached: nohup/setsid)
 #   6. wait until HTTP /health is ok and /api/frontier is not 404
@@ -33,7 +33,7 @@
 #   ALREADY-ACTIVATED — if the freshly built binary hashes equal to the one
 #     the running daemon was started from, and that daemon is healthy, there
 #     is nothing to activate. Exit 0 without touching the port. This is a
-#     true no-op, not a deferral: the daily path already serves this exact
+#     true no-op, not a deferral: the development surface already serves this exact
 #     build, so the caller's activation claim is honest.
 #
 #   ONE-AT-A-TIME — a lock dir serialises restarts. Concurrent callers wait
@@ -51,7 +51,7 @@
 #
 # SELF-DETACH (🎯T405) — being invoked wrongly cannot cause an outage.
 #
-# This script kills the daily daemon, and the daemon's shutdown stops
+# This script kills the development daemon, and the daemon's shutdown stops
 # every agent — including the agent that invoked the restart. On
 # 2026-08-10 the script died with its invoker five seconds after the
 # kill, before it reached the step that starts the replacement, and the
@@ -125,7 +125,7 @@ WAIT_SEC="${JEVONS_RESTART_WAIT_SEC:-90}"
 # before escalating to SIGKILL. See kill_port_listeners.
 STOP_WAIT_SEC="${JEVONS_RESTART_STOP_WAIT_SEC:-20}"
 # 🎯T218: min seconds between successful restarts (debounce thrash from
-# concurrent workers each bouncing daily after every land).
+# concurrent workers each bouncing the development daemon after every land).
 MIN_INTERVAL_SEC="${JEVONS_RESTART_MIN_INTERVAL_SEC:-180}"
 STAMP_FILE="${JEVONS_RESTART_STAMP:-$HOME/.jevons/restart-daily.last}"
 # 🎯T218: identity of the daemon this script last started ("<pid> <sha256>"),
@@ -137,7 +137,7 @@ ACTIVE_FILE="${JEVONS_RESTART_ACTIVE:-$HOME/.jevons/restart-daily.active}"
 # and the holder writing its pid file, a second caller read an empty pid,
 # concluded the live holder was stale, rm -rf'd the lock and proceeded.
 # On 2026-08-09 five restarts fired in 17 minutes, the last two 59s apart;
-# the second killed the first mid-flight and left the daily daemon down.
+# the second killed the first mid-flight and left the development daemon down.
 # Every agent turn in flight was cancelled, and cancelled turns bill a full
 # context for discarded work — 6.6% of the 🎯T392 baseline.
 #
@@ -212,7 +212,7 @@ usage() {
   cat <<'EOF'
 Usage: restart-daily-jevonsd.sh [options]
 
-Rebuild bin/jevonsd, stop brew KeepAlive if needed, free the daily port,
+Rebuild bin/jevonsd, stop brew KeepAlive if needed, free the development port,
 start repo bin/jevonsd detached, wait until /health and /api/frontier serve.
 
 🎯T218 thrash policy: if the rebuilt binary is already the one the running
@@ -481,14 +481,14 @@ kill_port_listeners() {
 
 stop_brew_jevons() {
   # Cellar launchd KeepAlive will reclaim :13705 if brew service is loaded.
-  # Stop it whenever brew is present so repo bin/jevonsd owns the daily port.
+  # Stop it whenever brew is present so repo bin/jevonsd owns the development port.
   #
-  # Only for the daily port: the Cellar service is configured for :13705 and
+  # Only for the development port: the Cellar service is configured for :13705 and
   # can never be holding a throwaway one, so stopping it on behalf of a test
   # bounce would take the owner's daemon down to fix a port it does not have
   # (🎯T405 — the oracle drives this script on a scratch port).
   if [[ "$PORT" != "$DAILY_PORT" ]]; then
-    log "port :$PORT is not the daily :$DAILY_PORT; leaving brew services alone"
+    log "port :$PORT is not the development :$DAILY_PORT; leaving brew services alone"
     return 0
   fi
   if ! command -v brew >/dev/null 2>&1; then
@@ -657,7 +657,7 @@ wait_until_serving() {
     sleep 1
     i=$((i + 1))
   done
-  die "timed out after ${deadline}s waiting for daily jevonsd on :$PORT (log=$LOG)"
+  die "timed out after ${deadline}s waiting for development jevonsd on :$PORT (log=$LOG)"
 }
 
 # --- main --------------------------------------------------------------------
@@ -726,7 +726,7 @@ fi
 # Names the pin SHA and any sibling commits the pin is missing. Hard-fails
 # (die) when a required fleet commit (T28 send-submit) is absent from the
 # pin; LOUD-warns when the sibling is merely ahead of a sufficient pin
-# (daily still builds via ../go.work + buildsnap sibling inject).
+# (development still builds via ../go.work + buildsnap sibling inject).
 if [[ ! -x "$CLAUDIAPIN" ]]; then
   (cd "$ROOT" && go build -o "$CLAUDIAPIN" ./cmd/claudiapin) || \
     die "cannot build $CLAUDIAPIN — refusing a silent claudia pin"
@@ -826,7 +826,7 @@ fi
 wait_until_serving
 record_active_identity
 
-log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR)"
+log "OK: development jevonsd serving on :$PORT (workdir=$WORKDIR)"
 # 🎯T218: stamp successful restart to open the next thrash window.
 mkdir -p "$(dirname "$STAMP_FILE")" 2>/dev/null || true
 date +%s >"$STAMP_FILE" 2>/dev/null || true

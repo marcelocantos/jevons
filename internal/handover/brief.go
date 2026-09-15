@@ -40,11 +40,15 @@ func Distill(transcriptPath string) string {
 	if path == "" {
 		return ""
 	}
-	turns, err := transcript.ReadPath(path)
-	if err != nil || len(turns) == 0 {
+	got, err := transcript.ReadLogical(path)
+	if err != nil || len(got.Turns) == 0 {
 		return ""
 	}
-	return distillTurns(turns, MaxBriefTokens)
+	out := distillTurns(got.Turns, MaxBriefTokens)
+	if len(got.Warnings) == 0 {
+		return out
+	}
+	return strings.TrimSpace(out + "\n\nWarnings: " + strings.Join(got.Warnings, "; "))
 }
 
 func distillTurns(turns []transcript.Turn, capTokens int) string {

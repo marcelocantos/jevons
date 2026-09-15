@@ -4,7 +4,7 @@
 import { createElement, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,26 @@ import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe('PlanUsageBar mux wiring', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reloads kick GET /api/plan-usage?refresh=1', async () => {
+    const mux = {
+      subscribe() { return () => {}; },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    render(createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux })));
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/plan-usage?refresh=1', expect.anything());
+    });
+  });
+
   it('subscribes to plan-usage mux and does not 60s-poll when mux is connected', () => {
     const src = readFileSync(join(here, 'PlanUsageBar.tsx'), 'utf8');
     expect(src).toContain('PLAN_USAGE_CHANNEL');
@@ -26,6 +46,7 @@ describe('PlanUsageBar mux wiring', () => {
     expect(src).toContain('enabled: !props.mux');
     expect(src).toContain('if (props.mux) return false');
     expect(src).toContain("fetch('/api/plan-usage', { signal })");
+    expect(src).toContain("fetch('/api/plan-usage?refresh=1'");
     expect(src).toContain('CompanyMark');
   });
 

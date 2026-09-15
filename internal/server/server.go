@@ -154,6 +154,9 @@ type Server struct {
 	// planUsageWaitReady blocks until the first plan-usage batch has landed
 	// (or ctx ends). Nil means handlePlanUsage returns pending immediately.
 	planUsageWaitReady func(ctx context.Context) error
+	// planUsageRefresh forces a producer poll (🎯T653). Nil means
+	// ?refresh=1 is a no-op besides returning the current snapshot.
+	planUsageRefresh func(ctx context.Context) error
 	// planSweep runs the 🎯T390.1.5 hot/exhausted migrate-or-park actuator.
 	planSweep func() any
 	// providerHardBlock observes classified provider refusals / successes so

@@ -26,7 +26,7 @@ func TestT405SelfDetachIsUnconditional(t *testing.T) {
 		"JEVONS_RESTART_FAULT", // the seam the oracle kills it through
 		"jevons-watchdog",      // points at its own supervisor
 		"JEVONS_RESTART_BIN",   // so the oracle can drive a stub daemon
-		"is not the daily",     // and leave brew alone on a scratch port
+		"is not the development", // and leave brew alone on a scratch port
 	} {
 		if !strings.Contains(body, m) {
 			t.Errorf("restart-daily-jevonsd.sh missing 🎯T405 marker %q", m)

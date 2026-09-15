@@ -596,7 +596,7 @@ func (a ownerActuator) acpUnstick() error {
 func (a ownerActuator) overseerNoise(g converge.OwnerGap, now time.Time) error {
 	note := fmt.Sprintf(
 		"[owner-interaction] %s gap unresolved: %s (%s) — open %s, %d steps taken. "+
-			"The owner chat path is not converging; check delivery, chrome and reply on the daily seat.",
+			"The owner chat path is not converging; check delivery, chrome and reply on the development seat.",
 		g.Dimension, g.Kind, g.Reason, g.Age(now).Round(time.Second), g.StepCount())
 	return a.s.SendToOverseer(note)
 }

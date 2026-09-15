@@ -5,7 +5,7 @@
 // fleet-needed commits, and names sibling commits the pin is missing
 // (🎯T448). Exit 2 on a hard pin gap (required commit absent); exit 0
 // with a LOUD line when the sibling is merely ahead of a sufficient pin
-// (daily path still builds via go.work / buildsnap inject).
+// (development still builds via go.work / buildsnap inject).
 package main
 
 import (

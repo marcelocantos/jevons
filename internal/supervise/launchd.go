@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// AgentLabel is the launchd job label for the daily-daemon watchdog.
+// AgentLabel is the launchd job label for the development-daemon watchdog.
 const AgentLabel = "com.marcelocantos.jevons-watchdog"
 
 // AgentInterval is how often launchd runs one probe, in seconds. With
@@ -28,7 +28,7 @@ type AgentSpec struct {
 	Repo string
 	// StateDir is the daemon's state dir.
 	StateDir string
-	// Port is the daily port.
+	// Port is the development port (legacy DailyPort).
 	Port int
 	// LogPath is where launchd sends the job's output.
 	LogPath string

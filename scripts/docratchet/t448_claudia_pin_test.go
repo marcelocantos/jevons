@@ -17,7 +17,7 @@ import (
 // (EnsureMCP removed; Config.MCPServers only). ../go.work will hide a
 // stale pin during local builds; this test reads go.mod and resolves
 // with GOWORK=off (🎯T448).
-const minClaudiaPin = "v0.27.0"
+const minClaudiaPin = "v0.30.0"
 
 func TestT448ClaudiaPinResolvesWithoutGoWork(t *testing.T) {
 	root := repoRoot(t)

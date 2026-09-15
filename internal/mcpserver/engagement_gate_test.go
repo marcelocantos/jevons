@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/marcelocantos/claudia"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // 🎯T222 hermetic: play/agent_start on engaged target → no second agent.

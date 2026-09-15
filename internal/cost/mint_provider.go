@@ -17,6 +17,7 @@ const (
 	KnobCompiledSeed  = "compiled_seed"
 	KnobPlanDest      = "plan_dest"
 	KnobClaudeFirst   = "claude-first"
+	KnobClaudia       = "claudia"
 )
 
 // MintProviderArgs is the input to PickMintProvider.

@@ -22,7 +22,7 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *captureHandler) WithGroup(string) slog.Handler       { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
 
 // 🎯T128.4: MCP fleet tools call s.LogEvent; with SetEventLogger wired to a
 // journal-backed sink, server rows land in events.jsonl.

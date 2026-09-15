@@ -785,8 +785,8 @@ func TestSweepFrontierConsumeDeviceVoiceDSPParkNotSpawn(t *testing.T) {
 					"Slots into the VoicelabKit capture pipeline. iPad-in-car primary.",
 			},
 			{
-				ID:   "T27.5",
-				Name: "jevonsd ingests provider data feeds into an aggregated live model broadcast to clients",
+				ID:      "T27.5",
+				Name:    "jevonsd ingests provider data feeds into an aggregated live model broadcast to clients",
 				Context: "Feed failures degrade gracefully; hub never wedges on stalled provider feeds.",
 				Tags:    []string{"providers", "feeds", "aggregation", "streaming"},
 			},
@@ -958,8 +958,8 @@ func TestSweepFrontierConsumeDeferredAmbitionParkNotSpawn(t *testing.T) {
 					"conventional markdown rendering. Not on the initial critical path.",
 			},
 			{
-				ID:   "T27.6",
-				Name: "The server-side server-driven-UI producer is rebuilt with multi-provider composition",
+				ID:      "T27.6",
+				Name:    "The server-side server-driven-UI producer is rebuilt with multi-provider composition",
 				Context: "Rebuild server-driven UI with multi-provider composition; providers' UI surfaces compose.",
 				Tags:    []string{"providers", "ui", "server-driven", "composition"},
 			},

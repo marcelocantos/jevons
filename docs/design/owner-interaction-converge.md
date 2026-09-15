@@ -173,7 +173,7 @@ replay, and a blocked composer reaches the wire. Server side:
 
 ## Residuals
 
-- **Live owner smoke.** Hermetics cover the loop; the daily seat is the class-3
+- **Live owner smoke.** Hermetics cover the loop; the development seat is the class-3
   gate on wording and feel.
 - **Frozen-tab reporting.** A page whose main thread is genuinely wedged
   cannot report its own composer either; that class is still observed from

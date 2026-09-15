@@ -19,7 +19,7 @@ import (
 )
 
 // 🎯T367 oracle: sidebar (fleet agent / aside) conversations must rehydrate
-// after a page hard-reload AND a daily jevonsd restart through the SAME
+// after a page hard-reload AND a development jevonsd restart through the SAME
 // persistence code main chat uses (internal/chatlog, 🎯T30.1) — not a
 // browser-side cache. These tests exercise the product HTTP/build paths, and
 // the "restart" arm builds a brand-new Server + Registry over the same state

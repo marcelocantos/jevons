@@ -226,4 +226,3 @@ func TestAgentListShowsNeverBriefed(t *testing.T) {
 		t.Fatalf("alive zero-turn status=%s", status)
 	}
 }
-
