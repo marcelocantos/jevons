@@ -646,8 +646,8 @@ The owner never restarts by hand (🎯T188). A committed script exists so
 an overseer or owner-requested activation can bounce without the owner
 typing brew/kill (🎯T191).
 
-**Owner-visible product is activated in the same turn it lands (🎯T632)**
-unless activation would be destructive (data loss, a known in-flight kill
+**Owner-visible product — a daemon-path or React land — is activated in
+the same turn it lands (🎯T632)** unless activation would be destructive (data loss, a known in-flight kill
 that T392.5 SIGHUP does not protect, or an explicit owner hold). T218
 coalesces concurrent bounces. T553.2 remains: a restart citation is not
 the achieve gate — observation of the running surface is (🎯T552).
