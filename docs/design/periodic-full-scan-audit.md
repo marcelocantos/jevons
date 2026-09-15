@@ -147,7 +147,7 @@ Hermetic, in `internal/audit` and `internal/mcpserver`:
 
 - **Live advanced-model pass:** the hermetics drive the cycle with a fixture
   runner. One successful pass against the real `claude-fable-5` CLI on the
-  daily path is the remaining live evidence.
+  development surface is the remaining live evidence.
 - **Class-3 (owner taste):** whether the findings a full-scan pass produces are
   the ones worth interrupting for, and where `notify_severity` should sit.
 - **Out of scope unless the owner opens it:** infinite full-repo scanning and

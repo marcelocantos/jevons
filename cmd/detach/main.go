@@ -6,7 +6,7 @@
 //
 //	detach [-log FILE] [-quiet] -- <command> [args…]
 //
-// Why this exists: restart-daily-jevonsd kills the daily daemon, and the
+// Why this exists: restart-daily-jevonsd kills the development daemon, and the
 // daemon's shutdown stops every agent — including the agent that invoked
 // the restart. On 2026-08-10 the script died with its invoker five
 // seconds after the kill, before it reached the step that starts the

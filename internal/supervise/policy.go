@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package supervise decides whether the daily daemon needs bringing back
+// Package supervise decides whether the development daemon needs bringing back
 // (🎯T405).
 //
 // Until this existed, nothing outside the daemon's own process tree was

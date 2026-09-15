@@ -39,7 +39,7 @@
 //     exit is a request, not a drain.
 //
 // Everything runs against a scratch port, a scratch HOME and the stub;
-// the daily port is refused outright by t405FreePort.
+// the development port is refused outright by t405FreePort.
 package main
 
 import (

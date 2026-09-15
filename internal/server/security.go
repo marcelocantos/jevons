@@ -14,7 +14,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/writconf"
 )
 
-// Security wiring (🎯T335): confined exec + auditor status on the daily path.
+// Security wiring (🎯T335): confined exec + auditor status on the development surface.
 
 // SetSecurityAuditor attaches the standing security interest.
 func (s *Server) SetSecurityAuditor(a *secauditor.Interest) {

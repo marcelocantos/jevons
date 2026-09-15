@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// DaemonLabel is the launchd job that KeepAlives daily jevonsd (🎯T553.3).
+// DaemonLabel is the launchd job that KeepAlives development jevonsd (🎯T553.3).
 // This replaces com.marcelocantos.jevons-watchdog as the standing
 // supervisor: if the process dies, launchd relaunches the same
 // ProgramArguments binary. The fat restart script is not on this path.
@@ -123,7 +123,7 @@ func SkipWatchdogSupervise() bool {
 // script. Candidates whose absolute path is "/" are skipped: a temp
 // binary at /tmp/jevonsd has grandparent /, and installing KeepAlive
 // from that path is how the first T553.3 adopt pointed launchd at
-// /tmp/jevonsd-peel with workdir / and crash-looped daily.
+// /tmp/jevonsd-peel with workdir / and crash-looped the development daemon.
 func DailyRepoRoot(candidates ...string) (string, error) {
 	for _, c := range candidates {
 		if c == "" {
@@ -139,7 +139,7 @@ func DailyRepoRoot(candidates ...string) (string, error) {
 			return abs, nil
 		}
 	}
-	return "", fmt.Errorf("supervise: no daily repo among %v", candidates)
+	return "", fmt.Errorf("supervise: no development repo among %v", candidates)
 }
 
 // DailyDaemonBinary is <repo>/bin/jevonsd.

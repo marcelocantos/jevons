@@ -48,7 +48,7 @@ function die(code, msg) {
 
 if (!HOST) die(2, 'j19_paint: --host HOST:PORT is required');
 if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
-  die(2, 'j19_paint: refuses daily port ' + DAILY_PORT + ' (Universe A)');
+  die(2, 'j19_paint: refuses development port ' + DAILY_PORT + ' (Universe A)');
 }
 
 (async () => {

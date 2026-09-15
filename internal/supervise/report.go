@@ -13,7 +13,7 @@ import (
 const OutageKind = "daemon-outage"
 
 // OutageSubject names what the notice is about.
-const OutageSubject = "daily-jevonsd"
+const OutageSubject = "development-jevonsd"
 
 // Notifier writes one notice to the owner's own journal, returning
 // whether it landed. server.Server.NotifyOwnerNote satisfies it — the

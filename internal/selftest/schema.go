@@ -15,7 +15,7 @@ const SchemaVersion = 1
 type Site string
 
 const (
-	SiteLive  Site = "live"  // soft L0–L2 safe packs on daily daemon
+	SiteLive  Site = "live"  // soft L0–L2 safe packs on development daemon
 	SiteDrill Site = "drill" // non-prod isolate for aggressive packs
 	SiteCI    Site = "ci"    // unattended hermetic/headless
 )

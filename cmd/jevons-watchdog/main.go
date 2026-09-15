@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// jevons-watchdog is the supervisor for the daily jevonsd (🎯T405).
+// jevons-watchdog is the supervisor for the development jevonsd (🎯T405).
 //
 // launchd runs it on an interval, which is the point: it lives outside
 // every process tree that a daemon restart tears down, so it is still
@@ -9,7 +9,7 @@
 // invocation is one probe and at most one decision — no loop, no state
 // in memory, nothing to wedge. Everything it remembers is on disk.
 //
-// It restarts the daily daemon and it tells the owner. It does not
+// It restarts the development daemon and it tells the owner. It does not
 // diagnose, does not build, and does not decide whether the outage was
 // deserved. Its whole job is that the fleet is never down because nobody
 // was looking.
@@ -46,7 +46,7 @@ func main() {
 
 func run() int {
 	var (
-		port    = flag.Int("port", defaultPort, "daily jevonsd port to supervise")
+		port    = flag.Int("port", defaultPort, "development jevonsd port to supervise")
 		repo    = flag.String("repo", defaultRepo(), "repo root holding scripts/restart-daily-jevonsd.sh")
 		state   = flag.String("state", defaultState(), "jevonsd state dir (supervision state lives under watchdog/)")
 		grace   = flag.Duration("grace", supervise.DefaultConfig().Grace, "how long the port may be unserved before this is an outage")
@@ -124,7 +124,7 @@ func run() int {
 	return 0
 }
 
-// probe asks the only question that matters: is the daily port serving?
+// probe asks the only question that matters: is the development port serving?
 func probe(port int) bool {
 	c := &http.Client{Timeout: probeTimeout}
 	resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
@@ -225,7 +225,7 @@ func notify(d supervise.Decision, port int, detail string) {
 		return
 	}
 	subject := fmt.Sprintf("jevons daemon down on :%d", port)
-	body := fmt.Sprintf("The daily jevonsd stopped serving. The watchdog is restarting it. %s", d.Reason)
+	body := fmt.Sprintf("The development jevonsd stopped serving. The watchdog is restarting it. %s", d.Reason)
 	switch {
 	case d.Notify == supervise.NotifyOK:
 		subject = fmt.Sprintf("jevons daemon back on :%d", port)

@@ -102,7 +102,7 @@ function contentType(p) {
 
 // The set of scripts/… paths named by //go:embed lines in web/embed.go — what
 // a released jevonsd can actually serve. Serving exactly that set is what
-// makes this test reproduce the daily path rather than a developer's tree.
+// makes this test reproduce the development surface rather than a developer's tree.
 function embeddedScripts() {
   const src = fs.readFileSync(path.join(WEB_ROOT, 'embed.go'), 'utf8');
   const out = new Set();

@@ -63,7 +63,7 @@ func TestT450ThrashOracleStaysGreenUnderLoad(t *testing.T) {
 		"-run", "^TestRestartThrashPolicy$",
 		"./scripts/docratchet")
 	cmd.Dir = root
-	// Fleet agents inherit JEVONS_RESTART_{DETACHED,LOCKED}=1 from the daily
+	// Fleet agents inherit JEVONS_RESTART_{DETACHED,LOCKED}=1 from the development
 	// daemon (T442). Scrub at this boundary so the subject oracle takes the
 	// lock even when the in-tree thrashEnv scrub is not yet on HEAD.
 	cmd.Env = t450ScrubRestartEnv(os.Environ())
@@ -183,8 +183,8 @@ func TestT450StaleBinaryMutationFails(t *testing.T) {
 		mutated = mutated[:loc[0]] + indent + pair[1] + mutated[loc[1]:]
 	}
 	mutated = strings.Replace(mutated,
-		`log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR)"`,
-		`log "OK: daily jevonsd serving on :$PORT (workdir=$WORKDIR) # 🎯T450 mutant lie"`,
+		`log "OK: development jevonsd serving on :$PORT (workdir=$WORKDIR)"`,
+		`log "OK: development jevonsd serving on :$PORT (workdir=$WORKDIR) # 🎯T450 mutant lie"`,
 		1)
 	if err := os.WriteFile(e.script, []byte(mutated), 0o755); err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func mutateScript(t *testing.T, script, old, new string) {
 
 // t450ScrubRestartEnv drops the restart script's re-exec flags. Same defect
 // class as T442's thrashEnv scrub: a fleet-agent process tree inherits
-// DETACHED/LOCKED=1 from the daily daemon and would otherwise skip the lock.
+// DETACHED/LOCKED=1 from the development daemon and would otherwise skip the lock.
 func t450ScrubRestartEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

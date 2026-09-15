@@ -99,7 +99,7 @@ func TestJ19PaintTargetsReactNotVanillaGlobals(t *testing.T) {
 	if strings.Contains(src, "viewport_census.js") {
 		t.Error("j19_paint.js must not import vanilla viewport_census.js")
 	}
-	if !strings.Contains(src, "refuses daily port") {
+	if !strings.Contains(src, "refuses development port") {
 		t.Error("j19_paint.js must still refuse :13705")
 	}
 	if !strings.Contains(src, "T540.2") {

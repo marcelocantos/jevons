@@ -39,7 +39,7 @@ type RequiredCommit struct {
 	Summary string
 }
 
-// Report is the daily-path pin check result.
+// Report is the development-surface pin check result.
 type Report struct {
 	PinVersion      string   // go.mod require version (e.g. v0.24.0)
 	PinSHA          string   // resolved commit (sibling tag and/or module-cache Origin.Hash)
@@ -52,7 +52,7 @@ type Report struct {
 }
 
 // DecisionSeam is the recorded T448 policy under local-master (T104) + no Ship.
-const DecisionSeam = "go.mod pins last published claudia release; daily path consumes local-master via ../go.work + buildsnap sibling inject — not a committed replace"
+const DecisionSeam = "go.mod pins last published claudia release; development builds consume local-master via ../go.work + buildsnap sibling inject — not a committed replace"
 
 // Check reads go.mod at repoRoot and names the pin SHA. When a sibling
 // claudia checkout is reachable (adjacent dir, or adjacent to the primary
@@ -134,7 +134,7 @@ func Check(repoRoot string) (Report, error) {
 		)
 	case len(r.Missing) > 0:
 		r.Loud = fmt.Sprintf(
-			"CLAUDIA PIN BEHIND SIBLING: pin=%s sha=%s sibling_HEAD=%s missing %d commit(s) — daily builds via go.work/buildsnap sibling; publish+bump pin to close (T448). First missing: %s",
+			"CLAUDIA PIN BEHIND SIBLING: pin=%s sha=%s sibling_HEAD=%s missing %d commit(s) — development builds via go.work/buildsnap sibling; publish+bump pin to close (T448). First missing: %s",
 			r.PinVersion, short(r.PinSHA), short(r.SiblingHEAD), len(r.Missing), r.Missing[0],
 		)
 	}

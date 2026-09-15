@@ -11,7 +11,7 @@ import (
 )
 
 // 🎯T590. The 2026-08-31 crash: `fatal error: concurrent map writes` took the
-// daemon down on the owner's daily path. The hub's live fan-out records
+// daemon down on the owner's development surface. The hub's live fan-out records
 // delivered ids under the hub lock; the socket's own replay handler
 // recorded them under no lock, because it must not hold the hub while it
 // writes to a network. A reconnect landing while the fleet was talking was

@@ -131,5 +131,5 @@ Residual (deliberately not pinned):
 - **Not optimal scheduling.** This is admission control over a ranked set, not
   an infinite-horizon scheduler. It never claims to maximise anything.
 - **Live concurrency smoke** (background cycles running while an owner turn is
-  in flight, on the daily daemon) is a manual/journey check, not a hermetic
+  in flight, on the development daemon) is a manual/journey check, not a hermetic
   one.

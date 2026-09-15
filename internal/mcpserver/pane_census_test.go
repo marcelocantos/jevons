@@ -93,7 +93,7 @@ func TestT459SweepReapsUnregisteredIdleOnly(t *testing.T) {
 }
 
 func TestT514SweepKeepsLiveClaudeSessionPane(t *testing.T) {
-	// Production call site (🎯T419): the 2026-08-18 daily-driver pane
+	// Production call site (🎯T419): the 2026-08-18 development pane
 	// that SweepOrphanPanes reaped every ~10s.
 	sid := "377bf9c3-6483-4f01-a642-fe5a3030248e"
 	panes := []panecensus.Pane{

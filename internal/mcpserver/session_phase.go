@@ -14,7 +14,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
-// DefaultSessionRoots is the on-disk pair the daily daemon reads: Grok
+// DefaultSessionRoots is the on-disk pair the development daemon reads: Grok
 // sessions and Claude projects. Tests override via SessionPhase.
 func DefaultSessionRoots() discovery.Roots {
 	home, err := os.UserHomeDir()

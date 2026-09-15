@@ -330,8 +330,8 @@ func TestAdoptTakesOverByDefault(t *testing.T) {
 	}
 }
 
-// writeSessionTranscript writes a minimal concluded-turn Grok chat_history
-// for an arbitrary session id, timestamped at `at`.
+// writeSessionTranscript writes a minimal concluded-turn Grok updates.jsonl
+// for an arbitrary session id, timestamped at `at` (🎯T621).
 func writeSessionTranscript(t *testing.T, sessionsDir, sessionID string, at time.Time) {
 	t.Helper()
 	ts := at.Format(time.RFC3339)
@@ -343,7 +343,7 @@ func writeSessionTranscript(t *testing.T, sessionsDir, sessionID string, at time
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "chat_history.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "updates.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
 }

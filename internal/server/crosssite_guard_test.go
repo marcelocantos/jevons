@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// 🎯T385: the daily daemon has no TLS and no authentication, so the cross-site
+// 🎯T385: the development daemon has no TLS and no authentication, so the cross-site
 // guard is the whole defence against a web page in the owner's browser driving
 // the API. These tests read the mutating route set out of the source at run
 // time, so a route added later is covered without anyone updating a list here.

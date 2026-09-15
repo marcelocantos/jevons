@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package buildsnap builds the daily daemon from a committed snapshot of the
+// Package buildsnap builds the development daemon from a committed snapshot of the
 // repository instead of the shared working tree (🎯T254.2).
 //
 // THE FAULT. A dozen fleet workers share one clone. `make -C $ROOT bin/jevonsd`

@@ -31,7 +31,7 @@ type Client struct {
 	DialTimeout time.Duration
 }
 
-// DefaultBaseURL is the daily jevonsd origin (Universe A).
+// DefaultBaseURL is the development jevonsd origin (Universe A).
 const DefaultBaseURL = "http://127.0.0.1:13705"
 
 // Run dials /ws/remote and applies frames until ctx is cancelled or the

@@ -59,7 +59,7 @@ make test-journey
 go run ./scripts/journey-suite
 ```
 
-The journey suite refuses the daily port by design. For a long-lived
+The journey suite refuses the development port by design. For a long-lived
 drill daemon (future), start `bin/jevonsd` with an alternate state
 directory and listen address (same flags the journey suite uses), then
 kick packs with `"site":"drill"`.

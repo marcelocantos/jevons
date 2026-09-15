@@ -22,7 +22,7 @@ import (
 // the caller as a submission that did not HAPPEN.
 //
 // The two are not close. Nine confirmed instances on 2026-08-10, and two more on
-// 2026-08-15 after the daily daemon was rebuilt onto a candidate root's fix, were
+// 2026-08-15 after the development daemon was rebuilt onto a candidate root's fix, were
 // all in the same dangerous direction — a negative verdict on a payload the
 // receiver was already working from. jv-t434's brief was reported
 // `turn not submitted: composer state=paste_chip after 8 Enter presses`; its own

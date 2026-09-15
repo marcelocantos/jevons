@@ -20,9 +20,10 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the development or released surface.
 
 ## Environments: development vs released (🎯T572)
-- **development** = this machine's running jevonsd (:13705 / ~/.jevons).
+- **development** = always-on jevonsd from this machine's development source tree (:13705 / ~/.jevons). Not a scheduled build and not a separately named cockpit.
 - **released** = Homebrew / shipped.
 - Do not mint a third environment. restart-daily-jevonsd.sh is a legacy filename; speech is "restart the development daemon".
+- Informal talk about preferring this orchestrator over other harnesses is not a product name and is not used in code.
 
 ## Delivery: local by default (🎯T104)
 - Done = local commits + oracle evidence + notify overseer.

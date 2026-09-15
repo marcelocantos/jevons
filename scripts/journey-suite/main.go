@@ -3,7 +3,7 @@
 
 // journey-suite runs a small owner-chat user-journey suite against an
 // ISOLATED jevonsd — separate port, state dir, chatlog, and MCP name —
-// so it never pollutes the daily-driver stream on :13705 / ~/.jevons.
+// so it never pollutes the development stream on :13705 / ~/.jevons.
 //
 //	make test-journey
 //	make test-journey PROVIDER=claude
@@ -159,8 +159,8 @@ func main() {
 	}
 	packaged = nil
 
-	// MCP baseline: daily registration must survive the suite if present.
-	// (Daily chatlog mtime is *not* an oracle — a live daily-driver overseer
+	// MCP baseline: development registration must survive the suite if present.
+	// (Development chatlog mtime is *not* an oracle — a live development overseer
 	// may write concurrently while this suite runs against its own isolate.)
 	hadDailyMCP := mcpListedFor(provider, dailyMCPName)
 
@@ -213,7 +213,7 @@ persona_notes: |
 		started := s.cmd != nil && s.cmd.Process != nil
 		_ = s.signalStop(5 * time.Second)
 		_ = logFile.Close()
-		// Remove journey MCP only — never touch the daily MCP name — and
+		// Remove journey MCP only — never touch the development MCP name — and
 		// through the CLI that an older daemon used (🎯T282). Current
 		// isolates do not write provider configs; this reclaims a leaked
 		// user-scope journey name if one is still present.
@@ -247,7 +247,7 @@ persona_notes: |
 	s.run("J3-cancel-and-send", s.jCancelAndSend)
 	s.run("J4-reconnect-sealed", s.jReconnectSealed)
 
-	// Orchestration (MCP-direct against the isolate — not the daily stream).
+	// Orchestration (MCP-direct against the isolate — not the development stream).
 	s.run("J6-mcp-tool-surface", s.jMCPToolSurface)
 	s.run("J6c-overseer-tools-attached", s.jOverseerToolsAttached)
 	s.run("J6b-mcp-reconnect", s.jMCPReconnect)

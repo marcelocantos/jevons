@@ -13,7 +13,7 @@ import (
 
 // TestRestartDailyJevonsdScript is the hermetic oracle for 🎯T191:
 // committed restart script, help/dry-run, detach markers (nohup/setsid),
-// bash 3.2 syntax under /bin/bash -n. Does not bounce the daily daemon.
+// bash 3.2 syntax under /bin/bash -n. Does not bounce the development daemon.
 func TestRestartDailyJevonsdScript(t *testing.T) {
 	root := repoRoot(t)
 	rel := "scripts/restart-daily-jevonsd.sh"

@@ -70,9 +70,12 @@ func TestT543CompactSeatInvisibleToRecoverAndNudge(t *testing.T) {
 
 	var recoverPushed, nudgePushed []string
 	SweepFleetRecover(FleetRecoverSweepArgs{
-		Reg:            reg,
-		Now:            now,
-		Push:           func(target string, interrupt bool, event, text string) error { recoverPushed = append(recoverPushed, target); return nil },
+		Reg: reg,
+		Now: now,
+		Push: func(target string, interrupt bool, event, text string) error {
+			recoverPushed = append(recoverPushed, target)
+			return nil
+		},
 		ProcessRunning: func(string) bool { return true },
 		MissionOpen:    func(string) bool { return true },
 	})

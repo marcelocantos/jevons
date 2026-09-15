@@ -190,7 +190,7 @@ func TestT459WarmPoolBoundIsStatedNotEmergent(t *testing.T) {
 	}
 }
 
-// Live 2026-08-18 daily-driver shape (🎯T514): registry holds jevons-po
+// Live 2026-08-18 development-fleet shape (🎯T514): registry holds jevons-po
 // plus the full Claude session UUID; the pane window is SessionWindowName
 // of that UUID; AgentName and the list-panes session-id field are empty.
 func t514LivePO() (Pane, map[string]bool) {

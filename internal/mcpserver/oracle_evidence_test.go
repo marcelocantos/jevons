@@ -77,6 +77,8 @@ func TestHasDailyPathEvidence(t *testing.T) {
 		{"http 200 frontier", "GET http://127.0.0.1:13705/api/frontier → HTTP 200 with targets JSON", true},
 		{"non-404", "restart-daily exit 0; /api/frontier non-404", true},
 		{"daily path phrase", "proven on the daily path after bounce", true},
+		{"development path phrase", "proven on the development path after bounce", true},
+		{"development surface phrase", "observed on the development surface", true},
 		{"zero-downtime residual", "proven zero-downtime upgrade; product path green", true},
 		{"status only", "still rebuilding", false},
 	}

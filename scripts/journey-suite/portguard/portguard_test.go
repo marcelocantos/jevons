@@ -21,7 +21,7 @@ func TestRefuseDaily(t *testing.T) {
 		t.Fatal("RefuseDaily(DailyPort) = nil, want error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"refusing port", "daily-driver", "13705"} {
+	for _, want := range []string{"refusing port", "development", "13705"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q missing %q", msg, want)
 		}

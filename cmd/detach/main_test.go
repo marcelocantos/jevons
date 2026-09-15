@@ -32,7 +32,7 @@ func buildDetach(t *testing.T) string {
 // The bug it locks out: the parent signalled its tail goroutine and
 // returned, and os.Exit does not wait for goroutines, so the final lines
 // were dropped whenever the copy lost the race. The line at risk is the
-// one that matters — "OK: daily jevonsd serving" — and losing it turns a
+// one that matters — "OK: development jevonsd serving" — and losing it turns a
 // restart that worked into a report that says it did not.
 func TestStreamedOutputSurvivesTheChildExiting(t *testing.T) {
 	bin := buildDetach(t)

@@ -84,7 +84,7 @@ func (o Outage) Text() string {
 		attempts = fmt.Sprintf("%d restarts", o.Attempts)
 	}
 	msg := fmt.Sprintf(
-		"daemon outage: the daily jevonsd stopped serving at %s and was down for %s. The watchdog brought it back after %s — no owner action was needed.",
+		"daemon outage: the development jevonsd stopped serving at %s and was down for %s. The watchdog brought it back after %s — no owner action was needed.",
 		o.DownSince.Local().Format("15:04:05"), o.Downtime().Round(time.Second), attempts)
 	if o.Detail != "" {
 		msg += " " + o.Detail

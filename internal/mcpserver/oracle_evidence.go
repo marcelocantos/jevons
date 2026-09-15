@@ -319,13 +319,15 @@ func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
-// dailyPathEvidenceMarkers cite activated daily jevonsd path (🎯T194).
-// Hermetic-only finish reports for daemon/API work are not sufficient.
+// dailyPathEvidenceMarkers cite an activated owner-visible surface (🎯T194 /
+// 🎯T572). Hermetic-only finish reports for daemon/API work are not sufficient.
 var dailyPathEvidenceMarkers = []string{
 	"restart-daily-jevonsd",
 	"restart-daily",
 	"live probe",
-	"daily path",
+	"development path",
+	"development surface",
+	"daily path", // legacy accept — speech is development (🎯T572)
 	"daily-path",
 	"curl ",
 	"curl\t",
@@ -343,7 +345,7 @@ var dailyPathEvidenceMarkers = []string{
 	"proven zero-downtime",
 }
 
-// hermeticOnlyMarkers are evidence that does not activate the daily path.
+// hermeticOnlyMarkers are evidence that does not activate the development surface.
 // Used only to document the T194 residual in tests — HasDailyPathEvidence
 // does not treat these as daily-path proof.
 var hermeticOnlyMarkers = []string{
@@ -356,7 +358,7 @@ var hermeticOnlyMarkers = []string{
 }
 
 // HasDailyPathEvidence reports whether a finish report cites activation
-// of the daily path (restart-daily, curl, :13705, …). 🎯T552 / 🎯T553.2:
+// of the development surface (restart script, curl, :13705, …). 🎯T552 / 🎯T553.2:
 // this is a seam classifier, not an achieve gate. Observation of the
 // running surface is the test. Pure string heuristic.
 func HasDailyPathEvidence(report string) bool {
