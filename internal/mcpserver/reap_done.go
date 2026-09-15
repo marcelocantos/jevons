@@ -258,6 +258,12 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",
 				"agent", name, "reason", reason)
 		}
+		// 🎯T663: a checkpoint the HOOK asked for. The daemon counter did not
+		// (that case returned above), so unless the daemon resumes the seat
+		// here, nothing does — it sits idle until a rehydrate.
+		if strings.HasPrefix(reason, "awaits_overseer_checkpoint") && IsDepthCeilingCheckpoint(report) {
+			s.resumeHookCheckpoint(name, report)
+		}
 		return
 	}
 	if err := killSubtree(s.registry, s.RemovalAccount(), name, reapDoneRemoval(reason)); err != nil {

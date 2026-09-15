@@ -74,6 +74,9 @@ func (s *Server) markAgentTurnBegan(name string) {
 	s.agentTurnBegan[name] = true
 	// 🎯T664: a confirmed turn begin decides any undecided delivery.
 	delete(s.unconfirmedSends, name)
+	// 🎯T663: the resume (or any send) became a turn; the seat is no longer
+	// checkpointed.
+	delete(s.checkpointResumePending, name)
 	reg := s.registry
 	s.mu.Unlock()
 

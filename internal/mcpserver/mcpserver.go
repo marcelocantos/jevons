@@ -146,6 +146,12 @@ type Server struct {
 	// stop / kill can refuse to act on an undecided delivery (🎯T664).
 	// Guarded by mu.
 	unconfirmedSends map[string]unconfirmedSend
+	// checkpointResumePending marks a seat between a depth-ceiling checkpoint
+	// and the resume the daemon owes it (🎯T663). Guarded by mu.
+	checkpointResumePending map[string]time.Time
+	// oversizedSessions caches the per-session census of records over the
+	// broker line limit, keyed by session path (🎯T661). Guarded by mu.
+	oversizedSessions map[string]oversizedEntry
 	// resolveProc overrides which claudia process carries an agent's event
 	// sink (🎯T426). Nil — the product path — reads the live registry.
 	resolveProc agentProcResolver
