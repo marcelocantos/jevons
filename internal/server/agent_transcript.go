@@ -8,8 +8,9 @@ import (
 )
 
 // SetTranscriptReader attaches the multi-provider transcript reader (provider
-// session JSONL). Inspect hydrate does not use it — writeInspectReplay reads
-// the jevons journal. Kept so MCP/butler discovery still has a reader.
+// session JSONL). Inspect hydrate prefers a T621-reconstructed read of that
+// file (compact/snip/rollback / Grok updates.jsonl) and falls back to the
+// jevons journal when the reader cannot produce turns.
 func (s *Server) SetTranscriptReader(r *transcript.Reader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

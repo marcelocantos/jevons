@@ -54,6 +54,10 @@ func TestScanGrokSessions(t *testing.T) {
 	if err := os.WriteFile(hist, []byte(`{"type":"user","content":"hi"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	updates := filepath.Join(dir, "updates.jsonl")
+	if err := os.WriteFile(updates, []byte(`{"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"}}}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	active := []map[string]any{{
 		"session_id": sid,
 		"pid":        os.Getpid(),
@@ -88,6 +92,9 @@ func TestScanGrokSessions(t *testing.T) {
 	}
 	if ChatHistoryPath(sessions, sid) != hist {
 		t.Fatalf("ChatHistoryPath = %q", ChatHistoryPath(sessions, sid))
+	}
+	if UpdatesPath(sessions, sid) != updates {
+		t.Fatalf("UpdatesPath = %q want %q", UpdatesPath(sessions, sid), updates)
 	}
 }
 
@@ -164,17 +171,27 @@ func TestTranscriptPathPreferGrokThenClaude(t *testing.T) {
 		t.Fatalf("claude-only path = %q want %q", got, claudePath)
 	}
 
-	// Add Grok — must win.
+	// Add Grok — updates.jsonl must win; chat_history is never the source.
 	gdir := filepath.Join(sessions, "enc%2Fcwd", sid)
 	if err := os.MkdirAll(gdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	grokPath := filepath.Join(gdir, "chat_history.jsonl")
-	if err := os.WriteFile(grokPath, []byte(`{"type":"user","content":"g"}`+"\n"), 0o644); err != nil {
+	chatHist := filepath.Join(gdir, "chat_history.jsonl")
+	if err := os.WriteFile(chatHist, []byte(`{"type":"user","content":"dropped-on-compact"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := TranscriptPath(r, sid); got != claudePath {
+		t.Fatalf("chat_history alone must not steal Claude: %q", got)
+	}
+	grokPath := filepath.Join(gdir, "updates.jsonl")
+	if err := os.WriteFile(grokPath, []byte(`{"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"g"}}}}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got := TranscriptPath(r, sid); got != grokPath {
-		t.Fatalf("prefer grok = %q want %q", got, grokPath)
+		t.Fatalf("prefer grok updates.jsonl = %q want %q", got, grokPath)
+	}
+	if got := TranscriptPath(r, sid); got == chatHist {
+		t.Fatal("chat_history.jsonl must never be the conversation source")
 	}
 }
 

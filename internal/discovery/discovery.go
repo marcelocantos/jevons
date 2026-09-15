@@ -6,7 +6,9 @@
 //
 // Layouts:
 //
-//	Grok Build:  ~/.grok/sessions/<url-encoded-cwd>/<session-id>/chat_history.jsonl
+//	Grok Build:  ~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl
+//	             (chat_history.jsonl is rewritten on compact — never the
+//	             conversation source; 🎯T621 / mnemo grok-ingest.md)
 //	Claude Code: ~/.claude/projects/<escaped-cwd>/<session-id>.jsonl
 //
 // Roots.GrokSessions and Roots.ClaudeProjects are independently optional;
@@ -147,12 +149,14 @@ func (s *Scanner) scanGrok(cutoff time.Time, active map[string]bool) ([]SessionI
 				continue
 			}
 			sessPath := filepath.Join(bucketPath, sid)
-			hist := filepath.Join(sessPath, "chat_history.jsonl")
-			fi, err := os.Stat(hist)
+			fi, err := os.Stat(filepath.Join(sessPath, "updates.jsonl"))
 			if err != nil {
-				fi, err = os.Stat(sessPath)
+				fi, err = os.Stat(filepath.Join(sessPath, "chat_history.jsonl"))
 				if err != nil {
-					continue
+					fi, err = os.Stat(sessPath)
+					if err != nil {
+						continue
+					}
 				}
 			}
 			if !cutoff.IsZero() && fi.ModTime().Before(cutoff) {
@@ -265,12 +269,14 @@ func (s *Scanner) getGrok(sessionID string, active map[string]bool) *SessionInfo
 		if err != nil {
 			continue
 		}
-		hist := filepath.Join(sessPath, "chat_history.jsonl")
 		size := fi.Size()
 		mod := fi.ModTime()
-		if hfi, err := os.Stat(hist); err == nil {
-			size = hfi.Size()
-			mod = hfi.ModTime()
+		for _, name := range []string{"updates.jsonl", "chat_history.jsonl"} {
+			if hfi, err := os.Stat(filepath.Join(sessPath, name)); err == nil {
+				size = hfi.Size()
+				mod = hfi.ModTime()
+				break
+			}
 		}
 		return &SessionInfo{
 			UUID:       sessionID,
@@ -453,12 +459,33 @@ func SessionPath(sessionsDir, sessionID string) string {
 }
 
 // ChatHistoryPath returns Grok chat_history.jsonl for the session, or "".
+// That file is the model-facing view and is rewritten on compact — do not
+// treat it as the conversation source (🎯T621). Prefer UpdatesPath.
 func ChatHistoryPath(sessionsDir, sessionID string) string {
 	dir := SessionPath(sessionsDir, sessionID)
 	if dir == "" {
 		return ""
 	}
 	return filepath.Join(dir, "chat_history.jsonl")
+}
+
+// UpdatesPath returns Grok updates.jsonl for the session, or "".
+// That file is the durable ACP conversation log (🎯T621).
+func UpdatesPath(sessionsDir, sessionID string) string {
+	dir := SessionPath(sessionsDir, sessionID)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "updates.jsonl")
+}
+
+func grokConversationPath(sessionsDir, sessionID string) string {
+	if p := UpdatesPath(sessionsDir, sessionID); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 // EncodeCWDBucket encodes a workdir the way Grok names session buckets.
@@ -533,16 +560,21 @@ func ClaudeJSONLPathForWorkDir(projectsDir, workDir, sessionID string) string {
 }
 
 // TranscriptPath returns the JSONL transcript for sessionID across roots.
-// Prefer Grok chat_history when present; else Claude session JSONL (🎯T213).
+// Grok-as-source is updates.jsonl (never chat_history.jsonl — 🎯T621);
+// else Claude session JSONL (🎯T213). Exclusive GROK_HOME trees are
+// searched after the primary Grok root.
 func TranscriptPath(r Roots, sessionID string) string {
 	if !IsSessionID(sessionID) {
 		return ""
 	}
 	if r.GrokSessions != "" {
-		if p := ChatHistoryPath(r.GrokSessions, sessionID); p != "" {
-			if _, err := os.Stat(p); err == nil {
-				return p
-			}
+		if p := grokConversationPath(r.GrokSessions, sessionID); p != "" {
+			return p
+		}
+	}
+	for _, extra := range r.GrokHomeSessions {
+		if p := grokConversationPath(extra, sessionID); p != "" {
+			return p
 		}
 	}
 	if r.ClaudeProjects != "" {

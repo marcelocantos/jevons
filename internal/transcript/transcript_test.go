@@ -13,7 +13,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
-// Grok Build chat_history.jsonl shapes (real sessions under ~/.grok/sessions).
+// Grok Build conversation shapes (updates.jsonl is the source — 🎯T621).
 const grokFixture = `{"type":"system","content":"You are Grok."}
 {"type":"user","content":[{"type":"text","text":"spawn a worker for tern"}]}
 {"type":"reasoning","summary":[{"type":"summary_text","text":"planning…"}]}
@@ -40,7 +40,7 @@ func writeSession(t *testing.T, sessionsDir, sid, body string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "chat_history.jsonl")
+	path := filepath.Join(dir, "updates.jsonl")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

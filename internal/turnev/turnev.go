@@ -408,6 +408,7 @@ type rawRecord struct {
 // report, and reporting it is 🎯T422 clause 7's "names precisely what it
 // cannot parse" rather than silently shrinking the conversation.
 func Decode(line []byte) (Record, bool) {
+	line = unwrapGrokUpdate(line)
 	var raw rawRecord
 	if err := json.Unmarshal(line, &raw); err != nil {
 		return Record{}, false
@@ -522,6 +523,8 @@ func decodeContent(content json.RawMessage) (text string, hasToolUse, hasToolRes
 			if blk.Text != "" {
 				parts = append(parts, blk.Text)
 			}
+		case "thinking", "reasoning":
+			// Thinking is not a Distill / inspect turn (🎯T621).
 		case "tool_use":
 			hasToolUse = true
 		case "tool_result":
@@ -557,4 +560,85 @@ func classify(line []byte, needle string) Fate {
 			return FateQueued
 		}
 	}
+}
+
+// unwrapGrokUpdate rewrites an ACP updates.jsonl envelope into the
+// conversation shape Decode already understands. chat_history.jsonl is
+// never unwrapped here — that file is not the conversation source (🎯T621).
+func unwrapGrokUpdate(line []byte) []byte {
+	var env struct {
+		Type   string `json:"type"`
+		Method string `json:"method"`
+		Params *struct {
+			Update *struct {
+				SessionUpdate string          `json:"sessionUpdate"`
+				Content       json.RawMessage `json:"content"`
+			} `json:"update"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(line, &env) != nil || env.Params == nil || env.Params.Update == nil {
+		return line
+	}
+	if env.Type != "" {
+		return line
+	}
+	su := env.Params.Update.SessionUpdate
+	role := ""
+	meta := false
+	switch su {
+	case "user_message_chunk":
+		role = "user"
+	case "agent_message_chunk":
+		role = "assistant"
+	case "agent_thought_chunk":
+		role = "assistant"
+		meta = true
+	default:
+		return line
+	}
+	text := grokContentText(env.Params.Update.Content)
+	if text == "" {
+		return line
+	}
+	out, err := json.Marshal(map[string]any{
+		"type":   role,
+		"content": text,
+		"isMeta": meta,
+	})
+	if err != nil {
+		return line
+	}
+	return out
+}
+
+func grokContentText(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return ""
+		}
+		return s
+	}
+	if trimmed[0] == '{' {
+		var o struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(raw, &o) != nil {
+			return ""
+		}
+		if o.Type == "thinking" || o.Type == "reasoning" {
+			return ""
+		}
+		return o.Text
+	}
+	if trimmed[0] == '[' {
+		text, _, _ := decodeContent(raw)
+		return text
+	}
+	return ""
 }

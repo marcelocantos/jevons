@@ -58,7 +58,7 @@ func TestSeedMessageWithoutTranscriptSeedsNothing(t *testing.T) {
 // TestTranscriptFormatDescribesTheSourceBackend: the successor is opening
 // a file written by a different tool, so the seed says which shape it is.
 func TestTranscriptFormatDescribesTheSourceBackend(t *testing.T) {
-	if got := handover.TranscriptFormat("grok"); !strings.Contains(got, "Grok") {
+	if got := handover.TranscriptFormat("grok"); !strings.Contains(got, "Grok") || !strings.Contains(got, "updates.jsonl") {
 		t.Errorf("grok format = %q", got)
 	}
 	if got := handover.TranscriptFormat("claude"); !strings.Contains(got, "Claude") {

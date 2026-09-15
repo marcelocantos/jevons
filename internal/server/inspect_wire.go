@@ -155,6 +155,14 @@ func (s *Server) writeInspectReplay(ctx context.Context, conn inspectWriter, nam
 		_, _, err := clog.ReplayTailSealed(historyReplayTurns, writeLine)
 		return err
 	}
+	if lines := s.reconstructedInspectLines(name); len(lines) > 0 {
+		for _, line := range lines {
+			if err := writeLine(line); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	j := s.agentJournalsFor()
 	if j == nil {
 		return nil
@@ -280,6 +288,75 @@ func (s *Server) DeliverInspectLive(name string, ev claudia.Event) {
 			s.fanInspectLive(name, string(payload))
 		}
 	}
+}
+
+// reconstructedInspectLines hydrates inspect from the provider transcript
+// after T621 reconstruction, so compacted-away turns do not paint (🎯T621).
+// Empty means fall back to the jevons journal.
+func (s *Server) reconstructedInspectLines(name string) []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	reg := s.registry
+	reader := s.transcriptReader
+	s.mu.RUnlock()
+	if reg == nil || reader == nil {
+		return nil
+	}
+	def := reg.Def(name)
+	if def == nil || strings.TrimSpace(def.SessionID) == "" {
+		return nil
+	}
+	turns, err := reader.Read(def.SessionID)
+	if err != nil || len(turns) == 0 {
+		return nil
+	}
+	turns = tailInspectTurns(turns, inspectHistoryTurns)
+	out := make([]string, 0, len(turns))
+	for _, t := range turns {
+		role, _ := t["role"].(string)
+		text, _ := t["text"].(string)
+		if (role != "user" && role != "assistant") || strings.TrimSpace(text) == "" {
+			continue
+		}
+		frame := map[string]any{
+			"type": role,
+			"name": name,
+			"message": map[string]any{
+				"role": role,
+				"content": []map[string]any{
+					{"type": "text", "text": text},
+				},
+			},
+		}
+		b, err := json.Marshal(frame)
+		if err != nil {
+			continue
+		}
+		out = append(out, string(b))
+	}
+	return out
+}
+
+func tailInspectTurns(turns []map[string]any, userCap int) []map[string]any {
+	if userCap <= 0 || len(turns) == 0 {
+		return turns
+	}
+	users := 0
+	start := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		role, _ := turns[i]["role"].(string)
+		if role != "user" {
+			continue
+		}
+		users++
+		if users >= userCap {
+			start = i
+			break
+		}
+	}
+	return turns[start:]
 }
 
 // stampConversationName puts the addressee on a chat-wire line so one
