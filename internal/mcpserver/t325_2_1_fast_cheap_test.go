@@ -153,6 +153,9 @@ func TestStitchDoesNotPinSparkOnRedCodexWeekly(t *testing.T) {
 		t.Fatalf("omit mint pinned Spark: %q", omit.Model)
 	}
 
+	// The owner named Codex (🎯T652): the pin sticks even though the weekly is
+	// red, and T390.1.5 still refuses to pin Spark on it.
+	s.pendingOwnerAsked = true
 	_, _, note, err := s.stitchAgentStart(
 		"jv-no-spark-explicit", t.TempDir(), "", "codex", "mechanical",
 		"jevons-po", claudia.PurposeWork, "", "",

@@ -49,7 +49,7 @@ func TestReapIdleRequiresKnownActivity(t *testing.T) {
 			projects := filepath.Join(dir, "projects")
 			if state != "missing" {
 				writeSessionTranscript(t, projects, mint, fixedNow.Add(-30*time.Minute))
-				files, err := filepath.Glob(filepath.Join(projects, "*", mint, "chat_history.jsonl"))
+				files, err := filepath.Glob(filepath.Join(projects, "*", mint, "updates.jsonl"))
 				if err != nil || len(files) != 1 {
 					t.Fatalf("fixture: %v %v", files, err)
 				}
