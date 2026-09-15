@@ -15,6 +15,17 @@ import {
 import { applyComposerHomeEnd } from '../keys/composerCaret';
 import { classifyEnterAction } from '../keys/composerEnter';
 import type { DeliveryMode } from '../composer/deliveryMode';
+import type { QueueItem } from '../composer/sendQueue';
+import { cycleQueueFocus } from '../composer/queueFocus';
+
+/** 🎯T657 slice 2b: the send queue the composer can focus with Alt+↑/↓. */
+export type ComposerQueue = {
+  items: QueueItem[];
+  focusedId: string | null;
+  onFocus: (id: string | null) => void;
+  /** Send a queued item now with the given mode; the queue removes it. */
+  onSend: (id: string, mode: DeliveryMode) => void;
+};
 
 export type RecalledRequest = { id: string; text: string };
 
@@ -24,6 +35,7 @@ type UserRequestProps = {
   /** 🎯T657: returns `{ queued: true }` when the text was held in the send queue instead of sent. */
   onSend: (text: string, opts?: { mode?: DeliveryMode }) => void | { queued?: boolean };
   onInterrupt?: () => void;
+  queue?: ComposerQueue;
   disabled?: boolean;
   history?: RecalledRequest[];
   onRecall?: (request: RecalledRequest | null) => void;
@@ -245,7 +257,21 @@ function NamedUserRequest(props: UserRequestProps) {
           if (e.nativeEvent.isComposing) return;
           if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
             e.preventDefault();
-            navigateHistory(e.key === 'ArrowUp' ? -1 : 1);
+            const dir = e.key === 'ArrowUp' ? -1 : 1;
+            // 🎯T657: a non-empty send queue owns Alt+↑/↓; history recall
+            // is only reachable once the queue is empty.
+            const q = props.queue;
+            if (q && q.items.length) {
+              const r = cycleQueueFocus(q.focusedId, q.items, dir);
+              if (r.handled) q.onFocus(r.focusedId);
+              return;
+            }
+            navigateHistory(dir);
+            return;
+          }
+          if (e.key === 'Escape' && props.queue?.focusedId) {
+            e.preventDefault();
+            props.queue.onFocus(null);
             return;
           }
           if (e.key === 'Escape' && recalled && !rewinding) {
@@ -264,7 +290,17 @@ function NamedUserRequest(props: UserRequestProps) {
             void submit(e);
             return;
           }
+          // 🎯T657 slice 2b: with a queue item focused, the steer and
+          // interrupt chords act on that item, not on the draft.
+          const focusedQueueId = props.queue?.focusedId && props.queue.items.some((it) => it.id === props.queue!.focusedId)
+            ? props.queue.focusedId
+            : null;
           if (action === 'steer') {
+            if (focusedQueueId) {
+              props.queue!.onSend(focusedQueueId, 'steer');
+              props.queue!.onFocus(null);
+              return;
+            }
             // Cmd+Enter (🎯T657): fold the draft into the running turn; the
             // server sends plainly when the seat is idle. Nothing to steer
             // with on an empty composer, so that is a noop.
@@ -272,6 +308,11 @@ function NamedUserRequest(props: UserRequestProps) {
             return;
           }
           if (action === 'interrupt') {
+            if (focusedQueueId) {
+              props.queue!.onSend(focusedQueueId, 'interrupt');
+              props.queue!.onFocus(null);
+              return;
+            }
             // Cmd+Shift+Enter (🎯T657): cancel the open turn, then send.
             if (canSend) void submit(e, !!recalled, { mode: 'interrupt' });
             else props.onInterrupt?.();

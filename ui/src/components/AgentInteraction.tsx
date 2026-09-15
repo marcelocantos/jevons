@@ -11,6 +11,7 @@ import { UserRequest, type RecalledRequest } from './UserRequest';
 import { displayRows } from '../conversation/display';
 import { PHASE_IDLE, phaseSampleFromUnknown } from '../conversation/overseerPhase';
 import { useSendQueue } from '../composer/useSendQueue';
+import { reconcileQueueFocus } from '../composer/queueFocus';
 import { SendQueueStrip } from './SendQueueStrip';
 
 export function AgentInteraction(props: {
@@ -49,6 +50,13 @@ export function AgentInteraction(props: {
     wireOpen: connected,
     sendNow: (text, mode) => conv.send(text, { mode }),
   });
+  // 🎯T657 slice 2b: Alt+↑/↓ focus over the queue; a drained or removed
+  // item drops the focus rather than pointing at nothing.
+  const [queueFocusRaw, setQueueFocus] = useState<string | null>(null);
+  const queueFocus = reconcileQueueFocus(queueFocusRaw, queue.items);
+  useEffect(() => {
+    setQueueFocus(null);
+  }, [props.name]);
   return (
     <div
       id={comfortable ? 'chat-pane' : 'agent-inspect'}
@@ -101,6 +109,7 @@ export function AgentInteraction(props: {
           </div>
           <SendQueueStrip
             items={queue.items}
+            focusedId={queueFocus}
             onSteer={(id) => queue.sendItem(id, 'steer')}
             onInterrupt={(id) => queue.sendItem(id, 'interrupt')}
             onRemove={queue.remove}
@@ -113,6 +122,7 @@ export function AgentInteraction(props: {
         density={density}
         onSend={(t, opts) => queue.submit(t, opts?.mode ?? 'submit')}
         onInterrupt={() => conv.send('', { mode: 'interrupt' })}
+        queue={{ items: queue.items, focusedId: queueFocus, onFocus: setQueueFocus, onSend: queue.sendItem }}
         history={history}
         onRecall={setRecalled}
       />

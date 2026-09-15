@@ -76,6 +76,73 @@ describe('send queue wiring (T657 / T113)', () => {
     await waitFor(() => expect(strip.classList.contains('visible')).toBe(false));
   });
 
+  it('Alt+↑/↓ focus the queue before history; ⌘Enter steers and ⌘⇧Enter interrupts with the focused item (T657 2b)', async () => {
+    const view = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
+    const userFrame = { id: 'e:1', index: 1, op: 'put', type: 'user', event: { type: 'user', turn_origin: 'owner', message: { role: 'user', content: [{ type: 'text', text: 'earlier request' }] } } };
+    act(() => { emit('frame', userFrame); emit('meta', { start: 1, older: 0, total: 1, n: 1, following: true, phase: 'thinking' }); });
+    const box = view.getByRole('textbox') as HTMLTextAreaElement;
+    for (const t of ['a', 'b']) {
+      fireEvent.change(box, { target: { value: t } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+    }
+    const strip = view.container.querySelector('#send-queue') as HTMLElement;
+    await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(2));
+    const focusedText = () => strip.querySelector('.send-queue-item.focused .sq-text')?.textContent ?? null;
+
+    // Queue non-empty: Alt+↑ goes to the next-to-send item, not to history.
+    fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(focusedText()).toBe('a'));
+    expect(box.value).toBe('');
+    expect(strip.querySelector('[aria-current="true"] .sq-text')?.textContent).toBe('a');
+    fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(focusedText()).toBe('b'));
+    fireEvent.keyDown(box, { key: 'ArrowDown', altKey: true });
+    await waitFor(() => expect(focusedText()).toBe('a'));
+
+    // ⌘Enter steers the focused item and removes it; the draft is untouched.
+    fireEvent.change(box, { target: { value: 'draft stays' } });
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    await waitFor(() => expect(sends()).toEqual([{ text: 'a', mode: 'steer' }]));
+    await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(1));
+    expect(focusedText()).toBeNull();
+    expect(box.value).toBe('draft stays');
+
+    // ⌘⇧Enter interrupts with the focused item.
+    fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(focusedText()).toBe('b'));
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, shiftKey: true });
+    await waitFor(() => expect(sends()).toEqual([{ text: 'a', mode: 'steer' }, { text: 'b', mode: 'interrupt', interrupt: true }]));
+    await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(0));
+
+    // Queue empty again: Alt+↑ falls through to transcript history recall.
+    fireEvent.change(box, { target: { value: '' } });
+    fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(box.value).toBe('earlier request'));
+  });
+
+  it('Escape drops queue focus without touching the queue; a drained item drops its own focus', async () => {
+    const view = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
+    act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'streaming' }); });
+    const box = view.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'held' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    const strip = view.container.querySelector('#send-queue') as HTMLElement;
+    await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(1));
+    fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(strip.querySelector('.send-queue-item.focused')).not.toBeNull());
+    fireEvent.keyDown(box, { key: 'Escape' });
+    await waitFor(() => expect(strip.querySelector('.send-queue-item.focused')).toBeNull());
+    expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(1);
+    fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(strip.querySelector('.send-queue-item.focused')).not.toBeNull());
+    act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'idle' }); });
+    await waitFor(() => expect(sends()).toEqual([{ text: 'held' }]));
+    await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(0));
+    expect(strip.querySelector('.send-queue-item.focused')).toBeNull();
+  });
+
   it('strip buttons: Steer sends with mode=steer, Cut in with mode=interrupt, Remove drops it', async () => {
     const view = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
     const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
