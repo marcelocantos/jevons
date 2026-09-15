@@ -21,7 +21,8 @@ export type RecalledRequest = { id: string; text: string };
 type UserRequestProps = {
   name: string;
   density?: Density;
-  onSend: (text: string, opts?: { mode?: DeliveryMode }) => void;
+  /** 🎯T657: returns `{ queued: true }` when the text was held in the send queue instead of sent. */
+  onSend: (text: string, opts?: { mode?: DeliveryMode }) => void | { queued?: boolean };
   onInterrupt?: () => void;
   disabled?: boolean;
   history?: RecalledRequest[];
@@ -125,6 +126,7 @@ function NamedUserRequest(props: UserRequestProps) {
     if (props.disabled && mode !== 'interrupt' && mode !== 'steer') return;
     const payload = composeSendText(raw, pending);
     if (!payload) return;
+    let queued = false;
     if (recalled && !append) {
       if (!props.history?.some((request) => request.id === recalled.id && request.text === recalled.text)) {
         setRecallError('This request changed or is no longer in the conversation. Cancel and select it again.');
@@ -149,8 +151,8 @@ function NamedUserRequest(props: UserRequestProps) {
       queueMicrotask(() => boxRef.current?.focus());
       return;
     } else {
-      if (mode && mode !== 'submit') props.onSend(payload, { mode });
-      else props.onSend(payload);
+      const outcome = mode && mode !== 'submit' ? props.onSend(payload, { mode }) : props.onSend(payload);
+      queued = !!(outcome && typeof outcome === 'object' && outcome.queued);
       if (recalled) {
         setDraft(props.name, payload);
         leaveRecall(false);
@@ -159,8 +161,10 @@ function NamedUserRequest(props: UserRequestProps) {
     pending.forEach((img) => revokeObjectUrl(img.objectUrl));
     setPending([]);
     // 🎯T545.3: keep the sent text until the transcript echoes a user row.
-    // Failed send leaves composer + Send enabled for retry.
-    if (payload !== raw) setDraft(props.name, payload);
+    // Failed send leaves composer + Send enabled for retry. A queued send
+    // lives in the queue strip instead, so the composer clears at once.
+    if (queued) setDraft(props.name, '');
+    else if (payload !== raw) setDraft(props.name, payload);
     // 🎯T153: send returns focus so the next Tab stays on the box (T571).
     queueMicrotask(() => boxRef.current?.focus());
   };

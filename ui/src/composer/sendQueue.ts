@@ -61,6 +61,18 @@ export function enqueue(state: QueueState | null | undefined, text: string): Que
   };
 }
 
+/** Remove one item by id; item is null when absent (🎯T657 queue actions). */
+export function takeById(state: QueueState | null | undefined, id: string): { item: QueueItem | null; state: QueueState } {
+  const s = state || emptyState();
+  let found: QueueItem | null = null;
+  const items: QueueItem[] = [];
+  for (const it of s.items) {
+    if (it.id === id && !found) found = it;
+    else items.push(it);
+  }
+  return { item: found, state: { items, nextId: s.nextId } };
+}
+
 export function shiftNext(state: QueueState | null | undefined): { item: QueueItem | null; state: QueueState } {
   const s = state || emptyState();
   if (!s.items.length) return { item: null, state: s };
@@ -121,19 +133,19 @@ export type StorageLike = {
   setItem: (k: string, v: string) => void;
 };
 
-export function load(storage: StorageLike | null | undefined): QueueState {
+export function load(storage: StorageLike | null | undefined, key: string = STORAGE_KEY): QueueState {
   if (!storage || typeof storage.getItem !== 'function') return emptyState();
   try {
-    return deserialize(storage.getItem(STORAGE_KEY));
+    return deserialize(storage.getItem(key));
   } catch {
     return emptyState();
   }
 }
 
-export function save(storage: StorageLike | null | undefined, state: QueueState): void {
+export function save(storage: StorageLike | null | undefined, state: QueueState, key: string = STORAGE_KEY): void {
   if (!storage || typeof storage.setItem !== 'function') return;
   try {
-    storage.setItem(STORAGE_KEY, serialize(state));
+    storage.setItem(key, serialize(state));
   } catch {
     /* quota / private mode — in-memory state still works */
   }

@@ -9,6 +9,9 @@ import { AgentTranscript } from './AgentTranscript';
 import { OverseerPhaseStrip } from './OverseerPhaseStrip';
 import { UserRequest, type RecalledRequest } from './UserRequest';
 import { displayRows } from '../conversation/display';
+import { PHASE_IDLE, phaseSampleFromUnknown } from '../conversation/overseerPhase';
+import { useSendQueue } from '../composer/useSendQueue';
+import { SendQueueStrip } from './SendQueueStrip';
 
 export function AgentInteraction(props: {
   mux: MuxClient | null;
@@ -35,6 +38,17 @@ export function AgentInteraction(props: {
     setRecalled(null);
   }, [props.name]);
   const comfortable = density === 'comfortable';
+  // 🎯T657: the seat is busy when its painted phase is anything but idle.
+  // Seats without a phase sample (fleet transcripts) send straight through
+  // and the daemon queues on busy, as before.
+  const phase = phaseSampleFromUnknown(conv.meta);
+  const busy = !!phase && phase.phase !== PHASE_IDLE;
+  const connected = props.connected ?? true;
+  const queue = useSendQueue(props.name, {
+    busy,
+    wireOpen: connected,
+    sendNow: (text, mode) => conv.send(text, { mode }),
+  });
   return (
     <div
       id={comfortable ? 'chat-pane' : 'agent-inspect'}
@@ -85,14 +99,19 @@ export function AgentInteraction(props: {
             <div id="attention-stack" role="list" />
             <div id="attention-actions" aria-label="Attention aside actions" />
           </div>
-          <div id="send-queue" aria-label="Queued follow-ups" role="list" />
-          <OverseerPhaseStrip connected={props.connected ?? true} meta={conv.meta} />
+          <SendQueueStrip
+            items={queue.items}
+            onSteer={(id) => queue.sendItem(id, 'steer')}
+            onInterrupt={(id) => queue.sendItem(id, 'interrupt')}
+            onRemove={queue.remove}
+          />
+          <OverseerPhaseStrip connected={connected} meta={conv.meta} />
         </>
       ) : null}
       <UserRequest
         name={props.name}
         density={density}
-        onSend={(t, opts) => conv.send(t, opts)}
+        onSend={(t, opts) => queue.submit(t, opts?.mode ?? 'submit')}
         onInterrupt={() => conv.send('', { mode: 'interrupt' })}
         history={history}
         onRecall={setRecalled}
