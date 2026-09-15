@@ -202,7 +202,10 @@ func (r *rig) killDaemon() {
 	// the scratch dir — the same leak t218/t434 used to leave behind.
 	prefix := r.dir + string(os.PathSeparator)
 	live := func() []string {
-		out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
+		// args=, not comm=: Linux comm is a 15-char name, so a prefix
+		// match on the scratch dir never hits stubdaemon and cleanup
+		// races the leftover writer (TempDir "directory not empty").
+		out, err := exec.Command("ps", "-Ao", "pid=,args=").Output()
 		if err != nil {
 			return nil
 		}
