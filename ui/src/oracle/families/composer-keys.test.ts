@@ -84,14 +84,58 @@ describeOracle(family('composer-keys'), () => {
     expect(shouldFocusComposer('/', {}, { tagName: 'TEXTAREA' })).toBe(false);
   });
 
-  itOracle('T132', 'Cmd+Enter interrupts; Ctrl+Enter is not hooked; Alt+Enter empty is queue/noop', () => {
-    expect(classifyEnterAction('Enter', { metaKey: true })).toBe('interrupt');
+  itOracle('T132', 'Cmd+Enter steers; Ctrl+Enter is not hooked; Alt+Enter empty is queue/noop', () => {
+    expect(classifyEnterAction('Enter', { metaKey: true })).toBe('steer');
+    expect(classifyEnterAction('Enter', { metaKey: true, shiftKey: true })).toBe('interrupt');
     expect(classifyEnterAction('Enter', { ctrlKey: true })).toBeNull();
     expect(classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true, queueLen: 0 })).toBe('noop');
     expect(classifyEnterAction('Enter', { shiftKey: true })).toBe('newline');
   });
 
-  itOracle('T644', 'UserRequest: Cmd+Enter interrupts, Ctrl+Enter is left to the browser', () => {
+  itOracle('T657', 'Enter→submit, Cmd+Enter→steer, Cmd+Shift+Enter→interrupt, Shift+Enter→newline; empty plain Enter is a noop', () => {
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: false })).toBe('send');
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: true })).toBe('noop');
+    expect(classifyEnterAction('Enter', { metaKey: true }, { composerEmpty: false })).toBe('steer');
+    expect(classifyEnterAction('Enter', { metaKey: true, shiftKey: true }, { composerEmpty: false })).toBe('interrupt');
+    expect(classifyEnterAction('Enter', { metaKey: true, shiftKey: true }, { composerEmpty: true })).toBe('interrupt');
+    expect(classifyEnterAction('Enter', { shiftKey: true })).toBe('newline');
+    expect(classifyEnterAction('Enter', { ctrlKey: true })).toBeNull();
+    expect(classifyEnterAction('Enter', { ctrlKey: true, metaKey: true })).toBe('steer');
+
+    const onSend = vi.fn();
+    const onInterrupt = vi.fn();
+    const { container } = render(
+      createElement(UserRequest, { name: 'jevons', onSend, onInterrupt, disabled: true }),
+    );
+    const box = container.querySelector('#input') as HTMLTextAreaElement;
+    // Busy seat, empty composer: plain Enter must not steal focus or send.
+    const emptyPlain = createEvent.keyDown(box, { key: 'Enter', cancelable: true });
+    fireEvent(box, emptyPlain);
+    expect(emptyPlain.defaultPrevented).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
+    // Busy seat, empty composer: Cmd+Enter has nothing to steer with.
+    const emptySteer = createEvent.keyDown(box, { key: 'Enter', metaKey: true, cancelable: true });
+    fireEvent(box, emptySteer);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onInterrupt).not.toHaveBeenCalled();
+
+    fireEvent.change(box, { target: { value: 'go left' } });
+    const steer = createEvent.keyDown(box, { key: 'Enter', metaKey: true, cancelable: true });
+    fireEvent(box, steer);
+    expect(steer.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenLastCalledWith('go left', { mode: 'steer' });
+
+    const cut = createEvent.keyDown(box, { key: 'Enter', metaKey: true, shiftKey: true, cancelable: true });
+    fireEvent(box, cut);
+    expect(onSend).toHaveBeenLastCalledWith('go left', { mode: 'interrupt' });
+
+    // disabled (busy) swallows plain Enter with a draft: that path enqueues upstream.
+    const plain = createEvent.keyDown(box, { key: 'Enter', cancelable: true });
+    fireEvent(box, plain);
+    expect(onSend).toHaveBeenCalledTimes(2);
+  });
+
+  itOracle('T644', 'UserRequest: Cmd+Shift+Enter interrupts, Ctrl+Enter is left to the browser', () => {
     const onSend = vi.fn();
     const onInterrupt = vi.fn();
     const { container } = render(
@@ -107,21 +151,21 @@ describeOracle(family('composer-keys'), () => {
     expect(onInterrupt).not.toHaveBeenCalled();
 
     fireEvent.change(box, { target: { value: 'cut in' } });
-    const cmd = createEvent.keyDown(box, { key: 'Enter', metaKey: true, cancelable: true });
+    const cmd = createEvent.keyDown(box, { key: 'Enter', metaKey: true, shiftKey: true, cancelable: true });
     fireEvent(box, cmd);
     expect(cmd.defaultPrevented).toBe(true);
-    expect(onSend).toHaveBeenCalledWith('cut in', { interrupt: true });
+    expect(onSend).toHaveBeenCalledWith('cut in', { mode: 'interrupt' });
 
     const alt = createEvent.keyDown(box, { key: 'Enter', altKey: true, cancelable: true });
     fireEvent(box, alt);
-    expect(onSend).toHaveBeenLastCalledWith('cut in', { interrupt: true });
+    expect(onSend).toHaveBeenLastCalledWith('cut in', { mode: 'interrupt' });
 
     const plain = createEvent.keyDown(box, { key: 'Enter', cancelable: true });
     fireEvent(box, plain);
     expect(onSend).toHaveBeenLastCalledWith('cut in');
 
     fireEvent.change(box, { target: { value: '' } });
-    const emptyCmd = createEvent.keyDown(box, { key: 'Enter', metaKey: true, cancelable: true });
+    const emptyCmd = createEvent.keyDown(box, { key: 'Enter', metaKey: true, shiftKey: true, cancelable: true });
     fireEvent(box, emptyCmd);
     expect(emptyCmd.defaultPrevented).toBe(true);
     expect(onInterrupt).toHaveBeenCalledTimes(1);

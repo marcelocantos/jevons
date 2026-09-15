@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { deliveryModeOf, type DeliveryMode } from '../composer/deliveryMode';
 import { decodeMux, encodeMux, transcriptChannel, type MuxEnvelope } from './protocol';
 
 export type MuxHandler = (env: MuxEnvelope) => void;
@@ -140,9 +141,13 @@ export class MuxClient {
     this.send(encodeMux(transcriptChannel(name), 'page', body));
   }
 
-  sendTranscript(name: string, text: string, opts?: { interrupt?: boolean }): void {
-    const body: { text: string; interrupt?: boolean } = { text };
-    if (opts?.interrupt) body.interrupt = true;
+  sendTranscript(name: string, text: string, opts?: { mode?: DeliveryMode; interrupt?: boolean }): void {
+    // 🎯T657: mode is the wire; interrupt=true rides along as the deprecated
+    // alias so a daemon that predates send.mode still cancels the turn.
+    const mode = deliveryModeOf(opts);
+    const body: { text: string; mode?: DeliveryMode; interrupt?: boolean } = { text };
+    if (mode !== 'submit') body.mode = mode;
+    if (mode === 'interrupt') body.interrupt = true;
     this.send(encodeMux(transcriptChannel(name), 'send', body));
   }
 

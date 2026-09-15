@@ -53,10 +53,10 @@ export const CATALOG: readonly OracleFamily[] = [
   },
   {
     id: 'composer-keys',
-    title: 'Composer chords — Tab, Home/End, Alt+Enter, Cmd+Enter, queue',
+    title: 'Composer chords — Tab, Home/End, Alt+Enter, Cmd+Enter steer, Cmd+Shift+Enter interrupt, queue',
     file: 'composer-keys.test.ts',
     layer: 'hermetic',
-    covers: covers('composer-keys', ['T113', 'T126', 'T127', 'T132', 'T149', 'T153', 'T235', 'T241', 'T307', 'T366', 'T540.3.1', 'T547', 'T549', 'T571', 'T644']),
+    covers: covers('composer-keys', ['T113', 'T126', 'T127', 'T132', 'T149', 'T153', 'T235', 'T241', 'T307', 'T366', 'T540.3.1', 'T547', 'T549', 'T571', 'T644', 'T657']),
   },
   {
     id: 'composer-chrome',

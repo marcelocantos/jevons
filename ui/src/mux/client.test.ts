@@ -89,13 +89,13 @@ describe('MuxClient snapshot channels (T631)', () => {
 describe('MuxClient interrupt (T644)', () => {
   it('sendTranscript carries interrupt; empty cancel is t=interrupt', () => {
     const { client, ws } = connectClient();
-    client.sendTranscript('jevons', 'cut in', { interrupt: true });
+    client.sendTranscript('jevons', 'cut in', { mode: 'interrupt' });
     const send = ws.sent.find((s) => s.includes('"t":"send"'));
     expect(send).toBeTruthy();
     expect(JSON.parse(send!)).toMatchObject({
       t: 'send',
       ch: 'transcript:jevons',
-      body: { text: 'cut in', interrupt: true },
+      body: { text: 'cut in', mode: 'interrupt', interrupt: true },
     });
     client.interruptTranscript('jevons');
     const cancel = ws.sent.find((s) => s.includes('"t":"interrupt"'));

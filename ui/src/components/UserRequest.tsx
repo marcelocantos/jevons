@@ -14,13 +14,14 @@ import {
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
 import { classifyEnterAction } from '../keys/composerEnter';
+import type { DeliveryMode } from '../composer/deliveryMode';
 
 export type RecalledRequest = { id: string; text: string };
 
 type UserRequestProps = {
   name: string;
   density?: Density;
-  onSend: (text: string, opts?: { interrupt?: boolean }) => void;
+  onSend: (text: string, opts?: { mode?: DeliveryMode }) => void;
   onInterrupt?: () => void;
   disabled?: boolean;
   history?: RecalledRequest[];
@@ -115,10 +116,13 @@ function NamedUserRequest(props: UserRequestProps) {
     };
   }, []);
 
-  const submit = async (e: FormEvent, append = false, opts?: { interrupt?: boolean }) => {
+  const submit = async (e: FormEvent, append = false, opts?: { mode?: DeliveryMode }) => {
     e.preventDefault();
     if (rewinding) return;
-    if (props.disabled && !opts?.interrupt) return;
+    // 🎯T657: steer and interrupt are exactly the chords for a busy seat, so
+    // the busy-disabled state must not swallow them.
+    const mode = opts?.mode;
+    if (props.disabled && mode !== 'interrupt' && mode !== 'steer') return;
     const payload = composeSendText(raw, pending);
     if (!payload) return;
     if (recalled && !append) {
@@ -145,7 +149,7 @@ function NamedUserRequest(props: UserRequestProps) {
       queueMicrotask(() => boxRef.current?.focus());
       return;
     } else {
-      if (opts?.interrupt) props.onSend(payload, { interrupt: true });
+      if (mode && mode !== 'submit') props.onSend(payload, { mode });
       else props.onSend(payload);
       if (recalled) {
         setDraft(props.name, payload);
@@ -256,13 +260,21 @@ function NamedUserRequest(props: UserRequestProps) {
             void submit(e);
             return;
           }
+          if (action === 'steer') {
+            // Cmd+Enter (🎯T657): fold the draft into the running turn; the
+            // server sends plainly when the seat is idle. Nothing to steer
+            // with on an empty composer, so that is a noop.
+            if (canSend) void submit(e, !!recalled, { mode: 'steer' });
+            return;
+          }
           if (action === 'interrupt') {
-            if (canSend) void submit(e, !!recalled, { interrupt: true });
+            // Cmd+Shift+Enter (🎯T657): cancel the open turn, then send.
+            if (canSend) void submit(e, !!recalled, { mode: 'interrupt' });
             else props.onInterrupt?.();
             return;
           }
           if (action === 'force_send' && canSend) {
-            void submit(e, !!recalled, { interrupt: true });
+            void submit(e, !!recalled, { mode: 'interrupt' });
           }
         }}
       />

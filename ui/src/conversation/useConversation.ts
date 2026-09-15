@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { deliveryModeOf, type DeliveryMode } from '../composer/deliveryMode';
 import { useEffect, useReducer, useRef } from 'react';
 import { MuxClient } from '../mux/client';
 import { transcriptChannel } from '../mux/protocol';
@@ -96,9 +97,10 @@ export function useConversation(mux: MuxClient | null, name: string) {
     meta: state.meta,
     error: state.error,
     ready: state.ready,
-    send: (text: string, opts?: { interrupt?: boolean }) => {
+    send: (text: string, opts?: { mode?: DeliveryMode; interrupt?: boolean }) => {
       const t = String(text || '').trim();
-      const interrupt = !!opts?.interrupt;
+      const mode = deliveryModeOf(opts);
+      const interrupt = mode === 'interrupt';
       if (!t && !interrupt) return;
       if (frozenRef.current) rejoinLive();
       if (!t) {
@@ -118,7 +120,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
         stateRef.current = next;
         dispatch(env);
       }
-      mux?.sendTranscript(name, t, interrupt ? { interrupt: true } : undefined);
+      mux?.sendTranscript(name, t, mode === 'submit' ? undefined : { mode });
     },
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),
     pageOlder: (limit = 50) => {

@@ -93,7 +93,7 @@ export function AgentInteraction(props: {
         name={props.name}
         density={density}
         onSend={(t, opts) => conv.send(t, opts)}
-        onInterrupt={() => conv.send('', { interrupt: true })}
+        onInterrupt={() => conv.send('', { mode: 'interrupt' })}
         history={history}
         onRecall={setRecalled}
       />
