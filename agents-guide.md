@@ -854,6 +854,36 @@ unfinished fidelity independently of retirement. Main and sidebar share
 AgentInteraction and main-derived behavior; do not recreate the old sidebar
 fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP.
 
+## Clean-checkout web gate (🎯T398 / 🎯T659)
+
+Green in the shared clone is not green on master: many workers share one
+working copy, so `make test-web` run there reads everyone's uncommitted
+edits, and a suite held green by WIP is red for a fresh clone, a CI runner,
+and the next worker to check master out. Before calling a web change done,
+run the sanctioned recipe:
+
+```bash
+make test-web-clean            # verifies HEAD
+make test-web-clean SHA=abc123 # verifies a named commit
+```
+
+It checks the commit out into a detached worktree, runs `make test-web`
+there under `bin/gate` (cite the `GATE test-web-clean … tree=clean@<sha>`
+line), installs ui deps **inside that tree** with `npm ci`, and removes the
+tree behind a foreign-symlink guard; the shared `ui/node_modules` is hashed
+before and after and any difference fails the run even when the suite was
+green.
+
+Do **not** hand-roll the worktree with `ui/node_modules` symlinked into the
+shared clone. On 2026-09-15 that link let `make ui-deps` re-run `npm ci`
+through it — the fresh checkout's lockfile was newer than the linked vitest
+— and the shared install (171 packages) was emptied twice in one slice;
+`rm -rf <link>/` with a trailing slash does the same. Every neighbour
+running vitest at the time would have gone red for someone else's cleanup.
+Ratchets: `TestT398CleanCheckoutWebTestsPass`,
+`TestT659RemovalPathSparesSymlinkedNodeModules` in `scripts/docratchet`.
+Same shared-clone family as 🎯T376 / 🎯T377.
+
 ## Configuration
 
 | Path | Purpose |
