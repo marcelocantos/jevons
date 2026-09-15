@@ -94,6 +94,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer.")),
 			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it.")),
+			mcp.WithBoolean("force", mcp.Description("🎯T664: stop even while a turn is in flight or a delivery is still delivered_unconfirmed. Without it the stop is refused and the check that decides it is named. Pass only with a reason you can state.")),
 		),
 		s.handleAgentStop,
 	)
@@ -115,6 +116,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister")),
 			mcp.WithBoolean("subtree", mcp.Description("If true, also kill and deregister every descendant. Default false = descendants stay registered under this name (🎯T560).")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
+			mcp.WithBoolean("force", mcp.Description("🎯T664: kill even while a turn is in flight or a delivery is still delivered_unconfirmed. Without it the kill is refused and the check that decides it is named.")),
 		),
 		s.handleAgentKill,
 	)
@@ -893,6 +895,18 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
+	// 🎯T664: an uncertain verdict is resolved by looking, not by stopping.
+	forceStop, _ := args["force"].(bool)
+	if refuse, why := s.stopGuardFor(name); refuse {
+		if !forceStop {
+			s.logLifecycle(compAgentLifecycle, "stop", "skipped", map[string]any{
+				"name": name, "actor": args["actor"], "reason": "t664_guard", "why": why})
+			return mcp.NewToolResultError(FormatStopRefusal("stop", name, why)), nil
+		}
+		s.logLifecycle(compAgentLifecycle, "stop", "forced", map[string]any{
+			"name": name, "actor": args["actor"], "reason": args["reason"], "why": why})
+	}
+
 	s.registry.Stop(name)
 	// 🎯T408 via 🎯T414: stopping without killing is an instruction, and the
 	// instruction is the part that used to evaporate. The process ends here;
@@ -973,6 +987,18 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		life["err"] = err.Error()
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(err.Error()), nil
+	}
+	// 🎯T664: same guard as stop — a kill on an undecided delivery is the
+	// overseer inventing the answer the instrument refused to give.
+	forceKill, _ := args["force"].(bool)
+	if refuse, why := s.stopGuardFor(name); refuse {
+		if !forceKill {
+			life["err"] = "t664_guard: " + why
+			s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+			return mcp.NewToolResultError(FormatStopRefusal("kill", name, why)), nil
+		}
+		life["force"] = true
+		life["guard_why"] = why
 	}
 	allDesc := s.registry.Descendants(name)
 	plan := PlanKill(name, allDesc, subtree)

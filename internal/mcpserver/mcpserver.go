@@ -142,6 +142,10 @@ type Server struct {
 	// deliverToSenderWith shim for the same synchronous call (🎯T657).
 	// Guarded by mu.
 	sendModes map[string]delivery.Mode
+	// unconfirmedSends remembers a delivered_unconfirmed verdict per seat so
+	// stop / kill can refuse to act on an undecided delivery (🎯T664).
+	// Guarded by mu.
+	unconfirmedSends map[string]unconfirmedSend
 	// resolveProc overrides which claudia process carries an agent's event
 	// sink (🎯T426). Nil — the product path — reads the live registry.
 	resolveProc agentProcResolver

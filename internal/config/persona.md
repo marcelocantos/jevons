@@ -867,8 +867,11 @@ survive daemon restarts — you never lose one.
   observed of the RECEIVER, not what the send call returned. `sent` means your
   payload appeared in its transcript as a user message. `queued` means a turn
   was running and the daemon is holding the message itself. `delivered_unconfirmed`
-  means it was handed over and not seen to land — **treat as undelivered** until
-  the agent acts. An error naming the message **not submitted** means it is
+  means it was handed over and not seen to land — resolve it by reading
+  (`jevons_transcript_read`) or wait for the turn boundary;
+  **never stop, kill or re-send** on this verdict (🎯T664: `jevons_agent_stop` /
+  `jevons_agent_kill` refuse it without `force=true`). A seat is stopped only
+  for a reason you can state. An error naming the message **not submitted** means it is
   sitting in that agent's composer: do not re-send, that stacks a second copy,
   and it is neither a provider refusal nor an agent with nothing to say.
   Checking by hand, three instruments lie — transcript growth (a send's Enter

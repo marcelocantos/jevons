@@ -333,6 +333,10 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 				"enqueue/dequeue/remove/popAll or queued_command attachment carrying it, "+
 				"means it was delivered. Absence at user-message level alone does not mean lost.",
 			name)
+		// 🎯T664: remember the undecided delivery so stop / kill refuse to act
+		// on it, and say so here, where the verdict is read.
+		s.noteUnconfirmedSend(name, payload)
+		msg += fmt.Sprintf(" Do not stop or kill %q on this verdict either: jevons_agent_stop and jevons_agent_kill refuse it until a turn boundary or a transcript read decides it (🎯T664).", name)
 		res := agentSendResult{
 			Status:    "delivered_unconfirmed",
 			Message:   msg,
