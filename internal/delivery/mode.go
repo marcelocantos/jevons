@@ -40,6 +40,18 @@ const (
 	// MechanismQueueUntilIdle: steer was asked for but this seat (or this
 	// claudia) cannot steer, so the text is held honestly — never reported as steered.
 	MechanismQueueUntilIdle = "queue_until_idle"
+	// MechanismSessionCancelPrompt: the jevons daemon itself cancelled the
+	// open turn (Interrupt) and then submitted (Send), because the seat's
+	// process exposes no SendMode. Distinct from claudia's own
+	// interrupt+submit so a log tells the two apart.
+	MechanismSessionCancelPrompt = "session_cancel+prompt"
+)
+
+// Turn phases as claudia's SendMode reports them in DeliveryOutcome.PhaseBefore.
+// Read through the seam as plain strings (🎯T448: the pin has no TurnPhase).
+const (
+	PhaseIdle   = "idle"
+	PhaseInTurn = "in_turn"
 )
 
 // Parse normalises a wire mode. Empty is submit. interruptAlias is the

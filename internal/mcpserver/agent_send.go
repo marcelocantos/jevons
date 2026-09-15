@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -29,10 +30,14 @@ func undeliverableQueueError(name string, err error) error {
 
 // agentSendResult is the outcome of sendToAgent (🎯T111.1).
 type agentSendResult struct {
-	// Status: sent | queued | interrupted_sent | interrupted_queued | rehydrated_sent
+	// Status: sent | queued | steered | interrupted_sent | interrupted_queued | rehydrated_sent
 	Status  string
 	Message string
 	Queued  int // pending after this call (including this message if queued)
+	// Mode is the owner's delivery intent and Mechanism what actually ran
+	// (🎯T657). Spellings: internal/delivery.
+	Mode      delivery.Mode
+	Mechanism string
 }
 
 // agentSender is the process surface sendToAgent needs (testable).
@@ -96,6 +101,9 @@ type AgentDeliverResult struct {
 	Status  string
 	Message string
 	Queued  int
+	// Mode and Mechanism: the owner's intent and what ran (🎯T657).
+	Mode      string
+	Mechanism string
 }
 
 // DeliverAgentMessage is the product deliver path shared by HTTP
@@ -210,6 +218,8 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 
 // logAgentSendResult emits structured slog for busy/queue/interrupt outcomes
 // (🎯T120.2). Shared field schema: component, name, status, queued, rehydrated.
+// 🎯T657: the same line carries mode and mechanism, so a steer that fell back
+// to a queue is legible as one without a second log line.
 func logAgentSendResult(name string, res agentSendResult, rehydrated bool) {
 	slog.Info("agent_send",
 		"component", "agent_send",
@@ -217,6 +227,8 @@ func logAgentSendResult(name string, res agentSendResult, rehydrated bool) {
 		"status", res.Status,
 		"queued", res.Queued,
 		"rehydrated", rehydrated,
+		"mode", string(res.Mode),
+		"mechanism", res.Mechanism,
 	)
 }
 
@@ -232,6 +244,8 @@ func logAgentSendOutcome(name string, res agentSendResult, rehydrated bool, outc
 		"status", res.Status,
 		"queued", res.Queued,
 		"rehydrated", rehydrated,
+		"mode", string(res.Mode),
+		"mechanism", res.Mechanism,
 		"outcome", string(outcome),
 		"flight", flight.String(),
 		"payload_seen", ev.PayloadSeen,
@@ -250,7 +264,7 @@ func logAgentSendOutcome(name string, res agentSendResult, rehydrated bool, outc
 // through so the operator sees both accounts — what the harness claimed and what
 // the receiver's records showed — because the whole defect is the first being
 // reported as though it were the second.
-func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, flight TurnFlight, ev TurnEvidence, rehydrated, interrupted bool, transportErr error) (agentSendResult, error) {
+func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, flight TurnFlight, ev TurnEvidence, rehydrated, interrupted bool, transportErr error, mm sendMech) (agentSendResult, error) {
 	claim := describeTransportClaim(transportErr)
 	switch outcome {
 	case OutcomeBegun:
@@ -276,7 +290,8 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 				" (the send transport reported %q — a claim about its own pane capture, "+
 					"contradicted by %s)", claim, evidenceDetail(ev))
 		}
-		res := agentSendResult{Status: sentStatus(rehydrated, interrupted), Message: msg, Queued: s.pendingAgentSends(name)}
+		msg += describeMode(mm)
+		res := agentSendResult{Status: sentStatus(rehydrated, interrupted), Message: msg, Queued: s.pendingAgentSends(name), Mode: mm.Mode, Mechanism: mm.Mechanism}
 		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
 		// 🎯T305: never_briefed → running. Now earned from the payload
 		// arriving rather than from the send call returning.
@@ -319,9 +334,11 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 				"means it was delivered. Absence at user-message level alone does not mean lost.",
 			name)
 		res := agentSendResult{
-			Status:  "delivered_unconfirmed",
-			Message: msg,
-			Queued:  s.pendingAgentSends(name),
+			Status:    "delivered_unconfirmed",
+			Message:   msg,
+			Queued:    s.pendingAgentSends(name),
+			Mode:      mm.Mode,
+			Mechanism: mm.Mechanism,
 		}
 		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
 		return res, nil
@@ -332,7 +349,9 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 			Message: fmt.Sprintf(
 				"busy: %q had a turn in flight; message queued (%d pending) for delivery when it ends.",
 				name, s.pendingAgentSends(name)),
-			Queued: s.pendingAgentSends(name),
+			Queued:    s.pendingAgentSends(name),
+			Mode:      mm.Mode,
+			Mechanism: delivery.MechanismClientQueue,
 		}
 		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
 		return res, nil
@@ -407,9 +426,43 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 }
 
 // deliverToSenderWith is deliverToSender with the confirmation owner named.
+// The bool is the deprecated interrupt alias (🎯T657); a mode stashed by
+// deliverByNameMode for this call wins over it.
 func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
+	return deliverToSenderMode(s, name, text, s.takeSendMode(name, interrupt), proc, rehydrated, confirm)
+}
+
+// deliverToSenderMode is the mode-carrying send path (🎯T657).
+//
+//   - submit: send when idle; queue behind a known or discovered open turn
+//     (mechanism client_queue).
+//   - steer: through the process's SendMode when it has one — folded into the
+//     open turn (status steered, mechanism as claudia reports it) or a plain
+//     submit when the seat was idle. Without SendMode, or when claudia says
+//     steer is unsupported, the text is queued and the mechanism says
+//     queue_until_idle — never "steered".
+//   - interrupt: the 🎯T424 hatch — cancel, then send (mechanism
+//     session_cancel+prompt when the daemon ran the cancel itself).
+//   - queue: hold for the next turn boundary when a turn is open; an idle seat
+//     has no boundary coming, so the text is submitted (mechanism submit).
+func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
 	if proc == nil || !proc.Alive() {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
+	}
+	if mode == "" {
+		mode = delivery.ModeSubmit
+	}
+	interrupt := mode.Interrupts()
+	mm := sendMech{Mode: mode, Mechanism: delivery.MechanismSubmit}
+
+	// The seam through which a steer reaches the seat. Nil on the pinned
+	// claudia (🎯T448): the mode then degrades to submit-or-queue, said once.
+	var seam sendModeFunc
+	if mode == delivery.ModeSteer {
+		seam = sendModeSeam(proc)
+		if seam == nil {
+			logSendModeSeamMissing(name)
+		}
 	}
 
 	// A turn known to be running is not offered to the provider CLI at all.
@@ -421,7 +474,11 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 	// 🎯T424: interrupt=true never takes this arm. The reading can be
 	// stale in both directions; the hatch must act on the process, not on
 	// the flag it exists to escape.
-	if !interrupt && s.flightState(name) == FlightInFlight {
+	//
+	// 🎯T657: a steer with a seam does not take it either — folding into the
+	// open turn is the point, and the seam decides on the process's own
+	// phase reading rather than this one.
+	if !interrupt && seam == nil && s.flightState(name) == FlightInFlight {
 		// 🎯T426 clause 3: "in flight" is a claim this process wrote when it
 		// last saw a send begin, and it is only worth anything while the sink
 		// that would retract it is still attached. Attaching one HERE means it
@@ -435,10 +492,14 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		if qerr != nil {
 			return agentSendResult{}, undeliverableQueueError(name, qerr)
 		}
+		mm.Mechanism = delivery.MechanismClientQueue
+		if mode == delivery.ModeSteer {
+			mm.Mechanism = delivery.MechanismQueueUntilIdle
+		}
 		msg := fmt.Sprintf(
 			"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
 				"held by the daemon, not pasted into the agent's composer. "+
-				"To cut the current turn short instead: jevons_agent_send with interrupt=true.",
+				"To cut the current turn short instead: jevons_agent_send with mode=interrupt.",
 			name, n)
 		if darkStream {
 			slog.Warn("🎯T426 queued behind an unobserved turn boundary — event stream was dark",
@@ -451,15 +512,22 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 					"The stream is re-attached now and the queue drains at the next observed turn end. "+
 					"If nothing moves, that agent's turn already ended before the re-attach: confirm from ITS "+
 					"transcript (terminal assistant message + turn_duration, file not growing) and then use "+
-					"jevons_agent_send with interrupt=true.",
+					"jevons_agent_send with mode=interrupt.",
 				n, name)
 		}
-		res := agentSendResult{Status: "queued", Message: msg, Queued: n}
+		res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: n, Mode: mode, Mechanism: mm.Mechanism}
 		logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightInFlight, TurnEvidence{})
 		return res, nil
 	}
 
-	trySend := func() error { return proc.Send(text) }
+	// trySend is the one place text reaches the process. Through the seam it
+	// also reports what ran and the phase the process saw itself in.
+	trySend := func() (sendModeOutcome, error) {
+		if seam != nil {
+			return seam(text, mode)
+		}
+		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, proc.Send(text)
+	}
 
 	// Opened BEFORE the send so "the payload arrived" is measured against a
 	// pre-send baseline, never against what an earlier session left on disk.
@@ -469,15 +537,35 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		watch = s.watchAgentTurnFor(name, text)
 	}
 
-	err := trySend()
+	out, err := trySend()
 	if err == nil {
+		if out.Mechanism != "" {
+			mm.Mechanism = out.Mechanism
+		}
+		if seam != nil && out.PhaseBefore == delivery.PhaseInTurn {
+			// Folded into the open turn: there is no new turn to watch begin,
+			// and the queue is untouched. The mechanism is claudia's own word
+			// for what it did (ACP supersede, Codex turn/steer, …).
+			res := agentSendResult{
+				Status:    statusSteered,
+				Message:   fmt.Sprintf("Steered the in-flight turn on %q with the new text.", name) + describeMode(mm),
+				Queued:    s.pendingAgentSends(name),
+				Mode:      mode,
+				Mechanism: mm.Mechanism,
+			}
+			logAgentSendResult(name, res, rehydrated)
+			s.noteTurnInFlight(name)
+			return res, nil
+		}
 		if confirm == confirmByCaller {
 			// The spawn path judges this one; reporting a verdict here would
 			// hand it a status its own predicate does not know.
 			res := agentSendResult{
-				Status:  sentStatus(rehydrated, false),
-				Message: fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name),
-				Queued:  s.pendingAgentSends(name),
+				Status:    sentStatus(rehydrated, false),
+				Message:   fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name) + describeMode(mm),
+				Queued:    s.pendingAgentSends(name),
+				Mode:      mode,
+				Mechanism: mm.Mechanism,
 			}
 			logAgentSendResult(name, res, rehydrated)
 			s.markAgentTurnBegan(name)
@@ -486,10 +574,14 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		}
 		ev := watch()
 		outcome := s.classifySend(name, text, flight, ev)
-		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, nil)
+		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, nil, mm)
 	}
 
-	if !isPromptInFlight(err) {
+	// 🎯T657: claudia answered that this handle cannot steer. Not busy, not a
+	// transport failure — the honest answer is to hold the text.
+	steerRefused := mode == delivery.ModeSteer && isSteerUnsupported(err)
+
+	if !isPromptInFlight(err) && !steerRefused {
 		// 🎯T429: ask the error the narrow question first — does it DISPROVE
 		// delivery? A transport that could not verify a submission has not
 		// observed the receiver at all, and returning its claim as a failure is
@@ -500,7 +592,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmHere {
 			ev := watch()
 			outcome := s.classifySend(name, text, flight, ev)
-			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, err)
+			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, err, mm)
 		}
 		// 🎯T237: structured class + owner-visible copy (not bare Internal error).
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
@@ -511,6 +603,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 			"component", "agent_send",
 			"name", name,
 			"status", "failed",
+			"mode", string(mode),
 			"failure_class", class.String(),
 			"transient", class.IsTransient(),
 			"err", err.Error(),
@@ -533,6 +626,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 					"The turn could not be cut; jevons_agent_stop then jevons_agent_start resumes the session.",
 				name, ierr)
 		}
+		mm.Mechanism = delivery.MechanismSessionCancelPrompt
 		// Brief yield so ACP can clear promptID after session/cancel.
 		time.Sleep(50 * time.Millisecond)
 		// A successful interrupt ends the turn that was running, so the agent
@@ -540,10 +634,10 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 		// cutting a turn short, "it went into the composer and stayed there"
 		// is precisely the outcome the caller must not hear as success.
 		watch2 := s.watchAgentTurnFor(name, text)
-		if err2 := trySend(); err2 == nil {
+		if err2 := proc.Send(text); err2 == nil {
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
-			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil)
+			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil, mm)
 		} else if !isPromptInFlight(err2) && !ClassifySendError(err2).DisprovesDelivery() {
 			// 🎯T429, on the interrupt arm: the same non-observation, and the
 			// same rule. An interrupt that succeeded leaves the agent known
@@ -551,7 +645,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 			// earned from the receiver, not inherited from the transport.
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
-			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, err2)
+			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, err2, mm)
 		} else if isPromptInFlight(err2) {
 			// 🎯T424: still busy after a successful Interrupt is a
 			// typed failure, not a queue increment. The 2026-08-10
@@ -570,6 +664,7 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 				"component", "agent_send",
 				"name", name,
 				"status", "failed_after_interrupt",
+				"mode", string(mode),
 				"failure_class", class.String(),
 				"transient", class.IsTransient(),
 				"err", err2.Error(),
@@ -583,14 +678,25 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 	if qerr != nil {
 		return agentSendResult{}, undeliverableQueueError(name, qerr)
 	}
+	mm.Mechanism = delivery.MechanismClientQueue
+	why := "prompt already in flight"
+	if mode == delivery.ModeSteer {
+		mm.Mechanism = delivery.MechanismQueueUntilIdle
+		why = "steer asked for but this seat cannot fold text into its open turn"
+		if steerRefused {
+			why = "steer asked for but claudia reports this handle cannot steer"
+		}
+	}
 	res := agentSendResult{
 		Status: "queued",
 		Message: fmt.Sprintf(
-			"busy: prompt already in flight on %q; message queued (%d pending) for delivery when the current turn ends. "+
-				"Not a dead-end — no silent drop. To interrupt a stuck turn: jevons_agent_send with interrupt=true "+
+			"busy: %s on %q; message queued (%d pending) for delivery when the current turn ends. "+
+				"Not a dead-end — no silent drop. To interrupt a stuck turn: jevons_agent_send with mode=interrupt "+
 				"(or stop+start to resume the same session without kill/remint).",
-			name, n),
-		Queued: n,
+			why, name, n) + describeMode(mm),
+		Queued:    n,
+		Mode:      mode,
+		Mechanism: mm.Mechanism,
 	}
 	logAgentSendResult(name, res, rehydrated)
 	return res, nil

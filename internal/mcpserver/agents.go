@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -80,7 +81,8 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
-			mcp.WithBoolean("interrupt", mcp.Description("If true and a prompt is in flight, interrupt that turn then send (stuck recovery without kill). Default false = queue for after the turn.")),
+			mcp.WithString("mode", mcp.Description("🎯T657 delivery mode: submit (default; queue for after the turn when busy) | steer (fold the text into the in-flight turn; plain submit when idle; queued honestly as queue_until_idle when the seat cannot steer) | interrupt (cancel the in-flight turn, then send — stuck recovery without kill) | queue (hold for the next turn boundary; submits when idle). The result names the mechanism that ran.")),
+			mcp.WithBoolean("interrupt", mcp.Description("Deprecated alias for mode=interrupt (🎯T657). Refused when it contradicts an explicit mode.")),
 			mcp.WithBoolean("force_rebrief", mcp.Description("🎯T597: a full re-brief (spawn-brief envelope, or >1KB opening-brief prose) to a seat with recent activity (stored report / workdir touch) is refused, because re-briefing a working seat restarts its mission and can discard uncommitted work. Pass true only when you are sure the seat needs its brief again.")),
 		),
 		s.handleAgentSend,
@@ -799,10 +801,16 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	text, _ := args["text"].(string)
 	actor, _ := args["actor"].(string)
 	interrupt, _ := args["interrupt"].(bool)
+	modeArg, _ := args["mode"].(string)
 	forceRebrief, _ := args["force_rebrief"].(bool)
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
+	}
+	// 🎯T657: mode is the intent; interrupt=true is its deprecated alias.
+	mode, err := delivery.Parse(strings.TrimSpace(modeArg), interrupt)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	// 🎯T597: a full re-brief to a seat with recent activity is refused
@@ -862,7 +870,7 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 
 	// 🎯T111.1 / 🎯T321: rehydrate + send under the caller's lineage, or
 	// queue/interrupt when prompt in flight.
-	result, err := s.sendToAgentAs(actor, name, text, interrupt)
+	result, err := s.sendToAgentMode(actor, name, text, mode)
 	if err != nil {
 		// 🎯T283: deliverToSender already formats send failures; this also
 		// classifies the rehydrate/launch arm, which reaches the provider too.

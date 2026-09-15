@@ -52,6 +52,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
 
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
 	"github.com/marcelocantos/pigeon/qr"
@@ -961,12 +962,12 @@ func main() {
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
 	// terminal stop is wired in mcpserver agentEventSink (ð¯T111.1).
-	srv.SetAgentSendOriginHook(func(name, text, origin string, interrupt bool) (string, error) {
-		res, err := mcpSrv.DeliverAgentMessageAs(name, text, mcpserver.SendOrigin(origin), interrupt)
+	srv.SetAgentSendOriginHook(func(name, text, origin string, mode delivery.Mode) (server.AgentSendOutcome, error) {
+		res, err := mcpSrv.DeliverAgentMessageMode(name, text, mcpserver.SendOrigin(origin), mode)
 		if err != nil {
-			return "", err
+			return server.AgentSendOutcome{}, err
 		}
-		return res.Status, nil
+		return server.AgentSendOutcome{Status: res.Status, Mechanism: res.Mechanism}, nil
 	})
 	mcpSrv.SetAgentRequestRecorder(func(name, text string, origin mcpserver.SendOrigin) error {
 		return srv.RecordAgentRequest(name, text, string(origin))

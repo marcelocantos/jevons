@@ -476,7 +476,7 @@ func TestT426QueuedSendOverADarkStreamIsFailLoud(t *testing.T) {
 	if !strings.Contains(res.Message, "NOT TRUSTWORTHY") {
 		t.Fatalf("sender was told a cheerful %q over a dark stream", res.Message)
 	}
-	if !strings.Contains(res.Message, "interrupt=true") {
+	if !strings.Contains(res.Message, "mode=interrupt") {
 		t.Fatalf("message does not name the recovery: %q", res.Message)
 	}
 	var warned bool

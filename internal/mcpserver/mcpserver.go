@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -118,7 +119,7 @@ type Server struct {
 	// process; Claudia owns whether the conversation is resumable.
 	cursorSubmit func(name, text string) error
 	cursorBound  func(name string) bool
-	notifyJevon           NotifyFunc
+	notifyJevon  NotifyFunc
 	// overseerDeliver is the overseer arm of the single deliver-by-name path
 	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
 	// overseer-addressed send reuses the owner chat journal and notify queue.
@@ -137,6 +138,10 @@ type Server struct {
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver
+	// sendModes carries a delivery.Mode from deliverByNameMode to the bool
+	// deliverToSenderWith shim for the same synchronous call (🎯T657).
+	// Guarded by mu.
+	sendModes map[string]delivery.Mode
 	// resolveProc overrides which claudia process carries an agent's event
 	// sink (🎯T426). Nil — the product path — reads the live registry.
 	resolveProc agentProcResolver
