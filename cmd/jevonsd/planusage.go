@@ -41,6 +41,9 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		Load:     mcpSrv.HarnessLoad,
 		History:  hist,
 		OnUpdate: srv.FanPlanUsage,
+		// 🎯T666: a Grok billing 401 runs one headless grok turn to rotate
+		// the login token, then re-polls; journalled as plan_usage.grok_token_refresh.
+		LogEvent: srv.LogEvent,
 	})
 	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
 	srv.SetPlanUsageWaitReady(reader.WaitReady)
