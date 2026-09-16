@@ -55,16 +55,6 @@ type ReaderArgs struct {
 	// ForceFetch is the producer used by RefreshNow (cockpit reload,
 	// 🎯T653). Nil uses Fetch, or the default LoadPlanUsage with Refresh.
 	ForceFetch FetchFunc
-	// GrokTokenRefresh rotates the Grok login token after a billing 401
-	// (🎯T666). Nil uses DefaultGrokTokenRefresher (a headless grok
-	// one-shot); GrokRefreshDisabled turns the hook off entirely.
-	GrokTokenRefresh    GrokTokenRefresher
-	GrokRefreshDisabled bool
-	// GrokRefreshWindow is the least time between two one-shots. Zero uses
-	// DefaultGrokRefreshWindow.
-	GrokRefreshWindow time.Duration
-	// LogEvent, when set, journals the refresh outcome (component plan_usage).
-	LogEvent func(component, decision string, fields map[string]any)
 }
 
 // Reader keeps the last round of plan-usage readings and re-shapes them on
@@ -82,8 +72,6 @@ type Reader struct {
 	readings []claudia.PlanUsage
 	fetched  bool
 	lastErr  string
-	// lastGrokRefresh is when the 🎯T666 one-shot last ran.
-	lastGrokRefresh time.Time
 
 	// ready is closed on the first successful Refresh so GET /api/plan-usage
 	// can long-poll until the first batch lands instead of returning pending.
@@ -189,8 +177,8 @@ func (r *Reader) refresh(ctx context.Context, force bool) error {
 	return err
 }
 
-func (r *Reader) doRefresh(parent context.Context, force bool) error {
-	ctx, cancel := context.WithTimeout(parent, r.args.FetchTimeout)
+func (r *Reader) doRefresh(ctx context.Context, force bool) error {
+	ctx, cancel := context.WithTimeout(ctx, r.args.FetchTimeout)
 	defer cancel()
 
 	fetch := r.args.Fetch
@@ -198,14 +186,6 @@ func (r *Reader) doRefresh(parent context.Context, force bool) error {
 		fetch = r.args.ForceFetch
 	}
 	readings, err := fetch(ctx)
-	if err == nil {
-		// 🎯T666: a Grok 401 is a stale login token; rotate it and ask again.
-		refetch := r.args.ForceFetch
-		if refetch == nil {
-			refetch = r.args.Fetch
-		}
-		readings = r.refreshGrokTokenIfNeeded(parent, readings, refetch)
-	}
 	r.mu.Lock()
 	if err != nil {
 		r.lastErr = err.Error()
