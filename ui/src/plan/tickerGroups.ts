@@ -6,6 +6,8 @@
 export type PlanHistoryPoint = {
   at: string;
   remaining_percent: number;
+  /** 🎯T667: the daemon's band for the window as of `at`. */
+  band?: string;
 };
 
 export type PlanWindow = {

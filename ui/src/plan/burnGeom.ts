@@ -10,6 +10,7 @@
  * keeps a visible inward stem so it is not a 1px line on the column border.
  */
 
+import { paceClassForBand } from './pace';
 import { limitSecondsFor } from './windowGeom';
 import type { PlanHistoryPoint, PlanWindow } from './tickerGroups';
 
@@ -55,7 +56,9 @@ export function historyPoints(w: PlanWindow): PlanHistoryPoint[] {
     if (typeof p.remaining_percent !== 'number' || !Number.isFinite(p.remaining_percent)) continue;
     const at = Date.parse(p.at);
     if (Number.isNaN(at)) continue;
-    out.push({ at: p.at, remaining_percent: clamp(p.remaining_percent, 0, 100) });
+    const point: PlanHistoryPoint = { at: p.at, remaining_percent: clamp(p.remaining_percent, 0, 100) };
+    if (typeof p.band === 'string' && p.band) point.band = p.band;
+    out.push(point);
   }
   return out;
 }
@@ -139,4 +142,46 @@ export function burnPaths(w: PlanWindow): BurnPaths | null {
 
 function round(n: number): string {
   return (Math.round(n * 10) / 10).toString();
+}
+
+/**
+ * 🎯T667: the sparkline's colour at each sample is the band the daemon
+ * assigned the window at that moment, so a week that started on track and
+ * ended burning hot shifts green → red along the curve instead of painting
+ * the whole period in today's colour. Each stop carries the band's pace class
+ * (paceClassForBand — the bar's own chain); cockpit.css colours it, so the
+ * palette has one home.
+ */
+export type BurnStop = { offset: number; className: string };
+
+/**
+ * Horizontal gradient stops, one per sample, at the sample's x as a fraction
+ * of the plot width. Empty when no sample carries a band (an older daemon):
+ * the chart then keeps its single inherited colour. A stem-width cluster has
+ * no horizontal extent to shift across, so it takes the latest band flat.
+ */
+export function burnStops(w: PlanWindow): BurnStop[] {
+  const samples = historyPoints(w);
+  const points = burnPoints(w);
+  if (!points.length || points.length !== samples.length) return [];
+  const classes = samples.map((p) => paceClassForBand(p.band));
+  if (!classes.some((c) => c !== null)) return [];
+  const span = points[points.length - 1].x - points[0].x;
+  if (points.length === 1 || span < BURN_STEM_MIN) {
+    let latest: string | null = null;
+    for (const c of classes) if (c !== null) latest = c;
+    return [
+      { offset: 0, className: latest as string },
+      { offset: 1, className: latest as string },
+    ];
+  }
+  const stops: BurnStop[] = [];
+  let last: string | null = null;
+  for (let i = 0; i < points.length; i++) {
+    const c: string | null = classes[i] ?? last;
+    if (c === null) continue;
+    last = c;
+    stops.push({ offset: clamp(points[i].x / BURN_WIDTH, 0, 1), className: c });
+  }
+  return stops;
 }

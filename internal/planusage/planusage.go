@@ -111,6 +111,11 @@ type Window struct {
 type HistoryPoint struct {
 	At        time.Time `json:"at"`
 	Remaining float64   `json:"remaining_percent"`
+	// Band is the daemon's verdict for the window as of At, from the same
+	// model as Window.Band (🎯T667). Filled per request by WithBands, never
+	// stored: the sparkline paints how the colour moved across the period
+	// instead of repainting the whole curve in today's colour.
+	Band string `json:"band,omitempty"`
 }
 
 // Backend is one provider's plan-usage picture.

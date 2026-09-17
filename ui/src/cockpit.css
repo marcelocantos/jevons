@@ -1589,11 +1589,18 @@ body.rhs-resizing-row { cursor: row-resize; }
   padding: 2px 4px;
   vertical-align: bottom;
 }
-.plan-tip-table td.plan-burn.plan-ahead { color: var(--amber); }
+.plan-tip-table td.plan-burn.plan-ahead,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-ahead { color: var(--amber); }
 .plan-tip-table td.plan-burn.plan-hot,
-.plan-tip-table td.plan-burn.plan-crit { color: var(--red); }
-.plan-tip-table td.plan-burn.plan-under { color: var(--plan-under); }
-.plan-tip-table td.plan-burn.plan-locked { color: var(--plan-locked); }
+.plan-tip-table td.plan-burn.plan-crit,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-hot { color: var(--red); }
+.plan-tip-table td.plan-burn.plan-under,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-burn.plan-locked,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-locked { color: var(--plan-locked); }
+/* 🎯T667: a gradient stop takes the same class as the cell, so the palette
+   above is the only one; an ok stop falls back to the ok green. */
+.plan-tip-table td.plan-burn .plan-burn-stop { color: var(--green); stop-color: currentColor; }
 .plan-tip-table td.plan-burn .plan-burn-svg {
   display: block;
   width: 100%;

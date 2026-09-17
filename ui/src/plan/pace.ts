@@ -294,6 +294,18 @@ const SERVED_BAND: Record<string, string> = {
   exhausted: PACE_HOT,
 };
 
+/**
+ * 🎯T667: the pace class for a served band, through the same SERVED_BAND →
+ * paceClassName chain the bar uses. null when the band is empty or unknown
+ * (nothing to paint); '' for ok, whose colour is the element's default.
+ */
+export function paceClassForBand(band: string | null | undefined): string | null {
+  const served = typeof band === 'string' ? band.trim() : '';
+  if (!served) return null;
+  const pace = SERVED_BAND[served];
+  return pace === undefined ? null : paceClassName(pace);
+}
+
 /** Served bands this build did not recognise, for tests and the notice. */
 export const unknownServedBands: string[] = [];
 
