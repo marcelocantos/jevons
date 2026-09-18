@@ -102,6 +102,16 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
     ]);
   });
 
+  it('leaves the column dividers neutral — a pace colour is data, not furniture (🎯T668)', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
+    const rule = /\.plan-tip-table thead th,\s*\.plan-tip-table tbody td \{([^}]*)\}/.exec(css);
+    expect(rule, 'tip-table border rule').toBeTruthy();
+    expect(rule![1]).toContain('border-color');
+    // currentColor here is the cell's pace colour, which drew red and blue
+    // dividers between the columns.
+    expect(rule![1]).not.toContain('currentColor');
+  });
+
   it('colours the stops from the same cockpit.css rules as the cell — no second palette', () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
     for (const cls of [CLASS_AHEAD, CLASS_HOT, CLASS_UNDER, CLASS_LOCKED]) {

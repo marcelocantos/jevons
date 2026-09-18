@@ -1667,9 +1667,13 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table tbody td {
   border-left: 1px solid currentColor;
 }
+/* 🎯T668: the rules between columns are furniture, not data. Mixing them
+   from currentColor made them take each cell's pace colour, so a hot
+   window drew a red divider and an under one a blue divider. The tip's
+   own text colour is the neutral the cells' colours vary against. */
 .plan-tip-table thead th,
 .plan-tip-table tbody td {
-  border-color: color-mix(in srgb, currentColor 22%, transparent);
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 .plan-tip-win {
   font-size: 11px;
