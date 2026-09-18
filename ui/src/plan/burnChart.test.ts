@@ -34,7 +34,9 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     );
     expect(pts).toHaveLength(1);
     expect(pts[0].x).toBeCloseTo(25, 5);
-    expect(pts[0].y).toBeCloseTo(32 * (1 - 0.71), 5);
+    // 71% remaining is 29% used, and y grows downward: a low-usage sample
+    // sits near the bottom of the plot (🎯T670).
+    expect(pts[0].y).toBeCloseTo(32 * 0.71, 5);
     expect(pts[0].x).not.toBe(0);
   });
 
@@ -65,7 +67,9 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     expect(spec?.points).toHaveLength(2);
     expect(spec?.line.startsWith('M')).toBe(true);
     expect(spec?.fill.endsWith('Z')).toBe(true);
-    expect(spec?.points[0].y).toBeLessThan(spec!.points[1].y);
+    // Usage climbs as the period runs, so the curve rises: later samples
+    // have smaller y (🎯T670).
+    expect(spec?.points[0].y).toBeGreaterThan(spec!.points[1].y);
   });
 
   it('gives a single sample a visible stem, not a zero-width sliver', () => {

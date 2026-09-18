@@ -47,14 +47,16 @@ describe('plan tooltip table (🎯T588.1)', () => {
   it('names the weekday inside a week and the date beyond one', () => {
     // 'Tue 14:20' answers "when" without arithmetic; past a week a weekday
     // is ambiguous — which Tuesday? — so the date replaces it.
-    expect(rolloverCell(hoursOut(14), NOW, 'UTC')).toBe('Mon 14:00');
-    expect(rolloverCell(hoursOut(24 * 6 + 8), NOW, 'UTC')).toBe('Sun 08:00');
-    expect(rolloverCell(hoursOut(24 * 8), NOW, 'UTC')).toBe('8 Sep 00:00');
+    // 🎯T670: the cell also carries how long is left, so the owner does not
+    // subtract dates in their head.
+    expect(rolloverCell(hoursOut(14), NOW, 'UTC')).toBe('Mon 14:00 14h');
+    expect(rolloverCell(hoursOut(24 * 6 + 8), NOW, 'UTC')).toBe('Sun 08:00 152h');
+    expect(rolloverCell(hoursOut(24 * 8), NOW, 'UTC')).toBe('8 Sep 00:00 192h');
   });
 
   it('renders the rollover in the viewer zone, not UTC', () => {
-    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'Australia/Melbourne')).toBe('Mon 10:52');
-    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'America/Los_Angeles')).toBe('Sun 17:52');
+    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'Australia/Melbourne')).toBe('Mon 10:52 52m');
+    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'America/Los_Angeles')).toBe('Sun 17:52 52m');
   });
 
   it('says the duration the way the owner would', () => {
@@ -89,9 +91,11 @@ describe('plan tooltip table (🎯T588.1)', () => {
   it('paints one row per measure, one column per window', () => {
     const { container } = render(<PlanTipTable groups={FLEET} nowMs={NOW} timeZone="UTC" />);
     const rowLabels = [...container.querySelectorAll('th[scope="row"]')].map((e) => e.textContent);
-    expect(rowLabels).toEqual(['available', 'time left', 'consumed', 'rollover', 'burn']);
+    // 🎯T670: usage leads, available and time-left are gone, and the
+    // rollover cell carries the span.
+    expect(rowLabels).toEqual(['usage', 'rollover', 'burn']);
     const firstRow = [...container.querySelectorAll('tbody tr')][0];
-    expect([...firstRow.querySelectorAll('td')].map((e) => e.textContent)).toEqual(['76%', '25%', '85%']);
+    expect([...firstRow.querySelectorAll('td')].map((e) => e.textContent)).toEqual(['24%', '75%', '15%']);
     // The single-window provider's mark spans both header rows, so the
     // second header row carries only claude's two window labels.
     const winHeads = [...container.querySelectorAll('.plan-tip-win')].map((e) => e.textContent);
@@ -106,10 +110,10 @@ describe('plan tooltip table (🎯T588.1)', () => {
   });
 });
 
-// 🎯T588.2: the available figure must carry the bar's own pace class, or
+// 🎯T588.2: the usage figure must carry the bar's own pace class, or
 // the number and the bar above it can disagree about the same window.
-describe('available wears the bar colour (🎯T588.2)', () => {
-  it('puts the pace class on the available cell only', () => {
+describe('usage wears the bar colour (🎯T588.2 / 🎯T670)', () => {
+  it('puts the pace class on the usage cell only', () => {
     const hot = [
       {
         provider: 'claude',
@@ -120,14 +124,14 @@ describe('available wears the bar colour (🎯T588.2)', () => {
     const { container } = render(<PlanTipTable groups={hot} nowMs={NOW} timeZone="UTC" />);
     const avail = container.querySelector('td.plan-avail');
     expect(avail).toBeTruthy();
-    expect(avail?.textContent).toBe('2%');
+    expect(avail?.textContent).toBe('98%');
     // The cell's class is whatever the bar would paint for this window —
     // asserted against pace.ts itself rather than a hardcoded name, so the
     // test pins the wiring (they cannot drift apart) without freezing the
     // threshold policy that decides which colour it is.
     const expected = formatWindow(hot[0].windows[0], NOW).className;
     expect(avail?.className).toBe(('plan-avail ' + expected).trim());
-    // Only the available row is marked; consumed and rollover stay plain.
+    // Only the usage row is marked; rollover stays plain.
     expect(container.querySelectorAll('td.plan-avail')).toHaveLength(1);
     const burn = container.querySelector('td.plan-burn');
     expect(burn?.className).toBe(('plan-burn ' + expected).trim());

@@ -229,3 +229,34 @@ export function tickerTipBody(groups: TickerGroup[]): string {
 export function tickerTitle(groups: TickerGroup[]): string {
   return tickerTipBody(groups);
 }
+
+/**
+ * Usage 0–100 for a window (🎯T670). The published used_percent when there is
+ * one, else the complement of remaining. Null when the window publishes
+ * neither: an unknown is not zero usage.
+ */
+export function usedPercentOf(w: {
+  used_percent?: number | null;
+  remaining_percent?: number | null;
+}): number | null {
+  const used = w.used_percent;
+  if (typeof used === 'number' && Number.isFinite(used)) return Math.min(100, Math.max(0, used));
+  const rem = w.remaining_percent;
+  if (typeof rem === 'number' && Number.isFinite(rem)) return Math.min(100, Math.max(0, 100 - rem));
+  return null;
+}
+
+/**
+ * What the gauge fills with (🎯T670). Usage, except when the window is spent:
+ * a run-dry window keeps the empty red-bordered bar it has always had rather
+ * than reading as a solid red block, because "nothing left" and "full" must
+ * not paint the same however the bar is oriented.
+ */
+export function gaugeFillPercent(w: {
+  used_percent?: number | null;
+  remaining_percent?: number | null;
+}): number {
+  const rem = w.remaining_percent;
+  if (typeof rem === 'number' && Number.isFinite(rem) && rem <= 0) return 0;
+  return usedPercentOf(w) ?? 0;
+}

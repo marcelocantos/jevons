@@ -13,7 +13,7 @@
 import { now } from '../clock';
 import { formatWindow } from './pace';
 import { CompanyMark, companyOfProvider } from './companyMark';
-import { formatInstantParts } from './tickerGroups';
+import { formatInstantParts, usedPercentOf } from './tickerGroups';
 import type { PlanWindow, TickerGroup } from './tickerGroups';
 import { BurnChart } from './BurnChart';
 
@@ -101,6 +101,21 @@ export function timeLeft(w: PlanWindow, nowMs: number): string {
  * enough out to show it today, which is exactly why the rule is written
  * from the data rather than from the current fleet.
  */
+/**
+ * 🎯T670: how long is left, in the coarsest unit that is still honest —
+ * whole hours, because a rollover four days out does not need minutes, and
+ * minutes only once the hour itself is the interesting part (under 90m,
+ * where "2h" would round away most of what is left).
+ */
+export function remainingSpan(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0m';
+  const minutes = ms / (MINUTES_PER_HOUR * SECONDS_PER_MINUTE * 1000 / MINUTES_PER_HOUR) / SECONDS_PER_MINUTE / 1000;
+  const mins = ms / 60000;
+  if (mins < 90) return Math.max(1, Math.round(mins)) + 'm';
+  void minutes;
+  return Math.round(mins / MINUTES_PER_HOUR) + 'h';
+}
+
 export function rolloverCell(
   iso: string | null | undefined,
   nowMs: number,
@@ -115,7 +130,7 @@ export function rolloverCell(
     ? { timeZone, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }
     : { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
   try {
-    return formatInstantParts(at, opts);
+    return formatInstantParts(at, opts) + ' ' + remainingSpan(at.getTime() - nowMs);
   } catch {
     return '—';
   }
@@ -137,7 +152,7 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
   }
   const cols = header.flatMap((h) => h.columns);
   const multi = (h: TipHeaderGroup) => h.columns.length > 1;
-  // The available figure carries the same pace class the bar's fill does,
+  // The usage figure carries the same pace class the bar's fill does,
   // so the number and the bar above it say the same thing in the same
   // colour (🎯T588.2). Reusing formatWindow rather than re-deriving the
   // class is the point: two sources would drift and the tooltip would
@@ -193,13 +208,13 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
           </tr>
         </thead>
         <tbody>
+          {/* 🎯T670: usage leads and carries the pace colour — the same
+              quantity the gauge fills with and every harness reports. */}
           {row(
-            'available',
-            (c) => pct(c.window.remaining_percent),
+            'usage',
+            (c) => pct(usedPercentOf(c.window)),
             (c) => ('plan-avail ' + paceClass(c)).trim(),
           )}
-          {row('time left', (c) => timeLeft(c.window, nowMs))}
-          {row('consumed', (c) => pct(c.window.used_percent))}
           {row('rollover', (c) => rolloverCell(c.window.resets_at, nowMs, props.timeZone))}
           <tr>
             <th scope="row">burn</th>

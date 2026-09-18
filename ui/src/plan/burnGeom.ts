@@ -4,8 +4,10 @@
 /**
  * Plan-usage burn-down sparkline (🎯T634 / T637).
  *
- * X is the published window period; Y is remaining 0–100. The line starts
- * at the first stored sample — never a fabricated 100% at t=0. A cluster
+ * X is the published window period; Y is usage 0–100, rising to the right
+ * (🎯T670: every harness reports usage, and usage trending right reads more
+ * naturally than remaining trending left). The line starts at the first
+ * stored sample — never a fabricated 0% at t=0. A cluster
  * whose x-span is below the stem minimum (just-reset week, second Refresh)
  * keeps a visible inward stem so it is not a 1px line on the column border.
  */
@@ -73,7 +75,11 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
   return samples.map((p) => {
     const at = Date.parse(p.at);
     const x = clamp((100 * (at - period.start)) / span, 0, BURN_WIDTH);
-    const y = BURN_HEIGHT - (BURN_HEIGHT * clamp(p.remaining_percent, 0, 100)) / 100;
+    // The API publishes remaining; the chart plots usage (🎯T670). Derived
+    // here in full rather than folded into one inverted expression, so the
+    // next reader sees the quantity the axis claims to show.
+    const used = 100 - clamp(p.remaining_percent, 0, 100);
+    const y = BURN_HEIGHT - (BURN_HEIGHT * used) / 100;
     return { x, y };
   });
 }

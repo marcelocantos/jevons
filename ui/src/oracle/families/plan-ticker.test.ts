@@ -50,13 +50,13 @@ describeOracle(family('plan-ticker'), () => {
     fireEvent.pointerEnter(host!);
     const tip = container.querySelector('.instant-tip-show');
     expect(tip).toBeTruthy();
-    // 🎯T588.1 turned the hover into a grid, so the measure is a row
-    // label ("tokens left") rather than the word "remaining". T390's
-    // acceptance is that the owner can SEE percent-remaining and the next
-    // rollover, so assert the information — label, an actual percentage,
-    // and the rollover row — rather than the old sentence's wording.
+    // 🎯T588.1 turned the hover into a grid, so the measure is a row label
+    // rather than a sentence, and 🎯T670 made that measure usage — the
+    // complement T390 asked for, in the direction every harness reports.
+    // Assert the information — label, an actual percentage, and the
+    // rollover row — rather than either version's wording.
     const text = tip?.textContent || '';
-    expect(text).toMatch(/available/i);
+    expect(text).toMatch(/usage/i);
     expect(text).toMatch(/\d+%/);
     expect(text).toMatch(/rollover/i);
   });

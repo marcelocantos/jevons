@@ -11,7 +11,7 @@ import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
 import { triangleColorForRemaining } from '../plan/triColor';
 import { InstantTip } from './InstantTip';
-import { tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
+import { gaugeFillPercent, tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
 
 /** HTTP fallback only when mux is not connected (tests / non-cockpit). */
@@ -97,8 +97,12 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
           <span className="plan-box">
             {g.windows.map((w) => {
               const painted = formatWindow(w, now());
-              const rem = Number(w.remaining_percent) || 0;
-              const t = painted.remainingTimePercent;
+              // 🎯T670: the gauge fills with what has been spent, like every
+              // harness reports it, so bar and chevron both travel rightward.
+              // A spent window stays the empty red-bordered bar.
+              const used = gaugeFillPercent(w);
+              const remainingTime = painted.remainingTimePercent;
+              const spentTime = remainingTime == null ? null : 100 - remainingTime;
               const cls = painted.className;
               return (
                 <span
@@ -109,13 +113,18 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
                 >
                   <span className="plan-track">
                     <span className="plan-bar" aria-hidden="true">
-                      <span className="plan-bar-fill" style={{ width: rem + '%' }} />
+                      <span className="plan-bar-fill" style={{ width: used + '%' }} />
                     </span>
-                    {t != null ? (
+                    {spentTime != null && remainingTime != null ? (
                       <span
                         className="plan-tri"
                         aria-hidden="true"
-                        style={{ left: t + '%', borderBottomColor: triangleColorForRemaining(t) }}
+                        style={{
+                          left: spentTime + '%',
+                          // Position is time spent; the colour still answers
+                          // how much of the window is left (🎯T641's map).
+                          borderBottomColor: triangleColorForRemaining(remainingTime),
+                        }}
                       />
                     ) : null}
                   </span>
