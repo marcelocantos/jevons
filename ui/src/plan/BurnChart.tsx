@@ -39,7 +39,6 @@ export function BurnChart(props: { window: PlanWindow }) {
         width={BURN_WIDTH}
         height={BURN_HEIGHT}
       />
-      {spec ? <path className="plan-burn-fill" d={spec.fill} style={paint ? { fill: paint } : undefined} /> : null}
       {spec ? <path className="plan-burn-line" d={spec.line} style={paint ? { stroke: paint } : undefined} /> : null}
     </svg>
   );

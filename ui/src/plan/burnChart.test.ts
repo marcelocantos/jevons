@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { BURN_STEM_MIN, burnPaths, burnPoints, periodBounds, stemBand } from './burnGeom';
+import { BURN_STEM_MIN, burnPaths, burnPoints, periodBounds, stemBand,
+  BURN_HEIGHT,
+} from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 const START = Date.parse('2026-09-01T00:00:00Z');
@@ -66,24 +68,26 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     );
     expect(spec?.points).toHaveLength(2);
     expect(spec?.line.startsWith('M')).toBe(true);
-    expect(spec?.fill.endsWith('Z')).toBe(true);
     // Usage climbs as the period runs, so the curve rises: later samples
     // have smaller y (🎯T670).
     expect(spec?.points[0].y).toBeGreaterThan(spec!.points[1].y);
   });
 
-  it('gives a single sample a visible stem, not a zero-width sliver', () => {
+  it('gives a single sample an upright stem, not a dot on the border', () => {
     const mid = new Date(START + WEEK * 1000 * 0.25).toISOString();
     const spec = burnPaths(
       win({
         history: [{ at: mid, remaining_percent: 71 }],
       }),
     );
+    // 🎯T671 dropped the shaded area, so the stem IS the line: one
+    // vertical stroke from the sample's value down to the baseline.
     expect(spec?.line).toMatch(/^M/);
     expect(spec?.line).toContain(' L');
-    expect(spec?.fill.endsWith('Z')).toBe(true);
-    const ext = fillExtent(spec!.fill);
-    expect(ext.x1 - ext.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
+    const ext = lineExtent(spec!.line);
+    expect(ext.x0).toBe(ext.x1);
+    expect(ext.x0).toBeGreaterThan(0);
+    expect(spec!.line).toContain(',' + BURN_HEIGHT);
   });
 
   it('keeps a just-reset cluster as an inward stem, not a 1px left border (🎯T637)', () => {
@@ -100,9 +104,11 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     );
     expect(spec?.points).toHaveLength(2);
     expect(spec?.points[0].x).toBe(0);
-    const ext = fillExtent(spec!.fill);
+    // The samples sit on the period start, but the drawn stroke is held
+    // inside the stem band so it is not painted on the cell border.
+    const ext = lineExtent(spec!.line);
     expect(ext.x0).toBeGreaterThan(0);
-    expect(ext.x1 - ext.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
+    expect(ext.x1).toBeLessThanOrEqual(BURN_STEM_MIN + 1);
     const lineX = Number(spec!.line.match(/^M([\d.]+),/)?.[1]);
     expect(lineX).toBeGreaterThan(0);
   });
@@ -117,7 +123,7 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
   });
 });
 
-function fillExtent(d: string): { x0: number; x1: number } {
+function lineExtent(d: string): { x0: number; x1: number } {
   const xs = [...d.matchAll(/[ML]([\d.]+),/g)].map((m) => Number(m[1]));
   return { x0: Math.min(...xs), x1: Math.max(...xs) };
 }

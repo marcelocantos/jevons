@@ -1606,15 +1606,15 @@ body.rhs-resizing-row { cursor: row-resize; }
   width: 100%;
   height: 28px;
   overflow: hidden;
+  /* 🎯T671: the plot extents read as a white card with a grey frame — the
+     old tint was a shade off the tip's own background and barely there. */
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+  border-radius: 2px;
 }
 .plan-tip-table td.plan-burn .plan-burn-plot {
-  /* Slightly lighter than the tip (surface-raised) so the published
-     period × remaining 0–100 box is visible even when the line is a stem. */
-  fill: color-mix(in srgb, #fff 14%, var(--surface-raised));
-}
-.plan-tip-table td.plan-burn .plan-burn-fill {
-  fill: currentColor;
-  opacity: 0.4;
+  /* The published period × usage 0–100 box (🎯T671). */
+  fill: #fff;
 }
 .plan-tip-table td.plan-burn .plan-burn-line {
   fill: none;

@@ -4,9 +4,12 @@
 /**
  * Plan-usage burn-down sparkline (🎯T634 / T637).
  *
- * X is the published window period; Y is usage 0–100, rising to the right
- * (🎯T670: every harness reports usage, and usage trending right reads more
- * naturally than remaining trending left). The line starts at the first
+ * X is the published window period; Y is usage 0–100, rising to the right.
+ * The curve is a line alone (🎯T671): shading the area under it said
+ * nothing the line did not.
+ *
+ * 🎯T670: every harness reports usage, and usage trending right reads more
+ * naturally than remaining trending left. The line starts at the first
  * stored sample — never a fabricated 0% at t=0. A cluster
  * whose x-span is below the stem minimum (just-reset week, second Refresh)
  * keeps a visible inward stem so it is not a 1px line on the column border.
@@ -27,7 +30,6 @@ const BURN_EDGE_INSET = 1;
 export type BurnPoint = { x: number; y: number };
 
 export type BurnPaths = {
-  fill: string;
   line: string;
   points: BurnPoint[];
 };
@@ -112,19 +114,19 @@ function stemPaths(points: BurnPoint[]): BurnPaths {
   const midX = (first.x + last.x) / 2;
   const { x0, x1, lineX } = stemBand(midX);
   if (points.length === 1) {
-    const topY = first.y;
-    const line = `M${round(lineX)},${round(topY)} L${round(lineX)},${BURN_HEIGHT}`;
-    const fill = `M${round(x0)},${round(topY)} L${round(x1)},${round(topY)} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
-    return { fill, line, points };
+    // A lone sample is drawn as an upright stem from its value to the
+    // baseline: a single point has no slope to show, and a bare dot on
+    // the border was the 🎯T637 sliver.
+    const line = `M${round(lineX)},${round(first.y)} L${round(lineX)},${BURN_HEIGHT}`;
+    return { line, points };
   }
-  // Keep the real slope; only the fill is fattened and the stroke is
-  // kept inside the stem so a week-start cluster is not the cell border.
+  // Keep the real slope; the stroke is held inside the stem band so a
+  // week-start cluster is drawn inward rather than on the cell border.
   const drawn = points.map((p) => ({ x: clamp(p.x, x0, x1), y: p.y }));
   const line = drawn
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
     .join(' ');
-  const fill = `${line} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
-  return { fill, line, points };
+  return { line, points };
 }
 
 export function burnPaths(w: PlanWindow): BurnPaths | null {
@@ -140,10 +142,7 @@ export function burnPaths(w: PlanWindow): BurnPaths | null {
   const line = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
     .join(' ');
-  const first = points[0];
-  const last = points[points.length - 1];
-  const fill = `${line} L${round(last.x)},${BURN_HEIGHT} L${round(first.x)},${BURN_HEIGHT} Z`;
-  return { fill, line, points };
+  return { line, points };
 }
 
 function round(n: number): string {

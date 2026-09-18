@@ -72,7 +72,8 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
     // Browsers and jsdom may serialise url(#id) as url("#id").
     const ref = new RegExp(`^url\\("?#${id}"?\\)$`);
     expect((container.querySelector('.plan-burn-line') as SVGPathElement).style.stroke).toMatch(ref);
-    expect((container.querySelector('.plan-burn-fill') as SVGPathElement).style.fill).toMatch(ref);
+    // 🎯T671: the line is the whole chart; there is no shaded area to paint.
+    expect(container.querySelector('.plan-burn-fill')).toBeNull();
   });
 
   it('keeps the single inherited colour when no sample carries a band (older daemon)', () => {
