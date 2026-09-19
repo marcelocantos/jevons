@@ -101,19 +101,25 @@ export function timeLeft(w: PlanWindow, nowMs: number): string {
  * enough out to show it today, which is exactly why the rule is written
  * from the data rather than from the current fleet.
  */
+/** Below this many minutes left, the minutes are the interesting part. */
+export const MINUTES_SPAN_CUTOFF = 90;
+/** From this many hours left, hours stop being a quantity anyone reads. */
+export const DAYS_SPAN_CUTOFF_HOURS = 3 * HOURS_PER_DAY;
+
 /**
- * 🎯T670: how long is left, in the coarsest unit that is still honest —
- * whole hours, because a rollover four days out does not need minutes, and
- * minutes only once the hour itself is the interesting part (under 90m,
- * where "2h" would round away most of what is left).
+ * 🎯T670 / 🎯T672: how long is left, in the coarsest unit that is still
+ * honest — whole days from three days out, where "622h" stops being a
+ * quantity anyone reads; whole hours below that; and minutes only once the
+ * hour itself is the interesting part (under 90m, where "2h" would round
+ * away most of what is left).
  */
 export function remainingSpan(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0m';
-  const minutes = ms / (MINUTES_PER_HOUR * SECONDS_PER_MINUTE * 1000 / MINUTES_PER_HOUR) / SECONDS_PER_MINUTE / 1000;
-  const mins = ms / 60000;
-  if (mins < 90) return Math.max(1, Math.round(mins)) + 'm';
-  void minutes;
-  return Math.round(mins / MINUTES_PER_HOUR) + 'h';
+  const minutes = ms / (SECONDS_PER_MINUTE * 1000);
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0m';
+  if (minutes < MINUTES_SPAN_CUTOFF) return Math.max(1, Math.round(minutes)) + 'm';
+  const hours = minutes / MINUTES_PER_HOUR;
+  if (hours >= DAYS_SPAN_CUTOFF_HOURS) return Math.round(hours / HOURS_PER_DAY) + 'd';
+  return Math.round(hours) + 'h';
 }
 
 export function rolloverCell(

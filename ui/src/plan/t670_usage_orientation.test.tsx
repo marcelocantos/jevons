@@ -55,7 +55,7 @@ describe('the gauge fills with what was spent (🎯T670)', () => {
 });
 
 describe('the rollover cell says when and how long (🎯T670)', () => {
-  it('rounds to whole hours, and to minutes only under 90 minutes', () => {
+  it('reads in minutes, then hours, then days (🎯T672)', () => {
     expect(remainingSpan(22 * 3600_000)).toBe('22h');
     expect(remainingSpan(89 * 60_000)).toBe('89m');
     expect(remainingSpan(90 * 60_000)).toBe('2h');
@@ -63,6 +63,11 @@ describe('the rollover cell says when and how long (🎯T670)', () => {
     expect(remainingSpan(30_000)).toBe('1m');
     expect(remainingSpan(0)).toBe('0m');
     expect(remainingSpan(-5000)).toBe('0m');
+    // Three days is where hours stop being readable: 622h says nothing.
+    expect(remainingSpan(71 * 3600_000)).toBe('71h');
+    expect(remainingSpan(72 * 3600_000)).toBe('3d');
+    expect(remainingSpan(622 * 3600_000)).toBe('26d');
+    expect(remainingSpan(6.3 * 24 * 3600_000)).toBe('6d');
   });
 
   it('reads as a moment and a span', () => {

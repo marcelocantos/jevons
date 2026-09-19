@@ -50,8 +50,8 @@ describe('plan tooltip table (🎯T588.1)', () => {
     // 🎯T670: the cell also carries how long is left, so the owner does not
     // subtract dates in their head.
     expect(rolloverCell(hoursOut(14), NOW, 'UTC')).toBe('Mon 14:00 14h');
-    expect(rolloverCell(hoursOut(24 * 6 + 8), NOW, 'UTC')).toBe('Sun 08:00 152h');
-    expect(rolloverCell(hoursOut(24 * 8), NOW, 'UTC')).toBe('8 Sep 00:00 192h');
+    expect(rolloverCell(hoursOut(24 * 6 + 8), NOW, 'UTC')).toBe('Sun 08:00 6d');
+    expect(rolloverCell(hoursOut(24 * 8), NOW, 'UTC')).toBe('8 Sep 00:00 8d');
   });
 
   it('renders the rollover in the viewer zone, not UTC', () => {
