@@ -125,6 +125,12 @@ describe('PlanUsageBar mux wiring', () => {
       const win = container.querySelector('.plan-win') as HTMLElement;
       expect(win.className).toContain('plan-hot');
       expect(tri.style.borderBottomColor).toBe(triangleColorForRemaining(25));
+      // 🎯T670: the chevron marks time SPENT and travels rightward with the
+      // fill — a quarter of this window is left, so three quarters are gone.
+      // Only the colour was pinned before, so the flip was invisible here.
+      expect(tri.style.left).toBe('75%');
+      const fill = container.querySelector('.plan-bar-fill') as HTMLElement;
+      expect(fill.style.width).toBe('90%');
     } finally {
       resetClock();
     }
