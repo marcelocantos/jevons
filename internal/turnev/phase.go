@@ -6,7 +6,6 @@ package turnev
 import (
 	"bufio"
 	"io"
-	"os"
 	"strings"
 )
 
@@ -48,59 +47,66 @@ func (p Phase) Positive() bool { return p == PhaseIdle || p == PhaseWorking }
 // answers idle / working / unknown. It never infers one from the absence
 // of the other.
 func ClassifyPhase(recs []Record) Phase {
-	pending := 0
-	last := PhaseUnknown
+	var f phaseFold
 	for _, r := range recs {
-		switch r.Kind {
-		case KindQueueOp:
-			op := strings.ToLower(strings.TrimSpace(r.Operation))
-			switch op {
-			case "enqueue":
-				pending++
-				last = PhaseWorking
-			case "dequeue", "remove", "popall", "pop_all":
-				if pending > 0 {
-					pending--
-				}
-				// A drain without a later terminal is still in-flight
-				// unless we have already seen an end_turn.
-				if last != PhaseIdle {
-					last = PhaseWorking
-				}
+		f.step(r)
+	}
+	return f.phase()
+}
+
+// step folds one record into the running state. ClassifyPhase runs it over
+// a slice; the incremental path resumes it across calls (🎯T705). One
+// implementation, so the two cannot drift.
+func (f *phaseFold) step(r Record) {
+	switch r.Kind {
+	case KindQueueOp:
+		switch strings.ToLower(strings.TrimSpace(r.Operation)) {
+		case "enqueue":
+			f.pending++
+			f.last = PhaseWorking
+		case "dequeue", "remove", "popall", "pop_all":
+			if f.pending > 0 {
+				f.pending--
 			}
-		case KindQueuedCommand:
-			last = PhaseWorking
-		case KindUserMessage:
-			if strings.TrimSpace(r.Text) != "" {
-				last = PhaseWorking
-			}
-		case KindAssistant:
-			stop := strings.ToLower(strings.TrimSpace(r.StopReason))
-			terminal := stop == "end_turn" || stop == "stop_sequence" ||
-				stop == "max_tokens" || stop == "stop"
-			if r.HasToolUse && !terminal {
-				last = PhaseWorking
-				continue
-			}
-			if terminal {
-				last = PhaseIdle
-				continue
-			}
-			if strings.TrimSpace(r.Text) != "" {
-				last = PhaseWorking
-			}
-		default:
-			// System records after an assistant close the turn
-			// (session 76cef0a9 lines 112–113).
-			if last == PhaseWorking && strings.EqualFold(r.Type, "system") {
-				last = PhaseIdle
+			// A drain without a later terminal is still in-flight unless
+			// we have already seen an end_turn.
+			if f.last != PhaseIdle {
+				f.last = PhaseWorking
 			}
 		}
+	case KindQueuedCommand:
+		f.last = PhaseWorking
+	case KindUserMessage:
+		if strings.TrimSpace(r.Text) != "" {
+			f.last = PhaseWorking
+		}
+	case KindAssistant:
+		stop := strings.ToLower(strings.TrimSpace(r.StopReason))
+		terminal := stop == "end_turn" || stop == "stop_sequence" ||
+			stop == "max_tokens" || stop == "stop"
+		switch {
+		case r.HasToolUse && !terminal:
+			f.last = PhaseWorking
+		case terminal:
+			f.last = PhaseIdle
+		case strings.TrimSpace(r.Text) != "":
+			f.last = PhaseWorking
+		}
+	default:
+		// System records after an assistant close the turn
+		// (session 76cef0a9 lines 112–113).
+		if f.last == PhaseWorking && strings.EqualFold(r.Type, "system") {
+			f.last = PhaseIdle
+		}
 	}
-	if pending > 0 {
+}
+
+// phase is the fold's reading: a pending queue outranks the last signal.
+func (f phaseFold) phase() Phase {
+	if f.pending > 0 {
 		return PhaseWorking
 	}
-	return last
+	return f.last
 }
 
 // DecodeAll decodes every JSONL line from r using Decode. Unparseable
@@ -129,12 +135,7 @@ func ClassifyPhaseFile(path string) Phase {
 	if strings.TrimSpace(path) == "" {
 		return PhaseUnknown
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return PhaseUnknown
-	}
-	defer f.Close()
-	return ClassifyPhase(DecodeAll(f))
+	return classifyFile(path)
 }
 
 // CapsSystemicActions reports whether a single pass that would act on n
