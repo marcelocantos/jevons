@@ -30,6 +30,11 @@ package mcpserver
 // handoff, not a mission restart. The discriminator is that terminal
 // envelope — not elapsed time or workdir mtime. A genuine re-brief of a
 // working seat is still refused.
+//
+// 🎯T725: a workdir touch of a repo-wide shared file (bullseye.yaml above
+// all) is not this seat's activity. The probe either skips those files
+// and says so, or it would have to attribute the write to the seat
+// before citing it. A seat that edited its own source is still detected.
 
 import (
 	"fmt"
@@ -63,12 +68,34 @@ var workdirSkipDirs = map[string]bool{
 	"bin": true, ".playwright-mcp": true,
 }
 
+// workdirSharedBasenames are repo-wide files any actor in a shared clone
+// may write. A touch of one of these is not evidence that a particular
+// seat is working (🎯T725). bullseye.yaml is the load-bearing specimen:
+// jevons_target_file and every bullseye commit update it, and workers
+// are forbidden from editing it (🎯T546). The list is the named ledger
+// only — a broader skip (all yaml, go.mod, AGENTS.md) is how working
+// seats start reading idle and the idle-nudge stack fires on them.
+var workdirSharedBasenames = map[string]bool{
+	"bullseye.yaml": true,
+}
+
+// workdirTouchCounts reports whether a workdir path may be cited as
+// this seat's activity. Shared ledger files return false. A mutant that
+// returns true for every path restores bare mtime-on-any-file and goes
+// RED on the 🎯T725 tapes.
+func workdirTouchCounts(path string) bool {
+	return !workdirSharedBasenames[strings.ToLower(filepath.Base(path))]
+}
+
 // SeatActivity is what the daemon observed of a seat since its (re-)mint.
 type SeatActivity struct {
 	// LastAt is the freshest evidence timestamp (zero when nothing observed).
 	LastAt time.Time
 	// Evidence names each observation in operator prose.
 	Evidence []string
+	// SharedSkipped is true when a recent shared file (bullseye.yaml)
+	// was seen and not counted as this seat's work (🎯T725).
+	SharedSkipped bool
 }
 
 // Active reports any evidence at all — the transcript_read ACTIVE verdict.
@@ -79,12 +106,27 @@ func (a SeatActivity) RecentWithin(now time.Time, window time.Duration) bool {
 	return a.Active() && now.Sub(a.LastAt) <= window
 }
 
+// sharedFileExclusion is the 🎯T725 operator note: the probe excluded
+// known shared files rather than naming a file the seat may never have
+// opened. It is appended whenever a recent shared file was actually
+// seen, so a refusal citing a stored report or a real source edit says
+// so instead of citing bullseye.yaml.
+const sharedFileExclusion = "shared files such as bullseye.yaml are excluded"
+
 // Describe renders the evidence list, or the explicit absence of it.
 func (a SeatActivity) Describe() string {
 	if !a.Active() {
+		if a.SharedSkipped {
+			return "no stored reports and no seat-owned workdir files touched since its (re-)mint (" +
+				sharedFileExclusion + ")"
+		}
 		return "no stored reports and no workdir files touched since its (re-)mint"
 	}
-	return strings.Join(a.Evidence, "; ")
+	out := strings.Join(a.Evidence, "; ")
+	if a.SharedSkipped {
+		return out + " (" + sharedFileExclusion + ")"
+	}
+	return out
 }
 
 // noteSeatMinted records when this daemon (re-)minted name's session, the
@@ -136,7 +178,9 @@ func (s *Server) seatActivity(name string) SeatActivity {
 
 	if s.registry != nil {
 		if def := s.registry.Def(name); def != nil && strings.TrimSpace(def.WorkDir) != "" {
-			if path, mtime, ok := latestWorkdirTouch(def.WorkDir, since); ok {
+			path, mtime, skipped := latestWorkdirTouch(def.WorkDir, since)
+			act.SharedSkipped = skipped
+			if path != "" {
 				act.Evidence = append(act.Evidence, fmt.Sprintf(
 					"workdir file %s touched at %s", path, mtime.Format(time.RFC3339)))
 				if mtime.After(act.LastAt) {
@@ -148,15 +192,22 @@ func (s *Server) seatActivity(name string) SeatActivity {
 	return act
 }
 
-// latestWorkdirTouch reports one regular file under dir modified after since.
-// It exits on the first hit — the question is "has anything been touched?",
+// latestWorkdirTouch reports one regular file under dir modified after since
+// that workdirTouchCounts accepts. Shared ledger files (bullseye.yaml) are
+// skipped, not cited: a write by another actor in the same clone is not
+// this seat's activity (🎯T725). The walk still exits on the first
+// seat-owned hit — the question is "has this seat's tree been touched?",
 // not "what was touched last" — and is bounded by workdirScanCap entries.
 // Directory mtimes are ignored (a freshly created empty workdir is not
 // activity). Walk errors are skipped, not fatal: an unreadable subtree must
 // not turn an activity probe into a tool failure.
+//
+// The third return is true when a recent shared file was seen and not
+// counted, so Describe can say so rather than naming that file.
 func latestWorkdirTouch(dir string, since time.Time) (string, time.Time, bool) {
 	var hitPath string
 	var hitAt time.Time
+	sharedSkipped := false
 	seen := 0
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -179,13 +230,17 @@ func latestWorkdirTouch(dir string, since time.Time) (string, time.Time, bool) {
 		if ierr != nil || !info.Mode().IsRegular() {
 			return nil
 		}
-		if info.ModTime().After(since) {
-			hitPath, hitAt = path, info.ModTime()
-			return filepath.SkipAll
+		if !info.ModTime().After(since) {
+			return nil
 		}
-		return nil
+		if !workdirTouchCounts(path) {
+			sharedSkipped = true
+			return nil
+		}
+		hitPath, hitAt = path, info.ModTime()
+		return filepath.SkipAll
 	})
-	return hitPath, hitAt, hitPath != ""
+	return hitPath, hitAt, sharedSkipped
 }
 
 // openingBriefMarkers are phrases a full opening brief carries that ordinary
