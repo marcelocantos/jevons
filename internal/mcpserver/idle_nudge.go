@@ -1626,14 +1626,10 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 			// changed or been removed while those notifications were delivered.
 			// T627.3: recovery may resume only work interrupted by this boot,
 			// never a new request accepted during the startup settle delay.
-			openIntent = LoadOpenOwnerIntentWithLedger(stateDir, overseer, s.workerWD)
-			if openIntent.Recoverable() {
-				if s.bootAt.IsZero() || openIntent.TS.IsZero() {
-					openIntent = OpenOwnerIntent{Residual: ResidualUnknownRestartBoundary}
-				} else if !openIntent.TS.Before(s.bootAt) {
-					openIntent = OpenOwnerIntent{Residual: ResidualPostBootIntent}
-				}
-			}
+			openIntent = applyRestartRecoveryCutoff(
+				LoadOpenOwnerIntentWithLedger(stateDir, overseer, s.workerWD),
+				s.bootAt,
+			)
 			if openIntent.Recoverable() {
 				slog.Info("open owner intent recovered for post-restart resume",
 					"overseer", overseer, "runes", utf8RuneCount(openIntent.Text), "source", openIntent.Source)
@@ -1670,6 +1666,23 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 			"open_intent": openIntent.Recoverable(), "residual": openIntent.Residual,
 		})
 	}
+}
+
+// applyRestartRecoveryCutoff restricts delayed restart resume to owner
+// intent that predates this daemon process. A request first accepted
+// after boot is live work, not interrupted pre-restart work (🎯T627.3).
+// Unknown instruction or boot time falls back to ordinary restart status.
+func applyRestartRecoveryCutoff(open OpenOwnerIntent, bootAt time.Time) OpenOwnerIntent {
+	if !open.Recoverable() {
+		return open
+	}
+	if bootAt.IsZero() || open.TS.IsZero() {
+		return OpenOwnerIntent{Residual: ResidualUnknownRestartBoundary}
+	}
+	if !open.TS.Before(bootAt) {
+		return OpenOwnerIntent{Residual: ResidualPostBootIntent}
+	}
+	return open
 }
 
 // utf8RuneCount is a tiny local helper for NotifyDaemonRestarted logs.

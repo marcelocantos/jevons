@@ -48,6 +48,7 @@ async function mcp(name, args) {
   assert(!data.error && !data.result?.isError, `${name}: ${JSON.stringify(data)}`);
 }
 async function main() {
+  const logStart = (await fs.readFile(values['daemon-log'], 'utf8')).length;
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(90000);
@@ -64,6 +65,7 @@ async function main() {
   const sideWork = await fs.mkdtemp(path.join(values.workdir, 'boundary-aside-'));
   await mcp('jevons_thread_spawn', { id: values.aside, provider: values.provider, workdir: sideWork, description: 'isolated owner-boundary check' });
   asideCreated = true;
+  let mainSubmittedAt = 0;
 
   for (const name of ['jevons', values.aside]) {
     const main = name === 'jevons';
@@ -88,6 +90,7 @@ async function main() {
     const assistants = () => events().filter(f => f.body?.event?.type === 'assistant');
     await page.locator(input).fill(prompt);
     await page.locator(button).click();
+    if (main) mainSubmittedAt = Date.now();
     try {
       const first = await until(() => assistants().find(f => content(f.body).includes(pre)), 'nonterminal PRE');
       assert(!terminal(first.body), 'PRE must precede provider terminal');
@@ -176,6 +179,19 @@ async function main() {
       if (frame.ch === `transcript:${name}` && frame.t === 'frame' && frame.body?.event?.type === 'assistant') replies.set(frame.body.id, content(frame.body));
     }
     for (const token of [pre, post, ack]) assert.equal([...replies.values()].filter(text => text.includes(token)).length, 1, `${name}: delayed duplicate reply ${token}`);
+  }
+  const decision = (await fs.readFile(values['daemon-log'], 'utf8')).slice(logStart).split('\n').find(line =>
+    line.includes('open owner intent recovered for post-restart resume') ||
+    line.includes('no recoverable open owner intent after restart')
+  );
+  if (decision) {
+    const decidedAt = Date.parse(decision.match(/time=(\S+)/)?.[1] || '');
+    if (Number.isFinite(decidedAt) && mainSubmittedAt && mainSubmittedAt <= decidedAt + 1000) {
+      assert(!decision.includes('open owner intent recovered for post-restart resume'), `restart sweep reissued the post-boot owner request: ${decision}`);
+      console.log(`PASS jevons: settle submit before restart sweep ${decision.match(/residual=\S+/)?.[0]}`);
+    } else {
+      console.log(`NOTE: startup sweep did not follow this submit; delayed-duplicate check is the reissue net. ${decision}`);
+    }
   }
   assert.deepEqual(errors, [], 'browser errors');
   console.log('PASS: packaged shared main/sidebar owner boundary with real provider tool interleaving');

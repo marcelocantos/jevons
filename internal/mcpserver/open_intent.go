@@ -1162,7 +1162,7 @@ func loadOpenIntentDialogueStateDB(stateDir, overseer string, maxUser, maxAssist
 	rows := snapshot.Events
 	turns, newestFrame := foldOpenIntentDialogue(func(yield func(string) bool) {
 		for _, r := range rows {
-			if !yield(r.Body) {
+			if !yield(overlayOpenIntentRowTS(r.Body, r.TS)) {
 				return
 			}
 		}
@@ -1285,6 +1285,32 @@ func foldOpenIntentDialogue(lines func(yield func(string) bool), maxUser, maxAss
 		ai++
 	}
 	return out, newestFrame
+}
+
+// overlayOpenIntentRowTS copies the statedb ts column onto a body that
+// has no timestamp field. Restart recovery (🎯T627.3) must see the
+// authoritative observation time even when the JSON body omitted it.
+func overlayOpenIntentRowTS(body, rowTS string) string {
+	if strings.TrimSpace(body) == "" {
+		return body
+	}
+	if !openIntentFrameTS(body).IsZero() {
+		return body
+	}
+	rowTS = strings.TrimSpace(rowTS)
+	if rowTS == "" || parseOpenIntentTS(rowTS).IsZero() {
+		return body
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(body), &m) != nil {
+		return body
+	}
+	m["timestamp"] = rowTS
+	out, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return string(out)
 }
 
 // openIntentFrameTS reads the timestamp off any chatlog line, whatever
