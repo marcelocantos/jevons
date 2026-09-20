@@ -14,7 +14,8 @@ import (
 var (
 	revertedDayRe = regexp.MustCompile(`(?m)^Reverted (\d{4}-\d{2}-\d{2}):`)
 	recordedOnRe  = regexp.MustCompile(`recorded the 🎯T449 owner gate on (\d{4}-\d{2}-\d{2})`)
-	recordedAtRe  = regexp.MustCompile(`recorded (\d{4}-\d{2}-\d{2}) by`)
+	recordedAtRe  = regexp.MustCompile(`recorded (\d{4}-\d{2}-\d{2})(?: [+-]\d{4})? by`)
+	offsetRe      = regexp.MustCompile(`\d{4}-\d{2}-\d{2} [+-]\d{4}`)
 )
 
 // TestT735OneApplyOneDate is the product-path oracle: a jevons ledger write
@@ -68,5 +69,8 @@ func TestT735OneApplyOneDate(t *testing.T) {
 	}
 	if recordedAt[1] != reverted[1] {
 		t.Fatalf("gate reason recorded %s vs bullseye Reverted %s in the same ceremony", recordedAt[1], reverted[1])
+	}
+	if !offsetRe.MatchString(row.OwnedByReason) {
+		t.Fatalf("jevons stamp has no offset, so a reader cannot tell the convention:\n%s", row.OwnedByReason)
 	}
 }

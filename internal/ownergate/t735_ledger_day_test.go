@@ -4,6 +4,9 @@
 package ownergate
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -37,13 +40,19 @@ func TestT735LedgerDayIsTheLocalCalendarNotUTC(t *testing.T) {
 	if utcDay != "2026-09-20" {
 		t.Fatalf("fixture is not the T711 specimen: UTC day = %s, want 2026-09-20", utcDay)
 	}
-	if got := LedgerDay(when); got != "2026-09-21" {
-		t.Fatalf("LedgerDay = %q, want 2026-09-21 (AEST); UTC would stamp %s", got, utcDay)
+	got := LedgerDay(when)
+	if got != "2026-09-21 +1000" {
+		t.Fatalf("LedgerDay = %q, want 2026-09-21 +1000 (AEST); UTC would stamp %s", got, utcDay)
 	}
-	if LedgerDay(when) == utcDay {
+	if got == utcDay {
 		t.Fatal("LedgerDay collapsed onto UTC — the T711 two-date write is back")
 	}
+	if bareDay.MatchString(got) {
+		t.Fatalf("LedgerDay = %q is a bare date — a reader cannot tell local from the old UTC convention", got)
+	}
 }
+
+var bareDay = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 func TestT735ReasonStampsLocalDayOnUTCCrossingInstant(t *testing.T) {
 	when, aest := aestT711Specimen()
@@ -127,5 +136,101 @@ func TestT735RestoreAttestationStampsLocalDay(t *testing.T) {
 	answer := FormatAnswer(VerdictAccept, "", "jevons-po", when)
 	if !strings.Contains(answer, "2026-09-21") || strings.Contains(answer, "2026-09-20") {
 		t.Fatalf("FormatAnswer UTC-leaked: %q", answer)
+	}
+}
+
+// Bullseye's `achieved` field is a bare local day. Copy it, do not restamp it:
+// restamping would rewrite a historical field and is how a "normalise the
+// ledger" pass would start.
+func TestT735DoesNotRewriteBullseyeAchievedField(t *testing.T) {
+	when, aest := aestT711Specimen()
+	pinLocal(t, aest)
+
+	r := Reopen{
+		Record: Record{
+			Question:   "Does the live seat preempt an in-flight turn as intended?",
+			Evidence:   "landed at 6e9da8f5; GATE id=45acfeb7 GREEN over TestT711",
+			RecordedBy: "jevons-po",
+			Now:        when,
+		},
+		AchievedOn:  "2026-09-21", // bullseye field shape
+		Attestation: "landed at 6e9da8f5",
+	}
+	reason, err := r.Reason()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reason, "on 2026-09-21 +1000") {
+		t.Fatalf("jevons stamp missing offset: %q", reason)
+	}
+	if !strings.Contains(reason, "achieved 2026-09-21") {
+		t.Fatalf("copied bullseye field missing: %q", reason)
+	}
+	if strings.Contains(reason, "achieved 2026-09-21 +1000") {
+		t.Fatalf("rewrote the bullseye achieved field: %q", reason)
+	}
+}
+
+var calendarDayFormatRe = regexp.MustCompile(`\.Format\("2006-01-02"\)`)
+
+// The formatter family is one function. A new UTC().Format("2006-01-02") in
+// production would re-introduce the T711 two-date write without touching
+// ownergate tests.
+func TestT735OnlyLedgerDayRendersLedgerCalendarDays(t *testing.T) {
+	root := moduleRoot(t)
+	var hits []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "ui", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			rel = path
+		}
+		for i, line := range strings.Split(string(body), "\n") {
+			if calendarDayFormatRe.MatchString(line) {
+				hits = append(hits, fmt.Sprintf("%s:%d: %s", rel, i+1, strings.TrimSpace(line)))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) > 0 {
+		t.Fatalf("production calendar-day Format must go through ownergate.LedgerDay; found:\n%s",
+			strings.Join(hits, "\n"))
+	}
+}
+
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found")
+		}
+		dir = parent
 	}
 }

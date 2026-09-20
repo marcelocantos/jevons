@@ -137,21 +137,27 @@ func FormatAnswer(v Verdict, note, by string, now time.Time) string {
 	return line
 }
 
+// ledgerDayLayout is the stamp a jevons ledger write puts in prose (🎯T735).
+// The calendar day is process-local, matching bullseye's `achieved` /
+// `Achieved <date>:` / `Reverted <date>:` (apply.rs `Local::now().date_naive()`).
+// The numeric offset is the tell: a bare YYYY-MM-DD in an older row may be
+// UTC (the pre-T735 convention) and is left alone — this package does not
+// rewrite history. UTC-with-suffix was the other allowed choice; it would
+// still name a different day than bullseye's fields, which is the T711 bug.
+const ledgerDayLayout = "2006-01-02 -0700"
+
 // LedgerDay is the calendar day a jevons ledger write stamps into prose.
 //
-// Convention (🎯T735): the process-local calendar day, the same one bullseye
-// stamps on `achieved`, `Achieved <date>:`, and `Reverted <date>:` (see
-// bullseye apply.rs `Local::now().date_naive()`). UTC was the previous
-// convention and named a different day than those fields for any write
-// between 10:00 and 00:00 AEST — the live 🎯T711 gate recorded at
-// 2026-09-21 02:22 +1000 read `recorded 2026-09-20` inside a reason that
-// correctly said the row `was achieved 2026-09-21`. One write, one date.
-// Callers pass time.Now() (or a fixture); UTC conversion is the defect.
+// Convention (🎯T735): process-local day plus offset, e.g. `2026-09-21 +1000`.
+// Callers pass time.Now() (or a fixture); converting to UTC first is the defect
+// that made the 🎯T711 gate recorded at 2026-09-21 02:22 +1000 read
+// `recorded 2026-09-20` inside a reason that correctly said the row
+// `was achieved 2026-09-21`.
 func LedgerDay(t time.Time) string {
 	if t.IsZero() {
 		t = time.Now()
 	}
-	return t.In(time.Local).Format("2006-01-02")
+	return t.In(time.Local).Format(ledgerDayLayout)
 }
 
 // HasLandedEvidence reports whether text names something a reader could go
