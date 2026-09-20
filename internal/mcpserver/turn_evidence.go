@@ -540,12 +540,32 @@ func fateEvidence(path string, baseline int64, hadTranscript bool, needle string
 // that predates this call is stopped but kept: failing to re-brief an
 // established agent must not delete it.
 func (s *Server) releaseUnbriefedSeat(name string, existed bool) bool {
+	return s.releaseSeatAfterFailedBrief(name, existed, seatRelease{
+		Source:        seatstop.SourceUnbriefed,
+		StopReason:    "opening brief proven undelivered; seat released (🎯T387)",
+		RemovalReason: fleetlog.ReasonUnbriefedSeat,
+		RemovalDetail: "retired a seat whose opening brief never landed (🎯T433)",
+	})
+}
+
+// seatRelease names the vocabulary one release writes into the journal. It
+// is a parameter rather than a constant because the daemon has more than one
+// reason to give up on an opening brief, and 🎯T729 turns on a reader being
+// able to tell them apart (see fleetlog.ReasonStartupStall).
+type seatRelease struct {
+	Source        seatstop.Source
+	StopReason    string
+	RemovalReason string
+	RemovalDetail string
+}
+
+func (s *Server) releaseSeatAfterFailedBrief(name string, existed bool, rel seatRelease) bool {
 	if s == nil || s.registry == nil || strings.TrimSpace(name) == "" {
 		return false
 	}
 	s.registry.Stop(name)
 	// 🎯T662: the release is a recorded reason on the seat.
-	s.noteSeatStop(name, seatstop.SourceUnbriefed, "opening brief proven undelivered; seat released (🎯T387)", "daemon", "")
+	s.noteSeatStop(name, rel.Source, rel.StopReason, "daemon", "")
 	if existed {
 		return false
 	}
@@ -553,11 +573,12 @@ func (s *Server) releaseUnbriefedSeat(name string, existed bool) bool {
 	// here never began a turn, so its row vanishing is exactly the kind of
 	// diff a watcher would otherwise read as an agent lost mid-flight.
 	if _, err := s.RemovalAccount().Remove(s.registry, name, fleetlog.Removal{
-		Reason: fleetlog.ReasonUnbriefedSeat,
-		Detail: "retired a seat whose opening brief never landed (🎯T433)",
+		Reason: rel.RemovalReason,
+		Detail: rel.RemovalDetail,
 	}); err != nil {
-		slog.Warn("unbriefed seat left registered after failed opening brief",
-			"component", compAgentLifecycle, "name", name, "err", err)
+		slog.Warn("seat left registered after failed opening brief",
+			"component", compAgentLifecycle, "name", name,
+			"reason", rel.RemovalReason, "err", err)
 		return false
 	}
 	s.clearAgentTurnBegan(name)

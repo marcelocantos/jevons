@@ -38,10 +38,33 @@ func isReadyTimeoutMessage(msg string) bool {
 		strings.Contains(low, "startup settings warnings")
 }
 
+// ownerCopyMarkers are this package's OWN OwnerCopy renderings of a stall.
+//
+// 🎯T729 — ClassifyText documents itself as accepting "provider/ACP failure
+// text OR owner-visible copy", and every other class honours that: the auth,
+// rate-limit and backend copies all quote the raw error, so their markers
+// still match. A stall's copy does not — it REPLACES the wire text with
+// prose ("Agent CLI stalled on startup …") and keeps only the last frame.
+// Neither "ready pattern did not match within" nor "claude not ready (splash)"
+// survives, so the class evaporated the instant the product formatted it for
+// a human, which is exactly where the spawn path reads it: agent_send wraps
+// send errors as "send failed: <owner copy>", and the start path then had no
+// way to tell a CLI that never came up from a ready pane that ignored its
+// brief. It retired the seat as unbriefed_seat two seconds later
+// (ge-t190-desktop-cook, 2026-09-20T15:19:50Z).
+var ownerCopyMarkers = []string{
+	"agent cli stalled on startup",
+	"agent cli stalled on remote-control handshake",
+}
+
 func namedReadyReason(msg string) string {
 	low := strings.ToLower(msg)
 	for _, token := range []string{"rc_connecting", "settings_warning", "splash", "no_composer"} {
-		if strings.Contains(low, "claude not ready ("+token+")") || strings.Contains(low, "reason="+token) {
+		if strings.Contains(low, "claude not ready ("+token+")") ||
+			strings.Contains(low, "reason="+token) ||
+			// 🎯T729: the sub-reason as OwnerCopy writes it, so a round
+			// trip through the owner copy keeps the same sub-reason.
+			strings.Contains(low, "startup_stall / "+token) {
 			return token
 		}
 	}
@@ -69,6 +92,10 @@ func LastFrame(msg string) string {
 // stall.
 func IsStartupStall(msg string) bool {
 	low := strings.ToLower(msg)
+	// 🎯T729: this package's own owner copy classifies back to this class.
+	if containsAny(low, ownerCopyMarkers...) {
+		return true
+	}
 	switch namedReadyReason(msg) {
 	case "settings_warning", "rc_connecting", "splash", "no_composer":
 		return true

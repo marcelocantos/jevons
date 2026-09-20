@@ -34,6 +34,9 @@ const (
 	SourcePlanPolicy Source = "plan_policy"
 	// SourceUnbriefed: an opening brief proven undelivered released the seat (🎯T387).
 	SourceUnbriefed Source = "unbriefed"
+	// SourceStartupStall: the agent CLI never became ready, so the brief had
+	// no pane to land in (🎯T729). Distinct from SourceUnbriefed on purpose.
+	SourceStartupStall Source = "startup_stall"
 	// SourceExit: the process was found not alive by a sweep; the harness
 	// reported no exit status or signal, so the reason is unknown.
 	SourceExit Source = "exit"

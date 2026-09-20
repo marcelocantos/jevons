@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
@@ -528,6 +529,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 					life["seat_released"] = true
 					s.notifySpawnFailure(def.Parent, def.TargetID, name, ferr.Error())
 				}
+				life["failure_class"] = agenterr.ClassifyText(ferr.Error()).String()
 				life["err"] = ferr.Error()
 				life["session_id"] = sessionDisplay(def.SessionID)
 				s.logLifecycle(compAgentLifecycle, "start", "error", life)
@@ -577,6 +579,11 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 					// with the error verbatim, on the durable send path.
 					s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
 				}
+				// 🎯T729: the eventlog says which of the two this was. The
+				// specimen's three lines were readable only as a contradiction
+				// because the removal reason and the start error disagreed and
+				// neither carried the class.
+				life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
 				life["err"] = err.Error()
 				life["session_id"] = sessionDisplay(def.SessionID)
 				s.logLifecycle(compAgentLifecycle, "start", "error", life)

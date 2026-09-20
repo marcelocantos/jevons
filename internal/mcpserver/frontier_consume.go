@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/keepgoing"
 	"github.com/marcelocantos/jevons/internal/poproactive"
@@ -674,6 +675,18 @@ func FormatSpawnFailureNotice(targetID, worker, errText string) string {
 		tid, worker, strings.TrimSpace(errText))
 	fmt.Fprintf(&b, "No briefless seat was retained; the leaf is parked %s and the sweep will retry. ",
 		FrontierReasonSpawnFailed)
+	// 🎯T729: name the verdict, because the two failures ask for opposite
+	// things from the reader. "Its brief did not land" points at the worker
+	// and invites investigating why it ignored one; a startup stall points
+	// at the LAUNCH — nothing is known about that worker, because it never
+	// existed to know anything about — and the answer is simply to spawn
+	// again. The parent that reads this is the one deciding between them.
+	if agenterr.ClassifyText(errText) == agenterr.ClassStartupStall {
+		fmt.Fprintf(&b, "VERDICT startup_stall: the agent CLI never drew a composer, so the brief had "+
+			"nowhere to land and the retry did not recover it — this is a failed LAUNCH, not a worker "+
+			"that ignored its brief, and nothing is known about %s itself. Spawn %s again. ",
+			worker, tid)
+	}
 	fmt.Fprintf(&b, "If this repeats, start a worker for %s by hand or investigate the spawn path.", tid)
 	return b.String()
 }

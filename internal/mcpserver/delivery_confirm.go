@@ -188,16 +188,26 @@ func StartVerdictInFlight(status string, sendErr error) bool {
 	return false
 }
 
-// startBriefFailureTeardown applies the 🎯T518 fork after a failed
+// startBriefFailureTeardown applies the 🎯T518 / 🎯T729 fork after a failed
 // deliverStartPrompt: an in-flight verdict keeps the seat and reports
-// kept=true; anything else releases it (🎯T387) and reports whether a row
-// this call minted was retired. Both spawn call sites (jevons_agent_start
-// and spawnFrontierWorker) go through here so the fork is one testable unit.
+// kept=true; a CLI that never became ready releases it as startup_stall;
+// anything else releases it as unbriefed (🎯T387). The bool pair reports
+// whether a row this call minted was retired. Both spawn call sites
+// (jevons_agent_start and spawnFrontierWorker) go through here so the fork
+// is one testable unit.
 func (s *Server) startBriefFailureTeardown(name string, existed bool, err error) (released, kept bool) {
-	if BriefInFlight(err) {
+	switch classifyStartBriefFailure(err) {
+	case startBriefInFlight:
 		return false, true
+	case startBriefNeverReady:
+		// 🎯T729: the brief had no composer to land in. The seat still goes
+		// — a never-ready row would consume the leaf exactly as 🎯T433
+		// describes — but it goes under its own reason, and the parent is
+		// told the class rather than being told its worker ignored a brief.
+		return s.releaseStalledSeat(name, existed), false
+	default:
+		return s.releaseUnbriefedSeat(name, existed), false
 	}
-	return s.releaseUnbriefedSeat(name, existed), false
 }
 
 // deliverStartPrompt injects the optional jevons_agent_start prompt after
@@ -263,6 +273,41 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 	// it may be asked. The payload is right here; passing it removes the
 	// licence argument entirely and makes the start path answer the same
 	// question as the other four callers.
+	// 🎯T729: compose once, submit with retry. The fleet brief is
+	// inject-once (EnsureFleetBriefWithRole has already flipped the flag
+	// above), so a retry must re-send THIS text — recomposing would send a
+	// second attempt stripped of the standing brief.
+	return s.submitStartBriefWithRetry(name, text)
+}
+
+// submitStartBriefWithRetry delivers the composed opening brief, retrying a
+// failure whose cause is that the agent CLI never became ready (🎯T729).
+//
+// The retry is the ordinary case's whole fix: a splash screen that needed a
+// few more seconds than the ready timeout allowed. It is bounded because the
+// other case — a CLI that is genuinely wedged — has to reach the spawning
+// parent quickly rather than be nursed. A brief that comes back IN FLIGHT is
+// never retried: 🎯T518's whole point is that the receiver already holds it,
+// and a re-send stacks a second copy (🎯T416).
+func (s *Server) submitStartBriefWithRetry(name, text string) error {
+	retries := s.startupStallRetries()
+	attempted := 0
+	for {
+		err := s.submitStartBrief(name, text)
+		if err == nil {
+			return nil
+		}
+		if attempted >= retries || !startBriefNeverReached(err) {
+			return noteStartBriefRetried(err, attempted)
+		}
+		attempted++
+		s.logStartBriefRetry(name, attempted, err)
+		s.waitStartupStallGrace()
+	}
+}
+
+// submitStartBrief is one attempt: watch, send, confirm.
+func (s *Server) submitStartBrief(name, text string) error {
 	watch := s.watchAgentTurnFor(name, text)
 
 	// This watch owns the verdict (🎯T416): the send path must not also judge,

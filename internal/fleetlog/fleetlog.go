@@ -58,6 +58,12 @@ const (
 	// ReasonUnbriefedSeat retires a seat whose opening brief never landed
 	// (🎯T433) — the seat would otherwise consume the leaf while dead.
 	ReasonUnbriefedSeat = "unbriefed_seat"
+	// ReasonStartupStall releases a seat whose CLI never finished starting,
+	// so its opening brief never had a ready pane to land in (🎯T729). It is
+	// deliberately NOT ReasonUnbriefedSeat: that reason asserts the brief was
+	// delivered to a working agent and ignored, and a reader who cannot tell
+	// the two apart cannot tell a broken worker from a broken launch.
+	ReasonStartupStall = "startup_stall"
 	// ReasonThreadRemove is a thread/agent dropped by name on request.
 	ReasonThreadRemove = "thread_remove"
 	// ReasonDeadSeat is the silent-death sweep dropping a work seat whose
@@ -82,7 +88,8 @@ func Reasons() []string {
 	out := []string{
 		ReasonAsideDismiss, ReasonBudgetKill, ReasonExpire, ReasonKill,
 		ReasonReapAchieve, ReasonReapDone, ReasonRotationDrop,
-		ReasonStopEngagement, ReasonThreadRemove, ReasonUnbriefedSeat,
+		ReasonStartupStall, ReasonStopEngagement, ReasonThreadRemove,
+		ReasonUnbriefedSeat,
 	}
 	sort.Strings(out)
 	return out
