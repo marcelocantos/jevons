@@ -4,7 +4,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   formatWindow, paceOfWindow, resetThresholds,
-  PACE_AHEAD, PACE_HOT, PACE_OK, PACE_UNDER,
+  PACE_AHEAD, PACE_HOT, PACE_LOCKED, PACE_OK, PACE_UNDER,
   unknownServedBands, unknownThresholdKeys, applyThresholds,
 } from './pace';
 
@@ -53,6 +53,7 @@ describe('🎯T610 the cockpit paints the daemon verdict', () => {
     ['ahead', PACE_AHEAD],
     ['ok', PACE_OK],
     ['under', PACE_UNDER],
+    ['locked', PACE_LOCKED],
     ['exhausted', PACE_HOT],
   ])('maps served %s', (served, want) => {
     expect(paceOfWindow(win(50, 50, 0.5, served), NOW)).toBe(want);

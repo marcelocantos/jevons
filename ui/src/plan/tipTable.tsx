@@ -11,7 +11,7 @@
  */
 
 import { now } from '../clock';
-import { formatWindow } from './pace';
+import { formatWindow, leftoverHoverName } from './pace';
 import { CompanyMark, companyOfProvider } from './companyMark';
 import { formatInstantParts, usedPercentOf } from './tickerGroups';
 import type { PlanWindow, TickerGroup } from './tickerGroups';
@@ -238,6 +238,11 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
             'usage',
             (c) => pct(usedPercentOf(c.window)),
             (c) => ('plan-avail ' + paceClass(c)).trim(),
+          )}
+          {row(
+            'leftover',
+            (c) => leftoverHoverName(formatWindow(c.window, nowMs).pace),
+            (c) => ('plan-leftover ' + paceClass(c)).trim(),
           )}
           {row('rollover', (c) => rolloverCell(c.window.resets_at, nowMs, props.timeZone))}
           <tr>

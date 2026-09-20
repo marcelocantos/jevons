@@ -3,7 +3,7 @@
 
 import { createElement, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -132,6 +132,94 @@ describe('PlanUsageBar mux wiring', () => {
       expect(tri.style.left).toBe('75%');
       const fill = container.querySelector('.plan-bar-fill') as HTMLElement;
       expect(fill.style.width).toBe('90%');
+    } finally {
+      resetClock();
+    }
+  });
+
+  it('paints weekly continuation blue and locked surplus purple; session stays off waste (🎯T390.1.1)', async () => {
+    const now = Date.parse('2026-09-12T12:00:00Z');
+    setNow(now);
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'claude',
+            status: 'available',
+            windows: [
+              {
+                name: 'session',
+                remaining_percent: 86,
+                used_percent: 14,
+                resets_at: new Date(now + 97 * 60 * 1000).toISOString(),
+                limit_window_seconds: 5 * 3600,
+              },
+              {
+                name: 'weekly',
+                remaining_percent: 58,
+                used_percent: 42,
+                resets_at: new Date(now + 3 * 24 * 3600 * 1000).toISOString(),
+                limit_window_seconds: WEEKLY_LIMIT_SECONDS,
+              },
+            ],
+          },
+          {
+            provider: 'codex',
+            status: 'available',
+            windows: [
+              {
+                name: 'weekly',
+                remaining_percent: 100,
+                used_percent: 0,
+                resets_at: new Date(now + 3600 * 1000).toISOString(),
+                limit_window_seconds: WEEKLY_LIMIT_SECONDS,
+              },
+            ],
+          },
+          {
+            provider: 'cursor',
+            status: 'available',
+            windows: [
+              {
+                name: 'monthly',
+                remaining_percent: 36,
+                used_percent: 64,
+                resets_at: new Date(now + 0.095 * 30 * 24 * 3600 * 1000).toISOString(),
+                limit_window_seconds: 30 * 24 * 3600,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    try {
+      await waitFor(() => expect(container.querySelector('[data-provider="codex"]')).toBeTruthy());
+      const session = container.querySelector('[data-provider="claude"] [data-window="session"]') as HTMLElement;
+      const claudeWeek = container.querySelector('[data-provider="claude"] [data-window="weekly"]') as HTMLElement;
+      const codexWeek = container.querySelector('[data-provider="codex"] [data-window="weekly"]') as HTMLElement;
+      const cursorMonth = container.querySelector('[data-provider="cursor"] [data-window="monthly"]') as HTMLElement;
+      expect(session.className).not.toMatch(/plan-under|plan-locked/);
+      expect(claudeWeek.className).toContain('plan-under');
+      expect(codexWeek.className).toContain('plan-locked');
+      expect(cursorMonth.className).toContain('plan-locked');
+      fireEvent.pointerEnter(container.querySelector('[data-instant-tip-host]')!);
+      const tip = container.querySelector('.instant-tip-show')?.textContent || '';
+      expect(tip).toMatch(/continuation leftover/);
+      expect(tip).toMatch(/already-unrecoverable at 1\.5×/);
     } finally {
       resetClock();
     }

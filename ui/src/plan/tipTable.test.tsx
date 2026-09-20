@@ -93,7 +93,7 @@ describe('plan tooltip table (🎯T588.1)', () => {
     const rowLabels = [...container.querySelectorAll('th[scope="row"]')].map((e) => e.textContent);
     // 🎯T670: usage leads, available and time-left are gone, and the
     // rollover cell carries the span.
-    expect(rowLabels).toEqual(['usage', 'rollover', 'burn']);
+    expect(rowLabels).toEqual(['usage', 'leftover', 'rollover', 'burn']);
     const firstRow = [...container.querySelectorAll('tbody tr')][0];
     expect([...firstRow.querySelectorAll('td')].map((e) => e.textContent)).toEqual(['24%', '75%', '15%']);
     // The single-window provider's mark spans both header rows, so the
@@ -112,6 +112,34 @@ describe('plan tooltip table (🎯T588.1)', () => {
 
 // 🎯T588.2: the usage figure must carry the bar's own pace class, or
 // the number and the bar above it can disagree about the same window.
+describe('leftover hover names (🎯T390.1.1)', () => {
+  it('names continuation leftover vs already-unrecoverable at 1.5×', () => {
+    const groups = [
+      {
+        provider: 'grok',
+        available: true,
+        windows: [{ name: 'weekly', remaining_percent: 58, used_percent: 42, resets_at: hoursOut(3 * 24) }],
+      },
+      {
+        provider: 'codex',
+        available: true,
+        windows: [{ name: 'weekly', remaining_percent: 100, used_percent: 0, resets_at: hoursOut(1) }],
+      },
+      {
+        provider: 'claude',
+        available: true,
+        windows: [{ name: 'session', remaining_percent: 86, used_percent: 14, resets_at: hoursOut(1.5) }],
+      },
+    ] as unknown as TickerGroup[];
+    const { container } = render(<PlanTipTable groups={groups} nowMs={NOW} timeZone="UTC" />);
+    const cells = [...container.querySelectorAll('td.plan-leftover')].map((e) => e.textContent);
+    expect(cells).toContain('continuation leftover');
+    expect(cells).toContain('already-unrecoverable at 1.5×');
+    const session = container.querySelector('td.plan-leftover[data-window="session"]');
+    expect(session?.textContent).toBe('—');
+  });
+});
+
 describe('usage wears the bar colour (🎯T588.2 / 🎯T670)', () => {
   it('puts the pace class on the usage cell only', () => {
     const hot = [
@@ -133,6 +161,9 @@ describe('usage wears the bar colour (🎯T588.2 / 🎯T670)', () => {
     expect(avail?.className).toBe(('plan-avail ' + expected).trim());
     // Only the usage row is marked; rollover stays plain.
     expect(container.querySelectorAll('td.plan-avail')).toHaveLength(1);
+    const leftover = container.querySelector('td.plan-leftover');
+    expect(leftover).toBeTruthy();
+    expect(leftover?.textContent).toMatch(/continuation leftover|already-unrecoverable at 1\.5×|—/);
     const burn = container.querySelector('td.plan-burn');
     expect(burn?.className).toBe(('plan-burn ' + expected).trim());
     expect(burn?.querySelector('rect.plan-burn-plot')).toBeTruthy();

@@ -908,6 +908,15 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-win.plan-crit .plan-bar-fill { background: var(--red); }
 #plan-ticker .plan-win.plan-under .plan-bar-fill { background: var(--plan-under); }
 #plan-ticker .plan-win.plan-locked .plan-bar-fill { background: var(--plan-locked); }
+/* 🎯T390.1.1: unused leftover (0% fill) still reads blue/purple — same
+   trick exhausted uses: the inset stroke is the signal when there is no
+   usage ink. */
+#plan-ticker .plan-win.plan-under .plan-bar {
+  box-shadow: inset 0 0 0 1px var(--plan-under);
+}
+#plan-ticker .plan-win.plan-locked .plan-bar {
+  box-shadow: inset 0 0 0 1px var(--plan-locked);
+}
 #plan-ticker .plan-win.plan-low .plan-bar-fill { background: var(--amber); }
 /* 🎯T390.1.3: rock bottom (published 0% or 429) — bright red bar chrome,
    weekly and session, every provider. Fill is already empty so the
@@ -1596,6 +1605,10 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table td.plan-avail.plan-crit { color: var(--red); }
 .plan-tip-table td.plan-avail.plan-under { color: var(--plan-under); }
 .plan-tip-table td.plan-avail.plan-locked { color: var(--plan-locked); }
+/* 🎯T390.1.1: hover names continuation leftover vs already-unrecoverable at 1.5×. */
+.plan-tip-table td.plan-leftover { color: var(--text-dim); }
+.plan-tip-table td.plan-leftover.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-leftover.plan-locked { color: var(--plan-locked); }
 
 /* 🎯T634: fifth-row sparkline inherits the same pace colour as available. */
 .plan-tip-table td.plan-burn {

@@ -5,6 +5,7 @@ package planusage
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 
@@ -54,18 +55,91 @@ type DestCand struct {
 
 // WeeklyBandOf classifies one backend's weekly window at now.
 // The verdict is claudia.ClassifyPlan — jevons does not re-derive it (🎯T691).
+// Ticker waste colour is BandOfWindow (🎯T390.1.1), not this dest/policy band.
 func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 	return WeeklyBand(claudia.ClassifyPlan(backendToPlanUsage(be), now, claudiaThresholdsPtr(th)).Weekly)
 }
 
-// BandOfWindow classifies a single window at now.
+// BandOfWindow classifies a single window at now for the served ticker band.
 //
-// Split out of WeeklyBandOf so the same verdict can be attached to every
-// window the API serves (🎯T610), rather than only to the backend's primary
-// one. One rule, one implementation, reached from both paths — the whole
-// point of serving the band is that nothing downstream re-derives it.
+// Overspend (ahead/hot/exhausted) is claudia.ClassifyWindow (🎯T691 / T596).
+// Waste (under/locked) is T390.1.1 arithmetic so late-window leftover paints
+// as locked surplus, not continuation-blue, and session bars never paint
+// underutilization. Dest/mint still read WeeklyBandOf.
 func BandOfWindow(w Window, now time.Time, th Thresholds) WeeklyBand {
-	return WeeklyBand(claudia.ClassifyWindow(windowToClaudia(w), now, thresholdsToClaudia(th)))
+	band := WeeklyBand(claudia.ClassifyWindow(windowToClaudia(w), now, thresholdsToClaudia(th)))
+	return applyWeeklyWaste(band, w, now, th)
+}
+
+func wasteWindow(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case WindowWeekly, WindowMonthly, WindowModelWeekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyWeeklyWaste is 🎯T390.1.1: session bars never paint underutilization;
+// weekly/monthly continuation leftover is under (blue) past warmup; locked
+// surplus remaining−1.5×time_left is locked (purple) and outranks blue.
+// Overspend bands from the pressure model are left alone.
+func applyWeeklyWaste(band WeeklyBand, w Window, now time.Time, th Thresholds) WeeklyBand {
+	switch band {
+	case BandHot, BandAhead, BandExhausted, BandUnpublished:
+		return band
+	}
+	name := strings.ToLower(strings.TrimSpace(w.Name))
+	if name == WindowSession {
+		if band == BandUnder || band == BandLocked {
+			return BandOK
+		}
+		return band
+	}
+	if !wasteWindow(w.Name) {
+		return band
+	}
+	used := usedPercent(w)
+	rtp, hasTime := remainingTimePercent(w, now)
+	if used == nil || !hasTime {
+		return band
+	}
+	rem := 100 - *used
+	if w.RemainingPercent != nil {
+		rem = *w.RemainingPercent
+	}
+	elapsed := 100 - rtp
+	hot := th.HotRatio
+	if hot <= 0 {
+		hot = 1.5
+	}
+	lockedThresh := th.LockedWastePercent
+	if lockedThresh <= 0 {
+		lockedThresh = 15
+	}
+	underThresh := th.UnderWastePercent
+	if underThresh <= 0 {
+		underThresh = 15
+	}
+	warmup := th.WarmupElapsedPercent
+	if warmup <= 0 {
+		warmup = 5
+	}
+	locked := math.Max(0, rem-hot*rtp)
+	if locked >= lockedThresh {
+		return BandLocked
+	}
+	continuation := 0.0
+	if elapsed > 0 {
+		continuation = math.Max(0, 100-(*used/elapsed)*100)
+	}
+	if elapsed >= warmup && continuation >= underThresh {
+		return BandUnder
+	}
+	if band == BandUnder || band == BandLocked {
+		return BandOK
+	}
+	return band
 }
 
 // SessionStatus is the session-window eligibility class (🎯T390.1.5.1).

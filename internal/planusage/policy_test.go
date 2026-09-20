@@ -94,7 +94,7 @@ func TestWeeklyBandTable(t *testing.T) {
 	// 🎯T596 widened the waste vertex deliberately, for the same reason it
 	// widened the panic one: 42% used at 50% elapsed is 16% behind pace
 	// and needs no correction worth a colour. It reads -0.32, inside the
-	// -0.60 vertex.
+	// -0.60 vertex. Ticker paint of the same numbers is T390.1.1.
 	if got := WeeklyBandOf(weekly(58, 42), now, th); got != BandOK {
 		t.Fatalf("16%% behind pace mid-window → ok, got %s", got)
 	}

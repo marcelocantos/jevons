@@ -231,14 +231,28 @@ export function classifyPace(
     if (burn > hotRatio) return PACE_HOT;
     if (burn > aheadRatio) return PACE_AHEAD;
   }
-  const weekly = String(windowName || '').toLowerCase() === 'weekly';
-  const monthly = String(windowName || '').toLowerCase() === 'monthly';
-  if (weekly || monthly) {
+  if (isWasteWindow(windowName)) {
     const w = weeklyWaste(used, remainingPercent, remainingTime);
     if (w.locked !== null && w.locked >= lockedWaste) return PACE_LOCKED;
-    if (w.continuation !== null && w.continuation >= underWaste) return PACE_UNDER;
+    // 🎯T390.1.1: blue only after the 5% warmup. Codex 0% / 19% elapsed
+    // is blue; an untouched week-start is not.
+    if (elapsed >= warmupElapsed && w.continuation !== null && w.continuation >= underWaste) {
+      return PACE_UNDER;
+    }
   }
   return PACE_OK;
+}
+
+function isWasteWindow(name?: string): boolean {
+  const n = String(name || '').toLowerCase();
+  return n === 'weekly' || n === 'monthly' || n === 'weekly_model';
+}
+
+/** Hover names 🎯T390.1.1 leftover: continuation vs already-unrecoverable at 1.5×. */
+export function leftoverHoverName(pace: string): string {
+  if (pace === PACE_UNDER) return 'continuation leftover';
+  if (pace === PACE_LOCKED) return 'already-unrecoverable at 1.5×';
+  return '—';
 }
 
 export function paceClassName(pace: string): string {

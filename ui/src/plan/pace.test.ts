@@ -15,6 +15,7 @@ import {
   applyThresholds,
   classifyPace,
   formatWindow,
+  leftoverHoverName,
   resetThresholds,
   weeklyWaste,
 } from './pace';
@@ -47,12 +48,19 @@ describe('classifyPace (🎯T390.1)', () => {
     expect(early.locked ?? 0).toBeLessThan(PACE_LOCKED_WASTE);
 
     expect(classifyPace(0, 100, 50, 'weekly')).toBe(PACE_LOCKED);
-    expect(classifyPace(0, 100, 97, 'weekly')).toBe(PACE_UNDER);
+    expect(classifyPace(0, 100, 97, 'weekly')).toBe(PACE_OK);
     expect(classifyPace(0, 100, 50, 'session')).toBe(PACE_OK);
     expect(classifyPace(87, 13, 12, 'weekly')).toBe(PACE_OK);
     expect(classifyPace(80, 20, 60, 'weekly')).toBe(PACE_HOT);
     expect(classifyPace(43, 57, 50, 'weekly')).toBe(PACE_OK);
     expect(classifyPace(42, 58, 50, 'weekly')).toBe(PACE_UNDER);
+    // Owner 2026-09-12: late-window leftover is locked surplus, not continuation-blue.
+    expect(classifyPace(64, 36, 9.5, 'monthly')).toBe(PACE_LOCKED);
+    expect(classifyPace(64, 36, 9.5, 'weekly')).toBe(PACE_LOCKED);
+    expect(leftoverHoverName(PACE_UNDER)).toBe('continuation leftover');
+    expect(leftoverHoverName(PACE_LOCKED)).toBe('already-unrecoverable at 1.5×');
+    expect(leftoverHoverName(PACE_OK)).toBe('—');
+    expect(leftoverHoverName(PACE_HOT)).toBe('—');
   });
 
   it('applyThresholds moves the hot vertex', () => {

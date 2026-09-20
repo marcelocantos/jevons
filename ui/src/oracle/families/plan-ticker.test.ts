@@ -7,7 +7,15 @@ import { fireEvent, render } from '@testing-library/react';
 import { expect, it } from 'vitest';
 import { PlanUsageBar } from '../../components/PlanUsageBar';
 import { nativeTitleForbidden } from '../../components/InstantTip';
-import { classifyPace, PACE_AHEAD, PACE_HOT, PACE_OK } from '../../plan/pace';
+import {
+  classifyPace,
+  leftoverHoverName,
+  PACE_AHEAD,
+  PACE_HOT,
+  PACE_LOCKED,
+  PACE_OK,
+  PACE_UNDER,
+} from '../../plan/pace';
 import { tickerGroups, tickerTipBody } from '../../plan/tickerGroups';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
@@ -21,6 +29,16 @@ function withQuery(node: ReactNode) {
 }
 
 describeOracle(family('plan-ticker'), () => {
+  itOracle('T390.1.1', 'weekly continuation leftover is blue, locked surplus is purple; session is exempt', () => {
+    expect(classifyPace(0, 100, 81, 'weekly')).toBe(PACE_UNDER);
+    expect(classifyPace(0, 100, 50, 'weekly')).toBe(PACE_LOCKED);
+    expect(classifyPace(0, 100, 97, 'weekly')).toBe(PACE_OK);
+    expect(classifyPace(0, 100, 50, 'session')).toBe(PACE_OK);
+    expect(classifyPace(64, 36, 9.5, 'monthly')).toBe(PACE_LOCKED);
+    expect(leftoverHoverName(PACE_UNDER)).toBe('continuation leftover');
+    expect(leftoverHoverName(PACE_LOCKED)).toBe('already-unrecoverable at 1.5×');
+  });
+
   itOracle('T390.1.6.2', 'no elapsed cutoff — Codex 26% used at ~5% elapsed is hot', () => {
     expect(classifyPace(26, 74, 95.1, 'weekly')).toBe(PACE_HOT);
   });
