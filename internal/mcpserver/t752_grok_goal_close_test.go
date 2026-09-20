@@ -292,3 +292,58 @@ func TestT752ProductEntryPointDispatchesGrokTranscripts(t *testing.T) {
 		t.Fatalf("Goal not cleared through the product entry point; Goal=%q", def.Goal)
 	}
 }
+
+// t752GrokToolResult writes a Grok tool_result record — tool output the agent
+// read back, not text it authored.
+func t752GrokToolResult(t *testing.T, text string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{
+		"type":         "tool_result",
+		"tool_call_id": "call-t752-0",
+		"content":      text,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestT752QuotedMarkerInToolOutputDoesNotClose is a real-world specimen, and
+// it is the failure mode a grep-shaped implementation of this target would
+// have shipped.
+//
+// Session 01a02ccf (real, on this machine) matches a grep for GOAL_STATUS, and
+// the string occurs in exactly one place: a tool_result. The agent had read the
+// marker back — a file read, a pane capture, a grep of its own brief — and
+// quoted it into its transcript. All seventeen of that session's assistant
+// records carry tool_calls, so it never completed a turn at all.
+//
+// Anything keying on the file's bytes closes a mission there on text the seat
+// never authored. This parser answers zero turns, because turnev gives a
+// tool_result no authored text by construction (🎯T422 clause 3) and only
+// KindAssistant accumulates — the same distinction 🎯T416 draws for deliveries.
+func TestT752QuotedMarkerInToolOutputDoesNotClose(t *testing.T) {
+	s, _, reportDir := t752Seat(t)
+
+	// The shape of the real session: work, a quoted marker in tool output, and
+	// no turn ever completed.
+	path := t752GrokHistory(t,
+		t752GrokUser(t, t752Goal),
+		t752GrokAssistant(t, "Checking what the brief asks for.", true),
+		t752GrokToolResult(t, "brief.md: emit exactly: "+claudia.GoalStatusComplete),
+		t752GrokAssistant(t, "Still reading.", true),
+	)
+
+	if got, err := scanGrokMissedTurns(path); err != nil || len(got) != 0 {
+		t.Fatalf("turns = %v, %v; a quoted marker in tool output is not an authored turn", got, err)
+	}
+	if n := s.recoverMissedTurns(t690Worker, path, time.Now()); n != 0 {
+		t.Fatalf("recovered %d turns; nothing was authored", n)
+	}
+	if _, err := agentreport.Latest(reportDir, t690Worker); err == nil {
+		t.Fatal("tool output must not be stored as this seat's report")
+	}
+	if def := s.registry.Def(t690Worker); def == nil || strings.TrimSpace(def.Goal) == "" {
+		t.Fatal("a marker the seat only READ must not close its mission")
+	}
+}
