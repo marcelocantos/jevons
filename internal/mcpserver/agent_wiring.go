@@ -180,8 +180,16 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	if had && prev.proc != nil {
 		prev.proc.UnsubscribeEvents(prev.token)
 	}
+	attachedAt := time.Now()
 	token := proc.SubscribeEvents(s.agentEventSink(name))
 	s.wiredSinks[name] = wiredSink{proc: proc, token: token}
+	// 🎯T744: the sink sees only future events, so a turn that ended before
+	// this attach (boot resume is serial; the wire pass runs after it) is
+	// read back from the transcript and delivered instead of lost. Off the
+	// wiring lock: it scans a file and delivers through notify.
+	if path := proc.JSONLPath(); path != "" {
+		go s.recoverMissedTurns(name, path, attachedAt)
+	}
 	// 🎯T528: ledger GoalCompleteCheck so Continue stops when named
 	// TargetIDs are achieved even if the sink misses a turn.
 	s.wireSessionGoalCompleteCheck(name, proc)
