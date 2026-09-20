@@ -793,6 +793,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerStaffOpsTools()
 	s.registerSentinelTools()
 	s.registerWritSecurityTools() // 🎯T335 security auditor + writ confinement
+	s.registerGateShowTool()      // 🎯T697: supervisor gate lookup
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s
