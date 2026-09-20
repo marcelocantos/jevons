@@ -531,6 +531,53 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		return res, nil
 	}
 
+	// 🎯T711: mode=interrupt cuts the turn on the PROCESS before the text is
+	// offered to it, rather than after the offer bounces back.
+	//
+	// The old order made the hatch conditional on the seat's process refusing
+	// a second prompt. That is true of a backend which answers "prompt already
+	// in flight" (Grok ACP) and false of every backend that accepts the text
+	// into its own client queue and returns nil — the ordinary Claude-shaped
+	// seat, and therefore every PO, which is mid-turn nearly all the time. On
+	// those seats interrupt=true never reached proc.Interrupt() at all: the
+	// text went into the CLI's queue, the classifier read it as waiting behind
+	// a live turn, and the caller was told `queued` (mechanism client_queue)
+	// while the turn it had asked to cut ran on. An owner direct to a working
+	// PO is precisely the message that must not wait its turn — the 2026-09-20
+	// ge-po specimen, where a doctrine direct with interrupt=true came back
+	// queued twice.
+	//
+	// 🎯T424 already required the hatch to act on the process rather than on a
+	// flag or a flight reading. It said so one step too late: in the arm only
+	// a bouncing backend can reach.
+	preFlight := s.flightState(name)
+	interrupted := false
+	if interrupt {
+		if ierr := proc.Interrupt(); ierr != nil {
+			// A turn this daemon watched begin is a turn the caller asked to
+			// cut. Failing that is an error, never a graceful enqueue (🎯T424).
+			if preFlight == FlightInFlight {
+				return agentSendResult{}, fmt.Errorf(
+					"interrupt failed for %q (%v) — message was not queued (🎯T424). "+
+						"The turn could not be cut; jevons_agent_stop then jevons_agent_start resumes the session.",
+					name, ierr)
+			}
+			// Nothing was known to be running, so a refused cancel may mean
+			// only that there was no turn to cancel. Offer the text, and leave
+			// the post-send busy arm below as the backstop for a seat that
+			// turns out to be working after all.
+			slog.Info("🎯T711 pre-send interrupt refused on a seat with no observed turn; offering the text anyway",
+				"component", "agent_send", "name", name,
+				"flight", preFlight.String(), "err", ierr.Error())
+		} else {
+			interrupted = true
+			s.cancelMCPFlights(name)
+			mm.Mechanism = delivery.MechanismSessionCancelPrompt
+			// Brief yield so ACP can clear promptID after session/cancel.
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
 	// trySend is the one place text reaches the process. Through the seam it
 	// also reports what ran and the phase the process saw itself in.
 	trySend := func() (sendModeOutcome, error) {
@@ -543,6 +590,13 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	// Opened BEFORE the send so "the payload arrived" is measured against a
 	// pre-send baseline, never against what an earlier session left on disk.
 	flight := s.flightState(name)
+	if interrupted {
+		// 🎯T711: the cut ended whatever was running, so this payload is being
+		// handed to a seat known idle — and the strict verdict applies. After
+		// cutting a turn short, "it went into the composer and stayed there"
+		// is exactly the outcome the caller must not hear as success.
+		flight = FlightIdle
+	}
 	var watch turnWatch
 	if confirm == confirmHere {
 		watch = s.watchAgentTurnFor(name, text)
@@ -572,7 +626,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 			// The spawn path judges this one; reporting a verdict here would
 			// hand it a status its own predicate does not know.
 			res := agentSendResult{
-				Status:    sentStatus(rehydrated, false),
+				Status:    sentStatus(rehydrated, interrupted),
 				Message:   fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name) + describeMode(mm),
 				Queued:    s.pendingAgentSends(name),
 				Mode:      mode,
@@ -585,7 +639,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		}
 		ev := watch()
 		outcome := s.classifySend(name, text, flight, ev)
-		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, nil, mm)
+		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, interrupted, nil, mm)
 	}
 
 	// 🎯T657: claudia answered that this handle cannot steer. Not busy, not a
@@ -603,7 +657,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmHere {
 			ev := watch()
 			outcome := s.classifySend(name, text, flight, ev)
-			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, false, err, mm)
+			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, interrupted, err, mm)
 		}
 		// 🎯T661: a broker refusal of the line is about the receiver's session,
 		// not this payload — say which records, and how to recover.
