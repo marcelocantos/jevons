@@ -183,8 +183,9 @@ func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
 }
 
 // DestEligible reports a published dest that may receive work (🎯T693):
-// locked, under, or ok. hot and ahead remain never-destinations even when
-// claudia.HasAvailableTokens still says the account has tokens.
+// locked, under, or ok via claudia.IsDestBand. hot and ahead remain
+// never-destinations even when claudia.HasAvailableTokens still says the
+// account has tokens. Eligibility only — ranking is claudia.Resolve.
 func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 	u := backendToPlanUsage(be)
 	if u.Status != claudia.PlanUsageAvailable {
@@ -196,8 +197,9 @@ func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 	return claudia.IsDestBand(claudia.PlanBand(WeeklyBandOf(be, now, th)))
 }
 
-// PickPlanDest chooses dest through claudia.Resolve (🎯T691). ok is false
-// when no published dest is token-eligible.
+// PickPlanDest chooses dest through claudia.Resolve (🎯T691 / 🎯T693).
+// ok is false when no published dest is dest-band eligible. Jevons does
+// not rank the candidates.
 func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool) {
 	pick, err := ResolveDest(context.Background(), cands, "", now, th)
 	if err != nil || pick.Provider == "" {

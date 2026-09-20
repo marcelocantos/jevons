@@ -51,9 +51,12 @@ func TestT693PickPlanDestUnderBeatsOkDespiteGrokSlack(t *testing.T) {
 	if !ok || got != "claude" {
 		t.Fatalf("under outranks ok: dest=%q ok=%v", got, ok)
 	}
+	// Seam oracle: PickMintDest is remaining-% (T495) and is not the
+	// dest chooser. On this fixture it still picks grok. Band-first
+	// lives in claudia.Resolve (PickPlanDest / ResolveMint).
 	mint := PickMintDest(cands, "grok", now, th)
-	if !mint.OK || mint.Provider != "claude" {
-		t.Fatalf("mint dest remaining-%% would pick grok (95 vs 29); band-first dest=%+v", mint)
+	if !mint.OK || mint.Provider != "grok" {
+		t.Fatalf("PickMintDest must stay remaining-%% (would pick grok 95 vs 29); got %+v — band-first here is the T691 seam bug", mint)
 	}
 
 	pick, err := ResolveMint(context.Background(), []DestCand{

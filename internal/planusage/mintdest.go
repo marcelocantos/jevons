@@ -22,40 +22,20 @@ type MintDestPick struct {
 	ConfigTie bool
 }
 
-// mintBandRank is destination order (🎯T693): locked, then under, then ok.
-func mintBandRank(b WeeklyBand) (int, bool) {
-	switch b {
-	case BandLocked:
-		return 0, true
-	case BandUnder:
-		return 1, true
-	case BandOK:
-		return 2, true
-	default:
-		return 0, false
-	}
-}
-
-// PickMintDest chooses where an omit-provider mint lands (🎯T495 / 🎯T693).
-//
-// DestEligible greens only (locked, under, ok — never ahead/hot). The
-// published band is the primary key. Within a band, remaining % and
-// configPref keep the T495 tie rules.
+// PickMintDest is the T495 remaining-% helper among DestEligible greens.
+// It is not destination ranking (🎯T693) and is not on the omit-provider
+// mint path after 🎯T691: mintProviderPick → ResolveMint → claudia.Resolve
+// (destBandRank / destBetter). Do not put band-first here — that is the
+// seam bug that reopened T693.
 func PickMintDest(cands []DestCand, configPref string, now time.Time, th Thresholds) MintDestPick {
 	type green struct {
 		prov      string
 		remaining *float64
 		load      int
-		rank      int
 	}
 	var greens []green
-	bestRank := 99
 	for _, c := range cands {
 		if !DestEligible(c.Backend, now, th) {
-			continue
-		}
-		rank, ok := mintBandRank(WeeklyBandOf(c.Backend, now, th))
-		if !ok {
 			continue
 		}
 		p := strings.ToLower(strings.TrimSpace(c.Provider))
@@ -70,22 +50,15 @@ func PickMintDest(cands []DestCand, configPref string, now time.Time, th Thresho
 			r := *w.RemainingPercent
 			rem = &r
 		}
-		greens = append(greens, green{prov: p, remaining: rem, load: c.Load, rank: rank})
-		if rank < bestRank {
-			bestRank = rank
-		}
+		greens = append(greens, green{prov: p, remaining: rem, load: c.Load})
 	}
-	var top []green
-	for _, g := range greens {
-		if g.rank == bestRank {
-			top = append(top, g)
-		}
-	}
-	if len(top) == 0 {
+	if len(greens) == 0 {
 		return MintDestPick{}
 	}
-	sort.SliceStable(top, func(i, j int) bool {
-		gi, gj := top[i], top[j]
+	// Outright order: most remaining first; known capacity outranks
+	// unknown; then least load, then name for determinism.
+	sort.SliceStable(greens, func(i, j int) bool {
+		gi, gj := greens[i], greens[j]
 		switch {
 		case gi.remaining != nil && gj.remaining != nil && *gi.remaining != *gj.remaining:
 			return *gi.remaining > *gj.remaining
@@ -98,14 +71,14 @@ func PickMintDest(cands []DestCand, configPref string, now time.Time, th Thresho
 		}
 	})
 	var bestKnown *float64
-	for _, g := range top {
+	for _, g := range greens {
 		if g.remaining != nil {
 			bestKnown = g.remaining
 			break
 		}
 	}
 	tie := map[string]bool{}
-	for _, g := range top {
+	for _, g := range greens {
 		if g.remaining == nil || bestKnown == nil || *g.remaining >= *bestKnown-th.MintIndifferencePercent {
 			tie[g.prov] = true
 		}
@@ -114,5 +87,5 @@ func PickMintDest(cands []DestCand, configPref string, now time.Time, th Thresho
 	if len(tie) >= 2 && cfg != "" && tie[cfg] {
 		return MintDestPick{Provider: cfg, OK: true, ConfigTie: true}
 	}
-	return MintDestPick{Provider: top[0].prov, OK: true}
+	return MintDestPick{Provider: greens[0].prov, OK: true}
 }

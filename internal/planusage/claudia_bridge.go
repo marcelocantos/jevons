@@ -11,10 +11,11 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// ResolveMint is the omit-provider dest pick (🎯T691 / 🎯T652): Claudia
-// chooses a session harness. PreferPlan + prefer Claude; RequireUsage
-// fails closed when no published dest remains. Jevons records the pick
-// and does not re-adjudicate it.
+// ResolveMint is the omit-provider dest pick (🎯T691 / 🎯T652 / 🎯T693):
+// Claudia chooses a session harness. PreferPlan + prefer Claude;
+// RequireUsage fails closed when no published dest remains. Ranking is
+// claudia destBandRank / destBetter (under before ok; pressure tiebreak;
+// hot/ahead never dest). Jevons records the pick and does not re-rank.
 func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	ct := thresholdsToClaudia(th)
 	return claudia.Resolve(ctx, claudia.ModelPredicates{
@@ -28,9 +29,10 @@ func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresh
 	})
 }
 
-// ResolveDest is the migrate/park dest pick (🎯T691): Claudia chooses among
-// published token-eligible dests. exclude drops the seat's current
-// provider. No PreferProvider — dest ranking is slack, not Claude-first.
+// ResolveDest is the migrate/park dest pick (🎯T691 / 🎯T693): Claudia
+// chooses among published dest-band dests. exclude drops the seat's
+// current provider. No PreferProvider — ranking is destBandRank (locked,
+// under, ok) then pressure, not Claude-first.
 func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	ct := thresholdsToClaudia(th)
 	pred := claudia.ModelPredicates{
