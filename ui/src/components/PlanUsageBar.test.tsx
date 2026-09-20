@@ -132,6 +132,7 @@ describe('PlanUsageBar mux wiring', () => {
       expect(tri.style.left).toBe('75%');
       const fill = container.querySelector('.plan-bar-fill') as HTMLElement;
       expect(fill.style.width).toBe('90%');
+      expect(fill.style.background).toMatch(/^rgb\(/);
     } finally {
       resetClock();
     }
@@ -220,6 +221,70 @@ describe('PlanUsageBar mux wiring', () => {
       const tip = container.querySelector('.instant-tip-show')?.textContent || '';
       expect(tip).toMatch(/continuation leftover/);
       expect(tip).toMatch(/already-unrecoverable at 1\.5×/);
+    } finally {
+      resetClock();
+    }
+  });
+
+  it('paints mid-ahead and mid-under fills from paceColor, not a class snap (🎯T390.1.2)', async () => {
+    const now = Date.parse('2026-09-12T12:00:00Z');
+    setNow(now);
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'claude',
+            status: 'available',
+            windows: [
+              {
+                name: 'session',
+                remaining_percent: 29.375,
+                used_percent: 70.625,
+                resets_at: new Date(now + 2.5 * 3600 * 1000).toISOString(),
+                limit_window_seconds: 5 * 3600,
+              },
+              {
+                name: 'weekly',
+                remaining_percent: 53.75,
+                used_percent: 46.25,
+                resets_at: new Date(now + 0.5 * WEEKLY_LIMIT_SECONDS * 1000).toISOString(),
+                limit_window_seconds: WEEKLY_LIMIT_SECONDS,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    try {
+      await waitFor(() => expect(container.querySelector('[data-window="weekly"]')).toBeTruthy());
+      const sessionFill = container.querySelector(
+        '[data-window="session"] .plan-bar-fill',
+      ) as HTMLElement;
+      const weekFill = container.querySelector(
+        '[data-window="weekly"] .plan-bar-fill',
+      ) as HTMLElement;
+      expect(sessionFill.style.background).toMatch(/^rgb\(/);
+      expect(weekFill.style.background).toMatch(/^rgb\(/);
+      expect(sessionFill.style.background).not.toBe(weekFill.style.background);
+      // Named class snaps: dark-theme amber / red / green / under-blue.
+      for (const named of ['rgb(251, 191, 36)', 'rgb(239, 68, 68)', 'rgb(74, 222, 128)', 'rgb(96, 165, 250)']) {
+        expect(sessionFill.style.background).not.toBe(named);
+        expect(weekFill.style.background).not.toBe(named);
+      }
     } finally {
       resetClock();
     }

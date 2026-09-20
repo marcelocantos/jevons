@@ -6,19 +6,30 @@ import {
   CLASS_EXHAUSTED,
   CLASS_HOT,
   PACE_AHEAD,
+  PACE_AHEAD_RATIO,
+  PACE_COLOR_AHEAD,
+  PACE_COLOR_HOT,
+  PACE_COLOR_LOCKED,
+  PACE_COLOR_OK,
+  PACE_COLOR_UNDER,
   PACE_HOT,
+  PACE_HOT_RATIO,
   PACE_LOCKED,
+  PACE_LOCKED_WASTE,
   PACE_OK,
   PACE_UNDER,
   PACE_UNDER_WASTE,
-  PACE_LOCKED_WASTE,
   applyThresholds,
   classifyPace,
+  fillColorForWindow,
   formatWindow,
   leftoverHoverName,
+  overspendStops,
+  paceColor,
   resetThresholds,
   weeklyWaste,
 } from './pace';
+import { hsvLerpRgb, parseCssColor, rgbToCss } from './hsv';
 
 afterEach(() => {
   resetThresholds();
@@ -106,5 +117,104 @@ describe('formatWindow paint class', () => {
     );
     expect(painted.className.split(' ')).toContain(CLASS_EXHAUSTED);
     expect(painted.className.split(' ')).toContain(CLASS_HOT);
+  });
+});
+
+function rgbOf(css: string): { r: number; g: number; b: number } | null {
+  return parseCssColor(css);
+}
+
+function far(
+  a: { r: number; g: number; b: number } | null,
+  b: { r: number; g: number; b: number } | null,
+  n = 30,
+): boolean {
+  if (!a || !b) return true;
+  return Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b) > n;
+}
+
+/** Wiring referent: same HSV helper paceColor uses, plus far() for snap-mutants. */
+function refLerp(hexA: string, hexB: string, t: number): string {
+  const a = parseCssColor(hexA);
+  const b = parseCssColor(hexB);
+  if (!a || !b) throw new Error('bad hex');
+  return rgbToCss(hsvLerpRgb(a, b, t));
+}
+
+describe('paceColor HSV lerp (🎯T390.1.2)', () => {
+  it('samples A, mid(A,B), B, mid(B,C), C on the overspend axis', () => {
+    const { a, b, c } = overspendStops();
+    expect(a).toBe(PACE_AHEAD_RATIO);
+    expect(c).toBe(PACE_HOT_RATIO);
+    expect(b).toBeCloseTo((a + c) / 2, 10);
+
+    const colA = paceColor(a);
+    const colMidAB = paceColor((a + b) / 2);
+    const colB = paceColor(b);
+    const colMidBC = paceColor((b + c) / 2);
+    const colC = paceColor(c);
+
+    const ok = rgbOf(refLerp(PACE_COLOR_OK, PACE_COLOR_OK, 0));
+    const amber = rgbOf(refLerp(PACE_COLOR_AHEAD, PACE_COLOR_AHEAD, 0));
+    const red = rgbOf(refLerp(PACE_COLOR_HOT, PACE_COLOR_HOT, 0));
+    expect(rgbOf(colA)).toEqual(ok);
+    expect(rgbOf(colB)).toEqual(amber);
+    expect(rgbOf(colC)).toEqual(red);
+    expect(colMidAB).toBe(refLerp(PACE_COLOR_OK, PACE_COLOR_AHEAD, 0.5));
+    expect(colMidBC).toBe(refLerp(PACE_COLOR_AHEAD, PACE_COLOR_HOT, 0.5));
+
+    // Snap-to-named-class mutant: midpoints equal a stop colour.
+    expect(far(rgbOf(colMidAB), ok)).toBe(true);
+    expect(far(rgbOf(colMidAB), amber)).toBe(true);
+    expect(far(rgbOf(colMidBC), amber)).toBe(true);
+    expect(far(rgbOf(colMidBC), red)).toBe(true);
+  });
+
+  it('samples waste counterparts A′, mid, B′, mid locked, C′', () => {
+    const green = paceColor(1, { continuation: 0, locked: 0 });
+    const midUnder = paceColor(0.5, { continuation: PACE_UNDER_WASTE / 2, locked: 0 });
+    const blue = paceColor(0.5, { continuation: PACE_UNDER_WASTE, locked: 0 });
+    const midLocked = paceColor(0.2, { continuation: PACE_UNDER_WASTE, locked: PACE_LOCKED_WASTE / 2 });
+    const purple = paceColor(0.2, { continuation: PACE_UNDER_WASTE, locked: PACE_LOCKED_WASTE });
+
+    expect(green).toBe(refLerp(PACE_COLOR_OK, PACE_COLOR_OK, 0));
+    expect(midUnder).toBe(refLerp(PACE_COLOR_OK, PACE_COLOR_UNDER, 0.5));
+    expect(blue).toBe(refLerp(PACE_COLOR_UNDER, PACE_COLOR_UNDER, 0));
+    expect(midLocked).toBe(refLerp(PACE_COLOR_UNDER, PACE_COLOR_LOCKED, 0.5));
+    expect(purple).toBe(refLerp(PACE_COLOR_LOCKED, PACE_COLOR_LOCKED, 0));
+
+    expect(far(rgbOf(midUnder), rgbOf(green))).toBe(true);
+    expect(far(rgbOf(midUnder), rgbOf(blue))).toBe(true);
+    expect(far(rgbOf(midLocked), rgbOf(blue))).toBe(true);
+    expect(far(rgbOf(midLocked), rgbOf(purple))).toBe(true);
+  });
+
+  it('session waste is ignored: only the burn axis paints', () => {
+    const sessionMid = paceColor((PACE_AHEAD_RATIO + PACE_HOT_RATIO) / 2);
+    expect(sessionMid).toBe(refLerp(PACE_COLOR_AHEAD, PACE_COLOR_AHEAD, 0));
+    const withWaste = paceColor((PACE_AHEAD_RATIO + PACE_HOT_RATIO) / 2, {
+      continuation: PACE_UNDER_WASTE,
+      locked: 0,
+    });
+    // burn is at B (orange); continuation does not override overspend.
+    expect(withWaste).toBe(sessionMid);
+  });
+
+  it('applyThresholds moves the lerp vertices', () => {
+    const before = paceColor(1.2);
+    applyThresholds({ hot_ratio: 1.2 });
+    const after = paceColor(1.2);
+    expect(after).toBe(refLerp(PACE_COLOR_HOT, PACE_COLOR_HOT, 0));
+    expect(before).not.toBe(after);
+  });
+
+  it('exhausted remaining paints stop C (red)', () => {
+    const painted = formatWindow(
+      { name: 'weekly', remaining_percent: 0, used_percent: 100 },
+      Date.now(),
+    );
+    expect(painted.fillColor).toBe(refLerp(PACE_COLOR_HOT, PACE_COLOR_HOT, 0));
+    expect(fillColorForWindow({ name: 'session', remaining_percent: 0, used_percent: 100 }, Date.now()))
+      .toBe(painted.fillColor);
   });
 });

@@ -10,12 +10,20 @@ import { nativeTitleForbidden } from '../../components/InstantTip';
 import {
   classifyPace,
   leftoverHoverName,
+  overspendStops,
+  paceColor,
   PACE_AHEAD,
+  PACE_COLOR_AHEAD,
+  PACE_COLOR_HOT,
+  PACE_COLOR_OK,
+  PACE_COLOR_UNDER,
   PACE_HOT,
   PACE_LOCKED,
   PACE_OK,
   PACE_UNDER,
+  PACE_UNDER_WASTE,
 } from '../../plan/pace';
+import { parseCssColor } from '../../plan/hsv';
 import { tickerGroups, tickerTipBody } from '../../plan/tickerGroups';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
@@ -29,6 +37,25 @@ function withQuery(node: ReactNode) {
 }
 
 describeOracle(family('plan-ticker'), () => {
+  itOracle('T390.1.2', 'paceColor HSV-lerps; midpoints are not named class colours', () => {
+    const { a, b, c } = overspendStops();
+    const midAB = paceColor((a + b) / 2);
+    const midBC = paceColor((b + c) / 2);
+    const midUnder = paceColor(0.5, { continuation: PACE_UNDER_WASTE / 2, locked: 0 });
+    const named = [PACE_COLOR_OK, PACE_COLOR_AHEAD, PACE_COLOR_HOT, PACE_COLOR_UNDER];
+    for (const sample of [midAB, midBC, midUnder]) {
+      const got = parseCssColor(sample);
+      for (const hex of named) {
+        const stop = parseCssColor(hex);
+        const dist = got && stop
+          ? Math.abs(got.r - stop.r) + Math.abs(got.g - stop.g) + Math.abs(got.b - stop.b)
+          : 999;
+        expect(dist).toBeGreaterThan(30);
+      }
+    }
+    expect(classifyPace(50, 50, 50)).toBe(PACE_OK);
+  });
+
   itOracle('T390.1.1', 'weekly continuation leftover is blue, locked surplus is purple; session is exempt', () => {
     expect(classifyPace(0, 100, 81, 'weekly')).toBe(PACE_UNDER);
     expect(classifyPace(0, 100, 50, 'weekly')).toBe(PACE_LOCKED);

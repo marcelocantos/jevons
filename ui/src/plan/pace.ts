@@ -4,6 +4,7 @@
 /** Same spend-vs-time colours as web/scripts/plan_usage.js (🎯T390.1). */
 
 import { remainingTimePercent, type PlanWindow as GeomWindow } from './windowGeom';
+import { hsvLerpRgb, parseCssColor, rgbToCss, type RGB } from './hsv';
 
 export const PACE_OK = 'ok';
 export const PACE_AHEAD = 'ahead';
@@ -73,6 +74,22 @@ export const PACE_WASTE_UNDER_LN = -0.6;
 export const PACE_WASTE_LOCKED_LN = -1.5;
 export const LOW_PERCENT = 15;
 export const CRITICAL_PERCENT = 5;
+
+/**
+ * Dark-theme fallbacks matching :root in cockpit.css. Live paint reads the
+ * CSS variables when a document is present so light theme keeps the same
+ * vertices in a different ink.
+ */
+export const PACE_COLOR_OK = '#4ade80';
+export const PACE_COLOR_AHEAD = '#fbbf24';
+export const PACE_COLOR_HOT = '#ef4444';
+export const PACE_COLOR_UNDER = '#60a5fa';
+export const PACE_COLOR_LOCKED = '#c084fc';
+
+export type PaceWaste = {
+  continuation?: number | null;
+  locked?: number | null;
+};
 
 export type ThresholdsDoc = {
   ahead_ratio?: number;
@@ -255,6 +272,115 @@ export function leftoverHoverName(pace: string): string {
   return '—';
 }
 
+function cssVarColor(name: string, fallback: string): RGB {
+  const fb = parseCssColor(fallback);
+  if (!fb) return { r: 0, g: 0, b: 0 };
+  if (typeof document === 'undefined' || !document.documentElement) return fb;
+  try {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return parseCssColor(raw) || fb;
+  } catch {
+    return fb;
+  }
+}
+
+function stopOk(): RGB { return cssVarColor('--green', PACE_COLOR_OK); }
+function stopAhead(): RGB { return cssVarColor('--amber', PACE_COLOR_AHEAD); }
+function stopHot(): RGB { return cssVarColor('--red', PACE_COLOR_HOT); }
+function stopUnder(): RGB { return cssVarColor('--plan-under', PACE_COLOR_UNDER); }
+function stopLocked(): RGB { return cssVarColor('--plan-locked', PACE_COLOR_LOCKED); }
+
+/**
+ * Burn vertices for the overspend ramp (🎯T390.1.2).
+ *
+ * A and C are the published ahead/hot ratios. B is the current orange
+ * colour sitting at the midpoint of that interval — not a third magic
+ * number in the thresholds feed. Existing 1.0 / 1.5 controls still
+ * decide the vertices; moving hot_ratio moves B and C together.
+ */
+export function overspendStops(): { a: number; b: number; c: number } {
+  const a = aheadRatio;
+  const c = hotRatio <= a ? a : hotRatio;
+  return { a, b: (a + c) / 2, c };
+}
+
+function overspendRgb(burn: number): RGB {
+  const { a, b, c } = overspendStops();
+  if (burn <= a) return stopOk();
+  if (burn >= c) return stopHot();
+  if (burn <= b) {
+    const span = b - a;
+    return hsvLerpRgb(stopOk(), stopAhead(), span <= 0 ? 1 : (burn - a) / span);
+  }
+  const span = c - b;
+  return hsvLerpRgb(stopAhead(), stopHot(), span <= 0 ? 1 : (burn - b) / span);
+}
+
+/**
+ * Published colour function (🎯T390.1.2): HSV lerp across the existing
+ * pace stops, not a CSS class hop. classifyPace keeps discrete hover
+ * labels; this is what the bar fill paints.
+ *
+ * Overspend: A = ahead_ratio green, B = midpoint orange, C = hot_ratio red.
+ * Weekly waste (omit for session): A′ = 0 continuation green, B′ =
+ * under_waste blue, C′ = locked_waste purple. Locked outranks
+ * continuation. Continuation/locked ramps only apply at burn ≤ A.
+ */
+export function paceColor(burn: number | null | undefined, waste?: PaceWaste | null): string {
+  const locked = waste && typeof waste.locked === 'number' && Number.isFinite(waste.locked)
+    ? waste.locked
+    : 0;
+  const continuation = waste && typeof waste.continuation === 'number' && Number.isFinite(waste.continuation)
+    ? waste.continuation
+    : 0;
+  const b = typeof burn === 'number' && Number.isFinite(burn) ? burn : null;
+  if (b !== null && b >= hotRatio) return rgbToCss(stopHot());
+  if (locked > 0) {
+    const t = lockedWaste <= 0 ? 1 : locked / lockedWaste;
+    return rgbToCss(hsvLerpRgb(stopUnder(), stopLocked(), t));
+  }
+  if (continuation > 0 && (b === null || b <= aheadRatio)) {
+    const t = underWaste <= 0 ? 1 : continuation / underWaste;
+    return rgbToCss(hsvLerpRgb(stopOk(), stopUnder(), t));
+  }
+  if (b !== null) return rgbToCss(overspendRgb(b));
+  return rgbToCss(stopOk());
+}
+
+/**
+ * Damped burn the classifier already uses, so week-start raw used/elapsed
+ * does not undo 🎯T390.1.6.1 by painting a barely-started window red.
+ */
+export function dampedBurn(used: number, elapsed: number): number | null {
+  const lambda = dampLambda < 0 ? 0 : dampLambda;
+  const denom = elapsed + lambda;
+  if (!(denom > 0)) return null;
+  return (used + lambda) / denom;
+}
+
+/** Bar-fill CSS colour for one window. Exhausted (remaining ≤ 0) is stop C. */
+export function fillColorForWindow(w: PaceWindow, nowMs: number): string {
+  const remaining = typeof w.remaining_percent === 'number' ? w.remaining_percent : null;
+  if (remaining !== null && remaining <= 0) return rgbToCss(stopHot());
+  const remainingTime = remainingTimePercent(w, nowMs);
+  const used =
+    typeof w.used_percent === 'number' && Number.isFinite(w.used_percent)
+      ? w.used_percent
+      : remaining !== null
+        ? 100 - remaining
+        : null;
+  let burn: number | null = null;
+  let waste: PaceWaste | null = null;
+  if (typeof remainingTime === 'number' && Number.isFinite(remainingTime) && used !== null) {
+    const elapsed = 100 - remainingTime;
+    burn = dampedBurn(used, elapsed);
+    if (isWasteWindow(w.name) && elapsed >= warmupElapsed) {
+      waste = weeklyWaste(used, remaining, remainingTime);
+    }
+  }
+  return paceColor(burn, waste);
+}
+
 export function paceClassName(pace: string): string {
   if (pace === PACE_HOT) return CLASS_HOT;
   if (pace === PACE_AHEAD) return CLASS_AHEAD;
@@ -358,6 +484,7 @@ export function paceOfWindow(w: PaceWindow, nowMs: number): string {
 export function formatWindow(w: PaceWindow, nowMs: number): FormattedWindow & {
   remainingTimePercent: number | null;
   className: string;
+  fillColor: string;
 } {
   const remaining = typeof w.remaining_percent === 'number' ? w.remaining_percent : null;
   const remainingTime = remainingTimePercent(w, nowMs);
@@ -368,5 +495,6 @@ export function formatWindow(w: PaceWindow, nowMs: number): FormattedWindow & {
     ...formatted,
     remainingTimePercent: remainingTime,
     className: windowClassName(formatted),
+    fillColor: fillColorForWindow(w, nowMs),
   };
 }
