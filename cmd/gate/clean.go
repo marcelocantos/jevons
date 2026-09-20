@@ -65,6 +65,8 @@ func cmdRunClean(argv []string, name, dir, commit, storeDir string, quiet, allow
 	switch {
 	case rec.Verdict == gate.VerdictSuspect && !allowSuspect:
 		return exitSuspect
+	case rec.Verdict == gate.VerdictEmpty && !allowSuspect:
+		return exitSuspect
 	case !rec.StatusKnown:
 		return exitError
 	default:

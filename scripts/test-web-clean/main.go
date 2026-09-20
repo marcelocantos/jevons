@@ -107,6 +107,8 @@ func run(repo, sha string, keep bool) int {
 	switch {
 	case rec.Verdict == gate.VerdictSuspect:
 		return exitSuspect
+	case rec.Verdict == gate.VerdictEmpty:
+		return exitSuspect
 	case !rec.StatusKnown:
 		return exitError
 	default:

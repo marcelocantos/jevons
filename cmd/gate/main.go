@@ -282,6 +282,8 @@ func cmdRun(argv []string, name, dir, storeDir string, quiet, allowSuspect bool)
 	switch {
 	case rec.Verdict == gate.VerdictSuspect && !allowSuspect:
 		return exitSuspect
+	case rec.Verdict == gate.VerdictEmpty && !allowSuspect:
+		return exitSuspect
 	case !rec.StatusKnown:
 		return exitError
 	default:

@@ -92,6 +92,13 @@ const (
 	// it did not measure the commit alone. Distinct from GREEN so quoting the
 	// GATE line cannot read as a pass. Never a green.
 	VerdictDirty Verdict = "DIRTY"
+	// VerdictEmpty: the command exited zero without contradicting output, but
+	// it executed no tests (🎯T719). Typical shape: go test -run matching
+	// nothing prints [no tests to run] and still exits 0. Distinct from
+	// GREEN so quoting the GATE line cannot read as a pass, and distinct
+	// from SUSPECT because the output does not contradict a pass — nothing
+	// ran. Never a green.
+	VerdictEmpty Verdict = "EMPTY"
 )
 
 // IsGreen reports whether v may be cited as a pass. Exactly one verdict may.
@@ -164,6 +171,68 @@ func ScanOutput(out string) []Anomaly {
 	return found
 }
 
+// EmptyRun reports whether captured output is a Go test run that executed
+// no tests (🎯T719). Whole-run, not per-package: a mixed `go test ./... -run`
+// that matches in one package and prints [no tests to run] in others is not
+// empty. Non-Go commands (true, echo ok) have none of the markers and stay
+// a pass. Skipped tests (`=== RUN` / `--- SKIP:`) count as executed.
+func EmptyRun(out string) bool {
+	if !hasGoEmptyMarker(out) {
+		return false
+	}
+	return !hasTestExecution(out)
+}
+
+func hasGoEmptyMarker(out string) bool {
+	return strings.Contains(out, "[no tests to run]") ||
+		strings.Contains(out, "testing: warning: no tests to run") ||
+		strings.Contains(out, "[no test files]")
+}
+
+func hasTestExecution(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "=== RUN") ||
+			strings.Contains(line, "--- PASS:") ||
+			strings.Contains(line, "--- SKIP:") ||
+			strings.Contains(line, "--- FAIL:") {
+			return true
+		}
+		trim := strings.TrimSpace(line)
+		if isGoOKPackageLine(trim) && !strings.Contains(trim, "[no tests to run]") {
+			return true
+		}
+		if jsonEventRanATest(trim) {
+			return true
+		}
+	}
+	return false
+}
+
+// isGoOKPackageLine is go test's package-ok line (`ok\tpkg\t0.1s`), not a
+// bare `echo ok`.
+func isGoOKPackageLine(line string) bool {
+	if !strings.HasPrefix(line, "ok") {
+		return false
+	}
+	rest := strings.TrimSpace(line[len("ok"):])
+	return rest != ""
+}
+
+// jsonEventRanATest is a go test -json pass/fail/skip/run event that names
+// a test. Package-level pass (no Test) is the empty-run JSON shape.
+func jsonEventRanATest(line string) bool {
+	if !strings.Contains(line, `"Action":"`) || !strings.Contains(line, `"Test":"`) {
+		return false
+	}
+	if strings.Contains(line, `"Test":""`) {
+		return false
+	}
+	return strings.Contains(line, `"Action":"pass"`) ||
+		strings.Contains(line, `"Action":"fail"`) ||
+		strings.Contains(line, `"Action":"skip"`) ||
+		strings.Contains(line, `"Action":"run"`)
+}
+
 func trimLine(line string) string {
 	s := strings.TrimSpace(strings.ReplaceAll(line, "\r", ""))
 	if len(s) > anomalyLineCap {
@@ -198,8 +267,9 @@ func outputIsOnlyKilledMarker(output string) bool {
 // output. Kept separate from Run so the decision is testable without a
 // subprocess, and so there is exactly one place that can call something green.
 // hostKill is decided by HostKill before this runs; it wins over every other
-// reading because a shot process arrived at no status of its own.
-func verdictFor(statusKnown bool, status int, anomalies []Anomaly, hostKill bool) Verdict {
+// reading because a shot process arrived at no status of its own. empty is
+// EmptyRun of the captured output: a zero-test Go run is EMPTY, not GREEN.
+func verdictFor(statusKnown bool, status int, anomalies []Anomaly, hostKill bool, empty bool) Verdict {
 	if hostKill {
 		return VerdictKilled
 	}
@@ -212,13 +282,19 @@ func verdictFor(statusKnown bool, status int, anomalies []Anomaly, hostKill bool
 	if len(anomalies) > 0 {
 		return VerdictSuspect
 	}
+	if empty {
+		return VerdictEmpty
+	}
 	return VerdictGreen
 }
 
 // applyTreeVerdict demotes a would-be GREEN when the measured tree carried
-// uncommitted changes (🎯T718). RED, SUSPECT, KILLED and UNKNOWN already
-// answer their own questions and are left alone. A nil tree is provenance
-// unknown, which is not DIRTY — absence is not a claim about dirt (🎯T397).
+// uncommitted changes (🎯T718). RED, SUSPECT, EMPTY, KILLED and UNKNOWN
+// already answer their own questions and are left alone — a run can be both
+// dirty and empty, and EMPTY wins so the worker fixes the -run pattern
+// rather than -clean-ing a suite that still executed nothing (🎯T719). A
+// nil tree is provenance unknown, which is not DIRTY — absence is not a
+// claim about dirt (🎯T397).
 func applyTreeVerdict(v Verdict, tree *TreeProvenance) Verdict {
 	if v != VerdictGreen {
 		return v

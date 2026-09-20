@@ -742,7 +742,9 @@ status, and records that status under `~/.jevons/gates`.
    or FAIL — the exact shape that nearly retired a target on a dead suite.
    `DIRTY` means a passing command measured in a tree carrying uncommitted
    changes, not citable as a commit pass — re-run with `bin/gate -clean`.
-   Emittable verdicts: GREEN, RED, SUSPECT, UNKNOWN, VOID, KILLED, DIRTY.
+   `EMPTY` means a run that executed no tests — a `-run` that matched
+   nothing, or a package with no test files, is not a pass.
+   Emittable verdicts: GREEN, RED, SUSPECT, UNKNOWN, VOID, KILLED, DIRTY, EMPTY.
 4. **Background and long-running gates are read back in band** with
    `bin/gate last` / `bin/gate show <id>`, not from whatever the harness
    said about the process.

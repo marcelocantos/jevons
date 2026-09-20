@@ -46,6 +46,7 @@ func TestVocabularyParse(t *testing.T) {
 		{"DIRTY", VerdictDirty},
 		{"killed", VerdictKilled},
 		{"VOID", VerdictVoid},
+		{"EMPTY", VerdictEmpty},
 	} {
 		v, ok := ParseVerdict(word.raw)
 		if !ok || v != word.want {

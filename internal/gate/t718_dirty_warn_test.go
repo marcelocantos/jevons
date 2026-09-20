@@ -32,6 +32,7 @@ func TestT718ApplyTreeVerdictDemotesOnlyGreen(t *testing.T) {
 		{"suspect dirty", VerdictSuspect, dirty, VerdictSuspect},
 		{"killed dirty", VerdictKilled, dirty, VerdictKilled},
 		{"unknown dirty", VerdictUnknown, dirty, VerdictUnknown},
+		{"empty dirty", VerdictEmpty, dirty, VerdictEmpty},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := applyTreeVerdict(tc.v, tc.tree); got != tc.want {

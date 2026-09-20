@@ -388,8 +388,10 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `GREEN` is the only verdict citable as one (`SUSPECT` = zero exit over
   panic/timeout/race/FAIL output; `DIRTY` = a passing command measured in a
   tree carrying uncommitted changes, not citable as a commit pass — re-run
-  with `bin/gate -clean`). Emittable verdicts: GREEN, RED, SUSPECT, UNKNOWN,
-  VOID, KILLED, DIRTY. `make bullseye`'s test step runs under the
+  with `bin/gate -clean`; `EMPTY` = a run that executed no tests — a `-run`
+  that matched nothing, or a package with no test files, is not a pass).
+  Emittable verdicts: GREEN, RED, SUSPECT, UNKNOWN, VOID, KILLED, DIRTY, EMPTY.
+  `make bullseye`'s test step runs under the
   gate. Report time closes the loop: `bin/gate check` reads a finish report and
   the daemon runs the same check on the notify path, prepending a FALSE-GREEN
   banner ahead of a report whose own cited evidence — piped gate, empty status,

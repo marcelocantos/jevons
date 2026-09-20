@@ -826,8 +826,8 @@ chain unchanged), and writes a record under `~/.jevons/gates`.
 |---|---|
 | Never pipe a gate and cite the result | Nothing after the command owns its status |
 | `exit=unknown` is not a pass | A status that could not be established never renders as zero |
-| Only `GREEN` may be cited as a pass | `SUSPECT` = zero exit over panic/timeout/race/FAIL output; `DIRTY` = a passing command measured in a tree carrying uncommitted changes, not citable as a commit pass — re-run with `bin/gate -clean` |
-| Emittable verdicts | GREEN, RED, SUSPECT, UNKNOWN, VOID, KILLED, DIRTY |
+| Only `GREEN` may be cited as a pass | `SUSPECT` = zero exit over panic/timeout/race/FAIL output; `DIRTY` = a passing command measured in a tree carrying uncommitted changes, not citable as a commit pass — re-run with `bin/gate -clean`; `EMPTY` = a run that executed no tests — a `-run` that matched nothing, or a package with no test files, is not a pass |
+| Emittable verdicts | GREEN, RED, SUSPECT, UNKNOWN, VOID, KILLED, DIRTY, EMPTY |
 | Read background gates back with `bin/gate last` | In band, off disk, independent of what the harness claimed |
 | A refused invocation is not a gate | An argument `gate` cannot honour is named and rejected, never performed in part (🎯T453) |
 

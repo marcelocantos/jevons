@@ -142,7 +142,7 @@ func Run(args *RunArgs) (*Record, error) {
 		rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
 	}
 	rec.Verdict = applyTreeVerdict(
-		verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill),
+		verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill, EmptyRun(outStr)),
 		rec.Tree,
 	)
 

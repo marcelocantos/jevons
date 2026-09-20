@@ -85,8 +85,9 @@ func (k Kind) ChatterCapped() bool {
 
 // Verdict is a gate/status verdict a message may claim. GREEN is the only
 // pass; SUSPECT is a zero exit whose output contradicts it; DIRTY is a
-// passing command measured in a dirty tree, not citable as a commit pass
-// (🎯T386 / 🎯T396 / 🎯T733). Unknown names fail closed — they are not a pass.
+// passing command measured in a dirty tree, not citable as a commit pass;
+// EMPTY is a run that executed no tests (🎯T386 / 🎯T396 / 🎯T733 / 🎯T719).
+// Unknown names fail closed — they are not a pass.
 type Verdict string
 
 const (
@@ -98,6 +99,7 @@ const (
 	VerdictDirty   Verdict = "DIRTY"
 	VerdictKilled  Verdict = "KILLED"
 	VerdictVoid    Verdict = "VOID"
+	VerdictEmpty   Verdict = "EMPTY"
 )
 
 // ParseVerdict maps a slot value onto a Verdict. Unknown names fail.
@@ -105,7 +107,7 @@ func ParseVerdict(raw string) (Verdict, bool) {
 	v := Verdict(strings.ToUpper(strings.TrimSpace(raw)))
 	switch v {
 	case VerdictGreen, VerdictSuspect, VerdictRed, VerdictUnknown,
-		VerdictDirty, VerdictKilled, VerdictVoid:
+		VerdictDirty, VerdictKilled, VerdictVoid, VerdictEmpty:
 		return v, true
 	case VerdictNone:
 		return VerdictNone, true

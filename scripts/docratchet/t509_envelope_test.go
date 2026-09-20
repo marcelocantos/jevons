@@ -68,6 +68,7 @@ func TestT509EnumsLiveInOnePackage(t *testing.T) {
 		"DIRTY",
 		"KILLED",
 		"VOID",
+		"EMPTY",
 		"in-progress",
 		"live",
 		"class-3",
