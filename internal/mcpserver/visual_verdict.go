@@ -156,7 +156,14 @@ func ClassifyVisualVerdict(report string) VisualVerdictClass {
 		return VisualVerdictNotApplicable
 	}
 	lower := strings.ToLower(report)
-	if !hasCompletionClaim(lower) {
+	// 🎯T750 narrowed hasCompletionClaim to claims the worker ASSERTS, for
+	// the reap chain, where reading a quoted marker as a claim destroys a
+	// seat. This gate asks a different question — is a visual verdict owed
+	// on this report — and must stay on the vocabulary scan. A worker that
+	// writes the verdict properly and ends "Not done." is the shape T493.1
+	// most wants to classify; an assertion test would return not_applicable
+	// on it and see nothing.
+	if !hasAnyCompletionMarker(lower) {
 		return VisualVerdictNotApplicable
 	}
 	if !HasVisualProseVerdict(report) {
