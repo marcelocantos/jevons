@@ -93,6 +93,16 @@ func TestT715OmitProviderMintsGrokWhenClaudeAtCap(t *testing.T) {
 	if blocked := s.checkHostSpawnAllowed("work", "jv-t715-omit"); blocked != nil {
 		t.Fatalf("dest-unaware early gate refused a pane while grok has room: %s", toolText(blocked))
 	}
+	def, _, note, err := s.stitchAgentStart(
+		"jv-t715-omit", t.TempDir(), "", "", "code_implement",
+		"jevons-po", claudia.PurposeWork, "", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Provider != claudia.ProviderGrok {
+		t.Fatalf("omit spawn minted %q, want grok; note=%q", def.Provider, note)
+	}
 }
 
 // 🎯T715 clause 2: explicit exhausted dest is refused and names dests with
@@ -151,5 +161,12 @@ func TestT715AllDestsAtCapRefusesOmitAndExplicit(t *testing.T) {
 	}
 	if blocked := s.checkHostSpawnAllowed("work", "jv-t715-omit-full"); blocked == nil {
 		t.Fatal("dest-unaware early gate admitted when every dest is at cap")
+	}
+	_, _, _, err := s.stitchAgentStart(
+		"jv-t715-omit-full", t.TempDir(), "", "", "code_implement",
+		"jevons-po", claudia.PurposeWork, "", "",
+	)
+	if err == nil {
+		t.Fatal("omit stitch minted a dest when every configured dest is at cap")
 	}
 }
