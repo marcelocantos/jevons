@@ -106,6 +106,9 @@ open http://localhost:13705/
 - **Workers**: `jwork` (sole ephemeral primitive — one self-contained
   task, runs to completion) and `jevons_agent_*` (named durable agents).
   The legacy `jevons_*_session` tools were removed (🎯T41).
+- **Held sendq (🎯T726)**: `jevons_sendq_reconcile` — see a seat's held
+  queue, and resolve an entry whose delivery outcome is unknown. The named
+  way out of PINNED; never an editor on `~/.jevons/sendq/*.json`.
 - **MCP resilience (🎯T60)**: `jevons_mcp_reconnect` — from inside the
   overseer chat, re-attach dropped MCP servers (all, or one named
   server) without session rotate or TUI `/mcps`. Cycles
@@ -133,6 +136,46 @@ bin/mcpscope diagnose        # exit 0 healthy, 3 out of scope (daemon UP), 4 dow
 with `AgentDef.MCPServers`: re-spawn under `jevons-po`, do not write
 HOME provider configs, do not restart the daemon, and do not report an
 outage.
+
+## A held sendq entry is reconciled, never hand-edited (🎯T726)
+
+A seat reads **PINNED** when the daemon is holding a message whose delivery
+outcome nobody knows: the submission errored after the write, so jevons can
+neither replay it (🎯T623 — a resend on an unknown outcome is how a message
+gets delivered twice) nor drop it (🎯T416 — non-delivery is a claim, and this
+one has no evidence). On 2026-09-20 `claudia-po` sat that way for almost a
+whole session, and the notice told it to "reconcile delivery before another
+send" while naming no tool for reconciling. The two moves that looked
+available were both wrong: an overseer kill throws the messages away, and an
+editor on `~/.jevons/sendq/*.json` races the daemon's atomic rename, where
+the loser is silent.
+
+**Look first, with 🎯T416's three instruments that work** — payload-match at
+user-message level in the receiver's JSONL, the receiver's own
+`queue-operation` / `queued_command` records, and transcript-file absence.
+(The three that passed while WRONG: transcript growth, a raw grep of the
+session file, and the receiver's behaviour.) **Then write down what you
+established:**
+
+```
+jevons_sendq_reconcile name=claudia-po                    # see the queue
+jevons_sendq_reconcile name=claudia-po action=confirmed \
+    entry_id=e81b80f752e0 attempt_id=4da672f24905 \
+    actor=jevons-po evidence="session f1a44c7f: queue-operation enqueue 15:25:32Z, remove 15:26:12Z"
+```
+
+`action=confirmed` when the receiver has it, `requeue` when you established
+it never landed (the only outcome that permits a resend), `drop` to abandon
+it deliberately and on the record. Every mutating action needs `actor=` and
+`evidence=`; the disposition is logged with both, and with the payload it
+removed. `action=consolidate` folds superseded messages for one addressee
+into a single authoritative message — it refuses while anything is
+unresolved, because folding an uncertain entry away would claim
+non-delivery.
+
+For a merely **pending** backlog nothing is uncertain and the
+non-destructive drain is still `jevons_agent_start name=<seat>` with no
+prompt: the queue delivers at the next turn boundary.
 
 ## Fleet spawn path (🎯T78)
 
