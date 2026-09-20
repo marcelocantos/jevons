@@ -915,7 +915,19 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-win.plan-exhausted .plan-bar {
   box-shadow: inset 0 0 0 1px var(--plan-exhausted);
 }
-#plan-ticker .plan-group.plan-unavail { opacity: 0.4; }
+/* 🎯T681: no reading is its own paint. An empty bar meant "no usage" and
+   a missing bar meant "no provider"; neither says "we could not read the
+   meter". The hatch is deliberately not a fill: there is no quantity here
+   to read, and the dashed edge says the rail itself is uncertain. */
+#plan-ticker .plan-win.plan-nodata .plan-bar {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 2px,
+    color-mix(in srgb, var(--text) 30%, transparent) 2px 4px
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 30%, transparent);
+}
+#plan-ticker .plan-group.plan-unavail { opacity: 0.55; }
 #plan-ticker .plan-group.plan-stale { opacity: 0.7; }
 #plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
 #plan-ticker .plan-sep { color: var(--text-muted); user-select: none; }

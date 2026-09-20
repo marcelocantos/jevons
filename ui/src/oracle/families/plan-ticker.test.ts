@@ -70,13 +70,19 @@ describeOracle(family('plan-ticker'), () => {
   });
 
   itOracle('T390.1.3', 'exhausted Claude still paints the boxed session+weekly pair', () => {
+    // A *published* zero is a reading like any other and keeps its pair of
+    // bars. 🎯T681 removed this oracle's other half: a 429 from the usage
+    // endpoint used to be synthesised into this same shape, which painted
+    // a failed reading as a spent plan.
     const groups = tickerGroups({
       backends: [
         {
           provider: 'claude',
-          status: 'unavailable',
-          reason: 'Claude usage HTTP 429: rate_limit_error',
-          windows: [],
+          status: 'available',
+          windows: [
+            { name: 'session', remaining_percent: 0, used_percent: 100 },
+            { name: 'weekly', remaining_percent: 0, used_percent: 100 },
+          ],
         },
       ],
     });

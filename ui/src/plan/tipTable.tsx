@@ -142,17 +142,31 @@ export function rolloverCell(
   }
 }
 
-/** Providers the feed could not answer for; shown under the table, not dropped. */
-export function unavailableNotes(groups: TickerGroup[]): string[] {
+/**
+ * Providers the feed could not answer for; shown under the table, not
+ * dropped. 🎯T681: when the provider did answer earlier in the session,
+ * the note carries that reading and its age — the honest thing to say is
+ * "this is what it last was, and that was a while ago", never a fresh
+ * looking zero.
+ */
+export function unavailableNotes(groups: TickerGroup[], nowMs?: number): string[] {
+  const at = nowMs ?? now();
   return groups
     .filter((g) => !g.available)
-    .map((g) => `${g.provider}: unavailable — ${g.reason || 'no plan-remaining published'}`);
+    .map((g) => {
+      const head = `${g.provider}: no reading — ${g.reason || 'no plan-remaining published'}`;
+      if (!g.last || !g.last.windows.length) return head;
+      const figures = g.last.windows
+        .map((w) => `${windowLabel(w.name || '')} ${pct(usedPercentOf(w))}`)
+        .join(', ');
+      return `${head} (last ${humanDuration((at - g.last.at) / 1000)} ago: ${figures})`;
+    });
 }
 
 export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; timeZone?: string }) {
   const nowMs = props.nowMs ?? now();
   const header = tipColumns(props.groups);
-  const notes = unavailableNotes(props.groups);
+  const notes = unavailableNotes(props.groups, nowMs);
   if (!header.length) {
     return <div className="plan-tip-empty">{notes.join('\n') || 'Plan remaining unavailable'}</div>;
   }

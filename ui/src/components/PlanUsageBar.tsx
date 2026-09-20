@@ -10,7 +10,13 @@ import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMar
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
 import { InstantTip } from './InstantTip';
-import { gaugeFillPercent, tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
+import {
+  gaugeFillPercent,
+  holdGroupReadings,
+  tickerGroups,
+  type LastReading,
+  type PlanSnapshot,
+} from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
 
 /** HTTP fallback only when mux is not connected (tests / non-cockpit). */
@@ -72,7 +78,12 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
   const incoming = muxSnap ?? q.data;
   const snap = holdLastPlanSnapshot(last.current, incoming);
   last.current = snap;
-  const groups = tickerGroups(snap);
+  // 🎯T681: carry each provider's last real reading forward, so a
+  // provider that has gone unreadable can say what it last knew and when.
+  const heldReadings = useRef<Map<string, LastReading>>(new Map());
+  const held = holdGroupReadings(heldReadings.current, tickerGroups(snap), now());
+  heldReadings.current = held.last;
+  const groups = held.groups;
   // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
   const tip = <PlanTipTable groups={groups} nowMs={now()} />;
   const inner = !groups.length ? (
@@ -92,7 +103,20 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
         <span className="plan-icon">
           <CompanyMark provider={g.provider} />
         </span>
-        {g.windows.length ? (
+        {!g.available ? (
+          // 🎯T681: an unreadable provider keeps its place in the row and
+          // says so. Painting nothing here was indistinguishable from a
+          // provider that is simply idle, and painting an empty bar was
+          // indistinguishable from one with no usage at all.
+          <span className="plan-box">
+            <span className="plan-win plan-nodata" data-window="unreadable">
+              <span className="plan-track">
+                <span className="plan-bar" aria-hidden="true" />
+              </span>
+              <span className="plan-win-label">?</span>
+            </span>
+          </span>
+        ) : g.windows.length ? (
           <span className="plan-box">
             {g.windows.map((w) => {
               const painted = formatWindow(w, now());

@@ -79,7 +79,7 @@ describe('plan tooltip table (🎯T588.1)', () => {
 
   it('keeps an unavailable provider visible as a note rather than dropping it', () => {
     expect(tipColumns(FLEET).some((h) => h.provider === 'bedrock')).toBe(false);
-    expect(unavailableNotes(FLEET)).toEqual(['bedrock: unavailable — no subscription surface']);
+    expect(unavailableNotes(FLEET)).toEqual(['bedrock: no reading — no subscription surface']);
   });
 
   it('labels weekly as week and monthly as month', () => {
@@ -106,7 +106,7 @@ describe('plan tooltip table (🎯T588.1)', () => {
     const { container } = render(
       <PlanTipTable groups={[{ provider: 'bedrock', available: false, reason: 'x', windows: [] }] as unknown as TickerGroup[]} nowMs={NOW} />,
     );
-    expect(container.textContent).toMatch(/bedrock: unavailable/);
+    expect(container.textContent).toMatch(/bedrock: no reading/);
   });
 });
 
