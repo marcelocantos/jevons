@@ -128,9 +128,12 @@ type Anomaly struct {
 // anomalyMarkers are output shapes that contradict a zero exit status.
 //
 // Chosen to be narrow on purpose. "panic" appears in ordinary prose about a
-// panic that was fixed; "panic:" is the runtime's own prefix. Widening this
-// list trades a false green for a false red, and a wrapper that fails
-// successful runs gets switched off, which costs more than it saves.
+// panic that was fixed; "panic:" is the runtime's own prefix. 🎯T737 then
+// requires the rest of the runtime/test-output shape: "panic:/FAIL/DATA RACE"
+// is a name catalog, not a panic. Widening this list, or matching the
+// marker substring without that shape, trades a false green for a false
+// red, and a wrapper that fails successful runs gets switched off, which
+// costs more than it saves.
 var anomalyMarkers = []string{
 	"panic:",
 	"fatal error:",
@@ -153,6 +156,11 @@ const anomalyLineCap = 200
 //
 // At most one Anomaly per marker: a suite that fails forty tests should
 // produce a readable record, not forty near-identical lines.
+//
+// A marker counts only in output shape (🎯T737): `panic: message`,
+// `--- FAIL: TestX`, `WARNING: DATA RACE`. A report that names those
+// markers — "ScanOutput markers are panic:/FAIL/DATA RACE/timeout" — is
+// not a contradiction.
 func ScanOutput(out string) []Anomaly {
 	if out == "" {
 		return nil
@@ -161,7 +169,7 @@ func ScanOutput(out string) []Anomaly {
 	seen := make(map[string]bool, len(anomalyMarkers))
 	for _, line := range strings.Split(out, "\n") {
 		for _, m := range anomalyMarkers {
-			if seen[m] || !strings.Contains(line, m) {
+			if seen[m] || !outputShapedMarker(line, m) {
 				continue
 			}
 			seen[m] = true
@@ -169,6 +177,93 @@ func ScanOutput(out string) []Anomaly {
 		}
 	}
 	return found
+}
+
+// LooksLikeMarkerProse reports whether line names ScanOutput's failure
+// markers without quoting a run's output (🎯T737). A catalog such as
+// "panic:/FAIL/DATA RACE/timeout", a fog-known line listing those names,
+// or an acceptance clause of execution-evidence tokens is prose. A go-test
+// `--- FAIL: TestX` or a runtime `panic: message` is not.
+func LooksLikeMarkerProse(line string) bool {
+	hit := false
+	for _, m := range anomalyMarkers {
+		if !strings.Contains(line, m) {
+			continue
+		}
+		hit = true
+		if outputShapedMarker(line, m) {
+			return false
+		}
+	}
+	return hit
+}
+
+// outputShapedMarker reports whether marker occurs on line as captured
+// gate/test output rather than as a name being discussed (🎯T737).
+func outputShapedMarker(line, marker string) bool {
+	switch marker {
+	case "panic:", "fatal error:":
+		return prefixedRuntimeMessage(line, marker)
+	case "--- FAIL":
+		return failTestOutput(line)
+	case "DATA RACE":
+		return dataRaceOutput(line)
+	default:
+		return strings.Contains(line, marker)
+	}
+}
+
+// prefixedRuntimeMessage is Go's `panic: <message>` / `fatal error: <message>`.
+// A catalog join (`panic:/FAIL`, `panic:, DATA RACE`) has no message.
+func prefixedRuntimeMessage(line, prefix string) bool {
+	for {
+		i := strings.Index(line, prefix)
+		if i < 0 {
+			return false
+		}
+		rest := strings.TrimLeft(line[i+len(prefix):], " \t")
+		if rest == "" {
+			return false
+		}
+		if isMarkerCatalogJoin(rest[0]) {
+			line = rest
+			continue
+		}
+		return true
+	}
+}
+
+func isMarkerCatalogJoin(c byte) bool {
+	switch c {
+	case '/', ',', ')', ']', '}', '|', ';', ':', '*', '_', '`', '\'', '"', '.', '!', '?':
+		return true
+	default:
+		return false
+	}
+}
+
+// failTestOutput is go test's `--- FAIL: TestName`. An acceptance list
+// (`--- FAIL:, an ok line`) has no identifier after the colon.
+func failTestOutput(line string) bool {
+	const p = "--- FAIL: "
+	i := strings.Index(line, p)
+	if i < 0 {
+		return false
+	}
+	rest := line[i+len(p):]
+	return rest != "" && !isMarkerCatalogJoin(rest[0])
+}
+
+// dataRaceOutput is the race detector's `WARNING: DATA RACE` (or a line
+// that is only that token). `FAIL/DATA RACE/timeout` is a name catalog.
+func dataRaceOutput(line string) bool {
+	if strings.Contains(line, "WARNING: DATA RACE") {
+		return true
+	}
+	trim := strings.TrimSpace(line)
+	trim = strings.Trim(trim, "`|")
+	trim = strings.TrimSpace(trim)
+	return trim == "DATA RACE"
 }
 
 // EmptyRun reports whether captured output is a Go test run that executed

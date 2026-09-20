@@ -535,6 +535,8 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	// 🎯T443 / 🎯T472: the failure quoted as the content of an honest red role
 	// is that run's result, not output arguing with a pass, so it is hidden
 	// from the scan. Everything outside those lines is scanned as before.
+	// 🎯T737: ScanOutput requires output shape, so naming the markers in
+	// prose / fog-known / an acceptance list is not output_contradicts.
 	for _, a := range ScanOutput(blankLines(lines, framingLines)) {
 		flags = append(flags, Flag{
 			Kind: FlagOutputContradicts,
