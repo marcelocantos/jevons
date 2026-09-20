@@ -7,8 +7,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/marcelocantos/claudia"
 )
 
 // 🎯T691: dest ranking lives in claudia.Resolve. Jevons records the author.
@@ -40,7 +38,7 @@ func TestT691PlanActionsAuthorIsClaudia(t *testing.T) {
 	if len(acts) != 1 || acts[0].To != "claude" {
 		t.Fatalf("migrate grok → claude: %+v", acts)
 	}
-	if acts[0].Author != claudia.DecisionAuthor {
+	if acts[0].Author != destAuthor {
 		t.Fatalf("author = %q, want claudia", acts[0].Author)
 	}
 }

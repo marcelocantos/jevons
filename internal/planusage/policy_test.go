@@ -6,8 +6,6 @@ package planusage
 import (
 	"testing"
 	"time"
-
-	"github.com/marcelocantos/claudia"
 )
 
 func TestWeeklyBandTable(t *testing.T) {
@@ -21,7 +19,7 @@ func TestWeeklyBandTable(t *testing.T) {
 	// so a specimen can sit anywhere in the window rather than only at the
 	// halfway mark.
 	weeklyAtElapsed := func(rem, used, remTimePct float64) Backend {
-		resets := now.Add(time.Duration(remTimePct / 100 * float64(lim)) * time.Second)
+		resets := now.Add(time.Duration(remTimePct/100*float64(lim)) * time.Second)
 		return Backend{
 			Provider: "grok",
 			Status:   StatusAvailable,
@@ -302,7 +300,7 @@ func TestPlanActionsParkWhenNoDest(t *testing.T) {
 	if len(acts) != 1 || acts[0].Name != "worker" || acts[0].To != "" {
 		t.Fatalf("overseer skipped; worker parks: %+v", acts)
 	}
-	if acts[0].Author != claudia.DecisionAuthor {
+	if acts[0].Author != destAuthor {
 		t.Fatalf("park author = %q, want claudia", acts[0].Author)
 	}
 }
@@ -335,7 +333,7 @@ func TestPlanActionsMigrateToDest(t *testing.T) {
 	if len(acts) != 1 || acts[0].To != "claude" {
 		t.Fatalf("migrate grok → claude: %+v", acts)
 	}
-	if acts[0].Author != claudia.DecisionAuthor {
+	if acts[0].Author != destAuthor {
 		t.Fatalf("migrate author = %q, want claudia", acts[0].Author)
 	}
 }

@@ -177,15 +177,16 @@ func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
 }
 
 // MigrateOff reports that running seats on this provider must leave.
-// Same bar as claudia.ShouldVacate (🎯T691).
+// Same bar as unpublished claudia.ShouldVacate (🎯T691); the published
+// pin does not export that helper, so the predicate is local (🎯T707).
 func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
-	return claudia.ShouldVacate(backendToPlanUsage(be), now, claudiaThresholdsPtr(th))
+	return shouldVacate(be, now, th)
 }
 
 // DestEligible reports a published dest that may receive work (🎯T693):
-// locked, under, or ok via claudia.IsDestBand. hot and ahead remain
-// never-destinations even when claudia.HasAvailableTokens still says the
-// account has tokens. Eligibility only — ranking is claudia.Resolve.
+// locked, under, or ok. hot and ahead remain never-destinations even
+// when claudia.HasAvailableTokens still says the account has tokens.
+// Eligibility only — ranking is claudia.Resolve.
 func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 	u := backendToPlanUsage(be)
 	if u.Status != claudia.PlanUsageAvailable {
@@ -194,7 +195,7 @@ func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 	if !claudia.HasAvailableTokens(u, now, claudiaThresholdsPtr(th)) {
 		return false
 	}
-	return claudia.IsDestBand(claudia.PlanBand(WeeklyBandOf(be, now, th)))
+	return isDestBand(WeeklyBandOf(be, now, th))
 }
 
 // PickPlanDest chooses dest through claudia.Resolve (🎯T691 / 🎯T693).
@@ -277,7 +278,7 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 		}
 		out = append(out, PlanAction{
 			Name: a.Name, From: from, To: to, Reason: reason,
-			Author: claudia.DecisionAuthor,
+			Author: destAuthor,
 		})
 	}
 	return out
@@ -415,5 +416,3 @@ func destPressure(be Backend, now time.Time, th Thresholds) float64 {
 	}
 	return Pressure(*used, 100-rtp, th)
 }
-
-
