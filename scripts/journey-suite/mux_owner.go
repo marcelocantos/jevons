@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -227,4 +228,119 @@ func assertOwnerMuxReplay(replay [][]byte, prompt, reply string) error {
 	}
 	close(frames)
 	return waitOwnerMuxReply(context.Background(), frames, prompt, reply)
+}
+
+// ownerMuxPhase reads the overseer turn-state sample the canonical socket
+// publishes alongside transcript frames (🎯T555.2 fanMeta). A window meta
+// carries no phase and reports false rather than an empty phase, so a
+// replay boundary can never be read as "idle".
+func ownerMuxPhase(body json.RawMessage) (string, bool) {
+	var meta struct {
+		Phase *struct {
+			Phase string `json:"phase"`
+		} `json:"phase"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil || meta.Phase == nil {
+		return "", false
+	}
+	return meta.Phase.Phase, true
+}
+
+// waitOwnerMuxTurnWorking establishes that THIS request is the one in
+// flight, and returns its owner echo index.
+//
+// 🎯T625: waiting for any assistant activity accepts a previous journey's
+// turn still streaming, so a cancel journey could interrupt — and then
+// cancel-settle — a turn it never sent. The owner echo's index bounds the
+// answer: only an assistant row after that index belongs to this request.
+// The phase sample must also say the overseer is working, so the interrupt
+// lands on a live turn rather than on an idle seat.
+//
+// A request that has already reached a terminal is refused rather than
+// cancelled: interrupting a finished turn proves nothing about cancel
+// ordering. The residual race — the turn ending between this observation
+// and the interrupt arriving — is real and declared, not hidden.
+func waitOwnerMuxTurnWorking(ctx context.Context, frames <-chan []byte, prompt string, d time.Duration) (int, error) {
+	deadline := time.After(d)
+	ownerIndex, working, started := 0, false, false
+	for {
+		select {
+		case data, ok := <-frames:
+			if !ok {
+				return 0, fmt.Errorf("mux closed before the request to cancel began working")
+			}
+			env, frame, err := decodeOwnerMux(data)
+			if err != nil {
+				return 0, err
+			}
+			if env.Channel != ownerMuxChannel {
+				continue
+			}
+			if env.Type == "meta" {
+				if phase, ok := ownerMuxPhase(env.Body); ok {
+					working = phase != "" && phase != "idle" && phase != "error"
+				}
+				// The phase sample and the first streamed row race; either
+				// order completes the observation.
+				if started && working {
+					return ownerIndex, nil
+				}
+				continue
+			}
+			if env.Type != "frame" {
+				continue
+			}
+			if frame.Type == "user" && (frame.Event.Origin == "owner" || frame.Event.Origin == "") &&
+				journeyContentText(frame.Event.Message.Content) == prompt {
+				ownerIndex = frame.Index
+			}
+			if frame.Type != "assistant" || ownerIndex == 0 || frame.Index <= ownerIndex {
+				continue
+			}
+			switch frame.Event.Message.Stop {
+			case "end_turn", "stop_sequence", "max_tokens":
+				return 0, fmt.Errorf("the request to cancel ended before it could be interrupted")
+			}
+			started = true
+			if working {
+				return ownerIndex, nil
+			}
+		case <-deadline:
+			return 0, fmt.Errorf("request to cancel never worked (echo=%d streaming=%v working=%v)",
+				ownerIndex, started, working)
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+}
+
+// waitOwnerMuxSettled waits for the owner's cancel to settle on the
+// canonical socket — the same level the React cockpit reduces. Asserting
+// the settle on /ws/chat would prove a signal the owner's actual UI never
+// sees (🎯T540). Reaching idle is a real transition here because the
+// caller has already observed this request working.
+func waitOwnerMuxSettled(ctx context.Context, frames <-chan []byte, d time.Duration) error {
+	deadline := time.After(d)
+	for {
+		select {
+		case data, ok := <-frames:
+			if !ok {
+				return fmt.Errorf("mux closed before the cancel settled")
+			}
+			env, _, err := decodeOwnerMux(data)
+			if err != nil {
+				return err
+			}
+			if env.Channel != ownerMuxChannel || env.Type != "meta" {
+				continue
+			}
+			if phase, ok := ownerMuxPhase(env.Body); ok && (phase == "idle" || phase == "") {
+				return nil
+			}
+		case <-deadline:
+			return fmt.Errorf("cancel never settled on the canonical owner level")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }

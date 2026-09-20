@@ -65,6 +65,17 @@ Journeys stay plain Go. Shared setup/act/assert helpers live in `steps.go`
 in this package (e.g. `ListAgentsHTTP`, `MCPToolCall`, `AgentStart`/`Send`,
 `MustAgentRunning`). Prefer steps over copy-paste; no formal YAML/DSL.
 
+## Provider observation (🎯T625)
+
+A journey that claims an agent outcome names the backend that produced it:
+`s.assertLaunchedOn(names…)` (`steps.go`) reads the isolate's own
+`msg="agent started" name=… provider=…` record. Without it, `-provider claude`
+proves only what the suite *asked* for — a fallback to another backend, or a
+named agent that never launched, reads identically. A Claude success cannot
+certify Grok.
+
+Wired into J2, J3, J4, J6c, J8, J8b, J9, J10, J11, J14, J17, J30, J31.
+
 ## Journey cache (🎯T107)
 
 A **successful** live run may be cached for later replay (store the
@@ -80,7 +91,12 @@ every run today; live is the default truth.
 ### Owner chat
 1. **J1-health** — `/health`
 2. **J2-chat-round-trip** — idle send → terminal
-3. **J3-cancel-and-send** — long turn → interrupt → settle → replacement → terminal
+3. **J3-cancel-and-send** — canonical `/ws/mux`. Fresh-nonce long turn → observe
+   **this request** streaming while the overseer phase says working → interrupt →
+   settle on the owner level → fresh-nonce replacement → exact terminal strictly
+   after the replacement echo, so nothing the cancelled turn emitted can close it.
+   Observes the named runtime provider (🎯T625). A request that ended before the
+   interrupt is refused, not cancelled.
 4. **J4-reconnect-sealed** — seed turn → reconnect → bounded replay + sandbox journal only
 4b. **J19-root-history-paint** — seed ≥12 distinct sealed owner turns into the isolate journal (not the owner's history) → hard-load the **React** cockpit (packaged isolate `GET /`; a missing React root fails rather than starting Vite) → Playwright census of the React transcript plus T493 gates (`checkVisibility`, centre hit-test, Vision OCR of a pinned 1280×800 viewport). Empty pane with model rows is a fail (🎯T494). Portguard still refuses `:13705` and `:13706`.
 4c. **J20-plan-dest** — fixture weekly remaining (not live vendor) → omit-provider mint refuses when dest empty; sweep parks an explicit-hot worker (🎯T390.1.5). Overseer chat turn proves isolate agent interaction.

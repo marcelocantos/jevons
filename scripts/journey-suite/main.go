@@ -12,7 +12,8 @@
 // Journeys (live agent backend; owner chat + MCP orchestration):
 //  1. health
 //  2. canonical mux round-trip (fresh owner send → exact terminal reply)
-//  3. cancel-and-send (interrupt mid-turn → replacement → terminal)
+//  3. cancel-and-send (canonical mux; interrupt THIS request mid-turn →
+//     settle on the owner level → fresh replacement → exact terminal)
 //  4. canonical mux reconnect (bounded replayed exchange → fresh reply)
 //  5. isolation (after teardown)
 //     6–11. orchestration: tool surface, overseer registry, two agents
@@ -407,48 +408,71 @@ func (s *suite) jChatRoundTrip() error {
 	return queueJourneyProvider(logs, overseerName, string(s.provider))
 }
 
+// jCancelAndSend is the cancel-ordering journey (🎯T625).
+//
+// It runs on the canonical owner socket, carries a fresh nonce in BOTH
+// requests, and proves the ordering rather than assuming it: the turn that
+// gets interrupted is this journey's own request, the cancel settles on the
+// owner level before any replacement is sent, and the replacement's exact
+// reply is a row strictly after the replacement echo — so nothing the
+// cancelled turn emitted, early or late, can satisfy it.
+//
+// The previous version sent a constant token over /ws/chat, waited for any
+// assistant frame at all, and accepted a terminal that a late frame from the
+// interrupted turn could supply. All three could pass without a cancel.
 func (s *suite) jCancelAndSend() error {
-	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout+60*time.Second)
 	defer cancel()
-	conn, frames, err := dialChat(ctx, s.host)
+	conn, frames, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		return err
 	}
 	defer conn.CloseNow()
-	if _, err := drainReplay(frames, 800*time.Millisecond); err != nil {
+	if _, err := collectOwnerMuxReplay(ctx, frames); err != nil {
 		return err
 	}
 
-	long := "Count slowly from 1 to 40, one number per line."
-	if err := conn.Write(ctx, websocket.MessageText, []byte(long)); err != nil {
+	// A fresh marker on the long turn makes the cancelled request
+	// identifiable: its own output can never be mistaken for the
+	// replacement's, and a stale count from an earlier run cannot stand in
+	// for a turn this journey never started.
+	longToken := "journey-cancel-long-" + uuid.NewString()
+	longPrompt := "Count slowly from 1 to 40, one number per line, " +
+		"prefixing every line with " + longToken + "."
+	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": longPrompt}); err != nil {
 		return err
 	}
-	// Wait for in-flight activity.
-	if err := waitAssistantActivity(ctx, frames, 25*time.Second); err != nil {
-		return fmt.Errorf("long turn never started: %w", err)
+	if _, err := waitOwnerMuxTurnWorking(ctx, frames, longPrompt, 45*time.Second); err != nil {
+		return fmt.Errorf("long turn: %w", err)
 	}
-	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"interrupt"}`)); err != nil {
+
+	if err := writeOwnerMux(ctx, conn, "interrupt", map[string]any{}); err != nil {
 		return err
 	}
-	// Wait for cancel settle BEFORE correction (honest; no false-pass).
-	if err := waitCancelSettled(ctx, frames, 30*time.Second); err != nil {
-		return fmt.Errorf("cancel settle: %w", err)
-	}
-	token := "JOURNEY-CANCEL-OK"
-	if err := conn.Write(ctx, websocket.MessageText, []byte("Reply with exactly: "+token)); err != nil {
+	// Settle BEFORE the replacement is composed. Sending the correction
+	// first and reading a reply afterwards cannot distinguish a product
+	// that cancelled from one that simply queued behind the long turn.
+	if err := waitOwnerMuxSettled(ctx, frames, 45*time.Second); err != nil {
 		return err
 	}
-	gotUser, _, terminal, err := waitTurn(ctx, frames, token, true)
+
+	token := "journey-cancel-ok-" + uuid.NewString()
+	prompt := "Reply with exactly: " + token
+	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": prompt}); err != nil {
+		return err
+	}
+	// waitOwnerMuxReply keys on this request's echo index and ignores every
+	// row at or before it, which is what makes a late frame from the
+	// cancelled turn unable to close this journey.
+	if err := waitOwnerMuxReply(ctx, frames, prompt, token); err != nil {
+		return fmt.Errorf("replacement after cancel: %w", err)
+	}
+
+	logs, err := os.ReadFile(s.logPath)
 	if err != nil {
 		return err
 	}
-	if !gotUser {
-		return fmt.Errorf("no correction user echo")
-	}
-	if !terminal {
-		return fmt.Errorf("no terminal after correction")
-	}
-	return nil
+	return queueJourneyProvider(logs, overseerName, string(s.provider))
 }
 
 func (s *suite) jReconnectSealed() error {
@@ -555,67 +579,6 @@ func drainReplay(frames <-chan []byte, quiet time.Duration) (int, error) {
 			n++
 		case <-time.After(quiet):
 			return n, nil
-		}
-	}
-}
-
-func waitAssistantActivity(ctx context.Context, frames <-chan []byte, d time.Duration) error {
-	deadline := time.After(d)
-	for {
-		select {
-		case data, ok := <-frames:
-			if !ok {
-				return fmt.Errorf("conn closed")
-			}
-			var m map[string]any
-			if json.Unmarshal(data, &m) != nil {
-				continue
-			}
-			if m["type"] == "error" {
-				return fmt.Errorf("wire error: %v", m["error"])
-			}
-			if m["type"] == "assistant" {
-				return nil
-			}
-		case <-deadline:
-			return fmt.Errorf("timeout")
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-func waitCancelSettled(ctx context.Context, frames <-chan []byte, d time.Duration) error {
-	deadline := time.After(d)
-	for {
-		select {
-		case data, ok := <-frames:
-			if !ok {
-				return fmt.Errorf("conn closed")
-			}
-			var m map[string]any
-			if json.Unmarshal(data, &m) != nil {
-				continue
-			}
-			if m["type"] == "error" {
-				return fmt.Errorf("wire error: %v", m["error"])
-			}
-			if m["type"] == "status" {
-				if st, _ := m["state"].(string); st == "cancel_settled" || st == "idle" {
-					return nil
-				}
-			}
-			if m["type"] == "assistant" {
-				msg, _ := m["message"].(map[string]any)
-				stop, _ := msg["stop_reason"].(string)
-				if stop == "end_turn" || stop == "stop_sequence" || stop == "max_tokens" {
-					return nil
-				}
-			}
-		case <-deadline:
-			return fmt.Errorf("timeout waiting cancel settle")
-		case <-ctx.Done():
-			return ctx.Err()
 		}
 	}
 }

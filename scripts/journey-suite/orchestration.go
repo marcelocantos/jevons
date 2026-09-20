@@ -295,6 +295,12 @@ func (s *suite) jTwoAgentsSameWorkdir() error {
 			byName[a].WorkDir, byName[b].WorkDir, work)
 	}
 
+	// 🎯T625: two distinct sessions on one workdir is only evidence about
+	// this backend if this backend is the one that started them.
+	if err := s.assertLaunchedOn(a, b); err != nil {
+		return err
+	}
+
 	// Stop both; list should drop running status or remove them depending
 	// on registry semantics — at least stop must succeed.
 	if _, err := s.mcpText("jevons_agent_stop", map[string]any{"name": a}); err != nil {
@@ -355,6 +361,11 @@ func (s *suite) jPOWorkerLineageFanout() error {
 	}
 	if by[po].Status != "running" || by[worker].Status != "running" {
 		return fmt.Errorf("want both running: po=%s worker=%s", by[po].Status, by[worker].Status)
+	}
+
+	// 🎯T625: lineage is a claim about two agents this backend launched.
+	if err := s.assertLaunchedOn(po, worker); err != nil {
+		return err
 	}
 
 	// First send must inject T104 standing brief (shipped path, not persona grep).
@@ -525,7 +536,11 @@ func (s *suite) jWorkerShellTool() error {
 		return fmt.Errorf("spawn: %w (%s)", err, trim(spawnOut, 80))
 	}
 
-	token := "J10_SHELL_OK"
+	// 🎯T625: a fresh token per request. A constant marker cannot tell a
+	// file this run's shell wrote from one a previous run left behind, and
+	// it is exactly the string a chatty model can produce without ever
+	// calling the tool.
+	token := "J10-SHELL-" + uuid.NewString()
 	// Force the shell tool path. Echo both to stdout (for reply) and to a
 	// marker file (filesystem oracle if the model is chatty).
 	prompt := fmt.Sprintf(
@@ -585,6 +600,11 @@ func (s *suite) jWorkerShellTool() error {
 			marker, trim(directOut, 160))
 	}
 
+	// 🎯T625: the tool effect is evidence about the backend that ran it.
+	if err := s.assertLaunchedOn(id); err != nil {
+		return err
+	}
+
 	if _, err := s.mcpText("jevons_thread_remove", map[string]any{"id": id}); err != nil {
 		return fmt.Errorf("remove: %w", err)
 	}
@@ -609,7 +629,9 @@ func (s *suite) jWorkerTranscriptVisible() error {
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
-	token := "JOURNEY-TX-OK"
+	// 🎯T625: fresh per request, so a journal left by an earlier run cannot
+	// stand in for a turn this journey never took.
+	token := "JOURNEY-TX-" + uuid.NewString()
 	if _, err := s.mcpText("jevons_thread_direct", map[string]any{
 		"id": id, "text": "Reply with exactly: " + token,
 	}); err != nil {
@@ -626,7 +648,9 @@ func (s *suite) jWorkerTranscriptVisible() error {
 			return fmt.Errorf("transcript API: %w", err)
 		}
 		if turns, _ := payload["turns"].([]any); len(turns) > 0 {
-			return nil
+			// 🎯T625: a populated journal is evidence about the backend
+			// whose turn populated it.
+			return s.assertLaunchedOn(id)
 		}
 		lastReason, _ = payload["empty_reason"].(string)
 		time.Sleep(500 * time.Millisecond)

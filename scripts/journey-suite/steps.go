@@ -247,3 +247,24 @@ func extractSessionFragment(s string) string {
 	}
 	return ""
 }
+
+// assertLaunchedOn is the 🎯T625 provider-observation step: a journey that
+// claims an agent outcome names the backend that actually produced it.
+//
+// Without it, `-provider claude` proves only that the suite asked for
+// Claude — a run where the daemon fell back to another backend, or where
+// the named agent never launched at all, reads exactly the same. Reading
+// the isolate's own named-launch record is what turns a selected provider
+// into an observed one. A Claude success cannot certify Grok.
+func (s *suite) assertLaunchedOn(names ...string) error {
+	logs, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := queueJourneyProvider(logs, name, string(s.provider)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
