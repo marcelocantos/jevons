@@ -52,17 +52,7 @@ func (s *Server) OpenFleetIntent(stateDir string) error {
 	// chokepoint rather than a stamp at each of the eight removal call sites
 	// across two packages: a per-caller convention is exactly the arrangement
 	// that produced three subsystems with three different answers.
-	s.RemovalAccount().SetRemovedHook(func(name string, rm fleetlog.Removal) {
-		by := strings.TrimSpace(rm.Actor)
-		if by == "" {
-			reason := strings.TrimSpace(rm.Reason)
-			if reason == "" {
-				reason = fleetlog.ReasonUnaccounted
-			}
-			by = "product:" + reason
-		}
-		s.MarkAgentReaped(name, by, strings.TrimSpace(rm.Detail))
-	})
+	s.RemovalAccount().SetRemovedHook(s.onAccountedRemoval)
 
 	snap := st.Snapshot()
 	slog.Info("fleet intent store opened",
@@ -71,6 +61,22 @@ func (s *Server) OpenFleetIntent(stateDir string) error {
 		"summary", snap.Summarize(),
 	)
 	return nil
+}
+
+// onAccountedRemoval is the process-wide 🎯T435 hook: stamp finished-and-reaped
+// so a stale fleet view cannot restart the name, and arm the 🎯T734 watch so
+// a leftover pane that keeps committing is attributed to the parent.
+func (s *Server) onAccountedRemoval(name string, rm fleetlog.Removal) {
+	by := strings.TrimSpace(rm.Actor)
+	if by == "" {
+		reason := strings.TrimSpace(rm.Reason)
+		if reason == "" {
+			reason = fleetlog.ReasonUnaccounted
+		}
+		by = "product:" + reason
+	}
+	s.MarkAgentReaped(name, by, strings.TrimSpace(rm.Detail))
+	s.armPostReapCommitWatch(name, rm)
 }
 
 // intentStore returns the installed store (nil-safe).

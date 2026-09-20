@@ -270,6 +270,11 @@ type Server struct {
 	parentReportOffered       map[string]struct{}
 	parentReportOfferedLoaded bool
 
+	// postReapWatches is 🎯T734: HEAD snapshots taken as a work seat is
+	// reaped, so a leftover pane that keeps committing is attributed to
+	// the parent instead of discovered by the next worker.
+	postReapWatches map[string]postReapWatch
+
 	// deadAgentStreak is the T717 generation for a dead-name set: stable
 	// across consecutive sweeps of the same names (list-call echoes), new
 	// when a name leaves the dead set and returns (a second death).
@@ -522,6 +527,9 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 	// 🎯T708: and act on the load that is still running, which 🎯T460's
 	// spawn gate has no lever over.
 	s.SweepSeatLoad()
+	// 🎯T734: a leftover pane that kept committing after T165/T195 is
+	// attributed here, on the same timer that already walks the fleet.
+	s.SweepPostReapCommits()
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn

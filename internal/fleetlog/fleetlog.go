@@ -133,6 +133,7 @@ type Notice struct {
 	Parent   string
 	Purpose  string
 	TargetID string
+	WorkDir  string
 	Err      string
 }
 
@@ -248,6 +249,7 @@ func (a *Account) Remove(reg *claudia.Registry, name string, rm Removal) (bool, 
 		Parent:   def.Parent,
 		Purpose:  def.Purpose,
 		TargetID: def.TargetID,
+		WorkDir:  def.WorkDir,
 	}
 	if n.Reason == "" {
 		n.Reason = ReasonUnaccounted
@@ -329,6 +331,28 @@ func (a *Account) Recent(window time.Duration) []Notice {
 	return out
 }
 
+// NoticeFor returns the most recent accounted removal of name still in the
+// ring. The 🎯T734 post-reap watch reads WorkDir / Parent / TargetID from
+// this after the row is gone — the definition was snapshotted here, and
+// the registry no longer has it.
+func (a *Account) NoticeFor(name string) (Notice, bool) {
+	if a == nil {
+		return Notice{}, false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Notice{}, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := len(a.recent) - 1; i >= 0; i-- {
+		if a.recent[i].Name == name {
+			return a.recent[i], true
+		}
+	}
+	return Notice{}, false
+}
+
 func (a *Account) clock() time.Time {
 	if a == nil {
 		return time.Now()
@@ -359,6 +383,9 @@ func (a *Account) record(n Notice, rm Removal) {
 	}
 	if n.TargetID != "" {
 		fields["target_id"] = n.TargetID
+	}
+	if n.WorkDir != "" {
+		fields["workdir"] = n.WorkDir
 	}
 	if n.Root != "" {
 		fields["root"] = n.Root

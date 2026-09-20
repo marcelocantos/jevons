@@ -99,6 +99,9 @@ func TestRemoveAccountsForEveryReason(t *testing.T) {
 			if got := ev.Fields["target_id"]; got != "T1" {
 				t.Errorf("target_id = %v, want T1", got)
 			}
+			if got := ev.Fields["workdir"]; got != "/tmp/repo" {
+				t.Errorf("workdir = %v, want /tmp/repo", got)
+			}
 			if got := ev.Fields["outcome"]; got != "ok" {
 				t.Errorf("outcome = %v, want ok", got)
 			}
@@ -260,5 +263,28 @@ func TestKnownReasonCoversTheVocabulary(t *testing.T) {
 	}
 	if KnownReason(ReasonUnaccounted) {
 		t.Error("unaccounted is a fault marker, not a reason a caller may pick")
+	}
+}
+
+// TestNoticeForKeepsWorkDirAfterRemoval is the 🎯T734 snapshot: after the
+// row is gone, the watch still needs the workdir the leftover pane commits in.
+func TestNoticeForKeepsWorkDirAfterRemoval(t *testing.T) {
+	acct := New(nil)
+	reg := newTestRegistry(t, work("jv-t717-replay-digest", "jevons-po", "T717"))
+	if _, err := acct.Remove(reg, "jv-t717-replay-digest", Removal{Reason: ReasonReapAchieve}); err != nil {
+		t.Fatal(err)
+	}
+	n, ok := acct.NoticeFor("jv-t717-replay-digest")
+	if !ok {
+		t.Fatal("NoticeFor missed the row it just accounted for")
+	}
+	if n.WorkDir != "/tmp/repo" {
+		t.Errorf("WorkDir = %q, want the snapshotted def", n.WorkDir)
+	}
+	if n.Parent != "jevons-po" || n.TargetID != "T717" {
+		t.Errorf("lineage = parent %q target %q", n.Parent, n.TargetID)
+	}
+	if _, ok := acct.NoticeFor("never-existed"); ok {
+		t.Fatal("NoticeFor invented a row")
 	}
 }
