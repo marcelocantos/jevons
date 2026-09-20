@@ -207,7 +207,7 @@ var openingBriefMarkers = []string{
 // or >1KB of prose carrying opening-brief markers. Pure — the send gate and
 // the tapes share it.
 func IsFullRebrief(text string) (bool, string) {
-	if m, _ := envelope.Parse(text); m != nil && m.Kind == envelope.KindSpawnBrief {
+	if m := parseIncomingEnvelope(text); m != nil && m.Kind == envelope.KindSpawnBrief {
 		return true, "a spawn-brief envelope"
 	}
 	if len(text) > rebriefProseBound {
@@ -281,8 +281,8 @@ func (s *Server) phaseAdvanceFromStore(name, text string) bool {
 // A mutant that returns true for every pair admits every spawn-brief to a
 // working seat and goes RED on the T597 workdir / checkpoint tapes.
 func phaseAdvanceHandoff(incoming, latestReport string) bool {
-	in, err := envelope.Parse(incoming)
-	if in == nil || err != nil || in.Kind != envelope.KindSpawnBrief {
+	in := parseIncomingEnvelope(incoming)
+	if in == nil || in.Kind != envelope.KindSpawnBrief {
 		return false
 	}
 	if envelope.EffectivePhase(in) != envelope.PhaseImplement {
@@ -302,26 +302,51 @@ func phaseAdvanceHandoff(incoming, latestReport string) bool {
 
 // parseTerminalEnvelope returns the author's terminal jevons envelope.
 // envelope.Parse requires the fence at line 1 (after known prefixes); stored
-// reports often have thinking before the fence (the T718 specimen). Fall
-// back to the last ```jevons fence in the body.
+// reports often have thinking before the fence (the T718 specimen), and they
+// also talk ABOUT envelopes after theirs (the T736 specimen). Walk the real
+// fence openers from the last backwards and answer the first that parses.
 func parseTerminalEnvelope(text string) *envelope.Message {
 	if m, err := envelope.Parse(text); m != nil && err == nil {
 		return m
 	}
-	i := lastJevonsFenceIndex(text)
-	if i < 0 {
-		return nil
-	}
-	m, err := envelope.Parse(text[i:])
-	if m != nil && err == nil {
-		return m
+	starts := envelope.FenceStarts(text)
+	for i := len(starts) - 1; i >= 0; i-- {
+		if m := parseFenceAt(text, starts[i]); m != nil {
+			return m
+		}
 	}
 	return nil
 }
 
-func lastJevonsFenceIndex(text string) int {
-	lower := strings.ToLower(text)
-	return strings.LastIndex(lower, "```"+envelope.FenceInfo)
+// parseIncomingEnvelope returns the sender's envelope even when prose or
+// daemon chrome precedes the fence (🎯T736). The send gate reads the payload
+// the caller wrote, and a caller who opens with a line of prose ("Implement
+// brief for T731:") still sent a spawn-brief; deciding that on line 1 alone
+// makes the gate's verdict depend on the sender's formatting.
+func parseIncomingEnvelope(text string) *envelope.Message {
+	if m, err := envelope.Parse(text); m != nil && err == nil {
+		return m
+	}
+	for _, i := range envelope.FenceStarts(text) {
+		if m := parseFenceAt(text, i); m != nil {
+			return m
+		}
+	}
+	return nil
+}
+
+// parseFenceAt parses one fence opener. A validation error is not a refusal
+// here: kind and target are what the handoff reads, and a real report with a
+// slot the schema dislikes is still that report (🎯T736).
+func parseFenceAt(text string, off int) *envelope.Message {
+	if off < 0 || off >= len(text) {
+		return nil
+	}
+	m, _ := envelope.Parse(text[off:])
+	if m == nil || strings.TrimSpace(string(m.Kind)) == "" {
+		return nil
+	}
+	return m
 }
 
 // transcriptNotFoundVerdict renders the transcript_read answer for a named

@@ -1,0 +1,52 @@
+Scout phase on 🎯T731: a reaped seat's report must be marked (with reap time), delivered once, and not read as current ledger/fleet state. I'll load target context, then map the delivery path and siblings 🎯T730 / 🎯T734.Target text is loaded. Next I’ll confirm this seat in the live registry and map how stored reports are queued, reaped, and delivered to the parent.Identity matches: `jv-t731-stale-report` is the live worker on 🎯T731. Next I’ll trace stored-report delivery, reap, and replay so we can see why a dead seat still looks current.Scout complete. One fix does **not** cover 🎯T730 / 🎯T734. 🎯T731 is mark-plus-dedup on the parent-report path; dropping those deliveries would break 🎯T690.
+
+```jevons
+jevons: kind scout-report
+jevons: target T731
+jevons: phase scout
+jevons: silent-ledger ranked
+jevons: silent-decision confidence=0.45 choice="report-id on the wire vs sendq metadata" why="drainAgentSendQueueOnce calls proc.Send directly and never re-enters deliverByName, so the queued copy must already carry a stable report id or the queue entry must. Either works; the hermetic keys on report id, not bytes."
+jevons: silent-decision confidence=0.7 choice="do not mark the overseer copy unless it also flushes after reap" why="acceptance names the parent. Overseer delivery in notify() is usually immediate and still live; T428/T568 already byte-dedup that arm. Expanding the marker there is a sibling, not this leaf."
+jevons: silent-decision confidence=0.85 choice="stamp at actual send, not at notify() compose" why="notify() runs before maybeReapDoneWorkAgent, so a compose-time lookup always sees a live seat. The hermetic is a queued report delivered after reap."
+jevons: silent-decision confidence=0.9 choice="banner outside the worker envelope; do not rewrite claims" why="rewriting tense or dropping ledger sentences is suppression, which T690/T401 forbid. A reap-time banner makes present-tense claims read as historical without touching oracle text."
+jevons: silent-decision confidence=0.95 choice="do not fold T730 or T734 into this slice" why="same family (artifact outliving the seat) at different sinks with opposite policies: T731 delivers+marks, T730 must not emit, T734 must stop or attribute the pane."
+jevons: fog-known "notify() stores then notifyParentReport then overseer deliver, then maybeReapDoneWorkAgent. Parent copy is [Agent NAME responded] plus elided body."
+jevons: fog-known "T428/T568 replay suppression is overseer-arm only. Fleet parent path has no byte ledger and no report-id ledger."
+jevons: fog-known "drainAgentSendQueueOnce sends queued text via proc.Send, bypassing deliverByName. A decorate-only wrap on notifyParentReport misses the hermetic queued flush."
+jevons: fog-known "agentreport.Save already mints report ids (timestamp + content digest). Handle is on the wire only when Elide truncates."
+jevons: fog-known "LookupReapedRecord + fleetintent.Record.At is the reap time. T582 already tags routed held backlogs with the reaped name; that is a different sink (sendq TO the dead seat), not the worker's own report."
+jevons: fog-known "T451 FilterIdleEventsForLiveAgents already drops idle events whose subject left the registry at flush. T730 still fired: the batch named four ABSENT seats and one PRESENT phase=working seat, so membership-only is not enough and/or a non-flush emit path skipped the filter."
+jevons: fog-known "Registry.Remove is stopLifecycle(name, true). reap_done uses killSubtree -> RemoveSubtree only; explicit kill also calls reapSeatLoad (T708). T734 is the pane still committing after product:reap_achieve."
+jevons: fog-known "Live sibling jv-t730-idle-notice is registered under jevons-po this turn. No T734 seat in the live list."
+jevons: fog-unknown "why the same seat produced 2-6 arrivals: queued retry, daemon bounce of sendq, Grok re-emitting IsTerminalStop into a still-wired agentEventSink, or distinct later turns from a zombie pane (T734). Id-dedup catches the first two; zombie extra turns are new report ids and only get the marker."
+jevons: fog-unknown "whether sendq.Entry can grow a report_id field without a queue-format bump, vs always putting report_id in the [Agent … responded] header even for short reports (Elide currently refuses chrome on untruncated bodies)."
+jevons: fog-blindspot "if a zombie pane keeps completing turns after reap, T731 will mark each new report and still deliver it. That is correct for this leaf and will keep looking like noise until T734 stops the pane. Do not 'fix' that here by dropping post-reap report ids."
+jevons: fog-blindspot "byte-digest dedup (T428) plus a reap banner is self-defeating: the marker changes bytes, so a retry looks new. Dedup must be (parent, report_id)."
+```
+
+**Target.** A report that reaches a parent after its seat was reaped is marked with the reap time; the same report id is not re-delivered to that parent; live-seat reports stay unmarked. Do not suppress the first delivery.
+
+**Mechanism (current, RED).** `internal/mcpserver/agents.go` `notify()` stores the report (🎯T388), delivers to the registry parent (`notifyParentReport`, 🎯T690), delivers to the overseer, then `maybeReapDoneWorkAgent` removes the row. If the parent is mid-turn the copy sits in sendq and is later flushed by `drainAgentSendQueueOnce` via `proc.Send` — **after** the author is gone, with no marker and no report-id guard. T428/T568 refuse byte-identical batches only on the overseer arm.
+
+**Hermetic to land (acceptance, not yet written).**
+
+1. Fixture parent busy. Seat writes a stored report (id known). Seat is reaped. Queued copy flushes **once**, carrying a reap-time marker (use `LookupReapedRecord` / `Record.At`).
+2. Second `deliverByName` (or drain) of that **same report id** to the same parent is suppressed.
+3. A still-registered seat's report is unmarked and delivered.
+4. Mutation: dropping the first parent copy goes RED (🎯T690). Mutation: restoring unmarked post-reap delivery goes RED.
+
+Suggested home: `internal/mcpserver/t731_stale_report_test.go`, decorating at **actual send** (notifyParentReport **and** drain), not at compose time.
+
+**Marker.** Daemon banner outside the worker ` ```jevons ` fence, e.g. T582's `[held backlog from NAME — …]` shape. Include reap time (`Record.At` RFC3339) and that claims are from that moment, not current ledger/fleet state. Do not rewrite the body (would break SHA/gate text and is suppression).
+
+**Siblings — one fix does not cover them.**
+
+| Target | Sink | Policy |
+|---|---|---|
+| 🎯T731 | parent report (`[Agent X responded]`) | **deliver once + mark** |
+| 🎯T730 | worker-idle digest (`FilterIdleEventsForLiveAgents` / `flushWakeBatches`) | **do not emit** (re-check registry **and** phase at flush; T451 is membership-only and missed `jv-t718-gate-dirty-warn` phase=working) |
+| 🎯T734 | pane/commits after `reap_achieve` | **stop or attribute** (registry Remove is supposed to `stopLifecycle`; the 15:44Z T717 commit landed after 15:40Z reap) |
+
+Shared lookup is `RemovalAccount` / `LookupReapedRecord` at emission time. Shared policy is not. Folding T730's drop into T731 would silence terminal reports the parent needs. Folding T734's kill into T731 would leave queued reports unmarked.
+
+**Do not implement from this seat** (phase=scout). Implementer inherits the ledger above. Identity this turn: `jevons_agent_list` shows `jv-t731-stale-report running purpose=work role=worker parent=jevons-po`.
