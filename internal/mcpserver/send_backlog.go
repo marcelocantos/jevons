@@ -162,19 +162,20 @@ func (s *Server) SweepSendBacklogs() {
 		switch {
 		case b.Uncertain > 0:
 			// Never route, discard, or replay an attempt left by this daemon or
-			// its predecessor. The durable entry also drives agent_list status.
-			if pin, ok := s.sendqPinFor(b.Agent); ok && pin.AttemptID != "" {
-				s.mu.Lock()
-				if s.sendqAttemptNoticed == nil {
-					s.sendqAttemptNoticed = map[string]string{}
-				}
-				noticed := s.sendqAttemptNoticed[b.Agent] == pin.AttemptID
-				s.sendqAttemptNoticed[b.Agent] = pin.AttemptID
-				s.mu.Unlock()
-				if !noticed {
-					s.notifyFleetHealth(FormatSendqPinLine(b.Agent, pin))
-				}
+			// its predecessor (🎯T623). PINNED is a live-seat word (🎯T599):
+			// a reaped or departed name must not keep raising it (🎯T686).
+			pin, ok := s.sendqPinFor(b.Agent)
+			if !ok || pin.AttemptID == "" {
+				break
 			}
+			if rec, reaped := LookupReapedRecord(s.fleetIntent(), b.Agent); reaped {
+				s.noticeUncertainAttempt(b.Agent, pin, FormatReapedUncertainHoldLine(b.Agent, pin, rec))
+				break
+			}
+			if s.registry != nil && !s.agentIsRegistered(b.Agent) {
+				break
+			}
+			s.noticeUncertainAttempt(b.Agent, pin, FormatSendqPinLine(b.Agent, pin))
 		case !s.agentIsRegistered(b.Agent):
 			// 🎯T401: a reaped seat is recoverable — gate feedback stays held
 			// until jevons_agent_start (or intent lift + start) recreates it.
