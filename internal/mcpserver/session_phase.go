@@ -15,15 +15,18 @@ import (
 )
 
 // DefaultSessionRoots is the on-disk pair the development daemon reads: Grok
-// sessions and Claude projects. Tests override via SessionPhase.
+// sessions (ordinary and exclusive-MCP) and Claude projects. Tests override
+// via SessionPhase. Omitting exclusive-MCP homes made Grok absence unprovable
+// for those seats (🎯T679.1).
 func DefaultSessionRoots() discovery.Roots {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return discovery.Roots{}
 	}
 	return discovery.Roots{
-		GrokSessions:   filepath.Join(home, ".grok", "sessions"),
-		ClaudeProjects: filepath.Join(home, ".claude", "projects"),
+		GrokSessions:     filepath.Join(home, ".grok", "sessions"),
+		GrokHomeSessions: discovery.ExclusiveGrokSessionRoots(),
+		ClaudeProjects:   filepath.Join(home, ".claude", "projects"),
 	}
 }
 
