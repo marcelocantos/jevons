@@ -73,12 +73,11 @@ func TestT583OmitProviderMintsClaudeWithHeadroom(t *testing.T) {
 	if def.Provider != claudia.ProviderClaude {
 		t.Fatalf("omit-provider mint = %q, want claude (grok 87%% is fresher but the owner rule is claude-first)", def.Provider)
 	}
-	if !strings.Contains(note, "provider_knob: claude-first: plan headroom 56%") {
-		t.Fatalf("note missing claude-first citation: %q", note)
+	if !strings.Contains(note, "provider_knob: claudia") {
+		t.Fatalf("note missing claudia citation: %q", note)
 	}
-	// The owner sees the same line in the tool result.
 	msg := formatAgentStartResult("jv-t583-tape1", "/tmp/w", "jevons-po", "work", "worker", "", string(def.Provider), "", "sess", note, "")
-	if !strings.Contains(msg, "claude-first: plan headroom 56%") {
+	if !strings.Contains(msg, "provider_knob: claudia") {
 		t.Fatalf("start result missing citation: %q", msg)
 	}
 }

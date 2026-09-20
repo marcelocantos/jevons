@@ -607,10 +607,10 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 	return cli.ResolveProvider("", s.defaultProvider)
 }
 
-// mintProviderPick is the 🎯T476 decision for stitchAgentStart, claude-first
-// per 🎯T495: the plan feed's green pick wins on omit-provider mint (config
-// only breaks ties among equally obvious greens, inside PickMintDest);
-// leftover file / compiled seed are losers.
+// mintProviderPick is the 🎯T476 / 🎯T691 decision for stitchAgentStart.
+// Explicit and resume stay fleet constraints. Omit-provider mint with a
+// plan feed asks claudia.Resolve and records the pick — jevons does not
+// re-adjudicate it. No feed → config default (T476).
 //
 // 🎯T475: omit-task_type derivation uses the agent name so product-owner
 // seats (suffix -po) get ceo even when purpose=work — they must not
@@ -620,19 +620,14 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
 	_, fromFile := s.llmPortfolioSource()
 	cfg := string(s.resolvedDefaultProvider())
-	var feedOK, destOK bool
-	var dest string
+	var feedOK bool
 	var cands []planusage.DestCand
 	var now time.Time
 	var th planusage.Thresholds
-	var claudeFirst planusage.ClaudeFirstDecision
-	if _, cands, now, th, ok := s.planPolicyInputs(); ok && len(cands) > 0 {
+	var ok bool
+	_, cands, now, th, ok = s.planPolicyInputs()
+	if ok && len(cands) > 0 {
 		feedOK = true
-		d := planusage.PickMintDest(cands, cfg, now, th)
-		dest, destOK = d.Provider, d.OK
-		// 🎯T583: the owner rule outranks usage-first — an omit-provider
-		// mint lands on Claude whenever Claude has plan headroom.
-		claudeFirst = planusage.ClaudeFirst(cands, now, th)
 	}
 	explicit := strings.ToLower(strings.TrimSpace(providerArg))
 	// 🎯T652: a PO habit pin on a depleted dest is not a decision — drop
@@ -642,40 +637,38 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		explicit = ""
 	}
 	if explicit == "" && !existed && feedOK {
-		args := cost.MintProviderArgs{
-			ConfigProvider:    cfg,
-			Portfolio:         dec,
-			PortfolioFromFile: fromFile,
-			PlanFeedOK:        true,
-			PlanDest:          dest,
-			PlanDestOK:        destOK,
-			ClaudeFirstOK:     claudeFirst.OK,
-			ClaudeHeadroom:    claudeFirst.Headroom,
-			OwnerAsked:        ownerAsked,
-		}
-		if claudeFirst.OK {
-			return cost.PickMintProvider(args)
-		}
-		if !destOK {
-			return cost.PickMintProvider(args)
-		}
-		if resolved, err := planusage.ResolveMint(context.Background(), cands, now, th); err == nil && resolved.Provider != "" {
-			p := strings.ToLower(string(resolved.Provider))
-			if p == dest {
-				return cost.PickMintProvider(args)
+		resolved, err := planusage.ResolveMint(context.Background(), cands, now, th)
+		if err != nil || resolved.Provider == "" {
+			pick := cost.MintProviderPick{
+				Provider:       "",
+				Knob:           cost.KnobClaudia,
+				LosingKnob:     cost.KnobConfig,
+				LosingProvider: cfg,
+				TaskType:       dec.TaskType,
 			}
-			// Catalog rows with no usage stay candidates in Resolve;
-			// only a published, dest-eligible pick may override dest.
-			if publishedDestEligible(cands, p, now, th) {
-				return cost.MintProviderPick{
-					Provider: p,
-					Knob:     cost.KnobClaudia,
-					Detail:   strings.TrimSpace(resolved.Reason),
-					TaskType: dec.TaskType,
-				}
+			if err != nil {
+				pick.Detail = strings.TrimSpace(err.Error())
+			}
+			return pick
+		}
+		p := strings.ToLower(string(resolved.Provider))
+		pick := cost.MintProviderPick{
+			Provider: p,
+			Knob:     cost.KnobClaudia,
+			Detail:   strings.TrimSpace(resolved.Reason),
+			TaskType: dec.TaskType,
+		}
+		if cfg != "" && cfg != p {
+			pick.LosingKnob = cost.KnobConfig
+			pick.LosingProvider = cfg
+		} else if fromFile {
+			want := strings.ToLower(strings.TrimSpace(dec.Provider))
+			if want != "" && want != p {
+				pick.LosingKnob = cost.KnobPortfolioFile
+				pick.LosingProvider = want
 			}
 		}
-		return cost.PickMintProvider(args)
+		return pick
 	}
 	return cost.PickMintProvider(cost.MintProviderArgs{
 		ProviderArg:       explicit,
@@ -685,22 +678,8 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		Portfolio:         dec,
 		PortfolioFromFile: fromFile,
 		PlanFeedOK:        feedOK,
-		PlanDest:          dest,
-		PlanDestOK:        destOK,
-		ClaudeFirstOK:     claudeFirst.OK,
-		ClaudeHeadroom:    claudeFirst.Headroom,
 		OwnerAsked:        ownerAsked,
 	})
-}
-
-func publishedDestEligible(cands []planusage.DestCand, harness string, now time.Time, th planusage.Thresholds) bool {
-	want := strings.ToLower(strings.TrimSpace(harness))
-	for _, c := range cands {
-		if strings.ToLower(strings.TrimSpace(c.Provider)) == want {
-			return planusage.DestEligible(c.Backend, now, th)
-		}
-	}
-	return false
 }
 
 func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, time.Time, planusage.Thresholds, bool) {

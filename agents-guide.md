@@ -940,9 +940,10 @@ Same shared-clone family as 🎯T376 / 🎯T377.
 4. `grok` (back-compat)
 
 **Ad hoc** (per spawn — overseer/PO): omit `provider` unless the owner named one (🎯T652). Do not write `provider=grok` as habit. Claudia
-Resolve picks the session harness (prefer plan, prefer Claude) and skips
-weekly-hot / exhausted / session-low dests. An ineligible explicit pin is
-treated as omit unless `owner_asked=true`.
+Resolve is the load-bearing chooser (🎯T691): jevons passes the plan
+snapshot, preferences and constraints, and records the pick. A prompt-level
+choice ("Grok has 100% weekly, so I'll use grok") is not that path. An
+ineligible explicit pin is treated as omit unless `owner_asked=true`.
 
 ```text
 jevons_agent_start(name=…, workdir=…, provider="claude", model=…?)
@@ -956,7 +957,7 @@ plan feed — not a grok default when the feed is live. 🎯T476: a leftover
 `~/.jevons/llm-portfolio.json` or the compiled T325.2 seed (which still
 prefers Claude for `code_implement` / `design_prose`) must not silently
 win. The start result cites which knob selected the provider
-(`provider_knob: config` | `explicit` | `resume` | `claude-first` |
+(`provider_knob: config` | `explicit` | `resume` | `claudia` | `claude-first` |
 `plan_dest` | `claudia`) and names a disagreeing file or compiled seed as
 the loser.
 Provider strings pass through to claudia (no allow-list) so future ids

@@ -3,6 +3,8 @@
 
 package planusage
 
+import "github.com/marcelocantos/claudia"
+
 // Thresholds are the daemon-owned transition points (🎯T390.1.6). The
 // ticker paints from this document plus the live snapshot. Mint and
 // migrate use the same numbers. They are not imported from JS.
@@ -103,23 +105,24 @@ const (
 // (ahead 1.0, hot 1.5, waste 15, remaining-low 15 / 5, damp λ 5).
 // warmup_elapsed_percent is 5 and load-bearing again since 🎯T595.
 func DefaultThresholds() Thresholds {
+	ct := claudia.DefaultPlanThresholds()
 	return Thresholds{
 		AheadRatio:               1.0,
 		HotRatio:                 1.5,
 		UnderWastePercent:        15,
 		LockedWastePercent:       15,
-		WarmupElapsedPercent:     5,
-		EarlyAlarmUsedPercent:    25,
-		LowRemainingPercent:      15,
-		CriticalRemainingPercent: 5,
+		WarmupElapsedPercent:     ct.WarmupElapsedPercent,
+		EarlyAlarmUsedPercent:    ct.EarlyAlarmUsedPercent,
+		LowRemainingPercent:      ct.LowRemainingPercent,
+		CriticalRemainingPercent: ct.CriticalRemainingPercent,
 		MintIndifferencePercent:  10,
-		DampLambdaPercent:        5,
-		AheadMarginPercent:       2,
-		ShrinkPriorK:             DefaultShrinkPriorK,
-		PanicAmberLn:             DefaultPanicAmberLn,
-		PanicRedLn:               DefaultPanicRedLn,
-		WasteUnderLn:             DefaultWasteUnderLn,
-		WasteLockedLn:            DefaultWasteLockedLn,
+		DampLambdaPercent:        ct.DampLambdaPercent,
+		AheadMarginPercent:       ct.AheadMarginPercent,
+		ShrinkPriorK:             ct.ShrinkPriorK,
+		PanicAmberLn:             ct.PanicAmberLn,
+		PanicRedLn:               ct.PanicRedLn,
+		WasteUnderLn:             ct.WasteUnderLn,
+		WasteLockedLn:            ct.WasteLockedLn,
 	}
 }
 

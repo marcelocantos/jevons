@@ -4,6 +4,7 @@
 package planusage
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -39,6 +40,9 @@ type PlanAction struct {
 	From   string
 	To     string
 	Reason string
+	// Author names who resolved the dest (🎯T691). Product placement is
+	// "claudia"; a prompt-level choice is a different decision.
+	Author string
 }
 
 // DestCand is one published backend plus fleet load for PickPlanDest.
@@ -49,18 +53,9 @@ type DestCand struct {
 }
 
 // WeeklyBandOf classifies one backend's weekly window at now.
+// The verdict is claudia.ClassifyPlan — jevons does not re-derive it (🎯T691).
 func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
-	// 🎯T677: an unreadable backend is unpublished, not exhausted. Only a
-	// number the provider actually published can put a window in the
-	// exhausted band.
-	if !be.Available() {
-		return BandUnpublished
-	}
-	w, ok := be.PrimaryAllowanceWindow()
-	if !ok {
-		return BandUnpublished
-	}
-	return BandOfWindow(w, now, th)
+	return WeeklyBand(claudia.ClassifyPlan(backendToPlanUsage(be), now, claudiaThresholdsPtr(th)).Weekly)
 }
 
 // BandOfWindow classifies a single window at now.
@@ -88,28 +83,12 @@ const (
 // SessionStatusOf classifies one backend's session window for mint/migrate
 // eligibility. Same snapshot numbers the ticker paints; no JS classifyPace.
 func SessionStatusOf(be Backend, th Thresholds) SessionStatus {
-	// 🎯T677: a reading we could not take says nothing about the
-	// allowance. This used to read any 429 in the backend's reason as an
-	// exhausted session, but that 429 comes from the usage endpoint, not
-	// from the plan: on 2026-09-20 repeated probes rate-limited the meter
-	// and this line parked a live worker holding 387 queued sends while
-	// Claude still had most of its session. An unreadable provider is
-	// unpublished — which is explicitly not a veto — and never exhausted.
-	w, ok := be.Window(WindowSession)
-	if !ok || w.RemainingPercent == nil {
-		return SessionUnpublished
-	}
-	if *w.RemainingPercent <= 0 {
-		return SessionExhausted
-	}
-	if *w.RemainingPercent <= th.LowRemainingPercent {
-		return SessionLow
-	}
-	return SessionOK
+	return SessionStatus(claudia.ClassifyPlan(backendToPlanUsage(be), time.Time{}, claudiaThresholdsPtr(th)).Session)
 }
 
-// MintIneligible reports that omit-provider mint must not land here
-// (weekly ahead/hot/exhausted, or session remaining-low / exhausted).
+// MintIneligible reports a published dest that must not receive new work
+// (session remaining-low / exhausted, or weekly ahead/hot/exhausted).
+// Unpublished is not spent (🎯T677).
 func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
 	switch SessionStatusOf(be, th) {
 	case SessionLow, SessionExhausted:
@@ -123,84 +102,34 @@ func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
 	}
 }
 
-// MigrateOff reports that running seats on this provider must leave
-// (weekly hot/exhausted, or session 0%/429). Session remaining-low does
-// not bounce the fleet — that window is only a mint veto (🎯T390.1.5.1).
+// MigrateOff reports that running seats on this provider must leave.
+// Same bar as claudia.ShouldVacate (🎯T691).
 func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
-	if SessionStatusOf(be, th) == SessionExhausted {
-		return true
-	}
-	switch WeeklyBandOf(be, now, th) {
-	case BandHot, BandExhausted:
-		return true
-	default:
-		return false
-	}
+	return claudia.ShouldVacate(backendToPlanUsage(be), now, claudiaThresholdsPtr(th))
 }
 
-// DestEligible reports a published weekly that may receive work, and whose
-// session is not remaining-low or exhausted (🎯T390.1.5.1). Healthy weekly
-// with a dead session is ineligible until the session resets.
+// DestEligible reports a published dest that may receive work (🎯T693):
+// locked, under, or ok. hot and ahead remain never-destinations even when
+// claudia.HasAvailableTokens still says the account has tokens.
 func DestEligible(be Backend, now time.Time, th Thresholds) bool {
-	switch SessionStatusOf(be, th) {
-	case SessionLow, SessionExhausted:
+	u := backendToPlanUsage(be)
+	if u.Status != claudia.PlanUsageAvailable {
 		return false
 	}
-	switch WeeklyBandOf(be, now, th) {
-	case BandOK, BandUnder, BandLocked:
-		return true
-	default:
+	if !claudia.HasAvailableTokens(u, now, claudiaThresholdsPtr(th)) {
 		return false
 	}
+	return claudia.IsDestBand(claudia.PlanBand(WeeklyBandOf(be, now, th)))
 }
 
-// PickPlanDest chooses dest: locked, then under, then ok; within a band,
-// least Load. ok is false when no dest is eligible.
+// PickPlanDest chooses dest through claudia.Resolve (🎯T691). ok is false
+// when no published dest is token-eligible.
 func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool) {
-	type scored struct {
-		prov     string
-		pressure float64
-		load     int
-	}
-	var best *scored
-	for _, c := range cands {
-		if !DestEligible(c.Backend, now, th) {
-			continue
-		}
-		b := WeeklyBandOf(c.Backend, now, th)
-		if b == BandHot || b == BandAhead {
-			continue // burning too fast is never a destination
-		}
-		// Rank by headroom, not by which colour the band happens to be
-		// (🎯T596). Routing and colour answer different questions: colour
-		// asks how hard the owner must correct, and under the pressure
-		// model it deliberately stays quiet about small deviations, since
-		// leaving allowance unspent is the cheaper failure. Routing asks
-		// which backend has the most slack — and 16% behind pace is still
-		// more slack than dead level, whether or not it is worth a colour.
-		// Ranking on the band identity made those two move together, so
-		// widening the waste vertex silently changed where work went.
-		s := scored{
-			prov:     strings.ToLower(strings.TrimSpace(c.Provider)),
-			pressure: destPressure(c.Backend, now, th),
-			load:     c.Load,
-		}
-		if s.prov == "" {
-			s.prov = strings.ToLower(strings.TrimSpace(c.Backend.Provider))
-		}
-		// A meaningful headroom gap decides it; otherwise load breaks the
-		// tie, so two comparable backends still balance by load rather
-		// than by a rounding difference in pressure.
-		if best == nil || s.pressure < best.pressure-destPressureIndifference ||
-			(s.pressure <= best.pressure+destPressureIndifference && s.load < best.load) {
-			cp := s
-			best = &cp
-		}
-	}
-	if best == nil || best.prov == "" {
+	pick, err := ResolveDest(context.Background(), cands, "", now, th)
+	if err != nil || pick.Provider == "" {
 		return "", false
 	}
-	return best.prov, true
+	return strings.ToLower(string(pick.Provider)), true
 }
 
 // OverseerNames is the set of agents whose Purpose is overseer.
@@ -270,7 +199,10 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 		} else {
 			reason += "; no eligible dest — park"
 		}
-		out = append(out, PlanAction{Name: a.Name, From: from, To: to, Reason: reason})
+		out = append(out, PlanAction{
+			Name: a.Name, From: from, To: to, Reason: reason,
+			Author: claudia.DecisionAuthor,
+		})
 	}
 	return out
 }
@@ -392,14 +324,9 @@ func BandOfPressure(p float64, th Thresholds) WeeklyBand {
 	return WeeklyBand(claudia.BandOfPressure(p, thresholdsToClaudia(th)))
 }
 
-// destPressureIndifference is the headroom gap below which two backends
-// are treated as equivalent and load decides. Without it, routing would
-// chase noise in the pressure estimate.
-const destPressureIndifference = 0.05
-
-// destPressure is the window pressure used for routing: lower means more
-// headroom. A backend with no usable weekly window sorts as level rather
-// than as maximally attractive, so missing data never wins a race.
+// destPressure is the window pressure used to explain slack ranking.
+// Lower means more headroom. A backend with no usable weekly window
+// sorts as level rather than as maximally attractive.
 func destPressure(be Backend, now time.Time, th Thresholds) float64 {
 	w, ok := be.PrimaryAllowanceWindow()
 	if !ok {
@@ -412,3 +339,5 @@ func destPressure(be Backend, now time.Time, th Thresholds) float64 {
 	}
 	return Pressure(*used, 100-rtp, th)
 }
+
+

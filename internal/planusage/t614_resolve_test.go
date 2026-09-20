@@ -11,10 +11,9 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// Claudia Resolve ranks published dests by plan slack (claudia v0.32+); it
-// no longer implements the owner's Claude-first rule. That rule is
-// ClaudeFirst here (🎯T583), consulted by mintProviderPick before Resolve.
-// These oracles pin what each side promises.
+// Claudia Resolve ranks published dests by plan slack; PreferProvider
+// now wins among token-eligible dests (🎯T691), so Claude-first is a
+// preference input rather than a jevons veto in front of Resolve.
 
 func TestT614ResolveSkipsHotClaude(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)

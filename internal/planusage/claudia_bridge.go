@@ -5,29 +5,52 @@ package planusage
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 )
 
-// ResolveMint is the omit-provider dest pick (🎯T652): Claudia chooses a
-// session harness. PreferPlan + prefer Claude; exhausted / weekly-hot /
-// session-low rows are skipped. Jevons does not default that mint to grok.
+// ResolveMint is the omit-provider dest pick (🎯T691 / 🎯T652): Claudia
+// chooses a session harness. PreferPlan + prefer Claude; RequireUsage
+// fails closed when no published dest remains. Jevons records the pick
+// and does not re-adjudicate it.
 func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	ct := thresholdsToClaudia(th)
 	return claudia.Resolve(ctx, claudia.ModelPredicates{
 		Mode:           claudia.CapabilitySession,
 		PreferPlan:     true,
 		PreferProvider: claudia.ProviderClaude,
+		RequireUsage:   true,
 		Now:            now,
 		Usage:          backendsToPlanUsage(cands),
 		Thresholds:     &ct,
 	})
 }
 
+// ResolveDest is the migrate/park dest pick (🎯T691): Claudia chooses among
+// published token-eligible dests. exclude drops the seat's current
+// provider. No PreferProvider — dest ranking is slack, not Claude-first.
+func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time.Time, th Thresholds) (claudia.ModelPick, error) {
+	ct := thresholdsToClaudia(th)
+	pred := claudia.ModelPredicates{
+		Mode:         claudia.CapabilitySession,
+		PreferPlan:   true,
+		RequireUsage: true,
+		Now:          now,
+		Usage:        backendsToPlanUsage(cands),
+		Thresholds:   &ct,
+	}
+	if e := strings.TrimSpace(exclude); e != "" {
+		pred.ExcludeProviders = []claudia.Provider{claudia.Provider(e)}
+	}
+	return claudia.Resolve(ctx, pred)
+}
+
 func windowToClaudia(w Window) claudia.PlanWindow {
 	pw := claudia.PlanWindow{
 		Name:             claudia.PlanWindowName(w.Name),
+		Model:            w.Model,
 		UsedPercent:      w.UsedPercent,
 		RemainingPercent: w.RemainingPercent,
 		ResetsAt:         w.ResetsAt,
@@ -74,4 +97,21 @@ func backendsToPlanUsage(cands []DestCand) []claudia.PlanUsage {
 		out = append(out, u)
 	}
 	return out
+}
+
+func backendToPlanUsage(be Backend) claudia.PlanUsage {
+	out := backendsToPlanUsage([]DestCand{{Provider: be.Provider, Backend: be}})
+	if len(out) == 0 {
+		return claudia.PlanUsage{
+			Provider: claudia.Provider(be.Provider),
+			Status:   claudia.PlanUsageStatus(be.Status),
+			Reason:   be.Reason,
+		}
+	}
+	return out[0]
+}
+
+func claudiaThresholdsPtr(th Thresholds) *claudia.PlanThresholds {
+	ct := thresholdsToClaudia(th)
+	return &ct
 }

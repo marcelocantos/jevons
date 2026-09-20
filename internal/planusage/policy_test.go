@@ -6,6 +6,8 @@ package planusage
 import (
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 func TestWeeklyBandTable(t *testing.T) {
@@ -253,24 +255,23 @@ func TestPickPlanDestWasteThenLoad(t *testing.T) {
 			}},
 		}
 	}
-	// claude under (waste), grok ok with lower load — waste band wins.
+	// Slack ranking (claudia.Resolve): more remaining / lower pressure wins.
 	cands := []DestCand{
-		{Provider: "claude", Backend: be("claude", 58, 42), Load: 5},
+		{Provider: "claude", Backend: be("claude", 80, 20), Load: 5},
 		{Provider: "grok", Backend: be("grok", 50, 50), Load: 1},
 	}
 	got, ok := PickPlanDest(cands, now, th)
 	if !ok || got != "claude" {
-		t.Fatalf("waste band beats load: dest=%q ok=%v", got, ok)
+		t.Fatalf("more slack wins dest: dest=%q ok=%v", got, ok)
 	}
 
-	// two greens: least load (not highest remaining)
 	cands = []DestCand{
 		{Provider: "grok", Backend: be("grok", 50, 50), Load: 4},
-		{Provider: "codex", Backend: be("codex", 55, 45), Load: 1},
+		{Provider: "codex", Backend: be("codex", 80, 20), Load: 1},
 	}
 	got, ok = PickPlanDest(cands, now, th)
 	if !ok || got != "codex" {
-		t.Fatalf("least load among greens: dest=%q ok=%v", got, ok)
+		t.Fatalf("more slack wins dest (load is not the chooser): dest=%q ok=%v", got, ok)
 	}
 
 	// all hot
@@ -301,6 +302,9 @@ func TestPlanActionsParkWhenNoDest(t *testing.T) {
 	if len(acts) != 1 || acts[0].Name != "worker" || acts[0].To != "" {
 		t.Fatalf("overseer skipped; worker parks: %+v", acts)
 	}
+	if acts[0].Author != claudia.DecisionAuthor {
+		t.Fatalf("park author = %q, want claudia", acts[0].Author)
+	}
 }
 
 func TestPlanActionsMigrateToDest(t *testing.T) {
@@ -330,6 +334,9 @@ func TestPlanActionsMigrateToDest(t *testing.T) {
 	}, now, th)
 	if len(acts) != 1 || acts[0].To != "claude" {
 		t.Fatalf("migrate grok → claude: %+v", acts)
+	}
+	if acts[0].Author != claudia.DecisionAuthor {
+		t.Fatalf("migrate author = %q, want claudia", acts[0].Author)
 	}
 }
 

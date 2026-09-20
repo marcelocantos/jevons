@@ -617,7 +617,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	ownerAsked := s.pendingOwnerAsked
 	s.mu.Unlock()
 	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose, name, ownerAsked)
-	if pick.Knob == cost.KnobPlanDest && strings.TrimSpace(pick.Provider) == "" {
+	if strings.TrimSpace(pick.Provider) == "" && (pick.Knob == cost.KnobPlanDest || pick.Knob == cost.KnobClaudia) {
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
 	}
