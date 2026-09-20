@@ -50,6 +50,10 @@ func (s *Server) killRootAndClearTurns(target string) error {
 	if s == nil || s.registry == nil {
 		return fmt.Errorf("agent registry not available")
 	}
+	// 🎯T708: before the row goes, take the seat's detached background work
+	// with it. After removal the pid is unfindable and whatever the seat
+	// left running is the owner's problem, forever.
+	s.reapSeatLoad(target)
 	if _, err := s.RemovalAccount().Remove(s.registry, target, fleetlog.Removal{
 		Reason: fleetlog.ReasonKill,
 		Detail: "killed by explicit request (descendants preserved; 🎯T560)",

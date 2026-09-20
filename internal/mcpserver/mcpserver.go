@@ -41,6 +41,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatload"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -72,6 +73,12 @@ type Server struct {
 	workerWD   string
 	screenshot ScreenshotFunc
 	transcript *TranscriptOps
+
+	// seatLoad anchors each seat's process group while its root is alive,
+	// so a stop, a reap or a lost seat takes its detached background work
+	// with it (🎯T708). Lazily built; see seat_load.go.
+	seatLoadMu sync.Mutex
+	seatLoad   *seatload.Tracker
 
 	// spawnGuard / resumeGuard are the budget clamp-down gates (T36.1):
 	// every MCP path that creates or re-launches a worker must consult
@@ -482,9 +489,15 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 	if overseerName == "" {
 		overseerName = "jevons"
 	}
+	// 🎯T708: anchor live seats before the sweep and reap the ones that are
+	// gone after it. The anchor has to be taken while the root is alive —
+	// afterwards the detached work is reparented to init and there is no
+	// link back to the seat at all.
+	s.TrackSeatLoad()
 	if reps := SweepDeadAgents(s.registry, s.RemovalAccount(), overseerName, s.fleetIntent()); len(reps) > 0 {
 		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
 	}
+	s.ReapLostSeats()
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn

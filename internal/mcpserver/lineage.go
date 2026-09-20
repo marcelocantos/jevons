@@ -129,6 +129,11 @@ func (s *Server) killSubtreeAndClearTurns(target string) error {
 		return fmt.Errorf("agent registry not available")
 	}
 	names := append(s.registry.Descendants(target), target)
+	// 🎯T708: every seat that leaves takes its detached background work
+	// with it, while its pid is still findable.
+	for _, n := range names {
+		s.reapSeatLoad(n)
+	}
 	if err := killSubtree(s.registry, s.RemovalAccount(), target, fleetlog.Removal{
 		Reason: fleetlog.ReasonKill,
 		Detail: "killed by explicit request",
