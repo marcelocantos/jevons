@@ -892,6 +892,11 @@ path and prepends a **FALSE-GREEN banner** in front of the report to the
 overseer. A fabricated `GATE` line is caught too — the id is looked up,
 and an id with no record behind it says so. Pure helpers:
 `gate.FlagFalseGreen` / `gate.Banner` (`internal/gate`).
+String-matching rules (`pipeline_masked`, `shell_array_trap`,
+`empty_status`, `output_contradicts`) each declare a scannable region
+(quoted command/output, or output shape) and do not fire on prose that
+names the hazard (🎯T742). A report quoting the hazard from its own cited
+run is still flagged. Do not weaken dirty_tree_gate.
 
 **Residual:** the banner marks a report, it does not block delivery.
 

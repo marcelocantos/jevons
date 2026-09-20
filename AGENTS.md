@@ -396,8 +396,13 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   the daemon runs the same check on the notify path, prepending a FALSE-GREEN
   banner ahead of a report whose own cited evidence — piped gate, empty status,
   quoted failure, or a `GATE` id with no record behind it — contradicts the
-  pass it claims. Ratcheted by `scripts/docratchet`. Residual: the banner marks
-  a report, it does not block delivery.
+  pass it claims. String-matching rules (`pipeline_masked`, `shell_array_trap`,
+  `empty_status`, `output_contradicts`) each declare a scannable region
+  (quoted command/output, or output shape) and do not fire on prose that
+  names the hazard (🎯T742). A report quoting the hazard from its own cited
+  run is still flagged. Do not weaken dirty_tree_gate. Ratcheted by
+  `scripts/docratchet`. Residual: the banner marks a report, it does not
+  block delivery.
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /

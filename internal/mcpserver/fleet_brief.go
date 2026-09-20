@@ -101,6 +101,11 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   hand) and prepends a FALSE-GREEN banner to the overseer when your own
   cited evidence contradicts the pass you claim. Fabricating a GATE line is
   flagged: the id is looked up, and an id with no record behind it says so.
+- String-matching false-green rules (pipeline_masked, shell_array_trap,
+  empty_status, output_contradicts) each declare a scannable region —
+  quoted command/output, or output shape — and do not fire on prose that
+  names the hazard (🎯T742). A report quoting the hazard from its own cited
+  run is still flagged. Do not weaken dirty_tree_gate.
 
 ## Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194)
 - Daemon/API product (HTTP API, compiled server, non-static) is **not

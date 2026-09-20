@@ -754,6 +754,11 @@ prepends a **FALSE-GREEN banner** ahead of the report when the cited
 evidence contradicts the pass claimed — piped gate, empty status,
 quoted failure output, or a `GATE` id with no record behind it.
 Pure helpers: `gate.FlagFalseGreen` / `gate.Banner` (`internal/gate`).
+String-matching rules (`pipeline_masked`, `shell_array_trap`,
+`empty_status`, `output_contradicts`) each declare a scannable region
+(quoted command/output, or output shape) and do not fire on prose that
+names the hazard (🎯T742). A report quoting the hazard from its own cited
+run is still flagged. Do not weaken dirty_tree_gate.
 **Residual:** the banner marks a report, it does not block delivery;
 detection is textual and narrow on purpose (a checker that flags honest
 reports gets skimmed past, which launders the next real false green).
