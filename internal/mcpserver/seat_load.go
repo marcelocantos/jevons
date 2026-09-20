@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"log/slog"
 
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/seatload"
 )
 
@@ -140,6 +141,97 @@ func (s *Server) ReapLostSeats() []seatload.Result {
 		}
 	}
 	return out
+}
+
+// seatLoadSources reads what each anchored seat is currently running and
+// whether its own turn could still reach it. A seat with no prompt in
+// flight has ended its turn: the 2026-09-20 specimen was in exactly that
+// state, idle with its loops running, which is why nothing turn-scoped
+// was ever going to clean up after it.
+func (s *Server) seatLoadSources() []capacity.LoadSource {
+	if s == nil {
+		return nil
+	}
+	raw, err := s.seatLoadTracker().Sources()
+	if err != nil {
+		slog.Debug("seat load sources unavailable", "component", "seat_load", "err", err)
+		return nil
+	}
+	out := make([]capacity.LoadSource, 0, len(raw))
+	for _, src := range raw {
+		idle := true
+		if s.registry != nil {
+			if proc := s.registry.Get(src.Seat); proc != nil && proc.Alive() {
+				idle = !proc.PromptInFlight()
+			}
+		}
+		out = append(out, capacity.LoadSource{
+			Seat:       src.Seat,
+			Procs:      src.Procs,
+			CPUPercent: src.CPUPercent,
+			Age:        src.Oldest,
+			Unbounded:  src.Unbounded,
+			Orphaned:   src.Orphaned,
+			SeatIdle:   idle,
+			Heaviest:   src.Heaviest,
+		})
+	}
+	return out
+}
+
+// SweepSeatLoad is the governor's lever over load that is already running
+// (🎯T708). 🎯T460 gates new panes; until now nothing could act on the load
+// already there, so the governor read critical for forty minutes while one
+// seat's loops starved the fleet, and named nothing.
+//
+// Every action is recorded where the overseer and the owner read it, not
+// only in the daemon's own log: at critical a source nothing turn-scoped
+// can reach is reaped and said so; one that a live turn could still bound
+// is named to its seat instead of being reached into.
+func (s *Server) SweepSeatLoad() []capacity.LoadAction {
+	if s == nil {
+		return nil
+	}
+	gov := s.CapacityGovernor()
+	if gov == nil {
+		return nil
+	}
+	acts := capacity.ActOnLoad(gov.Status().Assessment, s.seatLoadSources())
+	s.applySeatLoadActions(acts)
+	return acts
+}
+
+// applySeatLoadActions carries out what the policy decided.
+func (s *Server) applySeatLoadActions(acts []capacity.LoadAction) {
+	for _, act := range acts {
+		line := capacity.FormatLoadAction(act)
+		fields := map[string]any{
+			"seat":      act.Source.Seat,
+			"verdict":   string(act.Verdict),
+			"audience":  string(act.Audience),
+			"pressure":  act.Pressure.String(),
+			"procs":     act.Source.Procs,
+			"cpu":       act.Source.CPUPercent,
+			"orphaned":  act.Source.Orphaned,
+			"unbounded": act.Source.Unbounded,
+			"seat_idle": act.Source.SeatIdle,
+			"msg":       line,
+		}
+		if act.Verdict == capacity.LoadTerminate {
+			res, err := s.seatLoadTracker().Reap(act.Source.Seat)
+			if err != nil {
+				fields["err"] = err.Error()
+				s.logLifecycle("seat_load", "act", "error", fields)
+				slog.Warn(line, "component", "seat_load", "err", err)
+				continue
+			}
+			fields["terminated"] = len(res.Terminated)
+			fields["survived"] = len(res.Survived)
+			fields["reap"] = res.String()
+		}
+		s.logLifecycle("seat_load", "act", "ok", fields)
+		slog.Warn(line, "component", "seat_load", "seat", act.Source.Seat, "verdict", string(act.Verdict))
+	}
 }
 
 // forgetSeatLoad drops a seat's anchor without reaping — the seat is being

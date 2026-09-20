@@ -498,6 +498,9 @@ func (s *Server) SweepFleetHealth(overseerName string) {
 		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
 	}
 	s.ReapLostSeats()
+	// 🎯T708: and act on the load that is still running, which 🎯T460's
+	// spawn gate has no lever over.
+	s.SweepSeatLoad()
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn

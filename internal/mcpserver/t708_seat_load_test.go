@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/seatload"
 )
 
@@ -79,6 +80,71 @@ func TestT708QuietSeatReapsNothing(t *testing.T) {
 	}
 	if res := s.reapSeatLoad("jv-quiet"); res.Any() || len(signalled) != 0 {
 		t.Fatalf("quiet seat reap signalled %v (%s)", signalled, res)
+	}
+}
+
+// 🎯T708 clause 3: at critical the governor acts on load already running.
+// Before this, AdmitSpawn refused new panes correctly while the load that
+// was starving the fleet was measured and tolerated.
+func TestT708CriticalTerminatesUnreachableLoad(t *testing.T) {
+	var signalled []int
+	s := &Server{}
+	s.seatLoad = &seatload.Tracker{
+		List:   func() (seatload.Table, error) { return t708Table(), nil },
+		Signal: func(pid int, _ syscall.Signal) error { signalled = append(signalled, pid); return nil },
+		Sleep:  func(time.Duration) {},
+		Self:   500,
+	}
+	if _, err := s.seatLoad.Track("cl-t33-codex-load", 900); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	acts := capacity.ActOnLoad(
+		capacity.Assessment{Pressure: capacity.PressureCritical, LoadAverageHeadroom: 0},
+		[]capacity.LoadSource{{
+			Seat: "cl-t33-codex-load", Procs: 1, CPUPercent: 190,
+			Unbounded: true, Orphaned: 1, SeatIdle: true,
+			Heaviest: "/bin/sh -c while :; do go test -race ./...; done",
+		}})
+	if len(acts) != 1 || acts[0].Verdict != capacity.LoadTerminate {
+		t.Fatalf("acts = %+v, want one terminate", acts)
+	}
+
+	s.applySeatLoadActions(acts)
+
+	if len(signalled) == 0 {
+		t.Fatal("critical terminate signalled nothing — the governor certified the outage it exists to prevent")
+	}
+	for _, pid := range signalled {
+		if pid == 500 || pid <= 1 {
+			t.Fatalf("terminate signalled %d — the daemon or init", pid)
+		}
+	}
+}
+
+// A live turn is told, not reached into: the seat can still bound its own
+// work, and the daemon killing a running turn's children is a different
+// and worse failure.
+func TestT708CriticalNotifiesAReachableSeatWithoutSignalling(t *testing.T) {
+	var signalled []int
+	s := &Server{}
+	s.seatLoad = &seatload.Tracker{
+		List:   func() (seatload.Table, error) { return t708Table(), nil },
+		Signal: func(pid int, _ syscall.Signal) error { signalled = append(signalled, pid); return nil },
+		Sleep:  func(time.Duration) {},
+		Self:   500,
+	}
+	if _, err := s.seatLoad.Track("cl-t33-codex-load", 900); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	acts := capacity.ActOnLoad(
+		capacity.Assessment{Pressure: capacity.PressureCritical, LoadAverageHeadroom: 0},
+		[]capacity.LoadSource{{Seat: "cl-t33-codex-load", Procs: 1, CPUPercent: 190}})
+	if len(acts) != 1 || acts[0].Verdict != capacity.LoadNotify {
+		t.Fatalf("acts = %+v, want one notify", acts)
+	}
+	s.applySeatLoadActions(acts)
+	if len(signalled) != 0 {
+		t.Fatalf("a seat still taking turns was signalled: %v", signalled)
 	}
 }
 
