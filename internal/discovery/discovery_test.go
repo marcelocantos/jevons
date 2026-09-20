@@ -11,6 +11,20 @@ import (
 	"testing"
 )
 
+func TestClaudiaGrokHomesRootFollowsXDGThenHome(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/custom/state")
+	if got := ClaudiaGrokHomesRoot(); got != "/custom/state/claudia/grok-homes" {
+		t.Fatalf("XDG_STATE_HOME root = %q", got)
+	}
+	t.Setenv("XDG_STATE_HOME", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	want := filepath.Join(home, ".local", "state", "claudia", "grok-homes")
+	if got := ClaudiaGrokHomesRoot(); got != want {
+		t.Fatalf("HOME fallback root = %q want %q", got, want)
+	}
+}
+
 func TestExclusiveGrokSessionRoots(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "claudia-mcp-grok-testhome")

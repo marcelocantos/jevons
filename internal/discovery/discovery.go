@@ -9,6 +9,10 @@
 //	Grok Build:  ~/.grok/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl
 //	             (chat_history.jsonl is rewritten on compact — never the
 //	             conversation source; 🎯T621 / mnemo grok-ingest.md)
+//	             Durable Claudia Grok seats also write under
+//	             $XDG_STATE_HOME/claudia/grok-homes/<session-id>/sessions/…
+//	             (🎯T694). The session-id entry may be a directory or a
+//	             symlink onto the exclusive home uuid.
 //	Claude Code: ~/.claude/projects/<escaped-cwd>/<session-id>.jsonl
 //
 // Roots.GrokSessions and Roots.ClaudeProjects are independently optional;
@@ -34,6 +38,10 @@ type Roots struct {
 	// GrokHomeSessions are extra Grok session trees from exclusive-MCP
 	// GROK_HOME dirs (typically <tmp>/claudia-mcp-grok-*/sessions). 🎯T619.
 	GrokHomeSessions []string
+	// ClaudiaGrokHomes is the durable per-session GROK_HOME store
+	// ($XDG_STATE_HOME/claudia/grok-homes). Lookups join
+	// <root>/<session-id>/sessions and walk cwd buckets there (🎯T694).
+	ClaudiaGrokHomes string
 	// ClaudeProjects is typically ~/.claude/projects (not ~/.claude).
 	ClaudeProjects string
 }
@@ -418,6 +426,32 @@ func ExclusiveGrokSessionRoots() []string {
 	return exclusiveGrokSessionRoots(os.TempDir())
 }
 
+// ClaudiaGrokHomesRoot is $XDG_STATE_HOME/claudia/grok-homes, falling back
+// to $HOME/.local/state/claudia/grok-homes. Empty when neither is known.
+func ClaudiaGrokHomesRoot() string {
+	state := strings.TrimSpace(os.Getenv("XDG_STATE_HOME"))
+	if state == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(home) == "" {
+			return ""
+		}
+		state = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(state, "claudia", "grok-homes")
+}
+
+// ClaudiaGrokHomeSessionsDir is the sessions tree for one Grok session under
+// a claudia grok-homes root. The session-id entry is a directory or a
+// symlink onto the exclusive home uuid (publishExclusiveGrokHome).
+func ClaudiaGrokHomeSessionsDir(homesRoot, sessionID string) string {
+	homesRoot = strings.TrimSpace(homesRoot)
+	sessionID = strings.TrimSpace(sessionID)
+	if homesRoot == "" || sessionID == "" {
+		return ""
+	}
+	return filepath.Join(homesRoot, sessionID, "sessions")
+}
+
 func exclusiveGrokSessionRoots(tmp string) []string {
 	if tmp == "" {
 		return nil
@@ -573,6 +607,11 @@ func TranscriptPath(r Roots, sessionID string) string {
 		}
 	}
 	for _, extra := range r.GrokHomeSessions {
+		if p := grokConversationPath(extra, sessionID); p != "" {
+			return p
+		}
+	}
+	if extra := ClaudiaGrokHomeSessionsDir(r.ClaudiaGrokHomes, sessionID); extra != "" {
 		if p := grokConversationPath(extra, sessionID); p != "" {
 			return p
 		}

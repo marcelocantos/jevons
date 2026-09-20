@@ -37,6 +37,56 @@ func TestGrokUpdatesLookupPresentInOrdinaryRoot(t *testing.T) {
 	}
 }
 
+func plantClaudiaGrokHomeUpdates(t *testing.T, homes, workDir, sid, body string) string {
+	t.Helper()
+	return plantGrokUpdates(t, ClaudiaGrokHomeSessionsDir(homes, sid), workDir, sid, body)
+}
+
+func TestGrokUpdatesLookupPresentInClaudiaGrokHomes(t *testing.T) {
+	homes := t.TempDir()
+	ordinary := filepath.Join(t.TempDir(), "sessions")
+	if err := os.MkdirAll(ordinary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := plantClaudiaGrokHomeUpdates(t, homes, "/tmp/repo", t679SID, `{"method":"session/update"}`+"\n")
+	got := GrokUpdatesLookup(Roots{
+		GrokSessions:     ordinary,
+		ClaudiaGrokHomes: homes,
+	}, t679SID)
+	if got.State != LookupPresent || got.Path != want {
+		t.Fatalf("claudia grok-homes lookup = %+v want present %q", got, want)
+	}
+}
+
+func TestGrokUpdatesLookupPresentViaGrokHomeSymlink(t *testing.T) {
+	homes := t.TempDir()
+	realHome := filepath.Join(homes, "493a859b-047b-433c-81b3-3a25da8025ac")
+	want := plantGrokUpdates(t, filepath.Join(realHome, "sessions"), "/tmp/repo", t679SID, `{"method":"session/update"}`+"\n")
+	link := filepath.Join(homes, t679SID)
+	if err := os.Symlink(realHome, link); err != nil {
+		t.Fatal(err)
+	}
+	got := GrokUpdatesLookup(Roots{ClaudiaGrokHomes: homes}, t679SID)
+	if got.State != LookupPresent {
+		t.Fatalf("symlink grok-homes lookup = %+v want present", got)
+	}
+	viaLink := filepath.Join(ClaudiaGrokHomeSessionsDir(homes, t679SID), EncodeCWDBucket("/tmp/repo"), t679SID, grokUpdatesName)
+	if got.Path != viaLink {
+		t.Fatalf("path=%q want session-id path %q", got.Path, viaLink)
+	}
+	gotInfo, err := os.Stat(got.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("session-id path %q is not the planted file %q", got.Path, want)
+	}
+}
+
 func TestGrokUpdatesLookupPresentInExclusiveMCPRoot(t *testing.T) {
 	root := t.TempDir()
 	ordinary := filepath.Join(root, "ordinary")

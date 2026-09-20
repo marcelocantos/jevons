@@ -52,6 +52,9 @@ func GrokUpdatesLookup(roots Roots, sessionID string) FileLookup {
 			rootsToSearch = append(rootsToSearch, extra)
 		}
 	}
+	if extra := ClaudiaGrokHomeSessionsDir(roots.ClaudiaGrokHomes, sid); extra != "" {
+		rootsToSearch = append(rootsToSearch, extra)
+	}
 	if len(rootsToSearch) == 0 {
 		return FileLookup{State: LookupUnobservable, Reason: "no grok session roots configured"}
 	}
