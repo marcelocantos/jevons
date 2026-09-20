@@ -770,6 +770,10 @@ func main() {
 	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
 	rotationStore := handover.NewRotationStore(filepath.Join(cfg.StateDir, "rotations"))
 	fleetAdapter.SetRotationStore(rotationStore)
+	// 🎯T392.1: burn is limited by when the host runs a turn. Remint is
+	// withdrawn (🎯T392.1.1); this gate delays, pauses, or refuses the
+	// next send/deliver and leaves session_id unchanged.
+	startTurnRate(guard, fleetAdapter)
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
 	// ð¯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)

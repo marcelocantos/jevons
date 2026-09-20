@@ -128,6 +128,10 @@ type Claudia struct {
 	// leaves AgentDef.MCPServers empty — hermetic tests that never call
 	// SetMCP keep prior behaviour.
 	mcp mcpattach.Args
+
+	// turnGate is the 🎯T392.1 spend lever: delay, pause, or refuse the
+	// next turn. Nil admits. The gate must not remint, rewind, or seed.
+	turnGate func(agent, sessionID string) error
 }
 
 // NewClaudia wraps a registry as a Fleet. Default provider resolves from
@@ -158,6 +162,31 @@ func (f *Claudia) SetLaunchHook(fn func(name string) func()) {
 		return
 	}
 	f.onLaunch = fn
+}
+
+// SetTurnGate installs the 🎯T392.1 turn-rate seam. Nil (the default)
+// admits every turn. The function must not remint, rewind, or inject a
+// T285 seed — session identity is T40.2 / T285.
+func (f *Claudia) SetTurnGate(fn func(agent, sessionID string) error) {
+	if f == nil {
+		return
+	}
+	f.turnGate = fn
+}
+
+// allowTurn asks the turn-rate gate whether this send may run. Nil gate
+// admits. A deferred error leaves the registry session id untouched.
+func (f *Claudia) allowTurn(id string) error {
+	if f == nil || f.turnGate == nil {
+		return nil
+	}
+	sessionID := ""
+	if f.reg != nil {
+		if def := f.reg.Def(id); def != nil {
+			sessionID = def.SessionID
+		}
+	}
+	return f.turnGate(id, sessionID)
 }
 
 func (f *Claudia) SetRequestRecorder(fn func(name, text string) error) {
@@ -469,6 +498,9 @@ func (f *Claudia) Send(id, text string) (string, error) {
 	if ag == nil || !ag.Alive() {
 		return "", fmt.Errorf("no live process for thread %q", id)
 	}
+	if err := f.allowTurn(id); err != nil {
+		return "", fmt.Errorf("send %q: %w", id, err)
+	}
 	defer f.enterTurn(id)()
 	f.mu.Lock()
 	record := f.recordRequest
@@ -616,6 +648,9 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 	}
 	if f.reg.Def(id) == nil {
 		return "", fmt.Errorf("no agent %q", id)
+	}
+	if err := f.allowTurn(id); err != nil {
+		return "", fmt.Errorf("deliver %q: %w", id, err)
 	}
 	// Count the turn from before the rehydrate: a launch + first turn is
 	// exactly the window in which the idle sweep must not intervene.
