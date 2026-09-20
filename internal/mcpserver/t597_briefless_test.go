@@ -224,6 +224,7 @@ func TestT597IsFullRebrief(t *testing.T) {
 		{"big opening prose", "[Who you are — from the fleet registry]\nYou are jv-t1-x.\n" + strings.Repeat("Mission context. ", 100), true},
 		{"big prose without markers", strings.Repeat("status update line. ", 100), false},
 		{"small mention of spawn-brief", "your last spawn-brief said T10 — status?", false},
+		{"big prose discussing spawn-brief", "The previous spawn-brief (kind spawn-brief) was refused. " + strings.Repeat("Mission context. ", 100), false},
 		{"ordinary direct", "please commit and report", false},
 	}
 	for _, c := range cases {

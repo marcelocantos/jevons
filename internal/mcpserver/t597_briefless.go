@@ -24,6 +24,12 @@ package mcpserver
 //  3. jevons_agent_send refuses a full re-brief (spawn-brief envelope, or
 //     >1KB opening-brief prose) to a seat with recent activity, naming the
 //     evidence and the force_rebrief=true override.
+//
+// 🎯T721: a spawn-brief with phase implement sent to the seat whose latest
+// stored report is a scout-report for that same target is the 🎯T536.3
+// handoff, not a mission restart. The discriminator is that terminal
+// envelope — not elapsed time or workdir mtime. A genuine re-brief of a
+// working seat is still refused.
 
 import (
 	"fmt"
@@ -185,10 +191,12 @@ func latestWorkdirTouch(dir string, since time.Time) (string, time.Time, bool) {
 // openingBriefMarkers are phrases a full opening brief carries that ordinary
 // fleet chatter does not. Any one of them over rebriefProseBound classifies
 // as a re-brief; the envelope arm needs no marker.
+//
+// "spawn-brief" / "kind spawn-brief" are not markers: envelope.Parse already
+// catches a real fence, and a >1KB message that merely discusses a brief
+// (the 🎯T721 specimen's second refusal) is not itself a re-brief.
 var openingBriefMarkers = []string{
 	"[Who you are",
-	"kind spawn-brief",
-	"spawn-brief",
 	"standing brief",
 	"[Jevons role doctrine]",
 	"opening brief",
@@ -218,6 +226,9 @@ func IsFullRebrief(text string) (bool, string) {
 // with recent activity and force is false. The refusal names the evidence and
 // the override, because a refusal whose reason cannot be inspected just gets
 // worked around.
+//
+// 🎯T721: a same-target phase-implement spawn-brief after a scout-report is
+// delivered even when the seat shows activity — that activity *is* the scout.
 func (s *Server) checkRebriefRefusal(name, text string, force bool, now time.Time) string {
 	if force {
 		return ""
@@ -226,18 +237,91 @@ func (s *Server) checkRebriefRefusal(name, text string, force bool, now time.Tim
 	if !isRebrief {
 		return ""
 	}
+	if s.phaseAdvanceFromStore(name, text) {
+		return ""
+	}
 	act := s.seatActivity(name)
 	if !act.RecentWithin(now, RecentActivityWindow) {
 		return ""
 	}
 	return fmt.Sprintf(
 		"re-brief refused (🎯T597): this message is %s addressed to %q, but that seat shows "+
-			"recent activity — %s. A working seat that is re-briefed starts its mission over and "+
-			"can discard uncommitted work (that is the 2026-08-31 incident this gate exists for). "+
+			"recent activity — %s. Re-briefing a working seat can discard uncommitted work "+
+			"(that is the 2026-08-31 incident this gate exists for). "+
 			"A missing transcript for its session id is evidence about a path, not about the agent "+
 			"(🎯T416 input discipline): read jevons_transcript_read %q for the seat-activity verdict "+
-			"first. If the seat genuinely needs the brief again, re-send with force_rebrief=true.",
+			"first. Override: force_rebrief=true. A spawn-brief with phase implement after a "+
+			"scout-report for the same target is a 🎯T536.3 handoff, not a re-brief, and does not "+
+			"need the override.",
 		why, name, act.Describe(), name)
+}
+
+// phaseAdvanceFromStore is the 🎯T721 send-path exemption: the seat's own
+// latest stored report is the discriminator.
+func (s *Server) phaseAdvanceFromStore(name, text string) bool {
+	if s == nil {
+		return false
+	}
+	dir := s.agentReportStateDir()
+	if dir == "" {
+		return false
+	}
+	rec, err := agentreport.Latest(dir, name)
+	if err != nil {
+		return false
+	}
+	return phaseAdvanceHandoff(text, rec.Text)
+}
+
+// phaseAdvanceHandoff reports a 🎯T536.3 scout-to-implement send, not a
+// mission restart (🎯T721). Incoming must be a spawn-brief whose effective
+// phase is implement; latestReport must parse as a scout-report for the
+// same target. Workdir mtime and elapsed time are not consulted.
+//
+// A mutant that returns true for every pair admits every spawn-brief to a
+// working seat and goes RED on the T597 workdir / checkpoint tapes.
+func phaseAdvanceHandoff(incoming, latestReport string) bool {
+	in, err := envelope.Parse(incoming)
+	if in == nil || err != nil || in.Kind != envelope.KindSpawnBrief {
+		return false
+	}
+	if envelope.EffectivePhase(in) != envelope.PhaseImplement {
+		return false
+	}
+	want := NormalizeTargetID(in.Target)
+	if want == "" {
+		return false
+	}
+	last := parseTerminalEnvelope(latestReport)
+	if last == nil || last.Kind != envelope.KindScoutReport {
+		return false
+	}
+	got := NormalizeTargetID(last.Target)
+	return got != "" && got == want
+}
+
+// parseTerminalEnvelope returns the author's terminal jevons envelope.
+// envelope.Parse requires the fence at line 1 (after known prefixes); stored
+// reports often have thinking before the fence (the T718 specimen). Fall
+// back to the last ```jevons fence in the body.
+func parseTerminalEnvelope(text string) *envelope.Message {
+	if m, err := envelope.Parse(text); m != nil && err == nil {
+		return m
+	}
+	i := lastJevonsFenceIndex(text)
+	if i < 0 {
+		return nil
+	}
+	m, err := envelope.Parse(text[i:])
+	if m != nil && err == nil {
+		return m
+	}
+	return nil
+}
+
+func lastJevonsFenceIndex(text string) int {
+	lower := strings.ToLower(text)
+	return strings.LastIndex(lower, "```"+envelope.FenceInfo)
 }
 
 // transcriptNotFoundVerdict renders the transcript_read answer for a named
