@@ -390,7 +390,12 @@ type rawRecord struct {
 	// Content is a queue record's payload (a string) or a Grok top-level
 	// conversation payload (a string or an array of blocks), so it is decoded
 	// twice from raw rather than typed once.
-	Content    json.RawMessage `json:"content"`
+	Content json.RawMessage `json:"content"`
+	// ToolCalls is a Grok assistant record's top-level tool-call list. Claude
+	// marks tool use with a content block, so decodeContent finds it; Grok puts
+	// it here, and a decoder reading only content blocks therefore cannot tell
+	// a Grok mid-turn record from the one that ends the turn (🎯T752).
+	ToolCalls  json.RawMessage `json:"tool_calls"`
 	Attachment *struct {
 		Type   string `json:"type"`
 		Prompt string `json:"prompt"`
@@ -464,7 +469,7 @@ func Decode(line []byte) (Record, bool) {
 
 	text, hasToolUse, hasToolResult := decodeContent(content)
 	rec.Text = text
-	rec.HasToolUse = hasToolUse
+	rec.HasToolUse = hasToolUse || hasGrokToolCalls(raw.ToolCalls)
 	switch {
 	case raw.Type == "error":
 		// An error notice, whatever role it does or does not claim. Checked
@@ -483,6 +488,21 @@ func Decode(line []byte) (Record, bool) {
 		rec.Kind = KindOther
 	}
 	return rec, true
+}
+
+// hasGrokToolCalls reports whether a Grok assistant record carries tool calls,
+// which is that provider's mid-turn signal: the model asked for tools and will
+// speak again after the results. An empty or absent list is not one.
+func hasGrokToolCalls(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || trimmed == "[]" {
+		return false
+	}
+	var calls []json.RawMessage
+	if err := json.Unmarshal(raw, &calls); err != nil {
+		return false
+	}
+	return len(calls) > 0
 }
 
 // decodeContent extracts the AUTHORED text of a content payload and reports
@@ -601,9 +621,9 @@ func unwrapGrokUpdate(line []byte) []byte {
 		return line
 	}
 	out, err := json.Marshal(map[string]any{
-		"type":   role,
+		"type":    role,
 		"content": text,
-		"isMeta": meta,
+		"isMeta":  meta,
 	})
 	if err != nil {
 		return line

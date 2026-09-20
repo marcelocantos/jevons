@@ -105,6 +105,11 @@ func (s *Server) recoverMissedTurns(name, transcriptPath string, attachedAt time
 	if s == nil || strings.TrimSpace(transcriptPath) == "" || s.agentReportStateDir() == "" {
 		return 0
 	}
+	// 🎯T752: a Grok Build transcript is a different file shape and carries no
+	// timestamps, so it cannot be windowed or parsed here. Its own arm reads it.
+	if isGrokChatHistory(transcriptPath) {
+		return s.recoverGrokMissedTurns(name, transcriptPath)
+	}
 	after := attachedAt.Add(-MissedTurnLookback)
 	if rec, err := agentreport.Latest(s.agentReportStateDir(), name); err == nil && rec.At.After(after) {
 		after = rec.At
@@ -127,19 +132,45 @@ func (s *Server) recoverMissedTurns(name, transcriptPath string, attachedAt time
 		"agent": name, "missed_turns": len(missed), "turn_ended": last.At.Format(time.RFC3339),
 	})
 
+	s.deliverRecoveredTurn(name, last, len(missed))
+	return len(missed)
+}
+
+// deliverRecoveredTurn is what a recovered turn earns: the mission closes if
+// the turn says so, the report is stored and delivered, and the parent is told
+// the seat was unobserved. Shared by both transcript shapes.
+//
+// THE GOAL CLOSE IS THE HALF 🎯T752 ADDS, and it is not decoration. A recovered
+// turn used to be notified and nothing more, while clearSessionGoalIfComplete
+// was reachable only from agentEventSink's terminal-stop branch — so a seat
+// whose GOAL_STATUS: complete arrived on this path had its report stored and
+// went on being told to "Continue the open objective" forever. It runs BEFORE
+// notify, mirroring the sink's order, so the mission is shut before the report
+// travels and before any reap can act on it.
+func (s *Server) deliverRecoveredTurn(name string, last missedTurn, missed int) {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	s.clearSessionGoalIfComplete(name, last.Text)
+
 	// Verbatim: the stored report must be the envelope the seat wrote.
 	s.notify(name, last.Text)
 
 	if parent := s.registryParent(name); parent != "" && !s.isOverseerAgent(parent) {
+		// A Grok record carries no timestamp, so there is no honest moment to
+		// quote for one. Saying so is better than printing the zero time.
+		ended := "at an unrecorded time — its transcript stamps no turns"
+		if !last.At.IsZero() {
+			ended = "ended " + last.At.Format(time.RFC3339)
+		}
 		note := fmt.Sprintf("[🎯T744 seat %s went unobserved across a daemon bounce or relaunch: %d turn(s) "+
-			"ended with no event stream attached. The newest (ended %s) was recovered from its transcript "+
+			"ended with no event stream attached. The newest (%s) was recovered from its transcript "+
 			"and stored/delivered just above; earlier ones are in its transcript only. Silence from this "+
 			"seat before now did not mean it was idle.]",
-			name, len(missed), last.At.Format(time.RFC3339))
+			name, missed, ended)
 		if _, err := s.deliverByName(parent, note, OriginAgent, false); err != nil {
 			slog.Error("🎯T744 missed-turn notice to parent failed",
 				"agent", name, "parent", parent, "err", err)
 		}
 	}
-	return len(missed)
 }

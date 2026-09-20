@@ -187,9 +187,15 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	// this attach (boot resume is serial; the wire pass runs after it) is
 	// read back from the transcript and delivered instead of lost. Off the
 	// wiring lock: it scans a file and delivers through notify.
-	if path := proc.JSONLPath(); path != "" {
-		go s.recoverMissedTurns(name, path, attachedAt)
-	}
+	// 🎯T752: resolution happens INSIDE the goroutine. A Grok seat's process
+	// reports no JSONL path, so the fallback reads the session store — and that
+	// read takes s.mu, which this function must not touch while it holds
+	// wireMu (see the lock-order note above).
+	go func() {
+		if path := s.seatTranscriptPath(name, proc); path != "" {
+			s.recoverMissedTurns(name, path, attachedAt)
+		}
+	}()
 	// 🎯T528: ledger GoalCompleteCheck so Continue stops when named
 	// TargetIDs are achieved even if the sink misses a turn.
 	s.wireSessionGoalCompleteCheck(name, proc)

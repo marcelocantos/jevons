@@ -790,6 +790,9 @@ func main() {
 	// terminal report survives the ð¯T165/T195 reap of the agent that wrote it,
 	// and an over-bound delivery can name a call that returns the whole text.
 	mcpSrv.SetAgentReportDir(cfg.StateDir)
+	// 🎯T752: a Grok ACP seat's process reports no transcript path, so the
+	// missed-turn read-back resolves one from the session store by session id.
+	mcpSrv.SetGrokSessionsDir(cfg.SessionsDir)
 	// ð¯T392.2: coalesce machine-generated wakes into one digest per
 	// recipient. Owner turns and worker replies are never batched â only
 	// events the fleet generates about itself, whose content is additive.

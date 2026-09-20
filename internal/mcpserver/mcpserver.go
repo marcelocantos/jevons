@@ -101,6 +101,11 @@ type Server struct {
 	// seat's session (🎯T597). Absent name ⇒ minted before the last restart.
 	seatMintedAt map[string]time.Time
 
+	// grokSessions is the Grok session store (~/.grok/sessions), read under mu.
+	// A Grok ACP seat's process reports no transcript path, so this is how the
+	// read-back finds one (🎯T752).
+	grokSessions string
+
 	mu sync.Mutex
 	// startMu serializes Launch/wire on jevons_agent_start. It must be
 	// released before any ACP prompt delivery (🎯T541): holding it across
