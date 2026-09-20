@@ -4,8 +4,10 @@
 package turnev
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +170,184 @@ func TestT705UnchangedFileIsNotReparsed(t *testing.T) {
 	if again := ClassifyPhaseFile(path); again != first {
 		t.Fatalf("second read = %s, first = %s", again, first)
 	}
+
+	// An unchanged file must not be opened: mode 000 still stats, but a
+	// parse would fail open and collapse to unknown.
+	if os.Geteuid() == 0 {
+		t.Log("root can open mode-000 files; skipping the stat-not-parse chmod check")
+		return
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(path, 0o600)
+	if got := ClassifyPhaseFile(path); got != first {
+		t.Fatalf("unchanged unreadable file = %s, want %s: the second call parsed instead of statting",
+			got, first)
+	}
+}
+
+// A tape whose mtime went backwards is a rotation wearing the same name.
+// Size going forward is not enough to resume: the prefix is a different tape.
+func TestT705MtimeBackwardsIsReadAfresh(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "updates.jsonl")
+	t705Write(t, path, append([]string{t705Enqueue}, repeat(t705Working, 20)...), true)
+	if got := ClassifyPhaseFile(path); got != PhaseWorking {
+		t.Fatalf("baseline = %s, want working", got)
+	}
+
+	// Larger than the cached offset so a shrink check cannot save us, and
+	// stamped in the past so an append-only resume would keep the stale
+	// pending count and still read working.
+	body := strings.Join(repeat(t705Terminal, 40), "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if got := ClassifyPhaseFile(path); got != PhaseIdle {
+		t.Fatalf("mtime-backwards rewrite = %s, want idle: the stale fold survived a rotated tape", got)
+	}
+}
+
+// 🎯T705 last clause: a multi-megabyte tape's repeat classification is
+// orders of magnitude cheaper than the first, and both agree. Synthetic
+// is the hermetic ratchet. A live transcript is used when T705_TRANSCRIPT
+// points at one (the closer's measurement), never committed as testdata.
+func TestT705MultiMegabyteRepeatIsCheapAndAgrees(t *testing.T) {
+	t.Run("synthetic", func(t *testing.T) {
+		t705AssertCheapRepeat(t, t705MegabyteTape(t, 3<<20))
+	})
+	t.Run("live", func(t *testing.T) {
+		src := strings.TrimSpace(os.Getenv("T705_TRANSCRIPT"))
+		if src == "" {
+			t.Skip("set T705_TRANSCRIPT to a real multi-megabyte JSONL to measure the live tape")
+		}
+		st, err := os.Stat(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Size() < 1<<20 {
+			t.Fatalf("%s is %d bytes; want a multi-megabyte transcript", src, st.Size())
+		}
+		t705AssertCheapRepeat(t, t705CloneFile(t, src))
+	})
+}
+
+func t705AssertCheapRepeat(t *testing.T, path string) {
+	t.Helper()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ResetPhaseCache()
+
+	t0 := time.Now()
+	cold := ClassifyPhaseFile(path)
+	coldDur := time.Since(t0)
+	if cold == PhaseUnknown {
+		t.Fatal("cold classify returned unknown on a readable tape")
+	}
+
+	warm := make([]time.Duration, 11)
+	var again Phase
+	for i := range warm {
+		t1 := time.Now()
+		again = ClassifyPhaseFile(path)
+		warm[i] = time.Since(t1)
+		if again != cold {
+			t.Fatalf("repeat %d = %s, cold = %s", i, again, cold)
+		}
+	}
+	warmDur := t705MedianDuration(warm)
+	t.Logf("%d bytes: cold %s (%s) unchanged median %s (%s) ratio %.0fx",
+		st.Size(), coldDur, cold, warmDur, again, float64(coldDur)/float64(warmDur+1))
+
+	if coldDur < 500*time.Microsecond {
+		t.Fatalf("cold classify of %d bytes took %s — too small to measure", st.Size(), coldDur)
+	}
+	// Orders of magnitude: a 10× floor is the weakest reading of the
+	// clause; the 3.6 MB live tape measured ~18,000× in the landing commit.
+	if warmDur*10 >= coldDur {
+		t.Fatalf("unchanged %s is not orders of magnitude cheaper than cold %s", warmDur, coldDur)
+	}
+
+	// Appending one line must not re-pay the whole tape. If the fold
+	// restarted, this classify would cost about as much as cold.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(f, t705Working+"\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t2 := time.Now()
+	appended := ClassifyPhaseFile(path)
+	appendDur := time.Since(t2)
+	if appended != cold && appended != PhaseWorking {
+		t.Fatalf("after one-line append = %s, cold = %s", appended, cold)
+	}
+	if appendDur*5 >= coldDur {
+		t.Fatalf("one-line append %s re-paid the tape (cold %s)", appendDur, coldDur)
+	}
+
+	ResetPhaseCache()
+	full := ClassifyPhaseFile(path)
+	if full != appended {
+		t.Fatalf("resumed fold %s != cold whole-file %s after the append", appended, full)
+	}
+}
+
+func t705MegabyteTape(t *testing.T, minBytes int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "updates.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	pad := strings.Repeat("a", 2048)
+	bulky := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"cmd":"` + pad + `"}}]}}` + "\n"
+	if _, err := io.WriteString(f, t705Enqueue+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	written := len(t705Enqueue) + 1
+	for written < minBytes {
+		n, err := io.WriteString(f, bulky)
+		if err != nil {
+			t.Fatal(err)
+		}
+		written += n
+	}
+	return path
+}
+
+func t705CloneFile(t *testing.T, src string) string {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "updates.jsonl")
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+func t705MedianDuration(ds []time.Duration) time.Duration {
+	if len(ds) == 0 {
+		return 0
+	}
+	cp := append([]time.Duration(nil), ds...)
+	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
+	return cp[len(cp)/2]
 }
 
 func repeat(line string, n int) []string {
