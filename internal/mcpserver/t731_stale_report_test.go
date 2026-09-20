@@ -248,7 +248,10 @@ func TestT747DifferentBodyStillDelivered(t *testing.T) {
 	s.notify(t731Worker, t731Report)
 	s.setFlight(t731Parent, FlightIdle)
 	s.notify(t731Worker, t731Report+" And a second, different finding.")
-	if len(parent.sent) != 2 {
-		t.Fatalf("parent deliveries=%d want 2: %v", len(parent.sent), parent.sent)
+	// The parent is busy after its first copy, so the second may sit in sendq
+	// rather than be sent; either way it was not suppressed. The identical-body
+	// test above is the arm that must see neither.
+	if got := len(parent.sent) + s.pendingAgentSends(t731Parent); got != 2 {
+		t.Fatalf("sent+queued=%d want 2 (sent=%d): %v", got, len(parent.sent), parent.sent)
 	}
 }
