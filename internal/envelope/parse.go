@@ -44,6 +44,8 @@ type Message struct {
 	FogKnown     []string
 	FogUnknown   []string
 	FogBlindspot []string
+	// GateRoles are declared roles for cited gate ids (🎯T722). Repeatable.
+	GateRoles []GateRole
 	// Extra holds unknown jevons: keys so a newer emitter is not refused.
 	Extra   map[string]string
 	Payload string
@@ -100,6 +102,7 @@ func (m *Message) SlotsFingerprint() string {
 		"phase=" + string(m.Phase),
 		ledgerFingerprint(m),
 		fogFingerprint(m),
+		gateRoleFingerprint(m),
 	}, "\n")
 }
 
@@ -336,6 +339,12 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 		if v := strings.TrimSpace(value); v != "" {
 			msg.FogBlindspot = append(msg.FogBlindspot, unquoteSlot(v))
 		}
+	case "gate-role", "gaterole":
+		r, err := parseGateRole(value)
+		if err != nil {
+			return err
+		}
+		msg.GateRoles = append(msg.GateRoles, r)
 	default:
 		msg.Extra[key] = value
 	}
@@ -438,6 +447,12 @@ func Format(m *Message) string {
 	}
 	for _, s := range m.FogBlindspot {
 		writeSlot(&b, "fog-blindspot", quoteIfNeeded(s))
+	}
+	for _, r := range m.GateRoles {
+		if r.ID == "" || r.Role == "" {
+			continue
+		}
+		writeSlot(&b, "gate-role", r.ID+" "+r.Role)
 	}
 	b.WriteString("```\n")
 	if p := strings.TrimLeft(m.Payload, "\n"); p != "" {

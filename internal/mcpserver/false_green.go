@@ -60,17 +60,16 @@ func FalseGreenFlags(report string) []gate.Flag {
 	if store := gateStore(); store != nil {
 		lookup = store.Lookup
 	}
-	body := report
 	var flags []gate.Flag
 	if m, err := envelope.Parse(report); m != nil {
-		if m.Payload != "" {
-			body = m.Payload
-		}
-		if err == nil && m.GateID != "" && m.Verdict.IsPass() {
+		if err == nil && m.GateID != "" && m.Verdict.IsPass() && !envelope.ControlIDs(report)[m.GateID] {
 			flags = append(flags, envelopeGateFlags(m.GateID, lookup)...)
 		}
 	}
-	return append(flags, gate.FlagFalseGreen(body, lookup)...)
+	// Full report, not payload-only: 🎯T722 gate-role slots live in the
+	// fence, and FlagFalseGreen reads them. GATE lines in the payload
+	// are still in this text.
+	return append(flags, gate.FlagFalseGreen(report, lookup)...)
 }
 
 func envelopeGateFlags(id string, lookup func(string) (*gate.Record, bool)) []gate.Flag {

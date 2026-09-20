@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // FlagKind names one way a finish report's green claim fails to hold up.
@@ -58,10 +60,11 @@ const (
 // The same record can play several parts. A red run is a contradiction when it
 // is offered as a pass, and a *result* when the report assigns it any other
 // honest role — proof that an oracle falsifies (🎯T443), evidence of inherited
-// breakage the worker disowns, or a defect the oracle caught and the worker
-// then fixed (🎯T472). The record cannot tell those apart: they are the same
-// run. Only the prose around the citation says which, so the role is read from
-// the report and the store is never consulted.
+// breakage the worker disowns, a defect the oracle caught and the worker then
+// fixed (🎯T472), or a red-before control isolating the commit as sole cause
+// of a green (🎯T722). The record cannot tell those apart: they are the same
+// run. The role is read from the report (prose, a -before name, or a
+// jevons: gate-role slot); the store is never consulted.
 type CitationRole string
 
 const (
@@ -84,6 +87,12 @@ const (
 	// caught a real defect, which the worker then fixed. Bannering these was
 	// 🎯T472's second named case (jv-t391-guard-all-paths).
 	RoleDefectCaught CitationRole = "defect_caught"
+	// RoleControl: the report cites the red as a before-state, a mutation
+	// check, or a rebased run isolating this commit as the sole cause of a
+	// green (🎯T722). Bannering these was ge-t191-ndk-discovery's defect: the
+	// checker fired four times on one correct report, and the rebased red
+	// that proved causality was what it called a failed pass.
+	RoleControl CitationRole = "control"
 )
 
 // Flag is one contradiction found in a finish report.
@@ -181,6 +190,32 @@ var defectCaughtFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
 	`\boracle caught\b`,
 }, "|"))
 
+// controlFramingRe matches a report identifying a red as a before-control
+// (🎯T722). Distinct from inherited "before my commit" / "not mine": the
+// worker is showing that this commit is why the green exists.
+var controlFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
+	`\bbefore-?gate\b`,
+	`\bbefore-?state\b`,
+	`\bred-before\b`,
+	`\brebase[d]?\b`,
+	`\bisolat(es|ing) (my |the )?commit\b`,
+	`\bsole cause\b`,
+	`\bmutation check\b`,
+	`\bparent commit\b`,
+	`\bon the parent\b`,
+}, "|"))
+
+// passLaunderingRe matches a window that claims THIS citation as a pass,
+// even when control framing or a -before name is present. Narrower than
+// greenClaimMarkers: a control's own justification says "green" about the
+// after-gate, and that must not cancel the role.
+var passLaunderingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
+	`\bcalling it (a )?pass`,
+	`\bunrelated flake\b`,
+	`\bevery oracle pass`,
+	`\bthe suite is green here`,
+}, "|"))
+
 // contextRadius is how far from a citation's own line the framing that gives
 // it a role may sit. Two lines covers the shapes workers actually write — a
 // label above the attestation, the quoted failure below it — without letting
@@ -190,20 +225,29 @@ const contextRadius = 2
 // ClassifyCitation reads what role a cited gate plays, from the report text
 // around it. window is that surrounding text; see citationWindow.
 //
-// The citation's own attestation line is removed before matching, so the
-// framing has to be prose the worker wrote about the run rather than the label
-// they gave it. Otherwise naming a gate "t443-prefix-red" would classify it,
-// and a role that a worker can assert by choosing a name is not a check.
+// Every attestation in the window is removed before matching — not only
+// this citation — so a same-line GREEN after-gate cannot make the RED
+// look like a pass claim, and so naming a gate "t443-prefix-red" still
+// classifies nothing. A -before name is applied later in honestRedRoles,
+// and only when the report also cites a GREEN (🎯T722).
 func ClassifyCitation(window string, c CitedAttestation) CitationRole {
-	framing := strings.ToLower(strings.ReplaceAll(window, c.Raw, " "))
-	// A window that also calls this gate a pass is not an honest non-pass role,
-	// whatever else it says. Refusing the exemption here is the safe direction:
+	framing := framingWithoutAttestations(window)
+	if passLaunderingRe.MatchString(framing) {
+		return RoleClaimedPass
+	}
+	// Control prose is classified before greenClaimMarkers: a control's
+	// job is to sit next to a green, and "sole cause of the green" is
+	// the load-bearing phrase ge-po's report used (🎯T722).
+	if controlFramingRe.MatchString(framing) {
+		return RoleControl
+	}
+	// A window that also calls this gate a pass is not an honest non-pass
+	// role, whatever else it says. Refusing the exemption here is the safe
+	// direction for falsification / inherited / defect (🎯T443 / 🎯T472):
 	// the cost is a banner on a confusingly worded honest report, and the
 	// alternative is a green laundered through the word "red".
-	for _, m := range greenClaimMarkers {
-		if strings.Contains(framing, m) {
-			return RoleClaimedPass
-		}
+	if hasGreenClaim(framing) {
+		return RoleClaimedPass
 	}
 	if removalFramingRe.MatchString(framing) && failureFramingRe.MatchString(framing) {
 		return RoleFalsification
@@ -217,11 +261,31 @@ func ClassifyCitation(window string, c CitedAttestation) CitationRole {
 	return RoleClaimedPass
 }
 
+func framingWithoutAttestations(window string) string {
+	return strings.ToLower(attestationRe.ReplaceAllString(window, " "))
+}
+
+func hasGreenClaim(framing string) bool {
+	for _, m := range greenClaimMarkers {
+		if strings.Contains(framing, m) {
+			return true
+		}
+	}
+	return false
+}
+
+func isControlName(name string) bool {
+	n := strings.ToLower(name)
+	return strings.HasSuffix(n, "-before") ||
+		strings.HasSuffix(n, "-before-rebased") ||
+		strings.HasSuffix(n, "-control")
+}
+
 // isHonestNonPass reports whether role is one of the citations that must not
 // draw a FALSE-GREEN banner: the red is doing a job other than "my work passed".
 func isHonestNonPass(role CitationRole) bool {
 	switch role {
-	case RoleFalsification, RoleInherited, RoleDefectCaught:
+	case RoleFalsification, RoleInherited, RoleDefectCaught, RoleControl:
 		return true
 	default:
 		return false
@@ -252,8 +316,8 @@ func citationWindow(lines []string, isAttestation map[int]bool, i int) (start, e
 
 // honestRedRoles reports which cited attestations a report offers in a role
 // other than "my work passed" — falsification proof (🎯T443), inherited
-// breakage, or a defect the oracle caught (🎯T472) — and which lines their
-// framing occupies.
+// breakage, a defect the oracle caught (🎯T472), or a red-before control
+// (🎯T722) — and which lines their framing occupies.
 //
 // The line set matters as much as the citation set: the quoted failure that IS
 // the demonstration sits in the same neighbourhood as the citation, so flagging
@@ -263,11 +327,17 @@ func citationWindow(lines []string, isAttestation map[int]bool, i int) (start, e
 // Citations are located per line rather than searched for across the whole
 // report, so an attestation wrapped across a line break is simply never exempt
 // — the conservative answer, and the one that cannot be arranged deliberately.
-func honestRedRoles(lines []string) (exempt map[string]bool, framingLines map[int]bool) {
+func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string]bool, framingLines map[int]bool) {
 	isAttestation := make(map[int]bool, len(lines))
+	hasGreen := false
 	for i, ln := range lines {
 		if attestationRe.MatchString(ln) {
 			isAttestation[i] = true
+		}
+		for _, c := range ParseAttestations(ln) {
+			if c.Verdict.IsGreen() && c.StatusIsZero() {
+				hasGreen = true
+			}
 		}
 	}
 	exempt, framingLines = map[string]bool{}, map[int]bool{}
@@ -277,6 +347,7 @@ func honestRedRoles(lines []string) (exempt map[string]bool, framingLines map[in
 		}
 		start, end := citationWindow(lines, isAttestation, i)
 		window := strings.Join(lines[start:end+1], "\n")
+		framing := framingWithoutAttestations(window)
 		for _, c := range ParseAttestations(lines[i]) {
 			// A green citation is never exempt: it is not flagged in the first
 			// place, and a pre-fix run that PASSED is a finding, not a proof.
@@ -289,7 +360,22 @@ func honestRedRoles(lines []string) (exempt map[string]bool, framingLines map[in
 			if c.Verdict.IsKilled() {
 				continue
 			}
-			if !isHonestNonPass(ClassifyCitation(window, c)) {
+			role := ClassifyCitation(window, c)
+			// 🎯T722: a -before name or a declared gate-role slot upgrades
+			// the default claimed_pass, not a window that already claims
+			// this citation as a pass. Name-alone with no GREEN in the
+			// report stays a claimed pass (a control is evidence for a
+			// pass; only-RED is still flagged).
+			if role == RoleClaimedPass &&
+				(declared[c.ID] || isControlName(c.Name)) &&
+				!passLaunderingRe.MatchString(framing) &&
+				!hasGreenClaim(framing) {
+				role = RoleControl
+			}
+			if role == RoleControl && !hasGreen {
+				continue
+			}
+			if !isHonestNonPass(role) {
 				continue
 			}
 			exempt[c.Raw] = true
@@ -340,7 +426,7 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	var flags []Flag
 	lines := strings.Split(text, "\n")
 	cited := ParseAttestations(text)
-	exempt, framingLines := honestRedRoles(lines)
+	exempt, framingLines := honestRedRoles(lines, envelope.ControlIDs(text))
 	claimsGreen := claimsGreenPass(lower)
 
 	// Attestation checks first: a cited record is the strongest evidence
