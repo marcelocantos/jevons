@@ -1620,7 +1620,11 @@ body.rhs-resizing-row { cursor: row-resize; }
   display: block;
   width: 100%;
   height: 28px;
-  overflow: hidden;
+  /* 🎯T687: the current-value mark is painted in front of the plot and
+     may sit on an edge — at 100% used it straddles the top frame — so the
+     box must not clip it. The line's own coordinates are inside the box
+     by construction, so nothing else escapes. */
+  overflow: visible;
   /* 🎯T671: the plot extents read as a white card with a grey frame — the
      old tint was a shade off the tip's own background and barely there. */
   box-sizing: border-box;
@@ -1631,10 +1635,15 @@ body.rhs-resizing-row { cursor: row-resize; }
   /* The published period × usage 0–100 box (🎯T671). */
   fill: #fff;
 }
+.plan-tip-table td.plan-burn {
+  /* One source for the sparkline's weight: the line uses it, the
+     current-value mark is 1.5× it (🎯T687). */
+  --plan-burn-line-width: 1.5px;
+}
 .plan-tip-table td.plan-burn .plan-burn-line {
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.5;
+  stroke-width: var(--plan-burn-line-width);
   vector-effect: non-scaling-stroke;
   /* 🎯T686: round caps are what let one reading paint as a dot. A
      zero-length segment with butt caps renders nothing, which is why a
@@ -1644,6 +1653,18 @@ body.rhs-resizing-row { cursor: row-resize; }
      on a dense week. */
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+/* 🎯T687: the reading as it stands now. A zero-length segment with a
+   round cap paints a dot of the stroke's own width, and a non-scaling
+   stroke keeps it circular under a viewBox scaled unequally on the two
+   axes — a <circle> would come out an ellipse. Subtle on purpose: half
+   again the line, enough to find, not enough to shout. */
+.plan-tip-table td.plan-burn .plan-burn-now {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: calc(var(--plan-burn-line-width) * 1.5);
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
 }
 
 /* 🎯T588.1: the provider mark is a column head, not a picture. CompanyMark

@@ -2,17 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useId } from 'react';
-import { burnPaths, burnStops, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
+import { burnPaths, burnStops, currentMark, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 /**
- * Tiny area sparkline for one tooltip column (🎯T634 / T637). Plot frame
- * always paints. 🎯T667: when the daemon stamps a band on each sample, the
+ * Tiny sparkline for one tooltip column (🎯T634 / T637). Plot frame
+ * always paints, and the current reading always carries a mark (🎯T687). 🎯T667: when the daemon stamps a band on each sample, the
  * line and fill shift colour along the period through a horizontal gradient;
  * without bands the chart keeps its single inherited pace colour.
  */
 export function BurnChart(props: { window: PlanWindow }) {
   const spec = burnPaths(props.window);
+  // 🎯T687: the current reading is its own mark, drawn last so it sits in
+  // front of the line and outside the plot's clip, whole even when the
+  // value lands on an edge.
+  const mark = currentMark(props.window);
   const stops = spec ? burnStops(props.window) : [];
   const gradId = 'plan-burn-grad-' + useId().replace(/[^A-Za-z0-9_-]/g, '');
   const paint = stops.length ? `url(#${gradId})` : undefined;
@@ -40,6 +44,7 @@ export function BurnChart(props: { window: PlanWindow }) {
         height={BURN_HEIGHT}
       />
       {spec ? <path className="plan-burn-line" d={spec.line} style={paint ? { stroke: paint } : undefined} /> : null}
+      {mark ? <path className="plan-burn-now" d={mark} style={paint ? { stroke: paint } : undefined} /> : null}
     </svg>
   );
 }

@@ -180,11 +180,8 @@ describe('burn-down row (🎯T634)', () => {
     expect(plot?.getAttribute('height')).toBe('32');
     const line = svg?.querySelector('path.plan-burn-line')?.getAttribute('d') || '';
     expect(line.startsWith('M')).toBe(true);
-    // One lineto per stored sample, and the opening moveto repeats the
-    // first of them so the path always carries a segment (🎯T686). No
-    // sample is fabricated: two in, two drawn.
-    expect(line.match(/L/g)).toHaveLength(2);
-    expect(line.startsWith('M1.2,25.6 L1.2,25.6')).toBe(true);
+    // Two samples in, two drawn, nothing fabricated.
+    expect(line.split(/[ML]/).filter(Boolean)).toHaveLength(2);
 
     const blank = render(<PlanTipTable groups={empty} nowMs={NOW} timeZone="UTC" />);
     const emptySvg = blank.container.querySelector('td.plan-burn svg.plan-burn-svg');

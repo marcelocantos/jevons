@@ -18,9 +18,16 @@
  * zero-length stroke with butt caps paints nothing and the cell looked
  * empty. That is a painting problem wearing a geometry costume: it bought
  * a stem band, a minimum width, a lone-sample branch and finally a
- * flat-cluster branch, and it drew a bar where the data was a point. Round
- * caps paint a zero-length segment as a dot, which is what one reading is,
- * so every series — one sample or a thousand — is the same polyline.
+ * flat-cluster branch, and it drew a bar where the data was a point.
+ *
+ * 🎯T687: the current value is drawn as its own mark, always, in front of
+ * the line. That is what makes the line's own degeneracy uninteresting —
+ * a one-sample series shows its dot and an empty line, exactly as a
+ * thousand-sample series shows its dot at the end of a long line, so
+ * nothing anywhere reasons about how many samples there are. The mark is
+ * painted outside the clipped plot so a reading at an extreme is whole
+ * rather than sliced by the frame, which also retires the inset the
+ * earlier fix needed: values plot where they actually fall.
  */
 
 import { paceClassForBand } from './pace';
@@ -29,8 +36,7 @@ import type { PlanHistoryPoint, PlanWindow } from './tickerGroups';
 
 export const BURN_WIDTH = 100;
 export const BURN_HEIGHT = 32;
-/** Keep every drawn value inside the viewBox, off the cell border. */
-const BURN_EDGE_INSET = 1;
+
 
 export type BurnPoint = { x: number; y: number };
 
@@ -81,30 +87,12 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
   if (!(span > 0)) return [];
   return samples.map((p) => {
     const at = Date.parse(p.at);
-    // Hold both axes inside the box (🎯T637 / 🎯T685): a sample on the
-    // period boundary or at an extreme value would otherwise be painted
-    // half outside the viewBox, on the cell border, and read as absent.
-    const x = clamp(
-      (100 * (at - period.start)) / span,
-      BURN_EDGE_INSET,
-      BURN_WIDTH - BURN_EDGE_INSET,
-    );
+    const x = clamp((100 * (at - period.start)) / span, 0, BURN_WIDTH);
     // The API publishes remaining; the chart plots usage (🎯T670). Derived
     // here in full rather than folded into one inverted expression, so the
     // next reader sees the quantity the axis claims to show.
     const used = 100 - clamp(p.remaining_percent, 0, 100);
-    // 🎯T685: hold the value inside the box the way x already is. A
-    // fully spent window plots at usage 100, which is y=0 — the top
-    // border — so the stroke straddles the edge, half of it clipped, and
-    // the chart reads as empty. Fable at 100% used showed nothing at all.
-    // The same is true of an untouched window at y=BURN_HEIGHT. One unit
-    // of inset out of 32 is invisible as distortion and is the
-    // difference between a reading and a blank cell.
-    const y = clamp(
-      BURN_HEIGHT - (BURN_HEIGHT * used) / 100,
-      BURN_EDGE_INSET,
-      BURN_HEIGHT - BURN_EDGE_INSET,
-    );
+    const y = BURN_HEIGHT - (BURN_HEIGHT * used) / 100;
     return { x, y };
   });
 }
@@ -112,16 +100,27 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
 export function burnPaths(w: PlanWindow): BurnPaths | null {
   const points = burnPoints(w);
   if (!points.length) return null;
-  // Every sample is a lineto, including the first, so the path always
-  // contains at least one segment. A lone reading is then a zero-length
-  // segment, which round caps paint as a dot (🎯T686); on a dense series
-  // that first segment is invisible under the line. One rule, no branch:
-  // a moveto by itself draws nothing at all, which is the trap the old
-  // stem was built to avoid.
-  const line =
-    `M${round(points[0].x)},${round(points[0].y)} ` +
-    points.map((p) => `L${round(p.x)},${round(p.y)}`).join(' ');
+  const line = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
+    .join(' ');
   return { line, points };
+}
+
+/**
+ * The current reading, as a zero-length segment for the marker path
+ * (🎯T687). Null when there is nothing to mark.
+ *
+ * A zero-length segment with a round cap is a circle of the stroke's own
+ * width, which is why the mark is a path and not a <circle>: the viewBox
+ * is scaled unequally on the two axes, so a circle element would paint as
+ * an ellipse, while a non-scaling stroke is in screen pixels and stays
+ * round wherever the column lands.
+ */
+export function currentMark(w: PlanWindow): string | null {
+  const points = burnPoints(w);
+  if (!points.length) return null;
+  const last = points[points.length - 1];
+  return `M${round(last.x)},${round(last.y)} L${round(last.x)},${round(last.y)}`;
 }
 
 function round(n: number): string {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { burnPaths, burnPoints, periodBounds, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
+import { burnPaths, burnPoints, currentMark, periodBounds, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 const START = Date.parse('2026-09-01T00:00:00Z');
@@ -71,61 +71,51 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     expect(spec?.points[0].y).toBeGreaterThan(spec!.points[1].y);
   });
 
-  it('paints a single sample as a dot, inside the box (🎯T686)', () => {
+  it('leaves a lone sample to the current-value mark (🎯T687)', () => {
     const mid = new Date(START + WEEK * 1000 * 0.25).toISOString();
-    const spec = burnPaths(
-      win({
-        history: [{ at: mid, remaining_percent: 71 }],
-      }),
-    );
-    // 🎯T686 removed the synthesised stem. One reading is one point: the
-    // path is a zero-length segment, which round caps paint as a dot.
-    // The old behaviour drew a bar down to the baseline, which claimed a
-    // climb the data never showed.
-    expect(spec?.line).toBe('M25,22.7 L25,22.7');
-    expect(spec?.line).not.toContain(',' + BURN_HEIGHT);
-    const ext = lineExtent(spec!.line);
-    expect(ext.x0).toBe(ext.x1);
-    expect(ext.x0).toBeGreaterThan(0);
+    const w = win({ history: [{ at: mid, remaining_percent: 71 }] });
+    const spec = burnPaths(w);
+    // The line for one sample is a bare moveto, which paints nothing at
+    // all — and that is fine, because the reading is carried by its own
+    // mark. Nothing here counts samples or synthesises a shape.
+    expect(spec?.line).toBe('M25,22.7');
+    expect(currentMark(w)).toBe('M25,22.7 L25,22.7');
   });
 
-  it('keeps a just-reset cluster off the cell border (🎯T637 / 🎯T686)', () => {
+  it('plots a just-reset cluster where it falls, at the period start (🎯T687)', () => {
     const a = new Date(START).toISOString();
     const b = new Date(START + 5 * 60_000).toISOString();
-    const spec = burnPaths(
-      win({
-        remaining_percent: 100,
-        history: [
-          { at: a, remaining_percent: 100 },
-          { at: b, remaining_percent: 100 },
-        ],
-      }),
-    );
+    const w = win({
+      remaining_percent: 100,
+      history: [
+        { at: a, remaining_percent: 100 },
+        { at: b, remaining_percent: 100 },
+      ],
+    });
+    const spec = burnPaths(w);
     expect(spec?.points).toHaveLength(2);
-    // The samples sit on the period start, but nothing is drawn on the
-    // border: the inset holds them inside the box, so the mark is a dot
-    // just inside the left edge rather than a sliver on it. No stem is
-    // synthesised to make it visible (🎯T686).
-    const ext = lineExtent(spec!.line);
-    expect(ext.x0).toBeGreaterThan(0);
-    expect(ext.x1).toBeLessThan(BURN_WIDTH);
-    expect(spec!.line).not.toContain(',' + BURN_HEIGHT);
+    // No inset and no stem: the samples sit on the period start because
+    // that is when they were taken. The mark is drawn in front of the
+    // plot and outside its clip, so sitting on the edge costs nothing.
+    expect(spec!.points[0].x).toBe(0);
+    // 100% remaining is 0% used, so the mark sits in the bottom-left
+    // corner: the true position of an untouched, just-reset week.
+    expect(currentMark(w)).toBe('M0,32 L0,32');
   });
 
-  it('holds a value at either end of the period inside the box (🎯T686)', () => {
-    const atStart = burnPaths(
-      win({ history: [{ at: new Date(START).toISOString(), remaining_percent: 100 }] }),
-    );
-    const atEnd = burnPaths(
-      win({
-        history: [{ at: new Date(START + WEEK * 1000).toISOString(), remaining_percent: 0 }],
-      }),
-    );
-    for (const spec of [atStart, atEnd]) {
-      const ext = lineExtent(spec!.line);
-      expect(ext.x0).toBeGreaterThan(0);
-      expect(ext.x1).toBeLessThan(BURN_WIDTH);
-    }
+  it('marks a value at either extreme without moving it (🎯T687)', () => {
+    const atStart = win({
+      history: [{ at: new Date(START).toISOString(), remaining_percent: 100 }],
+    });
+    const atEnd = win({
+      history: [{ at: new Date(START + WEEK * 1000).toISOString(), remaining_percent: 0 }],
+    });
+    // Untouched at the very start of the period: bottom-left corner.
+    expect(burnPoints(atStart)[0]).toEqual({ x: 0, y: BURN_HEIGHT });
+    // Fully spent at the very end: top-right corner. Both are true
+    // positions, not nudged inward to survive a clip.
+    expect(burnPoints(atEnd)[0]).toEqual({ x: BURN_WIDTH, y: 0 });
+    expect(currentMark(atEnd)).toBe('M100,0 L100,0');
   });
 });
 
