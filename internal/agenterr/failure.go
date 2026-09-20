@@ -19,6 +19,7 @@ import (
 //   - auth: 401 / 403 / API key / unauthorized
 //   - client_bug: local config, wire, session, bad request
 //   - startup_stall: ready timeout over startup notices only, no composer (🎯T565)
+//   - workspace_trust: ready timeout on Claude Code's trust modal (🎯T709)
 //   - unknown: classified as failure but not mapped
 //   - none: empty / not a failure signal (including busy)
 type Class string
@@ -77,6 +78,13 @@ func ClassifyText(msg string) Class {
 	// Busy is not a provider failure.
 	if isBusyMessage(low) {
 		return ClassNone
+	}
+
+	// 🎯T709: a launch whose pane is Claude Code's workspace-trust modal.
+	// Ahead of the stall check because claudia reports it as no_composer,
+	// and a stall says "retried" — which is the wrong answer here.
+	if IsWorkspaceTrust(s) {
+		return ClassWorkspaceTrust
 	}
 
 	// 🎯T565: a launch that timed out on startup output alone, before any
@@ -161,6 +169,8 @@ func OwnerCopy(class Class, raw string) string {
 	case ClassClientBug:
 		return "Local client/session error (client_bug). Fix config, session, or wire state; not a cloud outage. " +
 			detailSuffix(raw)
+	case ClassWorkspaceTrust:
+		return workspaceTrustCopy(raw)
 	case ClassStartupStall:
 		switch namedReadyReason(raw) {
 		case "rc_connecting":

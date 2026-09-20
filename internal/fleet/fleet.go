@@ -469,6 +469,11 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 		return err
 	}
 
+	// 🎯T709: answer Claude Code's per-workdir trust question before the
+	// process reads its config, so the seat cannot be born behind a modal
+	// no tmux pane can clear. Never fails the launch — see preflightTrust.
+	f.preflightTrust(t.ID)
+
 	// 🎯T426: a rotation replaces the process object while the name, the
 	// registry row and the workdir all stay put, so nothing downstream can
 	// tell that this is a different conversation. The host is bracketed
