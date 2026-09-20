@@ -1112,6 +1112,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		if reps := args.Server.sweepDeadAccountedWith(overseer, args.Server.fleetIntent()); len(reps) > 0 {
 			slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
 		}
+		args.Server.sweepBornStuck()
 		args.Server.TriggerIdlePressureSweep()
 		// 🎯T392.2: deliver any digests whose window has elapsed. Driven
 		// from the sweep that generates the events rather than its own

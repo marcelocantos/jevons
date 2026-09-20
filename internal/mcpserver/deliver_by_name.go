@@ -156,9 +156,10 @@ func (s *Server) deliverByNameAs(actor, name, text string, origin SendOrigin, in
 }
 
 // deliverByNameWith is deliverByNameAs with the confirmation owner named.
-func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, interrupt bool, confirm sendConfirmation) (agentSendResult, error) {
+func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, interrupt bool, confirm sendConfirmation) (res agentSendResult, err error) {
 	name = strings.TrimSpace(name)
 	actor = strings.TrimSpace(actor)
+	defer func() { s.observeBirthAcceptance(name, res, err) }()
 	if name == "" || strings.TrimSpace(text) == "" {
 		return agentSendResult{}, fmt.Errorf("name and text are required")
 	}

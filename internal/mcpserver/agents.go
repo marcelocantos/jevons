@@ -144,6 +144,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
 	// (and overseer notify), not only logs.
 	reps := s.sweepDeadAccounted()
+	// 🎯T679.2: the same birth check the periodic health hook runs, so a
+	// list call is sufficient to mark and notify but is not required.
+	s.sweepBornStuck()
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)
@@ -168,17 +171,17 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 
 	var b strings.Builder
 	for _, d := range defs {
-		proc := s.registry.Get(d.Name)
-		alive := proc != nil && proc.Alive()
+		alive := s.seatAlive(d.Name)
 		// 🎯T305: zero-turn live seats are never_briefed, not running.
 		// 🎯T444: and the seat's own session records break the tie, because
 		// both of the other inputs go stale across a backend re-mint.
 		status := s.agentPhase(d, alive)
 		// 🎯T599: a seat whose held sendq cannot be delivered is PINNED, not
 		// ordinary running/idle — nothing else tells a caller the seat cannot
-		// be moved by its parent.
+		// be moved by its parent. 🎯T679.2: born-stuck stays in the status
+		// column; PINNED remains on the annotation line beside it.
 		pin, pinned := s.sendqPinFor(d.Name)
-		if pinned {
+		if pinned && status != AgentStatusBornStuck {
 			status = "PINNED"
 		}
 		parent := d.Parent
@@ -191,6 +194,10 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		}
 		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s %s (session: %s)\n",
 			d.Name, status, purpose, s.roleDisplay(d), parent, d.WorkDir, sessionDisplay(d.SessionID))
+		if status == AgentStatusBornStuck {
+			diag := s.diagnoseBirth(d, s.birthClock())
+			fmt.Fprintf(&b, "  ^ %s\n", FormatBornStuckLine(d, diag.Elapsed))
+		}
 		if pinned {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
 		}

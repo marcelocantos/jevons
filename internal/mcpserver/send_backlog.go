@@ -86,6 +86,7 @@ func (s *Server) SetSendQueueDir(stateDir string) {
 	s.mu.Lock()
 	s.agentSendQ = sendq.NewStore(dir)
 	s.mu.Unlock()
+	s.setBirthStoreDir(stateDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		slog.Error("send queue unavailable: state directory unusable; enqueue will fail",
 			"component", "agent_send", "dir", dir, "err", err)

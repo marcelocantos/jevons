@@ -248,6 +248,15 @@ type Server struct {
 	// simulated run costs no wall time (🎯T582). Nil = time.Now.
 	sweepNow func() time.Time
 
+	// birthNow is the 🎯T679.2 birth-monitor clock. Nil = time.Now.
+	birthNow func() time.Time
+	// birthRoots overrides DefaultSessionRoots for hermetic existence lookups.
+	birthRoots *discovery.Roots
+	// seatAliveFn overrides process aliveness for hermetic list/sweep tests.
+	seatAliveFn func(string) bool
+	// birthStore is the durable accepted-prompt + notice-key ledger (🎯T679.2).
+	birthStore *birthLedger
+
 	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
 	eventLogTail EventLogTailFunc
 	// eventLogger dual-writes server lifecycle events via HTTP Server.LogEvent

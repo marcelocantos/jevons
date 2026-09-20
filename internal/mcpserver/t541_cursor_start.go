@@ -120,19 +120,24 @@ func (s *Server) submitCursorStartBrief(name, prompt string) error {
 	if err := s.recordAgentRequest(name, text, OriginAgent); err != nil {
 		return err
 	}
+	var sendErr error
 	if s != nil && s.cursorSubmit != nil {
-		return s.cursorSubmit(name, text)
-	}
-	if s == nil || s.registry == nil {
+		sendErr = s.cursorSubmit(name, text)
+	} else if s == nil || s.registry == nil {
 		return fmt.Errorf("no agent registry")
+	} else {
+		proc := s.registry.Get(name)
+		if proc == nil || !proc.Alive() {
+			return fmt.Errorf("no bound cursor-agent for %q", name)
+		}
+		// ACP session/prompt is fire-and-forget: do not wait for turn
+		// confirmation (that is what hung the start RPC).
+		sendErr = proc.Send(text)
 	}
-	proc := s.registry.Get(name)
-	if proc == nil || !proc.Alive() {
-		return fmt.Errorf("no bound cursor-agent for %q", name)
+	if sendErr == nil {
+		s.observeBirthAcceptance(name, agentSendResult{Status: "sent"}, nil)
 	}
-	// ACP session/prompt is fire-and-forget: do not wait for turn
-	// confirmation (that is what hung the start RPC).
-	return proc.Send(text)
+	return sendErr
 }
 
 func (s *Server) composeStartBrief(name, prompt string) string {

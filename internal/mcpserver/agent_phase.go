@@ -177,6 +177,9 @@ func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
 	if alive && s.checkpointResumePendingFor(d.Name) {
 		return AgentStatusCheckpointed
 	}
+	if alive && s.seatIsBornStuck(d) {
+		return AgentStatusBornStuck
+	}
 	return ClassifyAgentPhase(alive, s.agentHasTurnBegan(d.Name), d.Materialized,
 		ReadSessionEvidence(d.Provider, d.SessionID, d.WorkDir))
 }
