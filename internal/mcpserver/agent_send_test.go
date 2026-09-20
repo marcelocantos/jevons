@@ -143,7 +143,7 @@ func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
 	if res.Queued != 1 {
 		t.Fatalf("queued=%d", res.Queued)
 	}
-	if !strings.Contains(res.Message, "queued") || !strings.Contains(res.Message, "interrupt=true") {
+	if !strings.Contains(res.Message, "queued") || !strings.Contains(res.Message, "mode=interrupt") {
 		t.Fatalf("message should describe recovery, got %q", res.Message)
 	}
 	if len(fs.sent) != 0 {

@@ -200,7 +200,7 @@ The send path now reports what it **observed of the agent**, in four answers:
 |---|---|---|
 | `sent` | The payload appeared in the receiver's transcript as a user message. It became a turn. | Nothing. |
 | `queued` | A turn was already running. The daemon holds the message itself and delivers it on the next turn boundary — it is **not** pasted into a composer that could merge or destroy it. | Nothing. |
-| `delivered_unconfirmed` | Handed over, not seen to land, and the daemon does not know whether a turn was already running (that record does not survive a restart). | Treat as **undelivered** until the agent acts. |
+| `delivered_unconfirmed` | Handed over, not seen to land, and the daemon does not know whether a turn was already running (that record does not survive a restart). | Resolve it by **reading** (`jevons_transcript_read`: a user message carrying the payload means it landed), or wait for the turn boundary. **Never stop, kill or re-send** on this verdict — `jevons_agent_stop` / `jevons_agent_kill` refuse it without `force=true` (🎯T664). A seat is stopped only for a reason you can state. |
 | error: *not submitted* | The agent was known idle and the payload never became a turn. It is sitting in that agent's composer. | Do not re-send — that stacks a second copy. |
 
 **Never** read a `not submitted` error as a provider refusal, a spend limit, or
@@ -853,6 +853,36 @@ reviewed map: docs/audits/react-fidelity-2026-09-05/. 🎯T540.3/🎯T540.7 reta
 unfinished fidelity independently of retirement. Main and sidebar share
 AgentInteraction and main-derived behavior; do not recreate the old sidebar
 fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP.
+
+## Clean-checkout web gate (🎯T398 / 🎯T659)
+
+Green in the shared clone is not green on master: many workers share one
+working copy, so `make test-web` run there reads everyone's uncommitted
+edits, and a suite held green by WIP is red for a fresh clone, a CI runner,
+and the next worker to check master out. Before calling a web change done,
+run the sanctioned recipe:
+
+```bash
+make test-web-clean            # verifies HEAD
+make test-web-clean SHA=abc123 # verifies a named commit
+```
+
+It checks the commit out into a detached worktree, runs `make test-web`
+there under `bin/gate` (cite the `GATE test-web-clean … tree=clean@<sha>`
+line), installs ui deps **inside that tree** with `npm ci`, and removes the
+tree behind a foreign-symlink guard; the shared `ui/node_modules` is hashed
+before and after and any difference fails the run even when the suite was
+green.
+
+Do **not** hand-roll the worktree with `ui/node_modules` symlinked into the
+shared clone. On 2026-09-15 that link let `make ui-deps` re-run `npm ci`
+through it — the fresh checkout's lockfile was newer than the linked vitest
+— and the shared install (171 packages) was emptied twice in one slice;
+`rm -rf <link>/` with a trailing slash does the same. Every neighbour
+running vitest at the time would have gone red for someone else's cleanup.
+Ratchets: `TestT398CleanCheckoutWebTestsPass`,
+`TestT659RemovalPathSparesSymlinkedNodeModules` in `scripts/docratchet`.
+Same shared-clone family as 🎯T376 / 🎯T377.
 
 ## Configuration
 

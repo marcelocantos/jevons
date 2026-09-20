@@ -13,7 +13,7 @@
 import { now } from '../clock';
 import { formatWindow } from './pace';
 import { CompanyMark, companyOfProvider } from './companyMark';
-import { formatInstantParts } from './tickerGroups';
+import { formatInstantParts, usedPercentOf } from './tickerGroups';
 import type { PlanWindow, TickerGroup } from './tickerGroups';
 import { BurnChart } from './BurnChart';
 
@@ -34,7 +34,11 @@ export type TipColumn = {
 export type TipHeaderGroup = { provider: string; columns: TipColumn[] };
 
 /** week reads better than weekly in a two-row header; the row is narrow. */
-export function windowLabel(name: string): string {
+export function windowLabel(name: string, model?: string | null): string {
+  // 🎯T682: a per-model window is headed by the model's own name, which
+  // is what the owner reads it as ("Fable"), not by its period.
+  const m = String(model || '').trim();
+  if (m) return m;
   const n = String(name || '').toLowerCase();
   if (n === 'weekly') return 'week';
   if (n === 'monthly') return 'month';
@@ -52,7 +56,7 @@ export function tipColumns(groups: TickerGroup[]): TipHeaderGroup[] {
     if (!g.available) continue;
     const columns = (g.windows || []).map((w) => ({
       provider: g.provider,
-      label: windowLabel(w.name || ''),
+      label: windowLabel(w.name || '', w.model),
       window: w,
     }));
     if (columns.length) out.push({ provider: g.provider, columns });
@@ -101,6 +105,27 @@ export function timeLeft(w: PlanWindow, nowMs: number): string {
  * enough out to show it today, which is exactly why the rule is written
  * from the data rather than from the current fleet.
  */
+/** Below this many minutes left, the minutes are the interesting part. */
+export const MINUTES_SPAN_CUTOFF = 90;
+/** From this many hours left, hours stop being a quantity anyone reads. */
+export const DAYS_SPAN_CUTOFF_HOURS = 3 * HOURS_PER_DAY;
+
+/**
+ * 🎯T670 / 🎯T672: how long is left, in the coarsest unit that is still
+ * honest — whole days from three days out, where "622h" stops being a
+ * quantity anyone reads; whole hours below that; and minutes only once the
+ * hour itself is the interesting part (under 90m, where "2h" would round
+ * away most of what is left).
+ */
+export function remainingSpan(ms: number): string {
+  const minutes = ms / (SECONDS_PER_MINUTE * 1000);
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0m';
+  if (minutes < MINUTES_SPAN_CUTOFF) return Math.max(1, Math.round(minutes)) + 'm';
+  const hours = minutes / MINUTES_PER_HOUR;
+  if (hours >= DAYS_SPAN_CUTOFF_HOURS) return Math.round(hours / HOURS_PER_DAY) + 'd';
+  return Math.round(hours) + 'h';
+}
+
 export function rolloverCell(
   iso: string | null | undefined,
   nowMs: number,
@@ -115,29 +140,43 @@ export function rolloverCell(
     ? { timeZone, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }
     : { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
   try {
-    return formatInstantParts(at, opts);
+    return formatInstantParts(at, opts) + ' ' + remainingSpan(at.getTime() - nowMs);
   } catch {
     return '—';
   }
 }
 
-/** Providers the feed could not answer for; shown under the table, not dropped. */
-export function unavailableNotes(groups: TickerGroup[]): string[] {
+/**
+ * Providers the feed could not answer for; shown under the table, not
+ * dropped. 🎯T681: when the provider did answer earlier in the session,
+ * the note carries that reading and its age — the honest thing to say is
+ * "this is what it last was, and that was a while ago", never a fresh
+ * looking zero.
+ */
+export function unavailableNotes(groups: TickerGroup[], nowMs?: number): string[] {
+  const at = nowMs ?? now();
   return groups
     .filter((g) => !g.available)
-    .map((g) => `${g.provider}: unavailable — ${g.reason || 'no plan-remaining published'}`);
+    .map((g) => {
+      const head = `${g.provider}: no reading — ${g.reason || 'no plan-remaining published'}`;
+      if (!g.last || !g.last.windows.length) return head;
+      const figures = g.last.windows
+        .map((w) => `${windowLabel(w.name || '', w.model)} ${pct(usedPercentOf(w))}`)
+        .join(', ');
+      return `${head} (last ${humanDuration((at - g.last.at) / 1000)} ago: ${figures})`;
+    });
 }
 
 export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; timeZone?: string }) {
   const nowMs = props.nowMs ?? now();
   const header = tipColumns(props.groups);
-  const notes = unavailableNotes(props.groups);
+  const notes = unavailableNotes(props.groups, nowMs);
   if (!header.length) {
     return <div className="plan-tip-empty">{notes.join('\n') || 'Plan remaining unavailable'}</div>;
   }
   const cols = header.flatMap((h) => h.columns);
   const multi = (h: TipHeaderGroup) => h.columns.length > 1;
-  // The available figure carries the same pace class the bar's fill does,
+  // The usage figure carries the same pace class the bar's fill does,
   // so the number and the bar above it say the same thing in the same
   // colour (🎯T588.2). Reusing formatWindow rather than re-deriving the
   // class is the point: two sources would drift and the tooltip would
@@ -193,13 +232,13 @@ export function PlanTipTable(props: { groups: TickerGroup[]; nowMs?: number; tim
           </tr>
         </thead>
         <tbody>
+          {/* 🎯T670: usage leads and carries the pace colour — the same
+              quantity the gauge fills with and every harness reports. */}
           {row(
-            'available',
-            (c) => pct(c.window.remaining_percent),
+            'usage',
+            (c) => pct(usedPercentOf(c.window)),
             (c) => ('plan-avail ' + paceClass(c)).trim(),
           )}
-          {row('time left', (c) => timeLeft(c.window, nowMs))}
-          {row('consumed', (c) => pct(c.window.used_percent))}
           {row('rollover', (c) => rolloverCell(c.window.resets_at, nowMs, props.timeZone))}
           <tr>
             <th scope="row">burn</th>

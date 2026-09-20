@@ -62,7 +62,9 @@ func TestT583ExhaustedOrBlockedClaudeIsNotEligible(t *testing.T) {
 	}{
 		{"weekly zero", t583Backend("claude", t583pf(0), t583pf(80), now), "exhausted"},
 		{"session zero", t583Backend("claude", t583pf(60), t583pf(0), now), "exhausted"},
-		{"rate limited", Backend{Provider: "claude", Status: StatusUnavailable, Reason: "429 rate_limit", FetchedAt: now}, "exhausted"},
+		// 🎯T677: still ineligible, but for the honest reason — we could
+		// not read it, which is "blocked", not a claim that it is spent.
+		{"rate limited", Backend{Provider: "claude", Status: StatusUnavailable, Reason: "429 rate_limit", FetchedAt: now}, "blocked"},
 		{"signed out", Backend{Provider: "claude", Status: StatusUnavailable, Reason: "not signed in", FetchedAt: now}, "blocked"},
 	} {
 		d := ClaudeFirst([]DestCand{{Provider: "claude", Backend: tc.be}}, now, th)

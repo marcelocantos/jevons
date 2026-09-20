@@ -336,6 +336,19 @@ test-ui-react: ui-deps
 # traceable in docs/audits/react-retirement-2026-09-05/legacy-suites.json.
 test-web: test-ui-react
 
+# 🎯T659: the sanctioned clean-checkout web gate (🎯T398). One recipe owns
+# the worktree: it checks SHA (default HEAD) out detached, runs `make
+# test-web` there under bin/gate — which installs ui deps inside that tree
+# with npm ci, never through a link into this clone — and removes the tree
+# behind gate.RemoveWorktree's foreign-symlink guard. The shared
+# ui/node_modules is hashed before and after; a difference fails the run
+# even when the suite was green. Do not hand-roll the worktree with
+# ui/node_modules symlinked here: on 2026-09-15 that link let npm ci empty
+# the shared install twice in one slice.
+.PHONY: test-web-clean
+test-web-clean:
+	go run ./scripts/test-web-clean -sha $(or $(SHA),HEAD)
+
 # Playwright perceptual chat UI (hermetic mocked WS). node_modules under
 # scripts/browser-loop-test is gitignored (🎯T438), so a clean checkout of
 # HEAD has no playwright until this install runs — same family as 🎯T360 /

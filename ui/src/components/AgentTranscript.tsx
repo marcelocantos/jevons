@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { now as clockNow } from '../clock';
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationMeta } from '../conversation/useConversation';
@@ -403,6 +404,9 @@ export function ClippedBubble(props: {
   const [userToggled, setUserToggled] = useState(() => !!seeded?.userToggled);
   const [autoExpanded, setAutoExpanded] = useState(() => !!seeded?.autoExpanded);
   const userToggledRef = useRef(!!seeded?.userToggled);
+  // 🎯T665: when the automatic rule last flipped this row; survives the
+  // virtualizer remount through clipPersist like the rest of the clip state.
+  const lastAutoFlipRef = useRef<number>(Number(seeded?.lastAutoFlipAtMs) || 0);
   const persistClip = (next: ClipUIState) => {
     if (props.clipKey && props.clipPersist) props.clipPersist.set(props.clipKey, next);
   };
@@ -420,6 +424,7 @@ export function ClippedBubble(props: {
       persistClip({ expanded, userToggled: true, autoExpanded: false });
       return;
     }
+    const nowMs = clockNow();
     const next = nextAutoExpanded({
       tall,
       isLatest: !!props.isLatest,
@@ -432,14 +437,17 @@ export function ClippedBubble(props: {
       height: paintedClipHeight(fullH, expanded),
       scrollTop: props.scrollTop ?? 0,
       clientHeight: props.clientHeight ?? 0,
+      nowMs,
+      lastAutoFlipAtMs: lastAutoFlipRef.current,
     });
     if (next === expanded) {
-      persistClip({ expanded, userToggled, autoExpanded });
+      persistClip({ expanded, userToggled, autoExpanded, lastAutoFlipAtMs: lastAutoFlipRef.current });
       return;
     }
+    lastAutoFlipRef.current = nowMs;
     setExpanded(next);
     setAutoExpanded(next);
-    persistClip({ expanded: next, userToggled: false, autoExpanded: next });
+    persistClip({ expanded: next, userToggled: false, autoExpanded: next, lastAutoFlipAtMs: nowMs });
   }, [
     tall,
     fullH,

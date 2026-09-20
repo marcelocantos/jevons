@@ -39,7 +39,16 @@ func TestHandlePlanUsagePaintsTicker(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := toolText(res)
-	if !strings.Contains(text, "EXHAUSTED") || !strings.Contains(text, "weekly 83%") {
-		t.Fatalf("tool text:\n%s", text)
+	// 🎯T677: the rate-limited backend reads as unavailable with its
+	// reason, not as an exhausted allowance, and the provider that did
+	// answer still reports its number so the overseer can route.
+	if !strings.Contains(text, "unavailable") || !strings.Contains(text, "429") {
+		t.Fatalf("a failed reading must say so:\n%s", text)
+	}
+	if strings.Contains(text, "EXHAUSTED") {
+		t.Fatalf("a failed reading was announced as exhausted:\n%s", text)
+	}
+	if !strings.Contains(text, "weekly 83%") {
+		t.Fatalf("the readable provider lost its number:\n%s", text)
 	}
 }

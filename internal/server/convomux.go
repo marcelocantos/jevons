@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/muxwin"
 )
 
@@ -761,13 +763,21 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		if !isTranscript {
 			return
 		}
+		// 🎯T657: mode is the owner's intent (submit | steer | interrupt |
+		// queue); interrupt=true is the deprecated alias for mode=interrupt.
 		var body struct {
 			Text      string `json:"text"`
+			Mode      string `json:"mode"`
 			Interrupt bool   `json:"interrupt"`
 		}
 		_ = json.Unmarshal(env.Body, &body)
 		text := strings.TrimSpace(body.Text)
-		if text == "" && !body.Interrupt {
+		mode, perr := delivery.Parse(strings.TrimSpace(body.Mode), body.Interrupt)
+		if perr != nil {
+			s.muxWrite(ctx, conn, env.Ch, "error", map[string]any{"error": perr.Error()})
+			return
+		}
+		if text == "" && !mode.Interrupts() {
 			return
 		}
 		// A send is a request to see the echo: unfreeze this session's
@@ -786,15 +796,23 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 		}
 		ch := env.Ch
 		go func() {
-			if body.Interrupt {
+			if mode.Interrupts() {
 				s.interruptMuxSeat(name)
 			}
 			if text == "" {
 				return
 			}
-			if _, err := s.sendToNamedAgentInterrupt(name, text, sendOriginOwner, body.Interrupt); err != nil {
+			out, err := s.sendToNamedAgentMode(name, text, sendOriginOwner, mode)
+			if err != nil {
 				s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": err.Error()})
+				return
 			}
+			// 🎯T657: the status event carries the mode the send ran under and
+			// the mechanism that ran, so a steer that was honestly queued reads
+			// as queue_until_idle in the cockpit rather than as "steered".
+			s.muxWrite(context.Background(), conn, ch, "status", map[string]any{
+				"status": out.Status, "mode": string(mode), "mechanism": out.Mechanism,
+			})
 		}()
 	}
 }
@@ -857,6 +875,11 @@ func muxOpenWindow(raw json.RawMessage) (lo, hi int) {
 }
 
 func (s *Server) muxWrite(ctx context.Context, conn muxConn, ch, t string, body any) {
+	// A send that outlives its socket has nowhere to answer; the status
+	// event is advisory and the delivery itself is already recorded.
+	if conn == nil || (reflect.ValueOf(conn).Kind() == reflect.Pointer && reflect.ValueOf(conn).IsNil()) {
+		return
+	}
 	payload, err := encodeMux(ch, t, body)
 	if err != nil {
 		return

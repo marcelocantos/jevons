@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
 // 🎯T182 / 🎯T275: POST /api/agents/{name}/send — fire-and-forget deliver to a
@@ -27,9 +28,15 @@ import (
 // wire does (🎯T63). Since 🎯T381 the origin also travels to the browser on
 // the wire's turn_origin field, where it decides how the turn paints: the
 // owner's words verbatim, an agent's report through markdown.
+//
+// 🎯T657: Mode is the owner's delivery intent (submit | steer | interrupt |
+// queue; empty = submit). Interrupt is the deprecated alias for mode=interrupt
+// and is refused when it contradicts an explicit mode (delivery.Parse).
 type agentSendRequest struct {
-	Text   string `json:"text"`
-	Origin string `json:"origin,omitempty"`
+	Text      string `json:"text"`
+	Origin    string `json:"origin,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Interrupt bool   `json:"interrupt,omitempty"`
 }
 
 // Send origins for agentSendRequest.Origin.
@@ -41,8 +48,19 @@ const (
 // agentSendResponse is returned on success.
 type agentSendResponse struct {
 	Name    string `json:"name"`
-	Status  string `json:"status"` // sent | rehydrated_sent | queued | interrupted_*
+	Status  string `json:"status"` // sent | rehydrated_sent | queued | steered | interrupted_*
 	Message string `json:"message,omitempty"`
+	// Mode echoes the intent the send ran under; Mechanism is what ran
+	// (🎯T657; spellings in internal/delivery, mirroring claudia's).
+	Mode      string `json:"mode,omitempty"`
+	Mechanism string `json:"mechanism,omitempty"`
+}
+
+// AgentSendOutcome is what the product deliver hook answers (🎯T657): the
+// wire status plus the mechanism the daemon recorded for the mode.
+type AgentSendOutcome struct {
+	Status    string
+	Mechanism string
 }
 
 // agentSendHook is the product/test deliver seam: (name, text) → (status, error).
@@ -53,7 +71,10 @@ func (s *Server) SetAgentSendHook(fn func(name, text string) (status string, err
 	s.agentSendHook = fn
 }
 
-func (s *Server) SetAgentSendOriginHook(fn func(name, text, origin string, interrupt bool) (status string, err error)) {
+// SetAgentSendOriginHook installs the product deliver seam for the
+// origin-carrying send ops: mcpserver.DeliverAgentMessageMode in production,
+// a stub in tests. The mode is the owner's intent (🎯T657).
+func (s *Server) SetAgentSendOriginHook(fn func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.agentSendOriginHook = fn
@@ -72,31 +93,49 @@ func (s *Server) sendToNamedAgent(name, text string) (string, error) {
 // to the same queue-on-busy delivery /ws/chat uses (never a silent drop), so
 // no send capability is exclusive to the owner wire.
 func (s *Server) sendToNamedAgentAs(name, text, origin string) (string, error) {
-	return s.sendToNamedAgentInterrupt(name, text, origin, false)
+	out, err := s.sendToNamedAgentMode(name, text, origin, delivery.ModeSubmit)
+	return out.Status, err
 }
 
 // sendToNamedAgentInterrupt is sendToNamedAgentAs with an owner-turn cancel
-// flag (🎯T644). Empty text is still refused here — mux cancel-only uses
-// interruptMuxSeat.
+// flag (🎯T644) — the deprecated alias for mode=interrupt (🎯T657).
 func (s *Server) sendToNamedAgentInterrupt(name, text, origin string, interrupt bool) (string, error) {
+	mode := delivery.ModeSubmit
+	if interrupt {
+		mode = delivery.ModeInterrupt
+	}
+	out, err := s.sendToNamedAgentMode(name, text, origin, mode)
+	return out.Status, err
+}
+
+// sendToNamedAgentMode is the mode-carrying send op (🎯T657): submit, steer,
+// interrupt or queue, decided by the fleet layer behind the origin hook.
+// Empty text is still refused here — mux cancel-only uses interruptMuxSeat.
+func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error) {
 	name = strings.TrimSpace(name)
 	text = strings.TrimSpace(text)
 	if name == "" || text == "" {
-		return "", fmt.Errorf("name and text are required")
+		return AgentSendOutcome{}, fmt.Errorf("name and text are required")
 	}
 	if origin == "" {
 		origin = sendOriginOwner
 	}
 	if origin != sendOriginOwner && origin != sendOriginAgent {
-		return "", fmt.Errorf("invalid message origin %q", origin)
+		return AgentSendOutcome{}, fmt.Errorf("invalid message origin %q", origin)
+	}
+	if mode == "" {
+		mode = delivery.ModeSubmit
 	}
 	s.mu.RLock()
 	originHook := s.agentSendOriginHook
 	s.mu.RUnlock()
 	if originHook != nil {
-		return originHook(name, text, origin, interrupt)
+		return originHook(name, text, origin, mode)
 	}
 
+	// Below the hook there is no fleet layer to steer or queue through: the
+	// bare registry path submits, and says so.
+	bare := AgentSendOutcome{Status: "sent", Mechanism: delivery.MechanismSubmit}
 	if s.isOverseerAgent(name) {
 		var err error
 		if origin == sendOriginAgent {
@@ -105,9 +144,9 @@ func (s *Server) sendToNamedAgentInterrupt(name, text, origin string, interrupt 
 			err = s.sendToOverseerAsOwner(text)
 		}
 		if err != nil {
-			return "", err
+			return AgentSendOutcome{}, err
 		}
-		return "sent", nil
+		return bare, nil
 	}
 
 	// 🎯T367: journal the turn BEFORE delivery, the fleet mirror of the owner
@@ -122,13 +161,17 @@ func (s *Server) sendToNamedAgentInterrupt(name, text, origin string, interrupt 
 	s.mu.RUnlock()
 
 	if hook != nil {
-		return hook(name, text)
+		status, err := hook(name, text)
+		if err != nil {
+			return AgentSendOutcome{}, err
+		}
+		return AgentSendOutcome{Status: status, Mechanism: delivery.MechanismSubmit}, nil
 	}
 	if reg == nil {
-		return "", fmt.Errorf("agent registry not available")
+		return AgentSendOutcome{}, fmt.Errorf("agent registry not available")
 	}
 	if reg.Def(name) == nil {
-		return "", fmt.Errorf("agent %q is not registered", name)
+		return AgentSendOutcome{}, fmt.Errorf("agent %q is not registered", name)
 	}
 
 	rehydrated := false
@@ -136,7 +179,7 @@ func (s *Server) sendToNamedAgentInterrupt(name, text, origin string, interrupt 
 	if proc == nil || !proc.Alive() {
 		launched, err := reg.Launch(name)
 		if err != nil {
-			return "", fmt.Errorf("agent %q rehydrate failed: %w", name, err)
+			return AgentSendOutcome{}, fmt.Errorf("agent %q rehydrate failed: %w", name, err)
 		}
 		proc = launched
 		rehydrated = true
@@ -144,12 +187,12 @@ func (s *Server) sendToNamedAgentInterrupt(name, text, origin string, interrupt 
 	if err := proc.Send(text); err != nil {
 		// No product hook: busy is a loud failure (not silent). Production
 		// always sets the MCP deliver hook so busy queues instead (🎯T275).
-		return "", err
+		return AgentSendOutcome{}, err
 	}
 	if rehydrated {
-		return "rehydrated_sent", nil
+		bare.Status = "rehydrated_sent"
 	}
-	return "sent", nil
+	return bare, nil
 }
 
 // handleAgentSend POST /api/agents/{name}/send
@@ -174,7 +217,14 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := s.sendToNamedAgentAs(name, text, strings.TrimSpace(req.Origin))
+	mode, err := delivery.Parse(strings.TrimSpace(req.Mode), req.Interrupt)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out, err := s.sendToNamedAgentMode(name, text, strings.TrimSpace(req.Origin), mode)
+	status := out.Status
 	if err != nil {
 		// 🎯T237: structured class for T236 recovery; owner copy beyond bare Internal error.
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
@@ -206,16 +256,23 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		"component", "agent_send",
 		"name", name,
 		"status", status,
+		"mode", string(mode),
+		"mechanism", out.Mechanism,
 	)
 	msg := fmt.Sprintf("Message delivered to %q (%s)", name, status)
-	if status == "queued" {
+	switch status {
+	case "queued":
 		msg = fmt.Sprintf("Message queued for %q (prompt in flight; will deliver when the turn ends)", name)
+	case "steered":
+		msg = fmt.Sprintf("Steered the in-flight turn on %q (%s)", name, out.Mechanism)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(agentSendResponse{
-		Name:    name,
-		Status:  status,
-		Message: msg,
+		Name:      name,
+		Status:    status,
+		Message:   msg,
+		Mode:      string(mode),
+		Mechanism: out.Mechanism,
 	})
 }
 

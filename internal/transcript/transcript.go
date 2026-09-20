@@ -90,13 +90,18 @@ func (r *Reader) Read(sessionID string) ([]map[string]any, error) {
 	}
 	turns := got.Turns
 
-	result := make([]map[string]any, len(turns))
-	for i, t := range turns {
-		result[i] = map[string]any{
+	result := make([]map[string]any, 0, len(turns)+1)
+	if marker := OversizedMarker(got.Oversized); marker != "" {
+		// 🎯T661: the note is not a turn. It names the oversized records and
+		// the recovery ahead of the conversation, which renders in full.
+		result = append(result, map[string]any{"role": MarkerRole, "text": marker})
+	}
+	for _, t := range turns {
+		result = append(result, map[string]any{
 			"turn_number": t.Number,
 			"role":        t.Role,
 			"text":        t.Text,
-		}
+		})
 	}
 	return result, nil
 }
@@ -135,22 +140,21 @@ func parseEntries(path string) ([]Entry, error) {
 	}
 	defer f.Close()
 
+	// 🎯T661: lines are read at any length. A 1 MiB scanner cap here turned
+	// one oversized tool_result into an unreadable session.
+	lines, err := readNumbered(f, path)
+	if err != nil {
+		return nil, err
+	}
 	var entries []Entry
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1MB line buffer
-
-	for scanner.Scan() {
-		raw := strings.TrimSpace(scanner.Text())
-		if raw == "" {
-			continue
-		}
-		rec, ok := turnev.Decode([]byte(raw))
+	for _, l := range lines {
+		rec, ok := turnev.Decode([]byte(strings.TrimSpace(l.raw)))
 		if !ok {
 			continue // skip lines we cannot parse
 		}
 		entries = append(entries, entryFrom(rec))
 	}
-	return entries, scanner.Err()
+	return entries, nil
 }
 
 // entryFrom projects a decoded record onto the status view. The projection is
@@ -277,24 +281,23 @@ func readLines(path string) ([]jsonlLine, error) {
 	return parseLines(raws), nil
 }
 
+// readRawLines reads every non-blank line at any length (🎯T661). Truncate and
+// Fork write these back, so an oversized record is preserved verbatim rather
+// than dropped or marked.
 func readRawLines(path string) ([]string, error) {
-	f, err := os.Open(path)
+	lines, err := readNumberedLines(path)
 	if err != nil {
-		return nil, fmt.Errorf("open transcript: %w", err)
+		return nil, err
 	}
-	defer f.Close()
+	return rawsOf(lines), nil
+}
 
-	var raws []string
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1MB line buffer
-	for scanner.Scan() {
-		raw := scanner.Text()
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		raws = append(raws, raw)
+func rawsOf(lines []numberedLine) []string {
+	raws := make([]string, len(lines))
+	for i, l := range lines {
+		raws[i] = l.raw
 	}
-	return raws, scanner.Err()
+	return raws
 }
 
 func parseLines(raws []string) []jsonlLine {

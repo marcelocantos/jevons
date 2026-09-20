@@ -12,6 +12,12 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
+// t653Now is movable because 🎯T689 coalesces a forced refresh that
+// lands on top of a reading seconds old. This test is about which
+// producer RefreshNow calls, so it steps past that floor rather than
+// asking for a vendor request the product would rightly decline.
+var t653Now = time.Date(2026, 9, 15, 7, 5, 0, 0, time.UTC)
+
 func TestT653RefreshNowUsesForceFetch(t *testing.T) {
 	var soft, forced atomic.Int32
 	r := NewReader(ReaderArgs{
@@ -28,7 +34,7 @@ func TestT653RefreshNowUsesForceFetch(t *testing.T) {
 				Windows: []claudia.PlanWindow{{Name: claudia.PlanWindowWeekly, RemainingPercent: floatPtr(30)}},
 			}}, nil
 		},
-		Now: func() time.Time { return time.Date(2026, 9, 15, 7, 5, 0, 0, time.UTC) },
+		Now: func() time.Time { return t653Now },
 	})
 	if err := r.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
@@ -36,6 +42,7 @@ func TestT653RefreshNowUsesForceFetch(t *testing.T) {
 	if soft.Load() != 1 || forced.Load() != 0 {
 		t.Fatalf("periodic Refresh used force: soft=%d forced=%d", soft.Load(), forced.Load())
 	}
+	t653Now = t653Now.Add(ForcedRefreshFloor + time.Second)
 	if err := r.RefreshNow(context.Background()); err != nil {
 		t.Fatal(err)
 	}

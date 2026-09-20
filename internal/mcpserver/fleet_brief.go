@@ -145,7 +145,9 @@ fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP
   delivered), **queued** (a turn was running; the daemon holds the message
   itself and delivers it on the next turn boundary), **delivered_unconfirmed**
   (handed over, not seen to land, and the daemon cannot tell queued from stuck
-  — treat as UNDELIVERED until the agent acts), and an ERROR naming the message
+  — resolve it by READING, jevons_transcript_read, or wait for the turn
+  boundary; never stop, kill or re-send on this verdict — stop/kill refuse it
+  without force=true, 🎯T664), and an ERROR naming the message
   as **not submitted** (it is sitting in that agent's composer; do NOT re-send,
   that stacks a second copy).
 - A "not submitted" error is NOT a provider refusal, NOT a spend limit, and NOT

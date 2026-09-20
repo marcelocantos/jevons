@@ -33,24 +33,11 @@ const (
 
 // Classify reads the report, not the agent's name.
 func Classify(report string) Route {
-	if m, err := envelope.Parse(report); m != nil && err == nil {
-		switch m.Kind {
-		case envelope.KindFinishReport:
-			if m.HasOracle() || m.HasRisk() {
-				return RouteOverseer
-			}
-		case envelope.KindEscalation, envelope.KindTargetFileRequest:
-			return RouteOverseer
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
-			// 🎯T536.3: scout handoff stays with the parent so they can
-			// re-slice / spawn the implementer with an inherited ledger.
-			return RouteParent
-		}
-		if m.Payload != "" {
-			report = m.Payload
-		}
+	body, decided, route := envelopeRoute(report)
+	if decided {
+		return route
 	}
-	s := strings.ToLower(strings.TrimSpace(report))
+	s := strings.ToLower(strings.TrimSpace(body))
 	if s == "" {
 		return RouteParent
 	}
@@ -62,6 +49,59 @@ func Classify(report string) Route {
 		return RouteOverseer
 	}
 	return RouteParent
+}
+
+// envelopeRoute is the envelope arm shared by Classify and Reason. It returns
+// the prose the keyword heuristics may read (never the fence's own slot
+// lines), and whether the envelope alone decided the route.
+//
+// 🎯T658: two shapes used to fall through to the keyword scan over text the
+// sender never wrote as a report. A fence that parses but fails validation
+// (one malformed silent-decision slot) was scanned whole, so a scout-report
+// whose fog lines mentioned "oracle" and whose prose said "Scout done" was
+// oracle_done — the 2026-09-15 jv-t657-steer-ui reroute. And a fence that
+// sits behind an unknown prefix (a first-send wrap the daemon composed) is
+// no envelope to Parse, so the prefix's doctrine was scanned instead. Both
+// are "cannot tell", and the package contract for that is the parent.
+func envelopeRoute(report string) (body string, decided bool, route Route) {
+	m, err := envelope.Parse(report)
+	if m == nil {
+		if fenceBeyondLine1(report) {
+			return "", true, RouteParent
+		}
+		return report, false, RouteParent
+	}
+	switch m.Kind {
+	case envelope.KindFinishReport:
+		if err == nil && (m.HasOracle() || m.HasRisk()) {
+			return "", true, RouteOverseer
+		}
+	case envelope.KindEscalation, envelope.KindTargetFileRequest:
+		if err == nil {
+			return "", true, RouteOverseer
+		}
+	case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
+		// 🎯T536.3: scout handoff stays with the parent so they can
+		// re-slice / spawn the implementer with an inherited ledger.
+		return "", true, RouteParent
+	}
+	if err != nil {
+		// Malformed envelope: the sender meant an envelope and the daemon
+		// could not read it. The PO sees it first; nothing here is a
+		// finish the keyword scan may infer from the fence's own words.
+		return "", true, RouteParent
+	}
+	return m.Payload, false, RouteParent
+}
+
+// fenceBeyondLine1 reports whether text carries a ```jevons fence that
+// Parse did not accept because prose precedes it. Parse treats such a fence
+// as a quotation; for routing it means daemon framing this package does not
+// know about sits ahead of the sender's envelope, and the words ahead of it
+// are not the sender's report.
+func fenceBeyondLine1(text string) bool {
+	return strings.Contains(text, "\n```"+envelope.FenceInfo+"\n") ||
+		strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), "```"+envelope.FenceInfo+"\n")
 }
 
 func needsOwner(s string) bool {
@@ -129,20 +169,17 @@ func (r Route) String() string { return string(r) }
 
 // Reason is a stable token for logs and the PO record line.
 func Reason(report string) string {
-	if m, err := envelope.Parse(report); m != nil && err == nil {
-		switch m.Kind {
-		case envelope.KindFinishReport:
-			if m.HasOracle() || m.HasRisk() {
-				return "oracle_done"
-			}
-		case envelope.KindEscalation, envelope.KindTargetFileRequest:
-			return "needs_owner"
+	body, decided, route := envelopeRoute(report)
+	if decided {
+		if route == RouteParent {
+			return "parent"
 		}
-		if m.Payload != "" {
-			report = m.Payload
+		if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
+			return "oracle_done"
 		}
+		return "needs_owner"
 	}
-	s := strings.ToLower(strings.TrimSpace(report))
+	s := strings.ToLower(strings.TrimSpace(body))
 	switch {
 	case needsOwner(s):
 		return "needs_owner"

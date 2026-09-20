@@ -29,6 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/provider"
@@ -287,7 +288,11 @@ type Server struct {
 	// hermetic tests (🎯T182). Nil = Launch + Agent.Send on the registry.
 	agentSendHook func(name, text string) (status string, err error)
 	// The product hook owns admission and retains the speaker's origin.
-	agentSendOriginHook func(name, text, origin string, interrupt bool) (status string, err error)
+	agentSendOriginHook func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)
+	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
+	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
+	seatStopReader func(name string) (reason string, at time.Time, ok bool)
+	massStopReader func() string
 
 	// portfolios is the declarative domain portfolio registry (🎯T200).
 	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).

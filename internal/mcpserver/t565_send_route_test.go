@@ -75,6 +75,7 @@ func TestT565RerouteResultNamesObservedReceiver(t *testing.T) {
 		"jevons-po": "jevons",
 		"jv-t10":    "jevons-po",
 	})
+	s.SetAgentReportDir(t.TempDir()) // 🎯T658: a skipped hop needs a stored report
 	res, err := s.deliverByNameAs("jv-t10", "jevons-po", "Blocked: needs owner verdict on the cap.", OriginAgent, false)
 	if err != nil {
 		t.Fatal(err)

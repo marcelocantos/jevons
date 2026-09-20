@@ -84,6 +84,14 @@ func OpenReadingStore(path string) (*ReadingStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("planusage readings: schema: %w", err)
 	}
+	if err := ensureResponsesSchema(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("planusage readings: responses schema: %w", err)
+	}
+	if err := rebucketSeriesKeys(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("planusage readings: rebucket series keys: %w", err)
+	}
 	return &ReadingStore{db: db}, nil
 }
 
@@ -247,9 +255,60 @@ func normKey(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// ResetsKeyBucket is how coarsely a period's rollover time is bucketed into
+// a series key (🎯T669).
+//
+// The key was the exact published timestamp, which assumed providers publish
+// a stable one. Anthropic does not: the same Claude week arrived as
+// 01:59:58, 01:59:59, 02:00:00 and 02:00:01 across successive fetches, so one
+// week's samples landed in four series and the sparkline drew only whichever
+// bucket the current snapshot happened to match — a week that began 31% in.
+// Ten minutes is far wider than any observed jitter and far narrower than the
+// gap between two periods (five hours at the shortest), so it cannot merge
+// periods that are genuinely different.
+const ResetsKeyBucket = 10 * time.Minute
+
 func resetsKey(t *time.Time) string {
 	if t == nil || t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.UTC().Round(ResetsKeyBucket).Format(time.RFC3339)
+}
+
+// rebucketSeriesKeys rewrites stored keys that predate 🎯T669's bucketing, so
+// the samples a jittering provider scattered across neighbouring keys rejoin
+// the one series they always belonged to. Idempotent and cheap: it touches
+// only rows whose key is not already its own bucket.
+func rebucketSeriesKeys(db *sql.DB) error {
+	rows, err := db.Query(`SELECT DISTINCT resets_key FROM plan_readings WHERE resets_key <> ''`)
+	if err != nil {
+		return err
+	}
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return err
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		t, err := time.Parse(time.RFC3339, k)
+		if err != nil {
+			continue
+		}
+		want := resetsKey(&t)
+		if want == k {
+			continue
+		}
+		if _, err := db.Exec(`UPDATE plan_readings SET resets_key = ? WHERE resets_key = ?`, want, k); err != nil {
+			return err
+		}
+	}
+	return nil
 }

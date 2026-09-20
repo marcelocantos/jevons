@@ -309,15 +309,85 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 // returned: the gate's verdict is the thing the caller came for, and 🎯T440's
 // sweeper exists precisely because this cleanup cannot be relied on.
 func removeWorktree(root, wt, scratch string) {
-	if out, err := runGit(root, "worktree", "remove", "--force", wt); err != nil {
-		fmt.Fprintf(os.Stderr, "gate clean: worktree remove %s: %v: %s\n", wt, err, out)
+	if err := RemoveWorktree(root, wt); err != nil {
+		fmt.Fprintln(os.Stderr, "gate clean:", err)
 	}
 	if err := os.RemoveAll(scratch); err != nil {
 		fmt.Fprintln(os.Stderr, "gate clean: remove scratch:", err)
 	}
-	if out, err := runGit(root, "worktree", "prune"); err != nil {
-		fmt.Fprintf(os.Stderr, "gate clean: worktree prune: %v: %s\n", err, out)
+}
+
+// RemoveWorktree is the one removal path for a throwaway checkout (🎯T659).
+//
+// On 2026-09-15 a worker ran the 🎯T398 clean-tree gate in a worktree whose
+// ui/node_modules was a symlink into the shared clone. Everything downstream
+// then reached the shared 282MB through that link: `make ui-deps` saw a
+// lockfile newer than the linked vitest and re-ran `npm ci`, which empties
+// node_modules in place; `rm -rf <link>/` with a trailing slash does the same.
+// The shared clone lost its node_modules twice in one slice, and every
+// worker running vitest at the time would have gone red for someone else's
+// cleanup.
+//
+// So before anything recursive touches the tree, every symlink that resolves
+// outside the worktree is unlinked — the link itself, never its target. Only
+// then does `git worktree remove --force` run. The ordering is the whole
+// guarantee: a link that is gone cannot be followed by any later step, this
+// function's or a shell's.
+func RemoveWorktree(root, wt string) error {
+	var errs []string
+	if _, err := UnlinkForeignSymlinks(wt); err != nil {
+		errs = append(errs, fmt.Sprintf("unlink foreign symlinks in %s: %v", wt, err))
 	}
+	if out, err := runGit(root, "worktree", "remove", "--force", wt); err != nil {
+		errs = append(errs, fmt.Sprintf("worktree remove %s: %v: %s", wt, err, out))
+	}
+	if out, err := runGit(root, "worktree", "prune"); err != nil {
+		errs = append(errs, fmt.Sprintf("worktree prune: %v: %s", err, out))
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// UnlinkForeignSymlinks removes every symlink under wt whose target resolves
+// outside wt, and returns the paths it unlinked. Symlinks that stay inside
+// the worktree (npm's own node_modules/.bin entries, for instance) are left
+// alone: they are the checkout's to own. The .git file at the worktree root
+// is skipped so the walk never enters git's own admin directory.
+//
+// A link whose target no longer exists is foreign by construction — nothing
+// inside the worktree is missing that the walk would not also have seen —
+// and is unlinked too, so a dangling link cannot stop the removal.
+func UnlinkForeignSymlinks(wt string) ([]string, error) {
+	base, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		return nil, err
+	}
+	base = filepath.Clean(base)
+	var unlinked []string
+	walkErr := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == ".git" && path != base {
+			return filepath.SkipDir
+		}
+		if d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, err := filepath.EvalSymlinks(path)
+		inside := err == nil && (target == base || strings.HasPrefix(target, base+string(filepath.Separator)))
+		if inside {
+			return nil
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("unlink %s: %w", path, err)
+		}
+		unlinked = append(unlinked, path)
+		return nil
+	})
+	return unlinked, walkErr
 }
 
 // runGit runs a git command for its effect, returning combined output for the

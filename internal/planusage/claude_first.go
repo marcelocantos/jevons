@@ -44,9 +44,8 @@ func ClaudeFirst(cands []DestCand, now time.Time, th Thresholds) ClaudeFirstDeci
 			continue
 		}
 		be := c.Backend
-		if IsExhaustedReason(be.Reason) {
-			return ClaudeFirstDecision{Reason: "exhausted"}
-		}
+		// 🎯T677: a failed reading is "blocked" — we could not tell — not
+		// "exhausted", which is a claim about the allowance itself.
 		if !be.Available() {
 			return ClaudeFirstDecision{Reason: "blocked"}
 		}

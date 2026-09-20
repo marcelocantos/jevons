@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/muxwin"
 	"github.com/marcelocantos/jevons/internal/statedb"
 )
@@ -107,9 +110,9 @@ func TestT627MuxSendUnfreezesWatchDuringConcurrentFanout(t *testing.T) {
 	s := New("test", t.TempDir())
 	const sends = 100
 	delivered := make(chan struct{}, sends)
-	s.SetAgentSendOriginHook(func(string, string, string, bool) (string, error) {
+	s.SetAgentSendOriginHook(func(string, string, string, delivery.Mode) (AgentSendOutcome, error) {
 		delivered <- struct{}{}
-		return "sent", nil
+		return AgentSendOutcome{Status: "sent"}, nil
 	})
 	sess := &muxSession{transcripts: make(map[string]*muxWatch)}
 	w := sess.ensure("worker")
@@ -146,12 +149,12 @@ func TestT644MuxSendInterruptReachesHook(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.overseerName = "jevons"
 	got := make(chan bool, 1)
-	s.SetAgentSendOriginHook(func(_ string, text string, _ string, interrupt bool) (string, error) {
+	s.SetAgentSendOriginHook(func(_ string, text string, _ string, mode delivery.Mode) (AgentSendOutcome, error) {
 		if text != "now" {
 			t.Errorf("text=%q", text)
 		}
-		got <- interrupt
-		return "sent", nil
+		got <- mode.Interrupts()
+		return AgentSendOutcome{Status: "sent"}, nil
 	})
 	s.handleMuxEnvelope(t.Context(), nil, &muxSession{transcripts: make(map[string]*muxWatch)}, muxEnvelope{
 		Ch:   transcriptChannel("jevons"),
@@ -172,9 +175,9 @@ func TestT644MuxInterruptEmptyDoesNotSend(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.overseerName = "jevons"
 	called := make(chan struct{}, 1)
-	s.SetAgentSendOriginHook(func(string, string, string, bool) (string, error) {
+	s.SetAgentSendOriginHook(func(string, string, string, delivery.Mode) (AgentSendOutcome, error) {
 		called <- struct{}{}
-		return "sent", nil
+		return AgentSendOutcome{Status: "sent"}, nil
 	})
 	sess := &muxSession{transcripts: make(map[string]*muxWatch)}
 	s.handleMuxEnvelope(t.Context(), nil, sess, muxEnvelope{
@@ -1165,5 +1168,113 @@ func muxMetaN(m map[string]any) int {
 		return int(v)
 	default:
 		return 0
+	}
+}
+
+// t657Conn captures every mux frame written to it.
+type t657Conn struct {
+	mu     sync.Mutex
+	frames []muxEnvelope
+	wrote  chan struct{}
+}
+
+func (c *t657Conn) Write(_ context.Context, _ websocket.MessageType, data []byte) error {
+	var env muxEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.frames = append(c.frames, env)
+	c.mu.Unlock()
+	select {
+	case c.wrote <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (c *t657Conn) statusFrame(ch string) map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, f := range c.frames {
+		if f.T == "status" && f.Ch == ch {
+			var body map[string]any
+			_ = json.Unmarshal(f.Body, &body)
+			return body
+		}
+	}
+	return nil
+}
+
+// 🎯T657: a mux send names its mode to the fleet layer, and the status event
+// that answers it carries the mechanism the daemon reports — here a claudia
+// whose TurnCaps allow steer and answer with the ACP supersede label.
+func TestT657MuxSendModeReachesHookAndStatusCarriesMechanism(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	gotMode := make(chan delivery.Mode, 1)
+	s.SetAgentSendOriginHook(func(_ string, text string, _ string, mode delivery.Mode) (AgentSendOutcome, error) {
+		if text != "go left" {
+			t.Errorf("text=%q", text)
+		}
+		gotMode <- mode
+		// The mocked claudia: CanSteer, and the seat was in a turn, so the
+		// text folded in through the ACP supersede path.
+		return AgentSendOutcome{Status: "steered", Mechanism: "acp_session_prompt_supersede"}, nil
+	})
+	conn := &t657Conn{wrote: make(chan struct{}, 4)}
+	sess := &muxSession{transcripts: make(map[string]*muxWatch)}
+	s.handleMuxEnvelope(t.Context(), conn, sess, muxEnvelope{
+		Ch:   transcriptChannel("jevons"),
+		T:    "send",
+		Body: json.RawMessage(`{"text":"go left","mode":"steer"}`),
+	})
+	select {
+	case mode := <-gotMode:
+		if mode != delivery.ModeSteer {
+			t.Fatalf("mode=%q want steer", mode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("send hook not called")
+	}
+	select {
+	case <-conn.wrote:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no status event followed the send")
+	}
+	status := conn.statusFrame(transcriptChannel("jevons"))
+	if status == nil {
+		t.Fatal("no status frame followed the send")
+	}
+	if status["mechanism"] != "acp_session_prompt_supersede" || status["mode"] != "steer" || status["status"] != "steered" {
+		t.Fatalf("status event = %+v", status)
+	}
+}
+
+// A steer the seat cannot honour is reported as the queue it became, never
+// as a steer (🎯T657: mechanism is what ran).
+func TestT657MuxSteerFallbackIsNamedQueueUntilIdle(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	s.SetAgentSendOriginHook(func(string, string, string, delivery.Mode) (AgentSendOutcome, error) {
+		return AgentSendOutcome{Status: "queued", Mechanism: delivery.MechanismQueueUntilIdle}, nil
+	})
+	conn := &t657Conn{wrote: make(chan struct{}, 4)}
+	s.handleMuxEnvelope(t.Context(), conn, &muxSession{transcripts: make(map[string]*muxWatch)}, muxEnvelope{
+		Ch:   transcriptChannel("jevons"),
+		T:    "send",
+		Body: json.RawMessage(`{"text":"later","mode":"steer"}`),
+	})
+	select {
+	case <-conn.wrote:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no status event followed the send")
+	}
+	body := conn.statusFrame(transcriptChannel("jevons"))
+	if body == nil {
+		t.Fatal("no status frame followed the send")
+	}
+	if body["mechanism"] != delivery.MechanismQueueUntilIdle || body["status"] != "queued" {
+		t.Fatalf("fallback misreported: %+v", body)
 	}
 }

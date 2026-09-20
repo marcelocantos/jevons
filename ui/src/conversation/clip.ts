@@ -14,6 +14,15 @@ export const EXPAND_TAB_CLEARANCE_REM = 0.35;
 export const NEAR_END_SLACK_PX = 48;
 /** 🎯T341: require real ink in view before auto-expand (enter hysteresis). */
 export const MIN_VISIBLE_PX_FOR_AUTO_EXPAND = 8;
+/**
+ * 🎯T665: minimum gap between two automatic flips of the same row. Expanding
+ * a row near the top of a bottom-pinned pane grows the canvas, the pin
+ * scrolls the row out, the off-screen rule collapses it, the canvas shrinks,
+ * the pin scrolls it back in, and the in-view rule expands it again — the
+ * two layouts race and the top of the pane flickers. A flip inside the
+ * cooldown is held; an explicit owner toggle is never subject to it.
+ */
+export const AUTO_FLIP_COOLDOWN_MS = 750;
 
 export function shouldClip(
   fullH: number,
@@ -178,6 +187,8 @@ export type ClipUIState = {
   expanded: boolean;
   userToggled: boolean;
   autoExpanded: boolean;
+  /** 🎯T665: when the automatic rule last flipped this row (ms epoch). */
+  lastAutoFlipAtMs?: number;
 };
 
 export const EMPTY_CLIP_UI: ClipUIState = {
@@ -204,10 +215,29 @@ export type ClipExpandInput = {
   height: number;
   scrollTop: number;
   clientHeight: number;
+  /** 🎯T665: cooldown inputs. Omit both to disable (pure callers, older tests). */
+  nowMs?: number;
+  lastAutoFlipAtMs?: number;
 };
+
+/** 🎯T665: an automatic flip inside the cooldown is held at the current state. */
+export function autoFlipHeld(nowMs?: number, lastAutoFlipAtMs?: number, cooldownMs = AUTO_FLIP_COOLDOWN_MS): boolean {
+  const now = Number(nowMs);
+  const last = Number(lastAutoFlipAtMs);
+  if (!Number.isFinite(now) || !Number.isFinite(last) || last <= 0) return false;
+  return now - last < cooldownMs;
+}
 
 /** One auto expand/collapse decision for both panes (🎯T480). */
 export function nextAutoExpanded(input: ClipExpandInput): boolean {
+  const decided = decideAutoExpanded(input);
+  if (decided !== input.expanded && autoFlipHeld(input.nowMs, input.lastAutoFlipAtMs)) {
+    return input.expanded;
+  }
+  return decided;
+}
+
+function decideAutoExpanded(input: ClipExpandInput): boolean {
   if (input.userToggled) return input.expanded;
   if (!input.tall) return false;
   if (shouldStayExpandedLatest(input)) return true;

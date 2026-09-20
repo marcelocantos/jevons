@@ -213,6 +213,8 @@ func (s *Server) noteTurnEnded(name string) {
 		s.agentTerminalGeneration = map[string]uint64{}
 	}
 	s.agentTerminalGeneration[name]++
+	// 🎯T664: a turn boundary answers the question an undecided delivery asked.
+	delete(s.unconfirmedSends, name)
 	if s.agentFlight == nil {
 		s.agentFlight = map[string]TurnFlight{}
 	}

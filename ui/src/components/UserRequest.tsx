@@ -14,14 +14,28 @@ import {
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
 import { classifyEnterAction } from '../keys/composerEnter';
+import type { DeliveryMode } from '../composer/deliveryMode';
+import type { QueueItem } from '../composer/sendQueue';
+import { cycleQueueFocus } from '../composer/queueFocus';
+
+/** 🎯T657 slice 2b: the send queue the composer can focus with Alt+↑/↓. */
+export type ComposerQueue = {
+  items: QueueItem[];
+  focusedId: string | null;
+  onFocus: (id: string | null) => void;
+  /** Send a queued item now with the given mode; the queue removes it. */
+  onSend: (id: string, mode: DeliveryMode) => void;
+};
 
 export type RecalledRequest = { id: string; text: string };
 
 type UserRequestProps = {
   name: string;
   density?: Density;
-  onSend: (text: string, opts?: { interrupt?: boolean }) => void;
+  /** 🎯T657: returns `{ queued: true }` when the text was held in the send queue instead of sent. */
+  onSend: (text: string, opts?: { mode?: DeliveryMode }) => void | { queued?: boolean };
   onInterrupt?: () => void;
+  queue?: ComposerQueue;
   disabled?: boolean;
   history?: RecalledRequest[];
   onRecall?: (request: RecalledRequest | null) => void;
@@ -115,12 +129,16 @@ function NamedUserRequest(props: UserRequestProps) {
     };
   }, []);
 
-  const submit = async (e: FormEvent, append = false, opts?: { interrupt?: boolean }) => {
+  const submit = async (e: FormEvent, append = false, opts?: { mode?: DeliveryMode }) => {
     e.preventDefault();
     if (rewinding) return;
-    if (props.disabled && !opts?.interrupt) return;
+    // 🎯T657: steer and interrupt are exactly the chords for a busy seat, so
+    // the busy-disabled state must not swallow them.
+    const mode = opts?.mode;
+    if (props.disabled && mode !== 'interrupt' && mode !== 'steer') return;
     const payload = composeSendText(raw, pending);
     if (!payload) return;
+    let queued = false;
     if (recalled && !append) {
       if (!props.history?.some((request) => request.id === recalled.id && request.text === recalled.text)) {
         setRecallError('This request changed or is no longer in the conversation. Cancel and select it again.');
@@ -145,8 +163,8 @@ function NamedUserRequest(props: UserRequestProps) {
       queueMicrotask(() => boxRef.current?.focus());
       return;
     } else {
-      if (opts?.interrupt) props.onSend(payload, { interrupt: true });
-      else props.onSend(payload);
+      const outcome = mode && mode !== 'submit' ? props.onSend(payload, { mode }) : props.onSend(payload);
+      queued = !!(outcome && typeof outcome === 'object' && outcome.queued);
       if (recalled) {
         setDraft(props.name, payload);
         leaveRecall(false);
@@ -155,8 +173,10 @@ function NamedUserRequest(props: UserRequestProps) {
     pending.forEach((img) => revokeObjectUrl(img.objectUrl));
     setPending([]);
     // 🎯T545.3: keep the sent text until the transcript echoes a user row.
-    // Failed send leaves composer + Send enabled for retry.
-    if (payload !== raw) setDraft(props.name, payload);
+    // Failed send leaves composer + Send enabled for retry. A queued send
+    // lives in the queue strip instead, so the composer clears at once.
+    if (queued) setDraft(props.name, '');
+    else if (payload !== raw) setDraft(props.name, payload);
     // 🎯T153: send returns focus so the next Tab stays on the box (T571).
     queueMicrotask(() => boxRef.current?.focus());
   };
@@ -237,7 +257,21 @@ function NamedUserRequest(props: UserRequestProps) {
           if (e.nativeEvent.isComposing) return;
           if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
             e.preventDefault();
-            navigateHistory(e.key === 'ArrowUp' ? -1 : 1);
+            const dir = e.key === 'ArrowUp' ? -1 : 1;
+            // 🎯T657: a non-empty send queue owns Alt+↑/↓; history recall
+            // is only reachable once the queue is empty.
+            const q = props.queue;
+            if (q && q.items.length) {
+              const r = cycleQueueFocus(q.focusedId, q.items, dir);
+              if (r.handled) q.onFocus(r.focusedId);
+              return;
+            }
+            navigateHistory(dir);
+            return;
+          }
+          if (e.key === 'Escape' && props.queue?.focusedId) {
+            e.preventDefault();
+            props.queue.onFocus(null);
             return;
           }
           if (e.key === 'Escape' && recalled && !rewinding) {
@@ -256,13 +290,36 @@ function NamedUserRequest(props: UserRequestProps) {
             void submit(e);
             return;
           }
+          // 🎯T657 slice 2b: with a queue item focused, the steer and
+          // interrupt chords act on that item, not on the draft.
+          const focusedQueueId = props.queue?.focusedId && props.queue.items.some((it) => it.id === props.queue!.focusedId)
+            ? props.queue.focusedId
+            : null;
+          if (action === 'steer') {
+            if (focusedQueueId) {
+              props.queue!.onSend(focusedQueueId, 'steer');
+              props.queue!.onFocus(null);
+              return;
+            }
+            // Cmd+Enter (🎯T657): fold the draft into the running turn; the
+            // server sends plainly when the seat is idle. Nothing to steer
+            // with on an empty composer, so that is a noop.
+            if (canSend) void submit(e, !!recalled, { mode: 'steer' });
+            return;
+          }
           if (action === 'interrupt') {
-            if (canSend) void submit(e, !!recalled, { interrupt: true });
+            if (focusedQueueId) {
+              props.queue!.onSend(focusedQueueId, 'interrupt');
+              props.queue!.onFocus(null);
+              return;
+            }
+            // Cmd+Shift+Enter (🎯T657): cancel the open turn, then send.
+            if (canSend) void submit(e, !!recalled, { mode: 'interrupt' });
             else props.onInterrupt?.();
             return;
           }
           if (action === 'force_send' && canSend) {
-            void submit(e, !!recalled, { interrupt: true });
+            void submit(e, !!recalled, { mode: 'interrupt' });
           }
         }}
       />

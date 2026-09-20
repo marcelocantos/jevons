@@ -50,13 +50,13 @@ describeOracle(family('plan-ticker'), () => {
     fireEvent.pointerEnter(host!);
     const tip = container.querySelector('.instant-tip-show');
     expect(tip).toBeTruthy();
-    // 🎯T588.1 turned the hover into a grid, so the measure is a row
-    // label ("tokens left") rather than the word "remaining". T390's
-    // acceptance is that the owner can SEE percent-remaining and the next
-    // rollover, so assert the information — label, an actual percentage,
-    // and the rollover row — rather than the old sentence's wording.
+    // 🎯T588.1 turned the hover into a grid, so the measure is a row label
+    // rather than a sentence, and 🎯T670 made that measure usage — the
+    // complement T390 asked for, in the direction every harness reports.
+    // Assert the information — label, an actual percentage, and the
+    // rollover row — rather than either version's wording.
     const text = tip?.textContent || '';
-    expect(text).toMatch(/available/i);
+    expect(text).toMatch(/usage/i);
     expect(text).toMatch(/\d+%/);
     expect(text).toMatch(/rollover/i);
   });
@@ -70,13 +70,19 @@ describeOracle(family('plan-ticker'), () => {
   });
 
   itOracle('T390.1.3', 'exhausted Claude still paints the boxed session+weekly pair', () => {
+    // A *published* zero is a reading like any other and keeps its pair of
+    // bars. 🎯T681 removed this oracle's other half: a 429 from the usage
+    // endpoint used to be synthesised into this same shape, which painted
+    // a failed reading as a spent plan.
     const groups = tickerGroups({
       backends: [
         {
           provider: 'claude',
-          status: 'unavailable',
-          reason: 'Claude usage HTTP 429: rate_limit_error',
-          windows: [],
+          status: 'available',
+          windows: [
+            { name: 'session', remaining_percent: 0, used_percent: 100 },
+            { name: 'weekly', remaining_percent: 0, used_percent: 100 },
+          ],
         },
       ],
     });

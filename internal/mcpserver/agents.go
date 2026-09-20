@@ -19,12 +19,14 @@ import (
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -80,7 +82,8 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
-			mcp.WithBoolean("interrupt", mcp.Description("If true and a prompt is in flight, interrupt that turn then send (stuck recovery without kill). Default false = queue for after the turn.")),
+			mcp.WithString("mode", mcp.Description("🎯T657 delivery mode: submit (default; queue for after the turn when busy) | steer (fold the text into the in-flight turn; plain submit when idle; queued honestly as queue_until_idle when the seat cannot steer) | interrupt (cancel the in-flight turn, then send — stuck recovery without kill) | queue (hold for the next turn boundary; submits when idle). The result names the mechanism that ran.")),
+			mcp.WithBoolean("interrupt", mcp.Description("Deprecated alias for mode=interrupt (🎯T657). Refused when it contradicts an explicit mode.")),
 			mcp.WithBoolean("force_rebrief", mcp.Description("🎯T597: a full re-brief (spawn-brief envelope, or >1KB opening-brief prose) to a seat with recent activity (stored report / workdir touch) is refused, because re-briefing a working seat restarts its mission and can discard uncommitted work. Pass true only when you are sure the seat needs its brief again.")),
 		),
 		s.handleAgentSend,
@@ -92,6 +95,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer.")),
 			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it.")),
+			mcp.WithBoolean("force", mcp.Description("🎯T664: stop even while a turn is in flight or a delivery is still delivered_unconfirmed. Without it the stop is refused and the check that decides it is named. Pass only with a reason you can state.")),
 		),
 		s.handleAgentStop,
 	)
@@ -113,6 +117,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name to kill and deregister")),
 			mcp.WithBoolean("subtree", mcp.Description("If true, also kill and deregister every descendant. Default false = descendants stay registered under this name (🎯T560).")),
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is requesting the kill). Overseer uses the overseer name (usually 'jevons').")),
+			mcp.WithBoolean("force", mcp.Description("🎯T664: kill even while a turn is in flight or a delivery is still delivered_unconfirmed. Without it the kill is refused and the check that decides it is named.")),
 		),
 		s.handleAgentKill,
 	)
@@ -138,7 +143,7 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
 	// (and overseer notify), not only logs.
-	reps := SweepDeadAgents(s.registry, s.RemovalAccount(), s.overseerName(), s.fleetIntent())
+	reps := s.sweepDeadAccounted()
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)
@@ -158,7 +163,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 			body += "\n" + extra
 		}
 		return mcp.NewToolResultText(fleetlog.PrependNotices(
-			PrependFleetHealth(body, reps), notices)), nil
+			s.withMassStop(PrependFleetHealth(body, reps)), notices)), nil
 	}
 
 	var b strings.Builder
@@ -189,6 +194,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if pinned {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
 		}
+		// 🎯T661: a session the broker wire cannot carry is named on the row,
+		// so a PO sees why sends to it fail before trying one.
+		if lines := s.seatOversized(d, DefaultSessionRoots()); len(lines) > 0 {
+			fmt.Fprintf(&b, "  ^ %s\n", FormatOversizedSeatLine(d.Name, lines))
+		}
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
 	// missions should have fan-out — visible without only RHS eyeballing.
@@ -207,7 +217,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		b.WriteString(extra)
 	}
 	return mcp.NewToolResultText(fleetlog.PrependNotices(
-		PrependFleetHealth(b.String(), reps), notices)), nil
+		s.withMassStop(PrependFleetHealth(b.String(), reps)), notices)), nil
 }
 
 // notifyFleetHealth delivers a fleet outage/recovery note to the overseer
@@ -799,10 +809,16 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	text, _ := args["text"].(string)
 	actor, _ := args["actor"].(string)
 	interrupt, _ := args["interrupt"].(bool)
+	modeArg, _ := args["mode"].(string)
 	forceRebrief, _ := args["force_rebrief"].(bool)
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
+	}
+	// 🎯T657: mode is the intent; interrupt=true is its deprecated alias.
+	mode, err := delivery.Parse(strings.TrimSpace(modeArg), interrupt)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	// 🎯T597: a full re-brief to a seat with recent activity is refused
@@ -862,7 +878,7 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 
 	// 🎯T111.1 / 🎯T321: rehydrate + send under the caller's lineage, or
 	// queue/interrupt when prompt in flight.
-	result, err := s.sendToAgentAs(actor, name, text, interrupt)
+	result, err := s.sendToAgentMode(actor, name, text, mode)
 	if err != nil {
 		// 🎯T283: deliverToSender already formats send failures; this also
 		// classifies the rehydrate/launch arm, which reaches the provider too.
@@ -885,6 +901,18 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
+	// 🎯T664: an uncertain verdict is resolved by looking, not by stopping.
+	forceStop, _ := args["force"].(bool)
+	if refuse, why := s.stopGuardFor(name); refuse {
+		if !forceStop {
+			s.logLifecycle(compAgentLifecycle, "stop", "skipped", map[string]any{
+				"name": name, "actor": args["actor"], "reason": "t664_guard", "why": why})
+			return mcp.NewToolResultError(FormatStopRefusal("stop", name, why)), nil
+		}
+		s.logLifecycle(compAgentLifecycle, "stop", "forced", map[string]any{
+			"name": name, "actor": args["actor"], "reason": args["reason"], "why": why})
+	}
+
 	s.registry.Stop(name)
 	// 🎯T408 via 🎯T414: stopping without killing is an instruction, and the
 	// instruction is the part that used to evaporate. The process ends here;
@@ -896,6 +924,12 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 	reason, _ := args["reason"].(string)
 	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
+	// 🎯T662: the stop is a recorded reason on the seat, not a bare handle.
+	stopWhy := "jevons_agent_stop by " + actor
+	if r := strings.TrimSpace(reason); r != "" {
+		stopWhy += ": " + r
+	}
+	s.noteSeatStop(name, seatstop.SourceSupervisor, stopWhy, actor, "")
 	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
 	// 🎯T418 clause 6: if this stop left the fleet with queued work and
 	// nobody live to press Enter, say so now — the cockpit may relaunch
@@ -966,6 +1000,18 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 		s.logLifecycle(compAgentLifecycle, "kill", "error", life)
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	// 🎯T664: same guard as stop — a kill on an undecided delivery is the
+	// overseer inventing the answer the instrument refused to give.
+	forceKill, _ := args["force"].(bool)
+	if refuse, why := s.stopGuardFor(name); refuse {
+		if !forceKill {
+			life["err"] = "t664_guard: " + why
+			s.logLifecycle(compAgentLifecycle, "kill", "error", life)
+			return mcp.NewToolResultError(FormatStopRefusal("kill", name, why)), nil
+		}
+		life["force"] = true
+		life["guard_why"] = why
+	}
 	allDesc := s.registry.Descendants(name)
 	plan := PlanKill(name, allDesc, subtree)
 	desc := plan.Removed
@@ -1005,6 +1051,10 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 	// removes the one seat and leaves its workers registered under its name.
 	var killErr error
 	if subtree {
+		// 🎯T662: every seat this kill takes records the actor that took it.
+		for _, n := range append(append([]string{}, desc...), name) {
+			s.noteSeatStop(n, seatstop.SourceSupervisor, "jevons_agent_kill by "+actor, actor, "")
+		}
 		killErr = s.killSubtreeAndClearTurns(name)
 	} else {
 		killErr = s.killRootAndClearTurns(name)

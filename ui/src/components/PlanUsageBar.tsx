@@ -9,9 +9,14 @@ import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMark';
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
-import { triangleColorForRemaining } from '../plan/triColor';
 import { InstantTip } from './InstantTip';
-import { tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
+import {
+  gaugeFillPercent,
+  holdGroupReadings,
+  tickerGroups,
+  type LastReading,
+  type PlanSnapshot,
+} from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
 
 /** HTTP fallback only when mux is not connected (tests / non-cockpit). */
@@ -73,7 +78,12 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
   const incoming = muxSnap ?? q.data;
   const snap = holdLastPlanSnapshot(last.current, incoming);
   last.current = snap;
-  const groups = tickerGroups(snap);
+  // 🎯T681: carry each provider's last real reading forward, so a
+  // provider that has gone unreadable can say what it last knew and when.
+  const heldReadings = useRef<Map<string, LastReading>>(new Map());
+  const held = holdGroupReadings(heldReadings.current, tickerGroups(snap), now());
+  heldReadings.current = held.last;
+  const groups = held.groups;
   // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
   const tip = <PlanTipTable groups={groups} nowMs={now()} />;
   const inner = !groups.length ? (
@@ -93,12 +103,29 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
         <span className="plan-icon">
           <CompanyMark provider={g.provider} />
         </span>
-        {g.windows.length ? (
+        {!g.available ? (
+          // 🎯T681: an unreadable provider keeps its place in the row and
+          // says so. Painting nothing here was indistinguishable from a
+          // provider that is simply idle, and painting an empty bar was
+          // indistinguishable from one with no usage at all.
+          <span className="plan-box">
+            <span className="plan-win plan-nodata" data-window="unreadable">
+              <span className="plan-track">
+                <span className="plan-bar" aria-hidden="true" />
+              </span>
+              <span className="plan-win-label">?</span>
+            </span>
+          </span>
+        ) : g.windows.length ? (
           <span className="plan-box">
             {g.windows.map((w) => {
               const painted = formatWindow(w, now());
-              const rem = Number(w.remaining_percent) || 0;
-              const t = painted.remainingTimePercent;
+              // 🎯T670: the gauge fills with what has been spent, like every
+              // harness reports it, so bar and chevron both travel rightward.
+              // A spent window stays the empty red-bordered bar.
+              const used = gaugeFillPercent(w);
+              const remainingTime = painted.remainingTimePercent;
+              const spentTime = remainingTime == null ? null : 100 - remainingTime;
               const cls = painted.className;
               return (
                 <span
@@ -106,20 +133,19 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
                   className={'plan-win' + (cls ? ' ' + cls : '')}
                   data-pace={painted.pace || undefined}
                   data-window={w.name}
+                  data-model={w.model || undefined}
                 >
                   <span className="plan-track">
                     <span className="plan-bar" aria-hidden="true">
-                      <span className="plan-bar-fill" style={{ width: rem + '%' }} />
+                      <span className="plan-bar-fill" style={{ width: used + '%' }} />
                     </span>
-                    {t != null ? (
-                      <span
-                        className="plan-tri"
-                        aria-hidden="true"
-                        style={{ left: t + '%', borderBottomColor: triangleColorForRemaining(t) }}
-                      />
+                    {spentTime != null ? (
+                      // 🎯T673: position is time spent; the chevron itself is
+                      // neutral. It is a ruler mark, not a reading.
+                      <span className="plan-tri" aria-hidden="true" style={{ left: spentTime + '%' }} />
                     ) : null}
                   </span>
-                  <span className="plan-win-label">{windowAbbrev(w.name || '')}</span>
+                  <span className="plan-win-label">{windowAbbrev(w.name || '', w.model || '')}</span>
                 </span>
               );
             })}

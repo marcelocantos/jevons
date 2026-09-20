@@ -204,12 +204,13 @@ func (s *Server) scheduleCheckpointResume(name string, st turndepth.State) {
 	if s == nil || name == "" {
 		return
 	}
-	prompt := turndepth.ResumePrompt(st)
+	prompt := resumePromptForState(st)
+	s.noteCheckpointResumePending(name)
 	s.mu.Lock()
 	fn := s.turnDepthResume
 	s.mu.Unlock()
 	s.logLifecycle(compTurnDepth, "checkpoint_resume", "ok", map[string]any{
-		"agent": name, "calls": st.Calls,
+		"agent": name, "calls": st.Calls, "source": checkpointSourceDaemon,
 	})
 	if fn != nil {
 		fn(name, prompt)
@@ -232,6 +233,7 @@ func (s *Server) forgetTurnDepth(name string) {
 	s.mu.Lock()
 	c := s.turnDepth
 	delete(s.checkpointEnded, name)
+	delete(s.checkpointResumePending, name)
 	s.mu.Unlock()
 	c.Forget(name)
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -40,6 +41,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/turndepth"
@@ -118,7 +120,7 @@ type Server struct {
 	// process; Claudia owns whether the conversation is resumable.
 	cursorSubmit func(name, text string) error
 	cursorBound  func(name string) bool
-	notifyJevon           NotifyFunc
+	notifyJevon  NotifyFunc
 	// overseerDeliver is the overseer arm of the single deliver-by-name path
 	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
 	// overseer-addressed send reuses the owner chat journal and notify queue.
@@ -137,6 +139,24 @@ type Server struct {
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver
+	// sendModes carries a delivery.Mode from deliverByNameMode to the bool
+	// deliverToSenderWith shim for the same synchronous call (🎯T657).
+	// Guarded by mu.
+	sendModes map[string]delivery.Mode
+	// unconfirmedSends remembers a delivered_unconfirmed verdict per seat so
+	// stop / kill can refuse to act on an undecided delivery (🎯T664).
+	// Guarded by mu.
+	unconfirmedSends map[string]unconfirmedSend
+	// checkpointResumePending marks a seat between a depth-ceiling checkpoint
+	// and the resume the daemon owes it (🎯T663). Guarded by mu.
+	checkpointResumePending map[string]time.Time
+	// oversizedSessions caches the per-session census of records over the
+	// broker line limit, keyed by session path (🎯T661). Guarded by mu.
+	oversizedSessions map[string]oversizedEntry
+	// seatStopLedger records why each seat last stopped (🎯T662); massStopNotified
+	// is the burst key already delivered to the overseer. Guarded by mu.
+	seatStopLedger   *seatstop.Ledger
+	massStopNotified string
 	// resolveProc overrides which claudia process carries an agent's event
 	// sink (🎯T426). Nil — the product path — reads the live registry.
 	resolveProc agentProcResolver

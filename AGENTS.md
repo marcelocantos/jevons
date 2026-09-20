@@ -114,8 +114,17 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   uncommitted edits. A suite held green by WIP is red for a fresh clone, a CI
   runner, and the next worker to check master out — master was red from
   8297ae6 until 🎯T388's gate tripped over it. Before calling a web change
-  done, run the suite in a detached `git worktree` of HEAD; `scripts/docratchet`
-  ratchets that (`TestT398CleanCheckoutWebTestsPass`), as it does the T360
+  done, run **`make test-web-clean`** (`SHA=<commit>` to name one; default
+  HEAD): it checks the commit out into a detached worktree, runs `make
+  test-web` there under `bin/gate` — installing ui deps inside that tree with
+  `npm ci` — and removes the tree behind a foreign-symlink guard, hashing
+  the shared `ui/node_modules` before and after (🎯T659). Do **not** hand-roll
+  the worktree with `ui/node_modules` symlinked into the shared clone: on
+  2026-09-15 the fresh checkout's lockfile was newer than the linked vitest,
+  so `make ui-deps` re-ran `npm ci` through the link and emptied the shared
+  install twice in one slice (`rm -rf <link>/` does the same).
+  `scripts/docratchet` ratchets both (`TestT398CleanCheckoutWebTestsPass`,
+  `TestT659RemovalPathSparesSymlinkedNodeModules`), as it does the T360
   build. Same shared-clone family as 🎯T376 and 🎯T377.
 - React conversation events use `/ws/mux` and `ui/src/conversation/`.
   Preserve the canonical frame contract and exercise it through the shared

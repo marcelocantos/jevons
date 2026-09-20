@@ -9,18 +9,55 @@ import (
 	"time"
 )
 
-func TestIsExhaustedReason(t *testing.T) {
-	if !IsExhaustedReason(`Claude usage HTTP 429: { "error": { "type": "rate_limit_error" } }`) {
-		t.Fatal("429 rate_limit_error should be exhausted")
+// 🎯T677: the inference this test used to pin is gone. A rate-limited
+// meter says nothing about the allowance behind it, so a backend whose
+// reading failed is reported as unreadable — never as spent.
+func TestT677FailedReadingIsNotExhaustion(t *testing.T) {
+	limited := Backend{
+		Provider: "claude",
+		Status:   StatusUnavailable,
+		Reason:   `Claude usage HTTP 429: { "error": { "type": "rate_limit_error" } }`,
 	}
-	if !IsExhaustedReason("Rate limited. Please try again later.") {
-		t.Fatal("rate limited should be exhausted")
+	th := DefaultThresholds()
+
+	// The park decision: a failed reading must not veto a seat. Session
+	// classifies as unpublished, which is explicitly not a veto.
+	if got := SessionStatusOf(limited, th); got != SessionUnpublished {
+		t.Fatalf("SessionStatusOf(429) = %q, want %q — a failed reading parked a live worker on 2026-09-20", got, SessionUnpublished)
 	}
-	if IsExhaustedReason("SuperGrok publishes no plan-remaining API") {
-		t.Fatal("unpublished is not exhausted")
+	if got := WeeklyBandOf(limited, time.Now(), th); got != BandUnpublished {
+		t.Fatalf("WeeklyBandOf(429) = %q, want %q", got, BandUnpublished)
 	}
-	if IsExhaustedReason("") {
-		t.Fatal("empty is not exhausted")
+	if MintIneligible(limited, time.Now(), th) {
+		t.Fatal("a provider we could not read was refused new work as though it were spent")
+	}
+
+	// A published zero is still exhaustion: only the inference went away.
+	zero := 0.0
+	spent := Backend{
+		Provider: "claude",
+		Status:   StatusAvailable,
+		Windows: []Window{
+			{Name: WindowSession, RemainingPercent: &zero},
+			{Name: WindowWeekly, RemainingPercent: &zero},
+		},
+	}
+	if got := SessionStatusOf(spent, th); got != SessionExhausted {
+		t.Fatalf("SessionStatusOf(published 0%%) = %q, want %q", got, SessionExhausted)
+	}
+
+	// And the snapshot the cockpit reads is no longer rewritten: an
+	// unreadable backend stays unavailable with its reason, instead of
+	// being handed over as available with two zero windows.
+	out := CockpitSnapshot(Snapshot{Backends: []Backend{limited}})
+	if len(out.Backends) != 1 {
+		t.Fatalf("CockpitSnapshot returned %d backends", len(out.Backends))
+	}
+	if out.Backends[0].Available() {
+		t.Fatal("a failed reading was published to the cockpit as an available backend")
+	}
+	if len(out.Backends[0].Windows) != 0 {
+		t.Fatalf("zero-remaining windows were synthesised from a failed reading: %+v", out.Backends[0].Windows)
 	}
 }
 
@@ -57,11 +94,18 @@ func TestFormatCockpitMatchesTicker(t *testing.T) {
 		},
 	}
 	text := FormatCockpit(snap)
-	if !strings.Contains(text, "claude") || !strings.Contains(text, "EXHAUSTED") {
-		t.Fatalf("429 Claude must paint EXHAUSTED:\n%s", text)
+	// 🎯T677: a rate-limited Claude reads as unavailable with its reason,
+	// not as EXHAUSTED with two invented zeroes. The overseer sees that
+	// the meter failed, which is the fact, and can still route on the
+	// providers that did answer.
+	if !strings.Contains(text, "claude") || !strings.Contains(text, "unavailable") {
+		t.Fatalf("429 Claude must read unavailable:\n%s", text)
 	}
-	if !strings.Contains(text, "session 0%") || !strings.Contains(text, "weekly 0%") {
-		t.Fatalf("429 Claude must show 0%% session+weekly:\n%s", text)
+	if strings.Contains(text, "EXHAUSTED") {
+		t.Fatalf("a failed reading was announced as an exhausted allowance:\n%s", text)
+	}
+	if strings.Contains(text, "session 0%") || strings.Contains(text, "weekly 0%") {
+		t.Fatalf("zero windows were invented from a failed reading:\n%s", text)
 	}
 	if !strings.Contains(text, "codex") || !strings.Contains(text, "weekly 83%") {
 		t.Fatalf("live Codex weekly must print remaining:\n%s", text)

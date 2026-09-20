@@ -1,0 +1,19 @@
+```jevons
+jevons: kind scout-report
+jevons: target T657
+jevons: phase scout
+jevons: silent-ledger ranked
+jevons: silent-decision confidence=0.55 choice=treat-react-queue-as-unwired-prerequisite why=sendQueue.ts exports (enqueue/shiftNext/load/save/decideSend) have zero product consumers; #send-queue div in AgentInteraction.tsx is an empty placeholder; useConversation.send goes straight to mux with no busy check
+jevons: silent-decision confidence=0.7 choice=map-mode-to-claudia-Agent.SendMode-not-raw-broker-wire why=jevons never speaks broker JSON itself; it holds *claudia.Agent handles, and claudia's broker handle forwards send.mode over the wire
+jevons: silent-decision confidence=0.8 choice=keep-Alt+Enter-force_send-semantics-unchanged why=design table does not mention Alt+Enter; T241 stays as is
+jevons: fog-known composer chords live in ui/src/keys/composerEnter.ts (classifyEnterAction) wired in ui/src/components/UserRequest.tsx onKeyDown; Alt+Arrow history recall is navigateHistory in the same handler, gated only on altKey
+jevons: fog-known oracle families to update: composer-keys.test.ts T113/T132/T241/T644 (T644 asserts Cmd+Enter → onSend(text,{interrupt:true})); UserRequest.history.test.tsx covers Alt+Arrow recall
+jevons: fog-known Go send path: convomux.go "send" case (body.text + body.interrupt) → sendToNamedAgentInterrupt → agentSendOriginHook → mcpserver/agent_send.go (proc.Send / proc.Interrupt at lines 462/524/664; status strings sent|queued|interrupted_sent|interrupted_queued|rehydrated_sent); MCP tool jevons_agent_send declares interrupt bool in mcpserver/agents.go:83, read at :801
+jevons: fog-known claudia local master 640a0a3 has the wire only: broker.SendMode enum, SendRequest.Mode, SentResponse{Mode,Mechanism,PhaseBefore,SupersededTurnID}, TurnCaps on agent_info/granted; Agent.SendMode/Steer/TurnCaps/DeliveryOutcome are in claudia's UNCOMMITTED working tree (cl-t72.2 in progress: agent.go, broker_daemon.go deliverSend, broker_agent.go steer op); go.mod pins v0.34.0, ../go.work consumes local master
+jevons: fog-unknown whether the jevons React queue should persist in localStorage (sendQueue.ts port of the old vanilla web/scripts/send_queue.js suggests yes) and whether queue drain-on-idle needs a new mux status hook or can key off the existing busy state in useConversation
+jevons: fog-unknown where "the status event" for mechanism should land: agentSendResponse.Status is a string enum today; likely add mechanism as a sibling field plus the statedb/eventlog status frame, but no existing mechanism slot exists on the jevons side
+jevons: fog-unknown whether claudia T72.2 will export a typed ErrSteerUnsupported/ErrTurnInFlight jevons can branch on for honest fallback (steer unsupported → queue, not silent submit)
+jevons: fog-blindspot slice 2 (queue focus) assumes a rendered, persisted send queue in the React cockpit; there is none — the vanilla queue was never ported past the pure module. Re-slice: 2a wire queue into useConversation (enqueue on busy, drain on idle, render strip above composer, persist), then 2b Alt+Arrow focus + Cmd/Cmd+Shift+Enter on a focused item
+```
+
+Scout done for 🎯T657. Proposed re-slice given the blindspot: slice 1 (chords, oracles) and slice 3 (mode on the wire, coded against `Agent.SendMode` with a hermetic mock, claudia T72.2 named as residue) can start now; slice 2 splits into 2a (wire the React send queue for real) and 2b (queue focus chords). Say "proceed" with or without the re-slice and I move to phase implement on slice 1 first.

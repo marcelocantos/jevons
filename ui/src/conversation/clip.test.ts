@@ -17,6 +17,8 @@ import {
   shouldClip,
   shouldRunOffScreenCollapse,
   shouldStayExpandedLatest,
+  autoFlipHeld,
+  AUTO_FLIP_COOLDOWN_MS,
 } from './clip';
 
 describe('shouldClip', () => {
@@ -275,5 +277,44 @@ describe('nextAutoExpanded', () => {
         clientHeight: 300,
       }),
     ).toBe(true);
+  });
+});
+
+describe('🎯T665 no expand/collapse oscillation near the auto-collapse boundary', () => {
+  const base = {
+    tall: true,
+    isLatest: false,
+    userToggled: false,
+    nearEnd: true,
+    historyReplayActive: false,
+    height: 224,
+    clientHeight: 600,
+  };
+  it('a row that just auto-flipped is held through the geometry that would flip it back', () => {
+    const t0 = 10_000;
+    // Tick 1: the row is in view near the end → the rule expands it.
+    expect(
+      nextAutoExpanded({ ...base, expanded: false, autoExpanded: false, top: 1100, scrollTop: 1000, nowMs: t0, lastAutoFlipAtMs: 0 }),
+    ).toBe(true);
+    // Tick 2, 50ms later: the pin re-scrolled and this pass reads the row as
+    // off-screen. Without a cooldown the rule collapses it, the canvas shrinks,
+    // the next pass reads it in view again, and the top of the pane flickers.
+    expect(
+      nextAutoExpanded({ ...base, expanded: true, autoExpanded: true, top: 0, scrollTop: 1000, nowMs: t0 + 50, lastAutoFlipAtMs: t0 }),
+    ).toBe(true);
+    // Tick 3, well after the cooldown, still off-screen: it may collapse now.
+    expect(
+      nextAutoExpanded({ ...base, expanded: true, autoExpanded: true, top: 0, scrollTop: 1000, nowMs: t0 + 2_000, lastAutoFlipAtMs: t0 }),
+    ).toBe(false);
+    expect(autoFlipHeld(t0 + 50, t0)).toBe(true);
+    expect(autoFlipHeld(t0 + AUTO_FLIP_COOLDOWN_MS, t0)).toBe(false);
+    expect(autoFlipHeld(t0, 0)).toBe(false);
+    expect(autoFlipHeld(undefined, undefined)).toBe(false);
+  });
+  it('an explicit owner toggle is never held and never overridden', () => {
+    const t0 = 10_000;
+    const offScreen = { ...base, top: 0, scrollTop: 1000, nowMs: t0 + 50, lastAutoFlipAtMs: t0 };
+    expect(nextAutoExpanded({ ...offScreen, userToggled: true, expanded: true, autoExpanded: false })).toBe(true);
+    expect(nextAutoExpanded({ ...offScreen, userToggled: true, expanded: false, autoExpanded: false })).toBe(false);
   });
 });

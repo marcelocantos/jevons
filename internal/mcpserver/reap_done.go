@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"log/slog"
 	"strings"
 
@@ -258,8 +259,16 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",
 				"agent", name, "reason", reason)
 		}
+		// 🎯T663: a checkpoint the HOOK asked for. The daemon counter did not
+		// (that case returned above), so unless the daemon resumes the seat
+		// here, nothing does — it sits idle until a rehydrate.
+		if strings.HasPrefix(reason, "awaits_overseer_checkpoint") && IsDepthCeilingCheckpoint(report) {
+			s.resumeHookCheckpoint(name, report)
+		}
 		return
 	}
+	// 🎯T662: a reap is a recorded reason on the seat.
+	s.noteSeatStop(name, seatstop.SourceReap, "reaped as finished work ("+reason+")", "daemon", "")
 	if err := killSubtree(s.registry, s.RemovalAccount(), name, reapDoneRemoval(reason)); err != nil {
 		slog.Warn("T165/T195 auto-reap failed", "agent", name, "reason", reason, "err", err)
 		fields := reapDecisionFields(name, reason, report)

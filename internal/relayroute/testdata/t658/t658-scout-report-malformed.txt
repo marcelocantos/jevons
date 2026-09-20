@@ -1,0 +1,12 @@
+```jevons
+jevons: kind scout-report
+jevons: target T658
+jevons: phase scout
+jevons: silent-ledger ranked
+jevons: silent-decision confidence=0.6 choice=reroute-stores-sender-payload-then-reads-it-back why=acceptance wants no skipped-hop record without a stored report, but agent_send never stored one (only turn-complete notify did)
+jevons: silent-decision confidence=0.7 choice=strip-receiver-role-doctrine-by-resolved-role-body why=Assemble marks doctrine start not end; unbounded doctrine falls back to RouteParent
+jevons: fog-known trigger was the worker's own scout-report agent_send to jevons-po at 10:26:01Z (first send), wrapped with standing brief + PO role doctrine; relayReportBody strips only the brief, envelope parse fails, oracleDone keyword-matches the doctrine
+jevons: fog-unknown other daemon-composed prefixes ahead of a payload on non-handleAgentSend paths
+jevons: fog-blindspot none
+```
+Proceeding to implement 🎯T658 without waiting.

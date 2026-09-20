@@ -898,7 +898,10 @@ body.rhs-resizing-row { cursor: row-resize; }
    of the tip) while painting orange. Inset stroke keeps the edge. */
 #plan-ticker .plan-bar { display: block; width: 100%; height: 6px; background: var(--surface-high); box-shadow: inset 0 0 0 1px var(--border); border-radius: 2px; overflow: hidden; }
 #plan-ticker .plan-bar-fill { display: block; height: 100%; background: var(--green); }
-#plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--green); transform: translateX(-50%); pointer-events: none; }
+/* 🎯T673: the chevron marks where the period has got to. It is neutral —
+   it took the bar's colour before, and then a red→purple ramp of its own,
+   and both read as a second verdict rather than a ruler mark. */
+#plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--text-muted); transform: translateX(-50%); pointer-events: none; }
 #plan-ticker .plan-win-label { font-size: 9px; line-height: 1; color: var(--text-muted); padding-bottom: 5px; }
 #plan-ticker .plan-win.plan-ahead .plan-bar-fill { background: var(--amber); }
 #plan-ticker .plan-win.plan-hot .plan-bar-fill,
@@ -912,7 +915,19 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-win.plan-exhausted .plan-bar {
   box-shadow: inset 0 0 0 1px var(--plan-exhausted);
 }
-#plan-ticker .plan-group.plan-unavail { opacity: 0.4; }
+/* 🎯T681: no reading is its own paint. An empty bar meant "no usage" and
+   a missing bar meant "no provider"; neither says "we could not read the
+   meter". The hatch is deliberately not a fill: there is no quantity here
+   to read, and the dashed edge says the rail itself is uncertain. */
+#plan-ticker .plan-win.plan-nodata .plan-bar {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 2px,
+    color-mix(in srgb, var(--text) 30%, transparent) 2px 4px
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 30%, transparent);
+}
+#plan-ticker .plan-group.plan-unavail { opacity: 0.55; }
 #plan-ticker .plan-group.plan-stale { opacity: 0.7; }
 #plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
 #plan-ticker .plan-sep { color: var(--text-muted); user-select: none; }
@@ -1589,30 +1604,71 @@ body.rhs-resizing-row { cursor: row-resize; }
   padding: 2px 4px;
   vertical-align: bottom;
 }
-.plan-tip-table td.plan-burn.plan-ahead { color: var(--amber); }
+.plan-tip-table td.plan-burn.plan-ahead,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-ahead { color: var(--amber); }
 .plan-tip-table td.plan-burn.plan-hot,
-.plan-tip-table td.plan-burn.plan-crit { color: var(--red); }
-.plan-tip-table td.plan-burn.plan-under { color: var(--plan-under); }
-.plan-tip-table td.plan-burn.plan-locked { color: var(--plan-locked); }
+.plan-tip-table td.plan-burn.plan-crit,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-hot { color: var(--red); }
+.plan-tip-table td.plan-burn.plan-under,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-burn.plan-locked,
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-locked { color: var(--plan-locked); }
+/* 🎯T667: a gradient stop takes the same class as the cell, so the palette
+   above is the only one; an ok stop falls back to the ok green. */
+.plan-tip-table td.plan-burn .plan-burn-stop { color: var(--green); stop-color: currentColor; }
 .plan-tip-table td.plan-burn .plan-burn-svg {
   display: block;
   width: 100%;
   height: 28px;
-  overflow: hidden;
+  /* 🎯T687: the current-value mark is painted in front of the plot and
+     may sit on an edge — at 100% used it straddles the top frame — so the
+     box must not clip it. The line's own coordinates are inside the box
+     by construction, so nothing else escapes. */
+  overflow: visible;
+  /* 🎯T671: the plot extents read as a white card with a grey frame — the
+     old tint was a shade off the tip's own background and barely there. */
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+  border-radius: 2px;
 }
 .plan-tip-table td.plan-burn .plan-burn-plot {
-  /* Slightly lighter than the tip (surface-raised) so the published
-     period × remaining 0–100 box is visible even when the line is a stem. */
-  fill: color-mix(in srgb, #fff 14%, var(--surface-raised));
+  /* The published period × usage 0–100 box (🎯T671). */
+  fill: #fff;
 }
-.plan-tip-table td.plan-burn .plan-burn-fill {
-  fill: currentColor;
-  opacity: 0.4;
+.plan-tip-table td.plan-burn {
+  /* One source for the sparkline's weight: the line uses it, the
+     current-value mark is a multiple of it (🎯T687). 1.5× was the first
+     try and the owner could not pick the dots out at a glance, which is
+     the only test that matters for a mark whose whole job is to be
+     found. 3× reads as a dot at this chart's 28px height without
+     competing with the line it terminates. */
+  --plan-burn-line-width: 1.5px;
+  --plan-burn-mark-scale: 3;
 }
 .plan-tip-table td.plan-burn .plan-burn-line {
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.5;
+  stroke-width: var(--plan-burn-line-width);
+  vector-effect: non-scaling-stroke;
+  /* 🎯T688: round caps are what let one reading paint as a dot. A
+     zero-length segment with butt caps renders nothing, which is why a
+     just-started period used to look like an empty chart and why the
+     geometry grew a stem to fake something visible. With round caps the
+     mark matches the data at every sample count, and joins stay smooth
+     on a dense week. */
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* 🎯T687: the reading as it stands now. A zero-length segment with a
+   round cap paints a dot of the stroke's own width, and a non-scaling
+   stroke keeps it circular under a viewBox scaled unequally on the two
+   axes — a <circle> would come out an ellipse. Subtle on purpose: half
+   again the line, enough to find, not enough to shout. */
+.plan-tip-table td.plan-burn .plan-burn-now {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: calc(var(--plan-burn-line-width) * var(--plan-burn-mark-scale));
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
 
@@ -1660,9 +1716,13 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table tbody td {
   border-left: 1px solid currentColor;
 }
+/* 🎯T668: the rules between columns are furniture, not data. Mixing them
+   from currentColor made them take each cell's pace colour, so a hot
+   window drew a red divider and an under one a blue divider. The tip's
+   own text colour is the neutral the cells' colours vary against. */
 .plan-tip-table thead th,
 .plan-tip-table tbody td {
-  border-color: color-mix(in srgb, currentColor 22%, transparent);
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 .plan-tip-win {
   font-size: 11px;
@@ -1674,4 +1734,27 @@ body.rhs-resizing-row { cursor: row-resize; }
   font-size: 11px;
   opacity: 0.8;
   white-space: pre-wrap;
+}
+
+/* 🎯T662: fleet mass-stop alert and per-row stop reasons in the RHS tree. */
+.fleet-mass-stop {
+  margin: 4px 6px 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.12);
+  color: inherit;
+  font-size: 0.85em;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.agent-node .agent-stop-reason {
+  margin-left: 6px;
+  font-size: 0.8em;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
 }

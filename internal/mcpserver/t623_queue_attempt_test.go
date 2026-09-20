@@ -283,6 +283,31 @@ func TestT623BusyRefusalsRemainOrdinaryWaiting(t *testing.T) {
 	}
 }
 
+func TestT623BrokerWrappedBusyWithPayloadQueuedConfirms(t *testing.T) {
+	s, _, _ := t418Daemon(t, t.TempDir())
+	if _, err := s.enqueueAgentSend("a", "monitor objective"); err != nil {
+		t.Fatal(err)
+	}
+	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+		return queueAttemptSender{send: func(string) error {
+			return errors.New("broker protocol: agent_failed: grok acp: prompt already in flight")
+		}}, false, nil
+	})
+	s.SetTurnWitness(witnessYielding(TurnEvidence{
+		Observed:      true,
+		PayloadQueued: true,
+		Detail:        "transcript shows payload enqueued behind live turn",
+	}))
+	s.drainAgentSendQueue("a")
+	entries, err := s.sendQueue().Snapshot("a")
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("queued-behind-turn must confirm and pop entry: %+v %v", entries, err)
+	}
+	if pin, ok := s.sendqPinFor("a"); ok {
+		t.Fatalf("must not pin when receiver holds payload: %+v", pin)
+	}
+}
+
 func TestT623ReapedRoutingKeepsConcurrentArrivals(t *testing.T) {
 	const agent, parent = "reaped-worker", "jevons-po"
 	f := t582Server(t, agent, parent, fleetlog.ReasonReapDone)

@@ -48,8 +48,34 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 				continue
 			}
 			windows[j].Band = string(BandOfWindow(windows[j], now, th))
+			windows[j].History = historyWithBands(windows[j], th)
 		}
 		be.Windows = windows
+	}
+	return out
+}
+
+// historyWithBands stamps each stored sample with the band the window had at
+// that sample's moment (🎯T667): the sample's remaining as both remaining and
+// 100-used, classified at the sample's own time against the same period. A
+// copy — the history slice belongs to the shared snapshot.
+//
+// Same rule as the window's own Band, reached through the same function, so
+// the sparkline's colour at its right edge is the bar's colour now.
+func historyWithBands(w Window, th Thresholds) []HistoryPoint {
+	if len(w.History) == 0 {
+		return w.History
+	}
+	out := make([]HistoryPoint, len(w.History))
+	for i, p := range w.History {
+		rem := p.Remaining
+		used := 100 - rem
+		at := w
+		at.RemainingPercent = &rem
+		at.UsedPercent = &used
+		at.History = nil
+		p.Band = string(BandOfWindow(at, p.At, th))
+		out[i] = p
 	}
 	return out
 }

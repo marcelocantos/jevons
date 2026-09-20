@@ -6,11 +6,15 @@
 export type PlanHistoryPoint = {
   at: string;
   remaining_percent: number;
+  /** 🎯T667: the daemon's band for the window as of `at`. */
+  band?: string;
 };
 
 export type PlanWindow = {
   provider?: string;
   name?: string;
+  /** 🎯T682: the vendor's label when this window meters one model. */
+  model?: string | null;
   remaining_percent?: number | null;
   used_percent?: number | null;
   resets_at?: string | null;
@@ -44,7 +48,12 @@ export type TickerGroup = {
   stale?: boolean;
   reason?: string;
   windows: PlanWindow[];
+  /** 🎯T681: the last reading that did arrive, for a provider now unreadable. */
+  last?: LastReading;
 };
+
+/** A reading that has since gone unreadable, kept with the moment it held. */
+export type LastReading = { at: number; windows: PlanWindow[] };
 
 const PROVIDER_RANK: Record<string, number> = {
   claude: 0,
@@ -54,15 +63,28 @@ const PROVIDER_RANK: Record<string, number> = {
   cursor: 4,
 };
 
-export function isExhaustedReason(reason: string): boolean {
-  const s = String(reason || '').toLowerCase();
-  if (!s) return false;
-  return (
-    s.includes('429') ||
-    s.includes('rate_limit') ||
-    s.includes('rate-limit') ||
-    s.includes('rate limited')
-  );
+/**
+ * holdGroupReadings remembers the last reading a provider did publish, so
+ * a provider that has gone unreadable can say what it last knew and how
+ * old that is instead of showing a bar with nothing in it (🎯T681).
+ *
+ * Pure: the caller owns the map across renders.
+ */
+export function holdGroupReadings(
+  prev: Map<string, LastReading>,
+  groups: TickerGroup[],
+  nowMs: number,
+): { groups: TickerGroup[]; last: Map<string, LastReading> } {
+  const last = new Map(prev);
+  const out = groups.map((g) => {
+    if (g.available && g.windows.length) {
+      last.set(g.provider, { at: nowMs, windows: g.windows });
+      return g;
+    }
+    const held = last.get(g.provider);
+    return held ? { ...g, last: held } : g;
+  });
+  return { groups: out, last };
 }
 
 export function showOnBar(row: { provider: string; available: boolean; running: boolean }): boolean {
@@ -95,17 +117,12 @@ function numericWindows(wins: PlanWindow[] | undefined): PlanWindow[] {
   );
 }
 
-function exhaustedZeroWindows(): PlanWindow[] {
-  return [
-    { name: 'session', remaining_percent: 0, used_percent: 100 },
-    { name: 'weekly', remaining_percent: 0, used_percent: 100 },
-  ];
-}
-
 function orderWindows(wins: PlanWindow[]): PlanWindow[] {
   return wins.slice().sort((a, b) => {
+    // 🎯T682: a per-model weekly sits after the plan's own week, where
+    // the owner asked for it: session, week, then the model.
     const rank = (n: string) =>
-      n === 'session' ? 0 : n === 'weekly' ? 1 : n === 'monthly' ? 2 : 3;
+      n === 'session' ? 0 : n === 'weekly' ? 1 : n === 'weekly_model' ? 2 : n === 'monthly' ? 3 : 4;
     return rank(String(a.name || '')) - rank(String(b.name || ''));
   });
 }
@@ -115,12 +132,17 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
   for (const b of backendsOf(snap)) {
     const provider = String(b.provider || '').toLowerCase();
     if (!provider) continue;
-    let windows = numericWindows(b.windows);
-    let available = b.status === 'available' && windows.length > 0;
-    if (!available && isExhaustedReason(b.reason || '') && windows.length === 0) {
-      available = true;
-      windows = exhaustedZeroWindows();
-    }
+    // 🎯T681: a failed reading says nothing about the allowance. This used
+    // to read any 429 in the reason as "the plan is spent" and synthesise
+    // two zero-remaining bars, but that 429 comes from the meter, not the
+    // plan: on 2026-09-20 repeated probes rate-limited Claude's usage
+    // endpoint and the cockpit painted a Claude with most of its session
+    // left as fully spent. It is the same inference that parked a live
+    // worker holding 387 queued sends (🎯T677, the daemon-side twin).
+    // Unknown is not zero and unknown is not exhausted, so an unreadable
+    // provider now paints as unreadable.
+    const windows = numericWindows(b.windows);
+    const available = b.status === 'available' && windows.length > 0;
     const running = (b.fleet_agents || 0) > 0;
     if (!showOnBar({ provider, available, running })) continue;
     if (!available) {
@@ -226,4 +248,35 @@ export function tickerTipBody(groups: TickerGroup[]): string {
 /** @deprecated use tickerTipBody — kept so existing imports compile. */
 export function tickerTitle(groups: TickerGroup[]): string {
   return tickerTipBody(groups);
+}
+
+/**
+ * Usage 0–100 for a window (🎯T670). The published used_percent when there is
+ * one, else the complement of remaining. Null when the window publishes
+ * neither: an unknown is not zero usage.
+ */
+export function usedPercentOf(w: {
+  used_percent?: number | null;
+  remaining_percent?: number | null;
+}): number | null {
+  const used = w.used_percent;
+  if (typeof used === 'number' && Number.isFinite(used)) return Math.min(100, Math.max(0, used));
+  const rem = w.remaining_percent;
+  if (typeof rem === 'number' && Number.isFinite(rem)) return Math.min(100, Math.max(0, 100 - rem));
+  return null;
+}
+
+/**
+ * What the gauge fills with (🎯T670). Usage, except when the window is spent:
+ * a run-dry window keeps the empty red-bordered bar it has always had rather
+ * than reading as a solid red block, because "nothing left" and "full" must
+ * not paint the same however the bar is oriented.
+ */
+export function gaugeFillPercent(w: {
+  used_percent?: number | null;
+  remaining_percent?: number | null;
+}): number {
+  const rem = w.remaining_percent;
+  if (typeof rem === 'number' && Number.isFinite(rem) && rem <= 0) return 0;
+  return usedPercentOf(w) ?? 0;
 }
