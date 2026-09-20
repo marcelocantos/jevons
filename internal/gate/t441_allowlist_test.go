@@ -72,7 +72,9 @@ func TestT441MistypedSubcommandIsAnErrorNotAGate(t *testing.T) {
 	}
 
 	// And the separated form is untouched: this is a real gate and records one.
-	code, out := runGate(t, store, "--", "true")
+	// -dir a non-git temp so the verdict is GREEN rather than DIRTY from the
+	// shared clone this suite happens to be running in (🎯T718).
+	code, out := runGate(t, store, "-dir", t.TempDir(), "--", "true")
 	if code != 0 {
 		t.Fatalf("gate -- true exited %d\n%s", code, out)
 	}

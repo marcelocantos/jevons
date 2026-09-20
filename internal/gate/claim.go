@@ -359,6 +359,14 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 			})
 			continue
 		}
+		if c.Verdict == VerdictDirty {
+			// 🎯T718: DIRTY is not a pass. When the report claims a commit,
+			// fire dirty_tree_gate (names -clean) rather than the generic
+			// not-green arm. A DIRTY line with no commit claim is a reading
+			// of the tree, which T397 leaves silent.
+			flags = append(flags, dirtyCitationFlags(text, lookup, c)...)
+			continue
+		}
 		if !c.Verdict.IsGreen() || !c.StatusIsZero() {
 			// 🎯T443 / 🎯T472: cited in an honest non-pass role, not as a pass.
 			// The red is the result, and saying so is what was asked for.
@@ -476,6 +484,49 @@ var commitClaimRe = regexp.MustCompile(
 // The flag is deliberately not phrased as a lie. The gate did pass; it just
 // answered a different question from the one the report puts to it, and the
 // remedy is one flag on the command line.
+// dirtyCitationFlags is the 🎯T718 report-time arm for a cited DIRTY line.
+// A matching dirty record plus a commit claim is dirty_tree_gate. No commit
+// claim is silence. A record that is not a dirty pass is a contradiction.
+func dirtyCitationFlags(report string, lookup func(string) (*Record, bool), c CitedAttestation) []Flag {
+	if lookup != nil {
+		rec, ok := lookup(c.ID)
+		if !ok {
+			return []Flag{{
+				Kind: FlagAttestationUnknown,
+				Detail: fmt.Sprintf(
+					"no gate record %s exists, so the cited dirty run for %q was not produced by a run here",
+					c.ID, c.Name),
+				Evidence: c.Raw,
+			}}
+		}
+		if f, ok := dirtyTreeFlag(report, rec, c); ok {
+			return []Flag{f}
+		}
+		if rec.Verdict != VerdictDirty || rec.Status() != "0" {
+			return []Flag{{
+				Kind: FlagAttestationContradicted,
+				Detail: fmt.Sprintf(
+					"gate record %s says exit=%s %s, the report says exit=%s %s",
+					c.ID, rec.Status(), rec.Verdict, c.Status, c.Verdict),
+				Evidence: c.Raw,
+			}}
+		}
+		return nil
+	}
+	if !commitClaimRe.MatchString(report) {
+		return nil
+	}
+	return []Flag{{
+		Kind: FlagDirtyTreeGate,
+		Detail: fmt.Sprintf(
+			"gate %q is cited DIRTY — it ran in a working tree with uncommitted changes, "+
+				"so it did not measure the claimed commit on its own (🎯T397). "+
+				"Re-run it as `bin/gate -clean -- <command>`",
+			c.Name),
+		Evidence: c.Raw,
+	}}
+}
+
 func dirtyTreeFlag(report string, rec *Record, c CitedAttestation) (Flag, bool) {
 	t := rec.Tree
 	if t == nil || t.Clean || t.DirtyFiles == 0 {

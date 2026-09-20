@@ -131,7 +131,7 @@ func TestT453SurplusArgumentIsRefusedAndNamed(t *testing.T) {
 
 	// A real record, so that the honoured forms have something to answer with
 	// and a silently-ignored argument would otherwise still print a green.
-	if code, out := runGate(t, store, "-name", "demo", "-quiet", "--", "true"); code != 0 {
+	if code, out := runGate(t, store, "-dir", t.TempDir(), "-name", "demo", "-quiet", "--", "true"); code != 0 {
 		t.Fatalf("seeding a record failed: exit %d\n%s", code, out)
 	}
 	_, seeded := runGate(t, store, "last")
@@ -179,7 +179,7 @@ func TestT453SurplusArgumentIsRefusedAndNamed(t *testing.T) {
 // The other half of any refusal: it must not have narrowed what still works.
 func TestT453HonouredFormsAreUnchanged(t *testing.T) {
 	store := t.TempDir()
-	if code, out := runGate(t, store, "-name", "demo", "-quiet", "--", "true"); code != 0 {
+	if code, out := runGate(t, store, "-dir", t.TempDir(), "-name", "demo", "-quiet", "--", "true"); code != 0 {
 		t.Fatalf("seeding a record failed: exit %d\n%s", code, out)
 	}
 

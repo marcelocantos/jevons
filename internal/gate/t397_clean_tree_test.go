@@ -98,14 +98,22 @@ func TestT397DirtyTreeIsGreenAndCleanCheckoutIsRed(t *testing.T) {
 
 	store := storeAt(t)
 
-	// CONTROL — the pre-fix reading, taken in the tree the worker is standing
-	// in. Green, and wrong about the commit.
+	// CONTROL — the shared-tree reading. The command still exits 0 (the
+	// T397 incident: a neighbour's uncommitted hunk makes the suite pass),
+	// but 🎯T718 marks that pass DIRTY so quoting the GATE line cannot read
+	// as a commit-attributable green.
 	dirty, err := Run(&RunArgs{Command: symbolCheck(), Dir: root, Store: store, Stdout: nil, Stderr: nil})
 	if err != nil {
 		t.Fatalf("shared-tree run: %v", err)
 	}
-	if !dirty.Verdict.IsGreen() {
-		t.Fatalf("the fixture does not reproduce the incident: the shared tree should read GREEN, got %s", dirty.Summary())
+	if dirty.Status() != "0" {
+		t.Fatalf("the fixture does not reproduce the incident: the shared tree command should exit 0, got %s", dirty.Summary())
+	}
+	if dirty.Verdict.IsGreen() {
+		t.Fatalf("a dirty-tree pass attested GREEN; 🎯T718 requires DIRTY, got %s", dirty.Summary())
+	}
+	if dirty.Verdict != VerdictDirty {
+		t.Fatalf("dirty-tree pass = %s, want %s", dirty.Verdict, VerdictDirty)
 	}
 	if dirty.Tree == nil || dirty.Tree.Clean || dirty.Tree.DirtyFiles == 0 {
 		t.Fatalf("a run in a dirty tree must record it as dirty, got %+v", dirty.Tree)

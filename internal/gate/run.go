@@ -141,7 +141,10 @@ func Run(args *RunArgs) (*Record, error) {
 	if hostKill && rec.StatusNote == "" {
 		rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
 	}
-	rec.Verdict = verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill)
+	rec.Verdict = applyTreeVerdict(
+		verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill),
+		rec.Tree,
+	)
 
 	if args.Store != nil {
 		rec.OutputPath = args.Store.LogPath(rec.ID)

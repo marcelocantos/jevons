@@ -30,6 +30,11 @@ const UnknownStatus = "unknown"
 // Enough to tie a report to a stored log, short enough to paste.
 const digestPrefix = 12
 
+// DirtyHintToken is the GATE-line flag that names how to get a
+// commit-attributable run (🎯T718). The runner sees it on the same line as
+// DIRTY; the Summary names the full `bin/gate -clean` form.
+const DirtyHintToken = "hint=-clean"
+
 // tailBytes is how much of the output the record keeps inline, so the truth
 // about a failing run survives even if the log file is cleaned up.
 const tailBytes = 4096
@@ -125,6 +130,11 @@ func (r *Record) Attestation() string {
 	if tok := r.Tree.Token(); tok != "" {
 		line += " " + tok
 	}
+	// 🎯T718: a dirty pass names -clean on the GATE line itself, so the
+	// runner sees the same fact T397 used to emit only after the report.
+	if r.Verdict == VerdictDirty {
+		line += " " + DirtyHintToken
+	}
 	return line
 }
 
@@ -145,6 +155,13 @@ func (r *Record) Summary() string {
 	if d := r.Tree.Describe(); d != "" {
 		fmt.Fprintf(&b, "\n  tree: %s", d)
 	}
+	if r.Verdict == VerdictDirty {
+		cmd := strings.Join(r.Command, " ")
+		if cmd == "" {
+			cmd = "<command>"
+		}
+		fmt.Fprintf(&b, "\n  not a pass for the commit: re-run as `bin/gate -clean -- %s`", cmd)
+	}
 	if r.VoidReason != "" {
 		fmt.Fprintf(&b, "\n  voided: %s", r.VoidReason)
 	}
@@ -157,7 +174,7 @@ func (r *Record) Summary() string {
 // attestationRe parses the line back out of a finish report. Tolerant of
 // surrounding prose and markdown, strict about the fields.
 var attestationRe = regexp.MustCompile(
-	`GATE\s+(\S+)\s+exit=(\S+)\s+(GREEN|RED|SUSPECT|UNKNOWN|VOID|KILLED)\s+id=([0-9a-zA-Z]+)`)
+	`GATE\s+(\S+)\s+exit=(\S+)\s+(GREEN|DIRTY|RED|SUSPECT|UNKNOWN|VOID|KILLED)\s+id=([0-9a-zA-Z]+)`)
 
 // Attestation is a claim found in a report: what the worker says a gate did.
 // Whether it is true is a question for the Store.

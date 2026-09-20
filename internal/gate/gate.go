@@ -87,6 +87,11 @@ const (
 	// only "[killed]" (🎯T461). Neither GREEN nor RED: a shot process is not
 	// a failing suite, and it is not a pass. Citable as neither.
 	VerdictKilled Verdict = "KILLED"
+	// VerdictDirty: the command exited zero without contradicting output, but
+	// the measured tree carried uncommitted changes (🎯T718). The run passed;
+	// it did not measure the commit alone. Distinct from GREEN so quoting the
+	// GATE line cannot read as a pass. Never a green.
+	VerdictDirty Verdict = "DIRTY"
 )
 
 // IsGreen reports whether v may be cited as a pass. Exactly one verdict may.
@@ -208,4 +213,18 @@ func verdictFor(statusKnown bool, status int, anomalies []Anomaly, hostKill bool
 		return VerdictSuspect
 	}
 	return VerdictGreen
+}
+
+// applyTreeVerdict demotes a would-be GREEN when the measured tree carried
+// uncommitted changes (🎯T718). RED, SUSPECT, KILLED and UNKNOWN already
+// answer their own questions and are left alone. A nil tree is provenance
+// unknown, which is not DIRTY — absence is not a claim about dirt (🎯T397).
+func applyTreeVerdict(v Verdict, tree *TreeProvenance) Verdict {
+	if v != VerdictGreen {
+		return v
+	}
+	if tree == nil || tree.Clean || tree.DirtyFiles == 0 {
+		return v
+	}
+	return VerdictDirty
 }
