@@ -81,7 +81,18 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
     // here in full rather than folded into one inverted expression, so the
     // next reader sees the quantity the axis claims to show.
     const used = 100 - clamp(p.remaining_percent, 0, 100);
-    const y = BURN_HEIGHT - (BURN_HEIGHT * used) / 100;
+    // 🎯T685: hold the value inside the box the way x already is. A
+    // fully spent window plots at usage 100, which is y=0 — the top
+    // border — so the stroke straddles the edge, half of it clipped, and
+    // the chart reads as empty. Fable at 100% used showed nothing at all.
+    // The same is true of an untouched window at y=BURN_HEIGHT. One unit
+    // of inset out of 32 is invisible as distortion and is the
+    // difference between a reading and a blank cell.
+    const y = clamp(
+      BURN_HEIGHT - (BURN_HEIGHT * used) / 100,
+      BURN_EDGE_INSET,
+      BURN_HEIGHT - BURN_EDGE_INSET,
+    );
     return { x, y };
   });
 }
