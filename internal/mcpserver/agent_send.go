@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/claudetrust"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -198,6 +199,7 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 		slog.Info("agent send rehydrated lost session", "name", name, "detail", lost.Describe())
 	}
 
+	claudetrust.PrepareLaunchAt(s.registry, name, s.claudeTrustConfig())
 	p2, err := s.registry.Launch(name)
 	if err != nil {
 		return nil, false, fmt.Errorf("agent %q is not running and rehydrate failed: %v", name, err)

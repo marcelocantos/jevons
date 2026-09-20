@@ -108,6 +108,9 @@ type Server struct {
 	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a
 	// short value so a hung Launch cannot sit for the product timeout.
 	launchDeadline time.Duration
+	// claudeTrustConfigPath is the Claude Code config written to pre-accept
+	// workspace trust before Launch (🎯T709). Empty uses claudetrust.ConfigPath.
+	claudeTrustConfigPath string
 	// toolDeadline overrides tools/call bounds (🎯T254.5.1). Tests set a
 	// short value so a hung handler cannot sit for the product timeout.
 	toolDeadline time.Duration
@@ -118,7 +121,7 @@ type Server struct {
 	// process; Claudia owns whether the conversation is resumable.
 	cursorSubmit func(name, text string) error
 	cursorBound  func(name string) bool
-	notifyJevon           NotifyFunc
+	notifyJevon  NotifyFunc
 	// overseerDeliver is the overseer arm of the single deliver-by-name path
 	// (🎯T309.3). Wired from main to server.DeliverToOverseerAs so an
 	// overseer-addressed send reuses the owner chat journal and notify queue.

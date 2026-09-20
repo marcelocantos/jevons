@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/claudetrust"
 )
 
 // 🎯T305 — delivery confirmation and never-briefed status.
@@ -192,7 +195,105 @@ func (s *Server) startBriefFailureTeardown(name string, existed bool, err error)
 	if BriefInFlight(err) {
 		return false, true
 	}
+	// 🎯T709 (secondary): a workspace-trust dialog is a recoverable stall,
+	// not proven-absent brief. T387/T433 reap of a freshly minted Claude
+	// PO (ge-po, 2026-09-20) turned that into reaped_held.
+	//
+	// The primary hole is Claudia: WaitReady already auto-Enters
+	// MatchStartupMenu (resume numbered cursor / resume wording; maxMenuDismissals)
+	// and even comments a follow-on trust-folder screen, but
+	// MatchStartupMenu does not match "Quick safety check: Is this a
+	// project you created or one you trust". Push-through belongs in
+	// claudia 🎯T87 (marcelocantos/claudia#57). This fork only refuses
+	// a silent reap: stop the stuck TUI, keep the row, write trust as
+	// residual until T87 lands, surface a recoverable notice.
+	if WorkspaceTrustBlocksReady(err) {
+		s.holdWorkspaceTrustSeat(name)
+		return false, false
+	}
 	return s.releaseUnbriefedSeat(name, existed), false
+}
+
+// WorkspaceTrustBlocksReady reports whether err is the Claude workspace-trust
+// dialog that blocked ready (🎯T709).
+func WorkspaceTrustBlocksReady(err error) bool {
+	if err == nil {
+		return false
+	}
+	return agenterr.IsWorkspaceTrust(err.Error()) || claudetrust.IsDialog(err.Error())
+}
+
+// holdWorkspaceTrustSeat stops a seat whose TUI is wedged on the trust
+// dialog without retiring the registry row or stamping reaped. The next
+// remint or send relaunches against a pre-accepted workdir.
+func (s *Server) holdWorkspaceTrustSeat(name string) {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			path := s.claudeTrustConfig()
+			if path != "" && strings.TrimSpace(d.WorkDir) != "" {
+				if _, err := claudetrust.Accept(path, d.WorkDir); err != nil {
+					slog.Warn("workspace trust pre-accept failed after stall",
+						"component", compAgentLifecycle, "name", name,
+						"workdir", d.WorkDir, "err", err)
+				}
+			}
+		}
+		s.registry.Stop(name)
+	}
+}
+
+// FormatWorkspaceTrustNotice is the recoverable owner/PO action when a
+// Claude mint stalled on workspace trust and the seat was kept (🎯T709).
+func FormatWorkspaceTrustNotice(name, workdir, errText string) string {
+	name = strings.TrimSpace(name)
+	workdir = strings.TrimSpace(workdir)
+	errText = strings.TrimSpace(errText)
+	if errText == "" {
+		errText = "workspace trust dialog blocked ready"
+	}
+	return fmt.Sprintf(
+		"[workspace-trust 🎯T709] Claude seat %s stayed registered after a workspace trust dialog blocked ready in %s — %s. "+
+			"Primary fix is Claudia WaitReady recognising that dialog (claudia 🎯T87). "+
+			"Jevons wrote hasTrustDialogAccepted as residual and did not reap. "+
+			"Remint or send to this name; reaped_held is the wrong outcome.",
+		name, workdir, errText)
+}
+
+// notifyWorkspaceTrust surfaces the 🎯T709 recoverable action to the seat's
+// parent (or the overseer). Repeat identical errors for the same name are
+// sent once per daemon lifetime so a remint loop does not flood.
+func (s *Server) notifyWorkspaceTrust(parent, name, workdir, errText string) {
+	if s == nil {
+		return
+	}
+	dest := strings.TrimSpace(parent)
+	if dest == "" {
+		dest = s.overseerName()
+	}
+	if dest == "" {
+		return
+	}
+	key := "workspace_trust|" + strings.TrimSpace(name)
+	s.mu.Lock()
+	if s.spawnFailureNotified == nil {
+		s.spawnFailureNotified = map[string]string{}
+	}
+	if s.spawnFailureNotified[key] == errText {
+		s.mu.Unlock()
+		return
+	}
+	s.spawnFailureNotified[key] = errText
+	s.mu.Unlock()
+
+	msg := FormatWorkspaceTrustNotice(name, workdir, errText)
+	if _, err := s.deliverByName(dest, msg, OriginAgent, false); err != nil {
+		slog.Warn("workspace-trust notice undelivered; escalating to overseer",
+			"component", compAgentLifecycle, "dest", dest, "name", name, "err", err)
+		s.notifyFleetHealth(msg)
+	}
 }
 
 // deliverStartPrompt injects the optional jevons_agent_start prompt after

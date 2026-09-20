@@ -172,6 +172,9 @@ func OwnerCopy(class Class, raw string) string {
 		case "no_composer":
 			return "Agent CLI stalled on startup (startup_stall / no_composer): no idle input box within the ready timeout — not a cloud outage; the seat is retried. Last frame: " +
 				truncate(LastFrame(raw), 400)
+		case "workspace_trust":
+			return "Agent CLI is blocked on Claude's workspace trust dialog (startup_stall / workspace_trust): the composer never appeared because Claude asked whether this folder is trusted. Primary fix is Claudia WaitReady (🎯T87). Jevons keeps the seat registered — remint or send; this is not a silent reap. Last frame: " +
+				truncate(LastFrame(raw), 400)
 		default:
 			return "Agent CLI stalled on startup (startup_stall): it printed its settings notices but never drew the composer within the ready timeout — not a cloud outage, not a wire bug; the seat is retried. Last frame: " +
 				truncate(LastFrame(raw), 400)

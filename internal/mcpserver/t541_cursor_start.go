@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudetrust"
 )
 
 // 🎯T541 — Cursor ACP starts must not wait for prompt confirmation
@@ -37,6 +38,10 @@ func deferStartPrompt(p claudia.Provider) bool {
 }
 
 func (s *Server) launchAgent(ctx context.Context, name string) (*claudia.Agent, error) {
+	if s != nil {
+		// Residual until claudia 🎯T87 WaitReady dismisses the trust dialog.
+		claudetrust.PrepareLaunchAt(s.registry, name, s.claudeTrustConfig())
+	}
 	if s != nil && s.launchAgentFn != nil {
 		return s.launchAgentFn(ctx, name)
 	}
