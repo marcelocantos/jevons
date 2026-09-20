@@ -205,3 +205,29 @@ func TestEmptyClaimNamesEveryChangedRow(t *testing.T) {
 		t.Errorf("empty claim did not name the other worker's target:\n%s", v.Message)
 	}
 }
+
+// TestWarningSaysWhatToDoWithOrphanedRows is the second half of the 🎯T748
+// acceptance. Naming a foreign row is only half an answer: the rows in this
+// file are usually written by seats that have since been reaped, so "leave
+// it for its author" addresses nobody and the row stays dirty forever. The
+// warning must dispose of both cases — live author, and no author left.
+func TestWarningSaysWhatToDoWithOrphanedRows(t *testing.T) {
+	v := Decide(&Request{
+		IndexFile: "/r/.git/next-index-9.lock",
+		Staged:    []string{"bullseye.yaml"},
+		Contents: []FileContent{{
+			Path:   "bullseye.yaml",
+			Head:   []byte(seedLedger),
+			Staged: []byte(claimedAndForeign),
+		}},
+		Claimed: []string{"T888"},
+	})
+	if v.Message == "" {
+		t.Fatal("no warning to inspect")
+	}
+	for _, want := range []string{"reaped", "adopt", "jevons_agent_list"} {
+		if !strings.Contains(v.Message, want) {
+			t.Errorf("warning never disposes of the orphaned-row case (missing %q):\n%s", want, v.Message)
+		}
+	}
+}
