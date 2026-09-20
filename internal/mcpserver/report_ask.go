@@ -293,6 +293,10 @@ var checkpointMarkers = []string{
 // "(" is 🎯T577: jv-t568-intent-closed wrote "Checkpoint (turn-depth ceiling)"
 // jammed after a period with no newline, and the parenthetical is the
 // declaration's punctuation, not more word.
+//
+// 🎯T716: an optional ordinal ("Checkpoint 3 —", "Checkpoint #3:") may sit
+// between the word and the delimiter. That is still a declaration; a
+// following letter is still a mention.
 var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";", "("}
 
 // forwardLookingPlanMarkers are remaining-work phrases that mean the report
@@ -300,8 +304,18 @@ var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";", "("}
 // "Checkpoint" declaration: these may appear anywhere. The word "checkpoint"
 // itself stays declaration-only so a genuine finish ABOUT checkpoint
 // handling still reaps (🎯T446 / 🎯T497 mention).
+//
+// 🎯T716: "next turn:" (colon required) names remaining work the way
+// "next step" already did. Bare "the next turn" is not a plan — T471's
+// "Done. Ready for the next turn." must still reap without a ceiling ask.
+// "not yet committed" / "not yet tested" are the incident's own unfinished
+// clauses; a mis-enveloped finish-report carrying them still reaps (kind
+// wins) but notifies the PO to respawn (T577).
 var forwardLookingPlanMarkers = []string{
 	"next step",
+	"next turn:",
+	"not yet committed",
+	"not yet tested",
 	"i'll resume",
 	"i will resume",
 	"turn-depth ceiling",
@@ -335,6 +349,9 @@ var explicitIncompleteMarkers = []string{
 	"status: in progress",
 	"still in progress",
 	"no commit yet",
+	"not yet committed",
+	"not yet tested",
+	"next turn:",
 	"no commit, no gate",
 	"no product evidence yet",
 	"nothing here is achieved",
@@ -541,7 +558,8 @@ func hasCueWord(s string, cues []string) bool {
 // checkpointDeclaration finds a line that declares the report a checkpoint
 // (🎯T497): its decoration-stripped text is the word "checkpoint" alone, or the
 // word followed by a punctuation break — "Checkpoint — ending this turn…",
-// "Checkpoint: parser mapped", a bare CHECKPOINT banner. Line-initial position
+// "Checkpoint: parser mapped", a bare CHECKPOINT banner. 🎯T716: an optional
+// ordinal is still a declaration ("Checkpoint 3 — …"). Line-initial position
 // plus the delimiter is what separates a declaration from a mention: prose that
 // contains the word mid-sentence, or uses it as an adjective ("checkpoint
 // reports"), never matches.
@@ -621,11 +639,29 @@ func hasForwardLookingPlan(report string) bool {
 // isCheckpointDelimited is true when rest — the line after the word — starts
 // with a break rather than more word. Trailing emphasis is stripped first so
 // "**CHECKPOINT**" is still bare.
+//
+// 🎯T716: a numbered ordinal between the word and the break is still a
+// declaration ("Checkpoint 3 — …", "Checkpoint #3:"). Recursing after the
+// digits reuses the same delimiter test; a following letter ("Checkpoint
+// handling") still fails.
 func isCheckpointDelimited(rest string) bool {
 	rest = strings.TrimLeft(rest, " \t")
 	rest = strings.TrimRight(rest, " \t*_`~")
 	if rest == "" {
 		return true
+	}
+	if rest[0] == '#' {
+		rest = strings.TrimLeft(rest[1:], " \t")
+		if rest == "" {
+			return true
+		}
+	}
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i > 0 {
+		return isCheckpointDelimited(rest[i:])
 	}
 	for _, d := range checkpointDelimiters {
 		if strings.HasPrefix(rest, d) {
