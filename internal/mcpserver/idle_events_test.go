@@ -223,6 +223,56 @@ func TestFormatDaemonRestartedAndWorkerIdle(t *testing.T) {
 	}
 }
 
+func TestSkipSleepingCoordinatorRestart(t *testing.T) {
+	t.Parallel()
+	const po, overseer = "jevons-po", "jevons"
+	cases := []struct {
+		name       string
+		target     string
+		overseer   string
+		alive      bool
+		openIntent bool
+		kids       int
+		wantSkip   bool
+		wantReason string
+	}{
+		{"sleeping po", po, overseer, false, false, 0, true, reasonSleepingPO},
+		{"running po", po, overseer, true, false, 0, false, ""},
+		{"open intent", po, overseer, false, true, 0, false, ""},
+		{"has work children", po, overseer, false, false, 1, false, ""},
+		{"overseer never skipped", overseer, overseer, false, false, 0, false, ""},
+		{"empty overseer defaults", po, "", false, false, 0, true, reasonSleepingPO},
+		{"empty target", "", overseer, false, false, 0, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			skip, reason := SkipSleepingCoordinatorRestart(tc.target, tc.overseer, tc.alive, tc.openIntent, tc.kids)
+			if skip != tc.wantSkip || reason != tc.wantReason {
+				t.Fatalf("skip=%v reason=%q want skip=%v reason=%q", skip, reason, tc.wantSkip, tc.wantReason)
+			}
+			if reason == "never_materialized" || reason == "never-materialized" {
+				t.Fatal("sleeping/parked must not be classified as never-materialized (🎯T629)")
+			}
+		})
+	}
+}
+
+func TestRestartNotifyWorkChildrenPrefersRegistered(t *testing.T) {
+	t.Parallel()
+	byParent := map[string][]WorkerIdleRef{"jevons-po": {{Name: "jv-running"}}}
+	defs := []claudia.AgentDef{
+		{Name: "jevons-po", Purpose: claudia.PurposeWork},
+		{Name: "jv-running", Parent: "jevons-po", Purpose: claudia.PurposeWork},
+		{Name: "jv-stopped", Parent: "jevons-po", Purpose: claudia.PurposeWork},
+	}
+	if n := restartNotifyWorkChildren("jevons-po", byParent, defs); n != 2 {
+		t.Fatalf("work children=%d want 2 (running + registered stopped)", n)
+	}
+	if n := restartNotifyWorkChildren("jevons-po", nil, nil); n != 0 {
+		t.Fatalf("empty=%d", n)
+	}
+}
+
 // 🎯T171: daemon-restarted emit targets = each parent PO + overseer (not workers).
 func TestDaemonRestartEventTargetsPOsAndOverseer(t *testing.T) {
 	t.Parallel()

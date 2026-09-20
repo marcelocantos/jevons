@@ -1571,12 +1571,18 @@ func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 }
 
 // NotifyDaemonRestarted sends restart recovery once per durable parent PO and
-// to the overseer (cockpit) (🎯T171 + 🎯T328).
+// to the overseer (cockpit) (🎯T171 + 🎯T328 + 🎯T627.5).
 //
-//  1. Parent POs always get daemon-restarted (reattached children + silent OK).
+//  1. Parent POs get daemon-restarted when they are running, have work
+//     children, or recoverable open owner intent. A stopped PO with
+//     open_intent=false and zero work children is left stopped: no ACP
+//     session/load, no rehydrated_sent (🎯T627.5). Sleeping is not
+//     never-materialized (🎯T629).
 //  2. Overseer: when stateDir/chatlog yields a recoverable open owner
 //     instruction, deliver owner-intent-resume (forces real turn; not
 //     silent-idle-only). Otherwise daemon-restarted status path as before.
+//     Independent of the PO skip; still suppressed on answered_or_closed
+//     or stale_chatlog.
 //
 // Fire-and-forget; queues if busy. Does not short-resume workers — that is
 // ResumeOpenMissionWorkers. Residual: no chatlog / no recoverable intent.
@@ -1606,9 +1612,18 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 		}
 		return "idle"
 	}
-	byParent := CollectWorkChildrenWithPhase(s.registry.List(), running, phaseOf, defaultPO, overseer)
+	defs := s.registry.List()
+	byParent := CollectWorkChildrenWithPhase(defs, running, phaseOf, defaultPO, overseer)
 	targets := DaemonRestartEventTargets(byParent, overseer, defaultPO)
 	allKids := FlattenWorkChildren(byParent)
+
+	// Preview owner intent for the 🎯T627.5 PO skip. Overseer re-reads
+	// after any slower PO sends (🎯T627.3): owner work may complete,
+	// change, or be removed while those notifications are delivered.
+	previewIntent := applyRestartRecoveryCutoff(
+		LoadOpenOwnerIntentWithLedger(stateDir, overseer, s.workerWD),
+		s.bootAt,
+	)
 
 	// 🎯T418: do this BEFORE the blocking restart-notify sends. A live
 	// overseer turn held SweepHandovers past the isolate journey window.
@@ -1619,6 +1634,22 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	for _, target := range targets {
 		var openIntent OpenOwnerIntent
 		kids := byParent[target]
+		if target != overseer {
+			nKids := restartNotifyWorkChildren(target, byParent, defs)
+			if skip, reason := SkipSleepingCoordinatorRestart(target, overseer, running(target), previewIntent.Recoverable(), nKids); skip {
+				slog.Info("daemon restart skip sleeping coordinator",
+					"target", target, "reason", reason,
+					"open_intent", false, "workers", nKids, "process", "stopped")
+				s.logLifecycle(compIdleNudge, eventDaemonRestarted, "skip", map[string]any{
+					"target":      target,
+					"reason":      reason,
+					"workers":     nKids,
+					"open_intent": false,
+					"process":     "stopped",
+				})
+				continue
+			}
+		}
 		if target == overseer {
 			// Cockpit gets the full reattached fleet summary.
 			kids = allKids

@@ -163,6 +163,53 @@ func FormatDaemonRestartedText(parent string, workers []WorkerIdleRef) string {
 	return b.String()
 }
 
+// reasonSleepingPO is the 🎯T627.5 skip decision: a stopped coordinator
+// with no recoverable owner intent and no work children stays stopped.
+// Named so GATE / daily-path logs show a skip, not a missing error.
+const reasonSleepingPO = "sleeping_po"
+
+// SkipSleepingCoordinatorRestart is the 🎯T627.5 gate for idle_nudge
+// daemon-restarted. A registered PO/boss that is process-stopped, has no
+// recoverable open owner intent, and has zero work children is left
+// stopped: no ACP session/load, no rehydrated_sent. Overseer is never
+// skipped here — its resume path is independent (and still suppressed
+// when residual is answered_or_closed or stale_chatlog).
+//
+// This does not treat sleeping/parked as never-materialized (🎯T629):
+// skip is "do not rehydrate"; a seat that must recover still goes
+// through send → fail-closed Cursor resume.
+func SkipSleepingCoordinatorRestart(target, overseer string, processAlive, openIntent bool, workChildren int) (skip bool, reason string) {
+	target = strings.TrimSpace(target)
+	overseer = strings.TrimSpace(overseer)
+	if overseer == "" {
+		overseer = "jevons"
+	}
+	if target == "" || strings.EqualFold(target, overseer) {
+		return false, ""
+	}
+	if processAlive {
+		return false, ""
+	}
+	if openIntent {
+		return false, ""
+	}
+	if workChildren > 0 {
+		return false, ""
+	}
+	return true, reasonSleepingPO
+}
+
+// restartNotifyWorkChildren counts work children for the 🎯T627.5 skip:
+// running children already grouped under target, or registered
+// purpose=work agents whose Parent is target — whichever is larger.
+func restartNotifyWorkChildren(target string, byParent map[string][]WorkerIdleRef, defs []claudia.AgentDef) int {
+	n := len(byParent[target])
+	if c := CountWorkChildren(defs, target); c > n {
+		n = c
+	}
+	return n
+}
+
 // DaemonRestartEventTargets returns who should receive daemon-restarted:
 // each parent key in byParent (durable POs / bosses) plus overseer when distinct.
 // Pure helper for hermetic emit-target oracles (🎯T171).
