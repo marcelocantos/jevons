@@ -22,6 +22,15 @@ import (
 // under-recorded the tree, and the next worker on an adjacent leaf discovered
 // them by accident.
 //
+// Judgment: attribute-and-surface, do not kill the seat root. Killing mid-write
+// is the 🎯T702 pile (untracked package + modified files orphaned in the shared
+// clone) and the 🎯T597 harm a stop of a working seat guards. Grok Stop is
+// client.Close — which does kill an owned stdio child — but a leftover turn
+// can still land a commit that was already in git, and a quiet root is not
+// T708's target (TestT708QuietSeatReapsNothing). Detached load is reaped
+// before the row leaves (SetBeforeRemoveHook → reapSeatLoad). Commits that
+// still land are the parent notice below.
+//
 // Product: at reap_done / reap_achieve, snapshot HEAD in the seat's workdir.
 // The fleet-health sweep then lists commits after that SHA. Any that mention
 // the closed target raise one parent notice naming the seat, the commits, and

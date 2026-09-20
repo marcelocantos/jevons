@@ -288,3 +288,29 @@ func TestNoticeForKeepsWorkDirAfterRemoval(t *testing.T) {
 		t.Fatal("NoticeFor invented a row")
 	}
 }
+
+// TestBeforeRemoveHookSeesTheRow: 🎯T708/T734 need the pid while Def still
+// exists. A hook that ran after Remove would find nothing to signal.
+func TestBeforeRemoveHookSeesTheRow(t *testing.T) {
+	acct := New(nil)
+	reg := newTestRegistry(t, work("jv-t717-replay-digest", "jevons-po", "T717"))
+	var saw bool
+	acct.SetBeforeRemoveHook(func(name string) {
+		if name != "jv-t717-replay-digest" {
+			t.Errorf("hook name = %q", name)
+		}
+		if reg.Def(name) == nil {
+			t.Error("before-remove hook ran after the row left")
+		}
+		saw = true
+	})
+	if _, err := acct.Remove(reg, "jv-t717-replay-digest", Removal{Reason: ReasonReapAchieve}); err != nil {
+		t.Fatal(err)
+	}
+	if !saw {
+		t.Fatal("before-remove hook did not run")
+	}
+	if reg.Def("jv-t717-replay-digest") != nil {
+		t.Fatal("row survived Remove")
+	}
+}

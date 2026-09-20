@@ -52,6 +52,7 @@ func (s *Server) OpenFleetIntent(stateDir string) error {
 	// chokepoint rather than a stamp at each of the eight removal call sites
 	// across two packages: a per-caller convention is exactly the arrangement
 	// that produced three subsystems with three different answers.
+	s.RemovalAccount().SetBeforeRemoveHook(s.onAccountedRemoving)
 	s.RemovalAccount().SetRemovedHook(s.onAccountedRemoval)
 
 	snap := st.Snapshot()
@@ -61,6 +62,14 @@ func (s *Server) OpenFleetIntent(stateDir string) error {
 		"summary", snap.Summarize(),
 	)
 	return nil
+}
+
+// onAccountedRemoving runs while the row still exists (🎯T708): detached
+// background load is signalled before Registry.Remove drops the pid. It
+// does not kill a quiet seat root — that would interrupt an in-flight
+// write (🎯T597 / 🎯T702). Leftover commits are 🎯T734's after-hook.
+func (s *Server) onAccountedRemoving(name string) {
+	s.reapSeatLoad(name)
 }
 
 // onAccountedRemoval is the process-wide 🎯T435 hook: stamp finished-and-reaped

@@ -149,11 +149,12 @@ const DefaultNoticeWindow = 15 * time.Minute
 // use New. A nil *Account is safe: removals still happen and still emit to
 // slog through the nil Logger path, which is what unwired tests want.
 type Account struct {
-	mu      sync.Mutex
-	log     Logger
-	now     func() time.Time
-	recent  []Notice
-	removed func(name string, rm Removal)
+	mu       sync.Mutex
+	log      Logger
+	now      func() time.Time
+	recent   []Notice
+	removing func(name string)
+	removed  func(name string, rm Removal)
 }
 
 // New returns an Account emitting through log (may be nil for slog-only).
@@ -186,6 +187,30 @@ func (a *Account) SetRemovedHook(fn func(name string, rm Removal)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.removed = fn
+}
+
+// SetBeforeRemoveHook installs a callback run once per row that is about
+// to leave, while the definition and process handle still exist.
+//
+// 🎯T708 / 🎯T734: detached load has to be signalled before Registry.Remove
+// drops the pid. The after-hook is too late — Get/Def are already nil.
+func (a *Account) SetBeforeRemoveHook(fn func(name string)) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.removing = fn
+}
+
+// beforeRemoveHook returns the installed pre-remove callback (nil-safe).
+func (a *Account) beforeRemoveHook() func(name string) {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.removing
 }
 
 // removedHook returns the installed hook (nil-safe).
@@ -256,6 +281,9 @@ func (a *Account) Remove(reg *claudia.Registry, name string, rm Removal) (bool, 
 	}
 	if n.Purpose == "" {
 		n.Purpose = claudia.PurposeWork
+	}
+	if hook := a.beforeRemoveHook(); hook != nil {
+		hook(name)
 	}
 	err := reg.Remove(name)
 	if err != nil {

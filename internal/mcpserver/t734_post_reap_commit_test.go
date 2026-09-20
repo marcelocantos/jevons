@@ -7,13 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/seatload"
 )
 
 const (
@@ -220,8 +223,49 @@ func t734Server(t *testing.T) (*Server, *fakeSender, string) {
 	}
 	s.SetFleetIntentStore(store)
 	s.SetRemovalAccount(fleetlog.New(nil))
+	s.RemovalAccount().SetBeforeRemoveHook(s.onAccountedRemoving)
 	s.RemovalAccount().SetRemovedHook(s.onAccountedRemoval)
 	return s, parent, repo
+}
+
+// 🎯T708-on-reap: reap_done / reap_achieve must take detached load with the
+// seat, same as explicit kill. A quiet root is not signalled — that would
+// be killing the in-flight write T734 chose not to destroy.
+func TestT734ReapPathReapsDetachedLoad(t *testing.T) {
+	for _, reason := range []string{fleetlog.ReasonReapDone, fleetlog.ReasonReapAchieve} {
+		t.Run(reason, func(t *testing.T) {
+			var signalled []int
+			s, _, _ := t734Server(t)
+			s.seatLoad = &seatload.Tracker{
+				List: func() (seatload.Table, error) {
+					return seatload.Table{
+						{PID: 1, PPID: 0, PGID: 1, Command: "/sbin/launchd"},
+						{PID: 500, PPID: 1, PGID: 500, Command: "jevonsd"},
+						{PID: 900, PPID: 500, PGID: 900, Command: "grok --seat " + t734Worker},
+						{PID: 902, PPID: 1, PGID: 900, CPUPercent: 190, Command: "/bin/sh -c while :; do go test -race ./...; done"},
+					}, nil
+				},
+				Signal: func(pid int, _ syscall.Signal) error { signalled = append(signalled, pid); return nil },
+				Sleep:  func(time.Duration) {},
+				Self:   500,
+			}
+			if _, err := s.seatLoad.Track(t734Worker, 900); err != nil {
+				t.Fatal(err)
+			}
+			ok, err := s.RemovalAccount().Remove(s.registry, t734Worker, fleetlog.Removal{Reason: reason})
+			if err != nil || !ok {
+				t.Fatalf("remove: ok=%v err=%v", ok, err)
+			}
+			if len(signalled) == 0 {
+				t.Fatalf("%s left the detached loop running", reason)
+			}
+			for _, pid := range signalled {
+				if pid == 500 || pid == 900 || pid <= 1 {
+					t.Fatalf("%s signalled seat root or daemon %d", reason, pid)
+				}
+			}
+		})
+	}
 }
 
 func t734Reap(t *testing.T, s *Server, name string) {
