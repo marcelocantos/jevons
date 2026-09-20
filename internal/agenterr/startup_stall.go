@@ -121,3 +121,7 @@ func IsStartupStall(msg string) bool {
 	}
 	return true
 }
+
+// StallReason returns the named not-ready sub-reason msg carries
+// (rc_connecting, settings_warning, splash, no_composer), or "" (🎯T745).
+func StallReason(msg string) string { return namedReadyReason(msg) }
