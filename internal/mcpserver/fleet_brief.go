@@ -314,11 +314,6 @@ fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP
   (jevons_plan_usage) or the owner asks (owner_asked=true). The 🎯T417
   unworkable notice says which applies.
 
-## Plan dest ranks published band first (🎯T693)
-- Destination selection ranks on the **published band** first: **under** outranks **ok**, because under means paid allowance is at risk of expiring unspent. **hot** and **ahead** are never destinations.
-- Within the same band, pressure (slack vs pace) is tiebreak only — not the primary rank key.
-- A per-model weekly window at 0% (Fable `weekly_model`) does **not** mean the provider is unavailable. **Fable spent ≠ Claude unavailable.**
-
 ## Parent report is daemon-delivered (🎯T690)
 - A spawned work agent's terminal report (finish-report / scout-report /
   stored-report) is delivered to its registry parent by the daemon. That

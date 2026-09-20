@@ -247,21 +247,6 @@ func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
 	}
 }
 
-// 🎯T693: standing brief ranks dest on published band; Fable spent is not Claude down.
-func TestFleetStandingBriefPlanDestBandFirst(t *testing.T) {
-	for _, want := range []string{
-		"Plan dest ranks published band first",
-		"🎯T693",
-		"under outranks **ok**",
-		"hot** and **ahead** are never destinations",
-		"Fable spent ≠ Claude unavailable",
-	} {
-		if !strings.Contains(FleetStandingBrief, want) {
-			t.Errorf("FleetStandingBrief missing T693 marker %q", want)
-		}
-	}
-}
-
 // 🎯T690: standing brief names the daemon parent-report channel.
 func TestFleetStandingBriefParentReportDaemonDelivered(t *testing.T) {
 	for _, want := range []string{
