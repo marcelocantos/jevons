@@ -400,6 +400,12 @@ type Server struct {
 	// Guarded by mu.
 	agentReportDir string
 
+	// sendApprovalNever names seats whose MCP jevons_agent_send is denied
+	// the Grok "approval policy is never" way (🎯T690 hermetic). Production
+	// mint does not populate this; parent-report is daemon-delivered
+	// regardless. Guarded by mu.
+	sendApprovalNever map[string]bool
+
 	// research is the ambient research staff cycle (🎯T356): periodic context
 	// refresh plus async feed triggers, writing durable versioned notes.
 	// Nil until SetResearchAgent.

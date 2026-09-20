@@ -258,6 +258,15 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Design-gated / parked-for-design / T31.2 fuzzy / host saturation
   (T460) still block punching through into implementation. Schema:
   `internal/envelope`.
+- **Parent report is daemon-delivered (🎯T690):** a work agent's
+  terminal report reaches its registry parent on the stored-report /
+  finish-report path the daemon already captures. That channel does
+  not go through `jevons_agent_send` and is not gated on a per-seat
+  tool-approval policy. Spawn result cites
+  `parent_report: daemon-delivered`. A worker discovering it cannot
+  `jevons_agent_send` to its parent is not "the parent cannot hear
+  you". Hermetic: mint a seat whose policy denies send, produce a
+  terminal report, assert the parent receives it.
 - **Finished work auto-deregister (🎯T165 / 🎯T195):** when a **work**
   agent’s terminal report claims done — including imperfect bare done
   without oracle markers — the product **stop+Removes** it from the live

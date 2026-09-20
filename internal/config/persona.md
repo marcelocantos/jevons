@@ -550,6 +550,12 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   ledger via `envelope.InheritLedger`. Skip rules still hold —
   design-gated, parked-for-design, T31.2 fuzzy, host saturation (T460) —
   scout does not punch through those into implementation.
+- **Parent report is daemon-delivered (🎯T690):** a work agent's
+  terminal report is stored and delivered to its registry parent by
+  the daemon. That path does not go through `jevons_agent_send` and
+  is not gated on a per-seat tool-approval policy. Spawn result cites
+  `parent_report: daemon-delivered`. A denied send is not "the parent
+  cannot hear you".
 
 ## Cited SHA must stay reachable (🎯T427)
 

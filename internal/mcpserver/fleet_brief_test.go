@@ -138,6 +138,9 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"jv-t159-seal",
 		"literal dots",
 		"implement the fix",
+		"Parent report is daemon-delivered",
+		"🎯T690",
+		"parent_report: daemon-delivered",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -204,6 +207,21 @@ func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
 	} {
 		if !strings.Contains(FleetStandingBrief, want) {
 			t.Errorf("FleetStandingBrief missing T536.3 marker %q", want)
+		}
+	}
+}
+
+// 🎯T690: standing brief names the daemon parent-report channel.
+func TestFleetStandingBriefParentReportDaemonDelivered(t *testing.T) {
+	for _, want := range []string{
+		"Parent report is daemon-delivered",
+		"🎯T690",
+		"parent_report: daemon-delivered",
+		"per-seat tool-approval policy",
+		"jevons_agent_send",
+	} {
+		if !strings.Contains(FleetStandingBrief, want) {
+			t.Errorf("FleetStandingBrief missing T690 marker %q", want)
 		}
 	}
 }

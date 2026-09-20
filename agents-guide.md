@@ -186,6 +186,19 @@ What this means when you are briefing or reporting:
 *synchronous* request/reply op (it waits for the reply and assembles it), which
 is why it stays separate from the fire-and-forget family above.
 
+### Parent report is daemon-delivered (🎯T690)
+
+A spawned work agent's terminal report (finish-report / scout-report /
+stored-report) is delivered to its registry parent by the daemon. That
+channel does not go through `jevons_agent_send` and is not gated on a
+per-seat tool-approval policy. Spawn result cites
+`parent_report: daemon-delivered`. A denied `jevons_agent_send` is not
+"the parent cannot hear you" — the daemon already has the report.
+
+Mid-mission messages that are not a terminal report still use
+`jevons_agent_send`. The 🎯T679 specimen was a scout whose approval
+policy was never: the parent heard nothing until a human relayed.
+
 ### A send is confirmed, not assumed (🎯T416)
 
 `jevons_agent_send` used to answer **"Message sent"** whenever the keystrokes

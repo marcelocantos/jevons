@@ -570,6 +570,7 @@ func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, prov
 	if prompt != "" {
 		msg += ", prompt_delivered=true"
 	}
+	msg += ", " + ParentReportChannelCite
 	msg += ")"
 	return msg
 }
@@ -856,6 +857,14 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	}
 	if actor == "" {
 		return mcp.NewToolResultError("actor is required (pass your agent name; overseer uses the overseer name)"), nil
+	}
+	// 🎯T690: a seat whose approval policy never allows jevons_agent_send
+	// is refused here (Grok specimen). The parent-report channel does not
+	// use this door.
+	if s.agentSendDenied(actor) {
+		slog.Info("agent_send denied by approval policy",
+			"actor", actor, "name", name, "policy", "never")
+		return mcp.NewToolResultError(ErrApprovalPolicyNever), nil
 	}
 
 	// 🎯T104 under fan-out: first send carries standing local-delivery brief.
@@ -1309,6 +1318,11 @@ func (s *Server) notify(agentName, text string) {
 		})
 		msg = gate.Banner(flags) + "\n\n" + msg
 	}
+
+	// 🎯T690: the stored terminal report reaches the registry parent on the
+	// daemon path, before the overseer copy and before 🎯T165 reap. A seat
+	// that cannot call jevons_agent_send still reports upward.
+	s.notifyParentReport(agentName, msg)
 
 	overseer := s.overseerName()
 	res, err := s.deliverByName(overseer, msg, OriginAgent, false)

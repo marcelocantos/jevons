@@ -130,4 +130,7 @@ func TestStartResultCitesProviderKnob(t *testing.T) {
 	if !strings.Contains(msg, "portfolio_file would have picked claude") {
 		t.Fatalf("missing loser: %q", msg)
 	}
+	if !strings.Contains(msg, ParentReportChannelCite) {
+		t.Fatalf("missing T690 parent-report channel: %q", msg)
+	}
 }

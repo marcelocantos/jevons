@@ -11,7 +11,7 @@ import (
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -299,6 +299,17 @@ fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP
 - Cross-provider migrate only when Claude is exhausted/blocked
   (jevons_plan_usage) or the owner asks (owner_asked=true). The 🎯T417
   unworkable notice says which applies.
+
+## Parent report is daemon-delivered (🎯T690)
+- A spawned work agent's terminal report (finish-report / scout-report /
+  stored-report) is delivered to its registry parent by the daemon. That
+  channel does not go through jevons_agent_send and is not gated on a
+  per-seat tool-approval policy.
+- Spawn result cites parent_report: daemon-delivered. A denied
+  jevons_agent_send is not "the parent cannot hear you" — the daemon
+  already has the report.
+- Residual: mid-mission messages that are not a terminal report still
+  use jevons_agent_send; this slice is the upward-report path.
 
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer
