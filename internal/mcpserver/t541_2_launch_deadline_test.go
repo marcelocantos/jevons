@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,20 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+func TestT627LaunchPrefersContextualRegistry(t *testing.T) {
+	src, err := os.ReadFile("t541_cursor_start.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "LaunchContext(context.Context, string)") {
+		t.Fatal("launchAgent dropped LaunchContext — Registry.Launch would hold the global mutex again")
+	}
+	if !strings.Contains(body, "return s.registry.Launch(name)") {
+		t.Fatal("legacy Launch fallback disappeared; keep it for the published pin")
+	}
+}
 
 func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 	s, _ := t541Server(t)
