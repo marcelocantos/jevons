@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
@@ -246,5 +247,48 @@ func TestT752SeatTranscriptPathFallsBackToSessionStore(t *testing.T) {
 	}
 	if !isGrokChatHistory(want) {
 		t.Fatalf("%q must be recognised as a Grok transcript", want)
+	}
+}
+
+// TestT752ProductEntryPointDispatchesGrokTranscripts enters where the wiring
+// actually enters — recoverMissedTurns, not the Grok arm directly — because
+// that dispatch is the whole fix from the daemon's point of view, and a test
+// that calls recoverGrokMissedTurns by hand would pass with the dispatch line
+// deleted.
+//
+// The second assertion is the control on the first: the Claude-shaped scanner
+// finds nothing in this same file, at any window. That is the original defect
+// stated as a test, and it is what makes the dispatch load-bearing rather than
+// redundant.
+func TestT752ProductEntryPointDispatchesGrokTranscripts(t *testing.T) {
+	s, _, reportDir := t752Seat(t)
+	report := t752FinishReport(true)
+
+	path := t752GrokHistory(t,
+		t752GrokUser(t, t752Goal),
+		t752GrokAssistant(t, "Scanning the transcript.", true),
+		t752GrokAssistant(t, report, false),
+	)
+
+	// The Claude reader sees nothing here — no message nest, no stop_reason,
+	// no timestamp — however wide the window is opened.
+	claudeSaw, err := scanMissedTurns(path, time.Now().Add(-24*time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Claude scan: %v", err)
+	}
+	if len(claudeSaw) != 0 {
+		t.Fatalf("the Claude-shaped scanner must find nothing in a Grok file; got %v", claudeSaw)
+	}
+
+	// The product entry point routes it anyway.
+	if n := s.recoverMissedTurns(t690Worker, path, time.Now()); n != 1 {
+		t.Fatalf("recoverMissedTurns over a Grok transcript = %d, want 1 — the dispatch is missing", n)
+	}
+	rec, err := agentreport.Latest(reportDir, t690Worker)
+	if err != nil || !strings.Contains(rec.Text, claudia.GoalStatusComplete) {
+		t.Fatalf("report not stored through the product entry point: %q, %v", rec.Text, err)
+	}
+	if def := s.registry.Def(t690Worker); def != nil && strings.TrimSpace(def.Goal) != "" {
+		t.Fatalf("Goal not cleared through the product entry point; Goal=%q", def.Goal)
 	}
 }
