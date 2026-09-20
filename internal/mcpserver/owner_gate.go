@@ -77,8 +77,7 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("owner gate refused (🎯T449): %v", err)), nil
 		}
-		out, err := runBullseye("commit", "--op", "assign", "--cwd", cwd,
-			"--id", target, "--owner", ownergate.OwnerHandle, "--reason", reason)
+		out, err := runBullseye(ownerGateRecordArgs(cwd, target, reason)...)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye assign failed: %v\n%s", err, out)), nil
 		}
@@ -95,7 +94,7 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		// Unassign first: the gate is answered, so the target must return to
 		// normal handling even if the follow-up narration fails. Leaving it
 		// parked on an answered gate is the same defect one step later.
-		out, err := runBullseye("commit", "--op", "unassign", "--cwd", cwd, "--id", target)
+		out, err := runBullseye(ownerGateAnswerArgs(cwd, target)...)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye unassign failed: %v\n%s", err, out)), nil
 		}
@@ -109,6 +108,30 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 	default:
 		return mcp.NewToolResultError("op must be record or answer"), nil
 	}
+}
+
+// ownerGateRecordArgs is the argv jevons_owner_gate shells for op=record.
+//
+// `bullseye commit --op assign --owner` is what the CLI help documents, but
+// installed 0.56.0 rejects `--owner` at the COMMIT_FLAGS whitelist before the
+// handler reads it (🎯T720: the 2026-09-21 T711 close). `apply --set owner=`
+// `--set reason=` is the mutation path that sugar wraps, and those flags are
+// in the accepted set. Tests probe the installed CLI's accepted-flag line so
+// a future unrecognised flag is RED at test time, not when a PO is closing.
+func ownerGateRecordArgs(cwd, target, reason string) []string {
+	return []string{
+		"apply",
+		"--cwd", cwd,
+		"--id", target,
+		"--set", "owner=" + ownergate.OwnerHandle,
+		"--set", "reason=" + reason,
+	}
+}
+
+// ownerGateAnswerArgs is the argv jevons_owner_gate shells for op=answer.
+// Unassign takes no --owner; 0.56.0 already accepts this set.
+func ownerGateAnswerArgs(cwd, target string) []string {
+	return []string{"commit", "--op", "unassign", "--cwd", cwd, "--id", target}
 }
 
 // resolveOwnerGateCwd expands ~ and checks the directory exists, the same
