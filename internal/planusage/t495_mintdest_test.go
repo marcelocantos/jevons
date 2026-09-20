@@ -99,11 +99,14 @@ func TestT495UnknownRemainingIsNotZero(t *testing.T) {
 	now := time.Now()
 	th := DefaultThresholds()
 	cands := []DestCand{
-		{Provider: "grok", Backend: t495Backend("grok", t495pf(10), t495pf(90), t495Week(0.5), now)},
+		{Provider: "grok", Backend: t495Backend("grok", t495pf(50), t495pf(50), t495Week(0.5), now)},
 		{Provider: "claude", Backend: t495Backend("claude", nil, nil, t495Week(0.5), now)},
 	}
 	if band := WeeklyBandOf(cands[1].Backend, now, th); band != BandOK {
 		t.Fatalf("fixture: unknown-remaining claude band=%s want ok", band)
+	}
+	if band := WeeklyBandOf(cands[0].Backend, now, th); band != BandOK {
+		t.Fatalf("fixture: on-pace grok band=%s want ok (same band as unknown claude)", band)
 	}
 	pick := PickMintDest(cands, "claude", now, th)
 	if !pick.OK || pick.Provider != "claude" || !pick.ConfigTie {

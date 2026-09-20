@@ -50,11 +50,28 @@ func isMonthlyDuration(sec *int64) bool {
 
 // PrimaryAllowanceWindow returns the longer plan allowance window — weekly
 // for Claude/Codex/Grok, monthly for Cursor's billing cycle (🎯T550).
+// Model-scoped windows (weekly_model / Model set) are not the plan: a spent
+// Fable figure must not stand in for Claude (🎯T693).
 func (b Backend) PrimaryAllowanceWindow() (Window, bool) {
-	if w, ok := b.Window(WindowWeekly); ok {
+	if w, ok := b.planLevelWindow(WindowWeekly); ok {
 		return w, true
 	}
-	return b.Window(WindowMonthly)
+	return b.planLevelWindow(WindowMonthly)
+}
+
+// planLevelWindow is the first named window that covers the whole plan,
+// not one model.
+func (b Backend) planLevelWindow(name string) (Window, bool) {
+	for _, w := range b.Windows {
+		if !strings.EqualFold(w.Name, name) {
+			continue
+		}
+		if strings.TrimSpace(w.Model) != "" {
+			continue
+		}
+		return w, true
+	}
+	return Window{}, false
 }
 
 // allowanceWindowLabel is the owner-facing word for band/tooltip copy.

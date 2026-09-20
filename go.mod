@@ -17,6 +17,8 @@ require (
 	modernc.org/sqlite v1.53.0
 )
 
+replace github.com/marcelocantos/claudia => ../claudia
+
 require (
 	github.com/arr-ai/frozen v1.11.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.43.3 // indirect

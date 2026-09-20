@@ -11,7 +11,7 @@ import (
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -313,6 +313,11 @@ fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP
 - Cross-provider migrate only when Claude is exhausted/blocked
   (jevons_plan_usage) or the owner asks (owner_asked=true). The 🎯T417
   unworkable notice says which applies.
+
+## Plan dest ranks published band first (🎯T693)
+- Destination selection ranks on the **published band** first: **under** outranks **ok**, because under means paid allowance is at risk of expiring unspent. **hot** and **ahead** are never destinations.
+- Within the same band, pressure (slack vs pace) is tiebreak only — not the primary rank key.
+- A per-model weekly window at 0% (Fable weekly_model) does **not** mean the provider is unavailable. **Fable spent ≠ Claude unavailable.**
 
 ## Parent report is daemon-delivered (🎯T690)
 - A spawned work agent's terminal report (finish-report / scout-report /

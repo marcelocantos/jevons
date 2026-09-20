@@ -58,6 +58,10 @@ const (
 	WindowWeekly  = "weekly"
 	// WindowMonthly is the billing-cycle allowance (Cursor included usage).
 	WindowMonthly = "monthly"
+	// WindowModelWeekly is a weekly allowance metered for one model, not
+	// the whole plan (claudia PlanWindowModelWeekly). Fable spent is not
+	// Claude unavailable (🎯T693).
+	WindowModelWeekly = "weekly_model"
 )
 
 // DefaultStaleAfter is how old a reading may be before it is served as stale.
@@ -211,6 +215,11 @@ func (s Snapshot) TightestRemaining() (fraction float64, source string, ok bool)
 		}
 		for _, w := range b.Windows {
 			if w.RemainingPercent == nil {
+				continue
+			}
+			// A per-model window is not the provider's remaining
+			// (🎯T693): Fable at 0% must not report Claude exhausted.
+			if strings.EqualFold(w.Name, WindowModelWeekly) || strings.TrimSpace(w.Model) != "" {
 				continue
 			}
 			f := *w.RemainingPercent / 100
