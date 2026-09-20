@@ -5,6 +5,8 @@ package docratchet_test
 
 import (
 	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +41,36 @@ func TestT742DoctrineNamesEveryStringMatchingRule(t *testing.T) {
 		if r.region != "RegionQuoted" && r.region != "RegionShaped" {
 			t.Errorf("%s region %s is not quoted or shaped — a rule added later cannot ship scanning unbounded text (🎯T742)", r.kind, r.region)
 		}
+	}
+
+	// T733 bound gate.go Verdict constants to attestationRe. Same shape:
+	// every FlagKind constant must sit in structuredFlagKinds or hazardRules.
+	// A fifth string-matching rule therefore cannot ship as an unclassified
+	// constant — it has to join the table, which then forces doctrine to move.
+	consts := flagKindConstNames(t)
+	if len(consts) < 10 {
+		t.Fatalf("found only %d FlagKind constants (%v) — the enumerator has rotted", len(consts), consts)
+	}
+	seen := map[string]bool{}
+	var classified []string
+	for _, n := range structuredFlagNames(t) {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		classified = append(classified, n)
+	}
+	for _, r := range rules {
+		if seen[r.kind] {
+			t.Errorf("%s is in both structuredFlagKinds and hazardRules", r.kind)
+			continue
+		}
+		seen[r.kind] = true
+		classified = append(classified, r.kind)
+	}
+	sort.Strings(classified)
+	if !sameStringSet(consts, classified) {
+		t.Errorf("FlagKind constants %v != structured∪hazard %v — a new constant must join structuredFlagKinds or hazardRules (🎯T742 / 🎯T733)", consts, classified)
 	}
 
 	for _, doc := range t742DoctrineFiles {
@@ -117,6 +149,52 @@ func stringMatchingRules(t *testing.T) []t742Rule {
 		out = append(out, t742Rule{kind: kind, region: region, word: word})
 	}
 	return out
+}
+
+func flagKindConstNames(t *testing.T) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range flagKindConstRe.FindAllStringSubmatch(readRepo(t, "internal/gate/claim.go"), -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		names = append(names, m[1])
+	}
+	sort.Strings(names)
+	return names
+}
+
+func structuredFlagNames(t *testing.T) []string {
+	t.Helper()
+	src := readRepo(t, "internal/gate/scan_region.go")
+	const marker = "var structuredFlagKinds"
+	start := strings.Index(src, marker)
+	if start < 0 {
+		t.Fatal("internal/gate/scan_region.go has no structuredFlagKinds")
+	}
+	rest := src[start:]
+	open := strings.Index(rest, "{")
+	close := strings.Index(rest, "}")
+	if open < 0 || close <= open {
+		t.Fatal("structuredFlagKinds block malformed")
+	}
+	block := rest[open:close]
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range regexp.MustCompile(`\b(Flag\w+)\b`).FindAllStringSubmatch(block, -1) {
+		if m[1] == "FlagKind" || seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		names = append(names, m[1])
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		t.Fatal("structuredFlagKinds enumerator found nothing")
+	}
+	return names
 }
 
 func stringsContainsT742(body string) bool {
