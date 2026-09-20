@@ -42,9 +42,13 @@ func TestT561ContextRemintStaysOnClaudeWhenWeeklyRemains(t *testing.T) {
 		t.Fatalf("weekly exhausted → migrate, got %+v", p)
 	}
 
+	// 🎯T677: a rate-limited meter is not a provider verdict. A context
+	// blow while the reading happens to be unavailable stays on the same
+	// provider — migrating on it would move a seat off a plan that may
+	// well have room, on no evidence at all.
 	a.Backend = Backend{Provider: "claude", Status: StatusUnavailable, Reason: "429 rate_limit"}
-	if p := ContextRemintPlan(a); p.Mode != RemintMigrate {
-		t.Fatalf("429 → migrate, got %+v", p)
+	if p := ContextRemintPlan(a); p.Mode == RemintMigrate {
+		t.Fatalf("429 must not migrate — the reading failed, the plan did not: %+v", p)
 	}
 
 	u := base

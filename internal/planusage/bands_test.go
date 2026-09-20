@@ -56,15 +56,24 @@ func TestT285_2WeeklyBandDetail(t *testing.T) {
 		t.Fatalf("ok: band=%s eligible=%v (reason %q)", ok.Band, ok.Eligible, ok.Reason)
 	}
 
-	exhausted := WeeklyBandDetail(Backend{
+	// 🎯T677: a rate-limited meter is unreadable, not spent. The backend
+	// is still not an eligible destination — we cannot vouch for it — but
+	// the band says unpublished and the reason quotes what went wrong
+	// rather than announcing an allowance nobody measured.
+	limited := WeeklyBandDetail(Backend{
 		Provider: "claude", Status: StatusUnavailable,
 		Reason: "Claude usage HTTP 429: rate_limit_error",
 	}, now, th)
-	if exhausted.Band != BandExhausted || exhausted.Eligible {
-		t.Fatalf("exhausted: band=%s eligible=%v", exhausted.Band, exhausted.Eligible)
+	if limited.Band != BandUnpublished || limited.Eligible {
+		t.Fatalf("rate-limited: band=%s eligible=%v", limited.Band, limited.Eligible)
 	}
-	if !strings.Contains(exhausted.Reason, "rate-limited") {
-		t.Fatalf("exhausted reason = %q", exhausted.Reason)
+	if !strings.Contains(limited.Reason, "429") {
+		t.Fatalf("rate-limited reason should quote the failure, got %q", limited.Reason)
+	}
+
+	zeroed := WeeklyBandDetail(weekly(0, 100), now, th)
+	if zeroed.Band != BandExhausted || zeroed.Eligible {
+		t.Fatalf("published zero: band=%s eligible=%v", zeroed.Band, zeroed.Eligible)
 	}
 
 	unpub := WeeklyBandDetail(Backend{Provider: "codex", Status: StatusUnavailable,

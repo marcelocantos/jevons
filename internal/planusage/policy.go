@@ -50,9 +50,9 @@ type DestCand struct {
 
 // WeeklyBandOf classifies one backend's weekly window at now.
 func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
-	if IsExhaustedReason(be.Reason) {
-		return BandExhausted
-	}
+	// 🎯T677: an unreadable backend is unpublished, not exhausted. Only a
+	// number the provider actually published can put a window in the
+	// exhausted band.
 	if !be.Available() {
 		return BandUnpublished
 	}
@@ -88,9 +88,13 @@ const (
 // SessionStatusOf classifies one backend's session window for mint/migrate
 // eligibility. Same snapshot numbers the ticker paints; no JS classifyPace.
 func SessionStatusOf(be Backend, th Thresholds) SessionStatus {
-	if IsExhaustedReason(be.Reason) {
-		return SessionExhausted
-	}
+	// 🎯T677: a reading we could not take says nothing about the
+	// allowance. This used to read any 429 in the backend's reason as an
+	// exhausted session, but that 429 comes from the usage endpoint, not
+	// from the plan: on 2026-09-20 repeated probes rate-limited the meter
+	// and this line parked a live worker holding 387 queued sends while
+	// Claude still had most of its session. An unreadable provider is
+	// unpublished — which is explicitly not a veto — and never exhausted.
 	w, ok := be.Window(WindowSession)
 	if !ok || w.RemainingPercent == nil {
 		return SessionUnpublished

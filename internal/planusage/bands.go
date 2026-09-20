@@ -38,9 +38,8 @@ func bandReason(be Backend, band WeeklyBand, now time.Time, th Thresholds) strin
 	name := titleProvider(be.Provider)
 	switch band {
 	case BandExhausted:
-		if IsExhaustedReason(be.Reason) {
-			return name + " plan allowance exhausted — provider reports rate-limited"
-		}
+		// Only a published zero reaches here now (🎯T677): a failed
+		// reading classifies as unpublished, with its reason shown.
 		return name + " plan allowance exhausted — 0% remaining"
 	case BandUnpublished:
 		if strings.TrimSpace(be.Reason) != "" {

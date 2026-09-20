@@ -141,9 +141,15 @@ func TestT390_1_5_1SessionRemainingLowMintOnly(t *testing.T) {
 	}
 }
 
-// 429 / rate_limit on the backend reason is session-exhausted even when a
-// weekly window would otherwise look fine before CockpitSnapshot rewrite.
-func TestT390_1_5_1Session429Migrates(t *testing.T) {
+// 🎯T677 supersedes the 🎯T390.1.5.1 clause this test used to pin.
+//
+// That clause read a 429 on the backend reason as a spent session and
+// migrated the seat off. The 429 comes from the usage endpoint, not the
+// provider's turn API: on 2026-09-20 eight probes in two minutes put the
+// meter into a multi-hour refusal and this rule parked a live worker
+// holding 387 queued sends while Claude still had most of its session.
+// The rest of T390.1.5.1 stands — a published zero still vetoes.
+func TestT677Session429DoesNotMigrate(t *testing.T) {
 	th := DefaultThresholds()
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	be := Backend{
@@ -151,14 +157,11 @@ func TestT390_1_5_1Session429Migrates(t *testing.T) {
 		Status:   StatusUnavailable,
 		Reason:   "Claude usage HTTP 429: rate_limit_error",
 	}
-	if SessionStatusOf(be, th) != SessionExhausted {
-		t.Fatalf("429 → session exhausted, got %s", SessionStatusOf(be, th))
+	if got := SessionStatusOf(be, th); got != SessionUnpublished {
+		t.Fatalf("429 → %s, want unpublished: a failed reading is unknown", got)
 	}
-	if !MigrateOff(be, now, th) {
-		t.Fatal("429 must migrate-off")
-	}
-	if DestEligible(be, now, th) {
-		t.Fatal("429 must not be dest-eligible")
+	if MigrateOff(be, now, th) {
+		t.Fatal("429 migrated a seat off a provider on no evidence about its allowance")
 	}
 }
 

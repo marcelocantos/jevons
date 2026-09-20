@@ -7,17 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/marcelocantos/claudia"
 )
-
-// IsExhaustedReason reports whether an unavailable reason is the
-// provider saying the allowance is gone (HTTP 429 / rate_limit), not
-// "we publish no remaining number". Matches the cockpit JS
-// (🎯T390.1.3): that case paints 0% session+weekly bars, not a collapsed
-// icon.
-func IsExhaustedReason(reason string) bool {
-	return claudia.IsExhaustedReason(reason)
-}
 
 // ShowOnBar is the cockpit filter: idle Bedrock stays off the ticker
 // (no subscription remaining). Everything else — including unpublished
@@ -29,27 +19,16 @@ func ShowOnBar(b Backend) bool {
 	return true
 }
 
-// CockpitSnapshot copies snap and rewrites 429/rate_limit backends the
-// way the header ticker paints them: available, session+weekly at 0%.
-// A backend that publishes no remaining is left unavailable with its
-// reason. The reader's stored snapshot is not mutated.
+// CockpitSnapshot used to rewrite a rate-limited backend as available
+// with session and weekly at 0%, so the ticker would paint spent bars
+// rather than a collapsed icon. 🎯T677 removed that: the 429 comes from
+// the usage endpoint, not the plan, and painting a failed reading as a
+// spent allowance is how a live provider came to look empty and a live
+// worker came to be parked. An unreadable backend now travels as what it
+// is — unavailable, with its reason — and the cockpit paints it as no
+// reading (🎯T681).
 func CockpitSnapshot(snap Snapshot) Snapshot {
-	out := snap
-	out.Backends = make([]Backend, len(snap.Backends))
-	copy(out.Backends, snap.Backends)
-	for i := range out.Backends {
-		b := &out.Backends[i]
-		if b.Available() || !IsExhaustedReason(b.Reason) || len(b.Windows) > 0 {
-			continue
-		}
-		zero, used := 0.0, 100.0
-		b.Status = StatusAvailable
-		b.Windows = []Window{
-			{Name: WindowSession, RemainingPercent: floatPtr(zero), UsedPercent: floatPtr(used)},
-			{Name: WindowWeekly, RemainingPercent: floatPtr(zero), UsedPercent: floatPtr(used)},
-		}
-	}
-	return out
+	return snap
 }
 
 func floatPtr(v float64) *float64 {
@@ -83,7 +62,7 @@ func FormatCockpit(snap Snapshot) string {
 		}
 		shown++
 		fmt.Fprintf(&b, "%s\n", formatCockpitBackend(be))
-		if IsExhaustedReason(be.Reason) || backendRockBottom(be) {
+		if backendRockBottom(be) {
 			exhausted = append(exhausted, be.Provider)
 		}
 		if w, ok := be.PrimaryAllowanceWindow(); ok && w.RemainingPercent != nil {
@@ -130,8 +109,7 @@ func formatCockpitBackend(be Backend) string {
 		}
 		return fmt.Sprintf("  %s  unavailable — %s", head, why)
 	}
-	rock := backendRockBottom(be) || IsExhaustedReason(be.Reason)
-	if rock {
+	if backendRockBottom(be) {
 		head += "  EXHAUSTED"
 	}
 	var parts []string
@@ -146,9 +124,6 @@ func formatCockpitBackend(be Backend) string {
 		parts = append(parts, label)
 	}
 	line := fmt.Sprintf("  %s  %s", head, strings.Join(parts, "  "))
-	if IsExhaustedReason(be.Reason) && be.Reason != "" {
-		line += "\n    " + oneLine(be.Reason)
-	}
 	return line
 }
 

@@ -80,11 +80,13 @@ func TestWeeklyBandTable(t *testing.T) {
 		t.Fatalf("0 remaining → exhausted, got %s", got)
 	}
 
+	// 🎯T677: a failed reading is unpublished, never exhausted. Only a
+	// number the provider published can empty a band.
 	if got := WeeklyBandOf(Backend{
 		Provider: "claude", Status: StatusUnavailable,
 		Reason: "Claude usage HTTP 429: rate_limit_error",
-	}, now, th); got != BandExhausted {
-		t.Fatalf("429 → exhausted, got %s", got)
+	}, now, th); got != BandUnpublished {
+		t.Fatalf("429 → unpublished, got %s", got)
 	}
 
 	// 🎯T596 widened the waste vertex deliberately, for the same reason it
