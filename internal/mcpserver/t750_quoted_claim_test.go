@@ -187,3 +187,32 @@ func TestT750SeatIsReapedOnItsOwnMarker(t *testing.T) {
 		t.Fatal("the sink kept a seat that claimed completion in its own voice")
 	}
 }
+
+// The save must be attributable in the lifecycle stream, not merely correct.
+// A quoted-marker keep used to take the silent return in the !ok branch, so
+// it left no record at all — and an absent record is what a dark sink
+// (🎯T426 / 🎯T744) also looks like.
+func TestT750SaveIsVisibleInTheLifecycleStream(t *testing.T) {
+	marker, span, _, ok := CitedCompletionClaim(t745BusyPaneReport)
+	if !ok {
+		t.Fatal("the quoted-marker save produced no citable record; it would log nothing and read as a dark sink")
+	}
+	if marker == "" || span == "" {
+		t.Errorf("record must name the cited marker and its sentence; got marker %q span %q", marker, span)
+	}
+
+	// A report that asserts its claim is reaped, not saved, so it must not
+	// also produce a save record.
+	if _, _, _, ok := CitedCompletionClaim(t745FinishedReport); ok {
+		t.Error("an asserted claim was recorded as a quoted-marker save")
+	}
+	// A report with no completion vocabulary at all had nothing to save.
+	if _, _, _, ok := CitedCompletionClaim("Still reading the classifier. Oracle: go test ./internal/mcpserver -run T750, GREEN."); ok {
+		t.Error("a report with no completion word was recorded as a save")
+	}
+	// Vocabulary present but nothing that would have reaped pre-fix: no
+	// accepted-risk, no oracle evidence, no bare claim clause.
+	if _, _, _, ok := CitedCompletionClaim("The objective is not complete and I am still reading."); ok {
+		t.Error("a report that would not have reaped pre-fix was recorded as a save")
+	}
+}

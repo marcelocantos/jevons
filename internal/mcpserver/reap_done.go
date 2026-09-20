@@ -265,6 +265,23 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			slog.Info("T581 kept agent whose done-word was a local clause, not a finish",
 				"agent", name)
 		}
+		// 🎯T750: a completion marker the worker cited rather than claimed.
+		// Without this the save takes the silent return below and leaves no
+		// record, which reads exactly like a sink that never ran.
+		if reason == "not_finished_work_report" {
+			if m, span, offset, cited := CitedCompletionClaim(report); cited {
+				fields := map[string]any{
+					"name":          name,
+					"reason":        "quoted_completion_claim",
+					"cited_marker":  m,
+					"report_span":   span,
+					"report_offset": offset,
+				}
+				s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
+				slog.Info("T750 kept agent whose completion marker was quoted, not claimed",
+					"agent", name, "cited_marker", m)
+			}
+		}
 		if strings.HasPrefix(reason, "awaits_overseer_checkpoint") ||
 			(strings.HasPrefix(reason, "awaits_overseer_") && hasForwardLookingPlan(report)) {
 			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",

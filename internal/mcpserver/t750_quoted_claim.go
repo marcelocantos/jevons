@@ -217,3 +217,58 @@ func hasAnyCompletionMarker(lower string) bool {
 	}
 	return false
 }
+
+// CitedCompletionClaim names the completion marker a report CITES without
+// asserting — the marker claimScanText masked — together with the sentence it
+// sits in.
+//
+// 🎯T750, second half: the save has to be visible. A report kept because its
+// only completion marker was quoted takes the silent `return` in
+// maybeReapDoneWorkAgent's !ok branch, so it leaves no lifecycle record at
+// all — while 🎯T395, 🎯T470 and 🎯T581 each log theirs. That absence is
+// indistinguishable from a sink that never ran (🎯T426 / 🎯T744 dark stream),
+// which is exactly how the first live provocation of this fix came back
+// unreadable. ok is true only when the report would have read as a finish
+// BEFORE the mask and does not after it, so the record marks the save this
+// target makes and not every passing mention of a completion word.
+func CitedCompletionClaim(report string) (marker, span string, offset int, ok bool) {
+	lower := asciiLower(report)
+	if hasCompletionClaim(lower) {
+		return "", "", 0, false // asserted, not cited
+	}
+	if !wouldHaveFinishedBeforeT750(lower) {
+		return "", "", 0, false
+	}
+	best, at := "", -1
+	for _, m := range completionClaimMarkers {
+		i := indexWordish(lower, m)
+		if i < 0 || (at >= 0 && i >= at) {
+			continue
+		}
+		best, at = m, i
+	}
+	if at < 0 {
+		return "", "", 0, false
+	}
+	span, offset = matchedSentence(report, at, at+len(best))
+	return best, span, offset, true
+}
+
+// wouldHaveFinishedBeforeT750 is hasFinishShape as it read before the mask:
+// a completion word anywhere, plus accepted-risk, oracle evidence, or a bare
+// claim clause. Kept here rather than left implicit so the log records a save
+// only where there was something to save from.
+func wouldHaveFinishedBeforeT750(lower string) bool {
+	if !hasAnyCompletionMarker(lower) {
+		return false
+	}
+	if hasAcceptedRisk(lower) || hasOracleEvidence(lower) {
+		return true
+	}
+	for _, clause := range strings.FieldsFunc(lower, finishClauseDelimiter) {
+		if bareClaimClause(clause) {
+			return true
+		}
+	}
+	return false
+}
