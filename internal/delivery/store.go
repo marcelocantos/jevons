@@ -28,7 +28,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,7 +87,21 @@ func AgentDir(stateDir, agent string) (string, error) {
 // a later lookup matches what was recorded at confirmation time.
 func Needle(payload string) string { return turnev.Needle(payload) }
 
-// newID builds a sortable evidence id.
+// newID proposes the base evidence id: a timestamp prefix so lexical order is
+// chronological, plus a digest of agent+needle so one message's confirmations
+// share a stable, greppable name.
+//
+// 🎯T749: the digest is NOT a uniqueness guarantee. It is derived entirely
+// from agent+needle, so every confirmation of the same message to the same
+// agent proposes the same suffix, and the whole id collides whenever two of
+// them land inside one second. That is not a rare shape here — a send is
+// recorded "begun" and then again with its outcome, and a retried or
+// re-confirmed delivery repeats the pair verbatim. Uniqueness is settled by
+// Record, when it claims the file; this function only proposes a name.
+//
+// Sibling of 🎯T746, which fixed the identical construction in
+// internal/agentreport. The two stores carry the same mechanism so they cannot
+// drift.
 func newID(now time.Time, agent, needle string) string {
 	if now.IsZero() {
 		now = time.Now()
@@ -127,11 +143,58 @@ func Record(stateDir string, e Evidence, now time.Time) (Evidence, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Evidence{}, fmt.Errorf("delivery: mkdir %s: %w", dir, err)
 	}
-	if err := writeJSONAtomic(filepath.Join(dir, rec.ID+".json"), rec); err != nil {
+	rec, err = claimRecordFile(dir, rec)
+	if err != nil {
 		return Evidence{}, err
 	}
 	prune(dir, DefaultKeepPerAgent)
 	return rec, nil
+}
+
+// maxIDSiblings bounds the search for a free name in one id family. One agent
+// would have to record the same message a thousand times inside a single
+// second to reach it; the bound exists so a filesystem that reports every name
+// as taken fails loudly instead of spinning.
+const maxIDSiblings = 1000
+
+// claimRecordFile writes rec under the first free name in its id family and
+// returns the record carrying the id it actually got.
+//
+// 🎯T749. The path this replaces was write-temp-then-rename onto <id>.json,
+// and rename overwrites: two confirmations of one message to one agent in the
+// same second resolved to one filename, so the second deleted the first. This
+// store exists precisely because a delivery that happened must stay provable
+// afterwards (🎯T417), and a store that silently drops a record does not make
+// that guarantee — the lost record may be the one carrying the outcome, the
+// session id, or the operator-facing detail that the survivor lacks.
+//
+// The base id is left exactly as newID proposes it, so every id already on
+// disk still resolves and a non-colliding record mints precisely what it
+// minted before. Siblings are "<base>-2", "-3", …, which sort immediately
+// after the base (a string sorts before its own extensions), so prune and
+// Lookup keep reading lexical order as chronological — Lookup walks ids in
+// reverse and still finds the newest confirmation first, with same-second
+// siblings in arrival order.
+//
+// The record is re-marshalled per attempt: rec.ID is stored INSIDE the file,
+// so a body written for the base name cannot be published under a sibling name
+// without lying about its own id.
+func claimRecordFile(dir string, rec Evidence) (Evidence, error) {
+	base := rec.ID
+	for n := 1; n <= maxIDSiblings; n++ {
+		if n > 1 {
+			rec.ID = fmt.Sprintf("%s-%d", base, n)
+		}
+		err := linkJSONExclusive(filepath.Join(dir, rec.ID+".json"), rec)
+		if err == nil {
+			return rec, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return Evidence{}, err
+		}
+	}
+	return Evidence{}, fmt.Errorf(
+		"delivery: no free evidence id for %s after %d siblings", base, maxIDSiblings)
 }
 
 // RecordPayload stores confirmation for a full payload (needle derived).
@@ -145,18 +208,45 @@ func RecordPayload(stateDir, agent, sessionID, payload, detail, outcome string, 
 	}, now)
 }
 
-func writeJSONAtomic(path string, v any) error {
+// linkJSONExclusive publishes v as JSON at path, and reports fs.ErrExist
+// rather than overwriting when that name is already taken.
+//
+// os.Link is the whole mechanism, and it does two jobs at once: the name
+// appears only if it does not already exist, and it appears already carrying
+// the complete file. An O_EXCL reservation would give exclusivity a moment
+// before the content, and a concurrent Lookup reading that window would find
+// an empty placeholder where a confirmation should be — which this package
+// would report as a malformed record.
+//
+// The temp name comes from os.CreateTemp rather than path+".tmp", which was
+// the same defect one layer down: two records racing for one id shared one
+// temp file and could interleave their bytes.
+func linkJSONExclusive(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("delivery: marshal: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".evidence-*.tmp")
+	if err != nil {
+		return fmt.Errorf("delivery: temp file in %s: %w", dir, err)
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("delivery: write %s: %w", tmp, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("delivery: rename %s: %w", path, err)
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("delivery: close %s: %w", tmp, err)
+	}
+	// CreateTemp makes 0600; stored evidence is world-readable like the rest
+	// of the state dir so an operator can read one without the daemon.
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		return fmt.Errorf("delivery: chmod %s: %w", tmp, err)
+	}
+	if err := os.Link(tmp, path); err != nil {
+		return fmt.Errorf("delivery: claim %s: %w", path, err)
 	}
 	return nil
 }
