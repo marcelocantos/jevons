@@ -147,11 +147,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	// 🎯T679.2: the same birth check the periodic health hook runs, so a
 	// list call is sufficient to mark and notify but is not required.
 	s.sweepBornStuck()
-	if len(reps) > 0 {
-		line := FormatDeadAgentReport(reps)
-		slog.Info(line)
-		s.notifyFleetHealth(deadAgentOccurrence(reps), line)
-	}
+	s.notifyDeadAgents(reps)
 	// 🎯T459: reap fleet panes the registry does not know about before
 	// we report the count the host is deciding against.
 	s.SweepOrphanPanes()
@@ -241,6 +237,17 @@ func mixFleetHealthOccurrence(line, occurrence string) string {
 		return line
 	}
 	return line + " (occurrence " + occurrence + ")"
+}
+
+// fleetHealthEventOccurrence is a discriminator that changes when at does,
+// even if the operator-facing names are identical (🎯T717: MCP remint,
+// T530 same-name drain-restart, frontier re-spawn of the same leaf).
+func fleetHealthEventOccurrence(stable string, at time.Time) string {
+	stable = strings.TrimSpace(stable)
+	if stable == "" || at.IsZero() {
+		return ""
+	}
+	return stable + "@" + at.UTC().Format(time.RFC3339Nano)
 }
 
 // notifyFleetHealth delivers a fleet outage/recovery note to the overseer

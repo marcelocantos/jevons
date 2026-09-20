@@ -258,6 +258,12 @@ type Server struct {
 	// announce its second, genuinely new backlog.
 	heldReapedNoticed map[string]string
 
+	// deadAgentStreak is the T717 generation for a dead-name set: stable
+	// across consecutive sweeps of the same names (list-call echoes), new
+	// when a name leaves the dead set and returns (a second death).
+	deadAgentStreak map[string]uint64
+	deadAgentGen    uint64
+
 	// sweepNow is the backlog sweep's clock, injectable so a ten-minute
 	// simulated run costs no wall time (🎯T582). Nil = time.Now.
 	sweepNow func() time.Time

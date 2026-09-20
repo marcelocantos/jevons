@@ -622,7 +622,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			s.logLifecycle(compFrontierConsume, "spawn", "ok", map[string]any{
 				"target_id": r.TargetID, "worker": r.Worker, "parent": parentPO,
 			})
-			s.notifyFleetHealth(r.Worker, fmt.Sprintf(
+			s.notifyFleetHealth(fleetHealthEventOccurrence(r.Worker+":"+r.TargetID, time.Now()), fmt.Sprintf(
 				"[frontier-consume 🎯T254.1] auto-spawned %s for 🎯%s under %s (unconsumed frontier leaf)",
 				r.Worker, r.TargetID, parentPO))
 		case FrontierConsumePark:

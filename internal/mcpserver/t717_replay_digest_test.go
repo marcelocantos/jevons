@@ -151,3 +151,73 @@ func TestT717SecondRoutedHoldReachesOverseer(t *testing.T) {
 		t.Fatal("the two overseer notices are byte-identical — the second hold was an echo of the first")
 	}
 }
+
+func TestT717EventOccurrenceDistinguishesRecurrence(t *testing.T) {
+	t.Parallel()
+	a := fleetHealthEventOccurrence("seat-a,seat-b", time.Date(2026, 9, 21, 1, 0, 0, 0, time.UTC))
+	b := fleetHealthEventOccurrence("seat-a,seat-b", time.Date(2026, 9, 21, 1, 0, 1, 0, time.UTC))
+	if a == "" || a == b {
+		t.Fatalf("same names at different times must differ: %q %q", a, b)
+	}
+	if fleetHealthEventOccurrence("seat-a,seat-b", time.Time{}) != "" {
+		t.Fatal("zero time must refuse")
+	}
+}
+
+// MCP health / T530 / frontier: stable prose, new event time → overseer inbox
+// grows. These are the four audit rows that passed a key already in the line.
+func TestT717MCPHealthT530FrontierSecondEventReachesOverseer(t *testing.T) {
+	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
+	const mcp = "jv-t717 started with a dead MCP registration"
+	const t530 = "🎯T530 parent kill: restarted 1 held-sendq seat(s) for drain under \"jevons-po\": jv-t717. reaped_held must not regenerate solely from this kill."
+	const frontier = "[frontier-consume 🎯T254.1] auto-spawned jv-t717-replay-digest for 🎯T717 under jevons-po (unconsumed frontier leaf)"
+
+	t0 := time.Date(2026, 9, 21, 2, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	s.notifyFleetHealth(fleetHealthEventOccurrence("sess-1", t0), mcp)
+	s.notifyFleetHealth(fleetHealthEventOccurrence("sess-1", t1), mcp)
+	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717", t0), t530)
+	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717", t1), t530)
+	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717-replay-digest:T717", t0), frontier)
+	s.notifyFleetHealth(fleetHealthEventOccurrence("jv-t717-replay-digest:T717", t1), frontier)
+	if len(inbox.texts) != 6 {
+		t.Fatalf("overseer received %d; want 6 (two starts, two drain-restarts, two spawns)\n%v",
+			len(inbox.texts), inbox.texts)
+	}
+	res, err := s.deliverByName("jevons", inbox.texts[1], OriginAgent, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StatusSuppressedReplay {
+		t.Fatalf("echo of MCP start B status=%q want %s", res.Status, StatusSuppressedReplay)
+	}
+}
+
+func TestT717DeadAgentRedeathReachesOverseer(t *testing.T) {
+	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadSeen: true})
+	rep := []DeadAgentReport{{Name: "jv-t717-replay-digest"}}
+
+	s.notifyDeadAgents(rep)
+	s.notifyDeadAgents(rep)
+	if len(inbox.texts) != 1 {
+		t.Fatalf("consecutive sweeps of the same death = %d; want 1 (list-call echo)\n%v",
+			len(inbox.texts), inbox.texts)
+	}
+
+	s.notifyDeadAgents(nil)
+	s.notifyDeadAgents(rep)
+	if len(inbox.texts) != 2 {
+		t.Fatalf("second death after recovery = %d; want 2\n%v",
+			len(inbox.texts), inbox.texts)
+	}
+	if inbox.texts[0] == inbox.texts[1] {
+		t.Fatal("re-death batches are byte-identical — generation was not mixed into the wire")
+	}
+	res, err := s.deliverByName("jevons", inbox.texts[1], OriginAgent, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StatusSuppressedReplay {
+		t.Fatalf("echo of re-death status=%q want %s", res.Status, StatusSuppressedReplay)
+	}
+}

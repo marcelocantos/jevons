@@ -189,17 +189,63 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 	return out
 }
 
-// deadAgentOccurrence is the T717 discriminator for a dead-agent sweep
-// report: the name set. Repeats of the same set stay one batch (list-call
-// echoes); a different name is a new occurrence.
-func deadAgentOccurrence(reps []DeadAgentReport) string {
+// notifyDeadAgents delivers one fleet-health line for this sweep's dead
+// set. An empty set forgets death streaks so a later death of the same
+// name is a new occurrence (🎯T717), not a T428 echo of the previous one.
+func (s *Server) notifyDeadAgents(reps []DeadAgentReport) {
+	if s == nil {
+		return
+	}
 	if len(reps) == 0 {
+		s.forgetDeadAgentStreaks()
+		return
+	}
+	line := FormatDeadAgentReport(reps)
+	slog.Info(line)
+	s.notifyFleetHealth(s.deadAgentOccurrence(reps), line)
+}
+
+func (s *Server) forgetDeadAgentStreaks() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.deadAgentStreak = nil
+	s.mu.Unlock()
+}
+
+// deadAgentOccurrence is the T717 discriminator for a dead-agent sweep.
+// Each name keeps a generation that is stable across consecutive sweeps
+// (list-call echoes) and increments when the name leaves the dead set
+// and returns (a second death as stopped).
+func (s *Server) deadAgentOccurrence(reps []DeadAgentReport) string {
+	if s == nil || len(reps) == 0 {
 		return ""
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deadAgentStreak == nil {
+		s.deadAgentStreak = map[string]uint64{}
+	}
+	seen := map[string]struct{}{}
 	parts := make([]string, 0, len(reps))
 	for _, r := range reps {
-		if n := strings.TrimSpace(r.Name); n != "" {
-			parts = append(parts, n)
+		n := strings.TrimSpace(r.Name)
+		if n == "" {
+			continue
+		}
+		seen[n] = struct{}{}
+		gen, ok := s.deadAgentStreak[n]
+		if !ok {
+			s.deadAgentGen++
+			gen = s.deadAgentGen
+			s.deadAgentStreak[n] = gen
+		}
+		parts = append(parts, fmt.Sprintf("%s#%d", n, gen))
+	}
+	for n := range s.deadAgentStreak {
+		if _, ok := seen[n]; !ok {
+			delete(s.deadAgentStreak, n)
 		}
 	}
 	return strings.Join(parts, ",")

@@ -121,14 +121,15 @@ func (s *Server) noteAgentMCPHealth(name string, provider claudia.Provider) stri
 		"name": name, "provider": string(provider), "detail": note,
 	})
 	line := fmt.Sprintf("%s started with a %s", name, note)
-	occ := name
+	sid := name
 	if s.registry != nil {
 		if def := s.registry.Def(name); def != nil {
-			if sid := strings.TrimSpace(def.SessionID); sid != "" {
-				occ = sid
+			if x := strings.TrimSpace(def.SessionID); x != "" {
+				sid = x
 			}
 		}
 	}
+	occ := fleetHealthEventOccurrence(sid, time.Now())
 	line = mixFleetHealthOccurrence(line, occ)
 	if line == "" {
 		return " — WARNING: " + note
