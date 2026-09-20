@@ -1636,6 +1636,14 @@ body.rhs-resizing-row { cursor: row-resize; }
   stroke: currentColor;
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
+  /* 🎯T686: round caps are what let one reading paint as a dot. A
+     zero-length segment with butt caps renders nothing, which is why a
+     just-started period used to look like an empty chart and why the
+     geometry grew a stem to fake something visible. With round caps the
+     mark matches the data at every sample count, and joins stay smooth
+     on a dense week. */
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* 🎯T588.1: the provider mark is a column head, not a picture. CompanyMark

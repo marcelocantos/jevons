@@ -71,18 +71,19 @@ describe('a fully spent window still draws (🎯T685)', () => {
   });
 });
 
-describe('a cluster with no slope is drawn as the reading it is (🎯T685)', () => {
-  it('gives a flat just-sampled window an upright stem, not a tenth-unit line', () => {
-    // Five samples minutes apart, all at 100% used: no x span worth
-    // drawing and no slope at all. This is what Fable looked like.
+describe('a cluster with no slope is a dot, not a bar (🎯T686)', () => {
+  it('draws a flat just-sampled window at its value and nowhere else', () => {
+    // Five samples minutes apart, all at 100% used. This is what Fable
+    // looked like, and it used to be synthesised into a full-height
+    // stem — a bar claiming a climb from zero that never happened.
     const spec = burnPaths(win([0, 0, 0, 0, 0], { resets_at: RESET }));
     expect(spec).not.toBeNull();
-    const xs = [...spec!.line.matchAll(/[ML]([\d.]+),/g)].map((m) => Number(m[1]));
     const ys = [...spec!.line.matchAll(/,([\d.]+)/g)].map((m) => Number(m[1]));
-    // One upright stroke: a single x, spanning real height.
-    expect(new Set(xs).size).toBe(1);
-    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(BURN_HEIGHT / 2);
-    expect(Math.min(...ys)).toBeGreaterThan(0);
+    // Every drawn y is the one value the samples report, held inside the
+    // box; nothing reaches the baseline.
+    expect(new Set(ys).size).toBe(1);
+    expect(ys[0]).toBeGreaterThan(0);
+    expect(ys[0]).toBeLessThan(BURN_HEIGHT * 0.1);
   });
 
   it('still shows the slope when a tight cluster has one', () => {

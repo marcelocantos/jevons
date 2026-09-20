@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { BURN_STEM_MIN, burnPaths, burnPoints, periodBounds, stemBand,
-  BURN_HEIGHT,
-} from './burnGeom';
+import { burnPaths, burnPoints, periodBounds, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 const START = Date.parse('2026-09-01T00:00:00Z');
@@ -73,24 +71,25 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     expect(spec?.points[0].y).toBeGreaterThan(spec!.points[1].y);
   });
 
-  it('gives a single sample an upright stem, not a dot on the border', () => {
+  it('paints a single sample as a dot, inside the box (🎯T686)', () => {
     const mid = new Date(START + WEEK * 1000 * 0.25).toISOString();
     const spec = burnPaths(
       win({
         history: [{ at: mid, remaining_percent: 71 }],
       }),
     );
-    // 🎯T671 dropped the shaded area, so the stem IS the line: one
-    // vertical stroke from the sample's value down to the baseline.
-    expect(spec?.line).toMatch(/^M/);
-    expect(spec?.line).toContain(' L');
+    // 🎯T686 removed the synthesised stem. One reading is one point: the
+    // path is a zero-length segment, which round caps paint as a dot.
+    // The old behaviour drew a bar down to the baseline, which claimed a
+    // climb the data never showed.
+    expect(spec?.line).toBe('M25,22.7 L25,22.7');
+    expect(spec?.line).not.toContain(',' + BURN_HEIGHT);
     const ext = lineExtent(spec!.line);
     expect(ext.x0).toBe(ext.x1);
     expect(ext.x0).toBeGreaterThan(0);
-    expect(spec!.line).toContain(',' + BURN_HEIGHT);
   });
 
-  it('keeps a just-reset cluster as an inward stem, not a 1px left border (🎯T637)', () => {
+  it('keeps a just-reset cluster off the cell border (🎯T637 / 🎯T686)', () => {
     const a = new Date(START).toISOString();
     const b = new Date(START + 5 * 60_000).toISOString();
     const spec = burnPaths(
@@ -103,23 +102,30 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
       }),
     );
     expect(spec?.points).toHaveLength(2);
-    expect(spec?.points[0].x).toBe(0);
-    // The samples sit on the period start, but the drawn stroke is held
-    // inside the stem band so it is not painted on the cell border.
+    // The samples sit on the period start, but nothing is drawn on the
+    // border: the inset holds them inside the box, so the mark is a dot
+    // just inside the left edge rather than a sliver on it. No stem is
+    // synthesised to make it visible (🎯T686).
     const ext = lineExtent(spec!.line);
     expect(ext.x0).toBeGreaterThan(0);
-    expect(ext.x1).toBeLessThanOrEqual(BURN_STEM_MIN + 1);
-    const lineX = Number(spec!.line.match(/^M([\d.]+),/)?.[1]);
-    expect(lineX).toBeGreaterThan(0);
+    expect(ext.x1).toBeLessThan(BURN_WIDTH);
+    expect(spec!.line).not.toContain(',' + BURN_HEIGHT);
   });
 
-  it('shifts a period-start stem inward instead of sitting on x=0', () => {
-    const band = stemBand(0);
-    expect(band.x0).toBeGreaterThan(0);
-    expect(band.x1 - band.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
-    expect(band.lineX).toBeGreaterThan(0);
-    expect(band.lineX).toBeGreaterThanOrEqual(band.x0);
-    expect(band.lineX).toBeLessThanOrEqual(band.x1);
+  it('holds a value at either end of the period inside the box (🎯T686)', () => {
+    const atStart = burnPaths(
+      win({ history: [{ at: new Date(START).toISOString(), remaining_percent: 100 }] }),
+    );
+    const atEnd = burnPaths(
+      win({
+        history: [{ at: new Date(START + WEEK * 1000).toISOString(), remaining_percent: 0 }],
+      }),
+    );
+    for (const spec of [atStart, atEnd]) {
+      const ext = lineExtent(spec!.line);
+      expect(ext.x0).toBeGreaterThan(0);
+      expect(ext.x1).toBeLessThan(BURN_WIDTH);
+    }
   });
 });
 
