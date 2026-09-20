@@ -312,7 +312,7 @@ func Assess(snap Snapshot, pol *Policy) Assessment {
 		a.Reasons = append(a.Reasons, memReason)
 	}
 	if a.Pressure > PressureNormal && seatCountBlocks(a) {
-		a.Reasons = append(a.Reasons, seatCountReason(snap, a))
+		a.Reasons = append(a.Reasons, seatCountReason(snap, pol, a))
 	}
 	// Ambient glance: name load-average without making it a halt reason.
 	if loadAvgReason != "" && a.LoadAverageHeadroom != unknownHeadroom &&

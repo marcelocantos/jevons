@@ -219,7 +219,31 @@ func CapacitySnapshot(args CapacitySnapshotArgs) capacity.Snapshot {
 	if args.HostLoad != nil {
 		applyHostLoad(&snap, args.HostLoad())
 	}
+	// The session census comes from the cost subsystem's billable session
+	// list, which under subscription accounting is empty — so a fleet of
+	// fourteen live seats reported zero, and every refusal the governor
+	// printed said "0 live sessions of 20" (🎯T708). Live provider load is
+	// the census the daemon actually has: it is the same number the RHS
+	// panel counts, summed across providers. It is a fallback, not an
+	// override — a billable session list, when there is one, is the more
+	// precise reading.
+	if snap.ActiveSessions == 0 {
+		if live := sumLoad(snap.ProviderLoad); live > 0 {
+			snap.ActiveSessions = live
+		}
+	}
 	return snap
+}
+
+// sumLoad totals live seats across providers.
+func sumLoad(load map[string]int) int {
+	total := 0
+	for _, n := range load {
+		if n > 0 {
+			total += n
+		}
+	}
+	return total
 }
 
 // highestAlertLevel returns the most severe alert level in the snapshot.

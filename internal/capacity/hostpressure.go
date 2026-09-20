@@ -3,7 +3,10 @@
 
 package capacity
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Host saturation as an admission dimension (🎯T463).
 //
@@ -203,11 +206,77 @@ func seatCountBlocks(a Assessment) bool {
 	return a.SeatHeadroom != unknownHeadroom && a.SeatHeadroom <= 0
 }
 
-func seatCountReason(snap Snapshot, a Assessment) string {
-	if snap.MaxSessions > 0 {
-		return fmt.Sprintf("seat-count runaway: %d live sessions of %d (🎯T566.2)", snap.ActiveSessions, snap.MaxSessions)
+// SeatBinding names the dimension that decided the seat headroom: the
+// session census, or one provider's soft cap.
+type SeatBinding struct {
+	// Provider is the provider whose cap bound, or "" when the session
+	// census bound.
+	Provider string
+	Used     int
+	Limit    int
+	// Inferred is true when the cap is this package's fallback rather than
+	// a published number (🎯T463) — a made-up denominator must say so.
+	Inferred bool
+	Headroom float64
+}
+
+// SeatDimension reports which seat dimension is tightest. It reads the
+// same numbers the headroom arithmetic reads, so a reason built from it
+// cannot name a dimension other than the one that decided.
+func SeatDimension(snap Snapshot, pol *Policy) SeatBinding {
+	if pol == nil {
+		pol = DefaultPolicy()
 	}
-	return fmt.Sprintf("seat-count runaway: provider or session cap exhausted (headroom %.0f%%) (🎯T566.2)", a.SeatHeadroom*100)
+	b := SeatBinding{Used: snap.ActiveSessions, Limit: snap.MaxSessions,
+		Headroom: fraction(float64(snap.ActiveSessions), float64(snap.MaxSessions))}
+	for prov, capN := range snap.ProviderSoftCaps {
+		name := strings.ToLower(strings.TrimSpace(prov))
+		limit := pol.providerCap(capN)
+		used := snap.ProviderLoad[name]
+		h := fraction(float64(used), float64(limit))
+		if capN <= 0 {
+			h = inferredFloor(h, pol)
+		}
+		if h == unknownHeadroom {
+			continue
+		}
+		if b.Headroom == unknownHeadroom || h < b.Headroom ||
+			(h == b.Headroom && b.Provider != "" && name < b.Provider) {
+			b = SeatBinding{Provider: name, Used: used, Limit: limit, Inferred: capN <= 0, Headroom: h}
+		}
+	}
+	return b
+}
+
+// seatCountReason names the dimension that actually bound.
+//
+// The old form printed the session numbers whenever a session bound was
+// configured, including when a provider soft cap was what reached zero. On
+// 2026-09-20 claude sat at 12 of a published soft cap of 12 and three Build
+// spawns were refused, while the sentence every product owner read was
+// "seat-count runaway: 0 live sessions of 20" — a count that was not the
+// reason, from a census that could not see the fleet at all. A reason that
+// names the wrong dimension is worse than no reason: it is a lead, and it
+// is false. Two product owners spent an evening on a session counter that
+// was not what refused them.
+func seatCountReason(snap Snapshot, pol *Policy, a Assessment) string {
+	b := SeatDimension(snap, pol)
+	if b.Provider != "" {
+		cap := "published soft cap"
+		if b.Inferred {
+			cap = "assumed cap (none published, 🎯T463)"
+		}
+		census := "session census unknown"
+		if snap.MaxSessions > 0 {
+			census = fmt.Sprintf("session census %d of %d", snap.ActiveSessions, snap.MaxSessions)
+		}
+		return fmt.Sprintf("seat-count runaway: provider %s at %d of its %s %d (🎯T566.2 / T325.2; %s)",
+			b.Provider, b.Used, cap, b.Limit, census)
+	}
+	if snap.MaxSessions > 0 {
+		return fmt.Sprintf("seat-count runaway: %d live seats of %d (🎯T566.2)", snap.ActiveSessions, snap.MaxSessions)
+	}
+	return fmt.Sprintf("seat-count runaway: the session bound is exhausted (headroom %.0f%%) (🎯T566.2)", a.SeatHeadroom*100)
 }
 
 // hostBound reports whether the host is the dimension that decided the
