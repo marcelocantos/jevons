@@ -77,6 +77,9 @@ func ClassifyKillHeldSendq(target string, descendants []string, depthOf func(str
 			"refusing to kill %q — daemon sendq still holds %d message(s) (recovery seat before DRAINED/EMPTY; 🎯T530). "+
 				"Drain path: pending messages can drain after jevons_agent_start(name=%[1]q) at a turn boundary. "+
 				"Unresolved delivery attempts remain held and require reconciliation; starting does not retry them. "+
+				"Reconcile path (🎯T726): jevons_sendq_reconcile name=%[1]q shows the queue, then "+
+				"action=confirmed|requeue|drop resolves the attempt on recorded evidence and returns the seat to "+
+				"service — a caller holding this refusal has a legal move that discards nothing. "+
 				"Override: when a held message must NOT be delivered, an overseer kill discards the held "+
 				"messages and always succeeds (🎯T599) — escalate to the overseer.",
 			target, n), nil

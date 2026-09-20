@@ -71,6 +71,12 @@ type Entry struct {
 	State     DeliveryState `json:"state,omitempty"`
 	AttemptID string        `json:"attempt_id,omitempty"`
 	Detail    string        `json:"detail,omitempty"`
+	// Reconciled is the operator judgement that resolved an uncertain
+	// delivery, attributed and evidenced (🎯T726). It rides an entry that
+	// survived reconciliation — requeued, or kept as the authoritative
+	// message of a consolidation — so the next reader of this file learns
+	// who decided and why without a git archaeology expedition.
+	Reconciled *Reconciliation `json:"reconciled,omitempty"`
 }
 
 type DeliveryState string

@@ -807,8 +807,9 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerAgentMigrate()
 	s.registerStaffOpsTools()
 	s.registerSentinelTools()
-	s.registerWritSecurityTools() // 🎯T335 security auditor + writ confinement
-	s.registerGateShowTool()      // 🎯T697: supervisor gate lookup
+	s.registerWritSecurityTools()  // 🎯T335 security auditor + writ confinement
+	s.registerGateShowTool()       // 🎯T697: supervisor gate lookup
+	s.registerSendqReconcileTool() // 🎯T726: the legal move out of PINNED
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s

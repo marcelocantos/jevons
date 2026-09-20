@@ -35,7 +35,8 @@ func FormatReapedUncertainHoldLine(name string, pin SendqPin, rec fleetintent.Re
 	return fmt.Sprintf(
 		"reaped-with-reason %s: sendq message %s has an unresolved %s attempt %s (%s). "+
 			"The seat is %s — a recoverable closed address, not a live PINNED seat. "+
-			"The payload remains held; a start will not retry it. jevons_agent_kill is a no-op here (🎯T401/🎯T686).",
+			"The payload remains held; a start will not retry it. jevons_agent_kill is a no-op here (🎯T401/🎯T686). "+
+			"Resolve the attempt with jevons_sendq_reconcile name=%[1]q entry_id=%[2]q attempt_id=%[4]q (🎯T726).",
 		name, pin.EntryID, pin.State, pin.AttemptID, pin.Reason, closed)
 }
 
