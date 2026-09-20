@@ -528,8 +528,41 @@ func NewLedgerMissionOpen(list func() []claudia.AgentDef) func(targetID string) 
 	}
 }
 
-// FilterIdleEventsForLiveAgents drops worker-idle events whose subject has
-// left the registry between enqueue and delivery (🎯T451).
+// IdleNoticeStillCurrent is the 🎯T730 emission gate: a worker-idle notice
+// may name a seat only when that seat still exists and is not currently
+// working. Presence is first — idleActivity is not cleared on reap, so a
+// gone seat can still look idle in the tracker.
+//
+// Empty phase on a registered seat is kept (fail-open toward idle). A
+// reader of GET /api/agents would still see the row; the defect is naming
+// a working row as idle, or naming a row that is not there.
+func IdleNoticeStillCurrent(def *claudia.AgentDef, phase string) bool {
+	if def == nil {
+		return false
+	}
+	return strings.ToLower(strings.TrimSpace(phase)) != "working"
+}
+
+// idleNoticeLive is the product lookup flushWakeBatches feeds the filter:
+// registry.Def (the same membership GET /api/agents lists) plus the
+// idleActivity phase ObserveTransition already maintains.
+func (s *Server) idleNoticeLive(name string) bool {
+	if s == nil {
+		return false
+	}
+	var def *claudia.AgentDef
+	if s.registry != nil {
+		def = s.registry.Def(name)
+	}
+	phase := ""
+	if s.idleActivity != nil {
+		phase = s.idleActivity.Get(name).Phase
+	}
+	return IdleNoticeStillCurrent(def, phase)
+}
+
+// FilterIdleEventsForLiveAgents drops worker-idle events whose subject is
+// not a current idle seat at this call (🎯T451 presence, 🎯T730 phase).
 //
 // An idle event is emitted the moment a worker's turn ends — which is the
 // same moment it delivers a terminal report, and 🎯T165 stops and Removes it
@@ -538,23 +571,24 @@ func NewLedgerMissionOpen(list func() []claudia.AgentDef) func(targetID string) 
 // successful worker is a digest that names an agent the reader can no longer
 // find, send to, or stand down. bullseye-po was told four times about two such
 // agents; a stand-down send came back `agent "bs-t70-release-probe-ci" is not
-// running`.
+// running`. 🎯T730: the same digest also named a seat whose phase was
+// working by the time the parent read it.
 //
 // The cost is not the noise: the correct response to those lines is to do
 // nothing, and the event's own text tells the reader not to do nothing. So it
 // spends a coordinator turn to establish that nothing is wrong.
 //
-// present may be nil (no registry to ask), in which case nothing is dropped —
-// an event is only withheld on a positive answer that the agent is gone.
-// Non-agent event kinds pass through untouched.
-func FilterIdleEventsForLiveAgents(evs []wakebatch.Event, present func(name string) bool) []wakebatch.Event {
-	if present == nil {
+// live may be nil (no registry to ask), in which case nothing is dropped —
+// an event is only withheld on a positive answer that the seat is gone or
+// no longer idle. Non-agent event kinds pass through untouched.
+func FilterIdleEventsForLiveAgents(evs []wakebatch.Event, live func(name string) bool) []wakebatch.Event {
+	if live == nil {
 		return evs
 	}
 	out := evs[:0:0]
 	for _, ev := range evs {
 		if ev.Kind == eventWorkerIdle && strings.TrimSpace(ev.Subject) != "" &&
-			!present(ev.Subject) {
+			!live(ev.Subject) {
 			continue
 		}
 		out = append(out, ev)
@@ -594,11 +628,12 @@ func (s *Server) flushWakeBatches(send func(recipient, text string) error) int {
 			return err
 		}
 	}
-	// 🎯T451: registry membership is re-read at delivery, not at enqueue. The
-	// window between them is exactly where an agent finishes and is reaped.
-	var present func(string) bool
+	// 🎯T451 / 🎯T730: membership and phase are re-read at delivery, not at
+	// enqueue. The window between them is where an agent finishes and is
+	// reaped, or starts another turn (phase=working) while the digest waits.
+	var live func(string) bool
 	if s.registry != nil {
-		present = func(name string) bool { return s.registry.Def(name) != nil }
+		live = s.idleNoticeLive
 	}
 	now := time.Now()
 	s.mu.Lock()
@@ -612,8 +647,8 @@ func (s *Server) flushWakeBatches(send func(recipient, text string) error) int {
 	woken := 0
 	for _, recipient := range due {
 		evs := pending[recipient]
-		if kept := FilterIdleEventsForLiveAgents(evs, present); len(kept) != len(evs) {
-			slog.Info("wake digest dropped events for deregistered agents",
+		if kept := FilterIdleEventsForLiveAgents(evs, live); len(kept) != len(evs) {
+			slog.Info("wake digest dropped events for gone or working seats",
 				"recipient", recipient, "dropped", len(evs)-len(kept), "kept", len(kept))
 			evs = kept
 		}
