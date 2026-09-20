@@ -1637,8 +1637,13 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 .plan-tip-table td.plan-burn {
   /* One source for the sparkline's weight: the line uses it, the
-     current-value mark is 1.5× it (🎯T687). */
+     current-value mark is a multiple of it (🎯T687). 1.5× was the first
+     try and the owner could not pick the dots out at a glance, which is
+     the only test that matters for a mark whose whole job is to be
+     found. 3× reads as a dot at this chart's 28px height without
+     competing with the line it terminates. */
   --plan-burn-line-width: 1.5px;
+  --plan-burn-mark-scale: 3;
 }
 .plan-tip-table td.plan-burn .plan-burn-line {
   fill: none;
@@ -1662,7 +1667,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table td.plan-burn .plan-burn-now {
   fill: none;
   stroke: currentColor;
-  stroke-width: calc(var(--plan-burn-line-width) * 1.5);
+  stroke-width: calc(var(--plan-burn-line-width) * var(--plan-burn-mark-scale));
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
