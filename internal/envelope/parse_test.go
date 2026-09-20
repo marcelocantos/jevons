@@ -114,6 +114,18 @@ func TestParseAfterAgentPrefix(t *testing.T) {
 	}
 }
 
+func TestParseAfterReapedSeatPrefix(t *testing.T) {
+	inner := Format(validFinish())
+	wrapped := "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n[Agent jv-t731-probe responded] report_id=abc\n" + inner
+	got, err := Parse(wrapped)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got == nil || got.Kind != KindFinishReport {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestParseTargetCanonical(t *testing.T) {
 	raw := "```jevons\njevons: kind spawn-brief\njevons: target 🎯T27.2\n```\n\nGo."
 	got, err := Parse(raw)

@@ -113,9 +113,9 @@ func (m *Message) SlotsFingerprint() string {
 //	(msg, err)  — envelope present but malformed / missing required slots
 //
 // The fence is sought at line 1 of the author's content after stripping
-// known daemon prefixes ([Agent … responded], identity header, check
-// banners). A fence deeper in the body is treated as a quotation and is
-// not an envelope.
+// known daemon prefixes ([Agent … responded], [reaped seat …] 🎯T731,
+// identity header, check banners). A fence deeper in the body is treated
+// as a quotation and is not an envelope.
 func Parse(text string) (*Message, error) {
 	body, _ := StripPrefixes(text)
 	if body == "" {
@@ -159,7 +159,7 @@ func StripPrefixes(text string) (string, bool) {
 
 func stripOnePrefix(s string) (string, bool) {
 	s = strings.TrimLeft(s, "\r")
-	if strings.HasPrefix(s, "[Agent ") {
+	if strings.HasPrefix(s, "[Agent ") || strings.HasPrefix(s, "[reaped seat ") {
 		if i := strings.IndexByte(s, '\n'); i >= 0 {
 			return s[i+1:], true
 		}

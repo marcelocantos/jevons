@@ -6,6 +6,8 @@ package mcpserver
 import (
 	"log/slog"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/agentreport"
 )
 
 // 🎯T690 — a worker can always reach its registry parent. Reporting upward
@@ -85,6 +87,9 @@ func (s *Server) notifyParentReport(agentName, msg string) {
 	}
 	if s.isOverseerAgent(parent) {
 		return
+	}
+	if rec, err := agentreport.Latest(s.agentReportStateDir(), agentName); err == nil {
+		msg = withAgentReportID(msg, rec.Handle())
 	}
 	res, err := s.deliverByName(parent, msg, OriginAgent, false)
 	if err != nil {

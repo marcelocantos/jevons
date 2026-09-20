@@ -842,10 +842,14 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 		}
 		return false
 	}
+	// 🎯T731: the queued copy may have been accepted while the author was
+	// still registered. Stamp it at flush, which is when the parent actually
+	// reads it. Do not suppress here — this drain is the first delivery.
+	text := s.prepareParentReport(name, entry.Text, true).Text
 	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
 	defer cancel()
 	generation := s.terminalGeneration(name)
-	sendErr := proc.Send(entry.Text)
+	sendErr := proc.Send(text)
 	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
 	// Watch before treating the attempt as failed — broker-wrapped errors miss
 	// queueSendDefinitelyNotSent's exact-string match and would otherwise land

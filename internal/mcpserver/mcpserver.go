@@ -258,6 +258,12 @@ type Server struct {
 	// announce its second, genuinely new backlog.
 	heldReapedNoticed map[string]string
 
+	// parentReportOffered is 🎯T731: report ids already offered to a parent,
+	// keyed parent+"\x00"+reportID. Drain fulfills the first offer; a second
+	// deliverByName of the same id is suppressed.
+	parentReportOffered       map[string]struct{}
+	parentReportOfferedLoaded bool
+
 	// deadAgentStreak is the T717 generation for a dead-name set: stable
 	// across consecutive sweeps of the same names (list-call echoes), new
 	// when a name leaves the dead set and returns (a second death).

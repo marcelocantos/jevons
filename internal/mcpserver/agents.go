@@ -1361,6 +1361,7 @@ func (s *Server) notify(agentName, text string) {
 	}
 
 	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
+	parentMsg := formatAgentResponded(agentName, handle, elision.Text)
 
 	// 🎯T386: a green the report's own evidence does not support is flagged
 	// here, in front of the report, before the overseer can accept it and
@@ -1373,13 +1374,17 @@ func (s *Server) notify(agentName, text string) {
 		s.logLifecycle(compAgentLifecycle, "false_green", "flagged", map[string]any{
 			"agent": agentName, "flags": kinds,
 		})
-		msg = gate.Banner(flags) + "\n\n" + msg
+		banner := gate.Banner(flags) + "\n\n"
+		msg = banner + msg
+		parentMsg = banner + parentMsg
 	}
 
 	// 🎯T690: the stored terminal report reaches the registry parent on the
 	// daemon path, before the overseer copy and before 🎯T165 reap. A seat
 	// that cannot call jevons_agent_send still reports upward.
-	s.notifyParentReport(agentName, msg)
+	// 🎯T731: the parent copy carries report_id so a post-reap flush can be
+	// marked and de-duplicated without changing the overseer short-report wire.
+	s.notifyParentReport(agentName, parentMsg)
 
 	overseer := s.overseerName()
 	res, err := s.deliverByName(overseer, msg, OriginAgent, false)

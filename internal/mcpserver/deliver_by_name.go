@@ -299,6 +299,32 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	if overseerArm {
 		return s.deliverToOverseer(name, text, origin)
 	}
+
+	// 🎯T731: a report whose author has been reaped is marked at this send,
+	// and a report id already offered to this parent is not offered again.
+	// Overseer arm is excluded: T428/T568 already guard that channel by bytes,
+	// and the overseer copy is usually delivered while the seat is still live.
+	var offeredReportID string
+	if origin == OriginAgent {
+		prep := s.prepareParentReport(name, text, false)
+		if prep.Suppress {
+			return agentSendResult{
+				Status:  StatusSuppressedDuplicateReport,
+				Message: prep.Reason,
+			}, nil
+		}
+		text = prep.Text
+		offeredReportID = prep.ReportID
+		defer func() {
+			if err != nil || offeredReportID == "" {
+				return
+			}
+			if parentReportOfferStatus(res.Status) {
+				s.noteParentReportOffered(name, offeredReportID)
+			}
+		}()
+	}
+
 	if err := s.recordAgentRequest(name, text, origin); err != nil {
 		return agentSendResult{}, err
 	}
