@@ -114,20 +114,34 @@ func (s *Server) parentOfReaped(name string) string {
 	return parent
 }
 
+// heldBacklogKey identifies THIS hold, not merely the seat it is held against.
+// A name can be reaped, restarted, drained and reaped again; keying the notice
+// on the name alone would silence the second, genuinely new backlog forever,
+// because forgetReapedBacklogNotice only runs on a sweep that sees the name
+// registered AND still holding. The head entry id is stable for the life of a
+// hold — appending another message to the same queue does not change it — and
+// differs the moment a new hold forms.
+func heldBacklogKey(b sendq.Backlog) string {
+	if len(b.EntryIDs) > 0 {
+		return b.EntryIDs[0]
+	}
+	return b.Oldest.UTC().Format(time.RFC3339Nano)
+}
+
 // noticedReapedBacklog reports whether the overseer has already been told
-// about this seat's held backlog, marking it told on the first call. One
-// notice per reaped seat is the whole point of the target: the sweep runs on a
+// about this hold on this seat, marking it told on the first call. One notice
+// per held backlog is the whole point of the target: the sweep runs on a
 // timer, and a timer plus an unconditional notify is a repeating alarm.
-func (s *Server) noticedReapedBacklog(name string) bool {
+func (s *Server) noticedReapedBacklog(name, hold string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.heldReapedNoticed == nil {
-		s.heldReapedNoticed = map[string]bool{}
+		s.heldReapedNoticed = map[string]string{}
 	}
-	if s.heldReapedNoticed[name] {
+	if s.heldReapedNoticed[name] == hold {
 		return true
 	}
-	s.heldReapedNoticed[name] = true
+	s.heldReapedNoticed[name] = hold
 	return false
 }
 
@@ -241,7 +255,7 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 		"oldest_age", age.Round(time.Second).String(),
 		"intent", rec.Describe())
 
-	if s.noticedReapedBacklog(b.Agent) {
+	if s.noticedReapedBacklog(b.Agent, heldBacklogKey(b)) {
 		return
 	}
 	var b2 strings.Builder

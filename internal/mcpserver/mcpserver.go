@@ -250,10 +250,13 @@ type Server struct {
 	agentTerminalGeneration map[string]uint64
 	sendqAttemptNoticed     map[string]string
 
-	// heldReapedNoticed remembers which reaped seats the overseer has already
-	// been told about (🎯T582). The sweep is a timer; without this the same
-	// finished seat produced a fleet-health alert every thirty seconds.
-	heldReapedNoticed map[string]bool
+	// heldReapedNoticed remembers which held backlog the overseer has already
+	// been told about, per reaped seat (🎯T582 / 🎯T706). The sweep is a timer;
+	// without this the same finished seat produced a fleet-health alert every
+	// thirty seconds. The value is the hold's head entry id rather than a bare
+	// flag, so a seat reaped, restarted, drained and reaped again can still
+	// announce its second, genuinely new backlog.
+	heldReapedNoticed map[string]string
 
 	// sweepNow is the backlog sweep's clock, injectable so a ten-minute
 	// simulated run costs no wall time (🎯T582). Nil = time.Now.

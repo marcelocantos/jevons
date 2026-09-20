@@ -230,17 +230,45 @@ func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record
 		s.routeHeldReapedBacklog(b, rec, now)
 		return
 	}
+	// 🎯T706: this branch is the sweep's, and the sweep is a timer. 🎯T582 put
+	// the once-per-seat seam on the ROUTED path only, so every reap the routing
+	// does not claim — an explicit kill, a stop_engagement, a dead_seat sweep —
+	// fell through to an unconditional notify and alarmed every thirty seconds
+	// for as long as the hold sat there. jv-t679.1-evidence-seam did exactly
+	// that for three hours after a product:kill.
+	//
+	// The hold here is genuinely recoverable (unlike 🎯T582's finished seat), so
+	// the recovery call stays in the notice. It is said ONCE per hold: repeating
+	// it does not make it more actionable, and an alarm that fires every sweep
+	// for a stable state is background, not signal (🎯T426).
+	hold := heldBacklogKey(b)
+	if s.noticedReapedBacklog(b.Agent, hold) {
+		slog.Debug("🎯T706 held backlog on reaped agent already announced",
+			"component", "agent_send",
+			"agent", b.Agent,
+			"queued", b.Depth,
+			"oldest_age", age.Round(time.Second).String(),
+			"intent", rec.Describe())
+		return
+	}
 	slog.Warn("🎯T401 backlog held for reaped agent",
 		"component", "agent_send",
 		"agent", b.Agent,
 		"queued", b.Depth,
 		"oldest_age", age.Round(time.Second).String(),
 		"intent", rec.Describe())
+	// The hold's head entry id is in the line because the notice is now said
+	// once: two successive holds on the same name would otherwise render
+	// byte-identical, and the overseer's own replay digest collapses an exact
+	// repeat — so the second, genuinely new backlog would be suppressed by the
+	// delivery path even though the seam released it. Naming the hold makes the
+	// second notice new information rather than an echo.
 	s.notifyFleetHealth(fmt.Sprintf(
-		"Held backlog on reaped agent %q: %d message(s) waiting %s (%s). "+
+		"Held backlog on reaped agent %q (hold %s): %d message(s) waiting %s (%s). "+
 			"Recover with jevons_agent_start name=%q … — queued gate feedback drains on start. "+
-			"Do not interrupt; the seat is finished-and-reaped, not stuck mid-turn.",
-		b.Agent, b.Depth, age.Round(time.Second), rec.Describe(), b.Agent))
+			"Do not interrupt; the seat is finished-and-reaped, not stuck mid-turn. "+
+			"This notice is sent once per held backlog (🎯T706); the hold stays on disk until the seat comes back or the queue is resolved.",
+		b.Agent, hold, b.Depth, age.Round(time.Second), rec.Describe(), b.Agent))
 }
 
 // agentIsRegistered reports whether the fleet still has a seat by this name.
