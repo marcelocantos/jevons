@@ -12,7 +12,7 @@
  * naturally than remaining trending left. The line starts at the first
  * stored sample — never a fabricated 0% at t=0.
  *
- * 🎯T686: there is no sample-count special case, and there should never be
+ * 🎯T688: there is no sample-count special case, and there should never be
  * one again. A series of one sample, or of twenty sitting on the same
  * minute of a week, used to be synthesised into an upright stem, because a
  * zero-length stroke with butt caps paints nothing and the cell looked
@@ -142,7 +142,7 @@ export type BurnStop = { offset: number; className: string };
  * of the plot width. Empty when no sample carries a band (an older daemon):
  * the chart then keeps its single inherited colour. Samples piled on one x
  * simply emit stops at that x; a gradient with no horizontal extent paints
- * the last stop, which is the current band (🎯T686).
+ * the last stop, which is the current band (🎯T688).
  */
 export function burnStops(w: PlanWindow): BurnStop[] {
   const samples = historyPoints(w);

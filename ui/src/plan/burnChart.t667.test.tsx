@@ -89,7 +89,7 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
     expect((container.querySelector('.plan-burn-line') as SVGPathElement).style.stroke).toBe('');
   });
 
-  it('gives a tight cluster stops at its own x, ending on the latest band (🎯T686)', () => {
+  it('gives a tight cluster stops at its own x, ending on the latest band (🎯T688)', () => {
     const t = start + 6 * day;
     const stops = burnStops(
       week([

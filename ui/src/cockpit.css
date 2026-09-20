@@ -1650,7 +1650,7 @@ body.rhs-resizing-row { cursor: row-resize; }
   stroke: currentColor;
   stroke-width: var(--plan-burn-line-width);
   vector-effect: non-scaling-stroke;
-  /* 🎯T686: round caps are what let one reading paint as a dot. A
+  /* 🎯T688: round caps are what let one reading paint as a dot. A
      zero-length segment with butt caps renders nothing, which is why a
      just-started period used to look like an empty chart and why the
      geometry grew a stem to fake something visible. With round caps the
