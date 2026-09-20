@@ -38,6 +38,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/reapverify"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
@@ -292,6 +293,9 @@ type Server struct {
 
 	// birthNow is the 🎯T679.2 birth-monitor clock. Nil = time.Now.
 	birthNow func() time.Time
+
+	// reportDeliveryNow is the 🎯T757 parent-routing age clock. Nil = time.Now.
+	reportDeliveryNow func() time.Time
 	// birthRoots overrides DefaultSessionRoots for hermetic existence lookups.
 	birthRoots *discovery.Roots
 	// seatAliveFn overrides process aliveness for hermetic list/sweep tests.
@@ -388,6 +392,10 @@ type Server struct {
 	// nudges, revives, repressures, or repairs. Nil resolves to all-working,
 	// which is the pre-T414 behaviour. See fleet_intent.go.
 	intent *fleetintent.Store
+
+	// reapVerify is the 🎯T753 pending-verification ledger: reaped implementers
+	// whose commits landed but whose target row stayed open.
+	reapVerify *reapverify.Store
 
 	// roleAssignments records agent-name → role (🎯T511 / 🎯T536.2). Nil
 	// means role is derived only from purpose/name heuristics / AgentDef.Role.

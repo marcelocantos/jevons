@@ -31,6 +31,7 @@ package agentreport
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -69,6 +70,9 @@ type Elision struct {
 type Handle struct {
 	Agent    string
 	ReportID string
+	// StoredAt is when the report was durably stored (🎯T757 age on the
+	// parent routing line). Zero means unknown — age is omitted, not guessed.
+	StoredAt time.Time
 }
 
 // Empty reports whether the handle names nothing retrievable.

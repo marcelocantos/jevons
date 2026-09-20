@@ -1373,7 +1373,7 @@ func (s *Server) notify(agentName, text string) {
 	}
 
 	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
-	parentMsg := formatAgentResponded(agentName, handle, elision.Text)
+	parentMsg := formatAgentResponded(agentName, handle, elision.Text, s.deliveryNow())
 
 	// 🎯T386: a green the report's own evidence does not support is flagged
 	// here, in front of the report, before the overseer can accept it and

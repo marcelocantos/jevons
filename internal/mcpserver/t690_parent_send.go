@@ -89,7 +89,7 @@ func (s *Server) notifyParentReport(agentName, msg string) {
 		return
 	}
 	if rec, err := agentreport.Latest(s.agentReportStateDir(), agentName); err == nil {
-		msg = withAgentReportID(msg, rec.Handle())
+		msg = withAgentReportID(msg, rec.Handle(), s.deliveryNow())
 	}
 	res, err := s.deliverByName(parent, msg, OriginAgent, false)
 	if err != nil {

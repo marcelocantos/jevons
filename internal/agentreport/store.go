@@ -39,7 +39,7 @@ type Record struct {
 
 // Handle returns the retrieval handle for this record.
 func (r Record) Handle() Handle {
-	return Handle{Agent: r.Agent, ReportID: r.ID}
+	return Handle{Agent: r.Agent, ReportID: r.ID, StoredAt: r.At}
 }
 
 // safeAgentDir maps an agent name to a single path element, refusing anything

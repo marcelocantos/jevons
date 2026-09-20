@@ -56,24 +56,90 @@ func FormatReapedReportBanner(agent string, rec fleetintent.Record) string {
 		agent, at)
 }
 
-func formatAgentResponded(agent string, h agentreport.Handle, body string) string {
-	agent = strings.TrimSpace(agent)
-	if !h.Empty() && strings.TrimSpace(h.Agent) == agent {
-		return fmt.Sprintf("[Agent %s responded] report_id=%s\n%s", agent, h.ReportID, body)
+// formatReportAge renders wall time since store for the parent routing line
+// (🎯T757). Coarse buckets so "about five hours" reads as age=5h.
+func formatReportAge(d time.Duration) string {
+	if d < 0 {
+		d = 0
 	}
-	return fmt.Sprintf("[Agent %s responded]\n%s", agent, body)
+	if d < time.Minute {
+		return "0m"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-func withAgentReportID(msg string, h agentreport.Handle) string {
+func agentRespondedRoutingLine(agent string, h agentreport.Handle, now time.Time) string {
+	agent = strings.TrimSpace(agent)
+	line := fmt.Sprintf("[Agent %s responded]", agent)
+	if h.Empty() || strings.TrimSpace(h.Agent) != agent {
+		return line
+	}
+	line += " report_id=" + h.ReportID
+	if !h.StoredAt.IsZero() && !now.IsZero() {
+		line += " age=" + formatReportAge(now.Sub(h.StoredAt))
+	}
+	return line
+}
+
+func formatAgentResponded(agent string, h agentreport.Handle, body string, now time.Time) string {
+	agent = strings.TrimSpace(agent)
+	return agentRespondedRoutingLine(agent, h, now) + "\n" + body
+}
+
+func replaceAgentRespondedChrome(text, agent string, h agentreport.Handle, now time.Time) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if n, _, ok := parseAgentRespondedLine(line); ok && n == agent {
+			lines[i] = agentRespondedRoutingLine(agent, h, now)
+			return strings.Join(lines, "\n")
+		}
+	}
+	return text
+}
+
+func withAgentReportID(msg string, h agentreport.Handle, now time.Time) string {
 	if h.Empty() {
 		return msg
 	}
-	old := fmt.Sprintf("[Agent %s responded]", h.Agent)
-	neu := fmt.Sprintf("[Agent %s responded] report_id=%s", h.Agent, h.ReportID)
-	if strings.Contains(msg, neu) {
-		return msg
+	if now.IsZero() {
+		now = time.Now()
 	}
-	return strings.Replace(msg, old, neu, 1)
+	return replaceAgentRespondedChrome(msg, h.Agent, h, now)
+}
+
+func (s *Server) deliveryNow() time.Time {
+	if s != nil && s.reportDeliveryNow != nil {
+		if t := s.reportDeliveryNow(); !t.IsZero() {
+			return t
+		}
+	}
+	return time.Now()
+}
+
+// stampReportAgeAtDelivery refreshes age= on the routing line at the moment
+// the parent actually receives the report (🎯T757), including queued copies
+// that may have waited hours since store.
+func (s *Server) stampReportAgeAtDelivery(text string, now time.Time) string {
+	if now.IsZero() {
+		now = s.deliveryNow()
+	}
+	agent, reportID, ok := findAgentResponded(text)
+	if !ok || reportID == "" {
+		return text
+	}
+	h := agentreport.Handle{Agent: agent, ReportID: reportID}
+	if dir := s.agentReportStateDir(); dir != "" {
+		if rec, err := agentreport.Load(dir, agent, reportID); err == nil {
+			h.StoredAt = rec.At
+		}
+	}
+	return replaceAgentRespondedChrome(text, agent, h, now)
 }
 
 func parseAgentRespondedLine(line string) (name, reportID string, ok bool) {
@@ -95,14 +161,16 @@ func parseAgentRespondedLine(line string) (name, reportID string, ok bool) {
 		return name, "", true
 	}
 	rest = strings.TrimSpace(strings.TrimPrefix(rest, "|"))
-	if !strings.HasPrefix(rest, "report_id=") {
-		return name, "", true
+	for _, tok := range strings.Fields(rest) {
+		if !strings.HasPrefix(tok, "report_id=") {
+			continue
+		}
+		id := strings.TrimPrefix(tok, "report_id=")
+		if id != "" && !strings.ContainsAny(id, " \t]") {
+			return name, id, true
+		}
 	}
-	id := strings.TrimSpace(strings.TrimPrefix(rest, "report_id="))
-	if id == "" || strings.ContainsAny(id, " \t]") {
-		return name, "", true
-	}
-	return name, id, true
+	return name, "", true
 }
 
 func findAgentResponded(text string) (name, reportID string, ok bool) {
@@ -177,6 +245,7 @@ func (s *Server) prepareParentReport(dest, text string, fulfilling bool) parentR
 	if rec, reaped := LookupReapedRecord(s.fleetIntent(), agent); reaped && !hasReapedSeatBanner(text) {
 		out.Text = FormatReapedReportBanner(agent, rec) + "\n" + text
 	}
+	out.Text = s.stampReportAgeAtDelivery(out.Text, s.deliveryNow())
 	return out
 }
 
