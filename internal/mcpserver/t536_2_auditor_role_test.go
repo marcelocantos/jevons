@@ -4,11 +4,13 @@
 package mcpserver
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/roles"
 )
@@ -77,5 +79,58 @@ func TestT5362SpawnAuditorRecordsRoleAndAssemblesDoctrine(t *testing.T) {
 
 	if err := (roles.Catalog{}).Delete(roles.Auditor, 0, false); err == nil {
 		t.Fatal("expected builtin delete refusal")
+	}
+
+	list, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := toolText(list)
+	if !strings.Contains(listed, "jv-t536.2-audit") || !strings.Contains(listed, "role=auditor") {
+		t.Fatalf("agent_list must surface spawn-with-role; got:\n%s", listed)
+	}
+
+	brief := s.composeStartBrief(def.Name, "Review the ledger.")
+	for _, want := range []string{
+		"[Jevons role doctrine]",
+		"cannot write or patch product code",
+		"silent-decision ledger",
+		"Review the ledger.",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("composeStartBrief missing %q", want)
+		}
+	}
+}
+
+func TestT5362UnknownRoleOnStartRefused(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(dir, nil, nil)
+	s.SetRegistry(reg)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"name":    "jv-t536.2-bad-role",
+		"workdir": dir,
+		"parent":  "jevons-po",
+		"role":    "not-a-role",
+	}
+	res, err := s.handleAgentStart(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatal("unknown role must refuse before Launch")
+	}
+	text := toolText(res)
+	if !strings.Contains(text, "unknown role") {
+		t.Fatalf("want unknown role error, got %q", text)
+	}
+	if reg.Def("jv-t536.2-bad-role") != nil {
+		t.Fatal("unknown role must not mint a registry row")
 	}
 }

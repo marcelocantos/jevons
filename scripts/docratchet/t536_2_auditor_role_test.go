@@ -31,6 +31,10 @@ func TestT5362AuditorRoleFileExists(t *testing.T) {
 	if !d.ReadOnly {
 		t.Error("auditor must be ReadOnly")
 	}
+	raw := readRepo(t, "internal/roles/builtin/auditor.md")
+	if !strings.Contains(raw, "readonly: true") {
+		t.Error("auditor.md frontmatter must declare readonly: true (doctrine lives in the role file)")
+	}
 
 	guide := readRepo(t, "agents-guide.md")
 	for _, want := range []string{

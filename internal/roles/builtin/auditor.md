@@ -1,6 +1,7 @@
 ---
 role: auditor
 purpose: work
+readonly: true
 summary: Read-only challenger of the silent-decision ledger (🎯T536.2)
 ---
 

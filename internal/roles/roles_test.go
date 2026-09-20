@@ -123,6 +123,58 @@ func TestT5362DefaultForPurpose(t *testing.T) {
 	}
 }
 
+func TestT5362AuditorOverrideCannotDropReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrole: auditor\npurpose: work\nreadonly: false\nsummary: write-capable override\n---\n\n# Override auditor\n"
+	if err := os.WriteFile(filepath.Join(dir, "auditor.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := (roles.Catalog{OwnerDir: dir}).Resolve("auditor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != roles.SourceOwner {
+		t.Fatalf("want owner override, got %+v", r)
+	}
+	if !r.ReadOnly {
+		t.Fatal("auditor stays ReadOnly even when an override sets readonly: false")
+	}
+}
+
+func TestT5362AssignmentsPersistAndMalformedIsHardError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent_roles.json")
+	a, err := roles.OpenAssignments(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Set("jv-t536.2-audit", roles.Auditor); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Get("jv-t536.2-audit"); got != roles.Auditor {
+		t.Fatalf("Get=%q", got)
+	}
+
+	reopened, err := roles.OpenAssignments(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Get("jv-t536.2-audit"); got != roles.Auditor {
+		t.Fatalf("reopen Get=%q", got)
+	}
+
+	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = roles.OpenAssignments(path)
+	if err == nil {
+		t.Fatal("malformed agent_roles.json must be a hard error, not a silent reset")
+	}
+	if !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("error should name malformed, got %v", err)
+	}
+}
+
 func TestT5362ListIncludesAuditorBuiltin(t *testing.T) {
 	list, err := (roles.Catalog{}).List()
 	if err != nil {
