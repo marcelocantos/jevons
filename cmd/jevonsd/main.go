@@ -640,6 +640,11 @@ func main() {
 			os.Exit(1)
 		}
 		registry = r
+		// 🎯T541.1: in-process Cursor Launch waits for leftover store.db
+		// writers to exit, then fail-loud (ErrCursorResumeDenied) rather
+		// than stacking a second ACP client. Daemon-held grants reclaim
+		// by name and do not use this Start.
+		upgrade.InstallCursorLaunchGuard(registry)
 	}
 
 	// Prior upgrade handoff: session_ids + optional connect-mode endpoints.

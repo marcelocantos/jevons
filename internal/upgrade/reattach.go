@@ -30,14 +30,16 @@ func ReattachFleetContext(ctx context.Context, reg *claudia.Registry) []string {
 		return nil
 	}
 	before := SessionSnapshot(reg)
-	// Cursor ACP leftovers cannot be adopted. Reap them before Launch
-	// so the successor opens exactly one client per store.db (🎯T541.1).
-	// Unless the claudia daemon holds the fleet: then those processes
-	// are the daemon's live seats, and Launch below reclaims them by
-	// name over the socket instead of stacking a second client.
+	// Cursor ACP stdio cannot be adopted in-process. Without a claudia
+	// daemon, reap leftover writers (and ppid=1 orphans) and wait for
+	// them to exit before PreferAdopt Launch — a second session/load
+	// on a still-held store.db is 🎯T541.1. Seats that will not die
+	// lose AutoStart (fail loud). With a daemon, the leftover is the
+	// live seat and Launch reclaims it by name.
 	if !brokerAvailable() {
 		ReapCursorFleetLeftovers(reg)
 		reapOrphanCursorACP()
+		hushUnreapedCursorSeats(reg)
 	} else {
 		slog.Info("claudia daemon present; fleet seats are reclaimed, not reaped")
 	}
