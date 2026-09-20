@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 )
 
@@ -91,6 +92,10 @@ func runBounceOraclePeer() error {
 	}
 	var mu sync.Mutex
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ws/mux" {
+			serveBounceOwnerMux(w, r)
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if r.URL.Path == "/health" {
@@ -172,6 +177,8 @@ func runBounceOraclePeer() error {
 					reply = ""
 				case "unrelated reply":
 					reply = "I am running"
+				case "commentary around secret":
+					reply = "searching files\n" + state.Secret + " " + challenge + "\n(done)"
 				case "lost retained fact":
 					reply = "unknown " + challenge
 				case "stale pre-restart reply":
@@ -229,9 +236,102 @@ func runBounceOraclePeer() error {
 	return nil
 }
 
+func serveBounceOwnerMux(w http.ResponseWriter, r *http.Request) {
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+	ctx := r.Context()
+	if _, _, err := conn.Read(ctx); err != nil {
+		return
+	}
+	if err := writeOwnerMux(ctx, conn, "meta", map[string]any{"n": 0, "lo": 1, "hi": 0, "following": true}); err != nil {
+		return
+	}
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		return
+	}
+	var send struct {
+		Body struct{ Text string } `json:"body"`
+	}
+	if err := json.Unmarshal(data, &send); err != nil {
+		return
+	}
+	prompt := send.Body.Text
+	token, ok := strings.CutPrefix(prompt, "Reply with exactly: ")
+	token, _, end := strings.Cut(token, ". Do not use tools.")
+	if !ok || !end || token == "" || !strings.HasPrefix(token, "bounce-main-") {
+		return
+	}
+	frames := [][]byte{
+		bounceMuxFrame("user", 1, prompt, "", "owner"),
+		bounceMuxFrame("assistant", 2, token, "end_turn", ""),
+	}
+	for _, frame := range frames {
+		if err := conn.Write(ctx, websocket.MessageText, frame); err != nil {
+			return
+		}
+	}
+	<-ctx.Done()
+}
+
+func bounceMuxFrame(kind string, index int, text, stop, origin string) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"id": fmt.Sprintf("e:%d", index), "index": index, "op": "put", "type": kind,
+		"event": map[string]any{
+			"type": kind, "turn_origin": origin,
+			"message": map[string]any{
+				"content":     []any{map[string]string{"type": "text", "text": text}},
+				"stop_reason": stop,
+			},
+		},
+	})
+	env, _ := json.Marshal(map[string]any{"v": 1, "ch": ownerMuxChannel, "t": "frame", "body": json.RawMessage(body)})
+	return env
+}
+
+func TestIsolateDaemonEnvDetachesFromHostBroker(t *testing.T) {
+	s := &suite{stateDir: t.TempDir(), daemonEnv: []string{"JOURNEY_EXTRA=1"}}
+	env := s.isolateDaemonEnv()
+	got := map[string]string{}
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if ok {
+			got[k] = v
+		}
+	}
+	if got["CLAUDIA_NO_BROKER"] != "1" {
+		t.Fatalf("CLAUDIA_NO_BROKER=%q, isolate drain would skip StopAll", got["CLAUDIA_NO_BROKER"])
+	}
+	if got["XDG_STATE_HOME"] != s.stateDir {
+		t.Fatalf("XDG_STATE_HOME=%q, isolate would share owner grok-homes", got["XDG_STATE_HOME"])
+	}
+	if got["JOURNEY_EXTRA"] != "1" {
+		t.Fatal("per-journey daemonEnv dropped")
+	}
+}
+
+func TestBounceDirectMatchesExactLine(t *testing.T) {
+	const expected = "secret challenge"
+	if !bounceDirectMatches(expected, expected) {
+		t.Fatal("exact reply rejected")
+	}
+	if !bounceDirectMatches("searching files\n"+expected+"\n(done)", expected) {
+		t.Fatal("exact line among commentary rejected")
+	}
+	if bounceDirectMatches(expected+" (from memory)", expected) {
+		t.Fatal("same-line extra accepted")
+	}
+	if bounceDirectMatches("unknown challenge", expected) {
+		t.Fatal("lost fact accepted")
+	}
+}
+
 func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 	identities := map[string]bool{}
-	for _, mode := range []string{"valid", "valid again", "no post reply", "unrelated reply", "lost retained fact",
+	for _, mode := range []string{"valid", "valid again", "commentary around secret", "no post reply", "unrelated reply", "lost retained fact",
 		"stale pre-restart reply", "truncated reply", "wrong provider", "missing replacement launch",
 		"late session rotation", "late provider rotation", "session rotation then outage", "unreadable registry", "new handover", "registry survives cleanup",
 		"bad exit", "upgrade stop", "forced stop"} {
@@ -257,7 +357,7 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 			// fixture teardown the same drain budget as the journey itself.
 			defer s.signalStop(8 * time.Second)
 			err = s.jBounceResume()
-			wantOK := strings.HasPrefix(mode, "valid")
+			wantOK := strings.HasPrefix(mode, "valid") || mode == "commentary around secret"
 			if (err == nil) != wantOK {
 				t.Errorf("J14 error=%v, want success=%v", err, wantOK)
 			}

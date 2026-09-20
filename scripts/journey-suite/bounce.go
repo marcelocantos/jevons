@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -20,6 +21,19 @@ import (
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
+
+// isolateDaemonEnv keeps the throwaway daemon off the host claudia
+// broker and out of the owner's grok-homes. A reachable broker makes
+// SIGINT skip StopAll (🎯T63), so J14 cannot observe a drain; sharing
+// XDG_STATE_HOME would resume the owner's conversations (🎯T627.1).
+func (s *suite) isolateDaemonEnv() []string {
+	env := append([]string{}, os.Environ()...)
+	env = append(env,
+		"CLAUDIA_NO_BROKER=1",
+		"XDG_STATE_HOME="+s.stateDir,
+	)
+	return append(env, s.daemonEnv...)
+}
 
 func (s *suite) startDaemon() error {
 	if s == nil {
@@ -40,9 +54,7 @@ func (s *suite) startDaemon() error {
 	cmd.Stdout = s.logFile
 	cmd.Stderr = s.logFile
 	cmd.Dir = s.workdir
-	if len(s.daemonEnv) > 0 {
-		cmd.Env = append(os.Environ(), s.daemonEnv...)
-	}
+	cmd.Env = s.isolateDaemonEnv()
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -203,7 +215,7 @@ func (s *suite) jBounceResume() error {
 		if outage := replyOutage("bounce direct reply", out); outage != nil {
 			return outage
 		}
-		if strings.TrimSpace(out) != expected {
+		if !bounceDirectMatches(out, expected) {
 			return fmt.Errorf("direct reply %q differs from requested %q", trim(out, 200), expected)
 		}
 		return nil
@@ -214,6 +226,9 @@ func (s *suite) jBounceResume() error {
 	if err := direct(seed, ack); err != nil {
 		return fmt.Errorf("pre-bounce seed turn: %w", err)
 	}
+	if err := s.completeBounceOwnerTurn(); err != nil {
+		return err
+	}
 
 	before, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
@@ -221,6 +236,9 @@ func (s *suite) jBounceResume() error {
 	}
 	if before[id].SessionID == "" || before[id].Provider != s.provider {
 		return fmt.Errorf("bounce fixture lacks its selected provider/session identity")
+	}
+	if before[overseerName].SessionID == "" {
+		return fmt.Errorf("bounce owner conversation lacks a provider session identity")
 	}
 	preLogs, err := os.ReadFile(s.logPath)
 	if err != nil {
@@ -268,7 +286,7 @@ func (s *suite) jBounceResume() error {
 		return fmt.Errorf("restart: %w", err)
 	}
 	challenge := "bounce-now-" + uuid.NewString()
-	prompt := "What journey continuity secret did I give you before the restart? Reply with exactly two words separated by one space: the saved secret, then " + challenge + ". No labels or punctuation."
+	prompt := "What journey continuity secret did I give you before the restart? Do not use tools or search. Reply with exactly two words separated by one space: the saved secret, then " + challenge + ". No labels or punctuation."
 	expected := secret + " " + challenge
 	directErr := direct(prompt, expected)
 	// Check identity even when the provider call failed. A timeout must not
@@ -340,6 +358,51 @@ func (s *suite) jBounceResume() error {
 		}
 	}
 	return nil
+}
+
+// completeBounceOwnerTurn is the 🎯T627.1 main-conversation half of J14:
+// the isolate overseer must finish a fresh owner request before drain.
+func (s *suite) completeBounceOwnerTurn() error {
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
+	conn, frames, err := dialOwnerMux(ctx, s.host)
+	if err != nil {
+		if outage := asOutage("bounce owner mux", err); outage != nil {
+			return outage
+		}
+		return fmt.Errorf("bounce owner mux: %w", err)
+	}
+	defer conn.CloseNow()
+	if _, err := collectOwnerMuxReplay(ctx, frames); err != nil {
+		return fmt.Errorf("bounce owner replay: %w", err)
+	}
+	token := "bounce-main-" + uuid.NewString()
+	prompt := "Reply with exactly: " + token + ". Do not use tools."
+	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": prompt}); err != nil {
+		return fmt.Errorf("bounce owner send: %w", err)
+	}
+	if err := waitOwnerMuxReplyMatching(ctx, frames, prompt, token, func(text string) bool {
+		return bounceDirectMatches(text, token)
+	}, nil); err != nil {
+		if outage := asOutage("bounce owner turn", err); outage != nil {
+			return outage
+		}
+		return fmt.Errorf("pre-bounce owner turn: %w", err)
+	}
+	return nil
+}
+
+func bounceDirectMatches(out, expected string) bool {
+	got := strings.TrimSpace(out)
+	if got == expected {
+		return true
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.TrimSpace(line) == expected {
+			return true
+		}
+	}
+	return false
 }
 
 // jSwitchSeedShape is the 🎯T285.1 isolate oracle: a provider switch

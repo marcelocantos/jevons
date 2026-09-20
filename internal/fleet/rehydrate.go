@@ -240,11 +240,8 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 		slog.Info("launch rehydrated lost session", "name", name, "detail", lost.Describe())
 	}
 	agent, err := reg.Launch(name)
-	if err != nil && claudia.IsCursorResumeDenied(err) {
+	if remintAfterResumeError(reg.Def(name), err) {
 		def := reg.Def(name)
-		if def == nil {
-			return nil, err
-		}
 		rotated, rerr := rotateOntoFreshSession(reg, def)
 		if rerr != nil {
 			slog.Warn("resume-denied rehydrate failed", "name", name, "err", rerr)
@@ -255,4 +252,21 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 		return reg.Launch(name)
 	}
 	return agent, err
+}
+
+// remintAfterResumeError is the 🎯T627.1 gate: a failed Launch may rotate
+// onto a fresh session only for Cursor session/load Invalid params, where
+// stacking a second ACP writer on the same store is 🎯T541.1. Grok (and
+// every other provider) must fail closed. Grok's load-failure wording
+// contains the same "existing conversation; refusing to mint" phrase as
+// [claudia.ErrCursorResumeDenied], so a string match alone would remint
+// a persisted Grok conversation whose home or session/load failed.
+func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
+	if err == nil || def == nil {
+		return false
+	}
+	if def.Provider != claudia.ProviderCursor {
+		return false
+	}
+	return claudia.IsCursorResumeDenied(err)
 }
