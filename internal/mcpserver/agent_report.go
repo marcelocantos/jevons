@@ -56,6 +56,16 @@ func (s *Server) agentReportStateDir() string {
 // 🎯T165/T195 auto-deregistration can remove the agent, and returns the handle
 // the delivery marker should name.
 //
+// 🎯T747: identical bodies are NOT collapsed here or in agentreport.Save, and
+// that is a decision, not an omission. Two reports with the same text, minutes
+// apart, are two events: seatActivity (🎯T597) and recoverMissedTurns (🎯T744)
+// read Latest().At as "this seat reported since X", and a store that handed
+// back the first record for the second report would make a genuine repeat look
+// stale. What the PO pays for is redelivery, which is handled where it is
+// paid: prepareParentReport refuses an identical body already offered to that
+// parent (reportContentKey), and bare acks — the bulk of identical bodies —
+// are not stored at all (notify).
+//
 // Storage failure is logged and returns a zero handle rather than dropping the
 // delivery: the report reaching the overseer partially beats it not reaching
 // the overseer at all.

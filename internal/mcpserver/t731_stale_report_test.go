@@ -215,3 +215,36 @@ func TestT731ReapedBannerStillParsesEnvelope(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// 🎯T747: the same report body stored twice has two ids (timestamped), so the
+// id-keyed ledger alone offers it twice. Route twice, assert one delivery.
+func TestT747IdenticalBodyUnderNewIDIsNotReDelivered(t *testing.T) {
+	s, parent, _, _ := t731Server(t)
+
+	s.notify(t731Worker, t731Report)
+	if len(parent.sent) != 1 {
+		t.Fatalf("first delivery: parent got %d want 1: %v", len(parent.sent), parent.sent)
+	}
+	// Same body, later second: a distinct stored id.
+	time.Sleep(1100 * time.Millisecond)
+	s.notify(t731Worker, t731Report)
+
+	recs, err := agentreport.List(s.agentReportStateDir(), t731Worker)
+	if err != nil || len(recs) != 2 || recs[0].ID == recs[1].ID {
+		t.Fatalf("want two stored reports with distinct ids; got %d err=%v", len(recs), err)
+	}
+	if len(parent.sent) != 1 {
+		t.Fatalf("identical body re-delivered to the parent that already consumed it: %d deliveries: %v",
+			len(parent.sent), parent.sent)
+	}
+}
+
+// Control: a different body from the same agent still reaches the parent.
+func TestT747DifferentBodyStillDelivered(t *testing.T) {
+	s, parent, _, _ := t731Server(t)
+	s.notify(t731Worker, t731Report)
+	s.notify(t731Worker, t731Report+" And a second, different finding.")
+	if len(parent.sent) != 2 {
+		t.Fatalf("parent deliveries=%d want 2: %v", len(parent.sent), parent.sent)
+	}
+}

@@ -4,6 +4,8 @@
 package mcpserver
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -112,12 +114,36 @@ func findAgentResponded(text string) (name, reportID string, ok bool) {
 	return "", "", false
 }
 
+// reportContentKey identifies a report by what it says, not by the id the
+// store minted for it (🎯T747). Ids carry a timestamp, so the same body stored
+// twice has two ids and an id-keyed ledger offers it twice; the PO then spends
+// a turn re-reading a report it already acted on. The key is the agent plus a
+// digest of everything after the "[Agent X responded]" line, so a reap banner
+// or false-green banner ahead of that line does not change it. Empty when the
+// text is not an agent report.
+func reportContentKey(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		name, _, ok := parseAgentRespondedLine(line)
+		if !ok {
+			continue
+		}
+		body := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+		sum := sha256.Sum256([]byte(body))
+		return "content:" + name + ":" + hex.EncodeToString(sum[:])
+	}
+	return ""
+}
+
 type parentReportPrep struct {
 	Text     string
 	ReportID string
-	Agent    string
-	Suppress bool
-	Reason   string
+	// ContentKey is reportContentKey of the text; recorded beside ReportID
+	// when the report is offered (🎯T747).
+	ContentKey string
+	Agent      string
+	Suppress   bool
+	Reason     string
 }
 
 func hasReapedSeatBanner(text string) bool {
@@ -133,11 +159,19 @@ func (s *Server) prepareParentReport(dest, text string, fulfilling bool) parentR
 	}
 	out.Agent = agent
 	out.ReportID = reportID
+	out.ContentKey = reportContentKey(text)
 	if !fulfilling && reportID != "" && s.parentReportAlreadyOffered(dest, reportID) {
 		out.Suppress = true
 		out.Reason = fmt.Sprintf(
 			"Not delivered to parent %q — report id %s was already offered to this parent (🎯T731). Nothing was lost.",
 			dest, reportID)
+		return out
+	}
+	if !fulfilling && out.ContentKey != "" && s.parentReportAlreadyOffered(dest, out.ContentKey) {
+		out.Suppress = true
+		out.Reason = fmt.Sprintf(
+			"Not delivered to parent %q — an identical report body from %s was already offered to this parent (🎯T747). Nothing was lost; read it with jevons_agent_report_read.",
+			dest, agent)
 		return out
 	}
 	if rec, reaped := LookupReapedRecord(s.fleetIntent(), agent); reaped && !hasReapedSeatBanner(text) {

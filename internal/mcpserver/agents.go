@@ -1329,27 +1329,32 @@ func (s *Server) notify(agentName, text string) {
 		return
 	}
 
+	// 🎯T502: a bare acknowledgement ("No response requested.") is a
+	// turn-boundary artefact, not a report. The idle signal still reaches the
+	// parent through the 🎯T207/T414 tracker, and anything with a finish shape,
+	// an ask, or a T392.7 direct-route class still escalates. See
+	// bareAckTurnReport.
+	//
+	// 🎯T747: it is not stored either. It was stored at first (649 of 3848
+	// files on one machine were this 22-byte ack), which made a seat that ended
+	// a turn with nothing to say indistinguishable from one that reported, and
+	// buried real reports in jevons_agent_report_read list=true. It is logged
+	// here, which is the record an ack deserves.
+	if bareAckTurnReport(text) {
+		slog.Info("agent bare ack suppressed (not a report)",
+			"agent", agentName, "len", len(text), "stored", false)
+		s.logLifecycle(compAgentLifecycle, "notify", "suppressed_bare_ack", map[string]any{
+			"agent": agentName,
+		})
+		return
+	}
+
 	// 🎯T388: store the report BEFORE delivering it and before the 🎯T165/T195
 	// reap can remove the agent, so the full text outlives its author. When
 	// jv-t372-auto was asked to resend, jevons_agent_send answered "agent is
 	// not running" and the content survived only because that worker happened
 	// to have committed its reasoning to a design doc.
 	handle := s.storeAgentReport(agentName, text)
-
-	// 🎯T502: a bare acknowledgement ("No response requested.") is a
-	// turn-boundary artefact, not a report — suppressing it here is a routing
-	// decision, not amnesia: it is stored above like any report, the idle
-	// signal still reaches the parent through the 🎯T207/T414 tracker, and
-	// anything with a finish shape, an ask, or a T392.7 direct-route class
-	// still escalates. See bareAckTurnReport.
-	if bareAckTurnReport(text) {
-		slog.Info("agent bare ack suppressed (not a report)",
-			"agent", agentName, "len", len(text), "report_id", handle.ReportID)
-		s.logLifecycle(compAgentLifecycle, "notify", "suppressed_bare_ack", map[string]any{
-			"agent": agentName, "report_id": handle.ReportID,
-		})
-		return
-	}
 
 	// Fit the report to the delivery bound. This used to be text[:1997]+"...",
 	// which lost the tail behind a marker indistinguishable from the author's

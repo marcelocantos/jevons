@@ -105,10 +105,10 @@ func TestT502ControlReportsStillRoute(t *testing.T) {
 	}
 }
 
-// TestT502SuppressedAckIsStillStored pins the 🎯T388 half: suppression is a
-// routing decision, not amnesia — the ack is still stored as the agent's
-// report, exactly as the two live fixtures were.
-func TestT502SuppressedAckIsStillStored(t *testing.T) {
+// TestT502SuppressedAckIsNotStored pins the 🎯T747 reversal of the original
+// 🎯T388 half: a bare ack is not a report, so it is not stored as one. 649 of
+// 3848 stored files on one machine were the same 22-byte ack.
+func TestT502SuppressedAckIsNotStored(t *testing.T) {
 	s := &Server{}
 	dir := t.TempDir()
 	s.SetAgentReportDir(dir)
@@ -121,7 +121,7 @@ func TestT502SuppressedAckIsStillStored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing stored reports: %v", err)
 	}
-	if len(reports) != 1 {
-		t.Fatalf("suppressed ack was not stored: %d reports", len(reports))
+	if len(reports) != 0 {
+		t.Fatalf("bare ack was stored as a report: %d reports", len(reports))
 	}
 }

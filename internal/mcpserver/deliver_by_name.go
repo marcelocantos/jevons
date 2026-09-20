@@ -304,7 +304,7 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	// and a report id already offered to this parent is not offered again.
 	// Overseer arm is excluded: T428/T568 already guard that channel by bytes,
 	// and the overseer copy is usually delivered while the seat is still live.
-	var offeredReportID string
+	var offeredReportID, offeredContentKey string
 	if origin == OriginAgent {
 		prep := s.prepareParentReport(name, text, false)
 		if prep.Suppress {
@@ -315,12 +315,15 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		}
 		text = prep.Text
 		offeredReportID = prep.ReportID
+		offeredContentKey = prep.ContentKey
 		defer func() {
 			if err != nil || offeredReportID == "" {
 				return
 			}
 			if parentReportOfferStatus(res.Status) {
 				s.noteParentReportOffered(name, offeredReportID)
+				// 🎯T747: also by content, so an identical body under a new id is not re-offered.
+				s.noteParentReportOffered(name, offeredContentKey)
 			}
 		}()
 	}
