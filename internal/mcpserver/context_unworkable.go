@@ -14,6 +14,24 @@ import (
 // parent and the overseer. Fire-and-forget: a failed notify is logged, never
 // retried into a remint loop. parent may be empty — ResolveEventParent fills
 // the lineage default.
+//
+// 🎯T727, why this path carries no occurrence. It does not go through
+// notifyFleetHealth, so nothing forces one on it; that is deliberate rather
+// than an omission. The emitter is once-per-spell — contextCeilingPass holds a
+// sticky latch per agent and clears it only when the seat drops back under the
+// ceiling — so a second spell is a genuinely new incident that must reach the
+// overseer. It already does, because FormatUnworkableNotice puts two moving
+// quantities in the text: the measured context size and the rotation/compaction
+// age. A seat that fell below the ceiling and climbed back is re-measured, so
+// the second notice differs and 🎯T428 passes it through.
+//
+// THE ACCEPTED LOSS, stated so it is not discovered as a bug: two spells whose
+// notices render byte-identical — the same token count to the digit AND a
+// rotation age that formats the same, which in practice means a parked seat
+// with "none recorded" both times — collapse as a replay and the second spell
+// is never announced. Closing that would mean stamping a discriminator into a
+// notice whose wording is deliberately pinned pure, to cover a case that needs
+// an exact token-count collision. The fleet knowingly accepts losing it.
 func (s *Server) ReportContextUnworkable(agent, parent, text string) {
 	if s == nil || strings.TrimSpace(text) == "" {
 		return
