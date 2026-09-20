@@ -3,7 +3,11 @@
 
 package mcpserver
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/marcelocantos/claudia"
+)
 
 // 🎯T750: a worker is reaped only on a completion claim it made.
 //
@@ -136,5 +140,50 @@ func TestT750MaskPreservesOffsets(t *testing.T) {
 		if got := len(claimScanText(s)); got != len(s) {
 			t.Errorf("claimScanText changed length: got %d, want %d", got, len(s))
 		}
+	}
+}
+
+// The acceptance criterion names the reap, not the classifier: the seat is
+// KEPT. Both arms run the whole path — ShouldAutoReapDoneWorkAgent for the
+// decision and its reason, then the live event sink, which is what actually
+// removes a name from the registry.
+func TestT750SeatIsKeptOnAQuotedMarker(t *testing.T) {
+	const agent = "jv-t745-busy-pane"
+	reg := t395Registry(t, agent)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, agent, t745BusyPaneReport, nil)
+	if ok {
+		t.Fatalf("a report whose only completion marker is negated reaps (reason %s)", reason)
+	}
+	if reason != "not_finished_work_report" {
+		t.Errorf("reason = %q, want not_finished_work_report", reason)
+	}
+
+	s, reg2 := t471SinkServer(t, agent)
+	s.agentEventSink(agent)(claudia.Event{
+		Type:       "assistant",
+		Text:       t745BusyPaneReport,
+		StopReason: "end_turn",
+	})
+	if reg2.Def(agent) == nil {
+		t.Fatal("the sink deregistered a seat that had just said it was not finished")
+	}
+}
+
+func TestT750SeatIsReapedOnItsOwnMarker(t *testing.T) {
+	const agent = "jv-t745-busy-pane"
+	reg := t395Registry(t, agent)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, agent, t745FinishedReport, nil)
+	if !ok {
+		t.Fatalf("the report that ends on an unquoted GOAL_STATUS: complete did not reap (reason %s)", reason)
+	}
+
+	s, reg2 := t471SinkServer(t, agent)
+	s.agentEventSink(agent)(claudia.Event{
+		Type:       "assistant",
+		Text:       t745FinishedReport,
+		StopReason: "end_turn",
+	})
+	if reg2.Def(agent) != nil {
+		t.Fatal("the sink kept a seat that claimed completion in its own voice")
 	}
 }
