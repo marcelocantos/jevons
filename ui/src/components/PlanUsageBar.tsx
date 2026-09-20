@@ -9,7 +9,6 @@ import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMark';
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
 import { applyThresholds, formatWindow } from '../plan/pace';
-import { triangleColorForRemaining } from '../plan/triColor';
 import { InstantTip } from './InstantTip';
 import { gaugeFillPercent, tickerGroups, type PlanSnapshot } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
@@ -115,17 +114,10 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
                     <span className="plan-bar" aria-hidden="true">
                       <span className="plan-bar-fill" style={{ width: used + '%' }} />
                     </span>
-                    {spentTime != null && remainingTime != null ? (
-                      <span
-                        className="plan-tri"
-                        aria-hidden="true"
-                        style={{
-                          left: spentTime + '%',
-                          // Position is time spent; the colour still answers
-                          // how much of the window is left (🎯T641's map).
-                          borderBottomColor: triangleColorForRemaining(remainingTime),
-                        }}
-                      />
+                    {spentTime != null ? (
+                      // 🎯T673: position is time spent; the chevron itself is
+                      // neutral. It is a ruler mark, not a reading.
+                      <span className="plan-tri" aria-hidden="true" style={{ left: spentTime + '%' }} />
                     ) : null}
                   </span>
                   <span className="plan-win-label">{windowAbbrev(w.name || '')}</span>

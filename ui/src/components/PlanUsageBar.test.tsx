@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url';
 import { setNow, reset as resetClock } from '../clock';
 import { PlanUsageBar } from './PlanUsageBar';
 import { companyOfProvider } from '../plan/companyMark';
-import { triangleColorForRemaining } from '../plan/triColor';
 import { WEEKLY_LIMIT_SECONDS } from '../plan/windowGeom';
 import type { MuxClient } from '../mux/client';
 import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
@@ -124,7 +123,9 @@ describe('PlanUsageBar mux wiring', () => {
       const tri = container.querySelector('.plan-tri') as HTMLElement;
       const win = container.querySelector('.plan-win') as HTMLElement;
       expect(win.className).toContain('plan-hot');
-      expect(tri.style.borderBottomColor).toBe(triangleColorForRemaining(25));
+      // 🎯T673: no inline colour — the chevron is grey from the stylesheet,
+      // never the bar's colour and never a ramp of its own.
+      expect(tri.style.borderBottomColor).toBe('');
       // 🎯T670: the chevron marks time SPENT and travels rightward with the
       // fill — a quarter of this window is left, so three quarters are gone.
       // Only the colour was pinned before, so the flip was invisible here.

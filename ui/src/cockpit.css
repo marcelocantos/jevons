@@ -898,7 +898,10 @@ body.rhs-resizing-row { cursor: row-resize; }
    of the tip) while painting orange. Inset stroke keeps the edge. */
 #plan-ticker .plan-bar { display: block; width: 100%; height: 6px; background: var(--surface-high); box-shadow: inset 0 0 0 1px var(--border); border-radius: 2px; overflow: hidden; }
 #plan-ticker .plan-bar-fill { display: block; height: 100%; background: var(--green); }
-#plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--green); transform: translateX(-50%); pointer-events: none; }
+/* 🎯T673: the chevron marks where the period has got to. It is neutral —
+   it took the bar's colour before, and then a red→purple ramp of its own,
+   and both read as a second verdict rather than a ruler mark. */
+#plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--text-muted); transform: translateX(-50%); pointer-events: none; }
 #plan-ticker .plan-win-label { font-size: 9px; line-height: 1; color: var(--text-muted); padding-bottom: 5px; }
 #plan-ticker .plan-win.plan-ahead .plan-bar-fill { background: var(--amber); }
 #plan-ticker .plan-win.plan-hot .plan-bar-fill,
