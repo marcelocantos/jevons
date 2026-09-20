@@ -12,6 +12,7 @@ const { chromium } = require('../browser-loop-test/node_modules/playwright');
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
   'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' },
+  'aside-only': { type: 'boolean', default: false },
 } });
 const base = new URL(`http://${values.host}`);
 assert(['localhost', '127.0.0.1', '[::1]'].includes(base.hostname));
@@ -67,7 +68,11 @@ async function main() {
   asideCreated = true;
   let mainSubmittedAt = 0;
 
-  for (const name of ['jevons', values.aside]) {
+  // T627.4 observes the MCP-spawned aside. The overseer composer client-queues
+  // a busy follow-up (T657) and never mux-sends, so it cannot show daemon sendq
+  // or an interleaved owner echo. Fleet asides without a phase sample still
+  // mux-send and the daemon queues.
+  for (const name of (values['aside-only'] ? [values.aside] : ['jevons', values.aside])) {
     const main = name === 'jevons';
     const input = main ? '#input' : '#agent-inspect-input';
     const button = main ? '#send' : '#agent-inspect-send';

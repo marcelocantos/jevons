@@ -64,8 +64,12 @@ type Claudia struct {
 	// inFlight counts turns currently awaiting a reply, per agent id.
 	// Idle-derived reaping consults it (Busy) so a worker mid-turn is
 	// never stopped out from under the caller — see Busy (🎯T282).
-	mu       sync.Mutex
-	inFlight map[string]int
+	mu        sync.Mutex
+	inFlight  map[string]int
+	idleObs   map[string]idleObs
+	idleWatch map[string]bool
+	pending   func(string) bool
+	admit     SeatGate
 
 	// Provider migration (🎯T285): session roots resolve a predecessor's
 	// transcript, and handovers persists the pointer across the rotation
@@ -488,12 +492,14 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	if sid := ag.SessionID(); sid != "" {
 		t.SessionID = sid
 	}
+	f.ensureIdleWatch(t.ID, ag)
 	return nil
 }
 
 // Send delivers a turn to the thread's live process and waits for its
 // reply. It requires a live process (call Launch first).
 func (f *Claudia) Send(id, text string) (string, error) {
+	defer f.BeginSend(id)()
 	ag := f.reg.Get(id)
 	if ag == nil || !ag.Alive() {
 		return "", fmt.Errorf("no live process for thread %q", id)
@@ -542,21 +548,77 @@ func (f *Claudia) enterTurn(id string) func() {
 }
 
 // Busy reports whether a directed turn is currently awaiting a reply for
-// id. The idle sweep uses it to leave working agents alone.
+// id. The idle sweep uses it to leave working agents alone. Canonical
+// mux/MCP sends, queued follow-ups, and a live provider prompt all count
+// (🎯T627.4); Butler.Direct is not the only admission path.
 func (f *Claudia) Busy(id string) bool {
 	if f == nil {
 		return false
 	}
+	if f.admit.Sending(id) {
+		return true
+	}
+	if f.Pending(id) {
+		return true
+	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.inFlight[id] > 0
+	n := f.inFlight[id]
+	f.mu.Unlock()
+	if n > 0 {
+		return true
+	}
+	if f.reg == nil {
+		return false
+	}
+	ag := f.reg.Get(id)
+	return ag != nil && ag.Alive() && ag.PromptInFlight()
 }
 
-// IdleTranscript supplies only a provider-bound JSONL observation. ACP and
-// app-server agents can advertise a vestigial Claude-shaped JSONL path; their
-// actual streams/stores are not evidence this legacy GC reader can interpret.
-// Defer their automatic reclamation until canonical activity and admission
-// are coordinated (T627.4), even if another provider has the same session ID.
+// BeginSend admits a send against the idle reap (🎯T627.4). Nested calls
+// on the same id are counted. The returned function releases once.
+func (f *Claudia) BeginSend(id string) func() {
+	if f == nil {
+		return func() {}
+	}
+	done := f.admit.BeginSend(id)
+	f.noteIdleUser(id)
+	return done
+}
+
+// TryBeginReap admits a reap only when no send holds the seat.
+func (f *Claudia) TryBeginReap(id string) (func(), bool) {
+	if f == nil {
+		return func() {}, false
+	}
+	return f.admit.TryBeginReap(id)
+}
+
+// SetPending installs the queued-follow-up predicate the idle sweep
+// consults through Busy. Nil means no durable queue is visible.
+func (f *Claudia) SetPending(fn func(string) bool) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pending = fn
+}
+
+// Pending reports a durable queued follow-up for id.
+func (f *Claudia) Pending(id string) bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	fn := f.pending
+	f.mu.Unlock()
+	return fn != nil && fn(id)
+}
+
+// IdleTranscript supplies a provider-bound activity tail. Claude uses its
+// JSONL path. Cursor/Codex/Grok use observed live-stream activity so a
+// genuinely idle seat can be reclaimed without reading a vestigial Claude
+// file (🎯T627.4). Unknown activity still defers reclamation.
 func (f *Claudia) IdleTranscript(t *thread.Thread, n int) ([]transcript.Entry, error) {
 	if f == nil || f.reg == nil {
 		return nil, fmt.Errorf("idle transcript: no registry")
@@ -565,6 +627,16 @@ func (f *Claudia) IdleTranscript(t *thread.Thread, n int) ([]transcript.Entry, e
 	def := f.reg.Def(t.ID)
 	if ag == nil || def == nil {
 		return nil, fmt.Errorf("idle transcript: no current process or definition")
+	}
+	if err := matchingLiveSession(t.SessionID, ag.SessionID(), def.SessionID); err != nil {
+		return nil, err
+	}
+	f.ensureIdleWatch(t.ID, ag)
+	if p := def.Provider; p != "" && p != claudia.ProviderClaude {
+		f.mu.Lock()
+		obs := f.idleObs[t.ID]
+		f.mu.Unlock()
+		return liveStreamIdleEntries(obs)
 	}
 	return readIdleTranscript(t, def, ag, n)
 }
@@ -575,8 +647,8 @@ func readIdleTranscript(t *thread.Thread, def *claudia.AgentDef, ag interface {
 	SessionID() string
 	JSONLPath() string
 }, n int) ([]transcript.Entry, error) {
-	if t.SessionID == "" || ag.SessionID() != t.SessionID || def.SessionID != t.SessionID {
-		return nil, fmt.Errorf("idle transcript: no matching live session")
+	if err := matchingLiveSession(t.SessionID, ag.SessionID(), def.SessionID); err != nil {
+		return nil, err
 	}
 	if p := def.Provider; p != "" && p != claudia.ProviderClaude {
 		return nil, fmt.Errorf("idle transcript: provider %q has no supported GC transcript", p)
@@ -598,6 +670,7 @@ func (f *Claudia) Alive(id string) bool {
 func (f *Claudia) Stop(id string) {
 	f.reg.Stop(id)
 	f.drainOnStop(id)
+	f.clearIdleWatch(id)
 }
 
 // Remove stops the process and drops the registry definition entirely, so
@@ -608,6 +681,7 @@ func (f *Claudia) Remove(id string) {
 	// Drain while the definition still names a workdir; removals.Remove is
 	// about to drop it.
 	f.drainOnStop(id)
+	f.clearIdleWatch(id)
 	// 🎯T435: the drop is accounted for. A thread with no registry def
 	// (observe-only) is a normal no-op and not a registry diff, so the
 	// chokepoint emits nothing for it.
@@ -652,6 +726,7 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 	if err := f.allowTurn(id); err != nil {
 		return "", fmt.Errorf("deliver %q: %w", id, err)
 	}
+	defer f.BeginSend(id)()
 	// Count the turn from before the rehydrate: a launch + first turn is
 	// exactly the window in which the idle sweep must not intervene.
 	defer f.enterTurn(id)()

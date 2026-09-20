@@ -868,6 +868,8 @@ func main() {
 	// hook brackets the launch rather than trailing it, so the standing sweep
 	// can tell a process that is still coming up from one nobody wired.
 	fleetAdapter.SetLaunchHook(mcpSrv.NoteAgentLaunch)
+	fleetAdapter.SetPending(mcpSrv.HasQueuedFollowUp)
+	mcpSrv.SetSeatAdmit(fleetAdapter)
 	mcpSrv.SetMigrator(fleetAdapter)
 	srv.SetOverseerMigrator(fleetAdapter)
 	// 🎯T285.2: the fleet-tree icon menu's thin HTTP wrapper for

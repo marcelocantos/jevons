@@ -87,6 +87,14 @@ func (s *Server) SetAgentRequestRecorder(fn func(name, text string, origin SendO
 	s.agentRequestRecorder = fn
 }
 
+// SetSeatAdmit installs the send/reap admission lock (🎯T627.4). Canonical
+// mux/MCP sends hold it so the idle sweep cannot Stop the seat mid-submit.
+func (s *Server) SetSeatAdmit(fn interface{ BeginSend(id string) func() }) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seatAdmit = fn
+}
+
 func (s *Server) recordAgentRequest(name, text string, origin SendOrigin) error {
 	if s == nil {
 		return fmt.Errorf("no agent server")
@@ -319,6 +327,14 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 			}
 			return proc, rehydrated, nil
 		}
+	}
+
+	s.mu.Lock()
+	admit := s.seatAdmit
+	s.mu.Unlock()
+	if admit != nil {
+		done := admit.BeginSend(name)
+		defer done()
 	}
 
 	proc, rehydrated, err := resolve(name)

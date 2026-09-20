@@ -54,6 +54,8 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 		// The real sweep is every two minutes. Observe its completion, rather
 		// than sleeping and assuming it happened; four minutes bounds outage.
 		cmd.Args = append(cmd.Args, "--daemon-log", s.logPath, "--sweep-deadline-ms", fmt.Sprint((4 * time.Minute).Milliseconds()))
+		// T627.4: the idle reaper's owner-visible case is the MCP-spawned aside.
+		cmd.Args = append(cmd.Args, "--aside-only")
 	}
 	// The browser needs no checkout as its working directory. Assets come
 	// exclusively from the isolated daemon's embedded bundle.

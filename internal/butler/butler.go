@@ -60,6 +60,20 @@ type BusyFleet interface {
 	Busy(id string) bool
 }
 
+// SendAdmitFleet is the optional half of Fleet that admits a send against
+// the idle reap (🎯T627.4). Mux/MCP sends use the same gate on the product
+// fleet; Direct holds it before rehydrate so Stop cannot win the race.
+type SendAdmitFleet interface {
+	BeginSend(id string) func()
+}
+
+// ReapAdmitFleet is the optional half of Fleet that makes Stop exclusive
+// with an admitted send (🎯T627.4). A Fleet that does not implement it
+// keeps transcript-only reaping.
+type ReapAdmitFleet interface {
+	TryBeginReap(id string) (func(), bool)
+}
+
 // IdleTranscriptFleet binds GC observations to the actual live provider.
 // A missing/unsupported observation defers reclamation. The production fleet
 // implements this; legacy test fleets may use the Butler's configured reader.
@@ -362,6 +376,11 @@ func (b *Butler) Direct(id, text string) (string, error) {
 		return "", fmt.Errorf("direct: thread %q is observe-only; take it over before directing it", id)
 	}
 
+	if admit, ok := b.fleet.(SendAdmitFleet); ok {
+		done := admit.BeginSend(id)
+		defer done()
+	}
+
 	if !b.fleet.Alive(id) {
 		// Process aged out or was GC'd — transparently rehydrate rather
 		// than fail. This is the T24 wedge's fix at the butler layer. The
@@ -460,6 +479,7 @@ func (b *Butler) ReapIdle() []string {
 		return nil
 	}
 	busy, _ := b.fleet.(BusyFleet)
+	admit, hasAdmit := b.fleet.(ReapAdmitFleet)
 	var reaped []string
 	var unknown, working []string
 	defer func() {
@@ -475,37 +495,52 @@ func (b *Butler) ReapIdle() []string {
 		// A turn in flight outranks the transcript-derived state: a
 		// worker whose first turn has not produced transcript output yet
 		// reads as idle, and stopping it there kills the turn (🎯T282).
+		// Mux/MCP sends, queued follow-ups and PromptInFlight ride Busy
+		// on the product fleet (🎯T627.4).
 		if busy != nil && busy.Busy(t.ID) {
 			working = append(working, t.ID)
 			continue
 		}
-		var entries []transcript.Entry
-		var err error
-		if source, ok := b.fleet.(IdleTranscriptFleet); ok {
-			entries, err = source.IdleTranscript(t, b.tailN)
-		} else {
-			entries, err = b.reader.Tail(t.SessionID, b.tailN)
+		var release func()
+		if hasAdmit {
+			var ok bool
+			release, ok = admit.TryBeginReap(t.ID)
+			if !ok {
+				working = append(working, t.ID)
+				continue
+			}
 		}
-		if err != nil {
-			unknown = append(unknown, t.ID)
-			continue
-		}
-		status := b.statusFromEntries(t, entries)
-		// Status is best-effort: no readable activity is displayed as idle.
-		// That is not evidence permitting a destructive process decision.
-		// Cursor's canonical stream, for example, is not this reader's JSONL.
-		// Keep unsupported/unreadable seats until GC has an authoritative
-		// activity source; do not invent elapsed idleness from an empty tail.
-		if status.LastActivity.IsZero() {
-			unknown = append(unknown, t.ID)
-			continue
-		}
-		if status.State == thread.StateIdle {
-			b.fleet.Stop(t.ID)
-			reaped = append(reaped, t.ID)
-		} else {
-			working = append(working, t.ID)
-		}
+		func() {
+			if release != nil {
+				defer release()
+			}
+			var entries []transcript.Entry
+			var err error
+			if source, ok := b.fleet.(IdleTranscriptFleet); ok {
+				entries, err = source.IdleTranscript(t, b.tailN)
+			} else {
+				entries, err = b.reader.Tail(t.SessionID, b.tailN)
+			}
+			if err != nil {
+				unknown = append(unknown, t.ID)
+				return
+			}
+			status := b.statusFromEntries(t, entries)
+			// Status is best-effort: no readable activity is displayed as idle.
+			// That is not evidence permitting a destructive process decision.
+			// Keep unsupported/unreadable seats until GC has an authoritative
+			// activity source; do not invent elapsed idleness from an empty tail.
+			if status.LastActivity.IsZero() {
+				unknown = append(unknown, t.ID)
+				return
+			}
+			if status.State == thread.StateIdle {
+				b.fleet.Stop(t.ID)
+				reaped = append(reaped, t.ID)
+			} else {
+				working = append(working, t.ID)
+			}
+		}()
 	}
 	return reaped
 }

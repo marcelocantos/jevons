@@ -43,6 +43,9 @@ type fakeSender struct {
 	afterInterruptClears bool
 	// sendErr forces Send to fail (🎯T305 delivery failure hermetic).
 	sendErr error
+	// sendHook runs after the send is accepted, while the caller still
+	// holds product locks (🎯T627.4 admission observation).
+	sendHook func()
 }
 
 func (f *fakeSender) Alive() bool { return f.alive }
@@ -59,6 +62,9 @@ func (f *fakeSender) Send(text string) error {
 	}
 	f.sent = append(f.sent, text)
 	f.inFlight = true
+	if f.sendHook != nil {
+		f.sendHook()
+	}
 	return nil
 }
 
