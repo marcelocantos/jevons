@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,9 +70,16 @@ func AgentDir(stateDir, agent string) (string, error) {
 	return filepath.Join(stateDir, DirName, elem), nil
 }
 
-// NewID builds a sortable report id: a timestamp prefix so lexical order is
-// chronological, plus a content digest so the same report saved twice in one
-// second is one record rather than two.
+// NewID proposes the base report id: a timestamp prefix so lexical order is
+// chronological, plus a content digest so a given text has a stable, greppable
+// name.
+//
+// 🎯T746: the digest is NOT a uniqueness guarantee and must never be read as
+// one. It carries no per-report entropy when the text repeats — every
+// "No response requested." ack ever stored is <second>-85caba2f, 649 of them
+// in this machine's store — so the base id collides whenever one agent stores
+// the same text twice inside one second. Uniqueness is settled by Save, when
+// it claims the file; this function only proposes a name.
 func NewID(now time.Time, text string) string {
 	if now.IsZero() {
 		now = time.Now()
@@ -108,27 +117,98 @@ func Save(stateDir, agent, text string, now time.Time) (Record, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Record{}, fmt.Errorf("agentreport: mkdir %s: %w", dir, err)
 	}
-	if err := writeJSONAtomic(filepath.Join(dir, rec.ID+".json"), rec); err != nil {
+	rec, err = claimRecordFile(dir, rec)
+	if err != nil {
 		return Record{}, err
 	}
 	prune(dir, DefaultKeepPerAgent)
 	return rec, nil
 }
 
-// writeJSONAtomic writes v as JSON via write-and-rename, so a crash or a
-// concurrent reader never observes a half-written report.
-func writeJSONAtomic(path string, v any) error {
+// maxIDSiblings bounds the search for a free name in one id family. One agent
+// would have to store the same text a thousand times inside a single second to
+// reach it; the bound exists so a filesystem that reports every name as taken
+// fails loudly instead of spinning.
+const maxIDSiblings = 1000
+
+// claimRecordFile writes rec under the first free name in its id family and
+// returns the record carrying the id it actually got.
+//
+// 🎯T746. The path this replaces was write-temp-then-rename onto <id>.json,
+// and rename overwrites: two reports with the same text in the same second
+// resolved to one filename, so the second one deleted the first. For a 22-byte
+// harness ack that was invisible, which is why it survived from 🎯T388's
+// landing until now; for two real reports it silently lost one, which is the
+// single failure 🎯T388 exists to prevent.
+//
+// The base id is left exactly as NewID proposes it, so every id already on
+// disk still resolves and the non-colliding save — which is nearly all of them
+// — mints precisely what it minted before. Only a genuine collision produces a
+// sibling, and a sibling could not have existed under the old scheme anyway.
+// Siblings are "<base>-2", "-3", …, which sort immediately after the base
+// (a string sorts before its own extensions), so List and prune keep reading
+// lexical order as chronological and same-second siblings read in arrival
+// order.
+//
+// Note the record is re-marshalled per attempt: rec.ID is stored INSIDE the
+// file, so a body written for the base name cannot be published under a
+// sibling name without lying about its own id.
+func claimRecordFile(dir string, rec Record) (Record, error) {
+	base := rec.ID
+	for n := 1; n <= maxIDSiblings; n++ {
+		if n > 1 {
+			rec.ID = fmt.Sprintf("%s-%d", base, n)
+		}
+		err := linkJSONExclusive(filepath.Join(dir, rec.ID+".json"), rec)
+		if err == nil {
+			return rec, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return Record{}, err
+		}
+	}
+	return Record{}, fmt.Errorf(
+		"agentreport: no free report id for %s after %d siblings", base, maxIDSiblings)
+}
+
+// linkJSONExclusive publishes v as JSON at path, and reports fs.ErrExist
+// rather than overwriting when that name is already taken.
+//
+// os.Link is the whole mechanism, and it is doing two jobs at once: the name
+// appears only if it does not already exist, and it appears already carrying
+// the complete file. An O_EXCL reservation would give exclusivity a moment
+// before the content, and a concurrent List reading that window would find an
+// empty placeholder where a report should be.
+//
+// The temp name comes from os.CreateTemp rather than path+".tmp", which was
+// the same defect one layer down: two saves racing for one id shared one temp
+// file and could interleave their bytes.
+func linkJSONExclusive(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("agentreport: marshal: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".report-*.tmp")
+	if err != nil {
+		return fmt.Errorf("agentreport: temp file in %s: %w", dir, err)
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("agentreport: write %s: %w", tmp, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("agentreport: rename %s: %w", path, err)
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("agentreport: close %s: %w", tmp, err)
+	}
+	// CreateTemp makes 0600; stored reports are world-readable like the rest
+	// of the state dir so an operator can read one without the daemon.
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		return fmt.Errorf("agentreport: chmod %s: %w", tmp, err)
+	}
+	if err := os.Link(tmp, path); err != nil {
+		return fmt.Errorf("agentreport: claim %s: %w", path, err)
 	}
 	return nil
 }
