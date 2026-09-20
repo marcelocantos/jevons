@@ -49,7 +49,7 @@ func TestFleetStandingBriefHasNoBareTargetIDs(t *testing.T) {
 		"🎯T78", "🎯T197", "🎯T111.4", "🎯T155", "🎯T193", "🎯T262.1",
 		"🎯T325.1", "🎯T125", "🎯T129", "🎯T130", "🎯T194",
 		"🎯T112", "🎯T67", "🎯T29", "🎯T244", "🎯T493.1",
-		"🎯T690",
+		"🎯T690", "🎯T693", "🎯T692",
 	} {
 		if !strings.Contains(FleetStandingBrief, want) {
 			t.Errorf("brief missing %q", want)

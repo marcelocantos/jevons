@@ -486,6 +486,32 @@ func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 	}
 }
 
+// 🎯T692: fleet state narration matches the live registry.
+func TestDefaultPersonaLifecycleNarration(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Fleet state narration matches the live registry",
+		"T692",
+		"killing",
+		"will stop",
+		"killed",
+		"is stopped",
+		"jv-t679.2-born-stuck",
+		"claiming a running seat is dead",
+		"LooksLikeUnverifiedLifecycleClaim",
+		"ClassifyLifecycleNarration",
+		"jevons_agent_list",
+		"GET /api/agents",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T692 marker %q", want)
+		}
+	}
+}
+
 // 🎯T652: omit-provider mint — Claudia decides dest; no habitual grok pin.
 func TestDefaultPersonaT652OmitProvider(t *testing.T) {
 	p, err := Default().Persona()
@@ -681,6 +707,17 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"proven API",
 		"development or released",
 		"T572",
+		// 🎯T692 fleet state narration
+		"Fleet state narration matches the live registry",
+		"T692",
+		"killing",
+		"will stop",
+		"killed",
+		"is stopped",
+		"jv-t679.2-born-stuck",
+		"claiming a running seat is dead",
+		"LooksLikeUnverifiedLifecycleClaim",
+		"ClassifyLifecycleNarration",
 		// 🎯T552 / T553.2 owner-visible observation (was T194)
 		"Owner-visible claims are observed",
 		"T552",
@@ -826,6 +863,17 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"proven API",
 		"development or released",
 		"T572",
+		// 🎯T692 fleet state narration
+		"Fleet state narration matches the live registry",
+		"T692",
+		"killing",
+		"will stop",
+		"killed",
+		"is stopped",
+		"jv-t679.2-born-stuck",
+		"claiming a running seat is dead",
+		"LooksLikeUnverifiedLifecycleClaim",
+		"ClassifyLifecycleNarration",
 		// 🎯T552 / T553.2 owner-visible observation (was T194)
 		"Owner-visible claims are observed",
 		"T552",

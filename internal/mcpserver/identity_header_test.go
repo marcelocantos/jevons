@@ -356,6 +356,17 @@ func TestT425SparseRowRendersCoherently(t *testing.T) {
 	}
 }
 
+// 🎯T692: identity header (brief-inject path) binds overseer, PO, and
+// worker to live-list-then-fact narration.
+func TestIdentityHeaderCarriesT692LifecycleNarration(t *testing.T) {
+	for _, role := range []string{RoleOverseer, RoleProductOwner, RoleWork} {
+		h := FormatIdentityHeader(AgentIdentity{Name: "seat", Role: role})
+		if !strings.Contains(h, "🎯T692") {
+			t.Errorf("role %s header missing 🎯T692:\n%s", role, h)
+		}
+	}
+}
+
 // Acceptance 4's derivation, stated as a table because the failure mode is a
 // role read off the wrong field: every PO in the live registry carries
 // purpose=work, so Purpose alone reproduces bullseye-po's own wrong answer.

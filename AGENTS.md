@@ -400,6 +400,17 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   proven API on the development or released surface). Lab/test uses of "live" (journeys,
   `test-ui-live`) stay technical jargon. Persona Communication Style +
   agents-guide + fleet standing brief.
+- **Fleet state narration matches the live registry (🎯T692):** a
+  kill/stop/reap/respawn claim is either intent/plan ('killing', 'will stop')
+  or it cites a live registry check from this same turn
+  (`jevons_agent_list`, `GET /api/agents`, or equivalent) whose result is
+  quoted. Completed-fact wording ('killed', 'is stopped') without that
+  citation is unverified narration. Concrete bad example: claiming a running seat is dead.
+  The 2026-09-20 specimen seat `jv-t679.2-born-stuck` was still on the panel
+  after a reported kill. Habit: live-list first, then the fact. Pure helpers:
+  `LooksLikeUnverifiedLifecycleClaim` / `ClassifyLifecycleNarration`.
+  Residual: instructional + pure classifier; not a hard daemon block.
+  Persona + agents-guide + fleet standing brief.
 - **Environments: development vs released (🎯T572):** say **development**
   for the always-on jevonsd built from this machine's development source
   tree (`:13705` / `~/.jevons`) and **released** for Homebrew / shipped.

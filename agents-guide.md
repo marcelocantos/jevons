@@ -620,6 +620,24 @@ Never call a registered or running worker **"live"** — that implies product
 on the wire. Residual: journey-suite / `test-ui-live` / daemon-attach uses of
 "live" stay lab jargon, not status language about workers.
 
+## Fleet state narration matches the live registry (🎯T692)
+
+A kill/stop/reap/respawn claim is either intent/plan ('killing', 'will stop')
+or it cites a live registry check from this same turn (`jevons_agent_list`,
+`GET /api/agents`, or equivalent) whose result is quoted. Completed-fact
+wording ('killed', 'is stopped') without that citation is unverified
+narration.
+
+**Concrete bad example:** claiming a running seat is dead. Never tell the
+owner a seat is gone because you remember acting. The 2026-09-20 specimen
+seat `jv-t679.2-born-stuck` was still on the panel after a reported kill.
+
+**Habit:** live-list first, then the fact. Quote the row (or its absence).
+
+Pure helpers: `LooksLikeUnverifiedLifecycleClaim` /
+`ClassifyLifecycleNarration` (`internal/mcpserver`). Residual:
+instructional + pure classifier; not a hard daemon block.
+
 ## Environments: development vs released (🎯T572)
 
 There is no third environment. Say **development** for the always-on

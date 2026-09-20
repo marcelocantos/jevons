@@ -11,13 +11,27 @@ import (
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
 - Always say **"in progress"** when a worker is running but product is not yet owner-visible.
 - Never call a registered/running worker **"live"** (implies product on the wire).
 - **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the development or released surface.
+
+## Fleet state narration matches the live registry (🎯T692)
+- A kill/stop/reap/respawn claim is either intent/plan ('killing', 'will stop')
+  or it cites a live registry check from this same turn
+  (jevons_agent_list, GET /api/agents, or equivalent) whose result is
+  quoted. Completed-fact wording ('killed', 'is stopped') without that
+  citation is unverified narration.
+- Concrete bad example: claiming a running seat is dead. Never tell the
+  owner a seat is gone because you remember acting. The 2026-09-20 specimen
+  seat jv-t679.2-born-stuck was still on the panel after a reported kill.
+- Habit: live-list first, then the fact. Quote the row (or its absence).
+- Pure helpers: LooksLikeUnverifiedLifecycleClaim /
+  ClassifyLifecycleNarration. Residual: instructional + pure classifier;
+  not a hard daemon block.
 
 ## Environments: development vs released (🎯T572)
 - **development** = always-on jevonsd from this machine's development source tree (:13705 / ~/.jevons). Not a scheduled build and not a separately named cockpit.
@@ -299,6 +313,11 @@ fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP
 - Cross-provider migrate only when Claude is exhausted/blocked
   (jevons_plan_usage) or the owner asks (owner_asked=true). The 🎯T417
   unworkable notice says which applies.
+
+## Plan dest ranks published band first (🎯T693)
+- Destination selection ranks on the **published band** first: **under** outranks **ok**, because under means paid allowance is at risk of expiring unspent. **hot** and **ahead** are never destinations.
+- Within the same band, pressure (slack vs pace) is tiebreak only — not the primary rank key.
+- A per-model weekly window at 0% (Fable `weekly_model`) does **not** mean the provider is unavailable. **Fable spent ≠ Claude unavailable.**
 
 ## Parent report is daemon-delivered (🎯T690)
 - A spawned work agent's terminal report (finish-report / scout-report /

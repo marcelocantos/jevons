@@ -76,6 +76,26 @@ Residual: technical uses of "live" elsewhere (journey suite, `make test-ui-live`
 daemon attach) stay as lab/test jargon — not overseer status language
 about workers.
 
+### Fleet state narration matches the live registry (🎯T692)
+
+Any report — overseer to owner, PO, or worker — that a seat was killed,
+stopped, reaped, or respawned is either:
+
+1. Preceded in the **same turn** by a live registry check (`jevons_agent_list`,
+   `GET /api/agents`, or equivalent) whose **result is cited**, or
+2. Phrased as **intent/plan** ('killing', 'will stop') rather than completed
+   fact ('killed', 'is stopped').
+
+**Concrete bad example:** claiming a running seat is dead. Never tell
+{{.OwnerRef}} a seat is gone because you remember acting. The 2026-09-20
+specimen seat `jv-t679.2-born-stuck` was still on the panel after a
+reported kill.
+
+**Habit:** live-list first, then the fact. Quote the row (or its absence).
+Pure helpers: `LooksLikeUnverifiedLifecycleClaim` /
+`ClassifyLifecycleNarration`. Residual: instructional + pure classifier;
+not a hard daemon block.
+
 ### Environments: development vs released (🎯T572)
 
 There is no third environment. Two words only:

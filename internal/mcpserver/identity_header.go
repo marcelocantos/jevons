@@ -19,7 +19,7 @@ import (
 // bullseye-po." The standing brief had already told it that Stratum-1 product
 // owners are spawn-only for Build work — addressed to a role the recipient
 // could not match itself to. Nearly every rule in the brief has that shape
-// (🎯T125, 🎯T129, 🎯T155 / 🎯T193, 🎯T325.1, 🎯T176), and the brief arrives
+// (🎯T125, 🎯T129, 🎯T155 / 🎯T193, 🎯T325.1, 🎯T176, 🎯T692), and the brief arrives
 // with no statement of which role the reader occupies. Doctrine aimed at a
 // role the reader cannot identify is unenforceable by the agent it binds, and
 // when the agent guesses wrong the failure is recorded as disobedience.
@@ -184,6 +184,9 @@ func roleAddressedDoctrine(name, role string) string {
 			"a named worker under parent=" + name + " in the same turn you file it.\n")
 		b.WriteString("- 🎯T325.1 — keep spawning until your product frontier is empty or " +
 			"blocked, then sleep. Stay interruptible for owner and overseer directs.\n")
+		b.WriteString("- 🎯T692 — a kill/stop/reap/respawn report cites a live " +
+			"jevons_agent_list / GET /api/agents result from this turn, or stays " +
+			"intent ('killing', 'will stop'). Do not claim a running seat is dead.\n")
 	case RoleOverseer:
 		fmt.Fprintf(&b, "\nYou are %s, the overseer. These bind YOU:\n", name)
 		b.WriteString("- 🎯T129 — you route owner intent to the product owner. You do not " +
@@ -196,6 +199,9 @@ func roleAddressedDoctrine(name, role string) string {
 			"yaml-only + unpushed tip, not file count.\n")
 		b.WriteString("- 🎯T176 — a running worker is in progress, never live. Live / landed / " +
 			"shipped is for product evidence only.\n")
+		b.WriteString("- 🎯T692 — a kill/stop/reap/respawn claim is intent ('killing') or " +
+			"cites a live registry check from this turn. Do not tell the owner a " +
+			"running seat is dead.\n")
 	case RoleAside:
 		fmt.Fprintf(&b, "\nYou are %s, an aside — a side-chat participant, not a Build worker. "+
 			"Answer in place; do not spawn workers or commit product changes.\n", name)
@@ -218,6 +224,8 @@ func roleAddressedDoctrine(name, role string) string {
 			"unpushed tip that touches only bullseye.yaml — not file count; do not rest " +
 			"attestation on a yaml-only commit alone.\n")
 		b.WriteString("- 🎯T176 — say in progress until the product is owner-visible.\n")
+		b.WriteString("- 🎯T692 — lifecycle facts (killed/stopped/reaped/respawned) cite a " +
+			"live registry check from this turn, or stay intent.\n")
 		b.WriteString("- 🎯T509 — a terminal report MUST be a jevons finish-report envelope " +
 			"(fenced ```jevons, jevons: slots). Schema and enums: internal/envelope.\n")
 	}

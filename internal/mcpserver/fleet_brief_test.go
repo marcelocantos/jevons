@@ -118,6 +118,17 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"proven API",
 		"development or released",
 		"🎯T572",
+		// 🎯T692 fleet state narration
+		"Fleet state narration matches the live registry",
+		"🎯T692",
+		"killing",
+		"will stop",
+		"killed",
+		"is stopped",
+		"jv-t679.2-born-stuck",
+		"claiming a running seat is dead",
+		"LooksLikeUnverifiedLifecycleClaim",
+		"ClassifyLifecycleNarration",
 		// 🎯T552 / T553.2 owner-visible observation (was T194)
 		"Owner-visible claims are observed",
 		"🎯T552",
@@ -192,6 +203,31 @@ func TestFleetStandingBriefVisualCockpitProseVerdict(t *testing.T) {
 	}
 }
 
+// 🎯T692: standing brief carries live-registry narration doctrine.
+func TestFleetStandingBriefLifecycleNarration(t *testing.T) {
+	for _, want := range []string{
+		"Fleet state narration matches the live registry",
+		"🎯T692",
+		"killing",
+		"will stop",
+		"killed",
+		"is stopped",
+		"jv-t679.2-born-stuck",
+		"claiming a running seat is dead",
+		"LooksLikeUnverifiedLifecycleClaim",
+		"ClassifyLifecycleNarration",
+		"jevons_agent_list",
+		"GET /api/agents",
+	} {
+		if !strings.Contains(FleetStandingBrief, want) {
+			t.Errorf("FleetStandingBrief missing T692 marker %q", want)
+		}
+	}
+	if LooksLikeUnverifiedLifecycleClaim(FleetStandingBrief) {
+		t.Fatal("injected standing brief must not self-flag as unverified lifecycle narration")
+	}
+}
+
 // 🎯T536.3: standing brief carries fog-of-war scout doctrine.
 func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
 	for _, want := range []string{
@@ -207,6 +243,21 @@ func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
 	} {
 		if !strings.Contains(FleetStandingBrief, want) {
 			t.Errorf("FleetStandingBrief missing T536.3 marker %q", want)
+		}
+	}
+}
+
+// 🎯T693: standing brief ranks dest on published band; Fable spent is not Claude down.
+func TestFleetStandingBriefPlanDestBandFirst(t *testing.T) {
+	for _, want := range []string{
+		"Plan dest ranks published band first",
+		"🎯T693",
+		"under outranks **ok**",
+		"hot** and **ahead** are never destinations",
+		"Fable spent ≠ Claude unavailable",
+	} {
+		if !strings.Contains(FleetStandingBrief, want) {
+			t.Errorf("FleetStandingBrief missing T693 marker %q", want)
 		}
 	}
 }
