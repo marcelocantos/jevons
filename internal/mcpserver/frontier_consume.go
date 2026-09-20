@@ -622,7 +622,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			s.logLifecycle(compFrontierConsume, "spawn", "ok", map[string]any{
 				"target_id": r.TargetID, "worker": r.Worker, "parent": parentPO,
 			})
-			s.notifyFleetHealth(fmt.Sprintf(
+			s.notifyFleetHealth(r.Worker, fmt.Sprintf(
 				"[frontier-consume 🎯T254.1] auto-spawned %s for 🎯%s under %s (unconsumed frontier leaf)",
 				r.Worker, r.TargetID, parentPO))
 		case FrontierConsumePark:
@@ -703,7 +703,7 @@ func (s *Server) notifySpawnFailure(po, targetID, worker, errText string) {
 	if _, err := s.deliverByName(po, msg, OriginAgent, false); err != nil {
 		slog.Warn("spawn-failure notice undelivered to PO; escalating to overseer",
 			"component", compFrontierConsume, "po", po, "target", targetID, "err", err)
-		s.notifyFleetHealth(fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
+		s.notifyFleetHealth(worker, fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
 	}
 }
 

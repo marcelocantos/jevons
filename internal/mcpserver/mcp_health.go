@@ -121,6 +121,18 @@ func (s *Server) noteAgentMCPHealth(name string, provider claudia.Provider) stri
 		"name": name, "provider": string(provider), "detail": note,
 	})
 	line := fmt.Sprintf("%s started with a %s", name, note)
+	occ := name
+	if s.registry != nil {
+		if def := s.registry.Def(name); def != nil {
+			if sid := strings.TrimSpace(def.SessionID); sid != "" {
+				occ = sid
+			}
+		}
+	}
+	line = mixFleetHealthOccurrence(line, occ)
+	if line == "" {
+		return " — WARNING: " + note
+	}
 	if _, err := s.deliverByName(s.overseerName(), "[MCP health] "+line, OriginAgent, false); err != nil {
 		slog.Debug("mcp health note undelivered", "err", err)
 	}

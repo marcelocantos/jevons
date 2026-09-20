@@ -127,7 +127,11 @@ func (s *Server) ReportRecoveredBacklog() {
 			"queued", b.Depth,
 			"oldest_age", b.OldestAge(now).Round(time.Second).String())
 	}
-	s.notifyFleetHealth(fmt.Sprintf(
+	keys := make([]string, 0, len(backlogs))
+	for _, b := range backlogs {
+		keys = append(keys, heldBacklogKey(b))
+	}
+	s.notifyFleetHealth(strings.Join(keys, ","), fmt.Sprintf(
 		"Recovered %d queued message(s) with outstanding delivery obligations: %s. "+
 			"Pending entries are offered at an agent's next turn boundary. Unresolved attempts remain held; "+
 			"their outcome is uncertain and they must be reconciled before any retry.",
@@ -263,7 +267,7 @@ func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record
 	// repeat — so the second, genuinely new backlog would be suppressed by the
 	// delivery path even though the seam released it. Naming the hold makes the
 	// second notice new information rather than an echo.
-	s.notifyFleetHealth(fmt.Sprintf(
+	s.notifyFleetHealth(hold, fmt.Sprintf(
 		"Held backlog on reaped agent %q (hold %s): %d message(s) waiting %s (%s). "+
 			"Recover with jevons_agent_start name=%q … — queued gate feedback drains on start. "+
 			"Do not interrupt; the seat is finished-and-reaped, not stuck mid-turn. "+
@@ -307,7 +311,7 @@ func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
 			"agent": b.Agent, "entry_id": e.ID, "attempt_id": e.AttemptID,
 			"bytes": len(e.Text), "reason": "addressee no longer registered",
 		})
-		s.notifyFleetHealth(fmt.Sprintf("UNDELIVERED: queued message %s (%d bytes) for %q has no registered addressee. "+
+		s.notifyFleetHealth(e.ID, fmt.Sprintf("UNDELIVERED: queued message %s (%d bytes) for %q has no registered addressee. "+
 			"It waited %s and is being discarded with a terminal record; re-send to a live agent if still needed.",
 			e.ID, len(e.Text), b.Agent, e.Age(now).Round(time.Second)))
 		if err := q.Resolve(b.Agent, e, sendq.TerminalUndelivered, "addressee no longer registered; sender notified"); err != nil {
@@ -345,7 +349,7 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 			"oldest_age", age.Round(time.Second).String(),
 			"reason", reason,
 			"intent", dec.Reason)
-		s.notifyFleetHealth(fmt.Sprintf(
+		s.notifyFleetHealth(heldBacklogKey(b), fmt.Sprintf(
 			"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s. "+
 				"Agent is stood down (%s; %s) — intentional stand-down; messages stay on disk until "+
 				"the park is lifted (jevons_fleet_intent name=%q state=working). "+
@@ -361,7 +365,7 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 		"queued", b.Depth,
 		"oldest_age", age.Round(time.Second).String(),
 		"reason", why)
-	s.notifyFleetHealth(fmt.Sprintf(
+	s.notifyFleetHealth(heldBacklogKey(b), fmt.Sprintf(
 		"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s, because %s. "+
 			"They are on disk and will be delivered when it next takes a turn. If that agent should not still be busy, "+
 			"confirm from ITS transcript (terminal assistant message + turn_duration, file not growing) and then "+

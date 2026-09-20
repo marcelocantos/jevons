@@ -135,7 +135,7 @@ func (s *Server) MassStopLine() string {
 	}
 	s.mu.Unlock()
 	if !seen {
-		s.notifyFleetHealth(line)
+		s.notifyFleetHealth(a.Key(), line)
 	}
 	return line
 }

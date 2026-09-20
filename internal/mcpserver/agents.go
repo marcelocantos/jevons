@@ -84,7 +84,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
 			mcp.WithString("mode", mcp.Description("🎯T657 delivery mode: submit (default; queue for after the turn when busy) | steer (fold the text into the in-flight turn; plain submit when idle; queued honestly as queue_until_idle when the seat cannot steer) | interrupt (cancel the in-flight turn, then send — stuck recovery without kill) | queue (hold for the next turn boundary; submits when idle). The result names the mechanism that ran.")),
 			mcp.WithBoolean("interrupt", mcp.Description("Deprecated alias for mode=interrupt (🎯T657). Refused when it contradicts an explicit mode.")),
-			mcp.WithBoolean("force_rebrief", mcp.Description("🎯T597: a full re-brief (spawn-brief envelope, or >1KB opening-brief prose) to a seat with recent activity (stored report / workdir touch) is refused, because re-briefing a working seat restarts its mission and can discard uncommitted work. Pass true only when you are sure the seat needs its brief again.")),
+			mcp.WithBoolean("force_rebrief", mcp.Description("🎯T597: a full re-brief (spawn-brief envelope, or >1KB opening-brief prose) to a seat with recent activity (stored report / workdir touch) is refused, because re-briefing a working seat can discard uncommitted work. A spawn-brief with phase implement after that seat's latest scout-report for the same target is the 🎯T536.3 handoff and is delivered without this flag (🎯T721). Pass true only when you are sure the seat needs its brief again.")),
 		),
 		s.handleAgentSend,
 	)
@@ -150,7 +150,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	if len(reps) > 0 {
 		line := FormatDeadAgentReport(reps)
 		slog.Info(line)
-		s.notifyFleetHealth(line)
+		s.notifyFleetHealth(deadAgentOccurrence(reps), line)
 	}
 	// 🎯T459: reap fleet panes the registry does not know about before
 	// we report the count the host is deciding against.
@@ -227,16 +227,44 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		s.withMassStop(PrependFleetHealth(b.String(), reps)), notices)), nil
 }
 
+// mixFleetHealthOccurrence returns the operator line with occurrence mixed
+// in when it is not already present. Empty occurrence or line yields empty:
+// notifyFleetHealth must not send a batch T428/T568 would treat as an echo
+// of an earlier terse recurrence (🎯T717).
+func mixFleetHealthOccurrence(line, occurrence string) string {
+	line = strings.TrimSpace(line)
+	occurrence = strings.TrimSpace(occurrence)
+	if line == "" || occurrence == "" {
+		return ""
+	}
+	if strings.Contains(line, occurrence) {
+		return line
+	}
+	return line + " (occurrence " + occurrence + ")"
+}
+
 // notifyFleetHealth delivers a fleet outage/recovery note to the overseer
-// through the single deliver-by-name path (🎯T309.3). Tests may leave the
-// overseer seam unwired, in which case delivery fails quietly here — a health
-// note is ambient chatter, not a report someone is waiting on.
-func (s *Server) notifyFleetHealth(line string) {
-	if s == nil || line == "" {
+// through the single deliver-by-name path (🎯T309.3). occurrence identifies
+// THIS release of the notice (hold id, attempt id, burst key, …) and is
+// mixed into the delivered bytes so a second, genuinely distinct event is
+// not collapsed by T428/T568 merely because the prose is stable. Empty
+// occurrence refuses to send — that is the enforcement a new emitter cannot
+// miss. Tests may leave the overseer seam unwired, in which case delivery
+// fails quietly here — a health note is ambient chatter, not a report
+// someone is waiting on.
+func (s *Server) notifyFleetHealth(occurrence, line string) {
+	if s == nil {
+		return
+	}
+	wire := mixFleetHealthOccurrence(line, occurrence)
+	if wire == "" {
+		slog.Debug("fleet health note dropped: empty occurrence or line",
+			"occurrence_empty", strings.TrimSpace(occurrence) == "",
+			"line_empty", strings.TrimSpace(line) == "")
 		return
 	}
 	// Distinct prefix so activity strip / overseer can treat as system note.
-	if _, err := s.deliverByName(s.overseerName(), "[Fleet health] "+line, OriginAgent, false); err != nil {
+	if _, err := s.deliverByName(s.overseerName(), "[Fleet health] "+wire, OriginAgent, false); err != nil {
 		slog.Debug("fleet health note undelivered", "err", err)
 	}
 }
@@ -398,7 +426,29 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	s.mu.Lock()
 	s.pendingSpawnRole = resolved.Name
 	s.pendingOwnerAsked = boolArg(args["owner_asked"])
+	ownerAsked := s.pendingOwnerAsked
 	s.mu.Unlock()
+	stored := ""
+	if rowExisted {
+		if d := s.registry.Def(name); d != nil {
+			stored = string(d.Provider)
+		}
+	}
+	pick := s.mintProviderPick(providerArg, stored, rowExisted, taskTypeArg, purpose, name, ownerAsked)
+	if !rowExisted {
+		if dest := strings.TrimSpace(pick.Provider); dest != "" {
+			if blocked := s.checkDestSpawnAllowed(purpose, name, dest); blocked != nil {
+				s.mu.Lock()
+				s.pendingSpawnRole = ""
+				s.pendingOwnerAsked = false
+				s.mu.Unlock()
+				s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
+					"name": name, "err": "dest_saturated", "dest": dest, "purpose": purpose,
+				})
+				return blocked, nil
+			}
+		}
+	}
 	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt)
 	s.mu.Lock()
 	s.pendingSpawnRole = ""

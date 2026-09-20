@@ -189,6 +189,22 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 	return out
 }
 
+// deadAgentOccurrence is the T717 discriminator for a dead-agent sweep
+// report: the name set. Repeats of the same set stay one batch (list-call
+// echoes); a different name is a new occurrence.
+func deadAgentOccurrence(reps []DeadAgentReport) string {
+	if len(reps) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(reps))
+	for _, r := range reps {
+		if n := strings.TrimSpace(r.Name); n != "" {
+			parts = append(parts, n)
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
 // FormatDeadAgentReport is a one-line human summary for MCP / notify / UI.
 func FormatDeadAgentReport(reps []DeadAgentReport) string {
 	if len(reps) == 0 {

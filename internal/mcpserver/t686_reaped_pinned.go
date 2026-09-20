@@ -54,6 +54,6 @@ func (s *Server) noticeUncertainAttempt(name string, pin SendqPin, line string) 
 	s.sendqAttemptNoticed[name] = pin.AttemptID
 	s.mu.Unlock()
 	if !noticed {
-		s.notifyFleetHealth(line)
+		s.notifyFleetHealth(pin.AttemptID, line)
 	}
 }

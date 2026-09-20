@@ -102,7 +102,7 @@ func (s *Server) reportDrainedSendNotBegun(name string, entry sendq.Entry, ev Tu
 			"bytes", len(entry.Text),
 		)
 	}
-	s.notifyFleetHealth(fmt.Sprintf("Held message %s (attempt %s): %s", entry.ID, entry.AttemptID,
+	s.notifyFleetHealth(entry.AttemptID, fmt.Sprintf("Held message %s (attempt %s): %s", entry.ID, entry.AttemptID,
 		DrainedSendNotice(name, len(entry.Text), reading, evidenceDetail(ev), entry.Age(now), behind)))
 }
 

@@ -121,7 +121,7 @@ func (s *Server) MarkSendqPinned(name string, e sendq.Entry, reason string) {
 	s.sendqPin[name] = pin
 	s.mu.Unlock()
 	if !already {
-		s.notifyFleetHealth(FormatSendqPinLine(name, pin))
+		s.notifyFleetHealth(pin.EntryID, FormatSendqPinLine(name, pin))
 	}
 }
 

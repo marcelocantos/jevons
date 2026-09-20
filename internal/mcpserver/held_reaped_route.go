@@ -221,7 +221,7 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 				if err := q.Resolve(b.Agent, e, sendq.Unverified, "parent delivery outcome uncertain: "+derr.Error()); err != nil {
 					slog.Error("held backlog route outcome not persisted", "agent", b.Agent, "entry_id", e.ID, "err", err)
 				}
-				s.notifyFleetHealth(fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
+				s.notifyFleetHealth(e.ID, fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
 				return
 			}
 			outcome = sendq.Confirmed
@@ -255,7 +255,8 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 		"oldest_age", age.Round(time.Second).String(),
 		"intent", rec.Describe())
 
-	if s.noticedReapedBacklog(b.Agent, heldBacklogKey(b)) {
+	hold := heldBacklogKey(b)
+	if s.noticedReapedBacklog(b.Agent, hold) {
 		return
 	}
 	var b2 strings.Builder
@@ -272,5 +273,5 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 	}
 	b2.WriteString("No action: the seat finished its mission and was deregistered — do NOT jevons_agent_start it to drain this. " +
 		"This notice is sent once per reaped seat (🎯T582).")
-	s.notifyFleetHealth(b2.String())
+	s.notifyFleetHealth(hold, b2.String())
 }

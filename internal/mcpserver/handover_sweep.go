@@ -89,7 +89,7 @@ func (s *Server) surfacePendingHandover(p handover.Pending, reason string, now t
 		p.Describe(), p.DescribeAge(now), reason)
 	slog.Error("🎯T418 pending handover surfaced",
 		"agent", p.Agent, "reason", reason, "age", p.DescribeAge(now))
-	s.notifyFleetHealth(msg)
+	s.notifyFleetHealth(p.Agent, msg)
 }
 
 // reportFleetMuteIfNeeded is 🎯T418 clause 6: if every registered agent
@@ -120,5 +120,5 @@ func (s *Server) reportFleetMuteIfNeeded() {
 		return
 	}
 	slog.Error("🎯T418 fleet mute", "reason", reason)
-	s.notifyFleetHealth(reason)
+	s.notifyFleetHealth("mute", reason)
 }

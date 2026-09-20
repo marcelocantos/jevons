@@ -272,7 +272,7 @@ func (s *Server) restartHeldSendqForDrain(held []HeldSeatSnapshot, newParent, ac
 		}
 	}
 	if len(restarted) > 0 {
-		s.notifyFleetHealth(fmt.Sprintf(
+		s.notifyFleetHealth(strings.Join(restarted, ","), fmt.Sprintf(
 			"🎯T530 parent kill: restarted %d held-sendq seat(s) for drain under %q: %s. "+
 				"reaped_held must not regenerate solely from this kill.",
 			len(restarted), newParent, strings.Join(restarted, ", ")))

@@ -166,7 +166,7 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 		if reps := s.sweepDeadAccounted(); len(reps) > 0 {
 			line := FormatDeadAgentReport(reps)
 			slog.Info(line)
-			s.notifyFleetHealth(line)
+			s.notifyFleetHealth(deadAgentOccurrence(reps), line)
 		}
 	}
 
@@ -833,7 +833,7 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 		if err := q.Resolve(name, entry, outcome, detail); err != nil {
 			slog.Error("agent send queue: cannot record delivery outcome", "name", name,
 				"entry_id", entry.ID, "attempt_id", entry.AttemptID, "err", err)
-			s.notifyFleetHealth(fmt.Sprintf("Delivery outcome for %q message %s could not be recorded: %v. "+
+			s.notifyFleetHealth(entry.ID, fmt.Sprintf("Delivery outcome for %q message %s could not be recorded: %v. "+
 				"Reconcile the held attempt before sending another copy.", name, entry.ID, err))
 			return false
 		}

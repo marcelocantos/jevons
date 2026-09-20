@@ -317,7 +317,7 @@ func (s *Server) notifyPORespawnAfterCheckpointReap(parent, worker, targetID str
 	if _, err := s.deliverByName(po, msg, OriginAgent, false); err != nil {
 		slog.Warn("T577 checkpoint-reap respawn notice undelivered to PO; escalating to overseer",
 			"po", po, "worker", worker, "target", targetID, "err", err)
-		s.notifyFleetHealth(fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
+		s.notifyFleetHealth(worker, fmt.Sprintf("PO %s unreachable (%v) for: %s", po, err, msg))
 	}
 }
 
