@@ -1,15 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package ctxcap decides when an agent's conversation has grown large
-// enough to compact (🎯T392.1).
+// Package ctxcap observes when an agent's conversation has grown large
+// (🎯T392.1). Remint-as-spend-control is withdrawn (🎯T392.1.1 / 🎯T40.2):
+// a large context is classified, never rotated onto a fresh session.
 //
-// Why a ceiling at all: every model call resends the whole conversation,
+// Why observe at all: every model call resends the whole conversation,
 // so a session's cost is quadratic in its length, and total fleet spend
-// is linear in how long agents run before compacting. The 🎯T392 baseline
-// measured 907.1M input tokens across 4,848 calls at a 187k mean context
-// — 83% of it spent by coordinators, whose contexts grew 1.2-3.2k per
-// turn and reached 399k before anything intervened.
+// is linear in how long agents run. The 🎯T392 baseline measured 907.1M
+// input tokens across 4,848 calls at a 187k mean context — 83% of it
+// spent by coordinators, whose contexts grew 1.2-3.2k per turn and
+// reached 399k before anything intervened.
 //
 // Why a mechanical threshold rather than the model's judgement: an agent
 // deciding whether its own context is too large is exactly the judgement
@@ -17,9 +18,9 @@
 // capping the overseer during the incident was accidental daemon
 // restarts, roughly one every five hours.
 //
-// This package is pure. It reads no files, holds no state, and makes no
-// decisions about *how* to compact — the daemon supplies observed context
-// and performs the rotation.
+// This package is pure. It reads no files, holds no state, and does not
+// remint. The daemon supplies observed context; ActionFor maps an
+// over-ceiling verdict to unworkable (🎯T417), never to rotate().
 package ctxcap
 
 import (
@@ -47,8 +48,8 @@ type Verdict string
 const (
 	// VerdictOK — under the ceiling; nothing to do.
 	VerdictOK Verdict = "ok"
-	// VerdictCompact — over the ceiling; rotate onto a fresh session with
-	// a handover pointer to the predecessor's transcript.
+	// VerdictCompact — over the ceiling. Classification only: the shipped
+	// governor maps this to unworkable (ActionFor), never remint.
 	VerdictCompact Verdict = "compact"
 	// VerdictUnknown — no context observation available. Never compact on
 	// an unknown: a missing measurement is not evidence of a small

@@ -31,6 +31,25 @@ func TestPrepareCompactionWithdrawn(t *testing.T) {
 	}
 }
 
+func TestSeedSuccessorDoesNotInjectCompactSeed(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e44"
+	f, store, transcript := migrateFixture(t, oldSession, true)
+	if err := store.Put(handover.Pending{
+		Agent: "jevons-po", From: "grok", To: "grok",
+		Kind: handover.KindCompact, TranscriptPath: transcript,
+		OldSessionID: oldSession,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := f.SeedSuccessor("jevons-po"); err != nil || ok {
+		t.Fatalf("compact SeedSuccessor: ok=%v err=%v; want no seed", ok, err)
+	}
+	def := f.reg.Def("jevons-po")
+	if def.SessionID != oldSession {
+		t.Fatalf("compact seed mutated session: %s", def.SessionID)
+	}
+}
+
 func TestThinDistillProducesTwoSessionIDs(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e41"
 	f, store, _ := migrateFixture(t, oldSession, false)

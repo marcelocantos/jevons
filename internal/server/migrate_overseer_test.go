@@ -228,6 +228,26 @@ func TestResumePendingHandoverStaysPendingOnFailure(t *testing.T) {
 
 // TestResumePendingHandoverNoopsWithoutWork: the ordinary attach path calls
 // this on every launch, so nothing pending must cost nothing.
+func TestResumePendingHandoverDoesNotSeedCompactKind(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetOverseerName("jevons")
+	mig := &fakeOverseerMigrator{pending: handover.Pending{
+		Agent: "jevons", From: "grok", To: "grok",
+		Kind:           handover.KindCompact,
+		TranscriptPath: "/Users/x/.grok/sessions/abc/chat_history.jsonl",
+	}}
+	s.SetOverseerMigrator(mig)
+	s.notifySender = func(string) error {
+		t.Error("restart injected a compact handover seed")
+		return nil
+	}
+	s.ResumePendingHandover()
+	time.Sleep(20 * time.Millisecond)
+	if mig.wasDelivered() {
+		t.Fatal("compact leftover marked delivered — a seed was injected")
+	}
+}
+
 func TestResumePendingHandoverNoopsWithoutWork(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.SetOverseerName("jevons")

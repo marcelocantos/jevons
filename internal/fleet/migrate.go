@@ -219,8 +219,8 @@ func (f *Claudia) PrepareCompaction(name string, force bool) (handover.Pending, 
 	return handover.Pending{}, fmt.Errorf("compact %q: withdrawn (T40.2) — same-provider remint is not a product operation", name)
 }
 
-// rotate is the shared body of migration and compaction. kind only
-// colours the errors and the log line; the mechanics are the same.
+// rotate is the shared body of provider migration. kind colours the
+// errors and the log line. Compaction no longer calls this (🎯T40.2).
 func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind string) (handover.Pending, error) {
 	def := f.reg.Def(name)
 	if def == nil {
@@ -388,6 +388,11 @@ func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 		// (🎯T646.1). Usable=false includes already-delivered records.
 		return pending, false, nil
 	}
+	if pending.Seed() == "" {
+		// Same-provider remint is withdrawn (🎯T40.2 / 🎯T392.1.1): a
+		// compact leftover must not become a handover seed on restart.
+		return pending, false, nil
+	}
 	ag := f.reg.Get(name)
 	if ag == nil || !ag.Alive() {
 		// Leave the record pending: the next successful launch delivers it.
@@ -423,6 +428,10 @@ func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
 		return
 	}
 	seed := pending.Seed()
+	if seed == "" {
+		slog.Info("handover seed skipped; same-provider remint is withdrawn", "name", name)
+		return
+	}
 	look := f.watchSeedArrival(name, seed)
 
 	_, err := f.deliverSeed(name, seed)

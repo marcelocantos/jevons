@@ -41,6 +41,10 @@ func ClassifyHandover(p Pending, now time.Time, inRegistry, alive bool) (Handove
 		return HandoverReap, fmt.Sprintf("agent left the registry (%s)", ageNote)
 	case !p.Usable():
 		return HandoverReap, fmt.Sprintf("COLD — record cannot seed a successor (%s)", ageNote)
+	case !ProviderSwitch(p.From, p.To):
+		// 🎯T392.1.1 / 🎯T40.2: leftover compact/upgrade remints are not
+		// migrate seeds. A restart must not inject them.
+		return HandoverReap, "same-provider remint is withdrawn (T40.2) — compact records do not seed"
 	case alive:
 		return HandoverRetry, "live process can take the seed"
 	case !hasAge:

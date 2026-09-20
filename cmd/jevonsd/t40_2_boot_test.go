@@ -29,7 +29,7 @@ func TestContextCeilingSourceDoesNotRemint(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	for _, bad := range []string{"PrepareCompaction", "compactFleetAgent", "CompactOverseer"} {
+	for _, bad := range []string{"PrepareCompaction", "compactFleetAgent", "CompactOverseer", "SeedSuccessor", ".rotate("} {
 		if strings.Contains(body, bad) {
 			t.Fatalf("ctxcap.go still remints via %s", bad)
 		}

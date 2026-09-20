@@ -12,7 +12,8 @@ import (
 
 func TestT418ClassifyHandoverRetryWhenAlive(t *testing.T) {
 	p := handover.Pending{
-		Agent: "jv", TranscriptPath: "/t.jsonl",
+		Agent: "jv", From: "grok", To: "claude", TranscriptPath: "/t.jsonl",
+		Kind:      handover.KindMigrate,
 		CreatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
 	}
 	got, _ := handover.ClassifyHandover(p, time.Now(), true, true)
@@ -21,9 +22,22 @@ func TestT418ClassifyHandoverRetryWhenAlive(t *testing.T) {
 	}
 }
 
+func TestT392ClassifyHandoverReapsSameProviderCompact(t *testing.T) {
+	p := handover.Pending{
+		Agent: "jv", From: "grok", To: "grok", TranscriptPath: "/t.jsonl",
+		Kind:      handover.KindCompact,
+		CreatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+	}
+	got, reason := handover.ClassifyHandover(p, time.Now(), true, true)
+	if got != handover.HandoverReap {
+		t.Fatalf("same-provider compact = %s (%s); want reap, not retry", got, reason)
+	}
+}
+
 func TestT418ClassifyHandoverSurfacesStalePending(t *testing.T) {
 	p := handover.Pending{
-		Agent: "jv", TranscriptPath: "/t.jsonl",
+		Agent: "jv", From: "grok", To: "claude", TranscriptPath: "/t.jsonl",
+		Kind:      handover.KindMigrate,
 		CreatedAt: time.Now().UTC().Add(-20 * time.Minute).Format(time.RFC3339),
 	}
 	got, reason := handover.ClassifyHandover(p, time.Now(), true, false)
@@ -52,7 +66,7 @@ func TestT418ClassifyHandoverReapsDelivered(t *testing.T) {
 }
 
 func TestT418ClassifyHandoverUnknownAgeIsNotWait(t *testing.T) {
-	p := handover.Pending{Agent: "jv", TranscriptPath: "/t.jsonl"}
+	p := handover.Pending{Agent: "jv", From: "grok", To: "claude", TranscriptPath: "/t.jsonl"}
 	got, _ := handover.ClassifyHandover(p, time.Now(), true, false)
 	if got != handover.HandoverSurface {
 		t.Fatalf("no created_at = %s; want surface, not wait on a zero clock", got)

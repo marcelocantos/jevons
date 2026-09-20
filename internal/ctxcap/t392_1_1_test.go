@@ -38,11 +38,17 @@ func TestSIGHUPAfterMigrateHoldsAtIncidentNumbers(t *testing.T) {
 	if d.Verdict != VerdictHold {
 		t.Fatalf("incident fixture verdict=%s want hold (%s)", d.Verdict, d.Reason)
 	}
+	if ActionFor(d) != ActionUnworkable {
+		t.Fatalf("incident action=%s want unworkable — remint is withdrawn", ActionFor(d))
+	}
 
 	// Mutation: compact-now on zero last-rotation (ignore the persist).
 	naked := Observation{Agent: "jevons", Context: 105_336, HasContext: true}
 	if got := p.Evaluate(naked).Verdict; got != VerdictCompact {
 		t.Fatalf("mutation control: zero last-rotation verdict=%s want compact", got)
+	}
+	if ActionFor(p.Evaluate(naked)) != ActionUnworkable {
+		t.Fatal("mutation control: compact verdict must still map to unworkable, not remint")
 	}
 }
 
@@ -68,6 +74,9 @@ func TestPostSeedWorkOverCeilingAfterIntervalCompacts(t *testing.T) {
 	})
 	if d.Verdict != VerdictCompact {
 		t.Fatalf("elapsed-interval verdict=%s want compact (%s)", d.Verdict, d.Reason)
+	}
+	if ActionFor(d) != ActionUnworkable {
+		t.Fatalf("elapsed-interval action=%s want unworkable — remint is withdrawn", ActionFor(d))
 	}
 }
 

@@ -122,7 +122,8 @@ func TestT418SweepRetriesAlivePending(t *testing.T) {
 		t.Fatal(err)
 	}
 	led := &sweepLedger{pending: []handover.Pending{{
-		Agent: "jv", TranscriptPath: "/t.jsonl",
+		Agent: "jv", From: "grok", To: "claude", TranscriptPath: "/t.jsonl",
+		Kind:      handover.KindMigrate,
 		CreatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
 	}}}
 	s := &Server{registry: reg, migrator: led}
@@ -151,8 +152,8 @@ func TestT517SweepHandoversDropsPOPending(t *testing.T) {
 		}
 	}
 	led := &sweepLedger{pending: []handover.Pending{
-		{Agent: "jevons-po", TranscriptPath: "/po.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
-		{Agent: "jv-w", TranscriptPath: "/w.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
+		{Agent: "jevons-po", From: "grok", To: "claude", TranscriptPath: "/po.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
+		{Agent: "jv-w", From: "grok", To: "claude", TranscriptPath: "/w.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
 	}}
 	s := &Server{registry: reg, migrator: led}
 	s.SetSenderResolver(func(string) (agentSender, bool, error) {
@@ -164,6 +165,33 @@ func TestT517SweepHandoversDropsPOPending(t *testing.T) {
 	}
 	if len(led.seeded) != 1 || led.seeded[0] != "jv-w" {
 		t.Fatalf("seeded = %v; want worker retry", led.seeded)
+	}
+}
+
+func TestT392SweepReapsSameProviderCompact(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(dir + "/agents.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{Name: "jv", SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	led := &sweepLedger{pending: []handover.Pending{{
+		Agent: "jv", From: "grok", To: "grok", TranscriptPath: "/t.jsonl",
+		Kind:      handover.KindCompact,
+		CreatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+	}}}
+	s := &Server{registry: reg, migrator: led}
+	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+		return &recordingSender{}, true, nil
+	})
+	s.SweepHandovers()
+	if len(led.seeded) != 0 {
+		t.Fatalf("seeded = %v; compact leftover must not retry", led.seeded)
+	}
+	if len(led.cleared) != 1 || led.cleared[0] != "jv" {
+		t.Fatalf("cleared = %v; want reap of same-provider compact", led.cleared)
 	}
 }
 
