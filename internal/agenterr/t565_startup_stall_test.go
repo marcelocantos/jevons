@@ -83,6 +83,11 @@ func TestT565NamedReadyReasonsAreStartupStall(t *testing.T) {
 			token:   "no_composer",
 			wantMsg: "no_composer",
 		},
+		{
+			in:      "send failed: Agent CLI stalled on startup (startup_stall / no_composer): no idle input box within the ready timeout — not a cloud outage; the seat is retried. Last frame: Quick safety check: Is this a project you created or one you trust? (Like your\n own code, a well-known open source project, or work from your team).",
+			token:   "workspace_trust",
+			wantMsg: "workspace_trust",
+		},
 	}
 	for _, c := range cases {
 		if got := agenterr.ClassifyText(c.in); got != agenterr.ClassStartupStall {

@@ -35,12 +35,19 @@ func isReadyTimeoutMessage(msg string) bool {
 	return strings.Contains(low, readyTimeoutMarker) ||
 		strings.Contains(low, "claude not ready (") ||
 		strings.Contains(low, "still /rc connecting") ||
-		strings.Contains(low, "startup settings warnings")
+		strings.Contains(low, "startup settings warnings") ||
+		strings.Contains(low, "startup_stall")
 }
 
 func namedReadyReason(msg string) string {
+	// 🎯T709: a no_composer stall whose last frame is the workspace-trust
+	// dialog is not a generic ready miss — classify it before the token
+	// list so OwnerCopy can name the recoverable action.
+	if IsWorkspaceTrust(msg) {
+		return "workspace_trust"
+	}
 	low := strings.ToLower(msg)
-	for _, token := range []string{"rc_connecting", "settings_warning", "splash", "no_composer"} {
+	for _, token := range []string{"rc_connecting", "settings_warning", "splash", "no_composer", "workspace_trust"} {
 		if strings.Contains(low, "claude not ready ("+token+")") || strings.Contains(low, "reason="+token) {
 			return token
 		}
@@ -51,14 +58,41 @@ func namedReadyReason(msg string) string {
 	return ""
 }
 
+// workspaceTrustMarkers are Claude Code's TUI / warning copy for the
+// workspace-trust dialog (Colossus ge-po 2026-09-20, 🎯T709).
+var workspaceTrustMarkers = []string{
+	"quick safety check",
+	"is this a project you created or one you trust",
+	"yes, i trust this folder",
+	"i trust this folder",
+	"this workspace has not been trusted",
+	"workspace has not been trusted",
+}
+
+// IsWorkspaceTrust reports whether msg is a ready stall whose pane is
+// Claude's workspace-trust dialog (or the same warning after formatting).
+func IsWorkspaceTrust(msg string) bool {
+	low := strings.ToLower(msg)
+	for _, m := range workspaceTrustMarkers {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // LastFrame returns the pane text a ready-timeout error carried after
 // "last frame:", trimmed, or "" when the error is not a ready timeout.
 func LastFrame(msg string) string {
-	_, after, ok := strings.Cut(msg, "last frame:")
-	if !ok || !isReadyTimeoutMessage(msg) {
+	if !isReadyTimeoutMessage(msg) && !IsWorkspaceTrust(msg) {
 		return ""
 	}
-	return strings.TrimSpace(after)
+	low := strings.ToLower(msg)
+	idx := strings.Index(low, "last frame:")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(msg[idx+len("last frame:"):])
 }
 
 // IsStartupStall reports whether msg is a ready timeout whose last frame is
@@ -70,7 +104,7 @@ func LastFrame(msg string) string {
 func IsStartupStall(msg string) bool {
 	low := strings.ToLower(msg)
 	switch namedReadyReason(msg) {
-	case "settings_warning", "rc_connecting", "splash", "no_composer":
+	case "settings_warning", "rc_connecting", "splash", "no_composer", "workspace_trust":
 		return true
 	}
 	if strings.Contains(low, "startup settings warnings") {

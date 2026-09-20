@@ -17,6 +17,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/claudetrust"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -41,6 +42,24 @@ func prefixRehydrate(rehydrated, msg string) string {
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
 type NotifyFunc func(text string)
+
+// SetClaudeTrustConfig points at the Claude Code config used to pre-accept
+// workspace trust before Launch (🎯T709). Empty falls back to
+// claudetrust.ConfigPath. Tests set a temp file so the owner's ~/.claude.json
+// is never touched.
+func (s *Server) SetClaudeTrustConfig(path string) {
+	if s == nil {
+		return
+	}
+	s.claudeTrustConfigPath = strings.TrimSpace(path)
+}
+
+func (s *Server) claudeTrustConfig() string {
+	if s != nil && strings.TrimSpace(s.claudeTrustConfigPath) != "" {
+		return s.claudeTrustConfigPath
+	}
+	return claudetrust.ConfigPath()
+}
 
 // SetRegistry attaches the agent registry to the MCP server and
 // registers agent management tools.
@@ -502,6 +521,12 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 					// told. The seat's parent hears about the lost mint by name,
 					// with the error verbatim, on the durable send path.
 					s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
+				} else if WorkspaceTrustBlocksReady(err) {
+					// 🎯T709: seat stayed registered; tell the parent the
+					// recoverable action instead of implying a reap.
+					life["workspace_trust"] = true
+					life["seat_kept"] = true
+					s.notifyWorkspaceTrust(def.Parent, name, def.WorkDir, err.Error())
 				}
 				life["err"] = err.Error()
 				life["session_id"] = sessionDisplay(def.SessionID)
