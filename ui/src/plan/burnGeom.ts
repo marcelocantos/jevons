@@ -131,6 +131,16 @@ function stemPaths(points: BurnPoint[]): BurnPaths {
     const line = `M${round(lineX)},${round(first.y)} L${round(lineX)},${BURN_HEIGHT}`;
     return { line, points };
   }
+  // 🎯T685: a cluster with no slope either is not a curve at all. The
+  // T637 case had samples falling over a few minutes, so clamping them
+  // into the band still drew something; a window sitting at one value —
+  // Fable pinned at 100% — collapses to a tenth of a unit of flat line
+  // and renders as an empty cell. Draw it as the single reading it is.
+  const flat = points.every((p) => p.y === first.y);
+  if (flat) {
+    const line = `M${round(lineX)},${round(last.y)} L${round(lineX)},${BURN_HEIGHT}`;
+    return { line, points };
+  }
   // Keep the real slope; the stroke is held inside the stem band so a
   // week-start cluster is drawn inward rather than on the cell border.
   const drawn = points.map((p) => ({ x: clamp(p.x, x0, x1), y: p.y }));
