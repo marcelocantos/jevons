@@ -501,51 +501,13 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 		return flags
 	}
 
-	if m := pipedGateRe.FindString(text); m != "" && citesAStatus(lower) {
-		flags = append(flags, Flag{
-			Kind: FlagPipelineMasked,
-			Detail: "the gate was piped into another command, so the status cited " +
-				"is that last command's, not the gate's — run it under bin/gate instead",
-			Evidence: strings.TrimSpace(m),
-		})
-	}
-	if m := bashArrayRe.FindString(text); m != "" {
-		flags = append(flags, Flag{
-			Kind: FlagShellArrayTrap,
-			Detail: "PIPESTATUS is bash-only and this harness runs zsh, where the " +
-				"expansion is empty — the status was never read",
-			Evidence: statusLineAround(text, m),
-		})
-	}
-	if m := zshZeroIndexRe.FindString(text); m != "" {
-		flags = append(flags, Flag{
-			Kind: FlagShellArrayTrap,
-			Detail: "zsh arrays index from 1, so ${pipestatus[0]} is empty — " +
-				"the status was never read",
-			Evidence: statusLineAround(text, m),
-		})
-	}
-	if m := emptyStatusRe.FindString(text); m != "" {
-		flags = append(flags, Flag{
-			Kind:     FlagEmptyStatus,
-			Detail:   "a status variable expanded to nothing; an empty status is not zero",
-			Evidence: strings.TrimSpace(m),
-		})
-	}
-	// 🎯T443 / 🎯T472: the failure quoted as the content of an honest red role
-	// is that run's result, not output arguing with a pass, so it is hidden
-	// from the scan. Everything outside those lines is scanned as before.
-	// 🎯T737: ScanOutput requires output shape, so naming the markers in
-	// prose / fog-known / an acceptance list is not output_contradicts.
-	for _, a := range ScanOutput(blankLines(lines, framingLines)) {
-		flags = append(flags, Flag{
-			Kind: FlagOutputContradicts,
-			Detail: fmt.Sprintf(
-				"the report claims a pass while quoting output that says otherwise (%s)",
-				a.Marker),
-			Evidence: a.Line,
-		})
-	}
+	// 🎯T742: hazard substring rules read a declared region, not the whole
+	// report. Quoted command/output for pipeline / PIPESTATUS / empty status;
+	// ScanOutput stays shape-aware on the report with honest-red framing
+	// blanked (🎯T443 / 🎯T472 / 🎯T737).
+	quoted := quotedRegion(text)
+	shaped := blankLines(lines, framingLines)
+	flags = append(flags, scanHazards(quoted, shaped)...)
 	return flags
 }
 
