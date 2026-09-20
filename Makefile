@@ -12,6 +12,13 @@ $(EMBED_GUIDE): agents-guide.md
 .PHONY: all
 all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope claudiapin buildident
 
+# 🎯T710: unbuildable strays (bin/jevond predating the jevon-to-jevons
+# rename) must not survive a clean. bin/ is gitignored; this recipe is
+# what accounts for them. There is no Makefile product named jevond.
+.PHONY: clean
+clean:
+	rm -rf bin
+
 .PHONY: jevonsd
 jevonsd: bin/jevonsd
 

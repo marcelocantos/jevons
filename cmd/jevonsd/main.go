@@ -38,6 +38,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/portown"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
@@ -1069,6 +1070,10 @@ func main() {
 			slog.Error("server failed", "err", err)
 		}
 	}()
+
+	// 🎯T710: after bind, so the first inspect sees our 127.0.0.1 holder.
+	// Notify only — never treat a squatter as an outage restart.
+	go portown.WatchLoop(ctx, cfg.Port, 0, srv.NotifyOwnerNote)
 
 	// Exit policy: normal â StopAll; upgrade (SIGHUP / JEVONS_UPGRADE_EXIT) â leave
 	// agents alone and write handles. See docs/design/upgrade-without-drain.md.

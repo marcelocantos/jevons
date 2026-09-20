@@ -87,6 +87,9 @@ func run() int {
 		return 0
 	}
 
+	// 🎯T710: independent of Decide. A squatter is not an outage.
+	inspectPortOwnership(*port, serving)
+
 	switch d.Action {
 	case supervise.ActionRestart:
 		detail := restart(*repo, *port)
