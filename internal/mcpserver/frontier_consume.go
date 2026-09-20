@@ -99,6 +99,7 @@ const (
 	FrontierReasonOwnedByOther         = "park_owned_by"               // 🎯T449 assigned to another driver
 	FrontierReasonDeferred             = "skip_deferred"               // 🎯T339/T342/T343 not-urgent + device-voice + T29 ambition
 	FrontierReasonOwnerParked          = "owner-parked"                // 🎯T339 explicit owner-parked
+	FrontierReasonParkedAncestor       = "skip_parked_ancestor"        // 🎯T262.5 parked umbrella parent
 	FrontierReasonCapacity             = "park_capacity"
 	FrontierReasonBackoff              = "park_backoff"
 	FrontierReasonMaxAutospawns        = "park_max_autospawns"
@@ -363,6 +364,13 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			rep.Action, rep.Reason = FrontierConsumeSkip, FrontierReasonDesignGated
 			out = append(out, rep)
 			continue
+		case poproactive.LeafSkipParkedAncestor:
+			rep.Action, rep.Reason = FrontierConsumeSkip, FrontierReasonParkedAncestor
+			if len(leaf.ParkedAncestors) > 0 {
+				rep.Err = "parked ancestor: " + strings.Join(leaf.ParkedAncestors, ",")
+			}
+			out = append(out, rep)
+			continue
 		case poproactive.LeafSkipSetAsideDep:
 			// Park (not skip): explicit reason owner-visible — leaf stays
 			// unconsumed until force_engage / dep reopened (🎯T337).
@@ -562,16 +570,17 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 	for _, leaf := range leaves {
 		byID[leaf.ID] = leaf
 		obs = append(obs, poproactive.LeafObs{
-			ID:             leaf.ID,
-			Tags:           leaf.Tags,
-			Name:           leaf.Name,
-			Context:        leaf.Context,
-			Cost:           leaf.Cost,
-			SetAsideDeps:   leaf.SetAsideDeps,
-			ActiveChildren: leaf.ActiveChildren,
-			OwnedBy:        leaf.OwnedBy,
-			OwnedByReason:  leaf.OwnedByReason,
-			ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
+			ID:              leaf.ID,
+			Tags:            leaf.Tags,
+			Name:            leaf.Name,
+			Context:         leaf.Context,
+			Cost:            leaf.Cost,
+			SetAsideDeps:    leaf.SetAsideDeps,
+			ActiveChildren:  leaf.ActiveChildren,
+			ParkedAncestors: leaf.ParkedAncestors,
+			OwnedBy:         leaf.OwnedBy,
+			OwnedByReason:   leaf.OwnedByReason,
+			ForceEngage:     poproactive.IsForceEngageTag(leaf.Tags),
 			// 🎯T389: this sweep's ledger only — another repo's worker on the
 			// same id must not make this leaf look consumed.
 			AlreadyEngaged: len(workAgentsBoundOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0,

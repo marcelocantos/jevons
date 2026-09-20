@@ -373,6 +373,7 @@ func TestDefaultPersonaUnattendedFrontierAutoSpawn(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		"T262.5",
 		"instructional",
 	} {
 		if !strings.Contains(p, want) {
@@ -620,6 +621,7 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		"T262.5",
 		// 🎯T193 file→spawn same turn
 		"File→spawn same turn",
 		"T193",
@@ -769,6 +771,7 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"T112",
 		"T67",
 		"T29-class",
+		"T262.5",
 		// 🎯T193 file→spawn same turn
 		"File→spawn same turn",
 		"T193",

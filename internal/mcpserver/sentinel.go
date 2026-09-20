@@ -673,15 +673,16 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			obs := make([]poproactive.LeafObs, 0, len(leaves))
 			for _, leaf := range leaves {
 				obs = append(obs, poproactive.LeafObs{
-					ID:             leaf.ID,
-					Tags:           leaf.Tags,
-					Name:           leaf.Name,
-					Context:        leaf.Context,
-					Cost:           leaf.Cost,
-					SetAsideDeps:   leaf.SetAsideDeps,
-					ActiveChildren: leaf.ActiveChildren,
-					ForceEngage:    poproactive.IsForceEngageTag(leaf.Tags),
-					AlreadyEngaged: len(workAgentsBoundOnTarget(s.registry, leaf.ID, workdir, "")) > 0,
+					ID:              leaf.ID,
+					Tags:            leaf.Tags,
+					Name:            leaf.Name,
+					Context:         leaf.Context,
+					Cost:            leaf.Cost,
+					SetAsideDeps:    leaf.SetAsideDeps,
+					ActiveChildren:  leaf.ActiveChildren,
+					ParkedAncestors: leaf.ParkedAncestors,
+					ForceEngage:     poproactive.IsForceEngageTag(leaf.Tags),
+					AlreadyEngaged:  len(workAgentsBoundOnTarget(s.registry, leaf.ID, workdir, "")) > 0,
 				})
 			}
 			readyIDs := poproactive.Classify(obs).ReadyIDs

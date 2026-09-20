@@ -263,3 +263,154 @@ func TestHierarchicalChildOf(t *testing.T) {
 		t.Fatal("digit-safe / non-child cases")
 	}
 }
+
+func TestHierarchicalAncestors(t *testing.T) {
+	got := HierarchicalAncestors("T254.5.1")
+	if len(got) != 2 || got[0] != "T254.5" || got[1] != "T254" {
+		t.Fatalf("T254.5.1 ancestors = %v want [T254.5 T254]", got)
+	}
+	got = HierarchicalAncestors("T10.2")
+	if len(got) != 1 || got[0] != "T10" {
+		t.Fatalf("T10.2 ancestors = %v want [T10]", got)
+	}
+	if len(HierarchicalAncestors("T10")) != 0 || len(HierarchicalAncestors("T100")) != 0 {
+		t.Fatal("undotted ids have no hierarchical ancestors")
+	}
+}
+
+func TestIsParkedUmbrellaTag(t *testing.T) {
+	if !IsParkedUmbrellaTag([]string{"parked"}) || !IsParkedUmbrellaTag([]string{"fleet", "parked-for-design"}) {
+		t.Fatal("parked / parked-for-design must match")
+	}
+	if IsParkedUmbrellaTag([]string{"design-discussion"}) || IsParkedUmbrellaTag([]string{"needs-owner"}) ||
+		IsParkedUmbrellaTag([]string{"owner-parked"}) {
+		t.Fatal("design-gated / owner-parked are not parked-umbrella tags")
+	}
+}
+
+// 🎯T262.5: parked parent + unblocked child carries ParkedAncestors;
+// achieved/set_aside parent does not; design-discussion parent does not.
+const t2625ParkedUmbrellaLedger = `
+targets:
+  T254:
+    name: factory parked
+    status: converging
+    tags:
+    - parked
+    depends_on:
+    - T254.2
+    - T254.3
+  T254.2:
+    name: worktrees
+    status: identified
+  T254.3:
+    name: plan steps
+    status: identified
+  T254.5:
+    name: recovery
+    status: achieved
+    tags:
+    - parked
+  T254.5.9:
+    name: grandchild under achieved mid-parent
+    status: identified
+  T262:
+    name: frontier design
+    status: converging
+    tags:
+    - design-discussion
+    depends_on:
+    - T262.5
+  T262.5:
+    name: parked umbrella skip
+    status: identified
+  T100:
+    name: achieved parked parent
+    status: achieved
+    tags:
+    - parked
+  T100.1:
+    name: child of achieved parent
+    status: identified
+  T200:
+    name: set_aside parked parent
+    status: set_aside
+    tags:
+    - parked-for-design
+  T200.1:
+    name: child of set_aside parent
+    status: identified
+  T300:
+    name: own parked tag
+    status: identified
+    tags:
+    - parked
+  T500:
+    name: ordinary ready
+    status: identified
+`
+
+func TestFrontierLeavesParkedAncestorsCarried(t *testing.T) {
+	leaves, err := FrontierLeaves([]byte(t2625ParkedUmbrellaLedger))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]FrontierLeaf{}
+	for _, l := range leaves {
+		byID[l.ID] = l
+	}
+	t2542, ok := byID["T254.2"]
+	if !ok {
+		t.Fatalf("T254.2 missing from frontier %v", keysOf(byID))
+	}
+	if len(t2542.ParkedAncestors) != 1 || t2542.ParkedAncestors[0] != "T254" {
+		t.Fatalf("T254.2 ParkedAncestors = %v want [T254]", t2542.ParkedAncestors)
+	}
+	t2543, ok := byID["T254.3"]
+	if !ok {
+		t.Fatal("T254.3 missing")
+	}
+	if len(t2543.ParkedAncestors) != 1 || t2543.ParkedAncestors[0] != "T254" {
+		t.Fatalf("T254.3 ParkedAncestors = %v want [T254]", t2543.ParkedAncestors)
+	}
+	// Grandchild: achieved T254.5 does not skip; open parked T254 does.
+	t25459, ok := byID["T254.5.9"]
+	if !ok {
+		t.Fatal("T254.5.9 missing")
+	}
+	if len(t25459.ParkedAncestors) != 1 || t25459.ParkedAncestors[0] != "T254" {
+		t.Fatalf("T254.5.9 ParkedAncestors = %v want [T254] (achieved T254.5 omitted)", t25459.ParkedAncestors)
+	}
+	// design-discussion parent is not a parked umbrella.
+	t2625, ok := byID["T262.5"]
+	if !ok {
+		t.Fatal("T262.5 missing")
+	}
+	if len(t2625.ParkedAncestors) != 0 {
+		t.Fatalf("T262.5 ParkedAncestors = %v want empty", t2625.ParkedAncestors)
+	}
+	t1001, ok := byID["T100.1"]
+	if !ok {
+		t.Fatal("T100.1 missing")
+	}
+	if len(t1001.ParkedAncestors) != 0 {
+		t.Fatalf("achieved parent must not skip: ParkedAncestors = %v", t1001.ParkedAncestors)
+	}
+	t2001, ok := byID["T200.1"]
+	if !ok {
+		t.Fatal("T200.1 missing")
+	}
+	if len(t2001.ParkedAncestors) != 0 {
+		t.Fatalf("set_aside parent must not skip: ParkedAncestors = %v", t2001.ParkedAncestors)
+	}
+	t300, ok := byID["T300"]
+	if !ok {
+		t.Fatal("T300 missing")
+	}
+	if len(t300.ParkedAncestors) != 0 {
+		t.Fatalf("own parked tag is not an ancestor: ParkedAncestors = %v", t300.ParkedAncestors)
+	}
+	if _, ok := byID["T500"]; !ok {
+		t.Fatal("ordinary T500 missing")
+	}
+}

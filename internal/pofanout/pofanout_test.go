@@ -62,6 +62,24 @@ func TestIdlePOOnGatedFrontierIsNotFault(t *testing.T) {
 	}
 }
 
+// 🎯T262.5: T254.2 under a parked T254 is not a ready leaf. A restart-woken
+// PO that sees only factory children must sleep, not mint.
+func TestIdlePOOnParkedUmbrellaChildrenIsNotFault(t *testing.T) {
+	t.Parallel()
+	leaves := []poproactive.LeafObs{
+		{ID: "T254.2", Name: "worktrees", ParkedAncestors: []string{"T254"}},
+		{ID: "T254.3", Name: "plan steps", ParkedAncestors: []string{"T254"}},
+		{ID: "T254.6", Name: "factory posture", ParkedAncestors: []string{"T254"}},
+	}
+	res := Classify(idlePO(), leaves)
+	if res.Verdict != VerdictSleepOK {
+		t.Fatalf("verdict=%s want %s (detail=%s)", res.Verdict, VerdictSleepOK, res.Detail)
+	}
+	if res.Fault() {
+		t.Fatal("parked-umbrella children are legitimate sleep, not a fan-out fault")
+	}
+}
+
 // 🎯T380 acceptance (4), engaged arm: every leaf already has an implementer, so
 // there is nothing left for the PO to spawn.
 func TestIdlePOOnFullyEngagedFrontierIsNotFault(t *testing.T) {

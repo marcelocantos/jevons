@@ -464,7 +464,9 @@ frontier review.
 - **Skip (stay unspawned):** design-gated leaves (🎯T112 / 🎯T67 / 🎯T29-class),
   blocked targets, anything tagged or contextualized as needs-owner /
   design-discussion / parked-for-design — until unblocked or the owner
-  opens design. Load-average is not a sleep or spawn-stop (🎯T566.1).
+  opens design. Skip a child when an ancestor is tagged parked or
+  parked-for-design, even if the child itself has no parked tag and no
+  open depends_on (🎯T262.5). Load-average is not a sleep or spawn-stop (🎯T566.1).
   Halt signals are **memory grind** and **seat-count runaway** (🎯T566.2):
   do not keep kicking while swap/RAM occupancy risks the kernel or live
   seats are a fork-bomb. Reanimate stopped implementers before a new pane

@@ -80,6 +80,11 @@ const (
 	// skip_device_voice / skip_ambition tag) until owner play
 	// (🎯T339 / 🎯T342 / 🎯T343).
 	LeafSkipDeferred
+	// LeafSkipParkedAncestor: hierarchical ancestor is tagged parked or
+	// parked-for-design and is still open. The child itself may have no
+	// parked tag and no open depends_on (T254.2 under parked T254). T155
+	// kick-off and ClassifyFrontierLeaf skip it (🎯T262.5).
+	LeafSkipParkedAncestor
 )
 
 func (k LeafKind) String() string {
@@ -108,6 +113,8 @@ func (k LeafKind) String() string {
 		return "skip_owned_by"
 	case LeafSkipDeferred:
 		return "skip_deferred"
+	case LeafSkipParkedAncestor:
+		return "skip_parked_ancestor"
 	default:
 		return "unknown"
 	}
@@ -139,6 +146,11 @@ type LeafObs struct {
 	// ActiveChildren lists hierarchical active descendants (T10.2 of T10).
 	// Non-empty ⇒ park parent; ready child leaves still spawn (🎯T338).
 	ActiveChildren []string
+	// ParkedAncestors lists open hierarchical ancestors tagged parked or
+	// parked-for-design (T254 of T254.2). Non-empty ⇒ skip the child even
+	// when it has no parked tag of its own (🎯T262.5). Achieved / set_aside
+	// ancestors are not listed.
+	ParkedAncestors []string
 	// Cost is the portfolio cost estimate (0 when unknown/omitted).
 	Cost float64
 	// OwnedBy / OwnedByReason are bullseye's ownership exclusion as recorded
@@ -417,6 +429,17 @@ func HasActiveChildren(o LeafObs) bool {
 	return false
 }
 
+// HasParkedAncestor is true when an open hierarchical ancestor is tagged
+// parked or parked-for-design (🎯T262.5).
+func HasParkedAncestor(o LeafObs) bool {
+	for _, a := range o.ParkedAncestors {
+		if strings.TrimSpace(a) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // IsHighCostMobileLeaf reports the 🎯T337 optional mobile/iPad megawork class:
 // (tags include "visual" AND cost ≥ HighCostMobileThreshold) OR name matches
 // Mobile app / iPad product class. unattended-safe and force-engage override
@@ -477,14 +500,15 @@ func IsHighInfraLeaf(tags []string, name, context string, cost float64, activeCh
 
 // ClassifyLeaf assigns one leaf to ready vs skip for PO proactive / frontier
 // consume. Priority: closed > awaiting_owner_verdict > owned_by >
-// set_aside_dep > parent_active_children >
+// set_aside_dep > parent_active_children > parked_ancestor >
 // deferred (before design so "owner-parked" is not swallowed by the bare
 // "parked" design marker) > design > high_cost_mobile > high_infra >
 // blocked > engaged > ready.
 // ForceEngage (or force-engage tag) overrides set_aside_dep, parent_active_
-// children, deferred, high_cost_mobile, and high_infra (design/blocked still skip).
-// unattended-safe overrides deferred, high_cost_mobile, and high_infra only — not
-// parent-with-active-children (structural; prefer ready child leaves).
+// children, deferred, high_cost_mobile, and high_infra (design/blocked/parked
+// ancestor still skip). unattended-safe overrides deferred, high_cost_mobile,
+// and high_infra only — not parent-with-active-children or parked-ancestor
+// (structural umbrella; prefer ready leaves outside the parked family).
 func ClassifyLeaf(o LeafObs) LeafKind {
 	if o.Closed {
 		return LeafSkipClosed
@@ -505,6 +529,13 @@ func ClassifyLeaf(o LeafObs) LeafKind {
 	}
 	if !force && HasActiveChildren(o) {
 		return LeafSkipParentActiveChildren
+	}
+	// 🎯T262.5: parked umbrella ancestors skip the child even when the child
+	// has no parked tag and no open depends_on. Not force-engage / unattended-
+	// safe overridable — same class as design-gated. Achieved/set_aside
+	// parents are omitted from ParkedAncestors by the assembler.
+	if HasParkedAncestor(o) {
+		return LeafSkipParkedAncestor
 	}
 	// 🎯T339 / 🎯T342 / 🎯T343 before design: "owner-parked" contains design
 	// marker "parked"; T28 device-voice DSP and T29 generative-UI ambition

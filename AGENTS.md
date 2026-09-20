@@ -289,7 +289,9 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   **`parent=jevons-po`** in the same operational cycle — kick off all
   non-design frontier work continuously; do not wait for the owner.
   Skip design-gated (T112 / T67 / T29-class) and blocked targets until
-  unblocked or owner opens design. Load-average is not a sleep or
+  unblocked or owner opens design. Skip a child when an ancestor is tagged
+  parked or parked-for-design, even if the child itself has no parked tag
+  and no open depends_on (🎯T262.5). Load-average is not a sleep or
   spawn-stop (🎯T566.1). Halt on memory grind or seat-count (🎯T566.2);
   remint stopped seats first (🎯T566.3).
   Instructional residual. Persona + agents-guide + fleet standing brief.

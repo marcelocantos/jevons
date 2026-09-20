@@ -325,7 +325,9 @@ fleet worker** under **`parent=jevons-po`** in the **same operational cycle**
   new unattended leaves get a worker **immediately**.
 - Overseer routes to PO (🎯T129); PO spawns, workers execute (🎯T125).
 - **Skip:** design-gated (🎯T112 / 🎯T67 / 🎯T29-class) and blocked targets stay
-  unspawned until unblocked or owner opens design. Load-average is not a
+  unspawned until unblocked or owner opens design. Skip a child when an
+  ancestor is tagged parked or parked-for-design, even if the child itself
+  has no parked tag and no open depends_on (🎯T262.5). Load-average is not a
   sleep or spawn-stop (🎯T566.1). Halt on **memory grind** or
   **seat-count runaway** (🎯T566.2); remint stopped implementers before a
   new pane (🎯T566.3).

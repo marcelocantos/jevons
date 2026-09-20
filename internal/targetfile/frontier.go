@@ -42,6 +42,12 @@ type FrontierLeaf struct {
 	// ActiveChildren lists hierarchical descendants (id + ".") that are still
 	// identified|converging. Unattended consume parks the parent (🎯T338).
 	ActiveChildren []string
+	// ParkedAncestors lists hierarchical ancestors that are still open
+	// (identified|converging) and tagged parked or parked-for-design
+	// (🎯T262.5). Achieved / set_aside ancestors are omitted — they do not
+	// skip the child. Unattended consume and ClassifyFrontierLeaf skip the
+	// child even when it has no parked tag of its own.
+	ParkedAncestors []string
 	// OwnedBy / OwnedByReason carry bullseye's ownership exclusion verbatim
 	// (🎯T449). A target assigned to someone — the owner holding a taste gate
 	// over landed code, or another driver — is active and still graph-ready,
@@ -91,6 +97,37 @@ func HierarchicalChildOf(parentID, childID string) bool {
 		return false
 	}
 	return strings.HasPrefix(childID, parentID+".")
+}
+
+// HierarchicalAncestors walks dotted parents of id (T254.5.1 → T254.5, T254).
+// Digit-safe: T10 yields nothing, T10.2 yields T10, not T1.
+func HierarchicalAncestors(id string) []string {
+	id = strings.TrimSpace(id)
+	var out []string
+	for {
+		dot := strings.LastIndex(id, ".")
+		if dot <= 0 {
+			return out
+		}
+		id = id[:dot]
+		if id == "" {
+			return out
+		}
+		out = append(out, id)
+	}
+}
+
+// IsParkedUmbrellaTag reports exact tags parked / parked-for-design (🎯T262.5).
+// Not the full design-gated set: a design-discussion parent (T262) must not
+// skip its children.
+func IsParkedUmbrellaTag(tags []string) bool {
+	for _, t := range tags {
+		s := strings.ToLower(strings.TrimSpace(t))
+		if s == "parked" || s == "parked-for-design" {
+			return true
+		}
+	}
+	return false
 }
 
 // FrontierLeaves extracts ready leaves from ledger YAML, ordered by natural
@@ -149,17 +186,32 @@ func FrontierLeaves(data []byte) ([]FrontierLeaf, error) {
 				activeChildren = append(activeChildren, other)
 			}
 		}
+		var parkedAncestors []string
+		for _, anc := range HierarchicalAncestors(id) {
+			at, ok := doc.Targets[anc]
+			if !ok {
+				continue
+			}
+			// Achieved / set_aside parent does not skip the child (🎯T262.5).
+			if IsClosedStatus(at.Status) {
+				continue
+			}
+			if IsParkedUmbrellaTag(at.Tags) {
+				parkedAncestors = append(parkedAncestors, anc)
+			}
+		}
 		leaf := FrontierLeaf{
-			ID:             id,
-			Name:           strings.TrimSpace(t.Name),
-			Context:        strings.TrimSpace(t.Context),
-			Tags:           t.Tags,
-			Acceptance:     t.Acceptance,
-			Cost:           t.Cost,
-			Value:          t.Value,
-			SetAsideDeps:   setAsideDeps,
-			ActiveChildren: activeChildren,
-			Discovered:     strings.TrimSpace(t.Discovered),
+			ID:              id,
+			Name:            strings.TrimSpace(t.Name),
+			Context:         strings.TrimSpace(t.Context),
+			Tags:            t.Tags,
+			Acceptance:      t.Acceptance,
+			Cost:            t.Cost,
+			Value:           t.Value,
+			SetAsideDeps:    setAsideDeps,
+			ActiveChildren:  activeChildren,
+			ParkedAncestors: parkedAncestors,
+			Discovered:      strings.TrimSpace(t.Discovered),
 		}
 		if t.OwnedBy != nil {
 			leaf.OwnedBy = strings.TrimSpace(t.OwnedBy.Owner)
