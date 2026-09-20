@@ -225,17 +225,20 @@ func TestT747IdenticalBodyUnderNewIDIsNotReDelivered(t *testing.T) {
 	if len(parent.sent) != 1 {
 		t.Fatalf("first delivery: parent got %d want 1: %v", len(parent.sent), parent.sent)
 	}
-	// Same body, later second: a distinct stored id.
+	// Same body, later second: a distinct stored id. The parent is idle again,
+	// so a delivery would be sent, not queued — the count below cannot pass
+	// by the copy merely waiting behind a turn.
 	time.Sleep(1100 * time.Millisecond)
+	s.setFlight(t731Parent, FlightIdle)
 	s.notify(t731Worker, t731Report)
 
 	recs, err := agentreport.List(s.agentReportStateDir(), t731Worker)
 	if err != nil || len(recs) != 2 || recs[0].ID == recs[1].ID {
 		t.Fatalf("want two stored reports with distinct ids; got %d err=%v", len(recs), err)
 	}
-	if len(parent.sent) != 1 {
-		t.Fatalf("identical body re-delivered to the parent that already consumed it: %d deliveries: %v",
-			len(parent.sent), parent.sent)
+	if len(parent.sent) != 1 || s.pendingAgentSends(t731Parent) != 0 {
+		t.Fatalf("identical body re-delivered to the parent that already consumed it: %d sent, %d queued: %v",
+			len(parent.sent), s.pendingAgentSends(t731Parent), parent.sent)
 	}
 }
 
@@ -243,6 +246,7 @@ func TestT747IdenticalBodyUnderNewIDIsNotReDelivered(t *testing.T) {
 func TestT747DifferentBodyStillDelivered(t *testing.T) {
 	s, parent, _, _ := t731Server(t)
 	s.notify(t731Worker, t731Report)
+	s.setFlight(t731Parent, FlightIdle)
 	s.notify(t731Worker, t731Report+" And a second, different finding.")
 	if len(parent.sent) != 2 {
 		t.Fatalf("parent deliveries=%d want 2: %v", len(parent.sent), parent.sent)
