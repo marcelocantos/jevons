@@ -604,7 +604,11 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 
 	out, err := trySend()
 	if err == nil {
-		if out.Mechanism != "" {
+		// 🎯T711: a cut already named the mechanism (session_cancel+prompt),
+		// and the plain Send that follows it reports the generic "submit".
+		// Letting that overwrite would erase the only part of the answer that
+		// says the turn was cut rather than joined.
+		if out.Mechanism != "" && !interrupted {
 			mm.Mechanism = out.Mechanism
 		}
 		if seam != nil && out.PhaseBefore == delivery.PhaseInTurn {
