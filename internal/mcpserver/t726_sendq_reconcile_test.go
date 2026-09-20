@@ -139,6 +139,11 @@ func TestT726SupersededMessagesReachTheReceiverAsOne(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Reconciliation kicks a background drain when the seat is live, which is
+	// the point of it — but it would race the consolidation this test is
+	// about. Keep the seat processless until the queue is the shape the
+	// receiver should see, then give it somewhere to deliver.
+	s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
 
 	// Consolidation refuses while the head's outcome is unknown: folding it
 	// away would claim non-delivery on no evidence (🎯T416).
@@ -163,6 +168,7 @@ func TestT726SupersededMessagesReachTheReceiverAsOne(t *testing.T) {
 		t.Fatalf("consolidate refused: %s", resultText(t, res))
 	}
 
+	s.SetSenderResolver(func(string) (agentSender, bool, error) { return sender, false, nil })
 	s.drainAgentSendQueue(name)
 	if got := sender.delivered(); len(got) != 1 || got[0] != "authoritative: do B" {
 		t.Fatalf("receiver got %v; want exactly one authoritative message", got)
@@ -170,6 +176,81 @@ func TestT726SupersededMessagesReachTheReceiverAsOne(t *testing.T) {
 	if depth := s.pendingAgentSends(name); depth != 0 {
 		t.Fatalf("queue depth after delivery = %d", depth)
 	}
+}
+
+// The non-destructive path, made first-class. A no-prompt jevons_agent_start
+// drained jv-t718-gate-dirty-warn on 2026-09-20 and nothing named it; these
+// are the three answers it should have been able to give.
+func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
+	t.Run("live seat: the backlog is offered now", func(t *testing.T) {
+		s, sender, _ := t418Daemon(t, t.TempDir())
+		const name = "jv-t718-gate-dirty-warn"
+		for _, text := range []string{"PO: bounce and re-read HEAD", "PO: and cite the gate id"} {
+			if _, _, err := s.sendQueue().Append(name, text, time.Now().Add(-time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// One per turn boundary: the drain offers the head now and says so.
+		// Handing a pane the whole backlog at once is what 🎯T416 stopped.
+		res := reconcile(t, s, map[string]any{"name": name, "action": "drain"})
+		if res.IsError {
+			t.Fatalf("drain refused a pending backlog: %s", resultText(t, res))
+		}
+		if got := sender.delivered(); len(got) != 1 || got[0] != "PO: bounce and re-read HEAD" {
+			t.Fatalf("delivered = %v; want the head message only", got)
+		}
+		if text := resultText(t, res); !strings.Contains(text, "1 still queued") {
+			t.Fatalf("drain does not account for what is left:\n%s", text)
+		}
+		if depth := s.pendingAgentSends(name); depth != 1 {
+			t.Fatalf("depth after drain = %d; want the tail still held", depth)
+		}
+		// And the seat keeps draining: the second call takes the tail.
+		reconcile(t, s, map[string]any{"name": name, "action": "drain"})
+		if got := sender.delivered(); len(got) != 2 || got[1] != "PO: and cite the gate id" {
+			t.Fatalf("delivered = %v; want the tail next, in order", got)
+		}
+		if depth := s.pendingAgentSends(name); depth != 0 {
+			t.Fatalf("depth after second drain = %d", depth)
+		}
+	})
+
+	t.Run("unresolved head: refuse and name reconcile", func(t *testing.T) {
+		const name, payload = "claudia-po", "the message whose fate is unknown"
+		s, sender, _, held := pinnedDaemon(t, name, payload)
+		if _, _, err := s.sendQueue().Append(name, "a later pending message", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		text := resultText(t, reconcile(t, s, map[string]any{"name": name, "action": "drain"}))
+		for _, want := range []string{held.ID, held.AttemptID, "jevons_sendq_reconcile"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("drain refusal omits %q, leaving no next move:\n%s", want, text)
+			}
+		}
+		if got := sender.delivered(); len(got) != 0 {
+			t.Fatalf("drain delivered past an unresolved attempt: %v", got)
+		}
+		entries, err := s.sendQueue().Snapshot(name)
+		if err != nil || len(entries) != 2 || entries[0].Text != payload || entries[0].State != sendq.Uncertain {
+			t.Fatalf("refused drain disturbed the queue: %+v %v", entries, err)
+		}
+	})
+
+	t.Run("no live process: name the start that creates one", func(t *testing.T) {
+		s, _, _ := t418Daemon(t, t.TempDir())
+		const name = "jv-reaped-worker"
+		if _, _, err := s.sendQueue().Append(name, "gate feedback", time.Now().Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
+		text := resultText(t, reconcile(t, s, map[string]any{"name": name, "action": "drain"}))
+		if !strings.Contains(text, "jevons_agent_start") || !strings.Contains(text, name) {
+			t.Fatalf("drain with no process does not name the recovery call:\n%s", text)
+		}
+		if depth := s.pendingAgentSends(name); depth != 1 {
+			t.Fatalf("drain with no process lost the payload: depth=%d", depth)
+		}
+	})
 }
 
 // The notices that named no tool are the reason this target exists. Each one

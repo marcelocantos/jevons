@@ -49,9 +49,9 @@ func (s *Server) registerSendqReconcileTool() {
 	}
 	s.addTool(
 		mcp.NewTool("jevons_sendq_reconcile",
-			mcp.WithDescription("Resolve a held daemon sendq entry by operator judgement (🎯T726) — the named path out of PINNED. NEVER edit ~/.jevons/sendq/*.json while the daemon is running: that write races the daemon's atomic rename and the loser is silent. Call with only name= to SEE the queue (entry ids, delivery state, attempt ids, ages, payload previews) before deciding anything. Then: action=confirmed when you established the receiver HAS it, action=requeue when you established it never landed (the only outcome that permits a resend — 🎯T416), action=drop to abandon it deliberately and on the record, action=consolidate to fold superseded messages into one authoritative message so a seat that fell behind does not act on the stalest. Every mutating action requires actor= and evidence=; the disposition is logged with both. 🎯T416's three instruments that work: payload-match at user-message level in the receiver's JSONL, the receiver's own queue-operation/queued_command records, and transcript-file absence. The three that passed while WRONG: transcript growth, a raw grep of the session file, and the receiver's behaviour. For merely PENDING entries the non-destructive drain is still jevons_agent_start name=<seat> with no prompt."),
+			mcp.WithDescription("Resolve a held daemon sendq entry by operator judgement (🎯T726) — the named path out of PINNED. NEVER edit ~/.jevons/sendq/*.json while the daemon is running: that write races the daemon's atomic rename and the loser is silent. Call with only name= to SEE the queue (entry ids, delivery state, attempt ids, ages, payload previews) before deciding anything. Then: action=confirmed when you established the receiver HAS it, action=requeue when you established it never landed (the only outcome that permits a resend — 🎯T416), action=drop to abandon it deliberately and on the record, action=consolidate to fold superseded messages into one authoritative message so a seat that fell behind does not act on the stalest. Every mutating action requires actor= and evidence=; the disposition is logged with both. 🎯T416's three instruments that work: payload-match at user-message level in the receiver's JSONL, the receiver's own queue-operation/queued_command records, and transcript-file absence. The three that passed while WRONG: transcript growth, a raw grep of the session file, and the receiver's behaviour. For merely PENDING entries nothing needs deciding and nothing is discarded: action=drain offers the backlog to the live seat now. That is the non-destructive path, and it is an operation, not folklore — jevons_agent_start name=<seat> with no prompt remains the way to get a live process when there is none."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("The addressee agent whose queue is held, e.g. claudia-po")),
-			mcp.WithString("action", mcp.Description("show (default) | confirmed | requeue | drop | consolidate")),
+			mcp.WithString("action", mcp.Description("show (default) | drain | confirmed | requeue | drop | consolidate")),
 			mcp.WithString("entry_id", mcp.Description("Queue entry to reconcile, as shown by action=show or named in the PINNED notice")),
 			mcp.WithString("attempt_id", mcp.Description("The entry's unresolved attempt id; required for a non-pending entry so a disposition cannot land on a stale view of the queue")),
 			mcp.WithString("actor", mcp.Description("Who established this (your agent name, or owner). Recorded with the disposition.")),
@@ -85,6 +85,9 @@ func (s *Server) handleSendqReconcile(_ context.Context, req mcp.CallToolRequest
 	if action == "show" {
 		return mcp.NewToolResultText(s.describeSendqForReconcile(name, now)), nil
 	}
+	if action == "drain" {
+		return mcp.NewToolResultText(s.drainHeldSendqOnRequest(name, now)), nil
+	}
 
 	var (
 		rec sendq.Receipt
@@ -98,7 +101,7 @@ func (s *Server) handleSendqReconcile(_ context.Context, req mcp.CallToolRequest
 			strings.TrimSpace(str(args["text"])), actor, evidence, now)
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf(
-			"unknown action %q (want show, confirmed, requeue, drop or consolidate)", action)), nil
+			"unknown action %q (want show, drain, confirmed, requeue, drop or consolidate)", action)), nil
 	}
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -200,10 +203,77 @@ func (s *Server) describeSendqForReconcile(name string, now time.Time) string {
 			"queue-operation records, transcript-file absence):\n"+
 			"  jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%q attempt_id=%q actor=<you> evidence=<what you read>\n",
 			name, pin.EntryID, pin.AttemptID)
-	} else if len(entries) > 1 {
-		fmt.Fprintf(&b, "\nNothing is unresolved. Superseded messages fold into one with:\n"+
-			"  jevons_sendq_reconcile name=%q action=consolidate keep=%q actor=<you> evidence=<why these are superseded>\n",
-			name, entries[len(entries)-1].ID)
+	} else if len(entries) > 0 {
+		fmt.Fprintf(&b, "\nNothing is unresolved, so nothing needs deciding. Offer the head to the seat now:\n"+
+			"  jevons_sendq_reconcile name=%q action=drain\n", name)
+		if len(entries) > 1 {
+			fmt.Fprintf(&b, "Or fold superseded messages into one authoritative message first:\n"+
+				"  jevons_sendq_reconcile name=%q action=consolidate keep=%q actor=<you> evidence=<why these are superseded>\n",
+				name, entries[len(entries)-1].ID)
+		}
+	}
+	return b.String()
+}
+
+// drainHeldSendqOnRequest is the non-destructive move, made first-class.
+//
+// On 2026-09-20 a no-prompt jevons_agent_start drained jv-t718-gate-dirty-warn's
+// held queue (sendq 0b7f6383b85c) — the only escape anybody found that did not
+// throw messages away, and it was folklore: nothing named it, and the seat's
+// own PINNED notice offered a PO an overseer kill instead. Starting a seat is a
+// heavy way to say "offer the backlog now", and it is the wrong instrument when
+// a process is already there.
+//
+// It refuses past an unresolved attempt rather than skipping it. A start would
+// not retry that entry either (🎯T623), and offering the message behind it
+// would deliver the queue out of order — reconcile the head first, which is
+// what the refusal says.
+func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
+	before, err := s.sendQueue().Snapshot(name)
+	if err != nil {
+		return fmt.Sprintf("sendq for %q is unreadable: %v\nDo NOT repair it by hand while the daemon is running.", name, err)
+	}
+	if len(before) == 0 {
+		return fmt.Sprintf("sendq for %q is empty: nothing to drain.\n", name)
+	}
+	if e, blocked, err := s.sendQueue().BlockedHead(name); err == nil && blocked {
+		return fmt.Sprintf(
+			"Refusing to drain %q: entry %s at the head has an unresolved %s attempt %s.\n"+
+				"A start would not retry it either (🎯T623), and draining past it would deliver the queue out of order.\n"+
+				"Resolve the head first: jevons_sendq_reconcile name=%[1]q action=confirmed|requeue|drop entry_id=%[2]s attempt_id=%[4]s actor=… evidence=…\n",
+			name, e.ID, e.State, e.AttemptID)
+	}
+	if _, live := s.liveSender(name); !live {
+		return fmt.Sprintf(
+			"%q holds %d pending message(s), oldest waiting %s, but has no live process to deliver to.\n"+
+				"Give it one and the queue drains at the first turn boundary: jevons_agent_start name=%[1]q (no prompt).\n",
+			name, len(before), before[0].Age(now).Round(time.Second))
+	}
+
+	s.drainAgentSendQueue(name)
+
+	after, err := s.sendQueue().Snapshot(name)
+	if err != nil {
+		return fmt.Sprintf("drained %q, but the queue is now unreadable: %v\n", name, err)
+	}
+	delivered := len(before) - len(after)
+	s.LogEvent("agent_send", "sendq_drain_on_request", map[string]any{
+		"agent": name, "depth_before": len(before), "depth_after": len(after), "delivered": delivered,
+	})
+	var b strings.Builder
+	fmt.Fprintf(&b, "Drained %q: %d of %d held message(s) delivered, %d still queued.\n",
+		name, delivered, len(before), len(after))
+	switch {
+	case delivered == 0:
+		b.WriteString("Nothing moved — the seat is most likely mid-turn, and the backlog is offered again at its next boundary.\n")
+	case len(after) > 0:
+		// One message per turn boundary is deliberate: handing a pane several
+		// at once is what 🎯T416 stopped doing, because the provider's own
+		// queue merges them silently. The rest are not stuck.
+		b.WriteString("The remainder follows one per turn boundary — that cadence is deliberate (🎯T416), not a stall.\n")
+	}
+	if pin, pinned := s.sendqPinFor(name); pinned {
+		fmt.Fprintf(&b, "%s\n", FormatSendqPinLine(name, pin))
 	}
 	return b.String()
 }

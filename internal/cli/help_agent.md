@@ -173,9 +173,20 @@ into a single authoritative message — it refuses while anything is
 unresolved, because folding an uncertain entry away would claim
 non-delivery.
 
-For a merely **pending** backlog nothing is uncertain and the
-non-destructive drain is still `jevons_agent_start name=<seat>` with no
-prompt: the queue delivers at the next turn boundary.
+For a merely **pending** backlog nothing is uncertain and nothing needs
+deciding — `jevons_sendq_reconcile name=<seat> action=drain` offers the head
+to the live seat now. That is the non-destructive path, and it is an
+operation rather than folklore: on 2026-09-20 a no-prompt
+`jevons_agent_start` was the only escape anybody found for
+`jv-t718-gate-dirty-warn`, and nothing named it. A start is still how you get
+a live process when there is none; it is a heavy way to say "offer the
+backlog now" when one is already there.
+
+`drain` refuses past an unresolved attempt rather than skipping it — a start
+would not retry that entry either (🎯T623), and draining past it would
+deliver the queue out of order. It delivers **one message per turn
+boundary**; that cadence is deliberate (🎯T416), because handing a pane
+several at once is what the provider's own queue merges silently.
 
 ## Fleet spawn path (🎯T78)
 
