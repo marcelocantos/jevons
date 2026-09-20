@@ -84,6 +84,10 @@ func OpenReadingStore(path string) (*ReadingStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("planusage readings: schema: %w", err)
 	}
+	if err := ensureResponsesSchema(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("planusage readings: responses schema: %w", err)
+	}
 	if err := rebucketSeriesKeys(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("planusage readings: rebucket series keys: %w", err)

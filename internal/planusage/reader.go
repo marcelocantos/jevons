@@ -214,6 +214,29 @@ func (r *Reader) appendHistory(readings []claudia.PlanUsage) {
 	if err := r.args.History.Append(samples); err != nil {
 		slog.Warn("plan usage history append", "err", err)
 	}
+	r.appendResponses(readings)
+}
+
+// appendResponses stores the raw vendor payloads that came back with this
+// fetch (🎯T683). Best effort: a reading that could not be filed is still
+// a reading, and plan usage must not go dark because a payload did not
+// store. Only a store that implements the recorder takes part, so a
+// History supplied by a test stays a History.
+func (r *Reader) appendResponses(readings []claudia.PlanUsage) {
+	if r == nil || r.args.History == nil {
+		return
+	}
+	rec, ok := r.args.History.(ResponseRecorder)
+	if !ok {
+		return
+	}
+	responses := responsesFromReadings(readings, r.args.Now())
+	if len(responses) == 0 {
+		return
+	}
+	if err := rec.AppendResponses(responses); err != nil {
+		slog.Warn("plan usage response append", "err", err)
+	}
 }
 
 func (r *Reader) emit() {
