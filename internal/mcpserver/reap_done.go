@@ -280,6 +280,11 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	}
 	// 🎯T662: a reap is a recorded reason on the seat.
 	s.noteSeatStop(name, seatstop.SourceReap, "reaped as finished work ("+reason+")", "daemon", "")
+	// 🎯T738: stop host Goal continuation before the seat leaves the
+	// registry. Once the row is gone claudia's askOwnerGoalCheck has no
+	// owner to ask and reads that as "not complete", so a pane that
+	// survived the kill is fed "Continue the open objective" forever.
+	s.closeSeatGoalBeforeRemoval(name, "reaped_as_finished_work")
 	if err := killSubtree(s.registry, s.RemovalAccount(), name, reapDoneRemoval(reason)); err != nil {
 		slog.Warn("T165/T195 auto-reap failed", "agent", name, "reason", reason, "err", err)
 		fields := reapDecisionFields(name, reason, report)
