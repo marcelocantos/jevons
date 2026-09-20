@@ -53,6 +53,10 @@ const (
 	// not an ancestor of HEAD (🎯T427). Distinguishes rewritten (object still
 	// present) from missing (never existed here).
 	FlagSHAUnreachable FlagKind = "sha_unreachable"
+	// FlagAttestationEmptyPackage: the report cites a green gate whose record
+	// names packages that executed no tests, and the report speaks of one of
+	// them (🎯T739). The gate passed; it proved nothing about that package.
+	FlagAttestationEmptyPackage FlagKind = "attestation_empty_package"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.
@@ -495,6 +499,7 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 		if f, ok := dirtyTreeFlag(text, rec, c); ok {
 			flags = append(flags, f)
 		}
+		flags = append(flags, emptyPackageFlags(lines, rec, c)...)
 	}
 
 	if !claimsGreen {
@@ -656,4 +661,56 @@ func Banner(flags []Flag) string {
 	}
 	b.WriteString("\n  Re-run the gate as `bin/gate -- <command>` and cite its GATE line.")
 	return b.String()
+}
+
+// emptyPackageFlags is 🎯T739's report-time arm: a green gate that ran no
+// tests in some package, cited by a report that talks about that package,
+// is evidence for nothing the report says about it. A line that itself says
+// the package has no tests is the honest form and stays silent.
+func emptyPackageFlags(lines []string, rec *Record, c CitedAttestation) []Flag {
+	var flags []Flag
+	for _, pkg := range rec.EmptyPackages {
+		names := []string{pkg}
+		if rel := relativePackage(pkg); rel != pkg {
+			names = append(names, rel)
+		}
+		for _, ln := range lines {
+			if strings.Contains(ln, "GATE ") || !mentionsAny(ln, names) {
+				continue
+			}
+			low := strings.ToLower(ln)
+			if strings.Contains(low, "no tests") || strings.Contains(low, "no test files") ||
+				strings.Contains(low, "empty") {
+				continue
+			}
+			flags = append(flags, Flag{
+				Kind: FlagAttestationEmptyPackage,
+				Detail: fmt.Sprintf(
+					"gate %q executed no tests in %s, so its green proves nothing about that package; "+
+						"the report names it anyway (🎯T739). Fix the -run pattern or cite a gate that ran it",
+					c.Name, pkg),
+				Evidence: trimLine(ln),
+			})
+			break
+		}
+	}
+	return flags
+}
+
+// relativePackage drops the host/org/repo prefix of an import path.
+func relativePackage(pkg string) string {
+	parts := strings.SplitN(pkg, "/", 4)
+	if len(parts) == 4 && strings.Contains(parts[0], ".") {
+		return parts[3]
+	}
+	return pkg
+}
+
+func mentionsAny(line string, names []string) bool {
+	for _, n := range names {
+		if n != "" && strings.Contains(line, n) {
+			return true
+		}
+	}
+	return false
 }

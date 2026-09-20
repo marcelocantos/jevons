@@ -278,6 +278,36 @@ func EmptyRun(out string) bool {
 	return !hasTestExecution(out)
 }
 
+// EmptyPackages names the packages in a Go test run's output that executed
+// no tests (🎯T739): `ok pkg 0.1s [no tests to run]` and `? pkg [no test
+// files]`. EmptyRun answers "did anything run at all"; this answers "which
+// of the packages the command named proved nothing", so a partly-empty
+// multi-package gate cannot be cited as if every package it named ran.
+// Order of first appearance, deduplicated. Non-Go output yields nil.
+func EmptyPackages(out string) []string {
+	var pkgs []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		trim := strings.TrimSpace(strings.ReplaceAll(line, "\r", ""))
+		var rest string
+		switch {
+		case strings.HasPrefix(trim, "ok") && strings.Contains(trim, "[no tests to run]"):
+			rest = strings.TrimSpace(trim[len("ok"):])
+		case strings.HasPrefix(trim, "?") && strings.Contains(trim, "[no test files]"):
+			rest = strings.TrimSpace(trim[len("?"):])
+		default:
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 || seen[fields[0]] {
+			continue
+		}
+		seen[fields[0]] = true
+		pkgs = append(pkgs, fields[0])
+	}
+	return pkgs
+}
+
 func hasGoEmptyMarker(out string) bool {
 	return strings.Contains(out, "[no tests to run]") ||
 		strings.Contains(out, "testing: warning: no tests to run") ||

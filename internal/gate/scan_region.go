@@ -50,6 +50,7 @@ var structuredFlagKinds = []FlagKind{
 	FlagAttestationKilled,
 	FlagDirtyTreeGate,
 	FlagSHAUnreachable,
+	FlagAttestationEmptyPackage,
 }
 
 func scanHazards(quoted, shaped string) []Flag {

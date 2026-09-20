@@ -85,6 +85,12 @@ type Record struct {
 	VoidReason string    `json:"void_reason,omitempty"`
 	VoidedAt   time.Time `json:"voided_at,omitzero"`
 
+	// EmptyPackages are the Go packages the run named that executed no tests
+	// (🎯T739). A gate that is GREEN overall may still have proved nothing
+	// about some of them; the set is the honest residue. Additive: records
+	// from before the field unmarshal to nil, meaning "not measured".
+	EmptyPackages []string `json:"empty_packages,omitempty"`
+
 	OutputBytes  int    `json:"output_bytes"`
 	OutputSHA256 string `json:"output_sha256"`
 	OutputPath   string `json:"output_path,omitempty"`
@@ -135,6 +141,10 @@ func (r *Record) Attestation() string {
 	if r.Verdict == VerdictDirty {
 		line += " " + DirtyHintToken
 	}
+	// 🎯T739: name the packages that ran nothing on the line itself.
+	if len(r.EmptyPackages) > 0 {
+		line += " " + EmptyPackagesToken + strings.Join(r.EmptyPackages, ",")
+	}
 	return line
 }
 
@@ -161,6 +171,10 @@ func (r *Record) Summary() string {
 			fmt.Fprintf(&b, "\n  tree was also dirty; EMPTY is the verdict because nothing ran (🎯T719)")
 		}
 	}
+	if len(r.EmptyPackages) > 0 && r.Verdict != VerdictEmpty {
+		fmt.Fprintf(&b, "\n  executed no tests in %d package(s): %s — this run proves nothing about them (🎯T739)",
+			len(r.EmptyPackages), strings.Join(r.EmptyPackages, ", "))
+	}
 	if r.Verdict == VerdictDirty {
 		cmd := strings.Join(r.Command, " ")
 		if cmd == "" {
@@ -176,6 +190,10 @@ func (r *Record) Summary() string {
 	}
 	return b.String()
 }
+
+// EmptyPackagesToken prefixes the comma-joined empty-package list on the GATE
+// line (🎯T739). It goes last, after the tree and dirty tokens.
+const EmptyPackagesToken = "empty="
 
 // attestationRe parses the line back out of a finish report. Tolerant of
 // surrounding prose and markdown, strict about the fields.

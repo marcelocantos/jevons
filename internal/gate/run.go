@@ -141,6 +141,7 @@ func Run(args *RunArgs) (*Record, error) {
 	if hostKill && rec.StatusNote == "" {
 		rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
 	}
+	rec.EmptyPackages = EmptyPackages(outStr)
 	rec.Verdict = applyTreeVerdict(
 		verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill, EmptyRun(outStr)),
 		rec.Tree,
