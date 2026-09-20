@@ -155,3 +155,42 @@ func TestT708ReapOfUnanchoredSeatIsSafe(t *testing.T) {
 		t.Fatalf("unanchored reap did something: %s", res)
 	}
 }
+
+// 🎯T708 clause 4: a seat quiet behind a melted host is starved, not
+// stalled, and the stall bar must not count it. On 2026-09-20 every
+// running claude worker was 47 to 71 minutes past the bar while the host
+// sat at load 121, and not one of them was stuck.
+func TestT708StarvedSeatIsNotCountedAgainstTheStallBar(t *testing.T) {
+	obs := IdleNudgeObs{
+		Name:             "cl-t78-pool-events",
+		Purpose:          "work",
+		ProcessRunning:   true,
+		Phase:            "idle",
+		IdleFor:          71 * time.Minute,
+		HasOpenMission:   true,
+		BriefPresent:     true,
+		HostLoadCritical: true,
+	}
+	verdict, why := ClassifyIdleNudge(obs)
+	if verdict != IdleNudgeSkip || why != IdleSkipStarved {
+		t.Fatalf("verdict = %v/%q, want skip/%s: nudging a starved seat spends the little CPU left punishing it for the queue",
+			verdict, why, IdleSkipStarved)
+	}
+}
+
+// The control an over-broad fix fails: on a host with room, the same quiet
+// seat still owes an explanation.
+func TestT708QuietSeatOnAHostWithRoomStillNudges(t *testing.T) {
+	obs := IdleNudgeObs{
+		Name:           "cl-t78-pool-events",
+		Purpose:        "work",
+		ProcessRunning: true,
+		Phase:          "idle",
+		IdleFor:        71 * time.Minute,
+		HasOpenMission: true,
+		BriefPresent:   true,
+	}
+	if verdict, why := ClassifyIdleNudge(obs); verdict != IdleNudgeNudge {
+		t.Fatalf("verdict = %v/%q, want nudge on an unsaturated host", verdict, why)
+	}
+}

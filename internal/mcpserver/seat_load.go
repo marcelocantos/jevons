@@ -234,6 +234,21 @@ func (s *Server) applySeatLoadActions(acts []capacity.LoadAction) {
 	}
 }
 
+// hostLoadCritical reports whether the host's run queue — not the budget,
+// not a provider cap — is the saturated dimension (🎯T708). A nil governor
+// is not critical: unknown and saturated are different statements, and the
+// stall bar must not go quiet because a reading is missing.
+func (s *Server) hostLoadCritical() bool {
+	if s == nil {
+		return false
+	}
+	gov := s.CapacityGovernor()
+	if gov == nil {
+		return false
+	}
+	return capacity.HostLoadCritical(gov.Status().Assessment)
+}
+
 // forgetSeatLoad drops a seat's anchor without reaping — the seat is being
 // handed over, not stopped.
 func (s *Server) forgetSeatLoad(name string) {

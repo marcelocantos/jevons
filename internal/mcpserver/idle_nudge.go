@@ -84,6 +84,9 @@ const (
 	IdleSkipBackoff = "backoff"
 	// IdleSkipBelowThreshold: still idle, not yet aged past the threshold.
 	IdleSkipBelowThreshold = "idle_below_threshold"
+	// IdleSkipStarved: quiet past the bar, but the host has no CPU left to
+	// give — starved, not stalled (🎯T708).
+	IdleSkipStarved = "starved_host_critical"
 	// IdleSkipWaitingOnGate: the last turn declared a blocking wait on a
 	// tracked background gate (🎯T565) — the idle is the wait.
 	IdleSkipWaitingOnGate = "waiting_on_gate"
@@ -149,9 +152,13 @@ type IdleNudgeObs struct {
 	DeliberateStop bool // stop without kill; residual: do not force-nudge
 	Phase          string
 	IdleFor        time.Duration
-	HasOpenMission bool // bound target still open, or post-restart open work
-	DesignGated    bool
-	LooksFinished  bool // leave to T165/T195 reap paths
+	// HostLoadCritical is the host's own run queue at or past the 🎯T463
+	// critical bar. A seat quiet on a host with no CPU left to give is
+	// starved, not stalled (🎯T708).
+	HostLoadCritical bool
+	HasOpenMission   bool // bound target still open, or post-restart open work
+	DesignGated      bool
+	LooksFinished    bool // leave to T165/T195 reap paths
 	// BriefPresent is true when the standing fleet brief (or equivalent
 	// resume brief) is known present for this worker session — e.g.
 	// EnsureFleetBrief inject-once already applied, or a prior user turn
@@ -247,6 +254,15 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	threshold := o.IdleThreshold
 	if threshold <= 0 {
 		threshold = DefaultIdleNudgeThreshold
+	}
+	// 🎯T708: a quiet seat on a host with no CPU left to give is starved,
+	// not stalled, and the stall bar must not count it. On 2026-09-20 every
+	// running claude worker was 47 to 71 minutes past the bar while the host
+	// sat at load 121 — not one of them was stuck; they were waiting behind
+	// a sibling's loops. Nudging, reminting and reaping them would have
+	// spent the little CPU that was left punishing seats for the queue.
+	if o.HostLoadCritical {
+		return IdleNudgeSkip, IdleSkipStarved
 	}
 	// 🎯T423: only a positive idle/blocked reading may nudge. Empty or
 	// unknown is a failure to observe — the 2026-08-10 misread.
@@ -726,6 +742,11 @@ type IdleNudgeSweepArgs struct {
 	LastTerminalReport func(name string) string
 	// MissionAcceptance optional: targetID → acceptance text for full brief.
 	MissionAcceptance func(targetID string) string
+	// HostLoadCritical is optional: reports whether the host's run queue is
+	// saturated. Nil reads as not critical — unknown and saturated are
+	// different statements, and a missing reading must not silence the
+	// stall bar (🎯T708).
+	HostLoadCritical func() bool
 	// ProcessRunning optional override (hermetic tests without OS processes).
 	// Nil → reg.Get(name).Alive().
 	ProcessRunning func(name string) bool
@@ -914,24 +935,25 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	}
 
 	obs := IdleNudgeObs{
-		Name:            d.Name,
-		Purpose:         purpose,
-		FleetIntent:     args.Intent.FleetState(),
-		Intent:          args.Intent.AgentState(d.Name),
-		ProcessRunning:  running,
-		DeliberateStop:  deliberateStop,
-		Phase:           phase,
-		IdleFor:         idleFor,
-		HasOpenMission:  hasMission,
-		DesignGated:     designGated,
-		LooksFinished:   looksFinished,
-		BriefPresent:    briefPresent,
-		NudgeCount:      count,
-		SinceLastNudge:  since,
-		EverNudged:      ever,
-		PostRestart:     args.PostRestart,
-		SessionReminted: args.SessionReminted != nil && args.SessionReminted(d.Name),
-		WaitingOnGate:   DeclaresBlockingGateWait(act.LastTerminal),
+		Name:             d.Name,
+		Purpose:          purpose,
+		FleetIntent:      args.Intent.FleetState(),
+		Intent:           args.Intent.AgentState(d.Name),
+		ProcessRunning:   running,
+		DeliberateStop:   deliberateStop,
+		Phase:            phase,
+		IdleFor:          idleFor,
+		HostLoadCritical: args.HostLoadCritical != nil && args.HostLoadCritical(),
+		HasOpenMission:   hasMission,
+		DesignGated:      designGated,
+		LooksFinished:    looksFinished,
+		BriefPresent:     briefPresent,
+		NudgeCount:       count,
+		SinceLastNudge:   since,
+		EverNudged:       ever,
+		PostRestart:      args.PostRestart,
+		SessionReminted:  args.SessionReminted != nil && args.SessionReminted(d.Name),
+		WaitingOnGate:    DeclaresBlockingGateWait(act.LastTerminal),
 	}
 	action, reason := ClassifyIdleNudge(obs)
 	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
@@ -1283,15 +1305,17 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 
 	defs := s.registry.List()
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:             s.registry,
-		SessionPhase:    deps.SessionPhase,
-		Activity:        activity,
-		Ledger:          ledger,
-		Push:            push,
-		Now:             now,
-		PostRestart:     false,
-		OverseerName:    overseer,
-		SessionReminted: s.bounceReminted,
+		Reg:          s.registry,
+		SessionPhase: deps.SessionPhase,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Now:          now,
+		PostRestart:  false,
+		OverseerName: overseer,
+		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
+		HostLoadCritical: s.hostLoadCritical,
+		SessionReminted:  s.bounceReminted,
 		BriefPresent: func(name string) bool {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -1766,14 +1790,16 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	}
 
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:             s.registry,
-		Activity:        activity,
-		Ledger:          ledger,
-		Push:            push,
-		Now:             time.Now(),
-		PostRestart:     true,
-		OverseerName:    overseer,
-		SessionReminted: s.bounceReminted,
+		Reg:          s.registry,
+		Activity:     activity,
+		Ledger:       ledger,
+		Push:         push,
+		Now:          time.Now(),
+		PostRestart:  true,
+		OverseerName: overseer,
+		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
+		HostLoadCritical: s.hostLoadCritical,
+		SessionReminted:  s.bounceReminted,
 		BriefPresent: func(name string) bool {
 			s.mu.Lock()
 			defer s.mu.Unlock()
