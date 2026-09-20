@@ -426,29 +426,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	s.mu.Lock()
 	s.pendingSpawnRole = resolved.Name
 	s.pendingOwnerAsked = boolArg(args["owner_asked"])
-	ownerAsked := s.pendingOwnerAsked
 	s.mu.Unlock()
-	stored := ""
-	if rowExisted {
-		if d := s.registry.Def(name); d != nil {
-			stored = string(d.Provider)
-		}
-	}
-	pick := s.mintProviderPick(providerArg, stored, rowExisted, taskTypeArg, purpose, name, ownerAsked)
-	if !rowExisted {
-		if dest := strings.TrimSpace(pick.Provider); dest != "" {
-			if blocked := s.checkDestSpawnAllowed(purpose, name, dest); blocked != nil {
-				s.mu.Lock()
-				s.pendingSpawnRole = ""
-				s.pendingOwnerAsked = false
-				s.mu.Unlock()
-				s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
-					"name": name, "err": "dest_saturated", "dest": dest, "purpose": purpose,
-				})
-				return blocked, nil
-			}
-		}
-	}
 	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt)
 	s.mu.Lock()
 	s.pendingSpawnRole = ""
