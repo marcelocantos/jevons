@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/ownergate"
+	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
 // jevons_owner_gate is the writer half of 🎯T449 — the tool the accepting PO
@@ -73,6 +74,13 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 			RecordedBy: by,
 			Now:        time.Now(),
 		}
+		// An achieved row cannot hold this state at all: bullseye refuses
+		// `owner` on a terminal status, which left the targets damaged by the
+		// 🎯T720 outage permanently unrecordable. The sanctioned reopen is
+		// the ceremony, and it is a different sequence (🎯T728).
+		if row, ok := targetfile.LoadGateRowFromCwd(cwd, target); ok && row.IsAchieved() {
+			return recordGateOnAchievedRow(cwd, target, rec, row)
+		}
 		reason, err := rec.Reason()
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("owner gate refused (🎯T449): %v", err)), nil
@@ -89,6 +97,14 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		verdict, err := ownergate.ParseVerdict(str(args["verdict"]))
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
+		}
+		// A gate recorded on a row this ceremony reopened owes that row its
+		// achievement back on accept (🎯T728). Unassigning alone would leave
+		// finished work reading active and unparked — the 🎯T449 defect one
+		// step later.
+		if row, ok := targetfile.LoadGateRowFromCwd(cwd, target); ok &&
+			!row.IsAchieved() && ownergate.IsReopenedGate(row.OwnedByReason) {
+			return answerGateOnReopenedRow(cwd, target, verdict, str(args["note"]), by, row)
 		}
 		line := ownergate.FormatAnswer(verdict, str(args["note"]), by, time.Now())
 		// Unassign first: the gate is answered, so the target must return to
