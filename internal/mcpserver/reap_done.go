@@ -61,6 +61,12 @@ func LooksLikeFinishedWorkReport(report string) bool {
 	if s == "" {
 		return false
 	}
+	// 🎯T723 / 🎯T716: a reap needs an affirmative claim. Empty and the
+	// harness ack are classified no-claim; they never become a finish
+	// even if a later finish-shape mutation matches their vocabulary.
+	if ClassifyReportAsk(report) == AskNoClaim {
+		return false
+	}
 	if !hasFinishShape(s) {
 		return false
 	}
@@ -127,6 +133,11 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	// unenveloped prose; the envelope path reaps and notifies the PO.
 	if !typedFinishReport(report) {
 		if ask := ClassifyReportAsk(report); ask != AskNone {
+			// 🎯T723: no-claim (empty / bare ack) keeps the seat but is not
+			// an overseer ask. The lifecycle reason must not say awaits_overseer.
+			if ask == AskNoClaim {
+				return false, "no_work_claim"
+			}
 			return false, "awaits_overseer_" + ask.String()
 		}
 	}

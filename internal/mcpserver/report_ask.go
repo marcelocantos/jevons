@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/noopwedge"
 )
 
 // 🎯T395: a worker that asks the overseer a question is never reaped as
@@ -68,6 +69,10 @@ const (
 	// AskCheckpoint: a mid-mission checkpoint — the report declares itself one,
 	// or echoes the 🎯T392.4 depth-ceiling ask's own vocabulary (🎯T497).
 	AskCheckpoint
+	// AskNoClaim: the report asserts nothing about the mission — empty body,
+	// whitespace, or a content-free acknowledgement (🎯T723). Absence is not
+	// a bare done. Reaping requires a positive terminal claim.
+	AskNoClaim
 )
 
 func (c ReportAskClass) String() string {
@@ -86,6 +91,8 @@ func (c ReportAskClass) String() string {
 		return "truncated"
 	case AskCheckpoint:
 		return "checkpoint"
+	case AskNoClaim:
+		return "no_claim"
 	default:
 		return "unknown"
 	}
@@ -408,10 +415,19 @@ func ClassifyReportAsk(report string) ReportAskClass {
 func ClassifyReportAskDetail(report string) ReportAskFinding {
 	s := strings.TrimSpace(report)
 	if s == "" {
-		return ReportAskFinding{Class: AskNone}
+		// 🎯T723: an empty body is not AskNone. AskNone means "no ask, so a
+		// finish shape may reap." Silence asserts nothing; it keeps the seat.
+		return ReportAskFinding{Class: AskNoClaim, Marker: "empty"}
 	}
 	if agentreport.IsTruncatedDelivery(s) {
 		return ReportAskFinding{Class: AskTruncated, Span: truncationSpan(s)}
+	}
+	// 🎯T723: the 22-byte harness ack is a turn-boundary artefact, not a
+	// work claim. Reuse T402's exact-match vocabulary (noopwedge.IsBareAck)
+	// rather than a second phrase list. A report that merely CONTAINS the
+	// phrase still has content and is not this class.
+	if noopwedge.IsBareAck(s) {
+		return ReportAskFinding{Class: AskNoClaim, Marker: "bare_ack", Span: s}
 	}
 	lower := asciiLower(s)
 	// A checkpoint declaration outranks the marker classes: a report that names
@@ -673,8 +689,17 @@ func isCheckpointDelimited(rest string) bool {
 
 // ReportAwaitsOverseer is true when the report needs an answer to continue, so
 // reaping it would strand the mission (🎯T395).
+//
+// AskNoClaim is the other kind of not-a-finish (🎯T723): the report says
+// nothing, so the seat stays, but the parent is not being asked a question.
+// Treating silence as an overseer-ask would mark idle ack seats blocked-on-owner.
 func ReportAwaitsOverseer(report string) bool {
-	return ClassifyReportAsk(report) != AskNone
+	switch ClassifyReportAsk(report) {
+	case AskNone, AskNoClaim:
+		return false
+	default:
+		return true
+	}
 }
 
 // closingQuestionIndex returns the byte offset of the closing question when the
