@@ -348,10 +348,16 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `git log --diff-filter=A -- web/scripts/fleet_cycle.js` still answers 29e69e8,
   and reverting T372 would silently revert T370. Commit as
   `git commit --only <your paths>`, then confirm with `git show --stat HEAD`.
-  The `pre-commit` hook (`scripts/hooks/pre-commit` → `internal/commitscope`)
-  refuses the sweeping forms — bare `git commit`, `-a`, `-i` — by reading
-  which index git is committing from, and names the paths that would have
-  gone in. Deliberate whole-index commits are `JEVONS_COMMIT_SCOPE=off git
+  `--only` names PATHS, not the current DIFF of those paths: `git commit
+  --only bullseye.yaml` still lands every target row currently dirty in
+  that file, including other workers' ledger writes (🎯T748). The hook
+  names those rows (semantic target-diff, so a YAML restyle of the same
+  text is not a wolf); it does not refuse a scoped ledger commit, because
+  the PO must be able to close targets. Inspect `git diff HEAD --
+  bullseye.yaml` first. The `pre-commit` hook (`scripts/hooks/pre-commit`
+  → `internal/commitscope`) refuses the sweeping forms — bare `git
+  commit`, `-a`, `-i` — by reading which index git is committing from,
+  and names the paths that would have gone in. Deliberate whole-index commits are `JEVONS_COMMIT_SCOPE=off git
   commit …`, never `--no-verify` reflexively. `make` installs the hook
   (`bin/commitscope --install`), since git never populates `.git/hooks` from
   the tree and a guard waiting to be copied by hand is absent in the fresh

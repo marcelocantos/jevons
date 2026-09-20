@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command commitscope is the pre-commit half of the shared-index guard
-// (🎯T377). It reads which index git is committing from, asks
-// internal/commitscope whether that index can contain paths this worker
-// never named, and refuses the commit when it can.
+// (🎯T377) and the shared-ledger content-scope warning (🎯T748). It reads
+// which index git is committing from, asks internal/commitscope whether
+// that index can contain paths this worker never named, and refuses the
+// commit when it can. A path-scoped commit of bullseye.yaml is allowed
+// (the PO must close targets) but is told when that file's current diff
+// contains target rows the actor did not write.
 //
 // Exit status is the hook contract:
 //
@@ -53,16 +56,25 @@ func main() {
 		fmt.Fprintf(os.Stderr, "commitscope: cannot read the staged set: %v\n", err)
 		os.Exit(exitBroken)
 	}
+	contents, err := stagedLedgerContents(staged)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "commitscope: cannot read staged ledger content: %v\n", err)
+		os.Exit(exitBroken)
+	}
 	v := commitscope.Decide(&commitscope.Request{
 		IndexFile: os.Getenv("GIT_INDEX_FILE"),
 		Staged:    staged,
 		Disabled:  commitscope.OffValue(os.Getenv(commitscope.DisableEnv)),
+		Contents:  contents,
+		Claimed:   commitscope.ParseClaimed(os.Getenv(commitscope.ClaimEnv)),
 	})
-	if !v.Refused {
-		os.Exit(exitAllow)
+	if v.Message != "" {
+		fmt.Fprint(os.Stderr, v.Message)
 	}
-	fmt.Fprint(os.Stderr, v.Message)
-	os.Exit(exitRefuse)
+	if v.Refused {
+		os.Exit(exitRefuse)
+	}
+	os.Exit(exitAllow)
 }
 
 // install puts the hook where git will exec it. The hooks directory comes
@@ -112,6 +124,33 @@ func stagedPaths() ([]string, error) {
 		return run("git", "ls-files", "--cached", "-z")
 	}
 	return run("git", "diff", "--cached", "--name-only", "-z")
+}
+
+// stagedLedgerContents reads HEAD vs index blobs for each staged shared
+// ledger path. `git show :path` inherits GIT_INDEX_FILE, so `--only`
+// sees only the named file's staged bytes.
+func stagedLedgerContents(staged []string) ([]commitscope.FileContent, error) {
+	var out []commitscope.FileContent
+	for _, p := range staged {
+		if !commitscope.IsSharedLedger(p) {
+			continue
+		}
+		stagedBytes, err := gitShow(":" + p)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
+		}
+		headBytes, _ := gitShow("HEAD:" + p) // missing HEAD path = new file
+		out = append(out, commitscope.FileContent{Path: p, Head: headBytes, Staged: stagedBytes})
+	}
+	return out, nil
+}
+
+func gitShow(revPath string) ([]byte, error) {
+	out, err := exec.Command("git", "show", revPath).Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func run(name string, args ...string) ([]string, error) {

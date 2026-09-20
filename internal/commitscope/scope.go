@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package commitscope stops one fleet worker's commit from silently
-// swallowing another worker's staged hunks (🎯T377).
+// swallowing another worker's staged hunks (🎯T377) and, for the shared
+// ledger, another worker's target rows inside a path the actor named
+// (🎯T748).
 //
 // Several fleet workers run concurrently in one clone, and a clone has
 // exactly one index. `git add` is therefore a write to shared mutable
@@ -130,6 +132,12 @@ type Request struct {
 	Staged []string
 	// Disabled is DisableEnv set to an off value.
 	Disabled bool
+	// Contents is HEAD vs staged bytes for staged shared-hot files
+	// (bullseye.yaml first). The binary fills this; tests pass fixtures.
+	Contents []FileContent
+	// Claimed is target IDs the actor says they wrote (ClaimEnv). Empty
+	// means none, so every semantically-changed ledger row is named.
+	Claimed []string
 }
 
 // Verdict is the decision plus the text the worker sees.
@@ -147,7 +155,10 @@ type Verdict struct {
 const MaxNamed = 20
 
 // Decide applies the rule. A commit is refused when it would carry staged
-// paths out of an index other workers can write into.
+// paths out of an index other workers can write into (🎯T377). A path-scoped
+// commit of the shared ledger is not refused — the PO must be able to close
+// targets — but it is told when that path's current DIFF contains target
+// rows the actor did not write (🎯T748).
 //
 // Two cases pass that might look like they should not. An empty staged set
 // cannot misattribute anything (git will reject the commit itself, or it is
@@ -160,10 +171,13 @@ func Decide(req *Request) Verdict {
 		return Verdict{Kind: kind}
 	case len(req.Staged) == 0:
 		return Verdict{Kind: kind}
-	case !kind.Sweeps():
-		return Verdict{Kind: kind}
+	case kind.Sweeps():
+		return Verdict{Refused: true, Kind: kind, Message: refusal(kind, req.Staged)}
 	}
-	return Verdict{Refused: true, Kind: kind, Message: refusal(kind, req.Staged)}
+	if msg := ledgerContentWarning(req); msg != "" {
+		return Verdict{Kind: kind, Message: msg}
+	}
+	return Verdict{Kind: kind}
 }
 
 // howBuilt names the command that produced each sweeping index, so the
@@ -193,6 +207,11 @@ func refusal(kind IndexKind, staged []string) string {
 	b.WriteString("  git commit --only <your paths> -m \"…\"\n")
 	b.WriteString("then confirm with:\n")
 	b.WriteString("  git show --stat HEAD\n\n")
+	b.WriteString("`--only` names PATHS, not the current DIFF of those paths. For a shared\n")
+	b.WriteString("hot file (bullseye.yaml) inspect `git diff HEAD -- bullseye.yaml` first:\n")
+	b.WriteString("other workers' target rows in that file will land in your commit (🎯T748).\n")
+	b.WriteString("The hook names those rows; it does not refuse a scoped ledger commit,\n")
+	b.WriteString("because the PO must be able to close targets.\n\n")
 	fmt.Fprintf(&b, "Deliberate whole-index commit (single-actor tree): %s=off git commit …\n", DisableEnv)
 	return b.String()
 }

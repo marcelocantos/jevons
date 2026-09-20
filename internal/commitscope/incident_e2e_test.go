@@ -150,6 +150,111 @@ func TestNothingStagedIsNotRefused(t *testing.T) {
 	}
 }
 
+// TestScopedLedgerCommitNamesForeignTarget is the 🎯T748 incident: worker A
+// has already dirtied the ledger with T999, and the actor follows T377's
+// printed advice (`git commit --only bullseye.yaml`). They are told T999
+// is in the current diff — not silently allowed. The commit is still
+// permitted: refusing would stop the PO from closing targets.
+func TestScopedLedgerCommitNamesForeignTarget(t *testing.T) {
+	repo := newGuardedRepo(t)
+	repo.write(t, "bullseye.yaml", seedLedgerWorktree)
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "add", "bullseye.yaml"); err != nil {
+		t.Fatalf("seed ledger add: %v\n%s", err, out)
+	}
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "commit", "-m", "seed ledger"); err != nil {
+		t.Fatalf("seed ledger commit: %v\n%s", err, out)
+	}
+
+	repo.write(t, "bullseye.yaml", foreignLedgerWorktree)
+	out, err := repo.gitEnv(t, []string{"JEVONS_TARGET_ID=T888"}, "commit", "--only", "bullseye.yaml", "-m", "ledger: actor's own row")
+	if err != nil {
+		t.Fatalf("scoped ledger commit was refused (want warn-and-name):\n%s", out)
+	}
+	if !strings.Contains(out, "T999") {
+		t.Errorf("warning does not name the other worker's target T999:\n%s", out)
+	}
+	if !strings.Contains(out, "🎯T748") {
+		t.Errorf("warning is not attributable to the content-scope guard:\n%s", out)
+	}
+	if !strings.Contains(repo.showStat(t, "HEAD"), "bullseye.yaml") {
+		t.Error("scoped ledger commit did not land")
+	}
+}
+
+// TestScopedLedgerYAMLRestyleIsSilent is the T742 false-alarm control:
+// bullseye re-quoting the same context must not cry wolf.
+func TestScopedLedgerYAMLRestyleIsSilent(t *testing.T) {
+	repo := newGuardedRepo(t)
+	repo.write(t, "bullseye.yaml", seedLedgerWorktree)
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "add", "bullseye.yaml"); err != nil {
+		t.Fatalf("seed ledger add: %v\n%s", err, out)
+	}
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "commit", "-m", "seed ledger"); err != nil {
+		t.Fatalf("seed ledger commit: %v\n%s", err, out)
+	}
+
+	repo.write(t, "bullseye.yaml", restyledLedgerWorktree)
+	out, err := repo.git(t, "commit", "--only", "bullseye.yaml", "-m", "ledger restyle")
+	if err != nil {
+		t.Fatalf("restyle commit was refused:\n%s", out)
+	}
+	if strings.Contains(out, "🎯T748") {
+		t.Errorf("YAML restyle of the same text still warned:\n%s", out)
+	}
+}
+
+// TestScopedNonLedgerCommitIgnoresDirtyLedger keeps path-scope working:
+// committing chat_wire.go must not inspect a dirty bullseye.yaml the
+// actor did not name.
+func TestScopedNonLedgerCommitIgnoresDirtyLedger(t *testing.T) {
+	repo := newGuardedRepo(t)
+	repo.write(t, "bullseye.yaml", seedLedgerWorktree)
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "add", "bullseye.yaml"); err != nil {
+		t.Fatalf("seed ledger add: %v\n%s", err, out)
+	}
+	if out, err := repo.gitEnv(t, []string{"JEVONS_COMMIT_SCOPE=off"}, "commit", "-m", "seed ledger"); err != nil {
+		t.Fatalf("seed ledger commit: %v\n%s", err, out)
+	}
+	repo.write(t, "bullseye.yaml", foreignLedgerWorktree)
+	repo.write(t, workerBPath, "B's own work")
+
+	out, err := repo.git(t, "commit", "--only", workerBPath, "-m", "B")
+	if err != nil {
+		t.Fatalf("scoped non-ledger commit was refused:\n%s", out)
+	}
+	if strings.Contains(out, "T999") || strings.Contains(out, "🎯T748") {
+		t.Errorf("non-ledger --only inspected a dirty ledger the actor did not name:\n%s", out)
+	}
+}
+
+const seedLedgerWorktree = `schema_version: 1
+targets:
+  T1:
+    name: seed
+    status: identified
+    context: 'same text that bullseye may re-quote'
+`
+
+const restyledLedgerWorktree = `schema_version: 1
+targets:
+  T1:
+    name: seed
+    status: identified
+    context: |-
+      same text that bullseye may re-quote
+`
+
+const foreignLedgerWorktree = `schema_version: 1
+targets:
+  T1:
+    name: seed
+    status: identified
+    context: 'same text that bullseye may re-quote'
+  T999:
+    name: other worker's target
+    status: identified
+`
+
 // TestExplicitOptOutIsHonoured. The owner committing by hand in a tree with
 // no fleet workers in it is a single actor; the escape must exist and must
 // have to be typed.

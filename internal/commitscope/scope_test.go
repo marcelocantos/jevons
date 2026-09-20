@@ -84,6 +84,9 @@ func TestRefusalNamesWhatWouldHaveBeenCommitted(t *testing.T) {
 		"git commit --only",
 		"git show --stat HEAD",
 		DisableEnv,
+		"🎯T748",
+		"DIFF",
+		"bullseye.yaml",
 	} {
 		if !strings.Contains(v.Message, want) {
 			t.Errorf("refusal message omits %q:\n%s", want, v.Message)

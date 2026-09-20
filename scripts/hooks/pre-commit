@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
-# Shared-index commit guard (🎯T377) — git pre-commit hook.
+# Shared-index commit guard (🎯T377) + shared-file write sweep (🎯T391).
 #
-# Thin wrapper only: it locates bin/commitscope and execs it. All policy lives
-# in internal/commitscope, because "which index is this commit built from, and
-# what would it therefore contain" is a decision that deserves tests.
+# Thin wrapper only: it locates the policy binaries and runs them. All
+# decisions live in Go packages, because those decisions deserve tests.
 #
-# Exit status contract, inherited from the binary:
+#   commitscope  — refuses bare/sweeping `git commit` forms (🎯T377)
+#                  and warns when --only bullseye.yaml would land
+#                  another worker's target rows (🎯T748)
+#   treeguard sweep — reports guarded-file losses that never passed the
+#                     write guard (🎯T391). Provider-independent: every
+#                     harness that can commit reaches this boundary, so a
+#                     grok/claudia worker that inherits no PreToolUse hook
+#                     still gets a loud detect rather than a silent loss.
+#
+# Exit status contract (commitscope owns refusal):
 #   0  allow    1  guard broken (visible, not a silent pass)    2  refused
+#
+# Sweep never refuses: a loss it reports has already landed, and exiting
+# non-zero here would punish whoever is committing rather than whoever
+# clobbered. A missing treeguard binary is loud on stderr and non-blocking
+# for the same reason the Claude hook treats exit 1 as non-blocking — a
+# pre-commit exit 1 would block every commit in a clean clone mid-build.
 set -uo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-}"
@@ -29,4 +43,27 @@ if [[ ! -x "$bin" ]]; then
     fi
 fi
 
-exec "$bin" "$@"
+# Do not exec: the treeguard sweep below must still run on an allow.
+"$bin" "$@"
+rc=$?
+if [[ "$rc" -ne 0 ]]; then
+    exit "$rc"
+fi
+
+# 🎯T391 provider-independent half. Best-effort and never blocks the commit.
+tg="${JEVONS_TREEGUARD_BIN:-$root/bin/treeguard}"
+if [[ ! -x "$tg" ]]; then
+    if [[ -d "$root/cmd/treeguard" ]] && (cd "$root" && go build -o "$tg" ./cmd/treeguard) 2>/dev/null; then
+        :
+    else
+        printf 'treeguard: %s not built — shared-file write sweep INACTIVE at pre-commit (🎯T391). Run: make treeguard\n' \
+            "$tg" >&2
+        exit 0
+    fi
+fi
+
+# Sweep prints its own findings (and the unprotected-provider notice) on
+# stderr; its non-zero is a tooling failure, never a refusal — keep the
+# commit allow from commitscope either way.
+"$tg" sweep >/dev/null || printf 'treeguard: sweep exited %s — write-guard detect path failed open (🎯T391)\n' "$?" >&2
+exit 0
