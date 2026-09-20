@@ -4,13 +4,12 @@
 package mcpserver
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/seatactivity"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -21,16 +20,7 @@ import (
 // grok-homes marked a live Grok PO born-stuck while updates.jsonl grew
 // (🎯T694).
 func DefaultSessionRoots() discovery.Roots {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return discovery.Roots{}
-	}
-	return discovery.Roots{
-		GrokSessions:     filepath.Join(home, ".grok", "sessions"),
-		GrokHomeSessions: discovery.ExclusiveGrokSessionRoots(),
-		ClaudiaGrokHomes: discovery.ClaudiaGrokHomesRoot(),
-		ClaudeProjects:   filepath.Join(home, ".claude", "projects"),
-	}
+	return seatactivity.DefaultRoots()
 }
 
 // AgentTranscriptPath is the current session file for d — registry session

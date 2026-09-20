@@ -30,6 +30,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/provider"
@@ -130,8 +131,12 @@ type Server struct {
 	screenshotCh   chan string
 	proc           *claudia.Agent
 	registry       *claudia.Registry
-	chatListeners  []chan string
-	chatLog        *chatlog.Log // durable conversation record (🎯T30.1)
+	// transcriptRoots are the provider transcript stores the 🎯T702 seat
+	// activity meter stats. Zero roots make Grok unobservable rather than
+	// probing the live home, which is the 🎯T679.1 rule for this seam.
+	transcriptRoots discovery.Roots
+	chatListeners   []chan string
+	chatLog         *chatlog.Log // durable conversation record (🎯T30.1)
 	// stateDB is the product SQLite store (🎯T548): coalesced transcripts
 	// and the fleet agent tree. Nil in tests that still drive mux from JSONL.
 	stateDB *statedb.Store

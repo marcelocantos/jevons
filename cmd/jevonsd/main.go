@@ -296,6 +296,14 @@ func main() {
 	// current_model_id / turn_completed usage / GROK_HOME, Claude
 	// message.model) re-seeds it at attach.
 	srv.SetModelSessionRoots(sessionRoots)
+	// 🎯T702: /api/agents recency is a stat of the same transcripts the
+	// daemon already locates for born-stuck (🎯T679.1 / 🎯T694). Bare
+	// sessionRoots is GrokSessions+ClaudeProjects only; exclusive-MCP
+	// homes and grok-homes have to be filled or Grok seats report unknown.
+	activityRoots := sessionRoots
+	activityRoots.GrokHomeSessions = discovery.ExclusiveGrokSessionRoots()
+	activityRoots.ClaudiaGrokHomes = discovery.ClaudiaGrokHomesRoot()
+	srv.SetTranscriptRoots(activityRoots)
 
 	// Durable decision/lifecycle journal (ð¯T120): browser + server events
 	// under state_dir/logs/events.jsonl â tool-readable without privilege.

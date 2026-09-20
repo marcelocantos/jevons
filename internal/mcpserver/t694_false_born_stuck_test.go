@@ -90,7 +90,10 @@ func TestT694ClaudeJSONLOnlyMutationGoesRed(t *testing.T) {
 
 	// Mutant: existence is only claudia.SessionExists / Claude JSONL. This
 	// is the live false-green — Grok updates.jsonl growing, no Claude file.
-	mutant := lookupClaudeTranscript(q.SessionID, q.WorkDir)
+	mutant := LookupTranscriptExistence(TranscriptExistenceQuery{
+		Name: q.Name, Provider: claudia.ProviderClaude,
+		SessionID: q.SessionID, WorkDir: q.WorkDir, Roots: q.Roots,
+	})
 	if mutant.Verdict == ExistencePresent {
 		t.Fatal("claude-JSONL-only mutant reported present; this oracle would not catch the live miss")
 	}

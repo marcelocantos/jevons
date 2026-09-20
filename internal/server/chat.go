@@ -25,8 +25,10 @@ import (
 	"github.com/marcelocantos/jevons/internal/briefaddr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/seatactivity"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
@@ -880,6 +882,21 @@ type agentInfo struct {
 	StopReason string `json:"stop_reason,omitempty"`
 	StoppedAt  string `json:"stopped_at,omitempty"`
 	MassStop   string `json:"mass_stop,omitempty"`
+	// TranscriptActivity / TranscriptLastMove / TranscriptAgeSeconds answer
+	// "has this running seat moved recently?" from this one response, with no
+	// filesystem reach into ~/.local/state/claudia or ~/.claude/projects
+	// (🎯T702). The reading is a stat of the same transcript the daemon
+	// already watches for born-stuck detection (🎯T679.1 / 🎯T694), so Grok,
+	// Claude and Cursor seats report the same field with the same meaning.
+	//
+	// TranscriptAgeSeconds is deliberately a pointer without omitempty: a seat
+	// whose transcript cannot be located serves null, never 0 and never the
+	// clock — an unreadable meter is unknown, not a value (🎯T677). Readers
+	// branch on TranscriptActivity ("known" | "unknown") and never on a zero.
+	TranscriptActivity       string   `json:"transcript_activity,omitempty"`
+	TranscriptLastMove       string   `json:"transcript_last_move,omitempty"`
+	TranscriptAgeSeconds     *float64 `json:"transcript_age_seconds"`
+	TranscriptActivityReason string   `json:"transcript_activity_reason,omitempty"`
 }
 
 // SetSeatStopReader installs the 🎯T662 seat-stop lookup the /api/agents
@@ -916,6 +933,59 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 			}
 		}
 		agents[i].MassStop = mass
+	}
+	return agents
+}
+
+// SetTranscriptRoots attaches the provider transcript stores the 🎯T702 seat
+// activity meter reads. Without it, Grok seats report unknown rather than
+// having the daemon guess at the live home (🎯T679.1).
+func (s *Server) SetTranscriptRoots(roots discovery.Roots) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transcriptRoots = roots
+}
+
+// decorateSeatActivity fills the 🎯T702 recency fields from the registry rows
+// the feed was built from. One stat per seat, never a decode: these tapes are
+// multi-megabyte and grow all night, and re-opening them per request is what
+// starved the loops that watch for stalls in 🎯T705.
+func (s *Server) decorateSeatActivity(reg *claudia.Registry, agents []agentInfo, now time.Time) []agentInfo {
+	if reg == nil {
+		return agents
+	}
+	s.mu.RLock()
+	roots := s.transcriptRoots
+	s.mu.RUnlock()
+	defs := make(map[string]claudia.AgentDef, len(agents))
+	for _, d := range reg.List() {
+		defs[d.Name] = d
+	}
+	for i := range agents {
+		d, ok := defs[agents[i].Name]
+		if !ok {
+			// The row outlived its registry def (removed between build and
+			// decorate). Unknown is the honest answer, not a missing field.
+			agents[i].TranscriptActivity = string(seatactivity.VerdictUnknown)
+			agents[i].TranscriptActivityReason = "agent left the registry during the read"
+			continue
+		}
+		got := seatactivity.Lookup(seatactivity.Query{
+			Name:      d.Name,
+			Provider:  d.Provider,
+			SessionID: d.SessionID,
+			WorkDir:   d.WorkDir,
+			Roots:     roots,
+			Now:       now,
+		})
+		agents[i].TranscriptActivity = string(got.Verdict)
+		if got.Verdict != seatactivity.VerdictKnown {
+			agents[i].TranscriptActivityReason = got.Reason
+			continue
+		}
+		age := got.Age.Seconds()
+		agents[i].TranscriptAgeSeconds = &age
+		agents[i].TranscriptLastMove = got.LastMove.UTC().Format(time.RFC3339)
 	}
 	return agents
 }
@@ -1130,7 +1200,8 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
 	}, s.agentProgress, models)
-	_ = json.NewEncoder(w).Encode(s.decorateSeatStops(agents))
+	rows := s.decorateSeatActivity(reg, s.decorateSeatStops(agents), time.Now())
+	_ = json.NewEncoder(w).Encode(rows)
 }
 
 // handleChatControlFrame consumes a client→server protocol frame arriving on
