@@ -3,15 +3,19 @@
 
 package mcpserver
 
-// 🎯T709 — Claude product-owner seats (ge-po) died seconds after
-// jevons_agent_start: the TUI workspace-trust dialog blocked ready
-// (startup_stall / no_composer), T387 treated the opening brief as
-// proven-undelivered, T433 retired the row as unbriefed_seat, and
-// POST /api/agents/ge-po/send returned reaped_held.
+// 🎯T709 (Jevons secondary) — Claude product-owner seats (ge-po) died
+// seconds after jevons_agent_start. Primary hole is Claudia
+// WaitReady / MatchStartupMenu (claudia 🎯T87, marcelocantos/claudia#57):
+// the loop already auto-Enters resume menus and comments a follow-on
+// trust-folder screen, but the matcher does not see
+// "Quick safety check: Is this a project you created or one you trust",
+// so the pane stays no_composer.
 //
-// These oracles fail on the pre-fix tree: the live last-frame is a
-// generic no_composer stall, startBriefFailureTeardown reaps a freshly
-// minted row, and the next send is reaped_held.
+// Jevons then classified that as generic startup_stall, T387 treated
+// the opening brief as proven-undelivered, T433 retired the row as
+// unbriefed_seat, and POST /api/agents/ge-po/send returned reaped_held.
+// These oracles pin the host half: classify the frame as workspace_trust
+// and never silent-reap. They fail on the pre-fix tree.
 
 import (
 	"context"
@@ -252,8 +256,9 @@ func TestT709HandleAgentStartKeepsClaudePO(t *testing.T) {
 		t.Fatalf("Launch must pre-accept owner workdir trust: %s", data)
 	}
 	heard := strings.Join(overseer, "\n")
-	if !strings.Contains(heard, "🎯T709") || !strings.Contains(heard, "not reaped") {
-		t.Fatalf("overseer must hear the recoverable action, got %q", heard)
+	if !strings.Contains(heard, "T709") || !strings.Contains(heard, "T87") ||
+		!strings.Contains(heard, "wrong outcome") {
+		t.Fatalf("overseer must hear the recoverable T709/T87 action, got %q", heard)
 	}
 
 	fs.sendErr = nil
@@ -332,7 +337,7 @@ func TestT709LaunchAgentPreAcceptsClaudeTrust(t *testing.T) {
 func TestT709FormatNoticeIsRecoverableNotReap(t *testing.T) {
 	t.Parallel()
 	got := FormatWorkspaceTrustNotice("ge-po", "/tmp/ge", t709GePoStartErr)
-	for _, want := range []string{"🎯T709", "ge-po", "not reaped", "Remint or send"} {
+	for _, want := range []string{"🎯T709", "ge-po", "did not reap", "Remint or send", "🎯T87"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("notice missing %q:\n%s", want, got)
 		}

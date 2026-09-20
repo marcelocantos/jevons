@@ -240,6 +240,7 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 	} else if ok {
 		slog.Info("launch rehydrated lost session", "name", name, "detail", lost.Describe())
 	}
+	// Residual until claudia 🎯T87 WaitReady dismisses the trust dialog.
 	claudetrust.PrepareLaunch(reg, name)
 	agent, err := reg.Launch(name)
 	if err != nil && claudia.IsCursorResumeDenied(err) {

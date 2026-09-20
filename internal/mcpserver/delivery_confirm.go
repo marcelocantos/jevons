@@ -195,10 +195,18 @@ func (s *Server) startBriefFailureTeardown(name string, existed bool, err error)
 	if BriefInFlight(err) {
 		return false, true
 	}
-	// 🎯T709: a workspace-trust dialog is a recoverable owner-workdir
-	// stall, not proven-absent brief. T387/T433 reap of a freshly minted
-	// Claude PO (ge-po, 2026-09-20) turned that into reaped_held. Stop
-	// the stuck TUI, write hasTrustDialogAccepted, keep the row.
+	// 🎯T709 (secondary): a workspace-trust dialog is a recoverable stall,
+	// not proven-absent brief. T387/T433 reap of a freshly minted Claude
+	// PO (ge-po, 2026-09-20) turned that into reaped_held.
+	//
+	// The primary hole is Claudia: WaitReady already auto-Enters
+	// MatchStartupMenu (resume numbered cursor / resume wording; maxMenuDismissals)
+	// and even comments a follow-on trust-folder screen, but
+	// MatchStartupMenu does not match "Quick safety check: Is this a
+	// project you created or one you trust". Push-through belongs in
+	// claudia 🎯T87 (marcelocantos/claudia#57). This fork only refuses
+	// a silent reap: stop the stuck TUI, keep the row, write trust as
+	// residual until T87 lands, surface a recoverable notice.
 	if WorkspaceTrustBlocksReady(err) {
 		s.holdWorkspaceTrustSeat(name)
 		return false, false
@@ -248,9 +256,9 @@ func FormatWorkspaceTrustNotice(name, workdir, errText string) string {
 	}
 	return fmt.Sprintf(
 		"[workspace-trust 🎯T709] Claude seat %s stayed registered after a workspace trust dialog blocked ready in %s — %s. "+
-			"Jevons wrote hasTrustDialogAccepted for that owner workdir. "+
-			"The seat was not reaped. Remint or send to this name; reaped_held is the wrong outcome. "+
-			"If the dialog persists, accept trust in that folder once.",
+			"Primary fix is Claudia WaitReady recognising that dialog (claudia 🎯T87). "+
+			"Jevons wrote hasTrustDialogAccepted as residual and did not reap. "+
+			"Remint or send to this name; reaped_held is the wrong outcome.",
 		name, workdir, errText)
 }
 

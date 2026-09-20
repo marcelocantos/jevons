@@ -42,7 +42,8 @@ func isReadyTimeoutMessage(msg string) bool {
 func namedReadyReason(msg string) string {
 	// 🎯T709: a no_composer stall whose last frame is the workspace-trust
 	// dialog is not a generic ready miss — classify it before the token
-	// list so OwnerCopy can name the recoverable action.
+	// list so OwnerCopy can name the recoverable action. The dialog itself
+	// is Claudia WaitReady (🎯T87); this token is the host-side class.
 	if IsWorkspaceTrust(msg) {
 		return "workspace_trust"
 	}

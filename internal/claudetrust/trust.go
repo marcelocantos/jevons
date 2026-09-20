@@ -1,9 +1,12 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package claudetrust pre-accepts Claude Code workspace trust for owner
-// workdirs so a mint does not stall on the TUI "Quick safety check" dialog
-// and then get retired as unbriefed_seat (🎯T709).
+// Package claudetrust is the Jevons residual for Claude workspace trust
+// (🎯T709 secondary). Push-through of the TUI dialog is Claudia
+// WaitReady / MatchStartupMenu (claudia 🎯T87, marcelocantos/claudia#57).
+// This package only writes hasTrustDialogAccepted so a remint after a
+// classified stall is not doomed to the same dialog, and classifies the
+// live last-frame copy so the host can refuse a silent reap.
 //
 // ~/.claude.json is shared hot state (🎯T376): the edit is one project key,
 // the document is carried as raw members, and a write is skipped when the
