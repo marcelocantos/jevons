@@ -43,8 +43,18 @@ func TestT577IncidentReportIsTheIncidentShape(t *testing.T) {
 	if !strings.Contains(lower, "next step") {
 		t.Fatal("fixture lost its remaining-work next step")
 	}
-	if !hasCompletionClaim(lower) {
+	// 🎯T750: the shape guard asks whether the fixture still carries the
+	// completion VOCABULARY that made the incident possible, so it scans
+	// unmasked. hasCompletionClaim now answers a narrower question — does
+	// the worker ASSERT completion — and answers no here, because this
+	// fixture's only completion word is "achieved" inside a quoted rule it
+	// is describing. That is the same defect one file over, and T577's own
+	// keep no longer rests solely on the checkpoint ask class.
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — cannot reproduce the incident")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("fixture's quoted completion word is being read as an asserted claim (🎯T750)")
 	}
 	if !hasOracleEvidence(lower) {
 		t.Fatal("fixture no longer carries oracle-shaped words — cannot reproduce the incident")

@@ -234,9 +234,13 @@ func hasAcceptedRisk(lower string) bool {
 	return false
 }
 
+// hasCompletionClaim is true when the report ASSERTS completion. 🎯T750: the
+// scan runs over claimScanText, so a marker the worker quoted, fenced, or
+// negated is not read as a claim it made.
 func hasCompletionClaim(lower string) bool {
+	scan := claimScanText(lower)
 	for _, m := range completionClaimMarkers {
-		if containsWordish(lower, m) {
+		if containsWordish(scan, m) {
 			return true
 		}
 	}
@@ -281,7 +285,9 @@ func indexWordish(lower, phrase string) int {
 // Diagnostic only: no decision is taken from this, so a miss costs an empty
 // span in a log line and nothing more.
 func FindCompletionClaim(report string) (marker, span string, offset int, ok bool) {
-	lower := asciiLower(report)
+	// 🎯T750: name the claim the worker made, so the log line and the reap
+	// decision are reading the same text.
+	lower := claimScanText(asciiLower(report))
 	best, at := "", -1
 	for _, m := range completionClaimMarkers {
 		i := indexWordish(lower, m)

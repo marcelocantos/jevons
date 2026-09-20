@@ -87,7 +87,8 @@ func hasFinishShape(lower string) bool {
 // "Mission complete."), rather than a sentence that happens to contain a
 // completion word.
 func hasBareClaimClause(lower string) bool {
-	for _, clause := range strings.FieldsFunc(lower, finishClauseDelimiter) {
+	// 🎯T750: a quoted or negated clause is not a claim clause.
+	for _, clause := range strings.FieldsFunc(claimScanText(lower), finishClauseDelimiter) {
 		if bareClaimClause(clause) {
 			return true
 		}
