@@ -15,21 +15,31 @@ import (
 // evidence. Treating a name catalog as quoted output teaches workers to
 // stop writing the reports that engage the verification machinery.
 //
-// Hermetic: ScanOutput markers are panic:/FAIL/DATA RACE/timeout is clean;
-// a report quoting an actual --- FAIL from its own run is flagged; a
-// checker that flags any occurrence of a marker anywhere goes RED.
+// Seam: a separate pass from 🎯T722 RoleControl. RoleControl classifies a
+// cited RED. The specimen cited none — it named the markers in prose —
+// so extending that role would leave the scout flagged. ScanOutput now
+// requires output shape instead.
+//
+// Hermetic: the verbatim fog-known line below is clean; a report quoting
+// an actual --- FAIL from its own run is flagged; a checker that flags
+// any occurrence of a marker anywhere goes RED. Dirty-tree catches must
+// still fire (discrimination, not permissiveness).
 
-const t737CatalogLine = "ScanOutput markers are panic:/FAIL/DATA RACE/timeout"
+// t737FogKnownSpecimen is the fog-known line that produced two of the
+// three flags, byte for byte from the T737 filing.
+const t737FogKnownSpecimen = "verdictFor then applyTreeVerdict. DIRTY demotes only GREEN. ScanOutput markers are panic:/FAIL/DATA RACE/timeout. Empty is not scanned today."
+
+// t737AcceptanceSpecimen is the acceptance clause that produced the
+// third flag. The ellipsis is the filing's, not three ASCII dots.
+const t737AcceptanceSpecimen = "output has no execution evidence (=== RUN, --- PASS:, --- SKIP:, --- FAIL:, an ok line without the empty suffix…)"
 
 func t737MarkerProseReport() string {
 	return strings.Join([]string{
 		"🎯T737 done, make test-go is green.",
 		"",
-		"jevons: fog-known \"verdictFor then applyTreeVerdict. DIRTY demotes only GREEN. " +
-			t737CatalogLine + ". Empty is not scanned today.\"",
+		t737FogKnownSpecimen,
 		"",
-		"Acceptance: output has no execution evidence (=== RUN, --- PASS:, --- SKIP:, " +
-			"--- FAIL:, an ok line without the empty suffix).",
+		t737AcceptanceSpecimen,
 		"",
 		"Landed as abc1234.",
 	}, "\n")
@@ -41,9 +51,9 @@ func TestT737LooksLikeMarkerProse(t *testing.T) {
 		line string
 		want bool
 	}{
-		{"catalog", t737CatalogLine, true},
-		{"fog-known specimen", "jevons: fog-known \"" + t737CatalogLine + "\"", true},
-		{"acceptance list", "output has no execution evidence (=== RUN, --- PASS:, --- SKIP:, --- FAIL:, an ok line)", true},
+		{"catalog", "ScanOutput markers are panic:/FAIL/DATA RACE/timeout", true},
+		{"verbatim fog-known", t737FogKnownSpecimen, true},
+		{"verbatim acceptance", t737AcceptanceSpecimen, true},
 		{"runtime panic", "    panic: test timed out after 10m0s", false},
 		{"go-test fail", "    --- FAIL: TestT737 (0.02s)", false},
 		{"race warning", "WARNING: DATA RACE", false},
@@ -58,12 +68,11 @@ func TestT737LooksLikeMarkerProse(t *testing.T) {
 }
 
 func TestT737ScanOutputIgnoresNameCatalog(t *testing.T) {
-	if got := ScanOutput(t737CatalogLine); len(got) != 0 {
-		t.Fatalf("catalog scanned as output: %v", got)
+	if got := ScanOutput(t737FogKnownSpecimen); len(got) != 0 {
+		t.Fatalf("verbatim fog-known scanned as output: %v", got)
 	}
-	list := "output has no execution evidence (=== RUN, --- PASS:, --- SKIP:, --- FAIL:, an ok line)"
-	if got := ScanOutput(list); len(got) != 0 {
-		t.Fatalf("acceptance list scanned as output: %v", got)
+	if got := ScanOutput(t737AcceptanceSpecimen); len(got) != 0 {
+		t.Fatalf("verbatim acceptance scanned as output: %v", got)
 	}
 }
 
@@ -117,6 +126,35 @@ func TestT737QuotedFailFromOwnRunIsFlagged(t *testing.T) {
 	flags := FlagFalseGreen(report, nil)
 	if !hasKind(flags, FlagOutputContradicts) {
 		t.Fatalf("flags = %v, want %s for a quoted --- FAIL from the run", kinds(flags), FlagOutputContradicts)
+	}
+}
+
+func TestT737ProseDoesNotHideARealFailOnTheSameReport(t *testing.T) {
+	report := t737MarkerProseReport() + "\n\n    --- FAIL: TestT737 (0.02s)\n"
+	flags := FlagFalseGreen(report, nil)
+	if !hasKind(flags, FlagOutputContradicts) {
+		t.Fatalf("flags = %v, want %s — specimen prose must not blanket-skip a real fail", kinds(flags), FlagOutputContradicts)
+	}
+}
+
+func TestT737DirtyTreeCatchStillFires(t *testing.T) {
+	// Discrimination, not permissiveness: five dirty-tree catches tonight
+	// were correct. Naming ScanOutput's markers must not swallow T397.
+	report := strings.Join([]string{
+		"🎯T737 done, make test-go is green.",
+		"",
+		t737FogKnownSpecimen,
+		"",
+		"GATE t737-suite exit=0 DIRTY id=aaaaaaaa out=bbbbbbbbbbbb dur=1s",
+		"",
+		"Landed as abc1234.",
+	}, "\n")
+	flags := FlagFalseGreen(report, nil)
+	if hasKind(flags, FlagOutputContradicts) {
+		t.Fatalf("specimen flagged output_contradicts: %v\n%s", kinds(flags), Banner(flags))
+	}
+	if !hasKind(flags, FlagDirtyTreeGate) {
+		t.Fatalf("flags = %v, want %s — T737 must not swallow dirty-tree catches", kinds(flags), FlagDirtyTreeGate)
 	}
 }
 

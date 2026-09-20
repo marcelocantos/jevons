@@ -184,6 +184,12 @@ func ScanOutput(out string) []Anomaly {
 // "panic:/FAIL/DATA RACE/timeout", a fog-known line listing those names,
 // or an acceptance clause of execution-evidence tokens is prose. A go-test
 // `--- FAIL: TestX` or a runtime `panic: message` is not.
+//
+// This is a separate pass from 🎯T722 RoleControl. RoleControl is a role
+// on a cited RED gate (before-prose, -before/-control names, gate-role
+// slot). T737's specimen cited no RED: it named the markers in fog-known
+// and acceptance prose. Extending RoleControl would leave that scout
+// flagged, and would not tell ScanOutput that a catalog is not a panic.
 func LooksLikeMarkerProse(line string) bool {
 	hit := false
 	for _, m := range anomalyMarkers {
@@ -254,16 +260,10 @@ func failTestOutput(line string) bool {
 	return rest != "" && !isMarkerCatalogJoin(rest[0])
 }
 
-// dataRaceOutput is the race detector's `WARNING: DATA RACE` (or a line
-// that is only that token). `FAIL/DATA RACE/timeout` is a name catalog.
+// dataRaceOutput is the race detector's `WARNING: DATA RACE`. A name
+// catalog (`FAIL/DATA RACE/timeout`) or a backticked token is not.
 func dataRaceOutput(line string) bool {
-	if strings.Contains(line, "WARNING: DATA RACE") {
-		return true
-	}
-	trim := strings.TrimSpace(line)
-	trim = strings.Trim(trim, "`|")
-	trim = strings.TrimSpace(trim)
-	return trim == "DATA RACE"
+	return strings.Contains(line, "WARNING: DATA RACE")
 }
 
 // EmptyRun reports whether captured output is a Go test run that executed
