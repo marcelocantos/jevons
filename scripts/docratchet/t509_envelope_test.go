@@ -65,6 +65,9 @@ func TestT509EnumsLiveInOnePackage(t *testing.T) {
 	for _, want := range []string{
 		"GREEN",
 		"SUSPECT",
+		"DIRTY",
+		"KILLED",
+		"VOID",
 		"in-progress",
 		"live",
 		"class-3",

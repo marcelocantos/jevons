@@ -92,7 +92,10 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   the status the process actually exited with.
 - exit=unknown is NOT a pass. GREEN is the only verdict you may cite as one;
   SUSPECT means the status said zero while the output showed a panic, a
-  timeout, a data race or a FAIL.
+  timeout, a data race or a FAIL; DIRTY means a passing command measured in
+  a tree carrying uncommitted changes, not citable as a commit pass — re-run
+  with bin/gate -clean. Emittable verdicts: GREEN, RED, SUSPECT, UNKNOWN,
+  VOID, KILLED, DIRTY.
 - The daemon runs the same check on your finish report ("bin/gate check" by
   hand) and prepends a FALSE-GREEN banner to the overseer when your own
   cited evidence contradicts the pass you claim. Fabricating a GATE line is

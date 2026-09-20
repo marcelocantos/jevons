@@ -39,6 +39,22 @@ func TestVocabularyParse(t *testing.T) {
 	if _, ok := ParseVerdict("pass"); ok {
 		t.Fatal("pass is not a verdict — GREEN is the only pass word")
 	}
+	for _, word := range []struct {
+		raw  string
+		want Verdict
+	}{
+		{"DIRTY", VerdictDirty},
+		{"killed", VerdictKilled},
+		{"VOID", VerdictVoid},
+	} {
+		v, ok := ParseVerdict(word.raw)
+		if !ok || v != word.want {
+			t.Fatalf("%s: %v %v", word.raw, v, ok)
+		}
+		if v.IsPass() {
+			t.Fatalf("%s must not be a pass", word.want)
+		}
+	}
 	if p, ok := ParseProgress("in progress"); !ok || p != ProgressInProgress {
 		t.Fatalf("in-progress: %v %v", p, ok)
 	}

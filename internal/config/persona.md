@@ -740,6 +740,9 @@ status, and records that status under `~/.jevons/gates`.
 3. **`GREEN` is the only verdict citable as a pass.** `SUSPECT` means the
    status said zero while the output showed a panic, timeout, data race
    or FAIL — the exact shape that nearly retired a target on a dead suite.
+   `DIRTY` means a passing command measured in a tree carrying uncommitted
+   changes, not citable as a commit pass — re-run with `bin/gate -clean`.
+   Emittable verdicts: GREEN, RED, SUSPECT, UNKNOWN, VOID, KILLED, DIRTY.
 4. **Background and long-running gates are read back in band** with
    `bin/gate last` / `bin/gate show <id>`, not from whatever the harness
    said about the process.
