@@ -5,6 +5,7 @@ package capacity
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -260,7 +261,10 @@ func SeatDimension(snap Snapshot, pol *Policy) SeatBinding {
 // is false. Two product owners spent an evening on a session counter that
 // was not what refused them.
 func seatCountReason(snap Snapshot, pol *Policy, a Assessment) string {
-	b := SeatDimension(snap, pol)
+	return formatSeatBinding(snap, SeatDimension(snap, pol), a.SeatHeadroom)
+}
+
+func formatSeatBinding(snap Snapshot, b SeatBinding, headroom float64) string {
 	if b.Provider != "" {
 		cap := "published soft cap"
 		if b.Inferred {
@@ -276,7 +280,126 @@ func seatCountReason(snap Snapshot, pol *Policy, a Assessment) string {
 	if snap.MaxSessions > 0 {
 		return fmt.Sprintf("seat-count runaway: %d live seats of %d (🎯T566.2)", snap.ActiveSessions, snap.MaxSessions)
 	}
-	return fmt.Sprintf("seat-count runaway: the session bound is exhausted (headroom %.0f%%) (🎯T566.2)", a.SeatHeadroom*100)
+	return fmt.Sprintf("seat-count runaway: the session bound is exhausted (headroom %.0f%%) (🎯T566.2)", headroom*100)
+}
+
+// destSeatBinding is the seat dimension for one dest (🎯T715): the tighter
+// of the session census and that dest's own published cap. Other dests'
+// caps do not bind — claude 12/12 must not refuse a grok mint.
+func destSeatBinding(dest string, snap Snapshot, pol *Policy) SeatBinding {
+	if pol == nil {
+		pol = DefaultPolicy()
+	}
+	dest = strings.ToLower(strings.TrimSpace(dest))
+	session := SeatBinding{
+		Used:     snap.ActiveSessions,
+		Limit:    snap.MaxSessions,
+		Headroom: fraction(float64(snap.ActiveSessions), float64(snap.MaxSessions)),
+	}
+	if dest == "" || snap.ProviderSoftCaps == nil {
+		return session
+	}
+	capN, ok := snap.ProviderSoftCaps[dest]
+	if !ok {
+		return session
+	}
+	limit := pol.providerCap(capN)
+	used := 0
+	if snap.ProviderLoad != nil {
+		used = snap.ProviderLoad[dest]
+	}
+	h := fraction(float64(used), float64(limit))
+	inferred := capN <= 0
+	if inferred {
+		h = inferredFloor(h, pol)
+	}
+	destB := SeatBinding{Provider: dest, Used: used, Limit: limit, Inferred: inferred, Headroom: h}
+	if session.Headroom != unknownHeadroom && (destB.Headroom == unknownHeadroom || session.Headroom < destB.Headroom) {
+		return session
+	}
+	if destB.Headroom == unknownHeadroom {
+		return session
+	}
+	return destB
+}
+
+func destSeatBlocks(b SeatBinding) bool {
+	return b.Headroom != unknownHeadroom && b.Headroom <= 0
+}
+
+func sessionCensusFull(snap Snapshot) bool {
+	return snap.MaxSessions > 0 && snap.ActiveSessions >= snap.MaxSessions
+}
+
+// anyPublishedDestHasHeadroom is true when at least one dest publishes a
+// positive soft cap and is under it. No published caps → true (session
+// census is the only seat lever). 🎯T715: dest-unaware AdmitSpawn must
+// not refuse a pane because a *different* dest is at cap.
+func anyPublishedDestHasHeadroom(snap Snapshot, pol *Policy) bool {
+	if pol == nil {
+		pol = DefaultPolicy()
+	}
+	saw := false
+	for prov, capN := range snap.ProviderSoftCaps {
+		if capN <= 0 {
+			continue
+		}
+		saw = true
+		used := 0
+		if snap.ProviderLoad != nil {
+			used = snap.ProviderLoad[strings.ToLower(strings.TrimSpace(prov))]
+		}
+		if used < capN {
+			return true
+		}
+	}
+	return !saw
+}
+
+// DestsWithHeadroom lists published dests still under their soft cap
+// (🎯T715 clause 2). Unpublished caps are omitted — a made-up denominator
+// must not look like published room.
+func DestsWithHeadroom(snap Snapshot, pol *Policy) []string {
+	if pol == nil {
+		pol = DefaultPolicy()
+	}
+	type row struct {
+		name      string
+		used, cap int
+	}
+	var rows []row
+	seen := map[string]bool{}
+	for prov, capN := range snap.ProviderSoftCaps {
+		if capN <= 0 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(prov))
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		used := 0
+		if snap.ProviderLoad != nil {
+			used = snap.ProviderLoad[name]
+		}
+		if used < capN {
+			rows = append(rows, row{name: name, used: used, cap: capN})
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = fmt.Sprintf("%s (%d/%d)", r.name, r.used, r.cap)
+	}
+	return out
+}
+
+func destsWithHeadroomSuffix(snap Snapshot, pol *Policy) string {
+	heads := DestsWithHeadroom(snap, pol)
+	if len(heads) == 0 {
+		return "; dests with headroom: none (every configured dest is at cap)"
+	}
+	return "; dests with headroom: " + strings.Join(heads, ", ")
 }
 
 // hostBound reports whether the host is the dimension that decided the

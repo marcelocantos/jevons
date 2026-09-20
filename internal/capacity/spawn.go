@@ -62,6 +62,18 @@ func BlocksUnattendedSpawn(a Assessment) bool {
 // stay admitted on the melted host. An over-broad fix that refuses
 // everything fails the control.
 func AdmitSpawn(kind SpawnKind, snap Snapshot, pol *Policy) Decision {
+	return admitSpawn(kind, "", snap, pol)
+}
+
+// AdmitSpawnDest is AdmitSpawn bound to one dest (🎯T715). Session census
+// still binds; other dests' soft caps do not. Empty dest is dest-unaware:
+// refuse only when the session census is full or every published dest is
+// at cap — not because the tightest other dest is full.
+func AdmitSpawnDest(kind SpawnKind, dest string, snap Snapshot, pol *Policy) Decision {
+	return admitSpawn(kind, strings.ToLower(strings.TrimSpace(dest)), snap, pol)
+}
+
+func admitSpawn(kind SpawnKind, dest string, snap Snapshot, pol *Policy) Decision {
 	if pol == nil {
 		pol = DefaultPolicy()
 	}
@@ -85,9 +97,23 @@ func AdmitSpawn(kind SpawnKind, snap Snapshot, pol *Policy) Decision {
 			d.Detail = "memory grind; refusing a new worker pane (🎯T566.2): " + joinReasons(a.Reasons)
 			return d
 		}
-		if seatCountBlocks(a) {
+		if dest != "" {
+			b := destSeatBinding(dest, snap, pol)
+			if destSeatBlocks(b) {
+				d.Verdict, d.Reason = VerdictDefer, ReasonSeatCount
+				detail := formatSeatBinding(snap, b, b.Headroom)
+				if b.Provider != "" {
+					detail += destsWithHeadroomSuffix(snap, pol)
+				}
+				d.Detail = "seat-count runaway; refusing a new worker pane (🎯T566.2): " + detail
+				return d
+			}
+		} else if sessionCensusFull(snap) || !anyPublishedDestHasHeadroom(snap, pol) {
 			d.Verdict, d.Reason = VerdictDefer, ReasonSeatCount
 			d.Detail = "seat-count runaway; refusing a new worker pane (🎯T566.2): " + joinReasons(a.Reasons)
+			if !sessionCensusFull(snap) {
+				d.Detail += destsWithHeadroomSuffix(snap, pol)
+			}
 			return d
 		}
 		if snap.SpawnHalted {
@@ -115,6 +141,23 @@ func (g *Governor) AdmitSpawn(kind SpawnKind, name string) Decision {
 	snap := g.snapshot()
 	g.mu.Unlock()
 	d := AdmitSpawn(kind, snap, pol)
+	d.Name = name
+	return d
+}
+
+// AdmitSpawnDest is the governor seam for a dest-bound spawn (🎯T715).
+func (g *Governor) AdmitSpawnDest(kind SpawnKind, name, dest string) Decision {
+	if g == nil {
+		return Decision{
+			Name: name, Verdict: VerdictAdmit, Tier: TierFull,
+			Reason: ReasonHeadroomOK, Detail: "no governor wired",
+		}
+	}
+	pol := g.policy()
+	g.mu.Lock()
+	snap := g.snapshot()
+	g.mu.Unlock()
+	d := AdmitSpawnDest(kind, dest, snap, pol)
 	d.Name = name
 	return d
 }

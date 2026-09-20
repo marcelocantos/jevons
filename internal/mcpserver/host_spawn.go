@@ -32,3 +32,25 @@ func (s *Server) checkHostSpawnAllowed(purpose, name string) *mcp.CallToolResult
 		"refusing to start %q — host pressure %s (%s): %s. Owner turns and control-plane repair are not blocked (🎯T460).",
 		name, d.Pressure, d.Reason, d.Detail))
 }
+
+// checkDestSpawnAllowed is the dest-bound seat check (🎯T715). Call after
+// mintProviderPick so an omit-provider mint on grok is not refused because
+// claude is at cap. An explicit dest that is at cap is still refused, and
+// the refusal names dests that have headroom.
+func (s *Server) checkDestSpawnAllowed(purpose, name, dest string) *mcp.CallToolResult {
+	if s == nil {
+		return nil
+	}
+	gov := s.CapacityGovernor()
+	if gov == nil {
+		return nil
+	}
+	kind := capacity.ClassifySpawnKind(purpose, name)
+	d := gov.AdmitSpawnDest(kind, name, dest)
+	if d.Admitted() {
+		return nil
+	}
+	return mcp.NewToolResultError(fmt.Sprintf(
+		"refusing to start %q — host pressure %s (%s): %s. Owner turns and control-plane repair are not blocked (🎯T460).",
+		name, d.Pressure, d.Reason, d.Detail))
+}

@@ -719,10 +719,13 @@ func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, t
 		now = snap.At
 	}
 	load := s.harnessLoadCounts()
+	caps := s.EffectiveProviderSoftCaps()
 	var cands []planusage.DestCand
 	for _, be := range planusage.CockpitSnapshot(snap).Backends {
 		p := strings.ToLower(strings.TrimSpace(be.Provider))
-		cands = append(cands, planusage.DestCand{Provider: p, Backend: be, Load: load[p]})
+		cands = append(cands, planusage.DestCand{
+			Provider: p, Backend: be, Load: load[p], Cap: caps[p],
+		})
 	}
 	return snap, cands, now, th, true
 }

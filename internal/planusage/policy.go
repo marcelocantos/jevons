@@ -51,6 +51,10 @@ type DestCand struct {
 	Provider string
 	Backend  Backend
 	Load     int
+	// Cap is the published session soft cap for this dest (🎯T715). 0 means
+	// unpublished — pickDest does not skip on load. A dest at Load >= Cap
+	// is not a destination even when the plan band is eligible.
+	Cap int
 }
 
 // WeeklyBandOf classifies one backend's weekly window at now.

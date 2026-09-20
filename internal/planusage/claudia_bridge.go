@@ -56,6 +56,9 @@ func pickDest(cands []DestCand, prefer, exclude string, now time.Time, th Thresh
 		if !DestEligible(c.Backend, now, th) {
 			continue
 		}
+		if destAtSessionCap(c) {
+			continue
+		}
 		dests = append(dests, destRow{
 			provider: p,
 			band:     WeeklyBandOf(c.Backend, now, th),
@@ -92,6 +95,17 @@ func pickDest(cands []DestCand, prefer, exclude string, now time.Time, th Thresh
 		Band:     claudia.PlanBand(best.band),
 		Reason:   reason,
 	}, nil
+}
+
+// destAtSessionCap reports a dest whose published session soft cap is
+// exhausted (🎯T715). Cap <= 0 is unpublished — not a skip. A mutation
+// that stops threading Cap (zero value) restores pin-first resolution
+// when the pin is at cap.
+func destAtSessionCap(c DestCand) bool {
+	if c.Cap <= 0 {
+		return false
+	}
+	return c.Load >= c.Cap
 }
 
 func destBandRank(b WeeklyBand) (int, bool) {
