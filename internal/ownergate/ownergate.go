@@ -116,7 +116,7 @@ func (r Record) Reason() (string, error) {
 	}
 	return fmt.Sprintf("%s — recorded %s by %s (🎯T449). Owner gate: %s Evidence: %s "+
 		"Do not spawn an implementer; unassign (verdict=reject) and resume from the landed commit if the owner says no.",
-		MarkerAwaiting, when.UTC().Format("2006-01-02"), by, ensureSentence(q), ensureSentence(e)), nil
+		MarkerAwaiting, LedgerDay(when), by, ensureSentence(q), ensureSentence(e)), nil
 }
 
 // FormatAnswer renders the line recording the owner's answer. The PO writes
@@ -130,11 +130,28 @@ func FormatAnswer(v Verdict, note, by string, now time.Time) string {
 		by = "unknown"
 	}
 	line := fmt.Sprintf("%s (%s) %s recorded by %s", MarkerAnswered, v,
-		now.UTC().Format("2006-01-02"), strings.TrimSpace(by))
+		LedgerDay(now), strings.TrimSpace(by))
 	if n := strings.TrimSpace(note); n != "" {
 		line += ": " + n
 	}
 	return line
+}
+
+// LedgerDay is the calendar day a jevons ledger write stamps into prose.
+//
+// Convention (🎯T735): the process-local calendar day, the same one bullseye
+// stamps on `achieved`, `Achieved <date>:`, and `Reverted <date>:` (see
+// bullseye apply.rs `Local::now().date_naive()`). UTC was the previous
+// convention and named a different day than those fields for any write
+// between 10:00 and 00:00 AEST — the live 🎯T711 gate recorded at
+// 2026-09-21 02:22 +1000 read `recorded 2026-09-20` inside a reason that
+// correctly said the row `was achieved 2026-09-21`. One write, one date.
+// Callers pass time.Now() (or a fixture); UTC conversion is the defect.
+func LedgerDay(t time.Time) string {
+	if t.IsZero() {
+		t = time.Now()
+	}
+	return t.In(time.Local).Format("2006-01-02")
 }
 
 // HasLandedEvidence reports whether text names something a reader could go

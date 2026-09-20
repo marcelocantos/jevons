@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func testNow() time.Time { return time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC) }
+func testNow() time.Time { return time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local) }
 
 // The refusal is the product (🎯T449 clause 4). Recording this state removes a
 // target from unattended consumption, so a claim that names nothing a reader

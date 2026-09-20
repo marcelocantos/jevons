@@ -119,7 +119,7 @@ func (r Reopen) Reason() (string, error) {
 			"while the owner's answer is outstanding. Owner gate: %s Evidence: %s "+
 			"On accept (`jevons_owner_gate op=answer verdict=accept`) the row is re-achieved with the attestation below "+
 			"restored verbatim; on reject it stays active and work resumes from the landed commit.",
-		MarkerReopened, by, when.UTC().Format("2006-01-02"), r.achievedPhrase(),
+		MarkerReopened, by, LedgerDay(when), r.achievedPhrase(),
 		ensureSentence(strings.TrimSpace(r.Record.Question)),
 		ensureSentence(strings.TrimSpace(r.Record.Evidence)))
 	return withPreserved(text, r.Attestation), nil
@@ -244,7 +244,7 @@ func RestoreAttestation(v Verdict, note, by, achievedOn, preserved string, now t
 		"assignment nor a content edit. The `achieved` date on this row is the day the owner answered, not the day the "+
 		"work landed: `bullseye apply` has no `achieved` key, so the original date survives in this text and in the "+
 		"context audit only (declared residue, 🎯T728). The attestation of that original achieve follows verbatim.",
-		FormatAnswer(v, note, by, now), now.UTC().Format("2006-01-02"), was)
+		FormatAnswer(v, note, by, now), LedgerDay(now), was)
 	if p := strings.TrimSpace(preserved); p != "" {
 		return withPreserved(text, p)
 	}
