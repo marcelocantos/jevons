@@ -133,6 +133,7 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
                   className={'plan-win' + (cls ? ' ' + cls : '')}
                   data-pace={painted.pace || undefined}
                   data-window={w.name}
+                  data-model={w.model || undefined}
                 >
                   <span className="plan-track">
                     <span className="plan-bar" aria-hidden="true">
@@ -144,7 +145,7 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
                       <span className="plan-tri" aria-hidden="true" style={{ left: spentTime + '%' }} />
                     ) : null}
                   </span>
-                  <span className="plan-win-label">{windowAbbrev(w.name || '')}</span>
+                  <span className="plan-win-label">{windowAbbrev(w.name || '', w.model || '')}</span>
                 </span>
               );
             })}

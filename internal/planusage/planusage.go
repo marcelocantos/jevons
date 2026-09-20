@@ -74,6 +74,10 @@ type Window struct {
 	// Name is "session" (short rolling window) or "weekly", or the
 	// provider's own label when it publishes a window we cannot classify.
 	Name string `json:"name"`
+	// Model names the model this window is metered for, when the vendor
+	// meters one model apart from the plan (🎯T682). Empty means the
+	// window covers the whole plan. The label is the vendor's own.
+	Model string `json:"model,omitempty"`
 	// RemainingPercent is 0–100 still available, when published.
 	RemainingPercent *float64 `json:"remaining_percent,omitempty"`
 	// UsedPercent is 0–100 consumed, when published.
@@ -253,6 +257,7 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 		for _, w := range r.Windows {
 			win := Window{
 				Name:               string(w.Name),
+				Model:              w.Model,
 				RemainingPercent:   copyFloat(w.RemainingPercent),
 				UsedPercent:        copyFloat(w.UsedPercent),
 				ResetsAt:           copyTime(w.ResetsAt),

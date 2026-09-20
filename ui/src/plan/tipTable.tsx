@@ -34,7 +34,11 @@ export type TipColumn = {
 export type TipHeaderGroup = { provider: string; columns: TipColumn[] };
 
 /** week reads better than weekly in a two-row header; the row is narrow. */
-export function windowLabel(name: string): string {
+export function windowLabel(name: string, model?: string | null): string {
+  // 🎯T682: a per-model window is headed by the model's own name, which
+  // is what the owner reads it as ("Fable"), not by its period.
+  const m = String(model || '').trim();
+  if (m) return m;
   const n = String(name || '').toLowerCase();
   if (n === 'weekly') return 'week';
   if (n === 'monthly') return 'month';
@@ -52,7 +56,7 @@ export function tipColumns(groups: TickerGroup[]): TipHeaderGroup[] {
     if (!g.available) continue;
     const columns = (g.windows || []).map((w) => ({
       provider: g.provider,
-      label: windowLabel(w.name || ''),
+      label: windowLabel(w.name || '', w.model),
       window: w,
     }));
     if (columns.length) out.push({ provider: g.provider, columns });
@@ -157,7 +161,7 @@ export function unavailableNotes(groups: TickerGroup[], nowMs?: number): string[
       const head = `${g.provider}: no reading — ${g.reason || 'no plan-remaining published'}`;
       if (!g.last || !g.last.windows.length) return head;
       const figures = g.last.windows
-        .map((w) => `${windowLabel(w.name || '')} ${pct(usedPercentOf(w))}`)
+        .map((w) => `${windowLabel(w.name || '', w.model)} ${pct(usedPercentOf(w))}`)
         .join(', ');
       return `${head} (last ${humanDuration((at - g.last.at) / 1000)} ago: ${figures})`;
     });

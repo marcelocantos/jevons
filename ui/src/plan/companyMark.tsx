@@ -57,7 +57,12 @@ export function CompanyMark(props: { provider?: string; company?: string }) {
   );
 }
 
-export function windowAbbrev(name: string): string {
+export function windowAbbrev(name: string, model?: string): string {
+  // 🎯T682: a per-model window is named for its model, not its period —
+  // two weekly bars labelled W would be indistinguishable, and the model
+  // is the thing the owner needs to tell apart.
+  const m = String(model || '').trim();
+  if (m) return m.charAt(0).toUpperCase();
   const n = String(name || '').toLowerCase();
   if (n === 'session') return 'S';
   if (n === 'weekly') return 'W';

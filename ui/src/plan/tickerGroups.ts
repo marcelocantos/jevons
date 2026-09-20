@@ -13,6 +13,8 @@ export type PlanHistoryPoint = {
 export type PlanWindow = {
   provider?: string;
   name?: string;
+  /** 🎯T682: the vendor's label when this window meters one model. */
+  model?: string | null;
   remaining_percent?: number | null;
   used_percent?: number | null;
   resets_at?: string | null;
@@ -117,8 +119,10 @@ function numericWindows(wins: PlanWindow[] | undefined): PlanWindow[] {
 
 function orderWindows(wins: PlanWindow[]): PlanWindow[] {
   return wins.slice().sort((a, b) => {
+    // 🎯T682: a per-model weekly sits after the plan's own week, where
+    // the owner asked for it: session, week, then the model.
     const rank = (n: string) =>
-      n === 'session' ? 0 : n === 'weekly' ? 1 : n === 'monthly' ? 2 : 3;
+      n === 'session' ? 0 : n === 'weekly' ? 1 : n === 'weekly_model' ? 2 : n === 'monthly' ? 3 : 4;
     return rank(String(a.name || '')) - rank(String(b.name || ''));
   });
 }
