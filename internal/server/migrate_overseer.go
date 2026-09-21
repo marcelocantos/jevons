@@ -26,6 +26,15 @@ import (
 // visibly broken. The rotate half is shared with the fleet path; the
 // attach and seed halves live here, mirroring RewindOverseer.
 
+// overseerInterruptSettle is how long a forced migration waits after
+// interrupting the overseer before it asks again.
+var overseerInterruptSettle = 3 * time.Second
+
+// overseerTurnInFlight reports claudia's refusal to migrate mid-turn.
+func overseerTurnInFlight(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "turn in flight")
+}
+
 // OverseerMigrator is the registry half of a provider switch, implemented
 // by *fleet.Claudia. Nil leaves overseer migration unavailable rather than
 // half-wired.
@@ -288,6 +297,16 @@ func (s *Server) handleOverseerMigrate(w http.ResponseWriter, r *http.Request) {
 		pending, err = s.PinOverseerModel(body.Model)
 	} else {
 		pending, err = s.MigrateOverseerModel(claudia.Provider(body.Provider), body.Model, body.Force)
+		if body.Force && overseerTurnInFlight(err) {
+			// A fleet that reports to the overseer every minute leaves it no
+			// gap between turns: forty-six forced migrations were refused over
+			// twelve minutes on 2026-09-22. The owner forcing the move outranks
+			// whatever notice the overseer is reading.
+			slog.Warn("forced overseer migration found a turn in flight; interrupting it", "to", body.Provider)
+			s.interruptOwnerTurn()
+			time.Sleep(overseerInterruptSettle)
+			pending, err = s.MigrateOverseerModel(claudia.Provider(body.Provider), body.Model, body.Force)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
