@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -36,8 +35,7 @@ import (
 // Residual, declared: only Claude seats are observable (other providers
 // record no such attachment); a transcript with no delta record at all is
 // unobservable, never "missing"; the required set is AgentDef.MCPServers plus
-// the fleet-critical registrations in ~/.claude.json (RequiredUserServers),
-// not every registration — a stale entry the owner never uses must not flag
+// intersected with RequiredServers, not every registration — a stale entry the owner never uses must not flag
 // every seat.
 
 // SeatMCPGrace is how long after the seat's first transcript record a
@@ -46,10 +44,13 @@ import (
 // rather than a measured percentile.
 const SeatMCPGrace = 5 * time.Minute
 
-// RequiredUserServers are the user-scope registrations whose absence leaves
-// a seat unable to do its job (the 2026-09-22 incident: no bullseye for
-// hours). Only counted when actually registered in ~/.claude.json.
-var RequiredUserServers = []string{"bullseye"}
+// RequiredServers are the fleet-critical servers whose absence leaves a seat
+// unable to do its job (the 2026-09-22 incident: no bullseye for hours). A
+// server counts only when the seat is actually configured with it
+// (AgentDef.MCPServers or a ~/.claude.json registration); everything else the
+// owner has registered — including entries that are permanently dead — is
+// not this target's business and would flag every seat.
+var RequiredServers = []string{"jevonsmcp", "bullseye"}
 
 type seatMCPDiagnosis struct {
 	Missing []string
@@ -73,28 +74,23 @@ type seatMCPCacheEntry struct {
 
 var seatMCPCache sync.Map // transcript path -> seatMCPCacheEntry
 
-// requiredSeatServers is the set a seat must have attached.
+// requiredSeatServers is the fleet-critical set this seat is configured with.
 func requiredSeatServers(d claudia.AgentDef) []string {
-	set := map[string]bool{}
+	configured := map[string]bool{}
 	for _, m := range d.MCPServers {
-		if n := strings.TrimSpace(m.Name); n != "" {
-			set[n] = true
-		}
+		configured[strings.TrimSpace(m.Name)] = true
 	}
 	if regs, ok := mcpRegistrationsFor(d.Provider); ok {
 		for _, r := range regs {
-			for _, want := range RequiredUserServers {
-				if r.Name == want {
-					set[want] = true
-				}
-			}
+			configured[r.Name] = true
 		}
 	}
-	out := make([]string, 0, len(set))
-	for n := range set {
-		out = append(out, n)
+	var out []string
+	for _, want := range RequiredServers {
+		if configured[want] {
+			out = append(out, want)
+		}
 	}
-	sort.Strings(out)
 	return out
 }
 

@@ -49,7 +49,10 @@ func t797Setup(t *testing.T, transcript string) *t679_2Env {
 		t.Fatal(err)
 	}
 	d := *e.reg.Def(e.name)
-	d.MCPServers = []claudia.MCPServer{{Name: "jevonsmcp", Type: "http", URL: "http://127.0.0.1:1/mcp"}}
+	d.MCPServers = []claudia.MCPServer{
+		{Name: "jevonsmcp", Type: "http", URL: "http://127.0.0.1:1/mcp"},
+		{Name: "orthograph", Type: "http", URL: "http://127.0.0.1:1/mcp"}, // dead, not fleet-critical
+	}
 	if err := e.reg.Register(d); err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +84,9 @@ func TestT797MissingRequiredServerFlaggedAndParentTold(t *testing.T) {
 	}
 	if strings.Contains(out, "missing jevonsmcp") || strings.Contains(out, "jevonsmcp,") {
 		t.Fatalf("attached server reported missing:\n%s", out)
+	}
+	if strings.Contains(out, "orthograph") {
+		t.Fatalf("non-critical server flagged:\n%s", out)
 	}
 	e.list()
 	e.s.sweepSeatMCP()
