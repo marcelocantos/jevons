@@ -141,10 +141,9 @@ func probe(port int) bool {
 // restart invokes the restart script and returns a human-readable
 // detail when it did not work, empty when it did.
 //
-// --force on purpose. The thrash policy (🎯T218) waits out a debounce
-// window meant to coalesce healthy workers landing the same build;
-// during an outage that window is three more minutes of downtime for no
-// benefit, since nothing is serving to protect.
+// No --force (🎯T815: it is owner-only). The thrash policy (🎯T218) and the
+// activation gate defer only while a healthy daemon is serving; the script
+// treats a dead port as its own bypass, so a recovery restart never waits.
 //
 // SKIP_MAKE when a binary already exists, also on purpose. Restoring
 // service beats freshness: if the daemon died because HEAD does not
@@ -171,7 +170,7 @@ func restart(repo string, port int) string {
 	ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
 	defer cancel()
 
-	args := []string{"--force"}
+	var args []string
 	cmd := exec.CommandContext(ctx, script, args...)
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(), fmt.Sprintf("JEVONS_RESTART_PORT=%d", port))
@@ -189,7 +188,7 @@ func restart(repo string, port int) string {
 	}
 
 	out, err := cmd.CombinedOutput()
-	logf("restart-daily-jevonsd --force exited: %v", errText(err))
+	logf("restart-daily-jevonsd exited: %v", errText(err))
 	for _, line := range lastLines(string(out), 20) {
 		logf("  | %s", line)
 	}

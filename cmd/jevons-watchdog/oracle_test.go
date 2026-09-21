@@ -161,7 +161,7 @@ func (r *rig) waitServing(want bool, within time.Duration) bool {
 
 // restart runs the script the way a fleet agent does, and waits for it.
 func (r *rig) restart(extraEnv ...string) error {
-	cmd := exec.Command(r.script, "--force")
+	cmd := exec.Command(r.script)
 	cmd.Dir = r.root
 	cmd.Env = r.env(extraEnv...)
 	out, err := cmd.CombinedOutput()
@@ -387,7 +387,7 @@ func t405ForegroundKill(t *testing.T, detached bool) {
 		t.Fatalf("something is already listening on scratch port %d", r.port)
 	}
 
-	cmd := exec.Command(r.script, "--force")
+	cmd := exec.Command(r.script)
 	cmd.Dir = r.root
 	if detached {
 		cmd.Env = r.env()

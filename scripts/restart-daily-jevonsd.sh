@@ -47,7 +47,9 @@
 #     stale binary kept serving, which is exactly the 🎯T194 failure mode.
 #
 # So: identical build → free no-op; new build → always activated, at most
-# one bounce per MIN_INTERVAL_SEC. --force overrides all three (owner debug).
+# one bounce per MIN_INTERVAL_SEC. --force overrides all three, but only with
+# the owner's token (🎯T815 OWNER-ONLY FORCE below); without it --force is an
+# ordinary request.
 #
 # SELF-DETACH (🎯T405) — being invoked wrongly cannot cause an outage.
 #
@@ -184,12 +186,13 @@ DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-daily.log}"
 # to the restart log, is a trap for anyone debugging one.
 WANTS_WORK=1
 GATE_MODE=request
+WANT_FORCE=0
 for _arg in ${@+"$@"}; do
   case "$_arg" in
     -h|--help|--dry-run) WANTS_WORK=0 ;;
     --served) WANTS_WORK=0; GATE_MODE=served ;;
     --deferred-runner) WANTS_WORK=0; GATE_MODE=runner ;;
-    --force) GATE_MODE=force ;;
+    --force) WANT_FORCE=1 ;;
   esac
 done
 
@@ -217,15 +220,58 @@ done
 #   exit 3 while its bounce is still pending.
 #
 # Bypasses, each deliberate: the daemon is not healthy (the watchdog's
-# recovery restart must never be deferred); no stamp yet (cold start); the
-# interval has elapsed; interval 0; and --force, which is the OWNER's word and
-# no worker's (the script cannot authenticate the caller — the standing brief
-# forbids workers from using it).
+# recovery restart must never be deferred, and never waits); no stamp yet
+# (cold start); the interval has elapsed; interval 0; and --force WITH THE
+# OWNER'S TOKEN.
+#
+# OWNER-ONLY FORCE (🎯T815, owner decision 2026-09-22): --force is honoured
+# only while $OWNER_FORCE_FILE exists as a regular file, mode 0600, owned by
+# the calling uid and younger than $OWNER_FORCE_TTL_SEC (default 600). The
+# owner creates it by hand (`install -m 0600 /dev/null <file>`); a honoured
+# --force consumes it, so one token buys one bypass. A --force without a valid
+# token is NOT an error and NOT a bounce: it degrades to an ordinary request
+# (deferred inside the interval, exactly like any other) and says why. Workers
+# ask through jevons-po instead. Residual, stated plainly: the token is a file
+# under the owner's uid, and workers run under that uid — this closes the
+# accidental and habitual bypass in code, it does not stop an agent that
+# deliberately forges the token. Nothing here can authenticate a caller.
 REQ_FILE="${JEVONS_RESTART_REQUESTS:-$HOME/.jevons/restart-daily.requests}"
 SERVED_FILE="${JEVONS_RESTART_SERVED:-$HOME/.jevons/restart-daily.served}"
 PENDING_LOCK="${JEVONS_RESTART_PENDING_LOCK:-$HOME/.jevons/restart-daily.pending.lock}"
 
+OWNER_FORCE_FILE="${JEVONS_RESTART_OWNER_FORCE:-$HOME/.jevons/restart-daily.owner-force}"
+OWNER_FORCE_TTL_SEC="${JEVONS_RESTART_OWNER_FORCE_TTL_SEC:-600}"
+
 SELF="$ROOT/scripts/$(basename "$0")"
+
+owner_force_valid() {
+  # 0 when the token file is the owner's: regular file, not a symlink, mode
+  # 0600, this uid, younger than the TTL. Prints the reason on failure.
+  local f="$OWNER_FORCE_FILE" mode uid mtime now
+  [[ -e "$f" || -L "$f" ]] || { echo "no token at $f"; return 1; }
+  [[ -f "$f" && ! -L "$f" ]] || { echo "$f is not a regular file"; return 1; }
+  if stat -f '%Lp %u %m' "$f" >/dev/null 2>&1; then
+    read -r mode uid mtime < <(stat -f '%Lp %u %m' "$f")
+  else
+    read -r mode uid mtime < <(stat -c '%a %u %Y' "$f")
+  fi
+  [[ "$mode" == "600" ]] || { echo "$f has mode $mode, want 600"; return 1; }
+  [[ "$uid" == "$(id -u)" ]] || { echo "$f is owned by uid $uid, not $(id -u)"; return 1; }
+  now="$(date +%s)"
+  [[ "$mtime" =~ ^[0-9]+$ && $((now - mtime)) -le "$OWNER_FORCE_TTL_SEC" ]] || { echo "$f is older than ${OWNER_FORCE_TTL_SEC}s"; return 1; }
+}
+
+# Validated in every stage (each re-exec re-reads the token), consumed only by
+# the stage that acts on it (argument parsing below), so no env flag carries
+# the owner's word between stages where a worker could forge it.
+if [[ "$WANT_FORCE" == "1" && "$WANTS_WORK" == "1" ]]; then
+  if _why="$(owner_force_valid)"; then
+    GATE_MODE=force
+  elif [[ "${JEVONS_RESTART_DETACHED:-0}" != "1" ]]; then
+    printf '%s 🎯T815 --force is OWNER-ONLY and was not honoured (%s): treating this as an ordinary activation request, deferred inside the interval like any other. Workers: ask jevons-po to request the activation.\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$_why" >&2
+  fi
+fi
 
 gate_head() { git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
 
@@ -354,11 +400,12 @@ Options:
   -h, --help     Show this help and exit 0
   --served SHA   Print the served-ledger line whose HEAD contains SHA
   --dry-run      Print planned steps; do not stop/start/kill
-  --force        Bypass the thrash policy: restart even if the running
-                 daemon already serves this build, and do not wait out the
-                 min-interval. Owner-debug escape hatch — fleet agents
-                 should not use it, since an unchanged binary needs no
-                 bounce and a changed one is activated without it (🎯T218).
+  --force        OWNER-ONLY (🎯T815). With the owner's token file
+                 (~/.jevons/restart-daily.owner-force: regular file, mode
+                 0600, this uid, younger than 600s; consumed on use) it
+                 bypasses the thrash policy and the gate. Without the token
+                 it is refused as a bypass: the request is deferred like any
+                 other and the output says so. Workers ask jevons-po.
 
 Env:
   JEVONS_RESTART_PORT              Listen port (default 13705)
@@ -372,6 +419,8 @@ Env:
   JEVONS_RESTART_LOCK_WAIT_SEC     Wait for in-flight restart (default 240; 🎯T218)
   JEVONS_RESTART_STAMP             Stamp file for last success (default ~/.jevons/restart-daily.last)
   JEVONS_RESTART_ACTIVE            Running-daemon identity (default ~/.jevons/restart-daily.active)
+  JEVONS_RESTART_OWNER_FORCE       Owner token file for --force (default ~/.jevons/restart-daily.owner-force)
+  JEVONS_RESTART_OWNER_FORCE_TTL_SEC  Token lifetime (default 600)
   JEVONS_RESTART_LOCK              Lock dir (default ~/.jevons/restart-daily.lock)
   JEVONS_RESTART_BIN               Daemon binary (default $REPO/bin/jevonsd)
   JEVONS_RESTART_NO_DETACH         If 1, skip the 🎯T405 self-detach re-exec
@@ -413,7 +462,13 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --force)
-      FORCE=1
+      # 🎯T815: only the owner's token makes this real (see OWNER-ONLY FORCE);
+      # Each stage re-validates; only this one consumes the token.
+      if _why="$(owner_force_valid)"; then
+        FORCE=1
+        rm -f "$OWNER_FORCE_FILE" # single use
+        printf '%s 🎯T815 owner --force honoured (token consumed)\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+      fi
       shift
       ;;
     *)
@@ -498,6 +553,9 @@ await_min_interval() {
   # instead of skipping: skipping would report success while the old binary
   # kept serving (🎯T194). Bounded by MIN_INTERVAL_SEC by construction.
   [[ "$FORCE" -eq 0 ]] || return 0
+  # 🎯T815: the watchdog's recovery restart carries no --force any more; a
+  # daemon that is not serving has nothing to debounce, so it never waits.
+  [[ "$(http_code "http://127.0.0.1:${PORT}/health")" == "200" ]] || return 0
   # 🎯T815: the deferred runner has already waited out the interval.
   [[ "${JEVONS_RESTART_GATE_RELEASE:-0}" != "1" ]] || return 0
   [[ -f "$STAMP_FILE" ]] || return 0

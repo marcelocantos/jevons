@@ -153,3 +153,162 @@ func TestActivationGateCoalescesRequests(t *testing.T) {
 		t.Errorf("--served answer does not name the served SHA:\n%s", q)
 	}
 }
+
+// ownerToken815 writes the owner's --force token (🎯T815 owner-only bypass).
+func (e *thrashEnv) ownerToken(t *testing.T, mode os.FileMode) string {
+	t.Helper()
+	p := filepath.Join(e.home, ".jevons", "restart-daily.owner-force")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, nil, mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, mode); err != nil { // WriteFile honours the umask
+		t.Fatal(err)
+	}
+	return p
+}
+
+func (e *thrashEnv) waitServedLines(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	for len(e.servedLines(t)) < n && time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+	}
+	if got := len(e.servedLines(t)); got != n {
+		t.Fatalf("served ledger has %d lines, want %d: %v", got, n, e.servedLines(t))
+	}
+}
+
+// 🎯T815 owner-only --force: a plain --force is an ordinary request; only the
+// owner's token bypasses the gate, and it is single-use.
+func TestActivationGateForceIsOwnerOnly(t *testing.T) {
+	if _, err := os.Stat("/usr/sbin/lsof"); err != nil {
+		t.Skip("lsof unavailable")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain unavailable for the fake daemon")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+
+	e := newThrashEnv(t)
+	git815(t, e.root, "init", "-q")
+	e.commit(t, "c1")
+	e.build("a")
+	if out, err := e.run(thrashWindowSec); err != nil || !strings.Contains(out, "OK: development jevonsd serving") {
+		t.Fatalf("cold start: %v\n%s", err, out)
+	}
+	first := e.listenerPID()
+	baseline := len(e.servedLines(t))
+
+	// A worker's plain --force inside the interval: deferred, not bounced.
+	e.build("b")
+	e.commit(t, "c2")
+	e.setClock(fixedClockEpoch + thrashElapsedSec)
+	out, err := e.run(thrashWindowSec, "--force")
+	if err != nil {
+		t.Fatalf("plain --force: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "OWNER-ONLY") || !strings.Contains(out, "jevons-po") {
+		t.Errorf("refusal does not name the owner-only rule and jevons-po:\n%s", out)
+	}
+	if !strings.Contains(out, "activation deferred") || strings.Contains(out, "OK: development jevonsd serving") {
+		t.Errorf("plain --force bypassed the gate:\n%s", out)
+	}
+	if got := e.listenerPID(); got != first {
+		t.Fatalf("daemon pid %d → %d: a plain --force bounced inside the interval", first, got)
+	}
+	// Wrong-shaped tokens are not the owner's: group-readable, and stale.
+	tok := e.ownerToken(t, 0o644)
+	out, _ = e.run(thrashWindowSec, "--force")
+	if !strings.Contains(out, "OWNER-ONLY") || strings.Contains(out, "OK: development jevonsd serving") {
+		t.Errorf("mode-0644 token was honoured:\n%s", out)
+	}
+	if err := os.Chmod(tok, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Unix(fixedClockEpoch-100000, 0)
+	if err := os.Chtimes(tok, old, old); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = e.run(thrashWindowSec, "--force")
+	if !strings.Contains(out, "OWNER-ONLY") || strings.Contains(out, "OK: development jevonsd serving") {
+		t.Errorf("stale token was honoured:\n%s", out)
+	}
+	os.Remove(tok)
+	if got := e.listenerPID(); got != first {
+		t.Fatalf("daemon pid %d → %d: a refused --force bounced", first, got)
+	}
+	// The deferred runner still delivers the one ordinary bounce.
+	e.waitServedLines(t, baseline+1)
+	afterDeferred := e.listenerPID()
+
+	// Control: the owner's token bypasses the gate at once, and is consumed.
+	e.build("c")
+	e.commit(t, "c3")
+	e.setClock(fixedClockEpoch + 2*thrashElapsedSec)
+	tok = e.ownerToken(t, 0o600)
+	out, err = e.run(thrashWindowSec, "--force")
+	if err != nil {
+		t.Fatalf("owner --force: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "OK: development jevonsd serving") || strings.Contains(out, "activation deferred") {
+		t.Fatalf("owner --force did not bypass the gate:\n%s", out)
+	}
+	if v := e.variantServed(); v != "c" {
+		t.Errorf("owner --force: :%d serves %q, want c", e.port, v)
+	}
+	if got := e.listenerPID(); got == afterDeferred || got == 0 {
+		t.Errorf("owner --force did not bounce: pid %d → %d", afterDeferred, got)
+	}
+	if _, err := os.Stat(tok); err == nil {
+		t.Errorf("owner token survived its use")
+	}
+	// Single use: the next --force is a plain one again.
+	e.build("d")
+	e.commit(t, "c4")
+	out, _ = e.run(thrashWindowSec, "--force")
+	if !strings.Contains(out, "OWNER-ONLY") || strings.Contains(out, "OK: development jevonsd serving") {
+		t.Errorf("a consumed token was honoured twice:\n%s", out)
+	}
+}
+
+// 🎯T815: the other bypasses are untouched — a dead daemon is never deferred,
+// with or without --force (the watchdog passes none).
+func TestActivationGateDaemonDownStillBypasses(t *testing.T) {
+	if _, err := os.Stat("/usr/sbin/lsof"); err != nil {
+		t.Skip("lsof unavailable")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain unavailable for the fake daemon")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+
+	e := newThrashEnv(t)
+	git815(t, e.root, "init", "-q")
+	e.commit(t, "c1")
+	e.build("a")
+	if out, err := e.run(thrashWindowSec); err != nil || !strings.Contains(out, "OK: development jevonsd serving") {
+		t.Fatalf("cold start: %v\n%s", err, out)
+	}
+	e.setClock(fixedClockEpoch + thrashElapsedSec) // inside the interval
+
+	for _, args := range [][]string{{"--force"}, {}} {
+		e.killDaemon()
+		out, err := e.run(thrashWindowSec, args...)
+		if err != nil {
+			t.Fatalf("daemon-down restart %v: %v\n%s", args, err, out)
+		}
+		if strings.Contains(out, "activation deferred") || !strings.Contains(out, "OK: development jevonsd serving") {
+			t.Errorf("daemon-down restart %v was deferred or did not serve:\n%s", args, out)
+		}
+		if strings.Contains(out, "waiting") && strings.Contains(out, "thrash window") {
+			t.Errorf("daemon-down restart %v waited out the thrash window:\n%s", args, out)
+		}
+	}
+}
