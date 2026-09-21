@@ -59,7 +59,11 @@ func TestT450ThrashOracleStaysGreenUnderLoad(t *testing.T) {
 	root := repoRoot(t)
 	const repeats = 2
 	cmd := exec.Command("go", "test", "-json", "-count", strconv.Itoa(repeats),
-		"-timeout", "8m",
+		// 🎯T808: the subject's own go-test timeout. 8m held at load ~150
+		// (2 x ~135 s) but panicked at 480 s under load ~280 (gate eb0e49f9,
+		// "observed passing 1 times, want 2"). Two repeats stay; only the
+		// budget grows. Must stay well inside the outer -timeout 45m.
+		"-timeout", "20m",
 		"-run", "^TestRestartThrashPolicy$",
 		"./scripts/docratchet")
 	cmd.Dir = root
