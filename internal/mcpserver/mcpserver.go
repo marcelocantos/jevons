@@ -129,6 +129,8 @@ type Server struct {
 	startMu sync.Mutex
 	// startFlights dedupes in-flight jevons_agent_start launches by name (🎯T792).
 	startFlights startFlights
+	// migrateOutcomes retains finished jevons_agent_migrate results (🎯T790).
+	migrateOutcomes migrateOutcomes
 	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
 	launchAgentFn func(ctx context.Context, name string) (*claudia.Agent, error)
 	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a

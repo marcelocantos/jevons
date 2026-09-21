@@ -28,6 +28,12 @@ type Migrator interface {
 	Launch(t *thread.Thread) error
 }
 
+// migratePinner is the optional model-pin seam (🎯T622 / 🎯T790);
+// *fleet.Claudia implements it.
+type migratePinner interface {
+	PrepareMigrationPinned(name string, to claudia.Provider, model string, force bool) (handover.Pending, error)
+}
+
 // SetMigrator wires the provider-migration capability.
 func (s *Server) SetMigrator(m Migrator) { s.migrator = m }
 
@@ -54,6 +60,8 @@ func (s *Server) registerAgentMigrate() {
 				mcp.Description("Agent to migrate (registry name, e.g. jevons-po)")),
 			mcp.WithString("provider", mcp.Required(),
 				mcp.Description("Target backend: claudia provider id (grok, claude, …)")),
+			mcp.WithString("model",
+				mcp.Description("Model to pin on the destination (e.g. claude-sonnet-5); empty = the destination provider's default. Visible afterwards in jevons_agent_list (🎯T790)")),
 			mcp.WithBoolean("force",
 				mcp.Description("Switch even when no predecessor transcript is found — a deliberate cold start")),
 			mcp.WithBoolean("owner_asked",
@@ -69,6 +77,7 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 	target := strings.TrimSpace(fmt.Sprint(args["provider"]))
 	force, _ := args["force"].(bool)
 	ownerAsked, _ := args["owner_asked"].(bool)
+	model := strings.TrimSpace(argString(req, "model"))
 	if name == "" || target == "" {
 		return mcp.NewToolResultError("name and provider are required"), nil
 	}
@@ -94,14 +103,24 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 		}
 	}
 
-	pending, err := s.migrator.PrepareMigration(name, claudia.Provider(target), force)
+	var pending handover.Pending
+	var err error
+	if p, ok := s.migrator.(migratePinner); ok {
+		pending, err = p.PrepareMigrationPinned(name, claudia.Provider(target), model, force)
+	} else {
+		pending, err = s.migrator.PrepareMigration(name, claudia.Provider(target), force)
+	}
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	if pending.Remap == handover.RemapClaudiaMigrate {
+		note := ""
+		if pending.SessionUnread {
+			note = "\nNOTE (🎯T790): the successor's session id could not be read, so the registry row is a fresh mint, not Materialized; a daemon restart starts a new conversation on the destination."
+		}
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"%s migrated %s → %s via claudia Agent.Migrate. Host brief (%s) was gathered before the swap; the destination already received the inert seed.\n%s",
-			name, pending.From, pending.To, pending.BriefSource, pending.Describe())), nil
+			"%s migrated %s → %s via claudia Agent.Migrate. Host brief (%s) was gathered before the swap; the destination already received the inert seed.\n%s%s",
+			name, pending.From, pending.To, pending.BriefSource, pending.Describe(), note)), nil
 	}
 	pending, err = s.migrator.CompleteThinBrief(pending)
 	if err != nil {

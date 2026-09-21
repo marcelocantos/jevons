@@ -157,6 +157,9 @@ type Pending struct {
 	TargetID     string `json:"target_id,omitempty"`
 	Goal         string `json:"goal,omitempty"`
 	NewSessionID string `json:"new_session_id,omitempty"`
+	// SessionUnread: a live remap could not read the successor's session id,
+	// so the registry row is a fresh mint, not Materialized (🎯T790).
+	SessionUnread bool `json:"session_unread,omitempty"`
 
 	// Remap names how the Session process was swapped (🎯T622). Empty is
 	// the T285 Stop+Register+Launch path. RemapClaudiaMigrate means

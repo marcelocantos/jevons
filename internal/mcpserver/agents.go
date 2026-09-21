@@ -194,8 +194,12 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if purpose == "" {
 			purpose = claudia.PurposeWork
 		}
-		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s %s (session: %s)\n",
-			d.Name, status, purpose, s.roleDisplay(d), parent, d.WorkDir, sessionDisplay(d.SessionID))
+		model := d.Model
+		if model == "" {
+			model = "default"
+		}
+		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s provider=%s model=%s %s (session: %s)\n",
+			d.Name, status, purpose, s.roleDisplay(d), parent, d.Provider, model, d.WorkDir, sessionDisplay(d.SessionID))
 		if status == AgentStatusBornStuck {
 			diag := s.diagnoseBirth(d, s.birthClock())
 			fmt.Fprintf(&b, "  ^ %s\n", FormatBornStuckLine(d, diag.Elapsed))

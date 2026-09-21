@@ -48,6 +48,7 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	f, store, _ := migrateFixture(t, oldSession, true)
 	var got *claudia.MigrateArgs
 	calls := 0
+	f.liveSession = func(string) (string, string) { return "live-successor-session", "" }
 	f.liveMigrate = func(args *claudia.MigrateArgs) error {
 		calls++
 		cp := *args

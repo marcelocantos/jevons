@@ -38,6 +38,9 @@ func (s *Server) addTool(t mcp.Tool, h func(context.Context, mcp.CallToolRequest
 		h = s.observeSpawnOrderStart(h) // 🎯T762: attribute starts to their order
 		h = s.detachStart(h)            // 🎯T792: the launch outlives the caller's deadline
 	}
+	if t.Name == "jevons_agent_migrate" {
+		h = s.detachMigrate(h) // 🎯T790: the move outlives the caller's deadline
+	}
 	s.mcpSrv.AddTool(t, s.boundTool(t.Name, h))
 }
 
@@ -70,6 +73,10 @@ func (s *Server) boundTool(name string, h func(context.Context, mcp.CallToolRequ
 				// 🎯T792: the launch was detached and continues.
 				startName, _ := req.GetArguments()["name"].(string)
 				return mcp.NewToolResultError(startPendingText(strings.TrimSpace(startName))), nil
+			}
+			if name == "jevons_agent_migrate" {
+				// 🎯T790: the move was detached and continues.
+				return mcp.NewToolResultError(migratePendingText(migrateKey(req))), nil
 			}
 			return mcp.NewToolResultError(fmt.Sprintf(
 				"tools/call %s timed out or cancelled after %s (🎯T254.5.1)", name, wait)), nil

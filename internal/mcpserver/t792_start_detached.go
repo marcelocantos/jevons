@@ -46,15 +46,28 @@ func startPendingText(name string) string {
 
 // detachStart wraps the jevons_agent_start handler: launch on a context
 // detached from the request, dedupe in-flight launches by name.
-func (s *Server) detachStart(h func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) detachStart(h toolHandler) toolHandler {
+	return s.detachFlight(func(req mcp.CallToolRequest) string {
+		return strings.TrimSpace(argString(req, "name"))
+	}, startPendingText, h)
+}
+
+type toolHandler = func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+
+func argString(req mcp.CallToolRequest, key string) string {
+	v, _ := req.GetArguments()[key].(string)
+	return v
+}
+
+// detachFlight is the 🎯T792 mechanism, shared with 🎯T790 (migrate): run h on
+// a context detached from the request, join a same-key call to the in-flight
+// one, and answer a caller whose deadline passes with pending(key).
+func (s *Server) detachFlight(key func(mcp.CallToolRequest) string, pending func(string) string, h toolHandler) toolHandler {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		name := ""
-		if v, ok := req.GetArguments()["name"].(string); ok {
-			name = strings.TrimSpace(v)
-		}
+		name := key(req)
 		fl := &s.startFlights
 		fl.mu.Lock()
 		if fl.m == nil {
@@ -79,7 +92,7 @@ func (s *Server) detachStart(h func(context.Context, mcp.CallToolRequest) (*mcp.
 		case <-f.done:
 			return f.out.res, f.out.err
 		case <-ctx.Done():
-			return mcp.NewToolResultError(startPendingText(name)), nil
+			return mcp.NewToolResultError(pending(name)), nil
 		}
 	}
 }

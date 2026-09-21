@@ -723,23 +723,31 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	} else if target != def.Provider {
 		next.Model = cli.BindSessionModel("", target)
 	}
-	nextSession := uuid.NewString()
-	if live := f.reg.Get(name); live != nil {
-		if sid := strings.TrimSpace(live.SessionID()); sid != "" && sid != def.SessionID {
-			nextSession = sid
-		}
-		if m := strings.TrimSpace(live.Model()); m != "" && model == "" {
-			next.Model = m
-		}
+	// 🎯T790: Materialized promises that SessionID names a session that
+	// exists. Only a session id read from the live agent keeps that promise;
+	// a fallback uuid was never written anywhere, and recording it as
+	// Materialized makes the next Launch insist on resuming a conversation
+	// that is not there (jevons got 227ea2e6 and jevons-po 60c71bb8 on
+	// 2026-09-22). With no readable id the row is a fresh mint instead.
+	nextSession, liveModel := f.liveSessionOf(name)
+	sessionRead := nextSession != "" && nextSession != def.SessionID
+	if !sessionRead {
+		nextSession = uuid.NewString()
+		slog.Warn("migrate: live session id unreadable; recording the row as a fresh mint, not Materialized",
+			"name", name, "to", target)
+	}
+	if liveModel != "" && model == "" {
+		next.Model = liveModel
 	}
 	next.SessionID = nextSession
-	next.Materialized = true
+	next.Materialized = sessionRead
 	if err := f.reg.Register(next); err != nil {
 		return handover.Pending{}, true, fmt.Errorf("migrate %q: record remapped row: %w", name, err)
 	}
 	pending := draft
 	pending.To = string(target)
 	pending.NewSessionID = nextSession
+	pending.SessionUnread = !sessionRead
 	pending.Remap = handover.RemapClaudiaMigrate
 	pending.Purpose = next.Purpose
 	pending.WorkDir = next.WorkDir
@@ -765,6 +773,18 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		"name", name, "from", pending.From, "to", pending.To,
 		"old_session", pending.OldSessionID, "new_session", nextSession)
 	return pending, true, nil
+}
+
+// liveSessionOf reads the session id and model of the live agent behind
+// name ("" when there is none or it cannot be read).
+func (f *Claudia) liveSessionOf(name string) (sessionID, model string) {
+	if f.liveSession != nil {
+		return f.liveSession(name)
+	}
+	if live := f.reg.Get(name); live != nil {
+		return strings.TrimSpace(live.SessionID()), strings.TrimSpace(live.Model())
+	}
+	return "", ""
 }
 
 func (f *Claudia) invokeMigrate(name string, args *claudia.MigrateArgs) error {

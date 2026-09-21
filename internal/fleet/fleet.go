@@ -100,6 +100,9 @@ type Claudia struct {
 	// product path (reg.Get(name).Migrate). Tests inject a recorder so the
 	// primitive is asserted without a live provider process.
 	liveMigrate func(args *claudia.MigrateArgs) error
+	// liveSession is the 🎯T790 seam for reading the live agent's session id
+	// and model after a remap. Nil reads the registry's live agent.
+	liveSession func(name string) (sessionID, model string)
 
 	// onLaunch brackets a launch this adapter performs (🎯T426). It is called
 	// BEFORE the process comes up and returns the function to call once it
