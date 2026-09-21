@@ -8,7 +8,7 @@ const { randomUUID } = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { parseArgs } = require('node:util');
-const { chromium } = require('../browser-loop-test/node_modules/playwright');
+const { chromium } = require('./playwright.cjs')();
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
   'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' },
