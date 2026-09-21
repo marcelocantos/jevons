@@ -366,6 +366,7 @@ playwright-browser: playwright-deps
 test-ui: ui-build playwright-browser
 	node scripts/react-ui-test/legacy-obligations.cjs
 	node scripts/react-ui-test/test.cjs
+	node scripts/react-ui-test/t789-send-cutin-test.cjs
 
 .PHONY: test-ui-live
 test-ui-live: playwright-browser

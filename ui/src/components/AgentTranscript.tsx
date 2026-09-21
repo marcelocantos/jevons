@@ -198,6 +198,11 @@ export function AgentTranscript(props: {
       pinningRef.current = false;
     });
     ro.observe(canvas);
+    // 🎯T789: the scroller itself resizes when the queue strip, the phase
+    // strip or a multi-line composer takes height from the pane. clientHeight
+    // shrinks, the live end moves away with no scroll event, and nothing else
+    // closes the gap — a later scroll then reads it as a leave.
+    ro.observe(el);
     return () => ro.disconnect();
   }, [props.name]);
 
