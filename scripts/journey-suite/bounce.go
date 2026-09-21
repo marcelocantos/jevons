@@ -437,8 +437,11 @@ func (s *suite) jSwitchSeedShape() error {
 		return fmt.Errorf("plant: %w", err)
 	}
 
+	// owner_asked: the journey plays the owner requesting this move; without
+	// it the T561 guard refuses whenever the source's weekly band is ok. The
+	// un-asked refusal stays pinned by TestT561MigrateRefusesLeavingClaudeWithWeeklyRemaining.
 	out, err := s.mcpText("jevons_agent_migrate", map[string]any{
-		"name": id, "provider": to,
+		"name": id, "provider": to, "owner_asked": true,
 	})
 	if err != nil {
 		return fmt.Errorf("migrate: %w (%s)", err, trim(out, 200))

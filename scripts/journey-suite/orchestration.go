@@ -706,8 +706,11 @@ func (s *suite) jProviderMigration() error {
 		return fmt.Errorf("plant fact: %w", err)
 	}
 
+	// owner_asked: the journey plays the owner requesting this move (T561
+	// refuses an un-asked leave of a provider with weekly remaining; that
+	// refusal is pinned by TestT561MigrateRefusesLeavingClaudeWithWeeklyRemaining).
 	migrateOut, err := s.mcpText("jevons_agent_migrate", map[string]any{
-		"name": id, "provider": string(to),
+		"name": id, "provider": string(to), "owner_asked": true,
 	})
 	if err != nil {
 		return fmt.Errorf("migrate %s → %s: %w (%s)", s.provider, to, err, trim(migrateOut, 200))
