@@ -100,21 +100,6 @@ func NewCoach(args CoachArgs) (*Coach, error) {
 	return c, nil
 }
 
-// NoteReaped appends stream evidence (optional; coach may cluster with errors).
-func (c *Coach) NoteReaped(threadIDs []string) {
-	if c == nil || len(threadIDs) == 0 {
-		return
-	}
-	ev := StreamReaped(threadIDs, c.args.Now())
-	c.mu.Lock()
-	c.stream = append(c.stream, ev...)
-	const maxStream = 500
-	if len(c.stream) > maxStream {
-		c.stream = c.stream[len(c.stream)-maxStream:]
-	}
-	c.mu.Unlock()
-}
-
 // Run starts the coach schedule until ctx is done.
 func (c *Coach) Run(ctx context.Context) {
 	if c == nil {

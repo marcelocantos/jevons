@@ -36,7 +36,7 @@ import (
 // internal/mcpserver/mcpserver.go, which is excluded below: it asks the
 // party that knows, records the answer, and is what every other site is
 // being converted to call.
-const seatInFlightPin = 7
+const seatInFlightPin = 6
 
 // Liveness — census derivation 4 — is deliberately NOT ratcheted here.
 // `.Alive()` is spelled the same by types that have nothing to do with a

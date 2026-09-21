@@ -12,7 +12,6 @@ package butler
 
 import (
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -49,36 +48,6 @@ type Fleet interface {
 	// Remove stops the process and deregisters the agent entirely, so it
 	// does not auto-restart. Used when a thread is deleted.
 	Remove(id string)
-}
-
-// BusyFleet is the optional half of Fleet that reports turns in flight.
-// A Fleet that implements it protects agents mid-turn from the idle
-// sweep; one that does not keeps the historical transcript-only
-// behaviour (🎯T282).
-type BusyFleet interface {
-	// Busy reports whether a directed turn is awaiting a reply for id.
-	Busy(id string) bool
-}
-
-// SendAdmitFleet is the optional half of Fleet that admits a send against
-// the idle reap (🎯T627.4). Mux/MCP sends use the same gate on the product
-// fleet; Direct holds it before rehydrate so Stop cannot win the race.
-type SendAdmitFleet interface {
-	BeginSend(id string) func()
-}
-
-// ReapAdmitFleet is the optional half of Fleet that makes Stop exclusive
-// with an admitted send (🎯T627.4). A Fleet that does not implement it
-// keeps transcript-only reaping.
-type ReapAdmitFleet interface {
-	TryBeginReap(id string) (func(), bool)
-}
-
-// IdleTranscriptFleet binds GC observations to the actual live provider.
-// A missing/unsupported observation defers reclamation. The production fleet
-// implements this; legacy test fleets may use the Butler's configured reader.
-type IdleTranscriptFleet interface {
-	IdleTranscript(t *thread.Thread, n int) ([]transcript.Entry, error)
 }
 
 // Participants is the optional secondary lookup for fleet agents that are
@@ -376,11 +345,6 @@ func (b *Butler) Direct(id, text string) (string, error) {
 		return "", fmt.Errorf("direct: thread %q is observe-only; take it over before directing it", id)
 	}
 
-	if admit, ok := b.fleet.(SendAdmitFleet); ok {
-		done := admit.BeginSend(id)
-		defer done()
-	}
-
 	if !b.fleet.Alive(id) {
 		// Process aged out or was GC'd — transparently rehydrate rather
 		// than fail. This is the T24 wedge's fix at the butler layer. The
@@ -468,81 +432,6 @@ func (b *Butler) TakeOver(id string) (*thread.Thread, error) {
 		return nil, fmt.Errorf("takeover %q: %w", id, err)
 	}
 	return t, nil
-}
-
-// ReapIdle stops the processes of spawned threads that have gone idle,
-// freeing resources while keeping the threads durable and rehydratable
-// (process-as-cache GC). It returns the IDs it reaped. Adopted threads
-// are never reaped — the butler does not own their processes.
-func (b *Butler) ReapIdle() []string {
-	if b.fleet == nil {
-		return nil
-	}
-	busy, _ := b.fleet.(BusyFleet)
-	admit, hasAdmit := b.fleet.(ReapAdmitFleet)
-	var reaped []string
-	var unknown, working []string
-	defer func() {
-		// No conversation content: a journey can observe that the real sweep
-		// evaluated its disposable thread, including when nothing was reaped.
-		slog.Info("idle thread sweep completed", "reaped", reaped,
-			"kept_unknown", unknown, "kept_busy", working)
-	}()
-	for _, t := range b.store.List() {
-		if t.Kind != thread.KindSpawned || !b.fleet.Alive(t.ID) {
-			continue
-		}
-		// A turn in flight outranks the transcript-derived state: a
-		// worker whose first turn has not produced transcript output yet
-		// reads as idle, and stopping it there kills the turn (🎯T282).
-		// Mux/MCP sends, queued follow-ups and PromptInFlight ride Busy
-		// on the product fleet (🎯T627.4).
-		if busy != nil && busy.Busy(t.ID) {
-			working = append(working, t.ID)
-			continue
-		}
-		var release func()
-		if hasAdmit {
-			var ok bool
-			release, ok = admit.TryBeginReap(t.ID)
-			if !ok {
-				working = append(working, t.ID)
-				continue
-			}
-		}
-		func() {
-			if release != nil {
-				defer release()
-			}
-			var entries []transcript.Entry
-			var err error
-			if source, ok := b.fleet.(IdleTranscriptFleet); ok {
-				entries, err = source.IdleTranscript(t, b.tailN)
-			} else {
-				entries, err = b.reader.Tail(t.SessionID, b.tailN)
-			}
-			if err != nil {
-				unknown = append(unknown, t.ID)
-				return
-			}
-			status := b.statusFromEntries(t, entries)
-			// Status is best-effort: no readable activity is displayed as idle.
-			// That is not evidence permitting a destructive process decision.
-			// Keep unsupported/unreadable seats until GC has an authoritative
-			// activity source; do not invent elapsed idleness from an empty tail.
-			if status.LastActivity.IsZero() {
-				unknown = append(unknown, t.ID)
-				return
-			}
-			if status.State == thread.StateIdle {
-				b.fleet.Stop(t.ID)
-				reaped = append(reaped, t.ID)
-			} else {
-				working = append(working, t.ID)
-			}
-		}()
-	}
-	return reaped
 }
 
 // ThreadStatus pairs a persisted thread record with its derived live

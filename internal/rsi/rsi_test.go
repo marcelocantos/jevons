@@ -257,7 +257,6 @@ func TestLoopRunOnceFromEventLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loop.NoteReaped([]string{"worker-1"})
 	res, err := loop.RunOnce("test")
 	if err != nil {
 		t.Fatal(err)

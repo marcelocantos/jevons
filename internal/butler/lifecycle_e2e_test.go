@@ -189,12 +189,13 @@ func TestReapIdleStopsAndRehydrates(t *testing.T) {
 		t.Fatal("precondition: spawned process should be alive")
 	}
 
-	reaped := b.ReapIdle()
-	if len(reaped) != 1 || reaped[0] != "w" {
-		t.Fatalf("ReapIdle = %v, want [w]", reaped)
-	}
+
+	// The butler's idle reaper was deleted under 🎯T766 (8,476 sweeps, one
+	// reap in fifteen days). What this test still guards is process-as-cache
+	// itself: stop the process, and the thread persists and rehydrates.
+	f.Stop("w")
 	if f.Alive("w") {
-		t.Fatal("idle process should have been stopped")
+		t.Fatal("stop left the process alive")
 	}
 
 	// Thread persists after GC and rehydrates on the next interaction.

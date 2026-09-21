@@ -88,21 +88,6 @@ func NewLoop(args LoopArgs) (*Loop, error) {
 	return &Loop{args: args, ledger: led}, nil
 }
 
-// NoteReaped appends stream evidence from idle GC (non-blocking, best-effort).
-func (l *Loop) NoteReaped(threadIDs []string) {
-	if l == nil || len(threadIDs) == 0 {
-		return
-	}
-	ev := StreamReaped(threadIDs, l.args.Now())
-	l.mu.Lock()
-	l.stream = append(l.stream, ev...)
-	const maxStream = 500
-	if len(l.stream) > maxStream {
-		l.stream = l.stream[len(l.stream)-maxStream:]
-	}
-	l.mu.Unlock()
-}
-
 // Run starts the schedule until ctx is done. Interval ≤0 means no ticker
 // (caller may still invoke RunOnce). Safe to call from a goroutine.
 func (l *Loop) Run(ctx context.Context) {

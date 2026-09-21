@@ -59,42 +59,6 @@ func chainServer(t *testing.T, fleet map[string]*fakeSender) (*Server, *overseer
 	return s, inbox
 }
 
-// The mission chain: a worker reports to its PO, the PO reports to the
-// overseer, and the overseer's arm is what the owner sees. Every leg is the
-// SAME call addressed by name — acceptance 1 and 3.
-type recordingAdmit struct {
-	sending int
-	began   int
-}
-
-func (a *recordingAdmit) BeginSend(string) func() {
-	a.began++
-	a.sending++
-	return func() { a.sending-- }
-}
-
-func TestDeliverHoldsSendAdmitAcrossSubmit(t *testing.T) {
-	admit := &recordingAdmit{}
-	var sawHeld bool
-	worker := &fakeSender{alive: true, sendHook: func() {
-		sawHeld = admit.sending > 0
-	}}
-	s, _ := chainServer(t, map[string]*fakeSender{"worker": worker})
-	s.SetSeatAdmit(admit)
-	if _, err := s.deliverByName("worker", "hold the seat", OriginOwner, false); err != nil {
-		t.Fatal(err)
-	}
-	if admit.began != 1 {
-		t.Fatalf("BeginSend called %d times, want 1", admit.began)
-	}
-	if !sawHeld {
-		t.Fatal("send ran without send/reap admission")
-	}
-	if admit.sending != 0 {
-		t.Fatalf("admission leaked: sending=%d", admit.sending)
-	}
-}
-
 func TestDeliverByNameWorkerToPOToOverseerChain(t *testing.T) {
 	po := &fakeSender{alive: true}
 	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})

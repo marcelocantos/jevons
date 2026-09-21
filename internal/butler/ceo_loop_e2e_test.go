@@ -89,15 +89,12 @@ func TestCEOLoopScenario(t *testing.T) {
 		t.Fatalf("directed turn did not round-trip: %q", reply)
 	}
 
-	// REAP-IDLE (process-as-cache): age the thread past the idle threshold
-	// — its process is stopped, the thread stays durable.
-	now = fixedNow.Add(thread.DefaultIdleThreshold + time.Minute)
-	reaped := b.ReapIdle()
-	if len(reaped) != 1 || reaped[0] != "po" {
-		t.Fatalf("ReapIdle = %v, want [po]", reaped)
-	}
+	// Process-as-cache: the process stops, the thread stays durable. The
+	// butler's idle reaper that used to do this was deleted under 🎯T766
+	// (8,476 sweeps, one reap in fifteen days), so stop it directly.
+	f.Stop("po")
 	if f.Alive("po") {
-		t.Fatal("reap left the process alive")
+		t.Fatal("stop left the process alive")
 	}
 
 	// NO SILENT-FAIL: with the process gone AND unlaunchable, Direct must

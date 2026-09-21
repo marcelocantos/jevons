@@ -880,8 +880,6 @@ func main() {
 	// hook brackets the launch rather than trailing it, so the standing sweep
 	// can tell a process that is still coming up from one nobody wired.
 	fleetAdapter.SetLaunchHook(mcpSrv.NoteAgentLaunch)
-	fleetAdapter.SetPending(mcpSrv.HasQueuedFollowUp)
-	mcpSrv.SetSeatAdmit(fleetAdapter)
 	mcpSrv.SetMigrator(fleetAdapter)
 	srv.SetOverseerMigrator(fleetAdapter)
 	// 🎯T285.2: the fleet-tree icon menu's thin HTTP wrapper for
@@ -937,8 +935,8 @@ func main() {
 	// they are killed. Ungated for the same reason as the loop above.
 	startWorktreeReap(ctx, cfg)
 
-	rsiCoach := startAmbientRSICoach(ctx, cfg, mcpSrv, capacityGate(capGov))
-	rsiLoop := startAmbientRSIMint(ctx, cfg, mcpSrv)
+	startAmbientRSICoach(ctx, cfg, mcpSrv, capacityGate(capGov))
+	startAmbientRSIMint(ctx, cfg, mcpSrv)
 
 	// ð¯T356 ambient research: periodic context refresh + async feed triggers,
 	// writing durable versioned notes and briefing the overseer.
@@ -951,7 +949,6 @@ func main() {
 	// Process-as-cache GC: periodically stop idle spawned threads'
 	// processes (resumably) to free resources. The threads persist and
 	// rehydrate on the next Direct. Stream-feeds coach (+ residual mint).
-	go reapIdleThreads(ctx, btlr, rsiLoop, rsiCoach)
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
@@ -1784,33 +1781,6 @@ func overseerUnavailableReason(provider claudia.Provider) string {
 			}
 		}
 		return diagnoseOverseerUnavailable(claudia.ProviderGrok, false, "")
-	}
-}
-
-// reapIdleGCInterval is how often the butler sweeps for idle spawned
-// threads whose processes can be stopped resumably.
-const reapIdleGCInterval = 2 * time.Minute
-
-// reapIdleThreads runs the process-as-cache GC sweep until ctx is done.
-// Reaped thread ids stream-feed the RSI coach (ð¯T243) and residual mint loop (ð¯T92).
-func reapIdleThreads(ctx context.Context, btlr *butler.Butler, rsiLoop *rsi.Loop, rsiCoach *rsi.Coach) {
-	ticker := time.NewTicker(reapIdleGCInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if reaped := btlr.ReapIdle(); len(reaped) > 0 {
-				slog.Info("reaped idle thread processes", "threads", reaped)
-				if rsiCoach != nil {
-					rsiCoach.NoteReaped(reaped)
-				}
-				if rsiLoop != nil {
-					rsiLoop.NoteReaped(reaped)
-				}
-			}
-		}
 	}
 }
 

@@ -83,15 +83,6 @@ func (s *Server) dequeueAgentSend(name string) sendq.Entry {
 	return e
 }
 
-// pendingAgentSends returns queue depth for name. Zero over an unreadable queue
-// is a number this function cannot stand behind, so it says so in the log
-// rather than letting a status line read it as "nothing waiting".
-// HasQueuedFollowUp reports a durable queued follow-up the idle sweep
-// must not reap through (🎯T627.4).
-func (s *Server) HasQueuedFollowUp(name string) bool {
-	return s != nil && s.pendingAgentSends(name) > 0
-}
-
 func (s *Server) pendingAgentSends(name string) int {
 	depth, err := s.sendQueue().Depth(name)
 	if err != nil {
