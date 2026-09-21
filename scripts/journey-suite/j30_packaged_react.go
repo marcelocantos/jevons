@@ -27,6 +27,11 @@ func (s *suite) jPackagedReactOwnerBoundary() error {
 	return s.jPackagedReactScript("boundary.cjs", 8*time.Minute)
 }
 
+// J32 (🎯T789.1) sends and Cuts in on a busy seat over a transcript taller than 12,000 px.
+func (s *suite) jPackagedReactSendCutIn() error {
+	return s.jPackagedReactScript("t789-live.cjs", 25*time.Minute)
+}
+
 func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error {
 	provider := string(s.provider)
 	var ready error
@@ -50,6 +55,13 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	defer cancel()
 	aside := "react-aside-" + uuid.NewString()
 	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", script), "--host", surface.host, "--provider", provider, "--workdir", s.stateDir, "--aside", aside)
+	names := []string{"jevons", aside}
+	if script == "t789-live.cjs" {
+		// Drives the overseer only; no aside is minted. The screenshot must
+		// outlive the sandbox so the T493.1 visual verdict can be read.
+		names = []string{"jevons"}
+		cmd.Args = append(cmd.Args, "--screenshot", filepath.Join(os.TempDir(), "t789-live.png"))
+	}
 	if script == "boundary.cjs" {
 		// The real sweep is every two minutes. Observe its completion, rather
 		// than sleeping and assuming it happened; four minutes bounds outage.
@@ -71,7 +83,7 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	if err != nil {
 		return fmt.Errorf("read runtime provider evidence: %w", err)
 	}
-	for _, name := range []string{"jevons", aside} {
+	for _, name := range names {
 		if err := queueJourneyProvider(logs, name, provider); err != nil {
 			return err
 		}

@@ -261,6 +261,7 @@ persona_notes: |
 	s.run("J29-tmux-anchor-spawn", s.j29TmuxAnchorSpawn)
 	s.run("J30-packaged-react-owner-turn", s.jPackagedReactOwnerTurn)
 	s.run("J31-packaged-react-owner-boundary", s.jPackagedReactOwnerBoundary)
+	s.run("J32-packaged-react-send-cutin", s.jPackagedReactSendCutIn)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()
