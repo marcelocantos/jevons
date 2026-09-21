@@ -164,4 +164,72 @@ describe('send queue wiring (T657 / T113)', () => {
     expect(sends()).toHaveLength(2);
     expect(JSON.parse(localStorage.getItem('jevons-send-queue-v1') || '{}').items).toEqual([]);
   });
+  // 🎯T562.7: Alt+Enter is force-send, never pop_last (T241), in both densities.
+  describe.each(['comfortable', 'compact'] as const)('Alt+Enter force-send (T562.7, %s)', (density) => {
+    const SEED = '\u200B.\u200B';
+    const mount = () => {
+      const view = render(<AgentInteraction mux={client} name="jevons" density={density} connected />);
+      const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
+      const userFrame = { id: 'e:1', index: 1, op: 'put', type: 'user', event: { type: 'user', turn_origin: 'owner', message: { role: 'user', content: [{ type: 'text', text: 'earlier request' }] } } };
+      act(() => { emit('frame', userFrame); emit('meta', { start: 1, older: 0, total: 1, n: 1, following: true, phase: 'thinking' }); });
+      const box = view.getByRole('textbox') as HTMLTextAreaElement;
+      // The sidebar paints no queue strip (T562.2), so observe the persisted queue in both densities.
+      const strip = { querySelector: () => null } as unknown as HTMLElement;
+      return { view, box, strip };
+    };
+    const queued = (): string[] => (JSON.parse(localStorage.getItem('jevons-send-queue-v1') || '{"items":[]}').items as { text: string }[]).map((i) => i.text);
+    const enqueue = async (box: HTMLTextAreaElement, _strip: HTMLElement, texts: string[]) => {
+      for (const t of texts) {
+        fireEvent.change(box, { target: { value: t } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+      }
+      await waitFor(() => expect(queued()).toEqual(texts));
+    };
+
+    it('a real draft is force-sent as an interrupt and leaves the queue alone', async () => {
+      const { box, strip } = mount();
+      await enqueue(box, strip, ['held']);
+      fireEvent.change(box, { target: { value: 'now' } });
+      fireEvent.keyDown(box, { key: 'Enter', altKey: true });
+      await waitFor(() => expect(sends()).toEqual([{ text: 'now', mode: 'interrupt', interrupt: true }]));
+      expect(queued()).toHaveLength(1);
+    });
+
+    it('an empty composer force-sends the queue head, not the last owner message', async () => {
+      const { box, strip } = mount();
+      await enqueue(box, strip, ['first', 'second']);
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.keyDown(box, { key: 'Enter', altKey: true });
+      await waitFor(() => expect(sends()).toEqual([{ text: 'first', mode: 'interrupt', interrupt: true }]));
+      await waitFor(() => expect(queued()).toHaveLength(1));
+      expect(box.value).toBe('');
+      expect(box.value).not.toBe('earlier request');
+    });
+
+    it('a seed-only composer acts as empty: it sends the focused queued item, never the seed', async () => {
+      const { box, strip } = mount();
+      await enqueue(box, strip, ['first', 'second']);
+      fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+      fireEvent.keyDown(box, { key: 'ArrowUp', altKey: true });
+      fireEvent.change(box, { target: { value: SEED } });
+      fireEvent.keyDown(box, { key: 'Enter', altKey: true });
+      await waitFor(() => expect(sends()).toEqual([{ text: 'second', mode: 'interrupt', interrupt: true }]));
+      await waitFor(() => expect(queued()).toHaveLength(1));
+    });
+
+    it('a seed-only or empty composer with an empty queue does nothing', async () => {
+      const { box } = mount();
+      fireEvent.change(box, { target: { value: SEED } });
+      fireEvent.keyDown(box, { key: 'Enter', altKey: true });
+      fireEvent.change(box, { target: { value: '' } });
+      fireEvent.keyDown(box, { key: 'Enter', altKey: true });
+      expect(sends()).toEqual([]);
+      expect(box.value).toBe('');
+    });
+
+    it('visible help names Alt+Enter as force-send', () => {
+      const { box } = mount();
+      expect(box.title).toMatch(/(⌥|Alt\+)Enter.*force/i);
+    });
+  });
 });

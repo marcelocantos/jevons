@@ -17,6 +17,14 @@
  * design inverts that so the destructive chord needs the extra modifier.
  */
 
+import type { DeliveryMode } from '../composer/deliveryMode';
+
+/**
+ * 🎯T562.7: delivery mode for Alt+Enter force-send. 'interrupt' cancels the
+ * running turn (owner question open: interrupt vs steer). One line to change.
+ */
+export const FORCE_SEND_MODE: DeliveryMode = 'interrupt';
+
 export type EnterAction = 'newline' | 'send' | 'steer' | 'interrupt' | 'force_send' | 'send_queue_now' | 'noop';
 
 export function isEnterKey(key: string | null | undefined, opts?: { code?: string }): boolean {

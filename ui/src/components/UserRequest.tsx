@@ -13,7 +13,8 @@ import {
   type PendingImage,
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
-import { classifyEnterAction } from '../keys/composerEnter';
+import { classifyEnterAction, FORCE_SEND_MODE } from '../keys/composerEnter';
+import { isEffectivelyEmpty } from '../composer/wispr';
 import type { DeliveryMode } from '../composer/deliveryMode';
 import type { QueueItem } from '../composer/sendQueue';
 import { cycleQueueFocus } from '../composer/queueFocus';
@@ -69,6 +70,8 @@ function NamedUserRequest(props: UserRequestProps) {
   const [rewinding, setRewinding] = useState(false);
   const [recallError, setRecallError] = useState('');
   const canSend = raw.trim().length > 0 || pending.length > 0;
+  // 🎯T562.7: a seed-only composer holds no owner draft (T192).
+  const hasRealDraft = !isEffectivelyEmpty(raw) || pending.length > 0;
 
   const leaveRecall = (restore: boolean) => {
     draftGeneration.current += 1;
@@ -268,6 +271,7 @@ function NamedUserRequest(props: UserRequestProps) {
         placeholder={compact ? 'Message this agent…' : 'Message...'}
         autoFocus={!compact}
         rows={1}
+        title="Enter send · ⌘Enter steer · ⌘⇧Enter interrupt · ⌥Enter force-send the draft (or the next queued item) · Alt+↑/↓ pick a queued item"
         disabled={rewinding}
         onPaste={onPaste}
         onKeyDown={(e) => {
@@ -298,7 +302,8 @@ function NamedUserRequest(props: UserRequestProps) {
           }
           if (applyComposerHomeEnd(e.currentTarget, e)) return;
           const action = classifyEnterAction(e.key, e, {
-            composerEmpty: !canSend,
+            composerEmpty: !hasRealDraft,
+            queueLen: props.queue?.items.length ?? 0,
             code: e.code,
           });
           if (action == null || action === 'newline') return;
@@ -335,8 +340,17 @@ function NamedUserRequest(props: UserRequestProps) {
             else props.onInterrupt?.();
             return;
           }
-          if (action === 'force_send' && canSend) {
-            void submit(e, !!recalled, { mode: 'interrupt' });
+          if (action === 'force_send') {
+            void submit(e, !!recalled, { mode: FORCE_SEND_MODE });
+            return;
+          }
+          if (action === 'send_queue_now') {
+            // Alt+Enter with no real draft (T241): the focused item, else the queue head.
+            const target = focusedQueueId ?? props.queue?.items[0]?.id;
+            if (target) {
+              props.queue!.onSend(target, FORCE_SEND_MODE);
+              props.queue!.onFocus(null);
+            }
           }
         }}
       />
