@@ -30,7 +30,7 @@ import (
 func (s *Server) registerSpawnOrderTools() {
 	s.addTool(
 		mcp.NewTool("jevons_spawn_order",
-			mcp.WithDescription("Declare a spawn order's named seats, then read per seat whether it was minted (🎯T762). action=declare records an order given to parent naming seats; action=status reconciles every seat against journalled jevons_agent_start attempts (same name, order window, matching target) — minted / rerouted (other provider) / refused (start error) / not_attempted (the journal covers the window and holds no start: the dropped half) / unknown (evidence missing: journal unreadable or too short, or only an older same-name incarnation); action=close retires an order from the panel. Open orders decorate the parent's /api/agents row as spawn_orders."),
+			mcp.WithDescription("Declare a spawn order's named seats, then read per seat whether it was minted (🎯T762). action=declare records an order given to parent naming seats; action=status reconciles every seat against journalled jevons_agent_start attempts; only a start that passed order_id=<this order's id> is attributed — minted / rerouted (other provider) / refused (start error) / not_attempted (no matching daemon start observed in the journal window: the dropped half, as far as the daemon can see) / unknown (a same-name start without the order id, an unreadable or too-short journal, or only an older same-name incarnation); action=close retires an order from the panel. Open orders decorate the parent's /api/agents row as spawn_orders."),
 			mcp.WithString("action", mcp.Required(), mcp.Description("declare | status | close")),
 			mcp.WithString("parent", mcp.Description("declare: the agent the order was given to (e.g. jevons-po). status: filter to this parent.")),
 			mcp.WithString("seats", mcp.Description("declare: named seats as name:provider[:target], comma- or newline-separated, e.g. \"jv-t759-x:grok:T759, jv-t749-y:claude:T749\"")),
@@ -97,24 +97,99 @@ func (s *Server) spawnOrderJournalEvidence(now time.Time) spawnorder.Evidence {
 	if !s.spawnOrderReadAt.IsZero() && now.Sub(s.spawnOrderReadAt) < spawnOrderAttemptsTTL {
 		return s.spawnOrderEvidence
 	}
-	events, _, err := s.eventLogTail(eventlog.TailOptions{Limit: spawnOrderJournalLimit, Component: compAgentLifecycle, Decision: "start"})
 	var ev spawnorder.Evidence
-	if err != nil {
-		ev.ReadErr = err.Error()
-	} else {
-		ev.Attempts = spawnorder.AttemptsFromEvents(events)
+	// Two reads: the daemon's own start events (unattributed) and the
+	// order-correlated ones the start observer journals. Coverage is the
+	// later of the two, since either falling short hides evidence.
+	for _, kind := range []eventlog.TailOptions{
+		{Limit: spawnOrderJournalLimit, Component: compAgentLifecycle, Decision: "start"},
+		{Limit: spawnOrderJournalLimit, Component: spawnorder.JournalComponent, Decision: spawnorder.JournalStart},
+	} {
+		events, _, err := s.eventLogTail(kind)
+		if err != nil {
+			ev.ReadErr = err.Error()
+			ev.Attempts = nil
+			break
+		}
+		ev.Attempts = append(ev.Attempts, spawnorder.AttemptsFromEvents(events)...)
 		if len(events) >= spawnOrderJournalLimit {
+			var oldest time.Time
 			for _, e := range events {
 				at, perr := time.Parse(time.RFC3339Nano, e.TS)
-				if perr == nil && (ev.CoveredSince.IsZero() || at.Before(ev.CoveredSince)) {
-					ev.CoveredSince = at
+				if perr == nil && (oldest.IsZero() || at.Before(oldest)) {
+					oldest = at
 				}
+			}
+			if oldest.After(ev.CoveredSince) {
+				ev.CoveredSince = oldest
 			}
 		}
 	}
 	s.spawnOrderEvidence = ev
 	s.spawnOrderReadAt = now
 	return ev
+}
+
+// observeSpawnOrderStart wraps jevons_agent_start: when the caller passes
+// order_id (the id jevons_spawn_order declare returned), the outcome is
+// journalled as spawn_order.start carrying that id. This is the only start
+// evidence reconciliation attributes to an order; a start without it can at
+// best read unknown. It lives here rather than in the start handler because
+// that file is held for the owner.
+func (s *Server) observeSpawnOrderStart(h func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		orderID := strings.TrimSpace(str(args["order_id"]))
+		res, err := h(ctx, req)
+		if orderID == "" {
+			return res, err
+		}
+		name := strings.TrimSpace(str(args["name"]))
+		fields := map[string]any{
+			"order_id":  orderID,
+			"name":      name,
+			"target_id": normalizeAgentTargetID(str(args["target_id"])),
+			"provider":  strings.TrimSpace(str(args["provider"])),
+		}
+		switch {
+		case err != nil:
+			fields["outcome"], fields["err"] = "error", err.Error()
+		case res == nil:
+			fields["outcome"], fields["err"] = "error", "start returned no result"
+		case res.IsError:
+			fields["outcome"], fields["err"] = "error", toolResultText(res)
+		default:
+			fields["outcome"] = "ok"
+			if s.registry != nil {
+				if def := s.registry.Def(name); def != nil {
+					if def.Provider != "" {
+						fields["provider"] = string(def.Provider)
+					}
+					fields["session_id"] = def.SessionID
+				}
+			}
+		}
+		s.LogEvent(spawnorder.JournalComponent, spawnorder.JournalStart, fields)
+		s.spawnOrderMu.Lock()
+		s.spawnOrderReadAt = time.Time{} // the next read must see this start
+		s.spawnOrderMu.Unlock()
+		return res, err
+	}
+}
+
+// toolResultText is a result's text content, first 500 bytes.
+func toolResultText(res *mcp.CallToolResult) string {
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	if len(out) > 500 {
+		out = out[:500]
+	}
+	return out
 }
 
 // SpawnOrderLines is the /api/agents decoration for one parent: a line per
@@ -175,8 +250,8 @@ func (s *Server) handleSpawnOrder(_ context.Context, req mcp.CallToolRequest) (*
 		s.LogEvent("spawn_order", "declare", map[string]any{
 			"id": o.ID, "parent": o.Parent, "by": o.By, "seats": strings.Join(names, ","),
 		})
-		return mcp.NewToolResultText(fmt.Sprintf("declared %s to %s naming %d seat(s): %s. Read it back with action=status id=%s.",
-			o.ID, o.Parent, len(o.Seats), strings.Join(names, ", "), o.ID)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("declared %s to %s naming %d seat(s): %s. Each jevons_agent_start for these seats must pass order_id=%s — only a start carrying it is attributed to the order; one without it reads unknown. Read it back with action=status id=%s.",
+			o.ID, o.Parent, len(o.Seats), strings.Join(names, ", "), o.ID, o.ID)), nil
 	case "close":
 		if id == "" {
 			return mcp.NewToolResultError("close needs id"), nil

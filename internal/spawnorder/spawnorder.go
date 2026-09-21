@@ -13,13 +13,16 @@
 // holds what was ordered, independently of what was attempted.
 //
 // So an order is declared (by whoever issues it) as its named seats, and each
-// seat is reconciled against the start attempts the daemon journals. Every
+// seat is reconciled against the start attempts the daemon journals. Only a
+// start that carries the order's id (passed as order_id on
+// jevons_agent_start) is attributed to the order. Every
 // named seat gets one of: minted, rerouted (minted, but on a provider the
 // order did not name), refused (a start was attempted and declined — the
-// reason is the journalled error), not_attempted (the journal covers the
-// order's window and holds no start for it) or unknown (the evidence cannot
-// decide: the journal was unreadable or does not reach back far enough, or
-// the only seat under that name is an older incarnation). Absence of evidence
+// reason is the journalled error), not_attempted (no matching daemon start
+// observed in a journal that covers the order's window — scoped to starts
+// that reached jevonsd) or unknown (the evidence cannot decide: a same-name
+// start without the order id, a journal that was unreadable or does not
+// reach back far enough, or only an older incarnation under that name). Absence of evidence
 // is never reported as evidence of absence. An order is complete only when
 // every seat is minted or rerouted, and [Result.Line] names the rest, so a
 // cold reader of the panel can tell a finished order from a half-finished one
@@ -117,6 +120,10 @@ type Attempt struct {
 	Provider string
 	Target   string
 	Session  string
+	// OrderID is the spawn order the start was made for, when the caller
+	// passed one (journalled as spawn_order.start). Empty for a plain
+	// agent_lifecycle.start, which cannot be attributed to any order.
+	OrderID string
 }
 
 // Incarnation is the registry's current seat under a name.
@@ -147,7 +154,7 @@ type SeatResult struct {
 	Status Status `json:"status"`
 	// Reason says why: the start error for refused, the provider actually
 	// used for rerouted, what the evidence lacked for unknown, and for
-	// not_attempted that no start was ever made.
+	// not_attempted the scoped NotAttemptedReason.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -207,29 +214,47 @@ func (r Result) Line() string {
 	return b.String()
 }
 
+// NotAttemptedReason is the reason text for a seat with no matching start.
+// It names its scope: the daemon journal records only starts that reached
+// the daemon, so a start refused before it (a tool-approval denial) or lost
+// in transport is invisible here.
+const NotAttemptedReason = "no matching daemon start observed in the event journal since %s (scope: starts that reached jevonsd; a start refused before it, e.g. by tool approval, or lost in transport is not visible here)"
+
 // Reconcile decides each named seat's outcome from ev and the observations
 // already persisted on the order.
 //
-// An attempt counts for a seat when its name matches, it falls inside the
-// order's window, and — when both carry one — its target matches the seat's:
-// a same-name start on another mission is another incarnation, not this
-// order's seat. The latest counting outcome (journal or persisted) decides:
-// OK is minted or rerouted, an error is refused. With no counting outcome the
-// seat is not_attempted only when the journal was read and covers the whole
-// window and no seat of that name exists; otherwise it is unknown, naming
-// which evidence was missing.
+// Only a start that carries this order's id is attributed to it: the latest
+// such start (journal or persisted) decides minted, rerouted or refused. A
+// same-name start without the order id cannot be attributed, whatever its
+// target, so it reads unknown and names what was seen — never minted. A
+// missing target is not a wildcard: target only rules a start out, when both
+// sides name one and they differ (another mission's seat). With no start
+// seen at all, a seat is not_attempted only when the journal was read, covers
+// the whole window, and no same-name seat exists; otherwise it is unknown,
+// naming which evidence was missing.
 func Reconcile(o Order, ev Evidence) Result {
 	from := o.windowStart()
 	res := Result{Order: o}
 	for _, seat := range o.Seats {
 		sr := SeatResult{Seat: seat}
 		obs := seat.Observed
-		for _, a := range ev.Attempts {
-			if a.Name != seat.Name || a.At.Before(from) || !sameTarget(seat.Target, a.Target) {
+		var loose *Attempt
+		for i := range ev.Attempts {
+			a := &ev.Attempts[i]
+			if a.Name != seat.Name {
 				continue
 			}
-			if obs == nil || a.At.After(obs.At) {
-				obs = &Observation{At: a.At, OK: a.OK, Err: a.Err, Provider: a.Provider, Target: a.Target, Session: a.Session}
+			if a.OrderID == o.ID {
+				if obs == nil || a.At.After(obs.At) {
+					obs = &Observation{At: a.At, OK: a.OK, Err: a.Err, Provider: a.Provider, Target: a.Target, Session: a.Session}
+				}
+				continue
+			}
+			if a.OrderID != "" || a.At.Before(from) || targetsConflict(seat.Target, a.Target) {
+				continue
+			}
+			if loose == nil || a.At.After(loose.At) {
+				loose = a
 			}
 		}
 		sr.Observed = obs
@@ -243,6 +268,13 @@ func Reconcile(o Order, ev Evidence) Result {
 			if sr.Reason == "" {
 				sr.Reason = "start returned an error with no reason"
 			}
+		case loose != nil:
+			sr.Status = Unknown
+			outcome := "ok"
+			if !loose.OK {
+				outcome = "refused: " + loose.Err
+			}
+			sr.Reason = fmt.Sprintf("a daemon start for this name was observed at %s (target %q, %s) but it carries no order id, so it cannot be attributed to order %s", loose.At.UTC().Format(time.RFC3339), loose.Target, outcome, o.ID)
 		case ev.ReadErr != "":
 			sr.Status = Unknown
 			sr.Reason = "start journal unreadable: " + ev.ReadErr
@@ -254,7 +286,7 @@ func Reconcile(o Order, ev Evidence) Result {
 			sr.Reason = fmt.Sprintf("a seat of this name exists (target %q, session %q) but no start for it fell in this order's window: an earlier incarnation is not evidence for this order", inc.Target, inc.Session)
 		default:
 			sr.Status = NotAttempted
-			sr.Reason = "no jevons_agent_start was made for this seat"
+			sr.Reason = fmt.Sprintf(NotAttemptedReason, from.UTC().Format(time.RFC3339))
 		}
 		res.Seats = append(res.Seats, sr)
 	}
@@ -278,17 +310,29 @@ func normTarget(t string) string {
 	return strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(t)), "🎯")
 }
 
-// sameTarget is true unless both sides name a target and they differ.
-func sameTarget(a, b string) bool {
+// targetsConflict is true only when both sides name a target and they
+// differ. It rules a start out; agreeing or missing targets never rule one
+// in (only an order id does).
+func targetsConflict(a, b string) bool {
 	a, b = normTarget(a), normTarget(b)
-	return a == "" || b == "" || a == b
+	return a != "" && b != "" && a != b
 }
 
-// AttemptsFromEvents projects journalled agent_lifecycle.start events.
+// JournalComponent / JournalStart name the order-correlated start event the
+// daemon journals when a jevons_agent_start call carries an order id.
+const (
+	JournalComponent = "spawn_order"
+	JournalStart     = "start"
+)
+
+// AttemptsFromEvents projects journalled agent_lifecycle.start events and
+// order-correlated spawn_order.start events.
 func AttemptsFromEvents(events []eventlog.Event) []Attempt {
 	var out []Attempt
 	for _, ev := range events {
-		if ev.Component != "agent_lifecycle" || ev.Decision != "start" {
+		lifecycle := ev.Component == "agent_lifecycle" && ev.Decision == "start"
+		correlated := ev.Component == JournalComponent && ev.Decision == JournalStart
+		if !lifecycle && !correlated {
 			continue
 		}
 		name, _ := ev.Fields["name"].(string)
@@ -307,7 +351,14 @@ func AttemptsFromEvents(events []eventlog.Event) []Attempt {
 		}
 		target, _ := ev.Fields["target_id"].(string)
 		session, _ := ev.Fields["session_id"].(string)
-		out = append(out, Attempt{Name: name, At: at, OK: outcome == "ok", Err: errText, Provider: prov, Target: target, Session: session})
+		a := Attempt{Name: name, At: at, OK: outcome == "ok", Err: errText, Provider: prov, Target: target, Session: session}
+		if correlated {
+			a.OrderID, _ = ev.Fields["order_id"].(string)
+			if a.OrderID == "" {
+				continue
+			}
+		}
+		out = append(out, a)
 	}
 	return out
 }

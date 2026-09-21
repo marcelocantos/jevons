@@ -52,41 +52,62 @@ func t762Call(t *testing.T, s *Server, args map[string]any) string {
 	return text
 }
 
+// t762Start drives a start through the production observer, with h standing
+// in for (or being) the start handler.
+func t762Start(t *testing.T, s *Server, h func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error), args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	var req mcp.CallToolRequest
+	req.Params.Arguments = args
+	res, err := s.observeSpawnOrderStart(h)(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// mintOK stands in for a start whose Launch succeeded (a real Launch needs a
+// provider process, which a hermetic test cannot have).
+func mintOK(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultText("started"), nil
+}
+
 // 🎯T762 acceptance 3 (hermetic): a PO-shaped order naming a claude seat and
-// two grok seats; only the claude mint path succeeds. One grok seat's start
-// is refused through the real jevons_agent_start error path, the other is
-// never attempted at all — the 2026-09-21 incident. The surviving record, the
-// PO's /api/agents decoration, names both seats that never appeared and why.
+// three grok seats; only the claude mint path succeeds. Starts pass through
+// the production jevons_agent_start observer. One grok seat is refused by the
+// real start handler with the order id; one is started without the order id
+// (unattributable); one is never attempted at all — the 2026-09-21 incident.
+// The surviving record and the PO's /api/agents decoration name each.
 func TestT762HalfExecutedOrderNamesTheDroppedSeats(t *testing.T) {
 	s := t762Server(t)
-	t762Call(t, s, map[string]any{
+	out := t762Call(t, s, map[string]any{
 		"action": "declare", "id": "o-0635", "parent": "jevons-po", "actor": "supervisor",
-		"seats": "jv-t749-delivery:claude:T749, jv-t760-attrib:grok:T760, jv-t759-dropped:grok:T759",
+		"seats": "jv-t749-delivery:claude:T749, jv-t760-attrib:grok:T760, jv-t755-loose:grok:T755, jv-t759-dropped:grok:T759",
 	})
+	if !strings.Contains(out, "must pass order_id=o-0635") {
+		t.Fatalf("declare does not tell the issuer how to attribute starts: %s", out)
+	}
 
-	// The claude half mints: the daemon journals the ok start it would.
-	s.logLifecycle(compAgentLifecycle, "start", "ok", map[string]any{"name": "jv-t749-delivery", "provider": "claude"})
-	// One grok seat is attempted and refused by the real start handler.
-	var req mcp.CallToolRequest
-	req.Params.Arguments = map[string]any{"name": "jv-t760-attrib", "provider": "grok"}
-	if res, _ := s.handleAgentStart(context.Background(), req); res == nil || !res.IsError {
+	t762Start(t, s, mintOK, map[string]any{"name": "jv-t749-delivery", "provider": "claude", "target_id": "T749", "order_id": "o-0635"})
+	if res := t762Start(t, s, s.handleAgentStart, map[string]any{"name": "jv-t760-attrib", "provider": "grok", "target_id": "T760", "order_id": "o-0635"}); !res.IsError {
 		t.Fatal("start without workdir must be refused")
 	}
-	// jv-t759-dropped: nothing ever asks.
+	t762Start(t, s, mintOK, map[string]any{"name": "jv-t755-loose", "provider": "grok", "target_id": "T755"})
+	s.logLifecycle(compAgentLifecycle, "start", "ok", map[string]any{"name": "jv-t755-loose", "provider": "grok", "target_id": "T755"})
 
-	out := t762Call(t, s, map[string]any{"action": "status", "id": "o-0635"})
+	out = t762Call(t, s, map[string]any{"action": "status", "id": "o-0635"})
 	for _, frag := range []string{
-		"order o-0635: 1/3 minted (INCOMPLETE)",
+		"order o-0635: 1/4 minted (INCOMPLETE)",
 		"jv-t760-attrib (grok) refused: name and workdir are required",
-		"jv-t759-dropped (grok) not_attempted",
+		"jv-t755-loose (grok) unknown: a daemon start for this name was observed",
+		"jv-t759-dropped (grok) not_attempted: no matching daemon start observed",
 	} {
 		if !strings.Contains(out, frag) {
 			t.Errorf("status lacks %q:\n%s", frag, out)
 		}
 	}
 
-	// Acceptance 4: the panel line for the PO carries the same reading, with
-	// no memory of the order text beyond what the daemon stored.
+	// Acceptance 4: a cold server with only the stored order and the journal
+	// gives the panel the same reading.
 	cold := &Server{stateDir: s.stateDir, eventLogTail: s.eventLogTail}
 	lines, err := cold.SpawnOrderLines("jevons-po")
 	if err != nil {
@@ -106,16 +127,27 @@ func TestT762HalfExecutedOrderNamesTheDroppedSeats(t *testing.T) {
 	}
 }
 
-// Acceptance 2 converse: an order whose every seat minted reads complete, so
-// the panel distinguishes it from the half-done one above.
+// Acceptance 2 converse: an order whose every seat minted with its order id
+// reads complete, so the panel distinguishes it from the half-done one above.
 func TestT762CompleteOrderReadsComplete(t *testing.T) {
 	s := t762Server(t)
 	t762Call(t, s, map[string]any{"action": "declare", "id": "o-full", "parent": "jevons-po", "seats": "a:claude, b:grok"})
-	s.logLifecycle(compAgentLifecycle, "start", "ok", map[string]any{"name": "a", "provider": "claude"})
-	s.logLifecycle(compAgentLifecycle, "start", "ok", map[string]any{"name": "b", "provider": "grok"})
+	t762Start(t, s, mintOK, map[string]any{"name": "a", "provider": "claude", "order_id": "o-full"})
+	t762Start(t, s, mintOK, map[string]any{"name": "b", "provider": "grok", "order_id": "o-full"})
 	lines, err := s.SpawnOrderLines("jevons-po")
 	if err != nil || len(lines) != 1 || lines[0] != "order o-full: 2/2 minted (complete)" {
 		t.Fatalf("lines = %q", lines)
+	}
+}
+
+// A start without order_id passes through the observer untouched and
+// journals nothing correlated.
+func TestT762ObserverIgnoresUnorderedStarts(t *testing.T) {
+	s := t762Server(t)
+	t762Start(t, s, mintOK, map[string]any{"name": "plain"})
+	ev, _, err := s.eventLogTail(eventlog.TailOptions{Component: spawnorder.JournalComponent, Decision: spawnorder.JournalStart})
+	if err != nil || len(ev) != 0 {
+		t.Fatalf("unordered start journalled as correlated: %+v %v", ev, err)
 	}
 }
 

@@ -33,6 +33,9 @@ func (s *Server) addTool(t mcp.Tool, h func(context.Context, mcp.CallToolRequest
 	if s == nil || s.mcpSrv == nil {
 		return
 	}
+	if t.Name == "jevons_agent_start" {
+		h = s.observeSpawnOrderStart(h) // 🎯T762: attribute starts to their order
+	}
 	s.mcpSrv.AddTool(t, s.boundTool(t.Name, h))
 }
 

@@ -40,10 +40,10 @@ func TestReconcileNamesEverySeat(t *testing.T) {
 		Seat{Name: "jv-t743", Provider: "grok"},
 	)
 	r := Reconcile(o, Evidence{Attempts: []Attempt{
-		{Name: "jv-t749", At: t0.Add(time.Minute), OK: true, Provider: "claude"},
-		{Name: "jv-t760", At: t0.Add(2 * time.Minute), Err: "dest_saturated", Provider: "claude"},
-		{Name: "jv-t755", At: t0.Add(3 * time.Minute), OK: true, Provider: "claude"},
-		// An attempt well before the order is not this order's.
+		{Name: "jv-t749", At: t0.Add(time.Minute), OK: true, Provider: "claude", OrderID: "o-test"},
+		{Name: "jv-t760", At: t0.Add(2 * time.Minute), Err: "dest_saturated", Provider: "claude", OrderID: "o-test"},
+		{Name: "jv-t755", At: t0.Add(3 * time.Minute), OK: true, Provider: "claude", OrderID: "o-test"},
+		// An unattributed attempt well before the order is not this order's.
 		{Name: "jv-t743", At: t0.Add(-time.Hour), OK: true, Provider: "grok"},
 	}})
 	want := map[string]Status{
@@ -70,9 +70,9 @@ func TestReconcileNamesEverySeat(t *testing.T) {
 func TestReconcileCompleteOrder(t *testing.T) {
 	o := order(Seat{Name: "a", Provider: "claude"}, Seat{Name: "b", Provider: "grok"})
 	r := Reconcile(o, Evidence{Attempts: []Attempt{
-		{Name: "a", At: t0.Add(time.Minute), OK: true, Provider: "claude"},
-		{Name: "b", At: t0.Add(time.Minute), Err: "launch timed out"},
-		{Name: "b", At: t0.Add(2 * time.Minute), OK: true, Provider: "grok"},
+		{Name: "a", At: t0.Add(time.Minute), OK: true, Provider: "claude", OrderID: "o-test"},
+		{Name: "b", At: t0.Add(time.Minute), Err: "launch timed out", OrderID: "o-test"},
+		{Name: "b", At: t0.Add(2 * time.Minute), OK: true, Provider: "grok", OrderID: "o-test"},
 	}})
 	if got := r.Line(); got != "order o-test: 2/2 minted (complete)" {
 		t.Fatalf("line = %q", got)
@@ -99,20 +99,49 @@ func TestMissingEvidenceIsUnknown(t *testing.T) {
 	}
 }
 
-// Review finding 3: a same-name start on another mission is not this seat.
-func TestSameNameOtherTargetDoesNotSatisfy(t *testing.T) {
-	o := order(Seat{Name: "jv-x", Provider: "grok", Target: "T759"})
-	r := Reconcile(o, Evidence{Attempts: []Attempt{
-		{Name: "jv-x", At: t0.Add(time.Minute), OK: true, Provider: "grok", Target: "T100"},
-	}})
-	if r.Seats[0].Status != NotAttempted {
-		t.Fatalf("other-target start counted: %s", r.Seats[0].Status)
+// Mission 3 limits 1 and 2: only a start carrying this order's id is
+// attributed to it. A same-name start without one reads unknown whatever its
+// target — a missing target is not a wildcard, and an agreeing target is not
+// identity — while a conflicting target or another order's id rules it out.
+func TestOnlyOrderIDAttributesAStart(t *testing.T) {
+	at := t0.Add(time.Minute)
+	cases := []struct {
+		name string
+		seat Seat
+		a    Attempt
+		want Status
+		frag string
+	}{
+		{"no target on seat, unattributed ok", Seat{Name: "x", Provider: "grok"}, Attempt{Name: "x", At: at, OK: true, Provider: "grok", Target: "T100"}, Unknown, "carries no order id"},
+		{"no target on start, unattributed ok", Seat{Name: "x", Provider: "grok", Target: "T759"}, Attempt{Name: "x", At: at, OK: true, Provider: "grok"}, Unknown, "carries no order id"},
+		{"matching target, unattributed ok", Seat{Name: "x", Provider: "grok", Target: "T759"}, Attempt{Name: "x", At: at, OK: true, Provider: "grok", Target: "🎯t759"}, Unknown, "cannot be attributed to order o-test"},
+		{"unattributed refusal", Seat{Name: "x", Provider: "grok"}, Attempt{Name: "x", At: at, Err: "dest_saturated"}, Unknown, "refused: dest_saturated"},
+		{"conflicting target", Seat{Name: "x", Provider: "grok", Target: "T759"}, Attempt{Name: "x", At: at, OK: true, Provider: "grok", Target: "T100"}, NotAttempted, "no matching daemon start observed"},
+		{"another order's start", Seat{Name: "x", Provider: "grok"}, Attempt{Name: "x", At: at, OK: true, Provider: "grok", OrderID: "o-other"}, NotAttempted, "no matching daemon start observed"},
+		{"this order's start, no target anywhere", Seat{Name: "x", Provider: "grok"}, Attempt{Name: "x", At: at, OK: true, Provider: "grok", OrderID: "o-test"}, Minted, ""},
+		{"this order's start before the window", Seat{Name: "x", Provider: "grok"}, Attempt{Name: "x", At: t0.Add(-time.Hour), OK: true, Provider: "grok", OrderID: "o-test"}, Minted, ""},
 	}
-	r = Reconcile(o, Evidence{Attempts: []Attempt{
-		{Name: "jv-x", At: t0.Add(time.Minute), OK: true, Provider: "grok", Target: "🎯t759"},
-	}})
-	if r.Seats[0].Status != Minted {
-		t.Fatalf("matching-target start not counted: %s", r.Seats[0].Status)
+	for _, c := range cases {
+		r := Reconcile(order(c.seat), Evidence{Attempts: []Attempt{c.a}})
+		got := r.Seats[0]
+		if got.Status != c.want || !strings.Contains(got.Reason, c.frag) {
+			t.Errorf("%s: %s (%s), want %s containing %q", c.name, got.Status, got.Reason, c.want, c.frag)
+		}
+		if c.want == Unknown && (r.Complete() || got.Observed != nil) {
+			t.Errorf("%s: an unattributed start completed the order or was persisted as this order's", c.name)
+		}
+	}
+}
+
+// Mission 3 limit 3: not_attempted says what the journal can and cannot see.
+func TestNotAttemptedWordingNamesItsScope(t *testing.T) {
+	r := Reconcile(order(Seat{Name: "x", Provider: "grok"}), Evidence{})
+	want := "no matching daemon start observed in the event journal since 2026-09-21T06:25:00Z (scope: starts that reached jevonsd; a start refused before it, e.g. by tool approval, or lost in transport is not visible here)"
+	if r.Seats[0].Status != NotAttempted || r.Seats[0].Reason != want {
+		t.Fatalf("reason = %q", r.Seats[0].Reason)
+	}
+	if strings.Contains(r.Line(), "no jevons_agent_start was made") {
+		t.Fatal("line still claims no start was made")
 	}
 }
 
@@ -128,8 +157,8 @@ func TestObservedOutcomeOutlivesJournalTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := Reconcile(o, Evidence{Attempts: []Attempt{
-		{Name: "a", At: t0.Add(time.Minute), OK: true, Provider: "grok", Session: "s1"},
-		{Name: "b", At: t0.Add(time.Minute), Err: "dest_saturated"},
+		{Name: "a", At: t0.Add(time.Minute), OK: true, Provider: "grok", Session: "s1", OrderID: "o-test"},
+		{Name: "b", At: t0.Add(time.Minute), Err: "dest_saturated", OrderID: "o-test"},
 	}})
 	if err := st.Record([]Result{first}); err != nil {
 		t.Fatal(err)
@@ -155,8 +184,15 @@ func TestAttemptsFromEvents(t *testing.T) {
 		{TS: ts, Component: "agent_lifecycle", Decision: "start", Fields: map[string]any{"name": "a", "outcome": "ok", "provider": "claude", "target_id": "T1", "session_id": "s"}},
 		{TS: ts, Component: "agent_lifecycle", Decision: "start", Fields: map[string]any{"name": "b", "outcome": "error", "err": "dest_saturated", "dest": "claude"}},
 		{TS: ts, Component: "agent_lifecycle", Decision: "seat_stop", Fields: map[string]any{"name": "c"}},
+		{TS: ts, Component: JournalComponent, Decision: JournalStart, Fields: map[string]any{"name": "d", "outcome": "ok", "order_id": "o-1"}},
+		// A correlated event with no order id is dropped, not treated as plain.
+		{TS: ts, Component: JournalComponent, Decision: JournalStart, Fields: map[string]any{"name": "e", "outcome": "ok"}},
 	}
 	got := AttemptsFromEvents(evs)
+	if len(got) != 3 || got[2].Name != "d" || got[2].OrderID != "o-1" || got[0].OrderID != "" {
+		t.Fatalf("attempts = %+v", got)
+	}
+	got = got[:2]
 	if len(got) != 2 || !got[0].OK || got[0].Target != "T1" || got[0].Session != "s" || got[1].OK || got[1].Err != "dest_saturated" || got[1].Provider != "claude" {
 		t.Fatalf("attempts = %+v", got)
 	}
