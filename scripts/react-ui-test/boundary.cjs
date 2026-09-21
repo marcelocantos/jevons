@@ -124,14 +124,19 @@ async function main() {
         return seen || list.some(f => terminal(f.body)) ? 'skipped' : null;
       }, label);
       let first = await preOrEnded('nonterminal PRE');
-      if (first === 'skipped') {
+      // Observed cause (🎯T813): a long owner message reaches the provider as a
+      // collapsed paste, and it sometimes answers "only pasted text, nothing from
+      // you" without acting. The re-ask is therefore short and plain, so it is not
+      // collapsed; two are allowed, each recorded, and none moves a timeout.
+      const MAX_REASKS = 2;
+      for (let attempt = 1; first === 'skipped'; attempt++) {
         const said = assistants().slice(-3).map(f => JSON.stringify(content(f.body).slice(0, 160)));
-        console.log(`RETRY ${name}: provider ended its first turn without a visible PRE plus tool call (replies: ${said.join(' | ') || 'none'}); re-asking once`);
+        if (attempt > MAX_REASKS) throw new Error(`provider skipped the PRE plus tool call after ${MAX_REASKS} re-asks (last replies: ${said.join(' | ') || 'none'})`);
+        console.log(`RETRY ${name} ${attempt}/${MAX_REASKS}: provider ended its turn without a visible PRE plus tool call (replies: ${said.join(' | ') || 'none'}); re-asking`);
         attemptStart = frames.length;
-        await page.locator(input).fill(`Your last reply did not follow the instructions. Do it now, in this order and nothing else. Step 1: write ${pre} as a visible message. Step 2: call your shell tool with exactly this command: node ${helper}. Step 3: after it returns, reply with exactly ${post}. Do not skip step 2.`);
+        await page.locator(input).fill(`Do this now: write ${pre}, then run node ${helper}, then reply ${post}.`);
         await page.locator(button).click();
-        first = await preOrEnded('nonterminal PRE after one re-ask');
-        assert(first !== 'skipped', 'provider skipped the PRE plus tool call again after one re-ask');
+        first = await preOrEnded(`nonterminal PRE after re-ask ${attempt}`);
       }
       assert(!terminal(first.body), 'PRE must precede provider terminal');
       await until(async () => { try { return await fs.readFile(ready, 'utf8') === nonce; } catch { return false; } }, 'actual tool ready marker');
