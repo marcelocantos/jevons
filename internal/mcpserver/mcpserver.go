@@ -392,10 +392,10 @@ type Server struct {
 	// deterministic notice does not depend on.
 	recoverBin string
 	stateDir   string
-	// spawnOrderAttempts caches the journalled start attempts 🎯T762 reconciles
+	// spawnOrderEvidence caches the journalled start attempts 🎯T762 reconciles
 	// against: the journal is a full scan, and /api/agents asks per row.
 	spawnOrderMu       sync.Mutex
-	spawnOrderAttempts []spawnorder.Attempt
+	spawnOrderEvidence spawnorder.Evidence
 	spawnOrderReadAt   time.Time
 
 	// intent is the 🎯T414 fleet-intent store: the deliberate answer to

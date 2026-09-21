@@ -899,6 +899,9 @@ type agentInfo struct {
 	// minted and why (refused: the start error; not_attempted: no start was
 	// ever made), so a cold reader can tell a half-done order from a done one.
 	SpawnOrders []string `json:"spawn_orders,omitempty"`
+	// SpawnOrdersError is set when the order store cannot be read: malformed
+	// state is a visible error on the row, never an empty spawn_orders.
+	SpawnOrdersError string `json:"spawn_orders_error,omitempty"`
 	// TranscriptActivity / TranscriptLastMove / TranscriptAgeSeconds answer
 	// "has this running seat moved recently?" from this one response, with no
 	// filesystem reach into ~/.local/state/claudia or ~/.claude/projects
@@ -934,7 +937,7 @@ func (s *Server) SetMassStopReader(fn func() string) {
 
 // SetSpawnOrderReader installs the 🎯T762 open-order lines per parent
 // (mcpserver.SpawnOrderLines in production).
-func (s *Server) SetSpawnOrderReader(fn func(parent string) []string) {
+func (s *Server) SetSpawnOrderReader(fn func(parent string) ([]string, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.spawnOrderReader = fn
@@ -960,7 +963,11 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 		}
 		agents[i].MassStop = mass
 		if orderReader != nil {
-			agents[i].SpawnOrders = orderReader(agents[i].Name)
+			lines, err := orderReader(agents[i].Name)
+			agents[i].SpawnOrders = lines
+			if err != nil {
+				agents[i].SpawnOrdersError = err.Error()
+			}
 		}
 	}
 	return agents

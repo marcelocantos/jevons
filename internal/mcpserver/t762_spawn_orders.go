@@ -30,7 +30,7 @@ import (
 func (s *Server) registerSpawnOrderTools() {
 	s.addTool(
 		mcp.NewTool("jevons_spawn_order",
-			mcp.WithDescription("Declare a spawn order's named seats, then read per seat whether it was minted (🎯T762). action=declare records an order given to parent naming seats; action=status reconciles every seat against journalled jevons_agent_start attempts and the registry — minted / rerouted (other provider) / refused (start error) / not_attempted (no start was ever made: the dropped half); action=close retires an order from the panel. Open orders decorate the parent's /api/agents row as spawn_orders."),
+			mcp.WithDescription("Declare a spawn order's named seats, then read per seat whether it was minted (🎯T762). action=declare records an order given to parent naming seats; action=status reconciles every seat against journalled jevons_agent_start attempts (same name, order window, matching target) — minted / rerouted (other provider) / refused (start error) / not_attempted (the journal covers the window and holds no start: the dropped half) / unknown (evidence missing: journal unreadable or too short, or only an older same-name incarnation); action=close retires an order from the panel. Open orders decorate the parent's /api/agents row as spawn_orders."),
 			mcp.WithString("action", mcp.Required(), mcp.Description("declare | status | close")),
 			mcp.WithString("parent", mcp.Description("declare: the agent the order was given to (e.g. jevons-po). status: filter to this parent.")),
 			mcp.WithString("seats", mcp.Description("declare: named seats as name:provider[:target], comma- or newline-separated, e.g. \"jv-t759-x:grok:T759, jv-t749-y:claude:T749\"")),
@@ -50,63 +50,84 @@ func (s *Server) spawnOrderStore() (*spawnorder.Store, error) {
 	return spawnorder.Open(spawnorder.DefaultPath(s.stateDir))
 }
 
-// reconcileSpawnOrders reads the journal's start attempts and the registry
-// once and reconciles every order against them.
-func (s *Server) reconcileSpawnOrders(orders []spawnorder.Order) []spawnorder.Result {
-	attempts := s.spawnOrderStartAttempts(time.Now())
-	present := map[string]string{}
+// reconcileSpawnOrders reconciles every order against the journal and the
+// registry, then writes the observed outcomes back so they outlive the
+// journal tail (🎯T762 review finding 3).
+func (s *Server) reconcileSpawnOrders(store *spawnorder.Store, orders []spawnorder.Order) ([]spawnorder.Result, error) {
+	ev := s.spawnOrderJournalEvidence(time.Now())
+	ev.Present = map[string]spawnorder.Incarnation{}
 	if s.registry != nil {
 		for _, def := range s.registry.List() {
 			prov := string(def.Provider)
 			if prov == "" {
 				prov = "claude"
 			}
-			present[def.Name] = prov
+			ev.Present[def.Name] = spawnorder.Incarnation{Provider: prov, Target: def.TargetID, Session: def.SessionID}
 		}
 	}
 	out := make([]spawnorder.Result, 0, len(orders))
 	for _, o := range orders {
-		out = append(out, spawnorder.Reconcile(o, attempts, present))
+		out = append(out, spawnorder.Reconcile(o, ev))
 	}
-	return out
+	if err := store.Record(out); err != nil {
+		return out, fmt.Errorf("spawn orders: record observed outcomes: %w", err)
+	}
+	return out, nil
 }
 
-// spawnOrderAttemptsTTL bounds how stale the cached start attempts may be.
+// spawnOrderJournalLimit is how many start events one journal read keeps.
+const spawnOrderJournalLimit = 2000
+
+// spawnOrderAttemptsTTL bounds how stale the cached journal evidence may be.
 // The journal is a full decode of a file that grows all day, and /api/agents
 // asks once per row with an open order.
 const spawnOrderAttemptsTTL = 30 * time.Second
 
-// spawnOrderStartAttempts returns the journalled start attempts, rescanning
-// the journal at most once per spawnOrderAttemptsTTL.
-func (s *Server) spawnOrderStartAttempts(now time.Time) []spawnorder.Attempt {
+// spawnOrderJournalEvidence returns the journalled start attempts, rescanning
+// the journal at most once per spawnOrderAttemptsTTL. A failed read is
+// carried as ReadErr, and a read that hit the limit carries the instant it
+// reaches back to, so reconciliation reports unknown instead of reading
+// missing evidence as "never attempted".
+func (s *Server) spawnOrderJournalEvidence(now time.Time) spawnorder.Evidence {
 	if s.eventLogTail == nil {
-		return nil
+		return spawnorder.Evidence{ReadErr: "no event journal is wired to this server"}
 	}
 	s.spawnOrderMu.Lock()
 	defer s.spawnOrderMu.Unlock()
 	if !s.spawnOrderReadAt.IsZero() && now.Sub(s.spawnOrderReadAt) < spawnOrderAttemptsTTL {
-		return s.spawnOrderAttempts
+		return s.spawnOrderEvidence
 	}
-	events, _, err := s.eventLogTail(eventlog.TailOptions{Limit: 2000, Component: compAgentLifecycle, Decision: "start"})
+	events, _, err := s.eventLogTail(eventlog.TailOptions{Limit: spawnOrderJournalLimit, Component: compAgentLifecycle, Decision: "start"})
+	var ev spawnorder.Evidence
 	if err != nil {
-		return s.spawnOrderAttempts
+		ev.ReadErr = err.Error()
+	} else {
+		ev.Attempts = spawnorder.AttemptsFromEvents(events)
+		if len(events) >= spawnOrderJournalLimit {
+			for _, e := range events {
+				at, perr := time.Parse(time.RFC3339Nano, e.TS)
+				if perr == nil && (ev.CoveredSince.IsZero() || at.Before(ev.CoveredSince)) {
+					ev.CoveredSince = at
+				}
+			}
+		}
 	}
-	s.spawnOrderAttempts = spawnorder.AttemptsFromEvents(events)
+	s.spawnOrderEvidence = ev
 	s.spawnOrderReadAt = now
-	return s.spawnOrderAttempts
+	return ev
 }
 
 // SpawnOrderLines is the /api/agents decoration for one parent: a line per
 // open (not closed) order given to it, incomplete orders naming their missing
-// seats. Empty when the parent has no open orders or no store exists.
-func (s *Server) SpawnOrderLines(parent string) []string {
+// seats. An unreadable or malformed store is an error, never "no orders".
+func (s *Server) SpawnOrderLines(parent string) ([]string, error) {
 	store, err := s.spawnOrderStore()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	orders, err := store.Orders()
 	if err != nil {
-		return []string{"spawn orders unreadable: " + err.Error()}
+		return nil, err
 	}
 	var open []spawnorder.Order
 	for _, o := range orders {
@@ -115,13 +136,14 @@ func (s *Server) SpawnOrderLines(parent string) []string {
 		}
 	}
 	if len(open) == 0 {
-		return nil
+		return nil, nil
 	}
+	results, err := s.reconcileSpawnOrders(store, open)
 	var lines []string
-	for _, r := range s.reconcileSpawnOrders(open) {
+	for _, r := range results {
 		lines = append(lines, r.Line())
 	}
-	return lines
+	return lines, err
 }
 
 func (s *Server) handleSpawnOrder(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -178,7 +200,10 @@ func (s *Server) handleSpawnOrder(_ context.Context, req mcp.CallToolRequest) (*
 		if id != "" && len(pick) == 0 {
 			return mcp.NewToolResultError(fmt.Sprintf("no order %q", id)), nil
 		}
-		results := s.reconcileSpawnOrders(pick)
+		results, err := s.reconcileSpawnOrders(store, pick)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 		var b strings.Builder
 		for _, r := range results {
 			b.WriteString(r.Line())

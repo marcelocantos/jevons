@@ -13,14 +13,20 @@
 // holds what was ordered, independently of what was attempted.
 //
 // So an order is declared (by whoever issues it) as its named seats, and each
-// seat is reconciled against the start attempts the daemon journals and the
-// seats the registry holds. Every named seat gets one of: minted, rerouted
-// (minted, but on a provider the order did not name), refused (a start was
-// attempted and declined — the reason is the journalled error) or
-// not_attempted (nothing ever asked the daemon for it). An order is complete
-// only when no seat is refused or not_attempted, and [Result.Line] names the
-// seats that are, so a cold reader of the panel can tell a finished order
-// from a half-finished one without holding the order text.
+// seat is reconciled against the start attempts the daemon journals. Every
+// named seat gets one of: minted, rerouted (minted, but on a provider the
+// order did not name), refused (a start was attempted and declined — the
+// reason is the journalled error), not_attempted (the journal covers the
+// order's window and holds no start for it) or unknown (the evidence cannot
+// decide: the journal was unreadable or does not reach back far enough, or
+// the only seat under that name is an older incarnation). Absence of evidence
+// is never reported as evidence of absence. An order is complete only when
+// every seat is minted or rerouted, and [Result.Line] names the rest, so a
+// cold reader of the panel can tell a finished order from a half-finished one
+// without holding the order text.
+//
+// An outcome, once observed, is written back to the order ([Store.Record]),
+// so it outlives the journal tail it was read from.
 package spawnorder
 
 import (
@@ -40,7 +46,9 @@ import (
 // FileName is the store's file under the daemon state dir.
 const FileName = "spawn-orders.json"
 
-// MaxOrders bounds the store; the oldest orders are dropped first.
+// MaxOrders bounds the store. Closed orders are evicted oldest first; when
+// every stored order is still open, a new declaration is refused rather than
+// dropping an unresolved obligation.
 const MaxOrders = 200
 
 // DeclareSkew is how far before an order's IssuedAt a start attempt still
@@ -53,6 +61,19 @@ type Seat struct {
 	Name     string `json:"name"`
 	Provider string `json:"provider,omitempty"`
 	Target   string `json:"target,omitempty"`
+	// Observed is the latest start outcome seen for this seat inside the
+	// order's window, persisted so it survives the journal tail.
+	Observed *Observation `json:"observed,omitempty"`
+}
+
+// Observation is one start outcome attributed to a seat of an order.
+type Observation struct {
+	At       time.Time `json:"at"`
+	OK       bool      `json:"ok"`
+	Err      string    `json:"err,omitempty"`
+	Provider string    `json:"provider,omitempty"`
+	Target   string    `json:"target,omitempty"`
+	Session  string    `json:"session,omitempty"`
 }
 
 // Order is one declared spawn order.
@@ -71,6 +92,11 @@ type Order struct {
 	ClosedNote string    `json:"closed_note,omitempty"`
 }
 
+// windowStart is the earliest start attempt that counts for the order.
+func (o Order) windowStart() time.Time {
+	return o.IssuedAt.Add(-DeclareSkew)
+}
+
 // Status is a named seat's reconciled outcome.
 type Status string
 
@@ -79,6 +105,7 @@ const (
 	Rerouted     Status = "rerouted"
 	Refused      Status = "refused"
 	NotAttempted Status = "not_attempted"
+	Unknown      Status = "unknown"
 )
 
 // Attempt is one journalled jevons_agent_start outcome.
@@ -88,6 +115,30 @@ type Attempt struct {
 	OK       bool
 	Err      string
 	Provider string
+	Target   string
+	Session  string
+}
+
+// Incarnation is the registry's current seat under a name.
+type Incarnation struct {
+	Provider string
+	Target   string
+	Session  string
+}
+
+// Evidence is everything a reconciliation reads.
+type Evidence struct {
+	// Attempts are journalled start outcomes, any order.
+	Attempts []Attempt
+	// ReadErr is set when the journal could not be read at all; every seat
+	// without a persisted observation is then unknown.
+	ReadErr string
+	// CoveredSince is the oldest instant the attempts are complete from:
+	// zero means the whole journal was read. A seat whose order window
+	// starts before it has no evidence of absence.
+	CoveredSince time.Time
+	// Present is the registry's seats by name.
+	Present map[string]Incarnation
 }
 
 // SeatResult is one named seat and what became of it.
@@ -95,9 +146,9 @@ type SeatResult struct {
 	Seat
 	Status Status `json:"status"`
 	// Reason says why: the start error for refused, the provider actually
-	// used for rerouted, and for not_attempted that no start was ever made.
-	Reason string    `json:"reason,omitempty"`
-	At     time.Time `json:"at,omitzero"`
+	// used for rerouted, what the evidence lacked for unknown, and for
+	// not_attempted that no start was ever made.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Result is an order reconciled against the fleet.
@@ -109,7 +160,7 @@ type Result struct {
 // Complete reports whether every named seat was minted (on any provider).
 func (r Result) Complete() bool {
 	for _, s := range r.Seats {
-		if s.Status == Refused || s.Status == NotAttempted {
+		if s.Status != Minted && s.Status != Rerouted {
 			return false
 		}
 	}
@@ -156,47 +207,51 @@ func (r Result) Line() string {
 	return b.String()
 }
 
-// Reconcile decides each named seat's outcome. attempts are journalled start
-// outcomes (any order); present maps registry seat names to their provider.
+// Reconcile decides each named seat's outcome from ev and the observations
+// already persisted on the order.
 //
-// The latest attempt inside the order's window decides a seat: an OK start is
-// minted (or rerouted when the provider differs from the one ordered), an
-// error is refused with that error — unless the seat is in the registry now,
-// because a later retry may have landed outside the journal tail. A seat with
-// no attempt is minted when the registry holds it (it predates the order) and
-// not_attempted otherwise: that is the dropped half.
-func Reconcile(o Order, attempts []Attempt, present map[string]string) Result {
-	from := o.IssuedAt.Add(-DeclareSkew)
-	latest := map[string]Attempt{}
-	for _, a := range attempts {
-		if a.At.Before(from) {
-			continue
-		}
-		if prev, ok := latest[a.Name]; !ok || a.At.After(prev.At) {
-			latest[a.Name] = a
-		}
-	}
+// An attempt counts for a seat when its name matches, it falls inside the
+// order's window, and — when both carry one — its target matches the seat's:
+// a same-name start on another mission is another incarnation, not this
+// order's seat. The latest counting outcome (journal or persisted) decides:
+// OK is minted or rerouted, an error is refused. With no counting outcome the
+// seat is not_attempted only when the journal was read and covers the whole
+// window and no seat of that name exists; otherwise it is unknown, naming
+// which evidence was missing.
+func Reconcile(o Order, ev Evidence) Result {
+	from := o.windowStart()
 	res := Result{Order: o}
 	for _, seat := range o.Seats {
 		sr := SeatResult{Seat: seat}
-		livePro, live := present[seat.Name]
-		a, attempted := latest[seat.Name]
+		obs := seat.Observed
+		for _, a := range ev.Attempts {
+			if a.Name != seat.Name || a.At.Before(from) || !sameTarget(seat.Target, a.Target) {
+				continue
+			}
+			if obs == nil || a.At.After(obs.At) {
+				obs = &Observation{At: a.At, OK: a.OK, Err: a.Err, Provider: a.Provider, Target: a.Target, Session: a.Session}
+			}
+		}
+		sr.Observed = obs
+		inc, live := ev.Present[seat.Name]
 		switch {
-		case attempted && a.OK:
-			sr.At = a.At
-			sr.Status, sr.Reason = mintedOn(seat, a.Provider)
-		case attempted && live:
-			sr.At = a.At
-			sr.Status, sr.Reason = mintedOn(seat, livePro)
-		case attempted:
-			sr.At = a.At
+		case obs != nil && obs.OK:
+			sr.Status, sr.Reason = mintedOn(seat, obs.Provider)
+		case obs != nil:
 			sr.Status = Refused
-			sr.Reason = strings.TrimSpace(a.Err)
+			sr.Reason = strings.TrimSpace(obs.Err)
 			if sr.Reason == "" {
 				sr.Reason = "start returned an error with no reason"
 			}
+		case ev.ReadErr != "":
+			sr.Status = Unknown
+			sr.Reason = "start journal unreadable: " + ev.ReadErr
+		case !ev.CoveredSince.IsZero() && ev.CoveredSince.After(from):
+			sr.Status = Unknown
+			sr.Reason = "start journal read reaches back only to " + ev.CoveredSince.UTC().Format(time.RFC3339) + ", after this order's window opened"
 		case live:
-			sr.Status, sr.Reason = mintedOn(seat, livePro)
+			sr.Status = Unknown
+			sr.Reason = fmt.Sprintf("a seat of this name exists (target %q, session %q) but no start for it fell in this order's window: an earlier incarnation is not evidence for this order", inc.Target, inc.Session)
 		default:
 			sr.Status = NotAttempted
 			sr.Reason = "no jevons_agent_start was made for this seat"
@@ -217,6 +272,16 @@ func mintedOn(seat Seat, actual string) (Status, string) {
 
 func normProvider(p string) string {
 	return strings.ToLower(strings.TrimSpace(p))
+}
+
+func normTarget(t string) string {
+	return strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(t)), "🎯")
+}
+
+// sameTarget is true unless both sides name a target and they differ.
+func sameTarget(a, b string) bool {
+	a, b = normTarget(a), normTarget(b)
+	return a == "" || b == "" || a == b
 }
 
 // AttemptsFromEvents projects journalled agent_lifecycle.start events.
@@ -240,7 +305,9 @@ func AttemptsFromEvents(events []eventlog.Event) []Attempt {
 		if prov == "" {
 			prov, _ = ev.Fields["dest"].(string)
 		}
-		out = append(out, Attempt{Name: name, At: at, OK: outcome == "ok", Err: errText, Provider: prov})
+		target, _ := ev.Fields["target_id"].(string)
+		session, _ := ev.Fields["session_id"].(string)
+		out = append(out, Attempt{Name: name, At: at, OK: outcome == "ok", Err: errText, Provider: prov, Target: target, Session: session})
 	}
 	return out
 }
@@ -261,7 +328,7 @@ func ParseSeats(s string) ([]Seat, error) {
 			seat.Provider = normProvider(parts[1])
 		}
 		if len(parts) > 2 {
-			seat.Target = strings.TrimSpace(parts[2])
+			seat.Target = normTarget(parts[2])
 		}
 		if seat.Name == "" {
 			return nil, fmt.Errorf("seat %q has no name", raw)
@@ -280,9 +347,22 @@ func ParseSeats(s string) ([]Seat, error) {
 
 // Store is the durable order list. Writes are atomic write-and-rename; a
 // malformed file is a hard error, never a silent reset.
+//
+// Every Store opened on the same path shares one lock, because the daemon
+// opens a Store per request: a mutex per instance would let two handlers
+// read, modify and write the file concurrently and lose one side's order.
 type Store struct {
-	mu   sync.Mutex
 	path string
+}
+
+// pathLocks holds one mutex per cleaned store path.
+var pathLocks sync.Map
+
+func (s *Store) lock() func() {
+	v, _ := pathLocks.LoadOrStore(s.path, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // DefaultPath is the store's path under stateDir.
@@ -292,7 +372,11 @@ func DefaultPath(stateDir string) string {
 
 // Open returns a store at path, failing when an existing file is malformed.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	s := &Store{path: filepath.Clean(path)}
+	defer s.lock()()
 	if _, err := s.load(); err != nil {
 		return nil, err
 	}
@@ -318,25 +402,43 @@ func (s *Store) load() ([]Order, error) {
 	return f.Orders, nil
 }
 
+// save writes through a uniquely named temp file, so two writers can never
+// interleave into one .tmp, then renames it over the store.
 func (s *Store) save(orders []Order) error {
 	data, err := json.MarshalIndent(fileShape{Orders: orders}, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, filepath.Base(s.path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), s.path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
-// Declare stores a new order, minting an ID and IssuedAt when absent.
+// Declare stores a new order, minting an ID and IssuedAt when absent. At
+// MaxOrders the oldest closed orders are evicted; if none is closed the
+// declaration is refused, because dropping an open order would silently
+// discard an unresolved obligation.
 func (s *Store) Declare(o Order, now time.Time) (Order, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lock()()
 	orders, err := s.load()
 	if err != nil {
 		return Order{}, err
@@ -353,24 +455,32 @@ func (s *Store) Declare(o Order, now time.Time) (Order, error) {
 	}
 	o.IssuedAt = o.IssuedAt.UTC()
 	if o.ID == "" {
-		o.ID = "o-" + o.IssuedAt.Format("20060102T150405")
+		o.ID = "o-" + o.IssuedAt.Format("20060102T150405.000")
 	}
 	for _, prev := range orders {
 		if prev.ID == o.ID {
 			return Order{}, fmt.Errorf("order id %q already declared", o.ID)
 		}
 	}
-	orders = append(orders, o)
-	if len(orders) > MaxOrders {
-		orders = orders[len(orders)-MaxOrders:]
+	for len(orders) >= MaxOrders {
+		evict := -1
+		for i, prev := range orders {
+			if prev.Closed && (evict < 0 || prev.IssuedAt.Before(orders[evict].IssuedAt)) {
+				evict = i
+			}
+		}
+		if evict < 0 {
+			return Order{}, fmt.Errorf("spawn order store at capacity: %d open orders, none closed; close resolved orders (action=close) before declaring more", len(orders))
+		}
+		orders = append(orders[:evict], orders[evict+1:]...)
 	}
+	orders = append(orders, o)
 	return o, s.save(orders)
 }
 
 // Close marks an order finished with.
 func (s *Store) Close(id, note string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lock()()
 	orders, err := s.load()
 	if err != nil {
 		return err
@@ -386,10 +496,48 @@ func (s *Store) Close(id, note string, now time.Time) error {
 	return fmt.Errorf("no order %q", id)
 }
 
+// Record writes each result's observed outcomes back onto its stored order
+// when newer than what is stored, so an outcome outlives the journal tail it
+// was read from. It writes only when something changed.
+func (s *Store) Record(results []Result) error {
+	defer s.lock()()
+	orders, err := s.load()
+	if err != nil {
+		return err
+	}
+	byID := map[string]Result{}
+	for _, r := range results {
+		byID[r.Order.ID] = r
+	}
+	changed := false
+	for i := range orders {
+		r, ok := byID[orders[i].ID]
+		if !ok {
+			continue
+		}
+		for j := range orders[i].Seats {
+			seat := &orders[i].Seats[j]
+			for _, sr := range r.Seats {
+				if sr.Name != seat.Name || sr.Observed == nil {
+					continue
+				}
+				if seat.Observed == nil || sr.Observed.At.After(seat.Observed.At) {
+					o := *sr.Observed
+					seat.Observed = &o
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.save(orders)
+}
+
 // Orders returns every stored order, oldest first.
 func (s *Store) Orders() ([]Order, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lock()()
 	orders, err := s.load()
 	sort.SliceStable(orders, func(i, j int) bool { return orders[i].IssuedAt.Before(orders[j].IssuedAt) })
 	return orders, err

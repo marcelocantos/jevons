@@ -4,9 +4,11 @@
 package spawnorder
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +21,14 @@ func order(seats ...Seat) Order {
 	return Order{ID: "o-test", Parent: "jevons-po", IssuedAt: t0, Seats: seats}
 }
 
+func statuses(r Result) map[string]Status {
+	out := map[string]Status{}
+	for _, s := range r.Seats {
+		out[s.Name] = s.Status
+	}
+	return out
+}
+
 // 🎯T762 acceptance 1: every named seat gets a verdict, not only the ones that
 // exist — the 2026-09-21 shape, claude half minted and grok half never asked.
 func TestReconcileNamesEverySeat(t *testing.T) {
@@ -29,24 +39,20 @@ func TestReconcileNamesEverySeat(t *testing.T) {
 		Seat{Name: "jv-t755", Provider: "grok"},
 		Seat{Name: "jv-t743", Provider: "grok"},
 	)
-	attempts := []Attempt{
+	r := Reconcile(o, Evidence{Attempts: []Attempt{
 		{Name: "jv-t749", At: t0.Add(time.Minute), OK: true, Provider: "claude"},
 		{Name: "jv-t760", At: t0.Add(2 * time.Minute), Err: "dest_saturated", Provider: "claude"},
 		{Name: "jv-t755", At: t0.Add(3 * time.Minute), OK: true, Provider: "claude"},
 		// An attempt well before the order is not this order's.
 		{Name: "jv-t743", At: t0.Add(-time.Hour), OK: true, Provider: "grok"},
-	}
-	r := Reconcile(o, attempts, map[string]string{"jv-t749": "claude"})
+	}})
 	want := map[string]Status{
 		"jv-t749": Minted, "jv-t759": NotAttempted, "jv-t760": Refused,
 		"jv-t755": Rerouted, "jv-t743": NotAttempted,
 	}
-	if len(r.Seats) != len(want) {
-		t.Fatalf("seats = %d, want %d", len(r.Seats), len(want))
-	}
-	for _, s := range r.Seats {
-		if s.Status != want[s.Name] {
-			t.Errorf("%s = %s (%s), want %s", s.Name, s.Status, s.Reason, want[s.Name])
+	for name, st := range statuses(r) {
+		if st != want[name] {
+			t.Errorf("%s = %s, want %s", name, st, want[name])
 		}
 	}
 	if r.Complete() {
@@ -63,43 +69,101 @@ func TestReconcileNamesEverySeat(t *testing.T) {
 // acceptance 2 converse: a fully minted order reads complete and names nobody.
 func TestReconcileCompleteOrder(t *testing.T) {
 	o := order(Seat{Name: "a", Provider: "claude"}, Seat{Name: "b", Provider: "grok"})
-	r := Reconcile(o, []Attempt{
+	r := Reconcile(o, Evidence{Attempts: []Attempt{
 		{Name: "a", At: t0.Add(time.Minute), OK: true, Provider: "claude"},
 		{Name: "b", At: t0.Add(time.Minute), Err: "launch timed out"},
 		{Name: "b", At: t0.Add(2 * time.Minute), OK: true, Provider: "grok"},
-	}, nil)
-	if !r.Complete() || r.Minted() != 2 {
-		t.Fatalf("want complete 2/2: %s", r.Line())
-	}
+	}})
 	if got := r.Line(); got != "order o-test: 2/2 minted (complete)" {
 		t.Fatalf("line = %q", got)
 	}
 }
 
-// A refused start whose seat is in the registry anyway (a retry past the
-// journal tail) counts as minted: existence beats a stale error.
-func TestRefusedButPresentIsMinted(t *testing.T) {
+// Review finding 3: missing evidence is unknown, never not_attempted.
+func TestMissingEvidenceIsUnknown(t *testing.T) {
 	o := order(Seat{Name: "a", Provider: "grok"})
-	r := Reconcile(o, []Attempt{{Name: "a", At: t0.Add(time.Minute), Err: "x"}}, map[string]string{"a": "grok"})
+	cases := map[string]Evidence{
+		"journal unreadable": {ReadErr: "permission denied"},
+		"tail too short":     {CoveredSince: t0.Add(time.Minute)},
+		"older incarnation":  {Present: map[string]Incarnation{"a": {Provider: "grok", Target: "T100", Session: "s-old"}}},
+	}
+	for name, ev := range cases {
+		r := Reconcile(o, ev)
+		if r.Seats[0].Status != Unknown || r.Complete() {
+			t.Errorf("%s: status = %s (%s), want unknown and incomplete", name, r.Seats[0].Status, r.Seats[0].Reason)
+		}
+	}
+	// A tail that does reach back past the window decides absence.
+	if r := Reconcile(o, Evidence{CoveredSince: t0.Add(-time.Hour)}); r.Seats[0].Status != NotAttempted {
+		t.Fatalf("covered window: %s", r.Seats[0].Status)
+	}
+}
+
+// Review finding 3: a same-name start on another mission is not this seat.
+func TestSameNameOtherTargetDoesNotSatisfy(t *testing.T) {
+	o := order(Seat{Name: "jv-x", Provider: "grok", Target: "T759"})
+	r := Reconcile(o, Evidence{Attempts: []Attempt{
+		{Name: "jv-x", At: t0.Add(time.Minute), OK: true, Provider: "grok", Target: "T100"},
+	}})
+	if r.Seats[0].Status != NotAttempted {
+		t.Fatalf("other-target start counted: %s", r.Seats[0].Status)
+	}
+	r = Reconcile(o, Evidence{Attempts: []Attempt{
+		{Name: "jv-x", At: t0.Add(time.Minute), OK: true, Provider: "grok", Target: "🎯t759"},
+	}})
 	if r.Seats[0].Status != Minted {
-		t.Fatalf("status = %s", r.Seats[0].Status)
+		t.Fatalf("matching-target start not counted: %s", r.Seats[0].Status)
+	}
+}
+
+// Review finding 3: an observed outcome survives the journal tail rolling
+// past it.
+func TestObservedOutcomeOutlivesJournalTail(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := st.Declare(order(Seat{Name: "a", Provider: "grok"}, Seat{Name: "b", Provider: "grok"}), t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := Reconcile(o, Evidence{Attempts: []Attempt{
+		{Name: "a", At: t0.Add(time.Minute), OK: true, Provider: "grok", Session: "s1"},
+		{Name: "b", At: t0.Add(time.Minute), Err: "dest_saturated"},
+	}})
+	if err := st.Record([]Result{first}); err != nil {
+		t.Fatal(err)
+	}
+	orders, err := st.Orders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The journal has rolled: nothing read covers the window any more.
+	later := Reconcile(orders[0], Evidence{CoveredSince: t0.Add(time.Hour)})
+	got := statuses(later)
+	if got["a"] != Minted || got["b"] != Refused {
+		t.Fatalf("after tail roll: %v", got)
+	}
+	if later.Seats[0].Observed.Session != "s1" {
+		t.Fatalf("session evidence lost: %+v", later.Seats[0].Observed)
 	}
 }
 
 func TestAttemptsFromEvents(t *testing.T) {
+	ts := t0.Format(time.RFC3339Nano)
 	evs := []eventlog.Event{
-		{TS: t0.Format(time.RFC3339Nano), Component: "agent_lifecycle", Decision: "start", Fields: map[string]any{"name": "a", "outcome": "ok", "provider": "claude"}},
-		{TS: t0.Format(time.RFC3339Nano), Component: "agent_lifecycle", Decision: "start", Fields: map[string]any{"name": "b", "outcome": "error", "err": "dest_saturated", "dest": "claude"}},
-		{TS: t0.Format(time.RFC3339Nano), Component: "agent_lifecycle", Decision: "seat_stop", Fields: map[string]any{"name": "c"}},
+		{TS: ts, Component: "agent_lifecycle", Decision: "start", Fields: map[string]any{"name": "a", "outcome": "ok", "provider": "claude", "target_id": "T1", "session_id": "s"}},
+		{TS: ts, Component: "agent_lifecycle", Decision: "start", Fields: map[string]any{"name": "b", "outcome": "error", "err": "dest_saturated", "dest": "claude"}},
+		{TS: ts, Component: "agent_lifecycle", Decision: "seat_stop", Fields: map[string]any{"name": "c"}},
 	}
 	got := AttemptsFromEvents(evs)
-	if len(got) != 2 || !got[0].OK || got[1].OK || got[1].Err != "dest_saturated" || got[1].Provider != "claude" {
+	if len(got) != 2 || !got[0].OK || got[0].Target != "T1" || got[0].Session != "s" || got[1].OK || got[1].Err != "dest_saturated" || got[1].Provider != "claude" {
 		t.Fatalf("attempts = %+v", got)
 	}
 }
 
 func TestParseSeats(t *testing.T) {
-	seats, err := ParseSeats("jv-a:Grok:T759, jv-b:claude\njv-c")
+	seats, err := ParseSeats("jv-a:Grok:t759, jv-b:claude\njv-c")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,5 +205,99 @@ func TestStoreRoundTripAndMalformed(t *testing.T) {
 	}
 	if _, err := Open(path); err == nil {
 		t.Fatal("malformed store opened: must be a hard error, never a silent reset")
+	}
+	if _, err := st.Orders(); err == nil {
+		t.Fatal("malformed store read through an open handle as no orders")
+	}
+}
+
+// Review finding 1: the daemon opens a Store per handler, so concurrent
+// declarations, closures and records through separate Stores on one path
+// must all land.
+func TestConcurrentHandlersLoseNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	const n = 40
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			st, err := Open(path)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			o, err := st.Declare(Order{ID: fmt.Sprintf("o-%02d", i), Parent: "p", IssuedAt: t0, Seats: []Seat{{Name: "a"}}}, t0)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if i%2 == 0 {
+				other, err := Open(path)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := other.Close(o.ID, "done", t0); err != nil {
+					t.Error(err)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Orders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := 0
+	for _, o := range got {
+		if o.Closed {
+			closed++
+		}
+	}
+	if len(got) != n || closed != n/2 {
+		t.Fatalf("orders = %d (closed %d), want %d (closed %d)", len(got), closed, n, n/2)
+	}
+	leftovers, _ := filepath.Glob(path + ".*.tmp")
+	if len(leftovers) != 0 {
+		t.Fatalf("temp files left behind: %v", leftovers)
+	}
+}
+
+// Review finding 4: at capacity, closed orders are evicted first and open
+// ones are never silently dropped.
+func TestCapacityNeverDropsOpenOrders(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range MaxOrders {
+		if _, err := st.Declare(Order{ID: fmt.Sprintf("o-%03d", i), Parent: "p", IssuedAt: t0.Add(time.Duration(i) * time.Second), Seats: []Seat{{Name: "a"}}}, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.Declare(Order{ID: "o-over", Parent: "p", Seats: []Seat{{Name: "a"}}}, t0); err == nil || !strings.Contains(err.Error(), "capacity") {
+		t.Fatalf("declare at capacity with every order open: err = %v", err)
+	}
+	if err := st.Close("o-150", "done", t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Declare(Order{ID: "o-over", Parent: "p", Seats: []Seat{{Name: "a"}}}, t0); err != nil {
+		t.Fatalf("declare after a close: %v", err)
+	}
+	got, err := st.Orders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, o := range got {
+		ids[o.ID] = true
+	}
+	if len(got) != MaxOrders || ids["o-150"] || !ids["o-000"] || !ids["o-over"] {
+		t.Fatalf("eviction took the wrong order: len=%d o-150=%v o-000=%v", len(got), ids["o-150"], ids["o-000"])
 	}
 }
