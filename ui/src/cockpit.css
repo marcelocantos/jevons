@@ -115,6 +115,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   padding: 2px 0;
   white-space: pre-wrap;
 }
+/* 🎯T811: owner-message delivery state lives in the message row. */
+.msg-delivery { display: flex; gap: 8px; align-items: center; font-size: 12px; line-height: 1.35; margin-top: 4px; }
+.msg-delivery[data-state="undelivered"] { color: var(--red); }
+.msg-delivery[data-state="delivered"] { color: var(--dim, inherit); opacity: 0.7; }
+.msg-resend { font: inherit; padding: 0 8px; border: 1px solid currentColor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
 /* Absolute rows already skip off-band work; content-visibility:auto on an
    abs child of a tall canvas reports 0×0 rects and we detach the row the
    owner is looking at. Always visible. */

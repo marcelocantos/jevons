@@ -197,6 +197,29 @@ describe('displayRows', () => {
     expect(rows[1].text).toBe('overseer is not running · ×3');
   });
 
+  it('an undelivered owner message paints into its own row and flips once, keyed by msg_id (🎯T806 / T811)', () => {
+    const user = { type: 'user', msg_id: 'om-1', message: { role: 'user', content: [{ type: 'text', text: 'decisions' }] } };
+    const undelivered = {
+      type: 'send_error', state: 'undelivered', msg_id: 'om-1', reason: 'broker protocol: not_owner',
+      text: 'message not delivered — will retry: broker protocol: not_owner',
+    };
+    const delivered = { type: 'send_error', state: 'delivered', msg_id: 'om-1', text: 'message delivered to the overseer after retry' };
+    const before = displayRows([user, undelivered]);
+    expect(before.map((r) => r.kind)).toEqual(['user']);
+    expect(before[0].delivery).toEqual({ state: 'undelivered', reason: 'broker protocol: not_owner' });
+    const after = displayRows([user, undelivered, { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }, delivered]);
+    expect(after.filter((r) => r.kind === 'diagnostic')).toHaveLength(0);
+    expect(after[0].delivery).toEqual({ state: 'delivered' });
+  });
+
+  it('without the owner bubble on screen an undelivered frame falls back to one diagnostic that flips in place', () => {
+    const undelivered = { type: 'send_error', state: 'undelivered', msg_id: 'om-2', text: 'message not delivered — will retry: x' };
+    const delivered = { type: 'send_error', state: 'delivered', msg_id: 'om-2', text: 'message delivered to the overseer after retry' };
+    expect(displayRows([undelivered]).map((r) => r.text)).toEqual(['message not delivered — will retry: x']);
+    expect(displayRows([undelivered, delivered]).map((r) => r.text)).toEqual(['message delivered to the overseer after retry']);
+    expect(displayRows([delivered]).filter((r) => r.kind === 'diagnostic')).toHaveLength(1);
+  });
+
   it('pending send acks only a user echo that arrived after send, not a nack or older bubble (🎯T545.3)', () => {
     const pending = 'hello';
     const prior = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hello' }] } };

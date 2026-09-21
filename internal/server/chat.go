@@ -458,6 +458,12 @@ func (s *Server) overseerWorkingLevel() bool {
 // fleet backlog and interrupt a fleet-only in-flight prompt so the owner's
 // words are not deferred behind idle churn.
 func (s *Server) SendToOverseer(text string) error {
+	return s.SendToOverseerAs(text, "")
+}
+
+// SendToOverseerAs is SendToOverseer for an owner turn that has a message id
+// (🎯T806): the id is registered in the same lock hold that enqueues the text.
+func (s *Server) SendToOverseerAs(text, msgID string) error {
 	owner := isOwnerNotifyText(text)
 	// The owner talking to Jevons is the strongest owner-present signal —
 	// feed the budget dead-man's switch so it never stops a fleet the
@@ -473,6 +479,9 @@ func (s *Server) SendToOverseer(text string) error {
 		// Owner turns never coalesce with each other; append then peel first
 		// at drain (partition). Keep enqueue order among owners.
 		s.notifyQueue = append(s.notifyQueue, text)
+		if msgID != "" {
+			s.registerOwnerMessageIDLocked(text, msgID)
+		}
 	} else {
 		s.notifyQueue = coalesceNotifyEnqueue(s.notifyQueue, text)
 	}

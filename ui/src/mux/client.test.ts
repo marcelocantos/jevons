@@ -107,6 +107,17 @@ describe('MuxClient interrupt (T644)', () => {
   });
 });
 
+describe('MuxClient resend (T811)', () => {
+  it('resendTranscript names the message id and never carries the text', () => {
+    const { client, ws } = connectClient();
+    client.resendTranscript('jevons', 'om-1');
+    const sent = ws.sent.find((s) => s.includes('"t":"resend"'));
+    expect(JSON.parse(sent!)).toMatchObject({ t: 'resend', ch: 'transcript:jevons', body: { msg_id: 'om-1' } });
+    expect(sent).not.toContain('"text"');
+    client.close();
+  });
+});
+
 describe('MuxClient heartbeat (T537.2.1)', () => {
   it('sends the vanilla chat ping on open and every heartbeat interval', () => {
     const { client, ws } = connectClient();

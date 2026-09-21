@@ -212,8 +212,7 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 	echo := chatUserEchoID(text, msgID)
 	s.NoteOwnerSend(text, echo)
 	s.BroadcastChat(echo)
-	s.registerOwnerMessageID(userTurnPrefix+text, msgID)
-	if err := s.SendToOverseer(userTurnPrefix + text); err != nil {
+	if err := s.SendToOverseerAs(userTurnPrefix+text, msgID); err != nil {
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
 		if !class.IsFailure() {
 			ownerMsg = err.Error()

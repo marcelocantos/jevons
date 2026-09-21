@@ -6,6 +6,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,13 @@ const (
 func (s *Server) registerOwnerMessageID(text, id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.registerOwnerMessageIDLocked(text, id)
+}
+
+// registerOwnerMessageIDLocked is the enqueue-side half: SendToOverseerAs calls
+// it under the same lock hold that appends the text, so the id FIFO for a text
+// and the queue order of that text can never be interleaved by another sender.
+func (s *Server) registerOwnerMessageIDLocked(text, id string) {
 	if s.notifyOwnerIDs == nil {
 		s.notifyOwnerIDs = map[string][]string{}
 	}
@@ -39,13 +47,26 @@ func (s *Server) peekOwnerMessageID(text string) string {
 	return ""
 }
 
-func (s *Server) broadcastDeliveryFrame(state, id, text string) {
-	b, _ := json.Marshal(map[string]any{
+// ownerStateKey keys per-message announce state by id, so two identical texts
+// are two messages; text is only the fallback for an id-less enqueue.
+func ownerStateKey(id, text string) string {
+	if id != "" {
+		return "id:" + id
+	}
+	return "text:" + text
+}
+
+func (s *Server) broadcastDeliveryFrame(state, id, text, reason string) {
+	frame := map[string]any{
 		"type":   "send_error",
 		"state":  state,
 		"msg_id": id,
 		"text":   text,
-	})
+	}
+	if reason != "" {
+		frame["reason"] = reason // 🎯T811: the cockpit renders "not delivered: <reason>"
+	}
+	b, _ := json.Marshal(frame)
 	s.BroadcastChat(string(b))
 }
 
@@ -53,19 +74,20 @@ func (s *Server) broadcastDeliveryFrame(state, id, text string) {
 // refused, naming the reason. The message itself stays queued for retry.
 func (s *Server) announceOwnerUndelivered(text string, err error) {
 	id := s.peekOwnerMessageID(text)
+	key := ownerStateKey(id, text)
 	s.mu.Lock()
 	if s.ownerUndelivered == nil {
 		s.ownerUndelivered = map[string]bool{}
 	}
-	if s.ownerUndelivered[text] {
+	if s.ownerUndelivered[key] {
 		s.mu.Unlock()
 		return
 	}
-	s.ownerUndelivered[text] = true
+	s.ownerUndelivered[key] = true
 	s.mu.Unlock()
 	reason := strings.TrimSpace(err.Error())
 	s.broadcastDeliveryFrame("undelivered", id,
-		fmt.Sprintf("message not delivered — will retry: %s", reason))
+		fmt.Sprintf("message not delivered — will retry: %s", reason), reason)
 }
 
 // announceOwnerDelivered flips a previously announced refusal to delivered,
@@ -78,14 +100,15 @@ func (s *Server) announceOwnerDelivered(text string) {
 	} else {
 		delete(s.notifyOwnerIDs, text)
 	}
-	was := s.ownerUndelivered[text]
-	delete(s.ownerUndelivered, text)
+	key := ownerStateKey(id, text)
+	was := s.ownerUndelivered[key]
+	delete(s.ownerUndelivered, key)
 	s.notifyRetryN = 0
 	s.mu.Unlock()
 	s.noteOwnerDeliveredID(id)
 	s.persistOwnerQueue()
 	if was {
-		s.broadcastDeliveryFrame("delivered", id, "message delivered to the overseer after retry")
+		s.broadcastDeliveryFrame("delivered", id, "message delivered to the overseer after retry", "")
 	}
 }
 
@@ -139,4 +162,30 @@ func (s *Server) awaitOverseerProcess() bool {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// ResendOwnerMessage retries a still-queued owner message now (the cockpit's
+// Resend). It never re-enqueues the text: the message is the one already
+// queued, so a resend racing the automatic retry cannot double-deliver. An id
+// that is not queued (delivered, or unknown) is an error, not a silent no-op.
+func (s *Server) ResendOwnerMessage(id string) error {
+	s.mu.Lock()
+	queued := false
+	for _, ids := range s.notifyOwnerIDs {
+		if slices.Contains(ids, id) {
+			queued = true
+			break
+		}
+	}
+	if !queued {
+		s.mu.Unlock()
+		return fmt.Errorf("message %s is not waiting for delivery", id)
+	}
+	if s.notifyRetryTimer != nil {
+		s.notifyRetryTimer.Stop()
+		s.notifyRetryTimer = nil
+	}
+	s.mu.Unlock()
+	s.drainOverseerNotes()
+	return nil
 }

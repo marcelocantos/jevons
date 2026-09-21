@@ -759,6 +759,21 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			return
 		}
 		go s.interruptMuxSeat(name)
+	case "resend":
+		// 🎯T811: retry a still-queued owner message now. Never re-enqueues.
+		if !isTranscript || !s.isOverseerAgent(name) {
+			return
+		}
+		var body struct {
+			MsgID string `json:"msg_id"`
+		}
+		_ = json.Unmarshal(env.Body, &body)
+		ch := env.Ch
+		go func() {
+			if err := s.ResendOwnerMessage(strings.TrimSpace(body.MsgID)); err != nil {
+				s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": err.Error()})
+			}
+		}()
 	case "send":
 		if !isTranscript {
 			return

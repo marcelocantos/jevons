@@ -178,6 +178,11 @@ export class MuxClient {
     this.send(encodeMux(transcriptChannel(name), 'send', body));
   }
 
+  /** Retry a queued, undelivered owner message now; never re-sends the text (🎯T811). */
+  resendTranscript(name: string, msgId: string): void {
+    this.send(encodeMux(transcriptChannel(name), 'resend', { msg_id: msgId }));
+  }
+
   /** Empty Cmd+Enter: cancel the in-flight turn without sending (🎯T644). */
   interruptTranscript(name: string): void {
     this.send(encodeMux(transcriptChannel(name), 'interrupt'));

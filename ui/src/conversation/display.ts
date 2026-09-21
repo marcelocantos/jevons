@@ -50,6 +50,10 @@ export type DisplayRow = {
   count?: number;
   /** User only: provenance for body paint (🎯T221 / T381). */
   origin?: TurnOrigin;
+  /** User only: the daemon's owner-message id (🎯T806). */
+  msgId?: string;
+  /** User only: delivery state painted into the message row (🎯T811). */
+  delivery?: { state: 'undelivered' | 'delivered'; reason?: string };
 };
 
 function asRec(frame: unknown): Record<string, unknown> {
@@ -259,6 +263,8 @@ function pushAssistant(
 
 export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayRow[] {
   const out: DisplayRow[] = [];
+  const userRows = new Map<string, DisplayRow>();
+  const undeliveredRows = new Map<string, DisplayRow>();
   let run = 0;
   let runItems: StepItem[] = [];
   let runWhen: number | undefined;
@@ -292,7 +298,28 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
     if (isSendErrorFrame(f)) {
       const text = String(rec.text || '').trim();
       if (!text) continue;
+      // 🎯T806: a delivered frame flips the undelivered row for the same
+      // message in place, so the owner sees one row change state, not a pile.
+      const msgId = typeof rec.msg_id === 'string' ? rec.msg_id : '';
+      // 🎯T811: with the owner bubble on screen the state lives in that row.
+      const owner = msgId ? userRows.get(msgId) : undefined;
+      if (owner && (rec.state === 'undelivered' || rec.state === 'delivered')) {
+        owner.delivery =
+          rec.state === 'undelivered'
+            ? { state: 'undelivered', reason: typeof rec.reason === 'string' ? rec.reason : text }
+            : { state: 'delivered' };
+        continue;
+      }
       flush();
+      if (msgId && rec.state === 'delivered') {
+        const prior = undeliveredRows.get(msgId);
+        if (prior) {
+          prior.text = text;
+          prior.count = 1;
+          undeliveredRows.delete(msgId);
+          continue;
+        }
+      }
       const last = out[out.length - 1];
       if (last && last.kind === 'diagnostic' && diagnosticBase(last) === text) {
         const n = (last.count || 1) + 1;
@@ -300,7 +327,9 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
         last.text = diagnosticLabel(text, n);
         continue;
       }
-      out.push({ kind: 'diagnostic', text, count: 1, when });
+      const row: DisplayRow = { kind: 'diagnostic', text, count: 1, when };
+      out.push(row);
+      if (msgId && rec.state === 'undelivered') undeliveredRows.set(msgId, row);
       continue;
     }
     const addStep = (it: StepItem) => {
@@ -336,7 +365,10 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       if (last && last.kind === 'user' && last.origin === origin &&
         (id ? last.id === id : !last.id) && normalizeOwnerEchoText(last.text) === text) continue;
       flush();
-      out.push({ kind: 'user', text, when, id, origin });
+      const msgId = typeof asRec(f).msg_id === 'string' ? (asRec(f).msg_id as string) : undefined;
+      const row: DisplayRow = { kind: 'user', text, when, id, origin, msgId };
+      out.push(row);
+      if (msgId) userRows.set(msgId, row);
       continue;
     }
     // Walk content in order so a mixed text+tool_use frame reports every

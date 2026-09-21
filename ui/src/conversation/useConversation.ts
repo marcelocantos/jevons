@@ -143,5 +143,6 @@ export function useConversation(mux: MuxClient | null, name: string) {
       mux?.windowTranscript(name, { lo, hi: hiIdx + 1 });
     },
     rejoinLive,
+    resend: (msgId: string) => mux?.resendTranscript(name, msgId),
   };
 }

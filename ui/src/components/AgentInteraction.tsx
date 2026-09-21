@@ -103,6 +103,7 @@ export function AgentInteraction(props: {
         followEpoch={followEpoch}
         onFollowChange={setFollowing}
         recalledId={recalled?.id}
+        onResend={conv.resend}
       />
       {comfortable ? (
         <>

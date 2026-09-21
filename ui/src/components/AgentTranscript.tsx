@@ -53,6 +53,8 @@ export function AgentTranscript(props: {
   onLeaveLive?: () => void;
   onFollowChange?: (following: boolean) => void;
   recalledId?: string;
+  /** 🎯T811: retry a queued, undelivered owner message by its id. */
+  onResend?: (msgId: string) => void;
 }) {
   const density = normalizeDensity(props.density);
   const parentRef = useRef<HTMLDivElement>(null);
@@ -349,6 +351,9 @@ export function AgentTranscript(props: {
               when={row.when}
               origin={row.origin}
               eventId={row.id}
+              msgId={row.msgId}
+              delivery={row.delivery}
+              onResend={props.onResend}
               recalled={!!row.id && row.id === props.recalledId}
               sealed={row.sealed === true}
               start={item.start}
@@ -391,6 +396,9 @@ export function ClippedBubble(props: {
   sealed?: boolean;
   origin?: TurnOrigin;
   eventId?: string;
+  msgId?: string;
+  delivery?: { state: 'undelivered' | 'delivered'; reason?: string };
+  onResend?: (msgId: string) => void;
   recalled?: boolean;
   start: number;
   measureRef?: (el: Element | null) => void;
@@ -572,6 +580,22 @@ export function ClippedBubble(props: {
             </span>
           ) : null}
           {chrome.contextText ? <span className="ctx-context">{chrome.contextText}</span> : null}
+        </div>
+      ) : null}
+      {props.kind === 'user' && props.delivery ? (
+        <div className="msg-delivery" data-state={props.delivery.state} role="status">
+          {props.delivery.state === 'undelivered' ? (
+            <>
+              <span className="msg-delivery-text">not delivered: {props.delivery.reason}</span>
+              {props.msgId && props.onResend ? (
+                <button type="button" className="msg-resend" onClick={() => props.onResend?.(props.msgId as string)}>
+                  Resend
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <span className="msg-delivery-text">delivered</span>
+          )}
         </div>
       ) : null}
       {props.when != null ? (
