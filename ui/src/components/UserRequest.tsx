@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useRef, useState } from 'react';
+import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useDrafts } from '../store/drafts';
 import { normalizeDensity, type Density } from '../density';
 import {
@@ -119,6 +119,23 @@ function NamedUserRequest(props: UserRequestProps) {
     props.onRecall?.(request);
     queueMicrotask(() => boxRef.current?.setSelectionRange(request.text.length, request.text.length));
   };
+
+  // 🎯T799: grow with the draft; the CSS max-height is the cap, and past it
+  // the textarea scrolls inside. Runs on every draft change, so clearing after
+  // a send shrinks it back to one line.
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    // An empty box stays at its CSS min-height (a wrapping placeholder would inflate scrollHeight, 🎯T478).
+    if (!raw) {
+      el.classList.remove('composer-scroll');
+      return;
+    }
+    const border = el.offsetHeight - el.clientHeight;
+    el.style.height = `${el.scrollHeight + border}px`;
+    el.classList.toggle('composer-scroll', el.scrollHeight > el.clientHeight + 1);
+  }, [raw]);
 
   useEffect(() => {
     activeRef.current = true;

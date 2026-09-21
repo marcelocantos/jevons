@@ -746,9 +746,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* 🎯T123: empty/single-line min-height pins to --control-h (same as #send).
    No multi-line default min-height (T69-era scroll workaround removed).
    autoGrow expands while typing; overflow hidden until max (🎯T69 scrollbar),
-   then .composer-scroll. Cap 28vh so growth does not eat the latest reply
+   then .composer-scroll. Cap 40vh (🎯T799) so growth does not eat the latest reply
    (🎯T70.1). */
-#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 28vh; overflow-y: hidden; }
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 40vh; overflow-y: hidden; }
 #input.composer-scroll { overflow-y: auto; }
 /* Fade the placeholder well below entered text so it's obviously a
    prompt, not typed content. Lower opacity blends it toward the input
@@ -1081,9 +1081,11 @@ body.rhs-resizing-row { cursor: row-resize; }
   flex: 1; min-width: 0; padding: 7px 10px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg); color: var(--text);
   font-size: 12px; font-family: var(--sans); outline: none; resize: none;
-  line-height: 1.4; min-height: var(--ai-control-h); max-height: 22vh;
+  line-height: 1.4; min-height: var(--ai-control-h); max-height: 40vh;
   overflow-y: hidden;
 }
+#agent-inspect-input.composer-scroll,
+.conversation-widget.density-compact .cw-composer textarea.composer-scroll { overflow-y: auto; }
 #agent-inspect-input:focus,
 .conversation-widget.density-compact .cw-composer textarea:focus {
   border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim);

@@ -71,5 +71,5 @@ export function emptyComposerUsedHeight(scrollHeight: number, controlH: number, 
   return Number(scrollHeight) || 0;
 }
 
-/** CSS grow cap so the composer cannot eat the latest reply (🎯T70.1). */
-export const COMPOSER_MAX_HEIGHT = '28vh';
+/** CSS grow cap so the composer cannot eat the latest reply (🎯T70.1); raised to 40vh by 🎯T799. */
+export const COMPOSER_MAX_HEIGHT = '40vh';
