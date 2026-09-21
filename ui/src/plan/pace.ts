@@ -119,6 +119,8 @@ let dampLambda = PACE_DAMP_LAMBDA;
 let aheadMargin = PACE_AHEAD_MARGIN;
 let warmupElapsed = PACE_WARMUP_PERCENT;
 let earlyAlarmUsed = PACE_EARLY_ALARM_USED;
+let panicAmberLn = PACE_PANIC_AMBER_LN;
+let panicRedLn = PACE_PANIC_RED_LN;
 
 /**
  * Recognized threshold keys, including the daemon's tuning parameters for
@@ -152,6 +154,8 @@ export function applyThresholds(doc: ThresholdsDoc | null | undefined): void {
   if (typeof doc.ahead_margin_percent === 'number') aheadMargin = doc.ahead_margin_percent;
   if (typeof doc.warmup_elapsed_percent === 'number') warmupElapsed = doc.warmup_elapsed_percent;
   if (typeof doc.early_alarm_used_percent === 'number') earlyAlarmUsed = doc.early_alarm_used_percent;
+  if (typeof doc.panic_amber_ln === 'number') panicAmberLn = doc.panic_amber_ln;
+  if (typeof doc.panic_red_ln === 'number') panicRedLn = doc.panic_red_ln;
   for (const k of Object.keys(doc)) {
     if (KNOWN_THRESHOLD_KEYS.has(k) || unknownThresholdKeys.includes(k)) continue;
     unknownThresholdKeys.push(k);
@@ -358,11 +362,47 @@ export function dampedBurn(used: number, elapsed: number): number | null {
   return (used + lambda) / denom;
 }
 
-/** Bar-fill CSS colour for one window. Exhausted (remaining ≤ 0) is stop C. */
+/**
+ * The overspend ramp inside a served "ahead" band: the 🎯T390.1.2 shape
+ * (green at the band's near edge, amber at its midpoint, red at its far
+ * edge) on the statistic the band was actually cut from. Flat amber when
+ * the daemon served a band but no pressure.
+ */
+function aheadRgb(pressure: number | null): RGB {
+  if (pressure === null) return stopAhead();
+  const a = panicAmberLn;
+  const c = panicRedLn <= a ? a : panicRedLn;
+  const b = (a + c) / 2;
+  if (pressure <= a) return stopOk();
+  if (pressure >= c) return stopHot();
+  if (pressure <= b) {
+    const span = b - a;
+    return hsvLerpRgb(stopOk(), stopAhead(), span <= 0 ? 1 : (pressure - a) / span);
+  }
+  const span = c - b;
+  return hsvLerpRgb(stopAhead(), stopHot(), span <= 0 ? 1 : (pressure - b) / span);
+}
+
+/**
+ * Bar-fill CSS colour for one window. Exhausted (remaining ≤ 0) is stop C.
+ *
+ * The served band decides which ramp the fill is on; this function only
+ * places it within that ramp. 🎯T610 moved the class to the daemon's verdict
+ * and left the fill on the ratio model, so claude weekly at 8% used, 3.1%
+ * elapsed had band "ok" and damped burn (8+5)/(3.1+5) = 1.6 — past
+ * hot_ratio, a red bar under a verdict that was not even amber. The ratio
+ * path below survives only for a payload with no band.
+ */
 export function fillColorForWindow(w: PaceWindow, nowMs: number): string {
   const remaining = typeof w.remaining_percent === 'number' ? w.remaining_percent : null;
   if (remaining !== null && remaining <= 0) return rgbToCss(stopHot());
   const remainingTime = remainingTimePercent(w, nowMs);
+  const served = typeof w.band === 'string' ? SERVED_BAND[w.band.trim()] : undefined;
+  if (served === PACE_HOT) return rgbToCss(stopHot());
+  if (served === PACE_AHEAD) {
+    const p = typeof w.pressure === 'number' && Number.isFinite(w.pressure) ? w.pressure : null;
+    return rgbToCss(aheadRgb(p));
+  }
   const used =
     typeof w.used_percent === 'number' && Number.isFinite(w.used_percent)
       ? w.used_percent
@@ -373,8 +413,12 @@ export function fillColorForWindow(w: PaceWindow, nowMs: number): string {
   let waste: PaceWaste | null = null;
   if (typeof remainingTime === 'number' && Number.isFinite(remainingTime) && used !== null) {
     const elapsed = 100 - remainingTime;
-    burn = dampedBurn(used, elapsed);
-    if (isWasteWindow(w.name) && elapsed >= warmupElapsed) {
+    // A served ok / under / locked has already ruled overspend out, so the
+    // ratio burn gets no say; only the waste ramp places the colour. The
+    // daemon's locked verdict has no warmup gate, so neither does its paint.
+    if (served === undefined) burn = dampedBurn(used, elapsed);
+    const wasteServed = served === PACE_UNDER || served === PACE_LOCKED;
+    if (isWasteWindow(w.name) && (wasteServed || elapsed >= warmupElapsed)) {
       waste = weeklyWaste(used, remaining, remainingTime);
     }
   }
@@ -418,6 +462,8 @@ export type PaceWindow = GeomWindow & {
   used_percent?: number | null;
   /** The daemon's own verdict for this window (🎯T610). Authoritative. */
   band?: string | null;
+  /** The 🎯T596 pressure behind an overspend band; places the fill within it. */
+  pressure?: number | null;
 };
 
 /**

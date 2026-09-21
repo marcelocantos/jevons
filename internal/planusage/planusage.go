@@ -109,6 +109,14 @@ type Window struct {
 	// Empty when the window carries no usable numbers, which is a real
 	// state and not the same as "ok".
 	Band string `json:"band,omitempty"`
+	// Pressure is the 🎯T596 statistic behind an overspend Band, filled at
+	// serve time by WithBands so the bar's fill can ramp inside the band the
+	// daemon chose. 🎯T610 served the verdict but not the number, so the
+	// fill kept ramping on the superseded used/elapsed ratio: claude weekly
+	// at 8% used, 3.1% elapsed painted red under a band of "ok".
+	//
+	// Nil when it cannot be computed or is not finite (an exhausted window).
+	Pressure *float64 `json:"pressure,omitempty"`
 	// History is stored vendor remaining samples for this window's current
 	// period (🎯T634). Omitted when none have been recorded. Never a
 	// reconstructed spend curve and never a fabricated 100% at t=0.

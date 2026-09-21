@@ -3,7 +3,10 @@
 
 package planusage
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // WithBands returns a copy of snap with every window's Band filled in at now.
 //
@@ -45,14 +48,33 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 			// provider is fine" must not paint the same.
 			if !be.Available() {
 				windows[j].Band = ""
+				windows[j].Pressure = nil
 				continue
 			}
 			windows[j].Band = string(BandOfWindow(windows[j], now, th))
+			windows[j].Pressure = pressureOfWindow(windows[j], now, th)
 			windows[j].History = historyWithBands(windows[j], th)
 		}
 		be.Windows = windows
 	}
 	return out
+}
+
+// pressureOfWindow is the number BandOfWindow's overspend verdict came from,
+// from the same inputs. Nil rather than a sentinel when there is nothing
+// finite to serve: JSON cannot carry +Inf, and the band already says
+// "exhausted".
+func pressureOfWindow(w Window, now time.Time, th Thresholds) *float64 {
+	used := usedPercent(w)
+	rtp, hasTime := remainingTimePercent(w, now)
+	if used == nil || !hasTime {
+		return nil
+	}
+	p := Pressure(*used, 100-rtp, th)
+	if math.IsInf(p, 0) || math.IsNaN(p) {
+		return nil
+	}
+	return &p
 }
 
 // historyWithBands stamps each stored sample with the band the window had at
