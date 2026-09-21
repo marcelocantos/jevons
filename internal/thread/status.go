@@ -8,44 +8,36 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
 
-// State is the derived lifecycle state of a thread, computed on demand
-// from its transcript tail plus liveness signals. It is never persisted.
+// State is where a thread's seat is, as the parties that know report it.
+//
+// 🎯T766.2: this used to be derived from the transcript tail — a five-rule
+// machine that read an unanswered prompt older than five minutes as
+// "blocked" and a quiet tail as "idle". That was census derivation 6, and
+// the butler's idle reaper acted on it. The reaper is gone, and a state
+// inferred from a quiet transcript is the guess the seat-state authority
+// exists to end, so the state now comes from the authority (claudia and the
+// provider event stream) and the transcript supplies content only.
 type State string
 
 const (
-	// StateActive: another writer is currently driving the session (a
-	// live claude process holds the transcript open) — the two-writer
-	// case where the butler observes but must not direct.
+	// StateActive: another writer is driving the session right now (the
+	// scanner sees a foreign process holding it open). An observation, not
+	// an inference: the two-writer case where the butler must not direct.
 	StateActive State = "active"
-	// StateWorking: a turn is in flight — the last event is an
-	// unfinished assistant message (streaming or a tool_use) or a fresh
-	// user prompt still awaiting its reply.
+	// StateWorking: the provider reports a turn in flight.
 	StateWorking State = "working"
-	// StateBlocked: a user prompt has gone unanswered past the idle
-	// threshold — the session appears stuck (or parked at a prompt).
-	StateBlocked State = "blocked"
-	// StateDone: the last turn concluded (terminal stop_reason) within
-	// the recent window.
-	StateDone State = "done"
-	// StateIdle: quiescent — concluded and old, or no transcript activity.
+	// StateIdle: the process is alive and no turn is in flight.
 	StateIdle State = "idle"
+	// StateStopped: the process is reported not alive.
+	StateStopped State = "stopped"
+	// StateUnknown: nobody has reported this seat, or the report is stale.
+	// Never rounded to idle.
+	StateUnknown State = "unknown"
 )
-
-// DefaultIdleThreshold is how long a thread may go without new transcript
-// activity before it is considered idle rather than freshly done, and
-// how long an unanswered prompt waits before it is considered blocked.
-const DefaultIdleThreshold = 5 * time.Minute
-
-// terminalStopReasons are the assistant stop_reasons that mark a turn as
-// concluded rather than mid-flight (tool_use is explicitly non-terminal).
-var terminalStopReasons = map[string]bool{
-	"end_turn":      true,
-	"stop_sequence": true,
-	"max_tokens":    true,
-}
 
 // Status is the on-demand answer to "where is this thread right now?".
 type Status struct {
@@ -57,76 +49,53 @@ type Status struct {
 	Integrity []transcript.IntegrityIssue `json:"integrity,omitempty"`
 }
 
-// StatusInput carries everything DeriveStatus needs. It is a pure
-// function of these inputs so the state machine is fully testable
-// without a filesystem or a live process.
+// StatusInput carries everything DeriveStatus needs. It is a pure function
+// of these inputs so it is fully testable without a filesystem or a process.
 type StatusInput struct {
-	Entries          []transcript.Entry // chronological transcript tail
+	Entries          []transcript.Entry // chronological transcript tail: content only
 	Now              time.Time
-	ExternallyActive bool          // a foreign claude process holds the transcript open
-	ProcessUp        bool          // the butler owns a live process for this thread
-	IdleThreshold    time.Duration // defaults to DefaultIdleThreshold when zero
+	ExternallyActive bool // a foreign process holds the session open
+	ProcessUp        bool // the butler owns a live process for this thread
+	// Seat is what the seat-state authority says; SeatKnown is false when it
+	// has never been told about this thread.
+	Seat      seatstate.State
+	SeatKnown bool
 }
 
-// DeriveStatus computes a thread's live status from its transcript tail
-// and liveness signals. The rules, in priority order:
-//
-//  1. externally active → active (someone else is driving it now)
-//  2. no transcript activity → idle
-//  3. last entry is a still-open assistant turn (no terminal stop_reason,
-//     or a tool_use) → working
-//  4. last entry is an unanswered user prompt → working if recent, else
-//     blocked (stuck / parked)
-//  5. last entry is a concluded assistant turn → done if recent, else idle
-func DeriveStatus(in StatusInput) Status {
-	threshold := in.IdleThreshold
-	if threshold <= 0 {
-		threshold = DefaultIdleThreshold
+// StateOf maps an authority reading to a thread state. Unknown stays
+// unknown: a seat nobody has reported is not idle.
+func StateOf(seat seatstate.State, known bool) State {
+	switch {
+	case !known:
+		return StateUnknown
+	case seat.Alive == seatstate.No:
+		return StateStopped
+	case seat.InFlight == seatstate.Yes:
+		return StateWorking
+	case seat.InFlight == seatstate.No:
+		return StateIdle
+	default:
+		return StateUnknown
 	}
+}
 
+// DeriveStatus assembles a thread's status: its state from the authority,
+// and its summary, last activity and integrity findings from the transcript.
+func DeriveStatus(in StatusInput) Status {
 	// 🎯T33: always attach decidable integrity findings for butler list/status.
 	integrity := transcript.CheckUserTurns(in.Entries)
-
+	state := StateOf(in.Seat, in.SeatKnown)
+	if in.ExternallyActive {
+		state = StateActive
+	}
+	st := Status{State: state, ProcessUp: in.ProcessUp, Integrity: integrity}
 	last, ok := lastMeaningful(in.Entries)
 	if !ok {
-		return Status{
-			State: StateIdle, Summary: "no transcript activity", ProcessUp: in.ProcessUp,
-			Integrity: integrity,
-		}
+		st.Summary = "no transcript activity"
+		return st
 	}
-
-	lastActivity := last.Timestamp
-	age := in.Now.Sub(lastActivity)
-	recent := !lastActivity.IsZero() && age < threshold
-	// A zero timestamp means we cannot judge recency; treat as recent so
-	// we never mislabel a live-looking tail as idle purely for lack of a
-	// clock reading.
-	if lastActivity.IsZero() {
-		recent = true
-	}
-
-	st := Status{LastActivity: lastActivity, ProcessUp: in.ProcessUp, Integrity: integrity}
-
-	switch {
-	case in.ExternallyActive:
-		st.State = StateActive
-	case last.Type == "assistant" && (last.HasToolUse || !terminalStopReasons[last.StopReason]):
-		st.State = StateWorking
-	case last.IsUserTurn:
-		if recent {
-			st.State = StateWorking
-		} else {
-			st.State = StateBlocked
-		}
-	default: // concluded assistant turn (or other terminal event)
-		if recent {
-			st.State = StateDone
-		} else {
-			st.State = StateIdle
-		}
-	}
-
-	st.Summary = summarise(in.Entries, st.State, in.Now, lastActivity)
+	st.LastActivity = last.Timestamp
+	st.Summary = summarise(in.Entries, state, in.Now, last.Timestamp)
 	if len(integrity) > 0 {
 		// Live thread-health signal for list/status (🎯T33).
 		st.Summary = "⚠ integrity: " + string(integrity[0].Kind) + " — " + st.Summary
@@ -160,7 +129,7 @@ func summarise(entries []transcript.Entry, state State, now, lastActivity time.T
 
 	var head string
 	switch state {
-	case StateBlocked, StateWorking:
+	case StateWorking:
 		if lastAssistant == "" && lastUser != "" {
 			head = "awaiting response to: " + oneLine(lastUser)
 		} else if lastAssistant != "" {

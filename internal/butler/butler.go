@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
@@ -84,9 +85,12 @@ type Butler struct {
 	spawnGuard  func() error
 	resumeGuard func(id string, auto bool) error
 
-	now           func() time.Time
-	idleThreshold time.Duration
-	tailN         int
+	now   func() time.Time
+	tailN int
+
+	// seats is the daemon's one seat-state authority (🎯T766.2), the source
+	// of a thread's state. Nil (tests, observe-only) reads as unknown.
+	seats *seatstate.Authority
 }
 
 // Config parameterises New. Store, Scanner, and Reader are required.
@@ -100,11 +104,13 @@ type Config struct {
 	Reader       *transcript.Reader
 	Fleet        Fleet
 	Participants Participants
-	// Now, IdleThreshold, and ExternallyActive are injected for
+	// Seats is the daemon's seat-state authority (🎯T766.2); a thread's
+	// state is read from it rather than inferred from its transcript.
+	Seats *seatstate.Authority
+	// Now and ExternallyActive are injected for
 	// deterministic tests; all default sensibly when nil/zero
 	// (ExternallyActive falls back to the scanner).
 	Now              func() time.Time
-	IdleThreshold    time.Duration
 	ExternallyActive func(sessionID string) bool
 	// SpawnGuard, if set, gates new spawns (the budget hard ceiling); a
 	// non-nil error refuses the spawn. ResumeGuard gates (re)launching a
@@ -126,7 +132,7 @@ func New(cfg Config) *Butler {
 		spawnGuard:       cfg.SpawnGuard,
 		resumeGuard:      cfg.ResumeGuard,
 		now:              cfg.Now,
-		idleThreshold:    cfg.IdleThreshold,
+		seats:            cfg.Seats,
 		tailN:            defaultTailEntries,
 	}
 	if b.now == nil {
@@ -460,26 +466,26 @@ func (b *Butler) Status(id string) (ThreadStatus, error) {
 	return ThreadStatus{Thread: t, Status: b.deriveStatus(t)}, nil
 }
 
-// deriveStatus tails the thread's transcript and folds in liveness
-// signals. A missing/unreadable transcript yields an empty tail, which
-// DeriveStatus reports as idle — never an error, since status is a
-// best-effort observation.
+// deriveStatus reads the thread's state from the seat-state authority and
+// its content from the transcript tail. A missing or unreadable transcript
+// yields an empty tail and a summary saying so — never an error, since
+// status is a best-effort observation.
 func (b *Butler) deriveStatus(t *thread.Thread) thread.Status {
 	var entries []transcript.Entry
 	if e, err := b.reader.Tail(t.SessionID, b.tailN); err == nil {
 		entries = e
 	}
-	return b.statusFromEntries(t, entries)
-}
-
-func (b *Butler) statusFromEntries(t *thread.Thread, entries []transcript.Entry) thread.Status {
-	processUp := b.fleet != nil && b.fleet.Alive(t.ID)
-
+	var seat seatstate.State
+	known := false
+	if b.seats != nil {
+		seat, known = b.seats.Get(t.ID)
+	}
 	return thread.DeriveStatus(thread.StatusInput{
 		Entries:          entries,
 		Now:              b.now(),
 		ExternallyActive: b.externallyActive(t.SessionID),
-		ProcessUp:        processUp,
-		IdleThreshold:    b.idleThreshold,
+		ProcessUp:        b.fleet != nil && b.fleet.Alive(t.ID),
+		Seat:             seat,
+		SeatKnown:        known,
 	})
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
 
@@ -75,106 +76,38 @@ func TestStoreRequiresSessionID(t *testing.T) {
 	}
 }
 
+// 🎯T766.2: state comes from the seat-state authority; the transcript
+// supplies content only. Unknown is never rounded to idle.
 func TestDeriveStatus(t *testing.T) {
 	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
-	recent := now.Add(-1 * time.Minute)
-	old := now.Add(-30 * time.Minute)
-
+	tail := []transcript.Entry{
+		{Type: "assistant", Role: "assistant", Text: "done", StopReason: "end_turn", Timestamp: now.Add(-30 * time.Minute)},
+	}
+	seat := func(alive, inflight seatstate.Tri) seatstate.State {
+		return seatstate.State{Alive: alive, InFlight: inflight}
+	}
 	tests := []struct {
 		name string
 		in   StatusInput
 		want State
 	}{
-		{
-			name: "externally active wins over everything",
-			in: StatusInput{
-				ExternallyActive: true,
-				Entries: []transcript.Entry{
-					{Type: "assistant", Role: "assistant", Text: "done", StopReason: "end_turn", Timestamp: old},
-				},
-				Now: now,
-			},
-			want: StateActive,
-		},
-		{
-			name: "no entries is idle",
-			in:   StatusInput{Now: now},
-			want: StateIdle,
-		},
-		{
-			name: "assistant tool_use is working",
-			in: StatusInput{
-				Entries: []transcript.Entry{
-					{Type: "user", Role: "user", Text: "go", IsUserTurn: true, Timestamp: recent},
-					{Type: "assistant", Role: "assistant", HasToolUse: true, Timestamp: recent},
-				},
-				Now: now,
-			},
-			want: StateWorking,
-		},
-		{
-			name: "assistant with no terminal stop_reason is working",
-			in: StatusInput{
-				Entries: []transcript.Entry{
-					{Type: "assistant", Role: "assistant", Text: "thinking", Timestamp: recent},
-				},
-				Now: now,
-			},
-			want: StateWorking,
-		},
-		{
-			name: "recent unanswered prompt is working",
-			in: StatusInput{
-				Entries: []transcript.Entry{
-					{Type: "user", Role: "user", Text: "please fix", IsUserTurn: true, Timestamp: recent},
-				},
-				Now: now,
-			},
-			want: StateWorking,
-		},
-		{
-			name: "stale unanswered prompt is blocked",
-			in: StatusInput{
-				Entries: []transcript.Entry{
-					{Type: "user", Role: "user", Text: "please fix", IsUserTurn: true, Timestamp: old},
-				},
-				Now: now,
-			},
-			want: StateBlocked,
-		},
-		{
-			name: "recent concluded turn is done",
-			in: StatusInput{
-				Entries: []transcript.Entry{
-					{Type: "user", Role: "user", Text: "go", IsUserTurn: true, Timestamp: recent},
-					{Type: "assistant", Role: "assistant", Text: "all set", StopReason: "end_turn", Timestamp: recent},
-				},
-				Now: now,
-			},
-			want: StateDone,
-		},
-		{
-			name: "stale concluded turn is idle",
-			in: StatusInput{
-				Entries: []transcript.Entry{
-					{Type: "assistant", Role: "assistant", Text: "all set", StopReason: "end_turn", Timestamp: old},
-				},
-				Now: now,
-			},
-			want: StateIdle,
-		},
+		{"externally active wins", StatusInput{ExternallyActive: true, Entries: tail, Now: now,
+			Seat: seat(seatstate.Yes, seatstate.No), SeatKnown: true}, StateActive},
+		{"unreported seat is unknown, not idle — even with a quiet tail", StatusInput{Entries: tail, Now: now}, StateUnknown},
+		{"turn in flight is working", StatusInput{Now: now, Seat: seat(seatstate.Yes, seatstate.Yes), SeatKnown: true}, StateWorking},
+		{"alive with no turn is idle", StatusInput{Now: now, Seat: seat(seatstate.Yes, seatstate.No), SeatKnown: true}, StateIdle},
+		{"not alive is stopped", StatusInput{Now: now, Seat: seat(seatstate.No, seatstate.Unknown), SeatKnown: true}, StateStopped},
+		{"known seat whose in-flight decayed is unknown", StatusInput{Now: now, Seat: seat(seatstate.Unknown, seatstate.Unknown), SeatKnown: true}, StateUnknown},
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := DeriveStatus(tc.in)
-			if got.State != tc.want {
-				t.Fatalf("state = %q, want %q (summary: %q)", got.State, tc.want, got.Summary)
-			}
-			if got.Summary == "" {
-				t.Fatal("summary should never be empty")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DeriveStatus(tt.in).State; got != tt.want {
+				t.Fatalf("state = %q, want %q", got, tt.want)
 			}
 		})
+	}
+	if got := DeriveStatus(StatusInput{Entries: tail, Now: now}); got.Summary == "" || got.LastActivity.IsZero() {
+		t.Fatalf("transcript content lost from the status: %+v", got)
 	}
 }
 

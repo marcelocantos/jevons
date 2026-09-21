@@ -894,6 +894,7 @@ func main() {
 	srv.SetFleetMigrator(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
+		Seats:        seats, // 🎯T766.2: thread state comes from the one authority
 		Store:        threadStore,
 		Scanner:      scanner,
 		Reader:       transcript.NewReaderRoots(sessionRoots),

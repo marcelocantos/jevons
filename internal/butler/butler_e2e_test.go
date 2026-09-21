@@ -119,8 +119,10 @@ func TestAdoptObserveAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if got.Status.State != thread.StateDone {
-		t.Fatalf("state = %q, want done (last turn concluded recently)", got.Status.State)
+	// 🎯T766.2: an adopted session nobody has reported is unknown — its
+	// state is not inferred from a transcript that merely looks concluded.
+	if got.Status.State != thread.StateUnknown {
+		t.Fatalf("state = %q, want unknown (no seat report for an adopted session)", got.Status.State)
 	}
 	if got.Status.ProcessUp {
 		t.Fatal("adopted thread reports a live process it should not own")
