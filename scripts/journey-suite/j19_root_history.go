@@ -45,7 +45,7 @@ func (s *suite) j19RootHistoryPaint() error {
 	}
 
 	journal := filepath.Join(s.stateDir, "chatlog", overseerName+".jsonl")
-	if err := seedJ19Journal(journal, j19SeedTurns); err != nil {
+	if err := seedThroughStore(s.stateDir, overseerName, journal, func() error { return seedJ19Journal(journal, j19SeedTurns) }); err != nil {
 		return fmt.Errorf("seed journal: %w", err)
 	}
 	if n := countJournalMarkers(journal, j19Prefix); n < j19SeedTurns {

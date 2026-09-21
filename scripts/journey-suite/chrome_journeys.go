@@ -75,7 +75,7 @@ func (s *suite) jFoldMd() error {
 	}
 	_ = chromeFoldCovers
 	journal := filepath.Join(s.stateDir, "chatlog", overseerName+".jsonl")
-	if err := seedFoldMdJournal(journal); err != nil {
+	if err := seedThroughStore(s.stateDir, overseerName, journal, func() error { return seedFoldMdJournal(journal) }); err != nil {
 		return fmt.Errorf("seed fold journal: %w", err)
 	}
 	surface, err := s.startReactSurface()
@@ -83,7 +83,8 @@ func (s *suite) jFoldMd() error {
 		return err
 	}
 	defer surface.stop()
-	shot := filepath.Join(s.stateDir, "j23-fold.png")
+	// 🎯T819: kept past the isolate's teardown for the T493.1 verdict.
+	shot := filepath.Join(os.TempDir(), "j23-fold.png")
 	if err := s.runReactPaint(surface.host, "fold-md", shot); err != nil {
 		return err
 	}
