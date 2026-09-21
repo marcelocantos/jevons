@@ -395,7 +395,12 @@ func (s *Server) muxTranscriptMeta(name string, r muxwin.Resolved, n int, trunca
 	// state. On any other channel they read as that seat's own: an aside's
 	// composer took the overseer's mid-turn phase for a busy aside and held
 	// the owner's first message in its client queue, sending nothing.
+	// 🎯T562.2: a seat's own phase comes from its own progress hub row,
+	// so its composer's busy reflects that seat and never the overseer.
 	if !s.isOverseerAgent(name) {
+		if p, ok := s.seatPhaseSample(name); ok {
+			m["phase"] = p
+		}
 		return m
 	}
 	m["working"] = s.publishedWorkingLevel()
@@ -403,6 +408,39 @@ func (s *Server) muxTranscriptMeta(name string, r muxwin.Resolved, n int, trunca
 	m["owner_ux"] = s.ownerUXLevel()
 	m["overseer_down"] = s.overseerDownSample()
 	return m
+}
+
+// seatPhaseSample projects name's AgentProgressHub row onto the closed phase
+// enum the composer reads (🎯T562.2). ok=false when the hub has never seen the
+// seat: no sample, so the composer sends straight through as before. Hub
+// "blocked" is not a running turn, so it reads idle.
+func (s *Server) seatPhaseSample(name string) (PhaseSample, bool) {
+	if s == nil || s.agentProgress == nil {
+		return PhaseSample{}, false
+	}
+	p := s.agentProgress.Get(name)
+	switch p.Phase {
+	case "":
+		return PhaseSample{}, false
+	case "working":
+		if p.Step != "" {
+			return PhaseSample{Phase: PhaseTool, Step: p.Step}, true
+		}
+		return PhaseSample{Phase: PhaseThinking}, true
+	default:
+		return PhaseSample{Phase: PhaseIdle}, true
+	}
+}
+
+// muxFanSeatPhase pushes name's live phase to its transcript watchers
+// (🎯T562.2). Overseer phase has its own fan (muxFanOverseerLevel).
+func (s *Server) muxFanSeatPhase(name string) {
+	if s == nil || s.mux == nil || s.isOverseerAgent(name) {
+		return
+	}
+	if p, ok := s.seatPhaseSample(name); ok {
+		s.mux.fanMeta(name, map[string]any{"phase": p})
+	}
 }
 
 func (s *Server) overseerDownSample() string {

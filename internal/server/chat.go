@@ -1247,7 +1247,11 @@ func (s *Server) ObserveAgentProgress(name string, ev claudia.Event) bool {
 	if s.agentProgress == nil {
 		s.agentProgress = NewAgentProgressHub()
 	}
-	return s.agentProgress.Observe(name, ev)
+	changed := s.agentProgress.Observe(name, ev)
+	if changed {
+		s.muxFanSeatPhase(name)
+	}
+	return changed
 }
 
 // handleListAgents returns all registered fleet agents with status (🎯T72.1).
