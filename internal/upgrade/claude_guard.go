@@ -20,8 +20,8 @@ import (
 
 // claudeProc is one row of the process table.
 type claudeProc struct {
-	PID     int
-	Command string
+	PID, PPID, PGID int
+	Command         string
 }
 
 // claudeProcessTable lists every process on the host; a test replaces it with
@@ -39,7 +39,9 @@ var (
 var claudeStopWait = 3 * time.Second
 
 // claudeHolderPIDs returns live claude processes started with --session-id or
-// --resume of sessionID, excluding this process. This is what bound two
+// --resume of sessionID, excluding this process, its ancestors and every
+// process in its process group: a guard that could stop the caller's own
+// tree would take the seat that asked for the launch down with it. This is what bound two
 // clients to one session JSONL on 2026-09-22 (jevons-po: --session-id pid
 // 80623 plus --resume pid 59999).
 func claudeHolderPIDs(sessionID string) []int {
@@ -47,9 +49,23 @@ func claudeHolderPIDs(sessionID string) []int {
 		return nil
 	}
 	self := os.Getpid()
+	table := claudeProcessTable()
+	byPID := map[int]claudeProc{}
+	for _, p := range table {
+		byPID[p.PID] = p
+	}
+	protected := map[int]bool{self: true}
+	for pid, hops := byPID[self].PPID, 0; pid > 1 && hops < 64; hops++ {
+		protected[pid] = true
+		pid = byPID[pid].PPID
+	}
+	selfPGID := byPID[self].PGID
+	if selfPGID == 0 {
+		selfPGID = syscall.Getpgrp()
+	}
 	var out []int
-	for _, p := range claudeProcessTable() {
-		if p.PID <= 1 || p.PID == self {
+	for _, p := range table {
+		if p.PID <= 1 || protected[p.PID] || (selfPGID > 1 && p.PGID == selfPGID) {
 			continue
 		}
 		if commandHoldsClaudeSession(p.Command, sessionID) {
@@ -127,7 +143,7 @@ func waitClaudeGone(pids []int) bool {
 func psProcessTable() []claudeProc {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,command=").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,pgid=,command=").Output()
 	if err != nil && len(out) == 0 {
 		slog.Warn("claude guard: ps failed", "err", err)
 		return nil
@@ -135,15 +151,18 @@ func psProcessTable() []claudeProc {
 	var rows []claudeProc
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		sp := strings.IndexByte(line, ' ')
-		if sp < 0 {
+		f := strings.Fields(line)
+		if len(f) < 4 {
 			continue
 		}
-		pid, err := strconv.Atoi(line[:sp])
-		if err != nil {
+		pid, e1 := strconv.Atoi(f[0])
+		ppid, e2 := strconv.Atoi(f[1])
+		pgid, e3 := strconv.Atoi(f[2])
+		if e1 != nil || e2 != nil || e3 != nil {
 			continue
 		}
-		rows = append(rows, claudeProc{PID: pid, Command: strings.TrimSpace(line[sp+1:])})
+		cmd := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(line, f[0])), f[1])), f[2]))
+		rows = append(rows, claudeProc{PID: pid, PPID: ppid, PGID: pgid, Command: cmd})
 	}
 	return rows
 }
