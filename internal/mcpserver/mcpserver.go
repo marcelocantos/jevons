@@ -163,6 +163,8 @@ type Server struct {
 	// re-deliver byte-identical content (🎯T428). Nil until first use; see
 	// notifyReplays(), which is the only reader of this field.
 	notifyReplay *notifyReplayLedger
+	// noticeCo coalesces materially unchanged fleet-health notices (🎯T810).
+	noticeCo *noticeCoalescer
 
 	// removals is the accounted-removal chokepoint (🎯T435), shared with the
 	// HTTP server so a reap decided on that side is legible on the fleet

@@ -236,6 +236,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		b.WriteString("\n")
 		b.WriteString(extra)
 	}
+	if line := s.FormatNoticeSavings(); line != "" {
+		b.WriteString("\n")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
 	return mcp.NewToolResultText(fleetlog.PrependNotices(
 		s.withMassStop(PrependFleetHealth(b.String(), reps)), notices)), nil
 }
@@ -287,9 +292,22 @@ func (s *Server) notifyFleetHealth(occurrence, line string) {
 			"line_empty", strings.TrimSpace(line) == "")
 		return
 	}
+	// 🎯T810: the same occurrence with materially unchanged content is not
+	// another overseer turn; it is counted instead.
+	if coalesced, saved := s.coalesceNotice(occurrence, wire); coalesced {
+		s.LogEvent("fleet_health", "notice_coalesced", map[string]any{
+			"key": strings.TrimSpace(occurrence), "saved": saved,
+		})
+		return
+	}
 	// Distinct prefix so activity strip / overseer can treat as system note.
-	if _, err := s.deliverByName(s.overseerName(), "[Fleet health] "+wire, OriginAgent, false); err != nil {
+	res, err := s.deliverByName(s.overseerName(), "[Fleet health] "+wire, OriginAgent, false)
+	if err != nil {
 		slog.Debug("fleet health note undelivered", "err", err)
+		return
+	}
+	if res.Status == "sent" || res.Status == StatusSuppressedReplay || res.Status == "delivered_unconfirmed" {
+		s.noteNoticeDelivered(occurrence, wire, res.Status != "delivered_unconfirmed")
 	}
 }
 
