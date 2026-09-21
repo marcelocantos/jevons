@@ -33,7 +33,7 @@ jobs:
           CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"
         run: |
           cp agents-guide.md internal/cli/help_agent.md
-          go test -tags "sqlite_preupdate_hook sqlite_fts5" ./...
+          go test -timeout 45m -tags "sqlite_preupdate_hook sqlite_fts5" ./...
 
   build:
     needs: test

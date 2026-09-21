@@ -3,7 +3,7 @@
 
 // gotest runs `go test` and reports a verdict instead of a transcript.
 //
-//	gotest [-timeout 20m] [-p n] [packages...]   # default ./...
+//	gotest [-timeout 45m] [-p n] [packages...]   # default ./...
 //
 // Why this exists: `go test ./...` emits thousands of lines of legitimate
 // log output from passing tests, and the failure signal is a handful of
@@ -66,7 +66,7 @@ type result struct {
 }
 
 func run(argv []string) int {
-	timeout := "20m"
+	timeout := "45m" // 🎯T808: docratchet alone runs ~11 min at load 120-150
 	// -p bounds how many package test binaries run at once. GOMAXPROCS
 	// alone does not: it caps threads within one process, and suites that
 	// shell out to `go build` (docratchet builds whole repos in throwaway

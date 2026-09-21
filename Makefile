@@ -273,17 +273,27 @@ export GOMAXPROCS = $(TEST_CPUS)
 # actually hurts. Kept well under TEST_CPUS for that reason.
 TEST_PKG_PAR ?= 4
 
+# Per-package `go test` timeout (🎯T808). Go's default is 10m, and
+# scripts/docratchet alone measured 664 s and 687 s (gates 24c6be1b,
+# c155758f, clean @74dd18e9c, load 120-150) -- over the default, so a
+# bare `go test ./...` kills it with a timeout panic. Its slow tests are
+# deliberate-load and clean-checkout-build oracles whose cost IS the
+# property (T450 thrash, T438/T398/T360 fresh builds), so the budget is
+# raised rather than the tests slimmed. 45m = ~4x the measured runtime,
+# and matches the docratchet gates already run with -timeout 45m.
+GO_TEST_TIMEOUT ?= 45m
+
 .PHONY: test test-go test-go-raw test-web test-ui
 # Hermetic Go tests never reach a claudia daemon installed on this machine:
 # with one reachable, every Registry launch in a fixture would be granted a
 # real seat with a real provider process behind it.
 test-go test-go-raw: export CLAUDIA_NO_BROKER = 1
 test-go: bin/gotest
-	@bin/gotest -p $(TEST_PKG_PAR) ./...
+	@bin/gotest -timeout $(GO_TEST_TIMEOUT) -p $(TEST_PKG_PAR) ./...
 
 # Escape hatch when the transcript itself is what you need.
 test-go-raw:
-	go test ./...
+	go test -timeout $(GO_TEST_TIMEOUT) ./...
 
 # React cockpit (🎯T540). The daemon embeds the tracked bundle (T540.2).
 .PHONY: ui-dev ui-build test-ui-react ui-deps ui-daemon-install ui-daemon-stop ui-daemon-status
@@ -463,7 +473,7 @@ t63-daemon-reclaim:
 .PHONY: bullseye
 bullseye: bin/gate
 	@go build ./... && echo "✓ build"
-	@bin/gate -name bullseye-test -- go test -timeout 20m ./... && echo "✓ tests"
+	@bin/gate -name bullseye-test -- go test -timeout $(GO_TEST_TIMEOUT) ./... && echo "✓ tests"
 	@go vet ./... && echo "✓ vet"
 	@dirty=$$(git status --porcelain | grep -vE 'bullseye\.yaml$$' || true); \
 	if [ -z "$$dirty" ]; then echo "✓ working tree clean"; \

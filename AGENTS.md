@@ -78,7 +78,7 @@ is intentional-only, not routine.
 
 ```bash
 make test         # All: Go + web hermetic + Playwright UI + isolate journeys (🎯T492)
-make test-go      # go test ./...
+make test-go      # go test ./... (-timeout 45m; docratchet alone runs ~11 min under load, 🎯T808)
 make test-web     # React unit tests (historical command alias)
 make test-ui      # Playwright perceptual chat UI (mocked WS)
 make test-ui-live # Explicit UI_HOST isolate; real React owner send/reload
@@ -386,7 +386,9 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `pipestatus` indexes from 1, so `${pipestatus[0]}` is empty too — an empty
   status is not zero), and the harness has itself relayed a background gate as
   "exit code 0" for a `go test` that exited 1. Run every gate as
-  `bin/gate -- make test-go` and cite the `GATE … exit=0 GREEN id=…` line it
+  `bin/gate -- make test-go` (a direct `go test ./scripts/docratchet` needs
+  `-timeout 45m`: it measured 664-687 s at load 120-150, over Go's 10m default,
+  🎯T808) and cite the `GATE … exit=0 GREEN id=…` line it
   prints: it runs the command as a process (no shell, no pipeline), exits with
   the command's own status, and records that status under `~/.jevons/gates`
   where `bin/gate last` reads it back **in band** — independent of what the
