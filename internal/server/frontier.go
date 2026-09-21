@@ -619,6 +619,78 @@ func discoverLedgerPath(cwd string) (ledger string, notInit bool, err error) {
 	return "", false, fmt.Errorf("bullseye open did not report a ledger path")
 }
 
+// frontierCache memoises the two expensive halves of loadFrontier.
+//
+// Every open cockpit tab asks for the frontier every 8s, and each ask used to
+// spawn the bullseye CLI to rediscover a ledger path that does not move and
+// then re-parse the whole ledger (2.9 MB, 955 targets on 2026-09-21). On a
+// loaded host one request took 19s — longer than the refetch interval, so the
+// panel sat on "0 ready", and longer than restart-daily's readiness probe
+// waits, so an activation timed out against a daemon that was serving.
+//
+// The rows are a pure function of the ledger file, so they are keyed on its
+// size and mtime: bullseye writes by atomic rename, which always moves both.
+// A discovered path is reused only while that file still exists.
+var frontierCache struct {
+	sync.Mutex
+	ledgerOf map[string]string
+	rowsOf   map[string]frontierCacheEntry
+}
+
+type frontierCacheEntry struct {
+	modTime time.Time
+	size    int64
+	rows    []FrontierRow
+}
+
+func cachedLedgerPath(abs string) (ledger string, notInit bool, err error) {
+	frontierCache.Lock()
+	known := frontierCache.ledgerOf[abs]
+	frontierCache.Unlock()
+	if known != "" {
+		if _, statErr := os.Stat(known); statErr == nil {
+			return known, false, nil
+		}
+	}
+	ledger, notInit, err = discoverLedgerPath(abs)
+	if err != nil || notInit || ledger == "" {
+		return ledger, notInit, err
+	}
+	frontierCache.Lock()
+	if frontierCache.ledgerOf == nil {
+		frontierCache.ledgerOf = make(map[string]string)
+	}
+	frontierCache.ledgerOf[abs] = ledger
+	frontierCache.Unlock()
+	return ledger, false, nil
+}
+
+// cachedFrontierRows returns rows shared between callers; treat them as
+// read-only.
+func cachedFrontierRows(ledger string) ([]FrontierRow, error) {
+	info, err := os.Stat(ledger)
+	if err != nil {
+		return computeFrontierFromLedger(ledger)
+	}
+	frontierCache.Lock()
+	hit, ok := frontierCache.rowsOf[ledger]
+	frontierCache.Unlock()
+	if ok && hit.size == info.Size() && hit.modTime.Equal(info.ModTime()) {
+		return hit.rows, nil
+	}
+	rows, err := computeFrontierFromLedger(ledger)
+	if err != nil {
+		return nil, err
+	}
+	frontierCache.Lock()
+	if frontierCache.rowsOf == nil {
+		frontierCache.rowsOf = make(map[string]frontierCacheEntry)
+	}
+	frontierCache.rowsOf[ledger] = frontierCacheEntry{modTime: info.ModTime(), size: info.Size(), rows: rows}
+	frontierCache.Unlock()
+	return rows, nil
+}
+
 // loadFrontier discovers the ledger via bullseye and builds the frontier table.
 func loadFrontier(cwd string) FrontierResponse {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -644,7 +716,7 @@ func loadFrontier(cwd string) FrontierResponse {
 	}
 	resp.Cwd = abs
 
-	ledger, notInit, err := discoverLedgerPath(abs)
+	ledger, notInit, err := cachedLedgerPath(abs)
 	if notInit {
 		resp.Error = "no bullseye ledger for this workdir"
 		return resp
@@ -656,7 +728,7 @@ func loadFrontier(cwd string) FrontierResponse {
 	resp.Ledger = ledger
 	resp.LedgerKey = targetfile.LedgerKey(abs)
 
-	rows, err := computeFrontierFromLedger(ledger)
+	rows, err := cachedFrontierRows(ledger)
 	if err != nil {
 		// Fallback: try CLI frontier text if file parse fails.
 		frontOut, frontErr := runBullseyeCLI("query", "--view", "frontier", "--cwd", abs)
@@ -860,10 +932,10 @@ func escapeMermaidLabel(s string) string {
 // was one 64-node component → empty viewer). Cap forces hierarchical re-split
 // so each diagram stays renderable. Jevons-scale islands stay under the cap.
 const (
-	mermaidNodeSpacing         = 28
-	mermaidRankSpacing         = 36
-	mermaidWrappingWidth       = 180
-	mermaidMaxNodesPerDiagram  = 24
+	mermaidNodeSpacing        = 28
+	mermaidRankSpacing        = 36
+	mermaidWrappingWidth      = 180
+	mermaidMaxNodesPerDiagram = 24
 )
 
 // mermaidActiveGraphHeader is the init + direction prefix for one unachieved

@@ -366,6 +366,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #mermaid-viz-panel .mvp-status {
   font-size: 11px; color: var(--text-muted); padding: 0 10px 8px; flex-shrink: 0;
 }
+.frontier-note { font-size: 12px; color: var(--text-muted); padding: 10px; }
 #mermaid-viz-panel .mvp-empty { text-align: left; color: var(--text-dim); max-width: 36em; margin: 0 auto; }
 #mermaid-viz-panel .mvp-empty-title { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; }
 #mermaid-viz-panel .mvp-empty-body { font-size: 12px; line-height: 1.45; margin: 0 0 8px; }

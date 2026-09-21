@@ -137,6 +137,8 @@ const KNOWN_THRESHOLD_KEYS = new Set([
   'ahead_margin_percent', 'warmup_elapsed_percent', 'early_alarm_used_percent',
   'shrink_prior_k', 'panic_amber_ln', 'panic_red_ln', 'waste_under_ln',
   'waste_locked_ln',
+  // Read by the daemon's mint policy only; the ticker paints nothing from it.
+  'mint_indifference_percent',
 ]);
 
 /** Unrecognised keys seen since load, for tests and for the console notice. */

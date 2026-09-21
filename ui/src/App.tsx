@@ -17,7 +17,7 @@ import type { ConversationMeta } from './conversation/reduce';
 import { AgentInteraction } from './components/AgentInteraction';
 import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
-import { FrontierTable, type FrontierRow } from './components/FrontierTable';
+import { FrontierTable } from './components/FrontierTable';
 import { FrontierRowsContext } from './frontier/rows';
 import { toFrontierRows } from './frontier/table';
 import { PlanUsageBar } from './components/PlanUsageBar';
@@ -168,11 +168,21 @@ function Cockpit() {
     queryKey: ['frontier'],
     queryFn: async () => {
       const r = await fetch('/api/frontier');
-      if (!r.ok) return [] as FrontierRow[];
+      // A failed ask is not an empty frontier. Returning [] here painted
+      // "0 ready" over 127 ready targets whenever the daemon was slow.
+      if (!r.ok) throw new Error('frontier: HTTP ' + r.status);
       return toFrontierRows(await r.json());
     },
+    placeholderData: keepPreviousData,
     refetchInterval: 8000,
   });
+  // Until a first answer arrives there is no count to show: say which of
+  // "still asking" and "could not ask" it is, never a number.
+  const frontierNote = frontierQ.data
+    ? undefined
+    : frontierQ.isError
+      ? 'frontier unavailable'
+      : 'loading…';
   const agents = agentsQ.data && agentsQ.data.length
     ? agentsQ.data
     : [{ name: 'jevons' }, { name: 'jevons-po' }];
@@ -340,7 +350,8 @@ function Cockpit() {
             />
             <SidebarPanel
               tab={tab}
-              readyCount={frontierRows.length}
+              readyCount={frontierQ.data ? frontierRows.length : undefined}
+              readyNote={frontierNote}
               onTab={(next) => {
                 navigate({ search: { agent, tab: next } });
                 queueMicrotask(() => focusMainComposer());
@@ -379,6 +390,7 @@ function Cockpit() {
                 )
               }
             >
+              {frontierNote ? <div className="frontier-note" role="status">{frontierNote}</div> : null}
               <FrontierTable rows={frontierRows} agents={agents} selectedAgent={agent} highlightId={frontierHighlightId} />
             </SidebarPanel>
           </div>

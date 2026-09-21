@@ -16,6 +16,8 @@ export function SidebarPanel(props: {
   onTab: (tab: SidebarTab) => void;
   onGraph?: () => void;
   readyCount?: number;
+  /** Shown instead of a count while there is no frontier answer to count. */
+  readyNote?: string;
   transcript?: ReactNode;
   children: ReactNode;
 }) {
@@ -37,7 +39,7 @@ export function SidebarPanel(props: {
           </button>
         ))}
         <span className="rhs-tab-meta" id="rhs-tab-meta">
-          {typeof props.readyCount === 'number' ? props.readyCount + ' ready' : ''}
+          {props.readyNote || (typeof props.readyCount === 'number' ? props.readyCount + ' ready' : '')}
         </span>
       </div>
       <div
