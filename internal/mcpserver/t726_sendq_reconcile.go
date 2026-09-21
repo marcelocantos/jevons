@@ -236,12 +236,15 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	if len(before) == 0 {
 		return fmt.Sprintf("sendq for %q is empty: nothing to drain.\n", name)
 	}
+	// 🎯T766.5: a held entry no longer blocks the drain. It is never resent;
+	// the pending messages behind it are offered past it, as the automatic
+	// drain does. The reply still names it, because it still needs a decision.
+	heldNote := ""
 	if e, blocked, err := s.sendQueue().BlockedHead(name); err == nil && blocked {
-		return fmt.Sprintf(
-			"Refusing to drain %q: entry %s at the head has an unresolved %s attempt %s.\n"+
-				"A start would not retry it either (🎯T623), and draining past it would deliver the queue out of order.\n"+
-				"Resolve the head first: jevons_sendq_reconcile name=%[1]q action=confirmed|requeue|drop entry_id=%[2]s attempt_id=%[4]s actor=… evidence=…\n",
-			name, e.ID, e.State, e.AttemptID)
+		heldNote = fmt.Sprintf(
+			"Entry %s has an unresolved %s attempt %s and stays held — it is never resent, and the messages behind it drain past it (🎯T766.5).\n"+
+				"Settle it with: jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%[1]s attempt_id=%[3]s actor=… evidence=…\n",
+			e.ID, e.State, e.AttemptID, name)
 	}
 	if _, live := s.liveSender(name); !live {
 		return fmt.Sprintf(
@@ -263,6 +266,7 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Drained %q: %d of %d held message(s) delivered, %d still queued.\n",
 		name, delivered, len(before), len(after))
+	b.WriteString(heldNote)
 	switch {
 	case delivered == 0:
 		b.WriteString("Nothing moved — the seat is most likely mid-turn, and the backlog is offered again at its next boundary.\n")

@@ -215,7 +215,10 @@ func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
 		}
 	})
 
-	t.Run("unresolved head: refuse and name reconcile", func(t *testing.T) {
+	// 🎯T766.5: the owner chose flow-past over the freeze this case used to
+	// pin. The held entry is never resent and is still named with its next
+	// move; the pending message behind it is delivered.
+	t.Run("unresolved head: drain past it and still name reconcile", func(t *testing.T) {
 		const name, payload = "claudia-po", "the message whose fate is unknown"
 		s, sender, _, held := pinnedDaemon(t, name, payload)
 		if _, _, err := s.sendQueue().Append(name, "a later pending message", time.Now()); err != nil {
@@ -224,15 +227,21 @@ func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
 		text := resultText(t, reconcile(t, s, map[string]any{"name": name, "action": "drain"}))
 		for _, want := range []string{held.ID, held.AttemptID, "jevons_sendq_reconcile"} {
 			if !strings.Contains(text, want) {
-				t.Fatalf("drain refusal omits %q, leaving no next move:\n%s", want, text)
+				t.Fatalf("drain reply omits %q, leaving no next move for the held entry:\n%s", want, text)
 			}
 		}
-		if got := sender.delivered(); len(got) != 0 {
-			t.Fatalf("drain delivered past an unresolved attempt: %v", got)
+		got := sender.delivered()
+		if len(got) != 1 || !strings.Contains(got[0], "a later pending message") {
+			t.Fatalf("drain did not deliver the pending message behind the held one: %q", got)
+		}
+		for _, text := range got {
+			if strings.Contains(text, payload) {
+				t.Fatalf("drain resent the held entry: %q", got)
+			}
 		}
 		entries, err := s.sendQueue().Snapshot(name)
-		if err != nil || len(entries) != 2 || entries[0].Text != payload || entries[0].State != sendq.Uncertain {
-			t.Fatalf("refused drain disturbed the queue: %+v %v", entries, err)
+		if err != nil || len(entries) != 1 || entries[0].Text != payload || entries[0].State != sendq.Uncertain {
+			t.Fatalf("held entry not kept in place: %+v %v", entries, err)
 		}
 	})
 
