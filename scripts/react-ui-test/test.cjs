@@ -228,7 +228,7 @@ async function main() {
     };
     const name = values.aside || `react-aside-${randomUUID()}`;
     const workdir = await fs.mkdtemp(path.join(values.workdir, 'react-aside-'));
-    await mcp('jevons_thread_spawn', { id: name, workdir, provider: values.provider, description: 'isolated React conversation check' });
+    await mcp('jevons_thread_spawn', { id: name, workdir, provider: values.provider, owner_asked: true, description: 'isolated React conversation check' });
     try {
       const direct = async () => {
         const token = `direct-${randomUUID()}`;

@@ -64,7 +64,7 @@ async function main() {
   const agents = await (await fetch(new URL('/api/agents', base))).json();
   assert.equal(agents.find(a => a.name === 'jevons')?.provider, values.provider);
   const sideWork = await fs.mkdtemp(path.join(values.workdir, 'boundary-aside-'));
-  await mcp('jevons_thread_spawn', { id: values.aside, provider: values.provider, workdir: sideWork, description: 'isolated owner-boundary check' });
+  await mcp('jevons_thread_spawn', { id: values.aside, provider: values.provider, owner_asked: true, workdir: sideWork, description: 'isolated owner-boundary check' });
   asideCreated = true;
   let mainSubmittedAt = 0;
 
