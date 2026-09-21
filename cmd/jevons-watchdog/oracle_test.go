@@ -159,9 +159,27 @@ func (r *rig) waitServing(want bool, within time.Duration) bool {
 	return r.serving() == want
 }
 
-// restart runs the script the way a fleet agent does, and waits for it.
+// ownerForce plants the 🎯T815 owner token so the next --force is honoured:
+// these oracles re-bounce a healthy daemon on purpose, which is the owner's
+// bypass. (The watchdog itself passes no --force: a dead port never waits.)
+func (r *rig) ownerForce() {
+	r.t.Helper()
+	p := filepath.Join(r.home, ".jevons", "restart-daily.owner-force")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		r.t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// restart runs the script the way the owner does (--force), and waits for it.
 func (r *rig) restart(extraEnv ...string) error {
-	cmd := exec.Command(r.script)
+	r.ownerForce()
+	cmd := exec.Command(r.script, "--force")
 	cmd.Dir = r.root
 	cmd.Env = r.env(extraEnv...)
 	out, err := cmd.CombinedOutput()
@@ -387,7 +405,8 @@ func t405ForegroundKill(t *testing.T, detached bool) {
 		t.Fatalf("something is already listening on scratch port %d", r.port)
 	}
 
-	cmd := exec.Command(r.script)
+	r.ownerForce()
+	cmd := exec.Command(r.script, "--force")
 	cmd.Dir = r.root
 	if detached {
 		cmd.Env = r.env()
