@@ -51,6 +51,13 @@ var structuredFlagKinds = []FlagKind{
 	FlagDirtyTreeGate,
 	FlagSHAUnreachable,
 	FlagAttestationEmptyPackage,
+	// 🎯T765 ledger-achieve flags. They never scan a finish report: CheckAchieve
+	// runs on a ledger attestation, which is a claim rather than narrative.
+	// Precedes-fix and tree-unknown read the record and git; uncited fires on
+	// the absence of any GATE id= in that claim, not on a hazard substring.
+	FlagAchieveGateUncited,
+	FlagAchieveGatePrecedesFix,
+	FlagAchieveTreeUnknown,
 }
 
 func scanHazards(quoted, shaped string) []Flag {
