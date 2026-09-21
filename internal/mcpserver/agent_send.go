@@ -914,16 +914,33 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 // These exact pre-write refusals come from Claudia's Agent.Send and ACP / app-
 // server Prompt implementations. Unknown, canceled, EOF, and write errors may
 // follow submission. ClassifySendError's broader default is unsafe for retries.
+// queueSendDefinitelyNotSent reports whether a drain's send provably never
+// reached the receiver, so the entry goes back to Pending and is retried on
+// the next turn boundary.
+//
+// 🎯T766: this used to be an exact-string switch over four provider literals
+// while the first-send path asked agenterr.IsPromptBusy, which matches on a
+// substring. Two classifiers for one question, and the drain held the strict
+// one. Every error from a broker-hosted seat arrives wrapped —
+// "broker protocol: agent_failed: cursor acp: prompt already in flight" —
+// so the switch matched nothing, the drain resolved Unverified, the queue
+// head became Uncertain, and ClaimFront refuses a non-Pending head forever.
+// One busy refusal froze a seat's whole queue with no automatic way out:
+// jevons-po sat at 87 stranded messages, the oldest fourteen hours old, while
+// the only exit anyone used was a reconcile that discards the payload.
+//
+// The comment at the call site already knew — it works around this for the
+// queued-behind-turn branch rather than fixing the classifier. So: one
+// classifier, shared with the send path. A busy refusal is backpressure, not
+// a poisoned queue.
 func queueSendDefinitelyNotSent(err error) bool {
 	if err == nil {
 		return false
 	}
-	switch err.Error() {
-	case "claude process not running",
-		"grok acp: prompt already in flight", "cursor acp: prompt already in flight",
-		"codex app-server: turn already in flight":
+	if agenterr.IsPromptBusy(err) {
 		return true
-	default:
-		return false
 	}
+	// A dead process cannot have taken the text either. Substring, for the
+	// same wrapping reason.
+	return strings.Contains(strings.ToLower(err.Error()), "process not running")
 }
