@@ -29,6 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/targetfile"
+	"github.com/marcelocantos/jevons/internal/upgrade"
 )
 
 // prefixRehydrate puts the lost-session account in front of whatever
@@ -634,6 +635,9 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), s.roleDisplay(*def), def.TargetID,
 		string(def.Provider), def.Model, sessionDisplay(def.SessionID), routeNote, prompt)
 	msg += briefNote
+	if cite := upgrade.ClaudeSingleClientCite(def.SessionID); cite != "" {
+		msg += " [" + cite + "]" // 🎯T796
+	}
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
 	// list. Any entry pointing at a port nothing serves will sit in "still
 	// connecting" forever, silently costing this agent those tools — so say

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -114,11 +115,37 @@ func reapClaudeSessionHolders(sessionID string) ([]int, error) {
 			return pids, fmt.Errorf("claude %v still holds session %s after SIGKILL; refusing a second client", pids, sessionID)
 		}
 	}
+	recordClaudeReap(sessionID, pids)
 	if len(pids) > 0 {
 		slog.Warn("stopped stray claude clients before launch: one client per session",
 			"session", sessionID, "pids", fmt.Sprint(pids))
 	}
 	return pids, nil
+}
+
+var (
+	claudeReapMu   sync.Mutex
+	claudeReapNote = map[string]string{}
+)
+
+// ClaudeSingleClientCite is the jevons_agent_start fragment saying what the
+// one-client-per-session guard did for sessionID's last Launch (🎯T796): which
+// stray pids it stopped, or that it found none. Empty when no Launch of that
+// session ran the guard (an adopted seat), which is itself the "kept" case.
+func ClaudeSingleClientCite(sessionID string) string {
+	claudeReapMu.Lock()
+	defer claudeReapMu.Unlock()
+	return claudeReapNote[sessionID]
+}
+
+func recordClaudeReap(sessionID string, pids []int) {
+	note := "claude_single_client: no other client held the session"
+	if len(pids) > 0 {
+		note = fmt.Sprintf("claude_single_client: stopped stray claude pid(s) %v before launch", pids)
+	}
+	claudeReapMu.Lock()
+	claudeReapNote[sessionID] = note
+	claudeReapMu.Unlock()
 }
 
 func waitClaudeGone(pids []int) bool {

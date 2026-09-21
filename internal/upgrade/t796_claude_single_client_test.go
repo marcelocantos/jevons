@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -156,5 +157,15 @@ func TestT796NeverTargetsSelfAncestorsOrProcessGroup(t *testing.T) {
 	got := claudeHolderPIDs(sidS)
 	if len(got) != 1 || got[0] != 902 {
 		t.Fatalf("targets = %v, want only the unrelated stray 902", got)
+	}
+}
+
+func TestT796StartResultCitesWhatTheGuardDid(t *testing.T) {
+	stubTable(t, stubRows(), nil)
+	if _, err := reapClaudeSessionHolders(sidS); err != nil {
+		t.Fatal(err)
+	}
+	if c := ClaudeSingleClientCite(sidS); !strings.Contains(c, "80623") {
+		t.Fatalf("cite = %q, want the stopped pid", c)
 	}
 }
