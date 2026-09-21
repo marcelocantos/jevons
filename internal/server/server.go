@@ -302,6 +302,8 @@ type Server struct {
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
 	seatStopReader func(name string) (reason string, at time.Time, ok bool)
 	massStopReader func() string
+	// spawnOrderReader names a parent's open spawn orders (🎯T762).
+	spawnOrderReader func(parent string) []string
 
 	// portfolios is the declarative domain portfolio registry (🎯T200).
 	// Guarded by mu. Empty = calm missing (no RHS portfolio chrome).

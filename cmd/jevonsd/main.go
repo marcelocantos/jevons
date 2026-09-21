@@ -1000,6 +1000,7 @@ func main() {
 	// 🎯T662: /api/agents rows carry why a seat stopped and the mass-stop line.
 	srv.SetSeatStopReader(mcpSrv.SeatStopReason)
 	srv.SetMassStopReader(mcpSrv.MassStopLine)
+	srv.SetSpawnOrderReader(mcpSrv.SpawnOrderLines) // 🎯T762
 	mcpSrv.SetAgentRequestRecorder(func(name, text string, origin mcpserver.SendOrigin) error {
 		return srv.RecordAgentRequest(name, text, string(origin))
 	})

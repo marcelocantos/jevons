@@ -47,6 +47,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
+	"github.com/marcelocantos/jevons/internal/spawnorder"
 	"github.com/marcelocantos/jevons/internal/turndepth"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -391,6 +392,11 @@ type Server struct {
 	// deterministic notice does not depend on.
 	recoverBin string
 	stateDir   string
+	// spawnOrderAttempts caches the journalled start attempts 🎯T762 reconciles
+	// against: the journal is a full scan, and /api/agents asks per row.
+	spawnOrderMu       sync.Mutex
+	spawnOrderAttempts []spawnorder.Attempt
+	spawnOrderReadAt   time.Time
 
 	// intent is the 🎯T414 fleet-intent store: the deliberate answer to
 	// "should this agent be running?", read by every control that spawns,
@@ -890,6 +896,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerWritSecurityTools()  // 🎯T335 security auditor + writ confinement
 	s.registerGateShowTool()       // 🎯T697: supervisor gate lookup
 	s.registerSendqReconcileTool() // 🎯T726: the legal move out of PINNED
+	s.registerSpawnOrderTools()    // 🎯T762: which half of a spawn order was dropped
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s

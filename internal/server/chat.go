@@ -894,6 +894,11 @@ type agentInfo struct {
 	// since this daemon started.
 	DroppedCaps string `json:"dropped_caps,omitempty"`
 	MassStop    string `json:"mass_stop,omitempty"`
+	// SpawnOrders: one line per open spawn order given to this seat
+	// (🎯T762). An incomplete order names every seat it listed that was never
+	// minted and why (refused: the start error; not_attempted: no start was
+	// ever made), so a cold reader can tell a half-done order from a done one.
+	SpawnOrders []string `json:"spawn_orders,omitempty"`
 	// TranscriptActivity / TranscriptLastMove / TranscriptAgeSeconds answer
 	// "has this running seat moved recently?" from this one response, with no
 	// filesystem reach into ~/.local/state/claudia or ~/.claude/projects
@@ -927,11 +932,20 @@ func (s *Server) SetMassStopReader(fn func() string) {
 	s.massStopReader = fn
 }
 
+// SetSpawnOrderReader installs the 🎯T762 open-order lines per parent
+// (mcpserver.SpawnOrderLines in production).
+func (s *Server) SetSpawnOrderReader(fn func(parent string) []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.spawnOrderReader = fn
+}
+
 // decorateSeatStops applies the 🎯T662 fields to the rows.
 func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 	s.mu.RLock()
 	stopReader := s.seatStopReader
 	massReader := s.massStopReader
+	orderReader := s.spawnOrderReader
 	s.mu.RUnlock()
 	mass := ""
 	if massReader != nil {
@@ -945,6 +959,9 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 			}
 		}
 		agents[i].MassStop = mass
+		if orderReader != nil {
+			agents[i].SpawnOrders = orderReader(agents[i].Name)
+		}
 	}
 	return agents
 }
