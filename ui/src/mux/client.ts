@@ -9,6 +9,16 @@ export type MuxHandler = (env: MuxEnvelope) => void;
 /** Same payload vanilla web/scripts/transport.js sends on /ws/chat (🎯T537.2.1). */
 export const CHAT_PING = '{"type":"ping"}';
 export const HEARTBEAT_MS = 15000;
+/** Reconnect backoff (🎯T798): base * 2^attempt, capped, scaled by jitter in [0.75, 1]. */
+export const RECONNECT_BASE_MS = 500;
+export const RECONNECT_CAP_MS = 10000;
+const JITTER_FLOOR = 0.75;
+
+/** Delay before reconnect attempt `attempt` (0-based). Jitter keeps the ranges of consecutive attempts disjoint until the cap. */
+export function reconnectDelayMs(attempt: number, rand: () => number = Math.random): number {
+  const exp = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** attempt);
+  return Math.round(exp * (JITTER_FLOOR + (1 - JITTER_FLOOR) * rand()));
+}
 
 export class MuxClient {
   private ws: WebSocket | null = null;
@@ -22,24 +32,33 @@ export class MuxClient {
   private heartbeatTimer = 0;
   private everOpened = false;
   private closed = false;
+  private attempts = 0;
+  private outageLogged = false;
   private readonly url: string;
+  private readonly rand: () => number;
   onOpen?: () => void;
   onClose?: () => void;
 
-  constructor(url: string) {
+  constructor(url: string, rand: () => number = Math.random) {
     this.url = url;
+    this.rand = rand;
   }
 
   connect(): void {
     if (this.closed) return;
+    // A backoff timer is pending: sends queue in `pending` and ride the next attempt.
+    if (this.reconnectTimer && !this.ws) return;
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
+    this.reconnectTimer = 0;
     const ws = new WebSocket(this.url);
     this.ws = ws;
     const gen = ++this.generation;
     ws.onopen = () => {
       if (gen !== this.generation) return;
+      this.attempts = 0;
+      this.outageLogged = false;
       for (const msg of this.pending.splice(0)) ws.send(msg);
       if (this.everOpened) {
         for (const name of this.watched) {
@@ -69,7 +88,15 @@ export class MuxClient {
       this.onClose?.();
       if (this.closed) return;
       clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = setTimeout(() => this.connect(), 500);
+      if (!this.outageLogged) {
+        this.outageLogged = true;
+        console.error('mux: /ws/mux connection lost; retrying with backoff');
+      }
+      const delay = reconnectDelayMs(this.attempts++, this.rand);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = 0;
+        this.connect();
+      }, delay);
     };
   }
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHAT_PING, HEARTBEAT_MS, MuxClient } from './client';
+import { CHAT_PING, HEARTBEAT_MS, MuxClient, RECONNECT_CAP_MS, reconnectDelayMs } from './client';
 
 class FakeWebSocket {
   static CONNECTING = 0;
@@ -76,7 +76,7 @@ describe('MuxClient snapshot channels (T631)', () => {
     client.openChannel('plan-usage');
     expect(ws.sent.some((s) => s.includes('"ch":"plan-usage"') && s.includes('"t":"open"'))).toBe(true);
     ws.close();
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(RECONNECT_CAP_MS);
     const next = FakeWebSocket.instances[1];
     if (!next) throw new Error('reconnect did not construct a socket');
     next.open();
@@ -133,5 +133,52 @@ describe('MuxClient heartbeat (T537.2.1)', () => {
     ws.onmessage?.({ data: '{"type":"pong"}' });
     expect(seen).toEqual([]);
     client.close();
+  });
+});
+
+describe('MuxClient reconnect backoff (T798)', () => {
+  it('delays strictly increase to the cap under worst and best jitter', () => {
+    for (const rand of [() => 0, () => 0.999]) {
+      const delays = Array.from({ length: 12 }, (_, n) => reconnectDelayMs(n, rand));
+      for (let i = 1; i < delays.length; i++) {
+        expect(delays[i]).toBeGreaterThanOrEqual(delays[i - 1]!);
+      }
+      // strictly increasing until the exponential term reaches the cap
+      for (let i = 1; i < 5; i++) expect(delays[i]).toBeGreaterThan(delays[i - 1]!);
+      expect(Math.max(...delays)).toBeLessThanOrEqual(RECONNECT_CAP_MS);
+      expect(delays[0]).toBeGreaterThanOrEqual(370);
+      expect(delays[0]).toBeLessThanOrEqual(500);
+    }
+  });
+
+  it('spaces failed opens by growing delays, logs once per outage, resets on open', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.useFakeTimers();
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const client = new MuxClient('ws://test/ws/mux', () => 0.999);
+    client.connect();
+    const gaps: number[] = [];
+    let last = Date.now();
+    for (let i = 0; i < 6; i++) {
+      FakeWebSocket.instances[i]!.close();
+      const before = FakeWebSocket.instances.length;
+      while (FakeWebSocket.instances.length === before) vi.advanceTimersByTime(10);
+      gaps.push(Date.now() - last - 0);
+      last = Date.now();
+    }
+    for (let i = 1; i < 5; i++) expect(gaps[i]).toBeGreaterThan(gaps[i - 1]!);
+    expect(errs).toHaveBeenCalledTimes(1);
+    // a send during the outage does not bypass the backoff
+    const n = FakeWebSocket.instances.length;
+    client.openChannel('plan-usage');
+    expect(FakeWebSocket.instances.length).toBe(n);
+    // success resets attempts and the outage log
+    FakeWebSocket.instances[n - 1]!.open();
+    FakeWebSocket.instances[n - 1]!.close();
+    vi.advanceTimersByTime(500);
+    expect(FakeWebSocket.instances.length).toBe(n + 1);
+    expect(errs).toHaveBeenCalledTimes(2);
+    client.close();
+    errs.mockRestore();
   });
 });
