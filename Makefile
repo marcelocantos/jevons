@@ -414,9 +414,10 @@ test-live-suite:
 # PROVIDER selects the backend for the whole isolate — overseer and every
 # agent the journeys spawn (🎯T282), e.g.:
 #	make test-journey PROVIDER=claude
+#	make test-journey ONLY=J32   # one journey (🎯T789.1)
 .PHONY: test-journey
 test-journey: jevonsd playwright-browser
-	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER))
+	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER)) $(if $(ONLY),-only $(ONLY))
 
 # Full product net (🎯T492): hermetic layers first, then Universe-B journeys.
 test: ui-check-bundle
