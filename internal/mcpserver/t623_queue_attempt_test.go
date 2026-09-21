@@ -113,10 +113,34 @@ func TestT623DrainErrorNeverLosesOrBlindlyRetriesPayload(t *testing.T) {
 			if err != nil || len(entries) != 2 || entries[0].ID != first.ID || entries[0].Text != first.Text || !entries[0].EnqueuedAt.Equal(first.EnqueuedAt) || entries[0].State != want {
 				t.Fatalf("drain changed/lost acceptance: %+v %v", entries, err)
 			}
+			// After a restart exactly one message is submitted. For a
+			// definitely-not-sent refusal it is the first request, retried.
+			// For an uncertain outcome it is the LATER request: 🎯T766.5
+			// lets the queue flow past an entry whose delivery nobody can
+			// establish, instead of freezing every message behind it until a
+			// human reconciles — which held jevons-po's 104 messages for
+			// seventeen hours. The uncertain entry itself is never resent,
+			// and it stays in the queue, held, for reconciliation.
 			after, receiver, _ := t418Daemon(t, dir)
 			after.drainAgentSendQueue("a")
-			if got := len(receiver.delivered()); (got == 1) != tc.retry {
-				t.Fatalf("restart submissions=%d retry=%v", got, tc.retry)
+			got := receiver.delivered()
+			wantText := "later request"
+			if tc.retry {
+				wantText = "first accepted request"
+			}
+			if len(got) != 1 || !strings.Contains(got[0], wantText) {
+				t.Fatalf("restart submissions=%q, want exactly one carrying %q (retry=%v)", got, wantText, tc.retry)
+			}
+			if !tc.retry {
+				held, err := after.sendQueue().Snapshot("a")
+				if err != nil || len(held) == 0 || held[0].ID != first.ID || held[0].State != sendq.Uncertain {
+					t.Fatalf("uncertain entry was not kept held after the queue flowed past it: %+v %v", held, err)
+				}
+				for _, text := range got {
+					if strings.Contains(text, "first accepted request") {
+						t.Fatal("uncertain entry was resent")
+					}
+				}
 			}
 		})
 	}

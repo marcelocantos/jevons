@@ -56,7 +56,7 @@ type SendqPin struct {
 func FormatSendqPinLine(name string, pin SendqPin) string {
 	if pin.State != sendq.Pending {
 		return fmt.Sprintf("PINNED %s: sendq message %s has an unresolved %s attempt %s (%s). "+
-			"The payload remains held. A start will not retry it; reconcile delivery before another send. "+
+			"The payload remains held. A start will not retry it; messages behind it keep delivering past it (🎯T766.5). "+
 			"Reconcile it with jevons_sendq_reconcile name=%[1]q (call it with only name= to see the queue, then "+
 			"action=confirmed|requeue|drop entry_id=%[2]q attempt_id=%[4]q actor=… evidence=…) — 🎯T726. "+
 			"Never edit ~/.jevons/sendq/*.json while the daemon is running. "+

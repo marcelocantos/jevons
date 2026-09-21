@@ -320,8 +320,8 @@ func (s *Store) PushFront(agent string, e Entry) error {
 	if err != nil {
 		return err
 	}
-	if len(f.Entries) > 0 && f.Entries[0].State != Pending {
-		return fmt.Errorf("sendq: cannot prepend past an unresolved delivery attempt for %q", agent)
+	if len(f.Entries) > 0 && f.Entries[0].State == Attempting {
+		return fmt.Errorf("sendq: cannot prepend past a delivery attempt in flight for %q", agent)
 	}
 	f.Entries = append([]Entry{e}, f.Entries...)
 	return s.save(f)
@@ -341,15 +341,49 @@ func (s *Store) PopFront(agent string) (Entry, bool, error) {
 	if len(f.Entries) == 0 {
 		return Entry{}, false, nil
 	}
-	e := f.Entries[0]
-	if e.State != Pending {
-		return Entry{}, false, fmt.Errorf("sendq: %q has an unresolved delivery attempt", agent)
+	i, _, blocked := claimable(f.Entries)
+	if blocked {
+		return Entry{}, false, fmt.Errorf("sendq: %q has a delivery attempt in flight", agent)
 	}
-	f.Entries = f.Entries[1:]
+	if i < 0 {
+		return Entry{}, false, nil
+	}
+	e := f.Entries[i]
+	f.Entries = append(f.Entries[:i:i], f.Entries[i+1:]...)
 	if err := s.save(f); err != nil {
 		return Entry{}, false, err
 	}
 	return e, true, nil
+}
+
+// claimable finds the entry a drain may take next (🎯T766.5).
+//
+// An Uncertain entry is one whose delivery nobody can establish. Until
+// 2026-09-21 it blocked everything behind it, so one ambiguous send froze a
+// seat's whole queue until a human reconciled it — jevons-po held 104
+// messages for seventeen hours behind one. The owner chose to let the queue
+// flow past it instead: the entry stays exactly where it is, held and
+// pinned for reconciliation, and is never offered again, while the entries
+// behind it keep delivering. What does still block is an Attempting entry,
+// because that is a send in flight (or one a dead daemon left mid-submit),
+// and a second concurrent attempt to one seat is how deliveries interleave.
+//
+// Cost, accepted deliberately: messages behind an Uncertain entry can reach
+// the seat before it, so a seat's queue is FIFO among deliverable entries,
+// not absolutely.
+//
+// i is the index of the first Pending entry, or -1. blocker is the entry that
+// stops the scan (an Attempting one), when there is one.
+func claimable(entries []Entry) (i int, blocker Entry, blocked bool) {
+	for idx, e := range entries {
+		switch e.State {
+		case Pending:
+			return idx, Entry{}, false
+		case Attempting:
+			return -1, e, true
+		}
+	}
+	return -1, Entry{}, false
 }
 
 // ClaimFront durably retains the oldest entry while granting one attempt.
@@ -375,15 +409,22 @@ func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) 
 	if err != nil || len(f.Entries) == 0 {
 		return Entry{}, false, err
 	}
-	e := f.Entries[0]
-	if e.State != Pending || (matchID && e.ID != id) {
+	i, blocker, blocked := claimable(f.Entries)
+	if blocked {
+		return blocker, false, nil
+	}
+	if i < 0 {
+		return Entry{}, false, nil
+	}
+	e := f.Entries[i]
+	if matchID && e.ID != id {
 		return e, false, nil
 	}
 	if e.ID == "" {
 		e.ID = NewID()
 	}
 	e.State, e.AttemptID, e.Detail = Attempting, NewID(), ""
-	f.Entries[0] = e
+	f.Entries[i] = e
 	if err := s.save(f); err != nil {
 		return Entry{}, false, err
 	}
@@ -406,11 +447,13 @@ func (s *Store) BlockedHead(agent string) (Entry, bool, error) {
 	if err != nil || len(f.Entries) == 0 {
 		return Entry{}, false, err
 	}
-	e := f.Entries[0]
-	if e.State == Pending || (e.State == Attempting && s.active[agent] == e.AttemptID) {
-		return Entry{}, false, nil
+	for _, e := range f.Entries {
+		if e.State == Pending || (e.State == Attempting && s.active[agent] == e.AttemptID) {
+			continue
+		}
+		return e, true, nil
 	}
-	return e, true, nil
+	return Entry{}, false, nil
 }
 
 // Resolve records one attempt's outcome. Unverified retains the payload without
@@ -433,17 +476,25 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 	if err != nil {
 		return err
 	}
-	if len(f.Entries) == 0 || attempt.ID == "" || attempt.AttemptID == "" ||
-		f.Entries[0].ID != attempt.ID || f.Entries[0].AttemptID != attempt.AttemptID || f.Entries[0].State == Pending {
+	at := -1
+	if attempt.ID != "" && attempt.AttemptID != "" {
+		for idx, e := range f.Entries {
+			if e.ID == attempt.ID {
+				at = idx
+				break
+			}
+		}
+	}
+	if at < 0 || f.Entries[at].AttemptID != attempt.AttemptID || f.Entries[at].State == Pending {
 		return fmt.Errorf("sendq: stale delivery attempt for %q", agent)
 	}
 	if outcome == Confirmed || outcome == TerminalUndelivered {
-		f.Entries = f.Entries[1:]
+		f.Entries = append(f.Entries[:at:at], f.Entries[at+1:]...)
 	} else {
-		f.Entries[0].State, f.Entries[0].Detail = Uncertain, detail
+		f.Entries[at].State, f.Entries[at].Detail = Uncertain, detail
 		if outcome == DefinitelyNotSent {
-			f.Entries[0].State = Pending
-			f.Entries[0].AttemptID = ""
+			f.Entries[at].State = Pending
+			f.Entries[at].AttemptID = ""
 		}
 	}
 	return s.save(f)
