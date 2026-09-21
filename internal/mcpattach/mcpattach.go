@@ -78,31 +78,10 @@ func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia
 	}
 	if name := strings.TrimSpace(a.Name); name != "" && strings.TrimSpace(a.URL) != "" {
 		inv.Servers = replaceOrAppend(inv.Servers, claudia.MCPServer{
-			Name: name, Type: "http", URL: seatURL(a.URL, provider),
+			Name: name, Type: "http", URL: a.URL,
 		})
 	}
 	return applyProxied(inv.ForProvider(provider), a.Proxied)
-}
-
-// CoreToolsQuery asks this daemon's MCP endpoint for the fleet-control tool
-// surface only (mcpserver.ToolProfileCore). Spelled here rather than imported
-// so the attach policy does not depend on the server package.
-const CoreToolsQuery = "tools=core"
-
-// seatURL is the jevonsmcp URL a seat on provider dials.
-//
-// Cursor gets the core surface. A Cursor overseer launched on 2026-09-22 with
-// all eighteen servers on its row was listed seven of them and not jevonsmcp,
-// the one a fleet seat cannot work without; the full surface is 55 tools, and
-// Cursor has long capped what it will take.
-func seatURL(base string, provider claudia.Provider) string {
-	if provider != claudia.ProviderCursor {
-		return base
-	}
-	if strings.Contains(base, "?") {
-		return base + "&" + CoreToolsQuery
-	}
-	return base + "?" + CoreToolsQuery
 }
 
 func grokSessionServers(a Args) []claudia.MCPServer {

@@ -20,11 +20,16 @@ const ToolProfileParam = "tools"
 // daemon's ambient cycles.
 //
 // The whole surface was 55 tools and 58 KB of schema on 2026-09-22, carried
-// in every seat's context on every turn. It also did not fit: a Cursor
-// overseer launched with jevonsmcp on its row was listed seven of its
-// eighteen servers and not this one, and spent the night driving the fleet
-// through curl. A profile changes what tools/list returns and nothing else;
-// a tool that is not listed can still be called by name.
+// in every seat's context on every turn; this profile is 21 tools and 28 KB.
+// A profile changes what tools/list returns and nothing else; a tool that is
+// not listed can still be called by name.
+//
+// No seat is given this profile yet. It was written on the theory that a
+// Cursor overseer could not see jevonsmcp because the surface was too large,
+// and that theory was wrong: with 21 tools listed it still could not. Three
+// throwaway ACP sessions showed cursor-agent 2026.09.18 surfacing only a
+// subset of ~/.cursor/mcp.json and nothing passed in session/new, over HTTP
+// or stdio.
 const ToolProfileCore = "core"
 
 type toolProfileKey struct{}

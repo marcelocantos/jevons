@@ -29,9 +29,8 @@ func listedFor(t *testing.T, url string, tools []mcp.Tool) map[string]bool {
 	return got
 }
 
-// A Cursor overseer was listed seven of its eighteen MCP servers on
-// 2026-09-22, and not this one: the surface was 55 tools. The core profile
-// is what such a seat is listed instead.
+// The full surface was 55 tools on 2026-09-22; the core profile is what a
+// seat that asks for it is listed instead.
 func TestCoreProfileListsFleetControlAndNotAmbientKnobs(t *testing.T) {
 	all := toolsNamed(
 		"jevons_agent_list", "jevons_agent_start", "jevons_agent_send", "jevons_target_file",
@@ -86,8 +85,8 @@ func liveSurface() []mcp.Tool {
 	)
 }
 
-// Under the core profile that surface has to fit a client that caps a server
-// at forty tools, and still carry what drives a fleet.
+// Under the core profile that surface stays under forty tools and still
+// carries what drives a fleet.
 func TestCoreProfileOfTheLiveSurfaceFitsFortyTools(t *testing.T) {
 	all := liveSurface()
 	core := listedFor(t, "/mcp?tools=core", all)
