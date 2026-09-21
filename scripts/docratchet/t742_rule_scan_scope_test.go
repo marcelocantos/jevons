@@ -4,6 +4,8 @@
 package docratchet_test
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,7 +23,7 @@ var t742DoctrineFiles = []string{
 	"agents-guide.md",
 }
 
-// flagKindConstRe pulls FlagX FlagKind = "word" out of claim.go.
+// flagKindConstRe pulls FlagX FlagKind = "word" out of internal/gate/*.go.
 // Source parse, not a helper: adding a constant the helper forgot must still go RED.
 var flagKindConstRe = regexp.MustCompile(`(?m)^\s+(Flag\w+)\s+FlagKind\s*=\s*"([a-z_]+)"`)
 
@@ -155,12 +157,25 @@ func flagKindConstNames(t *testing.T) []string {
 	t.Helper()
 	seen := map[string]bool{}
 	var names []string
-	for _, m := range flagKindConstRe.FindAllStringSubmatch(readRepo(t, "internal/gate/claim.go"), -1) {
-		if seen[m[1]] {
+	// 🎯T800: a FlagKind constant declared in ANY non-test file of
+	// internal/gate is seen — 🎯T765 declared three in achieve.go while this
+	// scan read only claim.go, so the ratchet went red for the wrong reason.
+	entries, err := os.ReadDir(filepath.Join(repoRoot(t), "internal", "gate"))
+	if err != nil {
+		t.Fatalf("read internal/gate: %v", err)
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
 			continue
 		}
-		seen[m[1]] = true
-		names = append(names, m[1])
+		for _, m := range flagKindConstRe.FindAllStringSubmatch(readRepo(t, "internal/gate/"+n), -1) {
+			if seen[m[1]] {
+				continue
+			}
+			seen[m[1]] = true
+			names = append(names, m[1])
+		}
 	}
 	sort.Strings(names)
 	return names
