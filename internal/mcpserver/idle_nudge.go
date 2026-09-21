@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -407,6 +408,15 @@ func formatIdleNudgeWire(event, text string) string {
 		src = "idle-nudge"
 	}
 	return fmt.Sprintf("[event: %s] %s", src, strings.TrimSpace(text))
+}
+
+var idleNudgeWireRE = regexp.MustCompile(`(?m)^\[event:\s*idle-nudge(?:-brief)?\]`)
+
+// IsIdleNudgeText reports whether text is an idle-nudge / idle-nudge-brief
+// wire message (🎯T821). Anchored at a line start so a brief that merely
+// quotes the marker mid-line does not match.
+func IsIdleNudgeText(text string) bool {
+	return idleNudgeWireRE.MatchString(text)
 }
 
 // SessionLooksBriefed reports whether transcript/user text already carries

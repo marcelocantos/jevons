@@ -77,6 +77,17 @@ func isPromptInFlight(err error) bool {
 // holding the message, and "queued (N pending) … held by the daemon" is then a
 // claim about a store that does not contain it.
 func (s *Server) enqueueAgentSend(name, text string) (int, error) {
+	if IsIdleNudgeText(text) {
+		// 🎯T821: a held idle nudge is stale the moment the next one is
+		// composed; keep one pending nudge per seat, not a growing stack.
+		_, depth, replaced, err := s.sendQueue().AppendSuperseding(name, text, time.Now(),
+			func(e sendq.Entry) bool { return IsIdleNudgeText(e.Text) })
+		if replaced > 0 {
+			slog.Info("idle nudge superseded held nudge",
+				"component", "agent_send", "name", name, "replaced", replaced)
+		}
+		return depth, err
+	}
 	_, depth, err := s.sendQueue().Append(name, text, time.Now())
 	return depth, err
 }

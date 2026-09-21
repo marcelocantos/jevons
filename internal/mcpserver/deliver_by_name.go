@@ -329,6 +329,17 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 	// sendq, and name the recovery call. Never-registered stays not-found.
 	if s.registry == nil || s.registry.Def(name) == nil {
 		if rec, ok := LookupReapedRecord(s.fleetIntent(), name); ok {
+			// 🎯T821: a nudge to a finished, reaped seat is noise, not a
+			// message worth holding. Gate feedback and everything else still
+			// is (🎯T401).
+			if IsIdleNudgeText(text) {
+				slog.Info("idle nudge dropped for reaped seat",
+					"component", "agent_send", "name", name)
+				return agentSendResult{
+					Status:  "dropped_reaped_nudge",
+					Message: fmt.Sprintf("idle nudge for reaped agent %q dropped, not queued (🎯T821)", name),
+				}, nil
+			}
 			return s.holdSendForReaped(name, text, rec), nil
 		}
 	}

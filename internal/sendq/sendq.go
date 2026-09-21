@@ -311,6 +311,37 @@ func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
 	return e, len(f.Entries), nil
 }
 
+// AppendSuperseding is Append that first removes every still-Pending entry for
+// which supersedes reports true (🎯T821). Attempting and Uncertain entries are
+// never touched: they may already be in the receiver's hands. The returned
+// count is how many held entries the new one replaced.
+func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
+	if s == nil {
+		return Entry{}, 0, 0, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return Entry{}, 0, 0, err
+	}
+	kept := make([]Entry, 0, len(f.Entries)+1)
+	replaced := 0
+	for _, old := range f.Entries {
+		if old.State == Pending && supersedes != nil && supersedes(old) {
+			replaced++
+			continue
+		}
+		kept = append(kept, old)
+	}
+	e := Entry{ID: NewID(), Text: text, EnqueuedAt: at.UTC()}
+	f.Entries = append(kept, e)
+	if err := s.save(f); err != nil {
+		return Entry{}, 0, 0, err
+	}
+	return e, len(f.Entries), replaced, nil
+}
+
 // PushFront returns an entry to the head of the queue, for the drain that
 // found the agent busy after all. The entry keeps its original EnqueuedAt:
 // re-stamping it would reset the age that says how long a message has been
