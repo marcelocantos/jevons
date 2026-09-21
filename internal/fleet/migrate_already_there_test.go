@@ -54,3 +54,33 @@ func TestMigrateRefusedForAnotherReasonRecordsNothing(t *testing.T) {
 		t.Fatalf("refused migration changed the row: %+v", after)
 	}
 }
+
+// jevons-po refused a forced migrate for as long as anyone kept asking on
+// 2026-09-22: its workers report to it every minute and each report starts a
+// turn. Force asks once more after the seat has been told to stop; an unforced
+// migrate still waits its turn.
+func TestForcedMigrateAsksAgainAfterATurnInFlight(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6461"
+	prev := migrateInterruptSettle
+	migrateInterruptSettle = 0
+	t.Cleanup(func() { migrateInterruptSettle = prev })
+
+	asks := func(force bool) int {
+		f, _, _ := migrateFixture(t, oldSession, true)
+		n := 0
+		f.liveMigrate = func(*claudia.MigrateArgs) error {
+			n++
+			return errors.New("Migrate: turn in flight; wait for the current response or Interrupt first")
+		}
+		if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, force); err == nil {
+			t.Fatal("a migrate that was refused twice was reported as done")
+		}
+		return n
+	}
+	if n := asks(false); n != 1 {
+		t.Fatalf("unforced migrate asked %d times, want 1", n)
+	}
+	if n := asks(true); n != 2 {
+		t.Fatalf("forced migrate asked %d times, want 2", n)
+	}
+}

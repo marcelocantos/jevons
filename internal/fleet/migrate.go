@@ -679,7 +679,22 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		}
 	}
 	args := &claudia.MigrateArgs{Provider: target, Model: model, Force: force, Reason: "explicit"}
-	if err := f.invokeMigrate(name, args); err != nil {
+	err := f.invokeMigrate(name, args)
+	if force && err != nil && strings.Contains(err.Error(), "turn in flight") {
+		// A seat that is reported to every minute has no gap between turns:
+		// jevons-po and the overseer each refused a forced migrate for as long
+		// as anyone kept asking on 2026-09-22. Force is the caller saying the
+		// move outranks the turn, so end the turn and ask once more.
+		slog.Warn("forced migrate found a turn in flight; interrupting it", "name", name, "to", target)
+		if live := f.reg.Get(name); live != nil && live.Alive() {
+			if ierr := live.Interrupt(); ierr != nil {
+				slog.Warn("interrupt before forced migrate failed", "name", name, "err", ierr)
+			}
+		}
+		time.Sleep(migrateInterruptSettle)
+		err = f.invokeMigrate(name, args)
+	}
+	if err != nil {
 		if isLiveMigrateFallback(err) {
 			return handover.Pending{}, false, nil
 		}
@@ -762,6 +777,10 @@ func (f *Claudia) invokeMigrate(name string, args *claudia.MigrateArgs) error {
 	}
 	return live.Migrate(args)
 }
+
+// migrateInterruptSettle is how long a forced migrate waits after
+// interrupting a seat before it asks claudia again.
+var migrateInterruptSettle = 3 * time.Second
 
 // alreadyMigratedTo reports claudia's refusal to migrate an agent onto the
 // provider it is already on.
