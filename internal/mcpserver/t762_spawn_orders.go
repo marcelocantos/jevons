@@ -294,3 +294,15 @@ func (s *Server) handleSpawnOrder(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("action %q: use declare, status or close", action)), nil
 	}
 }
+
+// spawnOrderStartTool exposes the observer's correlation argument on the wire.
+func spawnOrderStartTool(t mcp.Tool) mcp.Tool {
+	if t.InputSchema.Properties == nil {
+		t.InputSchema.Properties = map[string]any{}
+	}
+	t.InputSchema.Properties["order_id"] = map[string]any{
+		"type":        "string",
+		"description": "Spawn order id returned by jevons_spawn_order declare; attributes this start outcome to that order.",
+	}
+	return t
+}

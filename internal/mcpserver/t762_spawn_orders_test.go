@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/spawnorder"
@@ -246,5 +248,54 @@ func TestT762NoJournalReadsUnknown(t *testing.T) {
 	lines, err = failing.SpawnOrderLines("jevons-po")
 	if err != nil || len(lines) != 1 || !strings.Contains(lines[0], "unknown: start journal unreadable: disk on fire") {
 		t.Fatalf("lines = %q, err %v", lines, err)
+	}
+}
+
+func TestT762OrderIDThroughMCPDispatch(t *testing.T) {
+	s := t762Server(t)
+	s.mcpSrv = mcpserver.NewMCPServer("t762", "test")
+	s.SetRegistry(nil) // Real registration and handler; no provider process.
+	s.registerSpawnOrderTools()
+	call := func(message string) map[string]any {
+		t.Helper()
+		wire, err := json.Marshal(s.mcpSrv.HandleMessage(context.Background(), json.RawMessage(message)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(wire, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response["error"] != nil {
+			t.Fatalf("RPC error: %s", wire)
+		}
+		return response
+	}
+	listed := call(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	found := false
+	for _, item := range listed["result"].(map[string]any)["tools"].([]any) {
+		tool := item.(map[string]any)
+		if tool["name"] != "jevons_agent_start" {
+			continue
+		}
+		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		arg, ok := props["order_id"].(map[string]any)
+		if !ok || arg["type"] != "string" {
+			t.Fatalf("order_id schema: %v", props["order_id"])
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("start tool absent")
+	}
+	call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"jevons_spawn_order","arguments":{"action":"declare","id":"o-wire","parent":"jevons-po","seats":"x:grok:T762"}}}`)
+	response := call(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"jevons_agent_start","arguments":{"name":"x","workdir":"/tmp","target_id":"T762","order_id":"o-wire"}}}`)
+	if response["result"].(map[string]any)["isError"] != true {
+		t.Fatal("expected registry refusal")
+	}
+	status := call(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"jevons_spawn_order","arguments":{"action":"status","id":"o-wire"}}}`)
+	wire, _ := json.Marshal(status)
+	if !strings.Contains(string(wire), "refused") || !strings.Contains(string(wire), "no agent registry") {
+		t.Fatalf("dispatch lost attribution: %s", wire)
 	}
 }

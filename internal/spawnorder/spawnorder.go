@@ -71,6 +71,7 @@ type Seat struct {
 
 // Observation is one start outcome attributed to a seat of an order.
 type Observation struct {
+	OrderID  string    `json:"order_id,omitempty"`
 	At       time.Time `json:"at"`
 	OK       bool      `json:"ok"`
 	Err      string    `json:"err,omitempty"`
@@ -238,15 +239,19 @@ func Reconcile(o Order, ev Evidence) Result {
 	for _, seat := range o.Seats {
 		sr := SeatResult{Seat: seat}
 		obs := seat.Observed
+		unattributed := obs != nil && obs.OrderID == ""
+		if obs != nil && (o.ID == "" || obs.OrderID != o.ID || targetsConflict(seat.Target, obs.Target)) {
+			obs = nil
+		}
 		var loose *Attempt
 		for i := range ev.Attempts {
 			a := &ev.Attempts[i]
-			if a.Name != seat.Name {
+			if a.Name != seat.Name || targetsConflict(seat.Target, a.Target) {
 				continue
 			}
-			if a.OrderID == o.ID {
+			if o.ID != "" && a.OrderID == o.ID {
 				if obs == nil || a.At.After(obs.At) {
-					obs = &Observation{At: a.At, OK: a.OK, Err: a.Err, Provider: a.Provider, Target: a.Target, Session: a.Session}
+					obs = &Observation{OrderID: a.OrderID, At: a.At, OK: a.OK, Err: a.Err, Provider: a.Provider, Target: a.Target, Session: a.Session}
 				}
 				continue
 			}
@@ -275,6 +280,9 @@ func Reconcile(o Order, ev Evidence) Result {
 				outcome = "refused: " + loose.Err
 			}
 			sr.Reason = fmt.Sprintf("a daemon start for this name was observed at %s (target %q, %s) but it carries no order id, so it cannot be attributed to order %s", loose.At.UTC().Format(time.RFC3339), loose.Target, outcome, o.ID)
+		case unattributed:
+			sr.Status = Unknown
+			sr.Reason = "stored start observation carries no order id; attribution is unknown until correlated evidence is available"
 		case ev.ReadErr != "":
 			sr.Status = Unknown
 			sr.Reason = "start journal unreadable: " + ev.ReadErr
@@ -572,7 +580,7 @@ func (s *Store) Record(results []Result) error {
 				if sr.Name != seat.Name || sr.Observed == nil {
 					continue
 				}
-				if seat.Observed == nil || sr.Observed.At.After(seat.Observed.At) {
+				if seat.Observed == nil || seat.Observed.OrderID != orders[i].ID || targetsConflict(seat.Target, seat.Observed.Target) || sr.Observed.At.After(seat.Observed.At) {
 					o := *sr.Observed
 					seat.Observed = &o
 					changed = true

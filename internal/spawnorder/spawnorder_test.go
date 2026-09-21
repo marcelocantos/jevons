@@ -4,6 +4,7 @@
 package spawnorder
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -335,5 +336,72 @@ func TestCapacityNeverDropsOpenOrders(t *testing.T) {
 	}
 	if len(got) != MaxOrders || ids["o-150"] || !ids["o-000"] || !ids["o-over"] {
 		t.Fatalf("eviction took the wrong order: len=%d o-150=%v o-000=%v", len(got), ids["o-150"], ids["o-000"])
+	}
+}
+
+func TestT762LegacyObservationNeedsOrderEvidence(t *testing.T) {
+	for _, ok := range []bool{false, true} {
+		t.Run(fmt.Sprint(ok), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			o := order(Seat{Name: "x", Target: "T762", Observed: &Observation{At: t0.Add(time.Hour), OK: ok, Err: "legacy refusal"}})
+			data, err := json.Marshal(fileShape{Orders: []Order{o}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			st, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := st.Orders()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, ev := range []Evidence{{}, {ReadErr: "unavailable"}, {CoveredSince: t0.Add(2 * time.Hour)}} {
+				r := Reconcile(rows[0], ev)
+				if r.Seats[0].Status != Unknown || r.Seats[0].Observed != nil {
+					t.Fatalf("legacy attribution: %+v", r.Seats[0])
+				}
+			}
+			// Correlated evidence replaces even a newer legacy observation.
+			r := Reconcile(rows[0], Evidence{Attempts: []Attempt{{Name: "x", Target: "T762", OrderID: o.ID, At: t0, OK: true}}})
+			if r.Seats[0].Status != Minted {
+				t.Fatalf("correlated attribution: %+v", r.Seats[0])
+			}
+			if err := st.Record([]Result{r}); err != nil {
+				t.Fatal(err)
+			}
+			st, err = Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err = st.Orders()
+			if err != nil {
+				t.Fatal(err)
+			}
+			later := Reconcile(rows[0], Evidence{ReadErr: "journal rotated"})
+			if later.Seats[0].Status != Minted || later.Seats[0].Observed.OrderID != o.ID {
+				t.Fatalf("lost provenance: %+v", later.Seats[0])
+			}
+		})
+	}
+}
+
+func TestT762MatchingOrderCannotOverrideTargetConflict(t *testing.T) {
+	o := order(Seat{Name: "x", Target: "T762"})
+	a := Attempt{Name: "x", OrderID: o.ID, Target: "T999", At: t0, OK: true}
+	for _, persisted := range []bool{false, true} {
+		ev := Evidence{}
+		if persisted {
+			o.Seats[0].Observed = &Observation{OrderID: a.OrderID, Target: a.Target, At: a.At, OK: a.OK}
+		} else {
+			ev.Attempts = []Attempt{a}
+		}
+		r := Reconcile(o, ev)
+		if r.Seats[0].Status != NotAttempted || r.Seats[0].Observed != nil {
+			t.Fatalf("wrong target attributed: %+v", r.Seats[0])
+		}
 	}
 }
