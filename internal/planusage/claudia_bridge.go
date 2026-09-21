@@ -151,7 +151,7 @@ func slackDecides(c, best float64) (cBetter bool, decided bool) {
 // export claudia.ShouldVacate; the predicate is session exhausted or
 // weekly hot/exhausted.
 func shouldVacate(be Backend, now time.Time, th Thresholds) bool {
-	v := claudia.ClassifyPlan(backendToPlanUsage(be), now, claudiaThresholdsPtr(th))
+	v := classifyPlan(be, now, th)
 	if v.Session == claudia.PlanSessionExhausted {
 		return true
 	}
@@ -224,6 +224,24 @@ func backendsToPlanUsage(cands []DestCand) []claudia.PlanUsage {
 		out = append(out, u)
 	}
 	return out
+}
+
+// classifyPlan is claudia.ClassifyPlan with 🎯T677 applied first: an
+// unreadable backend is unpublished, never exhausted. The published pin
+// (v0.40.0) checks the reason before the status, so a 429 from the usage
+// meter comes back as a spent allowance; claudia master has the T677
+// ordering but no tag carries it yet. Once the pin does, this guard is a
+// no-op and the verdict is claudia's alone.
+func classifyPlan(be Backend, now time.Time, th Thresholds) claudia.PlanVerdict {
+	u := backendToPlanUsage(be)
+	if u.Status != claudia.PlanUsageAvailable {
+		return claudia.PlanVerdict{
+			Usage:   u,
+			Weekly:  claudia.PlanBandUnpublished,
+			Session: claudia.PlanSessionUnpublished,
+		}
+	}
+	return claudia.ClassifyPlan(u, now, claudiaThresholdsPtr(th))
 }
 
 func backendToPlanUsage(be Backend) claudia.PlanUsage {

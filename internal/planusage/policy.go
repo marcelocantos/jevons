@@ -61,7 +61,7 @@ type DestCand struct {
 // The verdict is claudia.ClassifyPlan — jevons does not re-derive it (🎯T691).
 // Ticker waste colour is BandOfWindow (🎯T390.1.1), not this dest/policy band.
 func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
-	return WeeklyBand(claudia.ClassifyPlan(backendToPlanUsage(be), now, claudiaThresholdsPtr(th)).Weekly)
+	return WeeklyBand(classifyPlan(be, now, th).Weekly)
 }
 
 // BandOfWindow classifies a single window at now for the served ticker band.
@@ -161,7 +161,7 @@ const (
 // SessionStatusOf classifies one backend's session window for mint/migrate
 // eligibility. Same snapshot numbers the ticker paints; no JS classifyPace.
 func SessionStatusOf(be Backend, th Thresholds) SessionStatus {
-	return SessionStatus(claudia.ClassifyPlan(backendToPlanUsage(be), time.Time{}, claudiaThresholdsPtr(th)).Session)
+	return SessionStatus(classifyPlan(be, time.Time{}, th).Session)
 }
 
 // MintIneligible reports a published dest that must not receive new work
