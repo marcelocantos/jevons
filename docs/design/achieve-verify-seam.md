@@ -30,6 +30,8 @@ minicades or claudia achieve is therefore judged against that repo's history.
 | 70 | the check could not be made (ledger unreadable, target absent, ledger outside a git work tree, store unopenable) | reason on stderr |
 | 2 | bad command line | usage on stderr |
 
+`make achieve-verify` reports any failure as make's own exit 2; a caller that needs the 4/70 distinction runs `bin/gate check-attestation` directly.
+
 Anything other than 0 must refuse the achieve; 70 is a refusal to judge, never
 a pass.
 
