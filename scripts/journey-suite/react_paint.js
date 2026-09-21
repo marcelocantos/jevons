@@ -288,8 +288,10 @@ async function scenarioFrontier(page) {
   const openedPad = await page.locator('.instant-tip-show').waitFor({ state: 'visible', timeout: 4000 }).then(() => true).catch(() => false);
   if (!openedPad) fail('T643', '1px below the ID host top (still in the row) must open the hovercard');
   await page.mouse.move(nameX, nameBox.y + 1, { steps: 6 });
-  if ((await page.locator('.instant-tip-show').count()) < 1) {
-    fail('T643', '1px below the name cell top (still in the row) must keep the hovercard open');
+  // 🎯T649 supersedes the T643 persist-in-row band: the finger is the ID
+  // column only, so the name cell (even 1px into the row) dismisses the card.
+  if ((await page.locator('.instant-tip-show').count()) > 0) {
+    fail('T649', 'moving from the ID onto the name cell (1px into the row) must dismiss the hovercard');
   }
   const host = page.locator('#frontier-table .ft-id [data-instant-tip-host], #frontier-table .ft-id').first();
   if ((await host.count()) < 1) fail('T181', 'Frontier table has no ID cell to hover');
