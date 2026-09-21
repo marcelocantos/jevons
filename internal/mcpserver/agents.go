@@ -148,6 +148,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	// 🎯T679.2: the same birth check the periodic health hook runs, so a
 	// list call is sufficient to mark and notify but is not required.
 	s.sweepBornStuck()
+	s.sweepSeatMCP() // 🎯T797
 	s.notifyDeadAgents(reps)
 	// 🎯T459: reap fleet panes the registry does not know about before
 	// we report the count the host is deciding against.
@@ -203,6 +204,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if status == AgentStatusBornStuck {
 			diag := s.diagnoseBirth(d, s.birthClock())
 			fmt.Fprintf(&b, "  ^ %s\n", FormatBornStuckLine(d, diag.Elapsed))
+		}
+		if alive {
+			if diag := s.diagnoseSeatMCP(d, s.birthClock()); len(diag.Missing) > 0 {
+				fmt.Fprintf(&b, "  ^ %s\n", FormatSeatMCPNotice(d, diag.Missing, diag.Age))
+			}
 		}
 		if pinned {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))

@@ -54,6 +54,7 @@ func (s *Server) Reconcile() {
 	s.SweepSeatLoad()
 	s.SweepPostReapCommits()
 	s.sweepBornStuck()
+	s.sweepSeatMCP() // 🎯T797
 
 	s.runFleetRecoverSweep(false)
 	s.TriggerIdlePressureSweep()
