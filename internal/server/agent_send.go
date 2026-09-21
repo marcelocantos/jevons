@@ -4,15 +4,18 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/upgrade"
 )
 
 // 🎯T182 / 🎯T275: POST /api/agents/{name}/send — fire-and-forget deliver to a
@@ -185,7 +188,8 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 		proc = launched
 		rehydrated = true
 	}
-	if err := proc.Send(text); err != nil {
+	if err := upgrade.WithReadopt(context.Background(), name, proc,
+		func(a *claudia.Agent) error { return a.Send(text) }); err != nil {
 		// No product hook: busy is a loud failure (not silent). Production
 		// always sets the MCP deliver hook so busy queues instead (🎯T275).
 		return AgentSendOutcome{}, err

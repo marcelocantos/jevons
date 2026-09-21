@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
+	"github.com/marcelocantos/jevons/internal/upgrade"
 )
 
 // undeliverableQueueError is what a sender is told when the daemon could not
@@ -46,6 +48,18 @@ type agentSender interface {
 	Send(text string) error
 	Interrupt() error
 	Alive() bool
+}
+
+// readoptDeliver runs op on proc and, when proc is the real broker-held agent
+// and the broker answers not_owner, re-adopts the seat and retries once on the
+// fresh handle (🎯T796). Test doubles are delivered to as they are.
+func readoptDeliver(name string, proc agentSender, op func(agentSender) error) error {
+	real, ok := proc.(*claudia.Agent)
+	if !ok {
+		return op(proc)
+	}
+	return upgrade.WithReadopt(context.Background(), name, real,
+		func(a *claudia.Agent) error { return op(a) })
 }
 
 // isPromptInFlight reports a concurrent prompt/turn (busy) so senders
@@ -540,7 +554,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	preFlight := s.flightState(name)
 	interrupted := false
 	if interrupt {
-		if ierr := proc.Interrupt(); ierr != nil {
+		if ierr := readoptDeliver(name, proc, func(a agentSender) error { return a.Interrupt() }); ierr != nil {
 			// A turn this daemon watched begin is a turn the caller asked to
 			// cut. Failing that is an error, never a graceful enqueue (🎯T424).
 			if preFlight == FlightInFlight {
@@ -571,7 +585,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		if seam != nil {
 			return seam(text, mode)
 		}
-		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, proc.Send(text)
+		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return a.Send(text) })
 	}
 
 	// Opened BEFORE the send so "the payload arrived" is measured against a
@@ -708,7 +722,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		// cutting a turn short, "it went into the composer and stayed there"
 		// is precisely the outcome the caller must not hear as success.
 		watch2 := s.watchAgentTurnFor(name, text)
-		if err2 := proc.Send(text); err2 == nil {
+		if err2 := readoptDeliver(name, proc, func(a agentSender) error { return a.Send(text) }); err2 == nil {
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
 			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil, mm)
@@ -858,7 +872,7 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
 	defer cancel()
 	generation := s.terminalGeneration(name)
-	sendErr := proc.Send(text)
+	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return a.Send(text) })
 	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
 	// Watch before treating the attempt as failed — broker-wrapped errors miss
 	// queueSendDefinitelyNotSent's exact-string match and would otherwise land

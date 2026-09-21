@@ -12,6 +12,10 @@
 //	          directly (claudia's own adopt blocks on a hung socket for the whole
 //	          context and never reaches it): expect ErrClaudeHeldByBroker, no launch,
 //	          no signal, the holder's pid alive after.
+//	readopt   adopt as a restarted daemon would, wait for the broker's silent
+//	          detach (claudia T125), show the refused send (not_owner), then send
+//	          through upgrade.WithReadopt (🎯T796) and show it succeed on a fresh
+//	          grant without the seat dying.
 //	hung      takeover while the broker "does not answer" (🎯T796.1): the driver
 //	          points CLAUDIA_BROKER_SOCKET at a listener that accepts and never
 //	          replies, and burns every core, so claudia.BrokerAvailable times out
@@ -21,6 +25,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -30,16 +35,26 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 )
 
-const (
-	seatName  = "jv-t796-throwaway"
-	sessionID = "ee0e1d94-a7bd-4a9b-bf1d-66f2665c588b"
+// The seat and session default to the original throwaway; T796_SEAT and
+// T796_SESSION select another (a session inflated past ~1024 replay events).
+var (
+	seatName  = envOr("T796_SEAT", "jv-t796-throwaway")
+	sessionID = envOr("T796_SESSION", "ee0e1d94-a7bd-4a9b-bf1d-66f2665c588b")
 )
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -78,6 +93,8 @@ func main() {
 		signal.Notify(c, os.Interrupt)
 		<-c
 		os.Exit(0) // no Stop: the broker keeps the seat running, like an upgrade exit
+	case "readopt":
+		readopt(ctx, reg)
 	case "takeover", "hung":
 		upgrade.LaunchRefusedNotifier = func(agent string, err error) {
 			fmt.Printf("OWNER NOTICE (seat %s): %v\n", agent, err)
@@ -152,4 +169,83 @@ func guardHung() {
 	fmt.Printf("guard returned after %s: %v\n", time.Since(t0).Round(time.Millisecond), err)
 	fmt.Println("refused with ErrClaudeHeldByBroker:", errors.Is(err, upgrade.ErrClaudeHeldByBroker))
 	fmt.Println("holders after:", holderPIDs())
+}
+
+func readopt(ctx context.Context, reg *claudia.Registry) {
+	upgrade.DefaultReadopter = upgrade.NewReadopter(reg)
+	upgrade.DefaultReadopter.Notify = func(agent string, err error) { fmt.Printf("OWNER NOTICE (seat %s): %v\n", agent, err) }
+	upgrade.DefaultReadopter.OnReadopt = func(name string, a *claudia.Agent) {
+		fmt.Printf("readopt: fresh handle for %s window=%s pid=%d\n", name, a.WindowID(), a.PID())
+	}
+	fmt.Println("holders before:", holderPIDs())
+	t0 := time.Now()
+	upgrade.ReattachSeatsContext(ctx, reg, func(n string) bool { return n == seatName }, 1)
+	a := reg.Get(seatName)
+	if a == nil {
+		fmt.Println("readopt: no agent after adopt")
+		os.Exit(1)
+	}
+	fmt.Printf("adopted in %s window=%s pid=%d\n", time.Since(t0).Round(time.Millisecond), a.WindowID(), a.PID())
+	var release func()
+	if os.Getenv("T796_STALL") != "" {
+		release = stallAndFlood(a)
+	}
+	// The detach lands about a second after the adopt when it happens at all.
+	time.Sleep(6 * time.Second)
+	if release != nil {
+		release()
+	}
+	pids := holderPIDs()
+	err := a.Send("Reply with the single word ok.")
+	fmt.Printf("plain send: err=%v not_owner=%v\n", err, upgrade.IsNotOwner(err))
+	if !upgrade.IsNotOwner(err) {
+		fmt.Println("NOT REPRODUCED: the grant was not detached this run")
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	fmt.Println("REPRODUCED: broker refused the owner's send")
+	err = upgrade.WithReadopt(ctx, seatName, a, func(x *claudia.Agent) error { return x.Send("Reply with the single word ok.") })
+	fmt.Printf("send through WithReadopt: err=%v\n", err)
+	fmt.Println("holders before/after (same pids = seat not killed, none stacked):", pids, "|", holderPIDs())
+	if err != nil {
+		os.Exit(1)
+	}
+	time.Sleep(3 * time.Second)
+}
+
+// stallAndFlood reproduces claudia T125's trigger: the consumer's read loop
+// stalls (its event handler blocks, so the client queue fills and the socket
+// stops being read) while the seat produces a live burst (lines appended to the
+// session JSONL the broker tails). The broker's per-owner pump (1024) fills and
+// it detaches the owner, silently. The returned func lets the handler drain.
+func stallAndFlood(a *claudia.Agent) func() {
+	gate := make(chan struct{})
+	a.SubscribeEvents(func(claudia.Event) { <-gate })
+	path := a.JSONLPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+	lines := bytes.Split(bytes.TrimRight(raw, "\n"), []byte("\n"))
+	burst := 12000
+	if v, err := strconv.Atoi(os.Getenv("T796_BURST")); err == nil && v > 0 {
+		burst = v
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	var buf bytes.Buffer
+	for i := 0; i < burst; i++ {
+		buf.Write(lines[len(lines)-1-i%len(lines)])
+		buf.WriteByte('\n')
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		panic(err)
+	}
+	fmt.Printf("flood: appended %d lines to %s while the consumer handler is stalled\n", burst, path)
+	return func() { close(gate) }
 }

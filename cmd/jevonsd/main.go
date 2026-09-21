@@ -1162,6 +1162,21 @@ func main() {
 				". Nothing was stopped. Check the claudia broker (its socket exists but "+
 				"the seat's grant is held or the broker is not answering), then restart the seat.")
 	}
+	// 🎯T796: the broker detaches a seat's owner without telling it (claudia
+	// T124/T125), after which every delivery is refused not_owner. A refusal
+	// re-adopts the seat by name on one connection, bounded; a spent budget
+	// tells the owner.
+	upgrade.DefaultReadopter = upgrade.NewReadopter(registry)
+	upgrade.DefaultReadopter.OnReadopt = func(name string, a *claudia.Agent) {
+		if isOverseerSeat(name) {
+			srv.AttachOverseer(a)
+		}
+	}
+	upgrade.DefaultReadopter.Notify = func(agent string, err error) {
+		srv.NotifyOwnerNote(agent, "seat_grant_lost",
+			"Seat "+agent+" keeps losing its claudia broker grant: "+err.Error()+
+				". Deliveries to it are refused until the broker is fixed (claudia T124/T125) or the seat is restarted.")
+	}
 	noteRemint(upgrade.ReattachSeatsContext(ctx, registry, isOverseerSeat, 1))
 	if ctx.Err() != nil {
 		return

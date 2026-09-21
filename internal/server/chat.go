@@ -31,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatactivity"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 	"github.com/marcelocantos/jevons/internal/targetfile"
+	"github.com/marcelocantos/jevons/internal/upgrade"
 )
 
 // defaultOverseerName is the fallback registry name of the persistent
@@ -525,7 +526,8 @@ func (s *Server) interruptOverseerForOwner() {
 	if proc == nil || !proc.Alive() {
 		return
 	}
-	if err := proc.Interrupt(); err != nil {
+	if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
+		func(a *claudia.Agent) error { return a.Interrupt() }); err != nil {
 		slog.Info("notify_queue",
 			"component", "notify_queue",
 			"decision", "owner_interrupt",
@@ -553,7 +555,8 @@ func (s *Server) sendNotes(text string) error {
 	if proc == nil || !proc.Alive() {
 		return fmt.Errorf("overseer not running")
 	}
-	return proc.Send(text)
+	return upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
+		func(a *claudia.Agent) error { return a.Send(text) })
 }
 
 // notifyErrClass classifies overseer-notify delivery failures for structured

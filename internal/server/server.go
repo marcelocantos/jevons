@@ -38,6 +38,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/transcript"
+	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
 )
@@ -930,7 +931,8 @@ func (s *Server) HandleUserMessage(text string) {
 	s.overseerOwnerTurn = true // 🎯T291: remote owner speech is an owner turn
 	s.mu.Unlock()
 	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
-	if err := proc.Send(text); err != nil {
+	if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
+		func(a *claudia.Agent) error { return a.Send(text) }); err != nil {
 		slog.Error("jevons: send failed", "err", err)
 	}
 }
