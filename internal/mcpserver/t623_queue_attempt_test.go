@@ -441,3 +441,39 @@ func TestT623ReapedRouteRetainsUnconfirmedAndFailedSuccessor(t *testing.T) {
 		})
 	}
 }
+
+// 🎯T766.5: after a restart, the backlog sweep is the only thing that can
+// move an idle seat's queue — the turn boundary it was waiting for was
+// consumed by the bounce. A held entry at the head must not stop the sweep
+// from re-offering the pending messages behind it.
+func TestT766SweepReoffersPendingBehindHeldEntryAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	s, _, _ := t418Daemon(t, dir)
+	first, _, err := s.sendQueue().Append("a", "ambiguous delivery", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.sendQueue().Append("a", "waiting behind it", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	attempt, ok, err := s.sendQueue().ClaimFront("a")
+	if err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := s.sendQueue().Resolve("a", attempt, sendq.Unverified, "no session event within 45s"); err != nil {
+		t.Fatal(err)
+	}
+
+	after, receiver, _ := t418Daemon(t, dir)
+	after.ReportRecoveredBacklog()
+	after.SweepSendBacklogs()
+
+	got := receiver.delivered()
+	if len(got) != 1 || !strings.Contains(got[0], "waiting behind it") {
+		t.Fatalf("sweep delivered %q, want exactly the pending message behind the held one", got)
+	}
+	left, err := after.sendQueue().Snapshot("a")
+	if err != nil || len(left) != 1 || left[0].ID != first.ID || left[0].State != sendq.Uncertain {
+		t.Fatalf("held entry not kept after the sweep flowed past it: %+v %v", left, err)
+	}
+}

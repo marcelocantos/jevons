@@ -180,6 +180,20 @@ func (s *Server) SweepSendBacklogs() {
 				break
 			}
 			s.noticeUncertainAttempt(b.Agent, pin, FormatSendqPinLine(b.Agent, pin))
+			// 🎯T766.5: the held entry is never touched here, but the ones
+			// behind it are ordinary pending messages. Before flow-past this
+			// branch was a freeze by design, so it never re-offered anything —
+			// and after a restart it was the only branch a queue with one
+			// held entry could reach, so the queue waited for a turn boundary
+			// the bounce had already consumed. jevons-po sat at 53 pending
+			// behind 4 held for as long as it stayed idle.
+			if b.Depth > b.Uncertain && s.flightState(b.Agent) != FlightInFlight {
+				if _, live := s.liveSender(b.Agent); live {
+					slog.Info("🎯T766.5 backlog sweep: re-offering pending messages behind held entries",
+						"component", "agent_send", "agent", b.Agent, "queued", b.Depth, "held", b.Uncertain)
+					s.drainAgentSendQueue(b.Agent)
+				}
+			}
 		case !s.agentIsRegistered(b.Agent):
 			// 🎯T401: a reaped seat is recoverable — gate feedback stays held
 			// until jevons_agent_start (or intent lift + start) recreates it.
