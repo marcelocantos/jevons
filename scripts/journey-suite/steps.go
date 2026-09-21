@@ -14,10 +14,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/statedb"
 )
 
 // ── Fleet / HTTP steps ────────────────────────────────────────────────
@@ -51,43 +52,64 @@ func (s *suite) ListAgentsHTTP() ([]AgentInfo, error) {
 // listAgentsHTTP is a legacy alias used by existing journeys.
 func (s *suite) listAgentsHTTP() ([]AgentInfo, error) { return s.ListAgentsHTTP() }
 
-// agentTranscriptHTTP reads the product inspect record: the jevons
-// per-agent journal. GET /api/agents/{name}/transcript is gone.
+// agentTranscriptHTTP reads the agent's conversation from the store the
+// daemon writes: the statedb transcript_events rows (🎯T548). The retired
+// state_dir/agent-chatlogs/<name>.jsonl is only appended when no statedb is
+// open, so reading it saw an empty transcript for a turn the worker had
+// answered (🎯T625.10). Read-only: it cannot manufacture missing evidence.
 func (s *suite) agentTranscriptHTTP(name string) (map[string]any, error) {
-	path := filepath.Join(s.stateDir, "agent-chatlogs", name+".jsonl")
-	b, err := os.ReadFile(path)
-	if err != nil {
+	dbPath := statedb.DefaultPath(s.stateDir)
+	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
-			return map[string]any{"turns": []any{}, "empty": true, "journal": path}, nil
+			return map[string]any{"turns": []any{}, "empty": true, "journal": dbPath}, nil
 		}
 		return nil, err
 	}
+	db, err := statedb.OpenReadOnly(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	n, err := db.N(name)
+	if err != nil {
+		return nil, err
+	}
+	evs, err := db.Range(name, 1, n+1)
+	if err != nil {
+		return nil, err
+	}
+	return transcriptPayloadFromStore(evs), nil
+}
+
+// transcriptPayloadFromStore projects stored transcript rows onto the
+// {turns, empty, journal} shape the journeys read: user / assistant /
+// agent_note rows become turns, tool traffic and other kinds do not.
+func transcriptPayloadFromStore(evs []statedb.Event) map[string]any {
 	var turns []any
-	for _, ln := range strings.Split(string(b), "\n") {
-		ln = strings.TrimSpace(ln)
-		if ln == "" {
+	var journal strings.Builder
+	for _, e := range evs {
+		journal.WriteString(e.Body)
+		journal.WriteByte('\n')
+		if e.Type != "user" && e.Type != "assistant" && e.Type != "agent_note" {
 			continue
 		}
+		role := e.Type
 		var ev map[string]any
-		if err := json.Unmarshal([]byte(ln), &ev); err != nil {
-			continue
+		if err := json.Unmarshal([]byte(e.Body), &ev); err != nil {
+			ev = map[string]any{"body": e.Body}
 		}
-		typ, _ := ev["type"].(string)
-		if typ == "user" || typ == "assistant" || typ == "agent_note" {
-			role := typ
-			if msg, ok := ev["message"].(map[string]any); ok {
-				if r, _ := msg["role"].(string); r != "" {
-					role = r
-				}
+		if msg, ok := ev["message"].(map[string]any); ok {
+			if r, _ := msg["role"].(string); r != "" {
+				role = r
 			}
-			turns = append(turns, map[string]any{"role": role, "raw": ev})
 		}
+		turns = append(turns, map[string]any{"role": role, "raw": ev})
 	}
 	return map[string]any{
 		"turns":   turns,
 		"empty":   len(turns) == 0,
-		"journal": string(b),
-	}, nil
+		"journal": journal.String(),
+	}
 }
 
 // ── MCP steps ─────────────────────────────────────────────────────────
