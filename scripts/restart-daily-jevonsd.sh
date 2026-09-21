@@ -803,7 +803,7 @@ record_served() {
   fi
   mkdir -p "$(dirname "$SERVED_FILE")" 2>/dev/null || true
   printf 'served %s %s coalesced=%s bounce=%s\n' "$(date +%s)" "$SERVED_HEAD" "$n" "$1" >>"$SERVED_FILE" 2>/dev/null || true
-  log "🎯T815 served head=${SERVED_HEAD:0:12} coalesced=$n bounce=$1"
+  log "🎯T815 served head=${SERVED_HEAD:0:12} requests-absorbed=$n bounce=$1"
 }
 
 # --- main --------------------------------------------------------------------
