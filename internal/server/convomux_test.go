@@ -247,7 +247,7 @@ func TestOverseerDownSampleAndMuxMeta(t *testing.T) {
 	if got := s.overseerDownSample(); got != "session/load failed" {
 		t.Fatalf("reason: %q", got)
 	}
-	meta := s.muxTranscriptMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0, false)
+	meta := s.muxTranscriptMeta("jevons", muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0, false)
 	if meta["overseer_down"] != "session/load failed" {
 		t.Fatalf("meta=%+v", meta)
 	}

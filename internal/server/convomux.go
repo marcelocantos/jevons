@@ -386,9 +386,16 @@ func muxWindowMeta(r muxwin.Resolved, n int, truncated bool) map[string]any {
 	return m
 }
 
-func (s *Server) muxTranscriptMeta(r muxwin.Resolved, n int, truncated bool) map[string]any {
+func (s *Server) muxTranscriptMeta(name string, r muxwin.Resolved, n int, truncated bool) map[string]any {
 	m := muxWindowMeta(r, n, truncated)
 	if s == nil {
+		return m
+	}
+	// 🎯T809: working / phase / owner_ux / overseer_down are the overseer's
+	// state. On any other channel they read as that seat's own: an aside's
+	// composer took the overseer's mid-turn phase for a busy aside and held
+	// the owner's first message in its client queue, sending nothing.
+	if !s.isOverseerAgent(name) {
 		return m
 	}
 	m["working"] = s.publishedWorkingLevel()
@@ -1113,7 +1120,7 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 		s.muxWrite(ctx, conn, ch, "frame", muxEventBody(ev, "put", ""))
 		watch.markSent(ev.ID)
 	}
-	s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(sub, n, s.muxTruncated(name)))
+	s.muxWrite(ctx, conn, ch, "meta", s.muxTranscriptMeta(name, sub, n, s.muxTruncated(name)))
 	return nil
 }
 

@@ -232,7 +232,7 @@ func TestT555_3MapperConsumesTypedProgressAndUsage(t *testing.T) {
 func TestT555_2MuxMetaAndFanCarryPhaseSample(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.overseerName = "jevons"
-	meta := s.muxTranscriptMeta(muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0, false)
+	meta := s.muxTranscriptMeta("jevons", muxwin.Resolved{Lo: 1, Hi: 0, Following: true}, 0, false)
 	p, ok := meta["phase"].(PhaseSample)
 	if !ok || p.Phase != PhaseIdle {
 		t.Fatalf("reload snapshot phase = %#v", meta["phase"])
