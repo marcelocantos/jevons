@@ -1,7 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDrafts } from '../store/drafts';
+import { isEffectivelyEmpty } from '../composer/wispr';
 import { MuxClient } from '../mux/client';
 import { useConversation, type ConversationMeta } from '../conversation/useConversation';
 import { normalizeDensity, type Density } from '../density';
@@ -39,6 +41,7 @@ export function AgentInteraction(props: {
     setRecalled(null);
   }, [props.name]);
   const comfortable = density === 'comfortable';
+  const rootRef = useRef<HTMLDivElement>(null);
   // 🎯T657: the seat is busy when its painted phase is anything but idle.
   // Seats without a phase sample (fleet transcripts) send straight through
   // and the daemon queues on busy, as before.
@@ -57,8 +60,21 @@ export function AgentInteraction(props: {
   useEffect(() => {
     setQueueFocus(null);
   }, [props.name]);
+  // 🎯T562.1: Edit returns a queued item to the composer (above any draft
+  // already there) and takes it out of the queue; Enter queues it again.
+  const setDraft = useDrafts((s) => s.setDraft);
+  const editQueued = (id: string) => {
+    const item = queue.items.find((it) => it.id === id);
+    if (!item) return;
+    const current = useDrafts.getState().drafts[props.name] || '';
+    queue.remove(id);
+    setDraft(props.name, isEffectivelyEmpty(current) ? item.text : `${item.text}\n${current}`);
+    setRecalled(null);
+    queueMicrotask(() => rootRef.current?.querySelector('textarea')?.focus());
+  };
   return (
     <div
+      ref={rootRef}
       id={comfortable ? 'chat-pane' : 'agent-inspect'}
       className={
         comfortable
@@ -107,16 +123,18 @@ export function AgentInteraction(props: {
             <div id="attention-stack" role="list" />
             <div id="attention-actions" aria-label="Attention aside actions" />
           </div>
-          <SendQueueStrip
-            items={queue.items}
-            focusedId={queueFocus}
-            onSteer={(id) => queue.sendItem(id, 'steer')}
-            onInterrupt={(id) => queue.sendItem(id, 'interrupt')}
-            onRemove={queue.remove}
-          />
-          <OverseerPhaseStrip connected={connected} meta={conv.meta} />
         </>
       ) : null}
+      <SendQueueStrip
+        id={comfortable ? 'send-queue' : 'agent-inspect-send-queue'}
+        items={queue.items}
+        focusedId={queueFocus}
+        onSteer={(id) => queue.sendItem(id, 'steer')}
+        onInterrupt={(id) => queue.sendItem(id, 'interrupt')}
+        onRemove={queue.remove}
+        onEdit={editQueued}
+      />
+      {comfortable ? <OverseerPhaseStrip connected={connected} meta={conv.meta} /> : null}
       <UserRequest
         name={props.name}
         density={density}

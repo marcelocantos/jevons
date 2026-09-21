@@ -723,8 +723,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .attn-chip .attn-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 
 /* 🎯T113 send queue strip — Grok-like, just above the composer */
-#send-queue { display: none; flex-direction: column; gap: 4px; padding: 8px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); }
-#send-queue.visible { display: flex; }
+#send-queue, .send-queue { display: none; flex-direction: column; gap: 4px; padding: 8px 20px 0 20px; background: var(--surface); border-top: 1px solid var(--border); }
+#send-queue.visible, .send-queue.visible { display: flex; }
+.conversation-widget.density-compact .send-queue { padding: 6px 10px 0 10px; max-height: 30%; overflow-y: auto; flex-shrink: 0; }
+.conversation-widget.density-compact .send-queue-item { flex-wrap: wrap; padding: 4px 8px; font-size: 11px; }
+.conversation-widget.density-compact .send-queue-item .sq-text { flex: 1 1 100%; }
+.conversation-widget.density-compact .send-queue-item .sq-actions { margin-left: 0; }
 .send-queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.35; color: var(--text-dim); }
 .send-queue-item.focused { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
 .send-queue-item .sq-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

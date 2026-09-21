@@ -164,6 +164,59 @@ describe('send queue wiring (T657 / T113)', () => {
     expect(sends()).toHaveLength(2);
     expect(JSON.parse(localStorage.getItem('jevons-send-queue-v1') || '{}').items).toEqual([]);
   });
+  // 🎯T562.1: the strip and its per-item actions are the same in both densities.
+  describe.each(['comfortable', 'compact'] as const)('queue strip (T562.1, %s)', (density) => {
+    const mount = async (texts: string[]) => {
+      const view = render(<AgentInteraction mux={client} name="jevons" density={density} connected />);
+      const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
+      act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'thinking' }); });
+      const box = view.getByRole('textbox') as HTMLTextAreaElement;
+      for (const t of texts) {
+        fireEvent.change(box, { target: { value: t } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+      }
+      const strip = view.container.querySelector('.send-queue') as HTMLElement;
+      await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(texts.length));
+      const row = (text: string) => [...strip.querySelectorAll('.send-queue-item')].find((el) => el.querySelector('.sq-text')?.textContent === text) as HTMLElement;
+      return { view, box, strip, row };
+    };
+
+    it('paints queued follow-ups above the composer, next-to-send nearest it', async () => {
+      const { strip } = await mount(['a', 'b']);
+      expect(strip.classList.contains('visible')).toBe(true);
+      expect([...strip.querySelectorAll('.sq-text')].map((el) => el.textContent)).toEqual(['b', 'a']);
+      expect(strip.querySelector('[data-queue-next="true"] .sq-text')?.textContent).toBe('a');
+    });
+
+    it('Steer, Cut in and Remove act on the clicked item', async () => {
+      const { strip, row } = await mount(['a', 'b', 'c']);
+      fireEvent.click(row('b').querySelector('.sq-send-now')!);
+      fireEvent.click(row('c').querySelector('.sq-interrupt')!);
+      expect(sends()).toEqual([{ text: 'b', mode: 'steer' }, { text: 'c', mode: 'interrupt', interrupt: true }]);
+      fireEvent.click(row('a').querySelector('.sq-remove')!);
+      await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(0));
+    });
+
+    it('Edit returns the item to the composer and leaves the queue; Enter re-queues the edited text', async () => {
+      const { strip, box, row } = await mount(['first', 'second']);
+      fireEvent.click(row('second').querySelector('.sq-edit')!);
+      await waitFor(() => expect(box.value).toBe('second'));
+      expect([...strip.querySelectorAll('.sq-text')].map((el) => el.textContent)).toEqual(['first']);
+      expect(sends()).toEqual([]);
+      fireEvent.change(box, { target: { value: 'second, revised' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await waitFor(() => expect([...strip.querySelectorAll('.sq-text')].map((el) => el.textContent)).toEqual(['second, revised', 'first']));
+      expect(box.value).toBe('');
+    });
+
+    it('Edit keeps a draft already in the composer, placing the item above it', async () => {
+      const { box, row } = await mount(['held']);
+      fireEvent.change(box, { target: { value: 'typing' } });
+      fireEvent.click(row('held').querySelector('.sq-edit')!);
+      await waitFor(() => expect(box.value).toBe('held\ntyping'));
+    });
+  });
+
   // 🎯T562.7: Alt+Enter is force-send, never pop_last (T241), in both densities.
   describe.each(['comfortable', 'compact'] as const)('Alt+Enter force-send (T562.7, %s)', (density) => {
     const SEED = '\u200B.\u200B';
@@ -173,11 +226,11 @@ describe('send queue wiring (T657 / T113)', () => {
       const userFrame = { id: 'e:1', index: 1, op: 'put', type: 'user', event: { type: 'user', turn_origin: 'owner', message: { role: 'user', content: [{ type: 'text', text: 'earlier request' }] } } };
       act(() => { emit('frame', userFrame); emit('meta', { start: 1, older: 0, total: 1, n: 1, following: true, phase: 'thinking' }); });
       const box = view.getByRole('textbox') as HTMLTextAreaElement;
-      // The sidebar paints no queue strip (T562.2), so observe the persisted queue in both densities.
-      const strip = { querySelector: () => null } as unknown as HTMLElement;
+      const strip = view.container.querySelector('.send-queue') as HTMLElement;
       return { view, box, strip };
     };
-    const queued = (): string[] => (JSON.parse(localStorage.getItem('jevons-send-queue-v1') || '{"items":[]}').items as { text: string }[]).map((i) => i.text);
+    // The real strip paints newest first; the queue order is bottom-up.
+    const queued = (): string[] => [...document.querySelectorAll('.send-queue .sq-text')].map((el) => el.textContent ?? '').reverse();
     const enqueue = async (box: HTMLTextAreaElement, _strip: HTMLElement, texts: string[]) => {
       for (const t of texts) {
         fireEvent.change(box, { target: { value: t } });
