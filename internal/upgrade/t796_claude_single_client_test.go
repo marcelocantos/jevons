@@ -169,3 +169,58 @@ func TestT796StartResultCitesWhatTheGuardDid(t *testing.T) {
 		t.Fatalf("cite = %q, want the stopped pid", c)
 	}
 }
+
+// 🎯T796 reopen: the claudia daemon launches a seat itself, so the in-process
+// guard never sees that Launch. A stray started earlier outside the daemon
+// (the 03:19 grant_held fallback) survived beside the daemon's client. After
+// the grant returns, every holder that is not the granted window's client is
+// a stray.
+func TestT796DaemonGrantedClientKeepsOnlyItsOwnProcess(t *testing.T) {
+	rows := stubTable(t, []claudeProc{
+		{PID: 75806, PPID: 91440, Command: "/x/claude --resume " + sidS},
+		{PID: 500, PPID: 91440, Command: "-zsh"},
+		{PID: 28028, PPID: 500, Command: "/x/claude --resume " + sidS},
+		{PID: 7001, PPID: 91440, Command: "/x/claude --resume other-session"},
+	}, nil)
+	old := claudeWindowPanePIDs
+	t.Cleanup(func() { claudeWindowPanePIDs = old })
+	claudeWindowPanePIDs = func(win string) []int {
+		if win != "@164" {
+			t.Fatalf("window = %q", win)
+		}
+		return []int{500}
+	}
+	stopped, err := reapClaudeStraysExcept(sidS, "@164")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stopped) != 1 || stopped[0] != 75806 {
+		t.Fatalf("stopped = %v, want [75806]", stopped)
+	}
+	held := claudeHolderPIDs(sidS)
+	if len(held) != 1 || held[0] != 28028 {
+		t.Fatalf("holders of S = %v, want only the granted 28028 (rows %v)", held, *rows)
+	}
+	if !claudeProcAlive(7001) {
+		t.Fatal("reaped another session's client")
+	}
+}
+
+// When the granted client cannot be identified nothing is stopped: a guess
+// could take the seat itself down.
+func TestT796DaemonGrantWithUnknownWindowStopsNothing(t *testing.T) {
+	stubTable(t, []claudeProc{
+		{PID: 75806, PPID: 91440, Command: "/x/claude --resume " + sidS},
+		{PID: 28028, PPID: 500, Command: "/x/claude --resume " + sidS},
+	}, nil)
+	old := claudeWindowPanePIDs
+	t.Cleanup(func() { claudeWindowPanePIDs = old })
+	claudeWindowPanePIDs = func(string) []int { return nil }
+	stopped, err := reapClaudeStraysExcept(sidS, "@164")
+	if err != nil || len(stopped) != 0 {
+		t.Fatalf("stopped=%v err=%v", stopped, err)
+	}
+	if len(claudeHolderPIDs(sidS)) != 2 {
+		t.Fatal("touched a holder without knowing which is the seat")
+	}
+}

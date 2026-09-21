@@ -99,7 +99,9 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 			}
 			if _, err := reg.AdoptOrLaunchContext(ctx, name); err != nil {
 				slog.Error("auto-start failed", "agent", name, "err", err)
+				return
 			}
+			ReapClaudeStraysAfterGrant(reg, name)
 		}(name)
 	}
 	wg.Wait()

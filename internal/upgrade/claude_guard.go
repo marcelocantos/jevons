@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 )
 
 // claudeProc is one row of the process table.
@@ -101,7 +102,78 @@ func commandHoldsClaudeSession(command, sessionID string) bool {
 // seat never reaches Start, so anything found here is a stray. It fails closed
 // when a holder survives SIGKILL. The stopped pids are returned for the log.
 func reapClaudeSessionHolders(sessionID string) ([]int, error) {
-	pids := claudeHolderPIDs(sessionID)
+	return stopClaudeHolders(sessionID, claudeHolderPIDs(sessionID))
+}
+
+// claudeWindowPanePIDs returns the pane pids of a tmux window on claudia's
+// socket; a test replaces it. Nil when the window or server is gone.
+var claudeWindowPanePIDs = tmuxWindowPanePIDs
+
+func tmuxWindowPanePIDs(windowID string) []int {
+	if strings.TrimSpace(windowID) == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tmux", "-S", cli.AgentTmuxSocket(),
+		"list-panes", "-t", windowID, "-F", "#{pane_pid}").Output()
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, f := range strings.Fields(string(out)) {
+		if pid, e := strconv.Atoi(f); e == nil && pid > 1 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// reapClaudeStraysExcept stops every claude bound to sessionID that is not
+// the client running in windowID. It is the post-grant half of the guard
+// (🎯T796): the claudia daemon launches seats itself, so the in-process
+// Start guard never sees that Launch, and a client started earlier outside
+// the daemon (the grant_held fallback) would stay beside it. When the
+// window's own client cannot be identified nothing is stopped — a guess
+// could take the seat down.
+func reapClaudeStraysExcept(sessionID, windowID string) ([]int, error) {
+	holders := claudeHolderPIDs(sessionID)
+	if len(holders) < 2 {
+		return nil, nil
+	}
+	panes := claudeWindowPanePIDs(windowID)
+	byPID := map[int]claudeProc{}
+	for _, p := range claudeProcessTable() {
+		byPID[p.PID] = p
+	}
+	inWindow := func(pid int) bool {
+		for hops := 0; pid > 1 && hops < 64; hops++ {
+			for _, pane := range panes {
+				if pid == pane {
+					return true
+				}
+			}
+			pid = byPID[pid].PPID
+		}
+		return false
+	}
+	var keep, strays []int
+	for _, pid := range holders {
+		if inWindow(pid) {
+			keep = append(keep, pid)
+		} else {
+			strays = append(strays, pid)
+		}
+	}
+	if len(keep) == 0 {
+		slog.Warn("claude guard: granted client not identifiable; leaving all holders",
+			"session", sessionID, "window", windowID, "holders", fmt.Sprint(holders))
+		return nil, nil
+	}
+	return stopClaudeHolders(sessionID, strays)
+}
+
+func stopClaudeHolders(sessionID string, pids []int) ([]int, error) {
 	for _, pid := range pids {
 		_ = signalClaudeProc(pid, syscall.SIGTERM)
 	}
@@ -196,4 +268,17 @@ func psProcessTable() []claudeProc {
 
 func isClaudeProvider(p claudia.Provider) bool {
 	return p == "" || p == claudia.ProviderClaude
+}
+
+// ReapClaudeStraysAfterGrant runs the post-grant one-client check for a Claude
+// seat the Registry just started or adopted (🎯T796).
+func ReapClaudeStraysAfterGrant(reg *claudia.Registry, name string) {
+	def := reg.Def(name)
+	proc := reg.Get(name)
+	if def == nil || proc == nil || !isClaudeProvider(def.Provider) || def.SessionID == "" {
+		return
+	}
+	if _, err := reapClaudeStraysExcept(def.SessionID, proc.WindowID()); err != nil {
+		slog.Error("claude guard: stray client survived", "agent", name, "err", err)
+	}
 }
