@@ -128,6 +128,19 @@ bin/gate: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/gate ./cmd/gate
 
+# Achieve-time attestation check (🎯T765.1). Reads the proposed attestation on
+# stdin; exit 0 verified/ungated/marked, 4 refused, 70 cannot judge. Contract:
+# docs/design/achieve-verify-seam.md. Example:
+#   printf '%s' "$ATT" | make -s achieve-verify LEDGER=path/bullseye.yaml ID=T765
+.PHONY: achieve-verify test-achieve-verify
+achieve-verify: bin/gate
+	@test -n "$(LEDGER)" && test -n "$(ID)" || { echo "usage: make achieve-verify LEDGER=<path> ID=<Tn> < attestation" >&2; exit 2; }
+	@bin/gate check-attestation -ledger "$(LEDGER)" -id "$(ID)"
+
+# Hermetic oracle for the check, run under the gate so the status survives.
+test-achieve-verify: bin/gate
+	bin/gate -name achieve-verify -- go test -count=1 -run 'CheckAttestation|T765' ./internal/gate
+
 # MCP scope diagnosis and repair (🎯T464). An agent whose jevons_* tools are
 # absent cannot call an MCP tool to ask why, so the answer has to arrive
 # through Bash: `bin/mcpscope diagnose` says whether the daemon is down or
