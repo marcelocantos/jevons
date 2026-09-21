@@ -149,7 +149,15 @@ func cursorLeftoverPIDs(sessionID string) (out []int, answered bool) {
 // the rest of jevonsd's main, including the cockpit loop that drives the
 // fleet pass — for as long as lsof hung: on 2026-09-21 no boot after 14:05
 // reached StartCockpitConverge (a goroutine dump put main in this call).
-var lsofTimeout = 3 * time.Second
+//
+// Ten seconds, not the original three. The bound exists to stop a hang, not to
+// judge a slow answer, and three judged: lsof walks every process on the host,
+// and a Launch runs straight after the broker has torn down a Cursor agent and
+// its dozen MCP children. On 2026-09-22 the same probe answered in about 1s
+// from a launchd job at the daemon's priority and ran past 3s inside the
+// daemon on every overseer Launch, each refusal costing a further two-minute
+// adopt attempt before the next try.
+var lsofTimeout = 10 * time.Second
 
 // lsofCommand is the holder probe; a test replaces it.
 var lsofCommand = "lsof"
