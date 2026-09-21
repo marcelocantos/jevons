@@ -82,6 +82,8 @@ func (s *Server) announceOwnerDelivered(text string) {
 	delete(s.ownerUndelivered, text)
 	s.notifyRetryN = 0
 	s.mu.Unlock()
+	s.noteOwnerDeliveredID(id)
+	s.persistOwnerQueue()
 	if was {
 		s.broadcastDeliveryFrame("delivered", id, "message delivered to the overseer after retry")
 	}

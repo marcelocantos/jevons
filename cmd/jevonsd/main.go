@@ -979,6 +979,11 @@ func main() {
 
 	srv.SetRegistry(registry)
 	srv.SetOverseerReattachWait(5 * time.Second) // 🎯T806
+	// 🎯T806: undelivered owner messages survive a bounce; malformed state is fatal.
+	if err := srv.LoadOwnerQueue(filepath.Join(cfg.StateDir, "owner_queue.json")); err != nil {
+		slog.Error("owner queue load failed", "err", err)
+		os.Exit(1)
+	}
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
 	// terminal stop is wired in mcpserver agentEventSink (ð¯T111.1).

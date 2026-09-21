@@ -219,6 +219,9 @@ type Server struct {
 	notifyRetryTimer  *time.Timer
 	notifyRetryN      int
 	overseerReattachWait time.Duration
+	ownerQueueMu     sync.Mutex
+	ownerQueuePath   string
+	ownerDelivered   []string
 	overseerOwnerTurn bool
 	// overseerPhase is the current reduce of the interleaved turn-state
 	// stream (🎯T555.1); overseerCorrespondent is the in-flight notify batch

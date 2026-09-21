@@ -481,6 +481,9 @@ func (s *Server) SendToOverseer(text string) error {
 	// Do not interrupt an owner turn — cancel-and-send is the chat client's job.
 	fleetBusy := s.waiting && !s.overseerOwnerTurn
 	s.mu.Unlock()
+	if owner {
+		s.persistOwnerQueue() // 🎯T806: a bounce must not lose a displayed message
+	}
 
 	// 🎯T128.3: enqueue is Info so queue growth is visible at production default.
 	slog.Info("notify_queue",
