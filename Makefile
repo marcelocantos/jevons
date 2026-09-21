@@ -434,9 +434,14 @@ test-live-suite:
 # agent the journeys spawn (🎯T282), e.g.:
 #	make test-journey PROVIDER=claude
 #	make test-journey ONLY=J32   # one journey (🎯T789.1)
+# PORT is the isolate's listen port. The default 0 asks the OS for a free
+# ephemeral port, so journeys started by different workers at once do not
+# collide on :13715 (🎯T817). Pin one with PORT=13715; the suite still refuses
+# the development ports (🎯T526 portguard).
+PORT ?= 0
 .PHONY: test-journey
 test-journey: jevonsd playwright-browser
-	go run ./scripts/journey-suite $(if $(PROVIDER),-provider $(PROVIDER)) $(if $(ONLY),-only $(ONLY))
+	go run ./scripts/journey-suite -port $(PORT) $(if $(PROVIDER),-provider $(PROVIDER)) $(if $(ONLY),-only $(ONLY))
 
 # Full product net (🎯T492): hermetic layers first, then Universe-B journeys.
 test: ui-check-bundle
