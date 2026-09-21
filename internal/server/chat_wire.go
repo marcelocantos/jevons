@@ -466,11 +466,17 @@ func chatUserEcho(text string) string {
 // Anything other than the agent origin is recorded as the owner: verbatim is
 // the safe default, so a caller that has not been taught about provenance can
 // never cause the owner's own words to be reinterpreted as formatting.
-func chatUserEchoAs(text, origin string) string {
+func chatUserEchoAs(text, origin string) string { return chatUserEchoFull(text, origin, "") }
+
+// chatUserEchoID stamps the owner echo with a message id (🎯T806) so the
+// undelivered/delivered frames can be keyed to the row they describe.
+func chatUserEchoID(text, id string) string { return chatUserEchoFull(text, sendOriginOwner, id) }
+
+func chatUserEchoFull(text, origin, msgID string) string {
 	if origin != sendOriginAgent {
 		origin = sendOriginOwner
 	}
-	b, err := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"type":            "user",
 		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
 		wireTurnOriginKey: origin,
@@ -487,7 +493,11 @@ func chatUserEchoAs(text, origin string) string {
 				{"type": "text", "text": text},
 			},
 		},
-	})
+	}
+	if msgID != "" {
+		fields["msg_id"] = msgID
+	}
+	b, err := json.Marshal(fields)
 	if err != nil {
 		return `{"type":"user","message":{"role":"user","content":[]}}`
 	}

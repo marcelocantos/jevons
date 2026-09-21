@@ -978,6 +978,7 @@ func main() {
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
 
 	srv.SetRegistry(registry)
+	srv.SetOverseerReattachWait(5 * time.Second) // 🎯T806
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
 	// terminal stop is wired in mcpserver agentEventSink (ð¯T111.1).

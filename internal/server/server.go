@@ -210,6 +210,15 @@ type Server struct {
 	notifyQueue       []string
 	notifyDraining    bool
 	notifySender      func(string) error
+	// 🎯T806: owner-message honesty. Ids ride beside the queued wire text (FIFO
+	// per text); ownerUndelivered marks texts whose refusal was announced so a
+	// retry storm tells the owner once; the timer re-drains a refused batch.
+	notifyOwnerIDs    map[string][]string
+	ownerUndelivered  map[string]bool
+	notifyRetryDelay  time.Duration
+	notifyRetryTimer  *time.Timer
+	notifyRetryN      int
+	overseerReattachWait time.Duration
 	overseerOwnerTurn bool
 	// overseerPhase is the current reduce of the interleaved turn-state
 	// stream (🎯T555.1); overseerCorrespondent is the in-flight notify batch

@@ -202,13 +202,17 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 	// 🎯T545: a down overseer is a nack, not a silent enqueue that the
 	// HTTP/mux path reports as "sent". Composer keeps the text; no
 	// optimistic owner bubble.
-	proc := s.CurrentProcess()
-	if proc == nil || !proc.Alive() {
+	// 🎯T806: an overseer relaunch leaves a sub-second gap (the 04:20:09
+	// specimen was refused 0.3 s before re-attach). Wait a bounded moment for
+	// re-attach before nacking; only a sustained absence is a nack.
+	if !s.awaitOverseerProcess() {
 		return fmt.Errorf("overseer not running")
 	}
-	echo := chatUserEcho(text)
+	msgID := newOwnerMessageID()
+	echo := chatUserEchoID(text, msgID)
 	s.NoteOwnerSend(text, echo)
 	s.BroadcastChat(echo)
+	s.registerOwnerMessageID(userTurnPrefix+text, msgID)
 	if err := s.SendToOverseer(userTurnPrefix + text); err != nil {
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
 		if !class.IsFailure() {

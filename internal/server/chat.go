@@ -555,6 +555,8 @@ func notifyErrClass(err error) string {
 	switch {
 	case strings.Contains(msg, "overseer not running"):
 		return "not_running"
+	case strings.Contains(msg, "not_owner"):
+		return "not_owner"
 	default:
 		return "other"
 	}
@@ -609,6 +611,12 @@ func (s *Server) drainOverseerNotes() {
 			"err", err,
 			"owner_batch", ownerBatch,
 		)
+		// 🎯T806: busy is ordinary queueing behind a turn. Anything else on an
+		// owner batch is a refusal the owner must be told about, and retried.
+		if ownerBatch && notifyErrClass(err) != "busy" {
+			s.announceOwnerUndelivered(batch[0], err)
+			s.scheduleNotifyRetry()
+		}
 		return
 	}
 	// Successful prompt delivery: mark waiting so stuck-busy can see an
@@ -620,6 +628,7 @@ func (s *Server) drainOverseerNotes() {
 	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
 	if ownerBatch {
+		s.announceOwnerDelivered(batch[0])
 		// 🎯T355: the prompt left the queue into the overseer's session —
 		// the server-ack half of send-landed.
 		s.NoteOwnerDelivered()
