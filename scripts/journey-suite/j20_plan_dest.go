@@ -60,8 +60,10 @@ func (s *suite) j20PlanDest() error {
 		return fmt.Errorf("jevons_plan_usage: %w", err)
 	}
 
-	// Exhausted weekly: explicit grok worker then sweep parks.
-	if _, err := s.writePlanFixture(0, 100); err != nil {
+	// Mint an explicit grok worker while the feed is a destination band
+	// (the product refuses a mint onto an exhausted dest even with an
+	// explicit provider), then exhaust the weekly window; sweep parks it.
+	if _, err := s.writePlanFixture(defaultPlanRemaining, defaultPlanUsed); err != nil {
 		return err
 	}
 	_, err = s.MCPToolCall("jevons_agent_start", map[string]any{
@@ -70,6 +72,9 @@ func (s *suite) j20PlanDest() error {
 	})
 	if err != nil {
 		return fmt.Errorf("explicit grok start: %w", err)
+	}
+	if _, err := s.writePlanFixture(0, 100); err != nil {
+		return err
 	}
 	sweep, err := http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
