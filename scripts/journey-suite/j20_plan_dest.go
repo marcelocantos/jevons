@@ -14,7 +14,7 @@ import (
 )
 
 func (s *suite) writePlanFixture(rem, used float64) (string, error) {
-	return writePlanFixtureFile(s.stateDir, "plan-usage-j20.json", rem, used)
+	return writePlanFixtureFile(s.stateDir, "plan-usage-j20.json", "grok", rem, used)
 }
 
 func (s *suite) j20PlanDest() error {

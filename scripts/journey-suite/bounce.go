@@ -37,7 +37,7 @@ func (s *suite) isolateDaemonEnv() []string {
 	)
 	// 🎯T625.6: hermetic plan feed; the journey's own daemonEnv follows
 	// and, being later, overrides it.
-	planEnv, err := defaultPlanFixtureEnv(s.stateDir)
+	planEnv, err := defaultPlanFixtureEnv(s.stateDir, string(s.provider))
 	if err != nil {
 		panic(fmt.Sprintf("isolate plan fixture: %v", err))
 	}
