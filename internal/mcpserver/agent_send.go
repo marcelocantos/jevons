@@ -817,7 +817,11 @@ func (s *Server) drainAgentSendQueue(name string) {
 func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	s.confirmCodexReceipts(name)
 	q := s.sendQueue()
-	entry, claimed, err := q.ClaimFront(name)
+	// 🎯T774: a pile of pending messages is one digest, not one turn apiece.
+	entry, claimed, err := q.ClaimDigest(name)
+	if err == nil && !claimed {
+		entry, claimed, err = q.ClaimFront(name)
+	}
 	if err != nil {
 		slog.Error("agent send queue: cannot persist delivery attempt", "name", name, "err", err)
 		return false
@@ -845,7 +849,12 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	// 🎯T731: the queued copy may have been accepted while the author was
 	// still registered. Stamp it at flush, which is when the parent actually
 	// reads it. Do not suppress here — this drain is the first delivery.
-	text := s.prepareParentReport(name, entry.Text, true).Text
+	// A digest already carries its members' text; per-report stamping would
+	// misread the "[Agent X responded]" lines quoted inside it.
+	text := entry.Text
+	if entry.Members == "" {
+		text = s.prepareParentReport(name, entry.Text, true).Text
+	}
 	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
 	defer cancel()
 	generation := s.terminalGeneration(name)

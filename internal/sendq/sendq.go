@@ -77,6 +77,9 @@ type Entry struct {
 	// message of a consolidation — so the next reader of this file learns
 	// who decided and why without a git archaeology expedition.
 	Reconciled *Reconciliation `json:"reconciled,omitempty"`
+	// Members are the comma-joined ids of the original entries folded into this digest
+	// (🎯T774). The originals live in the digest archive, readable by id.
+	Members string `json:"members,omitempty"`
 }
 
 type DeliveryState string
@@ -163,6 +166,8 @@ type Store struct {
 	// Ownership exists only in this process. A reopened store has no active
 	// owner for an attempting entry left by the preceding daemon.
 	active map[string]string
+	// memArchive is the digest archive of a memory-backed store (🎯T774).
+	memArchive map[string]archiveFile
 }
 
 // NewStore roots a store at dir (conventionally <state_dir>/sendq). An empty

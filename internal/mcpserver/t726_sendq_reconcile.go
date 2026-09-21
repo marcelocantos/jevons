@@ -49,9 +49,9 @@ func (s *Server) registerSendqReconcileTool() {
 	}
 	s.addTool(
 		mcp.NewTool("jevons_sendq_reconcile",
-			mcp.WithDescription("Resolve a held daemon sendq entry by operator judgement (🎯T726) — the named path out of PINNED. NEVER edit ~/.jevons/sendq/*.json while the daemon is running: that write races the daemon's atomic rename and the loser is silent. Call with only name= to SEE the queue (entry ids, delivery state, attempt ids, ages, payload previews) before deciding anything. Then: action=confirmed when you established the receiver HAS it, action=requeue when you established it never landed (the only outcome that permits a resend — 🎯T416), action=drop to abandon it deliberately and on the record, action=consolidate to fold superseded messages into one authoritative message so a seat that fell behind does not act on the stalest. Every mutating action requires actor= and evidence=; the disposition is logged with both. 🎯T416's three instruments that work: payload-match at user-message level in the receiver's JSONL, the receiver's own queue-operation/queued_command records, and transcript-file absence. The three that passed while WRONG: transcript growth, a raw grep of the session file, and the receiver's behaviour. For merely PENDING entries nothing needs deciding and nothing is discarded: action=drain offers the backlog to the live seat now. That is the non-destructive path, and it is an operation, not folklore — jevons_agent_start name=<seat> with no prompt remains the way to get a live process when there is none."),
+			mcp.WithDescription("Resolve a held daemon sendq entry by operator judgement (🎯T726) — the named path out of PINNED. NEVER edit ~/.jevons/sendq/*.json while the daemon is running: that write races the daemon's atomic rename and the loser is silent. Call with only name= to SEE the queue (entry ids, delivery state, attempt ids, ages, payload previews) before deciding anything. Then: action=confirmed when you established the receiver HAS it, action=requeue when you established it never landed (the only outcome that permits a resend — 🎯T416), action=drop to abandon it deliberately and on the record, action=read entry_id=<id> to read an original message a digest collapsed (🎯T774), action=consolidate to fold superseded messages into one authoritative message so a seat that fell behind does not act on the stalest. Every mutating action requires actor= and evidence=; the disposition is logged with both. 🎯T416's three instruments that work: payload-match at user-message level in the receiver's JSONL, the receiver's own queue-operation/queued_command records, and transcript-file absence. The three that passed while WRONG: transcript growth, a raw grep of the session file, and the receiver's behaviour. For merely PENDING entries nothing needs deciding and nothing is discarded: action=drain offers the backlog to the live seat now. That is the non-destructive path, and it is an operation, not folklore — jevons_agent_start name=<seat> with no prompt remains the way to get a live process when there is none."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("The addressee agent whose queue is held, e.g. claudia-po")),
-			mcp.WithString("action", mcp.Description("show (default) | drain | confirmed | requeue | drop | consolidate")),
+			mcp.WithString("action", mcp.Description("show (default) | read | drain | confirmed | requeue | drop | consolidate")),
 			mcp.WithString("entry_id", mcp.Description("Queue entry to reconcile, as shown by action=show or named in the PINNED notice")),
 			mcp.WithString("attempt_id", mcp.Description("The entry's unresolved attempt id; required for a non-pending entry so a disposition cannot land on a stale view of the queue")),
 			mcp.WithString("actor", mcp.Description("Who established this (your agent name, or owner). Recorded with the disposition.")),
@@ -84,6 +84,15 @@ func (s *Server) handleSendqReconcile(_ context.Context, req mcp.CallToolRequest
 
 	if action == "show" {
 		return mcp.NewToolResultText(s.describeSendqForReconcile(name, now)), nil
+	}
+	if action == "read" {
+		// 🎯T774: an original folded into a digest stays readable by id.
+		e, err := s.sendQueue().ReadArchived(entryID)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("entry id=%s enqueued %s\n\n%s",
+			e.ID, e.EnqueuedAt.UTC().Format(time.RFC3339), e.Text)), nil
 	}
 	if action == "drain" {
 		return mcp.NewToolResultText(s.drainHeldSendqOnRequest(name, now)), nil
