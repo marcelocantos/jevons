@@ -295,6 +295,15 @@ test-go: bin/gotest
 test-go-raw:
 	go test -timeout $(GO_TEST_TIMEOUT) ./...
 
+# 🎯T553.1: seeded-throw oracle. Seeds an uncommitted deliberate throw into an
+# ISOLATED clone (never the shared clone or :13705), builds it the daily way
+# (buildsnap of committed HEAD) and the working-tree way (control), and scans
+# what each serves. Two npm ci + vite + go builds, so it is not in test-go:
+# the pure decision logic is (internal/t553oracle), the end-to-end run is here.
+.PHONY: test-t553-oracle
+test-t553-oracle:
+	JEVONS_T553_ORACLE=1 CLAUDIA_NO_BROKER=1 go test -count=1 -timeout 40m -v -run TestT553SeededThrowNotExecutedByDaily ./internal/t553oracle
+
 # React cockpit (🎯T540). The daemon embeds the tracked bundle (T540.2).
 .PHONY: ui-dev ui-build test-ui-react ui-deps ui-daemon-install ui-daemon-stop ui-daemon-status
 ui-dev:
