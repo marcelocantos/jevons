@@ -1143,6 +1143,14 @@ func main() {
 		}
 	}
 	isOverseerSeat := func(name string) bool { return name == cfg.OverseerName }
+	// 🎯T796.1: the one-client guard signals nothing when it cannot rule out a
+	// broker, so a seat it refuses stays down until the owner hears why.
+	upgrade.LaunchRefusedNotifier = func(agent string, err error) {
+		srv.NotifyOwnerNote(agent, "seat_launch_refused",
+			"Seat "+agent+" was not started: "+err.Error()+
+				". Nothing was stopped. Check the claudia broker (its socket exists but "+
+				"the seat's grant is held or the broker is not answering), then restart the seat.")
+	}
 	noteRemint(upgrade.ReattachSeatsContext(ctx, registry, isOverseerSeat, 1))
 	if ctx.Err() != nil {
 		return

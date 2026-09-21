@@ -44,7 +44,7 @@ const (
 // release them (🎯T63). Hermetic suites set CLAUDIA_NO_BROKER=1 and
 // keep the historical ModeNormal == stop behaviour.
 func (m Mode) StopAgents() bool {
-	if brokerAvailable() {
+	if brokerMayOwnSeats() {
 		return false
 	}
 	return m != ModeUpgrade

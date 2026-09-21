@@ -60,7 +60,7 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 	// on a still-held store.db is 🎯T541.1. Seats that will not die
 	// lose AutoStart (fail loud). With a daemon, the leftover is the
 	// live seat and Launch reclaims it by name.
-	reapCursor := !brokerAvailable()
+	reapCursor := !brokerMayOwnSeats()
 	if reapCursor {
 		for _, d := range reg.List() {
 			if d.Provider == claudia.ProviderCursor && accepts(d.Name) {
@@ -101,6 +101,11 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 			}
 			if _, err := adoptOrLaunchRetryingHeld(ctx, reg, name); err != nil {
 				slog.Error("auto-start failed", "agent", name, "err", err)
+				if errors.Is(err, ErrClaudeHeldByBroker) {
+					if notify := LaunchRefusedNotifier; notify != nil {
+						notify(name, err)
+					}
+				}
 				return
 			}
 			ReapClaudeStraysAfterGrant(reg, name)
@@ -142,7 +147,7 @@ func StopNonAdoptable(reg *claudia.Registry) int {
 	if reg == nil {
 		return 0
 	}
-	if brokerAvailable() {
+	if brokerMayOwnSeats() {
 		// Every seat is adoptable when the daemon parents it: the next
 		// jevonsd grants by name and gets the running process back.
 		return 0
@@ -230,6 +235,13 @@ func SessionDriftNames(before, after map[string]string) []string {
 	}
 	return out
 }
+
+// LaunchRefusedNotifier, when set, is told once per seat when the bounded
+// refuse-and-retry is exhausted (🎯T796.1): the seat did not start because a
+// client already holds its session and the broker could not be ruled out. The
+// refusal signals nothing, so the only way the owner learns of it is this
+// notice. The daemon wires it to the owner notice channel.
+var LaunchRefusedNotifier func(agent string, err error)
 
 // heldRetryDelay and heldRetries bound how long a seat waits for the broker's
 // grant to come free: the previous daemon's connection is still closing when

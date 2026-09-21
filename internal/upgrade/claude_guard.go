@@ -115,11 +115,13 @@ func reapClaudeSessionHolders(sessionID string) ([]int, error) {
 var ErrClaudeHeldByBroker = errors.New("a claude client the broker owns already holds the session")
 
 // guardClaudeSession is the pre-launch half of the one-client guard. With a
-// broker reachable it never stops anything: a holder is refused (retriable,
-// see [ReattachSeatsContext]); a free session launches. Without a broker the
-// holders are strays of a previous daemon and are stopped.
+// broker reachable, or one that cannot be ruled out ([brokerStateNow] unknown:
+// a socket exists but did not answer, as under host load), it never stops
+// anything: a holder is refused (retriable, see [ReattachSeatsContext]); a free
+// session launches. Only with positive evidence of no broker are the holders
+// strays of a previous daemon and stopped (🎯T796.1).
 func guardClaudeSession(sessionID string) error {
-	if brokerAvailable() {
+	if brokerMayOwnSeats() {
 		if h := claudeHolderPIDs(sessionID); len(h) > 0 {
 			return fmt.Errorf("%w: session %s pids %v; not launching a second client", ErrClaudeHeldByBroker, sessionID, h)
 		}
@@ -306,7 +308,7 @@ func ReapClaudeStraysAfterGrant(reg *claudia.Registry, name string) {
 	// so is any other holder it launched; the stop cannot tell them apart
 	// (the in-process fallback also lives on claudia's tmux socket), so it
 	// stands down. Strays are prevented at launch instead ([guardClaudeSession]).
-	if brokerAvailable() {
+	if brokerMayOwnSeats() {
 		return
 	}
 	if _, err := reapClaudeStraysExcept(def.SessionID, proc.WindowID()); err != nil {
