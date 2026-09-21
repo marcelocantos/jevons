@@ -440,6 +440,20 @@ func ClaudiaGrokHomesRoot() string {
 	return filepath.Join(state, "claudia", "grok-homes")
 }
 
+// DaemonRoots is the one session-root computation for the daemon: the two
+// configured stores plus the exclusive-MCP GROK_HOME trees and the durable
+// claudia grok-homes store. Activity, model, transcript, and migrate lookups
+// all take this value so they cannot drift (🎯T625.9: migrate was handed bare
+// roots and could not see a Grok seat's session under grok-homes).
+func DaemonRoots(grokSessions, claudeProjects string) Roots {
+	return Roots{
+		GrokSessions:     grokSessions,
+		GrokHomeSessions: ExclusiveGrokSessionRoots(),
+		ClaudiaGrokHomes: ClaudiaGrokHomesRoot(),
+		ClaudeProjects:   claudeProjects,
+	}
+}
+
 // ClaudiaGrokHomeSessionsDir is the sessions tree for one Grok session under
 // a claudia grok-homes root. The session-id entry is a directory or a
 // symlink onto the exclusive home uuid (publishExclusiveGrokHome).

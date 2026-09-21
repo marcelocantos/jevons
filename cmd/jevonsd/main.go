@@ -257,10 +257,8 @@ func main() {
 	}
 
 	// Multi-provider session roots (ð¯T213): Grok sessions + Claude projects.
-	sessionRoots := discovery.Roots{
-		GrokSessions:   cfg.SessionsDir,
-		ClaudeProjects: cfg.ClaudeProjects,
-	}
+	// 🎯T625.9: one computation for every consumer, including migrate.
+	sessionRoots := discovery.DaemonRoots(cfg.SessionsDir, cfg.ClaudeProjects)
 	scanner := discovery.NewScannerRoots(sessionRoots)
 
 	// 🎯T766.2: one answer about a seat for the whole daemon. Built before
@@ -302,13 +300,8 @@ func main() {
 	// message.model) re-seeds it at attach.
 	srv.SetModelSessionRoots(sessionRoots)
 	// 🎯T702: /api/agents recency is a stat of the same transcripts the
-	// daemon already locates for born-stuck (🎯T679.1 / 🎯T694). Bare
-	// sessionRoots is GrokSessions+ClaudeProjects only; exclusive-MCP
-	// homes and grok-homes have to be filled or Grok seats report unknown.
-	activityRoots := sessionRoots
-	activityRoots.GrokHomeSessions = discovery.ExclusiveGrokSessionRoots()
-	activityRoots.ClaudiaGrokHomes = discovery.ClaudiaGrokHomesRoot()
-	srv.SetTranscriptRoots(activityRoots)
+	// daemon already locates for born-stuck (🎯T679.1 / 🎯T694).
+	srv.SetTranscriptRoots(sessionRoots)
 
 	// Durable decision/lifecycle journal (ð¯T120): browser + server events
 	// under state_dir/logs/events.jsonl â tool-readable without privilege.
