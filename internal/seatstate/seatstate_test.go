@@ -228,3 +228,97 @@ func TestSnapshotIsOrderedAndDecayed(t *testing.T) {
 		t.Fatal("a fresh seat decayed in a snapshot")
 	}
 }
+
+// 🎯T766.2 feeds: each one translates what a knowing party said, and none
+// of them can turn a failed observation into a fact.
+
+func TestAFailedClaudiaReportIsNotADeadSeat(t *testing.T) {
+	a, c := newAt(at("2026-09-21T00:00:00Z"), time.Hour)
+	a.FromClaudia(SeatReport{Name: "jv-1", Provider: "claude", Alive: true, PromptInFlight: true, Known: true}, c.t)
+
+	c.tick(time.Second)
+	// The broker did not answer this time.
+	a.FromClaudia(SeatReport{Name: "jv-1", Provider: "claude", Known: false}, c.t)
+
+	s, ok := a.Get("jv-1")
+	if !ok {
+		t.Fatal("a seat we failed to reach was forgotten")
+	}
+	if s.Alive == No {
+		t.Fatal("a failed report was recorded as a dead seat — the whole bug this package exists for")
+	}
+	if s.Alive != Yes {
+		t.Fatalf("Alive = %s, want the last known reading to stand until it goes stale", s.Alive)
+	}
+	if s.Provider != "claude" {
+		t.Fatalf("identity lost on a failed report: %+v", s)
+	}
+}
+
+func TestATurnEventProvesLifeAndMotion(t *testing.T) {
+	a, c := newAt(at("2026-09-21T00:00:00Z"), time.Hour)
+	a.FromTurnEvent("jv-1", false, c.t)
+
+	s, _ := a.Get("jv-1")
+	if s.Alive != Yes {
+		t.Fatalf("Alive = %s after the seat spoke, want yes", s.Alive)
+	}
+	if s.InFlight != Yes || s.Phase != turnev.PhaseWorking {
+		t.Fatalf("a non-terminal event should read as working: %+v", s)
+	}
+	if !s.LastActivity.Equal(c.t) {
+		t.Fatalf("LastActivity = %v, want the event time", s.LastActivity)
+	}
+
+	c.tick(time.Second)
+	a.FromTurnEvent("jv-1", true, c.t)
+	s, _ = a.Get("jv-1")
+	if s.InFlight != No || s.Phase != turnev.PhaseIdle {
+		t.Fatalf("a terminal event should end the turn: %+v", s)
+	}
+}
+
+func TestQueueDepthComesOnlyFromTheQueue(t *testing.T) {
+	a, c := newAt(at("2026-09-21T00:00:00Z"), time.Hour)
+	a.FromClaudia(SeatReport{Name: "jv-1", Alive: true, Known: true}, c.t)
+	a.FromTurnEvent("jv-1", false, c.t)
+
+	s, _ := a.Get("jv-1")
+	if s.QueueDepth != QueueUnknown {
+		t.Fatalf("QueueDepth = %d before the queue reported, want unknown", s.QueueDepth)
+	}
+	a.FromQueue("jv-1", 87, c.t)
+	s, _ = a.Get("jv-1")
+	if s.QueueDepth != 87 {
+		t.Fatalf("QueueDepth = %d, want 87", s.QueueDepth)
+	}
+	// A caller that could not read the queue passes a negative and is ignored.
+	a.FromQueue("jv-1", -1, c.t)
+	s, _ = a.Get("jv-1")
+	if s.QueueDepth != 87 {
+		t.Fatalf("a failed queue read overwrote a real depth: %d", s.QueueDepth)
+	}
+}
+
+// Blocked must distinguish "leave it alone" from "we cannot see it".
+func TestBlockedSaysNothingAboutASeatItCannotSee(t *testing.T) {
+	a, c := newAt(at("2026-09-21T00:00:00Z"), time.Minute)
+	if _, blocked := a.Blocked("ghost"); blocked {
+		t.Fatal("an unknown seat was reported as blocked")
+	}
+
+	a.FromClaudia(SeatReport{Name: "jv-1", Alive: true, PromptInFlight: true, Known: true}, c.t)
+	reason, blocked := a.Blocked("jv-1")
+	if !blocked || reason != "a turn is in flight" {
+		t.Fatalf("in-flight seat: blocked=%v reason=%q", blocked, reason)
+	}
+
+	c.tick(2 * time.Minute) // stale now
+	if _, blocked := a.Blocked("jv-1"); blocked {
+		t.Fatal("a stale reading was still used to block — a control must be told it cannot see")
+	}
+	s, _ := a.Get("jv-1")
+	if s.InFlight != Unknown {
+		t.Fatalf("InFlight = %s after staleness, want unknown", s.InFlight)
+	}
+}
