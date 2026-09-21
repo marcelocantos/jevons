@@ -815,6 +815,7 @@ func (s *Server) drainAgentSendQueue(name string) {
 }
 
 func (s *Server) drainAgentSendQueueOnce(name string) bool {
+	s.confirmCodexReceipts(name)
 	q := s.sendQueue()
 	entry, claimed, err := q.ClaimFront(name)
 	if err != nil {
