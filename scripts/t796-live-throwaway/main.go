@@ -8,14 +8,28 @@
 //
 //	hold      grant the seat on this connection and keep it until killed
 //	takeover  adopt as a restarted daemon would (guard installed), then send
+//	guard-hung  the same hung broker and load, but call the one-client launch guard
+//	          directly (claudia's own adopt blocks on a hung socket for the whole
+//	          context and never reaches it): expect ErrClaudeHeldByBroker, no launch,
+//	          no signal, the holder's pid alive after.
+//	hung      takeover while the broker "does not answer" (🎯T796.1): the driver
+//	          points CLAUDIA_BROKER_SOCKET at a listener that accepts and never
+//	          replies, and burns every core, so claudia.BrokerAvailable times out
+//	          exactly as on a loaded host while the real broker's client (from a
+//	          prior hold) still holds the session. Expect a refusal, an owner
+//	          notice and the client's pid alive afterwards.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -31,6 +45,13 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: t796-live-throwaway hold|takeover")
 		os.Exit(2)
+	}
+	if os.Args[1] == "hung" || os.Args[1] == "guard-hung" {
+		hungBroker()
+	}
+	if os.Args[1] == "guard-hung" {
+		guardHung()
+		return
 	}
 	work := "/Users/marcelo/work/github.com/marcelocantos/jevons"
 	_ = os.MkdirAll(os.TempDir(), 0o755)
@@ -57,10 +78,15 @@ func main() {
 		signal.Notify(c, os.Interrupt)
 		<-c
 		os.Exit(0) // no Stop: the broker keeps the seat running, like an upgrade exit
-	case "takeover":
+	case "takeover", "hung":
+		upgrade.LaunchRefusedNotifier = func(agent string, err error) {
+			fmt.Printf("OWNER NOTICE (seat %s): %v\n", agent, err)
+		}
+		fmt.Println("holders before:", holderPIDs())
 		names := upgrade.ReattachSeatsContext(ctx, reg, func(n string) bool { return n == seatName }, 1)
 		_ = names
 		a := reg.Get(seatName)
+		fmt.Println("holders after:", holderPIDs())
 		if a == nil {
 			fmt.Println("takeover: no agent (launch refused) — the broker's client was left alone")
 			return
@@ -74,4 +100,56 @@ func main() {
 		time.Sleep(3 * time.Second)
 		os.Exit(0)
 	}
+}
+
+// hungBroker makes claudia see a broker that accepts and never answers, and
+// loads the host. The hung socket is only visible to this process.
+func hungBroker() {
+	dir, err := os.MkdirTemp("/tmp", "hb")
+	if err != nil {
+		panic(err)
+	}
+	sock := filepath.Join(dir, "b.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		panic(err)
+	}
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_ = c // never read, never reply
+		}
+	}()
+	os.Setenv("CLAUDIA_BROKER_SOCKET", sock)
+	os.Setenv("CLAUDIA_NO_BROKER", "0")
+	for range runtime.NumCPU() {
+		go func() {
+			for {
+			}
+		}()
+	}
+	fmt.Println("hung broker at", sock, "and", runtime.NumCPU(), "busy loops")
+}
+
+func holderPIDs() string {
+	out, _ := exec.Command("pgrep", "-f", "claude.*"+sessionID).Output()
+	return string(out)
+}
+
+func guardHung() {
+	before := holderPIDs()
+	fmt.Println("holders before:", before)
+	start := upgrade.GuardCursorStart(func(context.Context, claudia.Config) (*claudia.Agent, error) {
+		fmt.Println("FAIL: the guard let a second client launch")
+		os.Exit(1)
+		return nil, nil
+	})
+	t0 := time.Now()
+	_, err := start(context.Background(), claudia.Config{Provider: claudia.ProviderClaude, SessionID: sessionID})
+	fmt.Printf("guard returned after %s: %v\n", time.Since(t0).Round(time.Millisecond), err)
+	fmt.Println("refused with ErrClaudeHeldByBroker:", errors.Is(err, upgrade.ErrClaudeHeldByBroker))
+	fmt.Println("holders after:", holderPIDs())
 }
