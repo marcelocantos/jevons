@@ -45,6 +45,12 @@ func GuardCursorStart(start func(context.Context, claudia.Config) (*claudia.Agen
 				return nil, err
 			}
 		}
+		if isClaudeProvider(cfg.Provider) && cfg.SessionID != "" {
+			// 🎯T796: one live claude per session id.
+			if _, err := reapClaudeSessionHolders(cfg.SessionID); err != nil {
+				return nil, err
+			}
+		}
 		return start(ctx, cfg)
 	}
 }
