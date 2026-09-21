@@ -795,6 +795,11 @@ reviewed map: docs/audits/react-fidelity-2026-09-05/. 🎯T540.3/🎯T540.7 reta
 unfinished fidelity independently of retirement. Main and sidebar share
 AgentInteraction and main-derived behavior; do not recreate the old sidebar
 fork. 🎯T505 / 🎯T553.1: development serves committed assets, not shared WIP.
+🎯T812: a commit that changes a bundle input (ui/src non-test files, ui/index.html,
+ui/public, ui/package*.json, vite/tsconfig) must also change ui/bundle.zip; the
+pre-commit hook refuses it otherwise. Run make ui-build, commit source and bundle
+together (git commit --only <paths> ui/bundle.zip), then bin/gate -clean -- make
+ui-check-bundle. The hook proves the bundle was touched, not that it is right.
 
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 

@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/commitattrib"
 	"github.com/marcelocantos/jevons/internal/commitscope"
@@ -77,14 +78,16 @@ func main() {
 		os.Exit(exitBroken)
 	}
 	v := commitscope.Decide(&commitscope.Request{
-		IndexFile: os.Getenv("GIT_INDEX_FILE"),
-		Staged:    staged,
-		Disabled:  commitscope.OffValue(os.Getenv(commitscope.DisableEnv)),
-		Contents:  contents,
-		Claimed:   commitscope.ParseClaimed(os.Getenv(commitscope.ClaimEnv)),
+		IndexFile:      os.Getenv("GIT_INDEX_FILE"),
+		Staged:         staged,
+		Disabled:       commitscope.OffValue(os.Getenv(commitscope.DisableEnv)),
+		BundleDisabled: commitscope.OffValue(os.Getenv(commitscope.UIBundleEnv)),
+		Contents:       contents,
+		Claimed:        commitscope.ParseClaimed(os.Getenv(commitscope.ClaimEnv)),
 	})
 	if v.Message != "" {
 		fmt.Fprint(os.Stderr, v.Message)
+		logBundleBypass(v.Message)
 	}
 	if v.Refused {
 		os.Exit(exitRefuse)
@@ -193,4 +196,25 @@ func run(name string, args ...string) ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+// logBundleBypass appends a bypassed stale-bundle check to
+// <git-common-dir>/ui-bundle-bypass.log so the bypass is auditable after the
+// terminal scrolls away (🎯T812). Best effort: a log failure never blocks.
+func logBundleBypass(msg string) {
+	i := strings.Index(msg, commitscope.BypassNoticePrefix)
+	if i < 0 {
+		return
+	}
+	dir, err := one("git", "rev-parse", "--git-common-dir")
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "ui-bundle-bypass.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	line, _, _ := strings.Cut(msg[i:], "\n")
+	fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), line)
 }

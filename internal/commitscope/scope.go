@@ -132,6 +132,8 @@ type Request struct {
 	Staged []string
 	// Disabled is DisableEnv set to an off value.
 	Disabled bool
+	// BundleDisabled is UIBundleEnv set to an off value (🎯T812).
+	BundleDisabled bool
 	// Contents is HEAD vs staged bytes for staged shared-hot files
 	// (bullseye.yaml first). The binary fills this; tests pass fixtures.
 	Contents []FileContent
@@ -165,6 +167,15 @@ const MaxNamed = 20
 // an `--amend` of the message alone). And a disabled guard passes by
 // construction — the point of the escape hatch is that it is explicit.
 func Decide(req *Request) Verdict {
+	v := decideScope(req)
+	if v.Refused {
+		return v
+	}
+	msg, refused := bundleVerdict(req)
+	return Verdict{Refused: refused, Kind: v.Kind, Message: v.Message + msg}
+}
+
+func decideScope(req *Request) Verdict {
 	kind := Classify(req.IndexFile)
 	switch {
 	case req.Disabled:

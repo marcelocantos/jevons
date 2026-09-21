@@ -109,6 +109,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - `ui/bundle.zip` is tracked so pristine `go build ./...` has every embed
   input. Run `make ui-check-bundle` before acceptance; it must not repair
   a stale bundle while claiming to check it.
+- **Bundle rides the source (🎯T812):** rebuild and commit `ui/bundle.zip` in
+  the SAME commit as the `ui/src` change (`make ui-build`, then `git commit
+  --only <your ui paths> ui/bundle.zip`), then `bin/gate -clean -- make
+  ui-check-bundle`. The pre-commit hook (`internal/commitscope`) refuses a
+  commit whose index changes a bundle input — non-test `ui/src`,
+  `ui/index.html`, `ui/public`, `ui/package*.json`, vite/tsconfig — without
+  changing `ui/bundle.zip`, naming the stale inputs. It judges the index git
+  is committing, so another worker's dirty `ui/src` is invisible to it. It
+  proves the bundle was touched, not that it is right; the gate is the byte
+  comparison. A bundle-neutral edit to a bundle input is refused too (rebuild
+  anyway). Bypass, logged to `.git/ui-bundle-bypass.log`:
+  `JEVONS_UI_BUNDLE=off git commit …`. Never `--no-verify` reflexively.
 - **Green in the shared clone is not green on master (🎯T398):** many workers
   share one working copy, so `make test-web` there reads everyone's
   uncommitted edits. A suite held green by WIP is red for a fresh clone, a CI
