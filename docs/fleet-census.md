@@ -119,6 +119,39 @@ levers has none.
 
 Five of roughly twenty loops ask the capacity governor anything.
 
+## Progress against the baseline
+
+Recorded here rather than in a commit message, because the baseline table
+above is what the parent is judged against and a reader needs both in one
+place.
+
+| Date | Change | Effect on the counts |
+|---|---|---|
+| 2026-09-21 | `internal/seatstate` lands: the authority, `Tri`, and three feeds | none — this is the replacement, and it counts against 🎯T766 until the things it replaces are gone |
+| 2026-09-21 | Derivation 5 loses two of its eight sites: `seat_load.go` and `t254_5_1_tool_bound.go` now ask the authority | `substring_classifiers` 665 → 664; derivation count unchanged, because the symbol still has six callers |
+
+Derivation 5 is the one being dismantled first, because it is the signal
+that authorises `LoadTerminate` to kill a process group and it defaulted to
+idle for a seat nothing was known about. Its remaining sites:
+
+| Site | Kind | Note |
+|---|---|---|
+| `internal/mcpserver/mcpserver.go` (`observeSeat`) | feed | legitimate: this is how claudia's answer reaches the authority |
+| `internal/mcpserver/fleet_recover.go:359` | control | left alone on 2026-09-21: another worker held uncommitted edits in that file (🎯T376) |
+| `internal/fleet/fleet.go:579` | control | needs the authority injected from `main`, which `internal/fleet` cannot reach today |
+| `internal/server/chat.go:448`, `overseer_converge.go:194`, `owner_health.go:328,579` | display + control | same injection dependency |
+
+The four `internal/server` sites and the `internal/fleet` one cannot be
+converted without a single authority instance built in `cmd/jevonsd/main.go`
+and handed to all three packages — they are siblings with no import edge
+between them. That injection is the next slice, and it is the point at which
+the derivation genuinely disappears rather than shrinking.
+
+`scripts/docratchet/t766_seat_derivation_ratchet_test.go` pins the count at
+seven so it can only fall. Liveness (derivation 4) is not pinned: `.Alive()`
+is spelled identically by unrelated types, and a ratchet that fires on
+unrelated code gets switched off.
+
 ## How to read this later
 
 Run `scripts/fleetcensus/count.sh`. If the numbers have not fallen, the work

@@ -79,14 +79,18 @@ type Server struct {
 	// seatLoad anchors each seat's process group while its root is alive,
 	// so a stop, a reap or a lost seat takes its detached background work
 	// with it (🎯T708). Lazily built; see seat_load.go.
+	seatLoadMu sync.Mutex
+	seatLoad   *seatload.Tracker
+
 	// seats is the single answer to "what is true about this seat"
 	// (🎯T766.2). Controls read it instead of each deriving their own;
 	// see docs/fleet-census.md for the eleven derivations it replaces.
+	// Built once, lazily. When internal/server and internal/fleet are
+	// converted they need this same instance, injected from main rather
+	// than each building its own; that setter lands with those callers,
+	// not before them.
 	seatsOnce sync.Once
 	seats     *seatstate.Authority
-
-	seatLoadMu sync.Mutex
-	seatLoad   *seatload.Tracker
 
 	// spawnGuard / resumeGuard are the budget clamp-down gates (T36.1):
 	// every MCP path that creates or re-launches a worker must consult
@@ -510,6 +514,78 @@ func (s *Server) Seats() *seatstate.Authority {
 	}
 	s.seatsOnce.Do(func() { s.seats = seatstate.New(seatstate.Args{}) })
 	return s.seats
+}
+
+// observeSeat folds what claudia says about one registry row into the
+// authority (🎯T766.2).
+//
+// This is the feed the authority was missing: the event stream reports
+// motion, but it is silent for a seat that is merely sitting there, and it
+// is empty entirely whenever the sink is dark. claudia owns the process, so
+// it is the only honest source for alive and in-flight.
+//
+// alive is passed in rather than re-read because the caller has already
+// asked (seatAlive honours a test's override, which a second read here
+// would bypass).
+func (s *Server) observeSeat(d claudia.AgentDef, alive bool) {
+	if s == nil || d.Name == "" {
+		return
+	}
+	rep := seatstate.SeatReport{
+		Name:     d.Name,
+		Provider: string(d.Provider),
+		Model:    d.Model,
+		Alive:    alive,
+		Known:    true,
+	}
+	if s.registry != nil {
+		if proc := s.registry.Get(d.Name); proc != nil {
+			rep.PromptInFlight = proc.PromptInFlight()
+		} else if alive {
+			// seatAlive says yes but the registry has no handle: we cannot
+			// see the turn. Report identity and aliveness, and leave
+			// in-flight to decay to unknown rather than asserting calm.
+			rep.Known = false
+			s.Seats().Observe(seatstate.Observation{
+				Name: d.Name, Provider: string(d.Provider), Model: d.Model,
+				Alive: seatstate.Yes, QueueDepth: seatstate.QueueUnknown,
+				Source: "claudia.report", At: time.Now(),
+			})
+			return
+		}
+	}
+	s.Seats().FromClaudia(rep, time.Now())
+}
+
+// seatInFlight is the one place that answers "is a turn running on this
+// seat" (🎯T766.2, census derivation 5).
+//
+// It asks claudia, records the answer, and returns it. Asking rather than
+// serving a cache is deliberate: the registry handle is right here, and a
+// control about to act on a seat should not act on a two-minute-old reading
+// when a current one costs nothing. The recording is what makes every other
+// reader — the cockpit, a sweep, a supervisor — see the same answer.
+//
+// Unknown is returned when there is no handle to ask, and it is a real
+// answer: callers must decide what to do about not knowing rather than
+// receiving a false.
+func (s *Server) seatInFlight(name string) seatstate.Tri {
+	if s == nil || name == "" {
+		return seatstate.Unknown
+	}
+	if s.registry != nil {
+		if proc := s.registry.Get(name); proc != nil {
+			inFlight := proc.PromptInFlight()
+			s.Seats().FromClaudia(seatstate.SeatReport{
+				Name: name, Alive: proc.Alive(), PromptInFlight: inFlight, Known: true,
+			}, time.Now())
+			return seatstate.TriOf(inFlight)
+		}
+	}
+	if st, ok := s.Seats().Get(name); ok {
+		return st.InFlight
+	}
+	return seatstate.Unknown
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).

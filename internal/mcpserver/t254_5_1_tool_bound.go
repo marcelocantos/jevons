@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -99,7 +101,11 @@ func (s *Server) mcpCallerOf(req mcp.CallToolRequest) string {
 		if d.Name == "" {
 			continue
 		}
-		if proc := s.registry.Get(d.Name); proc != nil && proc.PromptInFlight() {
+		// 🎯T766.2: ask the authority's funnel, not the registry
+		// handle. Unknown is not in flight here — this picks the single
+		// seat to attribute a bound tool call to, and a seat we cannot see
+		// is not evidence for that attribution.
+		if s.seatInFlight(d.Name) == seatstate.Yes {
 			inflight = append(inflight, d.Name)
 		}
 	}

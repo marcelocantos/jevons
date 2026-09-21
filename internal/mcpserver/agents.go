@@ -169,6 +169,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	var b strings.Builder
 	for _, d := range defs {
 		alive := s.seatAlive(d.Name)
+		// 🎯T766.2: the walk already holds what claudia says about
+		// every seat, so it feeds the authority. The event stream reports
+		// motion but is silent for a seat that is merely sitting there, and
+		// empty entirely when the sink is dark; this is the standing feed.
+		s.observeSeat(d, alive)
 		// 🎯T305: zero-turn live seats are never_briefed, not running.
 		// 🎯T444: and the seat's own session records break the tie, because
 		// both of the other inputs go stale across a backend re-mint.
