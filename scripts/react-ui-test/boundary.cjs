@@ -23,6 +23,7 @@ const sweepDeadline = Number(values['sweep-deadline-ms']);
 assert(Number.isSafeInteger(sweepDeadline) && sweepDeadline > 0);
 let browser;
 const frames = [];
+const opened = [];
 const releases = [];
 let asideCreated = false;
 const content = body => {
@@ -37,7 +38,8 @@ async function until(check, label, timeout = 90000) {
     if (found) return found;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  throw new Error(`Timed out: ${label}`);
+  if (until.shot) await until.shot().catch(() => {});
+  throw new Error(`Timed out: ${label}${until.diag ? ` — ${until.diag()}` : ''}`);
 }
 async function mcp(name, args) {
   const response = await fetch(new URL('/mcp', base), {
@@ -56,9 +58,14 @@ async function main() {
   const errors = [];
   const checked = [];
   page.on('pageerror', error => errors.push(error.message));
-  page.on('websocket', socket => socket.on('framereceived', ({ payload }) => {
-    try { frames.push(JSON.parse(String(payload))); } catch { /* heartbeat */ }
-  }));
+  page.on('websocket', socket => {
+    socket.on('framesent', ({ payload }) => {
+      try { const f = JSON.parse(String(payload)); opened.push(`${f.t}:${f.ch}`); } catch { /* not JSON */ }
+    });
+    socket.on('framereceived', ({ payload }) => {
+      try { frames.push(JSON.parse(String(payload))); } catch { /* heartbeat */ }
+    });
+  });
   await page.route('https://fonts.**/*', route => route.abort());
   await page.goto(base.href);
   const agents = await (await fetch(new URL('/api/agents', base))).json();
@@ -91,11 +98,17 @@ async function main() {
     const prompt = `Perform this short interaction check in order. First emit ${pre} as a visible commentary message, not just tool input. Then run exactly this shell command using your tool: node ${helper}. Wait for it to finish. Then reply with exactly ${post}. Do not read or change the helper or its files; the test harness releases it. Do not spawn agents.`;
     const owner = `Reply with exactly: ${ack}`;
     const start = frames.length;
+    until.diag = () => {
+      const seen = {};
+      for (const f of frames.slice(start)) { const k = `${f.ch || '?'}/${f.t || '?'}/${f.body?.event?.type || '-'}`; seen[k] = (seen[k] || 0) + 1; }
+      return `frames since submit (channel/t/event: n) ${JSON.stringify(seen)}; expected channel transcript:${name}; frames the page sent (t:ch): ${JSON.stringify(opened)}; url ${page.url()}`;
+    };
     const events = () => frames.slice(start).filter(f => f.ch === `transcript:${name}` && f.t === 'frame');
     const assistants = () => events().filter(f => f.body?.event?.type === 'assistant');
     await page.locator(input).fill(prompt);
     await page.locator(button).click();
     if (main) mainSubmittedAt = Date.now();
+    if (process.env.BOUNDARY_SHOT) until.shot = () => page.screenshot({ path: process.env.BOUNDARY_SHOT });
     try {
       const first = await until(() => assistants().find(f => content(f.body).includes(pre)), 'nonterminal PRE');
       assert(!terminal(first.body), 'PRE must precede provider terminal');
@@ -116,7 +129,7 @@ async function main() {
         const running = async () => (await (await fetch(new URL('/api/agents', base))).json()).find(a => a.name === name)?.running;
         const before = await identity();
         assert(before?.session_id, 'the running aside must have a session identity');
-        assert.equal(await running(), true, 'the aside must be running before cleanup');
+        assert.equal(await running(), true, 'the aside must be running with the owner request queued');
         const queued = async () => {
           try {
             const queue = JSON.parse(await fs.readFile(path.join(values.workdir, 'sendq', `${name}.json`), 'utf8'));
@@ -130,25 +143,15 @@ async function main() {
         };
         const obligation = await until(queued, 'durable queued follow-up');
         assert(obligation.id, 'the queued request must have a durable identity');
-        const logStart = (await fs.readFile(values['daemon-log'], 'utf8')).length;
-        await until(async () => {
-          const lines = (await fs.readFile(values['daemon-log'], 'utf8')).slice(logStart).split('\n');
-          const members = (line, key) => {
-            const field = line.match(new RegExp(`${key}=("[^\"]*"|\\[[^\\]]*\\])`))?.[1] || '';
-            return field.replaceAll('"', '').replace(/^\[|\]$/g, '').split(' ');
-          };
-          for (const line of lines.filter(line => line.includes('idle thread sweep completed'))) {
-            assert(!members(line, 'reaped').includes(name), 'cleanup stopped the active aside');
-            if (['kept_unknown', 'kept_busy'].some(key => members(line, key).includes(name))) return true;
-          }
-          return false;
-        }, 'actual periodic cleanup evaluated and kept the aside', sweepDeadline);
+        // The butler idle reaper is gone (🎯T766), so there is no sweep to wait
+        // for; what the boundary owes the aside is that its identity, process
+        // and queued obligation survive the interleave.
         const after = await identity();
-        assert.equal(after?.session_id, before.session_id, 'cleanup must preserve session identity');
-        assert.equal(await running(), true, 'cleanup must preserve the active process');
-        assert.equal((await queued())?.id, obligation.id, 'cleanup must preserve the queued obligation');
-        assert(!assistants().some(f => terminal(f.body)), 'tool hold must span the cleanup cycle');
-        console.log(`PASS ${name}: actual periodic sweep retained the held turn and queued follow-up`);
+        assert.equal(after?.session_id, before.session_id, 'the interleave must preserve session identity');
+        assert.equal(await running(), true, 'the interleave must preserve the active process');
+        assert.equal((await queued())?.id, obligation.id, 'the interleave must preserve the queued obligation');
+        assert(!assistants().some(f => terminal(f.body)), 'tool hold must span the owner interleave');
+        console.log(`PASS ${name}: identity, process and queued follow-up survived the held turn`);
       }
       await fs.writeFile(release, nonce);
       const later = await until(() => assistants().find(f => content(f.body).includes(post)), 'continuation POST');
