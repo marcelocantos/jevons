@@ -34,6 +34,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/provider"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -130,7 +131,10 @@ type Server struct {
 	lastScreenshot string
 	screenshotCh   chan string
 	proc           *claudia.Agent
-	registry       *claudia.Registry
+	// seats is the daemon's one seat-state authority (🎯T766.2), set by
+	// SetSeats. Atomic because its readers run outside s.mu.
+	seats    atomic.Pointer[seatstate.Authority]
+	registry *claudia.Registry
 	// transcriptRoots are the provider transcript stores the 🎯T702 seat
 	// activity meter stats. Zero roots make Grok unobservable rather than
 	// probing the live home, which is the 🎯T679.1 rule for this seam.

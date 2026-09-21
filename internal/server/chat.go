@@ -445,7 +445,7 @@ func (s *Server) overseerWorkingLevel() bool {
 	if waiting || streamOpen {
 		return true
 	}
-	if proc != nil && proc.Alive() && proc.PromptInFlight() {
+	if s.seatInFlight(s.overseerSeatName(), proc) {
 		return true
 	}
 	return false

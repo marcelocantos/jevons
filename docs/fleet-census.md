@@ -130,6 +130,7 @@ place.
 | 2026-09-21 | `internal/seatstate` lands: the authority, `Tri`, and three feeds | none — this is the replacement, and it counts against 🎯T766 until the things it replaces are gone |
 | 2026-09-21 | Derivation 5 loses two of its eight sites: `seat_load.go` and `t254_5_1_tool_bound.go` now ask the authority | `substring_classifiers` 665 → 664; derivation count unchanged, because the symbol still has six callers |
 | 2026-09-21 | **The butler idle reaper is deleted**: `reapIdleThreads`, `Butler.ReapIdle`, `SeatGate`, the send/reap admission on both sides, `fleet.Claudia.Busy`/`Pending`/`IdleTranscript`, the write-only `idle_activity.go` event subscription, and the `rsi` `NoteReaped` hooks. Across four log generations it ran 8,476 sweeps and stopped one thread (a boundary probe, 2026-09-06); its only remaining candidate was the overseer, kept alive by `Busy()` alone | `standing_loops` 24 → 23 — the first control loop ever deleted in this repository; in-flight ratchet 7 → 6. Derivation 6 (`statusFromEntries`) survives, because the butler's `List`/`Status` display path still reads it, so `seat_state_derivations` is unchanged |
+| 2026-09-21 | **One authority for the whole daemon**: `cmd/jevonsd/main.go` builds a single `seatstate.Authority` before anything reads it and hands the same instance to `mcpserver`, `internal/server` and `internal/fleet`. `internal/server`'s four in-flight reads become one funnel that records what it saw; the fleet reports the seats it stops and forgets the ones it removes | in-flight ratchet 6 → 2 — the two left are the `observeSeat` feed and `fleet_recover.go`, whose file holds another worker's uncommitted edits |
 
 Derivation 5 is the one being dismantled first, because it is the signal
 that authorises `LoadTerminate` to kill a process group and it defaulted to
@@ -139,7 +140,6 @@ idle for a seat nothing was known about. Its remaining sites:
 |---|---|---|
 | `internal/mcpserver/mcpserver.go` (`observeSeat`) | feed | legitimate: this is how claudia's answer reaches the authority |
 | `internal/mcpserver/fleet_recover.go:359` | control | left alone on 2026-09-21: another worker held uncommitted edits in that file (🎯T376) |
-| `internal/server/chat.go:448`, `overseer_converge.go:194`, `owner_health.go:328,579` | display + control | same injection dependency |
 
 The four `internal/server` sites and the `internal/fleet` one cannot be
 converted without a single authority instance built in `cmd/jevonsd/main.go`

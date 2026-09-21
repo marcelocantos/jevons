@@ -32,11 +32,12 @@ import (
 // authority. Census derivation 5 — the signal that authorises a SIGKILL of
 // a process group.
 //
-// The one permitted site is the funnel itself, Server.seatInFlight in
-// internal/mcpserver/mcpserver.go, which is excluded below: it asks the
+// The permitted sites are the two funnels, Server.seatInFlight in
+// internal/mcpserver/mcpserver.go and in internal/server/seat_state.go,
+// which are excluded below: it asks the
 // party that knows, records the answer, and is what every other site is
 // being converted to call.
-const seatInFlightPin = 6
+const seatInFlightPin = 2
 
 // Liveness — census derivation 4 — is deliberately NOT ratcheted here.
 // `.Alive()` is spelled the same by types that have nothing to do with a

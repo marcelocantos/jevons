@@ -85,10 +85,8 @@ type Server struct {
 	// seats is the single answer to "what is true about this seat"
 	// (🎯T766.2). Controls read it instead of each deriving their own;
 	// see docs/fleet-census.md for the eleven derivations it replaces.
-	// Built once, lazily. When internal/server and internal/fleet are
-	// converted they need this same instance, injected from main rather
-	// than each building its own; that setter lands with those callers,
-	// not before them.
+	// Injected by SetSeats from main (the same instance internal/server and
+	// internal/fleet hold); built lazily and privately only in tests.
 	seatsOnce sync.Once
 	seats     *seatstate.Authority
 
@@ -510,6 +508,25 @@ func (s *Server) Seats() *seatstate.Authority {
 	}
 	s.seatsOnce.Do(func() { s.seats = seatstate.New(seatstate.Args{}) })
 	return s.seats
+}
+
+// SetSeats injects the daemon's one seat-state authority (🎯T766.2), built
+// in main and shared with internal/server and internal/fleet. It must be
+// called before anything asks Seats(); a private authority already built is
+// a wiring error, logged rather than silently producing two answers.
+func (s *Server) SetSeats(a *seatstate.Authority) {
+	if s == nil || a == nil {
+		return
+	}
+	injected := false
+	s.seatsOnce.Do(func() {
+		s.seats = a
+		injected = true
+	})
+	if !injected {
+		slog.Warn("seat authority already built before injection; wiring order is wrong",
+			"component", "seatstate")
+	}
 }
 
 // observeSeat folds what claudia says about one registry row into the

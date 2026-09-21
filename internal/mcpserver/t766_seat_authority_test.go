@@ -95,3 +95,15 @@ func TestT766LoadSourceCarriesSeatIdle(t *testing.T) {
 		t.Fatal("capacity.LoadSource lost SeatIdle")
 	}
 }
+
+// 🎯T766.2: main hands every package the same authority. The injected
+// instance is the one Seats() returns, so the MCP server, the HTTP server
+// and the fleet share one answer.
+func TestT766SetSeatsSharesTheInjectedAuthority(t *testing.T) {
+	s := &Server{}
+	a := seatstate.New(seatstate.Args{})
+	s.SetSeats(a)
+	if s.Seats() != a {
+		t.Fatal("Seats() is not the injected authority")
+	}
+}

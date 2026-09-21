@@ -191,7 +191,7 @@ func (s *Server) ObserveCockpit() cockpitObs {
 	proc := reg.Get(name)
 	if proc != nil && proc.Alive() {
 		o.ProcAlive = true
-		o.PromptInFlight = proc.PromptInFlight()
+		o.PromptInFlight = s.seatInFlight(name, proc)
 		// 🎯T601: ask the pane, not only the event stream — but only
 		// where the answer IS the pane. For a tmux Claude session
 		// PromptInFlight is now read from the frame (claudia

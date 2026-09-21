@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
@@ -62,6 +63,11 @@ type Claudia struct {
 	recordRequest func(name, text string) error
 
 	mu sync.Mutex
+
+	// seats is the daemon's one seat-state authority (🎯T766.2). The
+	// fleet stops and removes processes, so it is the party that knows when
+	// a seat stops being alive. Nil in tests.
+	seats *seatstate.Authority
 
 	// Provider migration (🎯T285): session roots resolve a predecessor's
 	// transcript, and handovers persists the pointer across the rotation
@@ -528,6 +534,16 @@ func (f *Claudia) Alive(id string) bool {
 func (f *Claudia) Stop(id string) {
 	f.reg.Stop(id)
 	f.drainOnStop(id)
+	if f.seats != nil {
+		f.seats.FromClaudia(seatstate.SeatReport{Name: id, Alive: false, Known: true}, time.Now())
+	}
+}
+
+// SetSeats hands the fleet the daemon's one seat-state authority (🎯T766.2).
+func (f *Claudia) SetSeats(a *seatstate.Authority) {
+	if f != nil {
+		f.seats = a
+	}
 }
 
 // Remove stops the process and drops the registry definition entirely, so
@@ -535,6 +551,10 @@ func (f *Claudia) Stop(id string) {
 // intact (only jevons's ownership is dropped).
 func (f *Claudia) Remove(id string) {
 	f.reg.Stop(id)
+	if f.seats != nil {
+		// A removed seat has no identity left to answer for.
+		defer f.seats.Forget(id)
+	}
 	// Drain while the definition still names a workdir; removals.Remove is
 	// about to drop it.
 	f.drainOnStop(id)

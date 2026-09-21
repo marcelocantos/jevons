@@ -42,6 +42,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/statedb"
 	"github.com/marcelocantos/jevons/internal/supervise"
@@ -263,7 +264,11 @@ func main() {
 	}
 	scanner := discovery.NewScannerRoots(sessionRoots)
 
+	// 🎯T766.2: one answer about a seat for the whole daemon. Built before
+	// anything that reads it, and the same instance goes to all three.
+	seats := seatstate.New(seatstate.Args{})
 	srv := server.New(cli.Version, cfg.StateDir)
+	srv.SetSeats(seats)
 	srv.SetOverseerName(cfg.OverseerName)
 	// ð¯T200: declarative domain portfolios from config (no GM agent).
 	srv.SetPortfolios(cfg.Portfolios)
@@ -470,6 +475,7 @@ func main() {
 			return ""
 		},
 	})
+	mcpSrv.SetSeats(seats)
 	if workerTracker != nil {
 		mcpSrv.SetWorkersTracker(workerTracker)
 	}
@@ -770,6 +776,7 @@ func main() {
 	// (agent-only names) so Deliver/PushEvent share one id space.
 	// ð¯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
+	fleetAdapter.SetSeats(seats)
 	fleetAdapter.SetRemovalAccount(removals)
 	fleetAdapter.SetDefaultProvider(defaultProvider)
 	// ð¯T285: provider migration needs the session roots to find a
