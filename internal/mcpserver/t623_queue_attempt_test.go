@@ -79,6 +79,13 @@ func TestT623DrainErrorNeverLosesOrBlindlyRetriesPayload(t *testing.T) {
 		{"closed awaiting response", errors.New("codex app-server: closed waiting for turn/start"), false},
 		{"unrecognized provider error", errors.New("provider failed"), false},
 		{"quoted busy text", errors.New("provider response quoted: grok acp: prompt already in flight"), false},
+		// 🎯T766: the live specimen. Every error from a broker-hosted
+		// seat arrives wrapped like this, and on 2026-09-20 20:55 one of them
+		// resolved Uncertain and froze 104 messages behind it for seventeen
+		// hours, because the classifier compared the whole rendered string
+		// against four unwrapped literals. A wrapped refusal must be
+		// classified identically to the bare one it wraps.
+		{"broker-wrapped busy refusal", errors.New("broker protocol: agent_failed: cursor acp: prompt already in flight"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
