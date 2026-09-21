@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -37,12 +36,13 @@ func (s *suite) j21GoalContinuesAllBackends() error {
 		{name: "codex", provider: string(claudia.ProviderCodex)},
 	}
 
+	// Backends run one after another: three concurrent launches made the
+	// journey create its own load, which is what pushed a start past its
+	// call deadline (🎯T625.8).
 	var (
-		mu      sync.Mutex
 		ran     []string
 		failed  []string
 		outages []error
-		wg      sync.WaitGroup
 	)
 	for _, b := range all {
 		if err := backendCLIReady(b.provider); err != nil {
@@ -53,25 +53,16 @@ func (s *suite) j21GoalContinuesAllBackends() error {
 			})
 			continue
 		}
-		wg.Add(1)
-		go func(b backend) {
-			defer wg.Done()
-			if err := s.goalContinueOneBackend(b.provider); err != nil {
-				mu.Lock()
-				defer mu.Unlock()
-				if isOutage(err) {
-					outages = append(outages, err)
-					return
-				}
-				failed = append(failed, b.name+": "+err.Error())
-				return
+		if err := s.goalContinueOneBackend(b.provider); err != nil {
+			if isOutage(err) {
+				outages = append(outages, err)
+				continue
 			}
-			mu.Lock()
-			ran = append(ran, b.name)
-			mu.Unlock()
-		}(b)
+			failed = append(failed, b.name+": "+err.Error())
+			continue
+		}
+		ran = append(ran, b.name)
 	}
-	wg.Wait()
 
 	if len(failed) > 0 {
 		return fmt.Errorf("goal continuation failed: %s", strings.Join(failed, "; "))
@@ -102,6 +93,12 @@ func (s *suite) goalContinueOneBackend(provider string) error {
 		"purpose": "work", "provider": provider, "target_id": "T510",
 		"prompt": prompt,
 	})
+	if err != nil && isStartPending(err) {
+		// 🎯T792: the launch outlived this call's deadline and continues in
+		// the daemon. That is "in flight", not failure: wait for the seat to
+		// register as running (never re-send the brief).
+		err = s.waitStartRunning(name)
+	}
 	if err != nil {
 		if oe := asOutage("J21-"+provider, err); oe != nil {
 			return oe
@@ -200,4 +197,38 @@ func backendCLIReady(provider string) error {
 		return fmt.Errorf("unknown provider %q", provider)
 	}
 	return nil
+}
+
+// startJoinTimeout bounds how long a detached start (🎯T792) may take to
+// register the seat before the journey calls it failed.
+const startJoinTimeout = 3 * time.Minute
+
+// isStartPending reports whether err is the 🎯T792 pending result of
+// jevons_agent_start (internal/mcpserver startPendingText): the launch is
+// still running in the daemon past the call's deadline.
+func isStartPending(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// MCPToolCall trims the error text, so match the early phrase too.
+	return strings.Contains(msg, "still running past this call's deadline") ||
+		strings.Contains(msg, "CONTINUES in the daemon") || strings.Contains(msg, "T792")
+}
+
+// waitStartRunning polls the fleet list until name is registered and
+// running, observing the in-flight launch as the pending text directs.
+func (s *suite) waitStartRunning(name string) error {
+	deadline := time.Now().Add(startJoinTimeout)
+	for time.Now().Before(deadline) {
+		if agents, err := s.ListAgentsHTTP(); err == nil {
+			for _, a := range agents {
+				if a.Name == name && a.Status == "running" {
+					return nil
+				}
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("detached start of %s never registered as running within %s", name, startJoinTimeout)
 }
