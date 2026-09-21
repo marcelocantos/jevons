@@ -239,7 +239,7 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 	} else if ok {
 		slog.Info("launch rehydrated lost session", "name", name, "detail", lost.Describe())
 	}
-	agent, err := reg.Launch(name)
+	agent, err := LaunchReconciled(reg, name)
 	if remintAfterResumeError(reg.Def(name), err) {
 		def := reg.Def(name)
 		rotated, rerr := rotateOntoFreshSession(reg, def)
@@ -249,7 +249,7 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 		}
 		slog.Warn("launch reminted after provider resume refusal",
 			"name", name, "detail", rotated.Describe())
-		return reg.Launch(name)
+		return LaunchReconciled(reg, name)
 	}
 	return agent, err
 }

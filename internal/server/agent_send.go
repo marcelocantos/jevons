@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // 🎯T182 / 🎯T275: POST /api/agents/{name}/send — fire-and-forget deliver to a
@@ -177,7 +178,7 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 	rehydrated := false
 	proc := reg.Get(name)
 	if proc == nil || !proc.Alive() {
-		launched, err := reg.Launch(name)
+		launched, err := fleet.LaunchReconciled(reg, name)
 		if err != nil {
 			return AgentSendOutcome{}, fmt.Errorf("agent %q rehydrate failed: %w", name, err)
 		}

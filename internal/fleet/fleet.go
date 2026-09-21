@@ -481,7 +481,7 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	// that must be observed.
 	defer f.launching(t.ID)()
 
-	ag, err := f.reg.Launch(t.ID)
+	ag, err := LaunchReconciled(f.reg, t.ID)
 	if err != nil {
 		return fmt.Errorf("launch agent %q: %w", t.ID, err)
 	}
@@ -609,7 +609,7 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		// the turn that follows can run for minutes and a launch that is
 		// "in flight" for all of it would mute the sweep for all of it.
 		endLaunch := f.launching(id)
-		launched, err := f.reg.Launch(id)
+		launched, err := LaunchReconciled(f.reg, id)
 		if err != nil {
 			endLaunch()
 			return "", fmt.Errorf("could not rehydrate agent %q: %w", id, err)

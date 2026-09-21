@@ -282,7 +282,7 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 	f.reg.Stop(name)
 
 	next := *def
-	next.Provider = target
+	switchProvider(&next, target, kind)
 	next.SessionID = nextSession
 	next.Model = nextModel
 	next.Materialized = false // a fresh conversation, not a resume
@@ -675,7 +675,7 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		return handover.Pending{}, true, fmt.Errorf("migrate %q: registry row vanished after Agent.Migrate", name)
 	}
 	next := *def
-	next.Provider = target
+	switchProvider(&next, target, "migrate")
 	next.ConnectURL = ""
 	next.ConnectPID = 0
 	if model != "" {
@@ -757,7 +757,7 @@ func isLiveMigrateFallback(err error) bool {
 func throwawayCompactDef(source claudia.AgentDef, name, sessionID string, provider claudia.Provider) claudia.AgentDef {
 	source.Name = name
 	source.SessionID = sessionID
-	source.Provider = provider
+	switchProvider(&source, provider, "throwaway compact")
 	// This row exists only long enough to ask for one compact brief. Keep it
 	// outside every work-seat policy (plan migration, recovery, idle nudges)
 	// and never make it look engaged on the predecessor's target (🎯T543).

@@ -881,7 +881,14 @@ type agentInfo struct {
 	// restart; carried on every row so the RHS can show it once.
 	StopReason string `json:"stop_reason,omitempty"`
 	StoppedAt  string `json:"stopped_at,omitempty"`
-	MassStop   string `json:"mass_stop,omitempty"`
+	// Rehydrate says whether a not-running seat can come back (🎯T763):
+	// "resumable", "repairable: …" (its def carries settings its provider
+	// refuses, dropped on the next rehydrate) or "broken: …" (its last
+	// rehydrate failed, with the error). `status: stopped` alone cannot
+	// tell a revivable seat from one every send will refuse. Empty while
+	// running.
+	Rehydrate string `json:"rehydrate,omitempty"`
+	MassStop  string `json:"mass_stop,omitempty"`
 	// TranscriptActivity / TranscriptLastMove / TranscriptAgeSeconds answer
 	// "has this running seat moved recently?" from this one response, with no
 	// filesystem reach into ~/.local/state/claudia or ~/.claude/projects
@@ -1108,6 +1115,9 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 			Status:      status,
 			Running:     running,
 			Provider:    strings.TrimSpace(string(d.Provider)),
+		}
+		if !running {
+			info.Rehydrate = fleet.RehydrateHealth(d)
 		}
 		// 🎯T365: target filings and idea/capture asides share purpose=aside;
 		// the create-time meta beside the workdir is what tells them apart.
