@@ -82,14 +82,28 @@ func waitCursorStoreClearImpl(sessionID string, extraPID int) bool {
 	}
 }
 
+// cursorLeftoversAlive reports whether anything may still hold the store.
+// An lsof that could not answer in time counts as yes: the guard exists to
+// stop a second ACP client opening a store another still writes, so not
+// knowing fails closed.
 func cursorLeftoversAlive(sessionID string) bool {
-	return len(cursorLeftoverPIDs(sessionID)) > 0
+	pids, ok := storeWriterPIDs(claudia.CursorACPStorePath(sessionID))
+	if !ok {
+		return true
+	}
+	for _, pid := range pids {
+		if pid > 1 && pid != os.Getpid() {
+			return true
+		}
+	}
+	return false
 }
 
 func cursorLeftoverPIDs(sessionID string) []int {
 	self := os.Getpid()
 	var out []int
-	for _, pid := range listStoreWriterPIDs(claudia.CursorACPStorePath(sessionID)) {
+	pids, _ := storeWriterPIDs(claudia.CursorACPStorePath(sessionID))
+	for _, pid := range pids {
 		if pid <= 1 || pid == self {
 			continue
 		}
@@ -98,37 +112,57 @@ func cursorLeftoverPIDs(sessionID string) []int {
 	return out
 }
 
-func listStoreWriterPIDs(path string) []int {
+// lsofTimeout bounds one holder check. lsof stats the open files of every
+// process on the host, and a single stat on a stalled mount can block it
+// indefinitely. With no bound, that stall held ReattachFleetContext — and so
+// the rest of jevonsd's main, including the cockpit loop that drives the
+// fleet pass — for as long as lsof hung: on 2026-09-21 no boot after 14:05
+// reached StartCockpitConverge (a goroutine dump put main in this call).
+var lsofTimeout = 3 * time.Second
+
+// lsofCommand is the holder probe; a test replaces it.
+var lsofCommand = "lsof"
+
+// storeWriterPIDs lists processes holding the store or its -wal/-shm, in one
+// lsof call. ok is false when lsof did not answer within lsofTimeout, which
+// callers must treat as "may be held", never as "clear". A plain lsof exit
+// status of 1 means no process holds the files, which is an answer.
+func storeWriterPIDs(path string) ([]int, bool) {
 	if path == "" {
-		return nil
+		return nil, true
 	}
+	var args []string
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(p); err == nil {
+			args = append(args, p)
+		}
+	}
+	if len(args) == 0 {
+		return nil, true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), lsofTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, lsofCommand, append([]string{"-t", "--"}, args...)...).Output()
+	if ctx.Err() != nil {
+		slog.Warn("cursor guard: lsof did not answer in time; treating store as held",
+			"path", path, "timeout", lsofTimeout)
+		return nil, false
+	}
+	_ = err // lsof exits 1 when nothing holds the files
 	var pids []int
 	seen := map[int]struct{}{}
-	for _, p := range []string{path, path + "-wal", path + "-shm"} {
-		if _, err := os.Stat(p); err != nil {
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		pid, err := strconv.Atoi(strings.TrimSpace(string(line)))
+		if err != nil || pid <= 1 {
 			continue
 		}
-		out, err := exec.Command("lsof", "-t", "--", p).Output()
-		if err != nil {
+		if _, ok := seen[pid]; ok {
 			continue
 		}
-		for _, line := range bytes.Split(out, []byte("\n")) {
-			s := strings.TrimSpace(string(line))
-			if s == "" {
-				continue
-			}
-			pid, err := strconv.Atoi(s)
-			if err != nil || pid <= 1 {
-				continue
-			}
-			if _, ok := seen[pid]; ok {
-				continue
-			}
-			seen[pid] = struct{}{}
-			pids = append(pids, pid)
-		}
+		seen[pid] = struct{}{}
+		pids = append(pids, pid)
 	}
-	return pids
+	return pids, true
 }
 
 // hushUnreapedCursorSeats disables AutoStart on Cursor rows whose leftover
