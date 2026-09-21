@@ -47,7 +47,8 @@ func TestT766UncertainEntryIsHeldWhileLaterEntriesDeliver(t *testing.T) {
 	if err != nil || len(left) != 1 || left[0].ID != first.ID || left[0].State != Uncertain {
 		t.Fatalf("uncertain entry not kept, in place, after the one behind it delivered: %+v %v", left, err)
 	}
-	if again, ok, err := q.ClaimFront("a"); err != nil || ok || again.ID == first.ID {
+	// Nothing is claimable: the held entry may be reported, never claimed.
+	if again, ok, err := q.ClaimFront("a"); err != nil || ok || again.State != Uncertain {
 		t.Fatalf("uncertain entry was offered again: %+v %v %v", again, ok, err)
 	}
 }
@@ -92,5 +93,26 @@ func TestT766StaleAttemptOnNonHeadEntryIsRefused(t *testing.T) {
 	}
 	if err := q.Resolve("a", a2, Confirmed, "seen"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An Attempting entry left by a daemon that died mid-submit is not a send in
+// flight here: it is held and flowed past, never re-offered.
+func TestT766OrphanedAttemptFromDeadDaemonIsFlowedPast(t *testing.T) {
+	dir := t.TempDir()
+	q := NewStore(dir)
+	now := time.Now()
+	first, _, _ := q.Append("a", "mid-submit when the daemon died", now)
+	second, _, _ := q.Append("a", "behind it", now.Add(time.Second))
+	if _, ok, err := q.ClaimFront("a"); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	after := NewStore(dir) // the restarted daemon owns no attempt
+	next, ok, err := after.ClaimFront("a")
+	if err != nil || !ok || next.ID != second.ID {
+		t.Fatalf("orphaned attempt froze the queue: %+v %v %v", next, ok, err)
+	}
+	if held, blocked, err := after.BlockedHead("a"); err != nil || !blocked || held.ID != first.ID {
+		t.Fatalf("orphaned attempt not reported held: %+v %v %v", held, blocked, err)
 	}
 }

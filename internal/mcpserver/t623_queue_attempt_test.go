@@ -189,10 +189,17 @@ func TestT623DrainClaimAndResolutionMustReachDisk(t *testing.T) {
 				t.Fatal(err)
 			}
 			if at == "resolution" {
+				// 🎯T766.5: the head's attempt was orphaned by the dead
+				// daemon, so it is held and never resent; the tail behind it
+				// was never sent, so delivering it is not a duplicate.
 				after, receiver, _ := t418Daemon(t, dir)
 				after.drainAgentSendQueue("a")
-				if len(receiver.delivered()) != 0 {
-					t.Fatal("failed resolution caused a duplicate after restart")
+				got := receiver.delivered()
+				if len(got) != 1 || !strings.Contains(got[0], "tail") {
+					t.Fatalf("after restart delivered %q, want only the never-sent tail", got)
+				}
+				if left, _ := after.sendQueue().Snapshot("a"); len(left) != 1 || left[0].Text != "head" || left[0].State != sendq.Attempting {
+					t.Fatalf("orphaned attempt not kept held: %+v", left)
 				}
 			}
 		})

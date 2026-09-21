@@ -341,11 +341,14 @@ func (s *Store) PopFront(agent string) (Entry, bool, error) {
 	if len(f.Entries) == 0 {
 		return Entry{}, false, nil
 	}
-	i, _, blocked := claimable(f.Entries)
+	i, _, blocked := claimable(f.Entries, s.active[agent])
 	if blocked {
 		return Entry{}, false, fmt.Errorf("sendq: %q has a delivery attempt in flight", agent)
 	}
 	if i < 0 {
+		if len(f.Entries) > 0 {
+			return Entry{}, false, fmt.Errorf("sendq: %q holds only unresolved delivery attempts", agent)
+		}
 		return Entry{}, false, nil
 	}
 	e := f.Entries[i]
@@ -373,13 +376,20 @@ func (s *Store) PopFront(agent string) (Entry, bool, error) {
 // not absolutely.
 //
 // i is the index of the first Pending entry, or -1. blocker is the entry that
-// stops the scan (an Attempting one), when there is one.
-func claimable(entries []Entry) (i int, blocker Entry, blocked bool) {
+// stops the scan, when there is one.
+//
+// Only an attempt this store is running blocks — active is its attempt id
+// for the agent. An Attempting entry with any other id was left by a daemon
+// that died mid-submit: nothing is in flight for it here, and before this
+// check it froze the queue behind it exactly as an Uncertain entry used to
+// (observed 2026-09-21 on jevons-po after a restart). It is held the same
+// way: never offered again, and flowed past.
+func claimable(entries []Entry, active string) (i int, blocker Entry, blocked bool) {
 	for idx, e := range entries {
-		switch e.State {
-		case Pending:
+		switch {
+		case e.State == Pending:
 			return idx, Entry{}, false
-		case Attempting:
+		case e.State == Attempting && active != "" && e.AttemptID == active:
 			return -1, e, true
 		}
 	}
@@ -409,12 +419,12 @@ func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) 
 	if err != nil || len(f.Entries) == 0 {
 		return Entry{}, false, err
 	}
-	i, blocker, blocked := claimable(f.Entries)
+	i, blocker, blocked := claimable(f.Entries, s.active[agent])
 	if blocked {
 		return blocker, false, nil
 	}
 	if i < 0 {
-		return Entry{}, false, nil
+		return f.Entries[0], false, nil // only held entries: report, never claim
 	}
 	e := f.Entries[i]
 	if matchID && e.ID != id {

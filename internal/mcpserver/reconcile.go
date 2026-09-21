@@ -3,7 +3,14 @@
 
 package mcpserver
 
-import "log/slog"
+import (
+	"log/slog"
+	"sync"
+)
+
+// reconcileFirst logs the first pass once, so the running daemon can be
+// seen to drive Reconcile without a line every tick.
+var reconcileFirst sync.Once
 
 // Reconcile is the one pass that decides what to do about the fleet
 // (🎯T766.3).
@@ -31,6 +38,7 @@ func (s *Server) Reconcile() {
 		return
 	}
 	overseer := s.overseerName()
+	reconcileFirst.Do(func() { slog.Info("reconcile: first fleet pass", "overseer", overseer) })
 
 	s.TrackSeatLoad()
 	s.SweepOrphanPanes()
