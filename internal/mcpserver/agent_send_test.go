@@ -85,8 +85,10 @@ func TestIsPromptInFlight(t *testing.T) {
 	if !isPromptInFlight(fmt.Errorf("task worker-1 is busy")) {
 		t.Fatal("expected Task busy match")
 	}
-	if !isPromptInFlight(fmt.Errorf("claude session: prompt in progress")) {
-		t.Fatal("expected Claude-shaped busy match")
+	// 🎯T766.4: this used an invented "prompt in progress" phrasing no
+	// backend produces; codex's own busy refusal is the real non-ACP shape.
+	if !isPromptInFlight(fmt.Errorf("codex app-server: turn already in flight")) {
+		t.Fatal("expected codex busy match")
 	}
 	if isPromptInFlight(fmt.Errorf("other")) {
 		t.Fatal("unexpected match")

@@ -34,12 +34,6 @@ func IsPromptBusy(err error) bool {
 		return true
 	case strings.Contains(msg, " is busy"):
 		return true
-	case strings.Contains(msg, "prompt in progress"):
-		return true
-	case strings.Contains(msg, "session busy"):
-		return true
-	case strings.Contains(msg, "turn in progress"):
-		return true
 	default:
 		return false
 	}

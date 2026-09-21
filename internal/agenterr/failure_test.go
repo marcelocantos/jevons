@@ -28,7 +28,7 @@ func TestClassifyTextFixtures(t *testing.T) {
 		// busy → none
 		{"grok acp: prompt already in flight", agenterr.ClassNone},
 		{"task abc is busy", agenterr.ClassNone},
-		{"session busy; try again", agenterr.ClassNone},
+		{"codex app-server: turn already in flight", agenterr.ClassNone}, // real codex busy (🎯T766.4 replaced an invented phrase)
 
 		// backend_unavailable (Grok outage post-mortem class)
 		{"Internal error", agenterr.ClassBackendUnavailable},

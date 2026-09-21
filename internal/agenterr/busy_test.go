@@ -24,10 +24,10 @@ func TestIsPromptBusy(t *testing.T) {
 		{fmt.Errorf("send to x: grok acp: prompt already in flight"), true},
 		// Claudia Task.
 		{fmt.Errorf("task abc is busy"), true},
-		// Claude / generic session phrasing (when a backend surfaces busy).
-		{fmt.Errorf("claude: prompt in progress"), true},
-		{fmt.Errorf("session busy; try again"), true},
-		{fmt.Errorf("agent turn in progress"), true},
+		// 🎯T766.4: "prompt in progress", "session busy" and "turn in
+		// progress" were matched here for a backend that "surfaces busy", and
+		// no backend in jevons or claudia produces any of them. Branches that
+		// can only match text nobody writes are deleted, not kept as a hedge.
 	}
 	for _, tc := range cases {
 		got := agenterr.IsPromptBusy(tc.err)

@@ -287,9 +287,6 @@ func isBusyMessage(lower string) bool {
 	return containsAny(lower,
 		"already in flight",
 		" is busy",
-		"prompt in progress",
-		"session busy",
-		"turn in progress",
 	)
 }
 

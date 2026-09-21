@@ -202,8 +202,9 @@ func TestNotifyErrClass(t *testing.T) {
 	if got := notifyErrClass(fmt.Errorf("task x is busy")); got != "busy" {
 		t.Fatalf("task busy got %q", got)
 	}
-	if got := notifyErrClass(fmt.Errorf("session busy")); got != "busy" {
-		t.Fatalf("session busy got %q", got)
+	// 🎯T766.4: "session busy" was an invented phrase no backend produces.
+	if got := notifyErrClass(fmt.Errorf("codex app-server: turn already in flight")); got != "busy" {
+		t.Fatalf("codex busy got %q", got)
 	}
 	if got := notifyErrClass(fmt.Errorf("overseer not running")); got != "not_running" {
 		t.Fatalf("got %q", got)
