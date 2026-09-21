@@ -777,15 +777,25 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	s.remoteSeq++
 	remoteID := s.remoteSeq
 	s.remotes[remoteID] = remoteConn{writer: wsWriter{conn: conn}, ctx: ctx}
+	clients := len(s.remotes)
 	s.mu.Unlock()
 
+	// 🎯T604.1: the disconnect count is sampled in the same critical
+	// section as the delete, then logged after the lock is released.
+	// Other remote handlers write s.remotes concurrently, so it is never
+	// read outside s.mu.
+	logDisconnect := false
 	defer func() {
 		s.mu.Lock()
 		delete(s.remotes, remoteID)
+		clients := len(s.remotes)
 		s.mu.Unlock()
+		if logDisconnect {
+			slog.Info("remote disconnected", "clients", clients)
+		}
 	}()
 
-	slog.Info("remote connected", "clients", len(s.remotes))
+	slog.Info("remote connected", "clients", clients)
 
 	// Send init. History is no longer carried in-memory — Claude's
 	// JSONL session file at proc.JSONLPath() is the canonical record.
@@ -817,9 +827,7 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	for {
 		mt, data, err := conn.Read(ctx)
 		if err != nil {
-			if ctx.Err() == nil {
-				slog.Info("remote disconnected", "clients", len(s.remotes)-1)
-			}
+			logDisconnect = ctx.Err() == nil
 			return
 		}
 

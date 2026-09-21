@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,6 +78,30 @@ func TestProviderFeedToClientBroadcast(t *testing.T) {
 	// Client first, so it observes the live broadcast.
 	client := dialWS(t, ctx, srv.URL, "/ws/remote")
 	readFrameOfType(t, ctx, client, "init")
+
+	// 🎯T604.1: other remote clients connect and disconnect concurrently
+	// for the whole test, so every handler's connect/disconnect logging
+	// runs while other handlers insert into and delete from s.remotes.
+	// Under -race an unlocked read of the registry fails the test.
+	var churn sync.WaitGroup
+	churnCtx, stopChurn := context.WithCancel(ctx)
+	defer func() {
+		stopChurn()
+		churn.Wait()
+	}()
+	const churnClients = 8
+	for range churnClients {
+		churn.Go(func() {
+			for churnCtx.Err() == nil {
+				c, _, err := websocket.Dial(churnCtx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/remote", nil)
+				if err != nil {
+					return
+				}
+				c.Read(churnCtx) // wait for init, so the handler has registered
+				c.Close(websocket.StatusNormalClosure, "")
+			}
+		})
+	}
 
 	// Fake provider attaches: describe → describe_ok → subscribe.
 	prov := dialWS(t, ctx, srv.URL, "/ws/provider")
