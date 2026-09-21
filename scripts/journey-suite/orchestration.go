@@ -855,15 +855,8 @@ func (s *suite) jOverseerMigration() error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.Post("http://"+s.host+"/api/overseer/migrate", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("migrate overseer: %w", err)
-	}
-	defer resp.Body.Close()
-	var out map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&out)
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("migrate overseer HTTP %d: %v", resp.StatusCode, out["error"])
+	if err := postOverseerMigrateWhenSettled(ctx, "http://"+s.host+"/api/overseer/migrate", body); err != nil {
+		return err
 	}
 
 	// Owner chat must still reach the successor — a migration that leaves
@@ -888,4 +881,43 @@ func (s *suite) jOverseerMigration() error {
 		time.Sleep(10 * time.Second)
 	}
 	return fmt.Errorf("overseer on %s never recovered the codeword after migration", to)
+}
+
+// overseerMigrateRetry is how often a refused migrate is re-asked.
+const overseerMigrateRetry = 2 * time.Second
+
+// postOverseerMigrateWhenSettled asks the daemon to migrate the overseer and
+// treats its own "turn in flight" refusal as the settle oracle (🎯T625.9).
+// The plant turn ending does not mean the overseer is idle: a notice the
+// daemon deferred behind that turn starts as it ends (isolate log 15e5f3bf:
+// notify_queue drain at 06:53:25.190, migrate refused at 25.3). Any other
+// refusal fails at once, and a turn that never settles fails at ctx's
+// deadline, so the guard itself stays under test.
+func postOverseerMigrateWhenSettled(ctx context.Context, url string, body []byte) error {
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("migrate overseer: %w", err)
+		}
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		msg := fmt.Sprint(out["error"])
+		if resp.StatusCode != http.StatusConflict || !strings.Contains(msg, "turn in flight") {
+			return fmt.Errorf("migrate overseer HTTP %d: %v", resp.StatusCode, out["error"])
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("migrate overseer: turn never settled: %s", msg)
+		case <-time.After(overseerMigrateRetry):
+		}
+	}
 }
