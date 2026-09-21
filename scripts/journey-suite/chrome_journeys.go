@@ -160,6 +160,9 @@ func (s *suite) jFrontierChrome() error {
 		return err
 	}
 	_ = chromeFrontierCovers
+	if err := s.seedFrontierLedger(); err != nil {
+		return err
+	}
 	surface, err := s.startReactSurface()
 	if err != nil {
 		return err
@@ -255,4 +258,30 @@ func seedFoldMdJournal(path string) error {
 		return err
 	}
 	return f.Sync()
+}
+
+// seedFrontierLedger gives the isolate's own throwaway workdir a bullseye
+// ledger with ready targets (🎯T820), so the T643 hover block of the frontier
+// scenario has real #frontier-table rows to measure. The isolate serves
+// /api/frontier from the ledger of its workdir (stateDir), which starts
+// uninitialised; the react_paint.js wait is deliberately left as is, so an
+// unseeded isolate still fails loudly there.
+func (s *suite) seedFrontierLedger() error {
+	run := func(args ...string) error {
+		out, err := exec.Command("bullseye", args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("bullseye %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err := run("open", "--cwd", s.workdir, "--location", "in_repo"); err != nil {
+		return err
+	}
+	for _, name := range []string{"J27 seeded frontier row alpha", "J27 seeded frontier row beta"} {
+		if err := run("commit", "--op", "track", "--cwd", s.workdir, "--name", name,
+			"--acceptance", "Exists so the J27 frontier table has rows to hover."); err != nil {
+			return err
+		}
+	}
+	return nil
 }
