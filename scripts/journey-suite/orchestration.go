@@ -396,8 +396,27 @@ func (s *suite) jPOWorkerLineageFanout() error {
 	}
 
 	// Stop worker — must remain listed as stopped (not vanished without kill).
-	if _, err := s.mcpText("jevons_agent_stop", map[string]any{"name": worker}); err != nil {
-		return fmt.Errorf("stop worker: %w", err)
+	//
+	// 🎯T664: the send above may still be undecided (delivered_unconfirmed) or
+	// its turn in flight, and the daemon then refuses an un-forced stop. Try
+	// the plain stop first: it either succeeds (delivery decided) or must be
+	// refused with the T664 text naming the deciding check. Only then stop
+	// with force=true and a reason. Any other stop error still fails the
+	// journey, and the refusal text is asserted, so a guard that vanished or
+	// changed shape shows up here rather than being papered over by force.
+	if stopOut, err := s.mcpText("jevons_agent_stop", map[string]any{"name": worker}); err != nil {
+		// err carries a trimmed copy; the full refusal text is the returned string.
+		msg := stopOut
+		if !strings.Contains(msg, "refusing to stop") || !strings.Contains(msg, "T664") ||
+			!strings.Contains(msg, "jevons_transcript_read") {
+			return fmt.Errorf("stop worker: %w", err)
+		}
+		if _, err := s.mcpText("jevons_agent_stop", map[string]any{
+			"name": worker, "force": true,
+			"reason": "journey teardown: fan-out assertions are complete, delivery verdict irrelevant",
+		}); err != nil {
+			return fmt.Errorf("forced stop worker: %w", err)
+		}
 	}
 	agents2, err := s.listAgentsHTTP()
 	if err != nil {
