@@ -226,6 +226,11 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 	if def == nil {
 		return handover.Pending{}, fmt.Errorf("%s: no agent %q", kind, name)
 	}
+	// 🎯T763: refuse before anything is stopped or persisted when the switch
+	// would have to drop a restriction the new provider cannot enforce.
+	if err := providerSwitchRefusal(*def, target); err != nil {
+		return handover.Pending{}, fmt.Errorf("%s %q: %w", kind, name, err)
+	}
 
 	// Resolve the pointer while the old session id is still on the row.
 	oldSession := def.SessionID
@@ -282,7 +287,9 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 	f.reg.Stop(name)
 
 	next := *def
-	switchProvider(&next, target, kind)
+	if err := switchProvider(&next, target, kind); err != nil {
+		return handover.Pending{}, fmt.Errorf("%s %q: %w", kind, name, err)
+	}
 	next.SessionID = nextSession
 	next.Model = nextModel
 	next.Materialized = false // a fresh conversation, not a resume
@@ -627,7 +634,10 @@ func (f *Claudia) launchThrowawayCompact(p handover.Pending) (string, string, er
 	}
 	sid := uuid.NewString()
 	temp := "jv-compact-" + sid[:8]
-	tempDef := throwawayCompactDef(*def, temp, sid, claudia.Provider(p.To))
+	tempDef, err := throwawayCompactDef(*def, temp, sid, claudia.Provider(p.To))
+	if err != nil {
+		return "", "", fmt.Errorf("throwaway compact: %w", err)
+	}
 	if err := f.reg.Register(tempDef); err != nil {
 		return "", "", err
 	}
@@ -663,6 +673,11 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	if f.liveMigrate == nil && f.reg.Get(name) == nil {
 		return handover.Pending{}, false, nil
 	}
+	if def := f.reg.Def(name); def != nil {
+		if err := providerSwitchRefusal(*def, target); err != nil {
+			return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
+		}
+	}
 	args := &claudia.MigrateArgs{Provider: target, Model: model, Force: force, Reason: "explicit"}
 	if err := f.invokeMigrate(name, args); err != nil {
 		if isLiveMigrateFallback(err) {
@@ -675,7 +690,9 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		return handover.Pending{}, true, fmt.Errorf("migrate %q: registry row vanished after Agent.Migrate", name)
 	}
 	next := *def
-	switchProvider(&next, target, "migrate")
+	if err := switchProvider(&next, target, "migrate"); err != nil {
+		return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
+	}
 	next.ConnectURL = ""
 	next.ConnectPID = 0
 	if model != "" {
@@ -754,10 +771,12 @@ func isLiveMigrateFallback(err error) bool {
 		strings.Contains(msg, "agent not ready")
 }
 
-func throwawayCompactDef(source claudia.AgentDef, name, sessionID string, provider claudia.Provider) claudia.AgentDef {
+func throwawayCompactDef(source claudia.AgentDef, name, sessionID string, provider claudia.Provider) (claudia.AgentDef, error) {
 	source.Name = name
 	source.SessionID = sessionID
-	switchProvider(&source, provider, "throwaway compact")
+	if err := switchProvider(&source, provider, "throwaway compact"); err != nil {
+		return claudia.AgentDef{}, err
+	}
 	// This row exists only long enough to ask for one compact brief. Keep it
 	// outside every work-seat policy (plan migration, recovery, idle nudges)
 	// and never make it look engaged on the predecessor's target (🎯T543).
@@ -767,5 +786,5 @@ func throwawayCompactDef(source claudia.AgentDef, name, sessionID string, provid
 	source.AutoStart = false
 	source.ConnectURL = ""
 	source.ConnectPID = 0
-	return source
+	return source, nil
 }

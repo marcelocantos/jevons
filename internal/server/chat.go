@@ -888,7 +888,12 @@ type agentInfo struct {
 	// tell a revivable seat from one every send will refuse. Empty while
 	// running.
 	Rehydrate string `json:"rehydrate,omitempty"`
-	MassStop  string `json:"mass_stop,omitempty"`
+	// DroppedCaps is the last provider-native setting (a codex sandbox)
+	// dropped from this seat's def because its provider refuses it, with
+	// when and what (🎯T763). A drop is never silent; empty means none
+	// since this daemon started.
+	DroppedCaps string `json:"dropped_caps,omitempty"`
+	MassStop    string `json:"mass_stop,omitempty"`
 	// TranscriptActivity / TranscriptLastMove / TranscriptAgeSeconds answer
 	// "has this running seat moved recently?" from this one response, with no
 	// filesystem reach into ~/.local/state/claudia or ~/.claude/projects
@@ -1119,6 +1124,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 		if !running {
 			info.Rehydrate = fleet.RehydrateHealth(d)
 		}
+		info.DroppedCaps = fleet.CapDrop(d.Name)
 		// 🎯T365: target filings and idea/capture asides share purpose=aside;
 		// the create-time meta beside the workdir is what tells them apart.
 		if purpose == claudia.PurposeAside {

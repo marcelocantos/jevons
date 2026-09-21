@@ -55,10 +55,13 @@ func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claud
 }
 
 func TestT543ThrowawayCompactIsNotAWorkSeat(t *testing.T) {
-	got := throwawayCompactDef(claudia.AgentDef{
+	got, err := throwawayCompactDef(claudia.AgentDef{
 		Name: "worker", Purpose: claudia.PurposeWork, TargetID: "T543",
 		AutoStart: true, Materialized: true, ConnectURL: "http://old", ConnectPID: 42,
 	}, "jv-compact-12345678", "compact-session", claudia.ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Purpose == claudia.PurposeWork || got.Purpose != claudia.PurposeAside {
 		t.Fatalf("purpose=%q; want aside, never work", got.Purpose)
 	}
