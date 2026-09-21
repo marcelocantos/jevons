@@ -305,6 +305,33 @@ func (s *suite) jT418HandoverMute() error {
 		fmt.Println("T418 planted handover", s.handoverPath(name), "bytes", st.Size())
 	}
 
+	// 🎯T625.11: the aside above is a child of the overseer, so the sweep
+	// exempts and reaps its record (🎯T517). A second seat parented to that
+	// aside is not control-plane, so the sweep must classify it and retry or
+	// surface its stale record. Each arm has its own record and needle.
+	name2 := strings.Replace(name, "t418h", "t418w", 1) // not a prefix-extension of name: line matching stays per seat
+	work2 := filepath.Join(s.stateDir, "t418-handover-w")
+	if err := os.MkdirAll(work2, 0o755); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": name2})
+	}()
+	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": name2, "workdir": work2, "parent": name, "description": "T418 non-control-plane handover seat",
+	}); err != nil {
+		return fmt.Errorf("spawn non-control-plane seat: %w", err)
+	}
+	if err := store.Put(handover.Pending{
+		Agent:          name2,
+		From:           "claude",
+		To:             "grok",
+		TranscriptPath: filepath.Join(work, "pred.jsonl"),
+		CreatedAt:      time.Now().UTC().Add(-20 * time.Minute).Format(time.RFC3339),
+	}); err != nil {
+		return fmt.Errorf("plant pending (non-control-plane): %w", err)
+	}
+
 	go func() {
 		_, _ = s.mcpText("jevons_thread_direct", map[string]any{
 			"id": name, "text": "Count slowly from 1 to 40 in your reply, then say DONE.",
@@ -394,25 +421,58 @@ func (s *suite) jT418HandoverMute() error {
 			fmt.Println("  ", e.Name())
 		}
 	}
-	needles := []string{
-		"UNDELIVERED HANDOVER",
-		"pending handover surfaced",
-		"handover retry",
-		"handover classify",
-	}
 	wait = time.Now().Add(45 * time.Second)
+	var reapLine, classifyLine string
 	for time.Now().Before(wait) {
 		lg, _ := os.ReadFile(s.logPath)
 		ev, _ := os.ReadFile(s.eventsPath())
 		delta := newTail(preHandoverLogs, lg) + "\n" + newTail(preHandoverEvents, ev)
-		for _, n := range needles {
-			if strings.Contains(delta, n) {
-				printMatching("T418 handover NEW lines", delta, needles...)
-				fmt.Println("T418 handover retried or surfaced:", n)
-				return nil
-			}
+		reapLine = handoverLineFor(delta, name, t418ReapNeedles...)
+		classifyLine = handoverLineFor(delta, name2, t418ClassifyNeedles...)
+		if reapLine != "" && classifyLine != "" {
+			fmt.Println("T418 exempt seat reaped:", trim(reapLine, 200))
+			fmt.Println("T418 non-control-plane seat handled:", trim(classifyLine, 200))
+			return nil
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return fmt.Errorf("planted pending handover was not retried or surfaced after bounce (SweepHandovers never fired)")
+	switch {
+	case reapLine == "" && classifyLine == "":
+		return fmt.Errorf("neither planted handover was touched after bounce (SweepHandovers never fired)")
+	case reapLine == "":
+		return fmt.Errorf("control-plane seat %s was not reaped after bounce (want %q)", name, t418ReapNeedles[0])
+	default:
+		return fmt.Errorf("non-control-plane seat %s was neither classified, retried nor surfaced after bounce", name2)
+	}
+}
+
+// t418ReapNeedles is the 🎯T517 outcome for a control-plane seat's stale
+// handover: cleared, never force-migrated.
+var t418ReapNeedles = []string{"T517 handover reaped"}
+
+// t418ClassifyNeedles are the sweep outcomes for a non-control-plane seat.
+var t418ClassifyNeedles = []string{
+	"UNDELIVERED HANDOVER",
+	"pending handover surfaced",
+	"handover retry",
+	"handover classify",
+}
+
+// (No "reaped" here: the T517 reap of an exempt seat must not satisfy this arm.)
+
+// handoverLineFor returns the first line of blob that names agent and holds
+// one of needles, or "". Matching the agent keeps one seat's outcome from
+// satisfying the other's arm.
+func handoverLineFor(blob, agent string, needles ...string) string {
+	for _, ln := range strings.Split(blob, "\n") {
+		if !strings.Contains(ln, agent) {
+			continue
+		}
+		for _, n := range needles {
+			if strings.Contains(ln, n) {
+				return ln
+			}
+		}
+	}
+	return ""
 }
