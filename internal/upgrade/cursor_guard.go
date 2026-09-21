@@ -244,11 +244,17 @@ func releasePhantomCursorSessions(reg *claudia.Registry) {
 // writers survived reap+wait, so PreferAdopt does not Launch a second
 // client. Later cockpit Launch still hits [GuardCursorStart].
 func hushUnreapedCursorSeats(reg *claudia.Registry) {
+	hushUnreapedCursorSeatsIn(reg, nil)
+}
+
+// hushUnreapedCursorSeatsIn is [hushUnreapedCursorSeats] for the rows include
+// accepts (nil accepts all), so seats can be hushed as each one starts.
+func hushUnreapedCursorSeatsIn(reg *claudia.Registry, include func(string) bool) {
 	if reg == nil {
 		return
 	}
 	for _, d := range reg.List() {
-		if d.Provider != claudia.ProviderCursor {
+		if d.Provider != claudia.ProviderCursor || (include != nil && !include(d.Name)) {
 			continue
 		}
 		if waitCursorStoreClear(d.SessionID, d.ConnectPID) {

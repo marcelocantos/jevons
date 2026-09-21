@@ -1130,11 +1130,20 @@ func main() {
 	// not reaped. Upgrade handoff is consumed so a later drain start
 	// is not mistaken for an upgrade — it no longer chooses the start
 	// method.
-	if reminted := upgrade.ReattachFleetContext(ctx, registry); len(reminted) > 0 {
-		slog.Error("bounce reminted session_ids — skipping full_brief on those seats",
-			"agents", reminted)
-		mcpSrv.NoteBounceRemint(reminted)
+	//
+	// 🎯T778: the overseer starts alone and first. The owner's chat must not
+	// wait on fleet seats — a Cursor seat's adopt can spend minutes on a
+	// broker timeout and lsof retries. The rest of the fleet starts after the
+	// cockpit converge loop is up (below), concurrently with a bound.
+	noteRemint := func(reminted []string) {
+		if len(reminted) > 0 {
+			slog.Error("bounce reminted session_ids — skipping full_brief on those seats",
+				"agents", reminted)
+			mcpSrv.NoteBounceRemint(reminted)
+		}
 	}
+	isOverseerSeat := func(name string) bool { return name == cfg.OverseerName }
+	noteRemint(upgrade.ReattachSeatsContext(ctx, registry, isOverseerSeat, 1))
 	if ctx.Err() != nil {
 		return
 	}
@@ -1304,10 +1313,33 @@ func main() {
 
 	// ð¯T204: cockpit converge â overseer Alive+Attach+turn-usable; fleet
 	// dead-handle recovery. Restart dual-path is T171 (not periodic ladder).
+	// 🎯T778: the fleet pass repairs dead seats, so it waits until the fleet
+	// has finished its own start; otherwise it would Launch a seat the
+	// reattach below is still about to adopt.
+	var fleetStarted atomic.Bool
 	srv.SetCockpitHooks(server.CockpitHooks{
-		Reconcile: mcpSrv.Reconcile, // 🎯T766.3: the one fleet pass
+		Reconcile: func() { // 🎯T766.3: the one fleet pass
+			if fleetStarted.Load() {
+				mcpSrv.Reconcile()
+			}
+		},
 	})
 	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
+
+	// 🎯T778: fleet seats start after, and independently of, the overseer
+	// and the converge loop. Bounded concurrency; a slow seat delays itself.
+	go func() {
+		defer fleetStarted.Store(true)
+		started := time.Now()
+		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
+			func(name string) bool { return !isOverseerSeat(name) },
+			upgrade.DefaultReattachConcurrency))
+		// Workers started here never passed through handleAgentStart, so
+		// wire their completion-notify now (🎯T61); the standing sweep
+		// (🎯T426) would also catch them, later.
+		mcpSrv.WireRunningAgents(cfg.OverseerName)
+		slog.Info("fleet start finished", "elapsed", time.Since(started).String())
+	}()
 
 	// ð¯T219: durable sentinel â continuous observeâclassifyâact while up.
 	// Pure watcher: control-plane repair / file+PO mission; no product implement; no Ship.

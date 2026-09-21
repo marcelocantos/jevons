@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/marcelocantos/claudia"
 )
@@ -26,9 +27,29 @@ func ReattachFleet(reg *claudia.Registry) []string {
 // Claudia. The compatibility path preserves the published dependency until its
 // next release; activation gates must exercise the contextual implementation.
 func ReattachFleetContext(ctx context.Context, reg *claudia.Registry) []string {
+	return ReattachSeatsContext(ctx, reg, nil, DefaultReattachConcurrency)
+}
+
+// DefaultReattachConcurrency bounds how many seats adopt or launch at once.
+// A seat's adopt can burn minutes on a broker timeout or lsof retries; serial
+// start made those add up (🎯T778: 5m46s to the converge loop with four
+// Cursor seats).
+const DefaultReattachConcurrency = 4
+
+// ReattachSeatsContext is [ReattachFleetContext] for the AutoStart seats
+// include accepts (nil accepts all), started concurrently, at most limit at a
+// time. Each seat is reaped, hushed and adopted on its own, so one slow seat
+// delays only itself. The boot calls it for the overseer alone, attaches the
+// chat and starts the cockpit converge loop, then calls it for the rest
+// (🎯T778). Names whose session_id changed are returned.
+func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include func(string) bool, limit int) []string {
 	if reg == nil {
 		return nil
 	}
+	if limit < 1 {
+		limit = 1
+	}
+	accepts := func(name string) bool { return include == nil || include(name) }
 	before := SessionSnapshot(reg)
 	releasePhantomCursorSessions(reg)
 	// Cursor ACP stdio cannot be adopted in-process. Without a claudia
@@ -37,22 +58,51 @@ func ReattachFleetContext(ctx context.Context, reg *claudia.Registry) []string {
 	// on a still-held store.db is 🎯T541.1. Seats that will not die
 	// lose AutoStart (fail loud). With a daemon, the leftover is the
 	// live seat and Launch reclaims it by name.
-	if !brokerAvailable() {
-		ReapCursorFleetLeftovers(reg)
-		reapOrphanCursorACP()
-		hushUnreapedCursorSeats(reg)
+	reapCursor := !brokerAvailable()
+	if reapCursor {
+		for _, d := range reg.List() {
+			if d.Provider == claudia.ProviderCursor && accepts(d.Name) {
+				reapOrphanCursorACP()
+				break
+			}
+		}
 	} else {
 		slog.Info("claudia daemon present; fleet seats are reclaimed, not reaped")
 	}
-	if ctx.Err() != nil {
-		return nil
+	var names []string
+	for _, d := range reg.List() {
+		if accepts(d.Name) {
+			names = append(names, d.Name)
+		}
 	}
-	if contextual, ok := any(reg).(interface{ StartAllPreferAdoptContext(context.Context) }); ok {
-		contextual.StartAllPreferAdoptContext(ctx)
-	} else {
-		slog.Warn("Claudia dependency lacks cancellable fleet startup; legacy startup may delay shutdown")
-		reg.StartAllPreferAdopt()
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for _, name := range names {
+		if ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(name string) {
+			defer func() { <-sem; wg.Done() }()
+			only := func(n string) bool { return n == name }
+			if reapCursor {
+				reapCursorLeftoversIn(reg, only)
+				hushUnreapedCursorSeatsIn(reg, only)
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			def := reg.Def(name)
+			if def == nil || !def.AutoStart {
+				return
+			}
+			if _, err := reg.AdoptOrLaunchContext(ctx, name); err != nil {
+				slog.Error("auto-start failed", "agent", name, "err", err)
+			}
+		}(name)
 	}
+	wg.Wait()
 	return SessionDriftNames(before, SessionSnapshot(reg))
 }
 
@@ -67,11 +117,15 @@ var brokerAvailable = claudia.BrokerAvailable
 // ReapCursorFleetLeftovers kills leftover writers on every registered
 // Cursor session store (persisted ConnectPID + anyone holding store.db).
 func ReapCursorFleetLeftovers(reg *claudia.Registry) {
+	reapCursorLeftoversIn(reg, nil)
+}
+
+func reapCursorLeftoversIn(reg *claudia.Registry, include func(string) bool) {
 	if reg == nil {
 		return
 	}
 	for _, d := range reg.List() {
-		if d.Provider != claudia.ProviderCursor {
+		if d.Provider != claudia.ProviderCursor || (include != nil && !include(d.Name)) {
 			continue
 		}
 		claudia.ReapCursorACPLeftovers(d.SessionID, d.ConnectPID)

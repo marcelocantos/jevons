@@ -30,7 +30,7 @@ func TestT627BootInstallsShutdownBeforeReattach(t *testing.T) {
 	body := string(src)
 	notify := strings.Index(body, "signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)")
 	shutdown := strings.Index(body, `slog.Info("shutting down"`)
-	reattach := strings.Index(body, "upgrade.ReattachFleetContext(ctx, registry)")
+	reattach := strings.Index(body, "upgrade.ReattachSeatsContext(ctx, registry, isOverseerSeat, 1)")
 	if notify < 0 || shutdown < 0 || reattach < 0 {
 		t.Fatal("boot lost shutdown or reattach markers")
 	}
