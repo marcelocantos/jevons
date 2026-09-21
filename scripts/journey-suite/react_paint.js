@@ -118,15 +118,37 @@ async function scenarioSend(page) {
   if (order.idxUser < 0) fail('T504', 'user bubble is not a .msg.user stream barrier');
 }
 
+// 14rem (224px) clip plus the pocket edge tab/padding.
+const CLIP_MAX_PX = 260;
+
 async function scenarioFoldMd(page) {
   // T106 pocket, T59 mermaid, T238 silent must not be an owner bubble.
   await requireIds(page, ['messages'], 'T106');
-  const clip = await page.locator('.msg.msg-clipped').count();
-  if (clip < 1) {
-    fail('T106', 'tall content must be a .msg.msg-clipped pocket (vanilla 14rem clip + edge tab)');
+  // A tall row in view auto-expands (T261/T341) and an expanded row drops
+  // .msg-clipped by design (AgentTranscript: expanded ? base : clipClassName),
+  // so the class alone is not the contract. The contract: tall content carries
+  // the edge tab, and collapsing it yields the 14rem .msg-clipped pocket.
+  const tall = page.locator('#messages .msg:has(> .msg-expand-tab)').filter({ hasText: 'TALL-CLIP-BODY' }).first();
+  if ((await tall.count()) < 1) {
+    fail('T106', 'tall content must carry the vanilla .msg-expand-tab (clipped or expanded)');
   }
-  const tab = await page.locator('.msg-expand-tab').count();
-  if (tab < 1) fail('T106', 'clipped pocket must carry the vanilla .msg-expand-tab');
+  const findTall = () => [...document.querySelectorAll('#messages .msg')].find((e) => (e.textContent || '').indexOf('TALL-CLIP-BODY') >= 0 && e.querySelector(':scope > .msg-expand-tab'));
+  if (!/\bmsg-clipped\b/.test((await tall.getAttribute('class')) || '')) {
+    await tall.locator(':scope > .msg-expand-tab').click();
+  }
+  // Class and height are read in one evaluation, so an auto re-expand between
+  // two reads cannot pass or fail the pocket on stale state.
+  const pocket = await page.waitForFunction((fn) => {
+    const el = new Function('return (' + fn + ')()')();
+    if (!el || !/\bmsg-clipped\b/.test(el.className)) return false;
+    return { h: el.getBoundingClientRect().height };
+  }, findTall.toString(), { timeout: 8000 }).then((h) => h.jsonValue()).catch(() => null);
+  if (!pocket) {
+    fail('T106', 'tall content must be a .msg.msg-clipped pocket once collapsed (vanilla 14rem clip + edge tab)');
+  }
+  if (pocket.h > CLIP_MAX_PX) {
+    fail('T106', 'clipped pocket is ' + Math.round(pocket.h) + 'px tall; want at most ' + CLIP_MAX_PX + 'px (14rem clip)');
+  }
   const mermaidOk = await page.waitForFunction(() => {
     return document.querySelectorAll('#messages svg, #messages .mermaid').length > 0;
   }, null, { timeout: 15000 }).then(() => true).catch(() => false);
