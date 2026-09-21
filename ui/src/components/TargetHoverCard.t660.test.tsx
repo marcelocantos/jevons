@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { act, render } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 // 🎯T660: a target hovercard's dependency minigraph stays a painted mermaid
@@ -48,9 +48,12 @@ beforeAll(async () => {
   resetPaintedHoverCards = mod.resetPaintedHoverCards;
 });
 
-async function settle() {
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 20));
+// 🎯T801: wait for the paint itself, not a fixed 20 ms window. The stub's 5 ms
+// timer plus React's effect and the async ensureMermaid chain can each be
+// starved past 20 ms on a loaded host, leaving the raw fence on screen.
+async function settle(container: HTMLElement) {
+  await waitFor(() => {
+    expect(container.querySelector('.mermaid-diagram svg')).not.toBeNull();
   });
 }
 
@@ -60,7 +63,7 @@ describe('TargetHoverCard mermaid stays painted (🎯T660)', () => {
     const first = render(<TargetHoverCard markdown={md} id="T659" />);
     // Before the async paint lands the fence is what there is.
     expect(first.container.querySelector('code.language-mermaid')).not.toBeNull();
-    await settle();
+    await settle(first.container);
     expect(first.container.querySelector('.mermaid-diagram svg')).not.toBeNull();
     expect(first.container.querySelector('code.language-mermaid')).toBeNull();
     const rendersAfterFirst = stub.renders;
@@ -71,7 +74,7 @@ describe('TargetHoverCard mermaid stays painted (🎯T660)', () => {
     const second = render(<TargetHoverCard markdown={md} id="T659" />);
     expect(second.container.querySelector('.mermaid-diagram svg')).not.toBeNull();
     expect(second.container.querySelector('code.language-mermaid')).toBeNull();
-    await settle();
+    await settle(second.container);
     expect(second.container.querySelector('.mermaid-diagram svg')).not.toBeNull();
     expect(second.container.querySelector('code.language-mermaid')).toBeNull();
     expect(stub.renders).toBe(rendersAfterFirst);
@@ -80,7 +83,7 @@ describe('TargetHoverCard mermaid stays painted (🎯T660)', () => {
   it('a re-render with a fresh but identical props object keeps the diagram', async () => {
     resetPaintedHoverCards();
     const view = render(<TargetHoverCard markdown={md} id="T659" />);
-    await settle();
+    await settle(view.container);
     expect(view.container.querySelector('.mermaid-diagram svg')).not.toBeNull();
     for (let i = 0; i < 5; i++) {
       view.rerender(<TargetHoverCard markdown={String(md)} id="T659" name={'tick ' + i} />);

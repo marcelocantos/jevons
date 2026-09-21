@@ -18,5 +18,12 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // 🎯T801: the suite runs beside a busy fleet (host load average >100).
+    // Fixed windows (vitest's 5 s, RTL's 1 s waitFor) measured the host, not
+    // the code. Timeouts are ceilings only: a passing wait returns as soon as
+    // its condition holds, so generous values cost nothing when idle.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
+    setupFiles: ['./src/test-setup-timeouts.ts'],
   },
 })
