@@ -6,6 +6,7 @@ package upgrade
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,6 +26,11 @@ var cursorStoreClearWait = 2 * time.Second
 // waitCursorStoreClear is a seam so fail-loud hermetics do not need an
 // unkillable leftover.
 var waitCursorStoreClear = waitCursorStoreClearImpl
+
+// namedCursorLeftovers is the same kind of seam for who holds the store: a
+// test that stubs the wait to "never clears" must also say whether anybody
+// can be named, because that is what decides latch versus retry.
+var namedCursorLeftovers = cursorLeftoverPIDs
 
 // GuardCursorStart wraps a Registry Start so a Cursor Launch cannot mint
 // a second ACP client while a leftover still holds store.db. Non-Cursor
@@ -56,6 +62,19 @@ func InstallCursorLaunchGuard(reg *claudia.Registry) {
 	})
 }
 
+// ErrCursorStoreUnconfirmed refuses one Launch because the store could not be
+// shown free, without naming anything that holds it. It is retriable and
+// deliberately does not wrap claudia.ErrCursorResumeDenied, which the
+// Registry latches until a restart.
+//
+// The two were one error until 2026-09-21. Bounding lsof (🎯T766) made "did
+// not answer in time" a routine outcome on a saturated host, and that outcome
+// was reported as "leftover cursor-agent [] still holds store" — a holder
+// list with nobody in it — and latched. The overseer stayed down for hours
+// behind a banner blaming a process that did not exist, while the same probe
+// answered in 0.3s with no holders.
+var ErrCursorStoreUnconfirmed = errors.New("could not confirm the cursor store is free")
+
 func refuseStackedCursorLaunch(cfg claudia.Config) error {
 	sid := cfg.SessionID
 	extra := cfg.ConnectPID
@@ -63,7 +82,18 @@ func refuseStackedCursorLaunch(cfg claudia.Config) error {
 	if waitCursorStoreClear(sid, extra) {
 		return nil
 	}
-	pids := cursorLeftoverPIDs(sid)
+	// Still fail closed for this Launch either way: a second ACP client on a
+	// store that may be held is 🎯T541.1. What differs is whether it latches.
+	pids, answered := namedCursorLeftovers(sid)
+	if len(pids) == 0 {
+		if answered {
+			// The holder the wait ran out on has since exited: lsof now says
+			// nobody holds the store, which is the wait's own test for clear.
+			return nil
+		}
+		return fmt.Errorf("session %s: %w (lsof did not answer within %s); this Launch is refused and will be retried",
+			sid, ErrCursorStoreUnconfirmed, lsofTimeout)
+	}
 	return fmt.Errorf("leftover cursor-agent %v still holds store for session %s: %w",
 		pids, sid, claudia.ErrCursorResumeDenied)
 }
@@ -99,17 +129,18 @@ func cursorLeftoversAlive(sessionID string) bool {
 	return false
 }
 
-func cursorLeftoverPIDs(sessionID string) []int {
+// cursorLeftoverPIDs names the holders. answered is false when lsof could
+// not say, which is not the same as an empty list.
+func cursorLeftoverPIDs(sessionID string) (out []int, answered bool) {
 	self := os.Getpid()
-	var out []int
-	pids, _ := storeWriterPIDs(claudia.CursorACPStorePath(sessionID))
+	pids, answered := storeWriterPIDs(claudia.CursorACPStorePath(sessionID))
 	for _, pid := range pids {
 		if pid <= 1 || pid == self {
 			continue
 		}
 		out = append(out, pid)
 	}
-	return out
+	return out, answered
 }
 
 // lsofTimeout bounds one holder check. lsof stats the open files of every
@@ -179,9 +210,18 @@ func hushUnreapedCursorSeats(reg *claudia.Registry) {
 		if waitCursorStoreClear(d.SessionID, d.ConnectPID) {
 			continue
 		}
+		leftovers, answered := namedCursorLeftovers(d.SessionID)
+		if len(leftovers) == 0 {
+			// Nobody to name. Turning AutoStart off is a durable write, and
+			// "lsof was slow at boot" must not outlive the boot; the Launch
+			// guard still refuses a stacked client when it matters.
+			slog.Warn("cursor store holder probe named nobody; leaving AutoStart alone",
+				"name", d.Name, "session", d.SessionID, "lsof_answered", answered)
+			continue
+		}
 		slog.Error("cursor leftover survived reap; refusing second ACP client",
 			"name", d.Name, "session", d.SessionID,
-			"pids", fmt.Sprint(cursorLeftoverPIDs(d.SessionID)))
+			"pids", fmt.Sprint(leftovers), "lsof_answered", answered)
 		d.AutoStart = false
 		if err := reg.Register(d); err != nil {
 			slog.Error("could not disable AutoStart on unreaped cursor seat",

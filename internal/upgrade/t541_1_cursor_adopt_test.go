@@ -38,9 +38,10 @@ func TestT541_1GuardSkipsNonCursor(t *testing.T) {
 }
 
 func TestT541_1GuardRefusesLaunchWhileLeftoverHoldsStore(t *testing.T) {
-	prev := waitCursorStoreClear
-	t.Cleanup(func() { waitCursorStoreClear = prev })
+	prev, prevNamed := waitCursorStoreClear, namedCursorLeftovers
+	t.Cleanup(func() { waitCursorStoreClear, namedCursorLeftovers = prev, prevNamed })
 	waitCursorStoreClear = func(string, int) bool { return false }
+	namedCursorLeftovers = func(string) ([]int, bool) { return []int{424242}, true }
 
 	starts := 0
 	start := GuardCursorStart(func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
@@ -141,12 +142,14 @@ func TestT541_1AdoptOrLaunchDoesNotStackWriters(t *testing.T) {
 }
 
 func TestT541_1ReattachFleetFailLoudDisablesAutoStart(t *testing.T) {
-	prevWait, prevOrphan := waitCursorStoreClear, reapOrphanCursorACP
+	prevWait, prevOrphan, prevNamed := waitCursorStoreClear, reapOrphanCursorACP, namedCursorLeftovers
 	t.Cleanup(func() {
 		waitCursorStoreClear = prevWait
 		reapOrphanCursorACP = prevOrphan
+		namedCursorLeftovers = prevNamed
 	})
 	waitCursorStoreClear = func(string, int) bool { return false }
+	namedCursorLeftovers = func(string) ([]int, bool) { return []int{424242}, true }
 	reapOrphanCursorACP = func() []int { return nil }
 
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))

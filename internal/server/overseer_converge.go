@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/upgrade"
 )
 
 // Cockpit convergence (🎯T204): desired state is a *usable* owner chat and
@@ -442,7 +444,13 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 	}
 	if err != nil {
 		state.mu.Lock()
-		state.attempts++
+		// A Launch refused only because the holder probe could not answer is
+		// the host being slow, not the overseer failing to start. Counting it
+		// spends the streak's attempts in 24s of load and lands in the same
+		// permanent degraded the unlatched error exists to avoid.
+		if !errors.Is(err, upgrade.ErrCursorStoreUnconfirmed) {
+			state.attempts++
+		}
 		if claudia.IsCursorResumeDenied(err) {
 			state.attempts = DefaultCockpitMaxAttempts
 		}
