@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"log/slog"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -44,6 +45,13 @@ const (
 	// (3s * 10 = 30s) so idle workers are pressured without a separate
 	// 1m-only loop owning the product path.
 	DefaultFleetHookEvery = 10
+	// DefaultOverseerPageAfter is how long the overseer may be down before
+	// the owner is paged out of band, once per outage (🎯T775).
+	DefaultOverseerPageAfter = 5 * time.Minute
+	// DefaultCockpitRearmAfter is how long a launch-exhausted give-up waits
+	// before the streak re-arms: the cause (load, a store holder) is
+	// presumed to have moved (🎯T775).
+	DefaultCockpitRearmAfter = 5 * time.Minute
 )
 
 // cockpitPhase is the pure next action for one observation.
@@ -123,6 +131,91 @@ func planCockpit(o cockpitObs, attempts, maxAttempts int, stuckTimeout time.Dura
 	return cockpitOK
 }
 
+// cockpitShouldRearm is the pure re-arm policy (🎯T775): a give-up is
+// never terminal. A resume-denied latch re-arms the moment it clears; a
+// launch-exhausted streak re-arms after rearmAfter.
+func cockpitShouldRearm(obs cockpitObs, attempts, maxAttempts int, gaveUpAt time.Time, gaveUpResumeDenied bool, now time.Time, rearmAfter time.Duration) bool {
+	if maxAttempts < 1 {
+		maxAttempts = DefaultCockpitMaxAttempts
+	}
+	if attempts < maxAttempts || obs.ResumeDenied || !obs.Registered {
+		return false
+	}
+	if gaveUpResumeDenied {
+		return true // the latch has cleared
+	}
+	return !gaveUpAt.IsZero() && now.Sub(gaveUpAt) >= rearmAfter
+}
+
+// overseerPageDecision is the pure paging policy (🎯T775): page once per
+// outage after the threshold; send one recovery when it ends.
+type overseerPageAction int
+
+const (
+	pageNone overseerPageAction = iota
+	pageDown
+	pageRecovered
+)
+
+func planOverseerPage(reason string, downSince time.Time, paged bool, now time.Time, after time.Duration) overseerPageAction {
+	if reason == "" {
+		if paged {
+			return pageRecovered
+		}
+		return pageNone
+	}
+	if !paged && !downSince.IsZero() && now.Sub(downSince) >= after {
+		return pageDown
+	}
+	return pageNone
+}
+
+// SetOverseerPager overrides the out-of-band pager (tests; default blurter).
+func (s *Server) SetOverseerPager(f func(subject, body, key string, recovered bool)) {
+	s.mu.Lock()
+	s.overseerPager = f
+	s.mu.Unlock()
+}
+
+// reconcileOverseerPage pages the owner out of band when the overseer has
+// been down past the threshold (🎯T775). Independent of any agent.
+func (s *Server) reconcileOverseerPage(now time.Time) {
+	s.mu.Lock()
+	reason, since, paged, pager := s.overseerDownReason, s.overseerDownSince, s.overseerPaged, s.overseerPager
+	act := planOverseerPage(reason, since, paged, now, DefaultOverseerPageAfter)
+	switch act {
+	case pageDown:
+		s.overseerPaged = true
+	case pageRecovered:
+		s.overseerPaged = false
+		s.overseerDownSince = time.Time{}
+	}
+	if reason == "" {
+		s.overseerDownSince = time.Time{}
+	}
+	s.mu.Unlock()
+	if pager == nil {
+		pager = blurterPage
+	}
+	switch act {
+	case pageDown:
+		pager("jevons: overseer down for "+now.Sub(since).Round(time.Minute).String(), reason, "jevons-overseer-down", false)
+	case pageRecovered:
+		pager("jevons: overseer is back", "the overseer recovered", "jevons-overseer-down", true)
+	}
+}
+
+func blurterPage(subject, body, key string, recovered bool) {
+	sev := "problem"
+	if recovered {
+		sev = "ok"
+	}
+	if err := exec.Command("blurter", "send", "--app", "jevons", "--severity", sev,
+		"--subject", subject, "--body", body, "--key", key).Run(); err != nil {
+		slog.Warn("overseer page: blurter send failed", "err", err)
+	}
+}
+
 // clearConnectEndpoint zeros durable serve fields on a def copy so Launch
 // cannot reattach to a killed endpoint after intentional stop/rotate.
 func clearConnectEndpoint(def claudia.AgentDef) claudia.AgentDef {
@@ -140,6 +233,10 @@ type cockpitState struct {
 	unstickCount int
 	tick         int
 	lastUnstick  time.Time
+	// gaveUpAt / gaveUpResumeDenied record the current give-up (🎯T775) so
+	// it can re-arm when its cause clears.
+	gaveUpAt           time.Time
+	gaveUpResumeDenied bool
 	// maxUnstickPerHour soft-cap before escalate-to-relaunch only.
 	maxUnstickBurst int
 }
@@ -228,9 +325,17 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 		state = &cockpitState{}
 	}
 	obs := s.ObserveCockpit()
+	now := time.Now()
 	state.mu.Lock()
+	if cockpitShouldRearm(obs, state.attempts, DefaultCockpitMaxAttempts, state.gaveUpAt, state.gaveUpResumeDenied, now, DefaultCockpitRearmAfter) {
+		slog.Info("cockpit: give-up re-armed; cause cleared", "resume_denied_cleared", state.gaveUpResumeDenied)
+		state.attempts = 0
+		state.gaveUpAt = time.Time{}
+		state.gaveUpResumeDenied = false
+	}
 	attempts := state.attempts
 	state.mu.Unlock()
+	defer s.reconcileOverseerPage(now)
 
 	phase := planCockpit(obs, attempts, DefaultCockpitMaxAttempts, s.stuckBusyTimeout())
 	state.mu.Lock()
@@ -255,11 +360,17 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 		if state.lastErr != "" {
 			reason = reason + ": " + state.lastErr
 		}
+		if state.gaveUpAt.IsZero() {
+			state.gaveUpAt = now
+		}
+		state.gaveUpResumeDenied = obs.ResumeDenied
+		retryAt := state.gaveUpAt.Add(DefaultCockpitRearmAfter)
 		state.mu.Unlock()
+		reason += "; retrying automatically at " + retryAt.Format("15:04")
 		if !obs.Registered {
 			reason = "overseer is not registered in the agent registry"
 		} else if obs.ResumeDenied {
-			reason = "overseer session exists but could not be loaded; refusing to mint a replacement"
+			reason = "overseer session exists but could not be loaded; refusing to mint a replacement (clears when the session loads again)"
 			s.mu.RLock()
 			reg := s.registry
 			name := s.overseerName

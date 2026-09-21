@@ -77,6 +77,9 @@ type Server struct {
 	// handoverSeeding is the single-flight guard for delivering a pending
 	// handover (🎯T285); guarded by mu.
 	handoverSeeding    bool
+	overseerDownSince  time.Time // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
+	overseerPaged      bool      // owner already paged for this outage (🎯T775); guarded by mu
+	overseerPager      func(subject, body, key string, recovered bool) // out-of-band pager (🎯T775); nil → blurter
 	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
 	// overseerOutageOpen is set when a degraded/down/stuck state has been
 	// broadcast and cleared by the one "overseer is back" that answers it
@@ -383,6 +386,9 @@ func (s *Server) SetOverseerDownReason(reason string) {
 	s.overseerDownReason = reason
 	if reason != "" {
 		s.overseerOutageOpen = true
+		if s.overseerDownSince.IsZero() {
+			s.overseerDownSince = time.Now()
+		}
 	}
 	s.mu.Unlock()
 	s.muxFanOverseerLevel()
