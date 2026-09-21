@@ -43,6 +43,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/seatload"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -78,6 +79,12 @@ type Server struct {
 	// seatLoad anchors each seat's process group while its root is alive,
 	// so a stop, a reap or a lost seat takes its detached background work
 	// with it (🎯T708). Lazily built; see seat_load.go.
+	// seats is the single answer to "what is true about this seat"
+	// (🎯T766.2). Controls read it instead of each deriving their own;
+	// see docs/fleet-census.md for the eleven derivations it replaces.
+	seatsOnce sync.Once
+	seats     *seatstate.Authority
+
 	seatLoadMu sync.Mutex
 	seatLoad   *seatload.Tracker
 
@@ -492,6 +499,17 @@ type Server struct {
 	// delivery failure of one entry becomes a pin. Guarded by mu.
 	sendqPin      map[string]SendqPin
 	sendqPinFails map[string]sendqEntryFails
+}
+
+// Seats is the seat-state authority (🎯T766.2): the single answer to what
+// is true about a seat, fed by the parties that know. Lazily built so a
+// Server assembled by a test has one without ceremony.
+func (s *Server) Seats() *seatstate.Authority {
+	if s == nil {
+		return nil
+	}
+	s.seatsOnce.Do(func() { s.seats = seatstate.New(seatstate.Args{}) })
+	return s.seats
 }
 
 // TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).

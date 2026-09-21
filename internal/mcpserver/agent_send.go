@@ -911,36 +911,67 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	return ended
 }
 
-// These exact pre-write refusals come from Claudia's Agent.Send and ACP / app-
-// server Prompt implementations. Unknown, canceled, EOF, and write errors may
-// follow submission. ClassifySendError's broader default is unsafe for retries.
 // queueSendDefinitelyNotSent reports whether a drain's send provably never
 // reached the receiver, so the entry goes back to Pending and is retried on
-// the next turn boundary.
+// the next turn boundary. The bias is deliberate and asymmetric: a false
+// "not sent" duplicates a delivery, a false "uncertain" only stalls one
+// entry behind a pin the owner can see. So doubt resolves to uncertain.
 //
-// 🎯T766: this used to be an exact-string switch over four provider literals
-// while the first-send path asked agenterr.IsPromptBusy, which matches on a
-// substring. Two classifiers for one question, and the drain held the strict
-// one. Every error from a broker-hosted seat arrives wrapped —
-// "broker protocol: agent_failed: cursor acp: prompt already in flight" —
-// so the switch matched nothing, the drain resolved Unverified, the queue
-// head became Uncertain, and ClaimFront refuses a non-Pending head forever.
-// One busy refusal froze a seat's whole queue with no automatic way out:
-// jevons-po sat at 87 stranded messages, the oldest fourteen hours old, while
-// the only exit anyone used was a reconcile that discards the payload.
+// 🎯T766: this question has been answered two wrong ways in a row, and both
+// were failures of the same kind — classifying prose.
 //
-// The comment at the call site already knew — it works around this for the
-// queued-behind-turn branch rather than fixing the classifier. So: one
-// classifier, shared with the send path. A busy refusal is backpressure, not
-// a poisoned queue.
+// It began as an exact-string switch over four provider literals. Every
+// error from a broker-hosted seat arrives wrapped as
+// "broker protocol: agent_failed: cursor acp: prompt already in flight",
+// which equals none of them, so a plain busy refusal was not "definitely not
+// sent": the entry resolved Unverified, the queue head became Uncertain, and
+// ClaimFront refuses a non-Pending head. One refusal froze a seat's entire
+// queue with no automatic exit — jevons-po sat at 87 stranded messages, the
+// oldest fourteen hours old, and the only exit anyone used was a reconcile
+// that discards the payload.
+//
+// Replacing it with agenterr.IsPromptBusy, which matches on substring,
+// bought the wrapping and sold the guarantee: "provider response quoted:
+// grok acp: prompt already in flight" is a report *about* a refusal, not a
+// refusal, and substring matching cannot tell those apart. Neither can any
+// other textual rule, because both strings are a prefix followed by the same
+// phrase. That is 🎯T623's own case, and it caught this.
+//
+// So this does not match text at all where it matters. It decodes the one
+// envelope whose format is defined — broker.ProtocolError.Error(), whose Msg
+// is the provider's own error verbatim — and compares that exactly. A quoted
+// report is not that envelope, so it stays uncertain; a wrapped refusal is,
+// so it retries.
+//
+// The real seam is claudia exporting a predicate over its typed
+// *broker.ProtocolError, which Go's internal/ rule puts out of reach from
+// here (🎯T767).
 func queueSendDefinitelyNotSent(err error) bool {
 	if err == nil {
 		return false
 	}
-	if agenterr.IsPromptBusy(err) {
+	switch providerRefusalText(err) {
+	case "claude process not running",
+		"grok acp: prompt already in flight", "cursor acp: prompt already in flight",
+		"codex app-server: turn already in flight":
 		return true
+	default:
+		return false
 	}
-	// A dead process cannot have taken the text either. Substring, for the
-	// same wrapping reason.
-	return strings.Contains(strings.ToLower(err.Error()), "process not running")
+}
+
+// brokerAgentFailedPrefix is how claudia renders a provider failure the
+// daemon relayed: broker.ProtocolError.Error() with Code CodeAgentFailed and
+// no Field. Msg after it is the provider's error, untouched.
+const brokerAgentFailedPrefix = "broker protocol: agent_failed: "
+
+// providerRefusalText returns the provider's own error message, unwrapping a
+// relayed broker failure. Anything else is returned as it stands, so a string
+// that merely mentions a refusal is compared as the whole string it is.
+func providerRefusalText(err error) string {
+	msg := err.Error()
+	if rest, ok := strings.CutPrefix(msg, brokerAgentFailedPrefix); ok {
+		return rest
+	}
+	return msg
 }

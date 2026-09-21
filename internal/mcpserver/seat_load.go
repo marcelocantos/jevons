@@ -8,6 +8,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/seatload"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // Seat-created background load dies with the seat (🎯T708).
@@ -159,11 +160,17 @@ func (s *Server) seatLoadSources() []capacity.LoadSource {
 	}
 	out := make([]capacity.LoadSource, 0, len(raw))
 	for _, src := range raw {
-		idle := true
-		if s.registry != nil {
-			if proc := s.registry.Get(src.Seat); proc != nil && proc.Alive() {
-				idle = !proc.PromptInFlight()
-			}
+		// 🎯T766.2: read the authority rather than deriving idleness here.
+		//
+		// This used to default to idle and then ask the registry, so a seat
+		// nothing was known about read as idle — and SeatIdle is what
+		// authorises LoadTerminate to kill a process group. An absence
+		// authorising a kill is the sharpest instance of the pattern the
+		// census catalogued. Unknown now means not-idle: the governor may
+		// starve a seat it cannot see, never terminate one.
+		idle := false
+		if st, ok := s.Seats().Get(src.Seat); ok && st.InFlight == seatstate.No {
+			idle = true
 		}
 		out = append(out, capacity.LoadSource{
 			Seat:       src.Seat,

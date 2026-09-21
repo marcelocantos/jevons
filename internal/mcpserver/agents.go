@@ -1277,6 +1277,10 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		}
 		// tool_use pauses are mid-turn (the worker will continue after tool
 		// results); only a terminal stop ends the turn and delivers.
+		// 🎯T766.2: the sink is the only place with sub-second knowledge of
+		// motion, so it feeds the authority. Every event proves the seat is
+		// alive and moved; a terminal stop additionally ends the turn.
+		s.Seats().FromTurnEvent(name, ev.IsTerminalStop(), time.Now())
 		if ev.IsTerminalStop() {
 			text := responseText.String()
 			responseText.Reset()
