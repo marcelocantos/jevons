@@ -163,6 +163,16 @@ func TestT765NonCommitTokensAreNotFixes(t *testing.T) {
 	}
 }
 
+// A DIRTY record quoted as GREEN is a misquote, not an accepted risk: the
+// accepted-risk sentence must not turn it into a marker (jevons-po review).
+func TestT765MisquotedDirtyIsRefusedEvenWithRisk(t *testing.T) {
+	r := t765Check("3dda2240; GATE t757 exit=0 GREEN id=5921e618. " +
+		"Accepted-risk: -clean cannot pass until ge ships SDL3 libs (ge T203).")
+	if r.Verdict != AchieveRefused || !t765HasFlag(r, FlagAttestationContradicted) {
+		t.Fatalf("misquoted DIRTY with risk: got %s", r)
+	}
+}
+
 // A gate id with no record behind it is refused and never marked, even with
 // an accepted-risk sentence: that is a run that did not happen.
 func TestT765UnknownIDIsRefusedEvenWithRisk(t *testing.T) {
@@ -263,5 +273,62 @@ targets:
 	}
 	if _, err := LedgerAchieves([]byte("targets: [")); err == nil {
 		t.Error("malformed ledger must be an error")
+	}
+}
+
+// A reopened target's reverted achieve is history: it is still judged and
+// reported, but only a live achieved row can be a standing false closure.
+func TestT765LedgerSplitsLiveFromHistorical(t *testing.T) {
+	ledger := []byte(`targets:
+  T752:
+    status: achieved
+    achieved: 2026-09-21
+    attestation: 'GATE t752-head GREEN id=aefad0ae tree=clean@6efff2ce'
+  T757:
+    status: converging
+    context: |-
+      Achieved 2026-09-21: 3dda2240; bin/gate -clean go test (GREEN).
+
+      Reverted 2026-09-21: false green.
+  T760:
+    status: converging
+    attestation: 'Landed 3dda2240. GATE go-test exit=0 GREEN (clean gate pending).'
+  T799:
+    status: achieved
+    achieved: 2026-09-21
+    attestation: '3dda2240; GATE t799 exit=0 DIRTY id=5921e618'
+`)
+	achieves, err := LedgerAchieves(ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs := t765Records()
+	args := &LedgerCheckArgs{
+		Achieves: achieves,
+		Lookup:   func(id string) (*Record, bool) { r, ok := recs[id]; return r, ok },
+		Contains: t765Contains,
+	}
+	live, hist := CheckLedger(args)
+	ids := func(cs []LedgerCheck) (out []string) {
+		for _, c := range cs {
+			out = append(out, c.Achieve.ID+":"+string(c.Result.Verdict))
+		}
+		return out
+	}
+	if got := strings.Join(ids(live), " "); got != "T752:verified T799:refused" {
+		t.Errorf("live = %s", got)
+	}
+	if got := strings.Join(ids(hist), " "); got != "T757:refused T760:refused" {
+		t.Errorf("historical = %s", got)
+	}
+	if n := CountVerdict(live, AchieveRefused); n != 1 {
+		t.Errorf("live refused = %d, want 1 (T799 only)", n)
+	}
+	// With the standing false closure fixed, the historical refusals remain
+	// reported but no live one does: the walk would pass.
+	args.ID = "T757"
+	live, hist = CheckLedger(args)
+	if len(live) != 0 || CountVerdict(hist, AchieveRefused) != 1 {
+		t.Errorf("T757 alone: live=%v hist=%v", ids(live), ids(hist))
 	}
 }

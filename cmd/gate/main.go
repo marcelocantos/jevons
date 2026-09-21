@@ -493,7 +493,8 @@ func gitRootNear(path string) string {
 // ledger attestation — the artifact that actually retires a target — passed
 // through nothing.
 //
-// Exits 4 when any achieve is refused. A marked achieve (accepted risk about
+// Exits 4 when any live achieve is refused; historical refusals are reported
+// in their own section. A marked achieve (accepted risk about
 // the gate itself) is printed with its marker and does not fail the walk:
 // the marker is the visible record, and failing on it would make repos where
 // -clean cannot pass un-closable.
@@ -536,33 +537,32 @@ func cmdCheckLedger(args []string, storeDir string) int {
 		// code. An unresolvable sha answers false: stricter, never looser.
 		return exec.Command("git", "-C", root, "merge-base", "--is-ancestor", fix, code).Run() == nil
 	}
-	id := strings.TrimPrefix(*only, "🎯")
-	checked, refused, marked := 0, 0, 0
-	for _, a := range achieves {
-		if id != "" && a.ID != id {
-			continue
-		}
-		if *since != "" && a.Date < *since {
-			continue
-		}
-		r := gate.CheckAchieve(&gate.AchieveCheckArgs{
-			Attestation: a.Attestation,
-			Lookup:      store.Lookup,
-			Contains:    contains,
-			IsCommit: func(sha string) bool {
-				return exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", sha+"^{commit}").Run() == nil
-			},
-		})
-		checked++
-		switch r.Verdict {
-		case gate.AchieveRefused:
-			refused++
-		case gate.AchieveMarked:
-			marked++
-		}
-		fmt.Printf("%s %s (%s): %s\n", a.ID, a.Date, a.Source, r)
+	live, historical := gate.CheckLedger(&gate.LedgerCheckArgs{
+		Achieves: achieves,
+		ID:       strings.TrimPrefix(*only, "🎯"),
+		Since:    *since,
+		Lookup:   store.Lookup,
+		Contains: contains,
+		IsCommit: func(sha string) bool {
+			return exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", sha+"^{commit}").Run() == nil
+		},
+	})
+	fmt.Println("live achieves (achieved targets' current attestation):")
+	for _, c := range live {
+		fmt.Printf("%s %s: %s\n", c.Achieve.ID, c.Achieve.Date, c.Result)
 	}
-	fmt.Printf("\n%d achieve(s) checked: %d refused, %d marked\n", checked, refused, marked)
+	// History is reported, not failed on: a reverted false green is a
+	// corrected specimen, and an audit that failed on it forever would be
+	// read as noise and skipped (🎯T760's lesson).
+	fmt.Println("\nhistorical achieves (reverted, or on a target since reopened):")
+	for _, c := range historical {
+		fmt.Printf("%s %s (%s, now %s): %s\n",
+			c.Achieve.ID, c.Achieve.Date, c.Achieve.Source, c.Achieve.Status, c.Result)
+	}
+	refused := gate.CountVerdict(live, gate.AchieveRefused)
+	fmt.Printf("\nlive: %d checked, %d refused, %d marked; historical: %d checked, %d refused\n",
+		len(live), refused, gate.CountVerdict(live, gate.AchieveMarked),
+		len(historical), gate.CountVerdict(historical, gate.AchieveRefused))
 	if refused > 0 {
 		return exitFlagged
 	}

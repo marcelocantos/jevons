@@ -184,6 +184,17 @@ func CheckAchieve(args *AchieveCheckArgs) AchieveResult {
 			})
 			continue
 		}
+		// A misquote is checked before the verdict: a DIRTY record cited as
+		// GREEN must carry the contradiction, which withRisk never marks, so
+		// an accepted-risk sentence cannot launder it into a marker.
+		if citedVerdict != "" && Verdict(citedVerdict) != rec.Verdict {
+			flags = append(flags, Flag{
+				Kind: FlagAttestationContradicted,
+				Detail: fmt.Sprintf("the attestation says %s, gate record %s says %s",
+					citedVerdict, id, rec.Verdict),
+				Evidence: raw,
+			})
+		}
 		if !rec.Verdict.IsGreen() || rec.Status() != "0" {
 			// DIRTY lands here: T386 / T396 make GREEN the only citable
 			// verdict, and a dirty pass did not measure the commit.
@@ -192,15 +203,6 @@ func CheckAchieve(args *AchieveCheckArgs) AchieveResult {
 				Detail: fmt.Sprintf(
 					"gate record %s is exit=%s %s — GREEN is the only verdict that can close a target",
 					id, rec.Status(), rec.Verdict),
-				Evidence: raw,
-			})
-			continue
-		}
-		if citedVerdict != "" && Verdict(citedVerdict) != rec.Verdict {
-			flags = append(flags, Flag{
-				Kind: FlagAttestationContradicted,
-				Detail: fmt.Sprintf("the attestation says %s, gate record %s says %s",
-					citedVerdict, id, rec.Verdict),
 				Evidence: raw,
 			})
 			continue
@@ -280,7 +282,16 @@ type LedgerAchieve struct {
 	ID          string
 	Date        string
 	Source      string // "attestation" or "context"
+	Status      string // the target's current status
 	Attestation string
+}
+
+// Live reports whether this achieve is what currently retires its target: the
+// attestation of a target whose status is achieved. A paragraph kept in
+// context, or an attestation left on a target since reopened, is history —
+// still worth naming, but not something today's ledger rests on.
+func (a LedgerAchieve) Live() bool {
+	return a.Source == "attestation" && a.Status == "achieved"
 }
 
 // contextAchieveRe matches an achieve paragraph bullseye appends to context.
@@ -291,6 +302,7 @@ var contextAchieveRe = regexp.MustCompile(`(?ms)^Achieved (\d{4}-\d{2}-\d{2}): (
 func LedgerAchieves(data []byte) ([]LedgerAchieve, error) {
 	var ledger struct {
 		Targets map[string]struct {
+			Status      string `yaml:"status"`
 			Achieved    string `yaml:"achieved"`
 			Attestation string `yaml:"attestation"`
 			Context     string `yaml:"context"`
@@ -306,14 +318,14 @@ func LedgerAchieves(data []byte) ([]LedgerAchieve, error) {
 	for id, t := range ledger.Targets {
 		live := strings.TrimSpace(t.Attestation)
 		if live != "" {
-			out = append(out, LedgerAchieve{ID: id, Date: t.Achieved, Source: "attestation", Attestation: live})
+			out = append(out, LedgerAchieve{ID: id, Date: t.Achieved, Source: "attestation", Status: t.Status, Attestation: live})
 		}
 		for _, m := range contextAchieveRe.FindAllStringSubmatch(t.Context, -1) {
 			text := strings.TrimSpace(m[2])
 			if text == live {
 				continue // bullseye mirrors the live attestation into context
 			}
-			out = append(out, LedgerAchieve{ID: id, Date: m[1], Source: "context", Attestation: text})
+			out = append(out, LedgerAchieve{ID: id, Date: m[1], Source: "context", Status: t.Status, Attestation: text})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -323,4 +335,62 @@ func LedgerAchieves(data []byte) ([]LedgerAchieve, error) {
 		return out[i].Date < out[j].Date
 	})
 	return out, nil
+}
+
+// LedgerCheck is one achieve and what CheckAchieve concluded about it.
+type LedgerCheck struct {
+	Achieve LedgerAchieve
+	Result  AchieveResult
+}
+
+// LedgerCheckArgs is the input to CheckLedger.
+type LedgerCheckArgs struct {
+	Achieves []LedgerAchieve
+	// ID and Since narrow the walk: one target, or achieves dated on or after
+	// Since (YYYY-MM-DD). Empty means no narrowing.
+	ID    string
+	Since string
+	// Lookup, Contains and IsCommit are passed to CheckAchieve.
+	Lookup   func(id string) (*Record, bool)
+	Contains func(code, fix string) bool
+	IsCommit func(sha string) bool
+}
+
+// CheckLedger runs CheckAchieve over a ledger's achieves and splits the
+// results into live and historical (see LedgerAchieve.Live). Only a refused
+// live achieve is a standing false closure; a refused historical one was a
+// false closure that has since been reversed, and counting both alike would
+// fail every audit forever on a specimen someone already corrected.
+func CheckLedger(args *LedgerCheckArgs) (live, historical []LedgerCheck) {
+	for _, a := range args.Achieves {
+		if args.ID != "" && a.ID != args.ID {
+			continue
+		}
+		if args.Since != "" && a.Date < args.Since {
+			continue
+		}
+		c := LedgerCheck{Achieve: a, Result: CheckAchieve(&AchieveCheckArgs{
+			Attestation: a.Attestation,
+			Lookup:      args.Lookup,
+			Contains:    args.Contains,
+			IsCommit:    args.IsCommit,
+		})}
+		if a.Live() {
+			live = append(live, c)
+		} else {
+			historical = append(historical, c)
+		}
+	}
+	return live, historical
+}
+
+// CountVerdict counts the checks with verdict v.
+func CountVerdict(checks []LedgerCheck, v AchieveVerdict) int {
+	n := 0
+	for _, c := range checks {
+		if c.Result.Verdict == v {
+			n++
+		}
+	}
+	return n
 }
