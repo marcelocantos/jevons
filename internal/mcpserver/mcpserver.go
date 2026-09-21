@@ -842,7 +842,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 		bootAt:     time.Now(),
 	}
 
-	mcpSrv := server.NewMCPServer("jevons", "1.0.0")
+	mcpSrv := server.NewMCPServer("jevons", "1.0.0", server.WithToolFilter(filterToolsByProfile))
 	s.mcpSrv = mcpSrv
 
 	if s.screenshot != nil {
@@ -882,7 +882,8 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerSendqReconcileTool() // 🎯T726: the legal move out of PINNED
 	s.registerSpawnOrderTools()    // 🎯T762: which half of a spawn order was dropped
 
-	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
+	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true),
+		server.WithHTTPContextFunc(toolProfileFromRequest))
 	return s
 }
 
