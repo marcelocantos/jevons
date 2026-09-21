@@ -177,9 +177,13 @@ type IdleNudgeObs struct {
 	// under that declaration is the wait, not a stall: nudging it produced
 	// six identical "still waiting" turns in forty seconds (jv-t555.1).
 	WaitingOnGate bool
-	IdleThreshold time.Duration // 0 → DefaultIdleNudgeThreshold
-	MaxNudges     int           // 0 → DefaultIdleNudgeMax
-	Backoffs      []time.Duration
+	// TurnInFlight: send-path flightState == FlightInFlight (🎯T761).
+	TurnInFlight bool
+	// HasStoredTerminal: daemon stored finish-report or scout-report (🎯T761).
+	HasStoredTerminal bool
+	IdleThreshold     time.Duration // 0 → DefaultIdleNudgeThreshold
+	MaxNudges         int           // 0 → DefaultIdleNudgeMax
+	Backoffs          []time.Duration
 }
 
 // ClassifyIdleNudge decides skip | nudge | maxed for one agent.
@@ -202,8 +206,14 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	if o.SessionReminted {
 		return IdleNudgeSkip, "bounce_remint"
 	}
+	if o.HasStoredTerminal {
+		return IdleNudgeSkip, "stored_terminal_report"
+	}
 	if o.LooksFinished {
 		return IdleNudgeSkip, "achieved_should_reap"
+	}
+	if o.TurnInFlight {
+		return IdleNudgeSkip, IdleSkipInProgress
 	}
 	if o.DesignGated {
 		return IdleNudgeSkip, "design_gated"
@@ -740,6 +750,8 @@ type IdleNudgeSweepArgs struct {
 	MissionOpen func(targetID string) bool
 	// LastTerminalReport optional: name → last terminal text for LooksFinished.
 	LastTerminalReport func(name string) string
+	// TurnInFlight optional: send-path flight ledger (🎯T761). Nil = not in flight.
+	TurnInFlight func(name string) bool
 	// MissionAcceptance optional: targetID → acceptance text for full brief.
 	MissionAcceptance func(targetID string) string
 	// HostLoadCritical is optional: reports whether the host's run queue is
@@ -905,10 +917,14 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 		hasMission = true
 	}
 
+	var reportText string
 	looksFinished := false
+	hasStoredTerminal := false
 	if args.LastTerminalReport != nil {
-		if r := args.LastTerminalReport(d.Name); r != "" {
-			looksFinished = LooksLikeFinishedWorkReport(r)
+		reportText = args.LastTerminalReport(d.Name)
+		hasStoredTerminal, looksFinished = storedTerminalFromReport(reportText)
+		if !hasStoredTerminal && reportText != "" {
+			looksFinished = LooksLikeFinishedWorkReport(reportText)
 		}
 	}
 
@@ -935,25 +951,27 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	}
 
 	obs := IdleNudgeObs{
-		Name:             d.Name,
-		Purpose:          purpose,
-		FleetIntent:      args.Intent.FleetState(),
-		Intent:           args.Intent.AgentState(d.Name),
-		ProcessRunning:   running,
-		DeliberateStop:   deliberateStop,
-		Phase:            phase,
-		IdleFor:          idleFor,
-		HostLoadCritical: args.HostLoadCritical != nil && args.HostLoadCritical(),
-		HasOpenMission:   hasMission,
-		DesignGated:      designGated,
-		LooksFinished:    looksFinished,
-		BriefPresent:     briefPresent,
-		NudgeCount:       count,
-		SinceLastNudge:   since,
-		EverNudged:       ever,
-		PostRestart:      args.PostRestart,
-		SessionReminted:  args.SessionReminted != nil && args.SessionReminted(d.Name),
-		WaitingOnGate:    DeclaresBlockingGateWait(act.LastTerminal),
+		Name:              d.Name,
+		Purpose:           purpose,
+		FleetIntent:       args.Intent.FleetState(),
+		Intent:            args.Intent.AgentState(d.Name),
+		ProcessRunning:    running,
+		DeliberateStop:    deliberateStop,
+		Phase:             phase,
+		IdleFor:           idleFor,
+		HostLoadCritical:  args.HostLoadCritical != nil && args.HostLoadCritical(),
+		HasOpenMission:    hasMission,
+		DesignGated:       designGated,
+		LooksFinished:     looksFinished,
+		BriefPresent:      briefPresent,
+		NudgeCount:        count,
+		SinceLastNudge:    since,
+		EverNudged:        ever,
+		PostRestart:       args.PostRestart,
+		SessionReminted:   args.SessionReminted != nil && args.SessionReminted(d.Name),
+		WaitingOnGate:     DeclaresBlockingGateWait(act.LastTerminal),
+		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
+		HasStoredTerminal: hasStoredTerminal,
 	}
 	action, reason := ClassifyIdleNudge(obs)
 	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
@@ -1332,8 +1350,11 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		MissionOpen:        hooks.MissionOpen,
 		DesignGated:        hooks.DesignGated,
 		LastTerminalReport: hooks.LooksSatisfied,
-		ProcessRunning:     deps.Running,
-		Intent:             s.fleetIntent(),
+		TurnInFlight: func(name string) bool {
+			return s.flightState(name) == FlightInFlight
+		},
+		ProcessRunning: deps.Running,
+		Intent:         s.fleetIntent(),
 		Eligible: func(d claudia.AgentDef) bool {
 			// 🎯T244: unbound PO/boss with no work children is standing idle.
 			// 🎯T330: PO/boss with engaged implementers is sleep-OK (no thrash).
@@ -1388,6 +1409,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	s.mu.Lock()
 	activity := s.idleActivity
 	ledger := s.idleNudgeLedger
+	hooks := s.idlePressureHooks
 	s.mu.Unlock()
 	if activity == nil {
 		activity = NewIdleActivityTracker()
@@ -1413,15 +1435,21 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
-		Reg:             s.registry,
-		Activity:        activity,
-		Ledger:          ledger,
-		Push:            push,
-		Interrupt:       interruptFn,
-		Now:             time.Now(),
-		OverseerName:    overseer,
-		StuckTimeout:    DefaultFleetStuckTimeout,
-		SessionReminted: s.bounceReminted,
+		Reg:                s.registry,
+		Activity:           activity,
+		Ledger:             ledger,
+		Push:               push,
+		Interrupt:          interruptFn,
+		Now:                time.Now(),
+		OverseerName:       overseer,
+		StuckTimeout:       DefaultFleetStuckTimeout,
+		SessionReminted:    s.bounceReminted,
+		LastTerminalReport: hooks.LooksSatisfied,
+		MissionOpen:        hooks.MissionOpen,
+		DesignGated:        hooks.DesignGated,
+		TurnInFlight: func(name string) bool {
+			return s.flightState(name) == FlightInFlight
+		},
 		// 🎯T585: an exhausted model is moved down its ladder rather than
 		// re-briefed forever. Asserted rather than added to Migrator so
 		// existing implementors (and test fakes) stay valid; a migrator
@@ -1519,6 +1547,11 @@ func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, missionOpen)
 	intent := s.fleetIntent()
 	openMission := HasOpenMissionForIdle(*def, missionOpen, workKids, engagedKids)
+	if suppress, reason := s.workerIdleSuppressReason(name); suppress {
+		slog.Info("worker-idle notification withheld — terminal or in-flight",
+			"agent", name, "reason", reason)
+		return
+	}
 	if !ShouldEmitWorkerIdle(prevPhase, nextPhase, def.Purpose, openMission,
 		intent.FleetState(), intent.AgentState(name)) {
 		if d := intent.Allow(name, fleetintent.ControlNotifyIdle); !d.Allow {

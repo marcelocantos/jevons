@@ -1257,6 +1257,9 @@ func main() {
 	// Unknown ledger row stays open (residual).
 	mcpSrv.SetIdlePressureHooks(mcpserver.IdlePressureHooks{
 		MissionOpen: mcpserver.NewLedgerMissionOpen(registry.List),
+		// 🎯T761: idle/stuck classifiers read the durable report store so a
+		// seat that already delivered finish-report/scout-report is not nudged.
+		LooksSatisfied: mcpserver.NewReportStoreLooksSatisfied(cfg.StateDir),
 		// ð¯T415: convergence gave up. The notice inside is deterministic
 		// and depends on no agent; the recovery agent it also dispatches
 		// is allowed to fail, including failing to spawn.

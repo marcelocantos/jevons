@@ -111,6 +111,12 @@ type Observation struct {
 	// provider began accepting calls again after a refusal wall — not
 	// because the agent produced mission work (🎯T454 clause 2).
 	ProviderResume bool
+	// StoredTerminalReport is true when the daemon stored a typed finish-report
+	// or scout-report for this seat (🎯T761).
+	StoredTerminalReport bool
+	// TurnInFlight is true when the send path knows a turn is in flight
+	// (🎯T761), same signal as jevons_agent_send's queued verdict.
+	TurnInFlight bool
 }
 
 const purposeWork = "work"
@@ -133,6 +139,9 @@ func ClassifyObservation(o Observation) (Condition, GapKind, string) {
 	if o.Reaped {
 		return ConditionSatisfied, "", "agent_reaped"
 	}
+	if o.StoredTerminalReport {
+		return ConditionSatisfied, "", "stored_terminal_report"
+	}
 	if o.DeliberateStop {
 		return ConditionOutOfScope, "", "deliberate_stop"
 	}
@@ -152,6 +161,9 @@ func ClassifyObservation(o Observation) (Condition, GapKind, string) {
 	// 🎯T565: a declared wait on a gate is progress in flight, not a gap.
 	if o.WaitingOnGate && o.ProcessRunning {
 		return ConditionSatisfied, "", "waiting_on_tracked_gate"
+	}
+	if o.TurnInFlight {
+		return ConditionSatisfied, "", "turn_in_flight"
 	}
 	// 🎯T454: refusal-only hold — phase=working is not satisfaction.
 	if o.RefusalHold {

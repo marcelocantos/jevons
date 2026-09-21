@@ -429,26 +429,35 @@ func (s *Server) observeForImpatience(
 	}
 
 	claimsDone := false
+	storedTerminal := false
 	if hooks.LooksSatisfied != nil {
 		if r := hooks.LooksSatisfied(d.Name); r != "" {
-			claimsDone = LooksLikeFinishedWorkReport(r)
+			var looksFinished bool
+			storedTerminal, looksFinished = storedTerminalFromReport(r)
+			if !storedTerminal {
+				claimsDone = LooksLikeFinishedWorkReport(r)
+			} else {
+				claimsDone = looksFinished
+			}
 		}
 	}
 
 	_ = now // reserved for future idle-age observation fields
 	return converge.Observation{
-		Name:            d.Name,
-		Purpose:         purpose,
-		Phase:           phase,
-		ProcessRunning:  running,
-		TargetID:        targetID,
-		MissionOpen:     missionOpen,
-		MissionClosed:   missionClosed,
-		DeliberateStop:  deliberateStop,
-		DesignGated:     designGated,
-		ClaimsDone:      claimsDone,
-		RefusalHold:     refusalHold && !substantivePulse,
-		SubstantiveTurn: substantivePulse,
-		WaitingOnGate:   waitingOnGate,
+		Name:                 d.Name,
+		Purpose:              purpose,
+		Phase:                phase,
+		ProcessRunning:       running,
+		TargetID:             targetID,
+		MissionOpen:          missionOpen,
+		MissionClosed:        missionClosed,
+		DeliberateStop:       deliberateStop,
+		DesignGated:          designGated,
+		ClaimsDone:           claimsDone,
+		RefusalHold:          refusalHold && !substantivePulse,
+		SubstantiveTurn:      substantivePulse,
+		WaitingOnGate:        waitingOnGate,
+		StoredTerminalReport: storedTerminal,
+		TurnInFlight:         s.flightState(d.Name) == FlightInFlight,
 	}
 }

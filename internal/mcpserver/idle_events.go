@@ -124,6 +124,28 @@ func FormatWorkerIdleText(w WorkerIdleRef) string {
 	return b.String()
 }
 
+// FormatWorkerIdleAmbiguousText builds a parent notice when a stored report
+// exists but is not a typed finish-report or scout-report — the classifier
+// cannot distinguish finished from stuck (🎯T761 clause 3). It must not
+// prescribe continue / re-brief / restart.
+func FormatWorkerIdleAmbiguousText(w WorkerIdleRef, detail string) string {
+	var b strings.Builder
+	b.WriteString("A work agent under you has a stored terminal report, but the product ")
+	b.WriteString("cannot tell whether it finished or is stuck.\n\n")
+	fmt.Fprintf(&b, "Worker: %s\n", strings.TrimSpace(w.Name))
+	if tid := strings.TrimSpace(strings.TrimPrefix(w.TargetID, "🎯")); tid != "" {
+		fmt.Fprintf(&b, "Target: 🎯%s\n", tid)
+	}
+	if detail != "" {
+		fmt.Fprintf(&b, "Detail: %s\n", strings.TrimSpace(detail))
+	}
+	b.WriteString("\nDo not auto-continue or re-brief from this notice alone. ")
+	b.WriteString("Inspect the stored report, verify oracle evidence, then reap, ")
+	b.WriteString("reopen, or intervene deliberately.\n")
+	b.WriteString(silentResponseInstruction)
+	return b.String()
+}
+
 // FormatDaemonRestartedText builds one parent- or overseer-facing restart brief
 // listing reattached work children (name, target_id, status/phase).
 func FormatDaemonRestartedText(parent string, workers []WorkerIdleRef) string {

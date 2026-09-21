@@ -126,6 +126,10 @@ type FleetRecoverObs struct {
 	// seat's provider and model; "" when there is nowhere to fall back
 	// to, in which case the classifier must not pretend there is.
 	FallbackModel string
+	// TurnInFlight: send-path flightState == FlightInFlight (🎯T761).
+	TurnInFlight bool
+	// HasStoredTerminal: daemon stored finish-report or scout-report (🎯T761).
+	HasStoredTerminal bool
 }
 
 // ClassifyFleetRecover decides skip | unstick | rebrief | maxed for one agent.
@@ -141,8 +145,14 @@ func ClassifyFleetRecover(o FleetRecoverObs) (FleetRecoverAction, string) {
 	if o.SessionReminted {
 		return FleetRecoverSkip, "bounce_remint"
 	}
+	if o.HasStoredTerminal {
+		return FleetRecoverSkip, "stored_terminal_report"
+	}
 	if o.LooksFinished {
 		return FleetRecoverSkip, "achieved_should_reap"
+	}
+	if o.TurnInFlight {
+		return FleetRecoverSkip, "in_progress"
 	}
 	if o.DesignGated {
 		return FleetRecoverSkip, "design_gated"
@@ -271,6 +281,8 @@ type FleetRecoverSweepArgs struct {
 	StuckTimeout time.Duration
 	// PromptInFlight: name → in flight. Nil → reg.Get(name).PromptInFlight().
 	PromptInFlight func(name string) bool
+	// TurnInFlight optional: send-path flight ledger (🎯T761). Nil = not in flight.
+	TurnInFlight func(name string) bool
 	// ProcessRunning optional override for hermetic tests.
 	ProcessRunning     func(name string) bool
 	BriefPresent       func(name string) bool
@@ -375,9 +387,13 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	}
 
 	looksFinished := false
+	hasStoredTerminal := false
 	if args.LastTerminalReport != nil {
 		if r := args.LastTerminalReport(d.Name); r != "" {
-			looksFinished = LooksLikeFinishedWorkReport(r)
+			hasStoredTerminal, looksFinished = storedTerminalFromReport(r)
+			if !hasStoredTerminal {
+				looksFinished = LooksLikeFinishedWorkReport(r)
+			}
 		}
 	}
 	briefPresent := false
@@ -390,33 +406,35 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		sameToolSince = now.Sub(act.ToolCallSince)
 	}
 	obs := FleetRecoverObs{
-		Name:             d.Name,
-		Purpose:          purpose,
-		ProcessRunning:   running,
-		DeliberateStop:   deliberateStop,
-		HasOpenMission:   hasMission,
-		DesignGated:      designGated,
-		LooksFinished:    looksFinished,
-		PromptInFlight:   inFlight,
-		SinceProgress:    since,
-		NeverProgressed:  never,
-		Phase:            act.Phase,
-		FailureClass:     act.FailureClass,
-		NeedsRecover:     act.NeedsRecover,
-		TerminalEmpty:    act.TerminalEmpty,
-		StuckTimeout:     args.StuckTimeout,
-		BriefPresent:     briefPresent,
-		RecoverCount:     count,
-		SinceLastRecov:   sinceRecov,
-		EverRecovered:    ever,
-		Backoffs:         DefaultFleetRecoverBackoffs,
-		SpawnClass:       isSpawnClassSeat(d.Name, purpose),
-		SameToolID:       act.ToolCallID,
-		SameToolSince:    sameToolSince,
-		SessionReminted:  args.SessionReminted != nil && args.SessionReminted(d.Name),
-		Model:            strings.TrimSpace(d.Model),
-		RateLimitStrikes: act.RateLimitStrikes,
-		FallbackModel:    modelladder.Next(string(d.Provider), d.Model),
+		Name:              d.Name,
+		Purpose:           purpose,
+		ProcessRunning:    running,
+		DeliberateStop:    deliberateStop,
+		HasOpenMission:    hasMission,
+		DesignGated:       designGated,
+		LooksFinished:     looksFinished,
+		PromptInFlight:    inFlight,
+		SinceProgress:     since,
+		NeverProgressed:   never,
+		Phase:             act.Phase,
+		FailureClass:      act.FailureClass,
+		NeedsRecover:      act.NeedsRecover,
+		TerminalEmpty:     act.TerminalEmpty,
+		StuckTimeout:      args.StuckTimeout,
+		BriefPresent:      briefPresent,
+		RecoverCount:      count,
+		SinceLastRecov:    sinceRecov,
+		EverRecovered:     ever,
+		Backoffs:          DefaultFleetRecoverBackoffs,
+		SpawnClass:        isSpawnClassSeat(d.Name, purpose),
+		SameToolID:        act.ToolCallID,
+		SameToolSince:     sameToolSince,
+		SessionReminted:   args.SessionReminted != nil && args.SessionReminted(d.Name),
+		Model:             strings.TrimSpace(d.Model),
+		RateLimitStrikes:  act.RateLimitStrikes,
+		FallbackModel:     modelladder.Next(string(d.Provider), d.Model),
+		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
+		HasStoredTerminal: hasStoredTerminal,
 	}
 	action, reason := ClassifyFleetRecover(obs)
 	kind := ClassifyIdleNudgeKind(briefPresent)
