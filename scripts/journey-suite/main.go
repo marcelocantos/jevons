@@ -106,23 +106,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	// Prefer repo bin/jevonsd when run from repo root.
-	daemon := *bin
-	if daemon == "" {
-		cand := filepath.Join(root, "bin", "jevonsd")
-		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
-			daemon = cand
-		} else {
-			daemon = "jevonsd"
-		}
-	}
-
-	// Resolve before the daemon changes into its throwaway working directory.
-	daemon, err = exec.LookPath(daemon)
-	if err != nil {
-		fatal(err)
-	}
-	daemon, err = filepath.Abs(daemon)
+	daemon, err := resolveDaemon(root, *bin, goBuildDaemon)
 	if err != nil {
 		fatal(err)
 	}

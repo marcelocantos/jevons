@@ -37,7 +37,11 @@ func (s *suite) startJ19ReactSurface() (*j19ReactSurface, error) {
 	if !j19HTMLIsVanilla(body) {
 		return &j19ReactSurface{host: s.host, via: "isolate"}, nil
 	}
-	return nil, fmt.Errorf("packaged isolate GET / is not React; no Vite or vanilla fallback is permitted")
+	head := string(body)
+	if len(head) > 200 {
+		head = head[:200]
+	}
+	return nil, fmt.Errorf("packaged isolate GET / is not React (%d bytes, starts %q); no Vite or vanilla fallback is permitted", len(body), head)
 }
 
 func fetchIsolateRoot(host string) ([]byte, error) {
