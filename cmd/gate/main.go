@@ -12,6 +12,7 @@
 //	bin/gate check report.md        # flag a finish report's false green
 //	bin/gate check report.json      # …same; JSON envelopes decode to text (🎯T468)
 //	bin/gate check < report.md      # …the same, from stdin
+//	bin/gate check-ledger [-id T765] [-since 2026-09-21]  # ledger achieves (🎯T765)
 //	bin/gate sweep [-void]          # records that attest nothing (🎯T441)
 //	bin/gate void <id> <reason>     # take one record out of the citable store
 //
@@ -123,17 +124,18 @@ func main() {
 }
 
 // subcommands is the allowlist. A word outside it is a typo, not a gate.
-var subcommands = []string{"last", "show", "check", "sweep", "void", "help"}
+var subcommands = []string{"last", "show", "check", "check-ledger", "sweep", "void", "help"}
 
 // usageForms is the shape each subcommand accepts, quoted back at a caller
 // whose arguments do not fit it. It lives next to the allowlist so that adding
 // a subcommand without saying how to call it is visibly incomplete.
 var usageForms = map[string]string{
-	"last":  "gate last",
-	"show":  "gate show <id>",
-	"check": "gate check [report-path]   (or: gate check < report)",
-	"sweep": "gate sweep [-void]",
-	"void":  "gate void <id> <reason>",
+	"last":         "gate last",
+	"show":         "gate show <id>",
+	"check":        "gate check [report-path]   (or: gate check < report)",
+	"check-ledger": "gate check-ledger [-ledger path] [-id Tn] [-since YYYY-MM-DD]",
+	"sweep":        "gate sweep [-void]",
+	"void":         "gate void <id> <reason>",
 }
 
 // refuseSurplus rejects arguments a known subcommand cannot honour (🎯T453).
@@ -204,6 +206,8 @@ func cmdSubcommand(args []string, storeDir string) int {
 		return cmdShow(storeDir, rest[0])
 	case "check":
 		return cmdCheck(storeDir, rest)
+	case "check-ledger":
+		return cmdCheckLedger(rest, storeDir)
 	case "sweep":
 		return cmdSweep(rest, storeDir)
 	case "void":
@@ -233,6 +237,7 @@ func usage() {
   gate last                             show the most recent run
   gate show <id>                        show one run
   gate check [report-path]              flag a finish report's false greens (stdin if no path)
+  gate check-ledger [-id Tn] [-since D] check ledger achieves' cited gates (🎯T765)
   gate sweep [-void]                    list records that attest nothing; -void quarantines them
   gate void <id> <reason>               take one record out of the citable store
 
@@ -479,4 +484,87 @@ func gitRootNear(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// cmdCheckLedger runs the achieve check over a bullseye ledger (🎯T765): each
+// cited gate id is resolved against the store, must be GREEN on a clean tree,
+// and must have measured a commit containing every commit the attestation
+// names. A finish report passed through FlagFalseGreen on the notify path; a
+// ledger attestation — the artifact that actually retires a target — passed
+// through nothing.
+//
+// Exits 4 when any achieve is refused. A marked achieve (accepted risk about
+// the gate itself) is printed with its marker and does not fail the walk:
+// the marker is the visible record, and failing on it would make repos where
+// -clean cannot pass un-closable.
+func cmdCheckLedger(args []string, storeDir string) int {
+	fs := flag.NewFlagSet("check-ledger", flag.ContinueOnError)
+	ledgerPath := fs.String("ledger", "bullseye.yaml", "ledger to walk")
+	only := fs.String("id", "", "check only this target id (e.g. T765)")
+	since := fs.String("since", "", "check only achieves dated on or after YYYY-MM-DD")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "  usage:", usageForms["check-ledger"])
+		return exitUsage
+	}
+	if fs.NArg() > 0 {
+		return refuseSurplus("check-ledger", fs.Args())
+	}
+	data, err := os.ReadFile(*ledgerPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gate check-ledger:", err)
+		return exitError
+	}
+	achieves, err := gate.LedgerAchieves(data)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gate check-ledger:", err)
+		return exitError
+	}
+	root := gitRootNear(*ledgerPath)
+	if root == "" {
+		// Without history the commit comparison cannot be made, and a walk
+		// that skipped it would vouch for exactly the 🎯T757 shape.
+		fmt.Fprintln(os.Stderr, "gate check-ledger: the ledger is not in a git work tree, so gate commits cannot be compared")
+		return exitError
+	}
+	store, err := gate.OpenStore(storeDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gate check-ledger:", err)
+		return exitError
+	}
+	contains := func(code, fix string) bool {
+		// Exit 0 only when fix resolves and is an ancestor of (or equals)
+		// code. An unresolvable sha answers false: stricter, never looser.
+		return exec.Command("git", "-C", root, "merge-base", "--is-ancestor", fix, code).Run() == nil
+	}
+	id := strings.TrimPrefix(*only, "🎯")
+	checked, refused, marked := 0, 0, 0
+	for _, a := range achieves {
+		if id != "" && a.ID != id {
+			continue
+		}
+		if *since != "" && a.Date < *since {
+			continue
+		}
+		r := gate.CheckAchieve(&gate.AchieveCheckArgs{
+			Attestation: a.Attestation,
+			Lookup:      store.Lookup,
+			Contains:    contains,
+			IsCommit: func(sha string) bool {
+				return exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", sha+"^{commit}").Run() == nil
+			},
+		})
+		checked++
+		switch r.Verdict {
+		case gate.AchieveRefused:
+			refused++
+		case gate.AchieveMarked:
+			marked++
+		}
+		fmt.Printf("%s %s (%s): %s\n", a.ID, a.Date, a.Source, r)
+	}
+	fmt.Printf("\n%d achieve(s) checked: %d refused, %d marked\n", checked, refused, marked)
+	if refused > 0 {
+		return exitFlagged
+	}
+	return 0
 }
