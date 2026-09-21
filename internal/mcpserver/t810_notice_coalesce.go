@@ -63,8 +63,8 @@ type noticeRecord810 struct {
 	DeliveredAt time.Time `json:"delivered_at"`
 	LastOffered time.Time `json:"last_offered"`
 	Saved       int       `json:"saved"`
-	// Unconfirmed marks a delivery the receiver's records never showed; it is
-	// retried after notifyReplayUnconfirmedGrace rather than held forever.
+	// Unconfirmed marks a delivery the receiver's records never showed; repeats
+	// are re-offered, uncounted, until confirmed or notifyReplayUnconfirmedGrace.
 	Unconfirmed bool `json:"unconfirmed,omitempty"`
 }
 
@@ -174,8 +174,13 @@ func (s *Server) coalesceNotice(key, line string) (coalesced bool, saved int) {
 	last := e.LastOffered
 	e.LastOffered = now
 	cleared := now.Sub(last) > NoticeClearedAfter
-	retry := e.Unconfirmed && now.Sub(e.DeliveredAt) >= notifyReplayUnconfirmedGrace
-	if e.Digest != digest || cleared || retry {
+	// An UNCONFIRMED first delivery has not been seen to land, so a repeat is
+	// re-offered (and never counted as saved) until one is confirmed. Bounded:
+	// past notifyReplayUnconfirmedGrace since the first unconfirmed copy it
+	// counts as landed, so a seat whose confirmation never shows is not
+	// re-notified forever.
+	reoffer := e.Unconfirmed && now.Sub(e.DeliveredAt) < notifyReplayUnconfirmedGrace
+	if e.Digest != digest || cleared || reoffer {
 		return false, e.Saved
 	}
 	e.Saved++
@@ -196,7 +201,14 @@ func (s *Server) noteNoticeDelivered(key, line string, confirmed bool) {
 		e = &noticeRecord810{}
 		c.entries[key] = e
 	}
-	e.Digest, e.DeliveredAt, e.LastOffered, e.Unconfirmed = NoticeMaterialDigest(line), now, now, !confirmed
+	digest := NoticeMaterialDigest(line)
+	// The bounded re-offer window runs from the FIRST unconfirmed copy of a
+	// digest; a re-offer that is again unconfirmed must not restart it.
+	firstUnconfirmed := !confirmed && e.Unconfirmed && e.Digest == digest
+	e.Digest, e.LastOffered, e.Unconfirmed = digest, now, !confirmed
+	if !firstUnconfirmed {
+		e.DeliveredAt = now
+	}
 	c.saveLocked()
 }
 
@@ -228,7 +240,9 @@ func (s *Server) FormatNoticeSavings() string {
 		keys = append(keys, k)
 		total += n
 	}
-	sort.Slice(keys, func(i, j int) bool { return saved[keys[i]] > saved[keys[j]] || saved[keys[i]] == saved[keys[j]] && keys[i] < keys[j] })
+	sort.Slice(keys, func(i, j int) bool {
+		return saved[keys[i]] > saved[keys[j]] || saved[keys[i]] == saved[keys[j]] && keys[i] < keys[j]
+	})
 	const shown = 5
 	parts := []string{}
 	for i, k := range keys {

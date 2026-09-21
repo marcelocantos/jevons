@@ -148,3 +148,66 @@ func TestT810OwnerSendsAreNeverCoalesced(t *testing.T) {
 		t.Fatal("owner sends touched the notice coalescer")
 	}
 }
+
+// 🎯T810 (PO check): an unconfirmed first delivery does not suppress repeats.
+// Repeats are re-offered, uncounted, until one is confirmed; saved counts start
+// from confirmation. Past the bounded window an unconfirmed copy counts as landed.
+func TestT810UnconfirmedFirstDeliveryIsReofferedUntilConfirmed(t *testing.T) {
+	ev := TurnEvidence{}
+	s := &Server{}
+	inbox := &overseerInbox{}
+	s.SetOverseerDeliver(inbox.deliver)
+	s.SetTurnWitness(func(string, string) turnWatch { return func() TurnEvidence { return ev } })
+	now := time.Date(2026, 9, 22, 4, 0, 0, 0, time.UTC)
+	s.SetNoticeCoalesceClock(func() time.Time { return now })
+	s.SetNotifyReplayClock(func() time.Time { return now })
+
+	// First delivery and three repeats, none confirmed: each is re-offered.
+	for i := range 4 {
+		s.notifyFleetHealth("k1", t810Stalled(1, fmt.Sprintf("2%d m", i)))
+		now = now.Add(40 * time.Second)
+	}
+	if got := s.NoticeSavedTurns()["k1"]; got != 0 {
+		t.Fatalf("saved=%d while unconfirmed; want 0 (repeats must be re-offered)", got)
+	}
+	if len(inbox.texts) < 4 {
+		t.Fatalf("delivered=%d want 4 re-offers while unconfirmed", len(inbox.texts))
+	}
+
+	// One copy is confirmed; later repeats are saved from there.
+	ev = TurnEvidence{Observed: true, PayloadSeen: true}
+	s.notifyFleetHealth("k1", t810Stalled(1, "26m0s"))
+	before := len(inbox.texts)
+	s.notifyFleetHealth("k1", t810Stalled(1, "27m0s"))
+	s.notifyFleetHealth("k1", t810Stalled(1, "28m0s"))
+	if len(inbox.texts) != before {
+		t.Fatalf("repeats after confirmation reached the overseer: %d -> %d", before, len(inbox.texts))
+	}
+	if got := s.NoticeSavedTurns()["k1"]; got != 2 {
+		t.Fatalf("saved=%d want 2 counted from confirmation", got)
+	}
+}
+
+func TestT810UnconfirmedCountsAsLandedAfterBoundedWindow(t *testing.T) {
+	s := &Server{}
+	inbox := &overseerInbox{}
+	s.SetOverseerDeliver(inbox.deliver)
+	s.SetTurnWitness(witnessYielding(TurnEvidence{}))
+	now := time.Date(2026, 9, 22, 4, 0, 0, 0, time.UTC)
+	s.SetNoticeCoalesceClock(func() time.Time { return now })
+	s.SetNotifyReplayClock(func() time.Time { return now })
+
+	s.notifyFleetHealth("k1", t810Stalled(1, "20m0s"))
+	now = now.Add(5 * time.Minute) // inside the window: re-offered, not saved
+	s.notifyFleetHealth("k1", t810Stalled(1, "21m0s"))
+	if got := s.NoticeSavedTurns()["k1"]; got != 0 {
+		t.Fatalf("saved=%d inside the re-offer window; want 0", got)
+	}
+	now = now.Add(notifyReplayUnconfirmedGrace) // past the window measured from the first copy
+	before := len(inbox.texts)
+	s.notifyFleetHealth("k1", t810Stalled(1, "22m0s"))
+	if len(inbox.texts) != before || s.NoticeSavedTurns()["k1"] != 1 {
+		t.Fatalf("past the bounded window the copy must count as landed: delivered %d->%d saved=%d",
+			before, len(inbox.texts), s.NoticeSavedTurns()["k1"])
+	}
+}
