@@ -35,6 +35,13 @@ func (s *suite) isolateDaemonEnv() []string {
 		// until a journey writes the fault file.
 		"JEVONS_TEST_FAULTS=1",
 	)
+	// 🎯T625.6: hermetic plan feed; the journey's own daemonEnv follows
+	// and, being later, overrides it.
+	planEnv, err := defaultPlanFixtureEnv(s.stateDir)
+	if err != nil {
+		panic(fmt.Sprintf("isolate plan fixture: %v", err))
+	}
+	env = append(env, planEnv)
 	return append(env, s.daemonEnv...)
 }
 

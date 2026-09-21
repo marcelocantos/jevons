@@ -8,46 +8,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
 func (s *suite) writePlanFixture(rem, used float64) (string, error) {
-	now := time.Now().UTC()
-	week := now.Add(3*24*time.Hour + 12*time.Hour)
-	lim := planusage.DefaultWeeklyWindowSeconds
-	snap := planusage.Snapshot{
-		At: now,
-		Backends: []planusage.Backend{{
-			Provider: "grok",
-			Status:   planusage.StatusAvailable,
-			Windows: []planusage.Window{{
-				Name:               planusage.WindowWeekly,
-				RemainingPercent:   &rem,
-				UsedPercent:        &used,
-				ResetsAt:           &week,
-				LimitWindowSeconds: &lim,
-			}},
-		}},
-	}
-	path := filepath.Join(s.stateDir, "plan-usage-fixture.json")
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return "", err
-	}
-	return path, os.WriteFile(path, b, 0o600)
+	return writePlanFixtureFile(s.stateDir, "plan-usage-j20.json", rem, used)
 }
 
 func (s *suite) j20PlanDest() error {
 	if s.host == "" || strings.HasSuffix(s.host, ":13705") {
 		return fmt.Errorf("J20 refuses development port")
 	}
-	// Ahead: burn 55/50 = 1.1. No dest → omit-provider must refuse.
-	path, err := s.writePlanFixture(45, 55)
+	// Ahead: used 70 => burn 1.4 (ahead is 1.0-1.5; 55 measured ok). No dest → omit-provider must refuse.
+	path, err := s.writePlanFixture(30, 70)
 	if err != nil {
 		return err
 	}
