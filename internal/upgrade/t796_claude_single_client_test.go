@@ -5,6 +5,7 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,5 +223,140 @@ func TestT796DaemonGrantWithUnknownWindowStopsNothing(t *testing.T) {
 	}
 	if len(claudeHolderPIDs(sidS)) != 2 {
 		t.Fatal("touched a holder without knowing which is the seat")
+	}
+}
+
+func withBroker(t *testing.T, up bool) {
+	t.Helper()
+	prev := brokerAvailable
+	t.Cleanup(func() { brokerAvailable = prev })
+	brokerAvailable = func() bool { return up }
+}
+
+// 🎯T796 03:19: grant_held made the daemon fall back to an in-process Launch
+// and the guard stopped the broker's own client. With a broker reachable a
+// holder is refused, never signalled, and nothing launches.
+func TestT796BrokerHeldSessionIsRefusedNotStopped(t *testing.T) {
+	withBroker(t, true)
+	rows := stubTable(t, stubRows(), nil)
+	start := GuardCursorStart(func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+		t.Fatal("launched a second client beside the broker's")
+		return nil, nil
+	})
+	_, err := start(context.Background(), claudia.Config{Provider: claudia.ProviderClaude, SessionID: sidS})
+	if !errors.Is(err, ErrClaudeHeldByBroker) {
+		t.Fatalf("err = %v, want ErrClaudeHeldByBroker", err)
+	}
+	if !claudeProcAlive(80623) || len(*rows) != 3 {
+		t.Fatalf("stopped the broker's client: %v", *rows)
+	}
+}
+
+// A broker is reachable but nobody holds the session: launch as normal.
+func TestT796BrokerUpFreeSessionLaunches(t *testing.T) {
+	withBroker(t, true)
+	stubTable(t, []claudeProc{{PID: 7001, Command: "/x/claude --resume other"}}, nil)
+	starts := 0
+	start := GuardCursorStart(func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+		starts++
+		return claudia.StartStub(ctx, cfg, nil)
+	})
+	a, err := start(context.Background(), claudia.Config{SessionID: sidS, WorkDir: t.TempDir(), TermLogPath: "-"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Stop)
+	if starts != 1 {
+		t.Fatalf("starts = %d", starts)
+	}
+}
+
+// 03:45:55: a second SIGHUP cancelled the boot's launch, and the dying daemon
+// still stopped the live client at 03:45:56. A cancelled launch stops nothing.
+func TestT796CancelledLaunchStopsNothing(t *testing.T) {
+	withBroker(t, false)
+	rows := stubTable(t, stubRows(), nil)
+	start := GuardCursorStart(func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+		t.Fatal("launched under a cancelled context")
+		return nil, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := start(ctx, claudia.Config{Provider: claudia.ProviderClaude, SessionID: sidS}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if !claudeProcAlive(80623) || len(*rows) != 3 {
+		t.Fatalf("a cancelled launch stopped a client: %v", *rows)
+	}
+}
+
+// The post-grant stop stands down when a broker is reachable: the other
+// holder may be the broker's own.
+func TestT796PostGrantStopStandsDownWithBroker(t *testing.T) {
+	withBroker(t, true)
+	rows := stubTable(t, []claudeProc{
+		{PID: 75806, PPID: 91440, Command: "/x/claude --resume " + sidS},
+		{PID: 28028, PPID: 500, Command: "/x/claude --resume " + sidS},
+	}, nil)
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.SetDirect(true)
+	reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+		return claudia.StartStub(ctx, cfg, nil)
+	}})
+	if err := reg.Register(claudia.AgentDef{Name: "po", WorkDir: t.TempDir(), SessionID: sidS,
+		Provider: claudia.ProviderClaude, AutoStart: true, TermLogPath: "-"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.AdoptOrLaunch("po"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reg.StopAll)
+	old := claudeWindowPanePIDs
+	t.Cleanup(func() { claudeWindowPanePIDs = old })
+	claudeWindowPanePIDs = func(string) []int { return []int{500} }
+	ReapClaudeStraysAfterGrant(reg, "po")
+	if len(*rows) != 2 {
+		t.Fatalf("stopped a holder with a broker up: %v", *rows)
+	}
+}
+
+// A refused launch is retried, not surfaced as a dead seat.
+func TestT796HeldRefusalIsRetriedThenAdopts(t *testing.T) {
+	withBroker(t, true)
+	pd, pr := heldRetryDelay, heldRetries
+	t.Cleanup(func() { heldRetryDelay, heldRetries = pd, pr })
+	heldRetryDelay, heldRetries = time.Millisecond, 5
+	rows := stubTable(t, stubRows(), nil)
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.SetDirect(true)
+	tries := 0
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: GuardCursorStart(func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			return claudia.StartStub(ctx, cfg, nil)
+		}),
+		Adopt: func(cfg claudia.Config) (*claudia.Agent, error) {
+			tries++
+			if tries < 3 {
+				return nil, errors.New("broker protocol: grant_held")
+			}
+			return claudia.StartStub(context.Background(), cfg, nil)
+		},
+	})
+	if err := reg.Register(claudia.AgentDef{Name: "po", WorkDir: t.TempDir(), SessionID: sidS,
+		Provider: claudia.ProviderClaude, AutoStart: true, TermLogPath: "-"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adoptOrLaunchRetryingHeld(context.Background(), reg, "po"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	t.Cleanup(reg.StopAll)
+	if !claudeProcAlive(80623) || len(*rows) != 3 {
+		t.Fatalf("the holder was stopped: %v", *rows)
 	}
 }

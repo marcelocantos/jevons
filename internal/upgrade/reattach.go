@@ -5,9 +5,11 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 )
@@ -97,7 +99,7 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 			if def == nil || !def.AutoStart {
 				return
 			}
-			if _, err := reg.AdoptOrLaunchContext(ctx, name); err != nil {
+			if _, err := adoptOrLaunchRetryingHeld(ctx, reg, name); err != nil {
 				slog.Error("auto-start failed", "agent", name, "err", err)
 				return
 			}
@@ -227,4 +229,30 @@ func SessionDriftNames(before, after map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// heldRetryDelay and heldRetries bound how long a seat waits for the broker's
+// grant to come free: the previous daemon's connection is still closing when
+// a restart's adopt is refused with grant_held (🎯T796).
+var (
+	heldRetryDelay = 2 * time.Second
+	heldRetries    = 10
+)
+
+// adoptOrLaunchRetryingHeld adopts a seat, and when the launch fallback is
+// refused because the broker's own client already holds the session, waits and
+// adopts again instead of stacking a second client.
+func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name string) (*claudia.Agent, error) {
+	for attempt := 0; ; attempt++ {
+		a, err := reg.AdoptOrLaunchContext(ctx, name)
+		if err == nil || !errors.Is(err, ErrClaudeHeldByBroker) || attempt >= heldRetries {
+			return a, err
+		}
+		slog.Warn("grant held by another connection; waiting to adopt", "agent", name, "attempt", attempt+1)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(heldRetryDelay):
+		}
+	}
 }

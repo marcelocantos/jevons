@@ -5,6 +5,7 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -103,6 +104,29 @@ func commandHoldsClaudeSession(command, sessionID string) bool {
 // when a holder survives SIGKILL. The stopped pids are returned for the log.
 func reapClaudeSessionHolders(sessionID string) ([]int, error) {
 	return stopClaudeHolders(sessionID, claudeHolderPIDs(sessionID))
+}
+
+// ErrClaudeHeldByBroker refuses an in-process Claude launch because a live
+// client already holds the session while a claudia broker is reachable. The
+// launch reached this Start seam only because the broker refused the grant
+// (grant_held: the previous daemon's connection was still closing), so the
+// holder is the broker's own client. Stopping it took the seat down at
+// 03:19:12 and left a second, broker-unknown client beside the next grant.
+var ErrClaudeHeldByBroker = errors.New("a claude client the broker owns already holds the session")
+
+// guardClaudeSession is the pre-launch half of the one-client guard. With a
+// broker reachable it never stops anything: a holder is refused (retriable,
+// see [ReattachSeatsContext]); a free session launches. Without a broker the
+// holders are strays of a previous daemon and are stopped.
+func guardClaudeSession(sessionID string) error {
+	if brokerAvailable() {
+		if h := claudeHolderPIDs(sessionID); len(h) > 0 {
+			return fmt.Errorf("%w: session %s pids %v; not launching a second client", ErrClaudeHeldByBroker, sessionID, h)
+		}
+		return nil
+	}
+	_, err := reapClaudeSessionHolders(sessionID)
+	return err
 }
 
 // claudeWindowPanePIDs returns the pane pids of a tmux window on claudia's
@@ -276,6 +300,13 @@ func ReapClaudeStraysAfterGrant(reg *claudia.Registry, name string) {
 	def := reg.Def(name)
 	proc := reg.Get(name)
 	if def == nil || proc == nil || !isClaudeProvider(def.Provider) || def.SessionID == "" {
+		return
+	}
+	// With a broker reachable the granted window's client is the broker's and
+	// so is any other holder it launched; the stop cannot tell them apart
+	// (the in-process fallback also lives on claudia's tmux socket), so it
+	// stands down. Strays are prevented at launch instead ([guardClaudeSession]).
+	if brokerAvailable() {
 		return
 	}
 	if _, err := reapClaudeStraysExcept(def.SessionID, proc.WindowID()); err != nil {

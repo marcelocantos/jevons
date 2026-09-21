@@ -46,8 +46,14 @@ func GuardCursorStart(start func(context.Context, claudia.Config) (*claudia.Agen
 			}
 		}
 		if isClaudeProvider(cfg.Provider) && cfg.SessionID != "" {
-			// 🎯T796: one live claude per session id.
-			if _, err := reapClaudeSessionHolders(cfg.SessionID); err != nil {
+			// 🎯T796: one live claude per session id. A launch that was
+			// cancelled (a second SIGHUP overtook this boot) must not stop
+			// anything: the dying daemon stopped the live client at
+			// 03:45:56 after its own launch was already cancelled.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if err := guardClaudeSession(cfg.SessionID); err != nil {
 				return nil, err
 			}
 		}
