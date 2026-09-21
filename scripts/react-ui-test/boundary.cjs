@@ -98,19 +98,41 @@ async function main() {
     const prompt = `Perform this short interaction check in order. First emit ${pre} as a visible commentary message, not just tool input. Then run exactly this shell command using your tool: node ${helper}. Wait for it to finish. Then reply with exactly ${post}. Do not read or change the helper or its files; the test harness releases it. Do not spawn agents.`;
     const owner = `Reply with exactly: ${ack}`;
     const start = frames.length;
+    // 🎯T813: the provider may end a turn without the visible PRE or the tool
+    // call. `attemptStart` scopes the ordering assertions to the current ask,
+    // so one recorded re-ask does not inherit the first attempt's terminal frame.
+    let attemptStart = start;
     until.diag = () => {
       const seen = {};
       for (const f of frames.slice(start)) { const k = `${f.ch || '?'}/${f.t || '?'}/${f.body?.event?.type || '-'}`; seen[k] = (seen[k] || 0) + 1; }
-      return `frames since submit (channel/t/event: n) ${JSON.stringify(seen)}; expected channel transcript:${name}; frames the page sent (t:ch): ${JSON.stringify(opened)}; url ${page.url()}`;
+      const said = frames.slice(start).filter(f => f.ch === `transcript:${name}` && f.body?.event?.type === 'assistant').slice(-3).map(f => `${terminal(f.body) ? 'terminal' : 'open'}:${JSON.stringify(content(f.body).slice(0, 120))}`);
+      return `assistant replies (last 3) ${JSON.stringify(said)}; frames since submit (channel/t/event: n) ${JSON.stringify(seen)}; expected channel transcript:${name}; frames the page sent (t:ch): ${JSON.stringify(opened)}; url ${page.url()}`;
     };
-    const events = () => frames.slice(start).filter(f => f.ch === `transcript:${name}` && f.t === 'frame');
+    const events = () => frames.slice(attemptStart).filter(f => f.ch === `transcript:${name}` && f.t === 'frame');
     const assistants = () => events().filter(f => f.body?.event?.type === 'assistant');
     await page.locator(input).fill(prompt);
     await page.locator(button).click();
     if (main) mainSubmittedAt = Date.now();
     if (process.env.BOUNDARY_SHOT) until.shot = () => page.screenshot({ path: process.env.BOUNDARY_SHOT });
     try {
-      const first = await until(() => assistants().find(f => content(f.body).includes(pre)), 'nonterminal PRE');
+      const preOrEnded = label => until(() => {
+        const list = assistants();
+        const seen = list.find(f => content(f.body).includes(pre));
+        // A PRE that arrives already terminal, or a turn that ends without one,
+        // is the provider skipping the tool call: not what the journey guards.
+        if (seen && !terminal(seen.body)) return seen;
+        return seen || list.some(f => terminal(f.body)) ? 'skipped' : null;
+      }, label);
+      let first = await preOrEnded('nonterminal PRE');
+      if (first === 'skipped') {
+        const said = assistants().slice(-3).map(f => JSON.stringify(content(f.body).slice(0, 160)));
+        console.log(`RETRY ${name}: provider ended its first turn without a visible PRE plus tool call (replies: ${said.join(' | ') || 'none'}); re-asking once`);
+        attemptStart = frames.length;
+        await page.locator(input).fill(`Your last reply did not follow the instructions. Do it now, in this order and nothing else. Step 1: write ${pre} as a visible message. Step 2: call your shell tool with exactly this command: node ${helper}. Step 3: after it returns, reply with exactly ${post}. Do not skip step 2.`);
+        await page.locator(button).click();
+        first = await preOrEnded('nonterminal PRE after one re-ask');
+        assert(first !== 'skipped', 'provider skipped the PRE plus tool call again after one re-ask');
+      }
       assert(!terminal(first.body), 'PRE must precede provider terminal');
       await until(async () => { try { return await fs.readFile(ready, 'utf8') === nonce; } catch { return false; } }, 'actual tool ready marker');
       assert(!assistants().some(f => terminal(f.body)), 'first response ended before owner interleaving');
