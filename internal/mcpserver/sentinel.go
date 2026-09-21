@@ -365,13 +365,11 @@ func (s *Server) runSentinelCycle(args SentinelLoopArgs) (staffops.CycleResult, 
 	// Act on classification (control-plane only).
 	switch res.Primary {
 	case staffops.ActionRepair:
-		s.TriggerFleetRecoverSweep()
-		s.TriggerIdleNudgeSweep()
+		s.Reconcile()
 		overseer := args.Overseer
 		if overseer == "" {
 			overseer = s.overseerName()
 		}
-		s.SweepFleetHealth(overseer)
 		act.Repaired = true
 		act.AuditNote = "control-plane repair: fleet recover + idle nudge + dead-handle health"
 		s.logLifecycle(compSentinel, "repair", "ok", map[string]any{

@@ -1313,8 +1313,7 @@ func main() {
 	// ð¯T204: cockpit converge â overseer Alive+Attach+turn-usable; fleet
 	// dead-handle recovery. Restart dual-path is T171 (not periodic ladder).
 	srv.SetCockpitHooks(server.CockpitHooks{
-		FleetHealth: func() { mcpSrv.SweepFleetHealth(cfg.OverseerName) },
-		FleetNudge:  func() { mcpSrv.TriggerIdleNudgeSweep() }, // health only
+		Reconcile: mcpSrv.Reconcile, // 🎯T766.3: the one fleet pass
 	})
 	srv.StartCockpitConverge(ctx, server.DefaultCockpitInterval)
 

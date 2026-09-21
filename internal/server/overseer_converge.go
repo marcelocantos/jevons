@@ -146,9 +146,8 @@ type cockpitState struct {
 // package server does not import mcpserver (🎯T204 fleet dimensions).
 type CockpitHooks struct {
 	// FleetHealth rehydrates/clears dead worker handles (SweepDeadAgents).
-	FleetHealth func()
-	// FleetNudge runs one idle-nudge sweep (T207 policy, not post-restart).
-	FleetNudge func()
+	// Reconcile runs the one fleet pass (🎯T766.3) on the cockpit tick.
+	Reconcile func()
 }
 
 // SetCockpitHooks registers fleet health/nudge actuators for the converge loop.
@@ -487,24 +486,14 @@ func (s *Server) runFleetHooks(state *cockpitState) {
 	s.mu.RLock()
 	h := s.cockpitHooks
 	s.mu.RUnlock()
-	if h.FleetHealth != nil {
+	if h.Reconcile != nil {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("cockpit: fleet health panic", "recover", r)
+					slog.Error("cockpit: reconcile panic", "recover", r)
 				}
 			}()
-			h.FleetHealth()
-		}()
-	}
-	if h.FleetNudge != nil {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("cockpit: fleet nudge panic", "recover", r)
-				}
-			}()
-			h.FleetNudge()
+			h.Reconcile()
 		}()
 	}
 }

@@ -4,7 +4,6 @@
 package mcpserver
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -184,26 +183,6 @@ func TestIdlePressureSweepRespectsMissionOpenHook(t *testing.T) {
 	// first, and the classifier repeats the check for callers without it.
 	if r := reportFor(reps, "jv-t315-pressure"); r.Reason != "not_open_mission" && r.Reason != "no_open_mission" {
 		t.Fatalf("want an open-mission skip, got %+v", r)
-	}
-}
-
-func TestRunIdlePressureLoopTicks(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ticks := make(chan struct{}, 4)
-	go runIdlePressureLoop(ctx, time.Millisecond, func() {
-		select {
-		case ticks <- struct{}{}:
-		default:
-		}
-	})
-	for i := 0; i < 2; i++ {
-		select {
-		case <-ticks:
-		case <-time.After(2 * time.Second):
-			t.Fatal("periodic actuator never ticked")
-		}
 	}
 }
 

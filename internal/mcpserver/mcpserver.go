@@ -425,9 +425,6 @@ type Server struct {
 	// different workers each buying a full coordinator turn. Nil means
 	// batching is off and every event delivers immediately.
 	wakeBatch *wakebatch.Batcher
-	// idleNudgeSweep is set by StartIdleNudgeLoop for cockpit fleet health
-	// (dead-handle sweep only — no auto-continue ladder).
-	idleNudgeSweep func(postRestart bool)
 
 	// turnDepth counts how deep each agent's current turn has run, and
 	// turnDepthPolicy is the ceiling it is judged against (🎯T392.4).
@@ -599,57 +596,6 @@ func (s *Server) seatInFlight(name string) seatstate.Tri {
 		return st.InFlight
 	}
 	return seatstate.Unknown
-}
-
-// TriggerIdleNudgeSweep runs one fleet health + recover sweep (postRestart=false).
-// 🎯T236: also re-pressures open-mission workers after stuck-busy / terminal failure.
-// No-op until StartIdleNudgeLoop has registered the actuator.
-func (s *Server) TriggerIdleNudgeSweep() {
-	if s == nil {
-		return
-	}
-	s.SweepOrphanPanes()
-	s.mu.Lock()
-	f := s.idleNudgeSweep
-	s.mu.Unlock()
-	if f != nil {
-		f(false)
-	}
-}
-
-// TriggerFleetRecoverSweep runs one open-mission stuck/failure recover pass (🎯T236).
-// Safe for cockpit hooks; no-op when registry unset.
-func (s *Server) TriggerFleetRecoverSweep() {
-	if s == nil || s.registry == nil {
-		return
-	}
-	s.runFleetRecoverSweep(false)
-}
-
-// SweepFleetHealth runs SweepDeadAgents for the given overseer name
-// (log-only report). Safe for cockpit hooks.
-func (s *Server) SweepFleetHealth(overseerName string) {
-	if s == nil || s.registry == nil {
-		return
-	}
-	if overseerName == "" {
-		overseerName = "jevons"
-	}
-	// 🎯T708: anchor live seats before the sweep and reap the ones that are
-	// gone after it. The anchor has to be taken while the root is alive —
-	// afterwards the detached work is reparented to init and there is no
-	// link back to the seat at all.
-	s.TrackSeatLoad()
-	if reps := SweepDeadAgents(s.registry, s.RemovalAccount(), overseerName, s.fleetIntent()); len(reps) > 0 {
-		slog.Info("cockpit fleet health", "report", FormatDeadAgentReport(reps))
-	}
-	s.ReapLostSeats()
-	// 🎯T708: and act on the load that is still running, which 🎯T460's
-	// spawn gate has no lever over.
-	s.SweepSeatLoad()
-	// 🎯T734: a leftover pane that kept committing after T165/T195 is
-	// attributed here, on the same timer that already walks the fleet.
-	s.SweepPostReapCommits()
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn

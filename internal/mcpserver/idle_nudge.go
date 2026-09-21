@@ -1104,25 +1104,8 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		}
 	}
 
-	// Cockpit fleet hook: dead-handle health + T236 outage/stuck recover +
-	// 🎯T315 open-mission idle re-pressure. Event-first to the parent PO
-	// (emitWorkerIdleToParent) stays for replan/reap, but it is no longer the
-	// only pressure path — a PO that is itself idle or queued used to leave
-	// implementers silent for hours.
-	args.Server.mu.Lock()
-	args.Server.idleNudgeSweep = func(postRestart bool) {
-		// 🎯T418: mute from the stuck snapshot before SweepDeadAgents /
-		// recover relaunches a rescuer.
-		args.Server.SweepSendBacklogs()
-		args.Server.SweepHandovers()
-		args.Server.reportFleetMuteIfNeeded()
-		if reps := args.Server.sweepDeadAccountedWith(overseer, args.Server.fleetIntent()); len(reps) > 0 {
-			slog.Info("fleet health (cockpit/idle loop)", "report", FormatDeadAgentReport(reps), "post_restart", postRestart)
-		}
-		args.Server.runFleetRecoverSweep(postRestart)
-		args.Server.TriggerIdlePressureSweep()
-	}
-	args.Server.mu.Unlock()
+	// The periodic fleet pass is Server.Reconcile, driven by the cockpit tick
+	// (🎯T766.3); this loop only wires idle tracking and the restart path.
 
 	// After settle: T171 dual path only when jevonsd still parents the
 	// processes. Broker-held seats stay up; a reconnect indication is
@@ -1139,47 +1122,6 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		}
 	}
 
-	// Periodic fleet health + 🎯T315 open-mission idle re-pressure.
-	interval := args.Interval
-	if interval == 0 {
-		interval = DefaultIdlePressureInterval
-	}
-	if interval < 0 {
-		<-ctx.Done()
-		return
-	}
-	runIdlePressureLoop(ctx, interval, func() {
-		if reps := args.Server.sweepDeadAccountedWith(overseer, args.Server.fleetIntent()); len(reps) > 0 {
-			slog.Info("fleet health periodic", "report", FormatDeadAgentReport(reps))
-		}
-		args.Server.sweepBornStuck()
-		args.Server.TriggerIdlePressureSweep()
-		// 🎯T392.2: deliver any digests whose window has elapsed. Driven
-		// from the sweep that generates the events rather than its own
-		// timer — a second ticker would be a second thing to get wrong,
-		// and the flush is cheap when nothing is pending.
-		args.Server.FlushWakeBatches()
-	})
-}
-
-// runIdlePressureLoop ticks the actuator until ctx is done. Extracted from
-// StartIdleNudgeLoop so the periodic path is hermetically testable without a
-// daemon, registry, or clock skew (🎯T315).
-func runIdlePressureLoop(ctx context.Context, interval time.Duration, tick func()) {
-	if tick == nil || interval <= 0 {
-		<-ctx.Done()
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			tick()
-		}
-	}
 }
 
 // IdlePressureHooks are the optional collaborator seams of the 🎯T315
