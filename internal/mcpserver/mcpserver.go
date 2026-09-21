@@ -479,7 +479,10 @@ type Server struct {
 	// delivered (🎯T599): the pin names the blocking message for
 	// agent_list / fleet health, and the fail counts decide when repeated
 	// delivery failure of one entry becomes a pin. Guarded by mu.
-	sendqPin      map[string]SendqPin
+	sendqPin map[string]SendqPin
+	// heldScannedAt is the transcript size at which an agent's held attempts
+	// were last checked against it (reconcileHeldFromTranscript).
+	heldScannedAt map[string]int64
 	sendqPinFails map[string]sendqEntryFails
 }
 

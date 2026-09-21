@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T418 — WHAT HAPPENS TO A MESSAGE THE DAEMON ACCEPTED.
@@ -138,6 +139,84 @@ func (s *Server) ReportRecoveredBacklog() {
 		total, strings.Join(lines, "; ")))
 }
 
+// reconcileHeldFromTranscript settles held attempts the receiver's transcript
+// now shows it received, and reports how many it settled.
+//
+// An attempt goes Uncertain when the confirm window closes with no record of
+// the payload. For a Claude seat that is mid-turn, the window closing proves
+// little: Claude Code holds a submitted message in its own input queue until
+// the running turn ends, and the transcript gains it only then — routinely
+// later than the window. On 2026-09-21 claudia-po held seven such attempts,
+// the oldest 28 hours old, each naming a report_id that was sitting in its
+// transcript. Only an operator could clear them, none had, and 244 messages
+// were queued around them.
+//
+// This is not the automatic discard 🎯T623 forbids. Nothing is dropped on a
+// guess: an entry is settled only on the positive evidence the send itself
+// would have accepted — a user message, a queue record, or a queued payload
+// entering a turn. An entry the transcript does not show stays held.
+//
+// The scan starts at the top of the transcript because the entry does not
+// record where the transcript stood when it was attempted. The cost is that
+// an earlier delivery of identical text settles a later one; the receiver
+// then holds that text once rather than twice.
+func (s *Server) reconcileHeldFromTranscript(q *sendq.Store, name string) int {
+	if s == nil || s.registry == nil {
+		return 0
+	}
+	def := s.registry.Def(name)
+	proc := s.registry.Get(name)
+	if def == nil || proc == nil || !providerKeepsClaudeTranscript(def.Provider) {
+		return 0
+	}
+	return s.settleHeldAgainst(q, name, proc.JSONLPath())
+}
+
+// settleHeldAgainst is reconcileHeldFromTranscript once the receiver's
+// transcript is known.
+func (s *Server) settleHeldAgainst(q *sendq.Store, name, path string) int {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	// Re-reading a multi-megabyte transcript for every held entry on every
+	// sweep would be the cost; only a transcript that grew can say more.
+	s.mu.Lock()
+	if s.heldScannedAt == nil {
+		s.heldScannedAt = make(map[string]int64)
+	}
+	unchanged := s.heldScannedAt[name] == info.Size()
+	s.heldScannedAt[name] = info.Size()
+	s.mu.Unlock()
+	if unchanged {
+		return 0
+	}
+	entries, err := q.Snapshot(name)
+	if err != nil {
+		return 0
+	}
+	settled := 0
+	for _, e := range entries {
+		if e.State != sendq.Uncertain {
+			continue
+		}
+		ev, ok := fateEvidence(path, 0, true, turnev.Needle(e.Text))
+		if !ok {
+			continue
+		}
+		if err := q.Resolve(name, e, sendq.Confirmed, ev.Detail); err != nil {
+			slog.Warn("held attempt is in the transcript but could not be settled",
+				"component", "agent_send", "agent", name, "entry_id", e.ID, "err", err)
+			continue
+		}
+		settled++
+		slog.Info("held attempt settled from the receiver's transcript",
+			"component", "agent_send", "agent", name, "entry_id", e.ID,
+			"attempt_id", e.AttemptID, "enqueued_at", e.EnqueuedAt, "evidence", ev.Detail)
+	}
+	return settled
+}
+
 // SweepSendBacklogs re-offers held messages and surfaces the ones it cannot
 // deliver. Called from the fleet-health sweep, so it runs on the daemon's own
 // schedule rather than on a turn boundary that may already have been missed.
@@ -165,6 +244,20 @@ func (s *Server) SweepSendBacklogs() {
 	for _, b := range backlogs {
 		switch {
 		case b.Uncertain > 0:
+			// An attempt nobody could confirm in the window may have been
+			// confirmed by the receiver since. Look before pinning it.
+			if settled := s.reconcileHeldFromTranscript(q, b.Agent); settled > 0 {
+				b.Uncertain -= settled
+				b.Depth -= settled
+				if b.Uncertain <= 0 {
+					if b.Depth > 0 && s.flightState(b.Agent) != FlightInFlight {
+						if _, live := s.liveSender(b.Agent); live {
+							s.drainAgentSendQueue(b.Agent)
+						}
+					}
+					break
+				}
+			}
 			// Never route, discard, or replay an attempt left by this daemon or
 			// its predecessor (🎯T623). PINNED is a live-seat word (🎯T599):
 			// a reaped or departed name must not keep raising it (🎯T686).
