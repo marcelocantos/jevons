@@ -81,6 +81,8 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 		cmd.Args = append(cmd.Args, "--daemon-log", s.logPath, "--sweep-deadline-ms", fmt.Sprint((4 * time.Minute).Milliseconds()))
 		// T627.4: the idle reaper's owner-visible case is the MCP-spawned aside.
 		cmd.Args = append(cmd.Args, "--aside-only")
+		// 🎯T540.7.1.1: keep the reload screenshots past the sandbox for the T493.1 verdict.
+		cmd.Args = append(cmd.Args, "--screenshot", filepath.Join(os.TempDir(), "j31"))
 	}
 	// The browser needs no checkout as its working directory. Assets come
 	// exclusively from the isolated daemon's embedded bundle.

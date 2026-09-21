@@ -11,7 +11,7 @@ const { parseArgs } = require('node:util');
 const { chromium } = require('./playwright.cjs')();
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
-  'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' },
+  'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' }, screenshot: { type: 'string' },
   'aside-only': { type: 'boolean', default: false },
 } });
 const base = new URL(`http://${values.host}`);
@@ -192,11 +192,16 @@ async function main() {
       };
       await assertPaint();
       checked.push({ name, start, pre, post, ack });
+      // 🎯T540.7.1.1: the isolate's work dir is removed with the sandbox, so the
+      // T493.1 visual verdict needs copies at a path that outlives it.
+      const keep = label => values.screenshot ? page.screenshot({ path: `${values.screenshot}-${main ? 'main' : 'sidebar'}-${label}.png` }) : undefined;
+      await keep('before-reload');
       await page.reload();
       await assertPaint();
       const screenshot = path.join(work, `${main ? 'main' : 'sidebar'}-reload.png`);
       await page.screenshot({ path: screenshot });
-      console.log(`PASS ${name}: nonterminal ${first.body.id}, owner ${echo.body.id}, continuation ${later.body.id}; live and reload ordered. Screenshot: ${screenshot}`);
+      await keep('after-reload');
+      console.log(`PASS ${name}: nonterminal ${first.body.id}, owner ${echo.body.id}, continuation ${later.body.id}; live and reload ordered. Screenshot: ${screenshot}${values.screenshot ? ` (kept: ${values.screenshot}-${main ? 'main' : 'sidebar'}-after-reload.png)` : ''}`);
     } finally {
       await fs.writeFile(release, nonce);
     }
