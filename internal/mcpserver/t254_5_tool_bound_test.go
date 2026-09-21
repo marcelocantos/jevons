@@ -18,7 +18,7 @@ func TestT254_5_1BoundToolDeadline(t *testing.T) {
 	s.toolDeadline = 40 * time.Millisecond
 	block := make(chan struct{})
 	t.Cleanup(func() { close(block) })
-	h := s.boundTool("jevons_agent_start", func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h := s.boundTool("jevons_agent_stop", func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		<-block
 		return mcp.NewToolResultText("ok"), nil
 	})
@@ -43,7 +43,7 @@ func TestT254_5_1InterruptCancelsHandler(t *testing.T) {
 	s.toolDeadline = 5 * time.Second
 	block := make(chan struct{})
 	t.Cleanup(func() { close(block) })
-	h := s.boundTool("jevons_agent_start", func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h := s.boundTool("jevons_agent_stop", func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		<-block
 		return mcp.NewToolResultText("ok"), nil
 	})

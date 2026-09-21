@@ -127,6 +127,8 @@ type Server struct {
 	jobs *jobRegistry
 
 	startMu sync.Mutex
+	// startFlights dedupes in-flight jevons_agent_start launches by name (🎯T792).
+	startFlights startFlights
 	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
 	launchAgentFn func(ctx context.Context, name string) (*claudia.Agent, error)
 	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a
