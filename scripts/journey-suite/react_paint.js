@@ -328,21 +328,21 @@ async function scenarioFrontier(page) {
       fail('T181', 'Status+Dependencies+🎯 alone is not a rich card; saw ' + JSON.stringify(body.slice(0, 160)));
     }
   }
-  const hostBox = await host.boundingBox();
+  const idHostBox = await host.boundingBox();
   const tipBox = await tip.boundingBox();
-  if (!hostBox || !tipBox) fail('T271', 'host and card must have boxes so the corridor can be crossed');
-  const gapX = tipBox.x + tipBox.width < hostBox.x
-    ? (tipBox.x + tipBox.width + hostBox.x) / 2
-    : hostBox.x + hostBox.width < tipBox.x
-      ? (hostBox.x + hostBox.width + tipBox.x) / 2
-      : hostBox.x + hostBox.width / 2;
-  const gapY = hostBox.y + hostBox.height / 2;
+  if (!idHostBox || !tipBox) fail('T271', 'host and card must have boxes so the corridor can be crossed');
+  const gapX = tipBox.x + tipBox.width < idHostBox.x
+    ? (tipBox.x + tipBox.width + idHostBox.x) / 2
+    : idHostBox.x + idHostBox.width < tipBox.x
+      ? (idHostBox.x + idHostBox.width + tipBox.x) / 2
+      : idHostBox.x + idHostBox.width / 2;
+  const gapY = idHostBox.y + idHostBox.height / 2;
   await page.mouse.move(gapX, gapY, { steps: 8 });
   const still = await page.locator('.instant-tip-show').count();
   if (still < 1) fail('T271', 'card must stay open while the pointer crosses the host→card corridor');
   // Vertical leave: table X (not corridor X) above the row band — matches instant_tip_test T271.
-  const tableX = hostBox.x + hostBox.width / 2;
-  await page.mouse.move(tableX, Math.max(4, hostBox.y - 48), { steps: 6 });
+  const tableX = idHostBox.x + idHostBox.width / 2;
+  await page.mouse.move(tableX, Math.max(4, idHostBox.y - 48), { steps: 6 });
   const gone = await page.locator('.instant-tip-show').count();
   if (gone > 0) fail('T271', 'card must dismiss immediately when the pointer leaves the row band vertically');
 }
