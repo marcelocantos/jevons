@@ -31,6 +31,9 @@ func (s *suite) isolateDaemonEnv() []string {
 	env = append(env,
 		"CLAUDIA_NO_BROKER=1",
 		"XDG_STATE_HOME="+s.stateDir,
+		// 🎯T811: arms the daemon's isolate-only broker fault seam; inert
+		// until a journey writes the fault file.
+		"JEVONS_TEST_FAULTS=1",
 	)
 	return append(env, s.daemonEnv...)
 }

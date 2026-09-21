@@ -543,6 +543,9 @@ func (s *Server) interruptOverseerForOwner() {
 // sendNotes delivers one coalesced note batch to the overseer. The
 // notifySender seam lets tests stub delivery; nil uses the live process.
 func (s *Server) sendNotes(text string) error {
+	if err := s.injectedBrokerFault(text); err != nil {
+		return err
+	}
 	if s.notifySender != nil {
 		return s.notifySender(text)
 	}

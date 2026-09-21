@@ -32,6 +32,14 @@ func (s *suite) jPackagedReactSendCutIn() error {
 	return s.jPackagedReactScript("t789-live.cjs", 25*time.Minute)
 }
 
+// J33 (🎯T811): the daemon refuses the first owner delivery with the broker's
+// real not_owner text (isolate-only fault seam); the packaged cockpit must show
+// it undelivered with Resend, and Resend must deliver the same message once.
+// Nothing reaches the development overseer or its grant.
+func (s *suite) jUndeliveredResend() error {
+	return s.jPackagedReactScript("t811-undelivered.cjs", 10*time.Minute)
+}
+
 func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error {
 	provider := string(s.provider)
 	var ready error
@@ -61,6 +69,11 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 		// outlive the sandbox so the T493.1 visual verdict can be read.
 		names = []string{"jevons"}
 		cmd.Args = append(cmd.Args, "--screenshot", filepath.Join(os.TempDir(), "t789-live.png"))
+	}
+	if script == "t811-undelivered.cjs" {
+		names = []string{"jevons"}
+		cmd.Args = append(cmd.Args, "--fault", filepath.Join(s.stateDir, "fault-owner-not-owner"),
+			"--screenshot", filepath.Join(os.TempDir(), "t811-undelivered.png"))
 	}
 	if script == "boundary.cjs" {
 		// The real sweep is every two minutes. Observe its completion, rather

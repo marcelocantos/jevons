@@ -219,6 +219,7 @@ type Server struct {
 	notifyRetryTimer  *time.Timer
 	notifyRetryN      int
 	overseerReattachWait time.Duration
+	brokerFaultDir       string // 🎯T811 isolate-only fault seam
 	ownerQueueMu     sync.Mutex
 	ownerQueuePath   string
 	ownerDelivered   []string

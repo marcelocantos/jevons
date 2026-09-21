@@ -984,6 +984,11 @@ func main() {
 		slog.Error("owner queue load failed", "err", err)
 		os.Exit(1)
 	}
+	// 🎯T811: isolate journeys inject the broker's not_owner refusal through a
+	// state-dir file. Armed only by an explicit test env and never on :13705.
+	if os.Getenv("JEVONS_TEST_FAULTS") == "1" && *port != 13705 {
+		srv.EnableBrokerFaultSeam(cfg.StateDir)
+	}
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
 	// terminal stop is wired in mcpserver agentEventSink (ð¯T111.1).
