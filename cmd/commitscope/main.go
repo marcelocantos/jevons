@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/commitattrib"
 	"github.com/marcelocantos/jevons/internal/commitscope"
 )
 
@@ -41,12 +42,26 @@ const (
 
 // installFlag is the only argument this command takes. git passes none to a
 // pre-commit hook, so there is nothing for it to collide with.
-const installFlag = "--install"
+const (
+	installFlag       = "--install"
+	stampTrailersFlag = "--stamp-trailers"
+)
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == installFlag {
 		install()
 		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == stampTrailersFlag {
+		if len(os.Args) != 3 {
+			fmt.Fprintf(os.Stderr, "commitscope: usage: %s %s <commit-msg-file>\n", os.Args[0], stampTrailersFlag)
+			os.Exit(exitBroken)
+		}
+		if err := stampTrailers(os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "commitscope: stamp trailers: %v\n", err)
+			os.Exit(exitBroken)
+		}
+		os.Exit(exitAllow)
 	}
 	staged, err := stagedPaths()
 	if err != nil {
@@ -90,16 +105,29 @@ func install() {
 	if err == nil {
 		var root string
 		if root, err = one("git", "rev-parse", "--show-toplevel"); err == nil {
-			var outcome commitscope.InstallOutcome
-			source := filepath.Join(root, "scripts", "hooks", "pre-commit")
-			if outcome, err = commitscope.InstallHook(hooksDir, source); err == nil {
-				fmt.Fprint(os.Stderr, commitscope.InstallReport(outcome, hooksDir))
-				os.Exit(exitAllow)
+			var broken bool
+			for _, hook := range []string{"pre-commit", "prepare-commit-msg"} {
+				var outcome commitscope.InstallOutcome
+				source := filepath.Join(root, "scripts", "hooks", hook)
+				if outcome, err = commitscope.InstallHook(hooksDir, source, hook); err != nil {
+					fmt.Fprintf(os.Stderr, "commitscope: cannot install %s: %v\n", hook, err)
+					broken = true
+					continue
+				}
+				fmt.Fprint(os.Stderr, commitscope.InstallReport(outcome, hooksDir, hook))
 			}
+			if broken {
+				os.Exit(exitBroken)
+			}
+			os.Exit(exitAllow)
 		}
 	}
 	fmt.Fprintf(os.Stderr, "commitscope: cannot install the shared-index guard: %v\n", err)
 	os.Exit(exitBroken)
+}
+
+func stampTrailers(msgPath string) error {
+	return commitattrib.StampFile(msgPath)
 }
 
 // one runs a command expected to print a single line.

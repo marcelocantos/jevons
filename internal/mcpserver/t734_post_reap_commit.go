@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/marcelocantos/jevons/internal/attrib"
+	"github.com/marcelocantos/jevons/internal/commitattrib"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
 
@@ -31,21 +32,29 @@ import (
 // before the row leaves (SetBeforeRemoveHook → reapSeatLoad). Commits that
 // still land are the parent notice below.
 //
+// 🎯T760 — every seat shares one git identity, so timing cannot attribute.
+// Read Jevons-Actor / Jevons-Target trailers (stamped from JEVONS_AGENT /
+// JEVONS_TARGET_ID at commit time). Ledger-only commits stay silent. Where
+// provenance is missing, say "unattributed" — never name the reaped watch
+// seat merely because the commit landed after its reap.
+//
 // Product: at reap_done / reap_achieve, snapshot HEAD in the seat's workdir.
-// The fleet-health sweep then lists commits after that SHA. Any that mention
-// the closed target raise one parent notice naming the seat, the commits, and
-// the target. A reap with nothing in flight produces no notice.
+// The fleet-health sweep then lists commits after that SHA. Product commits
+// that mention the closed target raise one parent notice naming the actor
+// (or "unattributed"). A reap with nothing in flight produces no notice.
 
 const (
 	postReapCommitPrefix = "[post-reap-commit "
 	postReapCommitWindow = 30 * time.Minute
 )
 
-// gitCommit is one commit the leftover pane (or anyone) landed after a reap.
+// gitCommit is one commit landed after a reap snapshot.
 type gitCommit struct {
 	SHA     string
 	Subject string
 	Body    string
+	Actor   string
+	Files   []string
 }
 
 // postReapWatch is the HEAD snapshot taken as a seat leaves.
@@ -105,9 +114,36 @@ func FilterPostReapCommits(commits []gitCommit, targetID string) []gitCommit {
 	return out
 }
 
-// FormatPostReapCommitNotice is the parent-facing 🎯T734 review: a reaped
-// seat landed commits after it left, under a closed target's label.
-func FormatPostReapCommitNotice(seat, targetID, successor string, commits []gitCommit) string {
+// SelectPostReapNoticeCommits applies 🎯T760 provenance on top of the T734
+// target-mention filter. Ledger-only commits stay silent. Commits whose
+// Jevons-Actor names a different seat stay silent. Product commits with no
+// actor declaration are surfaced as unattributed rather than blamed on the
+// reaped watch seat.
+func SelectPostReapNoticeCommits(commits []gitCommit, watch postReapWatch) ([]gitCommit, bool) {
+	hits := FilterPostReapCommits(commits, watch.TargetID)
+	if len(hits) == 0 {
+		return nil, false
+	}
+	var out []gitCommit
+	unattributed := false
+	for _, c := range hits {
+		if !commitattrib.HasProductChanges(c.Files) {
+			continue
+		}
+		actor := strings.TrimSpace(c.Actor)
+		if actor != "" && actor != watch.Seat {
+			continue
+		}
+		if actor == "" {
+			unattributed = true
+		}
+		out = append(out, c)
+	}
+	return out, unattributed
+}
+
+// FormatPostReapCommitNotice is the parent-facing 🎯T734 review.
+func FormatPostReapCommitNotice(seat, targetID, successor string, commits []gitCommit, unattributed bool) string {
 	tid := FormatTargetID(targetID)
 	if tid == "" {
 		tid = "the closed target"
@@ -117,7 +153,11 @@ func FormatPostReapCommitNotice(seat, targetID, successor string, commits []gitC
 		seat = "reaped seat"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s🎯T734] reaped seat %s landed ", postReapCommitPrefix, seat)
+	if unattributed {
+		fmt.Fprintf(&b, "%s🎯T734] unattributed commit landed ", postReapCommitPrefix)
+	} else {
+		fmt.Fprintf(&b, "%s🎯T734] reaped seat %s landed ", postReapCommitPrefix, seat)
+	}
 	for i, c := range commits {
 		if i > 0 {
 			b.WriteString(", ")
@@ -171,9 +211,29 @@ func listCommitsAfter(workdir, since string) ([]gitCommit, error) {
 		if len(parts) == 3 {
 			c.Body = strings.TrimSpace(parts[2])
 		}
+		attr := commitattrib.ParseMessage(c.Subject + "\n" + c.Body)
+		c.Actor = attr.Actor
+		if files, err := commitChangedFiles(workdir, c.SHA); err == nil {
+			c.Files = files
+		}
 		commits = append(commits, c)
 	}
 	return commits, nil
+}
+
+func commitChangedFiles(workdir, sha string) ([]string, error) {
+	out, err := attrib.Git(workdir, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
 }
 
 func snapshotHEAD(workdir string) (string, string, error) {
@@ -303,7 +363,7 @@ func (s *Server) sweepOnePostReapWatch(w postReapWatch, now time.Time) {
 			"component", "post_reap_commit", "agent", w.Seat, "err", err)
 		return
 	}
-	hits := FilterPostReapCommits(commits, w.TargetID)
+	hits, unattributed := SelectPostReapNoticeCommits(commits, w)
 	if len(hits) == 0 {
 		return
 	}
@@ -317,19 +377,23 @@ func (s *Server) sweepOnePostReapWatch(w postReapWatch, now time.Time) {
 		cur.Notified = map[string]struct{}{}
 	}
 	var fresh []gitCommit
+	batchUnattributed := unattributed
 	for _, c := range hits {
 		if _, seen := cur.Notified[c.SHA]; seen {
 			continue
 		}
 		cur.Notified[c.SHA] = struct{}{}
 		fresh = append(fresh, c)
+		if strings.TrimSpace(c.Actor) == "" {
+			batchUnattributed = true
+		}
 	}
 	s.postReapWatches[w.Seat] = cur
 	s.mu.Unlock()
 	if len(fresh) == 0 {
 		return
 	}
-	s.deliverPostReapCommitNotice(cur, fresh)
+	s.deliverPostReapCommitNotice(cur, fresh, batchUnattributed)
 }
 
 func (s *Server) dropPostReapWatch(name string) {
@@ -338,12 +402,12 @@ func (s *Server) dropPostReapWatch(name string) {
 	s.mu.Unlock()
 }
 
-func (s *Server) deliverPostReapCommitNotice(w postReapWatch, commits []gitCommit) {
+func (s *Server) deliverPostReapCommitNotice(w postReapWatch, commits []gitCommit, unattributed bool) {
 	parent := strings.TrimSpace(w.Parent)
 	if parent == "" {
 		parent = "jevons-po"
 	}
-	msg := FormatPostReapCommitNotice(w.Seat, w.TargetID, s.liveSuccessorForTarget(w.Seat, w.TargetID), commits)
+	msg := FormatPostReapCommitNotice(w.Seat, w.TargetID, s.liveSuccessorForTarget(w.Seat, w.TargetID), commits, unattributed)
 	if _, err := s.deliverByName(parent, msg, OriginAgent, false); err != nil {
 		slog.Warn("T734 post-reap commit notice undelivered to parent; escalating to overseer",
 			"component", "post_reap_commit", "parent", parent, "agent", w.Seat, "err", err)

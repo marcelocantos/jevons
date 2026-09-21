@@ -32,6 +32,9 @@ import (
 // without it belongs to someone else.
 const HookMarker = "🎯T377"
 
+// AttributionHookMarker identifies prepare-commit-msg (🎯T760).
+const AttributionHookMarker = "🎯T760"
+
 // hookMode is what git requires of a hook it will exec.
 const hookMode = 0o755
 
@@ -81,29 +84,29 @@ func ClassifyExisting(existing, ours []byte) InstallOutcome {
 	}
 }
 
-// InstallHook copies source into hooksDir/pre-commit unless a hook that is
-// not ours is already there. hooksDir is the directory git will actually look
-// in — the caller resolves core.hooksPath, since a redirected hooks path makes
+// InstallHook copies source into hooksDir/hookName unless a hook that is not
+// ours is already there. hooksDir is the directory git will actually look in
+// — the caller resolves core.hooksPath, since a redirected hooks path makes
 // an install into .git/hooks inert.
 //
 // A foreign hook is not an error: it is a true statement about the clone, and
 // the caller reports it. Everything else that goes wrong is an error, because
 // a guard that could not be installed must not be mistaken for one that was.
-func InstallHook(hooksDir, source string) (InstallOutcome, error) {
+func InstallHook(hooksDir, source, hookName string) (InstallOutcome, error) {
 	ours, err := os.ReadFile(source)
 	if err != nil {
 		return HookForeign, fmt.Errorf("reading %s: %w", source, err)
 	}
-	if !bytes.Contains(ours, []byte(HookMarker)) {
+	if !isOurHookSource(ours) {
 		// Without the marker the next install could not recognise its own
 		// work and would refuse to refresh it ever again.
-		return HookForeign, fmt.Errorf("%s does not carry %s, so an installed copy could never be updated", source, HookMarker)
+		return HookForeign, fmt.Errorf("%s does not carry a repo hook marker, so an installed copy could never be updated", source)
 	}
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return HookForeign, fmt.Errorf("creating %s: %w", hooksDir, err)
 	}
 
-	dest := filepath.Join(hooksDir, "pre-commit")
+	dest := filepath.Join(hooksDir, hookName)
 	outcome := HookInstalled
 	switch existing, err := os.ReadFile(dest); {
 	case err == nil:
@@ -137,21 +140,35 @@ func InstallHook(hooksDir, source string) (InstallOutcome, error) {
 	return outcome, nil
 }
 
+func isOurHookSource(source []byte) bool {
+	return bytes.Contains(source, []byte(HookMarker)) ||
+		bytes.Contains(source, []byte(AttributionHookMarker))
+}
+
 // InstallReport is what the worker reads on stderr. A foreign hook gets the
 // whole story, since that clone is unguarded and nothing else will say so.
-func InstallReport(outcome InstallOutcome, hooksDir string) string {
-	dest := filepath.Join(hooksDir, "pre-commit")
+func InstallReport(outcome InstallOutcome, hooksDir, hookName string) string {
+	dest := filepath.Join(hooksDir, hookName)
 	switch outcome {
 	case HookCurrent:
 		return ""
 	case HookInstalled, HookUpdated:
-		return fmt.Sprintf("commitscope: shared-index commit guard %s at %s (🎯T377).\n", outcome, dest)
+		switch hookName {
+		case "prepare-commit-msg":
+			return fmt.Sprintf("commitscope: commit attribution hook %s at %s (🎯T760).\n", outcome, dest)
+		default:
+			return fmt.Sprintf("commitscope: shared-index commit guard %s at %s (🎯T377).\n", outcome, dest)
+		}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "commitscope: %s already exists and was not written by this repo — LEAVING IT ALONE.\n", dest)
-	b.WriteString("The shared-index commit guard is NOT active in this clone: a bare `git commit`\n")
-	b.WriteString("here can still sweep another worker's staged hunks into your commit (🎯T377).\n")
-	b.WriteString("Chain the guard from your hook, or install it over yours with:\n")
-	b.WriteString("  cp scripts/hooks/pre-commit " + dest + "\n")
+	if hookName == "pre-commit" {
+		b.WriteString("The shared-index commit guard is NOT active in this clone: a bare `git commit`\n")
+		b.WriteString("here can still sweep another worker's staged hunks into your commit (🎯T377).\n")
+		b.WriteString("Chain the guard from your hook, or install it over yours with:\n")
+		b.WriteString("  cp scripts/hooks/pre-commit " + dest + "\n")
+	} else {
+		b.WriteString("The commit attribution hook is NOT active in this clone (🎯T760).\n")
+	}
 	return b.String()
 }

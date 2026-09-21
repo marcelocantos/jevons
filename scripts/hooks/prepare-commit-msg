@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Stamp Jevons-Actor / Jevons-Target trailers from env (🎯T760).
+#
+# prepare-commit-msg receives: $1 message file, $2 source, $3 amend SHA.
+# The stamp is best-effort and never blocks a commit.
+set -uo pipefail
+
+root="${CLAUDE_PROJECT_DIR:-}"
+if [[ -z "$root" ]]; then
+    root="$(cd "$(dirname "$0")/../.." && pwd)"
+fi
+
+bin="${JEVONS_COMMITSCOPE_BIN:-$root/bin/commitscope}"
+if [[ ! -x "$bin" ]]; then
+    if ! (cd "$root" && go build -o "$bin" ./cmd/commitscope) 2>/dev/null; then
+        printf 'commitattrib: %s missing — attribution trailers not stamped (🎯T760).\n' "$bin" >&2
+        exit 0
+    fi
+fi
+
+"$bin" --stamp-trailers "${1:?}" || true
+exit 0

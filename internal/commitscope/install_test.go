@@ -49,7 +49,7 @@ func TestInstallRefusesToSpeakForAHookItDidNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outcome, err := commitscope.InstallHook(hooks, shimPath(t))
+	outcome, err := commitscope.InstallHook(hooks, shimPath(t), "pre-commit")
 	if err != nil {
 		t.Fatalf("InstallHook: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestInstallRefusesToSpeakForAHookItDidNotWrite(t *testing.T) {
 	if got := readFile(t, dest); got != foreign {
 		t.Errorf("the foreign hook was modified:\n%s", got)
 	}
-	if report := commitscope.InstallReport(outcome, hooks); !strings.Contains(report, "NOT active") {
+	if report := commitscope.InstallReport(outcome, hooks, "pre-commit"); !strings.Contains(report, "NOT active") {
 		t.Errorf("report does not say the guard is inactive:\n%s", report)
 	}
 }
@@ -70,7 +70,7 @@ func TestInstallRefusesToSpeakForAHookItDidNotWrite(t *testing.T) {
 func TestInstallIsIdempotentAndRefreshesItsOwnOlderCopy(t *testing.T) {
 	hooks := t.TempDir()
 
-	if outcome, err := commitscope.InstallHook(hooks, shimPath(t)); err != nil || outcome != commitscope.HookInstalled {
+	if outcome, err := commitscope.InstallHook(hooks, shimPath(t), "pre-commit"); err != nil || outcome != commitscope.HookInstalled {
 		t.Fatalf("first install = %v, %v; want %v", outcome, err, commitscope.HookInstalled)
 	}
 	dest := filepath.Join(hooks, "pre-commit")
@@ -84,10 +84,10 @@ func TestInstallIsIdempotentAndRefreshesItsOwnOlderCopy(t *testing.T) {
 		t.Errorf("installed hook is not executable (mode %v); git would ignore it", info.Mode())
 	}
 
-	if outcome, err := commitscope.InstallHook(hooks, shimPath(t)); err != nil || outcome != commitscope.HookCurrent {
+	if outcome, err := commitscope.InstallHook(hooks, shimPath(t), "pre-commit"); err != nil || outcome != commitscope.HookCurrent {
 		t.Fatalf("second install = %v, %v; want %v", outcome, err, commitscope.HookCurrent)
 	}
-	if report := commitscope.InstallReport(commitscope.HookCurrent, hooks); report != "" {
+	if report := commitscope.InstallReport(commitscope.HookCurrent, hooks, "pre-commit"); report != "" {
 		t.Errorf("an unchanged install should say nothing, said:\n%s", report)
 	}
 
@@ -96,7 +96,7 @@ func TestInstallIsIdempotentAndRefreshesItsOwnOlderCopy(t *testing.T) {
 	if err := os.WriteFile(dest, []byte("#!/bin/sh\n# 🎯T377 v1\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if outcome, err := commitscope.InstallHook(hooks, shimPath(t)); err != nil || outcome != commitscope.HookUpdated {
+	if outcome, err := commitscope.InstallHook(hooks, shimPath(t), "pre-commit"); err != nil || outcome != commitscope.HookUpdated {
 		t.Fatalf("refresh = %v, %v; want %v", outcome, err, commitscope.HookUpdated)
 	}
 	if got := readFile(t, dest); got != shim {
@@ -113,7 +113,7 @@ func TestInstallRejectsAnUnmarkableSource(t *testing.T) {
 	if err := os.WriteFile(source, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := commitscope.InstallHook(t.TempDir(), source); err == nil {
+	if _, err := commitscope.InstallHook(t.TempDir(), source, "pre-commit"); err == nil {
 		t.Error("an unmarked source installed silently")
 	}
 }
@@ -152,7 +152,7 @@ func TestAFreshCloneIsGuardedByInstallAlone(t *testing.T) {
 	}
 	// The clone as git leaves it: a scripts/hooks/pre-commit in the tree and
 	// nothing in .git/hooks.
-	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "pre-commit"), readFile(t, shimPath(t)), 0o755)
+	installHookShims(t, dir)
 	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "pre-commit")); !os.IsNotExist(err) {
 		t.Fatalf("the fresh clone already has a pre-commit hook (%v)", err)
 	}
@@ -215,7 +215,7 @@ func TestInstallFollowsARedirectedHooksPath(t *testing.T) {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "pre-commit"), readFile(t, shimPath(t)), 0o755)
+	installHookShims(t, dir)
 
 	install := exec.Command(bin, "--install")
 	install.Dir = dir
@@ -242,6 +242,17 @@ func hermeticEnv(home, bin string) []string {
 func shimPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(repoRoot(t), "scripts", "hooks", "pre-commit")
+}
+
+func prepareCommitMsgShimPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(repoRoot(t), "scripts", "hooks", "prepare-commit-msg")
+}
+
+func installHookShims(t *testing.T, dir string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "pre-commit"), readFile(t, shimPath(t)), 0o755)
+	mustWrite(t, filepath.Join(dir, "scripts", "hooks", "prepare-commit-msg"), readFile(t, prepareCommitMsgShimPath(t)), 0o755)
 }
 
 func readFile(t *testing.T, path string) string {

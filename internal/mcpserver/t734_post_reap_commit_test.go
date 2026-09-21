@@ -54,7 +54,7 @@ func TestT734FormatNoticeNamesSeatCommitsAndTarget(t *testing.T) {
 	t.Parallel()
 	got := FormatPostReapCommitNotice(t734Worker, t734Target, "", []gitCommit{
 		{SHA: "21ac010cb066deadbeef", Subject: "fix(T717): MCP, T530, frontier, and dead-agent recurrences differ on the wire"},
-	})
+	}, false)
 	for _, want := range []string{
 		postReapCommitPrefix,
 		t734Worker,
@@ -72,7 +72,17 @@ func TestT734FormatNoticeNamesSeatCommitsAndTarget(t *testing.T) {
 
 	withSucc := FormatPostReapCommitNotice(t734Worker, t734Target, "jv-t717-next", []gitCommit{
 		{SHA: "21ac010cb066deadbeef", Subject: "fix(T717): leftover"},
-	})
+	}, false)
+
+	unattributed := FormatPostReapCommitNotice(t734Worker, t734Target, "", []gitCommit{
+		{SHA: "21ac010cb066deadbeef", Subject: "fix(T717): leftover"},
+	}, true)
+	if !strings.Contains(unattributed, "unattributed commit") {
+		t.Errorf("unattributed notice missing label:\n%s", unattributed)
+	}
+	if strings.Contains(unattributed, "reaped seat") {
+		t.Errorf("unattributed notice blamed the watch seat:\n%s", unattributed)
+	}
 	if !strings.Contains(withSucc, "Live successor jv-t717-next") {
 		t.Errorf("successor not attributed:\n%s", withSucc)
 	}
@@ -100,7 +110,7 @@ func TestT734ReapedSeatCommitRaisesNotice(t *testing.T) {
 	s, parent, repo := t734Server(t)
 	t734Reap(t, s, t734Worker)
 
-	sha := t734Commit(t, repo, "leftover.go", "still going\n", "fix(T717): MCP recurrences differ on the wire")
+	sha := t734CommitAttributed(t, repo, "leftover.go", "still going\n", "fix(T717): MCP recurrences differ on the wire", t734Worker)
 	s.SweepPostReapCommits()
 	if len(parent.sent) != 1 {
 		t.Fatalf("parent deliveries=%d want 1; got %v", len(parent.sent), parent.sent)
@@ -146,7 +156,7 @@ func TestT734ReapDoneCommitRaisesNotice(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("reap: ok=%v err=%v", ok, err)
 	}
-	sha := t734Commit(t, repo, "leftover.go", "still going\n", "fix(T717): finish-report leftover")
+	sha := t734CommitAttributed(t, repo, "leftover.go", "still going\n", "fix(T717): finish-report leftover", t734Worker)
 	s.SweepPostReapCommits()
 	if len(parent.sent) != 1 {
 		t.Fatalf("parent deliveries=%d want 1; got %v", len(parent.sent), parent.sent)
@@ -175,7 +185,7 @@ func TestT734KillDoesNotArmWatch(t *testing.T) {
 func TestT734DroppingTheNoticeGoesRed(t *testing.T) {
 	s, parent, repo := t734Server(t)
 	t734Reap(t, s, t734Worker)
-	sha := t734Commit(t, repo, "leftover.go", "still going\n", "fix(T717): leftover pane")
+	sha := t734CommitAttributed(t, repo, "leftover.go", "still going\n", "fix(T717): leftover pane", t734Worker)
 
 	s.mu.Lock()
 	head := s.postReapWatches[t734Worker].Head
@@ -184,8 +194,8 @@ func TestT734DroppingTheNoticeGoesRed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hits := FilterPostReapCommits(commits, t734Target); len(hits) == 0 {
-		t.Fatal("mutation: FilterPostReapCommits dropped the leftover T717 commit")
+	if hits, _ := SelectPostReapNoticeCommits(commits, postReapWatch{Seat: t734Worker, TargetID: t734Target}); len(hits) == 0 {
+		t.Fatal("mutation: SelectPostReapNoticeCommits dropped the leftover T717 commit")
 	}
 
 	s.SweepPostReapCommits()
@@ -310,6 +320,14 @@ func t734Repo(t *testing.T) string {
 
 func t734Commit(t *testing.T, repo, rel, content, message string) string {
 	t.Helper()
+	return t734CommitAttributed(t, repo, rel, content, message, "")
+}
+
+func t734CommitAttributed(t *testing.T, repo, rel, content, message, actor string) string {
+	t.Helper()
+	if actor != "" {
+		message += "\n\nJevons-Actor: " + actor + "\n"
+	}
 	p := filepath.Join(repo, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
@@ -328,4 +346,65 @@ func t734Commit(t *testing.T, repo, rel, content, message string) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(sha)
+}
+
+func TestT760LedgerOnlyCommitAfterReapStaysSilent(t *testing.T) {
+	s, parent, repo := t734Server(t)
+	t734Reap(t, s, t734Worker)
+	t734CommitAttributed(t, repo, "bullseye.yaml", "targets:\n  T98:\n    status: achieved\n", "🎯T98: achieve ledger-only (mentions T717 closure)", t734Parent)
+	s.SweepPostReapCommits()
+	if len(parent.sent) != 0 {
+		t.Fatalf("ledger-only PO commit blamed the reaped seat: %v", parent.sent)
+	}
+}
+
+func TestT760OtherActorProductCommitStaysSilent(t *testing.T) {
+	s, parent, repo := t734Server(t)
+	t734Reap(t, s, t734Worker)
+	t734CommitAttributed(t, repo, "other.go", "adjacent\n", "fix(T717): attributed to a live seat", t734Parent)
+	s.SweepPostReapCommits()
+	if len(parent.sent) != 0 {
+		t.Fatalf("another actor's commit was blamed on the reaped seat: %v", parent.sent)
+	}
+}
+
+func TestT760UnattributedProductCommitDoesNotBlameReapedSeat(t *testing.T) {
+	s, parent, repo := t734Server(t)
+	t734Reap(t, s, t734Worker)
+	sha := t734Commit(t, repo, "leftover.go", "still going\n", "fix(T717): no actor trailer")
+	s.SweepPostReapCommits()
+	if len(parent.sent) != 1 {
+		t.Fatalf("parent deliveries=%d want 1; got %v", len(parent.sent), parent.sent)
+	}
+	got := parent.sent[0]
+	if !strings.Contains(got, "unattributed commit") {
+		t.Fatalf("notice should say unattributed:\n%s", got)
+	}
+	if strings.Contains(got, "reaped seat "+t734Worker) {
+		t.Fatalf("notice blamed the watch seat without provenance:\n%s", got)
+	}
+	if !strings.Contains(got, sha) {
+		t.Fatalf("notice missing commit %s:\n%s", sha, got)
+	}
+}
+
+func TestT760SelectPostReapNoticeCommits(t *testing.T) {
+	t.Parallel()
+	watch := postReapWatch{Seat: t734Worker, TargetID: t734Target}
+	commits := []gitCommit{
+		{SHA: "a", Subject: "fix(T717): ledger", Files: []string{"bullseye.yaml"}},
+		{SHA: "b", Subject: "fix(T717): po product", Actor: t734Parent, Files: []string{"other.go"}},
+		{SHA: "c", Subject: "fix(T717): worker", Actor: t734Worker, Files: []string{"leftover.go"}},
+		{SHA: "d", Subject: "fix(T717): unknown", Files: []string{"leftover.go"}},
+	}
+	got, unattributed := SelectPostReapNoticeCommits(commits, watch)
+	if len(got) != 2 {
+		t.Fatalf("got %d commits, want worker + unattributed product", len(got))
+	}
+	if got[0].SHA != "c" || got[1].SHA != "d" {
+		t.Fatalf("wrong commits kept: %+v", got)
+	}
+	if !unattributed {
+		t.Fatal("expected unattributed flag")
+	}
 }
