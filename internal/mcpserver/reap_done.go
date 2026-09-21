@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/reapverify"
 )
 
 // LooksLikeFinishedWorkReport is true when a terminal agent response claims
@@ -295,6 +296,18 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		}
 		return
 	}
+	// 🎯T753: a target whose implementation already landed is held out of
+	// the ready set until the parent decides achieve or reopen. The hold is
+	// durable before the row goes; if it cannot be written the seat stays,
+	// because a reap without it lets the sweep respawn onto landed work.
+	pending, err := s.recordReapedTargetPending(name, reason)
+	if err != nil {
+		fields := reapDecisionFields(name, "reaped_target_pending_unrecorded", report)
+		fields["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
+		slog.Warn("T753 kept finished agent: owed-decision record failed", "agent", name, "err", err)
+		return
+	}
 	// 🎯T662: a reap is a recorded reason on the seat.
 	s.noteSeatStop(name, seatstop.SourceReap, "reaped as finished work ("+reason+")", "daemon", "")
 	// 🎯T738: stop host Goal continuation before the seat leaves the
@@ -312,6 +325,14 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	s.logLifecycle(compAgentLifecycle, "reap_done", "ok",
 		reapDecisionFields(name, reason, report))
 	slog.Info("auto-reaped finished work agent", "agent", name, "reason", reason)
+	if pending != nil {
+		msg := reapverify.FormatOwedDecisionNotice(*pending)
+		if _, err := s.deliverByName(pending.Owes, msg, OriginAgent, false); err != nil {
+			slog.Warn("T753 owed-decision notice undelivered; escalating to overseer",
+				"owes", pending.Owes, "worker", name, "target", pending.TargetID, "err", err)
+			s.notifyFleetHealth(name, fmt.Sprintf("%s unreachable (%v) for: %s", pending.Owes, err, msg))
+		}
+	}
 	// 🎯T577: a typed finish-report still reaps, even when the payload
 	// names remaining work. That seat's target must not go ledger-only —
 	// tell the PO to respawn.

@@ -15,6 +15,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/reapverify"
 )
 
 // 🎯T414: the daemon's half of the shared intent representation. The pure
@@ -46,6 +47,16 @@ func (s *Server) OpenFleetIntent(stateDir string) error {
 		return err
 	}
 	s.SetFleetIntentStore(st)
+
+	// 🎯T753: owed achieve-or-reopen decisions for reaped implementers
+	// survive a restart alongside the intent they qualify.
+	rv, err := reapverify.Open(stateDir)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.reapVerify = rv
+	s.mu.Unlock()
 
 	// Every accounted removal is a deliberate decision that this name should
 	// not be running, so every accounted removal stamps it. One hook on the

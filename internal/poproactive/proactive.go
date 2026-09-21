@@ -85,12 +85,16 @@ const (
 	// parked tag and no open depends_on (T254.2 under parked T254). T155
 	// kick-off and ClassifyFrontierLeaf skip it (🎯T262.5).
 	LeafSkipParkedAncestor
+	// LeafSkipReapedPending: landed work awaits its parent's verification.
+	LeafSkipReapedPending
 )
 
 func (k LeafKind) String() string {
 	switch k {
 	case LeafReady:
 		return "ready"
+	case LeafSkipReapedPending:
+		return "reaped_target_pending"
 	case LeafSkipDesign:
 		return "skip_design"
 	case LeafSkipBlocked:
@@ -130,10 +134,12 @@ const HighInfraCostThreshold = 13
 
 // LeafObs is a pure observation of one product-scoped frontier leaf.
 type LeafObs struct {
-	ID      string
-	Tags    []string
-	Name    string
-	Context string
+	// ReapedPending names the owed decision and its commit evidence.
+	ReapedPending string
+	ID            string
+	Tags          []string
+	Name          string
+	Context       string
 	// Blocked is true when the leaf is blocked (depends unmet, explicit park).
 	Blocked bool
 	// AlreadyEngaged is true when a work implementer is bound to this target.
@@ -510,6 +516,9 @@ func IsHighInfraLeaf(tags []string, name, context string, cost float64, activeCh
 // and high_infra only — not parent-with-active-children or parked-ancestor
 // (structural umbrella; prefer ready leaves outside the parked family).
 func ClassifyLeaf(o LeafObs) LeafKind {
+	if o.ReapedPending != "" && !o.Closed {
+		return LeafSkipReapedPending
+	}
 	if o.Closed {
 		return LeafSkipClosed
 	}

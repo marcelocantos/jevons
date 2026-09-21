@@ -91,6 +91,7 @@ const (
 	FrontierReasonHighCostMobile       = "skip_high_cost_mobile"            // 🎯T337 mobile megawork
 	FrontierReasonParentActiveChildren = "skip_parent_with_active_children" // 🎯T338 T10 parent class
 	FrontierReasonHighInfra            = "skip_high_infra"                  // 🎯T338 sqlpipe/CGO/Peer
+	FrontierReasonReapedPending        = "reaped_target_pending"            // 🎯T753 landed work awaits its parent's verdict
 	// FrontierReasonAwaitingOwnerVerdict parks a leaf whose code has landed
 	// and whose sole residue is the owner's taste verdict (🎯T449). Every
 	// other park reason describes work that has not started; this one is the
@@ -348,6 +349,13 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 		}
 		rep := FrontierConsumeReport{TargetID: id}
 		switch poproactive.ClassifyLeaf(leaf) {
+		case poproactive.LeafSkipReapedPending:
+			// Park: the implementation landed and the parent owes the
+			// achieve-or-reopen verdict; a fresh worker would redo it (🎯T753).
+			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonReapedPending
+			rep.Err = leaf.ReapedPending
+			out = append(out, rep)
+			continue
 		case poproactive.LeafSkipAwaitingOwnerVerdict:
 			// Park, loudly: the leaf is finished and the ball is in the
 			// owner's court, so the reason carries the recorded claim
@@ -582,6 +590,7 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 			OwnedBy:         leaf.OwnedBy,
 			OwnedByReason:   leaf.OwnedByReason,
 			ForceEngage:     poproactive.IsForceEngageTag(leaf.Tags),
+			ReapedPending:   s.reapedTargetPending(leaf.ID, args.Workdir, poproactive.IsForceEngageTag(leaf.Tags)),
 			// 🎯T389: this sweep's ledger only — another repo's worker on the
 			// same id must not make this leaf look consumed.
 			AlreadyEngaged: len(workAgentsBoundOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0,
