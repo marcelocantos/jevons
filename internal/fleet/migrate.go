@@ -683,7 +683,15 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		if isLiveMigrateFallback(err) {
 			return handover.Pending{}, false, nil
 		}
-		return handover.Pending{}, true, err
+		if !alreadyMigratedTo(err, target) {
+			return handover.Pending{}, true, err
+		}
+		// The registry row still names the old provider (the refusal above
+		// would have fired otherwise) while the live agent is already on the
+		// target: an earlier Migrate landed in claudia and was never recorded
+		// here. Record it now, so a retry converges.
+		slog.Warn("live agent was already on the target provider; recording the migration the registry missed",
+			"name", name, "to", target)
 	}
 	def := f.reg.Def(name)
 	if def == nil {
@@ -753,6 +761,18 @@ func (f *Claudia) invokeMigrate(name string, args *claudia.MigrateArgs) error {
 		return errNoLiveAgent
 	}
 	return live.Migrate(args)
+}
+
+// alreadyMigratedTo reports claudia's refusal to migrate an agent onto the
+// provider it is already on.
+//
+// On 2026-09-21 an overseer migrate call outlived its HTTP client: claudia
+// finished moving the agent to Cursor, the caller had gone, and nothing wrote
+// the registry row. Every retry was then refused with "same provider cursor"
+// while the row went on saying codex — so the next daemon bounce would have
+// relaunched the overseer on the provider it had just been moved off.
+func alreadyMigratedTo(err error, target claudia.Provider) bool {
+	return err != nil && strings.Contains(err.Error(), "Migrate: same provider "+string(target))
 }
 
 func isLiveMigrateFallback(err error) bool {
