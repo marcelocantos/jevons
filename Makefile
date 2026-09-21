@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest turndepth mcpscope claudiapin buildident
+all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest mcpscope claudiapin buildident
 
 # 🎯T710: unbuildable strays (bin/jevond predating the jevon-to-jevons
 # rename) must not survive a clean. bin/ is gitignored; this recipe is
@@ -82,18 +82,6 @@ attrib: bin/attrib
 bin/attrib: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/attrib ./cmd/attrib
-
-# Per-turn depth ceiling hook (🎯T392.4). The PreToolUse hook in
-# .claude/settings.json execs this on every tool call, so `make all` builds
-# it. A missing binary reports a visible non-blocking error and leaves the
-# ceiling INACTIVE rather than refusing anybody's tool call — the shim
-# reserves exit 2 for the checkpoint ask alone.
-.PHONY: turndepth
-turndepth: bin/turndepth
-
-bin/turndepth: $(GO_SRC)
-	@mkdir -p bin
-	go build -o bin/turndepth ./cmd/turndepth
 
 # Restart serialiser (🎯T392.5). restart-daily-jevonsd re-execs itself under
 # this, so a missing binary means concurrent restarts race — which is how

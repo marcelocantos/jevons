@@ -48,7 +48,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/spawnorder"
-	"github.com/marcelocantos/jevons/internal/turndepth"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -176,9 +175,6 @@ type Server struct {
 	// stop / kill can refuse to act on an undecided delivery (🎯T664).
 	// Guarded by mu.
 	unconfirmedSends map[string]unconfirmedSend
-	// checkpointResumePending marks a seat between a depth-ceiling checkpoint
-	// and the resume the daemon owes it (🎯T663). Guarded by mu.
-	checkpointResumePending map[string]time.Time
 	// oversizedSessions caches the per-session census of records over the
 	// broker line limit, keyed by session path (🎯T661). Guarded by mu.
 	oversizedSessions map[string]oversizedEntry
@@ -431,21 +427,6 @@ type Server struct {
 	// different workers each buying a full coordinator turn. Nil means
 	// batching is off and every event delivers immediately.
 	wakeBatch *wakebatch.Batcher
-
-	// turnDepth counts how deep each agent's current turn has run, and
-	// turnDepthPolicy is the ceiling it is judged against (🎯T392.4).
-	// Guarded by mu; created on first use.
-	turnDepth          *turndepth.Counter
-	turnDepthPolicy    turndepth.Policy
-	turnDepthInterrupt func(string) error
-	turnDepthResume    func(name, prompt string)
-	// checkpointEnded latches that an agent's just-ended turn hit the
-	// 🎯T392.4 depth-ceiling ask (🎯T471). observeTurnDepth sets it from
-	// EndTurn's Requested flag before the counter forgets the turn;
-	// maybeReapDoneWorkAgent consumes it and refuses to auto-reap, so a
-	// checkpointed worker stays registered and resumable even when the
-	// report text looks like a finish. Guarded by mu; nil until first use.
-	checkpointEnded map[string]bool
 
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.

@@ -55,7 +55,7 @@ func TestT581IncidentReportIsNotTerminal(t *testing.T) {
 
 func TestT581IncidentSeatRetainedThroughSink(t *testing.T) {
 	const agent = "jv-t564-no-ctx-ceiling"
-	s, reg := t471SinkServer(t, agent)
+	s, reg := reapSinkServer(t, agent)
 	s.agentEventSink(agent)(claudia.Event{Type: "assistant", Text: loadT581Fixture(t), StopReason: "end_turn"})
 	if reg.Def(agent) == nil {
 		t.Fatal("reading-done status deregistered the seat")

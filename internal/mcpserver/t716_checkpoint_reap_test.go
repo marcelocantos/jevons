@@ -84,7 +84,7 @@ func TestT716IncidentReportIsNotTerminal(t *testing.T) {
 func TestT716IncidentSeatRetainedThroughSink(t *testing.T) {
 	report := loadT716Fixture(t)
 	const agent = "jv-t702-seat-activity"
-	s, reg := t471SinkServer(t, agent)
+	s, reg := reapSinkServer(t, agent)
 	s.agentEventSink(agent)(claudia.Event{
 		Type:       "assistant",
 		Text:       report,
@@ -209,9 +209,9 @@ func TestT716GenuineFinishStillReaps(t *testing.T) {
 }
 
 func TestT716BareNextTurnWithoutColonStillReaps(t *testing.T) {
-	// 🎯T471 control: "Done. Ready for the next turn." is not a remaining-work
+	// Control: "Done. Ready for the next turn." is not a remaining-work
 	// heading. The colon is what names what the worker will do next turn.
-	if !LooksLikeFinishedWorkReport(t471AmbiguousAfterCeiling) {
-		t.Fatal("T471 control fixture must still look like finished work")
+	if !LooksLikeFinishedWorkReport(reapBareDoneNextTurn) {
+		t.Fatal("bare-done control fixture must still look like finished work")
 	}
 }

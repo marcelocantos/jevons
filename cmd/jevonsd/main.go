@@ -48,7 +48,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/supervise"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
-	"github.com/marcelocantos/jevons/internal/turndepth"
 	"github.com/marcelocantos/jevons/internal/uidaemon"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
@@ -730,14 +729,6 @@ func main() {
 	// 🎯T418: accepted messages live in state_dir/sendq so a restart
 	// between accept and deliver no longer eats them.
 	mcpSrv.SetSendQueueDir(cfg.StateDir)
-
-	// 🎯T392.4: per-turn tool-call depth ceiling. Interrupt is disarmed
-	// until the ask is known to land; counting and recording happen either way.
-	turnDepthPolicy := turndepth.PolicyFromEnv(os.Getenv)
-	mcpSrv.SetTurnDepthPolicy(turnDepthPolicy)
-	slog.Info("turn depth ceiling", "enabled", !turnDepthPolicy.Disabled,
-		"ceiling", turnDepthPolicy.EffectiveCeiling(),
-		"grace", turnDepthPolicy.EffectiveGrace())
 
 	// 🎯T414: the shared answer to "should this agent be running?", opened
 	// before any control can ask it. Durable and opened here rather than

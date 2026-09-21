@@ -1269,9 +1269,6 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
 
-		// 🎯T392.4: count this turn's tool calls and act at the ceiling.
-		s.observeTurnDepth(name, ev)
-
 		mu.Lock()
 		defer mu.Unlock()
 

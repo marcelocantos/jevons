@@ -82,7 +82,7 @@ func TestT577IncidentReportIsNotTerminal(t *testing.T) {
 func TestT577IncidentSeatRetainedThroughSink(t *testing.T) {
 	report := loadT577Fixture(t)
 	const agent = "jv-t568-intent-closed"
-	s, reg := t471SinkServer(t, agent)
+	s, reg := reapSinkServer(t, agent)
 	sink := s.agentEventSink(agent)
 	sink(claudia.Event{
 		Type:       "assistant",

@@ -67,7 +67,8 @@ const (
 	// may be in the missing middle, so its intent is unknown.
 	AskTruncated
 	// AskCheckpoint: a mid-mission checkpoint — the report declares itself one,
-	// or echoes the 🎯T392.4 depth-ceiling ask's own vocabulary (🎯T497).
+	// or echoes the vocabulary of the since-removed per-turn depth-ceiling
+	// ask (🎯T497).
 	AskCheckpoint
 	// AskNoClaim: the report asserts nothing about the mission — empty body,
 	// whitespace, or a content-free acknowledgement (🎯T723). Absence is not
@@ -259,15 +260,17 @@ const negationWindow = 60
 
 // 🎯T497: a worker that checkpoints is complying, not finishing.
 //
-// The 🎯T392.4 depth ceiling tells an over-budget turn to "Reach a checkpoint
-// and END YOUR TURN" — write down where you are, state the next step, end the
-// turn, be resumed. jv-t496-owner-reply did exactly that: "Checkpoint — ending
+// The per-turn depth ceiling (since removed) told an over-budget turn to
+// "Reach a checkpoint and END YOUR TURN" — write down where you are, state the
+// next step, end the turn, be resumed. jv-t496-owner-reply did exactly that: "Checkpoint — ending
 // this turn at the depth ceiling", next steps for the successor turn, "No
 // files modified yet; nothing to commit." The reap path read the progress
 // header "Done so far:" as a completion claim, found "commit" in the
 // next-steps prose, and deregistered the seat as finished_work with zero
 // commits. The ceiling and the reaper had opposite readings of the same
-// compliance, and the reaper's was destructive.
+// compliance, and the reaper's was destructive. The ceiling is gone; a worker
+// that checkpoints of its own accord is still not finishing, and the ceiling
+// vocabulary stays so stored reports from that era classify the same way.
 //
 // Two signals, in the report's own voice:
 //   - a checkpoint DECLARATION: a line that IS the word — "Checkpoint —…",
@@ -313,8 +316,8 @@ var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";", "("}
 // handling still reaps (🎯T446 / 🎯T497 mention).
 //
 // 🎯T716: "next turn:" (colon required) names remaining work the way
-// "next step" already did. Bare "the next turn" is not a plan — T471's
-// "Done. Ready for the next turn." must still reap without a ceiling ask.
+// "next step" already did. Bare "the next turn" is not a plan —
+// "Done. Ready for the next turn." must still reap.
 // "not yet committed" / "not yet tested" are the incident's own unfinished
 // clauses; a mis-enveloped finish-report carrying them still reaps (kind
 // wins) but notifies the PO to respawn (T577).

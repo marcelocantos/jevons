@@ -85,7 +85,7 @@ func TestT723NoClaimReportsAreNotTerminal(t *testing.T) {
 
 func TestT723HarnessAckSeatRetainedThroughSink(t *testing.T) {
 	const agent = "ge-t190-desktop-cook"
-	s, reg := t471SinkServer(t, agent)
+	s, reg := reapSinkServer(t, agent)
 	s.agentEventSink(agent)(claudia.Event{
 		Type:       "assistant",
 		Text:       t723HarnessAck,
@@ -98,7 +98,7 @@ func TestT723HarnessAckSeatRetainedThroughSink(t *testing.T) {
 
 func TestT723EmptyTerminalSeatRetainedThroughSink(t *testing.T) {
 	const agent = "jv-t723-empty"
-	s, reg := t471SinkServer(t, agent)
+	s, reg := reapSinkServer(t, agent)
 	s.agentEventSink(agent)(claudia.Event{
 		Type:       "assistant",
 		Text:       "",

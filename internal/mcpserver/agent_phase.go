@@ -169,14 +169,7 @@ func ClassifyAgentPhase(alive, turnBegan, materialized bool, ev SessionEvidence)
 }
 
 // agentPhase derives the phase column for one registry row.
-// AgentStatusCheckpointed: the seat ended its turn at the depth ceiling and
-// the daemon owes it a resume (🎯T663) — not idle, not stopped.
-const AgentStatusCheckpointed = "checkpointed"
-
 func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
-	if alive && s.checkpointResumePendingFor(d.Name) {
-		return AgentStatusCheckpointed
-	}
 	if alive && s.seatIsBornStuck(d) {
 		return AgentStatusBornStuck
 	}

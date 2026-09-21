@@ -74,9 +74,6 @@ func (s *Server) markAgentTurnBegan(name string) {
 	s.agentTurnBegan[name] = true
 	// 🎯T664: a confirmed turn begin decides any undecided delivery.
 	delete(s.unconfirmedSends, name)
-	// 🎯T663: the resume (or any send) became a turn; the seat is no longer
-	// checkpointed.
-	delete(s.checkpointResumePending, name)
 	reg := s.registry
 	s.mu.Unlock()
 
@@ -124,8 +121,6 @@ func (s *Server) clearAgentTurnBegan(name string) {
 	// Outside the lock on purpose — the wiring mutex is never taken under mu
 	// (see attachAgentSink on lock order).
 	s.forgetAgentWiring(name)
-	// 🎯T392.4: so is the depth of the turn that seat was running.
-	s.forgetTurnDepth(name)
 }
 
 // 🎯T518 — queued / delivered_unconfirmed is a brief IN FLIGHT, not a brief

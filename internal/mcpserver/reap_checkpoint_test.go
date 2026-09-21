@@ -12,9 +12,9 @@ import (
 
 // 🎯T497: a depth-ceiling checkpoint report is not a finish.
 //
-// The 🎯T392.4 ceiling ask tells a worker to "Reach a checkpoint and END YOUR
-// TURN" — write down where you are, state the next step, end the turn, be
-// resumed. jv-t496-owner-reply did exactly that: its report opens "Checkpoint —
+// The per-turn depth-ceiling ask (since removed) told a worker to "Reach a
+// checkpoint and END YOUR TURN" — write down where you are, state the next
+// step, end the turn, be resumed. jv-t496-owner-reply did exactly that: its report opens "Checkpoint —
 // ending this turn at the depth ceiling", lists next steps for the successor
 // turn, and closes "No files modified yet; nothing to commit." The reap path
 // read the progress header "Done so far:" as a completion claim, found

@@ -158,7 +158,7 @@ func TestT750SeatIsKeptOnAQuotedMarker(t *testing.T) {
 		t.Errorf("reason = %q, want not_finished_work_report", reason)
 	}
 
-	s, reg2 := t471SinkServer(t, agent)
+	s, reg2 := reapSinkServer(t, agent)
 	s.agentEventSink(agent)(claudia.Event{
 		Type:       "assistant",
 		Text:       t745BusyPaneReport,
@@ -177,7 +177,7 @@ func TestT750SeatIsReapedOnItsOwnMarker(t *testing.T) {
 		t.Fatalf("the report that ends on an unquoted GOAL_STATUS: complete did not reap (reason %s)", reason)
 	}
 
-	s, reg2 := t471SinkServer(t, agent)
+	s, reg2 := reapSinkServer(t, agent)
 	s.agentEventSink(agent)(claudia.Event{
 		Type:       "assistant",
 		Text:       t745FinishedReport,
