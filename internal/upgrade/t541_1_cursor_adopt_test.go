@@ -229,6 +229,17 @@ func startCursorStoreHolder(t *testing.T) (sid string, pid int) {
 	if _, err := exec.LookPath("lsof"); err != nil {
 		t.Skip("lsof required to observe store.db writers")
 	}
+	// These tests assert what the guard does once a leftover is gone, not
+	// how it behaves when lsof or the reaped process is slow (that is
+	// TestStoreHolderProbeIsBoundedAndFailsClosed and the unconfirmed
+	// tests). Under host load lsof alone can outrun the production 10 s
+	// bound, and the guard then correctly fails closed — so the run is
+	// refused for a reason the test is not about. Widen the bounds so the
+	// awaited condition (leftover exited, lsof answered) decides the run
+	// rather than a wall-clock window.
+	prevLsof, prevWait := lsofTimeout, cursorStoreClearWait
+	lsofTimeout, cursorStoreClearWait = 5*time.Minute, 5*time.Minute
+	t.Cleanup(func() { lsofTimeout, cursorStoreClearWait = prevLsof, prevWait })
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	sid = "t541-1-leftover"

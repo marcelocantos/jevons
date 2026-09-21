@@ -78,20 +78,34 @@ func TestT438CleanCheckoutUISuiteInvocable(t *testing.T) {
 		return
 	}
 
-	// One fast UI oracle named in the acceptance (not the full make test-ui).
-	ui := exec.Command("make", "test-ui")
-	ui.Dir = wt
-	out, err := ui.CombinedOutput()
-	if err == nil {
-		return
+	// One UI oracle, not the whole `make test-ui`. What 🎯T438 guards is that
+	// the Playwright path is invocable on a clean checkout: the UI build the
+	// suites need, the browser install, and one suite that launches a
+	// browser. The remaining `make test-ui` scripts (legacy-obligations,
+	// t789, t799) assert product behaviour, not invocability, and already
+	// run as their own step of `make test`; repeating them here made this
+	// one test the longest in the package (over 10 min at host load ~200,
+	// past Go's default -timeout, while the same package passed with
+	// -timeout 45m — 🎯T803). The cost that remains is dependency install
+	// and build, which is what this test exists to exercise.
+	for _, step := range [][]string{
+		{"make", "ui-build", "playwright-browser"},
+		{"node", "scripts/react-ui-test/test.cjs"},
+	} {
+		ui := exec.Command(step[0], step[1:]...)
+		ui.Dir = wt
+		out, err := ui.CombinedOutput()
+		if err == nil {
+			continue
+		}
+		msg := string(out)
+		if strings.Contains(msg, "MODULE_NOT_FOUND") {
+			t.Fatalf("`%s` died with MODULE_NOT_FOUND in a clean checkout (%v).\n"+
+				"Install must make playwright require-able; this is not a browser-binary skip.\n%s",
+				strings.Join(step, " "), err, out)
+		}
+		t.Fatalf("`%s` RED on clean HEAD (%v).\n%s", strings.Join(step, " "), err, out)
 	}
-	msg := string(out)
-	if strings.Contains(msg, "MODULE_NOT_FOUND") {
-		t.Fatalf("UI oracle died with MODULE_NOT_FOUND in a clean checkout (%v).\n"+
-			"Install must make playwright require-able; this is not a browser-binary skip.\n%s",
-			err, out)
-	}
-	t.Fatalf("`make test-ui` RED on clean HEAD (%v).\n%s", err, out)
 }
 
 func jsString(s string) string {

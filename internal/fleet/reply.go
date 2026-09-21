@@ -82,15 +82,24 @@ type replyAssembler struct {
 	settleFor time.Duration
 	guardFor  time.Duration
 	done      chan string
+	// afterFunc schedules the settle and guard timers. Production uses
+	// time.AfterFunc; tests substitute a clock they fire by hand, so a
+	// test never races a wall-clock window against scheduler delay.
+	afterFunc func(d time.Duration, f func()) stopper
 
 	mu       sync.Mutex
 	text     strings.Builder
 	started  bool
 	gotText  bool
 	resolved bool
-	settle   *time.Timer
-	guard    *time.Timer
+	settle   stopper
+	guard    stopper
 }
+
+// stopper is the part of *time.Timer the assembler needs.
+type stopper interface{ Stop() bool }
+
+func realAfterFunc(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }
 
 func newReplyAssembler(sep string) *replyAssembler {
 	return &replyAssembler{
@@ -98,6 +107,7 @@ func newReplyAssembler(sep string) *replyAssembler {
 		settleFor: blockSettle,
 		guardFor:  emptyTurnGuard,
 		done:      make(chan string, 1),
+		afterFunc: realAfterFunc,
 	}
 }
 
@@ -178,14 +188,14 @@ func (r *replyAssembler) armSettleLocked() {
 	if r.settle != nil {
 		r.settle.Stop()
 	}
-	r.settle = time.AfterFunc(r.settleFor, r.resolve)
+	r.settle = r.afterFunc(r.settleFor, r.resolve)
 }
 
 func (r *replyAssembler) armGuardLocked() {
 	if r.guard != nil {
 		r.guard.Stop()
 	}
-	r.guard = time.AfterFunc(r.guardFor, r.resolve)
+	r.guard = r.afterFunc(r.guardFor, r.resolve)
 }
 
 func (r *replyAssembler) bumpGuardLocked() {

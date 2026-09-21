@@ -177,17 +177,62 @@ func TestReplyAssemblerSilentTurnResolvesEmpty(t *testing.T) {
 // stop_reason on some Claude Code versions, so the settle must extend
 // rather than resolve on the first terminal.
 func TestReplyAssemblerKeepsTrailingBlocksAfterTerminal(t *testing.T) {
+	// A wall-clock version of this test (sleep 5 ms against a 20 ms
+	// settle) went red under host load: the scheduler delayed the test
+	// goroutine past the settle window, so the settle fired before the
+	// trailing block was observed. The property is about ordering, not
+	// duration, so the timers here are fired by hand.
+	clock := &manualClock{}
 	r := testAssembler(chunkSeparator(claudia.ProviderClaude))
+	r.afterFunc = clock.afterFunc
 	defer r.Close()
 	r.Started()
 
 	r.Observe(final("headline"))
-	time.Sleep(5 * time.Millisecond)
+	first := clock.last()
 	r.Observe(delta("tail"))
+	second := clock.last()
+
+	if first == second || !first.stopped {
+		t.Fatalf("trailing block did not cancel and re-arm the settle (first stopped=%v)", first.stopped)
+	}
+	// Only the re-armed settle is live; the cancelled one must not resolve.
+	first.fire()
+	select {
+	case got := <-r.done:
+		t.Fatalf("cancelled settle resolved the reply as %q", got)
+	default:
+	}
+	second.fire()
 
 	got := mustWait(t, r)
 	if want := "headline\ntail"; got != want {
 		t.Errorf("reply = %q, want %q", got, want)
+	}
+}
+
+// manualClock hands out timers that fire only when the test says so.
+type manualClock struct{ timers []*manualTimer }
+
+type manualTimer struct {
+	f       func()
+	stopped bool
+}
+
+func (m *manualClock) afterFunc(_ time.Duration, f func()) stopper {
+	t := &manualTimer{f: f}
+	m.timers = append(m.timers, t)
+	return t
+}
+
+func (m *manualClock) last() *manualTimer { return m.timers[len(m.timers)-1] }
+
+func (t *manualTimer) Stop() bool { was := !t.stopped; t.stopped = true; return was }
+
+// fire runs the callback unless the timer was stopped, as a real timer would.
+func (t *manualTimer) fire() {
+	if !t.stopped {
+		t.f()
 	}
 }
 
