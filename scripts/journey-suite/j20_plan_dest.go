@@ -66,9 +66,18 @@ func (s *suite) j20PlanDest() error {
 	if _, err := s.writePlanFixture(defaultPlanRemaining, defaultPlanUsed); err != nil {
 		return err
 	}
+	// 🎯T517: a seat parented to the overseer is exempt from the sweep, so
+	// the parked worker hangs off an intermediate (PO-shaped) seat.
 	_, err = s.MCPToolCall("jevons_agent_start", map[string]any{
-		"name": "jv-t39015-park", "workdir": s.workdir, "actor": "jevons",
+		"name": "jv-t39015-po", "workdir": s.workdir, "actor": "jevons",
 		"parent": "jevons", "purpose": "work", "provider": "grok",
+	})
+	if err != nil {
+		return fmt.Errorf("explicit grok po start: %w", err)
+	}
+	_, err = s.MCPToolCall("jevons_agent_start", map[string]any{
+		"name": "jv-t39015-park", "workdir": s.workdir, "actor": "jv-t39015-po",
+		"parent": "jv-t39015-po", "purpose": "work", "provider": "grok",
 	})
 	if err != nil {
 		return fmt.Errorf("explicit grok start: %w", err)
