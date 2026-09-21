@@ -30,6 +30,7 @@ func ReattachFleetContext(ctx context.Context, reg *claudia.Registry) []string {
 		return nil
 	}
 	before := SessionSnapshot(reg)
+	releasePhantomCursorSessions(reg)
 	// Cursor ACP stdio cannot be adopted in-process. Without a claudia
 	// daemon, reap leftover writers (and ppid=1 orphans) and wait for
 	// them to exit before PreferAdopt Launch — a second session/load

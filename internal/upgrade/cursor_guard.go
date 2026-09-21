@@ -196,6 +196,42 @@ func storeWriterPIDs(path string) ([]int, bool) {
 	return pids, true
 }
 
+// releasePhantomCursorSessions clears Materialized on Cursor rows whose
+// session store is not on disk.
+//
+// Materialized makes a Launch insist on resuming, and a Cursor resume that
+// fails is latched until a restart. For a session that was never written
+// there is no conversation for that refusal to protect. On 2026-09-22 the
+// overseer's row named 227ea2e6, an id minted as a fallback when a live
+// migrate could not read the agent's session; the next bounce would have
+// taken the owner's chat down on it.
+//
+// Only a store that is positively absent counts. One that cannot be statted
+// for any other reason is left alone.
+func releasePhantomCursorSessions(reg *claudia.Registry) {
+	if reg == nil {
+		return
+	}
+	for _, d := range reg.List() {
+		if d.Provider != claudia.ProviderCursor || !d.Materialized || d.SessionID == "" {
+			continue
+		}
+		store := claudia.CursorACPStorePath(d.SessionID)
+		if store == "" {
+			continue
+		}
+		if _, err := os.Stat(store); !errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		slog.Warn("cursor row claims a session that was never written; it may mint a new one",
+			"name", d.Name, "session", d.SessionID, "store", store)
+		d.Materialized = false
+		if err := reg.Register(d); err != nil {
+			slog.Error("could not release phantom cursor session", "name", d.Name, "err", err)
+		}
+	}
+}
+
 // hushUnreapedCursorSeats disables AutoStart on Cursor rows whose leftover
 // writers survived reap+wait, so PreferAdopt does not Launch a second
 // client. Later cockpit Launch still hits [GuardCursorStart].
