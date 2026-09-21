@@ -503,38 +503,30 @@ func TestRestartThrashPolicy(t *testing.T) {
 	// fixedClockEpoch; thrashElapsedSec later is inside a thrashWindowSec
 	// window on any machine, at any load, however long the builds above took.
 	e.setClock(fixedClockEpoch + thrashElapsedSec)
-	start := time.Now()
+	// 🎯T815: inside the window the caller is no longer held for the
+	// remainder; the request is deferred and the runner activates the new
+	// build when the window ends. The 🎯T194 property is unchanged — a
+	// changed build is always activated, never skipped — only who waits.
 	out, err = e.run(thrashWindowSec)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("changed-build run failed: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "already activated") {
 		t.Fatalf("changed build was treated as already activated:\n%s", out)
 	}
-	// The exact arithmetic, not a substring: these three numbers are only
-	// reproducible because the clock is injected, so matching them is what
-	// keeps a future edit from quietly going back to real time.
-	wantWait := fmt.Sprintf("thrash window: last restart %ds ago (min %ds); waiting %ds",
-		thrashElapsedSec, thrashWindowSec, thrashRemainSec)
-	if !strings.Contains(out, wantWait) {
-		t.Errorf("changed build inside the window did not report waiting %q:\n%s", wantWait, out)
+	if !strings.Contains(out, "activation deferred") {
+		t.Fatalf("changed build inside the window was neither activated nor deferred:\n%s", out)
 	}
-	if !strings.Contains(out, "OK: development jevonsd serving") {
-		t.Fatalf("changed build was skipped instead of activated — a stale binary would keep serving:\n%s", out)
-	}
-	// A real `sleep thrashRemainSec` cannot come back early, so this bound is
-	// one-sided and load-proof: waiting longer never fails it.
-	if elapsed < thrashRemainSec*time.Second {
-		t.Errorf("restart took %v; expected to wait out the %ds remaining of the thrash window",
-			elapsed, thrashRemainSec)
+	deadline := time.Now().Add(90 * time.Second)
+	for e.variantServed() != "b" && time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
 	}
 	second := e.listenerPID()
 	if second == first || second == 0 {
 		t.Errorf("changed build did not replace the daemon (pid %d → %d)", first, second)
 	}
 	if got := e.variantServed(); got != "b" {
-		t.Fatalf("after activating the new build, :%d still serves variant %q — this is the stale-binary failure 🎯T194 forbids", e.port, got)
+		t.Fatalf("after the window, :%d still serves variant %q — this is the stale-binary failure 🎯T194 forbids", e.port, got)
 	}
 
 	// --- concurrency: N callers, one bounce -------------------------------
@@ -620,6 +612,8 @@ func TestRestartThrashPolicyDocumented(t *testing.T) {
 		"ONE-AT-A-TIME",
 		"WAIT, DON'T SKIP",
 		"🎯T194",
+		// 🎯T815: the gate that replaced sleeping out the interval.
+		"ACTIVATION GATE",
 		// 🎯T442: the daemon must not inherit the re-exec flags, or every
 		// agent it spawns skips the lock and races the port.
 		"unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED",

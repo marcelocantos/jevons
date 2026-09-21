@@ -126,7 +126,18 @@ WAIT_SEC="${JEVONS_RESTART_WAIT_SEC:-90}"
 STOP_WAIT_SEC="${JEVONS_RESTART_STOP_WAIT_SEC:-20}"
 # 🎯T218: min seconds between successful restarts (debounce thrash from
 # concurrent workers each bouncing the development daemon after every land).
-MIN_INTERVAL_SEC="${JEVONS_RESTART_MIN_INTERVAL_SEC:-180}"
+#
+# 🎯T815: the same knob is the ACTIVATION GATE interval (see below). Default
+# 600s; the owner tunes it with the env var or by writing a number of seconds
+# into ~/.jevons/restart-daily.interval (env wins). 0 disables the gate.
+INTERVAL_FILE="${JEVONS_RESTART_INTERVAL_FILE:-$HOME/.jevons/restart-daily.interval}"
+if [[ -n "${JEVONS_RESTART_MIN_INTERVAL_SEC:-}" ]]; then
+  MIN_INTERVAL_SEC="$JEVONS_RESTART_MIN_INTERVAL_SEC"
+elif [[ -r "$INTERVAL_FILE" && "$(tr -d '[:space:]' <"$INTERVAL_FILE")" =~ ^[0-9]+$ ]]; then
+  MIN_INTERVAL_SEC="$(tr -d '[:space:]' <"$INTERVAL_FILE")"
+else
+  MIN_INTERVAL_SEC=600
+fi
 STAMP_FILE="${JEVONS_RESTART_STAMP:-$HOME/.jevons/restart-daily.last}"
 # 🎯T218: identity of the daemon this script last started ("<pid> <sha256>"),
 # so a caller whose build is already serving can no-op instead of bouncing.
@@ -172,11 +183,121 @@ DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-daily.log}"
 # lock: introspection that blocks behind a live restart, or that appends
 # to the restart log, is a trap for anyone debugging one.
 WANTS_WORK=1
+GATE_MODE=request
 for _arg in ${@+"$@"}; do
   case "$_arg" in
     -h|--help|--dry-run) WANTS_WORK=0 ;;
+    --served) WANTS_WORK=0; GATE_MODE=served ;;
+    --deferred-runner) WANTS_WORK=0; GATE_MODE=runner ;;
+    --force) GATE_MODE=force ;;
   esac
 done
+
+# 🎯T815 ACTIVATION GATE — one bounce per interval carries every commit.
+#
+# Six bounces in an hour on 2026-09-22 (04:12 … 05:11), each one worker's
+# activation, each costing the fleet a restart. 🎯T218 bounded the rate by
+# making a caller SLEEP out the interval — which holds a worker seat past the
+# 30 s tool deadline, and still lets every sleeper bounce in turn. The gate
+# lives here, in the script, so a worker who simply runs it is covered:
+#
+#   a request that arrives inside the interval does NOT bounce and does NOT
+#   wait. It appends one line to $REQ_FILE, makes sure one detached deferred
+#   runner exists, prints when the next bounce is due, and returns.
+#
+#   the runner (one at a time, guarded by $PENDING_LOCK) sleeps to the end of
+#   the interval and runs this script with JEVONS_RESTART_GATE_RELEASE=1: the
+#   ordinary path, building committed HEAD *at that moment*, so the one bounce
+#   carries every commit landed since the last one. Every successful run
+#   appends "served <epoch> <sha> coalesced=<n> bounce=<0|1>" to $SERVED_FILE:
+#   the SHA is the HEAD the bounce was built from, n the requests it absorbed.
+#
+#   a requester asks `--served <its commit>` and gets the first served line
+#   whose SHA has its commit as an ancestor (git merge-base --is-ancestor), or
+#   exit 3 while its bounce is still pending.
+#
+# Bypasses, each deliberate: the daemon is not healthy (the watchdog's
+# recovery restart must never be deferred); no stamp yet (cold start); the
+# interval has elapsed; interval 0; and --force, which is the OWNER's word and
+# no worker's (the script cannot authenticate the caller — the standing brief
+# forbids workers from using it).
+REQ_FILE="${JEVONS_RESTART_REQUESTS:-$HOME/.jevons/restart-daily.requests}"
+SERVED_FILE="${JEVONS_RESTART_SERVED:-$HOME/.jevons/restart-daily.served}"
+PENDING_LOCK="${JEVONS_RESTART_PENDING_LOCK:-$HOME/.jevons/restart-daily.pending.lock}"
+
+SELF="$ROOT/scripts/$(basename "$0")"
+
+gate_head() { git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
+
+gate_due_epoch() {
+  # Epoch at which the next bounce may run: last stamp + interval, or empty
+  # when the gate does not apply (no valid stamp).
+  local last
+  last="$(cat "$STAMP_FILE" 2>/dev/null || true)"
+  [[ "$last" =~ ^[0-9]+$ ]] || return 0
+  printf '%s' $((last + MIN_INTERVAL_SEC))
+}
+
+if [[ "$GATE_MODE" == "served" ]]; then
+  # --served <sha>: which bounce carried this commit?
+  want=""
+  prev=""
+  for _arg in ${@+"$@"}; do
+    [[ "$prev" == "--served" ]] && want="$_arg"
+    prev="$_arg"
+  done
+  [[ -n "$want" ]] || { echo "usage: $0 --served <commit>" >&2; exit 2; }
+  want="$(git -C "$ROOT" rev-parse --verify --quiet "${want}^{commit}" 2>/dev/null || printf '%s' "$want")"
+  if [[ -r "$SERVED_FILE" ]]; then
+    while read -r _kind _epoch _sha _rest; do
+      [[ "$_kind" == "served" && -n "$_sha" && "$_sha" != "unknown" ]] || continue
+      if [[ "$_sha" == "$want" ]] || git -C "$ROOT" merge-base --is-ancestor "$want" "$_sha" 2>/dev/null; then
+        echo "served $_epoch $_sha $_rest"
+        exit 0
+      fi
+    done <"$SERVED_FILE"
+  fi
+  echo "pending: no bounce has carried $want yet (requests: $(wc -l <"$REQ_FILE" 2>/dev/null | tr -d ' ' || echo 0))"
+  exit 3
+fi
+
+if [[ "$GATE_MODE" == "runner" ]]; then
+  # The deferred runner. Holds $PENDING_LOCK for its whole life, so a second
+  # runner is refused; re-checks the request file under the lock before it
+  # exits, so a request that lands as it leaves gets a successor.
+  while [[ -s "$REQ_FILE" ]]; do
+    due="$(gate_due_epoch)"
+    now="$(date +%s)"
+    if [[ -n "$due" && "$due" -gt "$now" ]]; then
+      sleep $((due - now))
+    fi
+    JEVONS_RESTART_GATE_RELEASE=1 "$SELF" || {
+      echo "$(date '+%Y-%m-%dT%H:%M:%S%z') 🎯T815 deferred bounce failed; requests stay pending" >&2
+      exit 1
+    }
+  done
+  exit 0
+fi
+
+if [[ "$GATE_MODE" == "request" && "$WANTS_WORK" == "1" && "${JEVONS_RESTART_GATE_RELEASE:-0}" != "1" \
+      && "$MIN_INTERVAL_SEC" -gt 0 && -x "$ROOT/bin/detach" && -x "$ROOT/bin/runlock" ]]; then
+  gdue="$(gate_due_epoch)"
+  gnow="$(date +%s)"
+  ghealth="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+  if [[ -n "$gdue" && "$gdue" -gt "$gnow" && "$ghealth" == "200" ]]; then
+    mkdir -p "$(dirname "$REQ_FILE")"
+    printf 'req %s %s %s\n' "$gnow" "$(gate_head)" "${JEVONS_AGENT_NAME:-${USER:-unknown}}" >>"$REQ_FILE"
+    gpending="$(wc -l <"$REQ_FILE" | tr -d ' ')"
+    # One detached runner; extras lose the lock race and exit.
+    ( unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED JEVONS_RESTART_NO_DETACH JEVONS_RESTART_NO_LOCK JEVONS_RESTART_FAULT
+      "$ROOT/bin/detach" -quiet -log "${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-daily.log}" -- \
+        "$ROOT/bin/runlock" -quiet -timeout 5s "$PENDING_LOCK" "$SELF" --deferred-runner \
+        </dev/null >/dev/null 2>&1 & )
+    printf '%s 🎯T815 activation deferred: %s request(s) pending; the next bounce runs in %ss (interval %ss) and carries every commit landed by then. Not serving your commit yet: `%s --served <commit>` names the bounce that did.\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$gpending" "$((gdue - gnow))" "$MIN_INTERVAL_SEC" "$0"
+    exit 0
+  fi
+fi
 
 if [[ "$WANTS_WORK" == "1" && "${JEVONS_RESTART_DETACHED:-0}" != "1" && "${JEVONS_RESTART_NO_DETACH:-0}" != "1" ]]; then
   if [[ ! -x "$DETACH" ]]; then
@@ -222,8 +343,16 @@ that genuinely changed always gets activated — if the last restart was
 inside the min-interval, the script waits out the remainder rather than
 skipping, so a real change never reports success while a stale binary serves.
 
+🎯T815 activation gate: a request inside the interval (default 600s, env
+JEVONS_RESTART_MIN_INTERVAL_SEC or ~/.jevons/restart-daily.interval) does not
+bounce and does not wait. It is recorded, the next bounce time is printed, and
+one detached runner performs a single bounce that carries every commit landed
+by then. `--served <commit>` names the bounce that carried a commit (exit 3
+while pending). Nothing is deferred while the daemon is down.
+
 Options:
   -h, --help     Show this help and exit 0
+  --served SHA   Print the served-ledger line whose HEAD contains SHA
   --dry-run      Print planned steps; do not stop/start/kill
   --force        Bypass the thrash policy: restart even if the running
                  daemon already serves this build, and do not wait out the
@@ -369,6 +498,8 @@ await_min_interval() {
   # instead of skipping: skipping would report success while the old binary
   # kept serving (🎯T194). Bounded by MIN_INTERVAL_SEC by construction.
   [[ "$FORCE" -eq 0 ]] || return 0
+  # 🎯T815: the deferred runner has already waited out the interval.
+  [[ "${JEVONS_RESTART_GATE_RELEASE:-0}" != "1" ]] || return 0
   [[ -f "$STAMP_FILE" ]] || return 0
   local last now elapsed remain
   last="$(cat "$STAMP_FILE" 2>/dev/null || true)"
@@ -660,6 +791,21 @@ wait_until_serving() {
   die "timed out after ${deadline}s waiting for development jevonsd on :$PORT (log=$LOG)"
 }
 
+record_served() {
+  # 🎯T815: append one ledger line naming the HEAD this run served and how
+  # many pending requests it absorbed. The request file is renamed away
+  # first, so a request that lands afterwards is counted by the next bounce
+  # (and the runner loop, which re-checks the file, schedules it).
+  local n=0 taken="$REQ_FILE.taken.$$"
+  if [[ -f "$REQ_FILE" ]] && mv "$REQ_FILE" "$taken" 2>/dev/null; then
+    n="$(wc -l <"$taken" | tr -d ' ')"
+    rm -f "$taken"
+  fi
+  mkdir -p "$(dirname "$SERVED_FILE")" 2>/dev/null || true
+  printf 'served %s %s coalesced=%s bounce=%s\n' "$(date +%s)" "$SERVED_HEAD" "$n" "$1" >>"$SERVED_FILE" 2>/dev/null || true
+  log "🎯T815 served head=${SERVED_HEAD:0:12} coalesced=$n bounce=$1"
+}
+
 # --- main --------------------------------------------------------------------
 
 log "🎯T191 restart-daily-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_run=$DRY_RUN force=$FORCE"
@@ -677,6 +823,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-daily-jevonsd.sh >>\$HOME/.jevons/restart-daily.log 2>&1 &"
   exit 0
 fi
+
+# 🎯T815: the HEAD this run serves, read before the build. A commit landing
+# mid-build can only make this an under-claim (safe for the requester's
+# merge-base check), never an over-claim.
+SERVED_HEAD="$(gate_head)"
 
 if [[ "$SKIP_MAKE" != "1" ]]; then
   # 🎯T254.2: build committed HEAD in a throwaway worktree, never the shared
@@ -789,6 +940,7 @@ already_activated() {
 
 if already_activated; then
   log "🎯T218 already activated: :$PORT serves this exact build (sha ${WANT_SHA:0:12}…); no restart needed"
+  record_served 0
   exit 0
 fi
 
@@ -800,6 +952,7 @@ fi
 # they were very likely activating the same build we wanted.
 if already_activated; then
   log "🎯T218 coalesced: preceding restart activated this build; no restart needed"
+  record_served 0
   exit 0
 fi
 
@@ -830,4 +983,5 @@ log "OK: development jevonsd serving on :$PORT (workdir=$WORKDIR)"
 # 🎯T218: stamp successful restart to open the next thrash window.
 mkdir -p "$(dirname "$STAMP_FILE")" 2>/dev/null || true
 date +%s >"$STAMP_FILE" 2>/dev/null || true
+record_served 1
 exit 0
