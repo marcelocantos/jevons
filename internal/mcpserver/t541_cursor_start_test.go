@@ -159,6 +159,7 @@ func TestT541EmptyPromptWritesRemintSeed(t *testing.T) {
 }
 
 func TestT541HandleAgentStartReleasesMutexBeforePrompt(t *testing.T) {
+	t791Steerable(t) // 🎯T791: subject is not steerability
 	s, _ := t541Server(t)
 	var heldDuringLaunch, heldDuringSubmit atomic.Bool
 	s.launchAgentFn = func(context.Context, string) (*claudia.Agent, error) {
@@ -200,6 +201,7 @@ func TestT541HandleAgentStartReleasesMutexBeforePrompt(t *testing.T) {
 }
 
 func TestT541HandleAgentStartKeepsBoundMint(t *testing.T) {
+	t791Steerable(t) // 🎯T791: subject is not steerability
 	s, reg := t541Server(t)
 	s.launchAgentFn = func(context.Context, string) (*claudia.Agent, error) { return nil, nil }
 	s.cursorSubmit = func(string, string) error { return nil }

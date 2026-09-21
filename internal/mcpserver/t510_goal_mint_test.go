@@ -14,6 +14,7 @@ import (
 
 // 🎯T510 — work mint sets AgentDef.Goal; remint keeps it; asides stay empty.
 func TestT510WorkMintSetsGoal(t *testing.T) {
+	t791Steerable(t) // 🎯T791: subject is not steerability
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)

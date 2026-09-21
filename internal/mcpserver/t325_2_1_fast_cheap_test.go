@@ -60,6 +60,7 @@ func TestStitchFastCheapPinsGrokPeerOnMechanicalAndOps(t *testing.T) {
 }
 
 func TestStitchFastCheapPinsSparkWhenDestIsCodex(t *testing.T) {
+	t791Steerable(t) // 🎯T791: subject is not steerability
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -108,6 +109,7 @@ func TestStitchDoesNotPinFastCheapOnImplementOrOverseer(t *testing.T) {
 }
 
 func TestStitchExplicitModelStillWinsOnFastCheap(t *testing.T) {
+	t791Steerable(t) // 🎯T791: subject is not steerability
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +178,7 @@ func TestStitchDoesNotPinSparkOnRedCodexWeekly(t *testing.T) {
 }
 
 func TestStitchEscalatesFastCheapWhenPromptExceedsWindow(t *testing.T) {
+	t791Steerable(t) // 🎯T791: subject is not steerability
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)

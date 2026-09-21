@@ -448,6 +448,17 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		}
 	}
 	pick := s.mintProviderPick(providerArg, stored, rowExisted, taskTypeArg, purpose, name, ownerAsked)
+	// 🎯T791: an empty plan dest is refused here with the reason (soft cap,
+	// excluded unsteerable providers) rather than a bare register failure.
+	if !rowExisted && strings.TrimSpace(pick.Provider) == "" && pick.Knob == cost.KnobClaudia && strings.TrimSpace(pick.Detail) != "" {
+		s.mu.Lock()
+		s.pendingSpawnRole = ""
+		s.pendingOwnerAsked = false
+		s.mu.Unlock()
+		life["err"] = "plan_dest_empty"
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		return mcp.NewToolResultError("plan dest empty; refusing to land on a hot or unsteerable dest (🎯T390.1.5 / 🎯T791): " + pick.Detail), nil
+	}
 	if !rowExisted {
 		if dest := strings.TrimSpace(pick.Provider); dest != "" {
 			if blocked := s.checkDestSpawnAllowed(purpose, name, dest); blocked != nil {

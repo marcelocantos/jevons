@@ -22,17 +22,19 @@ const destAuthor = "claudia"
 // ResolveMint is the omit-provider dest pick (🎯T691 / 🎯T652 / 🎯T693).
 // Prefer Claude among dest-band backends. Published v0.40.0 Resolve
 // ranks by slack, which is the T693 false-green the sibling replace
-// hid; pickDest is the pin-compat destBandRank (🎯T707).
+// hid; pickDest is the pin-compat destBandRank (🎯T707). Providers whose
+// seats cannot be steered are never chosen (🎯T791).
 func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	_ = ctx
-	return pickDest(cands, string(claudia.ProviderClaude), "", now, th)
+	return pickDest(cands, string(claudia.ProviderClaude), "", true, now, th)
 }
 
 // ResolveDest is the migrate/park dest pick (🎯T691 / 🎯T693). exclude
 // drops the seat's current provider. No PreferProvider — not Claude-first.
+// Steerability is not filtered here: 🎯T791 scopes the exclusion to mint.
 func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	_ = ctx
-	return pickDest(cands, "", exclude, now, th)
+	return pickDest(cands, "", exclude, false, now, th)
 }
 
 type destRow struct {
@@ -41,10 +43,11 @@ type destRow struct {
 	pressure float64
 }
 
-func pickDest(cands []DestCand, prefer, exclude string, now time.Time, th Thresholds) (claudia.ModelPick, error) {
+func pickDest(cands []DestCand, prefer, exclude string, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	prefer = strings.ToLower(strings.TrimSpace(prefer))
 	exclude = strings.ToLower(strings.TrimSpace(exclude))
 	var dests []destRow
+	var capped, unsteer []string
 	for _, c := range cands {
 		p := strings.ToLower(strings.TrimSpace(c.Provider))
 		if p == "" {
@@ -53,10 +56,15 @@ func pickDest(cands []DestCand, prefer, exclude string, now time.Time, th Thresh
 		if p == "" || p == exclude {
 			continue
 		}
+		if why := UnsteerableReason(p); steerableOnly && why != "" {
+			unsteer = append(unsteer, fmt.Sprintf("%s (%s)", p, why))
+			continue
+		}
 		if !DestEligible(c.Backend, now, th) {
 			continue
 		}
 		if destAtSessionCap(c) {
+			capped = append(capped, fmt.Sprintf("%s %d/%d", p, c.Load, c.Cap))
 			continue
 		}
 		dests = append(dests, destRow{
@@ -66,7 +74,16 @@ func pickDest(cands []DestCand, prefer, exclude string, now time.Time, th Thresh
 		})
 	}
 	if len(dests) == 0 {
-		return claudia.ModelPick{}, fmt.Errorf("resolve: no dest-band dest")
+		// 🎯T791: name the cap and the unsteerable providers so the refusal
+		// says why headroom elsewhere did not help.
+		msg := "resolve: no dest-band dest"
+		if len(capped) > 0 {
+			msg += "; soft cap reached: " + strings.Join(capped, ", ")
+		}
+		if len(unsteer) > 0 {
+			msg += "; excluded unsteerable: " + strings.Join(unsteer, ", ")
+		}
+		return claudia.ModelPick{}, fmt.Errorf("%s", msg)
 	}
 	pool := dests
 	if prefer != "" {
@@ -89,6 +106,9 @@ func pickDest(cands []DestCand, prefer, exclude string, now time.Time, th Thresh
 	reason := fmt.Sprintf("band=%s", best.band)
 	if prefer != "" && best.provider == prefer {
 		reason += " prefer_provider"
+	}
+	if len(unsteer) > 0 {
+		reason += " excluded_unsteerable=" + strings.Join(unsteer, ",")
 	}
 	return claudia.ModelPick{
 		Provider: claudia.Provider(best.provider),

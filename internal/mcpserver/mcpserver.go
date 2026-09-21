@@ -741,6 +741,15 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	if explicit != "" && !existed && !ownerAsked && !s.providerDestEligible(explicit) {
 		explicit = ""
 	}
+	// 🎯T791: an unsteerable pin is dropped the same way; the exclusion is
+	// cited on the pick so the start result names it.
+	droppedUnsteerable := ""
+	if explicit != "" && !existed && !ownerAsked {
+		if why := planusage.UnsteerableReason(explicit); why != "" {
+			droppedUnsteerable = fmt.Sprintf("explicit %s dropped: unsteerable (%s)", explicit, why)
+			explicit = ""
+		}
+	}
 	if explicit == "" && !existed && feedOK {
 		resolved, err := planusage.ResolveMint(context.Background(), cands, now, th)
 		if err != nil || resolved.Provider == "" {
@@ -762,6 +771,9 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 			Knob:     cost.KnobClaudia,
 			Detail:   strings.TrimSpace(resolved.Reason),
 			TaskType: dec.TaskType,
+		}
+		if droppedUnsteerable != "" {
+			pick.Detail += "; " + droppedUnsteerable
 		}
 		if cfg != "" && cfg != p {
 			pick.LosingKnob = cost.KnobConfig

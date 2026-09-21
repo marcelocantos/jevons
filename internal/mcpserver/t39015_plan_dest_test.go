@@ -29,6 +29,7 @@ func t39015Weekly(name string, rem, used float64, now time.Time) planusage.Backe
 }
 
 func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
+	t791Steerable(t) // 🎯T791: subject is not steerability
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
