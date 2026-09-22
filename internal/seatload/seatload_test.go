@@ -50,6 +50,36 @@ func TestT708DescendantsFindOrphanedGroupMembers(t *testing.T) {
 	}
 }
 
+func TestT708SharedProcessGroupDoesNotClaimSiblings(t *testing.T) {
+	// Three Cursor seats the broker placed in one group. None of them
+	// leads it. Each reading must stay inside that seat's children.
+	tbl := Table{
+		{PID: 1, PPID: 0, PGID: 1, Command: "launchd"},
+		{PID: 99272, PPID: 1, PGID: 99272, Command: "broker"},
+		{PID: 24067, PPID: 99272, PGID: 99272, Command: "cursor-agent claudia-po"},
+		{PID: 24068, PPID: 24067, PGID: 99272, Command: "claudia-po child"},
+		{PID: 31741, PPID: 99272, PGID: 99272, CPUPercent: 90, Command: "cursor-agent cl-t119"},
+		{PID: 31742, PPID: 31741, PGID: 99272, CPUPercent: 80, Command: "go test"},
+		{PID: 22873, PPID: 99272, PGID: 99272, Command: "cursor-agent jv-t540"},
+	}
+	a, err := AnchorFor(tbl, "cl-t119-broker-gate", 31741, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]bool{}
+	for _, p := range Descendants(tbl, a) {
+		got[p.PID] = true
+	}
+	if !got[31742] {
+		t.Fatal("own child missing")
+	}
+	for _, never := range []int{99272, 24067, 24068, 22873, 31741} {
+		if got[never] {
+			t.Errorf("shared group attributed pid %d to cl-t119", never)
+		}
+	}
+}
+
 func TestT708OrphanedNamesTheUnreachableLoops(t *testing.T) {
 	tbl := specimenTable()
 	a, _ := AnchorFor(tbl, "cl-t33-codex-load", 900, time.Now())

@@ -149,7 +149,12 @@ func Descendants(t Table, a Anchor) []Proc {
 	}
 
 	// Process-group membership — the half that survives the root.
-	if a.PGID > 1 {
+	// Only a group this seat leads. A broker that starts several Cursor
+	// seats in one group made every seat own every sibling's children
+	// (2026-09-22: cl-t119 read as 184 processes while three agents
+	// shared pgid 99272). The reparented-loop case is the seat's own
+	// group: its pid and pgid are the same.
+	if a.PGID > 1 && a.PGID == a.PID {
 		for _, p := range t {
 			if p.PGID == a.PGID && p.PID != a.PID {
 				owned[p.PID] = p
