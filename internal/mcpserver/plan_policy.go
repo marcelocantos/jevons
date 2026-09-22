@@ -28,6 +28,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	if !ok {
 		return nil
 	}
+	stayed := map[string]bool{}
 	var agents []planusage.AgentRef
 	if s.registry != nil {
 		for _, d := range s.registry.List() {
@@ -78,6 +79,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				// to seed. Parking here is what left the product owners
 				// stopped after a hot-week move (2026-09-22).
 				s.finishColdPlanMigrate(a)
+				stayed[a.Name] = true
 				continue
 			}
 			if _, err := s.migrator.CompleteThinBrief(prepared); err != nil {
@@ -98,7 +100,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		}
 		slog.Info("plan policy parked", "name", a.Name, "from", a.From)
 	}
-	s.releaseColdSwitched(hotNames(acts))
+	s.releaseColdSwitched(hotNames(acts), stayed)
 	return acts
 }
 
@@ -153,21 +155,26 @@ func (s *Server) finishColdPlanMigrate(a planusage.PlanAction) {
 // releaseColdSwitched lifts a park that an earlier sweep wrote because a
 // hot-week move had no transcript to hand over. The seat's provider is
 // no longer hot, so the park is not protecting a handover.
-func (s *Server) releaseColdSwitched(stillHot map[string]bool) {
+func (s *Server) releaseColdSwitched(stillHot, justStayed map[string]bool) {
 	if s == nil || s.registry == nil {
 		return
 	}
 	snap := s.fleetIntent()
 	for _, d := range s.registry.List() {
-		if stillHot[d.Name] {
+		if stillHot[d.Name] || justStayed[d.Name] {
 			continue
 		}
 		rec, ok := snap.Agents[d.Name]
-		if !ok || rec.State != fleetintent.Parked || !coldSwitchPark(rec.Reason) {
+		if !ok || !coldSwitchStay(rec) {
+			continue
+		}
+		if ag := s.registry.Get(d.Name); ag != nil && ag.Alive() {
 			continue
 		}
 		slog.Info("plan policy lifting cold-switch park", "name", d.Name, "provider", d.Provider, "reason", rec.Reason)
-		s.MarkAgentWorking(d.Name, "jevons", "cold provider switch already landed; seat stays")
+		if rec.State != fleetintent.Working {
+			s.MarkAgentWorking(d.Name, "jevons", "cold provider switch already landed; seat stays")
+		}
 		if s.migrator == nil {
 			continue
 		}
@@ -179,6 +186,13 @@ func (s *Server) releaseColdSwitched(stillHot map[string]bool) {
 
 func coldSwitchPark(reason string) bool {
 	return strings.Contains(reason, "prepare returned COLD") || strings.Contains(reason, "pending record is COLD")
+}
+
+func coldSwitchStay(rec fleetintent.Record) bool {
+	if rec.State == fleetintent.Parked && coldSwitchPark(rec.Reason) {
+		return true
+	}
+	return rec.State == fleetintent.Working && strings.Contains(rec.Reason, "seat stays")
 }
 
 func (s *Server) pendingPlanHandovers() map[string]handover.Pending {

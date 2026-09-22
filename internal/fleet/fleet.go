@@ -484,7 +484,7 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 	// that must be observed.
 	defer f.launching(t.ID)()
 
-	ag, err := LaunchReconciled(f.reg, t.ID)
+	ag, err := LaunchRecovering(f.reg, t.ID)
 	if err != nil {
 		return fmt.Errorf("launch agent %q: %w", t.ID, err)
 	}
