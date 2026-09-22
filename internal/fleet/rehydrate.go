@@ -6,8 +6,6 @@ package fleet
 import (
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -95,30 +93,15 @@ const StatusDeadUnmaterialized = "dead_unmaterialized"
 
 // SessionLost reports whether def demands a resume that cannot succeed:
 // the row is Materialized (so Launch will pass RequireResume) but the
-// provider transcript backing its session id is not on disk.
+// Claude transcript backing its session id is not on disk.
 //
-// Claude is decidable via JSONL. Grok's exclusive home is the directory
-// claudia refuses to create on resume
-// (~/.local/state/claudia/grok-homes/<sessionID>). A materialized row
-// whose home was never published — a cold provider switch that kept the
-// old session id — retries that stat forever and the cockpit gives up.
-// Cursor and Codex stay unprobed here; a Cursor resume refusal is
-// Claudia's ErrCursorResumeDenied, and LaunchRecovering remints after
-// that, not after a disk probe.
+// Grok is not probed here. A missing exclusive home is not evidence that
+// a conversation was lost (🎯T627.1): session/load can fail for a store
+// that still exists, and rotating on that discards it. A home that was
+// never published is a different error — exclusive GROK_HOME unavailable
+// — and LaunchRecovering remints on that wording only.
 func SessionLost(def *claudia.AgentDef) bool {
-	if def == nil || def.SessionID == "" {
-		return false
-	}
-	switch def.Provider {
-	case claudia.ProviderGrok:
-		// Resume is required for any reloaded Grok row with a session id,
-		// materialized or not (claudia requireResumeLocked). A cold
-		// provider switch keeps the old id and never publishes a home, so
-		// the missing directory is the lost session. A first mint has no
-		// id yet, or Launch creates the home before the next check.
-		return grokHomeMissing(def.SessionID)
-	}
-	if !def.Materialized {
+	if def == nil || !def.Materialized || def.SessionID == "" {
 		return false
 	}
 	switch def.Provider {
@@ -133,24 +116,6 @@ func SessionLost(def *claudia.AgentDef) bool {
 	default:
 		return false
 	}
-}
-
-// grokHomeMissing reports that claudia's exclusive Grok home for sessionID
-// is not a directory. A stat error other than absence is not evidence.
-func grokHomeMissing(sessionID string) bool {
-	sid := strings.TrimSpace(sessionID)
-	if sid == "" || sid == "." || sid == ".." || strings.ContainsAny(sid, `/\`) {
-		return false
-	}
-	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
-		stateHome = filepath.Join(os.Getenv("HOME"), ".local", "state")
-	}
-	info, err := os.Stat(filepath.Join(stateHome, "claudia", "grok-homes", sid))
-	if err != nil {
-		return os.IsNotExist(err)
-	}
-	return !info.IsDir()
 }
 
 // RehydratedDef returns def rotated onto newSessionID: a fresh
@@ -291,18 +256,27 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 }
 
 // remintAfterResumeError is the 🎯T627.1 gate: a failed Launch may rotate
-// onto a fresh session only for Cursor session/load Invalid params, where
-// stacking a second ACP writer on the same store is 🎯T541.1. Grok (and
-// every other provider) must fail closed. Grok's load-failure wording
-// contains the same "existing conversation; refusing to mint" phrase as
-// [claudia.ErrCursorResumeDenied], so a string match alone would remint
-// a persisted Grok conversation whose home or session/load failed.
+// onto a fresh session only in two cases.
+//
+// Cursor session/load Invalid params, where stacking a second ACP writer
+// on the same store is 🎯T541.1.
+//
+// Grok "exclusive GROK_HOME unavailable": claudia will not mkdir on
+// resume, and the directory was never published. A cold provider switch
+// keeps the previous session id, so every later launch stats a path that
+// cannot exist and the cockpit stops after eight attempts. Grok's
+// session/load failure ("existing conversation; refusing to mint") shares
+// wording with [claudia.ErrCursorResumeDenied] and must still fail closed.
 func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
 	if err == nil || def == nil {
 		return false
 	}
-	if def.Provider != claudia.ProviderCursor {
+	switch def.Provider {
+	case claudia.ProviderCursor:
+		return claudia.IsCursorResumeDenied(err)
+	case claudia.ProviderGrok:
+		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")
+	default:
 		return false
 	}
-	return claudia.IsCursorResumeDenied(err)
 }

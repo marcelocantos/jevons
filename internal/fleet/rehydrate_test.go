@@ -169,29 +169,14 @@ func TestSessionLostGate(t *testing.T) {
 		t.Fatal("un-materialized row reported lost — first launch would rotate needlessly")
 	}
 
-	// A materialized Grok row whose exclusive home was never published
-	// cannot be resumed. One whose home exists is not lost, even with
-	// no Claude JSONL.
+	// Grok is not a Claude JSONL. Missing exclusive home is recovered by
+	// remintAfterResumeError on the unavailable-home error, not here
+	// (🎯T627.1).
 	grok := *claudeLost
 	grok.Provider = claudia.ProviderGrok
 	grok.SessionID = "grok-missing-home"
-	if !SessionLost(&grok) {
-		t.Fatal("materialized grok row with no exclusive home not reported lost")
-	}
-	grokHome := filepath.Join(home, ".local", "state", "claudia", "grok-homes", "grok-has-home")
-	if err := os.MkdirAll(grokHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	grok.SessionID = "grok-has-home"
 	if SessionLost(&grok) {
-		t.Fatal("grok row with an exclusive home reported lost")
-	}
-	// The live overseer row is not Materialized. Claudia still require-resumes
-	// a reloaded session id, so the missing home is lost either way.
-	grok.Materialized = false
-	grok.SessionID = "grok-missing-home"
-	if !SessionLost(&grok) {
-		t.Fatal("un-materialized grok row with no exclusive home not reported lost")
+		t.Fatal("grok row judged lost from a missing exclusive home")
 	}
 
 	cursor := *claudeLost

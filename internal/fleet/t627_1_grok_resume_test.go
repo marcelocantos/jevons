@@ -79,6 +79,29 @@ func TestT627_1GrokLoadFailureDoesNotRemint(t *testing.T) {
 	}
 }
 
+func TestGrokHomeNeverPublishedRemintsOnce(t *testing.T) {
+	reg := bounceLoadedGrok(t, false)
+	starts := 0
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(_ context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			starts++
+			if cfg.RequireResume {
+				return nil, fmt.Errorf("exclusive GROK_HOME unavailable for session %s: stat grok-homes/%s: no such file or directory", cfg.SessionID, cfg.SessionID)
+			}
+			return claudia.StartStub(context.Background(), cfg, nil)
+		},
+	})
+	if _, err := LaunchRecovering(reg, "jevons"); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Def("jevons").SessionID; got == t6271GrokSID || got == "" {
+		t.Fatalf("session not rotated: %q", got)
+	}
+	if starts != 2 {
+		t.Fatalf("starts=%d, want one refusal then one mint", starts)
+	}
+}
+
 func TestT627_1GrokMissingStorageDoesNotLookLost(t *testing.T) {
 	def := &claudia.AgentDef{
 		Name: "bounce-aside", WorkDir: t.TempDir(), SessionID: t6271GrokSID,
