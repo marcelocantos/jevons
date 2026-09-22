@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { QueueItem } from '../composer/sendQueue';
+import { imageThumbSrc, splitImageMarkers } from '../composer/images';
 
 /**
  * Queued follow-ups above the composer (🎯T657 slice 2a; 🎯T113 parity).
@@ -25,6 +26,7 @@ export function SendQueueStrip(props: {
       {items.map((it, i) => {
         const next = i === items.length - 1;
         const focused = props.focusedId === it.id;
+        const { ids, text } = splitImageMarkers(it.text);
         return (
           <div
             key={it.id}
@@ -34,7 +36,10 @@ export function SendQueueStrip(props: {
             data-queue-next={next ? 'true' : undefined}
             aria-current={focused ? 'true' : undefined}
           >
-            <span className="sq-text" title={it.text}>{it.text}</span>
+            {ids.map((id, n) => (
+              <img key={id + n} className="sq-thumb" src={imageThumbSrc(id)} alt={'queued image ' + id} />
+            ))}
+            <span className="sq-text" title={text || it.text}>{text}</span>
             <span className="sq-actions">
               <button type="button" className="sq-send-now" title="Fold into the running turn (⌘Enter)" onClick={() => props.onSteer(it.id)}>
                 Steer

@@ -5,15 +5,19 @@ package planusage
 
 import "testing"
 
-// 🎯T841: codex is steerable (claudia v0.42.0); only cursor stays excluded.
-func TestT841SteerableTableListsOnlyCursor(t *testing.T) {
-	if got := UnsteerableReason("cursor"); got != "claudia T118" {
-		t.Fatalf("cursor reason = %q", got)
+// 🎯T841: no provider is excluded; the mechanism still refuses whatever a
+// table names.
+func TestT841SteerableTableIsEmpty(t *testing.T) {
+	for _, p := range []string{"cursor", " Codex ", "claude", "grok"} {
+		if got := UnsteerableReason(p); got != "" {
+			t.Fatalf("%q must be steerable, got %q", p, got)
+		}
 	}
-	if got := UnsteerableReason(" Codex "); got != "" {
-		t.Fatalf("codex must be steerable, got %q", got)
+	if len(unsteerable) != 0 {
+		t.Fatalf("table = %v, want empty", unsteerable)
 	}
-	if len(unsteerable) != 1 {
-		t.Fatalf("table = %v, want only cursor", unsteerable)
+	defer SetUnsteerableForTest(map[string]string{"grok": "synthetic"})()
+	if got := UnsteerableReason(" GROK "); got != "synthetic" {
+		t.Fatalf("mechanism must refuse a named provider, got %q", got)
 	}
 }

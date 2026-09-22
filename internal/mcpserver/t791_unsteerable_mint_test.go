@@ -18,9 +18,10 @@ import (
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
-// 🎯T791: claude at its soft cap + cursor with plan headroom (and no cursor
-// cap) must refuse the mint — cursor seats cannot be steered (claudia T118),
-// so headroom does not make it a destination.
+// 🎯T791: claude at its soft cap + a provider in the unsteerable table with
+// plan headroom must refuse the mint — headroom does not make an unsteerable
+// provider a destination. The table is empty since 🎯T841, so these mechanism
+// tests name cursor in a synthetic table.
 func t791Server(t *testing.T, claudeLoad int, extra ...string) *Server {
 	t.Helper()
 	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
@@ -54,6 +55,7 @@ func t791Server(t *testing.T, claudeLoad int, extra ...string) *Server {
 }
 
 func TestT791ClaudeAtCapCursorHeadroomRefusesMint(t *testing.T) {
+	defer planusage.SetUnsteerableForTest(map[string]string{"cursor": "synthetic exclusion"})()
 	s := t791Server(t, 12)
 	pick := s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t791-omit", false)
 	if strings.TrimSpace(pick.Provider) != "" {
@@ -88,6 +90,7 @@ func TestT791ClaudeAtCapCursorHeadroomRefusesMint(t *testing.T) {
 
 // An explicit cursor pin is a habit, not a decision, unless owner_asked.
 func TestT791ExplicitCursorPinDroppedUnlessOwnerAsked(t *testing.T) {
+	defer planusage.SetUnsteerableForTest(map[string]string{"cursor": "synthetic exclusion"})()
 	s := t791Server(t, 0)
 	pick := s.mintProviderPick("cursor", "", false, "code_implement", string(claudia.PurposeWork), "jv-t791-pin", false)
 	if pick.Provider != "claude" {
@@ -102,52 +105,48 @@ func TestT791ExplicitCursorPinDroppedUnlessOwnerAsked(t *testing.T) {
 	}
 }
 
-// 🎯T841: codex is a destination again (claudia v0.42.0); cursor stays excluded.
-func TestT791CodexIsADestinationCursorStillRefused(t *testing.T) {
-	if why := planusage.UnsteerableReason("codex"); why != "" {
-		t.Fatalf("codex still unsteerable: %q", why)
-	}
-	if why := planusage.UnsteerableReason("cursor"); why == "" {
-		t.Fatal("cursor must stay unsteerable until claudia T118")
+// 🎯T841: with the table empty, codex and cursor are both destinations.
+func TestT791CodexAndCursorAreDestinations(t *testing.T) {
+	for _, p := range []string{"codex", "cursor"} {
+		if why := planusage.UnsteerableReason(p); why != "" {
+			t.Fatalf("%s still unsteerable: %q", p, why)
+		}
 	}
 
-	// Claude at cap, cursor and codex both with headroom: lands on codex, never cursor.
-	s := t791Server(t, 12, "codex")
-	pick := s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-omit", false)
+	// Claude at cap, only cursor with headroom: lands on cursor.
+	s := t791Server(t, 12)
+	pick := s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-cursor", false)
+	if pick.Provider != "cursor" {
+		t.Fatalf("omitted-provider mint did not land on cursor: %+v", pick)
+	}
+
+	// Claude at cap, only codex with headroom: lands on codex, not refused.
+	s = t791Server(t, 12, "codex")
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t583Weekly("claude", 56, now), t583Weekly("codex", 90, now),
+		}}
+	})
+	pick = s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-omit", false)
 	if pick.Provider != "codex" {
 		t.Fatalf("omitted-provider mint did not land on codex: %+v", pick)
 	}
-	if strings.Contains(pick.Detail, "excluded unsteerable: codex") {
-		t.Fatalf("codex cited as excluded: %q", pick.Detail)
+	if strings.Contains(pick.Detail, "excluded unsteerable") {
+		t.Fatalf("exclusion cited: %q", pick.Detail)
 	}
 
-	// Explicit codex is honoured without owner_asked.
-	s = t791Server(t, 0, "codex")
-	pick = s.mintProviderPick("codex", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-pin", false)
-	if pick.Provider != "codex" {
-		t.Fatalf("explicit codex dropped: %+v", pick)
-	}
-
-	// Cursor with headroom and codex absent: still refused.
-	s = t791Server(t, 12)
-	pick = s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-cursor", false)
-	if strings.TrimSpace(pick.Provider) != "" {
-		t.Fatalf("mint landed on unsteerable %q: %+v", pick.Provider, pick)
+	// Explicit pins are honoured without owner_asked.
+	for _, p := range []string{"codex", "cursor"} {
+		s = t791Server(t, 0, "codex")
+		pick = s.mintProviderPick(p, "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-pin-"+p, false)
+		if pick.Provider != p {
+			t.Fatalf("explicit %s dropped: %+v", p, pick)
+		}
 	}
 }
 
-// The exclusion is a capability flag: lifting it re-admits the provider.
-func TestT791ExclusionLiftsWithCapability(t *testing.T) {
-	restore := planusage.SetUnsteerableForTest(map[string]string{})
-	defer restore()
-	s := t791Server(t, 12)
-	pick := s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t791-lift", false)
-	if pick.Provider != "cursor" {
-		t.Fatalf("steerable cursor not a dest after lift: %+v", pick)
-	}
-}
-
-// t791Steerable simulates the claudia T118/T119 capability having landed, for
+// t791Steerable simulates an empty exclusion table (the state since 🎯T841), for
 // tests whose subject is something other than the steerability exclusion
 // (model pins, cursor start delivery, dest ranking among plan backends).
 func t791Steerable(t *testing.T) {

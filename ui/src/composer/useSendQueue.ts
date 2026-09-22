@@ -16,6 +16,7 @@ import type { DeliveryMode } from './deliveryMode';
 import {
   STORAGE_KEY,
   decideSend,
+  emptyState,
   enqueue,
   load,
   save,
@@ -74,13 +75,37 @@ export function useSendQueue(
   // FIFO drain: one head per idle observation. A submit to the overseer
   // paints an optimistic "received" phase, so busy flips true again before
   // the next head could race it (🎯T555.2).
+  //
+  // Do not drain on the first idle before phase meta arrives (🎯T562.3): a
+  // reload restores queued items while busy is still false, and draining then
+  // would drop the queue before the transcript paints thinking.
   const { busy, wireOpen } = opts;
+  const prevBusyRef = useRef<boolean | null>(null);
+  const prevWireRef = useRef(wireOpen);
+  const idleAfterBusyRef = useRef(false);
   useEffect(() => {
-    if (busy || !wireOpen || !state.items.length) return;
+    const prevBusy = prevBusyRef.current;
+    const prevWire = prevWireRef.current;
+    prevBusyRef.current = busy;
+    prevWireRef.current = wireOpen;
+    if (busy) {
+      idleAfterBusyRef.current = false;
+      return;
+    }
+    if (!wireOpen || !state.items.length) return;
+    if (prevBusy === true) idleAfterBusyRef.current = true;
+    const wireReopened = prevWire === false && wireOpen;
+    if (!idleAfterBusyRef.current && !wireReopened) return;
     const { item, state: next } = shiftNext(state);
     if (!item) return;
     setState(next);
     sendNowRef.current(item.text, 'submit');
+    if (wireReopened && next.items.length) {
+      // Offline hold: the wire is back and the seat is idle — drain the rest.
+      for (const rest of next.items) sendNowRef.current(rest.text, 'submit');
+      setState(emptyState());
+      idleAfterBusyRef.current = false;
+    }
   }, [busy, wireOpen, state]);
 
   const submit = useCallback(

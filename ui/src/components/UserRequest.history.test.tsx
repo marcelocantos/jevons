@@ -4,11 +4,15 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDrafts } from '../store/drafts';
+import { usePendingImages } from '../store/pendingImages';
 import { UserRequest } from './UserRequest';
 
 // T88/T562: mounted composer contract, not provider or complete-widget evidence.
 const history = [{ id: 'u1', text: 'same request' }, { id: 'u2', text: 'same request' }];
-beforeEach(() => useDrafts.setState({ drafts: { jevons: 'unfinished draft' } }));
+beforeEach(() => {
+  useDrafts.setState({ drafts: { jevons: 'unfinished draft' } });
+  usePendingImages.setState({ images: {} });
+});
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe.each(['comfortable', 'compact'] as const)('%s history recall', (density) => {

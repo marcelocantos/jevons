@@ -196,3 +196,24 @@ export function renderUserTextWithImages(s: string): string {
   html += escapeText(src.slice(last));
   return html;
 }
+
+/**
+ * 🎯T562.3: a queued send carries its images as the same `[image: id]` markers
+ * composeSendText prepends, so they survive reload and delivery with the text.
+ * This is the inverse: the ids and the text left over.
+ */
+export function splitImageMarkers(text: string): { ids: string[]; text: string } {
+  const src = String(text ?? '');
+  const ids: string[] = [];
+  const re = new RegExp(IMAGE_MARKER_RE.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) ids.push(m[1].toLowerCase());
+  const rest = src.replace(new RegExp(IMAGE_MARKER_RE.source, 'gi'), '').replace(/^\s+|\s+$/g, '');
+  return { ids, text: rest };
+}
+
+/** Rebuild a pending-image record from a durable id (thumb and full URLs are id-derived). */
+export function imageFromId(id: string): UploadedImage {
+  const n = String(id).trim().toLowerCase();
+  return { id: n, url: imageFullSrc(n), thumbUrl: imageThumbSrc(n), marker: imageMarker(n) };
+}

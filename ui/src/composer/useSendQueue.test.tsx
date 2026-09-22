@@ -101,6 +101,25 @@ describe('useSendQueue (T657 / T113)', () => {
     expect(other.result.current.items).toEqual([]);
   });
 
+  it('does not drain restored items until the seat has been busy then idle (T562.3)', () => {
+    const first = mount();
+    act(() => {
+      first.result.current.submit('held', 'submit');
+    });
+    first.unmount();
+    const sendNow = vi.fn();
+    const { result, rerender } = renderHook(
+      (p: { busy: boolean }) => useSendQueue('jevons', { busy: p.busy, wireOpen: true, sendNow }),
+      { initialProps: { busy: false } },
+    );
+    expect(result.current.items.map((i) => i.text)).toEqual(['held']);
+    expect(sendNow).not.toHaveBeenCalled();
+    rerender({ busy: true });
+    rerender({ busy: false });
+    expect(sendNow).toHaveBeenCalledWith('held', 'submit');
+    expect(result.current.items).toEqual([]);
+  });
+
   it('sendItem sends a chosen item with the given mode and removes it; remove drops it', () => {
     const { result, sendNow } = mount();
     act(() => {

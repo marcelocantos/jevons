@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MuxClient } from '../mux/client';
 import { AgentInteraction } from './AgentInteraction';
+import { usePendingImages } from '../store/pendingImages';
 
 // 🎯T657 slice 2a, owner path end to end inside the widget: a busy overseer
 // phase turns plain Enter into a queued follow-up that paints above the
@@ -26,6 +27,7 @@ class Socket {
 let client: MuxClient;
 beforeEach(() => {
   localStorage.clear();
+  usePendingImages.setState({ images: {} });
   vi.stubGlobal('WebSocket', Socket);
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(900);
@@ -74,6 +76,39 @@ describe('send queue wiring (T657 / T113)', () => {
     act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'idle' }); });
     await waitFor(() => expect(sends().map((b) => b.text)).toEqual(['go left', 'follow up', 'second']));
     await waitFor(() => expect(strip.classList.contains('visible')).toBe(false));
+  });
+
+  // 🎯T562.3: an image sent while busy rides the queue as its marker.
+  it('an image queued while busy survives a reload, returns as a chip on Edit, and is delivered with its marker', async () => {
+    const img = { id: 'abc123', url: '/api/images/abc123', thumbUrl: '/api/images/abc123/thumb', marker: '[image: abc123]' };
+    usePendingImages.setState({ images: { jevons: [img] } });
+    const first = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
+    act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'thinking' }); });
+    fireEvent.change(first.getByRole('textbox'), { target: { value: 'with a picture' } });
+    fireEvent.keyDown(first.getByRole('textbox'), { key: 'Enter' });
+    await waitFor(() => expect(first.container.querySelectorAll('#send-queue .sq-thumb')).toHaveLength(1));
+    expect(first.container.querySelectorAll('.img-chip')).toHaveLength(0);
+    expect(sends()).toEqual([]);
+    first.unmount();
+
+    // Reload: the queue comes back from localStorage with the marker intact.
+    const second = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'thinking' }); });
+    const strip = second.container.querySelector('#send-queue') as HTMLElement;
+    expect(strip.querySelector('.sq-thumb')?.getAttribute('src')).toBe(img.thumbUrl);
+    expect(strip.querySelector('.sq-text')?.textContent).toBe('with a picture');
+
+    // Edit puts the image back as a chip and the text back in the box.
+    fireEvent.click(strip.querySelector('.sq-edit')!);
+    await waitFor(() => expect(second.container.querySelectorAll('.img-chip')).toHaveLength(1));
+    expect((second.getByRole('textbox') as HTMLTextAreaElement).value).toBe('with a picture');
+
+    // Queue it again, then idle: delivery carries the marker.
+    fireEvent.keyDown(second.getByRole('textbox'), { key: 'Enter' });
+    await waitFor(() => expect(strip.querySelectorAll('.send-queue-item')).toHaveLength(1));
+    act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'idle' }); });
+    await waitFor(() => expect(sends()).toEqual([{ text: '[image: abc123]\nwith a picture' }]));
   });
 
   it('Alt+↑/↓ focus the queue before history; ⌘Enter steers and ⌘⇧Enter interrupts with the focused item (T657 2b)', async () => {

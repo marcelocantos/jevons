@@ -13,6 +13,8 @@ import { UserRequest, type RecalledRequest } from './UserRequest';
 import { displayRows } from '../conversation/display';
 import { PHASE_IDLE, phaseSampleFromUnknown } from '../conversation/overseerPhase';
 import { useSendQueue } from '../composer/useSendQueue';
+import { imageFromId, splitImageMarkers } from '../composer/images';
+import { usePendingImages } from '../store/pendingImages';
 import { reconcileQueueFocus } from '../composer/queueFocus';
 import { SendQueueStrip } from './SendQueueStrip';
 
@@ -68,7 +70,10 @@ export function AgentInteraction(props: {
     if (!item) return;
     const current = useDrafts.getState().drafts[props.name] || '';
     queue.remove(id);
-    setDraft(props.name, isEffectivelyEmpty(current) ? item.text : `${item.text}\n${current}`);
+    // Images go back to the composer as chips, not as marker text.
+    const { ids, text } = splitImageMarkers(item.text);
+    if (ids.length) usePendingImages.getState().add(props.name, ids.map(imageFromId));
+    setDraft(props.name, isEffectivelyEmpty(current) ? text : `${text}\n${current}`);
     setRecalled(null);
     queueMicrotask(() => rootRef.current?.querySelector('textarea')?.focus());
   };

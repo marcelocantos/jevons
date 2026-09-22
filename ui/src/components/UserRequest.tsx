@@ -3,6 +3,7 @@
 
 import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useDrafts } from '../store/drafts';
+import { durableImage, usePendingImages } from '../store/pendingImages';
 import { normalizeDensity, type Density } from '../density';
 import {
   composeSendText,
@@ -43,6 +44,8 @@ type UserRequestProps = {
   onRewind?: (request: RecalledRequest, text: string) => Promise<void>;
 };
 
+const NO_IMAGES: PendingImage[] = [];
+
 // A selected-agent change owns a new composer lifetime, including uploads and
 // rewind responses still in flight for the previous agent.
 export function UserRequest(props: UserRequestProps) {
@@ -54,14 +57,27 @@ function NamedUserRequest(props: UserRequestProps) {
   const compact = density === 'compact';
   const liveDraft = useDrafts((s) => s.drafts[props.name] || '');
   const setDraft = useDrafts((s) => s.setDraft);
-  const [pending, setPending] = useState<PendingImage[]>([]);
-  const boxRef = useRef<HTMLTextAreaElement>(null);
+  // 🎯T562.3: pending images persist per agent (agent switch and reload).
+  // While a history request is recalled its images are local state and the
+  // persisted set is left untouched, so a reload mid-edit loses nothing.
+  const storedPending = usePendingImages((s) => s.images[props.name]) ?? NO_IMAGES;
+  const setStoredPending = usePendingImages((s) => s.set);
+  const [recalledPending, setRecalledPending] = useState<PendingImage[]>([]);
   const [recalled, setRecalled] = useState<RecalledRequest | null>(null);
+  const pending: PendingImage[] = recalled ? recalledPending : storedPending;
+  const setPending = (next: PendingImage[] | ((cur: PendingImage[]) => PendingImage[])) => {
+    if (recalled) {
+      setRecalledPending(next);
+      return;
+    }
+    const cur = usePendingImages.getState().images[props.name] || NO_IMAGES;
+    setStoredPending(props.name, (typeof next === 'function' ? next(cur) : next).map(durableImage));
+  };
+  const boxRef = useRef<HTMLTextAreaElement>(null);
   const [recalledText, setRecalledText] = useState('');
   // Editing history never overwrites the ordinary persisted draft. Changing
   // agent cancels this local edit instead of turning it into an ordinary Send.
   const raw = recalled ? recalledText : liveDraft;
-  const imagesBeforeRecall = useRef<PendingImage[]>([]);
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const activeRef = useRef(true);
@@ -73,15 +89,10 @@ function NamedUserRequest(props: UserRequestProps) {
   // 🎯T562.7: a seed-only composer holds no owner draft (T192).
   const hasRealDraft = !isEffectivelyEmpty(raw) || pending.length > 0;
 
-  const leaveRecall = (restore: boolean) => {
+  const leaveRecall = () => {
     draftGeneration.current += 1;
-    if (restore) {
-      pending.forEach((img) => revokeObjectUrl(img.objectUrl));
-      setPending(imagesBeforeRecall.current);
-    } else {
-      imagesBeforeRecall.current.forEach((img) => revokeObjectUrl(img.objectUrl));
-    }
-    imagesBeforeRecall.current = [];
+    if (recalled) recalledPending.forEach((img) => revokeObjectUrl(img.objectUrl));
+    setRecalledPending([]);
     setRecalled(null);
     setRecalledText('');
     setRecallError('');
@@ -101,19 +112,15 @@ function NamedUserRequest(props: UserRequestProps) {
       setRecallError('This recalled request is no longer in the conversation. Cancel to restore your draft.');
       return;
     }
-    if (!recalled) {
-      imagesBeforeRecall.current = pending;
-      setPending([]);
-    }
     const next = Math.max(0, current + direction);
     if (next >= history.length) {
-      leaveRecall(true);
+      leaveRecall();
       return;
     }
     const request = history[next];
     if (recalled && request.id !== recalled.id) {
-      pending.forEach((img) => revokeObjectUrl(img.objectUrl));
-      setPending([]);
+      recalledPending.forEach((img) => revokeObjectUrl(img.objectUrl));
+      setRecalledPending([]);
     }
     draftGeneration.current += 1;
     setRecalled(request);
@@ -145,7 +152,6 @@ function NamedUserRequest(props: UserRequestProps) {
     return () => {
       activeRef.current = false;
       pendingRef.current.forEach((img) => revokeObjectUrl(img.objectUrl));
-      imagesBeforeRecall.current.forEach((img) => revokeObjectUrl(img.objectUrl));
     };
   }, []);
 
@@ -179,7 +185,7 @@ function NamedUserRequest(props: UserRequestProps) {
         if (activeRef.current) setRewinding(false);
       }
       if (!activeRef.current) return;
-      leaveRecall(true);
+      leaveRecall();
       queueMicrotask(() => boxRef.current?.focus());
       return;
     } else {
@@ -187,7 +193,7 @@ function NamedUserRequest(props: UserRequestProps) {
       queued = !!(outcome && typeof outcome === 'object' && outcome.queued);
       if (recalled) {
         setDraft(props.name, payload);
-        leaveRecall(false);
+        leaveRecall();
       }
     }
     pending.forEach((img) => revokeObjectUrl(img.objectUrl));
@@ -212,7 +218,10 @@ function NamedUserRequest(props: UserRequestProps) {
         added.forEach((img) => revokeObjectUrl(img.objectUrl));
         return;
       }
-      if (added.length) setPending((cur) => cur.concat(added));
+      if (!added.length) return;
+      setPending((cur) => cur.concat(added));
+      // Persisted images render from the server thumb; only recall keeps blobs.
+      if (!recalled) added.forEach((img) => revokeObjectUrl(img.objectUrl));
     }).finally(() => { uploadsRef.current -= 1; });
     return true;
   };
@@ -297,7 +306,7 @@ function NamedUserRequest(props: UserRequestProps) {
           }
           if (e.key === 'Escape' && recalled && !rewinding) {
             e.preventDefault();
-            leaveRecall(true);
+            leaveRecall();
             return;
           }
           if (applyComposerHomeEnd(e.currentTarget, e)) return;
@@ -357,7 +366,7 @@ function NamedUserRequest(props: UserRequestProps) {
       {recalled ? (
         <div className="composer-recall" role="group" aria-label="Editing an earlier request">
           <span>{props.onRewind ? 'Editing an earlier request. Enter rewinds and resends.' : 'Editing an earlier request. Rewind is not available yet.'}</span>
-          <button type="button" disabled={rewinding} onClick={() => leaveRecall(true)}>Cancel edit</button>
+          <button type="button" disabled={rewinding} onClick={() => leaveRecall()}>Cancel edit</button>
           <button type="button" disabled={rewinding || !canSend} onClick={(e) => void submit(e, true)}>Send as new message</button>
         </div>
       ) : null}

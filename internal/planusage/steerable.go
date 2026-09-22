@@ -8,14 +8,13 @@ import "strings"
 // unsteerable is the steerability capability table (🎯T791): a provider
 // listed here has seats that cannot receive jevons_* tools or accept
 // steering, so plan headroom never makes it a mint destination. The value
-// names the claudia target whose landing lifts the exclusion — delete the
-// row (or flip it via the claudia-side capability once published) and the
-// provider is a destination again; no other code names these providers.
-// Codex left the table when claudia v0.42.0 stopped rejecting its seats' MCP
-// calls (🎯T841); only cursor (claudia T118) remains excluded.
-var unsteerable = map[string]string{
-	"cursor": "claudia T118",
-}
+// names why (typically the claudia target whose landing lifts the exclusion);
+// add a row to exclude a provider, delete it to re-admit one. No provider is
+// currently excluded (🎯T841): codex left with claudia v0.42.0, and cursor
+// left once the boot scrub kept jevonsmcp first in ~/.cursor/mcp.json (the
+// root cause of claudia T118). The mechanism stays; no other code names
+// these providers.
+var unsteerable = map[string]string{}
 
 // UnsteerableReason returns why provider's seats cannot be steered, or ""
 // when they can (or the provider is unknown).

@@ -737,6 +737,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .send-queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.35; color: var(--text-dim); }
 .send-queue-item.focused { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
 .send-queue-item .sq-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-queue-item .sq-thumb { flex: none; height: 24px; width: 24px; object-fit: cover; border-radius: 4px; }
 .send-queue-item .sq-actions { display: flex; gap: 4px; flex-shrink: 0; margin-left: auto; }
 .send-queue-item .sq-actions button { border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 11px; font-family: var(--sans); padding: 2px 8px; border-radius: 5px; cursor: pointer; line-height: 1.3; }
 .send-queue-item .sq-actions button:hover { border-color: var(--border-focus); color: var(--text); }
