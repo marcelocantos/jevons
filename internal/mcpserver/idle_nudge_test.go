@@ -176,11 +176,15 @@ func TestClassifyIdleNudgeIdleStuckAndPostRestart(t *testing.T) {
 		t.Fatalf("post-restart: %s/%s", act, reason)
 	}
 
-	// 🎯T545.1: reminted empty seat is bounce failure, not a full_brief wake.
+	// A reminted seat is still a restart. The brief does not wait to see
+	// whether the old session came back.
 	pr.SessionReminted = true
 	act, reason = ClassifyIdleNudge(pr)
-	if act != IdleNudgeSkip || reason != "bounce_remint" {
+	if act != IdleNudgeNudge || reason != "post_restart_wake" {
 		t.Fatalf("reminted post-restart: %s/%s", act, reason)
+	}
+	if k := IdleNudgeKindFor(true, true); k != IdleNudgeKindFullBrief {
+		t.Fatalf("post-restart with brief already present: %s", k)
 	}
 }
 
@@ -495,7 +499,7 @@ func TestSweepIdleNudgesPostRestartFullBriefThenContinue(t *testing.T) {
 	}
 }
 
-func TestSweepIdleNudgesPostRestartSkipsRemintedFullBrief(t *testing.T) {
+func TestSweepIdleNudgesPostRestartBriefsRemintedSeat(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
 	if err != nil {
@@ -519,17 +523,18 @@ func TestSweepIdleNudgesPostRestartSkipsRemintedFullBrief(t *testing.T) {
 		Now:          time.Unix(2000, 0),
 		PostRestart:  true,
 		OverseerName: "jevons",
+		BriefPresent: func(string) bool { return true },
 		SessionReminted: func(name string) bool {
 			return name == "jv-t543-compact-once"
 		},
 		ProcessRunning: func(name string) bool { return name == "jv-t543-compact-once" },
 	})
-	if pushed != 0 {
-		t.Fatalf("full_brief delivered to reminted seat; pushed=%d", pushed)
+	if pushed != 1 {
+		t.Fatalf("full_brief deliveries=%d, want 1", pushed)
 	}
 	for _, r := range reps {
-		if r.Name == "jv-t543-compact-once" && (r.Delivered || r.Reason != "bounce_remint") {
-			t.Fatalf("report=%+v want skip bounce_remint", r)
+		if r.Name == "jv-t543-compact-once" && (!r.Delivered || r.Kind != IdleNudgeKindFullBrief || r.Reason != "post_restart_wake") {
+			t.Fatalf("report=%+v want full_brief post_restart_wake", r)
 		}
 	}
 }

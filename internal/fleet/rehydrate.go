@@ -180,6 +180,25 @@ func RehydrateLostSessionIn(reg *claudia.Registry, name string) (LostSession, bo
 	return lost, true, nil
 }
 
+// RestartCursorFresh abandons a Cursor seat's stored session before a
+// restart launches it. The next start does not session/load that id.
+// A process already alive in this registry is left on its session.
+// Grok and Claude keep their resume path.
+func RestartCursorFresh(reg *claudia.Registry, name string) error {
+	if reg == nil {
+		return nil
+	}
+	def := reg.Def(name)
+	if def == nil || def.Provider != claudia.ProviderCursor || def.SessionID == "" {
+		return nil
+	}
+	if proc := reg.Get(name); proc != nil && proc.Alive() {
+		return nil
+	}
+	_, err := rotateOntoFreshSession(reg, def)
+	return err
+}
+
 // rotateOntoFreshSession is the T313 rotation: new session id, same
 // identity, Materialized cleared so the next Launch mints. Callers that
 // already have a definitive resume refusal (Cursor Invalid params) use

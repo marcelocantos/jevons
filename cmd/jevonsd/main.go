@@ -1141,7 +1141,7 @@ func main() {
 	// cockpit converge loop is up (below), concurrently with a bound.
 	noteRemint := func(reminted []string) {
 		if len(reminted) > 0 {
-			slog.Error("bounce reminted session_ids — skipping full_brief on those seats",
+			slog.Info("bounce reminted session_ids — post-restart full_brief still runs",
 				"agents", reminted)
 			mcpSrv.NoteBounceRemint(reminted)
 		}

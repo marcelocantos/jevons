@@ -170,8 +170,8 @@ type IdleNudgeObs struct {
 	EverNudged     bool
 	PostRestart    bool
 	// SessionReminted is true when this boot's reattach minted a new
-	// session_id for the seat (🎯T545.1). Empty-goal blocked is bounce
-	// failure — do not full_brief / unstick as if it were the same worker.
+	// session_id (🎯T545.1). The post-restart wake still full_briefs
+	// that seat. Fleet recover unstick does not treat it as the same turn.
 	SessionReminted bool
 	// WaitingOnGate is true when the agent's last completed turn declares a
 	// blocking wait on a tracked background gate (🎯T565). An idle phase
@@ -203,9 +203,6 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	// no way to ask whether the agent was supposed to be working at all.
 	if d := fleetintent.Allows(o.FleetIntent, o.Intent, fleetintent.ControlNudge); !d.Allow {
 		return IdleNudgeSkip, d.Reason
-	}
-	if o.SessionReminted {
-		return IdleNudgeSkip, "bounce_remint"
 	}
 	if o.HasStoredTerminal {
 		return IdleNudgeSkip, "stored_terminal_report"
@@ -312,6 +309,17 @@ func ClassifyIdleNudgeKind(briefPresent bool) IdleNudgeKind {
 		return IdleNudgeKindContinue
 	}
 	return IdleNudgeKindFullBrief
+}
+
+// IdleNudgeKindFor is the restart rule: every post-restart wake is a full
+// brief, including a seat whose previous session came back and a seat whose
+// session id changed. A restart does not consult resume before sending it.
+// Later idle nudges still continue when the brief is already present.
+func IdleNudgeKindFor(postRestart, briefPresent bool) IdleNudgeKind {
+	if postRestart {
+		return IdleNudgeKindFullBrief
+	}
+	return ClassifyIdleNudgeKind(briefPresent)
 }
 
 // IdleNudgeTextArgs builds the deliver body for a classified nudge.
@@ -987,7 +995,7 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
 		action, reason = IdleNudgeSkip, "not_open_mission_resume"
 	}
-	kind := ClassifyIdleNudgeKind(briefPresent)
+	kind := IdleNudgeKindFor(args.PostRestart, briefPresent)
 	return IdleNudgeReport{
 		Name:        d.Name,
 		Action:      action,

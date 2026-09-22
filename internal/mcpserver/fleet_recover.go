@@ -109,6 +109,7 @@ type FleetRecoverObs struct {
 	MaxRecovers    int // 0 → DefaultFleetRecoverMax
 	Backoffs       []time.Duration
 	// SessionReminted: this boot minted a new session_id (🎯T545.1).
+	// Unstick still skips that seat. The post-restart full brief does not.
 	SessionReminted bool
 	// SpawnClass: PO / overseer — hung MCP is a control-plane outage (🎯T254.5.2).
 	SpawnClass bool

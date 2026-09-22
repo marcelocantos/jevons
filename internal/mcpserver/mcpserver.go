@@ -211,8 +211,8 @@ type Server struct {
 	// on first jevons_agent_send (🎯T104 under fan-out).
 	fleetBriefed map[string]bool
 	// bounceRemint names seats whose session_id changed on this boot's
-	// reattach (🎯T545.1). Those seats must not receive full_brief /
-	// fleet_recover unstick — empty-goal blocked is bounce failure.
+	// reattach (🎯T545.1). The post-restart wake still full_briefs them.
+	// Fleet recover unstick does not treat the new id as the old turn.
 	bounceRemint map[string]bool
 
 	// envelopeChatter dedupes/rate-caps chatter-capped kinds (🎯T509).
@@ -610,7 +610,8 @@ func (s *Server) SetMCP(a mcpattach.Args) {
 }
 
 // NoteBounceRemint records seats whose session_id changed on this boot
-// (🎯T545.1). Post-restart full_brief and fleet_recover unstick skip them.
+// (🎯T545.1). Fleet recover unstick skips them. The post-restart wake
+// still sends the full brief.
 func (s *Server) NoteBounceRemint(names []string) {
 	if s == nil || len(names) == 0 {
 		return

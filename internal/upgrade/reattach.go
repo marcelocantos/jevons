@@ -20,7 +20,7 @@ import (
 // ReattachFleet is the T40.2 return: every jevonsd boot adopts leftover
 // processes, then Launch-es (resumes) what exited. Launch itself still
 // only creates. Leftovers are not reaped. The returned names reminted
-// a new session_id (🎯T545.1); callers must not full_brief those seats.
+// a new session_id (🎯T545.1). The post-restart wake still full_briefs them.
 //
 // Upgrade handoff is no longer what chooses the start method — it is
 // only consumed so a later drain start is not mistaken for an upgrade.
@@ -258,6 +258,12 @@ var (
 // refused because the broker's own client already holds the session, waits and
 // adopts again instead of stacking a second client.
 func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name string) (*claudia.Agent, error) {
+	// A Cursor restart does not session/load the stored id and then brief
+	// only if that fails. The fresh session is the start, and the
+	// post-restart wake sends the brief either way.
+	if err := fleet.RestartCursorFresh(reg, name); err != nil {
+		slog.Warn("cursor restart fresh session failed", "agent", name, "err", err)
+	}
 	for attempt := 0; ; attempt++ {
 		a, err := reg.AdoptOrLaunchContext(ctx, name)
 		if err == nil || !errors.Is(err, ErrClaudeHeldByBroker) || attempt >= heldRetries {

@@ -274,6 +274,38 @@ func TestRotateOntoFreshSessionAfterResumeDenied(t *testing.T) {
 	}
 }
 
+func TestRestartCursorFreshSkipsLiveSeatAndOtherProviders(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons", WorkDir: t.TempDir(), SessionID: "grok-sid",
+		Provider: claudia.ProviderGrok,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: "cursor-sid",
+		Provider: claudia.ProviderCursor, Materialized: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestartCursorFresh(reg, "jevons"); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.Def("jevons").SessionID; got != "grok-sid" {
+		t.Fatalf("grok session changed: %s", got)
+	}
+	if err := RestartCursorFresh(reg, "jevons-po"); err != nil {
+		t.Fatal(err)
+	}
+	po := reg.Def("jevons-po")
+	if po.SessionID == "cursor-sid" || po.SessionID == "" || po.Materialized {
+		t.Fatalf("cursor restart session=%s materialized=%v", po.SessionID, po.Materialized)
+	}
+}
+
 // Unregistered names are an error, not a silent mint of a new agent.
 func TestRehydrateUnknownAgent(t *testing.T) {
 	f, _, _ := lostSessionFixture(t)
