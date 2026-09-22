@@ -66,8 +66,9 @@ func (s *suite) j20PlanDest() error {
 	if _, err := s.writePlanFixture(defaultPlanRemaining, defaultPlanUsed); err != nil {
 		return err
 	}
-	// 🎯T517: a seat parented to the overseer is exempt from the sweep, so
-	// the parked worker hangs off an intermediate (PO-shaped) seat.
+	// The worker hangs off an intermediate seat. When this fixture exhausts
+	// grok, that seat is on the hot provider too and the sweep parks it
+	// (🎯T850). The oracle here is the worker.
 	_, err = s.MCPToolCall("jevons_agent_start", map[string]any{
 		"name": "jv-t39015-po", "workdir": s.workdir, "actor": "jevons",
 		"parent": "jevons", "purpose": "work", "provider": "grok",

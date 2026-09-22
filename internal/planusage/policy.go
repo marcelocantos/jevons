@@ -214,7 +214,6 @@ func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool)
 }
 
 // OverseerNames is the set of agents whose Purpose is overseer.
-// Used with PlanMigrateExempt so a PO is identified by parentage, not name.
 func OverseerNames(agents []AgentRef) map[string]bool {
 	out := map[string]bool{}
 	for _, a := range agents {
@@ -227,21 +226,12 @@ func OverseerNames(agents []AgentRef) map[string]bool {
 	return out
 }
 
-// PlanMigrateExempt is true for control-plane seats T390.1.5 must not
-// bounce (🎯T517): the overseer itself, and any agent whose Parent is an
-// overseer (stratum-1 product owners). purpose=work on a PO does not
-// enroll it. Workers parented to a PO stay eligible.
-func PlanMigrateExempt(a AgentRef, overseers map[string]bool) bool {
-	if strings.EqualFold(strings.TrimSpace(a.Purpose), "overseer") {
-		return true
-	}
-	parent := strings.TrimSpace(a.Parent)
-	return parent != "" && overseers[parent]
-}
-
-// PlanActions lists migrate/park steps for seats on hot or exhausted
-// providers. Overseer purpose and aside seats are skipped (🎯T517, 🎯T543).
-// To is empty when dest is empty (park).
+// PlanActions lists migrate/park steps for seats whose own provider is
+// weekly-hot or exhausted (🎯T850). The overseer and a stratum-1 PO are
+// the same as any other seat: they move when their provider is hot, and
+// they stay when MigrateOff is false. There is no control-plane
+// exemption. Aside seats stay out (🎯T543). To is empty when dest is
+// empty (park).
 func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
 	view := CockpitSnapshot(snap)
 	byProv := map[string]Backend{}
@@ -259,13 +249,9 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 		cands = append(cands, DestCand{Provider: p, Backend: be, Load: load[p]})
 	}
 	dest, destOK := PickPlanDest(cands, now, th)
-	overseers := OverseerNames(agents)
 	var out []PlanAction
 	for _, a := range agents {
 		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
-			continue
-		}
-		if PlanMigrateExempt(a, overseers) {
 			continue
 		}
 		from := strings.ToLower(strings.TrimSpace(a.Provider))

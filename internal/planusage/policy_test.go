@@ -297,11 +297,17 @@ func TestPlanActionsParkWhenNoDest(t *testing.T) {
 		{Name: "jevons", Provider: "grok", Purpose: "overseer"},
 		{Name: "worker", Provider: "grok", Purpose: "work"},
 	}, now, th)
-	if len(acts) != 1 || acts[0].Name != "worker" || acts[0].To != "" {
-		t.Fatalf("overseer skipped; worker parks: %+v", acts)
+	got := map[string]PlanAction{}
+	for _, a := range acts {
+		got[a.Name] = a
 	}
-	if acts[0].Author != destAuthor {
-		t.Fatalf("park author = %q, want claudia", acts[0].Author)
+	if got["jevons"].To != "" || got["worker"].To != "" || len(acts) != 2 {
+		t.Fatalf("exhausted provider with no dest parks the overseer and the worker: %+v", acts)
+	}
+	for _, a := range acts {
+		if a.Author != destAuthor {
+			t.Fatalf("park author = %q, want claudia", a.Author)
+		}
 	}
 }
 
@@ -338,35 +344,140 @@ func TestPlanActionsMigrateToDest(t *testing.T) {
 	}
 }
 
-func TestT517PlanActionsSkipsPOEvenWhenPurposeIsWork(t *testing.T) {
+// A healthy provider produces no action for anyone on it, PO included.
+// The omission is MigrateOff, not a control-plane exemption.
+func TestT850PlanActionsOmitsSeatWhoseProviderIsHealthy(t *testing.T) {
 	th := DefaultThresholds()
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	grok := t850Weekly("grok", 20, 80, now)
+	claude := t850Weekly("claude", 80, 20, now)
+	if !MigrateOff(grok, now, th) || MigrateOff(claude, now, th) {
+		t.Fatal("fixture: grok vacates, claude does not")
+	}
+	snap := Snapshot{Backends: []Backend{grok, claude}}
+	acts := PlanActions(snap, []AgentRef{
+		{Name: "jevons", Provider: "claude", Purpose: "overseer"},
+		{Name: "jevons-po", Provider: "claude", Purpose: "work", Parent: "jevons"},
+		{Name: "jv-t517-worker", Provider: "grok", Purpose: "work", Parent: "jevons-po"},
+	}, now, th)
+	if len(acts) != 1 || acts[0].Name != "jv-t517-worker" || acts[0].To != "claude" {
+		t.Fatalf("healthy control plane stays out; worker moves grok→claude: %+v", acts)
+	}
+}
+
+// t850Weekly is a weekly window at the halfway mark (3.5d of 7d left).
+func t850Weekly(provider string, rem, used float64, now time.Time) Backend {
 	week := now.Add(3*24*time.Hour + 12*time.Hour)
 	lim := DefaultWeeklyWindowSeconds
-	pct := func(v float64) *float64 { return &v }
-	snap := Snapshot{Backends: []Backend{
-		{
-			Provider: "claude", Status: StatusAvailable,
-			Windows: []Window{{
-				Name: WindowWeekly, RemainingPercent: pct(0), UsedPercent: pct(100),
-				ResetsAt: &week, LimitWindowSeconds: &lim,
-			}},
-		},
-		{
-			Provider: "codex", Status: StatusAvailable,
-			Windows: []Window{{
-				Name: WindowWeekly, RemainingPercent: pct(80), UsedPercent: pct(20),
-				ResetsAt: &week, LimitWindowSeconds: &lim,
-			}},
-		},
-	}}
-	acts := PlanActions(snap, []AgentRef{
+	return Backend{
+		Provider: provider, Status: StatusAvailable,
+		Windows: []Window{{
+			Name: WindowWeekly, RemainingPercent: &rem, UsedPercent: &used,
+			ResetsAt: &week, LimitWindowSeconds: &lim,
+		}},
+	}
+}
+
+// 🎯T850: a weekly-hot provider moves the overseer and stratum-1 POs
+// once. The provider field is the memory — a second call after the PO
+// has arrived emits nothing for them.
+func TestT850PlanActionsHotControlPlaneOnce(t *testing.T) {
+	th := DefaultThresholds()
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	claude := t850Weekly("claude", 20, 80, now)
+	codex := t850Weekly("codex", 80, 20, now)
+	grok := t850Weekly("grok", 55, 45, now)
+	cursor := t850Weekly("cursor", 30, 70, now)
+	if !MigrateOff(claude, now, th) {
+		t.Fatal("fixture: claude must vacate")
+	}
+	if MigrateOff(codex, now, th) || MigrateOff(grok, now, th) || MigrateOff(cursor, now, th) {
+		t.Fatal("fixture: only claude vacates")
+	}
+	if !DestEligible(codex, now, th) {
+		t.Fatal("fixture: codex must be an eligible dest")
+	}
+	snap := Snapshot{Backends: []Backend{claude, codex, grok, cursor}}
+	dest, ok := PickPlanDest([]DestCand{
+		{Provider: "claude", Backend: claude},
+		{Provider: "codex", Backend: codex},
+		{Provider: "grok", Backend: grok},
+		{Provider: "cursor", Backend: cursor},
+	}, now, th)
+	if !ok || dest != "codex" {
+		t.Fatalf("fixture dest=%q ok=%v, want codex", dest, ok)
+	}
+	agents := []AgentRef{
 		{Name: "jevons", Provider: "grok", Purpose: "overseer"},
 		{Name: "jevons-po", Provider: "claude", Purpose: "work", Parent: "jevons"},
-		{Name: "jv-t517-worker", Provider: "claude", Purpose: "work", Parent: "jevons-po"},
+		{Name: "jv-worker", Provider: "claude", Purpose: "work", Parent: "jevons-po"},
+		{Name: "jv-cursor", Provider: "cursor", Purpose: "work", Parent: "jevons-po"},
+	}
+	acts := PlanActions(snap, agents, now, th)
+	byName := map[string]PlanAction{}
+	for _, a := range acts {
+		byName[a.Name] = a
+	}
+	if _, present := byName["jevons"]; present {
+		t.Fatalf("overseer on grok must be absent: %+v", acts)
+	}
+	if _, present := byName["jv-cursor"]; present {
+		t.Fatalf("cursor-provider seat must be absent: %+v", acts)
+	}
+	if byName["jevons-po"].To != dest || byName["jv-worker"].To != dest || len(acts) != 2 {
+		t.Fatalf("PO and worker move to %s, nobody else: %+v", dest, acts)
+	}
+
+	arrived := append([]AgentRef(nil), agents...)
+	arrived[1].Provider = dest
+	acts = PlanActions(snap, arrived, now, th)
+	for _, a := range acts {
+		if a.Name == "jevons-po" {
+			t.Fatalf("arrived PO must not move again: %+v", acts)
+		}
+		if a.To == "claude" {
+			t.Fatalf("must not send anyone back onto hot claude: %+v", acts)
+		}
+	}
+	if len(acts) != 1 || acts[0].Name != "jv-worker" || acts[0].To != dest {
+		t.Fatalf("worker still on claude moves, nobody else: %+v", acts)
+	}
+
+	onClaude := append([]AgentRef(nil), agents...)
+	onClaude[0].Provider = "claude"
+	acts = PlanActions(snap, onClaude, now, th)
+	found := false
+	for _, a := range acts {
+		if a.Name != "jevons" {
+			continue
+		}
+		found = true
+		if a.To != dest {
+			t.Fatalf("hot overseer To=%q want %s", a.To, dest)
+		}
+	}
+	if !found {
+		t.Fatalf("overseer on claude must be in the actions: %+v", acts)
+	}
+
+	parkSnap := Snapshot{Backends: []Backend{claude}}
+	acts = PlanActions(parkSnap, []AgentRef{
+		{Name: "jevons", Provider: "claude", Purpose: "overseer"},
+		{Name: "jevons-po", Provider: "claude", Purpose: "work", Parent: "jevons"},
+		{Name: "jv-cursor", Provider: "cursor", Purpose: "work", Parent: "jevons-po"},
 	}, now, th)
-	if len(acts) != 1 || acts[0].Name != "jv-t517-worker" || acts[0].To != "codex" {
-		t.Fatalf("only the worker migrates claude→codex, got %+v", acts)
+	byName = map[string]PlanAction{}
+	for _, a := range acts {
+		byName[a.Name] = a
+	}
+	if _, present := byName["jevons"]; !present || byName["jevons"].To != "" {
+		t.Fatalf("hot overseer parks when dest is empty: %+v", acts)
+	}
+	if _, present := byName["jevons-po"]; !present || byName["jevons-po"].To != "" {
+		t.Fatalf("hot PO parks when dest is empty: %+v", acts)
+	}
+	if _, present := byName["jv-cursor"]; present {
+		t.Fatalf("cursor seat stays out of a claude-only park: %+v", acts)
 	}
 }
 
