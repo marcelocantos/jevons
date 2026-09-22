@@ -13,6 +13,15 @@ describe('modelPrefix', () => {
     expect(p.label).toBe('O4.5');
   });
 
+  it('shows the Claude model running on a Cursor seat', () => {
+    const p = modelPrefix({ provider: 'cursor', model: 'claude-opus-5' });
+    expect(p.company).toBe('cursor');
+    expect(p.initial).toBe('O');
+    expect(p.version).toBe('5');
+    expect(p.label).toBe('O5');
+    expect(p.title).toBe('Cursor · claude-opus-5');
+  });
+
   it('paints Cursor from provider even with no model id', () => {
     const p = modelPrefix({ provider: 'cursor' });
     expect(p.company).toBe('cursor');

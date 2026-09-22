@@ -20,6 +20,11 @@ describe('AgentTree model badges', () => {
             model: 'claude-opus-4-5',
           },
           { name: 'jv-t541-acp-materialize', parent: 'jevons-po', provider: 'cursor' },
+          {
+            name: 'claudia-po',
+            provider: 'cursor',
+            model: 'claude-opus-5',
+          },
           { name: 'jv-bare-claude', parent: 'jevons-po', provider: 'claude' },
         ]}
       />,
@@ -35,6 +40,10 @@ describe('AgentTree model badges', () => {
     expect(byName.get('jv-compact-a7a1dc5e')?.getAttribute('data-company')).toBe('anthropic');
     expect(byName.get('jv-compact-a7a1dc5e')?.querySelector('sub')?.textContent).toBe('O4.5');
     expect(byName.get('jv-t541-acp-materialize')?.getAttribute('data-company')).toBe('cursor');
+    expect(byName.get('jv-t541-acp-materialize')?.querySelector('sub')).toBeNull();
+    expect(byName.get('claudia-po')?.getAttribute('data-company')).toBe('cursor');
+    expect(byName.get('claudia-po')?.querySelector('sub')?.textContent).toBe('O5');
+    expect(byName.get('claudia-po')?.getAttribute('title')).toBe('Cursor · claude-opus-5');
     expect(byName.get('jv-bare-claude')?.getAttribute('data-company')).toBe('anthropic');
     expect(byName.get('jv-bare-claude')?.querySelector('sub')).toBeNull();
     expect(byName.has('jevons-po')).toBe(false);

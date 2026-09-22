@@ -114,12 +114,6 @@ export function familyInitial(model: string): string {
   return family.charAt(0).toUpperCase();
 }
 
-export function modelMatchesCompany(company: string, model: string): boolean {
-  if (!model || !company) return true;
-  const fromModel = companyFromModel(model);
-  return !fromModel || fromModel === company;
-}
-
 export type ModelPrefix = {
   company: string;
   initial: string;
@@ -134,10 +128,13 @@ export function modelPrefix(agent: { provider?: string; model?: string } | null 
   const model = String(a.model || '');
   const company = companyFor(provider, model);
   if (!company) return { company: '', initial: '', version: '', label: '', title: '' };
-  const matched = modelMatchesCompany(company, model);
-  const initial = matched ? familyInitial(model) : '';
-  const version = matched ? versionOf(model) : '';
-  const shown = matched && model ? model : provider;
+  // The mark is the provider. The condensed text is the model that is
+  // actually running, including a Claude model on a Cursor seat. Hiding
+  // that text because the model company differs left every Cursor PO
+  // looking model-less (2026-09-22).
+  const initial = familyInitial(model);
+  const version = versionOf(model);
+  const shown = model || provider;
   const title = (COMPANY_LABEL[company] || company) + (shown ? ' · ' + shown : '');
   return { company, initial, version, label: initial + version, title };
 }
