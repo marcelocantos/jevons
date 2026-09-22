@@ -23,13 +23,18 @@ type sweepLedger struct {
 	prepared  int
 	completed int
 	compacts  int
+	launched  []string
+	cold      bool
 	reg       *claudia.Registry
 	launchErr error
 }
 
 func (l *sweepLedger) PrepareMigration(name string, to claudia.Provider, _ bool) (handover.Pending, error) {
 	l.prepared++
-	p := handover.Pending{Agent: name, From: "grok", To: string(to), TranscriptPath: "/thin.jsonl"}
+	p := handover.Pending{Agent: name, From: "grok", To: string(to)}
+	if !l.cold {
+		p.TranscriptPath = "/thin.jsonl"
+	}
 	l.pending = append(l.pending, p)
 	return p, nil
 }
@@ -46,7 +51,12 @@ func (l *sweepLedger) CompleteThinBrief(p handover.Pending) (handover.Pending, e
 	}
 	return p, nil
 }
-func (l *sweepLedger) Launch(*thread.Thread) error                   { return l.launchErr }
+func (l *sweepLedger) Launch(t *thread.Thread) error {
+	if t != nil {
+		l.launched = append(l.launched, t.ID)
+	}
+	return l.launchErr
+}
 func (l *sweepLedger) PendingHandovers() ([]handover.Pending, error) { return l.pending, nil }
 func (l *sweepLedger) SeedSuccessor(name string) (handover.Pending, bool, error) {
 	l.seeded = append(l.seeded, name)

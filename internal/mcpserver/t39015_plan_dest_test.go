@@ -86,6 +86,89 @@ func TestStitchOmitProviderRefusesWhenDestEmpty(t *testing.T) {
 	}
 }
 
+func TestColdSwitchStaysAndLaunches(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "claudia-po", SessionID: "s-po", Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	store, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(store)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("claude", 10, 90, now),
+			t39015Weekly("cursor", 80, 20, now),
+		}}
+	})
+	led := &sweepLedger{cold: true}
+	s.SetMigrator(led)
+	s.SweepPlanPolicy()
+	if len(led.launched) != 1 || led.launched[0] != "claudia-po" {
+		t.Fatalf("launched=%v; cold switch must launch", led.launched)
+	}
+	if rec := store.Snapshot().Agents["claudia-po"]; rec.State == fleetintent.Parked {
+		t.Fatalf("cold switch parked the seat: %+v", rec)
+	}
+}
+
+func TestColdSwitchParkLiftsWhenProviderIsCool(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "claudia-po", SessionID: "s-po", Provider: claudia.ProviderCursor,
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-deliberate", SessionID: "s-d", Provider: claudia.ProviderCursor,
+		Purpose: claudia.PurposeWork, Parent: "jevons-po",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	store, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(store)
+	s.MarkAgentParked("claudia-po", "jevons", "weekly hot or exhausted: prepare returned COLD (no predecessor transcript)")
+	s.MarkAgentParked("jv-deliberate", "jevons", "owner asked this seat to stop")
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("claude", 10, 90, now),
+			t39015Weekly("cursor", 80, 20, now),
+		}}
+	})
+	led := &sweepLedger{}
+	s.SetMigrator(led)
+	s.SweepPlanPolicy()
+	if len(led.launched) != 1 || led.launched[0] != "claudia-po" {
+		t.Fatalf("launched=%v; want only the cold-switch park lifted", led.launched)
+	}
+	if rec := store.Snapshot().Agents["claudia-po"]; rec.State != fleetintent.Working {
+		t.Fatalf("claudia-po intent=%q", rec.State)
+	}
+	if rec := store.Snapshot().Agents["jv-deliberate"]; rec.State != fleetintent.Parked {
+		t.Fatalf("deliberate park lifted: %+v", rec)
+	}
+}
+
 func TestSweepParksWhenDestEmpty(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {

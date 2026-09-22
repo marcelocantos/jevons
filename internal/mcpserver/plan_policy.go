@@ -10,6 +10,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -56,11 +57,14 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			// "already pending" — reap it rather than skip (🎯T542).
 			if p, ok := pending[a.Name]; ok {
 				if !p.Usable() {
-					s.abortColdPlanMigrate(a, "pending record is COLD")
+					// A COLD leftover is not a handover to retry. Drop it
+					// and prepare once: force-rotate already mints a fresh
+					// session when there is no transcript.
+					s.clearPlanHandover(a.Name)
+				} else {
+					slog.Info("plan policy migration already pending", "name", a.Name, "to", a.To)
 					continue
 				}
-				slog.Info("plan policy migration already pending", "name", a.Name, "to", a.To)
-				continue
 			}
 			prepared, err := s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), true)
 			if err != nil {
@@ -70,7 +74,10 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				continue
 			}
 			if !prepared.Usable() {
-				s.abortColdPlanMigrate(a, "prepare returned COLD (no predecessor transcript)")
+				// The row is already on the destination. There is nothing
+				// to seed. Parking here is what left the product owners
+				// stopped after a hot-week move (2026-09-22).
+				s.finishColdPlanMigrate(a)
 				continue
 			}
 			if _, err := s.migrator.CompleteThinBrief(prepared); err != nil {
@@ -91,7 +98,16 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		}
 		slog.Info("plan policy parked", "name", a.Name, "from", a.From)
 	}
+	s.releaseColdSwitched(hotNames(acts))
 	return acts
+}
+
+func hotNames(acts []planusage.PlanAction) map[string]bool {
+	hot := map[string]bool{}
+	for _, a := range acts {
+		hot[a.Name] = true
+	}
+	return hot
 }
 
 // planDestAllowed reports whether plan-usage migrate may land on dest.
@@ -107,20 +123,62 @@ func (s *Server) planDestAllowed(dest string) bool {
 	return pin == "claude"
 }
 
-// abortColdPlanMigrate drops a COLD handover and parks the seat so the
-// record cannot survive a restart as UNDELIVERED HANDOVER (🎯T542).
-func (s *Server) abortColdPlanMigrate(a planusage.PlanAction, why string) {
-	if led, ok := s.migrator.(handoverLedger); ok && led != nil {
-		if err := led.ClearHandover(a.Name); err != nil {
-			slog.Warn("🎯T542 COLD handover clear failed", "name", a.Name, "err", err)
+// clearPlanHandover drops a COLD record so it cannot survive a restart
+// as UNDELIVERED HANDOVER (🎯T542). It does not park.
+func (s *Server) clearPlanHandover(name string) {
+	led, ok := s.migrator.(handoverLedger)
+	if !ok || led == nil {
+		return
+	}
+	if err := led.ClearHandover(name); err != nil {
+		slog.Warn("🎯T542 COLD handover clear failed", "name", name, "err", err)
+	}
+}
+
+// finishColdPlanMigrate keeps a seat that force-rotated with no
+// predecessor transcript. The destination is already on the registry
+// row. Clear the empty handover and launch. Do not park.
+func (s *Server) finishColdPlanMigrate(a planusage.PlanAction) {
+	s.clearPlanHandover(a.Name)
+	slog.Info("plan policy cold switch stays", "name", a.Name, "from", a.From, "to", a.To)
+	s.MarkAgentWorking(a.Name, "jevons", a.Reason+": cold switch, no predecessor, seat stays")
+	if s.migrator == nil {
+		return
+	}
+	if err := s.migrator.Launch(&thread.Thread{ID: a.Name}); err != nil {
+		slog.Warn("plan policy cold switch launch failed", "name", a.Name, "err", err)
+	}
+}
+
+// releaseColdSwitched lifts a park that an earlier sweep wrote because a
+// hot-week move had no transcript to hand over. The seat's provider is
+// no longer hot, so the park is not protecting a handover.
+func (s *Server) releaseColdSwitched(stillHot map[string]bool) {
+	if s == nil || s.registry == nil {
+		return
+	}
+	snap := s.fleetIntent()
+	for _, d := range s.registry.List() {
+		if stillHot[d.Name] {
+			continue
+		}
+		rec, ok := snap.Agents[d.Name]
+		if !ok || rec.State != fleetintent.Parked || !coldSwitchPark(rec.Reason) {
+			continue
+		}
+		slog.Info("plan policy lifting cold-switch park", "name", d.Name, "provider", d.Provider, "reason", rec.Reason)
+		s.MarkAgentWorking(d.Name, "jevons", "cold provider switch already landed; seat stays")
+		if s.migrator == nil {
+			continue
+		}
+		if err := s.migrator.Launch(&thread.Thread{ID: d.Name}); err != nil {
+			slog.Warn("plan policy cold-switch relaunch failed", "name", d.Name, "err", err)
 		}
 	}
-	slog.Info("🎯T542 COLD plan migrate aborted", "name", a.Name, "to", a.To, "reason", why)
-	s.MarkAgentParked(a.Name, "jevons", a.Reason+": "+why)
-	s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason+": "+why), "jevons", "")
-	if s.registry != nil {
-		s.registry.Stop(a.Name)
-	}
+}
+
+func coldSwitchPark(reason string) bool {
+	return strings.Contains(reason, "prepare returned COLD") || strings.Contains(reason, "pending record is COLD")
 }
 
 func (s *Server) pendingPlanHandovers() map[string]handover.Pending {
