@@ -419,6 +419,13 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		s.clearOverseerStreamID()
 	}
 	s.HandleAgentEvent(ev)
+	// The fleet row reads AgentProgressHub, which workers fill from the
+	// MCP event hook. The overseer stream never went through that hook,
+	// so GET /api/agents kept phase=idle through a live Grok turn while
+	// the status bar said thinking.
+	if s.ObserveAgentProgress(s.overseerAgentName(), ev) {
+		s.NotifyAgentsChanged()
+	}
 	// 🎯T555.1: interleave the phase reduce on the same stream, same clock,
 	// after the bubble frame it describes so the message stays line-first.
 	if p, ok := phaseFromEvent(ev); ok {

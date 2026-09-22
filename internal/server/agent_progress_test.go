@@ -43,6 +43,30 @@ func TestAgentProgressObserveToolCall(t *testing.T) {
 	}
 }
 
+func TestOverseerThoughtReachesFleetPhase(t *testing.T) {
+	s := &Server{}
+	s.DeliverOverseerEvent(claudia.Event{Type: "progress", ProgressType: "thought"})
+	if s.agentProgress == nil {
+		t.Fatal("overseer event did not open the progress hub")
+	}
+	got := s.agentProgress.Get(defaultOverseerName)
+	if got.Phase != "working" {
+		t.Fatalf("fleet phase=%q want working", got.Phase)
+	}
+}
+
+func TestAgentProgressThoughtIsWorking(t *testing.T) {
+	h := NewAgentProgressHub()
+	h.SetStatus("jevons", "running")
+	if !h.Observe("jevons", claudia.Event{Type: "progress", ProgressType: "thought"}) {
+		t.Fatal("thought on a live seat must leave the idle baseline")
+	}
+	got := h.Get("jevons")
+	if got.Phase != "working" {
+		t.Fatalf("phase=%q want working", got.Phase)
+	}
+}
+
 func TestAgentProgressSkipsToolCallUpdate(t *testing.T) {
 	h := NewAgentProgressHub()
 	raw, _ := json.Marshal(map[string]any{

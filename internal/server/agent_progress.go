@@ -297,8 +297,10 @@ func progressFromEvent(ev claudia.Event) (AgentProgress, bool) {
 	if goalStatusBlocked(ev) && (ev.IsTerminalStop() || ev.Type == "assistant") {
 		return AgentProgress{Phase: "blocked", Summary: "blocked"}, true
 	}
-	if ev.Type == "progress" && ev.ProgressType != "" {
+	if ev.Type == "progress" && ev.ProgressType == progressTypeToolUse {
 		// Same filter as chat_wire: only initiating tool_call rows.
+		// Thought / plan / accepted are not tool titles; they fall
+		// through to phaseFromEvent so a live turn is not "idle".
 		title, _ := toolCallDetail(ev.Raw)
 		if title == "" {
 			return AgentProgress{}, false
