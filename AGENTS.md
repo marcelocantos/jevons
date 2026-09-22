@@ -568,7 +568,11 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   loopbacks stamped on that list), not because
   `~/.claude.json` / `~/.cursor/mcp.json` / `~/.codex` / `~/.grok`
   contain `jevonsmcp`. Development boot **must not** write those HOME files;
-  it scrubs leftover `jevonsmcp` keys. Isolates do not write
+  it scrubs leftover `jevonsmcp` keys — **except `~/.cursor/mcp.json`**,
+  where boot *ensures* the entry: cursor-agent 2026.09.18 gives the model
+  only that file's servers and ignores the per-session list (claudia
+  🎯T118), so a scrubbed map meant no Cursor seat had `jevons_*` at all
+  (2026-09-22). Isolates do not write
   `state_dir/mcp` either — `SessionServers` is enough. Isolate LoadMCP
   paths point at missing fixture files so a journey does not inherit
   the owner's map (🎯T379). `bin/mcpscope diagnose` remains the

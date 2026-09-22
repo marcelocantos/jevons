@@ -146,7 +146,7 @@ func TestScrubRemovesJSONAndTOML(t *testing.T) {
 	if err := Scrub(a); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{a.ClaudeJSON, a.GrokTOML, a.CodexTOML, a.CursorJSON} {
+	for _, p := range []string{a.ClaudeJSON, a.GrokTOML, a.CodexTOML} {
 		b, err := os.ReadFile(p)
 		if err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
@@ -154,6 +154,40 @@ func TestScrubRemovesJSONAndTOML(t *testing.T) {
 		if strings.Contains(string(b), "jevonsmcp") {
 			t.Fatalf("%s still has jevonsmcp: %s", p, b)
 		}
+	}
+	// Cursor honours only this file (claudia 🎯T118), so it keeps the entry.
+	b, err := os.ReadFile(a.CursorJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), a.URL) {
+		t.Fatalf("cursor map lost jevonsmcp: %s", b)
+	}
+}
+
+// A Cursor map that lost the entry (an older daemon's scrub, or a hand
+// edit) gets it back at boot; one that has it is left byte-for-byte.
+func TestScrubKeepsJevonsmcpInCursorMap(t *testing.T) {
+	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
+	a.CursorJSON = filepath.Join(filepath.Dir(a.ClaudeJSON), "cursor.json")
+	if err := os.WriteFile(a.CursorJSON, []byte(`{"mcpServers":{"mnemo":{"type":"http","url":"http://127.0.0.1:19419/mcp"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Scrub(a); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(a.CursorJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), a.URL) || !strings.Contains(string(b), "19419") {
+		t.Fatalf("cursor map after scrub: %s", b)
+	}
+	if err := Scrub(a); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := os.ReadFile(a.CursorJSON); string(again) != string(b) {
+		t.Fatalf("a second scrub rewrote an up-to-date cursor map")
 	}
 }
 

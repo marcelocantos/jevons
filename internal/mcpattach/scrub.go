@@ -35,8 +35,19 @@ func Scrub(a Args) error {
 	if _, err := mcpscope.WriteRemove(claude, name); err != nil {
 		return fmt.Errorf("mcpattach: scrub claude: %w", err)
 	}
-	if _, err := mcpscope.WriteRemove(cursor, name); err != nil {
-		return fmt.Errorf("mcpattach: scrub cursor: %w", err)
+	// Cursor is the exception: it is kept, not scrubbed. cursor-agent
+	// 2026.09.18 gives the model only what ~/.cursor/mcp.json holds and
+	// ignores servers passed per session over ACP (claudia 🎯T118), so
+	// the per-session channel 🎯T464 relies on does not reach a Cursor
+	// seat. Scrubbing this file was the reason no Cursor seat had
+	// jevons_* tools on 2026-09-22; with the entry present, a throwaway
+	// session listed all 55. A missing file is a no-op, as before.
+	if strings.TrimSpace(a.URL) != "" {
+		if _, err := os.Stat(cursor); err == nil {
+			if _, err := mcpscope.WriteEnsure(cursor, name, mcpscope.HTTPEntry(a.URL)); err != nil {
+				return fmt.Errorf("mcpattach: ensure cursor: %w", err)
+			}
+		}
 	}
 	grok := a.GrokTOML
 	if grok == "" {
