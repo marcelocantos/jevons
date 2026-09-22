@@ -6,11 +6,9 @@ package mcpserver
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/handover"
-	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
 // handoverLedger is the extra migrator surface the 🎯T418 sweep needs.
@@ -39,20 +37,7 @@ func (s *Server) SweepHandovers() {
 	}
 	slog.Info("🎯T418 handover sweep", "pending", len(pending))
 	now := time.Now()
-	overseers, byName := s.planAgentIndex()
 	for _, p := range pending {
-		// An aside parented to the overseer is never a plan-policy migrate
-		// (🎯T543). Reap its stale handover so T418 does not retry a move
-		// the sweep will not perform. J18's needle is this log line. A PO
-		// or the overseer is not reaped for who they are (🎯T850).
-		if ref, ok := byName[p.Agent]; ok && asideParentedToOverseer(ref, overseers) {
-			if err := led.ClearHandover(p.Agent); err != nil {
-				slog.Error("🎯T517 control-plane handover clear failed", "agent", p.Agent, "err", err)
-			} else {
-				slog.Info("🎯T517 handover reaped", "agent", p.Agent, "reason", "aside parented to the overseer is not force-migrated")
-			}
-			continue
-		}
 		inReg := s.agentIsRegistered(p.Agent)
 		_, alive := s.liveSender(p.Agent)
 		act, reason := handover.ClassifyHandover(p, now, inReg, alive)
@@ -86,16 +71,6 @@ func (s *Server) SweepHandovers() {
 			}
 		}
 	}
-}
-
-// asideParentedToOverseer is the seat J18 plants: purpose aside, parent
-// the overseer. It is not a product owner and not the overseer.
-func asideParentedToOverseer(a planusage.AgentRef, overseers map[string]bool) bool {
-	if !strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
-		return false
-	}
-	parent := strings.TrimSpace(a.Parent)
-	return parent != "" && overseers[parent]
 }
 
 func (s *Server) surfacePendingHandover(p handover.Pending, reason string, now time.Time) {

@@ -10,7 +10,7 @@ package fleet
 // claudia advertises a Claude-shaped JSONLPath for Codex/Grok; watchSeedArrival
 // treated Missing(path) as decidable "never begun"; Deliver also returned
 // "codex app-server: turn already in flight"; the record stayed pending and
-// every T418 sweep ERROR-spammed. T517 exempts the PO; this is the worker half.
+// every T418 sweep ERROR-spammed. This test is that worker half (🎯T519).
 
 import (
 	"fmt"

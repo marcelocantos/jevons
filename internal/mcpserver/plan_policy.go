@@ -138,24 +138,3 @@ func (s *Server) pendingPlanHandovers() map[string]handover.Pending {
 	}
 	return byAgent
 }
-
-func (s *Server) planAgentIndex() (overseers map[string]bool, byName map[string]planusage.AgentRef) {
-	var agents []planusage.AgentRef
-	if s != nil && s.registry != nil {
-		for _, d := range s.registry.List() {
-			agents = append(agents, planusage.AgentRef{
-				Name:     d.Name,
-				Provider: string(d.Provider),
-				Purpose:  d.Purpose,
-				Parent:   d.Parent,
-			})
-		}
-	}
-	return planusage.OverseerNames(agents), func() map[string]planusage.AgentRef {
-		m := map[string]planusage.AgentRef{}
-		for _, a := range agents {
-			m[a.Name] = a
-		}
-		return m
-	}()
-}

@@ -174,7 +174,7 @@ func TestT850SweepHandoversDoesNotReapPO(t *testing.T) {
 	}
 }
 
-func TestT850SweepHandoversKeepsHotPOAndReapsHotAside(t *testing.T) {
+func TestT850SweepHandoversDoesNotReapAsideForParentage(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(dir + "/agents.json")
 	if err != nil {
@@ -189,36 +189,26 @@ func TestT850SweepHandoversKeepsHotPOAndReapsHotAside(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
 	led := &sweepLedger{pending: []handover.Pending{
 		{Agent: "jevons-po", From: "claude", To: "codex", TranscriptPath: "/po.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
 		{Agent: "jv-aside", From: "claude", To: "grok", TranscriptPath: "/a.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
 	}}
 	s := &Server{registry: reg, migrator: led}
-	s.SetPlanUsageSource(func() planusage.Snapshot {
-		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
-			t39015Weekly("claude", 20, 80, now),
-			t39015Weekly("codex", 80, 20, now),
-			t39015Weekly("grok", 55, 45, now),
-		}}
-	})
 	s.SetSenderResolver(func(string) (agentSender, bool, error) {
 		return &recordingSender{}, true, nil
 	})
 	s.SweepHandovers()
 	for _, name := range led.cleared {
-		if name == "jevons-po" {
-			t.Fatalf("hot PO handover was reaped: %v", led.cleared)
+		if name == "jevons-po" || name == "jv-aside" {
+			t.Fatalf("handover reaped for who the seat is: %v", led.cleared)
 		}
 	}
-	reapedAside := false
-	for _, name := range led.cleared {
-		if name == "jv-aside" {
-			reapedAside = true
-		}
+	seeded := map[string]bool{}
+	for _, name := range led.seeded {
+		seeded[name] = true
 	}
-	if !reapedAside {
-		t.Fatalf("hot aside parented to the overseer must still be reaped, cleared=%v", led.cleared)
+	if !seeded["jevons-po"] || !seeded["jv-aside"] {
+		t.Fatalf("seeded = %v; want the PO and the aside retried", led.seeded)
 	}
 }
 

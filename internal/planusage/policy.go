@@ -213,19 +213,6 @@ func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool)
 	return strings.ToLower(string(pick.Provider)), true
 }
 
-// OverseerNames is the set of agents whose Purpose is overseer.
-func OverseerNames(agents []AgentRef) map[string]bool {
-	out := map[string]bool{}
-	for _, a := range agents {
-		if strings.EqualFold(strings.TrimSpace(a.Purpose), "overseer") {
-			if n := strings.TrimSpace(a.Name); n != "" {
-				out[n] = true
-			}
-		}
-	}
-	return out
-}
-
 // PlanActions lists migrate/park steps for seats whose own provider is
 // weekly-hot or exhausted (🎯T850). The overseer and a stratum-1 PO are
 // the same as any other seat: they move when their provider is hot, and

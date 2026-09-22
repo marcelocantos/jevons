@@ -305,10 +305,10 @@ func (s *suite) jT418HandoverMute() error {
 		fmt.Println("T418 planted handover", s.handoverPath(name), "bytes", st.Size())
 	}
 
-	// 🎯T625.11: the aside above is a child of the overseer, so the sweep
-	// exempts and reaps its record (🎯T517). A second seat parented to that
-	// aside is not control-plane, so the sweep must classify it and retry or
-	// surface its stale record. Each arm has its own record and needle.
+	// 🎯T850: nothing is reaped for being parented to the overseer. The
+	// aside above and a second seat parented to it each have a stale
+	// handover, and the sweep must classify, retry, or surface both.
+	// Each arm matches its own seat so one line cannot satisfy both.
 	name2 := strings.Replace(name, "t418h", "t418w", 1) // not a prefix-extension of name: line matching stays per seat
 	work2 := filepath.Join(s.stateDir, "t418-handover-w")
 	if err := os.MkdirAll(work2, 0o755); err != nil {
@@ -422,43 +422,38 @@ func (s *suite) jT418HandoverMute() error {
 		}
 	}
 	wait = time.Now().Add(45 * time.Second)
-	var reapLine, classifyLine string
+	var line1, line2 string
 	for time.Now().Before(wait) {
 		lg, _ := os.ReadFile(s.logPath)
 		ev, _ := os.ReadFile(s.eventsPath())
 		delta := newTail(preHandoverLogs, lg) + "\n" + newTail(preHandoverEvents, ev)
-		reapLine = handoverLineFor(delta, name, t418ReapNeedles...)
-		classifyLine = handoverLineFor(delta, name2, t418ClassifyNeedles...)
-		if reapLine != "" && classifyLine != "" {
-			fmt.Println("T418 exempt seat reaped:", trim(reapLine, 200))
-			fmt.Println("T418 non-control-plane seat handled:", trim(classifyLine, 200))
+		line1 = handoverLineFor(delta, name, t418ClassifyNeedles...)
+		line2 = handoverLineFor(delta, name2, t418ClassifyNeedles...)
+		if line1 != "" && line2 != "" {
+			fmt.Println("T418 aside handover handled:", trim(line1, 200))
+			fmt.Println("T418 second seat handled:", trim(line2, 200))
 			return nil
 		}
 		time.Sleep(2 * time.Second)
 	}
 	switch {
-	case reapLine == "" && classifyLine == "":
+	case line1 == "" && line2 == "":
 		return fmt.Errorf("neither planted handover was touched after bounce (SweepHandovers never fired)")
-	case reapLine == "":
-		return fmt.Errorf("control-plane seat %s was not reaped after bounce (want %q)", name, t418ReapNeedles[0])
+	case line1 == "":
+		return fmt.Errorf("aside %s was neither classified, retried nor surfaced after bounce", name)
 	default:
-		return fmt.Errorf("non-control-plane seat %s was neither classified, retried nor surfaced after bounce", name2)
+		return fmt.Errorf("second seat %s was neither classified, retried nor surfaced after bounce", name2)
 	}
 }
 
-// t418ReapNeedles is the 🎯T517 outcome for a control-plane seat's stale
-// handover: cleared, never force-migrated.
-var t418ReapNeedles = []string{"T517 handover reaped"}
-
-// t418ClassifyNeedles are the sweep outcomes for a non-control-plane seat.
+// t418ClassifyNeedles are the sweep outcomes for a planted handover.
+// A T517 reap is not among them: that short-circuit is withdrawn (🎯T850).
 var t418ClassifyNeedles = []string{
 	"UNDELIVERED HANDOVER",
 	"pending handover surfaced",
 	"handover retry",
 	"handover classify",
 }
-
-// (No "reaped" here: the T517 reap of an exempt seat must not satisfy this arm.)
 
 // handoverLineFor returns the first line of blob that names agent and holds
 // one of needles, or "". Matching the agent keeps one seat's outcome from
