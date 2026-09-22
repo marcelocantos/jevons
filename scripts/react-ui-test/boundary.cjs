@@ -9,6 +9,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { parseArgs } = require('node:util');
 const { chromium } = require('./playwright.cjs')();
+const { submitAside, ownerEcho } = require('./boundary-oracle.cjs');
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
   'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' }, screenshot: { type: 'string' },
@@ -75,16 +76,13 @@ async function main() {
   asideCreated = true;
   let mainSubmittedAt = 0;
 
-  // T627.4 observes the MCP-spawned aside. The overseer composer client-queues
-  // a busy follow-up (T657) and never mux-sends, so it cannot show daemon sendq
-  // or an interleaved owner echo. Fleet asides without a phase sample still
-  // mux-send and the daemon queues.
-  // 🎯T813/T562.2: an aside now has a phase sample, so its composer reads busy
-  // during the tool and client-queues the follow-up (visible strip). The aside
-  // arm asserts that strip, then Steers the item into the running turn, which
-  // keeps the guarded property: assistant, user, assistant order across an owner
-  // turn. BOUNDARY_CONTROL=no-owner-echo leaves the item queued and must fail at
-  // the echo wait (a control, with a short bound; no production timeout moves).
+  // T813: busy composers client-queue after T562.2. Submit the aside
+  // follow-up directly over the real mux so the daemon owns the queue while
+  // the tool is held. Steer may fold into the running turn instead, which is
+  // incompatible with the durable queue and separate terminal ACK below.
+  // The main arm retains its existing composer path.
+  // BOUNDARY_CONTROL=no-owner-echo withholds the aside submit: the echo
+  // oracle must fail before the helper is released, using a shorter bound.
   for (const name of (values['aside-only'] ? [values.aside] : ['jevons', values.aside])) {
     const main = name === 'jevons';
     const input = main ? '#input' : '#agent-inspect-input';
@@ -148,16 +146,18 @@ async function main() {
       await until(async () => { try { return await fs.readFile(ready, 'utf8') === nonce; } catch { return false; } }, 'actual tool ready marker');
       assert(!assistants().some(f => terminal(f.body)), 'first response ended before owner interleaving');
       await page.waitForFunction(({ transcript, pre }) => [...document.querySelectorAll(`${transcript} [data-kind="assistant"] .msg-body`)].some(el => el.textContent.includes(pre)), { transcript, pre });
-      await page.locator(input).fill(owner);
-      await page.locator(button).click();
-      const control = process.env.BOUNDARY_CONTROL === 'no-owner-echo';
-      if (!main) {
-        const item = page.locator(`#agent-inspect-send-queue .send-queue-item`, { hasText: ack });
-        await item.waitFor({ state: 'visible' });
-        assert.equal(await item.count(), 1, 'the busy aside composer must hold the follow-up as one visible queued item');
-        if (!control) await item.locator('.sq-send-now').click();
+      const control = !main && process.env.BOUNDARY_CONTROL === 'no-owner-echo';
+      if (main) {
+        await page.locator(input).fill(owner);
+        await page.locator(button).click();
+      } else if (!control) {
+        const status = await page.evaluate(submitAside, { name, text: owner });
+        assert.equal(status.mode, 'submit', 'aside follow-up must use ordinary submit');
+        assert.equal(status.status, 'queued', 'held aside must queue in the daemon');
       }
-      const echo = await until(() => events().find(f => f.body?.event?.turn_origin === 'owner' && content(f.body).includes(owner)), 'interleaved canonical owner echo', control ? 8000 : 90000);
+      const echo = await until(() => main
+        ? events().find(f => f.body?.event?.turn_origin === 'owner' && content(f.body).includes(owner))
+        : ownerEcho(events(), first, owner), 'interleaved canonical owner echo', control ? 8000 : 90000);
       assert(echo.body.index > first.body.index, 'owner must follow PRE');
       assert(!assistants().some(f => terminal(f.body)), 'first response ended before second owner echo');
       if (!main) {
