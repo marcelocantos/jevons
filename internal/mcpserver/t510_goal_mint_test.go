@@ -38,6 +38,11 @@ func TestT510WorkMintSetsGoal(t *testing.T) {
 	if def.SandboxMode != "workspace-write" {
 		t.Fatalf("SandboxMode = %q, want workspace-write", def.SandboxMode)
 	}
+	// 🎯T849: the mode without the grant is the silent read-only .git —
+	// the seat edits files and can commit none of it.
+	if !def.SandboxGitWrite {
+		t.Fatal("SandboxGitWrite = false on a codex work mint, so the seat cannot commit or gate -clean")
+	}
 	cfg := startConfigFromDef(def)
 	if cfg.Goal != def.Goal {
 		t.Fatalf("Launch Config.Goal = %q, want %q", cfg.Goal, def.Goal)
