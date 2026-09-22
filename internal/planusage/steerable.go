@@ -11,9 +11,10 @@ import "strings"
 // names the claudia target whose landing lifts the exclusion — delete the
 // row (or flip it via the claudia-side capability once published) and the
 // provider is a destination again; no other code names these providers.
+// Codex left the table when claudia v0.42.0 stopped rejecting its seats' MCP
+// calls (🎯T841); only cursor (claudia T118) remains excluded.
 var unsteerable = map[string]string{
 	"cursor": "claudia T118",
-	"codex":  "claudia T119",
 }
 
 // UnsteerableReason returns why provider's seats cannot be steered, or ""

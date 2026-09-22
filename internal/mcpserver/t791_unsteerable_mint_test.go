@@ -21,7 +21,7 @@ import (
 // 🎯T791: claude at its soft cap + cursor with plan headroom (and no cursor
 // cap) must refuse the mint — cursor seats cannot be steered (claudia T118),
 // so headroom does not make it a destination.
-func t791Server(t *testing.T, claudeLoad int) *Server {
+func t791Server(t *testing.T, claudeLoad int, extra ...string) *Server {
 	t.Helper()
 	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
@@ -33,10 +33,14 @@ func t791Server(t *testing.T, claudeLoad int) *Server {
 	s.SetDefaultProvider(string(claudia.ProviderClaude))
 	s.SetProviderSoftCaps(map[string]int{"claude": 12})
 	s.SetPlanUsageSource(func() planusage.Snapshot {
-		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+		bes := []planusage.Backend{
 			t583Weekly("claude", 56, now),
 			t583Weekly("cursor", 90, now),
-		}}
+		}
+		for _, p := range extra {
+			bes = append(bes, t583Weekly(p, 90, now))
+		}
+		return planusage.Snapshot{At: now, Backends: bes}
 	})
 	for i := 0; i < claudeLoad; i++ {
 		if err := reg.Register(claudia.AgentDef{
@@ -95,6 +99,40 @@ func TestT791ExplicitCursorPinDroppedUnlessOwnerAsked(t *testing.T) {
 	pick = s.mintProviderPick("cursor", "", false, "code_implement", string(claudia.PurposeWork), "jv-t791-pin2", true)
 	if pick.Provider != "cursor" {
 		t.Fatalf("owner_asked cursor dropped: %+v", pick)
+	}
+}
+
+// 🎯T841: codex is a destination again (claudia v0.42.0); cursor stays excluded.
+func TestT791CodexIsADestinationCursorStillRefused(t *testing.T) {
+	if why := planusage.UnsteerableReason("codex"); why != "" {
+		t.Fatalf("codex still unsteerable: %q", why)
+	}
+	if why := planusage.UnsteerableReason("cursor"); why == "" {
+		t.Fatal("cursor must stay unsteerable until claudia T118")
+	}
+
+	// Claude at cap, cursor and codex both with headroom: lands on codex, never cursor.
+	s := t791Server(t, 12, "codex")
+	pick := s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-omit", false)
+	if pick.Provider != "codex" {
+		t.Fatalf("omitted-provider mint did not land on codex: %+v", pick)
+	}
+	if strings.Contains(pick.Detail, "excluded unsteerable: codex") {
+		t.Fatalf("codex cited as excluded: %q", pick.Detail)
+	}
+
+	// Explicit codex is honoured without owner_asked.
+	s = t791Server(t, 0, "codex")
+	pick = s.mintProviderPick("codex", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-pin", false)
+	if pick.Provider != "codex" {
+		t.Fatalf("explicit codex dropped: %+v", pick)
+	}
+
+	// Cursor with headroom and codex absent: still refused.
+	s = t791Server(t, 12)
+	pick = s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-cursor", false)
+	if strings.TrimSpace(pick.Provider) != "" {
+		t.Fatalf("mint landed on unsteerable %q: %+v", pick.Provider, pick)
 	}
 }
 
