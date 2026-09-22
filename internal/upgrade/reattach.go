@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // ReattachFleet is the T40.2 return: every jevonsd boot adopts leftover
@@ -258,6 +261,14 @@ func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name 
 	for attempt := 0; ; attempt++ {
 		a, err := reg.AdoptOrLaunchContext(ctx, name)
 		if err == nil || !errors.Is(err, ErrClaudeHeldByBroker) || attempt >= heldRetries {
+			// AdoptOrLaunch latches a Cursor session/load refusal and
+			// every later boot repeats it. A leftover still holding the
+			// store is 🎯T541.1 and must not remint. "refusing to mint"
+			// with nobody on the store is a dead session id.
+			if err != nil && resumeDeniedRemint(reg.Def(name), err) {
+				slog.Warn("auto-start reminting after provider resume refusal", "agent", name, "err", err)
+				return fleet.LaunchRecovering(reg, name)
+			}
 			return a, err
 		}
 		slog.Warn("grant held by another connection; waiting to adopt", "agent", name, "attempt", attempt+1)
@@ -266,5 +277,23 @@ func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name 
 			return nil, ctx.Err()
 		case <-time.After(heldRetryDelay):
 		}
+	}
+}
+
+// resumeDeniedRemint is the boot-path half of fleet.LaunchRecovering.
+// AdoptOrLaunch latches the refusal, so the next bounce would otherwise
+// repeat the same session/load forever. A store a leftover still holds
+// is 🎯T541.1: that error wraps the same sentinel and must not rotate.
+func resumeDeniedRemint(def *claudia.AgentDef, err error) bool {
+	if err == nil || def == nil || strings.Contains(err.Error(), "still holds store") {
+		return false
+	}
+	switch def.Provider {
+	case claudia.ProviderCursor:
+		return claudia.IsCursorResumeDenied(err)
+	case claudia.ProviderGrok:
+		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")
+	default:
+		return false
 	}
 }
