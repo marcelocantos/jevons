@@ -219,8 +219,7 @@ describe('PlanUsageBar mux wiring', () => {
       expect(cursorMonth.className).toContain('plan-locked');
       fireEvent.pointerEnter(container.querySelector('[data-instant-tip-host]')!);
       const tip = container.querySelector('.instant-tip-show')?.textContent || '';
-      expect(tip).toMatch(/continuation leftover/);
-      expect(tip).toMatch(/already-unrecoverable at 1\.5×/);
+      expect(tip).not.toMatch(/continuation leftover|already-unrecoverable/);
     } finally {
       resetClock();
     }

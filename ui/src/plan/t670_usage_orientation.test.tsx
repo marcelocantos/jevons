@@ -87,7 +87,7 @@ describe('the tip leads with usage (🎯T670)', () => {
   it('shows usage, rollover and burn — available and time-left are gone', () => {
     const { container } = render(<PlanTipTable groups={fleet} nowMs={NOW} timeZone="UTC" />);
     const labels = [...container.querySelectorAll('th[scope="row"]')].map((e) => e.textContent);
-    expect(labels).toEqual(['usage', 'leftover', 'rollover', 'burn']);
+    expect(labels).toEqual(['usage', 'rollover', 'burn']);
     expect(container.querySelector('td.plan-avail')?.textContent).toBe('59%');
     expect(container.textContent).toContain('Mon 22:00 22h');
     expect(container.textContent).not.toMatch(/available|time left/i);

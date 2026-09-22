@@ -1618,11 +1618,6 @@ body.rhs-resizing-row { cursor: row-resize; }
 .plan-tip-table td.plan-avail.plan-crit { color: var(--red); }
 .plan-tip-table td.plan-avail.plan-under { color: var(--plan-under); }
 .plan-tip-table td.plan-avail.plan-locked { color: var(--plan-locked); }
-/* 🎯T390.1.1: hover names continuation leftover vs already-unrecoverable at 1.5×. */
-.plan-tip-table td.plan-leftover { color: var(--text-dim); }
-.plan-tip-table td.plan-leftover.plan-under { color: var(--plan-under); }
-.plan-tip-table td.plan-leftover.plan-locked { color: var(--plan-locked); }
-
 /* 🎯T634: fifth-row sparkline inherits the same pace colour as available. */
 .plan-tip-table td.plan-burn {
   color: var(--green);
