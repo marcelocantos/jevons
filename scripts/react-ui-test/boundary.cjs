@@ -79,6 +79,12 @@ async function main() {
   // a busy follow-up (T657) and never mux-sends, so it cannot show daemon sendq
   // or an interleaved owner echo. Fleet asides without a phase sample still
   // mux-send and the daemon queues.
+  // 🎯T813/T562.2: an aside now has a phase sample, so its composer reads busy
+  // during the tool and client-queues the follow-up (visible strip). The aside
+  // arm asserts that strip, then Steers the item into the running turn, which
+  // keeps the guarded property: assistant, user, assistant order across an owner
+  // turn. BOUNDARY_CONTROL=no-owner-echo leaves the item queued and must fail at
+  // the echo wait (a control, with a short bound; no production timeout moves).
   for (const name of (values['aside-only'] ? [values.aside] : ['jevons', values.aside])) {
     const main = name === 'jevons';
     const input = main ? '#input' : '#agent-inspect-input';
@@ -144,7 +150,14 @@ async function main() {
       await page.waitForFunction(({ transcript, pre }) => [...document.querySelectorAll(`${transcript} [data-kind="assistant"] .msg-body`)].some(el => el.textContent.includes(pre)), { transcript, pre });
       await page.locator(input).fill(owner);
       await page.locator(button).click();
-      const echo = await until(() => events().find(f => f.body?.event?.turn_origin === 'owner' && content(f.body).includes(owner)), 'interleaved canonical owner echo');
+      const control = process.env.BOUNDARY_CONTROL === 'no-owner-echo';
+      if (!main) {
+        const item = page.locator(`#agent-inspect-send-queue .send-queue-item`, { hasText: ack });
+        await item.waitFor({ state: 'visible' });
+        assert.equal(await item.count(), 1, 'the busy aside composer must hold the follow-up as one visible queued item');
+        if (!control) await item.locator('.sq-send-now').click();
+      }
+      const echo = await until(() => events().find(f => f.body?.event?.turn_origin === 'owner' && content(f.body).includes(owner)), 'interleaved canonical owner echo', control ? 8000 : 90000);
       assert(echo.body.index > first.body.index, 'owner must follow PRE');
       assert(!assistants().some(f => terminal(f.body)), 'first response ended before second owner echo');
       if (!main) {
