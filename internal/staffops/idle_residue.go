@@ -95,12 +95,13 @@ func ClassifyIdleResidue(ev IdleResidueEvidence) IdleResidueVerdict {
 			Detail: detail,
 		}
 	}
-	// Finished: report store claims done, or bound-target commits exist
-	// while the ledger leaf is still open. Target already achieved is not
-	// "awaiting gate" — that agent is residue of a different kind.
-	finished := ev.ReportLooksFinished ||
-		(ev.HasBoundCommits && targetStillOpen(ev.TargetLedgerStatus))
-	if finished && targetStillOpen(ev.TargetLedgerStatus) {
+	// Finished: the seat's newest stored report is terminal while the ledger
+	// leaf is still open. Commits that merely mention the target (ledger
+	// folds, passing mentions) are NOT evidence of a finish (🎯T814): they
+	// re-announced seats whose newest report said in progress. Target already
+	// achieved is not "awaiting gate" — that agent is residue of a different
+	// kind.
+	if ev.ReportLooksFinished && targetStillOpen(ev.TargetLedgerStatus) {
 		detail := "finished awaiting gate"
 		if target != "" {
 			detail = fmt.Sprintf("finished awaiting gate target=%s", target)

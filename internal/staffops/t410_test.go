@@ -190,8 +190,10 @@ func TestClassifyIdleResiduePriority(t *testing.T) {
 		IdleResidue: true, OpenMission: true, BoundTarget: "T410",
 		HasBoundCommits: true, TargetLedgerStatus: "converging",
 	})
-	if byCommits.Class != IdleResidueFinishedAwaitingGate {
-		t.Fatalf("commits: %q", byCommits.Class)
+	// 🎯T814: commits that mention the target are not a finish; only a
+	// terminal stored report is.
+	if byCommits.Class != IdleResidueStalled {
+		t.Fatalf("commits alone: %q want stalled", byCommits.Class)
 	}
 	blocked := ClassifyIdleResidue(IdleResidueEvidence{
 		IdleResidue: true, OpenMission: true, BoundTarget: "T410",

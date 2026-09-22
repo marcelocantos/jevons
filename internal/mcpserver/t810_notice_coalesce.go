@@ -160,6 +160,13 @@ func (c *noticeCoalescer) saveLocked() {
 // coalesce reports whether the notice is materially unchanged since the one
 // already delivered for key, counting the saved turn when it is.
 func (s *Server) coalesceNotice(key, line string) (coalesced bool, saved int) {
+	return s.coalesceNoticeWithin(key, line, NoticeClearedAfter)
+}
+
+// coalesceNoticeWithin is coalesceNotice for a door whose live condition is
+// re-offered less often than every NoticeClearedAfter (🎯T814: the sentinel
+// re-files a symptom only after its cooldown).
+func (s *Server) coalesceNoticeWithin(key, line string, clearedAfter time.Duration) (coalesced bool, saved int) {
 	c := s.noticeCoalescer()
 	dir := s.deliveryStateDir()
 	c.mu.Lock()
@@ -173,7 +180,7 @@ func (s *Server) coalesceNotice(key, line string) (coalesced bool, saved int) {
 	}
 	last := e.LastOffered
 	e.LastOffered = now
-	cleared := now.Sub(last) > NoticeClearedAfter
+	cleared := now.Sub(last) > clearedAfter
 	// An UNCONFIRMED first delivery has not been seen to land, so a repeat is
 	// re-offered (and never counted as saved) until one is confirmed. Bounded:
 	// past notifyReplayUnconfirmedGrace since the first unconfirmed copy it

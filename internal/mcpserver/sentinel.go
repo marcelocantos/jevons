@@ -390,19 +390,43 @@ func (s *Server) runSentinelCycle(args SentinelLoopArgs) (staffops.CycleResult, 
 			overseer = s.overseerName()
 		}
 		mission := staffops.FormatPOMission(res)
+		// 🎯T814: an unchanged symptom set is not another PO/overseer turn.
+		poKey, ovKey := sentinelNoticeKey(po), sentinelNoticeKey(overseer)
+		poSame, poSaved := s.coalesceNoticeWithin(poKey, mission, SentinelNoticeClearedAfter)
+		ovSame, ovSaved := s.coalesceNoticeWithin(ovKey, mission, SentinelNoticeClearedAfter)
+		if poSame {
+			s.LogEvent("sentinel", "notice_coalesced", map[string]any{"key": poKey, "saved": poSaved})
+		}
+		if ovSame {
+			s.LogEvent("sentinel", "notice_coalesced", map[string]any{"key": ovKey, "saved": ovSaved})
+		}
+		if poSame && ovSame {
+			act.Skipped = "coalesced — unchanged symptom set (🎯T814)"
+			s.logLifecycle(compSentinel, "file_po", "coalesced", map[string]any{
+				"symptoms": res.FiledSymptoms, "saved_po": poSaved, "saved_overseer": ovSaved,
+			})
+			return res, act
+		}
 		// Mission to PO (spawn-only path for residual Build).
-		if err := s.deliverSentinel(po, staffops.SentinelEventSource, mission); err != nil {
+		if poSame {
+			act.AuditNote = "PO mission coalesced (🎯T814)"
+		} else if err := s.deliverSentinel(po, staffops.SentinelEventSource, mission); err != nil {
 			act.AuditNote = "PO deliver failed: " + err.Error()
 			s.logLifecycle(compSentinel, "file_po", "error", map[string]any{
 				"err": err.Error(), "symptoms": res.FiledSymptoms,
 			})
 		} else {
+			s.noteNoticeDelivered(poKey, mission, true)
 			act.FiledToPO = true
 			act.Delivered = true
 		}
 		// Overseer gets full report for ledger file decision (alter-ego).
-		_ = s.deliverSentinel(overseer, staffops.SentinelEventSource, res.WireText+"\n"+mission)
-		act.Delivered = true
+		if !ovSame {
+			if err := s.deliverSentinel(overseer, staffops.SentinelEventSource, res.WireText+"\n"+mission); err == nil {
+				s.noteNoticeDelivered(ovKey, mission, true)
+			}
+			act.Delivered = true
+		}
 		s.logLifecycle(compSentinel, "file_po", "ok", map[string]any{
 			"symptoms": res.FiledSymptoms,
 			"po":       po,
@@ -422,6 +446,21 @@ func (s *Server) runSentinelCycle(args SentinelLoopArgs) (staffops.CycleResult, 
 	}
 
 	return res, act
+}
+
+// SentinelNoticeClearedAfter is how long a sentinel file+PO key may go
+// un-offered before its next offer counts as a recurrence (🎯T814). The
+// sentinel re-files a live symptom only after staffops.DefaultCooldown, so
+// T810's 10-minute window would call every repeat a recurrence; three cooldowns
+// of silence is a cleared condition. Delivery is recorded as confirmed: cycles
+// sit past the unconfirmed-replay grace of the previous copy anyway.
+const SentinelNoticeClearedAfter = 3 * staffops.DefaultCooldown
+
+// sentinelNoticeKey is the 🎯T814 coalescing key for a sentinel file+PO notice
+// to one recipient. The digested text is the mission, whose symptom lines name
+// (kind, seat, target); a changed symptom set is a changed digest.
+func sentinelNoticeKey(recipient string) string {
+	return "sentinel:file_po:" + strings.TrimSpace(recipient)
 }
 
 func (s *Server) deliverSentinel(target, event, text string) error {
