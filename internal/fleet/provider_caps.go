@@ -48,7 +48,8 @@ var providerCapFields = []providerCapField{
 	{
 		capability: claudia.CapabilitySandboxPolicy,
 		requested: func(d *claudia.AgentDef) bool {
-			return d.SandboxMode != "" || len(d.SandboxWritableRoots) > 0 || d.SandboxNetworkAccess
+			return d.SandboxMode != "" || len(d.SandboxWritableRoots) > 0 || d.SandboxNetworkAccess ||
+				d.SandboxGitWrite
 		},
 		// The fleet mints codex work seats "workspace-write" and every
 		// other provider with no sandbox (CodexWorkSandbox), so dropping
@@ -68,9 +69,16 @@ var providerCapFields = []providerCapField{
 			d.SandboxMode = ""
 			d.SandboxWritableRoots = nil
 			d.SandboxNetworkAccess = false
+			// 🎯T849: the git grant is a widening of workspace-write, so it
+			// drops with the mode. Left behind it is worse than useless —
+			// claudia counts it as a requested sandbox policy, so a claude
+			// seat carrying it is refused at every launch, which is the
+			// deterministic-rehydrate death this strip exists to prevent.
+			d.SandboxGitWrite = false
 		},
 		show: func(d *claudia.AgentDef) string {
-			return fmt.Sprintf("mode=%q roots=%d network=%v", d.SandboxMode, len(d.SandboxWritableRoots), d.SandboxNetworkAccess)
+			return fmt.Sprintf("mode=%q roots=%d network=%v git_write=%v",
+				d.SandboxMode, len(d.SandboxWritableRoots), d.SandboxNetworkAccess, d.SandboxGitWrite)
 		},
 	},
 	{

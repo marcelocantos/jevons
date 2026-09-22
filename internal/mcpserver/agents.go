@@ -791,10 +791,14 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 			def.SandboxMode = fleet.CodexWorkSandbox(def.Provider, def.Purpose, role)
 			def.SandboxWritableRoots, def.SandboxNetworkAccess =
 				fleet.CodexWorkSandboxTuning(def.Provider, def.Purpose, role)
+			def.SandboxGitWrite = fleet.CodexWorkGitWrite(def.Provider, def.Purpose, role)
 		}
 	} else if roles.Normalize(role) == roles.Auditor {
-		// Auditor stays read-only even on remint.
+		// Auditor stays read-only even on remint. claudia refuses a git
+		// grant on a read-only seat rather than dropping it (🎯T112), so
+		// the grant leaves with the mode or the remint cannot launch.
 		def.SandboxMode = ""
+		def.SandboxGitWrite = false
 	}
 	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs
 	// are already achieved in the ledger (clear durable Goal).

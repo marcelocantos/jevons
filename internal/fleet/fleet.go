@@ -303,8 +303,33 @@ func CodexWorkSandbox(prov claudia.Provider, purpose, role string) string {
 	if purpose != "" && purpose != claudia.PurposeWork {
 		return ""
 	}
-	return "workspace-write"
+	return codexSandboxWorkspaceWrite
 }
+
+// CodexWorkGitWrite is whether a Codex work seat is granted its repo's
+// git directories as writable roots (🎯T849).
+//
+// claudia 🎯T112 made that grant opt-in: a workspace-write seat keeps
+// Codex's protection of .git unless the spawner asks, so `git commit`
+// and `git worktree add` fail with "Operation not permitted" and the
+// seat learns it only from the first failure. jevons asked for nothing,
+// which is why every codex seat minted here after claudia readmitted
+// them could edit files and land none of it — no codex commit reached
+// this repo between 2026-09-06 and the fix.
+//
+// The grant is deliberately an escape hatch in claudia's sandbox:
+// .git/hooks and .git/config are code git runs unsandboxed, as the
+// operator. The fleet takes it anyway, for the seats it already trusts
+// with workspace-write, because a work seat that cannot commit cannot
+// produce evidence — and it takes it for exactly those seats, which is
+// what ties this to the mode rather than letting it drift.
+func CodexWorkGitWrite(prov claudia.Provider, purpose, role string) bool {
+	return CodexWorkSandbox(prov, purpose, role) == codexSandboxWorkspaceWrite
+}
+
+// codexSandboxWorkspaceWrite is the one mode that carves .git out, and so
+// the only one the git grant means anything for (claudia 🎯T109/🎯T112).
+const codexSandboxWorkspaceWrite = "workspace-write"
 
 // WorkSessionGoal is the host-owned Session objective for a work mint
 // (claudia 🎯T39 / jevons 🎯T510). Asides and the overseer stay empty
@@ -379,6 +404,7 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			SandboxMode:          CodexWorkSandbox(prov, purpose, ""),
 			SandboxWritableRoots: codexRoots(prov, purpose),
 			SandboxNetworkAccess: codexNetwork(prov, purpose),
+			SandboxGitWrite:      CodexWorkGitWrite(prov, purpose, ""),
 			Goal:                 WorkSessionGoal(purpose, "", t.Description, true),
 			MCPServers:           f.SessionMCPServers(prov, t.WorkDir),
 			MCPExclusive:         mcpattach.Exclusive,

@@ -59,6 +59,7 @@ func agentDefFromPending(p handover.Pending) claudia.AgentDef {
 		SandboxMode:          CodexWorkSandbox(prov, purpose, ""),
 		SandboxWritableRoots: codexRoots(prov, purpose),
 		SandboxNetworkAccess: codexNetwork(prov, purpose),
+		SandboxGitWrite:      CodexWorkGitWrite(prov, purpose, ""),
 		Goal:                 goal,
 		MCPExclusive:         mcpattach.Exclusive,
 		Materialized:         false,
