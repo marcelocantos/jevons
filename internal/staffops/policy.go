@@ -242,6 +242,47 @@ type CycleResult struct {
 	ActionsCounted int
 }
 
+// seatLoadComponent is the eventlog component the 🎯T708 governor logs under.
+const seatLoadComponent = "seat_load"
+
+// namesSeatLoad reports whether a symptom fingerprint or kind names the
+// seat_load component. Symptoms arrive as "event:error:seat_load", so the
+// match is on a whole colon-separated field — a message that merely mentions
+// the component in prose is not the governor speaking.
+func namesSeatLoad(s string) bool {
+	for _, field := range strings.Split(strings.ToLower(strings.TrimSpace(s)), ":") {
+		if strings.TrimSpace(field) == seatLoadComponent {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeLoadNameLine matches the governor's own sentence for the NAME
+// verdict (capacity.FormatLoadAction: `LOAD NAME (🎯T708): seat "x" holds …`).
+// Narrow on purpose: NAME is the verdict where the naming *is* the repair.
+func looksLikeLoadNameLine(detail string) bool {
+	d := strings.ToLower(detail)
+	if !strings.Contains(d, "t708") {
+		return false
+	}
+	return strings.Contains(d, "load name")
+}
+
+// LoadNameNotice reports whether a signal is a 🎯T708 seat-load notice — the
+// daemon's own governor naming heavy seat-created CPU load back to the seat
+// that created it — rather than a residual product gap.
+//
+// Two recognizers, because the same event reaches the sentinel by two routes:
+// the eventlog cluster stamps the component (symptom event:error:seat_load),
+// and a notify_queue carries the governor's sentence as detail.
+func LoadNameNotice(sig Signal) bool {
+	if namesSeatLoad(sig.Symptom) || namesSeatLoad(sig.Kind) {
+		return true
+	}
+	return looksLikeLoadNameLine(sig.Detail)
+}
+
 // Classify maps one signal to harness-ok | repair | file+PO | ignore.
 // Cooldown and rate budget are applied by the caller (or RunCycle).
 func Classify(sig Signal) Decision {
@@ -285,6 +326,21 @@ func Classify(sig Signal) Decision {
 			Signal: sig,
 			Action: ActionHarnessOK,
 			Reason: "blocked on owner — surface ask, no repair",
+		}
+	}
+
+	// 🎯T854: a 🎯T708 load notice is the governor's own repair, not a gap
+	// to file. On 2026-09-22 the sentinel read `LOAD NAME (🎯T708): seat
+	// "jv-t813-land" holds 41 process(es) at 16% CPU` as a file+PO mission —
+	// a bullseye target to speed up the `go run` that was parsing a finish
+	// envelope, and a worker to do it. The load was bounded, the naming was
+	// the repair, and the process was already gone by the time the cycle
+	// read the row.
+	if LoadNameNotice(sig) {
+		return Decision{
+			Signal: sig,
+			Action: ActionHarnessOK,
+			Reason: "🎯T708 load notice — governor already named the load to its seat; nothing to file",
 		}
 	}
 
