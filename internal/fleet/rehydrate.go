@@ -106,7 +106,19 @@ const StatusDeadUnmaterialized = "dead_unmaterialized"
 // Claudia's ErrCursorResumeDenied, and LaunchRecovering remints after
 // that, not after a disk probe.
 func SessionLost(def *claudia.AgentDef) bool {
-	if def == nil || !def.Materialized || def.SessionID == "" {
+	if def == nil || def.SessionID == "" {
+		return false
+	}
+	switch def.Provider {
+	case claudia.ProviderGrok:
+		// Resume is required for any reloaded Grok row with a session id,
+		// materialized or not (claudia requireResumeLocked). A cold
+		// provider switch keeps the old id and never publishes a home, so
+		// the missing directory is the lost session. A first mint has no
+		// id yet, or Launch creates the home before the next check.
+		return grokHomeMissing(def.SessionID)
+	}
+	if !def.Materialized {
 		return false
 	}
 	switch def.Provider {
@@ -118,8 +130,6 @@ func SessionLost(def *claudia.AgentDef) bool {
 			return false
 		}
 		return !exists
-	case claudia.ProviderGrok:
-		return grokHomeMissing(def.SessionID)
 	default:
 		return false
 	}

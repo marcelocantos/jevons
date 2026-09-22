@@ -186,6 +186,13 @@ func TestSessionLostGate(t *testing.T) {
 	if SessionLost(&grok) {
 		t.Fatal("grok row with an exclusive home reported lost")
 	}
+	// The live overseer row is not Materialized. Claudia still require-resumes
+	// a reloaded session id, so the missing home is lost either way.
+	grok.Materialized = false
+	grok.SessionID = "grok-missing-home"
+	if !SessionLost(&grok) {
+		t.Fatal("un-materialized grok row with no exclusive home not reported lost")
+	}
 
 	cursor := *claudeLost
 	cursor.Provider = claudia.ProviderCursor
