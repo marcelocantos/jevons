@@ -228,14 +228,41 @@ func seedJ19Journal(path string, turns int) error {
 		b.WriteByte('\n')
 		b.Write(ab)
 		b.WriteByte('\n')
-		// Daily last-30 replay includes tool_use between owner turns
-		// (🎯T494.1.1). A text-only seed is a failed oracle.
-		tool, _ := json.Marshal(map[string]any{
-			"type": "tool_use",
-			"name": "Read",
-			"id":   fmt.Sprintf("j19-tool-%02d", i),
+		// Daily last-30 replay is mostly progress/status and assistant
+		// tool_use blocks between owner turns (🎯T494.1.1). Top-level
+		// tool_use/system alone is not today's mix; a text-only seed is a
+		// failed oracle.
+		for p := 0; p < 8; p++ {
+			tsProg := base.Add(time.Duration(i*2+1)*time.Second + time.Duration(p+1)*time.Millisecond).Format(time.RFC3339)
+			prog, _ := json.Marshal(map[string]any{
+				"type":      "progress",
+				"timestamp": tsProg,
+				"phase":     "tool",
+				"step":      "Read",
+			})
+			b.Write(prog)
+			b.WriteByte('\n')
+		}
+		tsTool := base.Add(time.Duration(i*2+1)*time.Second + 9*time.Millisecond).Format(time.RFC3339)
+		toolAsst, _ := json.Marshal(map[string]any{
+			"type":      "assistant",
+			"timestamp": tsTool,
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "tool_use", "name": "Read", "id": fmt.Sprintf("j19-tool-%02d", i)},
+				},
+			},
 		})
-		b.Write(tool)
+		b.Write(toolAsst)
+		b.WriteByte('\n')
+		tsStatus := base.Add(time.Duration(i*2+1)*time.Second + 10*time.Millisecond).Format(time.RFC3339)
+		status, _ := json.Marshal(map[string]any{
+			"type":      "status",
+			"timestamp": tsStatus,
+			"text":      "working",
+		})
+		b.Write(status)
 		b.WriteByte('\n')
 		// Notes after every turn. Daily replay is a mix of bubbles and
 		// step-slots; a single mid-list burst is not enough for the
@@ -307,8 +334,9 @@ func j19AssistantBody(tok string, i int) string {
 }
 
 type j19SeedMix struct {
-	User, Assistant, AgentNote, System, ToolUse int
-	NotesBetweenTurns, ToolsBetweenTurns        int
+	User, Assistant, AgentNote, System, ToolUse, Progress, Status int
+	NotesBetweenTurns, ToolsBetweenTurns, ProgressBetweenTurns   int
+	AssistantToolBlocks                                            int
 }
 
 func classifyJ19Seed(body []byte) j19SeedMix {
@@ -320,7 +348,12 @@ func classifyJ19Seed(body []byte) j19SeedMix {
 			continue
 		}
 		var d struct {
-			Type string `json:"type"`
+			Type    string `json:"type"`
+			Message struct {
+				Content []struct {
+					Type string `json:"type"`
+				} `json:"content"`
+			} `json:"message"`
 		}
 		_ = json.Unmarshal([]byte(line), &d)
 		switch d.Type {
@@ -330,6 +363,15 @@ func classifyJ19Seed(body []byte) j19SeedMix {
 		case "assistant":
 			mix.Assistant++
 			phase = "between"
+			for _, c := range d.Message.Content {
+				if c.Type == "tool_use" {
+					mix.ToolUse++
+					mix.AssistantToolBlocks++
+					if phase == "between" {
+						mix.ToolsBetweenTurns++
+					}
+				}
+			}
 		case "agent_note":
 			mix.AgentNote++
 			if phase == "between" {
@@ -337,6 +379,13 @@ func classifyJ19Seed(body []byte) j19SeedMix {
 			}
 		case "system":
 			mix.System++
+		case "progress":
+			mix.Progress++
+			if phase == "between" {
+				mix.ProgressBetweenTurns++
+			}
+		case "status":
+			mix.Status++
 		case "tool_use":
 			mix.ToolUse++
 			if phase == "between" {

@@ -41,6 +41,18 @@ func TestT494_1_1J19SeedHasDailyReplayEventMix(t *testing.T) {
 	if mix.ToolUse < 1 {
 		t.Errorf("tool_use=%d — a text-only seed is the T494.1.1 miss", mix.ToolUse)
 	}
+	if mix.AssistantToolBlocks < 1 {
+		t.Errorf("assistant tool_use blocks=%d — daily mix embeds tools in assistant frames", mix.AssistantToolBlocks)
+	}
+	if mix.Progress < 1 {
+		t.Errorf("progress=%d — daily replay is mostly progress between owner turns", mix.Progress)
+	}
+	if mix.Status < 1 {
+		t.Errorf("status=%d — recovery/status chrome rides the daily mix", mix.Status)
+	}
+	if mix.ProgressBetweenTurns < 1 {
+		t.Errorf("progress between owner turns=%d", mix.ProgressBetweenTurns)
+	}
 	if mix.NotesBetweenTurns < 1 {
 		t.Errorf("notes between owner turns=%d (trailing-only is the empty-tail cousin, not the 65-slot desert)", mix.NotesBetweenTurns)
 	}
@@ -103,8 +115,14 @@ func TestT494_1_1RichMixReachesTheStore(t *testing.T) {
 		t.Fatalf("bubbles missing: %v", types)
 	}
 	nonBubble := len(evs) - types["user"] - types["assistant"]
-	if nonBubble < 4*8 {
-		t.Fatalf("only %d non-bubble rows reached the store for 4 turns (want ≥ %d notes/tools/system): %v", nonBubble, 4*8, types)
+	if nonBubble < 4*10 {
+		t.Fatalf("only %d non-bubble rows reached the store for 4 turns (want rich mix notes/tools/progress): %v", nonBubble, types)
+	}
+	if types["status"] < 4 {
+		t.Fatalf("status rows=%d want ≥ 4: %v", types["status"], types)
+	}
+	if types["tool_use"] < 4 {
+		t.Fatalf("tool_use rows=%d want ≥ 4 (assistant-embedded tools): %v", types["tool_use"], types)
 	}
 }
 
