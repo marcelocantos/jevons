@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/statedb"
 )
 
 // TestT494_1_1J19SeedHasDailyReplayEventMix fails if J19's isolate seed
@@ -71,5 +73,52 @@ func TestT494_1_1TextOnlySeedIsTheMiss(t *testing.T) {
 	}
 	if mix.User != 2 || mix.Assistant != 2 {
 		t.Fatalf("text-only user/assistant counts: %+v", mix)
+	}
+}
+
+// 🎯T494.1.1: the rich mix must survive the fold into the store the daemon
+// serves the React pane from — a seed that folds to bubbles only is the miss
+// again, one layer down.
+func TestT494_1_1RichMixReachesTheStore(t *testing.T) {
+	dir := t.TempDir()
+	journal := filepath.Join(dir, "chatlog", "jevons.jsonl")
+	if err := seedThroughStore(dir, "jevons", journal, func() error { return seedJ19Journal(journal, 4) }); err != nil {
+		t.Fatal(err)
+	}
+	db, err := statedb.Open(statedb.DefaultPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	evs, err := db.Range("jevons", 1, 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]int{}
+	for _, e := range evs {
+		types[e.Type]++
+	}
+	t.Logf("store rows=%d types=%v", len(evs), types)
+	if types["user"] != 4 || types["assistant"] < 4 {
+		t.Fatalf("bubbles missing: %v", types)
+	}
+	nonBubble := len(evs) - types["user"] - types["assistant"]
+	if nonBubble < 4*8 {
+		t.Fatalf("only %d non-bubble rows reached the store for 4 turns (want ≥ %d notes/tools/system): %v", nonBubble, 4*8, types)
+	}
+}
+
+// 🎯T494.1.1 control wiring: the paint script carries the empty-pane control,
+// and it runs before the census so the real verdict path judges it.
+func TestT494_1_1J19PaintHasEmptyPaneControl(t *testing.T) {
+	src, err := os.ReadFile("j19_paint.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	ctl := strings.Index(s, "J19_CONTROL === 'empty-pane'")
+	census := strings.Index(s, "const sweep = await page.evaluate")
+	if ctl < 0 || census < 0 || ctl > census {
+		t.Fatalf("control must exist and precede the census (ctl=%d census=%d)", ctl, census)
 	}
 }

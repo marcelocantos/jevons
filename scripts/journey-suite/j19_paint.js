@@ -83,6 +83,15 @@ if (HOST.indexOf(':' + DAILY_PORT) !== -1 || HOST === String(DAILY_PORT)) {
     }));
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 200)));
 
+    // 🎯T494.1.1 control: J19_CONTROL=empty-pane blanks every transcript
+    // row after mount, over the same rich daily-mix seed. The journey MUST
+    // fail (empty pane / visibility gates); a green here means the oracle
+    // cannot see a desert and the seed proves nothing.
+    if (process.env.J19_CONTROL === 'empty-pane') {
+      await page.addStyleTag({ content: '#messages-canvas > * { visibility: hidden !important; }' });
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 200)));
+    }
+
     // T491: sweep the virtualizer so collapsed-to-one-row is visible.
     // React has no window model array; unique user tokens across a
     // scroll sweep are the model census.
