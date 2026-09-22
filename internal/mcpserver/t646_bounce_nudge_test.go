@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // TestT646BrokerPresentSkipBounceNudge: when the claudia daemon holds
@@ -61,6 +63,73 @@ func TestT646NoBrokerStillRunsT171(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("no-broker settle sent no T171 wave: %v", inbox.snapshot())
+}
+
+// The restart wake used to run once, at the settle delay. A Cursor
+// session/new finishes later. The brief has to be waiting for that
+// process, and a broker-held reclaim must still not be interrupted.
+func TestRestartBriefArrivesWhenTheProcessDoes(t *testing.T) {
+	prevEvery, prevFor := restartBriefRetryEvery, restartBriefRetryFor
+	restartBriefRetryEvery = 20 * time.Millisecond
+	restartBriefRetryFor = 2 * time.Second
+	t.Cleanup(func() {
+		restartBriefRetryEvery = prevEvery
+		restartBriefRetryFor = prevFor
+	})
+
+	const worker = "jv-t443-red-as-proof"
+	s, inbox := t452Fixture(t, "jevons", "sid-overseer", t452Fleet()...)
+	def := s.registry.Def(worker)
+	if def == nil {
+		t.Fatal("missing worker")
+	}
+	next := *def
+	next.TermLogPath = "-"
+	next.AutoStart = true
+	next.Materialized = false
+	next.Provider = claudia.ProviderCursor
+	if err := s.registry.Register(next); err != nil {
+		t.Fatal(err)
+	}
+	s.registry.SetDirect(true)
+	s.registry.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			return claudia.StartStub(ctx, cfg, nil)
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.retryRestartBriefs(ctx, "jevons", "", nil, map[string]bool{worker: true})
+	}()
+
+	time.Sleep(60 * time.Millisecond)
+	if n := len(inbox.snapshot()[worker]); n != 0 {
+		t.Fatalf("brief delivered before the process existed: %d", n)
+	}
+	if _, err := s.registry.Launch(worker); err != nil {
+		t.Fatal(err)
+	}
+	if proc := s.registry.Get(worker); proc == nil || !proc.Alive() {
+		t.Fatalf("launch did not leave an alive process: %#v", proc)
+	}
+	t.Cleanup(func() { s.registry.Stop(worker) })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, m := range inbox.snapshot()[worker] {
+			if strings.Contains(m, "Jevons fleet standing brief") {
+				cancel()
+				<-done
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("no full brief after the process started: %v", inbox.snapshot())
 }
 
 func bounceNudgeCount(got map[string][]string) int {

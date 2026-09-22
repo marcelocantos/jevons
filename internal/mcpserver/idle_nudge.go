@@ -1125,21 +1125,38 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	// The periodic fleet pass is Server.Reconcile, driven by the cockpit tick
 	// (🎯T766.3); this loop only wires idle tracking and the restart path.
 
+	// Seats that were not running at seed are this boot's starts. A Cursor
+	// session/new routinely finishes after the settle delay (2026-09-22:
+	// the wake ran at +12s, the processes existed at +2min). Those seats
+	// are briefed when they are actually up, including when the broker
+	// holds the seats the daemon reclaimed.
+	born := map[string]bool{}
+	for _, d := range args.Server.registry.List() {
+		if d.Name == "" || d.Name == overseer {
+			continue
+		}
+		if proc := args.Server.registry.Get(d.Name); proc != nil && proc.Alive() {
+			continue
+		}
+		born[d.Name] = true
+	}
+
 	// After settle: T171 dual path only when jevonsd still parents the
 	// processes. Broker-held seats stay up; a reconnect indication is
 	// meaningless and an interrupt=true resume jams ACP (🎯T646).
+	// Seats born this boot are not that reclaim.
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(postDelay):
 		if brokerHoldsFleet() {
-			slog.Info("claudia daemon holds fleet; jevonsd bounce is silent")
+			slog.Info("claudia daemon holds fleet; reclaimed seats stay silent")
 		} else {
 			args.Server.NotifyDaemonRestarted(overseer, defaultPO, stateDir)
 			args.Server.ResumeOpenMissionWorkers(overseer, stateDir, activity)
 		}
 	}
-
+	args.Server.retryRestartBriefs(ctx, overseer, stateDir, activity, born)
 }
 
 // IdlePressureHooks are the optional collaborator seams of the 🎯T315
@@ -1738,13 +1755,105 @@ func utf8RuneCount(s string) int {
 	return len([]rune(s))
 }
 
+// restartBriefRetryFor is how long a boot keeps offering the full brief
+// to a seat that was down when the restart wake ran.
+var restartBriefRetryFor = 4 * time.Minute
+
+// restartBriefRetryEvery is the gap between those attempts.
+var restartBriefRetryEvery = 5 * time.Second
+
+// retryRestartBriefs delivers the post-restart full brief to seats that
+// were not running at boot, once they are. A seat already briefed by the
+// settle sweep is left alone. The loop stops when every such seat has
+// been briefed or permanently skipped, or when the window ends.
+func (s *Server) retryRestartBriefs(ctx context.Context, overseer, stateDir string, activity *IdleActivityTracker, born map[string]bool) {
+	if s == nil || len(born) == 0 {
+		return
+	}
+	deadline := time.NewTimer(restartBriefRetryFor)
+	defer deadline.Stop()
+	tick := time.NewTicker(restartBriefRetryEvery)
+	defer tick.Stop()
+	// A classification that ran while the process was still down reports
+	// no_open_mission. If the process is up by the time we read it, that
+	// report is stale — give the seat one more pass before treating the
+	// skip as final.
+	oneMore := map[string]bool{}
+	for {
+		s.dropBriefed(born)
+		if len(born) == 0 {
+			return
+		}
+		reps := s.resumeOpenMissionWorkers(overseer, stateDir, activity, func(name string) bool {
+			return born[name]
+		})
+		alive := func(name string) bool {
+			proc := s.registry.Get(name)
+			return proc != nil && proc.Alive()
+		}
+		seen := map[string]bool{}
+		for _, r := range reps {
+			seen[r.Name] = true
+			// A seat that is still down is classified no_open_mission,
+			// because eligibility itself requires a running process.
+			// That is the wait, not a permanent skip.
+			waiting := r.Reason == "not_running" || r.Reason == "no_open_mission" || r.Reason == "not_open_mission_resume"
+			if !r.Delivered && waiting && !alive(r.Name) {
+				continue
+			}
+			if !r.Delivered && waiting && alive(r.Name) && !oneMore[r.Name] {
+				oneMore[r.Name] = true
+				continue
+			}
+			delete(born, r.Name)
+		}
+		for name := range born {
+			if !seen[name] {
+				delete(born, name)
+			}
+		}
+		if len(born) == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			left := make([]string, 0, len(born))
+			for name := range born {
+				left = append(left, name)
+			}
+			slog.Info("restart brief retry ended with seats still down", "agents", left)
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+func (s *Server) dropBriefed(born map[string]bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name := range born {
+		if s.fleetBriefed != nil && s.fleetBriefed[name] {
+			delete(born, name)
+		}
+	}
+}
+
 // ResumeOpenMissionWorkers fire-and-forget short-resumes open-mission work
 // agents after restart via the T207 brief-or-verify send path (🎯T171 path 2).
 // Skips aside, overseer, PO/boss, deliberate-stop, design-gated, looks-finished.
 // Interrupt only when the prompt is already in flight (stuck recovery).
 func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *IdleActivityTracker) {
+	s.resumeOpenMissionWorkers(overseer, stateDir, activity, nil)
+}
+
+func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *IdleActivityTracker, only func(string) bool) []IdleNudgeReport {
 	if s == nil || s.registry == nil {
-		return
+		return nil
 	}
 	if overseer == "" {
 		overseer = "jevons"
@@ -1782,6 +1891,10 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		return err
 	}
 
+	var eligible func(claudia.AgentDef) bool
+	if only != nil {
+		eligible = func(d claudia.AgentDef) bool { return only(d.Name) }
+	}
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:          s.registry,
 		Activity:     activity,
@@ -1790,6 +1903,7 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		Now:          time.Now(),
 		PostRestart:  true,
 		OverseerName: overseer,
+		Eligible:     eligible,
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
 		HostLoadCritical: s.hostLoadCritical,
 		SessionReminted:  s.bounceReminted,
@@ -1827,4 +1941,5 @@ func (s *Server) ResumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	s.logLifecycle(compIdleNudge, "post_restart_resume", "ok", map[string]any{
 		"delivered": delivered, "reports": len(reps),
 	})
+	return reps
 }
