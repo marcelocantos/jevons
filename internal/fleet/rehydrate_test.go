@@ -169,12 +169,22 @@ func TestSessionLostGate(t *testing.T) {
 		t.Fatal("un-materialized row reported lost — first launch would rotate needlessly")
 	}
 
-	// Grok/Codex keep sessions in provider-owned stores; a missing
-	// Claude JSONL says nothing about them.
+	// A materialized Grok row whose exclusive home was never published
+	// cannot be resumed. One whose home exists is not lost, even with
+	// no Claude JSONL.
 	grok := *claudeLost
 	grok.Provider = claudia.ProviderGrok
+	grok.SessionID = "grok-missing-home"
+	if !SessionLost(&grok) {
+		t.Fatal("materialized grok row with no exclusive home not reported lost")
+	}
+	grokHome := filepath.Join(home, ".local", "state", "claudia", "grok-homes", "grok-has-home")
+	if err := os.MkdirAll(grokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	grok.SessionID = "grok-has-home"
 	if SessionLost(&grok) {
-		t.Fatal("grok row judged lost from a Claude transcript path")
+		t.Fatal("grok row with an exclusive home reported lost")
 	}
 
 	cursor := *claudeLost

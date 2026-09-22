@@ -6,6 +6,8 @@ package fleet
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -95,10 +97,14 @@ const StatusDeadUnmaterialized = "dead_unmaterialized"
 // the row is Materialized (so Launch will pass RequireResume) but the
 // provider transcript backing its session id is not on disk.
 //
-// Claude is decidable via JSONL. Cursor, Grok and Codex keep their
-// stores in provider-private paths — Jevons does not stat them.
-// A Cursor resume refusal is Claudia's ErrCursorResumeDenied;
-// LaunchRecovering remints after that, not after a disk probe.
+// Claude is decidable via JSONL. Grok's exclusive home is the directory
+// claudia refuses to create on resume
+// (~/.local/state/claudia/grok-homes/<sessionID>). A materialized row
+// whose home was never published — a cold provider switch that kept the
+// old session id — retries that stat forever and the cockpit gives up.
+// Cursor and Codex stay unprobed here; a Cursor resume refusal is
+// Claudia's ErrCursorResumeDenied, and LaunchRecovering remints after
+// that, not after a disk probe.
 func SessionLost(def *claudia.AgentDef) bool {
 	if def == nil || !def.Materialized || def.SessionID == "" {
 		return false
@@ -112,9 +118,29 @@ func SessionLost(def *claudia.AgentDef) bool {
 			return false
 		}
 		return !exists
+	case claudia.ProviderGrok:
+		return grokHomeMissing(def.SessionID)
 	default:
 		return false
 	}
+}
+
+// grokHomeMissing reports that claudia's exclusive Grok home for sessionID
+// is not a directory. A stat error other than absence is not evidence.
+func grokHomeMissing(sessionID string) bool {
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" || sid == "." || sid == ".." || strings.ContainsAny(sid, `/\`) {
+		return false
+	}
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if stateHome == "" {
+		stateHome = filepath.Join(os.Getenv("HOME"), ".local", "state")
+	}
+	info, err := os.Stat(filepath.Join(stateHome, "claudia", "grok-homes", sid))
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return !info.IsDir()
 }
 
 // RehydratedDef returns def rotated onto newSessionID: a fresh
