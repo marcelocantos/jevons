@@ -21,6 +21,7 @@ import { FrontierTable } from './components/FrontierTable';
 import { FrontierRowsContext } from './frontier/rows';
 import { toFrontierRows } from './frontier/table';
 import { PlanUsageBar } from './components/PlanUsageBar';
+import { WorkersList } from './components/WorkersList';
 import { MermaidVizPanel } from './components/MermaidVizPanel';
 import {
   applyTheme,
@@ -404,10 +405,7 @@ function Cockpit() {
               <FrontierTable rows={frontierRows} agents={agents} selectedAgent={agent} highlightId={frontierHighlightId} />
             </SidebarPanel>
           </div>
-          <div id="activity-header" style={{ marginTop: 0 }}>
-            Workers <span id="workers-live">NONE YET</span>
-          </div>
-          <div id="workers" title="jwork workers" />
+          <WorkersList />
         </div>
       </div>
       <MermaidVizPanel open={graphOpen} graphNonce={graphNonce} onClose={() => setGraphOpen(false)} />
