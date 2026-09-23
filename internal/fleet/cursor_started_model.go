@@ -20,7 +20,7 @@ import (
 // The badge reads it back. Nothing writes AgentDef.Model and nothing adds
 // --model: the process still takes the CLI default itself.
 
-const cursorStartedModelFile = "cursor-started-model.json"
+const cursorStartedModelFile = "started-model.json"
 
 type cursorStartedModelJSON struct {
 	Model string `json:"model"`
@@ -171,10 +171,10 @@ func LookCursorStart(reg *claudia.Registry, name string) CursorStartLook {
 	return look
 }
 
-// Record writes the looked-up model against the process launch left
-// running. An adopt of the same process does not write: the CLI file may
-// have changed since that process started. A pin still on the def does
-// not write. The registry model is left untouched.
+// Record writes started-model.json for the process Launch just started:
+// the model id read before Launch, and that process's ConnectPID. An
+// adopt of the same process does not write. A pin on the def does not
+// write. AgentDef.Model is not set.
 func (look CursorStartLook) Record(reg *claudia.Registry, name string) {
 	if reg == nil || !look.applicable || look.model == "" {
 		return
@@ -184,10 +184,10 @@ func (look CursorStartLook) Record(reg *claudia.Registry, name string) {
 		return
 	}
 	pid := def.ConnectPID
-	if proc := reg.Get(name); proc != nil && proc.PID() > 0 {
-		pid = proc.PID()
+	if look.wasAlive && pid == look.beforePID {
+		return
 	}
-	if pid <= 0 || (look.wasAlive && pid == look.beforePID) {
+	if pid <= 0 {
 		return
 	}
 	if err := SaveCursorStartedModel(def.SessionID, pid, look.model); err != nil {

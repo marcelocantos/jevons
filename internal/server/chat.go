@@ -1242,10 +1242,10 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 		if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
 			info.Model = ""
 		}
-		// A Cursor process started with no pin is on the CLI default from
-		// that moment. The record is that snapshot, matched to this pid, so
-		// a later edit of cli-config.json cannot rename a running seat.
-		// It is not written back as a pin.
+		// started-model.json holds the CLI modelId read immediately before
+		// an unpinned Cursor Launch, and the ConnectPID of the process that
+		// Launch started. A later edit of cli-config.json does not rename
+		// it. It is not AgentDef.Model.
 		if info.Model == "" && d.Provider == claudia.ProviderCursor && d.ConnectPID > 0 {
 			if model, pid, ok := fleet.CursorStartedModel(d.SessionID); ok && pid == d.ConnectPID {
 				info.Model = model

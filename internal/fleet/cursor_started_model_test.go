@@ -6,6 +6,7 @@ package fleet
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -62,6 +63,16 @@ func TestRecordUnpinnedCursorStartDoesNotPin(t *testing.T) {
 	model, pid, ok := CursorStartedModel(sid)
 	if !ok || model != "composer-2.5" || pid != 4242 {
 		t.Fatalf("recorded model=%q pid=%d ok=%v", model, pid, ok)
+	}
+	written, err := os.ReadFile(filepath.Join(home, ".jevons", "started-model.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), `"composer-2.5"`) || !strings.Contains(string(written), "4242") {
+		t.Fatalf("started-model.json = %s", written)
+	}
+	if reg.Def("jevons-po").Model != "" {
+		t.Fatal("write set AgentDef.Model")
 	}
 
 	// A pin is the argv model. Do not also snapshot the CLI file.
