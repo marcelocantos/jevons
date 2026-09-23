@@ -5,6 +5,7 @@ package planusage
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +101,67 @@ func TestT550SevenDayWindowStaysWeekly(t *testing.T) {
 	}
 	if _, ok := be.Window(WindowMonthly); ok {
 		t.Fatal("7d codex must not become monthly")
+	}
+}
+
+func TestCursorAPIBucketStaysBesideTheMonth(t *testing.T) {
+	now := time.Date(2026, 9, 24, 1, 0, 0, 0, time.UTC)
+	reset := now.Add(21 * 24 * time.Hour)
+	lim := int64(30 * 24 * 3600)
+	totalRem, totalUsed := 50.2, 49.8
+	apiRem, apiUsed := 0.0, 100.0
+
+	snap := Convert([]claudia.PlanUsage{{
+		Provider:  claudia.ProviderCursor,
+		Status:    claudia.PlanUsageAvailable,
+		FetchedAt: now,
+		Windows: []claudia.PlanWindow{
+			{
+				Name:             claudia.PlanWindowWeekly,
+				UsedPercent:      &totalUsed,
+				RemainingPercent: &totalRem,
+				ResetsAt:         &reset,
+				LimitWindow:      time.Duration(lim) * time.Second,
+			},
+			{
+				Name:             claudia.PlanWindowWeekly,
+				Model:            "API",
+				UsedPercent:      &apiUsed,
+				RemainingPercent: &apiRem,
+				ResetsAt:         &reset,
+				LimitWindow:      time.Duration(lim) * time.Second,
+			},
+		},
+	}}, nil, now, 0)
+
+	be, ok := snap.Backend("cursor")
+	if !ok {
+		t.Fatal("cursor backend missing")
+	}
+	plan, ok := be.PrimaryAllowanceWindow()
+	if !ok || plan.Model != "" || plan.Name != WindowMonthly {
+		t.Fatalf("plan window = %+v", plan)
+	}
+	if plan.RemainingPercent == nil || *plan.RemainingPercent != totalRem {
+		t.Fatalf("month remaining = %v", plan.RemainingPercent)
+	}
+	var api Window
+	found := false
+	for _, w := range be.Windows {
+		if strings.EqualFold(w.Model, "API") {
+			api, found = w, true
+		}
+	}
+	if !found || api.RemainingPercent == nil || *api.RemainingPercent != 0 {
+		t.Fatalf("api window = %+v", api)
+	}
+
+	info := WeeklyBandDetail(be, now, DefaultThresholds())
+	if info.Band == BandExhausted {
+		t.Fatalf("API bucket reclassified the month: %s %s", info.Band, info.Reason)
+	}
+	if !strings.Contains(info.Reason, "ahead of pace") || !strings.Contains(info.Reason, "included API usage exhausted") {
+		t.Fatalf("reason = %q", info.Reason)
 	}
 }
 

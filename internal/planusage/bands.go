@@ -66,18 +66,39 @@ func bandReason(be Backend, band WeeklyBand, now time.Time, th Thresholds) strin
 		remaining = fmt.Sprintf("%.0f%% remaining", *w.RemainingPercent)
 	}
 	detail := joinNonEmpty(burn, remaining)
+	var head string
 	switch band {
 	case BandHot:
-		return withDetail(name+" "+winLabel+" hot", detail)
+		head = name + " " + winLabel + " hot"
 	case BandAhead:
-		return withDetail(name+" "+winLabel+" ahead of pace", detail)
+		head = name + " " + winLabel + " ahead of pace"
 	case BandUnder:
-		return withDetail(name+" "+winLabel+" under pace", detail)
+		head = name + " " + winLabel + " under pace"
 	case BandLocked:
-		return withDetail(name+" "+winLabel+" surplus locked in", detail)
+		head = name + " " + winLabel + " surplus locked in"
 	default:
-		return withDetail(name+" "+winLabel+" on pace", detail)
+		head = name + " " + winLabel + " on pace"
 	}
+	reason := withDetail(head, detail)
+	// The month can be half full while named models are refused. Say so
+	// without letting that bucket reclassify the plan band (a spent Fable
+	// window must not exhaust Claude).
+	if note := includedAPINote(be); note != "" {
+		reason += "; " + note
+	}
+	return reason
+}
+
+func includedAPINote(be Backend) string {
+	for _, w := range be.Windows {
+		if !strings.EqualFold(strings.TrimSpace(w.Model), "API") {
+			continue
+		}
+		if w.RemainingPercent != nil && *w.RemainingPercent <= 0 {
+			return "included API usage exhausted"
+		}
+	}
+	return ""
 }
 
 func withDetail(head, detail string) string {
