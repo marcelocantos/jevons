@@ -41,6 +41,18 @@ export function massStopLine(agents: AgentRow[]): string {
   return '';
 }
 
+const unrecordedStop = 'unknown: process exited and no reason was recorded';
+
+// A relaunch refusal already says why the seat is down. The synthesized
+// "no reason was recorded" line beside it only contradicts that.
+export function showSeatStopReason(node: AgentRow): boolean {
+  if (node.running || !node.stop_reason) return false;
+  if (node.rehydrate && node.rehydrate !== 'resumable' && node.stop_reason === unrecordedStop) {
+    return false;
+  }
+  return true;
+}
+
 export type AgentNode = AgentRow & { children: AgentNode[] };
 
 export function buildAgentForest(agents: AgentRow[]): AgentNode[] {
@@ -210,7 +222,7 @@ function Row(props: {
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
         <span className="agent-name">{props.node.name}</span>
         <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
-        {!props.node.running && props.node.stop_reason ? (
+        {showSeatStopReason(props.node) ? (
           <span className="agent-stop-reason" title={props.node.stop_reason}>
             {'⛔ ' + props.node.stop_reason}
           </span>

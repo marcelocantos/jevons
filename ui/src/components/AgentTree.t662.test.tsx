@@ -71,6 +71,50 @@ describe('AgentTree seat stops (🎯T662)', () => {
     expect(notes).toEqual(['broken: cursor login connection closed']);
   });
 
+  it('hides the unrecorded stop when a relaunch refusal already names why', () => {
+    const { container } = render(
+      <AgentTree
+        selected=""
+        onSelect={() => {}}
+        agents={[
+          {
+            name: 'ge-po',
+            running: false,
+            stop_reason: 'unknown: process exited and no reason was recorded',
+            rehydrate: 'broken: acp authenticate cursor_login: connection closed',
+          },
+          {
+            name: 'mm2-t65-keys-doors',
+            running: false,
+            stop_reason: 'unknown: process exited and no reason was recorded',
+          },
+          {
+            name: 'claudia-po',
+            running: false,
+            stop_reason: 'jevons_agent_stop by jevons: parked',
+            rehydrate: 'broken: provider refused',
+          },
+        ]}
+      />,
+    );
+    const text = (name: string) => {
+      const row = [...container.querySelectorAll('.agent-node')].find((n) =>
+        n.querySelector('.agent-name')?.textContent === name,
+      );
+      return {
+        stop: row?.querySelector('.agent-stop-reason')?.textContent ?? '',
+        rehydrate: row?.querySelector('.agent-rehydrate')?.textContent ?? '',
+      };
+    };
+    expect(text('ge-po')).toEqual({
+      stop: '',
+      rehydrate: 'broken: acp authenticate cursor_login: connection closed',
+    });
+    expect(text('mm2-t65-keys-doors').stop).toBe('⛔ unknown: process exited and no reason was recorded');
+    expect(text('claudia-po').stop).toBe('⛔ jevons_agent_stop by jevons: parked');
+    expect(text('claudia-po').rehydrate).toBe('broken: provider refused');
+  });
+
   it('paints a plan wall on a running row the way a stop reason is painted', () => {
     const { container } = render(
       <AgentTree
