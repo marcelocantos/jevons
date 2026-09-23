@@ -148,6 +148,11 @@ export function fleetSecondary(agent: FleetAgent, ctx: FleetSecondaryCtx = {}): 
   if (purpose === 'aside' || purpose === 'side' || purpose === 'side-chat' || purpose === 'file-target') {
     return { kind: '', text: '' };
   }
+  // A stopped seat says so. A GitHub path in that slot looks like the
+  // running product owners beside it; the grey dot is too easy to miss.
+  if (agentDotState(agent) === 'stopped') {
+    return { kind: 'status', text: 'stopped' };
+  }
   const progressText = formatFleetProgress(agent);
   const busy = isBusyAgent(agent);
   const hasAction =

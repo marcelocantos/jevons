@@ -67,8 +67,16 @@ func modelCompany(model string) string {
 // provider (🎯T323). Empty model always fits (mark-alone is correct). A
 // model that clearly belongs to another company does not — fail closed so
 // migrate residue never paints Grok+F or leaks Anthropic ids under grok.
+//
+// Cursor is a harness, not a model company. The fleet mark is the Cursor
+// logo and the subscript is the model that seat is running, which is
+// routinely Claude, GPT, Grok, or Composer. Dropping those ids leaves
+// every Cursor seat as a bare mark.
 func modelFitsProvider(provider, model string) bool {
 	if strings.TrimSpace(model) == "" {
+		return true
+	}
+	if providerCompany(provider) == companyCursor {
 		return true
 	}
 	mc := modelCompany(model)

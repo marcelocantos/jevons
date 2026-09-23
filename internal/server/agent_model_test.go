@@ -496,7 +496,7 @@ func TestListFleetAgentsModelChangeReplacesStickyVersion(t *testing.T) {
 	}
 }
 
-func TestListFleetAgentsDropsAnotherCompanysModelOnCursor(t *testing.T) {
+func TestListFleetAgentsKeepsTheModelACursorSeatIsRunning(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -513,8 +513,8 @@ func TestListFleetAgentsDropsAnotherCompanysModelOnCursor(t *testing.T) {
 		Type: "assistant",
 		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
 	})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "claudia-po"); got != "" {
-		t.Fatalf("model=%q want empty; cursor has no version from another company", got)
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "claudia-po"); got != "claude-opus-5" {
+		t.Fatalf("model=%q want claude-opus-5; a Cursor seat keeps the model it is running", got)
 	}
 }
 
@@ -555,13 +555,12 @@ func TestModelFitsProvider(t *testing.T) {
 		{"", "fable", true},            // no provider → keep; UI sniffs model
 		{"mystery", "fable", true},     // unknown provider → keep
 		{"grok", "custom-thing", true}, // unrecognised pin → keep
-		// Cursor is a company in the same table. An id from another
-		// company does not fit, just as fable does not fit grok.
+		// Cursor is the harness. The subscript is the model it is running.
 		{"cursor", "composer-2.5", true},
-		{"cursor", "claude-opus-5", false},
-		{"cursor", "claude-sonnet-5", false},
-		{"cursor", "gpt-6-astra", false},
-		{"cursor", "grok-4.5", false},
+		{"cursor", "claude-opus-5", true},
+		{"cursor", "claude-sonnet-5", true},
+		{"cursor", "gpt-6-astra", true},
+		{"cursor", "grok-4.5", true},
 		{"cursor", "", true},
 	}
 	for _, tc := range cases {

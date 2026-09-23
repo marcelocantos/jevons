@@ -48,6 +48,20 @@ describe('fleetSecondary (🎯T545.4)', () => {
     });
   });
 
+  it('a stopped seat with its own repo says stopped, not the path', () => {
+    expect(
+      fleetSecondary({
+        name: 'ge-po',
+        parent: 'jevons',
+        purpose: 'work',
+        workdir: '/Users/x/work/github.com/squz/ge',
+        status: 'stopped',
+        running: false,
+        phase: 'idle',
+      }),
+    ).toEqual({ kind: 'status', text: 'stopped' });
+  });
+
   it('overseer home paints stopped/blocked, not idle path chrome', () => {
     const home = '/Users/x/.jevons/jevons';
     expect(
