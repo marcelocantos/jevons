@@ -159,6 +159,39 @@ func TestT285_2MigrateOptionsPayload(t *testing.T) {
 	}
 }
 
+func TestCursorAPIExhaustedBlocksModelPick(t *testing.T) {
+	now := time.Date(2026, 9, 24, 2, 0, 0, 0, time.UTC)
+	reset := now.Add(21 * 24 * time.Hour)
+	lim := int64(30 * 24 * 3600)
+	rem, used := 50.0, 50.0
+	zero, full := 0.0, 100.0
+	s := New("test", t.TempDir())
+	s.SetPlanUsageSource(func() any {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{{
+			Provider: "cursor", Status: planusage.StatusAvailable, FetchedAt: now,
+			Windows: []planusage.Window{
+				{Name: planusage.WindowMonthly, RemainingPercent: &rem, UsedPercent: &used, ResetsAt: &reset, LimitWindowSeconds: &lim},
+				{Name: "api", Model: "API", RemainingPercent: &zero, UsedPercent: &full, ResetsAt: &reset, LimitWindowSeconds: &lim},
+			},
+		}}}
+	})
+	var cursor migrateProviderOption
+	for _, p := range s.migrateOptions(now) {
+		if p.Provider == "cursor" {
+			cursor = p
+		}
+	}
+	if cursor.ModelPick == nil || *cursor.ModelPick {
+		t.Fatalf("model_pick = %v", cursor.ModelPick)
+	}
+	if cursor.Eligible {
+		t.Fatal("exhausted API bucket must not become a migration destination")
+	}
+	if !strings.Contains(cursor.Reason, "included API usage exhausted") {
+		t.Fatalf("reason = %q", cursor.Reason)
+	}
+}
+
 // TestT285_2AgentMigrateRoutes: the thin HTTP wrapper refuses the overseer
 // (that seat re-attaches chat through /api/overseer/migrate), pins on a
 // same-provider model choice, and migrates cross-provider with the chosen

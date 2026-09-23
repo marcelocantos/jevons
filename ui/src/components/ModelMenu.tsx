@@ -8,6 +8,8 @@ export type MigrateProvider = {
   reason?: string;
   eligible?: boolean;
   models?: string[];
+  /** False when another model of this provider would hit the same wall. */
+  model_pick?: boolean;
 };
 
 export function migrateUrl(purpose: string | undefined): string {
@@ -64,8 +66,10 @@ export function ModelMenu(props: {
         const models = p.models && p.models.length ? p.models : [''];
         const eligible = p.eligible !== false;
         // Ahead/hot blocks a migration onto that provider. It does not
-        // block choosing another model of the provider the seat is already on.
-        const canPick = (eligible || p.provider.trim().toLowerCase() === here) && !props.busy;
+        // block choosing another model of the provider the seat is already on,
+        // unless that pick would meet the same refusal.
+        const sameProvider = p.provider.trim().toLowerCase() === here && p.model_pick !== false;
+        const canPick = p.model_pick !== false && (eligible || sameProvider) && !props.busy;
         return (
           <div key={p.provider} className="model-menu-provider">
             <div className="model-menu-head">

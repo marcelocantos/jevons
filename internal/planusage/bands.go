@@ -89,6 +89,12 @@ func bandReason(be Backend, band WeeklyBand, now time.Time, th Thresholds) strin
 	return reason
 }
 
+// NamedModelsExhausted reports that this provider's named-model bucket
+// is spent. Another model of the same provider would meet the same refusal.
+func NamedModelsExhausted(be Backend) bool {
+	return includedAPINote(be) != ""
+}
+
 func includedAPINote(be Backend) string {
 	for _, w := range be.Windows {
 		if !strings.EqualFold(strings.TrimSpace(w.Model), "API") {

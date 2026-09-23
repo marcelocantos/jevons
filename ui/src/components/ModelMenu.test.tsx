@@ -51,6 +51,29 @@ describe('ModelMenu', () => {
     expect(view.getByText(/ahead of pace/)).toBeTruthy();
   });
 
+  it('does not offer another model when that provider refuses named models', () => {
+    cleanup();
+    const view = render(
+      <ModelMenu
+        currentProvider="cursor"
+        onPick={() => {}}
+        onClose={() => {}}
+        options={[
+          {
+            provider: 'cursor',
+            eligible: false,
+            model_pick: false,
+            reason: 'Cursor monthly ahead of pace — burn 1.6×, 50% remaining; included API usage exhausted',
+            models: ['claude-opus-5', 'gpt-6-astra'],
+          },
+        ]}
+      />,
+    );
+    expect((view.getByRole('menuitem', { name: 'gpt-6-astra' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((view.getByRole('menuitem', { name: 'claude-opus-5' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(view.getByText(/included API usage exhausted/)).toBeTruthy();
+  });
+
   it('sends the overseer to its own migrate route', () => {
     expect(migrateUrl('overseer')).toBe('/api/overseer/migrate');
     expect(migrateUrl('work')).toBe('/api/agents/migrate');

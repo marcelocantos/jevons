@@ -88,6 +88,9 @@ type migrateProviderOption struct {
 	// offers the provider default alone.
 	Models      []string `json:"models"`
 	FleetAgents int      `json:"fleet_agents,omitempty"`
+	// ModelPick is false when a same-provider model choice would hit the
+	// same wall. Nil means a pin is still a pin.
+	ModelPick *bool `json:"model_pick,omitempty"`
 }
 
 // migrateOptions assembles the payload from the plan-usage snapshot, the
@@ -145,14 +148,19 @@ func (s *Server) migrateOptions(now time.Time) []migrateProviderOption {
 		if published {
 			info = planusage.WeeklyBandDetail(be, now, th)
 		}
-		out = append(out, migrateProviderOption{
+		opt := migrateProviderOption{
 			Provider:    p,
 			Band:        info.Band,
 			Reason:      info.Reason,
 			Eligible:    info.Eligible,
 			Models:      mergeModels(providerModelCatalog[p], running[p]),
 			FleetAgents: be.FleetAgents,
-		})
+		}
+		if published && planusage.NamedModelsExhausted(be) {
+			no := false
+			opt.ModelPick = &no
+		}
+		out = append(out, opt)
 	}
 	for _, be := range view.Backends {
 		add(be.Provider, be, true)
