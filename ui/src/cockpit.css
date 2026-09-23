@@ -1431,7 +1431,16 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 #frontier-table .ft-play { cursor: default; }
 
-#workers { max-height: 220px; overflow-y: auto; padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+#workers-header {
+  flex-shrink: 0; padding: 10px 16px; font-size: 10px; font-weight: 600;
+  color: var(--text-muted); border-bottom: 1px solid var(--border);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+/* Keep up to four rows on screen. The fleet column can shrink; this strip should not. */
+#workers {
+  flex: 0 0 auto; max-height: 220px; overflow-y: auto;
+  padding: 4px 12px 12px; border-top: 1px solid var(--border); font-size: 12px;
+}
 .worker-row { padding: 5px 6px; border-radius: 5px; margin-bottom: 2px; border: 1px solid transparent; }
 .worker-row:hover { background: var(--surface-raised); }
 .worker-row .wr-head { display: flex; align-items: center; gap: 6px; }

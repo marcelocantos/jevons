@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { cleanup, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { WorkersList, workersLiveLabel } from './WorkersList';
@@ -34,5 +37,12 @@ describe('workers list', () => {
     expect(screen.getByText('none live')).toBeTruthy();
     expect(screen.getByText('run bin/gate show')).toBeTruthy();
     expect(screen.queryByText('NONE YET')).toBeNull();
+  });
+
+  it('does not let the fleet column squeeze the list down to one row', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
+    const block = css.slice(css.indexOf('#workers {'), css.indexOf('.worker-row'));
+    expect(block).toMatch(/flex:\s*0 0 auto/);
+    expect(block).toMatch(/max-height:\s*220px/);
   });
 });

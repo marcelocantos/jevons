@@ -60,7 +60,7 @@ export function WorkersList() {
 
   return (
     <>
-      <div id="activity-header" style={{ marginTop: 0 }}>
+      <div id="workers-header">
         Workers <span id="workers-live">{workersLiveLabel(rows) || 'NONE YET'}</span>
       </div>
       <div id="workers" title="jwork workers">
