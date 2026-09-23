@@ -1,6 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import {
@@ -37,6 +40,13 @@ const FLEET = [
 ] as unknown as TickerGroup[];
 
 describe('plan tooltip table (🎯T588.1)', () => {
+  it('is not capped at a width that hides a seventh column', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
+    const rule = css.match(/\.instant-tip\.plan-tip-card\s*\{[^}]*\}/);
+    expect(rule?.[0]).toMatch(/max-width:\s*94vw/);
+    expect(rule?.[0]).not.toMatch(/720px/);
+  });
+
   it('gives claude two columns under one mark and codex one', () => {
     const header = tipColumns(FLEET);
     expect(header.map((h) => h.provider)).toEqual(['claude', 'codex']);

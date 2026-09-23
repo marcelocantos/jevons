@@ -1614,13 +1614,14 @@ body.rhs-resizing-row { cursor: row-resize; }
 .agent-node { cursor: default; }
 .agent-node.selected { background: var(--accent-dim); }
 
-/* 🎯T588.1: the default tip is sized for a sentence, and a six-column grid
-   is not a sentence — at the shared cap the cursor column fell off the right
-   edge while every assertion about the table still passed. The plan tip gets
-   its own cap, and normal white-space: the shared pre-line rule exists for
-   text tips that keep their newlines, and inside a table it only adds gaps. */
+/* 🎯T588.1: the default tip is sized for a sentence, and the usage grid
+   is not a sentence. A 720px cap fit six columns and then hid the seventh
+   (Cursor's API bucket) past the card edge. The card may be as wide as the
+   viewport; placement keeps its right edge flush with the ticker.
+   Normal white-space: the shared pre-line rule exists for text tips that
+   keep their newlines, and inside a table it only adds gaps. */
 .instant-tip.plan-tip-card {
-  max-width: min(720px, 94vw);
+  max-width: 94vw;
   white-space: normal;
   /* The card hangs over the fleet. It is a readout: clicks belong to the
      seat underneath, and the yield rect closes it once the pointer is there. */
