@@ -24,7 +24,18 @@ export function workersLiveLabel(rows: Worker[] | null): string {
 }
 
 function firstLine(text: string | undefined, max: number): string {
-  const line = (text || '').split('\n').map((s) => s.trim()).find(Boolean) || '';
+  // A finish often opens a code fence on the same line as the sentence
+  // ("verbatim.```"). The strip is a preview, so skip fence-only lines and
+  // drop a trailing fence; inline `code` stays.
+  let line = '';
+  for (const raw of (text || '').split('\n')) {
+    const trimmed = raw.trim();
+    if (!trimmed || /^```[a-zA-Z0-9_-]*$/.test(trimmed)) continue;
+    const prose = trimmed.replace(/```+$/, '').trim();
+    if (!prose) continue;
+    line = prose;
+    break;
+  }
   if (line.length <= max) return line;
   return line.slice(0, max - 1) + '…';
 }

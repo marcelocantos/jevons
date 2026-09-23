@@ -39,6 +39,37 @@ describe('workers list', () => {
     expect(screen.queryByText('NONE YET')).toBeNull();
   });
 
+  it('shows the sentence when a finish line ends on a code fence', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{
+        id: 'abcdef01',
+        status: 'completed',
+        task: 'run the gates',
+        started_at: '2026-09-12T14:18:38Z',
+        outcome: "I'll paste the outputs verbatim.```\n```\nGATE green\n```",
+      }],
+    }));
+    render(createElement(WorkersList));
+    expect(await screen.findByText("I'll paste the outputs verbatim.")).toBeTruthy();
+    expect(screen.queryByText(/```/)).toBeNull();
+  });
+
+  it('skips a fence-only first line and shows the prose under it', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{
+        id: 'abcdef02',
+        status: 'completed',
+        task: 'run the gates',
+        started_at: '2026-09-12T14:18:38Z',
+        outcome: '```\nGATE green\n```',
+      }],
+    }));
+    render(createElement(WorkersList));
+    expect(await screen.findByText('GATE green')).toBeTruthy();
+  });
+
   it('does not let the fleet column squeeze the list down to one row', () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
     const block = css.slice(css.indexOf('#workers {'), css.indexOf('.worker-row'));
