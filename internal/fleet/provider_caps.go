@@ -228,9 +228,10 @@ var capDrops sync.Map // name -> string
 func noteRehydrate(name string, err error) {
 	if err == nil {
 		rehydrateFailures.Delete(name)
-		return
+	} else {
+		rehydrateFailures.Store(name, err.Error())
 	}
-	rehydrateFailures.Store(name, err.Error())
+	saveRehydrateFailures()
 }
 
 func noteCapDrop(name, what string) {

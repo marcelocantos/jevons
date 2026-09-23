@@ -732,6 +732,12 @@ func main() {
 		slog.Error("fleet intent store failed", "err", err)
 		os.Exit(1)
 	}
+	// A relaunch refusal is what the fleet row calls "broken: …". It lived
+	// only in memory, so a bounce replaced it with "unknown".
+	if err := fleet.UseRehydrateFailureFile(filepath.Join(cfg.StateDir, "rehydrate-failures.json")); err != nil {
+		slog.Error("rehydrate failure store failed", "err", err)
+		os.Exit(1)
+	}
 	// 🎯T536.2: agent-name → role assignments (sidecar; inspectable via agent_list).
 	if err := mcpSrv.OpenRoleAssignments(cfg.StateDir); err != nil {
 		slog.Error("role assignments store failed", "err", err)
