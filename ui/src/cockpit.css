@@ -1444,6 +1444,25 @@ body.rhs-resizing-row { cursor: row-resize; }
 .worker-row .wr-meta { color: var(--text-muted); font-size: 10px; font-family: var(--mono); margin-top: 2px; }
 .worker-row .wr-out { color: var(--text-muted); font-size: 10px; margin-top: 2px; max-height: 3.2em; overflow: hidden; }
 .agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
+.model-badge-wrap { position: relative; display: inline-flex; }
+.model-menu {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 0;
+  min-width: 180px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+.model-menu-head { font-size: 0.75em; opacity: 0.75; margin: 6px 2px 2px; }
+.model-menu button { display: block; width: 100%; text-align: left; margin: 1px 0; }
+.model-menu-error { margin: 4px 2px; font-size: 0.8em; color: var(--red); }
 .agent-node:hover { background: var(--surface-raised); }
 .agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
 .agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px var(--agent-dot-glow); }

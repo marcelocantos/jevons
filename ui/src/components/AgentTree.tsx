@@ -1,9 +1,11 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import { useState } from 'react';
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
+import { migrateBody, migrateUrl, ModelMenu, type MigrateProvider } from './ModelMenu';
 
 export type AgentRow = {
   name: string;
@@ -58,6 +60,10 @@ export function buildAgentForest(agents: AgentRow[]): AgentNode[] {
 
 function ModelBadge({ node }: { node: AgentNode }) {
   const p = modelPrefix(node);
+  const [open, setOpen] = useState(false);
+  const [options, setOptions] = useState<MigrateProvider[] | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   if (!p.company) return null;
   const aria =
     'Select provider and model' +
@@ -71,17 +77,66 @@ function ModelBadge({ node }: { node: AgentNode }) {
         {p.version}
       </sub>
     ) : null;
+  async function openMenu(e: { preventDefault: () => void; stopPropagation: () => void }) {
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(true);
+    setError('');
+    try {
+      const r = await fetch('/api/migrate/options');
+      if (!r.ok) throw new Error('could not load providers');
+      const data = await r.json();
+      setOptions(Array.isArray(data.providers) ? data.providers : []);
+    } catch (err) {
+      setOptions([]);
+      setError(err instanceof Error ? err.message : 'could not load providers');
+    }
+  }
+  async function pick(provider: string, model: string) {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch(migrateUrl(node.purpose), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(migrateBody(node.name, node.purpose, provider, model)),
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        setError(text.replace(/\s+/g, ' ').trim().slice(0, 180) || 'could not switch');
+        return;
+      }
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'could not switch');
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
-    <button
-      type="button"
-      className="model-badge"
-      data-company={p.company}
-      title={p.title}
-      aria-label={aria}
-    >
-      <CompanyMark company={p.company} />
-      {sub}
-    </button>
+    <span className="model-badge-wrap">
+      <button
+        type="button"
+        className="model-badge"
+        data-company={p.company}
+        title={p.title}
+        aria-label={aria}
+        aria-expanded={open}
+        onClick={openMenu}
+      >
+        <CompanyMark company={p.company} />
+        {sub}
+      </button>
+      {open ? (
+        <ModelMenu
+          options={options || []}
+          busy={busy}
+          error={error}
+          onPick={pick}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
+    </span>
   );
 }
 
