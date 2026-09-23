@@ -339,6 +339,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-auto-rows: max-content;
+  align-items: start;
   gap: 12px;
   align-content: start;
   text-align: left;
@@ -353,8 +355,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-radius: 8px;
   padding: 8px 10px 10px;
   background: var(--surface-raised);
-  overflow: hidden;
+  overflow: visible;
   min-width: 0;
+  min-height: min-content;
   box-sizing: border-box;
 }
 #mermaid-viz-panel .mvp-pack-block .mvp-pack-title {
@@ -364,7 +367,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   margin: 0 0 6px;
 }
 #mermaid-viz-panel .mvp-pack-block svg {
-  max-width: none;
+  max-width: 100%;
   max-height: none;
   height: auto;
   display: block;
