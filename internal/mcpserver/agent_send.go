@@ -208,24 +208,15 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 			name, fleetintent.Describe(dec.Blocking), dec.Reason)
 	}
 
-	// 🎯T409: the same lost-session recovery agent_start performs (🎯T313),
-	// on the path that actually needs it. Launch fails closed when the row
-	// is Materialized and the transcript is gone, and this path is reached
-	// by the impatience ladder — which retries on a timer, hits the
-	// identical error every time, and never escapes.
-	//
-	// Observed 2026-08-10: 10 of 16 agents carried a session id with no
-	// file on disk after a token-exhaustion event, because Materialized is
-	// set at launch while the transcript only appears once a session
-	// produces a turn. Every repressure of those agents failed forever.
-	if lost, ok, err := fleet.RehydrateLostSessionIn(s.registry, name); err != nil {
-		slog.Warn("lost-session rehydrate failed; falling through to launch",
-			"name", name, "err", err)
-	} else if ok {
-		slog.Info("agent send rehydrated lost session", "name", name, "detail", lost.Describe())
-	}
-
-	p2, err := s.registry.Launch(name)
+	// 🎯T409: lost-session recovery belongs on this path. It is what a
+	// parent report and the impatience ladder call, and they retry on a
+	// timer. registry.Launch latches a Cursor session/load refusal
+	// (RequireResume after a bounce, even when store.db was never written)
+	// and every later call returns that same error. SessionLost does not
+	// see a Cursor row, so the rotate-before-launch arm never engages.
+	// LaunchRecovering rotates once after that refusal and launches the
+	// fresh id; a store a leftover still holds is not rotated (🎯T541.1).
+	p2, err := fleet.LaunchRecovering(s.registry, name)
 	if err != nil {
 		return nil, false, fmt.Errorf("agent %q is not running and rehydrate failed: %v", name, err)
 	}

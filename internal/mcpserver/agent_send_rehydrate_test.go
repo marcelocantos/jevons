@@ -4,6 +4,8 @@
 package mcpserver
 
 import (
+	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -67,5 +69,62 @@ func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
 	// Identity must survive the rotation, or recovery silently orphans work.
 	if def.Purpose != claudia.PurposeWork || def.Name != phantom {
 		t.Errorf("rotation lost identity: %+v", def)
+	}
+}
+
+// A Cursor row reloaded after a bounce RequireResumes its persisted session
+// id even when that id never wrote store.db. session/load then returns
+// Invalid params and Launch latches the refusal. The send path used to
+// return that latch forever. It must rotate once and launch the fresh id.
+func TestEnsureAgentProcessRemintsCursorResumeDenial(t *testing.T) {
+	const oldSession = "82615afb-238d-44bd-a9fa-407b43009f13"
+	path := filepath.Join(t.TempDir(), "agents.json")
+	seed, err := claudia.NewRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Register(claudia.AgentDef{
+		Name: "multimaze2-po", WorkDir: t.TempDir(), SessionID: oldSession,
+		Provider: claudia.ProviderCursor, Purpose: claudia.PurposeWork,
+		AutoStart: true, TermLogPath: "-",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A registry opened on the same file is a bounce: the session id was
+	// not minted here, so Launch passes RequireResume.
+	reg, err := claudia.NewRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.SetDirect(true)
+	var resumes, mints int
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			if cfg.RequireResume {
+				resumes++
+				return nil, fmt.Errorf("acp session/load %s: Invalid params (%w)", cfg.SessionID, claudia.ErrCursorResumeDenied)
+			}
+			mints++
+			return claudia.StartStub(ctx, cfg, nil)
+		},
+	})
+
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	t.Cleanup(reg.StopAll)
+
+	proc, rehydrated, err := s.ensureAgentProcess("multimaze2-po")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proc == nil || !rehydrated {
+		t.Fatalf("proc=%v rehydrated=%v", proc != nil, rehydrated)
+	}
+	if resumes != 1 || mints != 1 {
+		t.Fatalf("resumes=%d mints=%d, want one refusal then one fresh mint", resumes, mints)
+	}
+	if got := reg.Def("multimaze2-po").SessionID; got == oldSession || got == "" {
+		t.Fatalf("session = %q, still the id Cursor will not load", got)
 	}
 }

@@ -197,6 +197,39 @@ func TestT627_1CursorResumeDeniedStillRemints(t *testing.T) {
 	}
 }
 
+// A leftover still holding store.db wraps the same resume-denied sentinel.
+// Rotating would mint a second writer on that store.
+func TestCursorHeldStoreDoesNotRemint(t *testing.T) {
+	const sid = "cursor-held"
+	path := filepath.Join(t.TempDir(), "agents.json")
+	r1, err := claudia.NewRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: sid,
+		Provider: claudia.ProviderCursor, Materialized: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.SetDirect(true)
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(context.Context, claudia.Config) (*claudia.Agent, error) {
+			return nil, fmt.Errorf("leftover cursor-agent [424242] still holds store for session %s: %w", sid, claudia.ErrCursorResumeDenied)
+		},
+	})
+	if _, err := LaunchRecovering(reg, "jevons-po"); err == nil {
+		t.Fatal("held store launched")
+	}
+	if got := reg.Def("jevons-po").SessionID; got != sid {
+		t.Fatalf("session = %q, held store was rotated", got)
+	}
+}
+
 func TestRemintAfterResumeErrorGrokStringMatchIsNotCursor(t *testing.T) {
 	err := grokLoadErr(t6271GrokSID)
 	if !claudia.IsCursorResumeDenied(err) {

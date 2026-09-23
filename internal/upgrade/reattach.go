@@ -261,11 +261,40 @@ func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name 
 	// A Cursor restart does not session/load the stored id and then brief
 	// only if that fails. The fresh session is the start, and the
 	// post-restart wake sends the brief either way.
+	prevSession := ""
+	if d := reg.Def(name); d != nil {
+		prevSession = d.SessionID
+	}
 	if err := fleet.RestartCursorFresh(reg, name); err != nil {
 		slog.Warn("cursor restart fresh session failed", "agent", name, "err", err)
 	}
+	freshSession := ""
+	if d := reg.Def(name); d != nil {
+		freshSession = d.SessionID
+	}
 	for attempt := 0; ; attempt++ {
 		a, err := reg.AdoptOrLaunchContext(ctx, name)
+		if err == nil && freshSession != prevSession && freshSession != "" {
+			// Adopt of the broker's existing grant reports the session
+			// that grant was started on. startHeld then writes that id
+			// back over the fresh one RestartCursorFresh just persisted,
+			// and the next launch RequireResumes a session Cursor will
+			// not load. Put the fresh id back and launch that.
+			if d := reg.Def(name); d != nil && d.SessionID == prevSession {
+				slog.Warn("adopt restored the cursor session a restart had abandoned",
+					"agent", name, "abandoned", prevSession, "fresh", freshSession)
+				reg.Stop(name)
+				next := *d
+				next.SessionID = freshSession
+				next.Materialized = false
+				next.ConnectURL = ""
+				next.ConnectPID = 0
+				if rerr := reg.Register(next); rerr != nil {
+					return nil, rerr
+				}
+				return fleet.LaunchRecovering(reg, name)
+			}
+		}
 		if err == nil || !errors.Is(err, ErrClaudeHeldByBroker) || attempt >= heldRetries {
 			// AdoptOrLaunch latches a Cursor session/load refusal and
 			// every later boot repeats it. A leftover still holding the

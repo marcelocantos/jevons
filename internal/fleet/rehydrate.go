@@ -292,6 +292,12 @@ func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
 	}
 	switch def.Provider {
 	case claudia.ProviderCursor:
+		// A leftover still holding store.db wraps the same sentinel.
+		// Rotating then would mint a second writer (🎯T541.1). A refusal
+		// with nobody on the store is a dead session id.
+		if strings.Contains(err.Error(), "still holds store") {
+			return false
+		}
 		return claudia.IsCursorResumeDenied(err)
 	case claudia.ProviderGrok:
 		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")
