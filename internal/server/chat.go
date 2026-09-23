@@ -916,6 +916,10 @@ type agentInfo struct {
 	// restart; carried on every row so the RHS can show it once.
 	StopReason string `json:"stop_reason,omitempty"`
 	StoppedAt  string `json:"stopped_at,omitempty"`
+	// PlanWall is set when the seat's transcript ends on Cursor's
+	// "Upgrade your plan to continue" turn. The process may still be
+	// running; the row shows it the way it shows a stop reason.
+	PlanWall string `json:"plan_wall,omitempty"`
 	// Rehydrate says whether a not-running seat can come back (🎯T763):
 	// "resumable", "repairable: …" (its def carries settings its provider
 	// refuses, dropped on the next rehydrate) or "broken: …" (its last
@@ -1297,7 +1301,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
 	}, s.agentProgress, models)
-	rows := s.decorateSeatActivity(reg, s.decorateSeatStops(agents), time.Now())
+	rows := s.decorateSeatActivity(reg, s.decoratePlanWalls(s.decorateSeatStops(agents)), time.Now())
 	_ = json.NewEncoder(w).Encode(rows)
 }
 

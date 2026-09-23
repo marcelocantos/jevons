@@ -144,6 +144,7 @@ function Cockpit() {
           stopped_at?: string;
           mass_stop?: string;
           rehydrate?: string;
+          plan_wall?: string;
         }) => ({
           name: a.name || '',
           purpose: a.purpose,
@@ -162,6 +163,7 @@ function Cockpit() {
           stopped_at: a.stopped_at,
           mass_stop: a.mass_stop,
           rehydrate: a.rehydrate,
+          plan_wall: a.plan_wall,
         }))
         .filter((a: AgentRow) => a.name);
       const merged = mergeAgentChrome(lastAgentsRef.current, rows);

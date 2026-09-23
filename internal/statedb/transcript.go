@@ -6,6 +6,7 @@ package statedb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -170,6 +171,26 @@ func (s *Store) BeforeProse(agent string, before, limit int) ([]Event, error) {
 		out = out[len(out)-beforeProseRawCap:]
 	}
 	return out, nil
+}
+
+// Last is the newest transcript row for agent. ok is false when the
+// agent has no rows.
+func (s *Store) Last(agent string) (Event, bool, error) {
+	if s == nil || agent == "" {
+		return Event{}, false, nil
+	}
+	var ev Event
+	err := s.db.QueryRow(
+		`SELECT idx, id, ts, typ, kind, body FROM transcript_events
+		 WHERE agent = ? ORDER BY idx DESC LIMIT 1`, agent,
+	).Scan(&ev.Index, &ev.ID, &ev.TS, &ev.Type, &ev.Kind, &ev.Body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Event{}, false, nil
+	}
+	if err != nil {
+		return Event{}, false, fmt.Errorf("statedb: last: %w", err)
+	}
+	return ev, true, nil
 }
 
 // N is the journal-absolute length: MAX(idx), or 0 when empty.

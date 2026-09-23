@@ -71,6 +71,25 @@ describe('AgentTree seat stops (🎯T662)', () => {
     expect(notes).toEqual(['broken: cursor login connection closed']);
   });
 
+  it('paints a plan wall on a running row the way a stop reason is painted', () => {
+    const { container } = render(
+      <AgentTree
+        selected=""
+        onSelect={() => {}}
+        agents={[
+          { name: 'jevons-po', running: true, plan_wall: 'Upgrade your plan to continue' },
+          { name: 'claudia-po', parent: 'jevons', running: true },
+        ]}
+      />,
+    );
+    const walls = [...container.querySelectorAll('.agent-plan-wall')].map((n) => n.textContent);
+    expect(walls).toEqual(['Upgrade your plan to continue']);
+    const po = [...container.querySelectorAll('.agent-node')].find((n) =>
+      n.querySelector('.agent-name')?.textContent === 'jevons-po',
+    );
+    expect(po?.querySelector('.agent-stop-reason')).toBeNull();
+  });
+
   it('shows nothing extra when the fleet is healthy', () => {
     const { container } = render(
       <AgentTree

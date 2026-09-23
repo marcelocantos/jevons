@@ -23,6 +23,8 @@ export type AgentRow = {
   ledger?: string;
   /** 🎯T662: why a not-running seat last stopped, from the daemon's seat-stop ledger. */
   stop_reason?: string;
+  /** Set when the transcript ends on Cursor's plan wall. Shown on a running seat. */
+  plan_wall?: string;
   stopped_at?: string;
   /** 🎯T662: the fleet-wide mass-stop line; identical on every row when present. */
   mass_stop?: string;
@@ -211,6 +213,11 @@ function Row(props: {
         {!props.node.running && props.node.stop_reason ? (
           <span className="agent-stop-reason" title={props.node.stop_reason}>
             {'⛔ ' + props.node.stop_reason}
+          </span>
+        ) : null}
+        {props.node.plan_wall ? (
+          <span className="agent-plan-wall" title={props.node.plan_wall}>
+            {props.node.plan_wall}
           </span>
         ) : null}
         {!props.node.running && props.node.rehydrate && props.node.rehydrate !== 'resumable' ? (
