@@ -22,6 +22,7 @@ import { FrontierRowsContext } from './frontier/rows';
 import { toFrontierRows } from './frontier/table';
 import { PlanUsageBar } from './components/PlanUsageBar';
 import { WorkersList } from './components/WorkersList';
+import { AsideHistoryPanel } from './components/AsideHistoryPanel';
 import { MermaidVizPanel } from './components/MermaidVizPanel';
 import {
   applyTheme,
@@ -100,6 +101,11 @@ function Cockpit() {
   const [degraded, setDegraded] = useState('');
   const [graphOpen, setGraphOpen] = useState(false);
   const [graphNonce, setGraphNonce] = useState(0);
+  const [asideOpen, setAsideOpen] = useState(false);
+  const openGraph = useCallback(() => {
+    setGraphOpen(true);
+    setGraphNonce((n) => n + 1);
+  }, []);
   const onJevonsMeta = useCallback((meta: ConversationMeta | null) => {
     setDegraded(degradedBannerText(meta));
   }, []);
@@ -323,18 +329,20 @@ function Cockpit() {
           <div id="cost-ticker" title="Token burn rate — click for detail" />
           <div id="activity-header" className="agents-header">
             <span className="ah-label">Agents</span>
-            <button type="button" id="aside-history-btn" title="Browse closed / dismissed asides">
+            <button
+              type="button"
+              id="aside-history-btn"
+              title="Browse closed / dismissed asides"
+              aria-expanded={asideOpen}
+              onClick={() => setAsideOpen((v) => !v)}
+            >
               Closed
             </button>
-            <button type="button" id="open-viz-btn" title="Open project graph viz panel">
+            <button type="button" id="open-viz-btn" title="Open project graph viz panel" onClick={openGraph}>
               Open viz
             </button>
           </div>
-          <div id="aside-history-panel" role="region" aria-label="Closed asides history" hidden>
-            <div className="aside-history-head">
-              <span className="ah-hist-label">Closed asides</span>
-            </div>
-          </div>
+          <AsideHistoryPanel open={asideOpen} onClose={() => setAsideOpen(false)} />
           <div id="rhs-split" ref={splitRef}>
             <div
               id="agents"
@@ -367,10 +375,7 @@ function Cockpit() {
                 navigate({ search: { agent, tab: next } });
                 queueMicrotask(() => focusMainComposer());
               }}
-              onGraph={() => {
-                setGraphOpen(true);
-                setGraphNonce((n) => n + 1);
-              }}
+              onGraph={openGraph}
               transcript={
                 agent === 'jevons' ? (
                   <div
