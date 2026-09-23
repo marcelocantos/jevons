@@ -420,7 +420,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: var(--surface);
   overflow: hidden;
 }
-#aside-history-panel.open { display: flex; }
+#aside-history-panel.open {
+  display: flex;
+  flex: 0 0 auto;
+  min-height: 160px;
+}
 #aside-history-panel .aside-history-head {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 10px; font-size: 11px; color: var(--text-muted);

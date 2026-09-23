@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement, useState } from 'react';
 import { AsideHistoryPanel } from './AsideHistoryPanel';
@@ -47,5 +50,12 @@ describe('closed asides', () => {
     expect(await screen.findByText('Selection is not sticky')).toBeTruthy();
     expect(screen.getByText('Target filing')).toBeTruthy();
     expect(document.getElementById('aside-history-panel')?.classList.contains('open')).toBe(true);
+  });
+
+  it('does not let the fleet column squeeze the archive to its header', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
+    const block = css.slice(css.indexOf('#aside-history-panel.open'), css.indexOf('#aside-history-panel .aside-history-head'));
+    expect(block).toMatch(/flex:\s*0 0 auto/);
+    expect(block).toMatch(/min-height:\s*160px/);
   });
 });
