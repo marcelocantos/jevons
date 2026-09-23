@@ -35,13 +35,15 @@ func attachCursorAPIUsage(readings []claudia.PlanUsage, dir string) []claudia.Pl
 		if cursorReadingHasAPI(reading) {
 			return readings
 		}
-		base := claudia.PlanWindow{Name: claudia.PlanWindowAPI}
+		base := claudia.PlanWindow{Name: cursorAPIWindowName}
 		if len(reading.Windows) > 0 {
 			base = reading.Windows[0]
 		}
 		// A copied month window would file this figure under "monthly"
 		// and the sparkline would draw the blend. The bucket has its own name.
-		base.Name = claudia.PlanWindowAPI
+		// The string matches claudia.PlanWindowAPI. It is written out here so
+		// this package still builds against the published claudia pin.
+		base.Name = cursorAPIWindowName
 		base.Model = "API"
 		u := used
 		rem := 100 - used
@@ -53,6 +55,10 @@ func attachCursorAPIUsage(readings []claudia.PlanUsage, dir string) []claudia.Pl
 	}
 	return readings
 }
+
+// cursorAPIWindowName is the series key for named-model usage. It must
+// not be "weekly" or "monthly".
+const cursorAPIWindowName claudia.PlanWindowName = "api"
 
 func cursorReadingHasAPI(reading claudia.PlanUsage) bool {
 	for _, w := range reading.Windows {

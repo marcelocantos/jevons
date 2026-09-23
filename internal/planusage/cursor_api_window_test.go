@@ -33,7 +33,7 @@ func TestAttachCursorAPIUsageFromRawStore(t *testing.T) {
 		t.Fatalf("windows=%+v", got)
 	}
 	api := got[0].Windows[1]
-	if api.Name != claudia.PlanWindowAPI || api.Model != "API" || api.UsedPercent == nil || *api.UsedPercent != 100 || api.RemainingPercent == nil || *api.RemainingPercent != 0 {
+	if api.Name != cursorAPIWindowName || api.Model != "API" || api.UsedPercent == nil || *api.UsedPercent != 100 || api.RemainingPercent == nil || *api.RemainingPercent != 0 {
 		t.Fatalf("api window=%+v", api)
 	}
 	if got[0].Windows[0].Model != "" || got[0].Windows[0].UsedPercent == nil || *got[0].Windows[0].UsedPercent != 50 {
