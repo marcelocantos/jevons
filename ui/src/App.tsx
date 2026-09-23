@@ -376,6 +376,7 @@ function Cockpit() {
                 queueMicrotask(() => focusMainComposer());
               }}
               onGraph={openGraph}
+              onRefresh={() => void queryClient.invalidateQueries({ queryKey: ['frontier'] })}
               transcript={
                 agent === 'jevons' ? (
                   <div

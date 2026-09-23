@@ -16,6 +16,7 @@ export function SidebarPanel(props: {
   tab: SidebarTab;
   onTab: (tab: SidebarTab) => void;
   onGraph?: () => void;
+  onRefresh?: () => void;
   readyCount?: number;
   /** Shown instead of a count while there is no frontier answer to count. */
   readyNote?: string;
@@ -52,7 +53,7 @@ export function SidebarPanel(props: {
           <button type="button" id="frontier-graph" title="Open unachieved dependency graph (~90% view)" onClick={props.onGraph}>
             Graph
           </button>
-          <button type="button" id="frontier-refresh">
+          <button type="button" id="frontier-refresh" onClick={props.onRefresh}>
             Refresh
           </button>
         </div>
