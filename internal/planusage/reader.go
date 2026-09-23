@@ -140,13 +140,17 @@ func defaultPlanUsageFetch(refresh bool) FetchFunc {
 		// with every other claudia consumer) when it is not. Either
 		// way jevonsd never races another process to a vendor endpoint.
 		// Refresh=true is the cockpit-reload path (🎯T653).
-		return claudia.LoadPlanUsage(ctx, &claudia.PlanUsageCacheArgs{
+		readings, err := claudia.LoadPlanUsage(ctx, &claudia.PlanUsageCacheArgs{
 			Refresh: refresh,
 			All: &claudia.AllPlanUsageArgs{
 				Providers:         SupportedProviders(),
 				CursorAccessToken: tok,
 			},
 		})
+		if err != nil {
+			return nil, err
+		}
+		return attachCursorAPIUsage(readings, cursorPlanCacheDir()), nil
 	}
 }
 
