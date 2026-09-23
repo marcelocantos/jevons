@@ -65,6 +65,37 @@ async function ensureMermaid(): Promise<MermaidAPI> {
   return api;
 }
 
+/** A wide pack diagram fitted to the card becomes a hairline. Pin it to its
+ * own viewBox instead, so the card scrolls sideways. Tall diagrams that
+ * stay above the floor keep the usual fit-to-width. */
+export const PACK_LEGIBLE_MIN_PX = 72;
+
+export function packSvgPin(
+  viewW: number,
+  viewH: number,
+  availW: number,
+  floor = PACK_LEGIBLE_MIN_PX,
+): { width: number; height: number } | null {
+  if (!(viewW > 0) || !(viewH > 0) || !(availW > 0)) return null;
+  if (viewW <= availW) return null;
+  const fittedH = viewH * (availW / viewW);
+  if (fittedH >= floor) return null;
+  return { width: viewW, height: viewH };
+}
+
+function keepWidePackLegible(svg: SVGSVGElement): void {
+  const card = svg.closest('.mvp-pack-block');
+  if (!card) return;
+  const box = svg.viewBox?.baseVal;
+  if (!box) return;
+  const avail = card.clientWidth;
+  const pin = packSvgPin(box.width, box.height, avail);
+  if (!pin) return;
+  svg.style.maxWidth = 'none';
+  svg.style.width = pin.width + 'px';
+  svg.style.height = pin.height + 'px';
+}
+
 export async function renderMermaidIn(container: ParentNode | null): Promise<void> {
   if (!container) return;
   // Await the script BEFORE querying. Hydrate remounts bubbles during the
@@ -95,6 +126,8 @@ export async function renderMermaidIn(container: ParentNode | null): Promise<voi
       wrap.className = 'mermaid mermaid-diagram';
       wrap.innerHTML = svg;
       host.parentNode.replaceChild(wrap, host);
+      const painted = wrap.querySelector('svg');
+      if (painted instanceof SVGSVGElement) keepWidePackLegible(painted);
     } catch (err) {
       rememberErr(err);
       [id, 'd' + id].forEach((x) => document.getElementById(x)?.remove());

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { packSvgPin } from '../conversation/mermaidPaint';
 import { graphBodyHtml } from './MermaidVizPanel';
 
 describe('frontier graph pack', () => {
@@ -28,5 +29,14 @@ describe('frontier graph pack', () => {
     expect(pack).toMatch(/align-items:\s*start/);
     expect(block).toMatch(/overflow:\s*visible/);
     expect(block).toMatch(/min-height:\s*min-content/);
+    const scroll = css.slice(css.indexOf('#mermaid-viz-panel .mvp-pack-block .mermaid-diagram {'), css.indexOf('#mermaid-viz-panel .mvp-pack-block svg {'));
+    expect(scroll).toMatch(/overflow-x:\s*auto/);
+  });
+
+  it('pins a wide orphan graph to its own height instead of a hairline', () => {
+    // Orphans part 1 measured 6419×118 and fitted into a ~320px card.
+    expect(packSvgPin(6419.49, 118, 320)).toEqual({ width: 6419.49, height: 118 });
+    expect(packSvgPin(400, 800, 320)).toBeNull();
+    expect(packSvgPin(200, 80, 320)).toBeNull();
   });
 });

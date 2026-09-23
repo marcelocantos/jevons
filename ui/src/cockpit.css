@@ -366,6 +366,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   color: var(--text-muted);
   margin: 0 0 6px;
 }
+#mermaid-viz-panel .mvp-pack-block .mermaid-diagram {
+  overflow-x: auto;
+  max-width: 100%;
+}
 #mermaid-viz-panel .mvp-pack-block svg {
   max-width: 100%;
   max-height: none;
