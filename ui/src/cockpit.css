@@ -334,11 +334,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   flex-shrink: 0;
   margin: auto;
 }
-/* 🎯T190/T276: multi-diagram pack host. T276 places blocks absolutely after
-   pack+scale; relative body is the composite coordinate space. */
+/* 🎯T190: one diagram per connected component, in a wrap grid. */
 #mermaid-viz-panel .mvp-body.mvp-pack {
   position: relative;
-  display: block;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  align-content: start;
   text-align: left;
   overflow: auto;
 }

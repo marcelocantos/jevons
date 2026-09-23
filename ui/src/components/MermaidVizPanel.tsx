@@ -5,15 +5,36 @@ import { useCallback, useEffect, useState } from 'react';
 import { renderMermaidIn } from '../conversation/mermaidPaint';
 import { copyImageStatus, copyMermaidImage, copyMermaidSource, svgMarkupFrom } from '../conversation/mermaidClipboard';
 
+type GraphDiagram = { id?: string; title?: string; mermaid?: string };
+type GraphPayload = { mermaid?: string; source?: string; diagrams?: GraphDiagram[]; error?: string };
+
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** One fenced diagram per block. The joined pack is not one Mermaid document. */
+export function graphBodyHtml(diagrams: GraphDiagram[]): string {
+  return diagrams
+    .filter((d) => (d.mermaid || '').trim())
+    .map((d) => {
+      const title = (d.title || d.id || '').trim();
+      const head = title ? `<div class="mvp-pack-title">${esc(title)}</div>` : '';
+      return `<div class="mvp-pack-block">${head}<pre><code class="language-mermaid">${esc(d.mermaid || '')}</code></pre></div>`;
+    })
+    .join('');
+}
+
 /** Vanilla #mermaid-viz-panel (🎯T83 / T185). Graph opens the unachieved ledger. */
 
 export function MermaidVizPanel(props: { open: boolean; onClose: () => void; graphNonce: number }) {
   const [status, setStatus] = useState('');
   const [bodyHtml, setBodyHtml] = useState('');
   const [src, setSrc] = useState('');
+  const [pack, setPack] = useState(false);
 
   const loadGraph = useCallback(async () => {
     setStatus('Loading unachieved dependency graph…');
+    setPack(false);
     setBodyHtml('<p class="mvp-empty-body" style="padding:12px">Loading…</p>');
     try {
       const r = await fetch('/api/frontier/graph');
@@ -28,17 +49,27 @@ export function MermaidVizPanel(props: { open: boolean; onClose: () => void; gra
         return;
       }
       const text = await r.text();
-      let src = text;
+      let source = text;
+      let diagrams: GraphDiagram[] = [];
       if (text.trim().startsWith('{')) {
-        const j = JSON.parse(text) as { mermaid?: string; source?: string };
-        src = String(j.mermaid || j.source || '');
+        const j = JSON.parse(text) as GraphPayload;
+        if (j.error) throw new Error(j.error);
+        source = String(j.mermaid || j.source || '');
+        diagrams = (j.diagrams || []).filter((d) => (d.mermaid || '').trim());
       }
-      setSrc(src);
-      const fence = src.includes('```') ? src : '```mermaid\n' + src + '\n```';
+      setSrc(source);
+      if (diagrams.length > 0) {
+        setPack(true);
+        setBodyHtml(graphBodyHtml(diagrams));
+        setStatus(diagrams.length === 1 ? 'Unachieved graph' : `Unachieved graph · ${diagrams.length} diagrams`);
+        return;
+      }
+      const fence = source.includes('```') ? source : '```mermaid\n' + source + '\n```';
       const marked = await import('../conversation/markdown');
       setBodyHtml(marked.parseAssistantMarkdown(fence));
       setStatus('Unachieved graph');
     } catch (err) {
+      setPack(false);
       setStatus('Frontier graph failed');
       setBodyHtml(
         '<div class="mvp-error"><p class="mvp-error-title">Graph failed</p>' +
@@ -110,7 +141,7 @@ export function MermaidVizPanel(props: { open: boolean; onClose: () => void; gra
           Close
         </button>
       </div>
-      <div className="mvp-body" id="mvp-body" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+      <div className={pack ? 'mvp-body mvp-pack' : 'mvp-body'} id="mvp-body" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
       <div className="mvp-status" id="mvp-status">
         {status}
       </div>
