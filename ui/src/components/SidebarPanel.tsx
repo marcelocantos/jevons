@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ReactNode } from 'react';
+import { CoachList } from './CoachList';
 
 export type SidebarTab = 'frontier' | 'transcript' | 'coach';
 
@@ -62,7 +63,7 @@ export function SidebarPanel(props: {
         className={'rhs-tab-pane' + (props.tab === 'coach' ? ' active' : '')}
         role="tabpanel"
       >
-        <p className="ai-empty">Coach judgments port next.</p>
+        <CoachList active={props.tab === 'coach'} />
       </div>
       {props.transcript}
     </div>
