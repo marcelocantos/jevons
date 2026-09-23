@@ -39,6 +39,8 @@ type UserRequestProps = {
   onInterrupt?: () => void;
   queue?: ComposerQueue;
   disabled?: boolean;
+  /** When set, the box is held and this sentence replaces the invitation. */
+  hold?: string;
   history?: RecalledRequest[];
   onRecall?: (request: RecalledRequest | null) => void;
   onRewind?: (request: RecalledRequest, text: string) => Promise<void>;
@@ -277,11 +279,11 @@ function NamedUserRequest(props: UserRequestProps) {
         data-composer={compact ? 'sidebar' : 'main'}
         value={raw}
         onChange={(e) => recalled ? setRecalledText(e.target.value) : setDraft(props.name, e.target.value)}
-        placeholder={compact ? 'Message this agent…' : 'Message...'}
-        autoFocus={!compact}
+        placeholder={props.hold || (compact ? 'Message this agent…' : 'Message...')}
+        autoFocus={!compact && !props.hold}
         rows={1}
-        title="Enter send · ⌘Enter steer · ⌘⇧Enter interrupt · ⌥Enter force-send the draft (or the next queued item) · Alt+↑/↓ pick a queued item"
-        disabled={rewinding}
+        title={props.hold || 'Enter send · ⌘Enter steer · ⌘⇧Enter interrupt · ⌥Enter force-send the draft (or the next queued item) · Alt+↑/↓ pick a queued item'}
+        disabled={rewinding || props.disabled === true}
         onPaste={onPaste}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return;

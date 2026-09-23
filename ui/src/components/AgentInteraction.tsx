@@ -25,6 +25,8 @@ export function AgentInteraction(props: {
   density?: Density;
   paneActive?: boolean;
   connected?: boolean;
+  /** Vendor stop, such as a spent plan. The composer stays closed until it clears. */
+  planWall?: string;
   onMeta?: (meta: ConversationMeta | null) => void;
 }) {
   const density = normalizeDensity(props.density);
@@ -135,8 +137,8 @@ export function AgentInteraction(props: {
         id={comfortable ? 'send-queue' : 'agent-inspect-send-queue'}
         items={queue.items}
         focusedId={queueFocus}
-        onSteer={(id) => queue.sendItem(id, 'steer')}
-        onInterrupt={(id) => queue.sendItem(id, 'interrupt')}
+        onSteer={(id) => { if (!props.planWall) queue.sendItem(id, 'steer'); }}
+        onInterrupt={(id) => { if (!props.planWall) queue.sendItem(id, 'interrupt'); }}
         onRemove={queue.remove}
         onEdit={editQueued}
       />
@@ -144,8 +146,13 @@ export function AgentInteraction(props: {
       <UserRequest
         name={props.name}
         density={density}
-        onSend={(t, opts) => queue.submit(t, opts?.mode ?? 'submit')}
-        onInterrupt={() => conv.send('', { mode: 'interrupt' })}
+        hold={props.planWall}
+        disabled={!!props.planWall}
+        onSend={(t, opts) => {
+          if (props.planWall) return;
+          return queue.submit(t, opts?.mode ?? 'submit');
+        }}
+        onInterrupt={props.planWall ? undefined : () => conv.send('', { mode: 'interrupt' })}
         queue={{ items: queue.items, focusedId: queueFocus, onFocus: setQueueFocus, onSend: queue.sendItem }}
         history={history}
         onRecall={setRecalled}

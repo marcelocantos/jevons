@@ -59,6 +59,17 @@ describe('seat composer busy from its own phase (T562.2)', () => {
     await waitFor(() => expect(sends()).toEqual([{ text: 'while busy' }]));
   });
 
+  it('a plan wall holds the composer closed', () => {
+    const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected planWall="Upgrade your plan to continue" />);
+    const box = view.getByRole('textbox') as HTMLTextAreaElement;
+    expect(box.disabled).toBe(true);
+    expect(box.placeholder).toBe('Upgrade your plan to continue');
+    expect((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(box, { target: { value: 'keep going' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(sends()).toEqual([]);
+  });
+
   it('idle seat: Enter sends straight through and nothing is queued', async () => {
     const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected />);
     act(() => { emit('meta', { ...win, phase: { phase: 'idle' } }); });

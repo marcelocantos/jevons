@@ -403,6 +403,7 @@ function Cockpit() {
                     title={agent}
                     density="compact"
                     paneActive={tab === 'transcript'}
+                    planWall={agents.find((a) => a.name === agent)?.plan_wall}
                   />
                 )
               }
