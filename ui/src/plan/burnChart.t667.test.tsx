@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BurnChart } from './BurnChart';
-import { burnRuns } from './burnGeom';
+import { burnStops } from './burnGeom';
 import { CLASS_AHEAD, CLASS_HOT, CLASS_LOCKED, CLASS_UNDER, paceClassForBand } from './pace';
 import type { PlanWindow } from './tickerGroups';
 
@@ -42,20 +42,20 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
     expect(paceClassForBand(undefined)).toBeNull();
   });
 
-  it('paints each band as its own stretch, ok early and hot late', () => {
-    const runs = burnRuns(
+  it('places one stop per sample at its x, ok early and hot late', () => {
+    const stops = burnStops(
       week([
         { at: iso(start + 1 * day), remaining_percent: 86, band: 'ok' },
         { at: iso(start + 3 * day), remaining_percent: 55, band: 'ahead' },
         { at: iso(start + 6 * day), remaining_percent: 3, band: 'hot' },
       ]),
     );
-    expect(runs.map((r) => r.className)).toEqual(['', CLASS_AHEAD, CLASS_HOT]);
-    expect(runs[0].d).toMatch(/^M14\.3,/);
-    expect(runs[2].d).toMatch(/L85\.7,/);
+    expect(stops.map((s) => s.className)).toEqual(['', CLASS_AHEAD, CLASS_HOT]);
+    expect(stops[0].offset).toBeCloseTo(1 / 7, 3);
+    expect(stops[2].offset).toBeCloseTo(6 / 7, 3);
   });
 
-  it('paints each stretch in its own pace class, not a gradient across the shape', () => {
+  it('washes the line and leaves the dot a single colour', () => {
     const { container } = render(
       <BurnChart
         window={week([
@@ -64,15 +64,15 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
         ])}
       />,
     );
-    expect(container.querySelector('linearGradient')).toBeNull();
-    const lines = [...container.querySelectorAll('.plan-burn-line')];
-    expect(lines.map((p) => p.getAttribute('class'))).toEqual([
-      'plan-burn-line plan-band',
-      'plan-burn-line plan-band ' + CLASS_UNDER,
-    ]);
-    for (const line of lines) expect((line as SVGPathElement).style.stroke).toBe('');
+    const grad = container.querySelector('linearGradient');
+    expect(grad).not.toBeNull();
+    const id = grad!.getAttribute('id')!;
+    const classes = [...grad!.querySelectorAll('stop')].map((s) => s.getAttribute('class'));
+    expect(classes).toEqual(['plan-burn-stop', 'plan-burn-stop ' + CLASS_UNDER]);
+    const ref = new RegExp(`^url\\("?#${id}"?\\)$`);
+    expect((container.querySelector('.plan-burn-line') as SVGPathElement).style.stroke).toMatch(ref);
+    // The wash is the line. The dot does not take it.
     expect((container.querySelector('.plan-burn-now') as SVGPathElement).style.stroke).toBe('');
-    // 🎯T671: the line is the whole chart; there is no shaded area to paint.
     expect(container.querySelector('.plan-burn-fill')).toBeNull();
   });
 
@@ -86,21 +86,20 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
       />,
     );
     expect(container.querySelector('linearGradient')).toBeNull();
-    expect(container.querySelector('.plan-burn-line.plan-band')).toBeNull();
     expect((container.querySelector('.plan-burn-line') as SVGPathElement).style.stroke).toBe('');
   });
 
-  it('keeps a one-minute cluster on the later band (🎯T688)', () => {
+  it('gives a tight cluster one stop, ending on the latest band (🎯T688)', () => {
     const t = start + 6 * day;
-    const runs = burnRuns(
+    const stops = burnStops(
       week([
         { at: iso(t), remaining_percent: 40, band: 'ok' },
         { at: iso(t + 60_000), remaining_percent: 39, band: 'ahead' },
       ]),
     );
-    // A one-minute gap shares a pixel. The column keeps both readings when
-    // they differ, and the stretch ends on the later band.
-    expect(runs[runs.length - 1].className).toBe(CLASS_AHEAD);
+    // A one-minute gap shares a pixel column. The column keeps the later band.
+    expect(stops).toHaveLength(1);
+    expect(stops[0].className).toBe(CLASS_AHEAD);
   });
 
   it('leaves the column dividers neutral — a pace colour is data, not furniture (🎯T668)', () => {
@@ -116,9 +115,10 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
   it('colours the stops from the same cockpit.css rules as the cell — no second palette', () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
     for (const cls of [CLASS_AHEAD, CLASS_HOT, CLASS_UNDER, CLASS_LOCKED]) {
-      expect(css).toContain(`.plan-tip-table td.plan-burn .plan-burn-line.plan-band.${cls}`);
+      expect(css).toContain(`.plan-tip-table td.plan-burn .plan-burn-stop.${cls}`);
     }
-    expect(css).toMatch(/\.plan-burn-line\.plan-band \{[^}]*color: var\(--green\)/);
+    expect(css).toMatch(/\.plan-burn-stop \{[^}]*stop-color: currentColor/);
+    expect(css).toMatch(/\.plan-burn-line \{[^}]*stroke-linecap: butt/);
     const burnGeom = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'burnGeom.ts'), 'utf8');
     expect(burnGeom).not.toMatch(/var\(--/);
   });

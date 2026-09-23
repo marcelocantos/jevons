@@ -1,17 +1,17 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useLayoutEffect, useRef, useState } from 'react';
-import { burnRuns, currentMark, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { burnPaths, burnStops, currentMark, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 /**
  * Tiny sparkline for one tooltip column (🎯T634 / T637). Plot frame
  * always paints, and the current reading always carries a mark (🎯T687). 🎯T667: when the daemon stamps a band on each sample, the
- * line shifts colour along the period by painting each band as its own
- * stretch. Without bands the chart keeps its single inherited pace colour.
- * A horizontal wash is not used: it would colour a circle by whatever
- * x positions the circle covers, and the end dot came out two colours.
+ * line shifts colour along the period through a horizontal wash; without
+ * bands the chart keeps its single inherited pace colour. The wash stops
+ * at the line. The mark is the cell's current colour, so a band change
+ * under the dot cannot paint it as two halves.
  */
 export function BurnChart(props: { window: PlanWindow }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -32,11 +32,14 @@ export function BurnChart(props: { window: PlanWindow }) {
   // Before layout, sample at one vertex per viewBox unit. After layout,
   // and again whenever the cell width changes, sample at one pixel.
   const width = pixelWidth > 0 ? pixelWidth : BURN_WIDTH;
-  const runs = burnRuns(props.window, width);
+  const spec = burnPaths(props.window, width);
   // 🎯T687: the current reading is its own mark, drawn last so it sits in
   // front of the line and outside the plot's clip, whole even when the
-  // value lands on an edge. One colour: the cell's, never a wash.
+  // value lands on an edge.
   const mark = currentMark(props.window);
+  const stops = spec ? burnStops(props.window, width) : [];
+  const gradId = 'plan-burn-grad-' + useId().replace(/[^A-Za-z0-9_-]/g, '');
+  const paint = stops.length ? `url(#${gradId})` : undefined;
   return (
     <svg
       ref={svgRef}
@@ -45,6 +48,15 @@ export function BurnChart(props: { window: PlanWindow }) {
       preserveAspectRatio="none"
       aria-hidden="true"
     >
+      {stops.length ? (
+        <defs>
+          <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2={BURN_WIDTH} y2="0">
+            {stops.map((st, i) => (
+              <stop key={i} offset={st.offset} className={('plan-burn-stop ' + st.className).trim()} />
+            ))}
+          </linearGradient>
+        </defs>
+      ) : null}
       <rect
         className="plan-burn-plot"
         x="0"
@@ -52,13 +64,7 @@ export function BurnChart(props: { window: PlanWindow }) {
         width={BURN_WIDTH}
         height={BURN_HEIGHT}
       />
-      {runs.map((run, i) => (
-        <path
-          key={i}
-          className={run.className === null ? 'plan-burn-line' : ('plan-burn-line plan-band ' + run.className).trim()}
-          d={run.d}
-        />
-      ))}
+      {spec ? <path className="plan-burn-line" d={spec.line} style={paint ? { stroke: paint } : undefined} /> : null}
       {mark ? <path className="plan-burn-now" d={mark} /> : null}
     </svg>
   );

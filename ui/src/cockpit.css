@@ -1626,23 +1626,18 @@ body.rhs-resizing-row { cursor: row-resize; }
   vertical-align: bottom;
 }
 .plan-tip-table td.plan-burn.plan-ahead,
-.plan-tip-table td.plan-burn .plan-burn-stop.plan-ahead,
-.plan-tip-table td.plan-burn .plan-burn-line.plan-band.plan-ahead { color: var(--amber); }
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-ahead { color: var(--amber); }
 .plan-tip-table td.plan-burn.plan-hot,
 .plan-tip-table td.plan-burn.plan-crit,
-.plan-tip-table td.plan-burn .plan-burn-stop.plan-hot,
-.plan-tip-table td.plan-burn .plan-burn-line.plan-band.plan-hot { color: var(--red); }
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-hot { color: var(--red); }
 .plan-tip-table td.plan-burn.plan-under,
-.plan-tip-table td.plan-burn .plan-burn-stop.plan-under,
-.plan-tip-table td.plan-burn .plan-burn-line.plan-band.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-under { color: var(--plan-under); }
 .plan-tip-table td.plan-burn.plan-locked,
-.plan-tip-table td.plan-burn .plan-burn-stop.plan-locked,
-.plan-tip-table td.plan-burn .plan-burn-line.plan-band.plan-locked { color: var(--plan-locked); }
-/* 🎯T667: a band stretch takes the same class as the cell, so the palette
-   above is the only one; an ok stretch falls back to the ok green. The
-   colour is the stretch's own, not a wash across the painted shape. */
+.plan-tip-table td.plan-burn .plan-burn-stop.plan-locked { color: var(--plan-locked); }
+/* 🎯T667: a gradient stop takes the same class as the cell, so the palette
+   above is the only one; an ok stop falls back to the ok green. The wash
+   is the line's stroke. The current-value mark does not use it. */
 .plan-tip-table td.plan-burn .plan-burn-stop { color: var(--green); stop-color: currentColor; }
-.plan-tip-table td.plan-burn .plan-burn-line.plan-band { color: var(--green); }
 .plan-tip-table td.plan-burn .plan-burn-svg {
   display: block;
   width: 100%;
@@ -1677,9 +1672,8 @@ body.rhs-resizing-row { cursor: row-resize; }
   stroke: currentColor;
   stroke-width: var(--plan-burn-line-width);
   vector-effect: non-scaling-stroke;
-  /* Butt caps. A round cap is a circle, and it was being coloured by
-     every band the circle covered, so the end read as two halves. The
-     current-value mark is the only circle. */
+  /* Butt caps. A round cap is a circle, and the wash would colour every
+     band that circle covered. The current-value mark is the only circle. */
   stroke-linecap: butt;
   stroke-linejoin: round;
 }
