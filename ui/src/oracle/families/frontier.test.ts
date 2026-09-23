@@ -3,7 +3,7 @@
 
 import { createElement, useRef } from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react';
-import { expect } from 'vitest';
+import { expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -605,6 +605,29 @@ describeOracle(family('frontier'), () => {
     expect(btn.disabled).toBe(true);
     expect(btn.querySelector('.ft-spin')).toBeTruthy();
     expect(playChromeSpec({ ...sample, kickoff_submitted: true }).mode).toBe('submitted');
+  });
+
+  it('disables play when the kickoff PO is on a plan wall', () => {
+    const walled = [{ name: 'jevons-po', purpose: 'po', plan_wall: 'Upgrade your plan to continue' }];
+    const spec = playChromeSpec(sample, { agents: walled, selectedAgent: 'jevons-po' });
+    expect(spec.disabled).toBe(true);
+    expect(spec.title).toBe('Upgrade your plan to continue');
+    expect(spec.ariaLabel).toContain('Cannot start 🎯T184');
+    const req = playKickoffRequest(sample, { agents: walled, selectedAgent: 'jevons-po' });
+    expect(req.blocked).toBe(true);
+    if (!req.blocked) return;
+    expect(req.reason).toBe('plan_wall');
+    const f = fakeFetch();
+    const { container } = render(createElement(FrontierTable, {
+      rows: [sample],
+      agents: walled,
+      selectedAgent: 'jevons-po',
+      fetcher: f.fetcher,
+    }));
+    const btn = container.querySelector<HTMLButtonElement>('.ft-play-btn')!;
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(btn);
+    expect(f.calls.length).toBe(0);
   });
 
   itOracle('T198', 'engaged rows show Stop, not a bullseye status rewrite', () => {
