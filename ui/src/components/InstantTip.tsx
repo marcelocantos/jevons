@@ -39,6 +39,11 @@ export function InstantTip(props: {
   placement?: InstantTipPlacement;
   /** T186: clamp card right edge left of these nodes (frontier table). */
   clampSelectors?: readonly string[];
+  /**
+   * Rects the card must yield. A pointer there dismisses even when it is
+   * still inside the card — the plan tip hangs over the fleet.
+   */
+  yieldSelectors?: readonly string[];
   /** Mount already open (delegated T326 attach). */
   defaultOpen?: boolean;
 }) {
@@ -64,6 +69,8 @@ export function InstantTip(props: {
   groupHostsRef.current = props.groupHosts;
   const persistHostsRef = useRef(props.persistHosts);
   persistHostsRef.current = props.persistHosts;
+  const yieldSelectorsRef = useRef(props.yieldSelectors);
+  yieldSelectorsRef.current = props.yieldSelectors;
   const stickyRef = useRef<{ left: number; top: number; side: 'left' | 'right'; width: number } | null>(null);
   const lastXYRef = useRef<{ x: number; y: number } | null>(null);
   const lastPartsRef = useRef<HitParts | null>(null);
@@ -189,6 +196,19 @@ export function InstantTip(props: {
 
   useEffect(() => {
     if (!open) return;
+    const yieldRects = () => {
+      const sels = yieldSelectorsRef.current;
+      if (!sels || typeof document === 'undefined') return [];
+      const out: DOMRect[] = [];
+      for (const sel of sels) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        const box = el.getBoundingClientRect();
+        if (box.width < 8 || box.height < 8) continue;
+        out.push(box);
+      }
+      return out;
+    };
     const sample = (x: number, y: number) => {
       const card = cardRef.current;
       const hosts = collectHitHosts();
@@ -201,7 +221,7 @@ export function InstantTip(props: {
       const lastParts = lastPartsRef.current;
       if (!hitRectIsDegenerate(parts.card)) lastPartsRef.current = parts;
       lastXYRef.current = { x, y };
-      if (shouldDismissPointerSample({ x, y, lastXY, parts, lastParts })) setOpen(false);
+      if (shouldDismissPointerSample({ x, y, lastXY, parts, lastParts, yieldRects: yieldRects() })) setOpen(false);
     };
     const onMove = (e: PointerEvent) => sample(e.clientX, e.clientY);
     document.addEventListener('pointermove', onMove);

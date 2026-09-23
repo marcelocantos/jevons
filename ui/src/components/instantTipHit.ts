@@ -132,15 +132,33 @@ export function hitRectIsDegenerate(r: HitRect | null | undefined): boolean {
   return r.right - r.left < 8 || r.bottom - r.top < 8;
 }
 
-/** 🎯T648: layout/mermaid resize is not a leave. Same clientXY is not a leave. */
+/** True when the point lies in any of the rects. Empty and missing rects are not a hit. */
+export function pointInAnyHitRect(
+  x: number,
+  y: number,
+  rects: Array<Partial<HitRect> | null | undefined> | null | undefined,
+): boolean {
+  for (const raw of rects || []) {
+    if (pointInHitRect(x, y, raw)) return true;
+  }
+  return false;
+}
+
+/**
+ * 🎯T648: layout/mermaid resize is not a leave. Same clientXY is not a leave.
+ * A yield rect dismisses even when the point is still on the card — the plan
+ * tip hangs over the fleet, and that overlap must not keep the card open.
+ */
 export function shouldDismissPointerSample(args: {
   x: number;
   y: number;
   lastXY?: { x: number; y: number } | null;
   parts: HitParts;
   lastParts?: HitParts | null;
+  yieldRects?: Array<Partial<HitRect> | null | undefined> | null;
 }): boolean {
   if (samePointerSample(args.lastXY, args.x, args.y)) return false;
+  if (pointInAnyHitRect(args.x, args.y, args.yieldRects)) return true;
   const parts =
     hitRectIsDegenerate(args.parts.card) && args.lastParts ? args.lastParts : args.parts;
   return shouldDismissOutsideHitParts(args.x, args.y, parts);

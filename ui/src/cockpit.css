@@ -1622,6 +1622,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 .instant-tip.plan-tip-card {
   max-width: min(720px, 94vw);
   white-space: normal;
+  /* The card hangs over the fleet. It is a readout: clicks belong to the
+     seat underneath, and the yield rect closes it once the pointer is there. */
+  pointer-events: none;
 }
 
 /* 🎯T588.2: the available figure wears the same colour as the bar fill it

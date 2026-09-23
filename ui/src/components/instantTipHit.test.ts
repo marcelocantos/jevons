@@ -71,6 +71,43 @@ describe('InstantTip hit geometry (🎯T231 / T271)', () => {
     expect(pos.top + 260).toBeLessThanOrEqual(1080 - 8);
   });
 
+  it('a yield rect dismisses even while the pointer is still on the card', () => {
+    const tip = { left: 452, top: 35, right: 1146, bottom: 173 };
+    const ticker = { left: 720, top: 6, right: 1146, bottom: 27 };
+    const fleet = { left: 781, top: 73, right: 1200, bottom: 796 };
+    const parts = computeHitParts({ cardRect: tip, hostRects: [ticker] });
+    // Over the fleet, still inside the card.
+    expect(
+      shouldDismissPointerSample({
+        x: 900,
+        y: 120,
+        lastXY: { x: 900, y: 16 },
+        parts,
+        yieldRects: [fleet],
+      }),
+    ).toBe(true);
+    // Over the chat, on the card, clear of the fleet.
+    expect(
+      shouldDismissPointerSample({
+        x: 500,
+        y: 120,
+        lastXY: { x: 500, y: 16 },
+        parts,
+        yieldRects: [fleet],
+      }),
+    ).toBe(false);
+    // Still on the ticker.
+    expect(
+      shouldDismissPointerSample({
+        x: 900,
+        y: 16,
+        lastXY: { x: 800, y: 16 },
+        parts,
+        yieldRects: [fleet],
+      }),
+    ).toBe(false);
+  });
+
   it('T648: same clientXY is not a leave; mermaid-grown card does not recenter as a dismiss', () => {
     expect(samePointerSample({ x: 200, y: 100 }, 200, 100)).toBe(true);
     expect(samePointerSample({ x: 200, y: 100 }, 201, 100)).toBe(false);

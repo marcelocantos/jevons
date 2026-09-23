@@ -167,6 +167,7 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
       id="plan-ticker"
       cardClassName="plan-tip-card"
       placement="below-host"
+      yieldSelectors={['#agents']}
       content={tip}
     >
       {inner}
