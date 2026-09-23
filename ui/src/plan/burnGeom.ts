@@ -28,6 +28,12 @@
  * painted outside the clipped plot so a reading at an extreme is whole
  * rather than sliced by the frame, which also retires the inset the
  * earlier fix needed: values plot where they actually fall.
+ *
+ * The painted line is a different question from where the samples fall.
+ * A week of readings is far denser than the cell is wide, and a path
+ * vertex the renderer cannot separate from its neighbour is wasted work.
+ * pixelColumns keeps, per screen pixel, the lowest and highest reading
+ * in time order. The mark stays on the true latest sample.
  */
 
 import { paceClassForBand } from './pace';
@@ -97,8 +103,56 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
   });
 }
 
-export function burnPaths(w: PlanWindow): BurnPaths | null {
-  const points = burnPoints(w);
+/**
+ * Thin plotted points to the chart's laid-out width. pixelWidth is CSS
+ * pixels; one column is about one pixel across the viewBox. Each column
+ * keeps its lowest and highest reading, in time order, so a one-sample
+ * spike still reaches the line. A flat column keeps a single vertex.
+ * Width 0 (not laid out yet) uses one column per viewBox unit.
+ */
+export function pixelColumns(points: BurnPoint[], pixelWidth = BURN_WIDTH): BurnPoint[] {
+  if (points.length <= 1) return points.slice();
+  const columns = Math.max(1, Math.round(pixelWidth) || BURN_WIDTH);
+  const ordered = points
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => a.p.x - b.p.x || a.i - b.i);
+  const out: BurnPoint[] = [];
+  let col = -1;
+  let bucket: BurnPoint[] = [];
+  const flush = () => {
+    if (!bucket.length) return;
+    let lo = bucket[0];
+    let hi = bucket[0];
+    for (const p of bucket) {
+      if (p.y < lo.y) lo = p;
+      if (p.y > hi.y) hi = p;
+    }
+    const first = lo.x <= hi.x ? lo : hi;
+    const second = first === lo ? hi : lo;
+    out.push(first);
+    if (second.y !== first.y) out.push(second);
+    bucket = [];
+  };
+  for (const { p } of ordered) {
+    const c = xColumn(p.x, columns);
+    if (c !== col) {
+      flush();
+      col = c;
+    }
+    bucket.push(p);
+  }
+  flush();
+  return out;
+}
+
+function xColumn(x: number, columns: number): number {
+  if (x >= BURN_WIDTH) return columns - 1;
+  if (x <= 0) return 0;
+  return Math.min(columns - 1, Math.floor((x / BURN_WIDTH) * columns));
+}
+
+export function burnPaths(w: PlanWindow, pixelWidth = BURN_WIDTH): BurnPaths | null {
+  const points = pixelColumns(burnPoints(w), pixelWidth);
   if (!points.length) return null;
   const line = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
@@ -138,25 +192,40 @@ function round(n: number): string {
 export type BurnStop = { offset: number; className: string };
 
 /**
- * Horizontal gradient stops, one per sample, at the sample's x as a fraction
- * of the plot width. Empty when no sample carries a band (an older daemon):
- * the chart then keeps its single inherited colour. Samples piled on one x
- * simply emit stops at that x; a gradient with no horizontal extent paints
- * the last stop, which is the current band (🎯T688).
+ * Horizontal gradient stops, one per pixel column, at that column's last
+ * sample. Empty when no sample carries a band (an older daemon): the chart
+ * then keeps its single inherited colour. Samples that share a column take
+ * the last band in it; a gradient with no horizontal extent paints that
+ * stop, which is the current band (🎯T688).
  */
-export function burnStops(w: PlanWindow): BurnStop[] {
+export function burnStops(w: PlanWindow, pixelWidth = BURN_WIDTH): BurnStop[] {
   const samples = historyPoints(w);
   const points = burnPoints(w);
   if (!points.length || points.length !== samples.length) return [];
   const classes = samples.map((p) => paceClassForBand(p.band));
   if (!classes.some((c) => c !== null)) return [];
+  const columns = Math.max(1, Math.round(pixelWidth) || BURN_WIDTH);
+  const ordered = points
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => a.p.x - b.p.x || a.i - b.i);
   const stops: BurnStop[] = [];
   let last: string | null = null;
-  for (let i = 0; i < points.length; i++) {
+  let col = -1;
+  let pending: BurnStop | null = null;
+  const emit = () => {
+    if (!pending) return;
+    stops.push(pending);
+    pending = null;
+  };
+  for (const { p, i } of ordered) {
     const c: string | null = classes[i] ?? last;
     if (c === null) continue;
     last = c;
-    stops.push({ offset: clamp(points[i].x / BURN_WIDTH, 0, 1), className: c });
+    const next = xColumn(p.x, columns);
+    if (next !== col) emit();
+    col = next;
+    pending = { offset: clamp(p.x / BURN_WIDTH, 0, 1), className: c };
   }
+  emit();
   return stops;
 }

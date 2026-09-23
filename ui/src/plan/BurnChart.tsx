@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useId } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { burnPaths, burnStops, currentMark, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
@@ -12,16 +12,35 @@ import type { PlanWindow } from './tickerGroups';
  * without bands the chart keeps its single inherited pace colour.
  */
 export function BurnChart(props: { window: PlanWindow }) {
-  const spec = burnPaths(props.window);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [pixelWidth, setPixelWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const read = () => {
+      const w = el.clientWidth;
+      setPixelWidth((prev) => (prev === w ? prev : w));
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // Before layout, sample at one vertex per viewBox unit. After layout,
+  // and again whenever the cell width changes, sample at one pixel.
+  const width = pixelWidth > 0 ? pixelWidth : BURN_WIDTH;
+  const spec = burnPaths(props.window, width);
   // 🎯T687: the current reading is its own mark, drawn last so it sits in
   // front of the line and outside the plot's clip, whole even when the
   // value lands on an edge.
   const mark = currentMark(props.window);
-  const stops = spec ? burnStops(props.window) : [];
+  const stops = spec ? burnStops(props.window, width) : [];
   const gradId = 'plan-burn-grad-' + useId().replace(/[^A-Za-z0-9_-]/g, '');
   const paint = stops.length ? `url(#${gradId})` : undefined;
   return (
     <svg
+      ref={svgRef}
       className="plan-burn-svg"
       viewBox={`0 0 ${BURN_WIDTH} ${BURN_HEIGHT}`}
       preserveAspectRatio="none"

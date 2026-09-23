@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { burnPaths, burnPoints, currentMark, periodBounds, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
+import { burnPaths, burnPoints, currentMark, periodBounds, pixelColumns, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 const START = Date.parse('2026-09-01T00:00:00Z');
@@ -93,14 +93,36 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
       ],
     });
     const spec = burnPaths(w);
-    expect(spec?.points).toHaveLength(2);
-    // No inset and no stem: the samples sit on the period start because
-    // that is when they were taken. The mark is drawn in front of the
-    // plot and outside its clip, so sitting on the edge costs nothing.
+    // Five minutes of a week share one pixel, at the same height, so the
+    // line keeps a single vertex. No inset and no stem: it sits on the
+    // period start because that is when the samples were taken. The mark
+    // is drawn in front of the plot and outside its clip.
+    expect(spec?.points).toHaveLength(1);
     expect(spec!.points[0].x).toBe(0);
     // 100% remaining is 0% used, so the mark sits in the bottom-left
     // corner: the true position of an untouched, just-reset week.
     expect(currentMark(w)).toBe('M0,32 L0,32');
+  });
+
+  it('keeps a one-sample spike inside a crowded pixel column', () => {
+    const crowded: { x: number; y: number }[] = [];
+    for (let i = 0; i < 40; i++) crowded.push({ x: i * 0.01, y: 28 });
+    crowded.push({ x: 0.2, y: 2 });
+    crowded.push({ x: 50, y: 16 });
+    const thinned = pixelColumns(crowded);
+    const firstColumn = thinned.filter((p) => p.x < 1);
+    expect(firstColumn.map((p) => p.y).sort((a, b) => a - b)).toEqual([2, 28]);
+    expect(thinned[thinned.length - 1]).toEqual({ x: 50, y: 16 });
+    expect(thinned.length).toBeLessThan(crowded.length);
+  });
+
+  it('splits a column when the cell is wide enough to show it', () => {
+    const pair = [
+      { x: 0, y: 20 },
+      { x: 0.6, y: 20 },
+    ];
+    expect(pixelColumns(pair, 100)).toHaveLength(1);
+    expect(pixelColumns(pair, 200)).toHaveLength(2);
   });
 
   it('marks a value at either extreme without moving it (🎯T687)', () => {

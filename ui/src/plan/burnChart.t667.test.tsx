@@ -97,14 +97,10 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
         { at: iso(t + 60_000), remaining_percent: 39, band: 'ahead' },
       ]),
     );
-    // No cluster special case any more: both samples emit a stop at their
-    // own position, which for a one-minute gap is effectively one place.
-    // A gradient with no horizontal extent paints its last stop, so the
-    // mark takes the current band — the same result the old flat branch
-    // hard-coded, now falling out of the general rule.
-    expect(stops).toHaveLength(2);
-    expect(stops[stops.length - 1].className).toBe(CLASS_AHEAD);
-    expect(stops[0].offset).toBeCloseTo(stops[1].offset, 1);
+    // A one-minute gap shares a pixel column. The column keeps the later
+    // band, and a gradient with no horizontal extent paints that stop.
+    expect(stops).toHaveLength(1);
+    expect(stops[0].className).toBe(CLASS_AHEAD);
   });
 
   it('leaves the column dividers neutral — a pace colour is data, not furniture (🎯T668)', () => {
