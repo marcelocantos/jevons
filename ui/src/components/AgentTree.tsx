@@ -130,6 +130,7 @@ function ModelBadge({ node }: { node: AgentNode }) {
       {open ? (
         <ModelMenu
           options={options || []}
+          loading={options === null && !error}
           busy={busy}
           error={error}
           onPick={pick}

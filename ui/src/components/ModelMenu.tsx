@@ -30,6 +30,7 @@ export function migrateBody(
  */
 export function ModelMenu(props: {
   options: MigrateProvider[];
+  loading?: boolean;
   busy?: boolean;
   error?: string;
   onPick: (provider: string, model: string) => void;
@@ -46,6 +47,10 @@ export function ModelMenu(props: {
         Close
       </button>
       {props.error ? <p className="model-menu-error">{props.error}</p> : null}
+      {props.loading ? <p className="model-menu-head">Loading…</p> : null}
+      {!props.loading && !props.error && props.options.length === 0 ? (
+        <p className="model-menu-head">No providers</p>
+      ) : null}
       {props.options.map((p) => {
         const models = p.models && p.models.length ? p.models : [''];
         const eligible = p.eligible !== false;
