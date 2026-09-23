@@ -32,6 +32,8 @@ export function ModelMenu(props: {
   options: MigrateProvider[];
   /** Viewport position. The fleet list scrolls, so an in-flow menu is clipped. */
   anchor?: { top: number; left: number };
+  /** The seat's provider. A model pick there is a pin, not a move onto that provider. */
+  currentProvider?: string;
   loading?: boolean;
   busy?: boolean;
   error?: string;
@@ -41,6 +43,7 @@ export function ModelMenu(props: {
   const placed = props.anchor
     ? { position: 'fixed' as const, top: props.anchor.top, left: props.anchor.left }
     : undefined;
+  const here = (props.currentProvider || '').trim().toLowerCase();
   return (
     <div
       className="model-menu"
@@ -60,6 +63,9 @@ export function ModelMenu(props: {
       {props.options.map((p) => {
         const models = p.models && p.models.length ? p.models : [''];
         const eligible = p.eligible !== false;
+        // Ahead/hot blocks a migration onto that provider. It does not
+        // block choosing another model of the provider the seat is already on.
+        const canPick = (eligible || p.provider.trim().toLowerCase() === here) && !props.busy;
         return (
           <div key={p.provider} className="model-menu-provider">
             <div className="model-menu-head">
@@ -71,7 +77,7 @@ export function ModelMenu(props: {
                 key={p.provider + ':' + m}
                 type="button"
                 role="menuitem"
-                disabled={!eligible || props.busy}
+                disabled={!canPick}
                 onClick={() => props.onPick(p.provider, m)}
               >
                 {m || 'provider default'}

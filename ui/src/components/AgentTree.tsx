@@ -149,6 +149,7 @@ function ModelBadge({ node }: { node: AgentNode }) {
       {open ? (
         <ModelMenu
           options={options || []}
+          currentProvider={node.provider}
           anchor={anchor || undefined}
           loading={options === null && !error}
           busy={busy}
