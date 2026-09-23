@@ -35,10 +35,13 @@ func attachCursorAPIUsage(readings []claudia.PlanUsage, dir string) []claudia.Pl
 		if cursorReadingHasAPI(reading) {
 			return readings
 		}
-		base := claudia.PlanWindow{Name: claudia.PlanWindowWeekly}
+		base := claudia.PlanWindow{Name: claudia.PlanWindowAPI}
 		if len(reading.Windows) > 0 {
 			base = reading.Windows[0]
 		}
+		// A copied month window would file this figure under "monthly"
+		// and the sparkline would draw the blend. The bucket has its own name.
+		base.Name = claudia.PlanWindowAPI
 		base.Model = "API"
 		u := used
 		rem := 100 - used

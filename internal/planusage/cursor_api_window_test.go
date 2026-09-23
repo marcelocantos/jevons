@@ -4,6 +4,7 @@
 package planusage
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestAttachCursorAPIUsageFromRawStore(t *testing.T) {
 		t.Fatalf("windows=%+v", got)
 	}
 	api := got[0].Windows[1]
-	if api.Model != "API" || api.UsedPercent == nil || *api.UsedPercent != 100 || api.RemainingPercent == nil || *api.RemainingPercent != 0 {
+	if api.Name != claudia.PlanWindowAPI || api.Model != "API" || api.UsedPercent == nil || *api.UsedPercent != 100 || api.RemainingPercent == nil || *api.RemainingPercent != 0 {
 		t.Fatalf("api window=%+v", api)
 	}
 	if got[0].Windows[0].Model != "" || got[0].Windows[0].UsedPercent == nil || *got[0].Windows[0].UsedPercent != 50 {
@@ -42,6 +43,60 @@ func TestAttachCursorAPIUsageFromRawStore(t *testing.T) {
 	again := attachCursorAPIUsage(got, dir)
 	if len(again[0].Windows) != 2 {
 		t.Fatalf("second pass duplicated the API window: %+v", again[0].Windows)
+	}
+}
+
+type monthlyOnlyHistory struct{}
+
+func (monthlyOnlyHistory) Append([]Reading) error { return nil }
+
+func (monthlyOnlyHistory) Series(_, window string, _ *time.Time) ([]HistoryPoint, error) {
+	if window == WindowMonthly {
+		return []HistoryPoint{{At: time.Unix(10, 0).UTC(), Remaining: 50}}, nil
+	}
+	return nil, nil
+}
+
+func TestCursorAPIHistoryIsNotTheMonth(t *testing.T) {
+	dir := t.TempDir()
+	claudia.RecordPlanRawPayload(dir, claudia.ProviderCursor, time.Now(), 200, `{"planUsage":{"totalPercentUsed":50,"apiPercentUsed":100}}`)
+	used := 50.0
+	rem := 50.0
+	now := time.Date(2026, 9, 24, 2, 0, 0, 0, time.UTC)
+	readings := attachCursorAPIUsage([]claudia.PlanUsage{{
+		Provider:  claudia.ProviderCursor,
+		Status:    claudia.PlanUsageAvailable,
+		FetchedAt: now,
+		Windows: []claudia.PlanWindow{{
+			Name:             claudia.PlanWindowWeekly,
+			UsedPercent:      &used,
+			RemainingPercent: &rem,
+		}},
+	}}, dir)
+	snap := AttachHistory(Convert(readings, nil, now, 0), monthlyOnlyHistory{})
+	be, ok := snap.Backend("cursor")
+	if !ok {
+		t.Fatal("cursor backend missing")
+	}
+	var api Window
+	found := false
+	for _, w := range be.Windows {
+		if strings.EqualFold(w.Model, "API") {
+			api, found = w, true
+		}
+	}
+	if !found {
+		t.Fatal("api window missing")
+	}
+	if api.Name == WindowMonthly {
+		t.Fatalf("api window shares the month name: %+v", api)
+	}
+	if len(api.History) != 0 {
+		t.Fatalf("api sparkline copied the month: %+v", api.History)
+	}
+	plan, ok := be.PrimaryAllowanceWindow()
+	if !ok || len(plan.History) != 1 {
+		t.Fatalf("month history = %+v", plan.History)
 	}
 }
 
