@@ -65,9 +65,16 @@ describe('seat composer busy from its own phase (T562.2)', () => {
     expect(box.disabled).toBe(true);
     expect(box.placeholder).toBe('Upgrade your plan to continue');
     expect((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(box, { target: { value: 'keep going' } });
     fireEvent.keyDown(box, { key: 'Enter' });
     expect(sends()).toEqual([]);
+  });
+
+  it('an open seat still keeps Send off while the box is empty', () => {
+    const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected />);
+    const box = view.getByRole('textbox') as HTMLTextAreaElement;
+    expect(box.disabled).toBe(false);
+    expect(box.placeholder).toBe('Message this agent…');
+    expect((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('idle seat: Enter sends straight through and nothing is queued', async () => {

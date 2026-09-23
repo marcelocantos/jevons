@@ -147,7 +147,7 @@ export function AgentInteraction(props: {
         name={props.name}
         density={density}
         hold={props.planWall}
-        disabled={!!props.planWall}
+        disabled={props.planWall ? true : undefined}
         onSend={(t, opts) => {
           if (props.planWall) return;
           return queue.submit(t, opts?.mode ?? 'submit');
