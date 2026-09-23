@@ -630,6 +630,34 @@ describeOracle(family('frontier'), () => {
     expect(f.calls.length).toBe(0);
   });
 
+  it('disables play when the kickoff PO failed to rehydrate', () => {
+    const why = 'broken: acp authenticate cursor_login: cursor acp: connection closed waiting for authenticate';
+    const broken = [{ name: 'ge-po', purpose: 'po', running: false, rehydrate: why }];
+    const spec = playChromeSpec(sample, { agents: broken, selectedAgent: 'ge-po' });
+    expect(spec.disabled).toBe(true);
+    expect(spec.title).toBe(why);
+    const req = playKickoffRequest(sample, { agents: broken, selectedAgent: 'ge-po' });
+    expect(req.blocked).toBe(true);
+    if (!req.blocked) return;
+    expect(req.reason).toBe('po_unavailable');
+    const f = fakeFetch();
+    const { container } = render(createElement(FrontierTable, {
+      rows: [sample],
+      agents: broken,
+      selectedAgent: 'ge-po',
+      fetcher: f.fetcher,
+    }));
+    const btn = container.querySelector<HTMLButtonElement>('.ft-play-btn')!;
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(btn);
+    expect(f.calls.length).toBe(0);
+    const resumable = playChromeSpec(sample, {
+      agents: [{ name: 'ge-po', purpose: 'po', running: false, rehydrate: 'resumable' }],
+      selectedAgent: 'ge-po',
+    });
+    expect(resumable.disabled).toBe(false);
+  });
+
   itOracle('T198', 'engaged rows show Stop, not a bullseye status rewrite', () => {
     const free: FrontierRow = { ...sample, id: 'T181', name: 'Free row' };
     const f = fakeFetch();

@@ -22,6 +22,8 @@ export type PlayAgent = {
   target_id?: string;
   ledger?: string;
   plan_wall?: string;
+  running?: boolean;
+  rehydrate?: string;
 };
 
 export type PlayRow = FrontierRow & { engaged?: boolean; engaged_agents?: string[]; kickoff_submitted?: boolean };
@@ -56,11 +58,18 @@ function purposeOf(a: PlayAgent): string {
   return String(a.purpose || a.role || '').trim().toLowerCase();
 }
 
-/** The kickoff PO's plan wall, when that seat cannot take new work. */
-function poPlanWall(opts: PlayOpts | undefined, po: string): string {
+/** Why kickoff must not be offered to this PO. A plan wall, or a stopped
+ * seat whose last rehydrate failed. A resumable stop can still be asked. */
+function poHold(opts: PlayOpts | undefined, po: string): { reason: string; message: string } | null {
   const agents = Array.isArray(opts?.agents) ? opts.agents : [];
   const row = findAgentByName(agents, po);
-  return String(row?.plan_wall || '').trim();
+  const wall = String(row?.plan_wall || '').trim();
+  if (wall) return { reason: 'plan_wall', message: wall };
+  if (row && row.running === false) {
+    const why = String(row.rehydrate || '').trim();
+    if (why && why !== 'resumable') return { reason: 'po_unavailable', message: why };
+  }
+  return null;
 }
 
 /** 🎯T255: kickoff recipient is the selected agent's PO, never a worker; overseer → default. */
@@ -190,8 +199,8 @@ export type KickoffRequest =
 
 export function playKickoffRequest(row: PlayRow, opts?: PlayOpts): KickoffRequest {
   const po = resolvePlayPO(opts);
-  const wall = poPlanWall(opts, po);
-  if (wall) return { blocked: true, reason: 'plan_wall', message: wall, agents: [], po };
+  const hold = poHold(opts, po);
+  if (hold) return { blocked: true, reason: hold.reason, message: hold.message, agents: [], po };
   const gate = canPlayKickoff(row, opts);
   if (!gate.ok) return { blocked: true, reason: gate.reason, message: gate.message || gate.reason, agents: gate.agents || [], po };
   return { blocked: false, url: agentSendPath(po), method: 'POST', body: { text: buildPlayKickoffText(row, opts) }, po };
@@ -276,14 +285,14 @@ export function playChromeSpec(row: PlayRow | null | undefined, opts?: PlayOpts)
     };
   }
   const po = resolvePlayPO(opts);
-  const wall = poPlanWall(opts, po);
-  if (wall) {
+  const hold = poHold(opts, po);
+  if (hold) {
     return {
       mode,
       className: 'ft-play-btn',
       glyph: PLAY_GLYPH,
-      ariaLabel: 'Cannot start 🎯' + id + ': ' + wall,
-      title: wall,
+      ariaLabel: 'Cannot start 🎯' + id + ': ' + hold.message,
+      title: hold.message,
       disabled: true,
       spinning: false,
       po,
