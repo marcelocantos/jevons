@@ -1242,6 +1242,15 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 		if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
 			info.Model = ""
 		}
+		// A Cursor process started with no pin is on the CLI default from
+		// that moment. The record is that snapshot, matched to this pid, so
+		// a later edit of cli-config.json cannot rename a running seat.
+		// It is not written back as a pin.
+		if info.Model == "" && d.Provider == claudia.ProviderCursor && d.ConnectPID > 0 {
+			if model, pid, ok := cursorStartedModel(d.SessionID); ok && pid == d.ConnectPID {
+				info.Model = model
+			}
+		}
 		// 🎯T324: unbound → provider default so cold Grok agents report a
 		// condensable id (badge version), not mark-only forever.
 		if info.Model == "" {

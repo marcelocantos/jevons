@@ -370,6 +370,46 @@ func modelOf(t *testing.T, agents []agentInfo, name string) string {
 
 // 🎯T324 hermetic (1): migrate residue — fable under old must never appear
 // under grok. Feed rewrites to provider default (session truth), not fable.
+func TestListFleetAgentsShowsCursorModelCapturedAtStart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	const sid = "sess-unpinned-cursor"
+	dir := filepath.Join(home, ".cursor", "acp-sessions", sid)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("{\"model\":\"claude-opus-5\",\"pid\":4242}\n")
+	if err := os.WriteFile(filepath.Join(dir, "started-model.json"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: sid,
+		Provider: claudia.ProviderCursor, ConnectPID: 4242,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, nil, nil), "jevons-po"); got != "claude-opus-5" {
+		t.Fatalf("model=%q want the model captured when the process started", got)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: sid,
+		Provider: claudia.ProviderCursor, ConnectPID: 99,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, nil, nil), "jevons-po"); got != "" {
+		t.Fatalf("model=%q want empty; pid does not match the captured process", got)
+	}
+	def := reg.Def("jevons-po")
+	if def == nil || def.Model != "" {
+		t.Fatalf("registry model=%q; showing the captured model pinned the seat", def.Model)
+	}
+}
+
 func TestListFleetAgentsDropsForeignModelAfterMigrateResidue(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
