@@ -52,6 +52,25 @@ describe('AgentTree seat stops (🎯T662)', () => {
     expect(po?.querySelector('.agent-stop-reason')).toBeNull();
   });
 
+  it('paints a broken rehydrate on a stopped row and skips a resumable one', () => {
+    const { container } = render(
+      <AgentTree
+        selected=""
+        onSelect={() => {}}
+        agents={[
+          {
+            name: 'ge-po',
+            running: false,
+            rehydrate: 'broken: cursor login connection closed',
+          },
+          { name: 'mm2-t65-keys-doors', parent: 'multimaze2-po', running: false, rehydrate: 'resumable' },
+        ]}
+      />,
+    );
+    const notes = [...container.querySelectorAll('.agent-rehydrate')].map((n) => n.textContent);
+    expect(notes).toEqual(['broken: cursor login connection closed']);
+  });
+
   it('shows nothing extra when the fleet is healthy', () => {
     const { container } = render(
       <AgentTree

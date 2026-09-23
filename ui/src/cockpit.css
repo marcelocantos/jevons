@@ -1774,7 +1774,8 @@ body.rhs-resizing-row { cursor: row-resize; }
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.agent-node .agent-stop-reason {
+.agent-node .agent-stop-reason,
+.agent-node .agent-rehydrate {
   margin-left: 6px;
   font-size: 0.8em;
   opacity: 0.8;

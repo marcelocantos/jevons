@@ -24,6 +24,8 @@ export type AgentRow = {
   stopped_at?: string;
   /** 🎯T662: the fleet-wide mass-stop line; identical on every row when present. */
   mass_stop?: string;
+  /** 🎯T763: whether a stopped seat can come back. Empty while running. */
+  rehydrate?: string;
 };
 
 /** 🎯T662: one alert for the fleet, read off the rows (the daemon puts the same line on each). */
@@ -147,6 +149,11 @@ function Row(props: {
         {!props.node.running && props.node.stop_reason ? (
           <span className="agent-stop-reason" title={props.node.stop_reason}>
             {'⛔ ' + props.node.stop_reason}
+          </span>
+        ) : null}
+        {!props.node.running && props.node.rehydrate && props.node.rehydrate !== 'resumable' ? (
+          <span className="agent-rehydrate" title={props.node.rehydrate}>
+            {props.node.rehydrate}
           </span>
         ) : null}
         {isAside ? (

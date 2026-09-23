@@ -140,6 +140,10 @@ function Cockpit() {
           workdir?: string;
           target_id?: string;
           ledger?: string;
+          stop_reason?: string;
+          stopped_at?: string;
+          mass_stop?: string;
+          rehydrate?: string;
         }) => ({
           name: a.name || '',
           purpose: a.purpose,
@@ -154,6 +158,10 @@ function Cockpit() {
           workdir: a.workdir,
           target_id: a.target_id,
           ledger: a.ledger,
+          stop_reason: a.stop_reason,
+          stopped_at: a.stopped_at,
+          mass_stop: a.mass_stop,
+          rehydrate: a.rehydrate,
         }))
         .filter((a: AgentRow) => a.name);
       const merged = mergeAgentChrome(lastAgentsRef.current, rows);
