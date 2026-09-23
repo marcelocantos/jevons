@@ -1657,6 +1657,13 @@ body.rhs-resizing-row { cursor: row-resize; }
   /* The published period × usage 0–100 box (🎯T671). */
   fill: #fff;
 }
+/* Period boundaries on the white card: hours, midnights, week starts.
+   A light black, fainter than the frame, and never the cell's pace colour. */
+.plan-tip-table td.plan-burn .plan-burn-bound {
+  stroke: rgb(0 0 0 / 0.14);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
 .plan-tip-table td.plan-burn {
   /* One source for the sparkline's weight: the line uses it, the
      current-value mark is a multiple of it (🎯T687). 1.5× was the first

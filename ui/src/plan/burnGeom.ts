@@ -190,6 +190,148 @@ function round(n: number): string {
   return (Math.round(n * 10) / 10).toString();
 }
 
+type BoundaryUnit = 'hour' | 'day' | 'week';
+
+/** Which clock boundary a window's graph marks. Null when the window is not one of these periods. */
+export function boundaryUnitFor(name: string | undefined): BoundaryUnit | null {
+  const n = String(name || '').toLowerCase();
+  if (n.startsWith('session')) return 'hour';
+  if (n.startsWith('week')) return 'day';
+  if (n.startsWith('month')) return 'week';
+  return null;
+}
+
+type WeekInfoLocale = Intl.Locale & { getWeekInfo?: () => { firstDay?: number } };
+
+/**
+ * Viewer's first day of the week, as Date.getUTCDay (0 Sunday … 6 Saturday).
+ * Intl numbers Sunday as 7. Monday when the locale does not say.
+ */
+export function localeWeekStartsOn(): number {
+  try {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+    const first = (new Intl.Locale(locale) as WeekInfoLocale).getWeekInfo?.()?.firstDay;
+    if (first === 7) return 0;
+    if (typeof first === 'number' && first >= 1 && first <= 6) return first;
+  } catch {
+    /* Monday */
+  }
+  return 1;
+}
+
+type Wall = { y: number; m: number; d: number; h: number; min: number; s: number };
+
+function wallOf(ms: number, timeZone: string): Wall | null {
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return null;
+  }
+  const parts = fmt.formatToParts(new Date(ms));
+  const pick = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value);
+  const y = pick('year');
+  const m = pick('month');
+  const d = pick('day');
+  let h = pick('hour');
+  const min = pick('minute');
+  const s = pick('second');
+  if (![y, m, d, h, min, s].every((n) => Number.isFinite(n))) return null;
+  if (h === 24) h = 0;
+  return { y, m, d, h, min, s };
+}
+
+function wallToUtc(wall: Wall, timeZone: string): number | null {
+  const want = Date.UTC(wall.y, wall.m - 1, wall.d, wall.h, wall.min, wall.s);
+  let utc = want;
+  for (let i = 0; i < 4; i++) {
+    const got = wallOf(utc, timeZone);
+    if (!got) return null;
+    const delta = want - Date.UTC(got.y, got.m - 1, got.d, got.h, got.min, got.s);
+    if (delta === 0) return utc;
+    utc += delta;
+  }
+  return utc;
+}
+
+function addCalendar(wall: Wall, days: number, hours: number): Wall {
+  const t = new Date(Date.UTC(wall.y, wall.m - 1, wall.d + days, wall.h + hours, 0, 0));
+  return {
+    y: t.getUTCFullYear(),
+    m: t.getUTCMonth() + 1,
+    d: t.getUTCDate(),
+    h: t.getUTCHours(),
+    min: 0,
+    s: 0,
+  };
+}
+
+function weekdayOf(wall: Wall): number {
+  return new Date(Date.UTC(wall.y, wall.m - 1, wall.d)).getUTCDay();
+}
+
+/** The next clock boundary strictly after `from`. */
+function nextBoundary(from: number, unit: BoundaryUnit, timeZone: string, weekStartsOn: number): number | null {
+  const w = wallOf(from, timeZone);
+  if (!w) return null;
+  if (unit === 'hour') {
+    const top = { ...w, min: 0, s: 0 };
+    const at = wallToUtc(top, timeZone);
+    if (at == null) return null;
+    if (at > from) return at;
+    return wallToUtc(addCalendar(top, 0, 1), timeZone);
+  }
+  const mid: Wall = { y: w.y, m: w.m, d: w.d, h: 0, min: 0, s: 0 };
+  if (unit === 'day') {
+    const at = wallToUtc(mid, timeZone);
+    if (at == null) return null;
+    if (at > from) return at;
+    return wallToUtc(addCalendar(mid, 1, 0), timeZone);
+  }
+  let delta = (weekStartsOn - weekdayOf(mid) + 7) % 7;
+  const at = wallToUtc(mid, timeZone);
+  if (at == null) return null;
+  if (delta === 0 && at > from) return at;
+  if (delta === 0) delta = 7;
+  return wallToUtc(addCalendar(mid, delta, 0), timeZone);
+}
+
+/**
+ * ViewBox x of each period boundary inside the published window.
+ * Session marks local hours, weekly marks local midnights, monthly marks
+ * the viewer's week start. The frame already owns the two edges, so a
+ * boundary that lands on the start or the reset is omitted.
+ * timeZone defaults to the viewer's zone. weekStartsOn is 0 Sunday … 6 Saturday.
+ */
+export function periodBoundaryXs(w: PlanWindow, timeZone?: string, weekStartsOn = 1): number[] {
+  const unit = boundaryUnitFor(w.name);
+  const period = periodBounds(w);
+  if (!unit || !period) return [];
+  const span = period.end - period.start;
+  if (!(span > 0)) return [];
+  const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const cap = unit === 'hour' ? 48 : unit === 'day' ? 40 : 8;
+  const out: number[] = [];
+  let cursor = nextBoundary(period.start, unit, zone, weekStartsOn);
+  for (let i = 0; i < cap && cursor != null && cursor < period.end; i++) {
+    if (cursor <= period.start) break;
+    out.push((BURN_WIDTH * (cursor - period.start)) / span);
+    const nxt = nextBoundary(cursor, unit, zone, weekStartsOn);
+    if (nxt == null || nxt <= cursor) break;
+    cursor = nxt;
+  }
+  return out;
+}
+
 /**
  * 🎯T667: the sparkline's colour at each sample is the band the daemon
  * assigned the window at that moment, so a week that started on track and

@@ -2,7 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { burnPaths, burnPoints, currentMark, periodBounds, pixelColumns, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
+import {
+  boundaryUnitFor,
+  burnPaths,
+  burnPoints,
+  currentMark,
+  periodBoundaryXs,
+  periodBounds,
+  pixelColumns,
+  BURN_HEIGHT,
+  BURN_WIDTH,
+} from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 const START = Date.parse('2026-09-01T00:00:00Z');
@@ -139,6 +149,102 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     // positions, not nudged inward to survive a clip.
     expect(burnPoints(atEnd)[0]).toEqual({ x: BURN_WIDTH, y: 0 });
     expect(currentMark(atEnd)).toBe('M100,0 L100,0');
+  });
+});
+
+describe('period boundary marks', () => {
+  const sessionStart = Date.parse('2026-09-01T00:00:00Z');
+  const fiveHours = 5 * 3600;
+
+  it('marks local hours on a session, not the frame', () => {
+    expect(boundaryUnitFor('session')).toBe('hour');
+    const onTheHour = periodBoundaryXs(
+      win({
+        name: 'session',
+        resets_at: new Date(sessionStart + fiveHours * 1000).toISOString(),
+        limit_window_seconds: fiveHours,
+      }),
+      'UTC',
+    );
+    // 00:00–05:00. The edges are the frame. 01, 02, 03, 04 remain.
+    expect(onTheHour.map((x) => Math.round(x))).toEqual([20, 40, 60, 80]);
+
+    const halfPast = periodBoundaryXs(
+      win({
+        name: 'session',
+        resets_at: new Date(sessionStart + 30 * 60_000 + fiveHours * 1000).toISOString(),
+        limit_window_seconds: fiveHours,
+      }),
+      'UTC',
+    );
+    // 00:30–05:30. Hours at 01, 02, 03, 04, 05.
+    expect(halfPast.map((x) => Math.round(x))).toEqual([10, 30, 50, 70, 90]);
+  });
+
+  it('follows the local hour, including a zone that is not a whole hour from UTC', () => {
+    // 00:00Z is 09:30 in Adelaide. A five-hour session ends 14:30 local.
+    const xs = periodBoundaryXs(
+      win({
+        name: 'session',
+        resets_at: new Date(sessionStart + fiveHours * 1000).toISOString(),
+        limit_window_seconds: fiveHours,
+      }),
+      'Australia/Adelaide',
+    );
+    expect(xs.map((x) => Math.round(x))).toEqual([10, 30, 50, 70, 90]);
+  });
+
+  it('skips an hour the clock does not have', () => {
+    // Melbourne springs forward at 02:00 local on 2026-10-04: 15:00Z is 01:00,
+    // 16:00Z is 03:00. A session from 01:00 to 07:00 local has no 02:00 line.
+    const start = Date.parse('2026-10-03T15:00:00Z');
+    const xs = periodBoundaryXs(
+      win({
+        name: 'session',
+        resets_at: new Date(start + fiveHours * 1000).toISOString(),
+        limit_window_seconds: fiveHours,
+      }),
+      'Australia/Melbourne',
+    );
+    expect(xs.map((x) => Math.round(x))).toEqual([20, 40, 60, 80]);
+  });
+
+  it('marks local midnights on a week', () => {
+    expect(boundaryUnitFor('weekly')).toBe('day');
+    expect(boundaryUnitFor('weekly_model')).toBe('day');
+    // Monday 00:00Z through the next Monday. Six midnights inside.
+    const monday = Date.parse('2026-09-07T00:00:00Z');
+    const xs = periodBoundaryXs(
+      win({
+        name: 'weekly',
+        resets_at: new Date(monday + WEEK * 1000).toISOString(),
+        limit_window_seconds: WEEK,
+      }),
+      'UTC',
+    );
+    expect(xs).toHaveLength(6);
+    expect(xs[0]).toBeCloseTo(100 / 7, 5);
+    expect(xs[5]).toBeCloseTo(600 / 7, 5);
+  });
+
+  it('marks week starts on a month, and the week start is the one asked for', () => {
+    expect(boundaryUnitFor('monthly')).toBe('week');
+    const start = Date.parse('2026-09-02T00:00:00Z'); // Wednesday
+    const month = 30 * 24 * 3600;
+    const w = win({
+      name: 'monthly',
+      resets_at: new Date(start + month * 1000).toISOString(),
+      limit_window_seconds: month,
+    });
+    const mondays = periodBoundaryXs(w, 'UTC', 1);
+    const sundays = periodBoundaryXs(w, 'UTC', 0);
+    expect(mondays.map((x) => Math.round(x * 10) / 10)).toEqual([16.7, 40, 63.3, 86.7]);
+    expect(sundays.map((x) => Math.round(x * 10) / 10)).toEqual([13.3, 36.7, 60, 83.3]);
+  });
+
+  it('draws nothing when the period is unknown', () => {
+    expect(periodBoundaryXs(win({ name: 'weekly', resets_at: null }), 'UTC')).toEqual([]);
+    expect(periodBoundaryXs(win({ name: 'other' }), 'UTC')).toEqual([]);
   });
 });
 
