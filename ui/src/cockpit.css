@@ -1443,7 +1443,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 .worker-row .wr-task { color: var(--text-dim); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .worker-row .wr-meta { color: var(--text-muted); font-size: 10px; font-family: var(--mono); margin-top: 2px; }
 .worker-row .wr-out { color: var(--text-muted); font-size: 10px; margin-top: 2px; max-height: 3.2em; overflow: hidden; }
-.agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
+.agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; transition: background 0.1s; }
 .model-badge-wrap { position: relative; display: inline-flex; }
 .model-menu {
   position: absolute;
@@ -1799,11 +1799,10 @@ body.rhs-resizing-row { cursor: row-resize; }
 .agent-node .agent-stop-reason,
 .agent-node .agent-plan-wall,
 .agent-node .agent-rehydrate {
-  margin-left: 6px;
+  flex: 1 0 100%;
+  margin-left: 22px;
   font-size: 0.8em;
   opacity: 0.8;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 40%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
