@@ -104,6 +104,14 @@ type Claudia struct {
 	// and model after a remap. Nil reads the registry's live agent.
 	liveSession func(name string) (sessionID, model string)
 
+	// onModelSwitch records a model change that actually landed. Nil drops
+	// the note; the switch still happens. Same-model, same-provider calls
+	// are not delivered — a no-op must not look like a switch in the journal.
+	onModelSwitch func(*ModelSwitch)
+
+	// liveSetModel replaces Agent.SetModel in tests. Nil uses the live agent.
+	liveSetModel func(name, model string) error
+
 	// onLaunch brackets a launch this adapter performs (🎯T426). It is called
 	// BEFORE the process comes up and returns the function to call once it
 	// has. The host attaches whatever must ride EVERY launch — today the
@@ -159,6 +167,17 @@ func (f *Claudia) SetRemovalAccount(a *fleetlog.Account) {
 		return
 	}
 	f.removals = a
+}
+
+// SetModelSwitchHook installs the durable note for a landed model change.
+// Nil clears it. The hook runs only after the new model is on the registry
+// row (or, for a live SetModel, after that call and the row write both
+// succeed). Fleet stays free of the event journal; the host writes it.
+func (f *Claudia) SetModelSwitchHook(fn func(*ModelSwitch)) {
+	if f == nil {
+		return
+	}
+	f.onModelSwitch = fn
 }
 
 // SetLaunchHook installs the per-launch host callback (🎯T426). Nil clears it.

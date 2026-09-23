@@ -13,6 +13,42 @@ import (
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
+// How a landed model change was performed. Stable for the event journal:
+// a diagnosis greps these rather than reconstructing the seat from memory.
+const (
+	ModelSwitchHowSetModel    = "set_model"
+	ModelSwitchHowRelaunch    = "relaunch"
+	ModelSwitchHowMigrate     = "migrate"
+	ModelSwitchHowOverseerPin = "overseer_pin"
+)
+
+// ModelSwitch is one change of the model a seat is recorded as running.
+// From/To are model ids. Provider is the provider after the change;
+// FromProvider is the one before it. A provider migration that also
+// rebinds the model is still a ModelSwitch — that is the case a later
+// diagnosis cannot reconstruct from provider alone.
+type ModelSwitch struct {
+	Name         string
+	Provider     string
+	FromProvider string
+	From         string
+	To           string
+	How          string
+}
+
+// noteModelSwitch delivers sw to the host hook. A same-model, same-provider
+// note is dropped so a rebind that changed nothing is not a switch.
+func (f *Claudia) noteModelSwitch(sw *ModelSwitch) {
+	if f == nil || sw == nil || f.onModelSwitch == nil {
+		return
+	}
+	if strings.TrimSpace(sw.From) == strings.TrimSpace(sw.To) &&
+		strings.TrimSpace(sw.FromProvider) == strings.TrimSpace(sw.Provider) {
+		return
+	}
+	f.onModelSwitch(sw)
+}
+
 // PinModel switches a fleet agent's model WITHOUT changing provider
 // (🎯T285.2): stop the process, relaunch the SAME session with the new
 // pin. This is not a migration — the session store is per-provider, so
@@ -52,8 +88,14 @@ func (f *Claudia) PinModel(name, model string) error {
 	// flight) and reports an unsupported provider as *claudia.CapabilityError,
 	// so trying it first costs nothing and tells us precisely when to fall
 	// back rather than making us predict it.
-	if live := f.reg.Get(name); live != nil {
-		switch err := live.SetModel(model); {
+	if live := f.reg.Get(name); live != nil || f.liveSetModel != nil {
+		var err error
+		if f.liveSetModel != nil {
+			err = f.liveSetModel(name, model)
+		} else {
+			err = live.SetModel(model)
+		}
+		switch {
 		case err == nil:
 			// Persist the new model without disturbing the conversation:
 			// Register is an upsert, and it only resets resume state when
@@ -63,6 +105,14 @@ func (f *Claudia) PinModel(name, model string) error {
 			if err := f.reg.Register(switched); err != nil {
 				return fmt.Errorf("pin model %q: record switched model: %w", name, err)
 			}
+			f.noteModelSwitch(&ModelSwitch{
+				Name:         name,
+				Provider:     string(def.Provider),
+				FromProvider: string(def.Provider),
+				From:         def.Model,
+				To:           model,
+				How:          ModelSwitchHowSetModel,
+			})
 			return nil
 		case isUnsupportedCapability(err):
 			// Fall through to relaunch: this provider genuinely cannot
@@ -87,6 +137,14 @@ func (f *Claudia) PinModel(name, model string) error {
 		}
 		return fmt.Errorf("pin model %q: relaunch: %w (seat restored on %s)", name, err, prev.Model)
 	}
+	f.noteModelSwitch(&ModelSwitch{
+		Name:         name,
+		Provider:     string(prev.Provider),
+		FromProvider: string(prev.Provider),
+		From:         prev.Model,
+		To:           model,
+		How:          ModelSwitchHowRelaunch,
+	})
 	return nil
 }
 

@@ -13,6 +13,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -245,13 +247,33 @@ func TestT285_2OverseerMigrateModelPin(t *testing.T) {
 	}
 	s.SetRegistry(reg)
 	s.SetOverseerMigrator(&fakeOverseerMigrator{})
+	path := t.TempDir() + "/events.jsonl"
+	j, err := eventlog.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	s.SetEventLog(j)
 
 	// The relaunch of a fake def fails in a unit test (no real provider);
 	// the pin must already be on the row by then — that ordering is the
-	// point of the test.
+	// point of the test. The pin is also a model_switch in the journal,
+	// written when the row changes, which is before the relaunch.
 	_, _ = s.MigrateOverseerModel(claudia.ProviderClaude, "claude-opus-5", true)
 	def := reg.Def("jevons")
 	if def == nil || def.Model != "claude-opus-5" {
 		t.Fatalf("overseer model pin not recorded: %+v", def)
+	}
+	evs, err := eventlog.Tail(path, eventlog.TailOptions{Component: "agent_lifecycle", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Decision != "model_switch" {
+		t.Fatalf("events=%+v", evs)
+	}
+	if evs[0].Fields["name"] != "jevons" || evs[0].Fields["to"] != "claude-opus-5" ||
+		evs[0].Fields["model"] != "claude-opus-5" || evs[0].Fields["how"] != fleet.ModelSwitchHowOverseerPin ||
+		evs[0].Fields["outcome"] != "ok" {
+		t.Fatalf("fields=%v", evs[0].Fields)
 	}
 }

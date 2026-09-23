@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // findLifecycle finds the first slog record with the given component+decision.
@@ -86,6 +87,57 @@ func TestAgentStopLifecycleLog(t *testing.T) {
 		t.Fatalf("event=%+v", evs[0])
 	}
 	if evs[0].Fields["outcome"] != "ok" {
+		t.Fatalf("fields=%v", evs[0].Fields)
+	}
+}
+
+// A landed model change is an agent_lifecycle.model_switch event. The
+// fields are what a diagnosis greps: seat, provider, from, to.
+func TestModelSwitchLifecycleLog(t *testing.T) {
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	path := filepath.Join(t.TempDir(), "logs", "events.jsonl")
+	j, err := eventlog.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+
+	s := &Server{}
+	s.SetEventLogger(func(component, decision string, fields map[string]any) {
+		_ = eventlog.Log(j, component, decision, fields)
+	})
+	s.NoteModelSwitch(&fleet.ModelSwitch{
+		Name:         "jevons-po",
+		Provider:     "cursor",
+		FromProvider: "cursor",
+		From:         "claude-fable-5",
+		To:           "composer-2.5",
+		How:          fleet.ModelSwitchHowSetModel,
+	})
+
+	got := findLifecycle(cap.records, compAgentLifecycle, "model_switch")
+	if got == nil {
+		t.Fatalf("no model_switch slog; records=%d", len(cap.records))
+	}
+	if got["outcome"] != "ok" || got["name"] != "jevons-po" || got["from"] != "claude-fable-5" ||
+		got["to"] != "composer-2.5" || got["model"] != "composer-2.5" || got["provider"] != "cursor" ||
+		got["how"] != fleet.ModelSwitchHowSetModel {
+		t.Fatalf("slog attrs=%v", got)
+	}
+
+	evs, err := eventlog.Tail(path, eventlog.TailOptions{Component: "agent_lifecycle", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Decision != "model_switch" {
+		t.Fatalf("events=%+v", evs)
+	}
+	if evs[0].Fields["from"] != "claude-fable-5" || evs[0].Fields["to"] != "composer-2.5" ||
+		evs[0].Fields["model"] != "composer-2.5" || evs[0].Fields["name"] != "jevons-po" {
 		t.Fatalf("fields=%v", evs[0].Fields)
 	}
 }

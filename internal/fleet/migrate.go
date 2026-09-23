@@ -286,6 +286,8 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 
 	f.reg.Stop(name)
 
+	fromModel := def.Model
+	fromProvider := string(def.Provider)
 	next := *def
 	if err := switchProvider(&next, target, kind); err != nil {
 		return handover.Pending{}, fmt.Errorf("%s %q: %w", kind, name, err)
@@ -302,6 +304,14 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 	if err := f.reg.Register(next); err != nil {
 		return handover.Pending{}, fmt.Errorf("%s %q: register rotated row: %w", kind, name, err)
 	}
+	f.noteModelSwitch(&ModelSwitch{
+		Name:         name,
+		Provider:     string(next.Provider),
+		FromProvider: fromProvider,
+		From:         fromModel,
+		To:           next.Model,
+		How:          kind,
+	})
 	slog.Info("agent session rotation prepared",
 		"kind", kind, "name", name, "from", pending.From, "to", pending.To,
 		"old_session", oldSession, "new_session", next.SessionID,
@@ -712,6 +722,8 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	if def == nil {
 		return handover.Pending{}, true, fmt.Errorf("migrate %q: registry row vanished after Agent.Migrate", name)
 	}
+	fromModel := def.Model
+	fromProvider := string(def.Provider)
 	next := *def
 	if err := switchProvider(&next, target, "migrate"); err != nil {
 		return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
@@ -744,6 +756,14 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	if err := f.reg.Register(next); err != nil {
 		return handover.Pending{}, true, fmt.Errorf("migrate %q: record remapped row: %w", name, err)
 	}
+	f.noteModelSwitch(&ModelSwitch{
+		Name:         name,
+		Provider:     string(next.Provider),
+		FromProvider: fromProvider,
+		From:         fromModel,
+		To:           next.Model,
+		How:          ModelSwitchHowMigrate,
+	})
 	pending := draft
 	pending.To = string(target)
 	pending.NewSessionID = nextSession

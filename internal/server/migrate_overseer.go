@@ -126,6 +126,32 @@ func (s *Server) CompactOverseer(force bool) (handover.Pending, error) {
 	return handover.Pending{}, fmt.Errorf("compact overseer: withdrawn (T40.2) — same-provider remint is not a product operation")
 }
 
+// noteModelSwitch writes the same agent_lifecycle.model_switch record the
+// fleet hook writes. The overseer pin lands on the registry row in this
+// server, after fleet's own rotation, so it cannot go through that hook.
+func (s *Server) noteModelSwitch(name, provider, fromProvider, from, to, how string, pinErr error) {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	fields := map[string]any{
+		"name":          name,
+		"provider":      provider,
+		"from_provider": fromProvider,
+		"from":          from,
+		"to":            to,
+		"model":         to,
+		"how":           how,
+		"outcome":       "ok",
+		"msg":           "agent_lifecycle.model_switch",
+	}
+	if pinErr != nil {
+		fields["outcome"] = "error"
+		fields["level"] = "warn"
+		fields["err"] = pinErr.Error()
+	}
+	s.LogEvent("agent_lifecycle", "model_switch", fields)
+}
+
 // rotateOverseer is the shared rotate/relaunch/re-attach/seed sequence.
 // Only the prepare step differs between a provider migration and a
 // context compaction; everything after the row is rotated is identical,
@@ -167,11 +193,16 @@ func (s *Server) rotateOverseer(kind, model string,
 
 	if model = strings.TrimSpace(model); model != "" {
 		if def := reg.Def(name); def != nil && strings.TrimSpace(def.Model) != model {
+			from := strings.TrimSpace(def.Model)
+			provider := string(def.Provider)
 			next := *def
 			next.Model = model
 			if rerr := reg.Register(next); rerr != nil {
 				slog.Warn("overseer model pin not recorded; successor keeps provider default",
 					"model", model, "err", rerr)
+				s.noteModelSwitch(name, provider, provider, from, model, fleet.ModelSwitchHowOverseerPin, rerr)
+			} else {
+				s.noteModelSwitch(name, provider, provider, from, model, fleet.ModelSwitchHowOverseerPin, nil)
 			}
 		}
 	}

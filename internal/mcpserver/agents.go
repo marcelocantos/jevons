@@ -640,11 +640,18 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		}
 	}
 
+	if d := s.registry.Def(name); d != nil {
+		def = d
+	}
 	life["session_id"] = sessionDisplay(def.SessionID)
 	life["purpose"] = def.Purpose
 	life["role"] = s.roleDisplay(*def)
 	life["parent"] = def.Parent
 	life["provider"] = string(def.Provider)
+	// The model the seat came up on. A later change is agent_lifecycle.model_switch;
+	// without this field the journal only has the provider, which is how a
+	// plan-wall gets blamed on the wrong model.
+	life["model"] = def.Model
 	if def.TargetID != "" {
 		life["target_id"] = def.TargetID
 	}

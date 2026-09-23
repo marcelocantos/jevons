@@ -871,6 +871,10 @@ func main() {
 	// hook brackets the launch rather than trailing it, so the standing sweep
 	// can tell a process that is still coming up from one nobody wired.
 	fleetAdapter.SetLaunchHook(mcpSrv.NoteAgentLaunch)
+	// A model change that only updates the registry is invisible in
+	// events.jsonl, and a later diagnosis then invents which model the
+	// seat was on. The hook is the journal; fleet does not write it.
+	fleetAdapter.SetModelSwitchHook(mcpSrv.NoteModelSwitch)
 	mcpSrv.SetMigrator(fleetAdapter)
 	srv.SetOverseerMigrator(fleetAdapter)
 	// 🎯T285.2: the fleet-tree icon menu's thin HTTP wrapper for

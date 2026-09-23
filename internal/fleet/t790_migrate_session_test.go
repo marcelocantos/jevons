@@ -67,3 +67,33 @@ func TestT790ModelIsHonoured(t *testing.T) {
 		t.Fatal("row model not recorded")
 	}
 }
+
+// A migration that changes the model (or the provider the model is bound
+// to) is a model switch. The note is what a later diagnosis reads; the
+// slog line on this path does not carry the model.
+func TestMigrationNotesTheModelSwitch(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa7903"
+	f, _, _ := migrateFixture(t, oldSession, true)
+	def := f.reg.Def("jevons-po")
+	row := *def
+	row.Model = "grok-4.6"
+	if err := f.reg.Register(row); err != nil {
+		t.Fatal(err)
+	}
+	f.liveMigrate = func(*claudia.MigrateArgs) error { return nil }
+	f.liveSession = func(string) (string, string) { return "live-sid", "claude-opus-5" }
+	var got *ModelSwitch
+	f.SetModelSwitchHook(func(sw *ModelSwitch) { got = sw })
+
+	if _, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("migration landed with no model switch note")
+	}
+	if got.Name != "jevons-po" || got.From != "grok-4.6" || got.To != "claude-opus-5" ||
+		got.FromProvider != string(claudia.ProviderGrok) || got.Provider != string(claudia.ProviderClaude) ||
+		got.How != ModelSwitchHowMigrate {
+		t.Fatalf("switch = %+v", got)
+	}
+}
