@@ -242,11 +242,20 @@ func (m *Monitor) collectorStale(now time.Time) (Alert, bool) {
 		return Alert{}, false
 	}
 	lp := m.collectorLastPoll()
-	stale := lp.IsZero() || now.Sub(lp) > collectorStaleAfter
+	var health CollectorHealth
+	if m.collectorHealth != nil {
+		health = m.collectorHealth()
+		lp = health.LastPoll
+	}
+	warming := lp.IsZero() && !health.Started.IsZero() && now.Sub(health.Started) <= collectorStaleAfter
+	stale := !warming && (lp.IsZero() || now.Sub(lp) > collectorStaleAfter)
 	m.staleMu.Lock()
 	confirmed := m.staleSeen
 	m.staleSeen = stale
 	m.staleMu.Unlock()
+	if warming {
+		slog.Info("cost monitor: collector warming up", "detail", health.Describe(now))
+	}
 	if !stale {
 		return Alert{}, false
 	}
@@ -256,9 +265,13 @@ func (m *Monitor) collectorStale(now time.Time) (Alert, bool) {
 	}
 	detail := fmt.Sprintf("cost collector has not polled since %s", since)
 	if m.collectorHealth != nil {
-		detail += " (" + m.collectorHealth().Describe(now) + ")"
+		detail += " (" + health.Describe(now) + ")"
 	}
-	dead := !lp.IsZero() && now.Sub(lp) > collectorDeadAfter
+	lastProgress := lp
+	if lastProgress.IsZero() {
+		lastProgress = health.Started
+	}
+	dead := !lastProgress.IsZero() && now.Sub(lastProgress) > collectorDeadAfter
 	if !confirmed && !dead {
 		slog.Info("cost monitor: collector poll overdue — confirming on the next pass before alarming (🎯T654)", "detail", detail)
 		return Alert{}, false

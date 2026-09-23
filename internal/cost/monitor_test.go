@@ -489,3 +489,35 @@ func TestDisabledAccounting(t *testing.T) {
 		t.Fatal("disabled must not report as subscription")
 	}
 }
+
+func TestMonitorCollectorBootWarmup(t *testing.T) {
+	start := time.Now()
+	health := CollectorHealth{Started: start, ScanStarted: start}
+	m := NewMonitor(&MonitorArgs{CollectorHealth: func() CollectorHealth { return health }})
+	for i := 0; i < 3; i++ {
+		if alert, ok := m.collectorStale(start.Add(collectorStaleAfter)); ok {
+			t.Fatalf("warm-up alarmed: %+v", alert)
+		}
+	}
+	// Even a first observation must alarm beyond the hard bound.
+	alert, ok := m.collectorStale(start.Add(collectorDeadAfter + time.Second))
+	if !ok || alert.Kind != AlertCollectorStale || !strings.Contains(alert.Detail, "scan in flight") || !strings.Contains(alert.Detail, "never") {
+		t.Fatalf("never-polled collector missing alarm/detail: %+v, %v", alert, ok)
+	}
+	health.LastPoll = start.Add(collectorDeadAfter)
+	if alert, ok := m.collectorStale(health.LastPoll); ok {
+		t.Fatalf("recovered collector alarmed: %+v", alert)
+	}
+}
+
+func TestMonitorCollectorWarmupExpires(t *testing.T) {
+	start := time.Now()
+	m := NewMonitor(&MonitorArgs{CollectorHealth: func() CollectorHealth { return CollectorHealth{Started: start} }})
+	now := start.Add(collectorStaleAfter + time.Second)
+	if _, ok := m.collectorStale(now); ok {
+		t.Fatal("first overdue observation alarmed before confirmation")
+	}
+	if _, ok := m.collectorStale(now); !ok {
+		t.Fatal("never-polled collector failed to alarm after warm-up")
+	}
+}

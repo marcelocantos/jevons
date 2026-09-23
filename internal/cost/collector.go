@@ -58,6 +58,8 @@ type Collector struct {
 // blind (a poll pass wedged mid-flight, a store error every pass, a
 // loop that simply never woke) instead of only that it is.
 type CollectorHealth struct {
+	// Started bounds warm-up even if Run never gets scheduled.
+	Started time.Time `json:"started"`
 	// LastPoll / LastScan are when each pass last completed.
 	LastPoll time.Time `json:"last_poll"`
 	LastScan time.Time `json:"last_scan"`
@@ -135,6 +137,7 @@ func NewCollector(args *CollectorArgs) *Collector {
 	if c.now == nil {
 		c.now = time.Now
 	}
+	c.health.Started = c.now()
 	c.scan = c.ScanOnce
 	return c
 }
@@ -235,20 +238,22 @@ func (c *Collector) Run(ctx context.Context, scanEvery, pollEvery time.Duration)
 	if pollEvery == 0 {
 		pollEvery = DefaultPollInterval
 	}
-	if _, err := c.scan(); err != nil {
-		slog.Warn("cost collector: initial scan", "err", err)
-	}
 	go func() {
-		scan := time.NewTicker(scanEvery)
-		defer scan.Stop()
-		for {
+		// One synchronous walk at a time on this goroutine, including the
+		// first. Wait after completion so a slow walk cannot build a ticker
+		// backlog; give IO at least as much rest as the walk consumed.
+		for ctx.Err() == nil {
+			started := time.Now()
+			if _, err := c.scan(); err != nil {
+				slog.Warn("cost collector: scan", "err", err)
+			}
+			delay := max(scanEvery, time.Since(started))
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-scan.C:
-				if _, err := c.scan(); err != nil {
-					slog.Warn("cost collector: scan", "err", err)
-				}
+			case <-timer.C:
 			}
 		}
 	}()

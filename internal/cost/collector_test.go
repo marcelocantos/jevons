@@ -458,10 +458,8 @@ func TestCollectorScanDoesNotStarvePoll(t *testing.T) {
 	release := make(chan struct{})
 	var scans atomic.Int32
 	c.scan = func() ([]string, error) {
-		if scans.Add(1) == 1 {
-			return nil, nil // the initial synchronous scan returns at once
-		}
-		<-release // every later scan wedges until the test lets it go
+		scans.Add(1)
+		<-release // even the first scan wedges until the test lets it go
 		return nil, nil
 	}
 	defer close(release)
@@ -473,11 +471,11 @@ func TestCollectorScanDoesNotStarvePoll(t *testing.T) {
 	// Wait for the blocking scan to be entered, note the poll clock, then
 	// require it to advance while that scan is still wedged.
 	deadline := time.Now().Add(5 * time.Second)
-	for scans.Load() < 2 && time.Now().Before(deadline) {
+	for scans.Load() < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if scans.Load() < 2 {
-		t.Fatal("scan loop never entered its second (blocking) scan")
+	if scans.Load() < 1 {
+		t.Fatal("scan loop never entered its first (blocking) scan")
 	}
 	mark := c.LastPoll()
 	for time.Now().Before(deadline) {
@@ -538,5 +536,55 @@ func TestCollectorHealthStampsPasses(t *testing.T) {
 	}
 	if d := h.Describe(before.Add(time.Second)); !strings.Contains(d, "last poll error: ") {
 		t.Fatalf("Describe = %q", d)
+	}
+}
+
+// A long walk must neither overlap another nor leave a pending ticker
+// tick that starts another walk immediately on completion (T859).
+func TestCollectorSlowScanBackoff(t *testing.T) {
+	c := NewCollector(&CollectorArgs{})
+	entered := make(chan time.Time, 4)
+	release := make(chan struct{})
+	var scans atomic.Int32
+	c.scan = func() ([]string, error) {
+		entered <- time.Now()
+		if scans.Add(1) == 1 {
+			<-release
+		}
+		return nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer close(release)
+	go c.Run(ctx, time.Millisecond, time.Millisecond)
+	var started time.Time
+	select {
+	case started = <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial scan did not start")
+	}
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-entered:
+		t.Fatal("walks overlapped")
+	default:
+	}
+	released := time.Now()
+	release <- struct{}{}
+	select {
+	case next := <-entered:
+		if next.Sub(released) < released.Sub(started) {
+			t.Fatalf("next walk after %s, shorter than preceding walk %s", next.Sub(released), released.Sub(started))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("scan never resumed")
+	}
+}
+
+func TestCollectorStartBoundsUnscheduledWarmup(t *testing.T) {
+	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	c := NewCollector(&CollectorArgs{Now: func() time.Time { return now }})
+	if h := c.Health(); h.Started != now || !h.LastPoll.IsZero() {
+		t.Fatalf("new collector must expose start without claiming a poll: %+v", h)
 	}
 }
