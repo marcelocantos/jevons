@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { CoachList } from './CoachList';
@@ -42,6 +45,13 @@ describe('coach list', () => {
     }));
     render(createElement(CoachList, { active: true }));
     expect(await screen.findByText('No coach judgments yet.')).toBeTruthy();
+  });
+
+  it('lets a long judgment wrap instead of ending in an ellipsis', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
+    const block = css.slice(css.indexOf('.coach-title {'), css.indexOf('.coach-chip {'));
+    expect(block).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(block).not.toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it('does not fetch until the tab is open', async () => {
