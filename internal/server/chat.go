@@ -29,6 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/upgrade"
@@ -993,6 +994,12 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 			if reason, at, ok := stopReader(agents[i].Name); ok {
 				agents[i].StopReason = reason
 				agents[i].StoppedAt = at.UTC().Format(time.RFC3339)
+			} else {
+				// A restart drops the in-memory ledger, and a seat that was
+				// already stopped at boot is never swept. Silence on that
+				// row is the 2026-09-15 failure. Unknown is the recorded
+				// answer when this process has no reason.
+				agents[i].StopReason = seatstop.Unknown
 			}
 		}
 		agents[i].MassStop = mass
