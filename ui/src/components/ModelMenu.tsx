@@ -30,17 +30,23 @@ export function migrateBody(
  */
 export function ModelMenu(props: {
   options: MigrateProvider[];
+  /** Viewport position. The fleet list scrolls, so an in-flow menu is clipped. */
+  anchor?: { top: number; left: number };
   loading?: boolean;
   busy?: boolean;
   error?: string;
   onPick: (provider: string, model: string) => void;
   onClose: () => void;
 }) {
+  const placed = props.anchor
+    ? { position: 'fixed' as const, top: props.anchor.top, left: props.anchor.left }
+    : undefined;
   return (
     <div
       className="model-menu"
       role="menu"
       aria-label="Provider and model"
+      style={placed}
       onClick={(e) => e.stopPropagation()}
     >
       <button type="button" className="model-menu-close" onClick={props.onClose}>

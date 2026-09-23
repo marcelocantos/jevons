@@ -61,6 +61,7 @@ export function buildAgentForest(agents: AgentRow[]): AgentNode[] {
 function ModelBadge({ node }: { node: AgentNode }) {
   const p = modelPrefix(node);
   const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
   const [options, setOptions] = useState<MigrateProvider[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -77,9 +78,13 @@ function ModelBadge({ node }: { node: AgentNode }) {
         {p.version}
       </sub>
     ) : null;
-  async function openMenu(e: { preventDefault: () => void; stopPropagation: () => void }) {
+  async function openMenu(e: { preventDefault: () => void; stopPropagation: () => void; currentTarget: HTMLElement }) {
     e.preventDefault();
     e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const menuH = 240;
+    const top = rect.bottom + menuH > window.innerHeight ? Math.max(8, rect.top - menuH) : rect.bottom + 4;
+    setAnchor({ top, left: rect.left });
     setOpen(true);
     setError('');
     try {
@@ -130,6 +135,7 @@ function ModelBadge({ node }: { node: AgentNode }) {
       {open ? (
         <ModelMenu
           options={options || []}
+          anchor={anchor || undefined}
           loading={options === null && !error}
           busy={busy}
           error={error}
