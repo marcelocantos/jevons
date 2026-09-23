@@ -71,7 +71,7 @@ describe('the rollover cell says when and how long (🎯T670)', () => {
   });
 
   it('reads as a moment and a span', () => {
-    expect(rolloverCell(hoursOut(22), NOW, 'UTC')).toBe('Mo 22:00 22h');
+    expect(rolloverCell(hoursOut(22), NOW, 'UTC')).toBe('Mo\u202f22:00 22h');
   });
 });
 
@@ -89,7 +89,7 @@ describe('the tip leads with usage (🎯T670)', () => {
     const labels = [...container.querySelectorAll('th[scope="row"]')].map((e) => e.textContent);
     expect(labels).toEqual(['usage', 'rollover', 'burn']);
     expect(container.querySelector('td.plan-avail')?.textContent).toBe('59%');
-    expect(container.textContent).toContain('Mo 22:00 22h');
+    expect(container.textContent).toContain('Mo\u202f22:00 22h');
     expect(container.textContent).not.toMatch(/available|time left/i);
   });
 });

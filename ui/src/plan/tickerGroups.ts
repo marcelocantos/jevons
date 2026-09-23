@@ -175,12 +175,16 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
  * letters, so a column of dates comes out ragged (🎯T611). Trimming
  * the month token is safe where the year is absent and the date is days
  * away: 'Sep' cannot be read as any other month. Weekday 'short' is
- * three letters; the first two are the day.
+ * three letters; the first two are the day. The gaps inside the instant
+ * are a narrow no-break space, so Mo 12:00 and 15 Oct 09:13 stay one word.
  */
+const NARROW_NBSP = '\u202f';
+
 export function formatInstantParts(at: Date, opts: Intl.DateTimeFormatOptions): string {
   return new Intl.DateTimeFormat('en-GB', opts)
     .formatToParts(at)
     .map((part) => {
+      if (part.type === 'literal' && part.value.replace(/[,\s]/g, '') === '') return NARROW_NBSP;
       if (part.type === 'month') return part.value.slice(0, 3);
       if (part.type === 'weekday') return part.value.slice(0, 2);
       return part.value;
@@ -205,7 +209,7 @@ export function formatInstantParts(at: Date, opts: Intl.DateTimeFormatOptions): 
  *
  * timeZone is injectable so the oracle can pin a zone; production passes
  * nothing and gets the runtime's. Locale is fixed at en-GB rather than
- * the runtime's so the shape stays '31 Aug 10:52' wherever it renders —
+ * the runtime's so the shape stays '31 Aug 10:52' (narrow no-break gaps) —
  * the zone must follow the viewer, the wording need not.
  */
 export function formatRolloverLocal(

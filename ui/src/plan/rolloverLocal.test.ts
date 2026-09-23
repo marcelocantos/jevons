@@ -11,10 +11,10 @@ const INSTANT = '2026-08-31T00:52:28.417Z';
 describe('rollover is local and to the minute (🎯T588)', () => {
   it('renders the viewer wall clock, not the UTC one', () => {
     // Melbourne is UTC+10 on this date: 00:52 UTC is 10:52 the same day.
-    expect(formatRolloverLocal(INSTANT, 'Australia/Melbourne')).toBe('31 Aug 10:52');
+    expect(formatRolloverLocal(INSTANT, 'Australia/Melbourne')).toBe('31\u202fAug\u202f10:52');
     // The zone genuinely drives it — same instant, a different day even.
-    expect(formatRolloverLocal(INSTANT, 'America/Los_Angeles')).toBe('30 Aug 17:52');
-    expect(formatRolloverLocal(INSTANT, 'UTC')).toBe('31 Aug 00:52');
+    expect(formatRolloverLocal(INSTANT, 'America/Los_Angeles')).toBe('30\u202fAug\u202f17:52');
+    expect(formatRolloverLocal(INSTANT, 'UTC')).toBe('31\u202fAug\u202f00:52');
   });
 
   it('drops seconds and milliseconds', () => {
@@ -22,7 +22,7 @@ describe('rollover is local and to the minute (🎯T588)', () => {
     expect(out).not.toMatch(/28/); // the seconds
     expect(out).not.toMatch(/417/); // the milliseconds
     expect(out).not.toMatch(/Z|GMT|UTC/);
-    expect(out).toMatch(/^\d{2} \w{3} \d{2}:\d{2}$/);
+    expect(out).toMatch(/^\d{2}\u202f\w{3}\u202f\d{2}:\d{2}$/);
   });
 
   it('says nothing at all when the instant is unusable', () => {
@@ -57,7 +57,7 @@ describe('rollover is local and to the minute (🎯T588)', () => {
       },
     ] as unknown as TickerGroup[];
     const body = tickerTipBody(groups);
-    expect(body).toMatch(/rollover \d{2} \w{3} \d{2}:\d{2}/);
+    expect(body).toMatch(/rollover \d{2}\u202f\w{3}\u202f\d{2}:\d{2}/);
     expect(body).not.toMatch(/T00:52:28|\.417/);
   });
 });

@@ -21,13 +21,13 @@ export function relTime(ms: number): string {
     if (d < 14) {
       return (
         days[dt.getDay()] +
-        ' ' +
+        '\u202f' +
         String(dt.getHours()).padStart(2, '0') +
         ':' +
         String(dt.getMinutes()).padStart(2, '0')
       );
     }
-    return months[dt.getMonth()] + ' ' + dt.getDate();
+    return months[dt.getMonth()] + '\u202f' + dt.getDate();
   }
   return dt.toLocaleDateString();
 }
