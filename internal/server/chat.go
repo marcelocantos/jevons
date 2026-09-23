@@ -1160,6 +1160,9 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 		// run's observation before the baseline can carry it forward.
 		if progress != nil {
 			progress.SyncEpoch(d.Name, d.SessionID)
+			// A changed pin drops the previous version before the baseline
+			// or a model-less frame can carry it forward.
+			progress.SyncModel(d.Name, d.Model)
 			progress.SetStatus(d.Name, status)
 		}
 		ledger, seen := ledgerOf[d.WorkDir]

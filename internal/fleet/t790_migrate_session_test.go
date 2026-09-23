@@ -97,3 +97,29 @@ func TestMigrationNotesTheModelSwitch(t *testing.T) {
 		t.Fatalf("switch = %+v", got)
 	}
 }
+
+// A model change clears the previous version. The live agent still
+// reporting that same id is the cache, not the model the seat moved to.
+// A different reported id is the successor and is kept (see
+// TestMigrationNotesTheModelSwitch).
+func TestModelChangeDropsThePreviousVersion(t *testing.T) {
+	for _, target := range []claudia.Provider{claudia.ProviderCursor, claudia.ProviderClaude} {
+		t.Run(string(target), func(t *testing.T) {
+			f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7910", true)
+			def := f.reg.Def("jevons-po")
+			row := *def
+			row.Model = "grok-4.6"
+			if err := f.reg.Register(row); err != nil {
+				t.Fatal(err)
+			}
+			f.liveMigrate = func(*claudia.MigrateArgs) error { return nil }
+			f.liveSession = func(string) (string, string) { return "live-sid", "grok-4.6" }
+			if _, err := f.PrepareMigrationPinned("jevons-po", target, "", false); err != nil {
+				t.Fatal(err)
+			}
+			if m := f.reg.Def("jevons-po").Model; m != "" {
+				t.Fatalf("model=%q want empty; previous version kept across the change", m)
+			}
+		})
+	}
+}

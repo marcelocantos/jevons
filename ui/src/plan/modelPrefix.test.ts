@@ -13,7 +13,7 @@ describe('modelPrefix', () => {
     expect(p.label).toBe('O4.5');
   });
 
-  it('shows the Claude model running on a Cursor seat', () => {
+  it('shows the model id it was given, including on a Cursor seat', () => {
     const p = modelPrefix({ provider: 'cursor', model: 'claude-opus-5' });
     expect(p.company).toBe('cursor');
     expect(p.initial).toBe('O');
@@ -22,11 +22,19 @@ describe('modelPrefix', () => {
     expect(p.title).toBe('Cursor · claude-opus-5');
   });
 
+  it('condenses Composer on a Cursor seat', () => {
+    const p = modelPrefix({ provider: 'cursor', model: 'composer-2.5' });
+    expect(p.company).toBe('cursor');
+    expect(p.label).toBe('C2.5');
+    expect(p.title).toBe('Cursor · composer-2.5');
+  });
+
   it('paints Cursor from provider even with no model id', () => {
     const p = modelPrefix({ provider: 'cursor' });
     expect(p.company).toBe('cursor');
     expect(p.version).toBe('');
     expect(p.label).toBe('');
+    expect(p.title).toBe('Cursor');
   });
 
   it('Grok is bare version, not G4.5', () => {
@@ -56,6 +64,32 @@ describe('modelPrefix', () => {
 });
 
 describe('mergeAgentChrome', () => {
+  it('clears the version when a poll names the provider and no model', () => {
+    const cursor = mergeAgentChrome(
+      [{ name: 'multimaze2-po', provider: 'cursor', model: 'claude-opus-5' }],
+      [{ name: 'multimaze2-po', provider: 'cursor', model: '' }],
+    );
+    expect(cursor[0].model).toBe('');
+    expect(modelPrefix(cursor[0]).label).toBe('');
+
+    const claude = mergeAgentChrome(
+      [{ name: 'jevons-po', provider: 'grok', model: 'grok-4.5' }],
+      [{ name: 'jevons-po', provider: 'claude', model: '' }],
+    );
+    expect(claude[0].provider).toBe('claude');
+    expect(claude[0].model).toBe('');
+    expect(modelPrefix(claude[0]).label).toBe('');
+  });
+
+  it('replaces the version when the poll names a new model', () => {
+    const next = mergeAgentChrome(
+      [{ name: 'w', provider: 'claude', model: 'claude-opus-5' }],
+      [{ name: 'w', provider: 'claude', model: 'claude-sonnet-5' }],
+    );
+    expect(next[0].model).toBe('claude-sonnet-5');
+    expect(modelPrefix(next[0]).label).toBe('S5');
+  });
+
   it('holds provider and model when the next poll omits them', () => {
     const prev = [{ name: 'jv-t541', provider: 'cursor', model: 'grok-4.5' }];
     const next = [{ name: 'jv-t541', provider: '', model: '' }];

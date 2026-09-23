@@ -748,7 +748,12 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		slog.Warn("migrate: live session id unreadable; recording the row as a fresh mint, not Materialized",
 			"name", name, "to", target)
 	}
-	if liveModel != "" && model == "" {
+	// The id the live agent still reports is the new version only when it
+	// is not the one this change left. A provider that does not report a
+	// model keeps answering with the previous id; writing that back is
+	// the version surviving the change. A different id is the model the
+	// successor is actually on.
+	if liveModel != "" && model == "" && liveModel != strings.TrimSpace(fromModel) {
 		next.Model = liveModel
 	}
 	next.SessionID = nextSession

@@ -14,6 +14,7 @@ const (
 	companyAnthropic = "anthropic"
 	companyXAI       = "xai"
 	companyOpenAI    = "openai"
+	companyCursor    = "cursor"
 )
 
 // providerCompany maps a registry provider id to a badge company.
@@ -27,14 +28,16 @@ func providerCompany(provider string) string {
 		return companyXAI
 	case "codex", "openai":
 		return companyOpenAI
+	case "cursor":
+		return companyCursor
 	default:
 		return ""
 	}
 }
 
-// modelCompany sniffs a model id for the company that ships it. Empty when
-// the string names nothing we recognise — unknown pins stay through.
-// Mirrors companyFromModel in web/scripts/model_prefix.js.
+// modelCompany returns the company that ships model. Empty when the id
+// names nothing this table recognises — an unrecognised pin stays through.
+// Mirrors companyFromModel in the fleet badge.
 func modelCompany(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
@@ -53,6 +56,8 @@ func modelCompany(model string) string {
 		strings.Contains(m, "codex"),
 		len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9':
 		return companyOpenAI
+	case strings.Contains(m, "composer"):
+		return companyCursor
 	default:
 		return ""
 	}

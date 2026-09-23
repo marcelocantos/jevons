@@ -24,8 +24,13 @@ type AgentProgress struct {
 	// Model is the last model id an assistant turn reported (🎯T287).
 	// Sticky: frames that name no model never forget the previous one, so
 	// the RHS company-icon + condensed model prefix survives idle frames.
-	// Empty when the provider never names one (Grok ACP).
+	// Empty when the provider never names one (Grok ACP). A model change
+	// drops it; frames must not keep the previous version.
 	Model string
+	// Bound is the registry pin SyncModel last aligned to. BoundSet
+	// distinguishes "not yet aligned" from "aligned to an empty pin".
+	Bound    string
+	BoundSet bool
 	// Session is the registry session id this observation belongs to
 	// (🎯T311). Stamped by SyncEpoch; a different session means a different
 	// run (kill+respawn, migration), so the sticky model is dropped rather
@@ -37,8 +42,8 @@ type AgentProgress struct {
 // AgentProgressHub tracks the latest progress line per agent name.
 // Safe for concurrent Observe from agent event sinks.
 type AgentProgressHub struct {
-	mu   sync.Mutex
-	by   map[string]AgentProgress
+	mu sync.Mutex
+	by map[string]AgentProgress
 	// now is injectable for tests; nil → time.Now.
 	now func() time.Time
 }
@@ -137,6 +142,39 @@ func (h *AgentProgressHub) SyncEpoch(name, sessionID string) {
 	}
 }
 
+// SyncModel aligns the sticky version with the registry pin. The first
+// sighting records the pin and leaves an observation alone: a live frame
+// is newer than the pin (🎯T311). A later sighting under a different pin
+// is a model change, on any provider. The previous version is dropped.
+// The new pin replaces it, and an empty pin leaves the version empty
+// until a frame names a model. Frames that name none must not put the
+// previous id back.
+func (h *AgentProgressHub) SyncModel(name, pin string) {
+	if h == nil || name == "" {
+		return
+	}
+	pin = strings.TrimSpace(pin)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.by == nil {
+		h.by = make(map[string]AgentProgress)
+	}
+	prev := h.by[name]
+	if !prev.BoundSet {
+		prev.Bound = pin
+		prev.BoundSet = true
+		h.by[name] = prev
+		return
+	}
+	if prev.Bound == pin {
+		return
+	}
+	prev.Model = pin
+	prev.Bound = pin
+	prev.Updated = h.clock()
+	h.by[name] = prev
+}
+
 // Observe updates progress from a claudia agent event.
 // Returns true when the glanceable summary changed (callers may push
 // agents_changed so the RHS refreshes without poll).
@@ -174,6 +212,8 @@ func (h *AgentProgressHub) Observe(name string, ev claudia.Event) bool {
 		next.Model = prev.Model
 	}
 	next.Session = prev.Session
+	next.Bound = prev.Bound
+	next.BoundSet = prev.BoundSet
 	// Preserve last step across mid-turn assistant frames that only set phase.
 	if next.Step == "" && prev.Step != "" && next.Phase == "working" {
 		next.Step = prev.Step
@@ -262,11 +302,13 @@ func (h *AgentProgressHub) SetStatus(name, status string) {
 		return
 	}
 	h.by[name] = AgentProgress{
-		Phase:   phase,
-		Summary: summary,
-		Model:   prev.Model, // 🎯T287: liveness baseline never forgets the model
-		Session: prev.Session,
-		Updated: h.clock(),
+		Phase:    phase,
+		Summary:  summary,
+		Model:    prev.Model, // 🎯T287: liveness baseline never forgets the model
+		Bound:    prev.Bound,
+		BoundSet: prev.BoundSet,
+		Session:  prev.Session,
+		Updated:  h.clock(),
 	}
 }
 

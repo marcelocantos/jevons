@@ -434,6 +434,90 @@ func TestListFleetAgentsBindsGrokDefaultWhenUnbound(t *testing.T) {
 }
 
 // 🎯T324 hermetic (3): SessionID change drops sticky hub model.
+func TestSyncModelClearsVersionOnAnyModelChange(t *testing.T) {
+	hub := NewAgentProgressHub()
+	hub.Observe("w", claudia.Event{
+		Type: "assistant",
+		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
+	})
+	hub.SyncModel("w", "claude-opus-5")
+	if got := hub.Get("w").Model; got != "claude-opus-5" {
+		t.Fatalf("first sight model=%q want the observation kept", got)
+	}
+	hub.SyncModel("w", "claude-sonnet-5")
+	if got := hub.Get("w").Model; got != "claude-sonnet-5" {
+		t.Fatalf("after pin change model=%q want claude-sonnet-5", got)
+	}
+	hub.SyncModel("w", "")
+	if got := hub.Get("w").Model; got != "" {
+		t.Fatalf("after pin cleared model=%q want empty", got)
+	}
+	hub.Observe("w", claudia.Event{Type: "assistant", Raw: []byte(`{"message":{}}`)})
+	if got := hub.Get("w").Model; got != "" {
+		t.Fatalf("model-less frame restored %q", got)
+	}
+}
+
+func TestListFleetAgentsModelChangeReplacesStickyVersion(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sid = "sess-model-change"
+	register := func(model string) {
+		t.Helper()
+		if err := reg.Register(claudia.AgentDef{
+			Name: "w", WorkDir: t.TempDir(), SessionID: sid,
+			Provider: claudia.ProviderClaude, Model: model,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	register("claude-opus-5")
+	hub := NewAgentProgressHub()
+	hub.Observe("w", claudia.Event{
+		Type: "assistant",
+		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
+	})
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "w"); got != "claude-opus-5" {
+		t.Fatalf("before change model=%q", got)
+	}
+
+	register("claude-sonnet-5")
+	hub.Observe("w", claudia.Event{Type: "assistant", Raw: []byte(`{"message":{}}`)})
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "w"); got != "claude-sonnet-5" {
+		t.Fatalf("model=%q want claude-sonnet-5, previous version kept", got)
+	}
+
+	register("")
+	hub.Observe("w", claudia.Event{Type: "assistant", Raw: []byte(`{"message":{}}`)})
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "w"); got != "" {
+		t.Fatalf("model=%q want empty after the pin was cleared", got)
+	}
+}
+
+func TestListFleetAgentsDropsAnotherCompanysModelOnCursor(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	if err := reg.Register(claudia.AgentDef{
+		Name: "claudia-po", WorkDir: work, SessionID: "s-cursor",
+		Provider: claudia.ProviderCursor, Model: "claude-opus-5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewAgentProgressHub()
+	hub.Observe("claudia-po", claudia.Event{
+		Type: "assistant",
+		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
+	})
+	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "claudia-po"); got != "" {
+		t.Fatalf("model=%q want empty; cursor has no version from another company", got)
+	}
+}
+
 func TestSyncEpochDropsStickyModelOnSessionChange(t *testing.T) {
 	hub := NewAgentProgressHub()
 	hub.Observe("w", claudia.Event{
@@ -468,9 +552,17 @@ func TestModelFitsProvider(t *testing.T) {
 		{"claude", "claude-opus-5", true},
 		{"claude", "grok-4.5", false},
 		{"bedrock", "claude-sonnet-4-5", true},
-		{"", "fable", true},          // no provider → keep; UI sniffs model
-		{"mystery", "fable", true},   // unknown provider → keep
+		{"", "fable", true},            // no provider → keep; UI sniffs model
+		{"mystery", "fable", true},     // unknown provider → keep
 		{"grok", "custom-thing", true}, // unrecognised pin → keep
+		// Cursor is a company in the same table. An id from another
+		// company does not fit, just as fable does not fit grok.
+		{"cursor", "composer-2.5", true},
+		{"cursor", "claude-opus-5", false},
+		{"cursor", "claude-sonnet-5", false},
+		{"cursor", "gpt-6-astra", false},
+		{"cursor", "grok-4.5", false},
+		{"cursor", "", true},
 	}
 	for _, tc := range cases {
 		if got := modelFitsProvider(tc.provider, tc.model); got != tc.want {
