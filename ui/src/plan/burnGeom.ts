@@ -110,15 +110,15 @@ export function burnPoints(w: PlanWindow): BurnPoint[] {
  * spike still reaches the line. A flat column keeps a single vertex.
  * Width 0 (not laid out yet) uses one column per viewBox unit.
  */
-export function pixelColumns(points: BurnPoint[], pixelWidth = BURN_WIDTH): BurnPoint[] {
+export function pixelColumns<T extends BurnPoint>(points: T[], pixelWidth = BURN_WIDTH): T[] {
   if (points.length <= 1) return points.slice();
   const columns = Math.max(1, Math.round(pixelWidth) || BURN_WIDTH);
   const ordered = points
     .map((p, i) => ({ p, i }))
     .sort((a, b) => a.p.x - b.p.x || a.i - b.i);
-  const out: BurnPoint[] = [];
+  const out: T[] = [];
   let col = -1;
-  let bucket: BurnPoint[] = [];
+  let bucket: T[] = [];
   const flush = (lastBucket: boolean) => {
     if (!bucket.length) return;
     let lo = bucket[0];
@@ -191,50 +191,51 @@ function round(n: number): string {
 }
 
 /**
- * 🎯T667: the sparkline's colour at each sample is the band the daemon
- * assigned the window at that moment, so a week that started on track and
- * ended burning hot shifts green → red along the curve instead of painting
- * the whole period in today's colour. Each stop carries the band's pace class
- * (paceClassForBand — the bar's own chain); cockpit.css colours it, so the
- * palette has one home.
+ * One solid-coloured stretch of the sparkline (🎯T667). className null
+ * means no sample carried a band: the stretch inherits the cell colour.
+ * Otherwise it is the pace class of that stretch, and cockpit.css colours
+ * it. A colour belongs to the stretch. It is not a wash laid across the
+ * finished shape, which is what sliced the end dot in half.
  */
-export type BurnStop = { offset: number; className: string };
+export type BurnRun = { d: string; className: string | null };
 
-/**
- * Horizontal gradient stops, one per pixel column, at that column's last
- * sample. Empty when no sample carries a band (an older daemon): the chart
- * then keeps its single inherited colour. Samples that share a column take
- * the last band in it; a gradient with no horizontal extent paints that
- * stop, which is the current band (🎯T688).
- */
-export function burnStops(w: PlanWindow, pixelWidth = BURN_WIDTH): BurnStop[] {
+type ClassedPoint = BurnPoint & { className: string | null };
+
+export function burnRuns(w: PlanWindow, pixelWidth = BURN_WIDTH): BurnRun[] {
   const samples = historyPoints(w);
-  const points = burnPoints(w);
-  if (!points.length || points.length !== samples.length) return [];
-  const classes = samples.map((p) => paceClassForBand(p.band));
-  if (!classes.some((c) => c !== null)) return [];
-  const columns = Math.max(1, Math.round(pixelWidth) || BURN_WIDTH);
-  const ordered = points
-    .map((p, i) => ({ p, i }))
-    .sort((a, b) => a.p.x - b.p.x || a.i - b.i);
-  const stops: BurnStop[] = [];
+  const raw = burnPoints(w);
+  if (!raw.length || raw.length !== samples.length) return [];
+  const classed: ClassedPoint[] = raw.map((p, i) => ({
+    ...p,
+    className: paceClassForBand(samples[i].band),
+  }));
+  return runsOf(pixelColumns(classed, pixelWidth));
+}
+
+function pathD(points: BurnPoint[]): string {
+  return points.map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`).join(' ');
+}
+
+function runsOf(points: ClassedPoint[]): BurnRun[] {
+  if (!points.length) return [];
+  if (!points.some((p) => p.className !== null)) {
+    return [{ d: pathD(points), className: null }];
+  }
+  const runs: { className: string; pts: BurnPoint[] }[] = [];
   let last: string | null = null;
-  let col = -1;
-  let pending: BurnStop | null = null;
-  const emit = () => {
-    if (!pending) return;
-    stops.push(pending);
-    pending = null;
-  };
-  for (const { p, i } of ordered) {
-    const c: string | null = classes[i] ?? last;
+  for (const p of points) {
+    const c: string | null = p.className ?? last;
     if (c === null) continue;
     last = c;
-    const next = xColumn(p.x, columns);
-    if (next !== col) emit();
-    col = next;
-    pending = { offset: clamp(p.x / BURN_WIDTH, 0, 1), className: c };
+    const prev = runs[runs.length - 1];
+    if (!prev || prev.className !== c) {
+      // Share the boundary vertex so two solid stretches meet, instead of
+      // leaving a gap for a colour wash to fill.
+      const pts: BurnPoint[] = prev ? [prev.pts[prev.pts.length - 1], p] : [p];
+      runs.push({ className: c, pts });
+    } else {
+      prev.pts.push(p);
+    }
   }
-  emit();
-  return stops;
+  return runs.map((r) => ({ d: pathD(r.pts), className: r.className }));
 }
