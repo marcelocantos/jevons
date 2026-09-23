@@ -101,3 +101,27 @@ func TestRecordUnpinnedCursorStartDoesNotPin(t *testing.T) {
 		t.Fatalf("adopt rewrote the record to model=%q pid=%d", model, pid)
 	}
 }
+
+func TestRecordAgentUsesProcessPIDWhenConnectPIDUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sid = "sess-boot"
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", SessionID: sid, Provider: claudia.ProviderCursor,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	look := CursorStartLook{applicable: true, model: "claude-opus-5"}
+	look.RecordAgent(reg, "jevons-po", 5151)
+	if reg.Def("jevons-po").Model != "" {
+		t.Fatal("recording pinned the seat")
+	}
+	model, pid, ok := CursorStartedModel(sid)
+	if !ok || model != "claude-opus-5" || pid != 5151 {
+		t.Fatalf("recorded model=%q pid=%d ok=%v", model, pid, ok)
+	}
+}

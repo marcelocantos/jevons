@@ -176,6 +176,13 @@ func LookCursorStart(reg *claudia.Registry, name string) CursorStartLook {
 // adopt of the same process does not write. A pin on the def does not
 // write. AgentDef.Model is not set.
 func (look CursorStartLook) Record(reg *claudia.Registry, name string) {
+	look.RecordAgent(reg, name, 0)
+}
+
+// RecordAgent is Record, using pid when the registry has not stored a
+// ConnectPID yet. Boot's AdoptOrLaunch returns the process before the
+// def's connect pid is published.
+func (look CursorStartLook) RecordAgent(reg *claudia.Registry, name string, pid int) {
 	if reg == nil || !look.applicable || look.model == "" {
 		return
 	}
@@ -183,7 +190,9 @@ func (look CursorStartLook) Record(reg *claudia.Registry, name string) {
 	if def == nil || strings.TrimSpace(def.Model) != "" || def.SessionID == "" {
 		return
 	}
-	pid := def.ConnectPID
+	if def.ConnectPID > 0 {
+		pid = def.ConnectPID
+	}
 	if look.wasAlive && pid == look.beforePID {
 		return
 	}

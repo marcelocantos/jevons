@@ -272,6 +272,10 @@ func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name 
 	if d := reg.Def(name); d != nil {
 		freshSession = d.SessionID
 	}
+	// Read the CLI default while the seat is down. AdoptOrLaunch is the
+	// boot start, and it does not go through LaunchRecording. Without
+	// this, an unpinned Cursor seat comes back as a bare "Cursor" badge.
+	look := fleet.LookCursorStart(reg, name)
 	for attempt := 0; ; attempt++ {
 		a, err := reg.AdoptOrLaunchContext(ctx, name)
 		if err == nil && freshSession != prevSession && freshSession != "" {
@@ -303,6 +307,13 @@ func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name 
 			if err != nil && resumeDeniedRemint(reg.Def(name), err) {
 				slog.Warn("auto-start reminting after provider resume refusal", "agent", name, "err", err)
 				return fleet.LaunchRecovering(reg, name)
+			}
+			if err == nil {
+				pid := 0
+				if a != nil {
+					pid = a.PID()
+				}
+				look.RecordAgent(reg, name, pid)
 			}
 			return a, err
 		}

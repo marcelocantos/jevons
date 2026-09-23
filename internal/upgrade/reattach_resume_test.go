@@ -6,13 +6,16 @@ package upgrade
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
 )
 
 func TestCursorRestartStartsFreshWithoutLoad(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "agents.json")
 	reg, err := claudia.NewRegistry(path)
 	if err != nil {
@@ -51,6 +54,54 @@ func TestCursorRestartStartsFreshWithoutLoad(t *testing.T) {
 	}
 	if starts != 1 {
 		t.Fatalf("starts=%d, want one fresh start and no resume attempt", starts)
+	}
+}
+
+func TestCursorBootStartRemembersCLIModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "cli-config.json"), []byte(`{"model":{"modelId":"claude-opus-5"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.SetDirect(true)
+	const oldSession = "11111111-2222-3333-4444-555555555555"
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: oldSession,
+		Provider: claudia.ProviderCursor, Materialized: true, AutoStart: true, TermLogPath: "-",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			return claudia.StartStub(ctx, cfg, nil)
+		},
+	})
+	if _, err := adoptOrLaunchRetryingHeld(context.Background(), reg, "jevons-po"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reg.Stop("jevons-po") })
+	def := reg.Def("jevons-po")
+	if def == nil || def.Model != "" {
+		t.Fatal("boot start pinned AgentDef.Model")
+	}
+	if def.SessionID == "" || def.SessionID == oldSession {
+		t.Fatalf("session=%q, want a fresh id", def.SessionID)
+	}
+	// StartStub has no OS pid, so this process records nothing. The
+	// write when the def's connect pid is still 0 is TestRecordAgentUsesProcessPID.
+	src, err := os.ReadFile("reattach.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "look.RecordAgent(reg, name, pid)") {
+		t.Fatal("boot adopt/launch does not record the CLI model")
 	}
 }
 
