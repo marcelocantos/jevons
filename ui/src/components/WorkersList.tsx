@@ -26,7 +26,8 @@ export function workersLiveLabel(rows: Worker[] | null): string {
 function firstLine(text: string | undefined, max: number): string {
   // A finish often opens a code fence on the same line as the sentence
   // ("verbatim.```"). The strip is a preview, so skip fence-only lines and
-  // drop a trailing fence; inline `code` stays.
+  // drop a trailing fence; inline `code` stays. A long line that runs the
+  // next sentence on ("HEAD.Pulling") stops at that period.
   let line = '';
   for (const raw of (text || '').split('\n')) {
     const trimmed = raw.trim();
@@ -37,7 +38,14 @@ function firstLine(text: string | undefined, max: number): string {
     break;
   }
   if (line.length <= max) return line;
-  return line.slice(0, max - 1) + '…';
+  const window = line.slice(0, max);
+  let sentenceEnd = -1;
+  for (let i = 0; i < window.length - 1; i++) {
+    const ch = window[i];
+    if ((ch === '.' || ch === '!' || ch === '?') && /[A-Z]/.test(window[i + 1])) sentenceEnd = i;
+  }
+  if (sentenceEnd >= 40) return window.slice(0, sentenceEnd + 1);
+  return window.slice(0, max - 1) + '…';
 }
 
 function when(iso?: string): string {

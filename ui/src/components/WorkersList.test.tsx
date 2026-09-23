@@ -70,6 +70,23 @@ describe('workers list', () => {
     expect(await screen.findByText('GATE green')).toBeTruthy();
   });
 
+  it('stops a long finish line where the next sentence is glued on', async () => {
+    const glued = 'I will confirm the named helpers exist on HEAD.Pulling the target, the commit, and the gate, then writing a much longer finish that runs past the preview limit and keeps going so the line is longer than the preview cap.';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{
+        id: 'ebf1e021',
+        status: 'completed',
+        task: 'verify the claim',
+        started_at: '2026-09-12T14:18:38Z',
+        outcome: glued,
+      }],
+    }));
+    render(createElement(WorkersList));
+    expect(await screen.findByText('I will confirm the named helpers exist on HEAD.')).toBeTruthy();
+    expect(screen.queryByText(/Pulling/)).toBeNull();
+  });
+
   it('does not let the fleet column squeeze the list down to one row', () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
     const block = css.slice(css.indexOf('#workers {'), css.indexOf('.worker-row'));
