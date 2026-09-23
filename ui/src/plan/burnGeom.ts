@@ -119,29 +119,38 @@ export function pixelColumns(points: BurnPoint[], pixelWidth = BURN_WIDTH): Burn
   const out: BurnPoint[] = [];
   let col = -1;
   let bucket: BurnPoint[] = [];
-  const flush = () => {
+  const flush = (lastBucket: boolean) => {
     if (!bucket.length) return;
     let lo = bucket[0];
     let hi = bucket[0];
+    let later = bucket[0];
     for (const p of bucket) {
       if (p.y < lo.y) lo = p;
       if (p.y > hi.y) hi = p;
+      if (p.x >= later.x) later = p;
     }
     const first = lo.x <= hi.x ? lo : hi;
     const second = first === lo ? hi : lo;
-    out.push(first);
-    if (second.y !== first.y) out.push(second);
+    if (lo.y === hi.y) {
+      // One vertex. The last column keeps the newest reading so the
+      // stroke ends on the current-value mark instead of beside it.
+      out.push(lastBucket ? later : first);
+    } else {
+      out.push(first);
+      out.push(second);
+      if (lastBucket && later !== first && later !== second) out.push(later);
+    }
     bucket = [];
   };
   for (const { p } of ordered) {
     const c = xColumn(p.x, columns);
     if (c !== col) {
-      flush();
+      flush(false);
       col = c;
     }
     bucket.push(p);
   }
-  flush();
+  flush(true);
   return out;
 }
 

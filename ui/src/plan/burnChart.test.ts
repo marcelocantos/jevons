@@ -98,7 +98,8 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     // period start because that is when the samples were taken. The mark
     // is drawn in front of the plot and outside its clip.
     expect(spec?.points).toHaveLength(1);
-    expect(spec!.points[0].x).toBe(0);
+    expect(spec!.points[0].x).toBeGreaterThanOrEqual(0);
+    expect(spec!.points[0].x).toBeLessThan(1);
     // 100% remaining is 0% used, so the mark sits in the bottom-left
     // corner: the true position of an untouched, just-reset week.
     expect(currentMark(w)).toBe('M0,32 L0,32');

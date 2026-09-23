@@ -72,6 +72,9 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
     // Browsers and jsdom may serialise url(#id) as url("#id").
     const ref = new RegExp(`^url\\("?#${id}"?\\)$`);
     expect((container.querySelector('.plan-burn-line') as SVGPathElement).style.stroke).toMatch(ref);
+    // The current-value mark is one colour — the cell's — not the gradient.
+    // A gradient across the dot paints it as two halves.
+    expect((container.querySelector('.plan-burn-now') as SVGPathElement).style.stroke).toBe('');
     // 🎯T671: the line is the whole chart; there is no shaded area to paint.
     expect(container.querySelector('.plan-burn-fill')).toBeNull();
   });

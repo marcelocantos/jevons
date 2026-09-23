@@ -63,7 +63,10 @@ export function BurnChart(props: { window: PlanWindow }) {
         height={BURN_HEIGHT}
       />
       {spec ? <path className="plan-burn-line" d={spec.line} style={paint ? { stroke: paint } : undefined} /> : null}
-      {mark ? <path className="plan-burn-now" d={mark} style={paint ? { stroke: paint } : undefined} /> : null}
+      {/* The mark stays the cell's current colour. Stroking it with the
+          gradient paints every stop the dot's width crosses, so a band
+          change under the reading comes out as two halves of one circle. */}
+      {mark ? <path className="plan-burn-now" d={mark} /> : null}
     </svg>
   );
 }
