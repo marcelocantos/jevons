@@ -23,7 +23,7 @@ func TestT627LaunchPrefersContextualRegistry(t *testing.T) {
 	if !strings.Contains(body, "LaunchContext(context.Context, string)") {
 		t.Fatal("launchAgent dropped LaunchContext — Registry.Launch would hold the global mutex again")
 	}
-	if !strings.Contains(body, "return s.registry.Launch(name)") {
+	if !strings.Contains(body, "s.registry.Launch(name)") {
 		t.Fatal("legacy Launch fallback disappeared; keep it for the published pin")
 	}
 }

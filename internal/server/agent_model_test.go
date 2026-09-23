@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // 🎯T287: the RHS fleet prefix (company icon + condensed model) needs the
@@ -374,12 +375,7 @@ func TestListFleetAgentsShowsCursorModelCapturedAtStart(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	const sid = "sess-unpinned-cursor"
-	dir := filepath.Join(home, ".cursor", "acp-sessions", sid)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body := []byte("{\"model\":\"claude-opus-5\",\"pid\":4242}\n")
-	if err := os.WriteFile(filepath.Join(dir, "started-model.json"), body, 0o644); err != nil {
+	if err := fleet.SaveCursorStartedModel(sid, 4242, "claude-opus-5"); err != nil {
 		t.Fatal(err)
 	}
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))

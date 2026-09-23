@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // 🎯T541 — Cursor ACP starts must not wait for prompt confirmation
@@ -43,15 +45,24 @@ func (s *Server) launchAgent(ctx context.Context, name string) (*claudia.Agent, 
 	if s == nil || s.registry == nil {
 		return nil, fmt.Errorf("no agent registry")
 	}
+	look := fleet.LookCursorStart(s.registry, name)
 	if contextual, ok := any(s.registry).(interface {
 		LaunchContext(context.Context, string) (*claudia.Agent, error)
 	}); ok {
-		return contextual.LaunchContext(ctx, name)
+		agent, err := contextual.LaunchContext(ctx, name)
+		if err == nil {
+			look.Record(s.registry, name)
+		}
+		return agent, err
 	}
 	// The published Claudia pin predates cancellation. Keep it buildable,
 	// but do not pretend its synchronous legacy operation has a hard deadline.
 	slog.Warn("Claudia dependency lacks cancellable agent startup", "name", name)
-	return s.registry.Launch(name)
+	agent, err := s.registry.Launch(name)
+	if err == nil {
+		look.Record(s.registry, name)
+	}
+	return agent, err
 }
 
 func (s *Server) launchWait() time.Duration {

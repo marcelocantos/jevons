@@ -131,7 +131,7 @@ func (f *Claudia) PinModel(name, model string) error {
 	prev := *def
 	f.reg.Stop(name)
 	if err := f.Launch(&thread.Thread{ID: name, Model: model}); err != nil {
-		if _, relaunchErr := f.reg.Launch(prev.Name); relaunchErr != nil {
+		if _, relaunchErr := LaunchRecording(f.reg, prev.Name); relaunchErr != nil {
 			return fmt.Errorf("pin model %q: relaunch: %w (and restoring the seat failed: %v)",
 				name, err, relaunchErr)
 		}

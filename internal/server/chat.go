@@ -1101,7 +1101,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 			continue
 		}
 		if d.AutoStart {
-			if _, err := reg.Launch(d.Name); err != nil {
+			if _, err := fleet.LaunchRecording(reg, d.Name); err != nil {
 				reg.Stop(d.Name)
 			} else {
 				recovered = append(recovered, d.Name)
@@ -1247,7 +1247,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 		// a later edit of cli-config.json cannot rename a running seat.
 		// It is not written back as a pin.
 		if info.Model == "" && d.Provider == claudia.ProviderCursor && d.ConnectPID > 0 {
-			if model, pid, ok := cursorStartedModel(d.SessionID); ok && pid == d.ConnectPID {
+			if model, pid, ok := fleet.CursorStartedModel(d.SessionID); ok && pid == d.ConnectPID {
 				info.Model = model
 			}
 		}
