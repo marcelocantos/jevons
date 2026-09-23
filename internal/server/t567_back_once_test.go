@@ -29,6 +29,21 @@ func countBackFrames(live chan string) int {
 // state broadcast produce exactly one "overseer is back" frame — the one
 // that answers the outage. The converge loop re-attaching on every tick
 // across a daemon bounce used to print one line per tick.
+func TestUnstickReturnsTheStripToIdle(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.markOverseerStuck()
+	if got := s.OverseerPhase().Phase; got != PhaseStuck {
+		t.Fatalf("phase %q, want stuck", got)
+	}
+	s.settleOverseerAfterUnstick()
+	if got := s.OverseerPhase().Phase; got != PhaseIdle {
+		t.Fatalf("phase %q, want idle", got)
+	}
+	if s.OverseerPhase().Working() {
+		t.Fatal("idle strip still reads as busy")
+	}
+}
+
 func TestT567BackEmittedOncePerOutage(t *testing.T) {
 	s := New("test", t.TempDir())
 	live := make(chan string, 64)

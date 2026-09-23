@@ -250,6 +250,20 @@ func (s *Server) beginOverseerPhase(correspondent []string) {
 	s.setOverseerPhase(PhaseSample{Phase: PhaseAccepted})
 }
 
+// settleOverseerAfterUnstick clears the in-flight turn and returns the
+// strip to idle. markOverseerStuck leaves the phase on stuck, and a
+// stuck strip stays busy, so a follow-up the owner already typed sits
+// in the queue until someone cuts in.
+func (s *Server) settleOverseerAfterUnstick() {
+	s.mu.Lock()
+	s.waiting = false
+	s.overseerOwnerTurn = false // 🎯T291
+	s.turnBuf = ""
+	s.overseerLastProgress = time.Now()
+	s.mu.Unlock()
+	s.setOverseerPhase(PhaseSample{Phase: PhaseIdle})
+}
+
 // markOverseerStuck is the jevons-minted stuck frame: in flight past the
 // watchdog with no new ACP progress.
 func (s *Server) markOverseerStuck() {

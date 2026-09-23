@@ -445,13 +445,10 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 		if err := proc.Interrupt(); err != nil {
 			slog.Warn("cockpit: interrupt failed", "err", err)
 		}
-		// Settle server + clients even if interrupt is racy.
-		s.mu.Lock()
-		s.waiting = false
-		s.overseerOwnerTurn = false // 🎯T291
-		s.turnBuf = ""
-		s.overseerLastProgress = time.Now()
-		s.mu.Unlock()
+		// Settle server + clients even if interrupt is racy. The strip
+		// was just set to stuck; leave it there and the queued follow-up
+		// never sends, because busy stays true.
+		s.settleOverseerAfterUnstick()
 		s.broadcastCockpitReady("overseer is back")
 		// Flush deferred owner/notify notes now that local busy is cleared.
 		s.drainOverseerNotes()
@@ -467,6 +464,7 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 	if err := s.cockpitLaunch(state); err != nil {
 		return err
 	}
+	s.settleOverseerAfterUnstick()
 	s.broadcastCockpitReady("overseer is back")
 	s.drainOverseerNotes()
 	return nil
