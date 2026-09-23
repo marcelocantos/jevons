@@ -361,9 +361,28 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 		}
 	}
 
+	var sessionBefore string
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			sessionBefore = d.SessionID
+		}
+	}
 	proc, rehydrated, err := resolve(name)
 	if err != nil {
 		return agentSendResult{}, err
+	}
+	if sessionBefore != "" && s.registry != nil {
+		if d := s.registry.Def(name); d != nil && d.SessionID != "" && d.SessionID != sessionBefore {
+			s.logLifecycle(compAgentLifecycle, "session_absent", "error", map[string]any{
+				"name":        name,
+				"old_session": sessionBefore,
+				"new_session": d.SessionID,
+				"provider":    string(d.Provider),
+			})
+			if seed := sessionFallbackSeed(name, sessionBefore, loadSessionFallbackReports(s.stateDir, name)); seed != "" {
+				text = seed + "\n\n" + text
+			}
+		}
 	}
 	return deliverToSenderWith(s, name, text, interrupt, proc, rehydrated, confirm)
 }

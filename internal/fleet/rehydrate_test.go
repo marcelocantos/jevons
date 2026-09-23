@@ -118,8 +118,8 @@ func TestRehydrateLostSessionPreservesLineage(t *testing.T) {
 	if !strings.Contains(desc, before.SessionID) {
 		t.Fatalf("report does not name the lost session id: %s", desc)
 	}
-	if !strings.Contains(desc, "PRIOR CONTEXT IS LOST") || !strings.Contains(desc, "re-send") {
-		t.Fatalf("report does not state context is gone / brief must be re-sent: %s", desc)
+	if !strings.Contains(desc, "not there") || !strings.Contains(desc, "new session") || !strings.Contains(desc, "context") {
+		t.Fatalf("report does not state the session is gone and a new one started: %s", desc)
 	}
 	if !strings.Contains(desc, "jevons-po") || !strings.Contains(desc, "T313") {
 		t.Fatalf("report does not evidence preserved lineage/target: %s", desc)

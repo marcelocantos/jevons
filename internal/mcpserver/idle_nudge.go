@@ -780,6 +780,10 @@ type IdleNudgeSweepArgs struct {
 	// ProcessRunning optional override (hermetic tests without OS processes).
 	// Nil → reg.Get(name).Alive().
 	ProcessRunning func(name string) bool
+	// StateDir is the daemon state directory. A post-restart full brief
+	// reads stored reports from here so a new session is handed whatever
+	// context survived the provider session. Empty skips that seed.
+	StateDir string
 	// Eligible optionally pre-filters agents before classification (🎯T315).
 	// False ⇒ skip with reason not_open_mission. Nil = every registered agent
 	// is classified. The periodic pressure path uses it for T244 (unbound
@@ -1023,6 +1027,11 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 		PostRestart: args.PostRestart,
 		Kind:        rep.Kind,
 	})
+	if args.PostRestart && rep.Kind == IdleNudgeKindFullBrief && args.StateDir != "" {
+		if seed := sessionFallbackSeed(d.Name, "", loadSessionFallbackReports(args.StateDir, d.Name)); seed != "" {
+			text = seed + "\n\n" + text
+		}
+	}
 	event := IdleNudgeEventSource(args.PostRestart, rep.Kind)
 	if err := args.Push(d.Name, event, text); err != nil {
 		rep.Error = err.Error()
@@ -1902,6 +1911,7 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		Push:         push,
 		Now:          time.Now(),
 		PostRestart:  true,
+		StateDir:     s.stateDir,
 		OverseerName: overseer,
 		Eligible:     eligible,
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.

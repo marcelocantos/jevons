@@ -59,9 +59,9 @@ type LostSession struct {
 // agent remembers nothing (🎯T313 acceptance 2).
 func (l LostSession) Describe() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Rehydrated %q on a FRESH session: its previous conversation %s is gone "+
-		"(no transcript at %s).", l.Name, l.OldSession, l.JSONLPath)
-	b.WriteString(" PRIOR CONTEXT IS LOST — the agent remembers nothing; re-send its brief.")
+	fmt.Fprintf(&b, "Rehydrated %q on a new session: provider session %s is not there "+
+		"(%s).", l.Name, l.OldSession, l.JSONLPath)
+	b.WriteString(" A new session was started. The provider conversation is gone; pass in whatever context is still on disk.")
 	fmt.Fprintf(&b, " Preserved: parent=%s purpose=%s provider=%s", dashIfEmpty(l.Parent),
 		dashIfEmpty(l.Purpose), dashIfEmpty(string(l.Provider)))
 	if l.Model != "" {
@@ -267,8 +267,12 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 			slog.Warn("resume-denied rehydrate failed", "name", name, "err", rerr)
 			return nil, err
 		}
-		slog.Warn("launch reminted after provider resume refusal",
-			"name", name, "detail", rotated.Describe())
+		slog.Error("provider session is not there; starting a new one",
+			"name", name,
+			"old_session", rotated.OldSession,
+			"new_session", rotated.NewSession,
+			"err", err,
+			"detail", rotated.Describe())
 		return LaunchReconciled(reg, name)
 	}
 	return agent, err
