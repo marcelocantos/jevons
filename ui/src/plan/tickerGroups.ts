@@ -168,17 +168,23 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
 }
 
 /**
- * formatInstantParts formats and forces three-letter month names.
+ * formatInstantParts formats, forces three-letter month names, and
+ * two-letter weekdays (Mo, Tu, …).
  *
  * en-GB renders September as 'Sept' and every other month as three
  * letters, so a column of dates comes out ragged (🎯T611). Trimming
  * the month token is safe where the year is absent and the date is days
- * away: 'Sep' cannot be read as any other month.
+ * away: 'Sep' cannot be read as any other month. Weekday 'short' is
+ * three letters; the first two are the day.
  */
 export function formatInstantParts(at: Date, opts: Intl.DateTimeFormatOptions): string {
   return new Intl.DateTimeFormat('en-GB', opts)
     .formatToParts(at)
-    .map((part) => (part.type === 'month' ? part.value.slice(0, 3) : part.value))
+    .map((part) => {
+      if (part.type === 'month') return part.value.slice(0, 3);
+      if (part.type === 'weekday') return part.value.slice(0, 2);
+      return part.value;
+    })
     .join('')
     .replace(',', '');
 }

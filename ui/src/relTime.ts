@@ -16,7 +16,7 @@ export function relTime(ms: number): string {
   const dt = new Date(ms);
   const n = date();
   if (dt.getFullYear() === n.getFullYear()) {
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const days = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     if (d < 14) {
       return (

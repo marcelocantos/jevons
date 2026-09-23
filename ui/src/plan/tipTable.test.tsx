@@ -55,18 +55,18 @@ describe('plan tooltip table (🎯T588.1)', () => {
   });
 
   it('names the weekday inside a week and the date beyond one', () => {
-    // 'Tue 14:20' answers "when" without arithmetic; past a week a weekday
+    // 'Tu 14:20' answers "when" without arithmetic; past a week a weekday
     // is ambiguous — which Tuesday? — so the date replaces it.
     // 🎯T670: the cell also carries how long is left, so the owner does not
     // subtract dates in their head.
-    expect(rolloverCell(hoursOut(14), NOW, 'UTC')).toBe('Mon 14:00 14h');
-    expect(rolloverCell(hoursOut(24 * 6 + 8), NOW, 'UTC')).toBe('Sun 08:00 6d');
+    expect(rolloverCell(hoursOut(14), NOW, 'UTC')).toBe('Mo 14:00 14h');
+    expect(rolloverCell(hoursOut(24 * 6 + 8), NOW, 'UTC')).toBe('Su 08:00 6d');
     expect(rolloverCell(hoursOut(24 * 8), NOW, 'UTC')).toBe('8 Sep 00:00 8d');
   });
 
   it('renders the rollover in the viewer zone, not UTC', () => {
-    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'Australia/Melbourne')).toBe('Mon 10:52 52m');
-    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'America/Los_Angeles')).toBe('Sun 17:52 52m');
+    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'Australia/Melbourne')).toBe('Mo 10:52 52m');
+    expect(rolloverCell('2026-08-31T00:52:00Z', NOW, 'America/Los_Angeles')).toBe('Su 17:52 52m');
   });
 
   it('says the duration the way the owner would', () => {

@@ -99,7 +99,7 @@ export function timeLeft(w: PlanWindow, nowMs: number): string {
 /**
  * rolloverCell names the moment in the owner's own zone (🎯T588).
  *
- * Inside a week the weekday is the useful handle — 'Tue 14:20' answers
+ * Inside a week the weekday is the useful handle — 'Tu 14:20' answers
  * "when" without arithmetic. Past a week a weekday is ambiguous (which
  * Tuesday?), so the date replaces it. Codex is the only backend far
  * enough out to show it today, which is exactly why the rule is written
