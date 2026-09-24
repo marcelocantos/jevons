@@ -153,7 +153,7 @@ bin/mcpscope: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/mcpscope ./cmd/mcpscope
 
-# Daily-daemon supervisor (🎯T405 / 🎯T553.3). KeepAlive on jevonsd is the
+# Development-daemon supervisor (🎯T405 / 🎯T553.3). KeepAlive on jevonsd is the
 # standing owner (`make jevonsd-install`). The interval watchdog that
 # called restart-jevonsd is legacy; keep the binary for oracles until T553.3
 # retires it. `make watchdog-install` still exists but is not the product path.
