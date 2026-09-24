@@ -5,11 +5,15 @@ package cost
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // nonBillableBasenames are session-tree sidecars that never carry usage.
@@ -65,6 +69,21 @@ func tailFile(path string, offset int64, attribute func(sessionID string) string
 			break
 		}
 		pos += int64(len(line))
+		if isBillableTranscript(path) && strings.HasSuffix(path, ".log") {
+			var rec spool.Record
+			if json.Unmarshal(line, &rec) == nil && rec.Seat != "" {
+				for _, cline := range bytes.Split(spool.AsJSONL([]spool.Record{rec}), []byte("\n")) {
+					if len(cline) == 0 {
+						continue
+					}
+					if e := ParseLine(cline, rec.Seat, now); e != nil {
+						e.Worker = attribute(e.SessionID)
+						events = append(events, e)
+					}
+				}
+				continue
+			}
+		}
 		if e := ParseLine(line, session, now); e != nil {
 			e.Worker = attribute(e.SessionID)
 			events = append(events, e)

@@ -221,3 +221,9 @@ func TestEncodeClaudeProject(t *testing.T) {
 		t.Fatalf("EncodeClaudeProject = %q want -Users-demo-work-repo", got)
 	}
 }
+
+func TestSidecarSeatPathIsEmpty(t *testing.T) {
+	if p := SidecarSeatPath(); p != "" {
+		t.Fatalf("SidecarSeatPath = %q, want empty (no vendor JSONL)", p)
+	}
+}

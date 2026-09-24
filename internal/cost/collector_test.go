@@ -588,3 +588,44 @@ func TestCollectorStartBoundsUnscheduledWarmup(t *testing.T) {
 		t.Fatalf("new collector must expose start without claiming a poll: %+v", h)
 	}
 }
+
+func TestScanOnceIncludesDatedSpool(t *testing.T) {
+	spoolDir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", spoolDir)
+	log := filepath.Join(spoolDir, "events-2026-09-25.log")
+	if err := os.WriteFile(log, []byte(`{"ts":"2026-09-25T12:00:00.000Z","seat":"po","type":"text","text":"hi"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	c := NewCollector(&CollectorArgs{
+		Store:        store,
+		ProjectsRoot: t.TempDir(),
+		Now:          time.Now,
+	})
+	files, err := c.ScanOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range files {
+		if f == log {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ScanOnce missed dated spool %s: %v", log, files)
+	}
+}
+
+func TestIsBillableTranscriptAcceptsDatedSpool(t *testing.T) {
+	if !isBillableTranscript("/tmp/events-2026-09-25.log") {
+		t.Fatal("dated spool must be billable")
+	}
+	if isBillableTranscript("/tmp/chat_history.jsonl") {
+		t.Fatal("vendor sidecar must stay non-billable")
+	}
+}

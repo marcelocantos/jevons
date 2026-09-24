@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -203,6 +204,39 @@ func TestCollectSpendReproducesFrozenBaseline(t *testing.T) {
 // Attribution is best-effort by construction — daemon logs rotate — so the
 // baseline assertions above deliberately cover only the frame-level
 // aggregates, which are reproducible from immutable session logs.
+func TestCollectSpendWalksDatedSpool(t *testing.T) {
+	home := t.TempDir()
+	spoolDir := filepath.Join(home, "spool")
+	if err := os.MkdirAll(spoolDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JEVONS_SPOOL_DIR", spoolDir)
+	if err := os.WriteFile(filepath.Join(spoolDir, "events-2026-09-25.log"), []byte(
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"po","type":"text","text":"from spool"}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vendor := filepath.Join(home, ".claude", "projects", "bucket", "00000000-0000-4000-8000-000000000001.jsonl")
+	writeJSONL(t, vendor, `{"type":"assistant","sessionId":"00000000-0000-4000-8000-000000000001","timestamp":"2026-09-25T00:00:00Z","message":{"id":"m","model":"claude-opus-4-8","usage":{"input_tokens":99,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`)
+
+	rep, err := CollectSpend(SpendArgs{
+		Collect: CollectArgs{
+			Home:  home,
+			Roots: map[Harness]string{HarnessGrok: filepath.Join(home, "missing-grok"), HarnessClaude: filepath.Join(home, "missing-claude")},
+			Now:   time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC),
+		},
+		Since:     time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC),
+		Until:     time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC),
+		Harnesses: []Harness{HarnessGrok},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(rep.Notes, "\n"), vendor) {
+		t.Fatalf("collect noted a vendor JSONL for the sidecar walk: %v", rep.Notes)
+	}
+}
+
 func loadBaselineAgents(t *testing.T) map[string]string {
 	t.Helper()
 	home, err := os.UserHomeDir()
