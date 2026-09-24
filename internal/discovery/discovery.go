@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // Roots names on-disk session trees for multi-provider discovery (🎯T213).
@@ -614,6 +616,12 @@ func ClaudeJSONLPathForWorkDir(projectsDir, workDir, sessionID string) string {
 // SidecarSeatPath is empty: sidecar seats are not in a vendor JSONL
 // (🎯T866.4). Callers that have a seat name should read ~/.jevons/spool.
 func SidecarSeatPath() string { return "" }
+
+// SidecarSeatHasHistory reports whether ~/.jevons/spool holds a record
+// for seat. Discovery uses this instead of a vendor JSONL path.
+func SidecarSeatHasHistory(seat string) bool {
+	return spool.SeatHasHistory(spool.Dir(), seat)
+}
 
 func TranscriptPath(r Roots, sessionID string) string {
 	if !IsSessionID(sessionID) {

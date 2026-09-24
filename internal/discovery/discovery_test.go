@@ -227,3 +227,22 @@ func TestSidecarSeatPathIsEmpty(t *testing.T) {
 		t.Fatalf("SidecarSeatPath = %q, want empty (no vendor JSONL)", p)
 	}
 }
+
+func TestSidecarSeatHasHistoryReadsDatedSpool(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	if SidecarSeatHasHistory("po") {
+		t.Fatal("empty spool reported history")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-09-25.log"), []byte(
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"po","type":"text","text":"from spool"}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !SidecarSeatHasHistory("po") {
+		t.Fatal("discovery missed the dated spool")
+	}
+	if p := TranscriptPath(Roots{ClaudeProjects: filepath.Join(dir, "projects")}, "00000000-0000-4000-8000-000000000001"); p != "" {
+		t.Fatalf("vendor JSONL invented for a sidecar seat: %q", p)
+	}
+}
