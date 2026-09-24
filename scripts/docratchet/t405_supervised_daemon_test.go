@@ -15,7 +15,7 @@ import (
 // documented as an instruction to callers from the script's first version,
 // and on 2026-08-10 the one caller who forgot took the fleet down.
 func TestT405SelfDetachIsUnconditional(t *testing.T) {
-	body := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	body := readRepo(t, "scripts/restart-jevonsd.sh")
 
 	for _, m := range []string{
 		"SELF-DETACH",
@@ -29,7 +29,7 @@ func TestT405SelfDetachIsUnconditional(t *testing.T) {
 		"is not the development", // and leave brew alone on a scratch port
 	} {
 		if !strings.Contains(body, m) {
-			t.Errorf("restart-daily-jevonsd.sh missing 🎯T405 marker %q", m)
+			t.Errorf("restart-jevonsd.sh missing 🎯T405 marker %q", m)
 		}
 	}
 

@@ -328,8 +328,8 @@ func isWordRune(r rune) bool {
 // dailyPathEvidenceMarkers cite an activated owner-visible surface (🎯T194 /
 // 🎯T572). Hermetic-only finish reports for daemon/API work are not sufficient.
 var dailyPathEvidenceMarkers = []string{
-	"restart-daily-jevonsd",
-	"restart-daily",
+	"restart-jevonsd",
+	"restart-jevonsd",
 	"live probe",
 	"development path",
 	"development surface",
@@ -352,7 +352,7 @@ var dailyPathEvidenceMarkers = []string{
 }
 
 // hermeticOnlyMarkers are evidence that does not activate the development surface.
-// Used only to document the T194 residual in tests — HasDailyPathEvidence
+// Used only to document the T194 residual in tests — HasActivationEvidence
 // does not treat these as daily-path proof.
 var hermeticOnlyMarkers = []string{
 	"go test",
@@ -363,12 +363,12 @@ var hermeticOnlyMarkers = []string{
 	"node web/scripts",
 }
 
-// HasDailyPathEvidence reports whether a finish report cites activation
+// HasActivationEvidence reports whether a finish report cites activation
 // of the development surface (restart script, curl, :13705, …). 🎯T552 / 🎯T553.2:
 // this is a seam classifier, not an achieve gate. Observation of the
 // running surface is the test. Pure string heuristic.
-func HasDailyPathEvidence(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasDaily() {
+func HasActivationEvidence(report string) bool {
+	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasActivation() {
 		return true
 	}
 	s := strings.ToLower(strings.TrimSpace(oracleScanBody(report)))
@@ -394,7 +394,7 @@ func HasDailyPathEvidence(report string) bool {
 // anti-pattern: achieve while stale binary may still serve). Instructional
 // residual for overseer review — not a hard block.
 func LooksLikeHermeticOnlyDaemonClaim(report string) bool {
-	if HasDailyPathEvidence(report) {
+	if HasActivationEvidence(report) {
 		return false
 	}
 	if !hasCompletionClaim(strings.ToLower(report)) && !HasOracleEvidence(report) {

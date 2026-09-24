@@ -5,7 +5,7 @@
 //
 //	runlock [-timeout 5m] <lockfile> <command> [args…]
 //
-// Why this exists: fleet workers each call restart-daily-jevonsd after
+// Why this exists: fleet workers each call restart-jevonsd after
 // landing a daemon-path change, and nothing stopped two runs overlapping.
 // On 2026-08-09 five fired between 21:42 and 21:59; the last two started
 // 59 seconds apart, the second killed the first mid-flight, and the daily

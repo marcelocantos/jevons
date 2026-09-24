@@ -27,7 +27,7 @@ type j19ReactSurface struct {
 func (r *j19ReactSurface) stop() {} // The suite owns the daemon lifecycle.
 
 func (s *suite) startJ19ReactSurface() (*j19ReactSurface, error) {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return nil, err
 	}
 	body, err := fetchIsolateRoot(s.host)
@@ -78,8 +78,8 @@ func j19HTMLIsVanilla(body []byte) bool {
 func refuseDailyHost(host string) error {
 	_, portStr, err := net.SplitHostPort(host)
 	if err != nil {
-		if host == strconv.Itoa(portguard.DailyPort) {
-			return portguard.RefuseDaily(portguard.DailyPort)
+		if host == strconv.Itoa(portguard.DevelopmentPort) {
+			return portguard.RefuseDevelopment(portguard.DevelopmentPort)
 		}
 		return nil
 	}
@@ -87,7 +87,7 @@ func refuseDailyHost(host string) error {
 	if err != nil {
 		return nil
 	}
-	return portguard.RefuseDaily(p)
+	return portguard.RefuseDevelopment(p)
 }
 
 func j19RepoRoot() (string, error) {

@@ -83,7 +83,7 @@ bin/attrib: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/attrib ./cmd/attrib
 
-# Restart serialiser (🎯T392.5). restart-daily-jevonsd re-execs itself under
+# Restart serialiser (🎯T392.5). restart-jevonsd re-execs itself under
 # this, so a missing binary means concurrent restarts race — which is how
 # the daemon was left down on 2026-08-09. Built by `make all`, and the
 # script fails closed rather than restarting unserialised.
@@ -105,7 +105,7 @@ bin/recover: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/recover ./cmd/recover
 
-# Self-detach helper (🎯T405). restart-daily-jevonsd re-execs itself through
+# Self-detach helper (🎯T405). restart-jevonsd re-execs itself through
 # this into a fresh session, so the caller's death — including the agent that
 # the restart's own kill is about to stop — cannot cancel the bounce. Built by
 # `make all`, and the script fails closed rather than restarting attached.
@@ -155,7 +155,7 @@ bin/mcpscope: $(GO_SRC)
 
 # Daily-daemon supervisor (🎯T405 / 🎯T553.3). KeepAlive on jevonsd is the
 # standing owner (`make jevonsd-install`). The interval watchdog that
-# called restart-daily is legacy; keep the binary for oracles until T553.3
+# called restart-jevonsd is legacy; keep the binary for oracles until T553.3
 # retires it. `make watchdog-install` still exists but is not the product path.
 .PHONY: jevons-watchdog
 jevons-watchdog: bin/jevons-watchdog

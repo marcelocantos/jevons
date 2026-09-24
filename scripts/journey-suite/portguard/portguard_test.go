@@ -8,17 +8,17 @@ import (
 	"testing"
 )
 
-func TestRefuseDaily(t *testing.T) {
-	if DailyPort != 13705 {
-		t.Fatalf("DailyPort = %d, want 13705", DailyPort)
+func TestRefuseDevelopment(t *testing.T) {
+	if DevelopmentPort != 13705 {
+		t.Fatalf("DevelopmentPort = %d, want 13705", DevelopmentPort)
 	}
-	if DefaultPort == DailyPort {
-		t.Fatal("DefaultPort must not equal DailyPort")
+	if DefaultPort == DevelopmentPort {
+		t.Fatal("DefaultPort must not equal DevelopmentPort")
 	}
 
-	err := RefuseDaily(DailyPort)
+	err := RefuseDevelopment(DevelopmentPort)
 	if err == nil {
-		t.Fatal("RefuseDaily(DailyPort) = nil, want error")
+		t.Fatal("RefuseDevelopment(DevelopmentPort) = nil, want error")
 	}
 	msg := err.Error()
 	for _, want := range []string{"refusing port", "development", "13705"} {
@@ -27,15 +27,15 @@ func TestRefuseDaily(t *testing.T) {
 		}
 	}
 
-	if err := RefuseDaily(13706); err == nil {
-		t.Fatal("RefuseDaily(13706) = nil, want error (vanilla sidecar)")
+	if err := RefuseDevelopment(13706); err == nil {
+		t.Fatal("RefuseDevelopment(13706) = nil, want error (vanilla sidecar)")
 	} else if !strings.Contains(err.Error(), "sidecar") {
 		t.Errorf("13706 error %q missing sidecar", err)
 	}
 
 	for _, p := range []int{DefaultPort, 0, 13716} {
-		if err := RefuseDaily(p); err != nil {
-			t.Errorf("RefuseDaily(%d) = %v, want nil", p, err)
+		if err := RefuseDevelopment(p); err != nil {
+			t.Errorf("RefuseDevelopment(%d) = %v, want nil", p, err)
 		}
 	}
 }

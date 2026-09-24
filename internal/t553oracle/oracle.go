@@ -6,7 +6,7 @@
 // working tree. The end-to-end test (oracle_test.go, gated by
 // JEVONS_T553_ORACLE=1, `make test-t553-oracle`) seeds a deliberate throw
 // into an ISOLATED clone's uncommitted tree — never the live shared clone —
-// builds through the same buildsnap path restart-daily-jevonsd.sh uses, and
+// builds through the same buildsnap path restart-jevonsd.sh uses, and
 // scans what that build serves. These helpers decide what "contains the
 // throw" means so the decision is pinned hermetically.
 package t553oracle

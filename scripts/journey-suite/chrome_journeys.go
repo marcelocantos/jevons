@@ -53,7 +53,7 @@ func init() {
 }
 
 func (s *suite) jSendOnce() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	_ = chromeSendCovers
@@ -70,7 +70,7 @@ func (s *suite) jSendOnce() error {
 }
 
 func (s *suite) jFoldMd() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	_ = chromeFoldCovers
@@ -92,7 +92,7 @@ func (s *suite) jFoldMd() error {
 }
 
 func (s *suite) jComposerChrome() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	_ = chromeComposerCovers
@@ -109,7 +109,7 @@ func (s *suite) jComposerChrome() error {
 }
 
 func (s *suite) jFleetSidebar() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	_ = chromeFleetCovers
@@ -141,7 +141,7 @@ func (s *suite) jFleetSidebar() error {
 }
 
 func (s *suite) jAsideChrome() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	_ = chromeAsideCovers
@@ -158,7 +158,7 @@ func (s *suite) jAsideChrome() error {
 }
 
 func (s *suite) jFrontierChrome() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	_ = chromeFrontierCovers
@@ -178,7 +178,7 @@ func (s *suite) jFrontierChrome() error {
 }
 
 func (s *suite) jTickerChrome() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	_ = chromeTickerCovers

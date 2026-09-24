@@ -74,9 +74,10 @@ func (m *Message) HasRisk() bool {
 	return m.Risk.IsAccepted()
 }
 
-// HasDaily is true when the envelope cites activated daily-path evidence
-// (🎯T194 field-read path).
-func (m *Message) HasDaily() bool {
+// HasActivation is true when the envelope cites that the development
+// surface was activated (🎯T194 field-read path). The wire slot is still
+// "daily", so reports written before the rename keep matching.
+func (m *Message) HasActivation() bool {
 	if m == nil {
 		return false
 	}

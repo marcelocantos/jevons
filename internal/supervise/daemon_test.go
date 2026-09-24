@@ -38,7 +38,7 @@ func TestDaemonPlistIsKeepAliveOnJevonsd(t *testing.T) {
 			t.Errorf("DaemonPlistXML missing %q\n%s", want, xml)
 		}
 	}
-	if strings.Contains(xml, "restart-daily-jevonsd") {
+	if strings.Contains(xml, "restart-jevonsd") {
 		t.Error("KeepAlive plist must not invoke the fat restart script")
 	}
 	if strings.Contains(xml, supervise.AgentLabel) {
@@ -54,12 +54,12 @@ func TestDaemonPlistPath(t *testing.T) {
 	}
 }
 
-func TestDailyRepoRootRejectsSlash(t *testing.T) {
-	if _, err := supervise.DailyRepoRoot("/"); err == nil {
-		t.Fatal("DailyRepoRoot(/) must refuse — that is the /tmp-binary trap")
+func TestDevelopmentRepoRootRejectsSlash(t *testing.T) {
+	if _, err := supervise.DevelopmentRepoRoot("/"); err == nil {
+		t.Fatal("DevelopmentRepoRoot(/) must refuse — that is the /tmp-binary trap")
 	}
-	if _, err := supervise.DailyRepoRoot(""); err == nil {
-		t.Fatal("DailyRepoRoot empty must refuse")
+	if _, err := supervise.DevelopmentRepoRoot(""); err == nil {
+		t.Fatal("DevelopmentRepoRoot empty must refuse")
 	}
 }
 

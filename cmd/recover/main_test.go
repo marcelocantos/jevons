@@ -123,7 +123,7 @@ func TestBriefTargetsPrimitivesNotMCP(t *testing.T) {
 		}
 	}
 	// It is allowed to restart the daemon — that is what detachment buys.
-	if !strings.Contains(b, "restart-daily-jevonsd.sh") {
+	if !strings.Contains(b, "restart-jevonsd.sh") {
 		t.Error("brief does not tell it that restarting the daemon is permitted")
 	}
 }

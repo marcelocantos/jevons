@@ -44,7 +44,7 @@ func (e *thrashEnv) commit(t *testing.T, name string) string {
 
 func (e *thrashEnv) servedLines(t *testing.T) []string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(e.home, ".jevons", "restart-daily.served"))
+	b, err := os.ReadFile(filepath.Join(e.home, ".jevons", "restart-jevonsd.served"))
 	if err != nil {
 		return nil
 	}
@@ -157,7 +157,7 @@ func TestActivationGateCoalescesRequests(t *testing.T) {
 // ownerToken815 writes the owner's --force token (🎯T815 owner-only bypass).
 func (e *thrashEnv) ownerToken(t *testing.T, mode os.FileMode) string {
 	t.Helper()
-	p := filepath.Join(e.home, ".jevons", "restart-daily.owner-force")
+	p := filepath.Join(e.home, ".jevons", "restart-jevonsd.owner-force")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}

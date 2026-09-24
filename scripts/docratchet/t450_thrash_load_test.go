@@ -226,7 +226,7 @@ func TestT450SiblingDaemonWaitTestsUnderLoad(t *testing.T) {
 
 	// Exact names: prose/script ratchets that live next to the thrash oracle.
 	// TestRestartThrashPolicy itself is covered by TestT450ThrashOracleStaysGreenUnderLoad.
-	filter := "^(TestRestartDailyJevonsdScript|TestRestartThrashPolicyDocumented|TestT405SelfDetachIsUnconditional|TestT405SupervisorIsBuiltAndInstallable|TestT405OracleIsCommitted)$"
+	filter := "^(TestRestartJevonsdScript|TestRestartThrashPolicyDocumented|TestT405SelfDetachIsUnconditional|TestT405SupervisorIsBuiltAndInstallable|TestT405OracleIsCommitted)$"
 	cmd := exec.Command("go", "test", "-json", "-count", "1",
 		"-timeout", "2m",
 		"-run", filter,
@@ -236,7 +236,7 @@ func TestT450SiblingDaemonWaitTestsUnderLoad(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	ran, skipped, failed := t450Verdicts(string(out))
 	want := []string{
-		"TestRestartDailyJevonsdScript",
+		"TestRestartJevonsdScript",
 		"TestRestartThrashPolicyDocumented",
 		"TestT405SelfDetachIsUnconditional",
 		"TestT405SupervisorIsBuiltAndInstallable",

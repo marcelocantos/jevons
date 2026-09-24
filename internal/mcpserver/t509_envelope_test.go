@@ -92,11 +92,11 @@ func TestT509DailyFieldWinsOverHermeticPayload(t *testing.T) {
 		Kind:         envelope.KindFinishReport,
 		Target:       "T509",
 		SHA:          "abcdef0123456",
-		Daily:        "restart-daily",
+		Daily:        "restart-jevonsd",
 		SilentLedger: envelope.SilentLedgerEmpty,
 		Payload:      "go test ./internal/envelope PASS",
 	})
-	if !HasDailyPathEvidence(raw) {
+	if !HasActivationEvidence(raw) {
 		t.Fatal("daily slot must count as T194 evidence")
 	}
 }

@@ -43,7 +43,7 @@ func newTail(prev, now []byte) string {
 // busy, produces its own shell effect after restart on the selected provider.
 // Recovery logs and a "queued" reply alone cannot establish this property.
 func (s *suite) jT418QueueBounce() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	work, err := os.MkdirTemp(s.stateDir, "t418-work-")
@@ -264,7 +264,7 @@ func queueJourneyNoResult(path string) error {
 // then stops every registered agent so nobody can press Enter, and
 // asserts the daemon reports MUTE.
 func (s *suite) jT418HandoverMute() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	name := fmt.Sprintf("jv-t418h-%d", time.Now().Unix()%100000)

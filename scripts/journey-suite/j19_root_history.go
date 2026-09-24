@@ -40,7 +40,7 @@ const (
 // surface (ui build or :5173 proxy) — do not add a second connect-tail
 // journey. T540.2 dual-path residual: isolate GET / is vanilla without ui/dist.
 func (s *suite) j19RootHistoryPaint() error {
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 

@@ -11,12 +11,12 @@ import (
 	"testing"
 )
 
-// TestRestartDailyJevonsdScript is the hermetic oracle for 🎯T191:
+// TestRestartJevonsdScript is the hermetic oracle for 🎯T191:
 // committed restart script, help/dry-run, detach markers (nohup/setsid),
 // bash 3.2 syntax under /bin/bash -n. Does not bounce the development daemon.
-func TestRestartDailyJevonsdScript(t *testing.T) {
+func TestRestartJevonsdScript(t *testing.T) {
 	root := repoRoot(t)
-	rel := "scripts/restart-daily-jevonsd.sh"
+	rel := "scripts/restart-jevonsd.sh"
 	path := filepath.Join(root, rel)
 
 	st, err := os.Stat(path)
@@ -82,10 +82,10 @@ func TestRestartDailyJevonsdScript(t *testing.T) {
 	}
 }
 
-// TestRestartDailyDoctrineMarkers ratchets 🎯T188 + 🎯T191 prose: after
+// TestRestartDoctrineMarkers ratchets 🎯T188 + 🎯T191 prose: after
 // daemon-path Build, invoke the restart script detached; owner never restarts
 // by hand; do not claim fixed until script success.
-func TestRestartDailyDoctrineMarkers(t *testing.T) {
+func TestRestartDoctrineMarkers(t *testing.T) {
 	persona := readRepo(t, "internal/config/persona.md")
 	agents := readRepo(t, "AGENTS.md")
 	guide := readRepo(t, "agents-guide.md")
@@ -97,7 +97,7 @@ func TestRestartDailyDoctrineMarkers(t *testing.T) {
 		{"internal/config/persona.md", persona, []string{
 			"🎯T188",
 			"🎯T191",
-			"restart-daily-jevonsd.sh",
+			"restart-jevonsd.sh",
 			"nohup",
 			"owner never restarts",
 			"daemon-path",
@@ -105,12 +105,12 @@ func TestRestartDailyDoctrineMarkers(t *testing.T) {
 		{"AGENTS.md", agents, []string{
 			"🎯T188",
 			"🎯T191",
-			"restart-daily-jevonsd.sh",
+			"restart-jevonsd.sh",
 			"nohup",
 		}},
 		{"agents-guide.md", guide, []string{
 			"🎯T191",
-			"restart-daily-jevonsd.sh",
+			"restart-jevonsd.sh",
 			"nohup",
 			"BLESSED INVOKE",
 		}},

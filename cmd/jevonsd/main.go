@@ -183,7 +183,7 @@ func main() {
 	// family below registers here and is re-read on change (≤5 s); nothing
 	// is read once and forgotten. Run starts once ctx exists.
 	watcher := config.NewWatcher(nil)
-	configBounceArmed = cfg.Port == config.DailyPort && cfg.StateDir == config.Default().StateDir
+	configBounceArmed = cfg.Port == config.DevelopmentPort && cfg.StateDir == config.Default().StateDir
 	explicit := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	if explicit["port"] {
@@ -210,7 +210,7 @@ func main() {
 	// 🎯T526: journey default port must never share development ~/.jevons.
 	// `jevonsd -port 13715 -workdir <repo>` otherwise loads the development
 	// config and mints fixture agents into the owner's registry.
-	if err := config.RefuseJourneyDailyState(cfg.Port, cfg.StateDir); err != nil {
+	if err := config.RefuseJourneyDevState(cfg.Port, cfg.StateDir); err != nil {
 		slog.Error("journey port isolation", "err", err)
 		os.Exit(1)
 	}
@@ -1632,17 +1632,17 @@ func runInstallDaemonAgent(workdir string) {
 		os.Exit(1)
 	}
 	wd, _ := os.Getwd()
-	repo, err := supervise.DailyRepoRoot(workdir, wd, supervise.RepoRoot())
+	repo, err := supervise.DevelopmentRepoRoot(workdir, wd, supervise.RepoRoot())
 	if err != nil {
 		slog.Error("daemon agent: locate repo", "err", err)
 		os.Exit(1)
 	}
-	bin := supervise.DailyDaemonBinary(repo)
+	bin := supervise.DevelopmentDaemonBinary(repo)
 	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
 	spec := supervise.DaemonSpec{
 		Binary:   bin,
 		Workdir:  repo,
-		Port:     config.DailyPort,
+		Port:     config.DevelopmentPort,
 		StateDir: config.Default().StateDir,
 		PathEnv:  pathEnv,
 		LogPath:  supervise.DaemonLogPath(config.Default().StateDir),
@@ -1704,7 +1704,7 @@ func runInstallUIAgents() {
 }
 
 func runUIProbe() {
-	got := uidaemon.ProbeReact(nil, uidaemon.DailyReactURL())
+	got := uidaemon.ProbeReact(nil, uidaemon.DevelopmentReactURL())
 	if got.OK {
 		slog.Info("React surface ok (🎯T540.4)", "status", got.Status)
 		os.Exit(0)
@@ -1718,7 +1718,7 @@ func runUIProbe() {
 		}
 		os.Exit(0)
 	}
-	slog.Error("React surface failed and KeepAlive is not loaded — not invoking restart-daily (🎯T553.2)")
+	slog.Error("React surface failed and KeepAlive is not loaded — not invoking restart-jevonsd (🎯T553.2)")
 	os.Exit(1)
 }
 

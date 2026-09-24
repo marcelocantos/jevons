@@ -13,7 +13,7 @@ import (
 
 // On 2026-09-21 one GET /api/frontier took 19s on a loaded host: every ask
 // spawned the bullseye CLI and re-parsed a 2.9 MB ledger, and every open
-// cockpit tab asks every 8s. The panel read "0 ready" and restart-daily's
+// cockpit tab asks every 8s. The panel read "0 ready" and restart-jevonsd's
 // readiness probe timed out against a daemon that was serving.
 func TestFrontierIsNotRecomputedForAnUnchangedLedger(t *testing.T) {
 	prev := runBullseyeCLI

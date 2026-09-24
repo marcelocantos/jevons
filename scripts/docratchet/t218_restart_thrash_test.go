@@ -22,7 +22,7 @@ import (
 //
 // This is not a prose ratchet: it runs the committed restart script against
 // a fake daemon on a throwaway port and asserts what the development port actually
-// experiences. The motivating incident (~/.jevons/restart-daily.log,
+// experiences. The motivating incident (~/.jevons/restart-jevonsd.log,
 // 2026-08-05T19:15–19:19) was five restarts in four minutes, every one of
 // them rebuilding nothing — a healthy daemon SIGTERMed and replaced by the
 // byte-identical binary, leaving owner chat unusable.
@@ -155,11 +155,11 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 		[]byte("module fixture\n\ngo 1.26\n\nrequire github.com/marcelocantos/claudia v0.24.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/restart-daily-jevonsd.sh"))
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/restart-jevonsd.sh"))
 	if err != nil {
 		t.Fatalf("read script: %v", err)
 	}
-	script := filepath.Join(root, "scripts", "restart-daily-jevonsd.sh")
+	script := filepath.Join(root, "scripts", "restart-jevonsd.sh")
 	if err := os.WriteFile(script, body, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +605,7 @@ func deadPID(t *testing.T) int {
 // script itself: the next reader must find out *why* it usually does
 // nothing before they "fix" it by deleting the check.
 func TestRestartThrashPolicyDocumented(t *testing.T) {
-	body := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	body := readRepo(t, "scripts/restart-jevonsd.sh")
 	for _, m := range []string{
 		"🎯T218",
 		"ALREADY-ACTIVATED",
@@ -635,7 +635,7 @@ func TestScrubRestartControlEnv(t *testing.T) {
 	in := []string{
 		"PATH=/bin",
 		"JEVONS_RESTART_LOCKED=1",
-		"JEVONS_RESTART_LOCK=/fleet/restart-daily.lock",
+		"JEVONS_RESTART_LOCK=/fleet/restart-jevonsd.lock",
 		"JEVONS_RESTART_LOCK_WAIT_SEC=240",
 		"JEVONS_RESTART_DETACHED=1",
 		"JEVONS_RESTART_NO_LOCK=1",

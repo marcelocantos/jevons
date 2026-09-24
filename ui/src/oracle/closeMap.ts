@@ -234,7 +234,7 @@ export const CLOSE: readonly CloseAssignment[] = [
   { id: 'T384', pocket: 'transcript', kind: 'skip', reason: 'mention-only covers-list — classified to transcript pocket; J22 live fail does not name this id yet' },
   { id: 'T390', pocket: 'ticker', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
   { id: 'T390.1.3', pocket: 'ticker', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
-  { id: 'T390.1.6', pocket: 'ticker', kind: 'skip', reason: 'served /api/plan-usage/thresholds — daily path' },
+  { id: 'T390.1.6', pocket: 'ticker', kind: 'skip', reason: 'served /api/plan-usage/thresholds — development surface' },
   { id: 'T390.1.6.1', pocket: 'ticker', kind: 'hermetic', reason: 'passing hermetic itOracle in family file' },
   { id: 'T412', pocket: 'fleet', kind: 'skip', reason: 'mention-only covers-list — classified to fleet pocket; J25 live fail does not name this id yet' },
   { id: 'T474', pocket: 'fleet', kind: 'skip', reason: 'mention-only covers-list — classified to fleet pocket; J25 live fail does not name this id yet' },

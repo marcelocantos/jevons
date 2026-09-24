@@ -6,7 +6,7 @@
 //
 //	detach [-log FILE] [-quiet] -- <command> [args…]
 //
-// Why this exists: restart-daily-jevonsd kills the development daemon, and the
+// Why this exists: restart-jevonsd kills the development daemon, and the
 // daemon's shutdown stops every agent — including the agent that invoked
 // the restart. On 2026-08-10 the script died with its invoker five
 // seconds after the kill, before it reached the step that starts the
@@ -34,7 +34,7 @@
 // Child output goes to a file, never to an inherited pipe. A pipe whose
 // read end dies with the caller kills the child with SIGPIPE on its next
 // log line, which would undo the whole exercise. When the caller's own
-// stdout is already a regular file — the blessed `>>…restart-daily.log`
+// stdout is already a regular file — the blessed `>>…restart-jevonsd.log`
 // invoke — the child inherits it directly and nothing is duplicated;
 // otherwise the child writes to the log and the parent streams it so a
 // foreground caller still sees the run.

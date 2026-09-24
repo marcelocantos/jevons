@@ -7,7 +7,7 @@
 // THE FAULT. A dozen fleet workers share one clone. `make -C $ROOT bin/jevonsd`
 // therefore compiles whatever every one of them happens to have half-written,
 // and a single worker's in-flight edit takes the whole fleet's daemon down with
-// it: on 2026-08-09 a detached restart-daily could not rebuild at all because
+// it: on 2026-08-09 a detached restart-jevonsd could not rebuild at all because
 // another worker's uncommitted chat.go called s.overseerStreamAccSnapshot,
 // which did not exist. The worker who ran the restart had nothing to do with
 // that file, could not fix it, and had no way to activate their own landed
@@ -30,7 +30,7 @@
 // built and warns when the shared tree has uncommitted Go changes, so nobody
 // mistakes "my change is not in the binary" for a mystery.
 //
-// Why Go and not more shell: restart-daily-jevonsd.sh is already 463 lines, and
+// Why Go and not more shell: restart-jevonsd.sh is already 463 lines, and
 // this adds worktree lifecycle state plus a real error taxonomy (git failure /
 // build failure / install failure, each with a different correct response).
 // Both belong in a program per the shared bash doctrine, which is also why the

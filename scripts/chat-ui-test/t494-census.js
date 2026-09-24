@@ -1,11 +1,11 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Daily :13705 hard-reload census (🎯T494 / 🎯T494.1 sanity).
+// Development :13705 hard-reload census (🎯T494 / 🎯T494.1 sanity).
 // Intentional Universe-A probe — never part of make test-journey.
 //
-//   node scripts/chat-ui-test/t494-daily-census.js
-//   node scripts/chat-ui-test/t494-daily-census.js --screenshot /tmp/t494.png
+//   node scripts/chat-ui-test/t494-census.js
+//   node scripts/chat-ui-test/t494-census.js --screenshot /tmp/t494.png
 //
 // T494: replay tail visible (visibleInScroller ≥ 1 with a real bubble).
 // T494.1 sanity: Latest hidden, ≥2 user/assistant bubbles, no empty-slot
@@ -197,5 +197,5 @@ function die(code, msg) {
     await browser.close().catch(() => {});
   }
 })().catch((err) => {
-  die(2, 't494-daily-census setup: ' + (err && err.stack ? err.stack : err));
+  die(2, 't494-census setup: ' + (err && err.stack ? err.stack : err));
 });

@@ -42,7 +42,7 @@ type rig struct {
 	port       int
 	stub       string // stub daemon binary
 	watchdog   string // built cmd/jevons-watchdog
-	script     string // scripts/restart-daily-jevonsd.sh
+	script     string // scripts/restart-jevonsd.sh
 	blurterLog string
 }
 
@@ -61,7 +61,7 @@ func newRig(t *testing.T) *rig {
 		dir:        dir,
 		home:       home,
 		port:       t405FreePort(t),
-		script:     filepath.Join(root, "scripts", "restart-daily-jevonsd.sh"),
+		script:     filepath.Join(root, "scripts", "restart-jevonsd.sh"),
 		blurterLog: filepath.Join(dir, "blurter.log"),
 	}
 	r.stub = t405BuildStubDaemon(t, dir)
@@ -133,7 +133,7 @@ func (r *rig) env(extra ...string) []string {
 	return append(e, extra...)
 }
 
-func (r *rig) restartLog() string { return filepath.Join(r.dir, "restart-daily.log") }
+func (r *rig) restartLog() string { return filepath.Join(r.dir, "restart-jevonsd.log") }
 
 func (r *rig) stateDir() string { return supervise.Dir(r.dir) }
 
@@ -164,7 +164,7 @@ func (r *rig) waitServing(want bool, within time.Duration) bool {
 // bypass. (The watchdog itself passes no --force: a dead port never waits.)
 func (r *rig) ownerForce() {
 	r.t.Helper()
-	p := filepath.Join(r.home, ".jevons", "restart-daily.owner-force")
+	p := filepath.Join(r.home, ".jevons", "restart-jevonsd.owner-force")
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		r.t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func t405ForegroundKill(t *testing.T, detached bool) {
 
 	// Wait until the bounce is genuinely under way — killing before the
 	// re-exec would prove nothing either way — then kill the caller.
-	if !t405WaitForLog(callerLog, "restart-daily-jevonsd: root=", 60*time.Second) {
+	if !t405WaitForLog(callerLog, "restart-jevonsd: root=", 60*time.Second) {
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		t.Fatalf("restart never started; log:\n%s", t405ReadFile(callerLog))
 	}

@@ -47,7 +47,7 @@ func main() {
 func run() int {
 	var (
 		port    = flag.Int("port", defaultPort, "development jevonsd port to supervise")
-		repo    = flag.String("repo", defaultRepo(), "repo root holding scripts/restart-daily-jevonsd.sh")
+		repo    = flag.String("repo", defaultRepo(), "repo root holding scripts/restart-jevonsd.sh")
 		state   = flag.String("state", defaultState(), "jevonsd state dir (supervision state lives under watchdog/)")
 		grace   = flag.Duration("grace", supervise.DefaultConfig().Grace, "how long the port may be unserved before this is an outage")
 		install = flag.Bool("install", false, "write and load the launchd agent for the current user, then exit")
@@ -154,7 +154,7 @@ func restart(repo string, port int) string {
 	// 🎯T553.3: KeepAlive on jevonsd is the standing supervisor. Calling
 	// the fat script here races launchd and recreates the bounce ceremony.
 	if supervise.DaemonOwnsProcess() {
-		logf("KeepAlive %s owns the daemon; not invoking restart-daily", supervise.DaemonLabel)
+		logf("KeepAlive %s owns the daemon; not invoking restart-jevonsd", supervise.DaemonLabel)
 		if err := supervise.KickstartAgent(supervise.DaemonLabel); err != nil {
 			return fmt.Sprintf("KeepAlive kickstart failed: %v", err)
 		}
@@ -163,7 +163,7 @@ func restart(repo string, port int) string {
 		}
 		return ""
 	}
-	script := filepath.Join(repo, "scripts", "restart-daily-jevonsd.sh")
+	script := filepath.Join(repo, "scripts", "restart-jevonsd.sh")
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Sprintf("no restart script at %s (%v)", script, err)
 	}
@@ -188,7 +188,7 @@ func restart(repo string, port int) string {
 	}
 
 	out, err := cmd.CombinedOutput()
-	logf("restart-daily-jevonsd exited: %v", errText(err))
+	logf("restart-jevonsd exited: %v", errText(err))
 	for _, line := range lastLines(string(out), 20) {
 		logf("  | %s", line)
 	}
@@ -300,7 +300,7 @@ func refusal(out string) string {
 		if line == "" {
 			continue
 		}
-		if _, rest, ok := strings.Cut(line, "restart-daily-jevonsd: "); ok {
+		if _, rest, ok := strings.Cut(line, "restart-jevonsd: "); ok {
 			return strings.TrimSpace(rest)
 		}
 		return line

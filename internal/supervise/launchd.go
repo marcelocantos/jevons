@@ -24,11 +24,11 @@ const AgentInterval = 30
 type AgentSpec struct {
 	// Binary is the watchdog, normally <repo>/bin/jevons-watchdog.
 	Binary string
-	// Repo holds scripts/restart-daily-jevonsd.sh.
+	// Repo holds scripts/restart-jevonsd.sh.
 	Repo string
 	// StateDir is the daemon's state dir.
 	StateDir string
-	// Port is the development port (legacy DailyPort).
+	// Port is the development port (legacy DevelopmentPort).
 	Port int
 	// LogPath is where launchd sends the job's output.
 	LogPath string

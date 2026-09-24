@@ -29,7 +29,7 @@ func (s *suite) runReactPaint(uiHost, scenario, screenshot string, agent ...stri
 	if err := refuseDailyHost(uiHost); err != nil {
 		return err
 	}
-	if err := portguard.RefuseDaily(s.port); err != nil {
+	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	script, err := reactPaintScript()

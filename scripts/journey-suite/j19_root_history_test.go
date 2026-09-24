@@ -12,11 +12,11 @@ import (
 	"github.com/marcelocantos/jevons/internal/statedb"
 )
 
-// TestT494_1_1J19SeedHasDailyReplayEventMix fails if J19's isolate seed
+// TestT494_1_1J19SeedHasReplayEventMix fails if J19's isolate seed
 // regresses to short user/assistant pairs. Daily connect replay of the
 // last 30 owner turns includes agent_note / system / tool_use between
 // those turns; a green J19 on text-only is a failed oracle (🎯T494.1.1).
-func TestT494_1_1J19SeedHasDailyReplayEventMix(t *testing.T) {
+func TestT494_1_1J19SeedHasReplayEventMix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jevons.jsonl")
 	if err := seedJ19Journal(path, 4); err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestT494_1_1J19SeedHasDailyReplayEventMix(t *testing.T) {
 		t.Errorf("assistant=%d want ≥4", mix.Assistant)
 	}
 	if mix.AgentNote < 1 {
-		t.Errorf("agent_note=%d — notes are the daily mix", mix.AgentNote)
+		t.Errorf("agent_note=%d — notes are the replay mix", mix.AgentNote)
 	}
 	if mix.System < 1 {
 		t.Errorf("system=%d — system frames ride with notes on daily", mix.System)
@@ -42,13 +42,13 @@ func TestT494_1_1J19SeedHasDailyReplayEventMix(t *testing.T) {
 		t.Errorf("tool_use=%d — a text-only seed is the T494.1.1 miss", mix.ToolUse)
 	}
 	if mix.AssistantToolBlocks < 1 {
-		t.Errorf("assistant tool_use blocks=%d — daily mix embeds tools in assistant frames", mix.AssistantToolBlocks)
+		t.Errorf("assistant tool_use blocks=%d — replay mix embeds tools in assistant frames", mix.AssistantToolBlocks)
 	}
 	if mix.Progress < 1 {
 		t.Errorf("progress=%d — daily replay is mostly progress between owner turns", mix.Progress)
 	}
 	if mix.Status < 1 {
-		t.Errorf("status=%d — recovery/status chrome rides the daily mix", mix.Status)
+		t.Errorf("status=%d — recovery/status chrome rides the replay mix", mix.Status)
 	}
 	if mix.ProgressBetweenTurns < 1 {
 		t.Errorf("progress between owner turns=%d", mix.ProgressBetweenTurns)
@@ -72,7 +72,7 @@ func TestT494_1_1J19SeedHasDailyReplayEventMix(t *testing.T) {
 
 func TestT494_1_1TextOnlySeedIsTheMiss(t *testing.T) {
 	// Mutation: user+assistant pairs with no notes/tools between them.
-	// classifyJ19Seed must not report that as the daily mix.
+	// classifyJ19Seed must not report that as the replay mix.
 	body := []byte(strings.Join([]string{
 		`{"type":"user","message":{"content":"ROOThist-00"}}`,
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"ack"}]}}`,

@@ -102,7 +102,7 @@ T37's interesting hook was Builder/API **remote MCP** pointing at Jevons `/mcp` 
 | Grok S2S alone (Builder or raw API) | Sub-second conversational turns (vendor claim); good for chitchat and short tool results. |
 | S2S + remote MCP into jevonsd fleet | STT/voice latency **plus** MCP RTT **plus** agent/tool time. Coding-fleet actions dominate; voice layer cannot hide that. |
 | Historical DIY: Grok voice + separate overseer round-trip (T25 design) | Explicitly accepted 2–5 s brain latency for reliability. |
-| Current text path (Wispr → chat → overseer) | No full-duplex; already the daily path. |
+| Current text path (Wispr → chat → overseer) | No full-duplex; already how the owner talks to it. |
 
 Builder does **not** remove the hard latency of fleet work. It only makes the **voice envelope** faster when the model answers from its own context.
 

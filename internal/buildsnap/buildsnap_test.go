@@ -101,7 +101,7 @@ func newRepo(t *testing.T) string {
 	return root
 }
 
-// build runs one snapshot build against root, the way restart-daily does.
+// build runs one snapshot build against root, the way restart-jevonsd does.
 func build(t *testing.T, root, snap string) error {
 	t.Helper()
 	_, err := buildsnap.Run(buildsnap.Config{

@@ -13,7 +13,7 @@
 // same unreachable PATH. It was latent only because both helpers happened
 // to be on disk.
 //
-// Both tests here run the SHIPPED scripts/restart-daily-jevonsd.sh and the
+// Both tests here run the SHIPPED scripts/restart-jevonsd.sh and the
 // SHIPPED sources of the helpers it re-execs through, out of a repo whose
 // bin/ is empty — the cold start where this stops being latent. They are
 // each other's control:
@@ -60,7 +60,7 @@ func newColdRepo(t *testing.T, r *rig) string {
 			t.Fatal(err)
 		}
 	}
-	copyFile(t, r.script, filepath.Join(root, "scripts", "restart-daily-jevonsd.sh"), 0o755)
+	copyFile(t, r.script, filepath.Join(root, "scripts", "restart-jevonsd.sh"), 0o755)
 
 	// detach and runlock import nothing from this module, which is what
 	// lets them be built out of a scratch module with no go.sum and no

@@ -70,7 +70,7 @@ func TestT817TwoEphemeralIsolatesDoNotCollide(t *testing.T) {
 		t.Fatalf("both isolates resolved port %d", p1)
 	}
 	for _, p := range []int{p1, p2} {
-		if err := portguard.RefuseDaily(p); err != nil {
+		if err := portguard.RefuseDevelopment(p); err != nil {
 			t.Fatalf("ephemeral port %d is a development port: %v", p, err)
 		}
 	}
@@ -78,7 +78,7 @@ func TestT817TwoEphemeralIsolatesDoNotCollide(t *testing.T) {
 	if portguard.ErrIfPortHeld(p2) != nil {
 		t.Fatalf("free port %d reported held", p2)
 	}
-	if err := portguard.RefuseDaily(portguard.DailyPort); err == nil {
+	if err := portguard.RefuseDevelopment(portguard.DevelopmentPort); err == nil {
 		t.Fatal("development port no longer refused")
 	}
 }

@@ -14,20 +14,20 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 )
 
-// DailyPort is the development bind (legacy name; Universe A).
-const DailyPort = config.DailyPort
+// DevelopmentPort is the development bind (:13705).
+const DevelopmentPort = config.DevelopmentPort
 
 // DefaultPort is the default Universe B isolate bind.
 const DefaultPort = config.JourneyPort
 
-// RefuseDaily returns an error when p is the development React port or the
+// RefuseDevelopment returns an error when p is the development React port or the
 // development vanilla sidecar so the journey suite never binds the owner stream.
-func RefuseDaily(p int) error {
-	if p == DailyPort {
-		return fmt.Errorf("refusing port %d (development); use %d or -port 0", DailyPort, DefaultPort)
+func RefuseDevelopment(p int) error {
+	if p == DevelopmentPort {
+		return fmt.Errorf("refusing port %d (development); use %d or -port 0", DevelopmentPort, DefaultPort)
 	}
-	if p == config.DailyVanillaPort {
-		return fmt.Errorf("refusing port %d (development vanilla sidecar LaunchAgent); use %d or -port 0", config.DailyVanillaPort, DefaultPort)
+	if p == config.VanillaPort {
+		return fmt.Errorf("refusing port %d (development vanilla sidecar LaunchAgent); use %d or -port 0", config.VanillaPort, DefaultPort)
 	}
 	return nil
 }

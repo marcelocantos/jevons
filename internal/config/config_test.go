@@ -532,7 +532,7 @@ func TestDefaultPersonaT652OmitProvider(t *testing.T) {
 }
 
 // 🎯T194 / T572: daemon/API achieve requires the development surface (restart script + live probe).
-func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
+func TestDefaultPersonaDevelopmentAchieve(t *testing.T) {
 	p, err := Default().Persona()
 	if err != nil {
 		t.Fatalf("Persona: %v", err)
@@ -543,10 +543,10 @@ func TestDefaultPersonaDailyPathAchieve(t *testing.T) {
 		"T553.2",
 		"T194",
 		"necessary, not sufficient",
-		"restart-daily-jevonsd",
+		"restart-jevonsd",
 		"live probe",
 		"stale binary",
-		"HasDailyPathEvidence",
+		"HasActivationEvidence",
 		"Hermetic unit green",
 		"not an achieve gate",
 	} {
@@ -724,9 +724,9 @@ func TestAgentsGuideFleetAndDeliveryDoctrine(t *testing.T) {
 		"T553.2",
 		"T194",
 		"necessary not sufficient",
-		"restart-daily-jevonsd",
+		"restart-jevonsd",
 		"live probe",
-		"HasDailyPathEvidence",
+		"HasActivationEvidence",
 		"hermetics alone",
 		// 🎯T493.1 visual cockpit prose verdict
 		"Visual cockpit finish is a prose look, not a green metric",
@@ -880,9 +880,9 @@ func TestAGENTSDoctrinePONeverImplements(t *testing.T) {
 		"T553.2",
 		"T194",
 		"necessary not sufficient",
-		"restart-daily-jevonsd",
+		"restart-jevonsd",
 		"live probe",
-		"HasDailyPathEvidence",
+		"HasActivationEvidence",
 		"stale binary",
 		// 🎯T493.1 visual cockpit prose verdict
 		"Visual cockpit finish is a prose look, not a green metric",

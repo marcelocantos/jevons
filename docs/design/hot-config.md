@@ -46,7 +46,7 @@ upgrade exit — SIGHUP to itself, so StopAll is skipped, reattach handles
 are written and in-flight agent turns survive — and launchd KeepAlive
 (🎯T553.3) re-raises the same binary, which reads the new file at boot.
 Once per process. Only a supervised daemon is armed (development
-`DailyPort` on the default state dir); an isolate has nothing to come
+`DevelopmentPort` on the default state dir); an isolate has nothing to come
 back under and only notifies. `JEVONS_CONFIG_BOUNCE=0` disarms for
 batching edits. A malformed edit is last-good + warning, never a bounce.
 

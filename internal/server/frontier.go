@@ -625,7 +625,7 @@ func discoverLedgerPath(cwd string) (ledger string, notInit bool, err error) {
 // spawn the bullseye CLI to rediscover a ledger path that does not move and
 // then re-parse the whole ledger (2.9 MB, 955 targets on 2026-09-21). On a
 // loaded host one request took 19s — longer than the refetch interval, so the
-// panel sat on "0 ready", and longer than restart-daily's readiness probe
+// panel sat on "0 ready", and longer than restart-jevonsd's readiness probe
 // waits, so an activation timed out against a daemon that was serving.
 //
 // The rows are a pure function of the ledger file, so they are keyed on its

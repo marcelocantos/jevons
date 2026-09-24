@@ -367,7 +367,7 @@ func SaveAgentState(dir string, st AgentState) error {
 // catch lasted five days.
 func WatchAgentLoop(ctx context.Context, p AgentPaths, cfg AgentConfig, every time.Duration, notify Notifier) {
 	// 🎯T553.3: launchd KeepAlive owns jevonsd. Reinstalling the
-	// probe-that-calls-restart-daily would undo the peel.
+	// probe-that-calls-restart-jevonsd would undo the peel.
 	if SkipWatchdogSupervise() {
 		slog.Info("supervise: KeepAlive owns jevonsd; not reinstating the watchdog", "label", DaemonLabel)
 		return

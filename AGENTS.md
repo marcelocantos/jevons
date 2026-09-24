@@ -446,8 +446,8 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   tree (`:13705` / `~/.jevons`) and **released** for Homebrew / shipped.
   That surface is not a scheduled build and not a separately named
   cockpit. Do not mint a third environment.
-  `restart-daily-jevonsd.sh` is a legacy filename; speech is "restart the
-  development daemon". `daily_token_budget` is a 24-hour spend key.
+  Speech for a bounce is "restart the development daemon"
+  (`scripts/restart-jevonsd.sh`). `daily_token_budget` is a 24-hour spend key.
   Informal talk about preferring this orchestrator over other harnesses
   is not a product name and is not used in code.
 - **Commit when done (🎯T638):** implementation that is ready to land is
@@ -463,7 +463,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
 - **Daemon activation (🎯T188 / 🎯T191 / 🎯T553 / 🎯T632):** owner never
   restarts by hand. After landing owner-visible daemon or React work,
   **activate in the same turn** so the running development surface shows
-  it (`nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &`).
+  it (`nohup scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &`).
   Skip only when activation would be destructive (data loss, a known
   in-flight kill that T392.5 SIGHUP does not protect, or an explicit
   owner hold). T218 coalesces concurrent bounces; identical binary already
@@ -473,7 +473,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   dirty shared clone. The development owner is supervisord program
   `jevonsd` (`supervisor/jevonsd.ini`; `make supervisor-install` renders
   the template). The restart script signals that owner with SIGHUP.
-  Script path: `scripts/restart-daily-jevonsd.sh`. React changes require
+  Script path: `scripts/restart-jevonsd.sh`. React changes require
   rebuilding and activating the embedded bundle before reloading.
 - **The process is supervised (🎯T405 / 🎯T553.3):** on 2026-08-10 a
   worker's restart killed the daemon, the script died with its invoker
@@ -484,7 +484,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   re-execs through `bin/detach` into its own session. The interval job
   **`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`,
   `make watchdog-status`) is **not** the product path — it must not
-  invoke restart-daily when KeepAlive owns the process. Residual:
+  invoke restart-jevonsd when KeepAlive owns the process. Residual:
   Cellar `brew services jevons` must stay stopped so it cannot reclaim
   `:13705`.
 - **Nothing was responsible for the supervisor (🎯T405, second half):** the
@@ -515,7 +515,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   bootstraps **before** it boots out, so a failed install can no longer
   leave the machine with no job at all — a plausible reading of how the job
   went missing. The supervisor is part of the deployment now too:
-  `restart-daily-jevonsd` rebuilds `bin/jevons-watchdog` from committed HEAD
+  `restart-jevonsd` rebuilds `bin/jevons-watchdog` from committed HEAD
   alongside the daemon, because the one process responsible for the daemon
   being up had been the one process that never received a fix.
 - **The supervisor carries its own PATH (🎯T434):** a LaunchAgent whose
@@ -542,8 +542,8 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   achieved on hermetics alone**. Hermetic unit green is **necessary not sufficient**
   — a stale binary still serving is a real failure. The
   test is observation of the running surface (composer, transcript, a
-  live probe of the owner path), not restart-daily / GATE / HEAD
-  snapshot. `HasDailyPathEvidence` is a seam classifier, not an achieve gate.
+  live probe of the owner path), not restart-jevonsd / GATE / HEAD
+  snapshot. `HasActivationEvidence` is a seam classifier, not an achieve gate.
   React changes require an activated embedded bundle (T540.2). Persona +
   agents-guide + fleet standing brief.
 - **Visual cockpit finish is a prose look, not a green metric (🎯T493.1):**

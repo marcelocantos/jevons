@@ -88,7 +88,7 @@ guard that assumes a JSONL exists.
 |------|------------------------|
 | `Registry.Stop` / `Remove` | Stop process / drop registry row only — **no** `os.Remove` on JSONL |
 | `tmuxagent.KillWindow` | Kills tmux window only |
-| `scripts/restart-daily-jevonsd.sh` | Rebuild, kill port listeners, start daemon — **no** session cleanup under `~/.claude` |
+| `scripts/restart-jevonsd.sh` | Rebuild, kill port listeners, start daemon — **no** session cleanup under `~/.claude` |
 
 Survivors’ JSONLs remained across today’s restart storm (14:09, 14:24, 14:27,
 14:37, 14:40, 14:45, 14:53…) — further evidence against teardown deletion.
@@ -179,7 +179,7 @@ should not invent session cleanup. Jevons T313 stays as residual safety net
 ```
 
 Daily-path (acceptance 4): after claudia fix is released into the daemon’s
-module path, detached `restart-daily-jevonsd` with pre-restart-alive Claude
+module path, detached `restart-jevonsd` with pre-restart-alive Claude
 workers that **completed ≥1 turn** should show zero
 `JSONL not found` / rehydrate-on-missing-JSONL for those agents. Seats killed
 before first turn may still rotate empty, but must not enter permanent
@@ -197,7 +197,7 @@ RequireResume refusal.
   and RequireResume gate; `pool.go` JSONL-on-send comment;  
   `agent_test.go` Send/JSONL smoke history
 - Jevons recovery (not prevention): `internal/fleet/rehydrate.go` (T313)
-- Restarts today: `~/.jevons/restart-daily.log` 14:09–14:53 window
+- Restarts today: `~/.jevons/restart-jevonsd.log` 14:09–14:53 window
 
 ---
 

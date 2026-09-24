@@ -114,17 +114,17 @@ func KickstartAgent(label string) error {
 }
 
 // SkipWatchdogSupervise is true when KeepAlive owns jevonsd, so the
-// daemon must not reinstall the probe-that-calls-restart-daily.
+// daemon must not reinstall the probe-that-calls-restart-jevonsd.
 func SkipWatchdogSupervise() bool {
 	return DaemonOwnsProcess()
 }
 
-// DailyRepoRoot is the clone that holds bin/jevonsd and the restart
+// DevelopmentRepoRoot is the clone that holds bin/jevonsd and the restart
 // script. Candidates whose absolute path is "/" are skipped: a temp
 // binary at /tmp/jevonsd has grandparent /, and installing KeepAlive
 // from that path is how the first T553.3 adopt pointed launchd at
 // /tmp/jevonsd-peel with workdir / and crash-looped the development daemon.
-func DailyRepoRoot(candidates ...string) (string, error) {
+func DevelopmentRepoRoot(candidates ...string) (string, error) {
 	for _, c := range candidates {
 		if c == "" {
 			continue
@@ -134,7 +134,7 @@ func DailyRepoRoot(candidates ...string) (string, error) {
 			continue
 		}
 		bin := filepath.Join(abs, "bin", "jevonsd")
-		script := filepath.Join(abs, "scripts", "restart-daily-jevonsd.sh")
+		script := filepath.Join(abs, "scripts", "restart-jevonsd.sh")
 		if executableFile(bin) && fileExists(script) {
 			return abs, nil
 		}
@@ -142,7 +142,7 @@ func DailyRepoRoot(candidates ...string) (string, error) {
 	return "", fmt.Errorf("supervise: no development repo among %v", candidates)
 }
 
-// DailyDaemonBinary is <repo>/bin/jevonsd.
-func DailyDaemonBinary(repo string) string {
+// DevelopmentDaemonBinary is <repo>/bin/jevonsd.
+func DevelopmentDaemonBinary(repo string) string {
 	return filepath.Join(repo, "bin", "jevonsd")
 }

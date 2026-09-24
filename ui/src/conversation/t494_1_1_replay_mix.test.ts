@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { displayRows } from './display';
 import { agentNote, assistantProse, assistantTool, userTurn } from '../oracle/fixtures';
 
-/** 🎯T494.1.1: fold coverage for the daily replay class mix — not host
+/** 🎯T494.1.1: fold coverage for the replay class mix — not host
  * historyReplayActive (see J19 / journey), but the fold the React pane uses. */
-describe('T494.1.1 daily replay mix', () => {
+describe('T494.1.1 replay mix', () => {
   it('coalesces progress/status/notes/tools between owner turns', () => {
     const frames: unknown[] = [];
     for (let i = 0; i < 2; i++) {

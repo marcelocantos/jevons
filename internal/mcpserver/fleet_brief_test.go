@@ -135,9 +135,9 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"🎯T553.2",
 		"🎯T194",
 		"necessary not sufficient",
-		"restart-daily-jevonsd.sh",
+		"restart-jevonsd.sh",
 		"live probe",
-		"HasDailyPathEvidence",
+		"HasActivationEvidence",
 		"hermetics alone",
 		"stale binary",
 		// 🎯T197 worker names: literal dots, never digit-squash

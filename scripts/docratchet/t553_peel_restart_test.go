@@ -11,7 +11,7 @@ import (
 // TestT553DailyStaysHEAD ratchets T553.1 / T505: ui/dist is built from
 // the HEAD snapshot, not the shared clone.
 func TestT553DailyStaysHEAD(t *testing.T) {
-	body := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	body := readRepo(t, "scripts/restart-jevonsd.sh")
 	for _, m := range []string{
 		"🎯T553.1",
 		"committed HEAD snapshot",
@@ -30,7 +30,7 @@ func TestT553DailyStaysHEAD(t *testing.T) {
 // TestT553KeepAliveOwnsDaemon ratchets T553.3: script prefers
 // com.marcelocantos.jevonsd KeepAlive over nohup-start.
 func TestT553KeepAliveOwnsDaemon(t *testing.T) {
-	body := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	body := readRepo(t, "scripts/restart-jevonsd.sh")
 	for _, m := range []string{
 		"🎯T553.3",
 		"com.marcelocantos.jevonsd",

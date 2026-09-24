@@ -36,7 +36,7 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 ## Environments: development vs released (🎯T572)
 - **development** = always-on jevonsd from this machine's development source tree (:13705 / ~/.jevons). Not a scheduled build and not a separately named cockpit.
 - **released** = Homebrew / shipped.
-- Do not mint a third environment. restart-daily-jevonsd.sh is a legacy filename; speech is "restart the development daemon".
+- Do not mint a third environment. Speech for a bounce is "restart the development daemon" (scripts/restart-jevonsd.sh).
 - Informal talk about preferring this orchestrator over other harnesses is not a product name and is not used in code.
 
 ## Delivery: local by default (🎯T104)
@@ -112,9 +112,9 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   achieved on hermetics alone**. Hermetic unit green is necessary not sufficient.
 - A stale binary still serving is a real failure. The test is observation
   of the running surface (composer, transcript, a **live probe** of the
-  owner path) — not restart-daily-jevonsd.sh / GATE / HEAD snapshot.
+  owner path) — not restart-jevonsd.sh / GATE / HEAD snapshot.
 - Owner-visible product is activated in the same turn it lands (🎯T632) unless destructive; 🎯T553.2 remains: restart citation is not the achieve gate.
-- HasDailyPathEvidence is a seam classifier, not an achieve gate.
+- HasActivationEvidence is a seam classifier, not an achieve gate.
   hermetics alone do not close an owner-visible claim.
 - React changes require a rebuilt and activated daemon; hard reload observes that bundle (🎯T540.2).
 

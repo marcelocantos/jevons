@@ -42,15 +42,15 @@ func TestJ19HTMLIsVanilla(t *testing.T) {
 	}
 }
 
-func TestJ19RefuseDailyHost(t *testing.T) {
+func TestJ19RefuseDevelopmentHost(t *testing.T) {
 	if err := refuseDailyHost("127.0.0.1:13705"); err == nil {
-		t.Fatal("react load path must RefuseDaily :13705")
+		t.Fatal("react load path must RefuseDevelopment :13705")
 	}
 	if err := refuseDailyHost("127.0.0.1:13715"); err != nil {
 		t.Fatalf("isolate default: %v", err)
 	}
-	if err := portguard.RefuseDaily(13705); err == nil {
-		t.Fatal("portguard.RefuseDaily(13705) must error")
+	if err := portguard.RefuseDevelopment(13705); err == nil {
+		t.Fatal("portguard.RefuseDevelopment(13705) must error")
 	}
 }
 

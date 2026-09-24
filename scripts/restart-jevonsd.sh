@@ -73,11 +73,11 @@
 #
 # BLESSED INVOKE (fleet agent / overseer) is unchanged and still
 # preferred, because it also stops the caller BLOCKING on the bounce:
-#   nohup "$REPO/scripts/restart-daily-jevonsd.sh" \
-#     >>"$HOME/.jevons/restart-daily.log" 2>&1 &
+#   nohup "$REPO/scripts/restart-jevonsd.sh" \
+#     >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 # Prefer nohup (portable). If setsid is available:
-#   setsid "$REPO/scripts/restart-daily-jevonsd.sh" \
-#     >>"$HOME/.jevons/restart-daily.log" 2>&1 < /dev/null &
+#   setsid "$REPO/scripts/restart-jevonsd.sh" \
+#     >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 < /dev/null &
 #
 # The daemon itself is also started under nohup/setsid so it outlives
 # this script (reparented to init).
@@ -90,9 +90,9 @@
 # macOS bash 3.2 safe (no mapfile/associative arrays/bash-4isms).
 #
 # Usage:
-#   ./scripts/restart-daily-jevonsd.sh
-#   ./scripts/restart-daily-jevonsd.sh --dry-run
-#   ./scripts/restart-daily-jevonsd.sh -h | --help
+#   ./scripts/restart-jevonsd.sh
+#   ./scripts/restart-jevonsd.sh --dry-run
+#   ./scripts/restart-jevonsd.sh -h | --help
 #
 # Env overrides:
 #   JEVONS_RESTART_PORT     default 13705
@@ -109,7 +109,7 @@
 #   JEVONS_RESTART_BIN      daemon binary to start (default: $REPO/bin/jevonsd)
 #   JEVONS_RESTART_NO_DETACH=1  skip the 🎯T405 self-detach re-exec
 #   JEVONS_RESTART_DETACH_LOG   where the detached run writes (default
-#                               ~/.jevons/restart-daily.log)
+#                               ~/.jevons/restart-jevonsd.log)
 #   JEVONS_RESTART_FAULT=after-kill  test seam: die between freeing the
 #                               port and starting the daemon (🎯T405 oracle)
 
@@ -131,8 +131,8 @@ STOP_WAIT_SEC="${JEVONS_RESTART_STOP_WAIT_SEC:-20}"
 #
 # 🎯T815: the same knob is the ACTIVATION GATE interval (see below). Default
 # 600s; the owner tunes it with the env var or by writing a number of seconds
-# into ~/.jevons/restart-daily.interval (env wins). 0 disables the gate.
-INTERVAL_FILE="${JEVONS_RESTART_INTERVAL_FILE:-$HOME/.jevons/restart-daily.interval}"
+# into ~/.jevons/restart-jevonsd.interval (env wins). 0 disables the gate.
+INTERVAL_FILE="${JEVONS_RESTART_INTERVAL_FILE:-$HOME/.jevons/restart-jevonsd.interval}"
 if [[ -n "${JEVONS_RESTART_MIN_INTERVAL_SEC:-}" ]]; then
   MIN_INTERVAL_SEC="$JEVONS_RESTART_MIN_INTERVAL_SEC"
 elif [[ -r "$INTERVAL_FILE" && "$(tr -d '[:space:]' <"$INTERVAL_FILE")" =~ ^[0-9]+$ ]]; then
@@ -140,10 +140,10 @@ elif [[ -r "$INTERVAL_FILE" && "$(tr -d '[:space:]' <"$INTERVAL_FILE")" =~ ^[0-9
 else
   MIN_INTERVAL_SEC=600
 fi
-STAMP_FILE="${JEVONS_RESTART_STAMP:-$HOME/.jevons/restart-daily.last}"
+STAMP_FILE="${JEVONS_RESTART_STAMP:-$HOME/.jevons/restart-jevonsd.last}"
 # 🎯T218: identity of the daemon this script last started ("<pid> <sha256>"),
 # so a caller whose build is already serving can no-op instead of bouncing.
-ACTIVE_FILE="${JEVONS_RESTART_ACTIVE:-$HOME/.jevons/restart-daily.active}"
+ACTIVE_FILE="${JEVONS_RESTART_ACTIVE:-$HOME/.jevons/restart-jevonsd.active}"
 # 🎯T392.5: serialise concurrent restarts under one exclusive lock.
 #
 # This replaces a mkdir-based mutex that raced. Between `mkdir` succeeding
@@ -157,7 +157,7 @@ ACTIVE_FILE="${JEVONS_RESTART_ACTIVE:-$HOME/.jevons/restart-daily.active}"
 # flock(2) has no such window and the kernel releases it when the holder
 # dies, so a crashed run cannot wedge the fleet. Locking is a Go binary
 # because a mutex in shell is a race per line (shared bash doctrine).
-LOCK_FILE="${JEVONS_RESTART_LOCK:-$HOME/.jevons/restart-daily.lock}"
+LOCK_FILE="${JEVONS_RESTART_LOCK:-$HOME/.jevons/restart-jevonsd.lock}"
 LOCK_WAIT_SEC="${JEVONS_RESTART_LOCK_WAIT_SEC:-240}"
 RUNLOCK="$ROOT/bin/runlock"
 # 🎯T254.2: the daemon is compiled from a detached worktree at HEAD, not from
@@ -179,7 +179,7 @@ SNAP_DIR="${JEVONS_RESTART_SNAP_DIR:-$HOME/.jevons/build-snapshot}"
 # own caller is the failure this removes, so an unbuildable helper aborts
 # rather than quietly restoring the old behaviour.
 DETACH="$ROOT/bin/detach"
-DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-daily.log}"
+DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-jevonsd.log}"
 
 # --help and --dry-run touch nothing, so they neither detach nor take the
 # lock: introspection that blocks behind a live restart, or that appends
@@ -235,11 +235,11 @@ done
 # under the owner's uid, and workers run under that uid — this closes the
 # accidental and habitual bypass in code, it does not stop an agent that
 # deliberately forges the token. Nothing here can authenticate a caller.
-REQ_FILE="${JEVONS_RESTART_REQUESTS:-$HOME/.jevons/restart-daily.requests}"
-SERVED_FILE="${JEVONS_RESTART_SERVED:-$HOME/.jevons/restart-daily.served}"
-PENDING_LOCK="${JEVONS_RESTART_PENDING_LOCK:-$HOME/.jevons/restart-daily.pending.lock}"
+REQ_FILE="${JEVONS_RESTART_REQUESTS:-$HOME/.jevons/restart-jevonsd.requests}"
+SERVED_FILE="${JEVONS_RESTART_SERVED:-$HOME/.jevons/restart-jevonsd.served}"
+PENDING_LOCK="${JEVONS_RESTART_PENDING_LOCK:-$HOME/.jevons/restart-jevonsd.pending.lock}"
 
-OWNER_FORCE_FILE="${JEVONS_RESTART_OWNER_FORCE:-$HOME/.jevons/restart-daily.owner-force}"
+OWNER_FORCE_FILE="${JEVONS_RESTART_OWNER_FORCE:-$HOME/.jevons/restart-jevonsd.owner-force}"
 OWNER_FORCE_TTL_SEC="${JEVONS_RESTART_OWNER_FORCE_TTL_SEC:-600}"
 
 SELF="$ROOT/scripts/$(basename "$0")"
@@ -336,7 +336,7 @@ if [[ "$GATE_MODE" == "request" && "$WANTS_WORK" == "1" && "${JEVONS_RESTART_GAT
     gpending="$(wc -l <"$REQ_FILE" | tr -d ' ')"
     # One detached runner; extras lose the lock race and exit.
     ( unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED JEVONS_RESTART_NO_DETACH JEVONS_RESTART_NO_LOCK JEVONS_RESTART_FAULT
-      "$ROOT/bin/detach" -quiet -log "${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-daily.log}" -- \
+      "$ROOT/bin/detach" -quiet -log "${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-jevonsd.log}" -- \
         "$ROOT/bin/runlock" -quiet -timeout 5s "$PENDING_LOCK" "$SELF" --deferred-runner \
         </dev/null >/dev/null 2>&1 & )
     printf '%s 🎯T815 activation deferred: %s request(s) pending; the next bounce runs in %ss (interval %ss) and carries every commit landed by then. Not serving your commit yet: `%s --served <commit>` names the bounce that did.\n' \
@@ -348,7 +348,7 @@ fi
 if [[ "$WANTS_WORK" == "1" && "${JEVONS_RESTART_DETACHED:-0}" != "1" && "${JEVONS_RESTART_NO_DETACH:-0}" != "1" ]]; then
   if [[ ! -x "$DETACH" ]]; then
     (cd "$ROOT" && go build -o "$DETACH" ./cmd/detach) || {
-      echo "restart-daily-jevonsd: cannot build $DETACH — refusing to restart where the caller's death can cancel it" >&2
+      echo "restart-jevonsd: cannot build $DETACH — refusing to restart where the caller's death can cancel it" >&2
       exit 2
     }
   fi
@@ -362,7 +362,7 @@ fi
 if [[ "$WANTS_WORK" == "1" && "${JEVONS_RESTART_LOCKED:-0}" != "1" && "${JEVONS_RESTART_NO_LOCK:-0}" != "1" ]]; then
   if [[ ! -x "$RUNLOCK" ]]; then
     (cd "$ROOT" && go build -o "$RUNLOCK" ./cmd/runlock) || {
-      echo "restart-daily-jevonsd: cannot build $RUNLOCK — refusing to restart unserialised" >&2
+      echo "restart-jevonsd: cannot build $RUNLOCK — refusing to restart unserialised" >&2
       exit 2
     }
   fi
@@ -377,7 +377,7 @@ FORCE=0
 
 usage() {
   cat <<'EOF'
-Usage: restart-daily-jevonsd.sh [options]
+Usage: restart-jevonsd.sh [options]
 
 Rebuild bin/jevonsd, stop brew KeepAlive if needed, free the development port,
 start repo bin/jevonsd detached, wait until /health and /api/frontier serve.
@@ -390,7 +390,7 @@ inside the min-interval, the script waits out the remainder rather than
 skipping, so a real change never reports success while a stale binary serves.
 
 🎯T815 activation gate: a request inside the interval (default 600s, env
-JEVONS_RESTART_MIN_INTERVAL_SEC or ~/.jevons/restart-daily.interval) does not
+JEVONS_RESTART_MIN_INTERVAL_SEC or ~/.jevons/restart-jevonsd.interval) does not
 bounce and does not wait. It is recorded, the next bounce time is printed, and
 one detached runner performs a single bounce that carries every commit landed
 by then. `--served <commit>` names the bounce that carried a commit (exit 3
@@ -401,7 +401,7 @@ Options:
   --served SHA   Print the served-ledger line whose HEAD contains SHA
   --dry-run      Print planned steps; do not stop/start/kill
   --force        OWNER-ONLY (🎯T815). With the owner's token file
-                 (~/.jevons/restart-daily.owner-force: regular file, mode
+                 (~/.jevons/restart-jevonsd.owner-force: regular file, mode
                  0600, this uid, younger than 600s; consumed on use) it
                  bypasses the thrash policy and the gate. Without the token
                  it is refused as a bypass: the request is deferred like any
@@ -417,14 +417,14 @@ Env:
   JEVONS_RESTART_SKIP_MAKE         If 1, skip make rebuild
   JEVONS_RESTART_MIN_INTERVAL_SEC  Thrash window (default 180; 🎯T218)
   JEVONS_RESTART_LOCK_WAIT_SEC     Wait for in-flight restart (default 240; 🎯T218)
-  JEVONS_RESTART_STAMP             Stamp file for last success (default ~/.jevons/restart-daily.last)
-  JEVONS_RESTART_ACTIVE            Running-daemon identity (default ~/.jevons/restart-daily.active)
-  JEVONS_RESTART_OWNER_FORCE       Owner token file for --force (default ~/.jevons/restart-daily.owner-force)
+  JEVONS_RESTART_STAMP             Stamp file for last success (default ~/.jevons/restart-jevonsd.last)
+  JEVONS_RESTART_ACTIVE            Running-daemon identity (default ~/.jevons/restart-jevonsd.active)
+  JEVONS_RESTART_OWNER_FORCE       Owner token file for --force (default ~/.jevons/restart-jevonsd.owner-force)
   JEVONS_RESTART_OWNER_FORCE_TTL_SEC  Token lifetime (default 600)
-  JEVONS_RESTART_LOCK              Lock dir (default ~/.jevons/restart-daily.lock)
+  JEVONS_RESTART_LOCK              Lock dir (default ~/.jevons/restart-jevonsd.lock)
   JEVONS_RESTART_BIN               Daemon binary (default $REPO/bin/jevonsd)
   JEVONS_RESTART_NO_DETACH         If 1, skip the 🎯T405 self-detach re-exec
-  JEVONS_RESTART_DETACH_LOG        Detached run's log (default ~/.jevons/restart-daily.log)
+  JEVONS_RESTART_DETACH_LOG        Detached run's log (default ~/.jevons/restart-jevonsd.log)
 
 SELF-DETACH (🎯T405): this script re-execs itself through bin/detach into
 its own session before doing anything, so the caller's death — including
@@ -433,7 +433,7 @@ the bounce. A caller that is still alive still gets the exit status.
 
 BLESSED INVOKE (survive agent/overseer death AND stop the caller blocking
 on the bounce; the self-detach above covers the first half on its own):
-  nohup ./scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
+  nohup ./scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 
 SUPERVISION (🎯T405): com.marcelocantos.jevons-watchdog probes the port
 every 30s and calls this script when it stays dead — so a bounce that
@@ -866,7 +866,7 @@ record_served() {
 
 # --- main --------------------------------------------------------------------
 
-log "🎯T191 restart-daily-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_run=$DRY_RUN force=$FORCE"
+log "🎯T191 restart-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_run=$DRY_RUN force=$FORCE"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T254.2 build bin/jevonsd from committed HEAD in $SNAP_DIR (never the shared tree) unless SKIP_MAKE=$SKIP_MAKE"
@@ -878,7 +878,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
   log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
   log "[dry-run] would: wait for /health 200 and /api/frontier non-404"
-  log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-daily-jevonsd.sh >>\$HOME/.jevons/restart-daily.log 2>&1 &"
+  log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-jevonsd.sh >>\$HOME/.jevons/restart-jevonsd.log 2>&1 &"
   exit 0
 fi
 

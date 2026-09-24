@@ -23,7 +23,7 @@ describe('T540.3 close map', () => {
     for (const row of CLOSE) {
       expect(row.reason.trim().length, row.id + ' empty reason').toBeGreaterThan(8);
       if (row.kind === 'skip' || row.kind === 'journey') {
-        expect(row.reason, row.id).toMatch(/journey is the arbiter|not ported|named residual|mention-only|daily path|live fail/);
+        expect(row.reason, row.id).toMatch(/journey is the arbiter|not ported|named residual|mention-only|development surface|live fail/);
       }
     }
   });

@@ -45,7 +45,7 @@ func installAgent(repo string, port int, state string) int {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: no binary at %s — run `make` first\n", binary)
 		return 1
 	}
-	script := filepath.Join(repo, "scripts", "restart-daily-jevonsd.sh")
+	script := filepath.Join(repo, "scripts", "restart-jevonsd.sh")
 	if !executable(script) {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: no restart script at %s — is -repo right?\n", script)
 		return 1

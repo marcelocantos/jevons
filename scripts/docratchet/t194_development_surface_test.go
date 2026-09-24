@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// TestDailyPathAchieveDoctrineMarkers ratchets 🎯T552 / 🎯T553.2 (was T194):
-// owner-visible daily behaviour is observed on the running surface.
-// Restart-daily + HasDailyPathEvidence are activation/seams, not the gate.
-func TestDailyPathAchieveDoctrineMarkers(t *testing.T) {
+// TestDevelopmentSurfaceAchieveDoctrineMarkers ratchets 🎯T552 / 🎯T553.2 (was T194):
+// owner-visible behaviour is observed on the running development surface.
+// The restart script and HasActivationEvidence are activation seams, not the gate.
+func TestDevelopmentSurfaceAchieveDoctrineMarkers(t *testing.T) {
 	persona := readRepo(t, "internal/config/persona.md")
 	agents := readRepo(t, "AGENTS.md")
 	guide := readRepo(t, "agents-guide.md")
@@ -26,10 +26,10 @@ func TestDailyPathAchieveDoctrineMarkers(t *testing.T) {
 			"🎯T552",
 			"🎯T553.2",
 			"necessary, not sufficient",
-			"restart-daily-jevonsd",
+			"restart-jevonsd",
 			"live probe",
 			"stale binary",
-			"HasDailyPathEvidence",
+			"HasActivationEvidence",
 			"Hermetic unit green",
 			"not an achieve gate",
 		}},
@@ -37,9 +37,9 @@ func TestDailyPathAchieveDoctrineMarkers(t *testing.T) {
 			"🎯T194",
 			"🎯T552",
 			"necessary not sufficient",
-			"restart-daily-jevonsd",
+			"restart-jevonsd",
 			"live probe",
-			"HasDailyPathEvidence",
+			"HasActivationEvidence",
 			"stale binary",
 			"not an achieve gate",
 		}},
@@ -47,18 +47,18 @@ func TestDailyPathAchieveDoctrineMarkers(t *testing.T) {
 			"🎯T194",
 			"🎯T552",
 			"necessary not sufficient",
-			"restart-daily-jevonsd",
+			"restart-jevonsd",
 			"live probe",
-			"HasDailyPathEvidence",
+			"HasActivationEvidence",
 			"hermetics alone",
 		}},
 		{"internal/mcpserver/fleet_brief.go", brief, []string{
 			"🎯T194",
 			"🎯T552",
 			"necessary not sufficient",
-			"restart-daily-jevonsd",
+			"restart-jevonsd",
 			"live probe",
-			"HasDailyPathEvidence",
+			"HasActivationEvidence",
 			"hermetics alone",
 			"stale binary",
 		}},

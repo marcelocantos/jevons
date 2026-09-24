@@ -23,7 +23,7 @@ func TestReactPaintRefusesDailyAndNamesTargets(t *testing.T) {
 	}
 	src := string(body)
 	if !strings.Contains(src, "13705") {
-		t.Error("react_paint.js must refuse daily :13705")
+		t.Error("react_paint.js must refuse development :13705")
 	}
 	for _, id := range []string{"T279", "T281", "T504", "T106", "T59", "T238", "T126", "T123", "T72.1", "T250", "T185", "T390"} {
 		if !strings.Contains(src, id) {
@@ -50,8 +50,8 @@ func TestReactPaintRefusesDailyAndNamesTargets(t *testing.T) {
 }
 
 func TestReactSurfaceHelperExists(t *testing.T) {
-	if err := portguard.RefuseDaily(13705); err == nil {
-		t.Fatal("RefuseDaily(13705) must error")
+	if err := portguard.RefuseDevelopment(13705); err == nil {
+		t.Fatal("RefuseDevelopment(13705) must error")
 	}
 	root, err := j19RepoRoot()
 	if err != nil {

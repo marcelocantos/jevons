@@ -699,8 +699,8 @@ jevonsd built from this machine's development source tree (`:13705` /
 `~/.jevons`) and **released** for Homebrew / shipped. That surface is
 not a scheduled build and not a separately named cockpit. Do not mint
 another name for it.
-`restart-daily-jevonsd.sh` is a legacy filename; speech is "restart the
-development daemon". `daily_token_budget` is a 24-hour spend key.
+Speech for a bounce is "restart the development daemon"
+(`scripts/restart-jevonsd.sh`). `daily_token_budget` is a 24-hour spend key.
 Informal talk about preferring this orchestrator over other harnesses is
 not a product name and is not used in code.
 
@@ -836,7 +836,7 @@ serves committed HEAD (🎯T505 / 🎯T553.1), never the dirty shared clone.
 **BLESSED INVOKE** (when you *are* activating — 🎯T191):
 
 ```bash
-nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
+nohup scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 ```
 
 The script detaches (🎯T405), builds a committed HEAD snapshot and requests
@@ -906,7 +906,7 @@ Daemon/API product is **not achieved on hermetics alone**. **Hermetic
 unit green is necessary not sufficient.** A stale binary still serving
 is a real failure. The test is observation of the running surface
 (composer, transcript, a **live probe** of the owner path) — not
-`restart-daily-jevonsd` / GATE / HEAD snapshot. `HasDailyPathEvidence`
+`restart-jevonsd` / GATE / HEAD snapshot. `HasActivationEvidence`
 (`internal/mcpserver`) is a seam classifier, not an achieve gate.
 hermetics alone do not close an owner-visible claim. React changes require a rebuilt and activated daemon (🎯T540.2).
 

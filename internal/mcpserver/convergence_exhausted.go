@@ -159,7 +159,7 @@ func (s *Server) spawnRecoveryAgent(rep IdleNudgeReport) {
 	// restarting jevonsd does not kill it. A recovery agent parented to
 	// the daemon cannot diagnose "the daemon is broken", which is among
 	// the faults it most needs to handle — the same shape that took the
-	// daemon down twice on 2026-08-09/10, when restart-daily-jevonsd died
+	// daemon down twice on 2026-08-09/10, when restart-jevonsd died
 	// with the agent whose shutdown it had caused.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {

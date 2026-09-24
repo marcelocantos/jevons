@@ -58,7 +58,7 @@ func TestT448ClaudiaPinResolvesWithoutGoWork(t *testing.T) {
 
 // TestT448PinContainsT28AndDailyCheckIsWired is the load-bearing T448
 // ratchet: the published pin contains the T28 send-submit squash, the
-// seam decision is recorded, and restart-daily invokes bin/claudiapin.
+// seam decision is recorded, and restart-jevonsd invokes bin/claudiapin.
 func TestT448PinContainsT28AndDailyCheckIsWired(t *testing.T) {
 	root := repoRoot(t)
 
@@ -95,10 +95,10 @@ func TestT448PinContainsT28AndDailyCheckIsWired(t *testing.T) {
 			t.Fatalf("AGENTS.md missing T448 seam marker %q", want)
 		}
 	}
-	restart := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	restart := readRepo(t, "scripts/restart-jevonsd.sh")
 	for _, want := range []string{"CLAUDIAPIN", "bin/claudiapin", "🎯T448"} {
 		if !strings.Contains(restart, want) {
-			t.Fatalf("restart-daily missing %q", want)
+			t.Fatalf("restart-jevonsd missing %q", want)
 		}
 	}
 	makeBody := readRepo(t, "Makefile")

@@ -29,11 +29,11 @@ func TestIsDailyStateDir(t *testing.T) {
 	}
 }
 
-func TestRefuseJourneyDailyState(t *testing.T) {
+func TestRefuseJourneyDevState(t *testing.T) {
 	daily := Default().StateDir
 	isolate := t.TempDir()
 
-	if err := RefuseJourneyDailyState(JourneyPort, daily); err == nil {
+	if err := RefuseJourneyDevState(JourneyPort, daily); err == nil {
 		t.Fatal("JourneyPort + daily state_dir must refuse")
 	} else {
 		msg := err.Error()
@@ -44,26 +44,26 @@ func TestRefuseJourneyDailyState(t *testing.T) {
 		}
 	}
 
-	if err := RefuseJourneyDailyState(JourneyPort, isolate); err != nil {
+	if err := RefuseJourneyDevState(JourneyPort, isolate); err != nil {
 		t.Fatalf("JourneyPort + isolate state_dir must allow: %v", err)
 	}
-	if err := RefuseJourneyDailyState(DailyPort, daily); err != nil {
-		t.Fatalf("DailyPort + daily state_dir must allow: %v", err)
+	if err := RefuseJourneyDevState(DevelopmentPort, daily); err != nil {
+		t.Fatalf("DevelopmentPort + daily state_dir must allow: %v", err)
 	}
-	if err := RefuseJourneyDailyState(13716, daily); err != nil {
+	if err := RefuseJourneyDevState(13716, daily); err != nil {
 		t.Fatalf("other port + daily state_dir must allow: %v", err)
 	}
-	if JourneyPort == DailyPort {
-		t.Fatal("JourneyPort must not equal DailyPort")
+	if JourneyPort == DevelopmentPort {
+		t.Fatal("JourneyPort must not equal DevelopmentPort")
 	}
-	if DailyVanillaPort == DailyPort || DailyVanillaPort == JourneyPort {
-		t.Fatal("DailyVanillaPort must be distinct from DailyPort and JourneyPort")
+	if VanillaPort == DevelopmentPort || VanillaPort == JourneyPort {
+		t.Fatal("VanillaPort must be distinct from DevelopmentPort and JourneyPort")
 	}
 }
 
 func TestRefuseVanillaPortAsPrimary(t *testing.T) {
-	if err := RefuseVanillaPortAsPrimary(DailyVanillaPort); err == nil {
-		t.Fatal("DailyVanillaPort as primary must refuse")
+	if err := RefuseVanillaPortAsPrimary(VanillaPort); err == nil {
+		t.Fatal("VanillaPort as primary must refuse")
 	} else {
 		msg := err.Error()
 		for _, want := range []string{"13706", "sidecar", "13705"} {
@@ -72,8 +72,8 @@ func TestRefuseVanillaPortAsPrimary(t *testing.T) {
 			}
 		}
 	}
-	if err := RefuseVanillaPortAsPrimary(DailyPort); err != nil {
-		t.Fatalf("DailyPort as primary must allow: %v", err)
+	if err := RefuseVanillaPortAsPrimary(DevelopmentPort); err != nil {
+		t.Fatalf("DevelopmentPort as primary must allow: %v", err)
 	}
 	if err := RefuseVanillaPortAsPrimary(JourneyPort); err != nil {
 		t.Fatalf("JourneyPort as primary must allow: %v", err)

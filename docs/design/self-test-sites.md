@@ -53,7 +53,7 @@ Prefer the existing journey-suite isolate (Universe B):
 
 ```bash
 # From repo root — throwaway port + state dir + MCP name.
-# Does NOT attach to daily :13705 / ~/.jevons.
+# Does NOT attach to development :13705 / ~/.jevons.
 make test-journey
 # or:
 go run ./scripts/journey-suite

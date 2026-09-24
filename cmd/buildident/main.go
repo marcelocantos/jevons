@@ -7,7 +7,7 @@
 // the change landed in claudia rather than here.
 //
 // With -id it prints the bare hex identity and nothing else, which is what
-// restart-daily-jevonsd.sh records and compares.
+// restart-jevonsd.sh records and compares.
 package main
 
 import (

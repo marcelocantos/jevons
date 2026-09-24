@@ -37,7 +37,7 @@ func TestClassifyVisualVerdict(t *testing.T) {
 		want VisualVerdictClass
 	}{
 		{"empty", "", VisualVerdictNotApplicable},
-		{"daemon daily-path", "Done. restart-daily-jevonsd + curl :13705/api/frontier HTTP 200. SHA deadbeef", VisualVerdictNotApplicable},
+		{"daemon daily-path", "Done. restart-jevonsd + curl :13705/api/frontier HTTP 200. SHA deadbeef", VisualVerdictNotApplicable},
 		{"in progress cockpit", "in progress: reading virtualizeMessages pin path in #messages", VisualVerdictNotApplicable},
 		{"incident metric as verdict", incident, VisualVerdictMissing},
 		{"caption as verdict", "Done. #messages screenshot caption: The image shows a chat window.", VisualVerdictMissing},

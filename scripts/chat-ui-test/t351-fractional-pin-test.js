@@ -3,7 +3,7 @@
 
 // Browser oracle for the residual post-T350 ~1px jiggle (🎯T351).
 //
-// Measured on the daily UI (not guessed): every scrollTop write is
+// Measured on the development cockpit (not guessed): every scrollTop write is
 // integer-quantized — scrollDown/pinToEndGated pin to
 // finalPinScrollTop(sh, ch) = sh − ch with INTEGER scrollHeight /
 // clientHeight, and loadEarlier compensates page inserts with an INTEGER

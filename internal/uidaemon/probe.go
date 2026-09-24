@@ -53,7 +53,7 @@ func ProbeReact(client *http.Client, url string) ProbeResult {
 	return ProbeResult{OK: true, Status: resp.StatusCode}
 }
 
-// DailyReactURL is the probe target for the owner's daily surface.
-func DailyReactURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/", config.DailyPort)
+// DevelopmentReactURL is the probe target for the owner's daily surface.
+func DevelopmentReactURL() string {
+	return fmt.Sprintf("http://127.0.0.1:%d/", config.DevelopmentPort)
 }

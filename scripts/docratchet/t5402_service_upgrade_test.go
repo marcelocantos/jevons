@@ -15,7 +15,7 @@ func TestReactUpgradeReloadsObsoleteLoadedArguments(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Fatal(err)
 	}
-	script := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	script := readRepo(t, "scripts/restart-jevonsd.sh")
 	start := strings.Index(script, "start_or_adopt_daemon() {")
 	if start < 0 {
 		t.Fatal("missing production adoption function")
@@ -79,7 +79,7 @@ launchctl() {
 }
 
 func TestReactUpgradeUsesOnlyTheSupervisorOwningTheListener(t *testing.T) {
-	script := readRepo(t, "scripts/restart-daily-jevonsd.sh")
+	script := readRepo(t, "scripts/restart-jevonsd.sh")
 	start := strings.Index(script, "upgrade_with_supervisor() {")
 	if start < 0 {
 		t.Fatal("missing production supervisor upgrade function")

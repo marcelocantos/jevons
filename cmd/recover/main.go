@@ -10,7 +10,7 @@
 // point: a recovery agent parented to jevonsd cannot diagnose or repair
 // "the daemon is broken", which is among the failures it most needs to
 // handle. On 2026-08-09/10 exactly that shape took the daemon down twice
-// — restart-daily-jevonsd killed the daemon, the shutdown stopped every
+// — restart-jevonsd killed the daemon, the shutdown stopped every
 // agent including the one that had invoked the script, and the script
 // died before starting the replacement.
 //
@@ -256,14 +256,14 @@ Use the filesystem and shell:
 
   %s/agents.json            registry: names, sessions, materialized, parents
   %s/daily-jevonsd.log      daemon log: launches, failures, idle nudges
-  %s/restart-daily.log      restart history
+  %s/restart-jevonsd.log      restart history
   ~/.claude/projects/*/     Claude session transcripts, one per session id
   ~/.grok/sessions/*/       Grok session transcripts
   %s                        repo root, for scripts and code
 
 Decide whether the cause is the agent, its session, its mission, or the machinery
 around it. If the daemon itself is down and that is the cause, you MAY restart it
-(scripts/restart-daily-jevonsd.sh) — you are detached from it, so it cannot take
+(scripts/restart-jevonsd.sh) — you are detached from it, so it cannot take
 you with it.
 
 File a bullseye target for what you find (name + acceptance), then report in one

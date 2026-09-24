@@ -52,7 +52,7 @@ import (
 
 const (
 	defaultPort     = portguard.DefaultPort
-	dailyPort       = portguard.DailyPort // Universe A — never bind (portguard.RefuseDaily)
+	dailyPort       = portguard.DevelopmentPort // Universe A — never bind (portguard.RefuseDevelopment)
 	mcpName         = "jevonsmcp-journey"
 	dailyMCPName    = "jevonsmcp"
 	overseerName    = "jevons"
@@ -118,7 +118,7 @@ func main() {
 			fatal(err)
 		}
 	}
-	if err := portguard.RefuseDaily(p); err != nil {
+	if err := portguard.RefuseDevelopment(p); err != nil {
 		fatal(err)
 	}
 	host := fmt.Sprintf("127.0.0.1:%d", p)
@@ -290,7 +290,7 @@ persona_notes: |
 // assertIsolation checks path + MCP isolation: journal lives only under the
 // temp state dir, journey MCP is gone, daily MCP still present if it was.
 func assertIsolation(provider claudia.Provider, hadDailyMCP bool, stateDir string, port int) error {
-	if err := portguard.RefuseDaily(port); err != nil {
+	if err := portguard.RefuseDevelopment(port); err != nil {
 		return err
 	}
 	homeJevons, err := filepath.Abs(filepath.Join(homeDir(), ".jevons"))

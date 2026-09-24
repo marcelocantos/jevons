@@ -105,8 +105,8 @@ There is no third environment. Two words only:
   and not a separately named cockpit.
 - **released** — Homebrew / shipped product.
 
-Do not mint another name for that surface. `restart-daily-jevonsd.sh` is a
-legacy filename; speech is "restart the development daemon".
+Do not mint another name for that surface. Speech for a bounce is
+"restart the development daemon" (`scripts/restart-jevonsd.sh`).
 `daily_token_budget` is a 24-hour spend key, not an environment.
 Informal talk about preferring this orchestrator over other harnesses is
 not a product name and is not used in code.
@@ -689,7 +689,7 @@ If you *are* activating (owner asked, or you are applying HEAD), invoke
 **detached** so session death does not cancel it:
 
 ```bash
-nohup scripts/restart-daily-jevonsd.sh >>"$HOME/.jevons/restart-daily.log" 2>&1 &
+nohup scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 ```
 
 The script rebuilds HEAD, stops brew KeepAlive (Cellar must not reclaim
@@ -776,9 +776,9 @@ Restart-script success, HEAD snapshot, and GATE lines are how a change
 gets into a process that does not load the working tree. They are **not**
 the oracle. Do not claim owner-visible behaviour from hermetics alone.
 
-`HasDailyPathEvidence` remains a seam classifier for reports that cite
-activation (`restart-daily-jevonsd` / live probe). It is **not an achieve gate**.
-A finish report that only cites restart-daily / GATE / HEAD
+`HasActivationEvidence` remains a seam classifier for reports that cite
+activation (`restart-jevonsd` / live probe). It is **not an achieve gate**.
+A finish report that only cites restart-jevonsd / GATE / HEAD
 snapshot without saying what was seen is not sufficient.
 
 **Residual:** instructional + classifiers; not a hard daemon block of

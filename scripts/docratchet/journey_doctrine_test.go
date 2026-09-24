@@ -205,13 +205,13 @@ func TestJourneyInventoryRegistered(t *testing.T) {
 }
 
 // TestJourneySuiteWiresPortguard fails if the suite stops calling the
-// shared RefuseDaily helper (duplicate reimplementation risk).
+// shared RefuseDevelopment helper (duplicate reimplementation risk).
 func TestJourneySuiteWiresPortguard(t *testing.T) {
 	mainSrc := readRepo(t, "scripts/journey-suite/main.go")
-	if !strings.Contains(mainSrc, "portguard.RefuseDaily") {
-		t.Fatal("main.go must call portguard.RefuseDaily (not a local reimplementation)")
+	if !strings.Contains(mainSrc, "portguard.RefuseDevelopment") {
+		t.Fatal("main.go must call portguard.RefuseDevelopment (not a local reimplementation)")
 	}
-	if strings.Count(mainSrc, "portguard.RefuseDaily") < 2 {
-		t.Fatal("want RefuseDaily at startup and isolation (at least 2 call sites)")
+	if strings.Count(mainSrc, "portguard.RefuseDevelopment") < 2 {
+		t.Fatal("want RefuseDevelopment at startup and isolation (at least 2 call sites)")
 	}
 }

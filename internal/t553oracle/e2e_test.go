@@ -182,7 +182,7 @@ func TestT553SeededThrowNotExecutedByDaily(t *testing.T) {
 	ctlJS := servedScripts(t, ctlBin, scratch, "control")
 	servedCtl := strings.Contains(ctlJS, marker)
 
-	// SNAPSHOT: the daily path (buildsnap of committed HEAD), over the same
+	// SNAPSHOT: the development surface (buildsnap of committed HEAD), over the same
 	// clone whose working tree — including its rebuilt bundle.zip — is dirty.
 	snapBin := filepath.Join(scratch, "snap-jevonsd")
 	res, err := buildsnap.Run(buildsnap.Config{

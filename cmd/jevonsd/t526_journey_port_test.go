@@ -40,7 +40,7 @@ func TestT526JevonsdRefusesJourneyPortOnDailyState(t *testing.T) {
 // TestT526JevonsdAllowsJourneyPortOnIsolateState is the control: throwaway
 // state_dir on the journey port gets past the T526 gate.
 func TestT526JevonsdAllowsJourneyPortOnIsolateState(t *testing.T) {
-	if err := config.RefuseJourneyDailyState(config.JourneyPort, t.TempDir()); err != nil {
+	if err := config.RefuseJourneyDevState(config.JourneyPort, t.TempDir()); err != nil {
 		t.Fatalf("pure control must allow isolate state: %v", err)
 	}
 
@@ -53,7 +53,7 @@ func TestT526JevonsdAllowsJourneyPortOnIsolateState(t *testing.T) {
 	}
 
 	if out, err := exec.Command("lsof", "-nP", "-iTCP:13715", "-sTCP:LISTEN", "-t").Output(); err == nil && strings.TrimSpace(string(out)) != "" {
-		t.Skip("port 13715 held; pure RefuseJourneyDailyState control already passed")
+		t.Skip("port 13715 held; pure RefuseJourneyDevState control already passed")
 	}
 
 	cmd := exec.Command(bin, "-config", cfgPath, "-port", "13715", "-bind", "127.0.0.1", "-workdir", state)

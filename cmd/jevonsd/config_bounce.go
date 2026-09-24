@@ -26,7 +26,7 @@ var bounceOnce sync.Once
 
 // configBounceArmed is set by main once the boot config is known: only a
 // supervised daemon (launchd KeepAlive re-raises it — the development
-// daemon on DailyPort with the default state dir) may bounce. An isolate
+// daemon on DevelopmentPort with the default state dir) may bounce. An isolate
 // or journey daemon has no supervisor to come back under, so it only
 // notifies.
 var configBounceArmed bool

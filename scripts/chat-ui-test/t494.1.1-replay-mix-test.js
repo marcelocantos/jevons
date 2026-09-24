@@ -178,7 +178,7 @@ function startServer() {
       failures.push('historyReplayActive still true after history_meta');
     }
     if (result.toolUse < MID || result.notes < MID || result.systems < MID) {
-      failures.push('tape was not the daily mix: tool_use=' + result.toolUse +
+      failures.push('tape was not the replay mix: tool_use=' + result.toolUse +
         ' notes=' + result.notes + ' system=' + result.systems);
     }
     if (result.emptySlots > 0 || result.emptySlotDesert) {
@@ -217,5 +217,5 @@ function startServer() {
     for (const f of failures) console.error('  - ' + f);
     process.exit(1);
   }
-  console.log('ok - host apply during historyReplayActive coalesces daily mix, no desert (🎯T494.1.1)');
+  console.log('ok - host apply during historyReplayActive coalesces replay mix, no desert (🎯T494.1.1)');
 })();

@@ -179,5 +179,5 @@ describeOracle(family('plan-ticker'), () => {
     expect(tickerTipBody(groups)).not.toMatch(/0% remaining/);
   });
 
-  itOracle.skip('T390.1.6', 'ticker vertices come from the served thresholds document', 'served /api/plan-usage/thresholds — daily path');
+  itOracle.skip('T390.1.6', 'ticker vertices come from the served thresholds document', 'served /api/plan-usage/thresholds — development surface');
 });

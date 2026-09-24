@@ -48,7 +48,7 @@ func TestSupervisorTemplatesAreVellumShaped(t *testing.T) {
 		if strings.Contains(s, "5173") || strings.Contains(s, "npm run") {
 			t.Errorf("%s must not be the Vite :5173 agent", name)
 		}
-		if strings.Contains(s, "restart-daily-jevonsd") {
+		if strings.Contains(s, "restart-jevonsd") {
 			t.Errorf("%s must not invoke the fat restart script", name)
 		}
 	}
