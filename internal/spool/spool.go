@@ -54,6 +54,7 @@ type Record struct {
 	Name     string          `json:"name,omitempty"`
 	Provider string          `json:"provider,omitempty"`
 	Model    string          `json:"model,omitempty"`
+	CostUSD  *float64        `json:"costUSD,omitempty"`
 	Snapshot json.RawMessage `json:"snapshot,omitempty"`
 }
 

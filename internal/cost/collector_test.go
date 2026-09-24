@@ -629,3 +629,20 @@ func TestIsBillableTranscriptAcceptsDatedSpool(t *testing.T) {
 		t.Fatal("vendor sidecar must stay non-billable")
 	}
 }
+
+func TestTailFileParsesSpoolCostUSD(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events-2026-09-25.log")
+	if err := os.WriteFile(path, []byte(
+		`{"ts":"2026-09-25T12:00:00.000Z","seat":"po","type":"text","text":"hi","costUSD":0.42}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	events, _, err := tailFile(path, 0, func(string) string { return "po" }, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].CostUSD != 0.42 || events[0].SessionID != "po" {
+		t.Fatalf("tailFile spool = %+v", events)
+	}
+}

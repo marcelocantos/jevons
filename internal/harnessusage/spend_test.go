@@ -212,7 +212,7 @@ func TestCollectSpendWalksDatedSpool(t *testing.T) {
 	}
 	t.Setenv("JEVONS_SPOOL_DIR", spoolDir)
 	if err := os.WriteFile(filepath.Join(spoolDir, "events-2026-09-25.log"), []byte(
-		`{"ts":"2026-09-25T00:00:00.000Z","seat":"po","type":"text","text":"from spool"}`+"\n",
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"po","type":"text","text":"from spool","costUSD":0.5}`+"\n",
 	), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -234,6 +234,9 @@ func TestCollectSpendWalksDatedSpool(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(rep.Notes, "\n"), vendor) {
 		t.Fatalf("collect noted a vendor JSONL for the sidecar walk: %v", rep.Notes)
+	}
+	if rep.Turns < 1 {
+		t.Fatalf("CollectSpend missed the dated spool (turns=%d notes=%v)", rep.Turns, rep.Notes)
 	}
 }
 

@@ -50,6 +50,15 @@ func claudeLine(rec Record) []byte {
 		if rec.Type == "turn_end" {
 			msg["message"].(map[string]any)["stop_reason"] = "end_turn"
 		}
+		if rec.CostUSD != nil {
+			msg["costUSD"] = *rec.CostUSD
+			msg["message"].(map[string]any)["usage"] = map[string]int{
+				"input_tokens":                  0,
+				"output_tokens":                 0,
+				"cache_creation_input_tokens":   0,
+				"cache_read_input_tokens":       0,
+			}
+		}
 		b, err := json.Marshal(msg)
 		if err != nil {
 			return nil
