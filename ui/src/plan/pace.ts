@@ -386,14 +386,18 @@ function aheadRgb(pressure: number | null): RGB {
 }
 
 /**
- * Bar-fill CSS colour for one window. Exhausted (remaining ≤ 0) is stop C.
+ * DO NOT paint the bar, the sparkline, or the usage figure with this.
  *
- * The served band decides which ramp the fill is on; this function only
- * places it within that ramp. 🎯T610 moved the class to the daemon's verdict
- * and left the fill on the ratio model, so claude weekly at 8% used, 3.1%
- * elapsed had band "ok" and damped burn (8+5)/(3.1+5) = 1.6 — past
- * hot_ratio, a red bar under a verdict that was not even amber. The ratio
- * path below survives only for a payload with no band.
+ * The daemon's band is the colour. One band, one colour, in cockpit.css,
+ * shared by the collapsed bar and the popup graph. On 2026-09-24 an ahead
+ * window was a green bar beside an amber line because this function blended
+ * pressure into a second colour the server had not sent. That drift had
+ * already happened once before (🎯T610: a red bar under a band that was not
+ * even amber). Wiring this return value back onto a pixel is how it happens
+ * a third time.
+ *
+ * The served band decides the class (paceOfWindow / paceClassForBand). This
+ * helper only remains for a payload that arrived with no band at all.
  */
 export function fillColorForWindow(w: PaceWindow, nowMs: number): string {
   const remaining = typeof w.remaining_percent === 'number' ? w.remaining_percent : null;

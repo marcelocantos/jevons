@@ -11,6 +11,12 @@ import (
 // WithBands returns a copy of snap with every window's Band filled in at now.
 //
 // 🎯T610: the cockpit paints the daemon's verdict instead of computing one.
+//
+// The band on this payload IS the colour. The cockpit must not blend
+// pressure, ratio, or anything else into a second colour for the same
+// window. On 2026-09-24 that happened: the bar lerped an "ahead" band to
+// green while the graph painted the band amber. Pressure is served so a
+// reader can see the number behind the band. It is not a licence to repaint.
 // Before this, GET /api/plan-usage carried only used_percent,
 // remaining_percent, resets_at and limit_window_seconds — raw numbers with no
 // verdict — so the browser had no choice but to classify for itself, and

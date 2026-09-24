@@ -127,7 +127,6 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
               const remainingTime = painted.remainingTimePercent;
               const spentTime = remainingTime == null ? null : 100 - remainingTime;
               const cls = painted.className;
-              const fillColor = painted.fillColor;
               return (
                 <span
                   key={`${g.provider}-${w.name}`}
@@ -137,15 +136,13 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
                   data-model={w.model || undefined}
                 >
                   <span className="plan-track">
-                    <span
-                      className="plan-bar"
-                      aria-hidden="true"
-                      style={used === 0 ? { boxShadow: 'inset 0 0 0 1px ' + fillColor } : undefined}
-                    >
-                      <span
-                        className="plan-bar-fill"
-                        style={{ width: used + '%', background: fillColor }}
-                      />
+                    <span className="plan-bar" aria-hidden="true">
+                      {/* DO NOT set an inline background here. The server's band
+                          is the only colour, via the pace class below and the
+                          rules in cockpit.css. fillColorForWindow will happily
+                          turn a served "ahead" into green or red. That is the
+                          drift: a green bar beside an amber graph. */}
+                      <span className="plan-bar-fill" style={{ width: used + '%' }} />
                     </span>
                     {spentTime != null ? (
                       // 🎯T673: position is time spent; the chevron itself is

@@ -338,8 +338,15 @@ export function periodBoundaryXs(w: PlanWindow, timeZone?: string, weekStartsOn 
  * ended burning hot shifts green → red along the curve instead of painting
  * the whole period in today's colour. Each stop carries the band's pace class
  * (paceClassForBand — the bar's own chain); cockpit.css colours it, so the
- * palette has one home. The wash colours the line only. The current-value
- * mark is not a stop, so a band change under the dot cannot slice it.
+ * palette has one home.
+ *
+ * DO NOT replace that class with a locally computed colour, a pressure
+ * blend, or fillColorForWindow. The server already decided the band. A
+ * second model paints the line a different colour from the bar, which is
+ * the drift these comments exist to stop. The wash colours the line only.
+ * The current-value mark is not a stop, so a band change under the dot
+ * cannot slice it. The mark takes the cell's pace class, the same class,
+ * and no other colour.
  */
 export type BurnStop = { offset: number; className: string };
 

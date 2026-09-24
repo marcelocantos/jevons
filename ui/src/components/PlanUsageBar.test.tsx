@@ -132,7 +132,7 @@ describe('PlanUsageBar mux wiring', () => {
       expect(tri.style.left).toBe('75%');
       const fill = container.querySelector('.plan-bar-fill') as HTMLElement;
       expect(fill.style.width).toBe('90%');
-      expect(fill.style.background).toMatch(/^rgb\(/);
+      expect(fill.style.background).toBe('');
     } finally {
       resetClock();
     }
@@ -225,7 +225,7 @@ describe('PlanUsageBar mux wiring', () => {
     }
   });
 
-  it('paints mid-ahead and mid-under fills from paceColor, not a class snap (🎯T390.1.2)', async () => {
+  it('paints the bar from the same pace class as the popup graph', async () => {
     const now = Date.parse('2026-09-12T12:00:00Z');
     setNow(now);
     const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
@@ -276,14 +276,12 @@ describe('PlanUsageBar mux wiring', () => {
       const weekFill = container.querySelector(
         '[data-window="weekly"] .plan-bar-fill',
       ) as HTMLElement;
-      expect(sessionFill.style.background).toMatch(/^rgb\(/);
-      expect(weekFill.style.background).toMatch(/^rgb\(/);
-      expect(sessionFill.style.background).not.toBe(weekFill.style.background);
-      // Named class snaps: dark-theme amber / red / green / under-blue.
-      for (const named of ['rgb(251, 191, 36)', 'rgb(239, 68, 68)', 'rgb(74, 222, 128)', 'rgb(96, 165, 250)']) {
-        expect(sessionFill.style.background).not.toBe(named);
-        expect(weekFill.style.background).not.toBe(named);
-      }
+      const session = container.querySelector('[data-window="session"]') as HTMLElement;
+      const week = container.querySelector('[data-window="weekly"]') as HTMLElement;
+      // The server's band is the colour. No inline blend on top of it.
+      expect(sessionFill.style.background).toBe('');
+      expect(weekFill.style.background).toBe('');
+      expect(session.className).not.toBe(week.className);
     } finally {
       resetClock();
     }
