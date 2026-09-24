@@ -84,11 +84,7 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
   it('leaves a lone sample to the current-value mark (🎯T687)', () => {
     const mid = new Date(START + WEEK * 1000 * 0.25).toISOString();
     const w = win({ history: [{ at: mid, remaining_percent: 71 }] });
-    const spec = burnPaths(w);
-    // The line for one sample is a bare moveto, which paints nothing at
-    // all — and that is fine, because the reading is carried by its own
-    // mark. Nothing here counts samples or synthesises a shape.
-    expect(spec?.line).toBe('M25,22.7');
+    expect(burnPaths(w)).toBeNull();
     expect(currentMark(w)).toBe('M25,22.7 L25,22.7');
   });
 
@@ -102,14 +98,10 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
         { at: b, remaining_percent: 100 },
       ],
     });
-    const spec = burnPaths(w);
-    // Five minutes of a week share one pixel, at the same height, so the
-    // line keeps a single vertex. No inset and no stem: it sits on the
-    // period start because that is when the samples were taken. The mark
-    // is drawn in front of the plot and outside its clip.
-    expect(spec?.points).toHaveLength(1);
-    expect(spec!.points[0].x).toBeGreaterThanOrEqual(0);
-    expect(spec!.points[0].x).toBeLessThan(1);
+    // Five minutes of a week, all untouched, share one height. There is
+    // no line. The mark sits on the period start because that is when
+    // the samples were taken.
+    expect(burnPaths(w)).toBeNull();
     // 100% remaining is 0% used, so the mark sits in the bottom-left
     // corner: the true position of an untouched, just-reset week.
     expect(currentMark(w)).toBe('M0,32 L0,32');

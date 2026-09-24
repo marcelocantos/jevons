@@ -163,6 +163,11 @@ function xColumn(x: number, columns: number): number {
 export function burnPaths(w: PlanWindow, pixelWidth = BURN_WIDTH): BurnPaths | null {
   const points = pixelColumns(burnPoints(w), pixelWidth);
   if (!points.length) return null;
+  // Every sample at the same usage is not a burn. A flat stroke across
+  // an almost-empty period is what made the Cursor API card look like a
+  // stray mark. The current-value mark still sits at the latest sample.
+  const y0 = points[0].y;
+  if (points.every((p) => p.y === y0)) return null;
   const line = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
     .join(' ');

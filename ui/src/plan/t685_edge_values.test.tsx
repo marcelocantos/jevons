@@ -77,17 +77,36 @@ describe('the mark renders in front of the line (🎯T687)', () => {
     const { container } = render(<BurnChart window={win([0, 0, 0])} />);
     const svg = container.querySelector('svg.plan-burn-svg')!;
     const kids = [...svg.querySelectorAll('path')].map((p) => p.getAttribute('class'));
-    expect(kids).toEqual(['plan-burn-line', 'plan-burn-now']);
+    expect(kids).toEqual(['plan-burn-now']);
   });
 
-  it('still marks a single sample, whose line paints nothing', () => {
+  it('still marks a single sample, and does not draw a line', () => {
     const { container } = render(<BurnChart window={win([55])} />);
-    const line = container.querySelector('path.plan-burn-line')!.getAttribute('d');
+    expect(container.querySelector('path.plan-burn-line')).toBeNull();
     const mark = container.querySelector('path.plan-burn-now')!.getAttribute('d');
-    // One sample: the line is a bare moveto that paints nothing, and the
-    // mark is the whole of what the owner sees. No branch produced this.
-    expect(line).not.toContain('L');
     expect(mark).toContain('L');
+  });
+
+  it('draws no line when a 30-day window stays fully spent', () => {
+    const start = Date.parse('2026-09-14T00:00:00Z');
+    const month = 30 * 24 * 3600;
+    const { container } = render(
+      <BurnChart
+        window={{
+          name: 'api',
+          model: 'API',
+          resets_at: new Date(start + month * 1000).toISOString(),
+          limit_window_seconds: month,
+          remaining_percent: 0,
+          history: [0, 6, 12, 18, 24, 30].map((h) => ({
+            at: new Date(start + (14 * 24 + h) * 3600_000).toISOString(),
+            remaining_percent: 0,
+          })),
+        }}
+      />,
+    );
+    expect(container.querySelector('path.plan-burn-line')).toBeNull();
+    expect(container.querySelector('path.plan-burn-now')).not.toBeNull();
   });
 
   it('keeps a full series inside the plot on x', () => {
