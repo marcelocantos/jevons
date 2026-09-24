@@ -42,6 +42,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatreg"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/statedb"
@@ -442,6 +443,10 @@ func main() {
 			tr := transcript.NewReaderRoots(sessionRoots)
 			return tr.Read(sessionID)
 		},
+		ReadForSeat: func(seat, sessionID string) ([]map[string]any, error) {
+			tr := transcript.NewReaderRoots(sessionRoots)
+			return tr.ReadForSeat(seat, sessionID)
+		},
 		Truncate: func(sessionID string, keepTurns int) error {
 			tr := transcript.NewReaderRoots(sessionRoots)
 			return tr.Truncate(sessionID, keepTurns)
@@ -639,9 +644,9 @@ func main() {
 	}
 
 	// Agent registry â manages persistent Grok ACP sessions.
-	registryPath := filepath.Join(cfg.StateDir, "agents.json")
+	registryPath := seatreg.Path(cfg.StateDir)
 	{
-		r, err := claudia.NewRegistry(registryPath)
+		r, err := seatreg.New(registryPath)
 		if err != nil {
 			slog.Error("agent registry failed", "err", err)
 			os.Exit(1)

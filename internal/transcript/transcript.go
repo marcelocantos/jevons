@@ -74,6 +74,45 @@ func NewReaderRoots(r discovery.Roots) *Reader {
 	return &Reader{roots: r}
 }
 
+func spoolView(id string) string {
+	if !spool.SeatHasHistory(spool.Dir(), id) {
+		return ""
+	}
+	path, err := spool.EnsureView(spool.Dir(), id)
+	if err != nil || path == "" {
+		return ""
+	}
+	return path
+}
+
+// ReadForSeat prefers the dated sidecar spool for seat, then sessionID
+// (🎯T866.4). Sidecar records name the seat, not a vendor session UUID.
+func (r *Reader) ReadForSeat(seat, sessionID string) ([]map[string]any, error) {
+	if path := spoolView(seat); path != "" {
+		return r.readPath(path)
+	}
+	return r.Read(sessionID)
+}
+
+func (r *Reader) readPath(path string) ([]map[string]any, error) {
+	got, err := ReadLogical(path)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]any, 0, len(got.Turns)+1)
+	if marker := OversizedMarker(got.Oversized); marker != "" {
+		result = append(result, map[string]any{"role": MarkerRole, "text": marker})
+	}
+	for _, t := range got.Turns {
+		result = append(result, map[string]any{
+			"turn_number": t.Number,
+			"role":        t.Role,
+			"text":        t.Text,
+		})
+	}
+	return result, nil
+}
+
 // Read parses a session transcript and returns turns grouped by user message boundaries.
 // A turn boundary is a JSONL line with type "user" whose content yields non-empty
 // prompt text (Grok top-level content string/text-blocks, or Claude nested message).
@@ -82,29 +121,7 @@ func (r *Reader) Read(sessionID string) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// 🎯T621: same reconstruction Distill uses, so inspect/MCP turns omit
-	// compacted-away history. findJSONL already prefers Grok updates.jsonl.
-	got, err := ReadLogical(path)
-	if err != nil {
-		return nil, err
-	}
-	turns := got.Turns
-
-	result := make([]map[string]any, 0, len(turns)+1)
-	if marker := OversizedMarker(got.Oversized); marker != "" {
-		// 🎯T661: the note is not a turn. It names the oversized records and
-		// the recovery ahead of the conversation, which renders in full.
-		result = append(result, map[string]any{"role": MarkerRole, "text": marker})
-	}
-	for _, t := range turns {
-		result = append(result, map[string]any{
-			"turn_number": t.Number,
-			"role":        t.Role,
-			"text":        t.Text,
-		})
-	}
-	return result, nil
+	return r.readPath(path)
 }
 
 // Tail returns the last n transcript entries in chronological order,
@@ -245,11 +262,8 @@ func (r *Reader) Fork(sessionID string, keepTurns int) (string, error) {
 // findJSONL locates the transcript JSONL for a session id across Grok and
 // Claude roots (🎯T213). Preference: Grok updates.jsonl, else Claude session file.
 func (r *Reader) findJSONL(sessionID string) (string, error) {
-	if spool.SeatHasHistory(spool.Dir(), sessionID) {
-		path, err := spool.EnsureView(spool.Dir(), sessionID)
-		if err == nil && path != "" {
-			return path, nil
-		}
+	if path := spoolView(sessionID); path != "" {
+		return path, nil
 	}
 	if !discovery.IsSessionID(sessionID) {
 		return "", fmt.Errorf("invalid session ID: %q", sessionID)

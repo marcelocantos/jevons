@@ -59,6 +59,8 @@ type ScreenshotFunc func() (string, error)
 // TranscriptOps provides transcript manipulation functions.
 type TranscriptOps struct {
 	Read     func(sessionID string) ([]map[string]any, error)
+	// ReadForSeat prefers the dated sidecar spool for seat (🎯T866.4).
+	ReadForSeat func(seat, sessionID string) ([]map[string]any, error)
 	Truncate func(sessionID string, keepTurns int) error
 	GetID    func() string // current Jevon claude session ID (from claudia registry)
 	// Locate answers where Read would look for sessionID: the resolved path
@@ -1071,7 +1073,13 @@ func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest
 		}
 	}
 
-	turns, err := s.transcript.Read(sessionID)
+	var turns []map[string]any
+	var err error
+	if agentName != "" && s.transcript.ReadForSeat != nil {
+		turns, err = s.transcript.ReadForSeat(agentName, sessionID)
+	} else {
+		turns, err = s.transcript.Read(sessionID)
+	}
 	if err != nil {
 		if agentName != "" {
 			// 🎯T597: never a bare not-found that reads as born-stuck. The
