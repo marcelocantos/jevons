@@ -44,3 +44,26 @@ func TestAsJSONLAndEnsureView(t *testing.T) {
 		t.Fatalf("view = %s", body)
 	}
 }
+
+func TestAsJSONLIsChatWireInput(t *testing.T) {
+	recs, err := ReadSeat(filepath.Dir(mustWriteSpool(t,
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"po","type":"text","text":"hello from sidecar"}`+"\n",
+	)), "po")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(AsJSONL(recs))
+	if !strings.Contains(body, "hello from sidecar") || !strings.Contains(body, `"role":"assistant"`) {
+		t.Fatalf("AsJSONL is not chat-wire input: %s", body)
+	}
+}
+
+func mustWriteSpool(t *testing.T, line string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events-2026-09-25.log")
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
