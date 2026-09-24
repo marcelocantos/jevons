@@ -13,6 +13,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // userTurnPrefix marks a turn delivered to the overseer as a genuine owner
@@ -77,6 +78,32 @@ func losslessLine(ev claudia.Event) string {
 		return `{"type":"unknown","recorded":"lossless"}`
 	}
 	return string(b)
+}
+
+// chatWireFromSpool folds dated-spool records into the same chat-wire
+// lines a live sidecar event would produce (🎯T866.4).
+func chatWireFromSpool(recs []spool.Record) []string {
+	var out []string
+	for _, rec := range recs {
+		var ev claudia.Event
+		switch rec.Type {
+		case "text":
+			ev = claudia.Event{Type: "assistant", Text: rec.Text}
+		case "tool_call":
+			ev = claudia.Event{
+				Type: "progress", ProgressType: "tool_use",
+				ToolCallID: rec.CallID, ToolTitle: rec.Name, Text: rec.Text,
+			}
+		case "turn_end":
+			ev = claudia.Event{Type: "assistant", Text: rec.Text, StopReason: "end_turn"}
+		default:
+			continue
+		}
+		if line, ok := chatWireLine(ev); ok {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func chatWireLine(ev claudia.Event) (line string, ok bool) {

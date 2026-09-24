@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // 🎯T744 — a turn that ends while the daemon holds no event sink is recovered
@@ -101,6 +102,49 @@ func scanMissedTurns(path string, after, before time.Time) ([]missedTurn, error)
 // recoverMissedTurns delivers the newest terminal stop the daemon missed for
 // name, if any, and reports how many were missed. attachedAt is the moment
 // the live sink took over: anything after it belongs to the sink.
+func (s *Server) recoverMissedTurnsFromSpool(name string, attachedAt time.Time) int {
+	if s == nil || strings.TrimSpace(name) == "" || s.agentReportStateDir() == "" {
+		return 0
+	}
+	recs, err := spool.ReadSeat(spool.Dir(), name)
+	if err != nil || len(recs) == 0 {
+		return 0
+	}
+	after := attachedAt.Add(-MissedTurnLookback)
+	if rec, err := agentreport.Latest(s.agentReportStateDir(), name); err == nil && rec.At.After(after) {
+		after = rec.At
+	}
+	var missed []missedTurn
+	var text strings.Builder
+	for _, rec := range recs {
+		if rec.Type == "text" && rec.Text != "" {
+			text.WriteString(rec.Text)
+		}
+		if rec.Type != "turn_end" {
+			continue
+		}
+		body := text.String()
+		if rec.Text != "" && rec.Text != "aborted" {
+			body = rec.Text
+		}
+		text.Reset()
+		at := rec.TS
+		if at.IsZero() && rec.RawTS != "" {
+			at, _ = time.Parse(time.RFC3339Nano, rec.RawTS)
+		}
+		if body == "" || at.IsZero() || !at.After(after) || !at.Before(attachedAt) {
+			continue
+		}
+		missed = append(missed, missedTurn{At: at, Text: body})
+	}
+	if len(missed) == 0 {
+		return 0
+	}
+	last := missed[len(missed)-1]
+	s.deliverRecoveredTurn(name, last, len(missed))
+	return len(missed)
+}
+
 func (s *Server) recoverMissedTurns(name, transcriptPath string, attachedAt time.Time) int {
 	if s == nil || strings.TrimSpace(transcriptPath) == "" || s.agentReportStateDir() == "" {
 		return 0

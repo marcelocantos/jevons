@@ -611,6 +611,10 @@ func ClaudeJSONLPathForWorkDir(projectsDir, workDir, sessionID string) string {
 // Grok-as-source is updates.jsonl (never chat_history.jsonl — 🎯T621);
 // else Claude session JSONL (🎯T213). Exclusive GROK_HOME trees are
 // searched after the primary Grok root.
+// SidecarSeatPath is empty: sidecar seats are not in a vendor JSONL
+// (🎯T866.4). Callers that have a seat name should read ~/.jevons/spool.
+func SidecarSeatPath() string { return "" }
+
 func TranscriptPath(r Roots, sessionID string) string {
 	if !IsSessionID(sessionID) {
 		return ""

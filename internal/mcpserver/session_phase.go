@@ -4,12 +4,14 @@
 package mcpserver
 
 import (
+	"bytes"
 	"strings"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
+	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -26,6 +28,11 @@ func DefaultSessionRoots() discovery.Roots {
 // AgentTranscriptPath is the current session file for d — registry session
 // id at the moment of the read, not a stale id (🎯T423 clause 6).
 func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
+	if spool.ResumeFromSpool(string(d.Provider), d.OMP) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+		// Sidecar seats have no vendor JSONL. Callers that need bytes
+		// use ClassifyAgentSessionPhase / spool.ReadSeat (🎯T866.4).
+		return ""
+	}
 	sid := strings.TrimSpace(d.SessionID)
 	if sid == "" {
 		return ""
@@ -45,5 +52,12 @@ func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
 // Decode via ClassifyPhase on the agent's current session. Missing or
 // unreadable is unknown, never idle.
 func ClassifyAgentSessionPhase(d claudia.AgentDef, roots discovery.Roots) turnev.Phase {
+	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+		recs, err := spool.ReadSeat(spool.Dir(), d.Name)
+		if err != nil || len(recs) == 0 {
+			return turnev.PhaseUnknown
+		}
+		return turnev.ClassifyPhase(turnev.DecodeAll(bytes.NewReader(spool.AsJSONL(recs))))
+	}
 	return turnev.ClassifyPhaseFile(AgentTranscriptPath(d, roots))
 }

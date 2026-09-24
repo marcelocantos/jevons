@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -148,6 +149,14 @@ func (s *Server) recoverGrokMissedTurns(name, path string) int {
 // that is the lock cycle that function's comment warns about. It is called
 // from the recovery goroutine, off both locks.
 func (s *Server) seatTranscriptPath(name string, proc *claudia.Agent) string {
+	if s != nil && s.registry != nil {
+		if def := s.registry.Def(name); def != nil &&
+			spool.ResumeFromSpool(string(def.Provider), def.OMP) &&
+			spool.SeatHasHistory(spool.Dir(), name) {
+			// Sidecar seats have no vendor JSONL (🎯T866.4).
+			return ""
+		}
+	}
 	if proc != nil {
 		if p := strings.TrimSpace(proc.JSONLPath()); p != "" {
 			return p

@@ -4,6 +4,8 @@
 package harnessusage
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"slices"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // Fleet spend measurement (🎯T392.6).
@@ -260,6 +263,27 @@ func CollectSpend(args SpendArgs) (SpendReport, error) {
 	}
 	scan(HarnessGrok, ".grok", resolveGrokSessions, isGrokUpdatesJSONL, sessionIDFromGrokPath)
 	scan(HarnessClaude, ".claude", resolveClaudeProjects, isClaudeSessionJSONL, sessionIDFromClaudePath)
+	if files, err := spool.Files(spool.Dir()); err == nil {
+		for _, path := range files {
+			_, _ = forEachJSONLLine(path, func(line []byte) error {
+				var rec spool.Record
+				if json.Unmarshal(line, &rec) != nil || rec.Seat == "" {
+					return nil
+				}
+				for _, cline := range bytes.Split(spool.AsJSONL([]spool.Record{rec}), []byte("\n")) {
+					if len(cline) == 0 {
+						continue
+					}
+					ev := cost.ParseLine(cline, rec.Seat, until)
+					if ev == nil || !inWindow(ev.Timestamp) {
+						continue
+					}
+					add(HarnessClaude, ev, rec.Seat)
+				}
+				return nil
+			})
+		}
+	}
 
 	rep.Sessions = len(sessions)
 	if rep.ModelCalls > 0 {

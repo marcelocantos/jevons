@@ -32,6 +32,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
 	"github.com/marcelocantos/jevons/internal/userturn"
 )
@@ -244,6 +245,12 @@ func (r *Reader) Fork(sessionID string, keepTurns int) (string, error) {
 // findJSONL locates the transcript JSONL for a session id across Grok and
 // Claude roots (🎯T213). Preference: Grok updates.jsonl, else Claude session file.
 func (r *Reader) findJSONL(sessionID string) (string, error) {
+	if spool.SeatHasHistory(spool.Dir(), sessionID) {
+		path, err := spool.EnsureView(spool.Dir(), sessionID)
+		if err == nil && path != "" {
+			return path, nil
+		}
+	}
 	if !discovery.IsSessionID(sessionID) {
 		return "", fmt.Errorf("invalid session ID: %q", sessionID)
 	}

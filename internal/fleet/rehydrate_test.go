@@ -118,8 +118,8 @@ func TestRehydrateLostSessionPreservesLineage(t *testing.T) {
 	if !strings.Contains(desc, before.SessionID) {
 		t.Fatalf("report does not name the lost session id: %s", desc)
 	}
-	if !strings.Contains(desc, "not there") || !strings.Contains(desc, "new session") || !strings.Contains(desc, "context") {
-		t.Fatalf("report does not state the session is gone and a new one started: %s", desc)
+	if !strings.Contains(desc, "PRIOR CONTEXT IS LOST") || !strings.Contains(desc, "re-send") {
+		t.Fatalf("report does not state context is gone / brief must be re-sent: %s", desc)
 	}
 	if !strings.Contains(desc, "jevons-po") || !strings.Contains(desc, "T313") {
 		t.Fatalf("report does not evidence preserved lineage/target: %s", desc)
@@ -152,6 +152,7 @@ func TestRehydrateSkipsHealthySession(t *testing.T) {
 func TestSessionLostGate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("JEVONS_SPOOL_DIR", filepath.Join(home, "spool"))
 	workDir := t.TempDir()
 
 	claudeLost := &claudia.AgentDef{
@@ -181,8 +182,18 @@ func TestSessionLostGate(t *testing.T) {
 
 	cursor := *claudeLost
 	cursor.Provider = claudia.ProviderCursor
+	if !SessionLost(&cursor) {
+		t.Fatal("materialized cursor sidecar row with no spool not reported lost")
+	}
+	if err := os.MkdirAll(filepath.Join(home, "spool"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "spool", "events-2026-09-25.log"),
+		[]byte(`{"ts":"2026-09-25T00:00:00.000Z","seat":"a","type":"ready"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if SessionLost(&cursor) {
-		t.Fatal("cursor row judged lost from a provider-private store")
+		t.Fatal("cursor sidecar row with spool history reported lost")
 	}
 
 	// Empty provider means Claude, and the transcript exists.

@@ -7,6 +7,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // 🎯T444 — A PHASE NOBODY LOOKED AT IS NOT "NEVER BRIEFED".
@@ -119,6 +120,11 @@ func ReadSessionEvidence(provider claudia.Provider, sessionID, workDir string) S
 	if sessionID == "" || workDir == "" {
 		return SessionEvidenceUnknown
 	}
+	if spool.SidecarProvider(string(provider)) {
+		// Sidecar seats have no Claude JSONL. Absence of that file is
+		// not a dead conversation and is not idle (🎯T866.3).
+		return SessionEvidenceUnknown
+	}
 	if provider != "" && provider != claudia.ProviderClaude {
 		return SessionEvidenceUnknown
 	}
@@ -173,6 +179,9 @@ func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
 	if alive && s.seatIsBornStuck(d) {
 		return AgentStatusBornStuck
 	}
-	return ClassifyAgentPhase(alive, s.agentHasTurnBegan(d.Name), d.Materialized,
-		ReadSessionEvidence(d.Provider, d.SessionID, d.WorkDir))
+	ev := ReadSessionEvidence(d.Provider, d.SessionID, d.WorkDir)
+	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+		ev = SessionEvidencePresent
+	}
+	return ClassifyAgentPhase(alive, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
 }

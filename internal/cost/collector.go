@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // Default cadences and windows for the collection loop.
@@ -152,15 +154,26 @@ func (c *Collector) ScanOnce() ([]string, error) {
 	c.mu.Unlock()
 	cutoff := c.now().Add(-c.activeWindow)
 	var files []string
-	err := filepath.WalkDir(c.projectsRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !isBillableTranscript(path) {
-			return nil // unreadable / non-billable entries are skipped, not fatal
+	walk := func(root string) error {
+		if strings.TrimSpace(root) == "" {
+			return nil
 		}
-		if fi, err := d.Info(); err == nil && fi.ModTime().After(cutoff) {
-			files = append(files, path)
+		return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !isBillableTranscript(path) {
+				return nil
+			}
+			if fi, err := d.Info(); err == nil && fi.ModTime().After(cutoff) {
+				files = append(files, path)
+			}
+			return nil
+		})
+	}
+	err := walk(c.projectsRoot)
+	if err == nil {
+		if serr := walk(spool.Dir()); serr != nil {
+			err = serr
 		}
-		return nil
-	})
+	}
 	c.mu.Lock()
 	c.active = files
 	c.health.LastScan = c.now()

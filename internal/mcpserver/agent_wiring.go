@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // 🎯T426 — an agent's event stream is an INVARIANT, not a step on one path.
@@ -192,6 +193,14 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	// read takes s.mu, which this function must not touch while it holds
 	// wireMu (see the lock-order note above).
 	go func() {
+		if s.registry != nil {
+			if def := s.registry.Def(name); def != nil &&
+				spool.SidecarProvider(string(def.Provider)) &&
+				spool.SeatHasHistory(spool.Dir(), name) {
+				s.recoverMissedTurnsFromSpool(name, attachedAt)
+				return
+			}
+		}
 		if path := s.seatTranscriptPath(name, proc); path != "" {
 			s.recoverMissedTurns(name, path, attachedAt)
 		}

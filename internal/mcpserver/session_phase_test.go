@@ -38,3 +38,21 @@ func TestT423ClassifyAgentSessionPhaseReadsCurrentSession(t *testing.T) {
 		t.Fatalf("stale id classified %s, want unknown", got)
 	}
 }
+
+func TestClassifyAgentSessionPhaseReadsSpoolForSidecar(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-09-25.log"), []byte(
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"po","type":"text","text":"ok"}`+"\n"+
+			`{"ts":"2026-09-25T00:00:01.000Z","seat":"po","type":"turn_end","text":"ok"}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := claudia.AgentDef{Name: "po", Provider: "anthropic", SessionID: "sid-missing"}
+	if p := AgentTranscriptPath(d, discovery.Roots{}); p != "" {
+		t.Fatalf("sidecar path = %q, want empty (no vendor JSONL)", p)
+	}
+	if got := ClassifyAgentSessionPhase(d, discovery.Roots{}); got != turnev.PhaseIdle {
+		t.Fatalf("sidecar spool classified %s, want idle", got)
+	}
+}

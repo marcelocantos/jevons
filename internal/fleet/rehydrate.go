@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // Lost-session rehydrate (🎯T313).
@@ -59,9 +60,9 @@ type LostSession struct {
 // agent remembers nothing (🎯T313 acceptance 2).
 func (l LostSession) Describe() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Rehydrated %q on a new session: provider session %s is not there "+
-		"(%s).", l.Name, l.OldSession, l.JSONLPath)
-	b.WriteString(" A new session was started. The provider conversation is gone; pass in whatever context is still on disk.")
+	fmt.Fprintf(&b, "Rehydrated %q on a FRESH session: its previous conversation %s is gone "+
+		"(no transcript at %s).", l.Name, l.OldSession, l.JSONLPath)
+	b.WriteString(" PRIOR CONTEXT IS LOST — the agent remembers nothing; re-send its brief.")
 	fmt.Fprintf(&b, " Preserved: parent=%s purpose=%s provider=%s", dashIfEmpty(l.Parent),
 		dashIfEmpty(l.Purpose), dashIfEmpty(string(l.Provider)))
 	if l.Model != "" {
@@ -95,14 +96,16 @@ const StatusDeadUnmaterialized = "dead_unmaterialized"
 // the row is Materialized (so Launch will pass RequireResume) but the
 // Claude transcript backing its session id is not on disk.
 //
-// Grok is not probed here. A missing exclusive home is not evidence that
-// a conversation was lost (🎯T627.1): session/load can fail for a store
-// that still exists, and rotating on that discards it. A home that was
-// never published is a different error — exclusive GROK_HOME unavailable
-// — and LaunchRecovering remints on that wording only.
+// Sidecar seats (anthropic, openai-codex, cursor, xai-oauth, or any
+// seat marked OMP) read ~/.jevons/spool, not a vendor JSONL (🎯T866.3).
+// Grok without the OMP mark is not probed here. A missing exclusive
+// home is not evidence that a conversation was lost (🎯T627.1).
 func SessionLost(def *claudia.AgentDef) bool {
 	if def == nil || !def.Materialized || def.SessionID == "" {
 		return false
+	}
+	if spool.ResumeFromSpool(string(def.Provider), def.OMP) {
+		return !spool.SeatHasHistory(spool.Dir(), def.Name)
 	}
 	switch def.Provider {
 	case "", claudia.ProviderClaude:
@@ -267,12 +270,8 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 			slog.Warn("resume-denied rehydrate failed", "name", name, "err", rerr)
 			return nil, err
 		}
-		slog.Error("provider session is not there; starting a new one",
-			"name", name,
-			"old_session", rotated.OldSession,
-			"new_session", rotated.NewSession,
-			"err", err,
-			"detail", rotated.Describe())
+		slog.Warn("launch reminted after provider resume refusal",
+			"name", name, "detail", rotated.Describe())
 		return LaunchReconciled(reg, name)
 	}
 	return agent, err
@@ -296,12 +295,6 @@ func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
 	}
 	switch def.Provider {
 	case claudia.ProviderCursor:
-		// A leftover still holding store.db wraps the same sentinel.
-		// Rotating then would mint a second writer (🎯T541.1). A refusal
-		// with nobody on the store is a dead session id.
-		if strings.Contains(err.Error(), "still holds store") {
-			return false
-		}
 		return claudia.IsCursorResumeDenied(err)
 	case claudia.ProviderGrok:
 		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")

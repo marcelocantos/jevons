@@ -90,8 +90,12 @@ func sessionIDFromPath(path string) string {
 // writes assistant lines on <session-id>.jsonl. Known non-usage sidecars
 // are skipped so the tail-state table does not fill with dead chrome.
 func isBillableTranscript(path string) bool {
+	base := filepath.Base(path)
+	if strings.HasPrefix(base, "events-") && strings.HasSuffix(base, ".log") {
+		return true
+	}
 	if !strings.HasSuffix(path, ".jsonl") {
 		return false
 	}
-	return !nonBillableBasenames[filepath.Base(path)]
+	return !nonBillableBasenames[base]
 }
