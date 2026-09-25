@@ -32,6 +32,9 @@ func TestBrokerIsASeparateProcess(t *testing.T) {
 	if !strings.Contains(body, "SetOMPToolExec") {
 		t.Fatal("jevons-broker must attach jevons_* to the sidecar")
 	}
+	if !strings.Contains(body, "RemintRegistry") {
+		t.Fatal("jevons-broker must remint the fleet onto the sidecar")
+	}
 }
 
 func TestUsageWithoutServe(t *testing.T) {

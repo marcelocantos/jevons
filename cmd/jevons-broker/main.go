@@ -22,6 +22,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/daemon"
+
+	"github.com/marcelocantos/jevons/internal/seatreg"
 )
 
 func main() {
@@ -80,6 +82,13 @@ func serve(args []string) error {
 		log.Info("omp sidecar listening", "socket", sock)
 	}
 	claudia.SetOMPToolExec(claudia.DefaultOMPToolExec)
+	if reg, err := seatreg.New(seatreg.Path(*stateDir)); err != nil {
+		log.Warn("sidecar remint skipped", "err", err)
+	} else if n, err := seatreg.RemintRegistry(reg, ""); err != nil {
+		log.Warn("sidecar remint failed", "err", err)
+	} else if n > 0 {
+		log.Info("sidecar remint", "seats", n)
+	}
 
 	d, err := daemon.New(daemon.Options{
 		SocketPath: *socket,
