@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/cli"
 )
 
 func TestRemintSubscriptionRewritesPlans(t *testing.T) {
@@ -105,5 +107,72 @@ func TestRemintRegistryIsTheFleet(t *testing.T) {
 	}
 	if got := reg.Def("other"); got == nil || got.Provider != claudia.ProviderBedrock {
 		t.Fatalf("bedrock touched: %+v", got)
+	}
+}
+
+func TestParkNonFleetAutoStartLeavesTheFleet(t *testing.T) {
+	dir := t.TempDir()
+	grants, err := New(filepath.Join(dir, GrantsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := New(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, def := range []claudia.AgentDef{
+		{Name: "jevons", Provider: claudia.ProviderGrok, AutoStart: true, SessionID: "fleet"},
+		{Name: "leftover", Provider: claudia.ProviderClaude, AutoStart: true, SessionID: "old"},
+	} {
+		if err := grants.Register(def); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fleet.Register(claudia.AgentDef{Name: "jevons", Provider: claudia.Provider("xai-oauth"), SessionID: "fleet"}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := ParkNonFleetAutoStart(grants, fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("parked %d, want leftover only", n)
+	}
+	if got := grants.Def("jevons"); got == nil || !got.AutoStart {
+		t.Fatalf("fleet grant parked: %+v", got)
+	}
+	if got := grants.Def("leftover"); got == nil || got.AutoStart {
+		t.Fatalf("leftover still AutoStart: %+v", got)
+	}
+}
+
+func TestT8666LiveFleetIsSidecarProviders(t *testing.T) {
+	if os.Getenv("JEVONS_T866_LIVE") == "" {
+		t.Skip("JEVONS_T866_LIVE not set")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := New(Path(filepath.Join(home, ".jevons")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, row := range reg.List() {
+		if !subscriptionPlan(row.Provider) {
+			continue
+		}
+		n++
+		want := cli.SidecarLaunchProvider(row.Provider)
+		if row.Provider != want {
+			t.Fatalf("fleet seat %s still stores %q, want sidecar id %q", row.Name, row.Provider, want)
+		}
+		if row.GrokConnect || row.ConnectURL != "" || row.ConnectPID != 0 {
+			t.Fatalf("fleet seat %s still carries Grok CLI connect: %+v", row.Name, row)
+		}
+	}
+	if n < 2 {
+		t.Fatalf("live fleet had %d subscription seats; T866.6 is the fleet, not one smoke seat", n)
 	}
 }

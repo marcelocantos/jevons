@@ -124,8 +124,8 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 
 	// Launch Config handoff (what registry.Launch would pass to Start).
 	prov, sid, requireResume := launchConfigFromDef(def)
-	if prov != claudia.ProviderClaude {
-		t.Fatalf("Launch provider handoff = %q, want claude", prov)
+	if prov != claudia.Provider("anthropic") {
+		t.Fatalf("Launch provider handoff = %q, want anthropic sidecar id", prov)
 	}
 	if sid != def.SessionID {
 		t.Fatalf("Launch session handoff = %q, want %q", sid, def.SessionID)
@@ -174,7 +174,7 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	}
 
 	prov, sid, requireResume = launchConfigFromDef(resumed)
-	if prov != claudia.ProviderClaude || sid != mintedSID || !requireResume {
+	if prov != claudia.Provider("anthropic") || sid != mintedSID || !requireResume {
 		t.Fatalf("resume Launch handoff provider=%q sid=%q requireResume=%v",
 			prov, sid, requireResume)
 	}

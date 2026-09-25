@@ -848,7 +848,7 @@ func startConfigFromDef(def *claudia.AgentDef) claudia.Config {
 		return claudia.Config{}
 	}
 	return claudia.Config{
-		Provider:      def.Provider,
+		Provider:      cli.SidecarLaunchProvider(def.Provider),
 		SessionID:     def.SessionID,
 		RequireResume: def.Materialized,
 		Model:         def.Model,

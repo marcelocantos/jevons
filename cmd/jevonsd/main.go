@@ -652,11 +652,6 @@ func main() {
 			os.Exit(1)
 		}
 		registry = r
-		if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
-			slog.Warn("sidecar remint failed", "err", err)
-		} else if n > 0 {
-			slog.Info("sidecar remint", "seats", n)
-		}
 		// 🎯T541.1: in-process Cursor Launch waits for leftover store.db
 		// writers to exit, then fail-loud (ErrCursorResumeDenied) rather
 		// than stacking a second ACP client. Daemon-held grants reclaim
@@ -684,7 +679,10 @@ func main() {
 				continue
 			}
 			if def := registry.Def(h.Name); def != nil {
-				if h.ConnectURL != "" {
+				// Subscription seats Launch on the sidecar. Restoring a
+				// leftover grok serve endpoint would start the vendor CLI
+				// (🎯T866.5 / T866.6).
+				if h.ConnectURL != "" && !seatreg.SubscriptionPlan(def.Provider) {
 					def.ConnectURL = h.ConnectURL
 					def.ConnectPID = h.PID
 					def.GrokConnect = true
@@ -702,6 +700,15 @@ func main() {
 			"process_reattach", plan.ProcessReattachPossible,
 			"written_at", snap.WrittenAt,
 			"residual", plan.Residual)
+	}
+
+	// Remint after the upgrade merge. Handoff restores grok ConnectURL;
+	// sidecar Launch must not adopt those leftover grok serve processes
+	// (🎯T866.5 / T866.6).
+	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
+		slog.Warn("sidecar remint failed", "err", err)
+	} else if n > 0 {
+		slog.Info("sidecar remint", "seats", n)
 	}
 
 	// Wire registry and scanner into MCP server.
@@ -1193,6 +1200,11 @@ func main() {
 	noteRemint(upgrade.ReattachSeatsContext(ctx, registry, isOverseerSeat, 1))
 	if ctx.Err() != nil {
 		return
+	}
+	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
+		slog.Warn("sidecar remint after reattach failed", "err", err)
+	} else if n > 0 {
+		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
 	}
 	if upgradeSnap != nil {
 		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {

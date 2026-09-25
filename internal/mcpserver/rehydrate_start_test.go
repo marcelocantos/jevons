@@ -75,7 +75,7 @@ func TestAgentStartRehydratesLostSessionBeforeLaunch(t *testing.T) {
 	if sessionID == lostID || sessionID != lost.NewSession {
 		t.Fatalf("session not rotated: %s (lost %s, reported %s)", sessionID, lostID, lost.NewSession)
 	}
-	if provider != claudia.ProviderClaude {
+	if provider != claudia.Provider("anthropic") {
 		t.Fatalf("provider lost in rehydrate: %q", provider)
 	}
 	after := reg.Def(name)

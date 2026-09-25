@@ -34,7 +34,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint [provider...]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint|smoke [provider...]")
 		return 2
 	}
 	var err error
@@ -47,8 +47,10 @@ func run(args []string) int {
 		err = loginPlans(args[1:])
 	case "remint":
 		err = remintOnly(args[1:])
+	case "smoke":
+		err = smoke(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint [provider...]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint|smoke [provider...]")
 		return 2
 	}
 	if err != nil {
@@ -100,10 +102,15 @@ func serve(args []string) error {
 		}
 	}
 	refreshCancel()
-	if n, err := remintFleet(""); err != nil {
+	if n, parked, err := remintFleet("", *stateDir); err != nil {
 		log.Warn("sidecar remint failed", "err", err)
-	} else if n > 0 {
-		log.Info("sidecar remint", "seats", n)
+	} else {
+		if n > 0 {
+			log.Info("sidecar remint", "seats", n)
+		}
+		if parked > 0 {
+			log.Info("parked leftover grants", "seats", parked)
+		}
 	}
 
 	d, err := daemon.New(daemon.Options{
@@ -152,11 +159,18 @@ func loginPlans(args []string) error {
 
 func refreshPlans(args []string) error {
 	fs := flag.NewFlagSet("refresh-plans", flag.ContinueOnError)
+	force := fs.Bool("force", false, "refresh even when the access token is still live")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *force {
+		os.Setenv("OMP_FORCE_REFRESH", "1")
+	}
 	if err := claudia.OpenOMPPlans(context.Background()); err != nil {
 		return err
+	}
+	if len(fs.Args()) > 0 {
+		os.Setenv("OMP_REFRESH_ONLY", strings.Join(fs.Args(), ","))
 	}
 	refreshed, skipped, err := claudia.RefreshOMPPlans(context.Background())
 	flushErr := claudia.FlushOMPPlans(context.Background())
@@ -181,22 +195,42 @@ func remintOnly(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	n, err := remintFleet("")
+	n, parked, err := remintFleet("", "")
 	if err != nil {
 		return err
 	}
-	fmt.Printf("reminted %d\n", n)
+	fmt.Printf("reminted %d parked %d\n", n, parked)
 	return nil
 }
 
-func remintFleet(spoolDir string) (int, error) {
+func remintFleet(spoolDir, stateDir string) (int, int, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	reg, err := seatreg.New(seatreg.Path(filepath.Join(home, ".jevons")))
+	fleet, err := seatreg.New(seatreg.Path(filepath.Join(home, ".jevons")))
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return seatreg.RemintRegistry(reg, spoolDir)
+	n, err := seatreg.RemintRegistry(fleet, spoolDir)
+	if err != nil {
+		return n, 0, err
+	}
+	if strings.TrimSpace(stateDir) == "" {
+		if xdg := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); xdg != "" && filepath.IsAbs(xdg) {
+			stateDir = filepath.Join(xdg, "claudia")
+		} else {
+			stateDir = filepath.Join(home, ".local", "state", "claudia")
+		}
+	}
+	grants, err := seatreg.New(seatreg.GrantsPath(stateDir))
+	if err != nil {
+		return n, 0, err
+	}
+	gn, err := seatreg.RemintRegistry(grants, spoolDir)
+	if err != nil {
+		return n + gn, 0, err
+	}
+	parked, err := seatreg.ParkNonFleetAutoStart(grants, fleet)
+	return n + gn, parked, err
 }

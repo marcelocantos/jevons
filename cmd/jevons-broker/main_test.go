@@ -38,8 +38,17 @@ func TestBrokerIsASeparateProcess(t *testing.T) {
 	if !strings.Contains(body, "RefreshOMPPlans") {
 		t.Fatal("jevons-broker must renew plan logins through pi-ai")
 	}
+	if !strings.Contains(body, "WithTimeout") || !strings.Contains(body, "RefreshOMPPlans(refreshCtx)") {
+		t.Fatal("serve must bound plan refresh so a Keychain ACL prompt cannot hang the broker")
+	}
 	if !strings.Contains(body, "LoginOMPPlans") {
 		t.Fatal("jevons-broker must create missing plan logins through pi-ai")
+	}
+	if !strings.Contains(body, `case "remint"`) {
+		t.Fatal("jevons-broker must remint the fleet without serving")
+	}
+	if !strings.Contains(body, `case "smoke"`) {
+		t.Fatal("jevons-broker must smoke Launch/Send/steer/abort on the sidecar")
 	}
 	if strings.Contains(body, `filepath.Join(*stateDir, "broker.sock")`) {
 		t.Fatal("jevons-broker must use the claudia socket default, not ~/.jevons/broker.sock")

@@ -4,6 +4,8 @@
 package seatreg
 
 import (
+	"path/filepath"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
@@ -37,6 +39,16 @@ func RemintSubscription(def *claudia.AgentDef, spoolDir string) bool {
 		def.ConnectPID != before.ConnectPID
 }
 
+// GrantsFile is the broker daemon registry basename under the claudia
+// state directory. The live fleet lives in ~/.jevons/agents.json;
+// leftover AutoStart rows here are not that fleet (🎯T866.6).
+const GrantsFile = "grants.json"
+
+// GrantsPath is grants.json under the broker state directory.
+func GrantsPath(stateDir string) string {
+	return filepath.Join(stateDir, GrantsFile)
+}
+
 // RemintRegistry rewrites every subscription-plan row onto the sidecar.
 // That is the fleet, not one smoke seat (🎯T866.6).
 func RemintRegistry(reg *claudia.Registry, spoolDir string) (int, error) {
@@ -50,6 +62,33 @@ func RemintRegistry(reg *claudia.Registry, spoolDir string) (int, error) {
 			continue
 		}
 		if err := reg.Register(def); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// ParkNonFleetAutoStart turns off AutoStart for grant rows that are not
+// live fleet names, so a broker bounce does not relaunch leftover
+// vendor-CLI seats as if they were the fleet (🎯T866.6).
+func ParkNonFleetAutoStart(grants, fleet *claudia.Registry) (int, error) {
+	if grants == nil {
+		return 0, nil
+	}
+	live := map[string]bool{}
+	if fleet != nil {
+		for _, row := range fleet.List() {
+			live[row.Name] = true
+		}
+	}
+	n := 0
+	for _, row := range grants.List() {
+		if !row.AutoStart || live[row.Name] {
+			continue
+		}
+		row.AutoStart = false
+		if err := grants.Register(row); err != nil {
 			return n, err
 		}
 		n++
