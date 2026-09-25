@@ -21,7 +21,7 @@ const DirEnv = "JEVONS_SPOOL_DIR"
 // the Oh My Pi sidecar rather than a vendor CLI (🎯T866.5).
 func SidecarProvider(id string) bool {
 	switch id {
-	case "anthropic", "openai-codex", "cursor", "xai-oauth", "grok":
+	case "anthropic", "openai-codex", "cursor", "xai-oauth":
 		return true
 	default:
 		return false
@@ -29,8 +29,8 @@ func SidecarProvider(id string) bool {
 }
 
 // ResumeFromSpool reports whether fail-closed resume for this seat
-// reads the dated spool. Subscription fleet ids — including grok,
-// claude, and codex — go through the sidecar (🎯T866.5 / T866.6).
+// reads the dated spool. Native sidecar ids do. Fleet grok stays on
+// vendor JSONL until remint (🎯T627.1 / T866.6). omp marks a remint.
 func ResumeFromSpool(provider string, omp bool) bool {
 	if omp {
 		return true

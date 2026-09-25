@@ -151,7 +151,7 @@ func (s *Server) recoverGrokMissedTurns(name, path string) int {
 func (s *Server) seatTranscriptPath(name string, proc *claudia.Agent) string {
 	if s != nil && s.registry != nil {
 		if def := s.registry.Def(name); def != nil &&
-			spool.ResumeFromSpool(string(def.Provider), def.OMP) &&
+			spool.SidecarProvider(string(def.Provider)) &&
 			spool.SeatHasHistory(spool.Dir(), name) {
 			// Sidecar seats have no vendor JSONL (🎯T866.4).
 			return ""

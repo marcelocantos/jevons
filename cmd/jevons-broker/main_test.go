@@ -1,3 +1,5 @@
+//go:build sibling_claudia
+
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +23,7 @@ func TestBrokerIsASeparateProcess(t *testing.T) {
 	if !strings.Contains(body, "daemon.New") {
 		t.Fatal("jevons-broker must run the seat daemon")
 	}
-	if !strings.Contains(body, "omp.Ensure") {
+	if !strings.Contains(body, "EnsureOMPSidecar") {
 		t.Fatal("jevons-broker must leave the sidecar ready")
 	}
 	if strings.Contains(body, "StopSidecar") {

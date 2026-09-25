@@ -28,7 +28,7 @@ func DefaultSessionRoots() discovery.Roots {
 // AgentTranscriptPath is the current session file for d — registry session
 // id at the moment of the read, not a stale id (🎯T423 clause 6).
 func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
-	if spool.ResumeFromSpool(string(d.Provider), d.OMP) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		// Sidecar seats have no vendor JSONL. Callers that need bytes
 		// use ClassifyAgentSessionPhase / spool.ReadSeat (🎯T866.4).
 		return ""

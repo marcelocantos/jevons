@@ -1,3 +1,5 @@
+//go:build sibling_claudia
+
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +22,6 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/daemon"
-	"github.com/marcelocantos/claudia/omp"
 )
 
 func main() {
@@ -73,7 +74,7 @@ func serve(args []string) error {
 		}
 	}
 
-	if sock, err := omp.Ensure(context.Background()); err != nil {
+	if sock, err := claudia.EnsureOMPSidecar(context.Background()); err != nil {
 		log.Warn("omp sidecar not ready; subscription seats will retry on Launch", "err", err)
 	} else {
 		log.Info("omp sidecar listening", "socket", sock)

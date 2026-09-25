@@ -79,7 +79,7 @@ func (s *Server) sendStallIsBusyPane(name string, err error) bool {
 	}
 	reading := seatactivity.Lookup(seatactivity.Query{
 		Name: d.Name, Provider: d.Provider, SessionID: d.SessionID,
-		WorkDir: d.WorkDir, Roots: DefaultSessionRoots(), OMP: d.OMP,
+		WorkDir: d.WorkDir, Roots: DefaultSessionRoots(),
 	})
 	return paneBusyRendering(err, reading, s.bounceReminted(name))
 }

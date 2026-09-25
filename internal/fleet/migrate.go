@@ -859,7 +859,7 @@ func isLiveMigrateFallback(err error) bool {
 // seatTranscript is the handover pointer for def. Sidecar seats read
 // ~/.jevons/spool, never a vendor JSONL (🎯T866.4).
 func seatTranscript(def claudia.AgentDef, roots discovery.Roots) string {
-	if spool.ResumeFromSpool(string(def.Provider), def.OMP) {
+	if spool.SidecarProvider(string(def.Provider)) {
 		if path, err := spool.EnsureView(spool.Dir(), def.Name); err == nil && path != "" {
 			return path
 		}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestResumeFromSpoolIncludesGrokAndCursor(t *testing.T) {
-	for _, id := range []string{"grok", "cursor", "anthropic", "openai-codex", "xai-oauth"} {
+	for _, id := range []string{"cursor", "anthropic", "openai-codex", "xai-oauth"} {
 		if !ResumeFromSpool(id, false) {
 			t.Fatalf("%s must resume from spool", id)
 		}
@@ -19,8 +19,11 @@ func TestResumeFromSpoolIncludesGrokAndCursor(t *testing.T) {
 			t.Fatalf("SidecarProvider(%s)", id)
 		}
 	}
-	if ResumeFromSpool("claude", false) || ResumeFromSpool("codex", false) {
-		t.Fatal("claude/codex CLI ids resume from vendor JSONL until reminted")
+	if ResumeFromSpool("grok", false) || ResumeFromSpool("claude", false) || ResumeFromSpool("codex", false) {
+		t.Fatal("grok/claude/codex CLI ids resume from vendor JSONL until reminted")
+	}
+	if !ResumeFromSpool("grok", true) {
+		t.Fatal("a reminted grok seat reads the spool")
 	}
 }
 

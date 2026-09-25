@@ -170,7 +170,7 @@ func (s *Server) reconcileHeldFromTranscript(q *sendq.Store, name string) int {
 	if def == nil || proc == nil {
 		return 0
 	}
-	if spool.ResumeFromSpool(string(def.Provider), def.OMP) {
+	if spool.SidecarProvider(string(def.Provider)) {
 		if path, err := spool.EnsureView(spool.Dir(), def.Name); err == nil && path != "" {
 			return s.settleHeldAgainst(q, name, path)
 		}
