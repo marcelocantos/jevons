@@ -173,6 +173,7 @@ set -e
 printf '%s\n' "$*" >>"$CALLS"
 case "$*" in
   reread) printf 'jevonsd: %s\nother: changed\n' "$INITIAL_STATE" ;;
+  'stop claudia') : ;;
   'update jevonsd') cp "$SUPERVISOR_CONF_DIR/jevonsd.ini" "$LOADED" ;;
   'restart jevonsd'|'start jevonsd') cmp "$LOADED" "$SUPERVISOR_CONF_DIR/jevonsd.ini" ;;
   'status jevonsd') : ;;
@@ -198,8 +199,22 @@ esac
 				t.Fatalf("install %s: %v\n%s", state, err, out)
 			}
 			out, err := os.ReadFile(calls)
-			if err != nil || string(out) != "reread\nupdate jevonsd\nrestart jevonsd\nupdate jevons-broker\nrestart jevons-broker\nstatus jevonsd\nstatus jevons-broker\n" {
-				t.Fatalf("primary definition not applied before restart: %s %v", out, err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				"reread",
+				"stop claudia",
+				"update jevonsd",
+				"restart jevonsd",
+				"update jevons-broker",
+				"restart jevons-broker",
+				"status jevonsd",
+				"status jevons-broker",
+			}
+			got := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if strings.Join(got, "|") != strings.Join(want, "|") {
+				t.Fatalf("primary definition not applied before restart: %q", got)
 			}
 		})
 	}

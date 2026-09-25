@@ -32,7 +32,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans [flags]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [flags]")
 		return 2
 	}
 	var err error
@@ -41,8 +41,10 @@ func run(args []string) int {
 		err = serve(args[1:])
 	case "refresh-plans":
 		err = refreshPlans(args[1:])
+	case "login-plans":
+		err = loginPlans(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans [flags]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [flags]")
 		return 2
 	}
 	if err != nil {
@@ -99,6 +101,19 @@ func serve(args []string) error {
 		return err
 	}
 	log.Info("jevons-broker stopped")
+	return nil
+}
+
+func loginPlans(args []string) error {
+	fs := flag.NewFlagSet("login-plans", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	n, err := claudia.LoginOMPPlans(context.Background())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("logged in %d\n", n)
 	return nil
 }
 

@@ -87,6 +87,10 @@ else
     # Claudia launchd agent so it cannot reclaim broker.sock.
     launchctl bootout "gui/$(id -u)/com.marcelocantos.claudia-broker" 2>/dev/null || true
   fi
+  # The seat broker now lives in this repo (🎯T866.7). Evict the
+  # Homebrew/claudia supervisor program so it cannot reclaim broker.sock.
+  supervisorctl stop claudia 2>/dev/null || true
+  rm -f "$CONF_DIR/claudia.ini"
   # Stop the Cellar service too. brew services would otherwise reclaim
   # :13705 on the next boot and win the race against supervisord.
   if command -v brew >/dev/null 2>&1; then
