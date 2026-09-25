@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/marcelocantos/claudia"
@@ -32,7 +33,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [flags]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [provider...]")
 		return 2
 	}
 	var err error
@@ -44,7 +45,7 @@ func run(args []string) int {
 	case "login-plans":
 		err = loginPlans(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [flags]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [provider...]")
 		return 2
 	}
 	if err != nil {
@@ -109,7 +110,13 @@ func loginPlans(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	n, err := claudia.LoginOMPPlans(context.Background())
+	ids := fs.Args()
+	if len(ids) == 0 {
+		fmt.Fprintln(os.Stderr, "jevons-broker: login-plans opens a browser for each missing subscription login (anthropic, openai-codex, cursor, xai-oauth)")
+	} else {
+		fmt.Fprintf(os.Stderr, "jevons-broker: login-plans for %s\n", strings.Join(ids, ", "))
+	}
+	n, err := claudia.LoginOMPPlans(context.Background(), ids...)
 	if err != nil {
 		return err
 	}

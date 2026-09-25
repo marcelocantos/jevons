@@ -90,8 +90,8 @@ func TestSidecarLaunchProviderRewritesSubscriptionIds(t *testing.T) {
 	if got := SidecarLaunchProvider(claudia.ProviderCodex); got != claudia.Provider("openai-codex") {
 		t.Fatalf("codex → %q", got)
 	}
-	if got := SidecarLaunchProvider(claudia.ProviderGrok); got != claudia.ProviderGrok {
-		t.Fatalf("grok stayed %q", got)
+	if got := SidecarLaunchProvider(claudia.ProviderGrok); got != claudia.Provider("xai-oauth") {
+		t.Fatalf("grok → %q", got)
 	}
 	if got := SidecarLaunchProvider(claudia.ProviderCursor); got != claudia.ProviderCursor {
 		t.Fatalf("cursor stayed %q", got)

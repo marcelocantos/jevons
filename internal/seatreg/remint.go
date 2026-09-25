@@ -11,8 +11,8 @@ import (
 )
 
 // RemintSubscription points a fleet seat at the Oh My Pi sidecar (🎯T866.6).
-// Claude/Codex ids become anthropic/openai-codex. Grok and Cursor keep
-// their fleet names; Launch talks to the sidecar as xai-oauth / cursor.
+// Claude/Codex/Grok ids become anthropic/openai-codex/xai-oauth. Cursor
+// stays cursor. Launch talks to the sidecar under those ids.
 // A seat with no dated-spool history is dematerialized so RequireResume
 // does not look for a vendor JSONL the sidecar will not write.
 func RemintSubscription(def *claudia.AgentDef, spoolDir string) bool {
@@ -21,9 +21,6 @@ func RemintSubscription(def *claudia.AgentDef, spoolDir string) bool {
 	}
 	before := *def
 	def.Provider = cli.SidecarLaunchProvider(def.Provider)
-	if def.Provider == claudia.ProviderGrok {
-		def.Provider = claudia.Provider("xai-oauth")
-	}
 	def.GrokConnect = false
 	def.ConnectURL = ""
 	def.ConnectPID = 0

@@ -68,14 +68,16 @@ func SelectAgentProvider(override string, stored, defaultProv claudia.Provider) 
 
 // SidecarLaunchProvider rewrites a subscription-plan fleet id onto the
 // Oh My Pi provider Launch talks to (🎯T866.5 / T866.6). Claude Pro/Max
-// is anthropic; ChatGPT Codex is openai-codex. grok and cursor already
-// Launch through the sidecar under those names.
+// is anthropic; ChatGPT Codex is openai-codex; grok is xai-oauth.
+// cursor already launches through the sidecar under that name.
 func SidecarLaunchProvider(p claudia.Provider) claudia.Provider {
 	switch p {
 	case claudia.ProviderClaude:
 		return claudia.Provider("anthropic")
 	case claudia.ProviderCodex:
 		return claudia.Provider("openai-codex")
+	case claudia.ProviderGrok:
+		return claudia.Provider("xai-oauth")
 	default:
 		return p
 	}
