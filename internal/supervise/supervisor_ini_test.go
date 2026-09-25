@@ -27,7 +27,7 @@ func supervisorDir(t *testing.T) string {
 
 func TestSupervisorTemplatesAreVellumShaped(t *testing.T) {
 	dir := supervisorDir(t)
-	for _, name := range []string{"jevonsd.ini"} {
+	for _, name := range []string{"jevonsd.ini", "jevons-broker.ini"} {
 		body, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -59,6 +59,13 @@ func TestSupervisorTemplatesAreVellumShaped(t *testing.T) {
 	if !strings.Contains(string(d), "[program:jevonsd]") {
 		t.Fatal("jevonsd.ini must name program:jevonsd")
 	}
+	b, err := os.ReadFile(filepath.Join(dir, "jevons-broker.ini"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "[program:jevons-broker]") {
+		t.Fatal("jevons-broker.ini must name program:jevons-broker")
+	}
 	if _, err := os.Stat(filepath.Join(dir, "jevons-vanilla.ini")); !os.IsNotExist(err) {
 		t.Fatal("retired vanilla program must have no installable template")
 	}
@@ -86,7 +93,7 @@ func TestSupervisorInstallRendersRepoRoot(t *testing.T) {
 		t.Fatalf("installer retained legacy comparison config: %v", err)
 	}
 	repo := filepath.Clean(filepath.Join(dir, ".."))
-	for _, name := range []string{"jevonsd.ini"} {
+	for _, name := range []string{"jevonsd.ini", "jevons-broker.ini"} {
 		body, err := os.ReadFile(filepath.Join(conf, name))
 		if err != nil {
 			t.Fatalf("rendered %s: %v", name, err)
@@ -169,6 +176,9 @@ case "$*" in
   'update jevonsd') cp "$SUPERVISOR_CONF_DIR/jevonsd.ini" "$LOADED" ;;
   'restart jevonsd'|'start jevonsd') cmp "$LOADED" "$SUPERVISOR_CONF_DIR/jevonsd.ini" ;;
   'status jevonsd') : ;;
+  'update jevons-broker') : ;;
+  'restart jevons-broker'|'start jevons-broker') : ;;
+  'status jevons-broker') : ;;
   *) echo "unexpected supervisor operation: $*" >&2; exit 1 ;;
 esac
 `,
@@ -188,7 +198,7 @@ esac
 				t.Fatalf("install %s: %v\n%s", state, err, out)
 			}
 			out, err := os.ReadFile(calls)
-			if err != nil || string(out) != "reread\nupdate jevonsd\nrestart jevonsd\nstatus jevonsd\n" {
+			if err != nil || string(out) != "reread\nupdate jevonsd\nrestart jevonsd\nupdate jevons-broker\nrestart jevons-broker\nstatus jevonsd\nstatus jevons-broker\n" {
 				t.Fatalf("primary definition not applied before restart: %s %v", out, err)
 			}
 		})

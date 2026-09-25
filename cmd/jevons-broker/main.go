@@ -32,14 +32,20 @@ func main() {
 
 func run(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve [flags]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans [flags]")
 		return 2
 	}
-	if args[0] != "serve" {
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve [flags]")
+	var err error
+	switch args[0] {
+	case "serve":
+		err = serve(args[1:])
+	case "refresh-plans":
+		err = refreshPlans(args[1:])
+	default:
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans [flags]")
 		return 2
 	}
-	if err := serve(args[1:]); err != nil {
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "jevons-broker:", err)
 		return 1
 	}
@@ -48,8 +54,8 @@ func run(args []string) int {
 
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	stateDir := fs.String("state-dir", "", "grants directory (default: ~/.jevons)")
-	socket := fs.String("socket", "", "listen socket (default: CLAUDIA_BROKER_SOCKET or ~/.jevons/broker.sock)")
+	stateDir := fs.String("state-dir", "", "grants directory (default: claudia state dir)")
+	socket := fs.String("socket", "", "listen socket (default: CLAUDIA_BROKER_SOCKET or ~/.local/state/claudia/broker.sock)")
 	logLevel := fs.String("log", "info", "log level")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -61,30 +67,18 @@ func serve(args []string) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
 	slog.SetDefault(log)
 
-	if *stateDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		*stateDir = filepath.Join(home, ".jevons")
-	}
-	if *socket == "" {
-		if env := os.Getenv("CLAUDIA_BROKER_SOCKET"); env != "" {
-			*socket = env
-		} else {
-			*socket = filepath.Join(*stateDir, "broker.sock")
-		}
-	}
-
 	if sock, err := claudia.EnsureOMPSidecar(context.Background()); err != nil {
 		log.Warn("omp sidecar not ready; subscription seats will retry on Launch", "err", err)
 	} else {
 		log.Info("omp sidecar listening", "socket", sock)
 	}
 	claudia.SetOMPToolExec(claudia.DefaultOMPToolExec)
-	if reg, err := seatreg.New(seatreg.Path(*stateDir)); err != nil {
-		log.Warn("sidecar remint skipped", "err", err)
-	} else if n, err := seatreg.RemintRegistry(reg, ""); err != nil {
+	if refreshed, skipped, err := claudia.RefreshOMPPlans(context.Background()); err != nil {
+		log.Warn("plan refresh failed; Launch will retry", "err", err, "refreshed", refreshed, "skipped", skipped)
+	} else {
+		log.Info("plan credentials", "refreshed", refreshed, "skipped", skipped)
+	}
+	if n, err := remintFleet(""); err != nil {
 		log.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
 		log.Info("sidecar remint", "seats", n)
@@ -106,4 +100,35 @@ func serve(args []string) error {
 	}
 	log.Info("jevons-broker stopped")
 	return nil
+}
+
+func refreshPlans(args []string) error {
+	fs := flag.NewFlagSet("refresh-plans", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	refreshed, skipped, err := claudia.RefreshOMPPlans(context.Background())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("refreshed %d skipped %d\n", len(refreshed), len(skipped))
+	for _, id := range refreshed {
+		fmt.Println("refreshed", id)
+	}
+	for _, id := range skipped {
+		fmt.Println("skipped", id)
+	}
+	return nil
+}
+
+func remintFleet(spoolDir string) (int, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return 0, err
+	}
+	reg, err := seatreg.New(seatreg.Path(filepath.Join(home, ".jevons")))
+	if err != nil {
+		return 0, err
+	}
+	return seatreg.RemintRegistry(reg, spoolDir)
 }

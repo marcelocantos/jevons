@@ -77,8 +77,8 @@ func TestStitchFastCheapPinsSparkWhenDestIsCodex(t *testing.T) {
 	})
 
 	def := t32521Mint(t, s, "jv-spark", "", "", "mechanical", claudia.PurposeWork, "")
-	if def.Provider != claudia.ProviderCodex {
-		t.Fatalf("omit mint dest=%q want codex (grok ahead); model=%q", def.Provider, def.Model)
+	if def.Provider != claudia.Provider("openai-codex") {
+		t.Fatalf("omit mint dest=%q want openai-codex (grok ahead); model=%q", def.Provider, def.Model)
 	}
 	if def.Model != cost.ModelCodexSpark {
 		t.Fatalf("codex dest model=%q want %s", def.Model, cost.ModelCodexSpark)

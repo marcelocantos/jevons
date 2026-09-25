@@ -24,6 +24,7 @@ fi
 mkdir -p "$CONF_DIR"
 mkdir -p "$HOME/.local/var/log"
 chmod +x "$REPO/supervisor/run-jevonsd.sh"
+chmod +x "$REPO/supervisor/run-jevons-broker.sh"
 
 render() {
   name="$1"
@@ -36,6 +37,7 @@ render() {
 
 if [ "${SUPERVISOR_RETIRE_VANILLA_ONLY:-}" != 1 ]; then
   render jevonsd
+  render jevons-broker
 fi
 # Retire the comparison program. supervisorctl update removes the old group;
 # there is no template left that can recreate it on the next installation.
@@ -81,6 +83,9 @@ else
   # state we want.
   if command -v launchctl >/dev/null 2>&1; then
     launchctl bootout "gui/$(id -u)/com.marcelocantos.jevonsd" 2>/dev/null || true
+    # jevons-broker is the seat broker now (🎯T866.7). Evict the
+    # Claudia launchd agent so it cannot reclaim broker.sock.
+    launchctl bootout "gui/$(id -u)/com.marcelocantos.claudia-broker" 2>/dev/null || true
   fi
   # Stop the Cellar service too. brew services would otherwise reclaim
   # :13705 on the next boot and win the race against supervisord.
@@ -106,6 +111,9 @@ else
   # replaces its loaded configuration. Scope this to the primary daemon.
   supervisorctl update jevonsd
   supervisorctl restart jevonsd 2>/dev/null || supervisorctl start jevonsd
+  supervisorctl update jevons-broker
+  supervisorctl restart jevons-broker 2>/dev/null || supervisorctl start jevons-broker
 fi
 
 supervisorctl status jevonsd || true
+supervisorctl status jevons-broker || true

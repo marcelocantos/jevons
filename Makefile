@@ -333,11 +333,12 @@ ui-check-bundle: ui-deps
 # Vite :5173 is not a standing program — make ui-dev is opt-in HMR.
 # jevonsd-install (launchd KeepAlive) remains until SUPERVISOR_TAKEOVER=1.
 .PHONY: supervisor-install supervisor-status
-supervisor-install: bin/jevonsd
+supervisor-install: bin/jevonsd bin/jevons-broker
 	supervisor/install.sh
 
 supervisor-status:
 	-supervisorctl status jevonsd
+	-supervisorctl status jevons-broker
 
 # Daily UI LaunchAgents (legacy 🎯T540.4 path). Prefer make supervisor-install.
 UI_DAEMON_LABEL := com.marcelocantos.jevons-ui

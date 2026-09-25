@@ -652,6 +652,11 @@ func main() {
 			os.Exit(1)
 		}
 		registry = r
+		if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
+			slog.Warn("sidecar remint failed", "err", err)
+		} else if n > 0 {
+			slog.Info("sidecar remint", "seats", n)
+		}
 		// 🎯T541.1: in-process Cursor Launch waits for leftover store.db
 		// writers to exit, then fail-loud (ErrCursorResumeDenied) rather
 		// than stacking a second ACP client. Daemon-held grants reclaim

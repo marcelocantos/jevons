@@ -35,6 +35,12 @@ func TestBrokerIsASeparateProcess(t *testing.T) {
 	if !strings.Contains(body, "RemintRegistry") {
 		t.Fatal("jevons-broker must remint the fleet onto the sidecar")
 	}
+	if !strings.Contains(body, "RefreshOMPPlans") {
+		t.Fatal("jevons-broker must renew plan logins through pi-ai")
+	}
+	if strings.Contains(body, `filepath.Join(*stateDir, "broker.sock")`) {
+		t.Fatal("jevons-broker must use the claudia socket default, not ~/.jevons/broker.sock")
+	}
 }
 
 func TestUsageWithoutServe(t *testing.T) {

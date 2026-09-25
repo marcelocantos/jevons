@@ -40,4 +40,7 @@ func TestJevonsdUsesSeatreg(t *testing.T) {
 	if strings.Contains(src, "claudia.NewRegistry(") {
 		t.Fatal("jevonsd still constructs claudia.NewRegistry directly")
 	}
+	if !strings.Contains(src, "seatreg.RemintRegistry(") {
+		t.Fatal("jevonsd must remint the fleet onto the sidecar")
+	}
 }

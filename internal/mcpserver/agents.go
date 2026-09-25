@@ -736,9 +736,6 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	ownerAsked := s.pendingOwnerAsked
 	s.mu.Unlock()
 	pick := s.mintProviderPick(providerArg, stored, existed, taskTypeArg, purpose, name, ownerAsked)
-	if !existed && strings.TrimSpace(providerArg) == "" && strings.TrimSpace(pick.Provider) != "" {
-		pick.Provider = string(cli.SidecarLaunchProvider(claudia.Provider(pick.Provider)))
-	}
 	if strings.TrimSpace(pick.Provider) == "" && (pick.Knob == cost.KnobPlanDest || pick.Knob == cost.KnobClaudia) {
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
@@ -809,6 +806,12 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		// the grant leaves with the mode or the remint cannot launch.
 		def.SandboxMode = ""
 		def.SandboxGitWrite = false
+	}
+	// Rewrite the stored fleet id after model pin and Codex sandbox so
+	// those still key on claude/codex, then Launch talks to the sidecar
+	// as anthropic/openai-codex (🎯T866.5).
+	if !existed && strings.TrimSpace(providerArg) == "" && strings.TrimSpace(pick.Provider) != "" {
+		def.Provider = cli.SidecarLaunchProvider(def.Provider)
 	}
 	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs
 	// are already achieved in the ledger (clear durable Goal).
