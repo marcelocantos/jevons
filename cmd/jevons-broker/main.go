@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/daemon"
@@ -33,7 +34,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [provider...]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint [provider...]")
 		return 2
 	}
 	var err error
@@ -44,8 +45,10 @@ func run(args []string) int {
 		err = refreshPlans(args[1:])
 	case "login-plans":
 		err = loginPlans(args[1:])
+	case "remint":
+		err = remintOnly(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans [provider...]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint [provider...]")
 		return 2
 	}
 	if err != nil {
@@ -76,11 +79,27 @@ func serve(args []string) error {
 		log.Info("omp sidecar listening", "socket", sock)
 	}
 	claudia.SetOMPToolExec(claudia.DefaultOMPToolExec)
-	if refreshed, skipped, err := claudia.RefreshOMPPlans(context.Background()); err != nil {
-		log.Warn("plan refresh failed; Launch will retry", "err", err, "refreshed", refreshed, "skipped", skipped)
+	// One Keychain read at startup. Later gets and puts stay in memory.
+	// The write, if the copy changed, happens on the way out.
+	// A rebuilt broker is refused by the Keychain ACL until the owner
+	// approves it again (🎯T865). Serve must not wait on that dialog:
+	// the socket has to come up so seats can be reclaimed.
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	if err := claudia.OpenOMPPlans(refreshCtx); err != nil {
+		log.Warn("plan keychain was not read; Launch will not prompt again", "err", err)
 	} else {
-		log.Info("plan credentials", "refreshed", refreshed, "skipped", skipped)
+		defer func() {
+			if err := claudia.FlushOMPPlans(context.Background()); err != nil {
+				log.Warn("plan keychain flush failed", "err", err)
+			}
+		}()
+		if refreshed, skipped, err := claudia.RefreshOMPPlans(refreshCtx); err != nil {
+			log.Warn("plan refresh failed; Launch will retry", "err", err, "refreshed", refreshed, "skipped", skipped)
+		} else {
+			log.Info("plan credentials", "refreshed", refreshed, "skipped", skipped)
+		}
 	}
+	refreshCancel()
 	if n, err := remintFleet(""); err != nil {
 		log.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
@@ -116,9 +135,16 @@ func loginPlans(args []string) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "jevons-broker: login-plans for %s\n", strings.Join(ids, ", "))
 	}
+	if err := claudia.OpenOMPPlans(context.Background()); err != nil {
+		return err
+	}
 	n, err := claudia.LoginOMPPlans(context.Background(), ids...)
+	flushErr := claudia.FlushOMPPlans(context.Background())
 	if err != nil {
 		return err
+	}
+	if flushErr != nil {
+		return flushErr
 	}
 	fmt.Printf("logged in %d\n", n)
 	return nil
@@ -129,9 +155,16 @@ func refreshPlans(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := claudia.OpenOMPPlans(context.Background()); err != nil {
+		return err
+	}
 	refreshed, skipped, err := claudia.RefreshOMPPlans(context.Background())
+	flushErr := claudia.FlushOMPPlans(context.Background())
 	if err != nil {
 		return err
+	}
+	if flushErr != nil {
+		return flushErr
 	}
 	fmt.Printf("refreshed %d skipped %d\n", len(refreshed), len(skipped))
 	for _, id := range refreshed {
@@ -140,6 +173,19 @@ func refreshPlans(args []string) error {
 	for _, id := range skipped {
 		fmt.Println("skipped", id)
 	}
+	return nil
+}
+
+func remintOnly(args []string) error {
+	fs := flag.NewFlagSet("remint", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	n, err := remintFleet("")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("reminted %d\n", n)
 	return nil
 }
 
