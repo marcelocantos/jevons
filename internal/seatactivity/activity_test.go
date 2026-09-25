@@ -195,6 +195,30 @@ func TestLookupFutureMtimeClampsAgeToZero(t *testing.T) {
 	}
 }
 
+func TestLocateSidecarReadsSpoolNotVendorJSONL(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	log := filepath.Join(dir, "events-2026-09-25.log")
+	if err := os.WriteFile(log, []byte(
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"jv-cursor","type":"text","text":"from spool"}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vendor := plantClaudeJSONL(t, t.TempDir(), "00000000-0000-4000-8000-000000000099", `{"type":"user"}`+"\n")
+	got := Locate(Query{
+		Name:      "jv-cursor",
+		Provider:  claudia.ProviderCursor,
+		SessionID: "00000000-0000-4000-8000-000000000099",
+		WorkDir:   filepath.Dir(vendor),
+	})
+	if got.State != discovery.LookupPresent || got.Path != log {
+		t.Fatalf("sidecar locate = %+v, want present %q", got, log)
+	}
+	if got.Path == vendor {
+		t.Fatal("sidecar locate returned a vendor JSONL")
+	}
+}
+
 func TestDefaultRootsIncludesGrokHomes(t *testing.T) {
 	got := DefaultRoots()
 	if got.ClaudiaGrokHomes != discovery.ClaudiaGrokHomesRoot() {

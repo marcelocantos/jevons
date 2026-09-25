@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/daemon"
 	"github.com/marcelocantos/claudia/omp"
 )
@@ -77,6 +78,7 @@ func serve(args []string) error {
 	} else {
 		log.Info("omp sidecar listening", "socket", sock)
 	}
+	claudia.SetOMPToolExec(claudia.DefaultOMPToolExec)
 
 	d, err := daemon.New(daemon.Options{
 		SocketPath: *socket,

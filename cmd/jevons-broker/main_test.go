@@ -27,6 +27,9 @@ func TestBrokerIsASeparateProcess(t *testing.T) {
 	if strings.Contains(body, "StopSidecar") {
 		t.Fatal("a jevonsd/broker bounce must not kill the sidecar")
 	}
+	if !strings.Contains(body, "SetOMPToolExec") {
+		t.Fatal("jevons-broker must attach jevons_* to the sidecar")
+	}
 }
 
 func TestUsageWithoutServe(t *testing.T) {

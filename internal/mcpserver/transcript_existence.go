@@ -37,6 +37,7 @@ type TranscriptExistenceQuery struct {
 	SessionID string
 	WorkDir   string
 	Roots     discovery.Roots
+	OMP       bool
 }
 
 // LookupTranscriptExistence answers whether the current session ever produced
@@ -52,6 +53,7 @@ func LookupTranscriptExistence(q TranscriptExistenceQuery) TranscriptExistence {
 		SessionID: q.SessionID,
 		WorkDir:   q.WorkDir,
 		Roots:     q.Roots,
+		OMP:       q.OMP,
 	})
 	return TranscriptExistence{
 		Verdict: ExistenceVerdict(loc.State),

@@ -183,7 +183,7 @@ func (s *Server) diagnoseSeatMCP(d claudia.AgentDef, now time.Time) seatMCPDiagn
 	}
 	ex := LookupTranscriptExistence(TranscriptExistenceQuery{
 		Name: d.Name, Provider: d.Provider, SessionID: d.SessionID, WorkDir: d.WorkDir,
-		Roots: s.transcriptRoots(),
+		Roots: s.transcriptRoots(), OMP: d.OMP,
 	})
 	if ex.Verdict != ExistencePresent || ex.Path == "" {
 		return out

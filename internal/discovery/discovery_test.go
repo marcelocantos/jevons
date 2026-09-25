@@ -228,6 +228,18 @@ func TestSidecarSeatPathIsEmpty(t *testing.T) {
 	}
 }
 
+func TestTranscriptPathForSeatIsEmptyForSidecar(t *testing.T) {
+	root := t.TempDir()
+	projects := filepath.Join(root, "projects")
+	sid := "00000000-0000-4000-8000-000000000002"
+	if p := TranscriptPathForSeat(Roots{ClaudeProjects: projects}, sid, "cursor", false); p != "" {
+		t.Fatalf("sidecar path = %q, want empty", p)
+	}
+	if p := TranscriptPathForSeat(Roots{ClaudeProjects: projects}, sid, "anthropic", false); p != "" {
+		t.Fatalf("anthropic sidecar path = %q, want empty", p)
+	}
+}
+
 func TestSidecarSeatHasHistoryReadsDatedSpool(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("JEVONS_SPOOL_DIR", dir)

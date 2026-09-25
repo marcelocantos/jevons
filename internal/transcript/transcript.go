@@ -124,6 +124,14 @@ func (r *Reader) Read(sessionID string) ([]map[string]any, error) {
 	return r.readPath(path)
 }
 
+// TailForSeat prefers the dated sidecar spool for seat (🎯T866.4).
+func (r *Reader) TailForSeat(seat, sessionID string, n int) ([]Entry, error) {
+	if path := spoolView(seat); path != "" {
+		return TailPath(path, n)
+	}
+	return r.Tail(sessionID, n)
+}
+
 // Tail returns the last n transcript entries in chronological order,
 // parsed richly enough for status derivation. If n <= 0 all entries are
 // returned. Blank and unparseable lines are skipped.

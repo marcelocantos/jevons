@@ -18,6 +18,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
@@ -108,7 +109,7 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	// throwaway compact do not. Rotate then mints the WORK session
 	// — a different id from any compact session (🎯T285.1).
 	oldSession := def.SessionID
-	transcript := discovery.TranscriptPath(f.roots, oldSession)
+	transcript := seatTranscript(*def, f.roots)
 	if transcript == "" && !force {
 		return handover.Pending{}, fmt.Errorf(
 			"migrate %q: no transcript found for session %s under the configured session roots — "+
@@ -234,7 +235,7 @@ func (f *Claudia) rotate(name string, target claudia.Provider, force bool, kind 
 
 	// Resolve the pointer while the old session id is still on the row.
 	oldSession := def.SessionID
-	transcript := discovery.TranscriptPath(f.roots, oldSession)
+	transcript := seatTranscript(*def, f.roots)
 	if transcript == "" && !force {
 		return handover.Pending{}, fmt.Errorf(
 			"%s %q: no transcript found for session %s under the configured session roots — "+
@@ -853,6 +854,17 @@ func isLiveMigrateFallback(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "agent process not running") ||
 		strings.Contains(msg, "agent not ready")
+}
+
+// seatTranscript is the handover pointer for def. Sidecar seats read
+// ~/.jevons/spool, never a vendor JSONL (🎯T866.4).
+func seatTranscript(def claudia.AgentDef, roots discovery.Roots) string {
+	if spool.ResumeFromSpool(string(def.Provider), def.OMP) {
+		if path, err := spool.EnsureView(spool.Dir(), def.Name); err == nil && path != "" {
+			return path
+		}
+	}
+	return discovery.TranscriptPath(roots, def.SessionID)
 }
 
 func throwawayCompactDef(source claudia.AgentDef, name, sessionID string, provider claudia.Provider) (claudia.AgentDef, error) {

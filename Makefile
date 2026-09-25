@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest mcpscope claudiapin buildident
+all: jevonsd jevons-broker jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest mcpscope claudiapin buildident
 
 # 🎯T710: unbuildable strays (bin/jevond predating the jevon-to-jevons
 # rename) must not survive a clean. bin/ is gitignored; this recipe is
@@ -25,6 +25,13 @@ jevonsd: bin/jevonsd
 bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE) ui-build
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
+
+.PHONY: jevons-broker
+jevons-broker: bin/jevons-broker
+
+bin/jevons-broker: $(GO_SRC)
+	@mkdir -p bin
+	go build $(LDFLAGS) -o bin/jevons-broker ./cmd/jevons-broker
 
 # Desktop menu-bar/tray head (🎯T27.7) — pure-Go model client.
 # macOS chrome: make macos-head (Swift status item).

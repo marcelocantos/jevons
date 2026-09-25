@@ -54,6 +54,34 @@ func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claud
 	return f, store, transcript
 }
 
+func TestSeatTranscriptReadsSpoolNotVendor(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-09-25.log"), []byte(
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"jv-cursor","type":"text","text":"from spool"}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sid := "00000000-0000-4000-8000-000000000866"
+	projects := filepath.Join(dir, "projects")
+	if err := os.MkdirAll(filepath.Join(projects, "bucket"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vendor := filepath.Join(projects, "bucket", sid+".jsonl")
+	if err := os.WriteFile(vendor, []byte(`{"type":"user"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := seatTranscript(claudia.AgentDef{
+		Name: "jv-cursor", Provider: claudia.ProviderCursor, SessionID: sid,
+	}, discovery.Roots{ClaudeProjects: projects})
+	if got == "" || got == vendor {
+		t.Fatalf("sidecar handover path = %q (vendor %q)", got, vendor)
+	}
+	if !strings.Contains(got, ".view") {
+		t.Fatalf("want spool view, got %q", got)
+	}
+}
+
 func TestT543ThrowawayCompactIsNotAWorkSeat(t *testing.T) {
 	got, err := throwawayCompactDef(claudia.AgentDef{
 		Name: "worker", Purpose: claudia.PurposeWork, TargetID: "T543",

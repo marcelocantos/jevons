@@ -29,18 +29,13 @@ func SidecarProvider(id string) bool {
 }
 
 // ResumeFromSpool reports whether fail-closed resume for this seat
-// reads the dated spool. Grok without the OMP mark still uses the
-// Grok Build store (🎯T866.3 / T627.1) until T866.6 remints it.
+// reads the dated spool. Subscription fleet ids — including grok,
+// claude, and codex — go through the sidecar (🎯T866.5 / T866.6).
 func ResumeFromSpool(provider string, omp bool) bool {
 	if omp {
 		return true
 	}
-	switch provider {
-	case "anthropic", "openai-codex", "cursor", "xai-oauth":
-		return true
-	default:
-		return false
-	}
+	return SidecarProvider(provider)
 }
 
 // Record is one sidecar line. Each names its seat.
@@ -123,6 +118,49 @@ func ReadSeat(dir, seat string) ([]Record, error) {
 		}
 	}
 	return out, nil
+}
+
+// LatestPath is the newest dated log that names seat. Empty when the
+// seat has no spool history. Readers use this for mtime, not a vendor
+// JSONL (🎯T866.4).
+func LatestPath(dir, seat string) string {
+	if dir == "" || seat == "" {
+		return ""
+	}
+	names, err := listDayFiles(dir)
+	if err != nil {
+		return ""
+	}
+	var last string
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		found := false
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" {
+				continue
+			}
+			var rec Record
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				continue
+			}
+			if rec.Seat == seat {
+				found = true
+				break
+			}
+		}
+		_ = f.Close()
+		if found {
+			last = path
+		}
+	}
+	return last
 }
 
 // Files returns dated log names, older first.

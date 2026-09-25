@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // errNoTranscriptReader is a sentinel tests and send-failure stubs use.
@@ -297,6 +298,15 @@ func (s *Server) reconstructedInspectLines(name string) []string {
 	if s == nil {
 		return nil
 	}
+	if recs, err := spool.ReadSeat(spool.Dir(), name); err == nil && len(recs) > 0 {
+		out := make([]string, 0, len(recs))
+		for _, line := range chatWireFromSpool(recs) {
+			out = append(out, stampConversationName(line, name))
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
 	s.mu.RLock()
 	reg := s.registry
 	reader := s.transcriptReader
@@ -308,7 +318,7 @@ func (s *Server) reconstructedInspectLines(name string) []string {
 	if def == nil || strings.TrimSpace(def.SessionID) == "" {
 		return nil
 	}
-	turns, err := reader.Read(def.SessionID)
+	turns, err := reader.ReadForSeat(name, def.SessionID)
 	if err != nil || len(turns) == 0 {
 		return nil
 	}

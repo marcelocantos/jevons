@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // Verdict is what the meter can honestly say. An unreadable meter is unknown,
@@ -53,6 +54,9 @@ type Query struct {
 	SessionID string
 	WorkDir   string
 	Roots     discovery.Roots
+	// OMP is the registry sidecar mark. Grok without it still uses the
+	// Grok Build store until T866.6 remints the seat.
+	OMP bool
 	// Now is the clock the age is measured against. Zero means time.Now();
 	// tests inject so an age is a computed distance and not whatever the
 	// suite happened to run at.
@@ -101,6 +105,9 @@ func DefaultRoots() discovery.Roots {
 
 // Locate resolves the seat's current transcript per provider.
 func Locate(q Query) Location {
+	if name := strings.TrimSpace(q.Name); name != "" && spool.SeatHasHistory(spool.Dir(), name) {
+		return locateSpool(name)
+	}
 	sid := strings.TrimSpace(q.SessionID)
 	if sid == "" {
 		return Location{State: discovery.LookupUnobservable, Reason: "no session id"}
@@ -186,6 +193,17 @@ func locateGrok(roots discovery.Roots, sessionID string) Location {
 		out.Reason = "grok lookup returned no state"
 	}
 	return out
+}
+
+func locateSpool(seat string) Location {
+	path := spool.LatestPath(spool.Dir(), seat)
+	if path == "" {
+		return Location{
+			State:  discovery.LookupAbsent,
+			Reason: "sidecar spool has no records for seat",
+		}
+	}
+	return Location{State: discovery.LookupPresent, Path: path}
 }
 
 func locateCursor(q Query) Location {

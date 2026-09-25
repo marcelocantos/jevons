@@ -623,6 +623,15 @@ func SidecarSeatHasHistory(seat string) bool {
 	return spool.SeatHasHistory(spool.Dir(), seat)
 }
 
+// TranscriptPathForSeat is empty for a sidecar seat — callers must read
+// ~/.jevons/spool instead of a vendor JSONL (🎯T866.4).
+func TranscriptPathForSeat(r Roots, sessionID, provider string, omp bool) string {
+	if spool.ResumeFromSpool(provider, omp) {
+		return SidecarSeatPath()
+	}
+	return TranscriptPath(r, sessionID)
+}
+
 func TranscriptPath(r Roots, sessionID string) string {
 	if !IsSessionID(sessionID) {
 		return ""

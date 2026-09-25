@@ -10,18 +10,17 @@ import (
 	"testing"
 )
 
-func TestResumeFromSpoolExcludesGrokWithoutOMP(t *testing.T) {
-	if ResumeFromSpool("grok", false) {
-		t.Fatal("grok without OMP still uses the Grok Build store")
+func TestResumeFromSpoolIncludesGrokAndCursor(t *testing.T) {
+	for _, id := range []string{"grok", "cursor", "anthropic", "openai-codex", "xai-oauth"} {
+		if !ResumeFromSpool(id, false) {
+			t.Fatalf("%s must resume from spool", id)
+		}
+		if !SidecarProvider(id) {
+			t.Fatalf("SidecarProvider(%s)", id)
+		}
 	}
-	if !ResumeFromSpool("grok", true) {
-		t.Fatal("OMP grok must resume from spool")
-	}
-	if !ResumeFromSpool("cursor", false) {
-		t.Fatal("cursor resumes from spool")
-	}
-	if !SidecarProvider("grok") || !SidecarProvider("anthropic") {
-		t.Fatal("SidecarProvider")
+	if ResumeFromSpool("claude", false) || ResumeFromSpool("codex", false) {
+		t.Fatal("claude/codex CLI ids resume from vendor JSONL until reminted")
 	}
 }
 
@@ -42,6 +41,27 @@ func TestAsJSONLAndEnsureView(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"role":"assistant"`) || !strings.Contains(string(body), "hi") {
 		t.Fatalf("view = %s", body)
+	}
+}
+
+func TestLatestPathNamesDatedSpoolNotVendor(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-09-24.log"), []byte(
+		`{"ts":"2026-09-24T00:00:00.000Z","seat":"po","type":"text","text":"old"}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(dir, "events-2026-09-25.log")
+	if err := os.WriteFile(live, []byte(
+		`{"ts":"2026-09-25T00:00:00.000Z","seat":"po","type":"text","text":"new"}`+"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := LatestPath(dir, "po"); got != live {
+		t.Fatalf("LatestPath = %q, want %q", got, live)
+	}
+	if got := LatestPath(dir, "missing"); got != "" {
+		t.Fatalf("missing seat path = %q", got)
 	}
 }
 

@@ -34,4 +34,11 @@ func TestReadForSeatUsesSpoolNotSessionID(t *testing.T) {
 	if !found {
 		t.Fatalf("ReadForSeat missed the spool: %#v", turns)
 	}
+	entries, err := reader.TailForSeat("jevons-po", "00000000-0000-4000-8000-000000000000", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("TailForSeat missed the spool")
+	}
 }

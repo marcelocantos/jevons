@@ -333,7 +333,7 @@ func (s *Server) diagnoseBirth(d claudia.AgentDef, now time.Time) birthDiagnosis
 	out.PastGrace = out.Elapsed >= BornStuckGrace
 	out.Existence = LookupTranscriptExistence(TranscriptExistenceQuery{
 		Name: d.Name, Provider: d.Provider, SessionID: sid, WorkDir: d.WorkDir,
-		Roots: s.transcriptRoots(),
+		Roots: s.transcriptRoots(), OMP: d.OMP,
 	})
 	switch out.Existence.Verdict {
 	case ExistencePresent:

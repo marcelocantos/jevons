@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
+	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -166,7 +167,15 @@ func (s *Server) reconcileHeldFromTranscript(q *sendq.Store, name string) int {
 	}
 	def := s.registry.Def(name)
 	proc := s.registry.Get(name)
-	if def == nil || proc == nil || !providerKeepsClaudeTranscript(def.Provider) {
+	if def == nil || proc == nil {
+		return 0
+	}
+	if spool.ResumeFromSpool(string(def.Provider), def.OMP) {
+		if path, err := spool.EnsureView(spool.Dir(), def.Name); err == nil && path != "" {
+			return s.settleHeldAgainst(q, name, path)
+		}
+	}
+	if !providerKeepsClaudeTranscript(def.Provider) {
 		return 0
 	}
 	return s.settleHeldAgainst(q, name, proc.JSONLPath())
