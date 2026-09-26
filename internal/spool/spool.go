@@ -7,10 +7,15 @@ package spool
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -66,9 +71,14 @@ func Dir() string {
 }
 
 // SeatHasHistory reports whether any dated file holds a record for seat.
+// It does not decode snapshots. GET /api/agents calls this for every
+// running seat, and a turn_end line is the whole agent state (🎯T868).
 func SeatHasHistory(dir, seat string) bool {
-	recs, err := ReadSeat(dir, seat)
-	return err == nil && len(recs) > 0
+	if dir == "" || seat == "" {
+		return false
+	}
+	hits, err := seatIndex(dir)
+	return err == nil && hits[seat] != ""
 }
 
 // ReadSeat returns records for seat, older dates first.
@@ -127,40 +137,11 @@ func LatestPath(dir, seat string) string {
 	if dir == "" || seat == "" {
 		return ""
 	}
-	names, err := listDayFiles(dir)
+	hits, err := seatIndex(dir)
 	if err != nil {
 		return ""
 	}
-	var last string
-	for _, name := range names {
-		path := filepath.Join(dir, name)
-		f, err := os.Open(path)
-		if err != nil {
-			continue
-		}
-		found := false
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
-		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if line == "" {
-				continue
-			}
-			var rec Record
-			if err := json.Unmarshal([]byte(line), &rec); err != nil {
-				continue
-			}
-			if rec.Seat == seat {
-				found = true
-				break
-			}
-		}
-		_ = f.Close()
-		if found {
-			last = path
-		}
-	}
-	return last
+	return hits[seat]
 }
 
 // Files returns dated log names, older first.
@@ -188,5 +169,126 @@ func listDayFiles(dir string) ([]string, error) {
 			names = append(names, n)
 		}
 	}
+	sort.Strings(names)
 	return names, nil
+}
+
+// seatIndex maps a seat to the newest dated log that names it. The
+// signature is file name, size, and mtime, so an append rebuilds and a
+// quiet poll does not read the spool again.
+type indexedSeats struct {
+	sig  string
+	hits map[string]string
+}
+
+var (
+	seatIndexMu sync.Mutex
+	seatIndexes = map[string]*indexedSeats{}
+)
+
+func seatIndex(dir string) (map[string]string, error) {
+	names, err := listDayFiles(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	sig, err := daySig(dir, names)
+	if err != nil {
+		return nil, err
+	}
+	seatIndexMu.Lock()
+	defer seatIndexMu.Unlock()
+	if idx, ok := seatIndexes[dir]; ok && idx.sig == sig {
+		return idx.hits, nil
+	}
+	hits := map[string]string{}
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		if err := scanSeatNames(path, hits); err != nil {
+			return nil, err
+		}
+	}
+	seatIndexes[dir] = &indexedSeats{sig: sig, hits: hits}
+	return hits, nil
+}
+
+func daySig(dir string, names []string) (string, error) {
+	var b strings.Builder
+	for _, name := range names {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(name)
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatInt(fi.Size(), 10))
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatInt(fi.ModTime().UnixNano(), 10))
+		b.WriteByte(';')
+	}
+	return b.String(), nil
+}
+
+// scanSeatNames records seats named in path. The seat field is at the
+// front of each line; the snapshot after it is not decoded.
+func scanSeatNames(path string, hits map[string]string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 64*1024)
+	for {
+		seat, err := nextSeat(r)
+		if seat != "" {
+			hits[seat] = path
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func nextSeat(r *bufio.Reader) (string, error) {
+	var prefix []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(prefix) < 512 {
+			room := 512 - len(prefix)
+			if len(chunk) > room {
+				prefix = append(prefix, chunk[:room]...)
+			} else {
+				prefix = append(prefix, chunk...)
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		if err == io.EOF && len(chunk) == 0 && len(prefix) == 0 {
+			return "", io.EOF
+		}
+		return seatField(prefix), err
+	}
+}
+
+func seatField(prefix []byte) string {
+	const key = `"seat":"`
+	i := bytes.Index(prefix, []byte(key))
+	if i < 0 {
+		return ""
+	}
+	rest := prefix[i+len(key):]
+	j := bytes.IndexByte(rest, '"')
+	if j <= 0 {
+		return ""
+	}
+	return string(rest[:j])
 }

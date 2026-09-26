@@ -6,6 +6,7 @@ package spool
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +27,25 @@ func TestReadSeatOlderDatesFirst(t *testing.T) {
 	}
 	if !SeatHasHistory(dir, "s") || SeatHasHistory(dir, "missing") {
 		t.Fatal("SeatHasHistory")
+	}
+	if LatestPath(dir, "s") != filepath.Join(dir, "events-2026-09-26.log") {
+		t.Fatalf("LatestPath = %q", LatestPath(dir, "s"))
+	}
+}
+
+func TestSeatIndexSkipsSnapshotBody(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString(`{"ts":"2026-09-26T00:00:00.000Z","seat":"jevons","type":"turn_end","snapshot":`)
+	b.WriteString(strings.Repeat("x", 256*1024))
+	b.WriteByte('\n')
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-09-26.log"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !SeatHasHistory(dir, "jevons") || SeatHasHistory(dir, "other") {
+		t.Fatal("index must see jevons and not the snapshot body")
+	}
+	if got := LatestPath(dir, "jevons"); got != filepath.Join(dir, "events-2026-09-26.log") {
+		t.Fatalf("LatestPath = %q", got)
 	}
 }
