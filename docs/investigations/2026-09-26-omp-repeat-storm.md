@@ -1,85 +1,72 @@
-# OMP / Claudia repeat-storm (T219 + T65)
+# Postmortem: OMP repeat storm (T219 + T65)
 
-**Date:** 2026-09-26  
-**Status:** open — handed off from an HMS Cursor session that received this thread by mistake  
-**Continue here.** Do not treat the HMS Ralph/T14 unpacker work as the cause.
+**Date:** 2026-09-26
+**Seat:** overseer `jevons`
+**Status:** closed
+**Filed:** 🎯T869 (a plan-only reply must not earn another prompt)
 
-Screenshots live beside this file:
+The repeated bubbles are Jevons prompting the same seat. One bubble inside that sequence is the model looping on a single prompt. The sidecar did not replay snapshots into the transcript, and the seat was not relaunched once per bubble.
 
-- `2026-09-26-omp-repeat-storm/01-ralph-t14-healthy-unpacker.jpg`
-- `2026-09-26-omp-repeat-storm/02-t65-repeat-wall.jpg`
-- `2026-09-26-omp-repeat-storm/03-t65-multi-bubble-eolos.jpg`
-
-OMP is oh-my-pi (`omp` / `@oh-my-pi/pi-ai` / `pi-agent-core`), newly wired as a Claudia backend. Design notes: [`docs/design/oh-my-pi-claudia-backend.md`](../design/oh-my-pi-claudia-backend.md). `pi-ai` `stream()` yields `text_*`, `thinking_*`, `toolcall_*`, `done`, `error`.
+A second note, on why this took a custom pass over the spool, is [2026-09-26-omp-repeat-storm-meta.md](2026-09-26-omp-repeat-storm-meta.md).
 
 ## What the owner saw
 
-Claudia chat (`marcelocantos/claudia`) after a user line about **T219 / T65**, interrupt, and spawn/no-product.
+Claudia chat after a line about T219 / T65, an interrupt, and "no spawn / no product."
 
-1. A **storm of T219 chatter** above the T65 mess. The owner could not screenshot it because the view **keeps snapping to the bottom** (separate UI bug). The T219 storm **survives reload**, so it is in the persisted transcript, not a paint artifact. Find it in the session JSONL; do not ask the owner to scroll.
-
-2. **Abort** (`aborted`, “1 step”).
-
-3. Several **short assistant bubbles**, each restarting the same plan: inspect workspace, T65 brief, directory listing, git status.
-
-4. **`<|eolos|>` leaked into visible text** — mid-sentence and as a terminator. Example shapes from the capture: `…notes.<|eolos|>` then more “I’ll…”; a later bubble ends `…tree.<|eolos|>`.
-
-5. One **runaway bubble**: the same “I’ll inspect / I’ll start / I’ll search T65…” plan, then collapse into `I'll start. I'll list. I'll search. I'll git.`
-
-6. After that wall, **more short bubbles** with the same opener. This is many turns, not one fat generation.
+1. A run of T219 chatter above the T65 mess. The view stayed on the latest bubbles, so that region was not in the screenshots. It is persisted.
+2. An abort ("aborted", "1 step").
+3. Several short assistant bubbles, each restating the same plan: inspect the workspace, the T65 brief, directory listing, git status.
+4. A stop token in the visible text. The capture reads `<|eolos|>`. The bytes are `<|eos|>`.
+5. One runaway bubble that collapses into `I'll start. I'll list. I'll search. I'll git.`
+6. More short bubbles with the same opener after that wall.
 
 ![T65 wall of repeated I'll-inspect sentences](2026-09-26-omp-repeat-storm/02-t65-repeat-wall.jpg)
 
-![Abort, multiple restating bubbles, leaked eolos, then the wall](2026-09-26-omp-repeat-storm/03-t65-multi-bubble-eolos.jpg)
+![Abort, multiple restating bubbles, leaked eos, then the wall](2026-09-26-omp-repeat-storm/03-t65-multi-bubble-eolos.jpg)
 
-## How to tell harness vs model
+The Ralph T14 unpacker in a parallel session is a different harness. It is not this incident.
 
-The painted bubble cannot decide it. Consecutive **raw** `text_*` (or equivalent session events) can.
+![Ralph T14 unpacker, not this incident](2026-09-26-omp-repeat-storm/01-ralph-t14-healthy-unpacker.jpg)
 
-| Next raw event | Likely cause |
+## Record
+
+The painted thread is `~/.jevons/spool/events-2026-09-26.log`. Earlier T219 history is in `events-2026-09-25.log`. Text events are word-sized deltas (1–11 characters). Each assistant bubble is one `prompt` that ends at `turn_end`. Prefix growth between consecutive deltas is zero, so this is not a snapshot appended onto itself.
+
+The grok-home session for this seat (`chat_history.jsonl`, `updates.jsonl`, `events.jsonl` under `~/.local/state/claudia/grok-homes/…/01a0c7fc-eacc-7703-9dd2-8fdb23e3783c`) does not contain the "I'll inspect" text. `~/.omp/` was empty. The live stream is the sidecar spool.
+
+## Timeline
+
+Times in UTC. AEST is UTC+10. The 12:35 AEST snapshot of seat `jevons` holds 38 messages, including both restart nudges, so the Agent was not wiped between them.
+
+| When | What landed in the seat |
 |---|---|
-| Byte-identical to the last, or same stream/message id replayed | Harness / OMP duplicate |
-| Full text **starts with** the last event’s full text (growing snapshot) **and** the UI **appends** the whole string | Harness. Display length goes roughly quadratic; the model only wrote the longest copy. |
-| New suffix is more “I’ll inspect…” that is **not** a prefix of what you already have | Model generated another sentence (can still be a loop) |
-| Output-token usage stays small while the bubble is huge | Harness |
-| Usage climbs in step with the wall | Model, or a loop that is actually calling the API again |
+| 2026-09-25, through 23:27Z | Same seat grew from 2 messages to 224 (112 user, 112 assistant). 116 of those messages contain T219. Seventeen share the sentinel boilerplate. A few T65 interrupt lines are repeated two or three times. Two `turn_end` lines that evening carry the text `aborted` (22:02Z and 22:04Z). |
+| 11:37:34 and 11:37:59 AEST | `ResumeAll` could not adopt, so it launched, twice, 25 seconds apart. Each launch `Send`s Claudia `DefaultRestartNudge` ("the host restarted… continue the task"). An adopted seat would have been left silent. |
+| 11:55–12:35 AEST | No new `ready` between the "I'll inspect" turns. New user turns kept arriving: `[event: sentinel]` T219 repair notices, `[Agent mm2-t65-keys-doors responded]` forwarding that worker's own plan sentence, and `Impatience incident closed` after repressure. The overseer answered each with another plan sentence and no tool call. Several of those turns end with a single delta whose text is `<|eos|>`. |
+| 02:24:29–02:24:34Z | One turn. 1063 deltas, 4314 characters, 244 sentences (`I'll start.` ×50, `I'll search T65.` ×28, `I'll list.` ×28, `I'll git.` ×26). |
+| 12:20 AEST jevonsd restart | The broker logged `consumer connection closed; seat kept running`. That bounce did not launch the seat again. |
 
-`<|eolos|>` in the transcript is a **stop/end token leak**, not prose. If OMP does not treat it as a stop — or treats it as “turn over, start another” — you get new bubbles that restate the plan, sometimes with the token still visible.
+## Cause
 
-Three layers, not one:
+Jevons treats a plan sentence with no tool call as the seat having returned to work.
 
-- **Leaked `<|eolos|>` / turn split** — check OMP stop sequences and whether that token closes a message.
-- **Many short bubbles with the same opener** — false turn split, or the agent really re-plans after abort/interrupt.
-- **The one collapsed wall** — still snapshot-append vs degeneration until you diff raw events.
+Impatience repressure fires because `mm2-t65-keys-doors` looks idle. The worker replies with "I'll inspect…" and does not call a tool. That reply is forwarded to the overseer as `[Agent mm2-t65-keys-doors responded]`. The overseer answers the same way. Impatience records the turn as cleared ("returned to working"), closes the incident, and the dwell clock starts again. Sentinel T219 repair notices are further user turns in the same list. Each one paints a new bubble.
 
-The T219 storm (persisted, above this, owner could not capture) is in scope. The scroll-to-bottom snap is a second bug; fix or work around it so a long session is inspectable.
+The stop token is separate and smaller. `sidecar/seat.ts` forwards every `text_delta` unchanged. The model emitted `<|eos|>` as the last delta of a short turn. That token is visible. It ends that turn. It does not start the next one.
 
-## Where to look
+The collapsed wall is the model, inside one of the prompts Jevons had just submitted. Delta size and the zero prefix-growth measurement put it on the model side of the table in the original handoff.
 
-Do not stop at the pretty chat. The mess is on disk after reload.
+## Ruled out
 
-Likely trees (today’s Claudia grok-homes were under `~/.local/state/claudia/grok-homes/`):
+- Harness snapshot-append. Consecutive text events are suffixes of a few characters, not copies of the whole bubble.
+- One reseat per bubble. Relaunch happened twice, at the 11:37 resume. Later bubbles have no `ready` between them, and the message list still holds both restart nudges.
+- `<|eolos|>` as a distinct token. It does not occur in the spool. The captured spelling is `<|eos|>`.
+- The Ralph stream-json unpacker.
 
-- Session `chat_history.jsonl`, `updates.jsonl`, `events.jsonl` for the Claudia workspace that showed `marcelocantos/claudia`
-- Jevons: `~/.jevons/chatlog/jevons.jsonl`, `~/.jevons/logs/events.jsonl`, `~/.jevons/spool/events-2026-09-26.log`
-- OMP: `~/.omp/` (empty on the machine that first looked; the live home may be a Claudia grok-home, not `~/.omp`)
+## Residual
 
-Search for `T219`, `T65`, `<|eolos|>`, and repeated `I'll inspect`.
+🎯T869: a plan-only reply must not earn another prompt. That covers the impatience close, the forwarded plan sentence, and a second `ResumeAll` sending another continue-nudge while the sidecar agent is already up.
 
-For each assistant/text event in the T219 storm and the T65 run: record type, id, timestamp, text length, whether text N+1 startswith text N, and whether the UI stored one row or N appended copies.
+The transcript follows the tail. While these prompts were landing, the latest bubble stayed in view, which is why the T219 region above them was not screenshotted. This postmortem does not treat that follow-tail behaviour as a second defect.
 
-## Out of scope (wrong harness)
-
-A parallel HMS session was unpacking Cursor `agent --output-format stream-json` for **Ralph T14** (desktop visual parity). That unpacker had its own bugs (word-per-line assistant deltas, raw `GetMcpTools` JSON). Those were fixed in `~/.local/bin/ralph` (dotfiles), not Jevons.
-
-![Ralph T14 unpacker looking healthy — not this incident](2026-09-26-omp-repeat-storm/01-ralph-t14-healthy-unpacker.jpg)
-
-Do not spend time on Ralph unless you need a contrast case for snapshot-vs-delta rendering.
-
-## Suggested next steps
-
-1. Identify the exact session files for the Claudia view that still shows the T219 storm after reload.
-2. Quantify T219: event count, unique vs repeated bodies, timestamps, abort/interrupt edges.
-3. Classify `<|eolos|>`: which layer emits it (model vocab vs OMP vs Claudia), and whether it should stop the turn.
-4. Apply the snapshot/duplicate table to the fat T65 bubble.
-5. File or fix the scroll-to-bottom snap so a long persisted thread can be read from the top.
+`<|eos|>` still reaches the owner until the sidecar drops a stop token instead of appending it. That is a one-delta strip in `sidecar/seat.ts`, not the loop.
