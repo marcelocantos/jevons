@@ -83,17 +83,15 @@ func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia
 			Name: name, Type: "http", URL: a.URL,
 		})
 	}
-	return applyProxied(dropClaudeSpecificMCP(inv.ForProvider(claudia.ProviderClaude)), a.Proxied)
+	return applyProxied(dropComputerUseMCP(inv.ForProvider(claudia.ProviderClaude)), a.Proxied)
 }
 
-// dropClaudeSpecificMCP removes Claude Code plugin/agent MCP that would
-// not work on other backends (🎯T871). LoadMCP does not read
-// ~/.claude/plugins; this also drops plugin-shaped names if they appear
-// in claude.json mcpServers.
-func dropClaudeSpecificMCP(list []claudia.MCPServer) []claudia.MCPServer {
+// dropComputerUseMCP removes computer-use, the one Claude/Codex MCP
+// that is not part of the shared harness set (🎯T871).
+func dropComputerUseMCP(list []claudia.MCPServer) []claudia.MCPServer {
 	out := make([]claudia.MCPServer, 0, len(list))
 	for _, s := range list {
-		if isClaudeSpecificMCP(s.Name) {
+		if isComputerUseMCP(s.Name) {
 			continue
 		}
 		out = append(out, s)
@@ -101,16 +99,9 @@ func dropClaudeSpecificMCP(list []claudia.MCPServer) []claudia.MCPServer {
 	return out
 }
 
-func isClaudeSpecificMCP(name string) bool {
-	n := strings.TrimSpace(name)
-	if n == "" {
-		return false
-	}
-	if strings.Contains(n, "@") {
-		return true
-	}
-	switch strings.ToLower(n) {
-	case "claude-code", "claude-agent", "claude-ai":
+func isComputerUseMCP(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "computer-use", "computer_use":
 		return true
 	default:
 		return false

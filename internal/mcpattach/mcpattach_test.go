@@ -245,13 +245,13 @@ args = ["mcp"]
 	}
 }
 
-func TestT871DropsClaudePluginAgentMCP(t *testing.T) {
+func TestT871DropsComputerUseFromClaudeMap(t *testing.T) {
 	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
 	doc := map[string]any{
 		"mcpServers": map[string]any{
-			"mnemo":                              map[string]any{"type": "http", "url": "http://127.0.0.1:7700/mcp"},
-			"gopls-lsp@claude-plugins-official":  map[string]any{"command": "gopls"},
-			"claude-agent":                       map[string]any{"command": "claude-agent"},
+			"mnemo":         map[string]any{"type": "http", "url": "http://127.0.0.1:7700/mcp"},
+			"computer-use":  map[string]any{"command": "./SkyComputerUseClient", "args": []string{"mcp"}},
+			"computer_use":  map[string]any{"command": "./SkyComputerUseClient"},
 		},
 	}
 	raw, err := json.Marshal(doc)
@@ -267,12 +267,12 @@ func TestT871DropsClaudePluginAgentMCP(t *testing.T) {
 		byName[s.Name] = s
 	}
 	if byName["mnemo"].URL == "" {
-		t.Fatalf("dropped mnemo with plugins: %+v", list)
+		t.Fatalf("dropped mnemo with computer-use: %+v", list)
 	}
-	if _, ok := byName["gopls-lsp@claude-plugins-official"]; ok {
-		t.Fatalf("plugin MCP leaked: %+v", list)
+	if _, ok := byName["computer-use"]; ok {
+		t.Fatalf("computer-use leaked from Claude map: %+v", list)
 	}
-	if _, ok := byName["claude-agent"]; ok {
-		t.Fatalf("claude-agent leaked: %+v", list)
+	if _, ok := byName["computer_use"]; ok {
+		t.Fatalf("computer_use leaked from Claude map: %+v", list)
 	}
 }
