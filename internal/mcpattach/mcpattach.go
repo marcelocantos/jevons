@@ -65,9 +65,11 @@ func HTTPURL(host string, port int) string {
 }
 
 // SessionServers is the list Jevons passes on AgentDef.MCPServers.
-// Claude/Cursor/Codex get discovered system servers plus this daemon's
-// jevonsmcp, with T520 loopbacks applied from Proxied. Grok gets only
-// the live HTTP jevonsmcp (🎯T525).
+// Every backend except Grok ACP uses Claude's LoadMCP inventory as the
+// standard set (🎯T871), plus this daemon's jevonsmcp, with T520
+// loopbacks applied from Proxied. Grok ACP still gets only the live
+// HTTP jevonsmcp (🎯T525): a Claude-shaped full inventory made
+// session/new return Invalid params.
 func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
 	if provider == claudia.ProviderGrok {
 		return grokSessionServers(a)
@@ -81,7 +83,38 @@ func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia
 			Name: name, Type: "http", URL: a.URL,
 		})
 	}
-	return applyProxied(inv.ForProvider(provider), a.Proxied)
+	return applyProxied(dropClaudeSpecificMCP(inv.ForProvider(claudia.ProviderClaude)), a.Proxied)
+}
+
+// dropClaudeSpecificMCP removes Claude Code plugin/agent MCP that would
+// not work on other backends (🎯T871). LoadMCP does not read
+// ~/.claude/plugins; this also drops plugin-shaped names if they appear
+// in claude.json mcpServers.
+func dropClaudeSpecificMCP(list []claudia.MCPServer) []claudia.MCPServer {
+	out := make([]claudia.MCPServer, 0, len(list))
+	for _, s := range list {
+		if isClaudeSpecificMCP(s.Name) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func isClaudeSpecificMCP(name string) bool {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return false
+	}
+	if strings.Contains(n, "@") {
+		return true
+	}
+	switch strings.ToLower(n) {
+	case "claude-code", "claude-agent", "claude-ai":
+		return true
+	default:
+		return false
+	}
 }
 
 func grokSessionServers(a Args) []claudia.MCPServer {

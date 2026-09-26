@@ -196,3 +196,83 @@ func TestHTTPURL(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestT871XaioauthUsesClaudeStandardSet(t *testing.T) {
+	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
+	doc := map[string]any{
+		"mcpServers": map[string]any{
+			"mnemo": map[string]any{"type": "http", "url": "http://127.0.0.1:7700/mcp"},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.CodexTOML, []byte(`
+[mcp_servers.computer-use]
+command = "./SkyComputerUseClient"
+args = ["mcp"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list := SessionServers(a, "xai-oauth", "")
+	byName := map[string]claudia.MCPServer{}
+	for _, s := range list {
+		byName[s.Name] = s
+	}
+	if byName["mnemo"].URL != "http://127.0.0.1:7700/mcp" {
+		t.Fatalf("xai-oauth dropped Claude mnemo: %+v", list)
+	}
+	if byName["jevonsmcp"].URL != a.URL {
+		t.Fatalf("xai-oauth jevonsmcp = %+v", byName["jevonsmcp"])
+	}
+	if _, ok := byName["computer-use"]; ok {
+		t.Fatalf("xai-oauth leaked Codex computer-use: %+v", list)
+	}
+	codex := SessionServers(a, claudia.ProviderCodex, "")
+	codexNames := map[string]bool{}
+	for _, s := range codex {
+		codexNames[s.Name] = true
+	}
+	if !codexNames["mnemo"] || !codexNames["jevonsmcp"] {
+		t.Fatalf("codex should carry Claude standard: %+v", codex)
+	}
+	if codexNames["computer-use"] {
+		t.Fatalf("codex standard leaked computer-use: %+v", codex)
+	}
+}
+
+func TestT871DropsClaudePluginAgentMCP(t *testing.T) {
+	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
+	doc := map[string]any{
+		"mcpServers": map[string]any{
+			"mnemo":                              map[string]any{"type": "http", "url": "http://127.0.0.1:7700/mcp"},
+			"gopls-lsp@claude-plugins-official":  map[string]any{"command": "gopls"},
+			"claude-agent":                       map[string]any{"command": "claude-agent"},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list := SessionServers(a, "xai-oauth", "")
+	byName := map[string]claudia.MCPServer{}
+	for _, s := range list {
+		byName[s.Name] = s
+	}
+	if byName["mnemo"].URL == "" {
+		t.Fatalf("dropped mnemo with plugins: %+v", list)
+	}
+	if _, ok := byName["gopls-lsp@claude-plugins-official"]; ok {
+		t.Fatalf("plugin MCP leaked: %+v", list)
+	}
+	if _, ok := byName["claude-agent"]; ok {
+		t.Fatalf("claude-agent leaked: %+v", list)
+	}
+}
