@@ -951,6 +951,12 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-win.plan-exhausted .plan-bar {
   box-shadow: inset 0 0 0 1px var(--plan-exhausted);
 }
+/* Nothing spent yet (used under 1%). Same trick as exhausted: the fill
+   is empty, so the inset stroke is the signal. Green says the window is
+   free to use. Under and locked keep their own strokes. */
+#plan-ticker .plan-win.plan-open .plan-bar {
+  box-shadow: inset 0 0 0 1px var(--green);
+}
 /* 🎯T681: no reading is its own paint. An empty bar meant "no usage" and
    a missing bar meant "no provider"; neither says "we could not read the
    meter". The hatch is deliberately not a fill: there is no quantity here

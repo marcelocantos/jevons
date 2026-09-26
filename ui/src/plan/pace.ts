@@ -3,6 +3,7 @@
 
 /** Same spend-vs-time colours as web/scripts/plan_usage.js (🎯T390.1). */
 
+import { usedPercentOf } from './tickerGroups';
 import { remainingTimePercent, type PlanWindow as GeomWindow } from './windowGeom';
 import { hsvLerpRgb, parseCssColor, rgbToCss, type RGB } from './hsv';
 
@@ -20,6 +21,13 @@ export const CLASS_HOT = 'plan-hot';
 export const CLASS_UNDER = 'plan-under';
 export const CLASS_LOCKED = 'plan-locked';
 export const CLASS_EXHAUSTED = 'plan-exhausted';
+/** Nothing spent yet: the empty bar's border is the "you can use this" signal. */
+export const CLASS_OPEN = 'plan-open';
+/**
+ * Consumed below this still counts as unused. At 1% the green border
+ * drops and the bar goes back to its ordinary stroke.
+ */
+export const OPEN_USED_PERCENT = 1;
 
 /** Served document only; classifyPace does not short-circuit on it (🎯T390.1.6.2). */
 /**
@@ -443,6 +451,11 @@ export function isRockBottomRemaining(remaining: number | null | undefined): boo
   return typeof remaining === 'number' && Number.isFinite(remaining) && remaining <= 0;
 }
 
+/** True while consumption has not yet hit {@link OPEN_USED_PERCENT}. */
+export function isUntouchedUsage(used: number | null | undefined): boolean {
+  return typeof used === 'number' && Number.isFinite(used) && used < OPEN_USED_PERCENT;
+}
+
 export function chipClassForRemaining(remaining: number | null | undefined, stale?: boolean): string {
   if (typeof remaining === 'number' && remaining <= criticalRemaining) return CLASS_CRITICAL;
   if (typeof remaining === 'number' && remaining <= lowRemaining) return CLASS_LOW;
@@ -454,13 +467,24 @@ export type FormattedWindow = {
   pace: string;
   paceClass: string;
   remainingPercent: number | null;
+  usedPercent?: number | null;
 };
 
 export function windowClassName(w: FormattedWindow | null | undefined, stale?: boolean): string {
   const parts: string[] = [];
   const paceOrRem = w && w.pace ? w.paceClass : chipClassForRemaining(w && w.remainingPercent, stale);
   if (paceOrRem) parts.push(paceOrRem);
-  if (isRockBottomRemaining(w && w.remainingPercent)) parts.push(CLASS_EXHAUSTED);
+  if (isRockBottomRemaining(w && w.remainingPercent)) {
+    parts.push(CLASS_EXHAUSTED);
+  } else if (
+    isUntouchedUsage(w && w.usedPercent) &&
+    paceOrRem !== CLASS_UNDER &&
+    paceOrRem !== CLASS_LOCKED
+  ) {
+    // A waste border already says the empty bar is blue or purple. Green
+    // is only for the stroke that would otherwise stay the quiet grey.
+    parts.push(CLASS_OPEN);
+  }
   return parts.join(' ');
 }
 
@@ -542,7 +566,7 @@ export function formatWindow(w: PaceWindow, nowMs: number): FormattedWindow & {
   const remainingTime = remainingTimePercent(w, nowMs);
   const pace = paceOfWindow(w, nowMs);
   const paceClass = paceClassName(pace);
-  const formatted = { pace, paceClass, remainingPercent: remaining };
+  const formatted = { pace, paceClass, remainingPercent: remaining, usedPercent: usedPercentOf(w) };
   return {
     ...formatted,
     remainingTimePercent: remainingTime,

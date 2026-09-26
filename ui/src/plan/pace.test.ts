@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLASS_EXHAUSTED,
   CLASS_HOT,
+  CLASS_LOCKED,
+  CLASS_OPEN,
   PACE_AHEAD,
   PACE_AHEAD_RATIO,
   PACE_COLOR_AHEAD,
@@ -117,6 +119,59 @@ describe('formatWindow paint class', () => {
     );
     expect(painted.className.split(' ')).toContain(CLASS_EXHAUSTED);
     expect(painted.className.split(' ')).toContain(CLASS_HOT);
+    expect(painted.className.split(' ')).not.toContain(CLASS_OPEN);
+  });
+
+  it('paints plan-open while usage is under 1%', () => {
+    const zero = formatWindow(
+      { name: 'session', remaining_percent: 100, used_percent: 0 },
+      Date.now(),
+    );
+    expect(zero.className.split(' ')).toContain(CLASS_OPEN);
+    const dust = formatWindow(
+      { name: 'session', remaining_percent: 99.2, used_percent: 0.8 },
+      Date.now(),
+    );
+    expect(dust.className.split(' ')).toContain(CLASS_OPEN);
+    const started = formatWindow(
+      { name: 'session', remaining_percent: 99, used_percent: 1 },
+      Date.now(),
+    );
+    expect(started.className.split(' ')).not.toContain(CLASS_OPEN);
+    const fromRemaining = formatWindow({ name: 'session', remaining_percent: 100 }, Date.now());
+    expect(fromRemaining.className.split(' ')).toContain(CLASS_OPEN);
+  });
+
+  it('leaves a locked empty week purple', () => {
+    const now = Date.parse('2026-09-12T12:00:00Z');
+    const locked = formatWindow(
+      {
+        name: 'weekly',
+        remaining_percent: 100,
+        used_percent: 0,
+        resets_at: new Date(now + 3600 * 1000).toISOString(),
+        limit_window_seconds: 7 * 24 * 3600,
+      },
+      now,
+    );
+    expect(locked.className.split(' ')).toContain(CLASS_LOCKED);
+    expect(locked.className.split(' ')).not.toContain(CLASS_OPEN);
+  });
+
+  it('paints an untouched week-start open', () => {
+    const now = Date.parse('2026-09-12T12:00:00Z');
+    const painted = formatWindow(
+      {
+        name: 'weekly',
+        remaining_percent: 100,
+        used_percent: 0,
+        resets_at: new Date(now + 6.9 * 24 * 3600 * 1000).toISOString(),
+        limit_window_seconds: 7 * 24 * 3600,
+      },
+      now,
+    );
+    expect(painted.className.split(' ')).toContain(CLASS_OPEN);
+    expect(painted.className).not.toMatch(/plan-under|plan-locked/);
   });
 });
 
