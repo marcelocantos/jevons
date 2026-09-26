@@ -48,9 +48,13 @@ Times in UTC. AEST is UTC+10. The 12:35 AEST snapshot of seat `jevons` holds 38 
 
 ## Cause
 
-Jevons treats a plan sentence with no tool call as the seat having returned to work.
+The repeating clock is the daemon, aimed at `mm2-t65-keys-doors` being idle. It is not a close-and-reopen of one impatience incident.
 
-Impatience repressure fires because `mm2-t65-keys-doors` looks idle. The worker replies with "I'll inspect…" and does not call a tool. That reply is forwarded to the overseer as `[Agent mm2-t65-keys-doors responded]`. The overseer answers the same way. Impatience records the turn as cleared ("returned to working"), closes the incident, and the dwell clock starts again. Sentinel T219 repair notices are further user turns in the same list. Each one paints a new bubble.
+`~/.jevons/logs/events.jsonl` records `sentinel.repair` with `symptoms=["idle:mm2-t65-keys-doors"]` about every two minutes through this window, and `idle_nudge.impatience` with `actions=1`, `closed=0`. The overseer’s next assistant text starts within a few seconds of those lines. The fat turn begins at 02:24:29Z. `sentinel.repair` for that same idle symptom is logged at 02:24:24Z. During the earlier 403s, the same repair lines are present and no “I’ll inspect” text is. A repair is a decision to prompt. A bubble appears when the model accepts it.
+
+The seat’s own user messages are those prompts: sentinel notices, `[Agent mm2-t65-keys-doors responded]` plan sentences, and some `Impatience incident closed` reports. The closed reports are in the transcript. They are not the two-minute clock. At the bubble times the impatience log still says the incident is open and an action fired.
+
+What this does not show is a `turn_id` joining one `Send` to one `turn_end`. The join is the timestamp and the user text. That is enough to name the prompter. It is not a trace.
 
 The stop token is separate and smaller. `sidecar/seat.ts` forwards every `text_delta` unchanged. The model emitted `<|eos|>` as the last delta of a short turn. That token is visible. It ends that turn. It does not start the next one.
 
