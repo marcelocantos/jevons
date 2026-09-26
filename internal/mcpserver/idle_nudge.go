@@ -462,6 +462,18 @@ type IdleActivity struct {
 	// a refusal hold (or arrives otherwise). observeForImpatience consumes
 	// it so a completed turn can satisfy even though phase is already idle.
 	SubstantivePulse bool
+	// PlanOnly is 🎯T869: the latest completed turn was assistant prose and
+	// called no tool. The impatience ladder keeps the seat idle — the turn
+	// does not close an incident and does not arm a repressure — until a
+	// later turn calls a tool or delivers a finish.
+	PlanOnly bool
+	// LastToolCalls is how many tools that latest turn called.
+	LastToolCalls int
+	// ProseWorking is set by an assistant event that moved the phase to
+	// working without a tool call. It is not satisfaction (🎯T869). A
+	// caller that stamps Phase directly leaves this false, so a positive
+	// working reading still satisfies.
+	ProseWorking bool
 	// ToolCallID is the in-flight ACP tool_call_id when known (🎯T254.5.2).
 	// Same-id heartbeats do not reset ToolCallSince.
 	ToolCallID    string
@@ -527,6 +539,11 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 	} else if toolID == "" {
 		toolID = prev.ToolCallID
 	}
+	sawTool := toolID != "" || turnCountedTool(ev)
+	planOnly := prev.PlanOnly
+	if sawTool {
+		planOnly = false
+	}
 	// Preserve T236 recover latches across mid-turn working updates;
 	// NoteTerminalOutcome sets them on end_turn; ClearRecover clears.
 	// Updated still refreshes (worker heartbeats); ToolCallSince does not
@@ -540,6 +557,9 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 		RefusalHold:      prev.RefusalHold,
 		LastTerminal:     prev.LastTerminal,
 		SubstantivePulse: prev.SubstantivePulse,
+		PlanOnly:         planOnly,
+		LastToolCalls:    prev.LastToolCalls,
+		ProseWorking:     phase == "working" && !sawTool,
 		ToolCallID:       toolID,
 		ToolCallSince:    toolSince,
 		RateLimitStrikes: prev.RateLimitStrikes,
@@ -780,10 +800,6 @@ type IdleNudgeSweepArgs struct {
 	// ProcessRunning optional override (hermetic tests without OS processes).
 	// Nil → reg.Get(name).Alive().
 	ProcessRunning func(name string) bool
-	// StateDir is the daemon state directory. A post-restart full brief
-	// reads stored reports from here so a new session is handed whatever
-	// context survived the provider session. Empty skips that seed.
-	StateDir string
 	// Eligible optionally pre-filters agents before classification (🎯T315).
 	// False ⇒ skip with reason not_open_mission. Nil = every registered agent
 	// is classified. The periodic pressure path uses it for T244 (unbound
@@ -1027,11 +1043,6 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 		PostRestart: args.PostRestart,
 		Kind:        rep.Kind,
 	})
-	if args.PostRestart && rep.Kind == IdleNudgeKindFullBrief && args.StateDir != "" {
-		if seed := sessionFallbackSeed(d.Name, "", loadSessionFallbackReports(args.StateDir, d.Name)); seed != "" {
-			text = seed + "\n\n" + text
-		}
-	}
 	event := IdleNudgeEventSource(args.PostRestart, rep.Kind)
 	if err := args.Push(d.Name, event, text); err != nil {
 		rep.Error = err.Error()
@@ -1911,7 +1922,6 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		Push:         push,
 		Now:          time.Now(),
 		PostRestart:  true,
-		StateDir:     s.stateDir,
 		OverseerName: overseer,
 		Eligible:     eligible,
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.

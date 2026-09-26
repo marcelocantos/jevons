@@ -1324,6 +1324,7 @@ func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
 func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	var mu sync.Mutex
 	var responseText strings.Builder
+	var toolCalls int
 
 	return func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
@@ -1337,6 +1338,9 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		if ev.Type == "assistant" && ev.Text != "" {
 			responseText.WriteString(ev.Text)
 		}
+		if turnCountedTool(ev) {
+			toolCalls++
+		}
 		// tool_use pauses are mid-turn (the worker will continue after tool
 		// results); only a terminal stop ends the turn and delivers.
 		// 🎯T766.2: the sink is the only place with sub-second knowledge of
@@ -1345,7 +1349,9 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		s.Seats().FromTurnEvent(name, ev.IsTerminalStop(), time.Now())
 		if ev.IsTerminalStop() {
 			text := responseText.String()
+			n := toolCalls
 			responseText.Reset()
+			toolCalls = 0
 			// 🎯T528: close Session Goal when ledger/GOAL_STATUS evidences
 			// complete — before Claudia's settle timer can inject Continue.
 			s.clearSessionGoalIfComplete(name, text)
@@ -1361,13 +1367,14 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			tracker := s.idleActivity
 			s.mu.Unlock()
 			if tracker != nil {
-				tracker.NoteTerminalOutcome(name, text)
+				tracker.NoteTerminalTurn(name, text, n)
 			}
 			if text != "" {
 				// Notify overseer first so the done report is delivered before
 				// the worker leaves the registry (🎯T165) — unless [silent]
 				// (ops events: daemon-restarted / worker-idle fine chatter).
-				s.notify(name, text)
+				// 🎯T869: a plan-only reply is not forwarded.
+				s.notifyTurn(name, text, n)
 			}
 			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
 			// Off the event goroutine since 🎯T416: the drain now waits for the
@@ -1389,6 +1396,10 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 // travel the same code; the overseer arm keeps the journal + notify-queue
 // semantics that make 🎯T62's silent drop impossible.
 func (s *Server) notify(agentName, text string) {
+	s.notifyTurn(agentName, text, -1)
+}
+
+func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 	if IsSilentAgentResponse(text) {
 		slog.Info("agent response suppressed (silent)",
 			"agent", agentName, "len", len(text))
@@ -1410,6 +1421,18 @@ func (s *Server) notify(agentName, text string) {
 		slog.Info("agent bare ack suppressed (not a report)",
 			"agent", agentName, "len", len(text), "stored", false)
 		s.logLifecycle(compAgentLifecycle, "notify", "suppressed_bare_ack", map[string]any{
+			"agent": agentName,
+		})
+		return
+	}
+
+	// 🎯T869: a bare plan ("I'll inspect…") is not a fresh user turn for
+	// the parent. A finish, a question, and a status report still are.
+	// toolCalls < 0 is the legacy path, which does not know and still forwards.
+	if !shouldForwardAgentReply(text, toolCalls) {
+		slog.Info("plan-only reply not forwarded",
+			"agent", agentName, "len", len(text))
+		s.logLifecycle(compAgentLifecycle, "notify", "suppressed_plan_only", map[string]any{
 			"agent": agentName,
 		})
 		return

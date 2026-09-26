@@ -48,6 +48,16 @@ func TestClassifyObservationSatisfactionSemantics(t *testing.T) {
 			wantCond: ConditionSatisfied, wantWhy: "working_on_open_mission",
 		},
 		{
+			name:     "plan-only prose is still a gap (T869)",
+			mutate:   func(o *Observation) { o.Phase = "working"; o.PlanOnly = true },
+			wantCond: ConditionGap, wantKind: GapKindIdle, wantWhy: "plan_only_turn",
+		},
+		{
+			name:     "plan-only outranks a substantive pulse (T869)",
+			mutate:   func(o *Observation) { o.Phase = "idle"; o.SubstantiveTurn = true; o.PlanOnly = true },
+			wantCond: ConditionGap, wantKind: GapKindIdle, wantWhy: "plan_only_turn",
+		},
+		{
 			name:     "working under refusal hold is still a gap (T454)",
 			mutate:   func(o *Observation) { o.Phase = "working"; o.RefusalHold = true },
 			wantCond: ConditionGap, wantKind: GapKindIdle, wantWhy: "refusal_only_turn",

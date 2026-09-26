@@ -639,6 +639,36 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	t.by[name] = prev
 }
 
+// NoteTerminalTurn is NoteTerminalOutcome plus whether the turn called a
+// tool (🎯T869). Assistant prose and no tool call stays idle: it does not
+// pulse satisfaction and does not clear a plan-only hold. A finish-shaped
+// report still does — a seat that actually resumed work still closes
+// (🎯T454). toolCalls < 0 leaves the text-only classification unchanged.
+func (t *IdleActivityTracker) NoteTerminalTurn(name, text string, toolCalls int) {
+	t.NoteTerminalOutcome(name, text)
+	if t == nil || name == "" || toolCalls < 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	prev := t.by[name]
+	prev.LastToolCalls = toolCalls
+	if toolCalls > 0 || LooksLikeFinishedWorkReport(text) {
+		prev.PlanOnly = false
+		t.by[name] = prev
+		return
+	}
+	if strings.TrimSpace(text) == "" || agenterr.RefusalOnlyTurn(text) {
+		t.by[name] = prev
+		return
+	}
+	prev.SubstantivePulse = false
+	prev.PlanOnly = true
+	prev.Phase = "idle"
+	prev.ProseWorking = false
+	t.by[name] = prev
+}
+
 // ConsumeTurnPulses returns and clears the one-shot substantive pulse for
 // name (🎯T454). Safe under the tracker lock.
 func (t *IdleActivityTracker) ConsumeTurnPulses(name string) (substantive bool) {

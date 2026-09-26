@@ -232,6 +232,7 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 	defs := s.registry.List()
 	present := make(map[string]bool, len(defs))
 	refusalBy := make(map[string]bool, len(defs))
+	planOnlyBy := make(map[string]bool, len(defs))
 	var outcomes []converge.Outcome
 	for _, d := range defs {
 		if d.Name == "" || d.Name == overseer {
@@ -240,11 +241,13 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 		present[d.Name] = true
 		obs := s.observeForImpatience(d, hooks, deps, now, defs)
 		refusalBy[d.Name] = obs.RefusalHold
+		planOnlyBy[d.Name] = obs.PlanOnly
 		out := e.set.Reconcile(obs, now)
 		outcomes = append(outcomes, out)
 		// 🎯T454: phase=working under a refusal hold is not progress — it is
-		// the agent thrashing against a wall.
-		if strings.EqualFold(strings.TrimSpace(obs.Phase), "working") && !obs.RefusalHold {
+		// the agent thrashing against a wall. 🎯T869: a plan-only turn is
+		// not progress either, and must not arm the next repressure.
+		if strings.EqualFold(strings.TrimSpace(obs.Phase), "working") && !obs.RefusalHold && !obs.PlanOnly {
 			e.ladder.ObserveProgress(d.Name, attenuate.SignalTargetWorking, now)
 		}
 	}
@@ -287,6 +290,9 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 		// fleet is under a provider wall (T406) — either signal is enough.
 		if refusalBy[gaps[i].Agent] || gaps[i].FleetIntent == fleetintent.BlockedProvider {
 			gaps[i].RefusalOnly = true
+		}
+		if planOnlyBy[gaps[i].Agent] {
+			gaps[i].PlanOnly = true
 		}
 	}
 
@@ -334,7 +340,12 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 	// 🎯T319: every closed episode → exactly one owner-visible mini-postmortem
 	// as root, independent of pathway. Clear human chrome is already in
 	// actions via ActClearHuman; the report is never satisfaction.
-	if e.journal != nil {
+	// 🎯T869: the overseer's own plan-only reply does not earn that notice
+	// as another prompt. Record it so a later tool-using turn can deliver;
+	// do not submit it now.
+	if e.journal != nil && s.withholdsPlanOnlyPrompt(overseer, promptImpatience) {
+		e.journal.Record(closed)
+	} else if e.journal != nil {
 		if _, err := e.journal.Flush(closed, e.postmortem); err != nil {
 			slog.Warn("impatience postmortem deliver", "err", err, "closed", len(closed))
 			s.logLifecycle(compIdleNudge, "impatience_postmortem", "error", map[string]any{
@@ -384,12 +395,16 @@ func (s *Server) observeForImpatience(
 	refusalHold := false
 	substantivePulse := false
 	waitingOnGate := false
+	planOnly := false
+	toolSeen := false
 	s.mu.Lock()
 	if s.idleActivity != nil {
 		act := s.idleActivity.Get(d.Name)
 		phase = act.Phase
 		refusalHold = act.RefusalHold
 		waitingOnGate = DeclaresBlockingGateWait(act.LastTerminal)
+		planOnly = act.PlanOnly || act.ProseWorking
+		toolSeen = strings.TrimSpace(act.ToolCallID) != ""
 	}
 	s.mu.Unlock()
 	if s.idleActivity != nil {
@@ -442,6 +457,13 @@ func (s *Server) observeForImpatience(
 		}
 	}
 
+	inFlight := s.flightState(d.Name) == FlightInFlight
+	// A prompt that has not called a tool yet is not the seat returning
+	// to work (🎯T869). Holding it here keeps the incident open and, via
+	// PlanOnly on the ladder, does not arm a repressure mid-reply.
+	if inFlight && !toolSeen {
+		planOnly = true
+	}
 	_ = now // reserved for future idle-age observation fields
 	return converge.Observation{
 		Name:                 d.Name,
@@ -455,9 +477,10 @@ func (s *Server) observeForImpatience(
 		DesignGated:          designGated,
 		ClaimsDone:           claimsDone,
 		RefusalHold:          refusalHold && !substantivePulse,
+		PlanOnly:             planOnly,
 		SubstantiveTurn:      substantivePulse,
 		WaitingOnGate:        waitingOnGate,
 		StoredTerminalReport: storedTerminal,
-		TurnInFlight:         s.flightState(d.Name) == FlightInFlight,
+		TurnInFlight:         inFlight,
 	}
 }

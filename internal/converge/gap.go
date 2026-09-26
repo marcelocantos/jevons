@@ -99,6 +99,10 @@ type Observation struct {
 	// not satisfaction — the account may be thrashing against a wall, not
 	// the agent resuming its mission.
 	RefusalHold bool
+	// PlanOnly is 🎯T869: the latest turn is assistant prose and no tool
+	// call, or a turn is in flight that has not called a tool yet. That is
+	// not a return to work. The incident stays open.
+	PlanOnly bool
 	// SubstantiveTurn is true when this tick observed a completed turn that
 	// produced real agent work (🎯T454). That closes even if phase has
 	// already flipped back to idle at end_turn.
@@ -150,6 +154,12 @@ func ClassifyObservation(o Observation) (Condition, GapKind, string) {
 	}
 	if !o.MissionOpen {
 		return ConditionOutOfScope, "", "no_open_mission"
+	}
+	// 🎯T869: prose with no tool call is not the agent working the mission.
+	// Checked before the substantive pulse and before phase=working so a
+	// plan cannot close an incident that those two would otherwise close.
+	if o.PlanOnly {
+		return ConditionGap, GapKindIdle, "plan_only_turn"
 	}
 	// 🎯T454: a substantive completed turn satisfies even at end_turn idle.
 	if o.SubstantiveTurn {

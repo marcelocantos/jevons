@@ -467,6 +467,16 @@ func (s *Server) deliverSentinel(target, event, text string) error {
 	if strings.TrimSpace(target) == "" {
 		return fmt.Errorf("sentinel deliver: empty target")
 	}
+	// 🎯T869: the seat already answered the last notice with a plan and no
+	// tool call. Another sentinel prompt is the two-minute clock from the
+	// 2026-09-26 storm.
+	if s.withholdsPlanOnlyPrompt(target, promptSentinel) {
+		slog.Info("sentinel notice withheld after plan-only reply", "target", target)
+		s.logLifecycle(compSentinel, "notice", "withheld_plan_only", map[string]any{
+			"target": target,
+		})
+		return nil
+	}
 	body := butler.FormatEventPush(event, text)
 	if _, err := s.sendToAgent(target, body, false); err != nil {
 		if s.butler != nil {

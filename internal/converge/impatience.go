@@ -107,6 +107,10 @@ type Gap struct {
 	// rungs (composes with 🎯T406 blocked_provider rather than duplicating
 	// it — either signal is enough to stop spending failed API calls).
 	RefusalOnly bool
+	// PlanOnly is 🎯T869: the latest turn was assistant prose and no tool
+	// call. The gap stays present (not a departure, not satisfaction) and
+	// this tick does not fire — the turn must not arm another repressure.
+	PlanOnly bool
 	// Cause is set on a Satisfied gap when the close reason is known
 	// (🎯T454 clause 2). Zero means ClosedBySatisfaction.
 	Cause CloseCause
@@ -243,6 +247,11 @@ func (l *Ladder) Reconcile(now time.Time, set []Gap) ([]Action, []Incident) {
 		// noise / human-alert against a wall burn failed API calls and then
 		// false-clear when the account recovers.
 		if g.RefusalOnly {
+			continue
+		}
+		// 🎯T869: a plan-only turn is not progress and does not earn a rung.
+		// The gap stays present so the open incident is not closed either.
+		if g.PlanOnly {
 			continue
 		}
 		st, ok := l.agents[g.Agent]
