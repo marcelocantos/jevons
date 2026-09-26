@@ -53,6 +53,12 @@ func TestBrokerIsASeparateProcess(t *testing.T) {
 	if strings.Contains(body, `filepath.Join(*stateDir, "broker.sock")`) {
 		t.Fatal("jevons-broker must use the claudia socket default, not ~/.jevons/broker.sock")
 	}
+	if !strings.Contains(body, "sockown.Claim") {
+		t.Fatal("jevons-broker must claim the socket before Listen")
+	}
+	if !strings.Contains(body, `case "status"`) {
+		t.Fatal("jevons-broker must report whether it owns the socket")
+	}
 }
 
 func TestUsageWithoutServe(t *testing.T) {

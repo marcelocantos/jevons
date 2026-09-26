@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/claudia/daemon"
 
 	"github.com/marcelocantos/jevons/internal/seatreg"
+	"github.com/marcelocantos/jevons/internal/sockown"
 )
 
 func main() {
@@ -34,13 +35,15 @@ func main() {
 
 func run(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint|smoke [provider...]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|status|refresh-plans|login-plans|remint|smoke [provider...]")
 		return 2
 	}
 	var err error
 	switch args[0] {
 	case "serve":
 		err = serve(args[1:])
+	case "status":
+		err = status(args[1:])
 	case "refresh-plans":
 		err = refreshPlans(args[1:])
 	case "login-plans":
@@ -50,7 +53,7 @@ func run(args []string) int {
 	case "smoke":
 		err = smoke(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|refresh-plans|login-plans|remint|smoke [provider...]")
+		fmt.Fprintln(os.Stderr, "usage: jevons-broker serve|status|refresh-plans|login-plans|remint|smoke [provider...]")
 		return 2
 	}
 	if err != nil {
@@ -74,6 +77,19 @@ func serve(args []string) error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
 	slog.SetDefault(log)
+
+	sockPath := strings.TrimSpace(*socket)
+	if sockPath == "" {
+		var err error
+		sockPath, err = sockown.DefaultPath()
+		if err != nil {
+			return err
+		}
+	}
+	if err := sockown.Claim(sockown.ClaimArgs{Socket: sockPath}); err != nil {
+		return fmt.Errorf("claim broker socket: %w", err)
+	}
+	log.Info("broker socket claimed", "socket", sockPath)
 
 	if sock, err := claudia.EnsureOMPSidecar(context.Background()); err != nil {
 		log.Warn("omp sidecar not ready; subscription seats will retry on Launch", "err", err)
@@ -114,7 +130,7 @@ func serve(args []string) error {
 	}
 
 	d, err := daemon.New(daemon.Options{
-		SocketPath: *socket,
+		SocketPath: sockPath,
 		StateDir:   *stateDir,
 		Logger:     log,
 	})
@@ -128,6 +144,31 @@ func serve(args []string) error {
 		return err
 	}
 	log.Info("jevons-broker stopped")
+	return nil
+}
+
+func status(args []string) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	socket := fs.String("socket", "", "socket path (default: CLAUDIA_BROKER_SOCKET or ~/.local/state/claudia/broker.sock)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	sockPath := strings.TrimSpace(*socket)
+	if sockPath == "" {
+		var err error
+		sockPath, err = sockown.DefaultPath()
+		if err != nil {
+			return err
+		}
+	}
+	ok, err := sockown.Owned(sockPath, nil)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("jevons-broker is not listening on %s", sockPath)
+	}
+	fmt.Printf("jevons-broker: listening on %s\n", sockPath)
 	return nil
 }
 
