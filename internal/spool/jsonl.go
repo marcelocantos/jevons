@@ -34,8 +34,12 @@ func claudeLine(rec Record) []byte {
 	switch rec.Type {
 	case "text", "turn_end":
 		role := "assistant"
-		if rec.Type == "turn_end" && rec.Text == "" {
-			role = "assistant"
+		text := rec.Text
+		if rec.Type == "text" {
+			text = VisibleAssistantText(text)
+			if text == "" {
+				return nil
+			}
 		}
 		msg := map[string]any{
 			"type":      role,
@@ -44,7 +48,7 @@ func claudeLine(rec Record) []byte {
 			"message": map[string]any{
 				"role":    role,
 				"model":   rec.Model,
-				"content": []map[string]any{{"type": "text", "text": rec.Text}},
+				"content": []map[string]any{{"type": "text", "text": text}},
 			},
 		}
 		if rec.Type == "turn_end" {
@@ -53,10 +57,10 @@ func claudeLine(rec Record) []byte {
 		if rec.CostUSD != nil {
 			msg["costUSD"] = *rec.CostUSD
 			msg["message"].(map[string]any)["usage"] = map[string]int{
-				"input_tokens":                  0,
-				"output_tokens":                 0,
-				"cache_creation_input_tokens":   0,
-				"cache_read_input_tokens":       0,
+				"input_tokens":                0,
+				"output_tokens":               0,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     0,
 			}
 		}
 		b, err := json.Marshal(msg)

@@ -23,3 +23,17 @@ func TestChatWireReadsSidecarSpool(t *testing.T) {
 		t.Fatalf("normalizer missed spool text: %s", joined)
 	}
 }
+
+func TestT870StopTokenIsNotOwnerVisible(t *testing.T) {
+	lines := chatWireFromSpool([]spool.Record{
+		{Type: "text", Text: "<|eos|>", Seat: "jevons"},
+		{Type: "text", Text: "I'll inspect <|eos|>", Seat: "jevons"},
+	})
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "<|eos|>") {
+		t.Fatalf("owner wire kept the stop token: %s", joined)
+	}
+	if !strings.Contains(joined, "I'll inspect ") {
+		t.Fatalf("owner wire dropped the sentence: %s", joined)
+	}
+}

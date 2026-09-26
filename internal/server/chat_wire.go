@@ -141,6 +141,8 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		return string(b), true
 
 	case "assistant":
+		// A stop token is a field on the turn record. It is not owner-visible text (🎯T870).
+		ev.Text = spool.VisibleAssistantText(ev.Text)
 		if ev.Text != "" {
 			// 🎯T238 / 🎯T240: overseer ops replies marked [silent] must not
 			// paint as owner-visible assistant bubbles. Single-fragment
