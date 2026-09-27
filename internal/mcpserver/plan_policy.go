@@ -103,6 +103,13 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 					a.Execution, a.Failure = "deferred", "turn in flight; Jevons host policy forbids interruption"
 					continue
 				}
+				if isUnattachedLiveSeat(err) {
+					// Claudia holds the seat live, but this host has not re-attached
+					// its handle yet (a sweep right after a daemon restart). The
+					// stopped path is correctly refused; the next sweep moves it live.
+					a.Execution, a.Failure = "deferred", "seat is live in Claudia but not yet attached to this host; retrying next sweep"
+					continue
+				}
 				if def := s.registry.Def(a.Name); def != nil && def.MigrationSeed != "" {
 					// Claudia has already saved the destination and brief. The
 					// next sweep retries that state; this is not a failed move.
@@ -433,4 +440,11 @@ func (s *Server) pendingPlanHandovers() map[string]handover.Pending {
 		byAgent[p.Agent] = p
 	}
 	return byAgent
+}
+
+// isUnattachedLiveSeat reports Claudia's refusal to migrate a seat as
+// stopped when its broker handle is live: this host simply has not
+// re-attached it yet, which is not a failed migration.
+func isUnattachedLiveSeat(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "live handle exists")
 }
