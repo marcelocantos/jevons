@@ -51,8 +51,8 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 	}); err != nil {
 		return fmt.Errorf("plant codeword: %w", err)
 	}
-	if _, err := s.waitHotMigrationReply(id, 0, "STORED", 90*time.Second); err != nil {
-		return fmt.Errorf("predecessor did not acknowledge codeword: %w", err)
+	if err := s.waitHotMigrationSource(id, codeword, 90*time.Second); err != nil {
+		return fmt.Errorf("predecessor did not record codeword: %w", err)
 	}
 	before, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
@@ -179,9 +179,12 @@ func (s *suite) waitHotMigrationReply(name string, after int, want string, timeo
 			return 0, err
 		}
 		turns, _ := payload["turns"].([]any)
+		if after > len(turns) {
+			return 0, fmt.Errorf("transcript shrank from %d to %d turns", after, len(turns))
+		}
 		for _, item := range turns[after:] {
 			turn, _ := item.(map[string]any)
-			if turn["role"] != "assistant" {
+			if turn["role"] != "assistant" && turn["role"] != "agent_note" {
 				continue
 			}
 			raw, _ := json.Marshal(turn["raw"])
@@ -192,4 +195,20 @@ func (s *suite) waitHotMigrationReply(name string, after int, want string, timeo
 		time.Sleep(2 * time.Second)
 	}
 	return 0, fmt.Errorf("no assistant reply containing %q within %s", want, timeout)
+}
+
+func (s *suite) waitHotMigrationSource(name, codeword string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		payload, err := s.agentTranscriptHTTP(name)
+		if err != nil {
+			return err
+		}
+		journal, _ := payload["journal"].(string)
+		if strings.Contains(strings.ToUpper(journal), codeword) {
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("codeword absent from durable transcript after %s", timeout)
 }
