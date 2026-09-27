@@ -683,7 +683,7 @@ func (s *suite) jWorkerTranscriptVisible() error {
 // is whether the successor can still do the work.
 //
 // The probe fact is planted in a DIRECT to the worker, so it exists only
-// in that agent's own transcript and then in the Distill brief the
+// in that agent's own transcript and then in Claudia's transfer brief the
 // successor is seeded with. It must not be in the owner chatlog or the
 // isolate persona. If the successor can state it, the brief carried
 // predecessor context. A second live agent with a shell will grep the
@@ -696,6 +696,10 @@ func migrationJourneyDestination(from claudia.Provider) claudia.Provider {
 }
 
 func (s *suite) jProviderMigration() error {
+	return s.withIsolatedBroker(s.providerMigrationWithBroker)
+}
+
+func (s *suite) providerMigrationWithBroker() error {
 	id := fmt.Sprintf("orch-mig-%d", time.Now().Unix()%100000)
 	work := filepath.Join(s.stateDir, "migrate-work")
 	if err := os.MkdirAll(work, 0o755); err != nil {

@@ -83,6 +83,9 @@ type suite struct {
 	cmdWait   chan error
 	logFile   *os.File
 	daemonEnv []string
+	// brokerSocket is set only while a migration journey owns a throwaway
+	// Claudia broker. Other journeys keep their direct-mode drain semantics.
+	brokerSocket string
 }
 
 func main() {

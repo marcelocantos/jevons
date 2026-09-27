@@ -23,13 +23,28 @@ import (
 )
 
 // isolateDaemonEnv keeps the throwaway daemon off the host claudia
-// broker and out of the owner's grok-homes. A reachable broker makes
-// SIGINT skip StopAll (🎯T63), so J14 cannot observe a drain; sharing
-// XDG_STATE_HOME would resume the owner's conversations (🎯T627.1).
+// broker and out of the owner's grok-homes. Most journeys use direct mode
+// so J14 can observe a SIGINT drain (🎯T63); migration journeys use their
+// own disposable broker. Sharing XDG_STATE_HOME would resume the owner's
+// conversations (🎯T627.1).
 func (s *suite) isolateDaemonEnv() []string {
-	env := append([]string{}, os.Environ()...)
+	var env []string
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "CLAUDIA_NO_BROKER=") ||
+			strings.HasPrefix(entry, "CLAUDIA_BROKER_SOCKET=") ||
+			strings.HasPrefix(entry, "CLAUDIA_OMP_SOCKET=") ||
+			strings.HasPrefix(entry, "XDG_STATE_HOME=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	if s.brokerSocket == "" {
+		env = append(env, "CLAUDIA_NO_BROKER=1")
+	} else {
+		env = append(env, "CLAUDIA_NO_BROKER=0", "CLAUDIA_BROKER_SOCKET="+s.brokerSocket,
+			"CLAUDIA_OMP_SOCKET="+filepath.Join(filepath.Dir(s.brokerSocket), "omp.sock"))
+	}
 	env = append(env,
-		"CLAUDIA_NO_BROKER=1",
 		"XDG_STATE_HOME="+s.stateDir,
 		// 🎯T811: arms the daemon's isolate-only broker fault seam; inert
 		// until a journey writes the fault file.

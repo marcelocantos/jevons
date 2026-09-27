@@ -313,6 +313,23 @@ func TestIsolateDaemonEnvDetachesFromHostBroker(t *testing.T) {
 	}
 }
 
+func TestMigrationJourneyUsesOnlyItsOwnBroker(t *testing.T) {
+	t.Setenv("CLAUDIA_BROKER_SOCKET", "/tmp/owner-broker.sock")
+	t.Setenv("CLAUDIA_OMP_SOCKET", "/tmp/owner-omp.sock")
+	s := &suite{stateDir: t.TempDir(), brokerSocket: "/tmp/journey-broker/broker.sock"}
+	got := map[string]string{}
+	for _, kv := range s.isolateDaemonEnv() {
+		key, value, ok := strings.Cut(kv, "=")
+		if ok {
+			got[key] = value
+		}
+	}
+	if got["CLAUDIA_NO_BROKER"] != "0" || got["CLAUDIA_BROKER_SOCKET"] != s.brokerSocket ||
+		got["CLAUDIA_OMP_SOCKET"] != "/tmp/journey-broker/omp.sock" {
+		t.Fatalf("migration journey inherited host broker or sidecar: %+v", got)
+	}
+}
+
 func TestBounceDirectMatchesExactLine(t *testing.T) {
 	const expected = "secret challenge"
 	if !bounceDirectMatches(expected, expected) {
