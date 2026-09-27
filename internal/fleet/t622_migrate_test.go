@@ -113,6 +113,47 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	}
 }
 
+func TestLiveMigrationDelegatesContextTransferToClaudia(t *testing.T) {
+	t.Setenv("CLAUDIA_NO_BROKER", "1")
+	const sourceSession = "019fd13d-e500-7913-b96c-981e50aa6910"
+	const destinationSession = "claudia-live-destination"
+	f, store, _ := migrateFixture(t, sourceSession, false)
+	f.reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(_ context.Context, _ claudia.Config) (*claudia.Agent, error) {
+		return claudia.StartStub(t.Context(), claudia.Config{
+			Provider: claudia.ProviderGrok, SessionID: sourceSession, WorkDir: t.TempDir(),
+		}, nil)
+	}})
+	live, err := f.reg.Launch("jevons-po")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(live.Stop)
+	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		t.Fatal("Jevons paid for a context transfer before delegating the live seat")
+		return claudia.MigrationTransferResult{}, nil
+	}
+	f.liveMigrate = func(args *claudia.MigrateArgs) error {
+		if args.ContextBrief != "" {
+			t.Fatalf("Jevons supplied a second handover brief: %q", args.ContextBrief)
+		}
+		def := f.reg.Def("jevons-po")
+		next := *def
+		next.Provider, next.Model, next.SessionID = args.Provider, args.Model, destinationSession
+		return f.reg.Register(next)
+	}
+	f.liveSession = func(string) (string, string) { return destinationSession, "composer-2.5" }
+	pending, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderCursor, "composer-2.5", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.NewSessionID != destinationSession || pending.Remap != handover.RemapClaudiaMigrate {
+		t.Fatalf("Claudia destination was not retained: %+v", pending)
+	}
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("live migration left a host handover: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestLiveDestinationRetrySkipsSecondTransferSummary(t *testing.T) {
 	t.Setenv("CLAUDIA_NO_BROKER", "1")
 	const sourceSession = "019fd13d-e500-7913-b96c-981e50aa6229"

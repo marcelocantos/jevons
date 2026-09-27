@@ -145,25 +145,31 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 		if live.PromptInFlight() && !force {
 			return handover.Pending{}, fmt.Errorf("migrate %q: turn in flight; wait or interrupt before context transfer", name)
 		}
+		draft := handover.Pending{
+			Agent: name, From: string(def.Provider), To: string(target),
+			Kind: handover.KindMigrate, OldSessionID: def.SessionID,
+			BriefSource: "claudia-transfer/" + string(claudia.PlanProvider(target)),
+		}
 		if claudia.PlanProvider(live.Provider()) == claudia.PlanProvider(target) {
 			// Claudia may have moved the live process while this host's row
 			// still names the source. Reconcile that move without paying for
 			// a second transfer summary or minting another destination.
-			draft := handover.Pending{
-				Agent: name, From: string(def.Provider), To: string(target),
-				Kind: handover.KindMigrate, OldSessionID: def.SessionID,
-			}
 			if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
 				return pending, err
 			}
 			return handover.Pending{}, fmt.Errorf("migrate %q: live destination could not be reconciled", name)
 		}
+		// A running seat carries its own retained turns. Claudia performs the
+		// disposable transfer and switch; Jevons must not require a provider-
+		// specific transcript path or pay for a second summary.
+		if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
+			return pending, err
+		}
 	}
 
 	oldSession := def.SessionID
-	// The one-shot transfer task reads the predecessor history. The work
-	// successor receives only its bounded brief; no fallback asks the
-	// predecessor or the work successor to summarize that history.
+	// A stopped seat has no live Claudia handle to summarize its retained
+	// turns. Its recorded transcript is the remaining context source.
 	draft := handover.Pending{
 		Agent: name, From: string(def.Provider), To: string(target),
 		Kind: handover.KindMigrate, OldSessionID: oldSession,
