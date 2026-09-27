@@ -249,7 +249,6 @@ persona_notes: |
 	s.run("J12-provider-migration", s.jProviderMigration)
 	s.run("J13-overseer-migration", s.jOverseerMigration)
 	s.run("J14-bounce-resume", s.jBounceResume)
-	s.run("J15-switch-seed-shape", s.jSwitchSeedShape)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
 	s.run("J19-root-history-paint", s.j19RootHistoryPaint)

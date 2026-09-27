@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -761,16 +762,15 @@ func (s *suite) providerMigrationWithBroker() error {
 		destination.SessionID == "" || destination.SessionID == source.SessionID {
 		return fmt.Errorf("migration did not record one distinct destination: source=%+v destination=%+v", source, destination)
 	}
+	if _, err := os.Stat(s.handoverPath(id)); err == nil {
+		return fmt.Errorf("broker-owned migration wrote a second Jevons handover for %s", id)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check host handover after migration: %w", err)
+	}
 
-	// The successor is a different backend with an empty session. Only its
-	// predecessor's transcript holds the answer.
-	//
-	// Seeding is fire-and-forget by design — reading a long transcript must
-	// not block the migration call — so the first probe can collide with the
-	// read still in flight and come back with its acknowledgement instead of
-	// an answer. Ask again rather than calling that a failure; a successor
-	// that never read the transcript keeps failing every attempt, which is
-	// what the cold control run demonstrates.
+	// Claudia's disposable transfer agent prepares a bounded brief before
+	// moving the work seat. The first probe can still collide with the
+	// destination's seed turn; ask again if it is busy.
 	// Probe with thread_direct: it queues behind the in-flight seed turn and
 	// returns once the successor answers. A busy refusal (Grok ACP) means
 	// "the read is still running", not a failure.
@@ -843,6 +843,11 @@ func (s *suite) providerMigrationWithBroker() error {
 	if got := reopened[id]; got.SessionID != destination.SessionID ||
 		claudia.PlanProvider(got.Provider) != claudia.PlanProvider(to) {
 		return fmt.Errorf("restart moved the seat again: destination=%+v reopened=%+v", destination, got)
+	}
+	if _, err := os.Stat(s.handoverPath(id)); err == nil {
+		return fmt.Errorf("broker-owned migration gained a Jevons handover after restart for %s", id)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check host handover after restart: %w", err)
 	}
 	for attempt := 0; attempt < 3; attempt++ {
 		reply, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe})
