@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -104,6 +105,31 @@ func (f *pinFake) PrepareMigrationPinned(_ string, _ claudia.Provider, m string,
 func (f *pinFake) CompleteThinBrief(p handover.Pending) (handover.Pending, error) { return p, nil }
 func (f *pinFake) SeedSuccessor(string) (handover.Pending, bool, error)           { return f.p, false, nil }
 func (f *pinFake) Launch(*thread.Thread) error                                    { return nil }
+
+func TestPlanSweepPassesClaudiaModelToMigrator(t *testing.T) {
+	reg, err := claudia.NewRegistry(t.TempDir() + "/agents.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{Name: "worker", SessionID: "old", Provider: "xai-oauth", Purpose: claudia.PurposeWork}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("grok", 10, 90, now),
+			t39015Weekly("claude", 90, 10, now),
+		}}
+	})
+	fake := &pinFake{p: handover.Pending{Agent: "worker", From: "grok", To: "claude", Remap: handover.RemapClaudiaMigrate}}
+	s.SetMigrator(fake)
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].Model == "" || fake.model != acts[0].Model {
+		t.Fatalf("Claudia model was not passed to migration: actions=%+v received=%q", acts, fake.model)
+	}
+}
 
 // 🎯T790: the model parameter reaches the migrator, and an unread session id
 // is surfaced to the caller.

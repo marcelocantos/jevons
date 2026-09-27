@@ -26,6 +26,9 @@ func TestPlanActionsUsesClaudiaForSidecarProviderIdentity(t *testing.T) {
 	if len(acts) != 1 || acts[0].From != "grok" || acts[0].To != "claude" || acts[0].Author != "claudia" {
 		t.Fatalf("hot Grok sidecar seat must migrate to eligible Claude: %+v", acts)
 	}
+	if acts[0].Model == "" {
+		t.Fatalf("Claudia's destination model must reach the migration action: %+v", acts[0])
+	}
 	seats[0].Provider = "anthropic"
 	if again := PlanActions(snap, seats, now, DefaultThresholds()); len(again) != 0 {
 		t.Fatalf("second sweep on Claude must stay: %+v", again)

@@ -60,7 +60,13 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 					continue
 				}
 			}
-			prepared, err := s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), true)
+			var prepared handover.Pending
+			var err error
+			if p, ok := s.migrator.(migratePinner); ok {
+				prepared, err = p.PrepareMigrationPinned(a.Name, claudia.Provider(a.To), a.Model, true)
+			} else {
+				prepared, err = s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), true)
+			}
 			if err != nil {
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
 				// The old seat is still the only working seat when preparation

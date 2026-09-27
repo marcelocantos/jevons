@@ -40,6 +40,7 @@ type PlanAction struct {
 	Name   string
 	From   string
 	To     string
+	Model  string
 	Reason string
 	// Author names who resolved the dest (🎯T691). Product placement is
 	// "claudia"; a prompt-level choice is a different decision.
@@ -243,6 +244,7 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 		}
 		out = append(out, PlanAction{
 			Name: a.Name, From: string(decision.From), To: to,
+			Model:  decision.Pick.Model,
 			Reason: decision.Reason, Author: decision.Author,
 		})
 	}
