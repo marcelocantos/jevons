@@ -907,7 +907,7 @@ body.rhs-resizing-row { cursor: row-resize; }
    purple = ≥15% already unrecoverable even at 1.5×. */
 #plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
 #plan-ticker .plan-group { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
-#plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); }
+#plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; align-self: center; color: var(--text-muted); }
 #plan-ticker .plan-icon .model-icon { width: 17px; height: 17px; display: block; opacity: 0.85; }
 /* 🎯T588.3: the claude mark is grey like every other vendor mark here.
    It carried --anthropic-mark and was the only coloured icon in the UI. */

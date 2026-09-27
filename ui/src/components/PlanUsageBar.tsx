@@ -172,15 +172,23 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
         data-provider={g.provider}
         data-company={companyOfProvider(g.provider)}
       >
-        <span className="plan-icon">
-          <CompanyMark provider={g.provider} />
-        </span>
+        {/* The vendor mark sits inside the provider's box, so the box
+            reads as one unit; a provider with no windows has no box and
+            keeps the mark on its own. */}
+        {g.available && !g.windows.length ? (
+          <span className="plan-icon">
+            <CompanyMark provider={g.provider} />
+          </span>
+        ) : null}
         {!g.available ? (
           // 🎯T681: an unreadable provider keeps its place in the row and
           // says so. Painting nothing here was indistinguishable from a
           // provider that is simply idle, and painting an empty bar was
           // indistinguishable from one with no usage at all.
           <span className="plan-box">
+            <span className="plan-icon">
+              <CompanyMark provider={g.provider} />
+            </span>
             <span className="plan-win plan-nodata" data-window="unreadable">
               <span className="plan-track">
                 <span className="plan-bar" aria-hidden="true" />
@@ -190,6 +198,9 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
           </span>
         ) : g.windows.length ? (
           <span className="plan-box">
+            <span className="plan-icon">
+              <CompanyMark provider={g.provider} />
+            </span>
             {g.windows.map((w) => {
               const painted = formatWindow(w, now());
               // 🎯T670: the gauge fills with what has been spent, like every
