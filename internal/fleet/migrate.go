@@ -25,17 +25,12 @@ import (
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
-// Provider migration (🎯T285).
-//
-// Moving an existing agent to another backend cannot preserve its
-// session — the stores are per-provider and claudia fails closed on a
-// session id it cannot find — so the agent is rotated onto a fresh
-// session and its successor is pointed at the predecessor's transcript.
-//
-// The order matters and is the whole reason this is not two lines at a
-// call site: the transcript pointer must be resolved and PERSISTED
-// before the registry row is rotated, because rotation overwrites the
-// old session id and nothing else remembers it.
+// Provider migration (🎯T691). Claudia owns the provider switch and durable
+// handover: Agent.Migrate handles live seats, and Registry.MigrateStopped
+// handles seats with no live process. Both use a disposable transfer agent
+// before starting the destination work session. Jevons supplies normalized
+// history for a stopped seat and recovers handover records written by older
+// builds; it does not write a second record for a Claudia-owned move.
 
 // SetSessionRoots attaches the provider session stores used to resolve a
 // predecessor's transcript (Grok sessions + Claude projects, 🎯T213).
@@ -122,11 +117,10 @@ func (f *Claudia) ClearHandover(name string) error {
 	return f.handovers.Clear(name)
 }
 
-// PrepareMigration rotates an agent onto a new session under provider
-// `to`, after recording where its predecessor's transcript lives. It does
-// NOT launch: the caller launches and then calls SeedSuccessor, so a
-// failed launch leaves a pending handover on disk rather than a half
-// migration with the pointer lost.
+// PrepareMigration asks Claudia to move an agent to provider `to`. A live
+// handle moves in place; a stopped seat is transferred, persisted, and
+// launched by Claudia. The returned Pending is a compatibility result for
+// Jevons callers, not a second host-owned handover record.
 //
 // force performs the switch even when no predecessor transcript can be
 // found — a deliberate cold start. Without it, an unfindable transcript
@@ -136,10 +130,8 @@ func (f *Claudia) PrepareMigration(name string, to claudia.Provider, force bool)
 	return f.PrepareMigrationPinned(name, to, "", force)
 }
 
-// PrepareMigrationPinned is PrepareMigration with a destination model pin
-// for the live claudia Agent.Migrate path (🎯T622). Empty model keeps the
-// target provider default. The rotate fallback still binds the default;
-// HTTP/overseer re-apply a pin after rotate when they Launch.
+// PrepareMigrationPinned adds a destination model pin to the Claudia move.
+// An empty model uses Claudia's destination selection.
 func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model string, force bool) (handover.Pending, error) {
 	if f == nil || f.reg == nil {
 		return handover.Pending{}, fmt.Errorf("migrate: no agent registry")
@@ -275,10 +267,9 @@ func (f *Claudia) migrateStoppedViaClaudia(name string, def claudia.AgentDef, ta
 	return pending, nil
 }
 
-// CompleteThinBrief runs the throwaway compact session when Distill
-// extracted nothing useful. Failure falls through — the switch must not
-// stall. The work session id on the registry row is kept distinct from
-// the compact session (🎯T285.1).
+// CompleteThinBrief remains for older host-owned handover records. Claudia
+// has already run its disposable transfer for a Claudia-owned move, so that
+// result returns here without another summary or destination turn.
 func (f *Claudia) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
 	if p.Remap == handover.RemapClaudiaMigrate {
 		return p, nil
