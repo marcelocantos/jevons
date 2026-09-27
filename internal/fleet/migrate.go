@@ -141,6 +141,24 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	if claudia.PlanProvider(def.Provider) == claudia.PlanProvider(target) {
 		return handover.Pending{}, fmt.Errorf("migrate %q: already on %s", name, target)
 	}
+	if live := f.reg.Get(name); live != nil && live.Alive() {
+		if live.PromptInFlight() && !force {
+			return handover.Pending{}, fmt.Errorf("migrate %q: turn in flight; wait or interrupt before context transfer", name)
+		}
+		if claudia.PlanProvider(live.Provider()) == claudia.PlanProvider(target) {
+			// Claudia may have moved the live process while this host's row
+			// still names the source. Reconcile that move without paying for
+			// a second transfer summary or minting another destination.
+			draft := handover.Pending{
+				Agent: name, From: string(def.Provider), To: string(target),
+				Kind: handover.KindMigrate, OldSessionID: def.SessionID,
+			}
+			if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
+				return pending, err
+			}
+			return handover.Pending{}, fmt.Errorf("migrate %q: live destination could not be reconciled", name)
+		}
+	}
 
 	oldSession := def.SessionID
 	// The one-shot transfer task reads the predecessor history. The work

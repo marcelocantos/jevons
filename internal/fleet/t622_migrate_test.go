@@ -4,7 +4,9 @@
 package fleet
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -108,6 +110,44 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	}
 	if _, ok, err := f.SeedSuccessor("jevons-po"); err != nil || ok {
 		t.Fatalf("SeedSuccessor after remap: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestLiveDestinationRetrySkipsSecondTransferSummary(t *testing.T) {
+	const sourceSession = "019fd13d-e500-7913-b96c-981e50aa6229"
+	f, _, _ := migrateFixture(t, sourceSession, false)
+	def := f.reg.Def("jevons-po")
+	def.Materialized = false
+	if err := f.reg.Register(*def); err != nil {
+		t.Fatal(err)
+	}
+	f.reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(_ context.Context, _ claudia.Config) (*claudia.Agent, error) {
+		return claudia.StartStub(t.Context(), claudia.Config{
+			Provider:  claudia.SubscriptionSeatProvider(claudia.ProviderCursor),
+			SessionID: sourceSession, WorkDir: t.TempDir(),
+		}, nil)
+	}})
+	live, err := f.reg.Launch("jevons-po")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(live.Stop)
+	if claudia.PlanProvider(live.Provider()) != claudia.ProviderCursor {
+		t.Fatalf("fixture did not create a live destination: %s", live.Provider())
+	}
+	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		t.Fatal("retry paid for a second context-transfer summary")
+		return claudia.MigrationTransferResult{}, nil
+	}
+	f.liveMigrate = func(*claudia.MigrateArgs) error { return fmt.Errorf("Migrate: same provider cursor") }
+	f.liveSession = func(string) (string, string) { return "destination-session", "composer-2.5" }
+	pending, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderCursor, "composer-2.5", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.NewSessionID != "destination-session" ||
+		f.reg.Def("jevons-po").SessionID != "destination-session" {
+		t.Fatalf("retry did not reconcile the live destination: %+v", pending)
 	}
 }
 
