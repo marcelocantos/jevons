@@ -756,17 +756,18 @@ func (s *suite) stoppedProviderMigrationWithBroker() error {
 		return err
 	}
 	const probe = "What is the mission codeword? Reply with the codeword only."
-	for attempt := 0; attempt < 4; attempt++ {
+	deadline := time.Now().Add(2 * time.Minute)
+	var lastReply string
+	var lastErr error
+	for time.Now().Before(deadline) {
 		reply, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe})
 		if err == nil && strings.Contains(strings.ToUpper(reply), codeword) {
 			return nil
 		}
-		if attempt == 3 {
-			return fmt.Errorf("stopped successor lost context: reply=%q err=%v", trim(reply, 200), err)
-		}
-		time.Sleep(3 * time.Second)
+		lastReply, lastErr = reply, err
+		time.Sleep(4 * time.Second)
 	}
-	return nil
+	return fmt.Errorf("stopped successor did not recall context within two minutes: reply=%q err=%v", trim(lastReply, 200), lastErr)
 }
 
 func (s *suite) providerMigrationWithBroker() error {

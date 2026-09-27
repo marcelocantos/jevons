@@ -76,6 +76,10 @@ type Claudia struct {
 	roots     discovery.Roots
 	handovers *handover.Store
 	rotations *handover.RotationStore
+	// retainedHistory reads the host's durable agent journal when a stopped
+	// predecessor has no provider transcript (notably direct Codex seats).
+	// It supplies inert history; Claudia still owns transfer and handover.
+	retainedHistory func(name string) (string, error)
 
 	// seedDeliver overrides how a handover seed reaches its successor
 	// (🎯T416). Nil is the product path, Deliver. Test seam: the handover

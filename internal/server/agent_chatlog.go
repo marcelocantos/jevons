@@ -432,6 +432,53 @@ func (s *Server) agentJournalTurns(name string) ([]map[string]any, error) {
 	return s.agentJournalsFor().turns(name)
 }
 
+// AgentMigrationHistory supplies Claudia with inert retained conversation
+// text when a stopped provider seat has no discoverable session transcript.
+// The product SQLite transcript is authoritative; pre-SQLite journals remain
+// readable for old seats and isolated tests.
+func (s *Server) AgentMigrationHistory(name string) (string, error) {
+	var turns []map[string]any
+	if db := s.stateStore(); db != nil {
+		n, err := db.N(name)
+		if err != nil {
+			return "", fmt.Errorf("read durable agent transcript count: %w", err)
+		}
+		if n > 0 {
+			lo, err := db.TailStart(name, agentJournalMaxTurns)
+			if err != nil {
+				return "", fmt.Errorf("read durable agent transcript tail: %w", err)
+			}
+			rows, err := db.Range(name, lo, n+1)
+			if err != nil {
+				return "", fmt.Errorf("read durable agent transcript: %w", err)
+			}
+			lines := make([]string, 0, len(rows))
+			for _, row := range rows {
+				lines = append(lines, row.Body)
+			}
+			turns = overseerTurnsFromWire(lines)
+		}
+	} else {
+		var err error
+		turns, err = s.agentJournalTurns(name)
+		if err != nil {
+			return "", err
+		}
+	}
+	var history strings.Builder
+	for _, turn := range turns {
+		role, _ := turn["role"].(string)
+		text, _ := turn["text"].(string)
+		if text = strings.TrimSpace(text); text != "" && (role == "user" || role == "assistant" || role == "agent_note") {
+			fmt.Fprintf(&history, "%s: %s\n", role, text)
+		}
+	}
+	if history.Len() == 0 {
+		return "", fmt.Errorf("no predecessor turns in durable agent journal for %q", name)
+	}
+	return history.String(), nil
+}
+
 // CloseAgentJournals closes every open per-agent journal (daemon shutdown).
 func (s *Server) CloseAgentJournals() {
 	if s == nil {

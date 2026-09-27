@@ -803,6 +803,7 @@ func main() {
 	// predecessor's transcript, and a durable store to hold that pointer
 	// across the rotation that overwrites the old session id.
 	fleetAdapter.SetSessionRoots(sessionRoots)
+	fleetAdapter.SetRetainedHistory(srv.AgentMigrationHistory)
 	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
 	rotationStore := handover.NewRotationStore(filepath.Join(cfg.StateDir, "rotations"))
 	fleetAdapter.SetRotationStore(rotationStore)

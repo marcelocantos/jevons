@@ -199,6 +199,29 @@ func TestStoppedMigrationDelegatesHandoverWithoutHostLedger(t *testing.T) {
 	}
 }
 
+func TestStoppedMigrationUsesDurableJournalWhenProviderHasNoTranscript(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e26"
+	f, _, _ := migrateFixture(t, oldSession, false)
+	def := f.reg.Def("jevons-po")
+	def.Provider = claudia.ProviderCodex
+	if err := f.reg.Register(*def); err != nil {
+		t.Fatal(err)
+	}
+	f.SetRetainedHistory(func(name string) (string, error) {
+		if name != "jevons-po" {
+			t.Fatalf("journal lookup for %q", name)
+		}
+		return "user: Remember AMBERPINE59\nassistant: STORED\n", nil
+	})
+	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderCursor, false)
+	if err != nil {
+		t.Fatalf("PrepareMigration: %v", err)
+	}
+	if !strings.Contains(pending.Brief, "AMBERPINE59") {
+		t.Fatalf("transfer lost retained history: %+v", pending)
+	}
+}
+
 func TestPrepareMigrationKeepsGoal(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e99"
 	f, _, _ := migrateFixture(t, oldSession, true)

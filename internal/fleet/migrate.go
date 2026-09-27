@@ -88,6 +88,12 @@ func migrationHistory(path string) (string, error) {
 // SetHandoverStore attaches the durable pending-handover store.
 func (f *Claudia) SetHandoverStore(s *handover.Store) { f.handovers = s }
 
+// SetRetainedHistory supplies the durable host journal for a stopped seat
+// whose provider has no discoverable transcript path.
+func (f *Claudia) SetRetainedHistory(read func(name string) (string, error)) {
+	f.retainedHistory = read
+}
+
 // SetRotationStore attaches the durable last-rotation store (🎯T392.1.1).
 func (f *Claudia) SetRotationStore(s *handover.RotationStore) { f.rotations = s }
 
@@ -209,7 +215,11 @@ func (f *Claudia) migrateStoppedViaClaudia(name string, def claudia.AgentDef, ta
 	if def.MigrationSeed == "" {
 		path := seatTranscript(def, f.roots)
 		var err error
-		history, err = migrationHistory(path)
+		if path == "" && f.retainedHistory != nil {
+			history, err = f.retainedHistory(name)
+		} else {
+			history, err = migrationHistory(path)
+		}
 		if err != nil {
 			return handover.Pending{}, fmt.Errorf("migrate %q: predecessor context: %w", name, err)
 		}

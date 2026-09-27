@@ -83,6 +83,48 @@ func containsRow(rows []string, want string) bool {
 	return false
 }
 
+func TestAgentMigrationHistoryReadsDurableJournalAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	const name = "migration-history"
+	first := newSidebarFixture(t, dir, name, "019fd13d-e500-7913-b96c-981e50aa2e27")
+	if rr := first.send(t, "Remember AMBERPINE59"); rr.Code != http.StatusOK {
+		t.Fatalf("send status %d: %s", rr.Code, rr.Body.String())
+	}
+	first.srv.CloseAgentJournals()
+	second := newSidebarFixture(t, dir, name, "019fd13d-e500-7913-b96c-981e50aa2e27")
+	history, err := second.srv.AgentMigrationHistory(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(history, "user: Remember AMBERPINE59") {
+		t.Fatalf("journal history lost predecessor context: %q", history)
+	}
+}
+
+func TestAgentMigrationHistoryReadsCanonicalSQLite(t *testing.T) {
+	dir := t.TempDir()
+	db, err := statedb.Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	first := New("test", dir)
+	first.SetStateDB(db)
+	if err := first.RecordAgentRequest("worker", "Remember AMBERPINE59", sendOriginOwner); err != nil {
+		t.Fatal(err)
+	}
+	first.DeliverInspectLive("worker", claudia.Event{Type: "assistant", Text: "STORED", StopReason: "end_turn"})
+	second := New("restarted", dir)
+	second.SetStateDB(db)
+	history, err := second.AgentMigrationHistory("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(history, "user: Remember AMBERPINE59") || !strings.Contains(history, "assistant: STORED") {
+		t.Fatalf("canonical history lost predecessor turns: %q", history)
+	}
+}
+
 // TestSidebarConversationSurvivesDaemonRestart is the headline acceptance:
 // an owner message typed into the sidebar and the agent's reply are both
 // readable from a FRESH Server over the same state dir, with no live process,
