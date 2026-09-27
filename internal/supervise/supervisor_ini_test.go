@@ -161,6 +161,9 @@ func TestSupervisorInstallAppliesRenderedPrimaryDefinition(t *testing.T) {
 			home, conf, fakeBin := t.TempDir(), t.TempDir(), t.TempDir()
 			loaded := filepath.Join(t.TempDir(), "loaded.ini")
 			calls := filepath.Join(t.TempDir(), "calls")
+			if err := os.WriteFile(filepath.Join(conf, "claudia.ini"), []byte("[program:claudia]\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			if state == "changed" {
 				if err := os.WriteFile(loaded, []byte("old loaded definition"), 0o644); err != nil {
 					t.Fatal(err)
@@ -172,7 +175,7 @@ set -e
 printf '%s\n' "$*" >>"$CALLS"
 case "$*" in
   reread) printf 'jevonsd: %s\nother: changed\n' "$INITIAL_STATE" ;;
-  'stop jevons-broker'|'update jevons-broker') : ;;
+  'stop jevons-broker'|'update jevons-broker'|'update claudia') : ;;
   'update jevonsd') cp "$SUPERVISOR_CONF_DIR/jevonsd.ini" "$LOADED" ;;
   'restart jevonsd'|'start jevonsd') cmp "$LOADED" "$SUPERVISOR_CONF_DIR/jevonsd.ini" ;;
   'status jevonsd') : ;;
@@ -204,6 +207,7 @@ esac
 				"reread",
 				"stop jevons-broker",
 				"update jevons-broker",
+				"update claudia",
 				"claudia broker status",
 				"claudia broker status",
 				"claudia broker status",
