@@ -85,9 +85,9 @@ func TestT474BareLaunchRecoversWorkIdentityFromHandover(t *testing.T) {
 	}
 }
 
-// TestT474RotatePersistsMintIdentity pins that PrepareMigration writes the
-// identity snapshot + prepared session onto the handover before Launch.
-func TestT474RotatePersistsMintIdentity(t *testing.T) {
+// A broker-owned provider switch keeps identity in Claudia's durable registry.
+// The old Jevons handover store is retained only for records from prior builds.
+func TestT474MigrationPreservesMintIdentityInClaudiaRegistry(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e44"
 	f, store, _ := migrateFixture(t, oldSession, true)
 	// Enrich the fixture row with the fields T474 must recover.
@@ -103,29 +103,27 @@ func TestT474RotatePersistsMintIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
+	pending, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "claude-sonnet-5", false)
 	if err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
 	}
-	got, ok, err := store.Get("jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("handover missing on disk: ok=%v err=%v", ok, err)
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("broker-owned move wrote a Jevons handover: ok=%v err=%v", ok, err)
 	}
-	if !got.HasMintIdentity() {
-		t.Fatalf("handover lacks mint identity: %+v", got)
+	if !pending.Delivered {
+		t.Fatalf("Claudia move did not return completed identity: %+v", pending)
 	}
-	if got.Purpose != claudia.PurposeWork || got.Parent != "jevons" || got.TargetID != "T285" {
-		t.Fatalf("identity snapshot wrong: %+v", got)
+	if pending.Purpose != claudia.PurposeWork || pending.Parent != "jevons" || pending.TargetID != "T285" {
+		t.Fatalf("completed move identity wrong: %+v", pending)
 	}
-	if got.NewSessionID == "" || got.NewSessionID == oldSession {
-		t.Fatalf("NewSessionID=%q want fresh prepared successor", got.NewSessionID)
-	}
-	if pending.NewSessionID != got.NewSessionID {
-		t.Fatalf("return NewSessionID=%q store=%q", pending.NewSessionID, got.NewSessionID)
+	if pending.NewSessionID == "" || pending.NewSessionID == oldSession {
+		t.Fatalf("NewSessionID=%q want fresh Claudia successor", pending.NewSessionID)
 	}
 	row := f.reg.Def("jevons-po")
-	if row == nil || row.SessionID != got.NewSessionID {
-		t.Fatalf("registry session=%v want %q", row, got.NewSessionID)
+	if row == nil || row.SessionID != pending.NewSessionID ||
+		row.Purpose != claudia.PurposeWork || row.Parent != "jevons" || row.TargetID != "T285" ||
+		row.WorkDir != def.WorkDir {
+		t.Fatalf("Claudia registry lost mint identity: %+v", row)
 	}
 }
 

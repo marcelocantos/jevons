@@ -3,8 +3,9 @@
 
 package fleet
 
-// 🎯T519 — handover seed arrival on a live-stream successor must not be
-// decided by a phantom Claude JSONL.
+// 🎯T519 — recovery of handover records written by older Jevons builds must
+// not be decided by a phantom Claude JSONL. New broker-owned migrations keep
+// their pending seed in Claudia's registry and never write this host record.
 //
 // Same surface bug T501 fixed on the mint path, at the handover call site:
 // claudia advertises a Claude-shaped JSONLPath for Codex/Grok; watchSeedArrival
@@ -26,8 +27,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 )
 
-// t519WorkerFixture is a Claude worker with a durable predecessor transcript,
-// ready to PrepareMigration onto Codex (live-stream successor).
+// t519WorkerFixture is a Claude worker with a durable predecessor transcript.
+// The tests install a historical Jevons handover after constructing the row.
 func t519WorkerFixture(t *testing.T) (*Claudia, *handover.Store) {
 	t.Helper()
 	dir := t.TempDir()
@@ -58,10 +59,31 @@ func t519WorkerFixture(t *testing.T) (*Claudia, *handover.Store) {
 	f := NewClaudia(reg)
 	f.SetSessionRoots(discovery.Roots{ClaudeProjects: claudeProjects})
 	f.SetHandoverStore(store)
-	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
-		return claudia.MigrationTransferResult{Brief: "- user: hello"}, nil
-	}
 	return f, store
+}
+
+func t519LegacyPending(t *testing.T, f *Claudia, store *handover.Store, to claudia.Provider) handover.Pending {
+	t.Helper()
+	def := *f.reg.Def("jv-t519-w")
+	predecessor := seatTranscript(def, f.roots)
+	if _, err := os.Stat(predecessor); err != nil {
+		t.Fatalf("historical predecessor transcript: %v", err)
+	}
+	def.Provider = claudia.SubscriptionSeatProvider(to)
+	def.SessionID = "legacy-successor"
+	def.Materialized = false
+	if err := f.reg.Register(def); err != nil {
+		t.Fatal(err)
+	}
+	pending := handover.Pending{
+		Agent: def.Name, From: "claude", To: string(to), Kind: handover.KindMigrate,
+		OldSessionID: "019fd13d-e500-7913-b96c-981e50aa2e51", NewSessionID: def.SessionID,
+		TranscriptPath: predecessor, Brief: "- user: hello",
+	}
+	if err := store.Put(pending); err != nil {
+		t.Fatal(err)
+	}
+	return pending
 }
 
 // TestT519CodexPhantomJSONLBusyIsNotNeverBegun: the live specimen — Codex
@@ -70,9 +92,7 @@ func t519WorkerFixture(t *testing.T) (*Claudia, *handover.Store) {
 // "no transcript was ever created at …jsonl".
 func TestT519CodexPhantomJSONLBusyIsNotNeverBegun(t *testing.T) {
 	f, store := t519WorkerFixture(t)
-	if _, err := f.PrepareMigration("jv-t519-w", claudia.ProviderCodex, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
+	t519LegacyPending(t, f, store, claudia.ProviderCodex)
 	pending, ok, err := store.Get("jv-t519-w")
 	if err != nil || !ok {
 		t.Fatalf("no pending record: ok=%v err=%v", ok, err)
@@ -121,9 +141,7 @@ func TestT519CodexPhantomJSONLBusyIsNotNeverBegun(t *testing.T) {
 // evidence is the reply, not the Claude JSONL).
 func TestT519CodexPhantomJSONLSuccessfulDeliverMarksDelivered(t *testing.T) {
 	f, store := t519WorkerFixture(t)
-	if _, err := f.PrepareMigration("jv-t519-w", claudia.ProviderCodex, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
+	t519LegacyPending(t, f, store, claudia.ProviderCodex)
 	pending, ok, err := store.Get("jv-t519-w")
 	if err != nil || !ok {
 		t.Fatalf("no pending record: ok=%v err=%v", ok, err)
@@ -156,9 +174,7 @@ func TestT519CodexPhantomJSONLSuccessfulDeliverMarksDelivered(t *testing.T) {
 // TestT519GrokPhantomJSONLSameRule: Grok is the other live-stream surface.
 func TestT519GrokPhantomJSONLSameRule(t *testing.T) {
 	f, store := t519WorkerFixture(t)
-	if _, err := f.PrepareMigration("jv-t519-w", claudia.ProviderGrok, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
+	t519LegacyPending(t, f, store, claudia.ProviderGrok)
 	pending, _, err := store.Get("jv-t519-w")
 	if err != nil {
 		t.Fatal(err)
