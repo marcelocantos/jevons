@@ -32,18 +32,54 @@ func (s *suite) withIsolatedBroker(run func() error) (result error) {
 	if err := s.signalStop(8 * time.Second); err != nil {
 		return fmt.Errorf("stop direct-mode isolate: %w", err)
 	}
-	b, err := s.startIsolatedBroker()
+	// A direct Codex or Grok session cannot be adopted as the subscription
+	// sidecar's session. Give the brokered journey a fresh registry and workdir,
+	// then restore the surrounding suite's direct-mode state afterward.
+	oldState, oldConfig, oldLogPath, oldLog, oldWork := s.stateDir, s.cfgPath, s.logPath, s.logFile, s.workdir
+	state, err := os.MkdirTemp("", "jevons-broker-journey-")
 	if err != nil {
 		return errors.Join(err, s.startDaemon())
 	}
-	s.brokerSocket = b.socket
+	config, err := os.ReadFile(oldConfig)
+	if err != nil {
+		_ = os.RemoveAll(state)
+		return errors.Join(err, s.startDaemon())
+	}
+	config = []byte(strings.ReplaceAll(string(config), oldState, state))
+	if err := os.WriteFile(filepath.Join(state, "config.yaml"), config, 0o600); err != nil {
+		_ = os.RemoveAll(state)
+		return errors.Join(err, s.startDaemon())
+	}
+	logFile, err := os.Create(filepath.Join(state, "jevonsd.log"))
+	if err != nil {
+		_ = os.RemoveAll(state)
+		return errors.Join(err, s.startDaemon())
+	}
+	s.stateDir, s.cfgPath, s.logPath, s.logFile, s.workdir =
+		state, filepath.Join(state, "config.yaml"), filepath.Join(state, "jevonsd.log"), logFile, state
+	var b *isolatedBroker
 	defer func() {
 		stopErr := s.signalStop(8 * time.Second)
 		s.brokerSocket = ""
 		brokerErr := b.close()
+		if result != nil {
+			for _, name := range []string{"jevonsd.log", "claudia-broker.log", "omp-sidecar.log"} {
+				if body, err := os.ReadFile(filepath.Join(state, name)); err == nil {
+					_ = os.WriteFile(filepath.Join(oldState, "migration-"+name), body, 0o600)
+				}
+			}
+		}
+		logErr := logFile.Close()
+		s.stateDir, s.cfgPath, s.logPath, s.logFile, s.workdir =
+			oldState, oldConfig, oldLogPath, oldLog, oldWork
 		restartErr := s.startDaemon()
-		result = errors.Join(result, stopErr, brokerErr, restartErr)
+		result = errors.Join(result, stopErr, brokerErr, logErr, restartErr, os.RemoveAll(state))
 	}()
+	b, err = s.startIsolatedBroker()
+	if err != nil {
+		return err
+	}
+	s.brokerSocket = b.socket
 	if err := s.startDaemon(); err != nil {
 		return fmt.Errorf("start brokered isolate: %w", err)
 	}
@@ -130,6 +166,9 @@ func (b *isolatedBroker) close() error {
 			_ = b.cmd.Process.Kill()
 			<-b.done
 		}
+	}
+	if body, err := os.ReadFile(filepath.Join(b.root, "omp-sidecar.log")); err == nil {
+		stopped = errors.Join(stopped, os.WriteFile(filepath.Join(filepath.Dir(b.log.Name()), "omp-sidecar.log"), body, 0o600))
 	}
 	if err := omp.StopSidecar(filepath.Join(b.root, "omp.sock")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		stopped = errors.Join(stopped, err)
