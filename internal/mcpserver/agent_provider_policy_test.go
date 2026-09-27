@@ -22,6 +22,30 @@ type busyPlanMigrator struct {
 	force bool
 }
 
+type pendingClaudiaMigrator struct {
+	sweepLedger
+	registry *claudia.Registry
+	attempts int
+	fail     bool
+}
+
+func (m *pendingClaudiaMigrator) PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error) {
+	m.attempts++
+	if force || to != claudia.ProviderCodex {
+		return handover.Pending{}, fmt.Errorf("unexpected pending retry: provider=%s force=%t", to, force)
+	}
+	if m.fail {
+		return handover.Pending{}, fmt.Errorf("destination launch unavailable")
+	}
+	def := *m.registry.Def(name)
+	def.MigrationSeed = ""
+	def.MigrationPendingStart = false
+	if err := m.registry.Register(def); err != nil {
+		return handover.Pending{}, err
+	}
+	return handover.Pending{Agent: name, To: string(to), Remap: handover.RemapClaudiaMigrate, Delivered: true}, nil
+}
+
 func (m *busyPlanMigrator) PrepareMigration(_ string, _ claudia.Provider, force bool) (handover.Pending, error) {
 	m.force = force
 	return handover.Pending{}, fmt.Errorf("Migrate: turn in flight; wait for the current response or Interrupt first")
@@ -162,5 +186,60 @@ func TestT691BrokerBusyRaceIsHostDeferralNotMigrationFailure(t *testing.T) {
 	}
 	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Execution != "deferred" {
 		t.Fatalf("decision surface lost busy deferral: %+v", got)
+	}
+}
+
+func TestT691PendingClaudiaHandoverRetriesWithoutHotSourceOrPlanFeed(t *testing.T) {
+	// Journey exception for the failed-launch branch: J34 proves a live
+	// broker-backed move and restart. This test injects the precise durable
+	// state left between Claudia's registry write and provider launch; Claudia's
+	// TestStoppedMigrationPersistsOneTransferAcrossFailedLaunch proves that
+	// retry keeps the destination ID and does not repeat the paid transfer.
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "worker", SessionID: "destination-session", Provider: claudia.ProviderCodex,
+		Purpose: claudia.PurposeWork, MigrationFrom: claudia.ProviderGrok,
+		MigrationFromSession: "source-session", MigrationSeed: "pending bounded handover",
+		MigrationPendingStart: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	migrator := &pendingClaudiaMigrator{registry: reg, fail: true}
+	s.SetMigrator(migrator)
+	if acts := s.SweepPlanPolicy(); len(acts) != 1 || acts[0].Execution != "pending" ||
+		!strings.Contains(acts[0].Failure, "destination launch unavailable") {
+		t.Fatalf("failed Claudia handover disappeared without a plan feed: %+v", acts)
+	}
+	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Author != claudia.DecisionAuthor ||
+		got[0].Execution != "pending" || !strings.Contains(got[0].Failure, "destination launch unavailable") {
+		t.Fatalf("owner decision surface hid Claudia's pending failure: %+v", got)
+	}
+	now := time.Now()
+	hot := true
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		remaining, used := 80.0, 20.0
+		if hot {
+			remaining, used = 20, 80
+		}
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("codex", remaining, used, now),
+			t39015Weekly("grok", 80, 20, now),
+		}}
+	})
+	migrator.fail = false
+	if acts := s.SweepPlanPolicy(); len(acts) != 1 || acts[0].Execution != "migrated" || acts[0].Failure != "" {
+		t.Fatalf("retry did not finish Claudia's persisted handover: %+v", acts)
+	}
+	if migrator.attempts != 2 || reg.Def("worker").MigrationSeed != "" {
+		t.Fatalf("retry did not settle the same destination: attempts=%d def=%+v", migrator.attempts, reg.Def("worker"))
+	}
+	hot = false
+	if acts := s.SweepPlanPolicy(); len(acts) != 0 || migrator.attempts != 2 {
+		t.Fatalf("completed handover was retried: acts=%+v attempts=%d", acts, migrator.attempts)
 	}
 }

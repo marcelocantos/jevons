@@ -27,15 +27,32 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	if s == nil {
 		return nil
 	}
+	// A failed destination launch has already changed Claudia's registry row.
+	// Retry its persisted handover before reading plan usage: the old hot
+	// provider is no longer on that row, and a stale feed must not strand it.
+	resuming := s.resumeClaudiaMigrations()
 	snap, cands, now, th, ok := s.planPolicyInputs()
 	if !ok {
-		return nil
+		s.rememberPlanResults(resuming)
+		return resuming
 	}
 	stayed := map[string]bool{}
 	pending := s.pendingPlanHandovers()
-	acts := planusage.PlanActions(snap, s.planPolicyAgents(), now, th, cands...)
+	acts := resuming
+	resumingNames := make(map[string]bool, len(resuming))
+	for _, action := range resuming {
+		resumingNames[action.Name] = true
+	}
+	for _, action := range planusage.PlanActions(snap, s.planPolicyAgents(), now, th, cands...) {
+		if !resumingNames[action.Name] {
+			acts = append(acts, action)
+		}
+	}
 	for i := range acts {
 		a := &acts[i]
+		if resumingNames[a.Name] {
+			continue // Claudia already retried this destination in this sweep.
+		}
 		if a.To != "" {
 			if p, ok := pending[a.Name]; ok && p.Usable() {
 				a.Execution = "pending"
@@ -139,13 +156,53 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		slog.Info("plan policy parked", "name", a.Name, "from", a.From)
 	}
 	s.releaseColdSwitched(hotNames(acts), stayed)
+	s.rememberPlanResults(acts)
+	return acts
+}
+
+func (s *Server) resumeClaudiaMigrations() []planusage.PlanAction {
+	if s.registry == nil {
+		return nil
+	}
+	var results []planusage.PlanAction
+	for _, def := range s.registry.List() {
+		if def.MigrationSeed == "" {
+			continue
+		}
+		action := pendingClaudiaMigration(def)
+		if s.migrator == nil {
+			action.Failure = "migrator not configured"
+		} else {
+			_, err := s.migrator.PrepareMigration(def.Name, def.Provider, false)
+			if err != nil {
+				action.Failure = err.Error()
+			} else if current := s.registry.Def(def.Name); current != nil && current.MigrationSeed == "" {
+				action.Execution, action.Failure = "migrated", ""
+			} else {
+				action.Failure = "Claudia has not confirmed handover delivery"
+			}
+		}
+		results = append(results, action)
+	}
+	return results
+}
+
+func pendingClaudiaMigration(def claudia.AgentDef) planusage.PlanAction {
+	return planusage.PlanAction{
+		Name: def.Name, From: string(def.MigrationFrom), To: string(def.Provider), Model: def.Model,
+		Action: claudia.SeatMigrate, Author: claudia.DecisionAuthor,
+		Reason:    "Claudia destination persisted; handover awaiting delivery",
+		Execution: "pending",
+	}
+}
+
+func (s *Server) rememberPlanResults(actions []planusage.PlanAction) {
 	s.planDecisionMu.Lock()
-	s.planLastResults = make(map[string]planusage.PlanAction, len(acts))
-	for _, a := range acts {
-		s.planLastResults[a.Name] = a
+	s.planLastResults = make(map[string]planusage.PlanAction, len(actions))
+	for _, action := range actions {
+		s.planLastResults[action.Name] = action
 	}
 	s.planDecisionMu.Unlock()
-	return acts
 }
 
 // PlanPolicyDecisions is the read-only placement picture, including stays and
@@ -155,16 +212,38 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 		return nil
 	}
 	snap, cands, now, th, ok := s.planPolicyInputs()
-	if !ok {
-		return nil
+	var decisions []planusage.PlanAction
+	if ok {
+		decisions = planusage.PlanDecisions(snap, s.planPolicyAgents(), now, th, cands...)
 	}
-	decisions := planusage.PlanDecisions(snap, s.planPolicyAgents(), now, th, cands...)
 	s.planDecisionMu.RLock()
 	for i := range decisions {
 		d := &decisions[i]
 		last, ok := s.planLastResults[d.Name]
 		if ok && last.From == d.From && last.To == d.To && last.Action == d.Action {
 			d.Execution, d.Failure = last.Execution, last.Failure
+		}
+	}
+	if s.registry != nil {
+		for _, def := range s.registry.List() {
+			if def.MigrationSeed == "" {
+				continue
+			}
+			pending := pendingClaudiaMigration(def)
+			if last, ok := s.planLastResults[def.Name]; ok && last.Execution == "pending" {
+				pending.Failure = last.Failure
+			}
+			replaced := false
+			for i := range decisions {
+				if decisions[i].Name == def.Name {
+					decisions[i] = pending
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				decisions = append(decisions, pending)
+			}
 		}
 	}
 	s.planDecisionMu.RUnlock()
