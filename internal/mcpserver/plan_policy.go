@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -32,10 +33,12 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	stayed := map[string]bool{}
 	pending := s.pendingPlanHandovers()
 	acts := planusage.PlanActions(snap, s.planPolicyAgents(), now, th, cands...)
-	for _, a := range acts {
+	for i := range acts {
+		a := &acts[i]
 		if a.To != "" {
 			if s.migrator == nil {
 				slog.Warn("plan policy migration unavailable", "name", a.Name, "to", a.To, "reason", "migrator not configured")
+				a.Execution, a.Failure = "deferred", "migrator not configured"
 				continue
 			}
 			// PrepareMigration persists the handover before CompleteThinBrief.
@@ -51,6 +54,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 					s.clearPlanHandover(a.Name)
 				} else {
 					slog.Info("plan policy migration already pending", "name", a.Name, "to", a.To)
+					a.Execution = "pending"
 					continue
 				}
 			}
@@ -63,6 +67,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			}
 			if err != nil {
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
+				a.Execution, a.Failure = "failed", err.Error()
 				// The old seat is still the only working seat when preparation
 				// fails. Leave it eligible and retry on the next policy tick;
 				// parking here turns a transient transfer failure into an outage.
@@ -73,6 +78,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				// continuation. Delivered=true makes Usable false; treating that
 				// as a cold rotate would launch a second session on the dest.
 				s.MarkAgentWorking(a.Name, "jevons", a.Reason+": Claudia migration complete")
+				a.Execution = "migrated"
 				stayed[a.Name] = true
 				continue
 			}
@@ -80,7 +86,11 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				// The row is already on the destination. There is nothing
 				// to seed. Parking here is what left the product owners
 				// stopped after a hot-week move (2026-09-22).
-				s.finishColdPlanMigrate(a)
+				if err := s.finishColdPlanMigrate(*a); err != nil {
+					a.Execution, a.Failure = "pending", err.Error()
+				} else {
+					a.Execution = "migrated"
+				}
 				stayed[a.Name] = true
 				continue
 			}
@@ -89,13 +99,21 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			}
 			if err := s.migrator.Launch(&thread.Thread{ID: a.Name}); err != nil {
 				slog.Warn("plan policy migrate launch failed; handover pending", "name", a.Name, "err", err)
-			} else if _, _, serr := s.migrator.SeedSuccessor(a.Name); serr != nil {
+				a.Execution, a.Failure = "pending", err.Error()
+			} else if _, seeded, serr := s.migrator.SeedSuccessor(a.Name); serr != nil {
 				slog.Warn("plan policy migrate seed failed", "name", a.Name, "err", serr)
+				a.Execution, a.Failure = "pending", serr.Error()
+			} else if !seeded {
+				a.Execution, a.Failure = "pending", "successor seed not confirmed"
+			} else {
+				a.Execution = "migrated"
 			}
-			slog.Info("plan policy migrated", "name", a.Name, "from", a.From, "to", a.To)
+			slog.Info("plan policy migration step", "name", a.Name, "from", a.From, "to", a.To,
+				"execution", a.Execution, "failure", a.Failure)
 			continue
 		}
 		s.MarkAgentParked(a.Name, "jevons", a.Reason)
+		a.Execution = "parked"
 		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason), "jevons", "")
 		if s.registry != nil {
 			s.registry.Stop(a.Name)
@@ -103,6 +121,12 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		slog.Info("plan policy parked", "name", a.Name, "from", a.From)
 	}
 	s.releaseColdSwitched(hotNames(acts), stayed)
+	s.planDecisionMu.Lock()
+	s.planLastResults = make(map[string]planusage.PlanAction, len(acts))
+	for _, a := range acts {
+		s.planLastResults[a.Name] = a
+	}
+	s.planDecisionMu.Unlock()
 	return acts
 }
 
@@ -116,7 +140,28 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 	if !ok {
 		return nil
 	}
-	return planusage.PlanDecisions(snap, s.planPolicyAgents(), now, th, cands...)
+	decisions := planusage.PlanDecisions(snap, s.planPolicyAgents(), now, th, cands...)
+	s.planDecisionMu.RLock()
+	for i := range decisions {
+		d := &decisions[i]
+		last, ok := s.planLastResults[d.Name]
+		if ok && last.From == d.From && last.To == d.To && last.Action == d.Action {
+			d.Execution, d.Failure = last.Execution, last.Failure
+		}
+	}
+	s.planDecisionMu.RUnlock()
+	pending := s.pendingPlanHandovers()
+	for i := range decisions {
+		d := &decisions[i]
+		if p, ok := pending[d.Name]; ok && p.Kind == handover.KindMigrate && !p.Delivered &&
+			d.Action == claudia.SeatMigrate {
+			d.Execution = "pending"
+			if d.Failure == "" {
+				d.Failure = "handover awaiting delivery"
+			}
+		}
+	}
+	return decisions
 }
 
 func (s *Server) planPolicyAgents() []planusage.AgentRef {
@@ -155,16 +200,18 @@ func (s *Server) clearPlanHandover(name string) {
 // finishColdPlanMigrate keeps a seat that force-rotated with no
 // predecessor transcript. The destination is already on the registry
 // row. Clear the empty handover and launch. Do not park.
-func (s *Server) finishColdPlanMigrate(a planusage.PlanAction) {
+func (s *Server) finishColdPlanMigrate(a planusage.PlanAction) error {
 	s.clearPlanHandover(a.Name)
 	slog.Info("plan policy cold switch stays", "name", a.Name, "from", a.From, "to", a.To)
 	s.MarkAgentWorking(a.Name, "jevons", a.Reason+": cold switch, no predecessor, seat stays")
 	if s.migrator == nil {
-		return
+		return fmt.Errorf("migrator not configured")
 	}
 	if err := s.migrator.Launch(&thread.Thread{ID: a.Name}); err != nil {
 		slog.Warn("plan policy cold switch launch failed", "name", a.Name, "err", err)
+		return err
 	}
+	return nil
 }
 
 // releaseColdSwitched lifts a park that an earlier sweep wrote because a

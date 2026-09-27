@@ -44,6 +44,10 @@ type PlanAction struct {
 	Model  string
 	Action claudia.SeatPlacementAction
 	Reason string
+	// Execution is the host's result of acting on Claudia's verdict. A
+	// placement choice is not proof that a migration finished.
+	Execution string
+	Failure   string
 	// Author names who resolved the dest (🎯T691). Product placement is
 	// "claudia"; a prompt-level choice is a different decision.
 	Author string

@@ -325,6 +325,10 @@ type Server struct {
 	// handover to the successor (🎯T285). Nil = jevons_agent_migrate
 	// unregistered rather than half-working.
 	migrator Migrator
+	// Latest host execution result for each Claudia placement verdict. Read
+	// alongside a fresh decision so a failed launch cannot look like a move.
+	planDecisionMu  sync.RWMutex
+	planLastResults map[string]planusage.PlanAction
 
 	// defaultProvider is the daemon-wide claudia backend for new agents
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).

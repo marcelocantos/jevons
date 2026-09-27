@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -245,8 +246,50 @@ func TestSweepDoesNotParkWhenMigratorIsUnavailable(t *testing.T) {
 	if len(acts) != 1 || acts[0].To != "cursor" {
 		t.Fatalf("fixture must request a migration: %+v", acts)
 	}
+	if acts[0].Execution != "deferred" || acts[0].Failure != "migrator not configured" {
+		t.Fatalf("unavailable migration must be reported, not implied complete: %+v", acts[0])
+	}
+	decisions := s.PlanPolicyDecisions()
+	if len(decisions) != 1 || decisions[0].Execution != "deferred" ||
+		decisions[0].Failure != "migrator not configured" {
+		t.Fatalf("read-only decision lost the host failure: %+v", decisions)
+	}
 	if got := store.Snapshot().Agents["claudia-po"].State; got == fleetintent.Parked {
 		t.Fatalf("missing migrator parked a seat with a valid destination: %q", got)
+	}
+}
+
+func TestSweepReportsFailedColdLaunchAsPending(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "claudia-po", SessionID: "source", Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("claude", 10, 90, now),
+			t39015Weekly("cursor", 80, 20, now),
+		}}
+	})
+	led := &sweepLedger{cold: true, launchErr: errors.New("destination unavailable")}
+	s.SetMigrator(led)
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].Execution != "pending" ||
+		acts[0].Failure != "destination unavailable" {
+		t.Fatalf("failed launch must be visible as pending, not migrated: %+v", acts)
+	}
+	decisions := s.PlanPolicyDecisions()
+	if len(decisions) != 1 || decisions[0].Execution != "pending" ||
+		decisions[0].Failure != "destination unavailable" {
+		t.Fatalf("read-only decision lost the pending launch failure: %+v", decisions)
 	}
 }
 
