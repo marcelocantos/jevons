@@ -23,7 +23,7 @@ import (
 // cost guard, because the cost guard is switched off (budget.json
 // disabled=true, owner, 2026-08-03) and plan remaining is exactly the number
 // that stays meaningful when dollars do not.
-func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.Server, stateDir string) *planusage.Reader {
+func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.Server, stateDir string, serveReady <-chan struct{}) *planusage.Reader {
 	var hist planusage.History
 	if path := planusage.DefaultReadingsPath(stateDir); path != "" {
 		store, err := planusage.OpenReadingStore(path)
@@ -50,12 +50,17 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 	srv.SetPlanDecisions(mcpSrv.PlanPolicyDecisions)
 	go reader.Run(ctx)
 	// A daemon restart clears the in-memory execution result. Re-evaluate
-	// once the first plan reading arrives so a rejected destination login is
-	// visible again without waiting for the next five-minute policy tick.
+	// after both the first plan reading and HTTP/MCP setup, so a rejected
+	// destination login is visible again without waiting for the next tick.
 	ready := make(chan struct{}, 1)
 	go func() {
-		if reader.WaitReady(ctx) == nil {
+		if reader.WaitReady(ctx) != nil {
+			return
+		}
+		select {
+		case <-serveReady:
 			ready <- struct{}{}
+		case <-ctx.Done():
 		}
 	}()
 	go func() {

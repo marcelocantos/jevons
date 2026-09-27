@@ -951,7 +951,8 @@ func main() {
 	// tick so owner turns and open Build missions keep their room.
 	// 🎯T390: subscription plan remaining, per backend, for the cockpit and
 	// as capacity's one honest budget dimension under a flat subscription.
-	plans := startPlanUsage(ctx, mcpSrv, srv, cfg.StateDir)
+	planServeReady := make(chan struct{})
+	plans := startPlanUsage(ctx, mcpSrv, srv, cfg.StateDir, planServeReady)
 
 	capGov := startCapacityGovernor(cfg, watcher, guard, plans, mcpSrv, srv)
 
@@ -1115,6 +1116,9 @@ func main() {
 			slog.Error("server failed", "err", err)
 		}
 	}()
+	// The listener is bound and MCP routes are mounted. The first plan
+	// reading may now run the post-restart migration check safely.
+	close(planServeReady)
 
 	// 🎯T710: after bind, so the first inspect sees our 127.0.0.1 holder.
 	// Notify only — never treat a squatter as an outage restart.
