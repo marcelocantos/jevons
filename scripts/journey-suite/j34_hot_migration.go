@@ -89,7 +89,7 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 	}
 	if choice == nil || choice.Author != claudia.DecisionAuthor || choice.Action != claudia.SeatMigrate ||
 		claudia.PlanProvider(claudia.Provider(choice.To)) != claudia.ProviderCodex || choice.Reason == "" {
-		return fmt.Errorf("Claudia did not explain an eligible move: %+v", choice)
+		return fmt.Errorf("Claudia did not explain an eligible move: choice=%+v decisions=%+v", choice, decisions)
 	}
 	resp, err = http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
