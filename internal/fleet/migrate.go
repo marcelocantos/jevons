@@ -914,10 +914,6 @@ func isLiveMigrateFallback(err error) bool {
 	if errors.Is(err, errNoLiveAgent) {
 		return true
 	}
-	var capErr *claudia.CapabilityError
-	if errors.As(err, &capErr) {
-		return true
-	}
 	msg := err.Error()
 	return strings.Contains(msg, "agent process not running") ||
 		strings.Contains(msg, "agent not ready")

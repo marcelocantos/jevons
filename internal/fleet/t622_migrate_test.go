@@ -270,28 +270,25 @@ func TestT646_1RemapDoesNotDeliverHostSeed(t *testing.T) {
 	}
 }
 
-func TestT622CapabilityErrorFallsBackToRotate(t *testing.T) {
+func TestT691CapabilityErrorDoesNotFallBackToHostRotation(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6221"
-	f, _, _ := migrateFixture(t, oldSession, true)
+	f, store, _ := migrateFixture(t, oldSession, true)
 	f.liveMigrate = func(*claudia.MigrateArgs) error {
 		return &claudia.CapabilityError{
 			Provider:   claudia.ProviderGrok,
 			Capability: claudia.CapabilityMigrate,
 		}
 	}
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
-	if err != nil {
-		t.Fatalf("fallback rotate: %v", err)
-	}
-	if pending.Remap != "" {
-		t.Fatalf("Remap=%q after capability fallback", pending.Remap)
+	_, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
+	if err == nil {
+		t.Fatal("unsupported live migration fell through to host rotation")
 	}
 	def := f.reg.Def("jevons-po")
-	if def == nil || def.Materialized {
-		t.Fatalf("rotate fallback must mint an unmaterialized successor: %+v", def)
+	if def == nil || def.Provider != claudia.ProviderGrok || def.SessionID != oldSession {
+		t.Fatalf("capability refusal changed the source seat: %+v", def)
 	}
-	if def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
-		t.Fatalf("provider=%s", def.Provider)
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("capability refusal left a host handover: ok=%v err=%v", ok, err)
 	}
 }
 
