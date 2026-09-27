@@ -172,6 +172,8 @@ func (s *Server) planPolicyAgents() []planusage.AgentRef {
 	for _, d := range s.registry.List() {
 		agents = append(agents, planusage.AgentRef{
 			Name: d.Name, Provider: string(d.Provider), Purpose: d.Purpose, Parent: d.Parent,
+			PreferProvider: d.PreferProvider, AllowedProviders: d.AllowedProviders,
+			ExcludeProviders: d.ExcludeProviders,
 		})
 	}
 	return agents

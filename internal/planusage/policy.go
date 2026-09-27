@@ -29,10 +29,13 @@ const (
 
 // AgentRef is a running seat the sweep can migrate or park.
 type AgentRef struct {
-	Name     string
-	Provider string
-	Purpose  string
-	Parent   string
+	Name             string
+	Provider         string
+	Purpose          string
+	Parent           string
+	PreferProvider   claudia.Provider
+	AllowedProviders []claudia.Provider
+	ExcludeProviders []claudia.Provider
 }
 
 // PlanAction is Claudia's per-seat verdict. Only migrate and park are actions
@@ -245,9 +248,12 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
 			continue
 		}
+		seatExclusions := append([]claudia.Provider(nil), exclusions...)
+		seatExclusions = append(seatExclusions, a.ExcludeProviders...)
 		decision, err := claudia.ResolveSeatPlacement(context.Background(), &claudia.SeatPlacementArgs{
 			CurrentProvider: claudia.Provider(a.Provider), Usage: usage, Now: now,
-			Thresholds: claudiaThresholdsPtr(th), ExcludeProviders: exclusions,
+			Thresholds: claudiaThresholdsPtr(th), ExcludeProviders: seatExclusions,
+			AllowedProviders: a.AllowedProviders, PreferProvider: a.PreferProvider,
 		})
 		if err != nil {
 			out = append(out, PlanAction{Name: a.Name, From: a.Provider, Action: claudia.SeatDefer,

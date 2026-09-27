@@ -29,6 +29,56 @@ func t39015Weekly(name string, rem, used float64, now time.Time) planusage.Backe
 	}
 }
 
+func TestT691PlanPolicyForwardsPersistedSeatProviderConstraints(t *testing.T) {
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		prefer  claudia.Provider
+		allowed []claudia.Provider
+		exclude []claudia.Provider
+		want    string
+	}{
+		{name: "preference", prefer: claudia.ProviderCodex, want: "codex"},
+		{name: "explicit exclusion beats preference", prefer: claudia.ProviderCodex,
+			exclude: []claudia.Provider{claudia.ProviderCodex}, want: "grok"},
+		{name: "allowed set beats preference", prefer: claudia.ProviderCodex,
+			allowed: []claudia.Provider{claudia.ProviderClaude, claudia.ProviderGrok}, want: "grok"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "agents.json")
+			reg, err := claudia.NewRegistry(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reg.Register(claudia.AgentDef{
+				Name: "worker", SessionID: "session-worker", Provider: claudia.ProviderClaude,
+				Purpose: claudia.PurposeWork, PreferProvider: tc.prefer,
+				AllowedProviders: tc.allowed, ExcludeProviders: tc.exclude,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := claudia.NewRegistry(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := New(t.TempDir(), nil, nil)
+			s.SetRegistry(reloaded)
+			s.SetPlanUsageSource(func() planusage.Snapshot {
+				return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+					t39015Weekly("claude", 20, 80, now),
+					t39015Weekly("codex", 80, 20, now),
+					t39015Weekly("grok", 55, 45, now),
+				}}
+			})
+			decisions := s.PlanPolicyDecisions()
+			if len(decisions) != 1 || decisions[0].Action != claudia.SeatMigrate ||
+				decisions[0].To != tc.want || decisions[0].Author != claudia.DecisionAuthor {
+				t.Fatalf("Claudia placement with persisted seat policy = %+v; want %s", decisions, tc.want)
+			}
+		})
+	}
+}
+
 func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	t791Steerable(t) // 🎯T791: subject is not steerability
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
