@@ -59,5 +59,20 @@ if [ "${1:-}" = "--print-bin" ]; then
   echo "$BIN"
   exit 0
 fi
+
+# Owner Reauth shells out to `claudia broker auth-recover` (🎯T691.1),
+# using CLAUDIA_BIN or else `claudia` on PATH. A dev machine's shared
+# broker runs the sibling claudia tree build (claudia's supervisor.d pin),
+# and the Homebrew CLI can predate the broker request the daemon needs
+# (0.44.0 had no auth-recover). Use the broker's own build as the client.
+if [ -z "${CLAUDIA_BIN:-}" ] && [ -n "${JEVONS_DEV_REPO:-}" ] &&
+  [ -x "$JEVONS_DEV_REPO/../claudia/bin/claudia" ]; then
+  CLAUDIA_BIN="$(CDPATH= cd "$JEVONS_DEV_REPO/../claudia/bin" && pwd)/claudia"
+  export CLAUDIA_BIN
+fi
+if [ "${1:-}" = "--print-claudia-bin" ]; then
+  echo "${CLAUDIA_BIN:-claudia}"
+  exit 0
+fi
 echo "jevonsd: running $BIN" >&2
 exec "$BIN" -port 13705 -workdir "$ROOT"

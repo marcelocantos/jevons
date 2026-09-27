@@ -146,3 +146,41 @@ func TestRenderedProgramCarriesTheDevRepoMarker(t *testing.T) {
 		t.Fatalf("rendered program does not mark this repo as the dev source:\n%s", body)
 	}
 }
+
+// 🎯T691.1: owner Reauth runs `claudia broker auth-recover`. On a dev
+// machine the client must be the sibling claudia build the broker runs,
+// not a Homebrew CLI that predates the request; an explicit pin wins.
+func TestDevRepoPinsSiblingClaudiaClient(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "jevons")
+	stubBin(t, filepath.Join(repo, "bin", "jevonsd"), "dev-repo")
+	sibling := stubBin(t, filepath.Join(root, "claudia", "bin", "claudia"), "sibling")
+
+	probe := func(env ...string) string {
+		t.Helper()
+		cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "run-jevonsd.sh"), "--print-claudia-bin")
+		cmd.Env = append([]string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}, env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run failed: %v\n%s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	resolvedSibling, err := filepath.EvalSymlinks(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := filepath.EvalSymlinks(probe("JEVONS_DEV_REPO=" + repo))
+	if err != nil || got != resolvedSibling {
+		t.Fatalf("dev repo client = %q (%v), want sibling %q", got, err, resolvedSibling)
+	}
+	if got := probe("JEVONS_DEV_REPO="+repo, "CLAUDIA_BIN=/explicit/claudia"); got != "/explicit/claudia" {
+		t.Fatalf("explicit CLAUDIA_BIN was overridden: %q", got)
+	}
+	bare := filepath.Join(t.TempDir(), "jevons")
+	stubBin(t, filepath.Join(bare, "bin", "jevonsd"), "dev-repo")
+	if got := probe("JEVONS_DEV_REPO=" + bare); got != "claudia" {
+		t.Fatalf("no sibling build should leave PATH lookup, got %q", got)
+	}
+}
