@@ -49,6 +49,15 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
 	srv.SetPlanDecisions(mcpSrv.PlanPolicyDecisions)
 	go reader.Run(ctx)
+	// A daemon restart clears the in-memory execution result. Re-evaluate
+	// once the first plan reading arrives so a rejected destination login is
+	// visible again without waiting for the next five-minute policy tick.
+	ready := make(chan struct{}, 1)
+	go func() {
+		if reader.WaitReady(ctx) == nil {
+			ready <- struct{}{}
+		}
+	}()
 	go func() {
 		tick := time.NewTicker(planusage.DefaultRefresh)
 		defer tick.Stop()
@@ -56,6 +65,9 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 			select {
 			case <-ctx.Done():
 				return
+			case <-ready:
+				ready = nil // The first reading gets one sweep; later ticks continue it.
+				mcpSrv.SweepPlanPolicy()
 			case <-tick.C:
 				mcpSrv.SweepPlanPolicy()
 			}
