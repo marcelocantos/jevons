@@ -22,6 +22,12 @@ const (
 func normalizeWindowLabel(provider string, w Window) Window {
 	name := strings.ToLower(strings.TrimSpace(w.Name))
 	p := strings.ToLower(strings.TrimSpace(provider))
+	// Older Claudia builds copied the billing-cycle name onto Cursor's API
+	// bucket. Keep the two histories separate even if that wire shape returns.
+	if p == "cursor" && strings.EqualFold(strings.TrimSpace(w.Model), "API") {
+		w.Name = string(cursorAPIWindowName)
+		return w
+	}
 	if name != WindowWeekly {
 		return w
 	}
