@@ -83,8 +83,9 @@ func migrationHistory(path string) (string, error) {
 // SetHandoverStore attaches the durable pending-handover store.
 func (f *Claudia) SetHandoverStore(s *handover.Store) { f.handovers = s }
 
-// SetRetainedHistory supplies the durable host journal for a stopped seat
-// whose provider has no discoverable transcript path.
+// SetRetainedHistory supplies the durable host journal to Claudia when a
+// live seat was adopted without process-local turns, or a stopped seat has
+// no discoverable provider transcript path.
 func (f *Claudia) SetRetainedHistory(read func(name string) (string, error)) {
 	f.retainedHistory = read
 }
@@ -800,7 +801,18 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 			return handover.Pending{}, true, fmt.Errorf("migrate %q: clear obsolete host handover: %w", name, err)
 		}
 	}
-	args := &claudia.MigrateArgs{Provider: target, Model: model, Force: force, Reason: "explicit", ContextBrief: draft.Brief}
+	var retained string
+	if draft.Brief == "" && f.retainedHistory != nil {
+		var err error
+		retained, err = f.retainedHistory(name)
+		if err != nil {
+			return handover.Pending{}, true, fmt.Errorf("migrate %q: retained predecessor context: %w", name, err)
+		}
+	}
+	args := &claudia.MigrateArgs{
+		Provider: target, Model: model, Force: force, Reason: "explicit",
+		ContextBrief: draft.Brief, RetainedTranscript: retained,
+	}
 	err := f.invokeMigrate(name, args)
 	if force && err != nil && strings.Contains(err.Error(), "turn in flight") {
 		// A seat that is reported to every minute has no gap between turns:

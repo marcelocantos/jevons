@@ -132,9 +132,16 @@ func TestLiveMigrationDelegatesContextTransferToClaudia(t *testing.T) {
 		t.Fatal("Jevons paid for a context transfer before delegating the live seat")
 		return claudia.MigrationTransferResult{}, nil
 	}
+	const retained = "user: Continue T691 and remember VIOLET67\nassistant: Current work remains on Grok\n"
+	f.SetRetainedHistory(func(name string) (string, error) {
+		if name != "jevons-po" {
+			t.Fatalf("journal lookup for %q", name)
+		}
+		return retained, nil
+	})
 	f.liveMigrate = func(args *claudia.MigrateArgs) error {
-		if args.ContextBrief != "" {
-			t.Fatalf("Jevons supplied a second handover brief: %q", args.ContextBrief)
+		if args.ContextBrief != "" || args.RetainedTranscript != retained {
+			t.Fatalf("Jevons must supply only inert history, never a second brief: %+v", args)
 		}
 		def := f.reg.Def("jevons-po")
 		next := *def
