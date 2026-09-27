@@ -157,6 +157,36 @@ func TestSentinelPOIdleOnReadyFrontierIsFault(t *testing.T) {
 	}
 }
 
+func TestPausedFleetDoesNotLogPOFanoutFailure(t *testing.T) {
+	alive := map[string]bool{"jevons-po": true}
+	s, dir := poFanoutFixture(t, readyLedger)
+	setPhase(s, "jevons-po", "idle", time.Time{})
+	var fanoutLogs int
+	s.SetEventLogger(func(component, decision string, fields map[string]any) {
+		if component == compSentinel && decision == "po_fanout" {
+			fanoutLogs++
+		}
+	})
+	s.SetAutoSpawnPaused(true)
+	t0 := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	sampleAt(s, dir, alive, t0)
+	sampleAt(s, dir, alive, t0.Add(DefaultSentinelMechanicalGrace+time.Minute))
+	if fanoutLogs != 0 {
+		t.Fatalf("owner-paused fleet logged %d PO fan-out failures", fanoutLogs)
+	}
+
+	s.SetAutoSpawnPaused(false)
+	unpaused := t0.Add(2 * DefaultSentinelMechanicalGrace)
+	sampleAt(s, dir, alive, unpaused)
+	if fanoutLogs != 0 {
+		t.Fatal("lifting the pause reused the old PO grace window")
+	}
+	sampleAt(s, dir, alive, unpaused.Add(DefaultSentinelMechanicalGrace+time.Minute))
+	if fanoutLogs == 0 {
+		t.Fatal("a genuinely idle PO on ready leaves was not logged after the pause lifted")
+	}
+}
+
 // 🎯T380 acceptance (2): an all-gated frontier is legitimate sleep.
 func TestSentinelPOIdleOnGatedFrontierIsNotFault(t *testing.T) {
 	alive := map[string]bool{"jevons-po": true}

@@ -702,6 +702,17 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 		if block.Detail != "" {
 			resources.Note += " (" + block.Detail + ")"
 		}
+		// A paused or provider-blocked fleet cannot owe a spawn. Drop the
+		// previous PO turn/grace window so an old turn cannot be reported as
+		// a fresh fan-out failure when the block is later lifted.
+		rt.mu.Lock()
+		clear(rt.poFanout)
+		for symptom := range rt.firstSeen {
+			if strings.HasPrefix(symptom, "po_fanout:") {
+				delete(rt.firstSeen, symptom)
+			}
+		}
+		rt.mu.Unlock()
 	}
 
 	// --- Frontier stall (🎯T346) ---
@@ -757,7 +768,9 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			// Same leaves, read against the POs answerable for them: a stall
 			// on this frontier has an owner, and silence from that owner is a
 			// fault rather than the sleep 🎯T325.1 blesses.
-			in.POFanout = s.samplePOFanout(rt, obs, overseer, workdir, now, grace, args.ProcessRunning)
+			if block.Runnable {
+				in.POFanout = s.samplePOFanout(rt, obs, overseer, workdir, now, grace, args.ProcessRunning)
+			}
 		}
 	}
 
