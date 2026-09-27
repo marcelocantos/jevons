@@ -151,6 +151,7 @@ function Cockpit() {
           stopped_at?: string;
           mass_stop?: string;
           rehydrate?: string;
+          reauth_available?: boolean;
           plan_wall?: string;
         }) => ({
           name: a.name || '',
@@ -170,6 +171,7 @@ function Cockpit() {
           stopped_at: a.stopped_at,
           mass_stop: a.mass_stop,
           rehydrate: a.rehydrate,
+          reauth_available: a.reauth_available,
           plan_wall: a.plan_wall,
         }))
         .filter((a: AgentRow) => a.name);
@@ -353,6 +355,17 @@ function Cockpit() {
                 selected={agent}
                 onSelect={(name) => navigate({ search: { agent: name, tab } })}
                 onDismiss={(name) => void dismissFleetAside(name)}
+                onReauth={async (name) => {
+                  try {
+                    const r = await fetch('/api/agents/' + encodeURIComponent(name) + '/auth/recover', { method: 'POST' });
+                    if (!r.ok) {
+                      const body = await r.json().catch(() => ({}));
+                      throw new Error(body.error || 'Authentication recovery failed (HTTP ' + r.status + ')');
+                    }
+                  } finally {
+                    await queryClient.invalidateQueries({ queryKey: ['agents'] });
+                  }
+                }}
               />
             </div>
             <div

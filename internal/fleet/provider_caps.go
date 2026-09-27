@@ -234,6 +234,10 @@ func noteRehydrate(name string, err error) {
 	saveRehydrateFailures()
 }
 
+// RecordRehydrateFailure updates the fleet row after a recovery operation
+// that fails before LaunchReconciled can run (for example, plan reauth).
+func RecordRehydrateFailure(name string, err error) { noteRehydrate(name, err) }
+
 func noteCapDrop(name, what string) {
 	capDrops.Store(name, time.Now().UTC().Format(time.RFC3339)+" "+what)
 	slog.Warn("provider-native settings dropped from agent def", "name", name, "detail", what)

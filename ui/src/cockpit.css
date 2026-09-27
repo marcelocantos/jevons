@@ -1839,4 +1839,22 @@ body.rhs-resizing-row { cursor: row-resize; }
   opacity: 0.8;
   white-space: normal;
   overflow-wrap: anywhere;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 7px;
 }
+.agent-node .agent-rehydrate-text { flex: 1 1 0; min-width: 0; }
+.agent-node .agent-reauth {
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.agent-node .agent-reauth:disabled { cursor: wait; opacity: 0.6; }
+.agent-node .agent-reauth-error { flex: 1 0 100%; color: #b33; }

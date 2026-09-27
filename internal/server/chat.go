@@ -929,7 +929,8 @@ type agentInfo struct {
 	// rehydrate failed, with the error). `status: stopped` alone cannot
 	// tell a revivable seat from one every send will refuse. Empty while
 	// running.
-	Rehydrate string `json:"rehydrate,omitempty"`
+	Rehydrate       string `json:"rehydrate,omitempty"`
+	ReauthAvailable bool   `json:"reauth_available,omitempty"`
 	// DroppedCaps is the last provider-native setting (a codex sandbox)
 	// dropped from this seat's def because its provider refuses it, with
 	// when and what (🎯T763). A drop is never silent; empty means none
@@ -1198,6 +1199,7 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 		}
 		if !running {
 			info.Rehydrate = fleet.RehydrateHealth(d)
+			info.ReauthAvailable = reauthablePlanFailure(d.Provider, info.Rehydrate)
 		}
 		info.DroppedCaps = fleet.CapDrop(d.Name)
 		// 🎯T365: target filings and idea/capture asides share purpose=aside;

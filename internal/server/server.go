@@ -313,6 +313,8 @@ type Server struct {
 	// agentSendHook overrides live registry Send for POST /api/agents/{name}/send
 	// hermetic tests (🎯T182). Nil = Launch + Agent.Send on the registry.
 	agentSendHook func(name, text string) (status string, err error)
+	// Tests replace the broker auth call; production leaves this nil.
+	authRecover func(context.Context, claudia.Provider) error
 	// The product hook owns admission and retains the speaker's origin.
 	agentSendOriginHook func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
@@ -570,6 +572,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend)     // 🎯T182: product agent_send proxy
+	mux.HandleFunc("POST /api/agents/{name}/auth/recover", s.handleAgentAuthRecover)
 	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
 	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
 	mux.HandleFunc("POST /api/asides", s.handleCreateAside)                  // 🎯T136: register purpose=aside in fleet
