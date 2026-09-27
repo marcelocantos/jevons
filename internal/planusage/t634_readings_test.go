@@ -137,6 +137,51 @@ func TestT634RolloverStartsANewSeries(t *testing.T) {
 	}
 }
 
+func TestT879OpeningStoreRepairsOnlyContradictoryCursorMonthlyZeros(t *testing.T) {
+	path := planusage.DefaultReadingsPath(t.TempDir())
+	store, err := planusage.OpenReadingStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset := time.Date(2026, 10, 14, 22, 10, 0, 0, time.UTC)
+	misfiledAt := time.Date(2026, 9, 23, 15, 54, 12, 0, time.UTC)
+	realZeroAt := misfiledAt.Add(time.Hour)
+	if err := store.Append([]planusage.Reading{
+		{Provider: "cursor", Window: "monthly", FetchedAt: misfiledAt, ResetsAt: &reset, Remaining: 49.952},
+		{Provider: "cursor", Window: "monthly", FetchedAt: misfiledAt, ResetsAt: &reset, Remaining: 0},
+		{Provider: "cursor", Window: "monthly", FetchedAt: realZeroAt, ResetsAt: &reset, Remaining: 0},
+		{Provider: "claude", Window: "monthly", FetchedAt: misfiledAt, ResetsAt: &reset, Remaining: 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		store, err = planusage.OpenReadingStore(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor, err := store.Series("cursor", "monthly", &reset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cursor) != 2 || cursor[0].Remaining != 49.952 || cursor[1].Remaining != 0 || !cursor[1].At.Equal(realZeroAt) {
+			t.Fatalf("open %d cursor monthly series=%+v", i, cursor)
+		}
+		claude, err := store.Series("claude", "monthly", &reset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(claude) != 1 || claude[0].Remaining != 0 {
+			t.Fatalf("open %d other provider series=%+v", i, claude)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestT634HistoryStartsAtFirstSample(t *testing.T) {
 	store, err := planusage.OpenReadingStore(":memory:")
 	if err != nil {

@@ -92,7 +92,29 @@ func OpenReadingStore(path string) (*ReadingStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("planusage readings: rebucket series keys: %w", err)
 	}
+	if err := repairCursorMonthlyAPIHistory(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("planusage readings: repair Cursor monthly history: %w", err)
+	}
 	return &ReadingStore{db: db}, nil
+}
+
+// repairCursorMonthlyAPIHistory removes samples filed before Cursor's API
+// bucket got its own series key. A zero remaining sample is demonstrably the
+// API bucket only when the same fetch also stored a different monthly total.
+// A month that is genuinely at zero, with no contradictory sibling, stays.
+func repairCursorMonthlyAPIHistory(db *sql.DB) error {
+	_, err := db.Exec(`DELETE FROM plan_readings
+		WHERE provider = 'cursor' AND window = 'monthly' AND remaining = 0
+		AND EXISTS (
+			SELECT 1 FROM plan_readings AS total
+			WHERE total.provider = plan_readings.provider
+				AND total.window = plan_readings.window
+				AND total.resets_key = plan_readings.resets_key
+				AND total.fetched_at = plan_readings.fetched_at
+				AND total.remaining > 0
+		)`)
+	return err
 }
 
 // Close closes the database.
