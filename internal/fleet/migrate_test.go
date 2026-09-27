@@ -4,11 +4,13 @@
 package fleet
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
@@ -52,6 +54,36 @@ func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claud
 	f.SetHandoverStore(store)
 	f.migrationTransfer = func(args claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
 		return claudia.MigrationTransferResult{Brief: "In-flight work: " + args.Goal + "\nRecent context: " + args.Transcript}, nil
+	}
+	f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (claudia.StoppedMigration, error) {
+		source := reg.Def(name)
+		if source == nil {
+			return claudia.StoppedMigration{}, fmt.Errorf("missing fixture seat %s", name)
+		}
+		if history == "" && !args.Force {
+			return claudia.StoppedMigration{}, fmt.Errorf("no predecessor context")
+		}
+		if history == "" {
+			history = "system: forced cold start; no predecessor turns were retained"
+		}
+		transfer, err := f.migrationTransfer(claudia.MigrationTransferArgs{
+			Destination: args.Provider, Goal: source.Goal, Transcript: history,
+		})
+		if err != nil {
+			return claudia.StoppedMigration{}, err
+		}
+		if strings.TrimSpace(transfer.Brief) == "" {
+			return claudia.StoppedMigration{}, fmt.Errorf("empty transfer brief")
+		}
+		next := *source
+		next.Provider = claudia.SubscriptionSeatProvider(args.Provider)
+		next.Model = args.Model
+		next.SessionID = uuid.NewString()
+		next.Materialized = false
+		if err := reg.Register(next); err != nil {
+			return claudia.StoppedMigration{}, err
+		}
+		return claudia.StoppedMigration{Source: *source, Destination: next, Transfer: transfer}, nil
 	}
 	return f, store, transcript
 }
@@ -105,7 +137,7 @@ func TestT543ThrowawayCompactIsNotAWorkSeat(t *testing.T) {
 
 func TestT543CompleteThinBriefMintsCompactOnce(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e54"
-	f, _, _ := migrateFixture(t, oldSession, true)
+	f, store, _ := migrateFixture(t, oldSession, true)
 	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderCodex, true)
 	if err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
@@ -118,44 +150,33 @@ func TestT543CompleteThinBriefMintsCompactOnce(t *testing.T) {
 	if _, err := f.CompleteThinBrief(pending); err != nil {
 		t.Fatalf("CompleteThinBrief: %v", err)
 	}
-	saved, ok, err := f.PendingHandover("jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("pending missing: ok=%v err=%v", ok, err)
-	}
-	if _, err := f.CompleteThinBrief(saved); err != nil {
+	if _, err := f.CompleteThinBrief(pending); err != nil {
 		t.Fatalf("second CompleteThinBrief: %v", err)
 	}
 	if mints != 0 {
 		t.Fatalf("compact mints=%d; completed Claudia transfer must not run a second summarizer", mints)
 	}
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("Claudia-owned transfer wrote a host handover: ok=%v err=%v", ok, err)
+	}
 }
 
-// TestPrepareMigrationPersistsPointerBeforeRotating is the ordering
-// oracle for 🎯T285: rotation overwrites the session id, so unless the
-// transcript pointer is already on disk the successor can never be told
-// where it came from. Asserting on the STORE (not the return value)
-// proves the durable half.
-func TestPrepareMigrationPersistsPointerBeforeRotating(t *testing.T) {
+// Jevons supplies normalized predecessor history, while Claudia owns the
+// persisted destination and handover. The host must not write a second one.
+func TestStoppedMigrationDelegatesHandoverWithoutHostLedger(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e21"
-	f, store, transcript := migrateFixture(t, oldSession, true)
+	f, store, _ := migrateFixture(t, oldSession, true)
 
 	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
 	if err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
 	}
-	if pending.TranscriptPath != transcript {
-		t.Errorf("pointer = %q, want %q", pending.TranscriptPath, transcript)
+	if pending.Remap != handover.RemapClaudiaMigrate || !pending.Delivered ||
+		!strings.Contains(pending.Brief, "hello") || pending.OldSessionID != oldSession {
+		t.Fatalf("Claudia transfer result lost context or source identity: %+v", pending)
 	}
-
-	saved, ok, err := store.Get("jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("nothing persisted: ok=%v err=%v", ok, err)
-	}
-	if saved.TranscriptPath != transcript || saved.OldSessionID != oldSession {
-		t.Fatalf("persisted record lost the pointer: %+v", saved)
-	}
-	if claudia.PlanProvider(claudia.Provider(saved.From)) != claudia.ProviderGrok || claudia.PlanProvider(claudia.Provider(saved.To)) != claudia.ProviderClaude {
-		t.Errorf("persisted providers wrong: %+v", saved)
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("stopped migration wrote a Jevons handover: ok=%v err=%v", ok, err)
 	}
 
 	// The row is rotated: new provider, NEW session, and not a resume —
@@ -290,25 +311,19 @@ func TestSeedSuccessorWithoutPendingIsQuiet(t *testing.T) {
 	}
 }
 
-// TestSeedSuccessorKeepsRecordWhenNoProcess: a failed launch must leave
-// the handover pending so the next launch delivers it, rather than
-// consuming it against a dead agent.
-func TestSeedSuccessorKeepsRecordWhenNoProcess(t *testing.T) {
+// Claudia delivers the stopped-seat seed inside its registry operation;
+// Jevons' old SeedSuccessor path must remain inert.
+func TestStoppedMigrationNeedsNoHostSeed(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e25"
 	f, store, _ := migrateFixture(t, oldSession, true)
 	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
 	}
 
-	// No process was launched (the fixture never starts one).
-	if _, ok, err := f.SeedSuccessor("jevons-po"); ok || err == nil {
-		t.Fatalf("seeding without a live process: ok=%v err=%v", ok, err)
+	if _, ok, err := f.SeedSuccessor("jevons-po"); ok || err != nil {
+		t.Fatalf("host attempted a second seed: ok=%v err=%v", ok, err)
 	}
-	saved, ok, err := store.Get("jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("record lost after failed seed: ok=%v err=%v", ok, err)
-	}
-	if !saved.Usable() {
-		t.Fatal("record marked delivered despite no successor receiving it")
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("host kept a second handover: ok=%v err=%v", ok, err)
 	}
 }

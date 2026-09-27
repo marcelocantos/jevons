@@ -42,25 +42,13 @@ import (
 func (f *Claudia) SetSessionRoots(r discovery.Roots) { f.roots = r }
 
 func (f *Claudia) prepareMigrationBrief(def claudia.AgentDef, destination claudia.Provider, path string) (string, claudia.Provider, error) {
-	if path == "" {
-		return "", "", fmt.Errorf("no predecessor transcript for session %s", def.SessionID)
-	}
-	logical, err := transcript.ReadLogical(path)
+	history, err := migrationHistory(path)
 	if err != nil {
-		return "", "", fmt.Errorf("read predecessor transcript: %w", err)
-	}
-	if len(logical.Turns) == 0 {
-		return "", "", fmt.Errorf("predecessor transcript has no readable turns")
-	}
-	var history strings.Builder
-	for _, turn := range logical.Turns {
-		if text := strings.TrimSpace(turn.Text); text != "" {
-			fmt.Fprintf(&history, "%s: %s\n", turn.Role, text)
-		}
+		return "", "", err
 	}
 	provider := claudia.PlanProvider(destination)
 	args := claudia.MigrationTransferArgs{
-		Destination: destination, Goal: def.Goal, Transcript: history.String(),
+		Destination: destination, Goal: def.Goal, Transcript: history,
 	}
 	var result claudia.MigrationTransferResult
 	if f.migrationTransfer != nil {
@@ -75,6 +63,26 @@ func (f *Claudia) prepareMigrationBrief(def claudia.AgentDef, destination claudi
 		return "", provider, fmt.Errorf("transfer agent returned an empty brief")
 	}
 	return result.Brief, provider, nil
+}
+
+func migrationHistory(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("no predecessor transcript")
+	}
+	logical, err := transcript.ReadLogical(path)
+	if err != nil {
+		return "", fmt.Errorf("read predecessor transcript: %w", err)
+	}
+	if len(logical.Turns) == 0 {
+		return "", fmt.Errorf("predecessor transcript has no readable turns")
+	}
+	var history strings.Builder
+	for _, turn := range logical.Turns {
+		if text := strings.TrimSpace(turn.Text); text != "" {
+			fmt.Fprintf(&history, "%s: %s\n", turn.Role, text)
+		}
+	}
+	return history.String(), nil
 }
 
 // SetHandoverStore attaches the durable pending-handover store.
@@ -138,8 +146,11 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	if def == nil {
 		return handover.Pending{}, fmt.Errorf("migrate: no agent %q", name)
 	}
-	if claudia.PlanProvider(def.Provider) == claudia.PlanProvider(target) {
+	if claudia.PlanProvider(def.Provider) == claudia.PlanProvider(target) && def.MigrationSeed == "" {
 		return handover.Pending{}, fmt.Errorf("migrate %q: already on %s", name, target)
+	}
+	if def.MigrationSeed != "" {
+		return f.migrateStoppedViaClaudia(name, *def, target, model, force)
 	}
 	if live := f.reg.Get(name); live != nil && live.Alive() {
 		if live.PromptInFlight() && !force {
@@ -166,53 +177,86 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 			return pending, err
 		}
 	}
+	if f.liveMigrate != nil {
+		// Test-only injected live seam: the fixture has no process handle,
+		// but still exercises the live Migrate refusal and reconciliation.
+		draft := handover.Pending{
+			Agent: name, From: string(def.Provider), To: string(target),
+			Kind: handover.KindMigrate, OldSessionID: def.SessionID,
+			TranscriptPath: seatTranscript(*def, f.roots),
+		}
+		brief, provider, err := f.prepareMigrationBrief(*def, target, draft.TranscriptPath)
+		if err != nil {
+			return handover.Pending{}, fmt.Errorf("migrate %q: context transfer: %w", name, err)
+		}
+		draft.Brief = brief
+		draft.BriefSource = "claudia-transfer/" + string(provider)
+		if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
+			return pending, err
+		}
+	}
 
-	oldSession := def.SessionID
-	// A stopped seat has no live Claudia handle to summarize its retained
-	// turns. Its recorded transcript is the remaining context source.
-	draft := handover.Pending{
-		Agent: name, From: string(def.Provider), To: string(target),
-		Kind: handover.KindMigrate, OldSessionID: oldSession,
-		TranscriptPath: seatTranscript(*def, f.roots),
-	}
-	brief, transferProvider, err := f.prepareMigrationBrief(*def, target, draft.TranscriptPath)
-	if err != nil {
-		return handover.Pending{}, fmt.Errorf("migrate %q: context transfer: %w", name, err)
-	}
-	draft.Brief = brief
-	draft.BriefSource = "claudia-transfer/" + string(transferProvider)
-	if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
-		return pending, err
-	}
+	return f.migrateStoppedViaClaudia(name, *def, target, model, force)
+}
 
-	// A stopped seat still needs Jevons' durable registry rotation, but its
-	// context was prepared by the same Claudia transfer operation above.
-	pending, err := f.rotate(name, target, force, "migrate")
-	if err != nil {
-		return pending, err
-	}
-	pending.Brief = draft.Brief
-	pending.BriefSource = draft.BriefSource
-	pending.CompactSessionID = draft.CompactSessionID
+func (f *Claudia) migrateStoppedViaClaudia(name string, def claudia.AgentDef, target claudia.Provider, model string, force bool) (handover.Pending, error) {
 	if f.handovers != nil {
-		if err := f.handovers.Put(pending); err != nil {
-			return pending, fmt.Errorf("migrate %q: persist brief: %w", name, err)
+		if err := f.handovers.Clear(name); err != nil {
+			return handover.Pending{}, fmt.Errorf("migrate %q: clear obsolete host handover: %w", name, err)
 		}
 	}
-	if def := f.reg.Def(name); def != nil && pending.CompactSessionID != "" &&
-		def.SessionID == pending.CompactSessionID {
-		next := *def
-		next.SessionID = uuid.NewString()
-		pending.NewSessionID = next.SessionID
-		if err := f.reg.Register(next); err != nil {
-			return pending, fmt.Errorf("migrate %q: separate work session from compact: %w", name, err)
-		}
-		if f.handovers != nil {
-			if err := f.handovers.Put(pending); err != nil {
-				return pending, fmt.Errorf("migrate %q: persist rewritten work session: %w", name, err)
-			}
+	var history string
+	if def.MigrationSeed == "" {
+		path := seatTranscript(def, f.roots)
+		var err error
+		history, err = migrationHistory(path)
+		if err != nil {
+			return handover.Pending{}, fmt.Errorf("migrate %q: predecessor context: %w", name, err)
 		}
 	}
+	if f.migrationTransfer != nil {
+		f.reg.SetMigrationSummarizer(func(_ context.Context, args claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+			return f.migrationTransfer(args)
+		})
+	}
+	args := claudia.MigrateArgs{
+		Provider: target, Model: model, Force: force, Reason: "explicit",
+	}
+	var result claudia.StoppedMigration
+	var err error
+	if f.stoppedMigrate != nil {
+		result, err = f.stoppedMigrate(name, args, history)
+	} else {
+		result, err = f.reg.MigrateStopped(context.Background(), name, args, history)
+	}
+	fromProvider, fromSession := def.Provider, def.SessionID
+	if def.MigrationFrom != "" {
+		fromProvider, fromSession = def.MigrationFrom, def.MigrationFromSession
+	}
+	pending := handover.Pending{
+		Agent: name, From: string(fromProvider), To: string(target),
+		Kind: handover.KindMigrate, OldSessionID: fromSession,
+		BriefSource: "claudia-transfer/" + string(claudia.PlanProvider(target)),
+		Remap:       handover.RemapClaudiaMigrate,
+	}
+	if result.Destination.SessionID != "" {
+		pending.NewSessionID = result.Destination.SessionID
+	}
+	pending.Brief = result.Transfer.Brief
+	if err != nil {
+		return pending, err
+	}
+	pending.Delivered = true
+	pending.Model = result.Destination.Model
+	pending.Goal = result.Destination.Goal
+	pending.Purpose = result.Destination.Purpose
+	pending.WorkDir = result.Destination.WorkDir
+	pending.Parent = result.Destination.Parent
+	pending.TargetID = result.Destination.TargetID
+	f.noteModelSwitch(&ModelSwitch{
+		Name: name, Provider: string(result.Destination.Provider), FromProvider: string(fromProvider),
+		From: def.Model, To: result.Destination.Model, How: ModelSwitchHowMigrate,
+	})
 	return pending, nil
 }
 

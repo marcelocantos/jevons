@@ -71,12 +71,11 @@ func TestMigrationTransferSeedsSeparateWorkSession(t *testing.T) {
 	if strings.Contains(strings.ToLower(seed), "start at the end") {
 		t.Fatalf("work seed assigned a walk:\n%s", seed)
 	}
-	saved, ok, err := store.Get("jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("brief not persisted: ok=%v err=%v", ok, err)
+	if pending.Remap != handover.RemapClaudiaMigrate || pending.BriefSource != "claudia-transfer/claude" {
+		t.Fatalf("Claudia transfer was not reported: %+v", pending)
 	}
-	if saved.Brief != "in flight: T999 still open" || saved.BriefSource != "claudia-transfer/claude" {
-		t.Fatalf("persisted transfer brief = %+v", saved)
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("Claudia transfer wrote a Jevons handover: ok=%v err=%v", ok, err)
 	}
 }
 

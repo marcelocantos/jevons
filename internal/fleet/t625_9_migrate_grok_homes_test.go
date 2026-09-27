@@ -4,6 +4,7 @@
 package fleet
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,6 +46,20 @@ func TestT625_9MigrateFindsGrokHomesSession(t *testing.T) {
 		f.SetHandoverStore(handover.NewStore(filepath.Join(t.TempDir(), "handover")))
 		f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
 			return claudia.MigrationTransferResult{Brief: "- user: hello"}, nil
+		}
+		f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (claudia.StoppedMigration, error) {
+			if history == "" {
+				return claudia.StoppedMigration{}, fmt.Errorf("missing predecessor history")
+			}
+			source := reg.Def(name)
+			next := *source
+			next.Provider = claudia.SubscriptionSeatProvider(args.Provider)
+			next.SessionID = "claudia-destination"
+			if err := reg.Register(next); err != nil {
+				return claudia.StoppedMigration{}, err
+			}
+			return claudia.StoppedMigration{Source: *source, Destination: next,
+				Transfer: claudia.MigrationTransferResult{Brief: "- user: hello"}}, nil
 		}
 		return f
 	}
