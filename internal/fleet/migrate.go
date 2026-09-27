@@ -712,10 +712,12 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	if f.liveMigrate == nil && f.reg.Get(name) == nil {
 		return handover.Pending{}, false, nil
 	}
-	if def := f.reg.Def(name); def != nil {
-		if err := providerSwitchRefusal(*def, target); err != nil {
-			return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
-		}
+	sourceDef := f.reg.Def(name)
+	if sourceDef == nil {
+		return handover.Pending{}, true, fmt.Errorf("migrate %q: registry row vanished before Agent.Migrate", name)
+	}
+	if err := providerSwitchRefusal(*sourceDef, target); err != nil {
+		return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
 	}
 	if f.handovers != nil {
 		// An old Jevons handover must be removed before the live Claudia
@@ -758,18 +760,25 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	if def == nil {
 		return handover.Pending{}, true, fmt.Errorf("migrate %q: registry row vanished after Agent.Migrate", name)
 	}
-	fromModel := def.Model
-	fromProvider := string(def.Provider)
+	fromModel := sourceDef.Model
+	fromProvider := string(sourceDef.Provider)
 	next := *def
-	if err := switchProvider(&next, target, "migrate"); err != nil {
-		return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
-	}
-	next.ConnectURL = ""
-	next.ConnectPID = 0
-	if model != "" {
-		next.Model = cli.BindSessionModel(model, target)
-	} else if target != def.Provider {
-		next.Model = cli.BindSessionModel("", target)
+	// A registered Claudia Agent.Migrate has already committed the provider,
+	// model and real destination session id. Re-registering that row from a
+	// host reconstruction can replace the real id with an invented UUID.
+	claudiaRecorded := claudia.PlanProvider(def.Provider) == claudia.PlanProvider(target) &&
+		def.SessionID != "" && def.SessionID != sourceDef.SessionID
+	if !claudiaRecorded {
+		if err := switchProvider(&next, target, "migrate"); err != nil {
+			return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
+		}
+		next.ConnectURL = ""
+		next.ConnectPID = 0
+		if model != "" {
+			next.Model = cli.BindSessionModel(model, target)
+		} else if target != def.Provider {
+			next.Model = cli.BindSessionModel("", target)
+		}
 	}
 	// 🎯T790: Materialized promises that SessionID names a session that
 	// exists. Only a session id read from the live agent keeps that promise;
@@ -778,8 +787,14 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	// that is not there (jevons got 227ea2e6 and jevons-po 60c71bb8 on
 	// 2026-09-22). With no readable id the row is a fresh mint instead.
 	nextSession, liveModel := f.liveSessionOf(name)
-	sessionRead := nextSession != "" && nextSession != def.SessionID
-	if !sessionRead {
+	sessionRead := nextSession != "" && nextSession != sourceDef.SessionID
+	if claudiaRecorded {
+		if nextSession != "" && nextSession != def.SessionID {
+			return handover.Pending{}, true, fmt.Errorf("migrate %q: Claudia recorded session %s but live agent reports %s", name, def.SessionID, nextSession)
+		}
+		nextSession = def.SessionID
+		sessionRead = true
+	} else if !sessionRead {
 		nextSession = uuid.NewString()
 		slog.Warn("migrate: live session id unreadable; recording the row as a fresh mint, not Materialized",
 			"name", name, "to", target)
@@ -789,13 +804,15 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	// model keeps answering with the previous id; writing that back is
 	// the version surviving the change. A different id is the model the
 	// successor is actually on.
-	if liveModel != "" && model == "" && liveModel != strings.TrimSpace(fromModel) {
+	if !claudiaRecorded && liveModel != "" && model == "" && liveModel != strings.TrimSpace(fromModel) {
 		next.Model = liveModel
 	}
-	next.SessionID = nextSession
-	next.Materialized = sessionRead
-	if err := f.reg.Register(next); err != nil {
-		return handover.Pending{}, true, fmt.Errorf("migrate %q: record remapped row: %w", name, err)
+	if !claudiaRecorded {
+		next.SessionID = nextSession
+		next.Materialized = sessionRead
+		if err := f.reg.Register(next); err != nil {
+			return handover.Pending{}, true, fmt.Errorf("migrate %q: record remapped row: %w", name, err)
+		}
 	}
 	f.noteModelSwitch(&ModelSwitch{
 		Name:         name,

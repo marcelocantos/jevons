@@ -51,6 +51,32 @@ func TestT790PredecessorSessionIsNotMaterialized(t *testing.T) {
 	}
 }
 
+func TestClaudiaRecordedDestinationIsNotRewrittenByJevons(t *testing.T) {
+	const destinationSession = "claudia-destination-session"
+	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7904", true)
+	f.liveMigrate = func(args *claudia.MigrateArgs) error {
+		def := f.reg.Def("jevons-po")
+		next := *def
+		next.Provider = args.Provider
+		next.SessionID = destinationSession
+		next.Model = "claude-sonnet-5"
+		return f.reg.Register(next)
+	}
+	f.liveSession = func(string) (string, string) { return destinationSession, "claude-sonnet-5" }
+	pending, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "claude-sonnet-5", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := f.reg.Def("jevons-po")
+	if def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) ||
+		def.SessionID != destinationSession || def.Model != "claude-sonnet-5" {
+		t.Fatalf("Jevons rewrote Claudia's committed destination: %+v", def)
+	}
+	if pending.NewSessionID != destinationSession || pending.SessionUnread {
+		t.Fatalf("handoff result lost Claudia's destination: %+v", pending)
+	}
+}
+
 // The model parameter reaches claudia and the registry row.
 func TestT790ModelIsHonoured(t *testing.T) {
 	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7902", true)
