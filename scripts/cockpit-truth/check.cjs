@@ -2,7 +2,7 @@
 //
 // A cockpit that looks plausible is not the same as one that is correct.
 // This compares what the UI actually paints against the daemon's own APIs
-// and against the live tmux server — three independent sources — and fails
+// and against the Claudia broker's live grants — three independent sources — and fails
 // when they disagree.
 //
 // It exists because on 2026-08-31 the fleet panel showed seven agents
@@ -14,21 +14,29 @@
 //   make test-cockpit-truth
 const path = require('path');
 const http = require('http');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { chromium } = require(path.join(__dirname, '..', 'browser-loop-test', 'node_modules', 'playwright'));
 
 const BASE = process.env.JEVONS_URL || 'http://localhost:13705';
-const SOCK = process.env.CLAUDIA_TMUX_SOCK ||
-  path.join(process.env.HOME, '.local', 'state', 'claudia', 'tmux.sock');
+const CLAUDIA = process.env.CLAUDIA_BIN || 'claudia';
 
 const get = p => new Promise((res, rej) => http.get(BASE + p, r => {
   let d = ''; r.on('data', c => (d += c));
   r.on('end', () => { try { res(JSON.parse(d)); } catch (e) { rej(new Error(p + ': ' + e.message)); } });
 }).on('error', rej));
 
-// Badge text the cockpit paints for a model id.
-const BADGE = { 'claude-opus-5': 'O5', 'claude-fable-5': 'F5', 'claude-sonnet-5': 'S5',
-  'claude-haiku-4-5': 'H4', 'grok-4.5': 'G4', 'grok-4': 'G4' };
+function brokerGrants() {
+  const lines = execFileSync(CLAUDIA, ['broker', 'grants'], { encoding: 'utf8' }).trimEnd().split('\n');
+  const header = lines.shift();
+  if (!header || !header.includes('NAME') || !header.includes('OWNED') || !header.includes('ALIVE')) {
+    throw new Error('claudia broker grants returned an unknown format');
+  }
+  const field = (line, name, next) => line.slice(header.indexOf(name), header.indexOf(next)).trim();
+  return new Map(lines.map(line => [
+    field(line, 'NAME', 'PROVIDER'),
+    { owned: field(line, 'OWNED', 'OWNER') === 'true', alive: field(line, 'ALIVE', 'PENDING') === 'true' },
+  ]));
+}
 
 (async () => {
   const issues = [];
@@ -40,12 +48,12 @@ const BADGE = { 'claude-opus-5': 'O5', 'claude-fable-5': 'F5', 'claude-sonnet-5'
   const agents = Array.isArray(api) ? api : api.agents || [];
   const plan = await get('/api/plan-usage');
 
-  let panes = null;
+  let grants = null;
   try {
-    panes = parseInt(execSync(
-      `tmux -S ${SOCK} list-windows -a -F '#{window_name}' 2>/dev/null | grep -c claudia || true`
-    ).toString().trim(), 10);
-  } catch { /* no tmux server: leave null and say so rather than guess */ }
+    grants = brokerGrants();
+  } catch (e) {
+    note('cannot read Claudia broker grants: ' + e.message);
+  }
 
   const b = await chromium.launch();
   const p = await b.newPage({ viewport: { width: 1500, height: 950 } });
@@ -61,7 +69,7 @@ const BADGE = { 'claude-opus-5': 'O5', 'claude-fable-5': 'F5', 'claude-sonnet-5'
     return {
       agents: [...document.querySelectorAll('.agent-node')].map(n => ({
         name: txt(n.querySelector('.agent-name')) || txt(n).split('\n')[0],
-        badge: txt(n.querySelector('.model-badge')),
+        modelTitle: n.querySelector('.model-badge')?.getAttribute('title') || '',
       })).filter(a => a.name),
       bars: [...document.querySelectorAll('#plan-ticker .plan-win')].length,
       rows: sc ? sc.querySelectorAll('[data-kind]').length : 0,
@@ -77,16 +85,21 @@ const BADGE = { 'claude-opus-5': 'O5', 'claude-fable-5': 'F5', 'claude-sonnet-5'
   if (JSON.stringify(uiNames) !== JSON.stringify(apiNames)) {
     note(`fleet panel disagrees with /api/agents:\n      UI  ${uiNames.join(' ')}\n      API ${apiNames.join(' ')}`);
   }
-  // 2. The fleet the daemon has is the fleet that exists (🎯T602).
-  if (panes !== null && panes !== agents.length) {
-    note(`/api/agents reports ${agents.length} agents but tmux holds ${panes} panes`);
+  // 2. The fleet the daemon has is held alive by the host broker (🎯T875).
+  if (grants) for (const a of agents) {
+    const grant = grants.get(a.name);
+    if (!grant || !grant.owned || !grant.alive) {
+      note(`${a.name}: /api/agents reports a seat but Claudia grant is ${
+        grant ? `owned=${grant.owned} alive=${grant.alive}` : 'missing'}`);
+    }
   }
-  // 3. Model badges name the model actually pinned.
+  // 3. The badge's full title names the model actually pinned; its visible
+  // abbreviation is typography and changes independently of the model id.
   for (const a of ui.agents) {
     const m = agents.find(x => x.name === a.name);
-    if (!m || !a.badge) continue;
-    const want = BADGE[m.model] || m.model;
-    if (a.badge !== want) note(`${a.name}: badge "${a.badge}" but model is ${m.model}`);
+    if (m?.model && !a.modelTitle.includes(m.model)) {
+      note(`${a.name}: badge title "${a.modelTitle}" but model is ${m.model}`);
+    }
   }
   // 4. One bar per published window.
   const wins = (plan.backends || []).flatMap(x => (x.windows || []).length ? x.windows : []);
@@ -99,12 +112,12 @@ const BADGE = { 'claude-opus-5': 'O5', 'claude-fable-5': 'F5', 'claude-sonnet-5'
   if (!ui.composerReady) note('no composer on the page — the owner cannot send anything');
   if (consoleErrors.length) note('console errors: ' + consoleErrors.join(' | '));
 
-  console.log(`cockpit-truth: ${agents.length} agents, ${panes === null ? '?' : panes} panes, ` +
+  console.log(`cockpit-truth: ${agents.length} agents, ${grants ? grants.size : '?'} broker grants, ` +
     `${ui.bars} bars, ${ui.rows} rows, ${ui.fromBottom}px from end`);
   if (issues.length) {
     console.error('\nMISMATCH — the cockpit is not telling the truth:');
     for (const i of issues) console.error('  - ' + i);
     process.exit(1);
   }
-  console.log('cockpit-truth: UI, daemon and tmux agree');
+  console.log('cockpit-truth: UI, daemon and Claudia broker agree');
 })();
