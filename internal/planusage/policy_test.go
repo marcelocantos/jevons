@@ -280,7 +280,7 @@ func TestPickPlanDestWasteThenLoad(t *testing.T) {
 	}
 }
 
-func TestPlanActionsParkWhenNoDest(t *testing.T) {
+func TestPlanDecisionsDeferWhenDestinationFeedIsIncomplete(t *testing.T) {
 	th := DefaultThresholds()
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	week := now.Add(3 * 24 * time.Hour)
@@ -293,20 +293,25 @@ func TestPlanActionsParkWhenNoDest(t *testing.T) {
 			ResetsAt: &week, LimitWindowSeconds: &lim,
 		}},
 	}}}
-	acts := PlanActions(snap, []AgentRef{
+	agents := []AgentRef{
 		{Name: "jevons", Provider: "grok", Purpose: "overseer"},
 		{Name: "worker", Provider: "grok", Purpose: "work"},
-	}, now, th)
+	}
+	acts := PlanActions(snap, agents, now, th)
+	if len(acts) != 0 {
+		t.Fatalf("an incomplete destination feed must not park seats: %+v", acts)
+	}
+	decisions := PlanDecisions(snap, agents, now, th)
 	got := map[string]PlanAction{}
-	for _, a := range acts {
+	for _, a := range decisions {
 		got[a.Name] = a
 	}
-	if got["jevons"].To != "" || got["worker"].To != "" || len(acts) != 2 {
-		t.Fatalf("exhausted provider with no dest parks the overseer and the worker: %+v", acts)
+	if len(decisions) != 2 || got["jevons"].Action != "defer" || got["worker"].Action != "defer" {
+		t.Fatalf("exhausted provider with incomplete feed defers each seat: %+v", decisions)
 	}
-	for _, a := range acts {
-		if a.Author != destAuthor {
-			t.Fatalf("park author = %q, want claudia", a.Author)
+	for _, a := range decisions {
+		if a.Author != destAuthor || a.Reason == "" {
+			t.Fatalf("defer must name Claudia and the reason: %+v", a)
 		}
 	}
 }
@@ -460,24 +465,14 @@ func TestT850PlanActionsHotControlPlaneOnce(t *testing.T) {
 		t.Fatalf("overseer on claude must be in the actions: %+v", acts)
 	}
 
-	parkSnap := Snapshot{Backends: []Backend{claude}}
-	acts = PlanActions(parkSnap, []AgentRef{
+	incompleteSnap := Snapshot{Backends: []Backend{claude}}
+	acts = PlanActions(incompleteSnap, []AgentRef{
 		{Name: "jevons", Provider: "claude", Purpose: "overseer"},
 		{Name: "jevons-po", Provider: "claude", Purpose: "work", Parent: "jevons"},
 		{Name: "jv-cursor", Provider: "cursor", Purpose: "work", Parent: "jevons-po"},
 	}, now, th)
-	byName = map[string]PlanAction{}
-	for _, a := range acts {
-		byName[a.Name] = a
-	}
-	if _, present := byName["jevons"]; !present || byName["jevons"].To != "" {
-		t.Fatalf("hot overseer parks when dest is empty: %+v", acts)
-	}
-	if _, present := byName["jevons-po"]; !present || byName["jevons-po"].To != "" {
-		t.Fatalf("hot PO parks when dest is empty: %+v", acts)
-	}
-	if _, present := byName["jv-cursor"]; present {
-		t.Fatalf("cursor seat stays out of a claude-only park: %+v", acts)
+	if len(acts) != 0 {
+		t.Fatalf("incomplete destination feed must not park a control-plane seat: %+v", acts)
 	}
 }
 

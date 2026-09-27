@@ -29,19 +29,8 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		return nil
 	}
 	stayed := map[string]bool{}
-	var agents []planusage.AgentRef
-	if s.registry != nil {
-		for _, d := range s.registry.List() {
-			agents = append(agents, planusage.AgentRef{
-				Name:     d.Name,
-				Provider: string(d.Provider),
-				Purpose:  d.Purpose,
-				Parent:   d.Parent,
-			})
-		}
-	}
 	pending := s.pendingPlanHandovers()
-	acts := planusage.PlanActions(snap, agents, now, th)
+	acts := planusage.PlanActions(snap, s.planPolicyAgents(), now, th)
 	for _, a := range acts {
 		if a.To != "" && s.migrator != nil {
 			// PrepareMigration persists the handover before CompleteThinBrief.
@@ -110,6 +99,32 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	}
 	s.releaseColdSwitched(hotNames(acts), stayed)
 	return acts
+}
+
+// PlanPolicyDecisions is the read-only placement picture, including stays and
+// deferrals that SweepPlanPolicy must never mistake for a park.
+func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
+	if s == nil {
+		return nil
+	}
+	snap, _, now, th, ok := s.planPolicyInputs()
+	if !ok {
+		return nil
+	}
+	return planusage.PlanDecisions(snap, s.planPolicyAgents(), now, th)
+}
+
+func (s *Server) planPolicyAgents() []planusage.AgentRef {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	var agents []planusage.AgentRef
+	for _, d := range s.registry.List() {
+		agents = append(agents, planusage.AgentRef{
+			Name: d.Name, Provider: string(d.Provider), Purpose: d.Purpose, Parent: d.Parent,
+		})
+	}
+	return agents
 }
 
 func hotNames(acts []planusage.PlanAction) map[string]bool {

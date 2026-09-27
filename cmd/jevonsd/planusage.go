@@ -47,6 +47,7 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 	srv.SetPlanUsageRefresh(reader.RefreshNow)
 	mcpSrv.SetPlanUsageSource(func() planusage.Snapshot { return reader.Snapshot() })
 	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
+	srv.SetPlanDecisions(mcpSrv.PlanPolicyDecisions)
 	go reader.Run(ctx)
 	go func() {
 		tick := time.NewTicker(planusage.DefaultRefresh)

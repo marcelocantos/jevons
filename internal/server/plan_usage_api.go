@@ -56,6 +56,27 @@ func wantsPlanUsageRefresh(r *http.Request) bool {
 // (🎯T390.1.5), served at POST /api/plan-usage/sweep.
 func (s *Server) SetPlanSweep(f func() any) { s.planSweep = f }
 
+// SetPlanDecisions wires the read-only per-seat placement picture.
+func (s *Server) SetPlanDecisions(f func() []planusage.PlanAction) { s.planDecisions = f }
+
+func (s *Server) handlePlanUsageDecisions(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.planDecisions == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"plan decisions not enabled"}`))
+		return
+	}
+	decisions := s.planDecisions()
+	if decisions == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"plan decisions unavailable until a plan reading arrives"}`))
+		return
+	}
+	if err := json.NewEncoder(w).Encode(decisions); err != nil {
+		slog.Warn("encode plan decisions", "err", err)
+	}
+}
+
 // handlePlanUsage serves how much of each backend's subscription allowance is
 // left and when it rolls over.
 //

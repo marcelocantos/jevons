@@ -33,6 +33,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -173,6 +174,8 @@ type Server struct {
 	planUsageRefresh func(ctx context.Context) error
 	// planSweep runs the 🎯T390.1.5 hot/exhausted migrate-or-park actuator.
 	planSweep func() any
+	// planDecisions reports Claudia's per-seat placement verdict without moving a seat.
+	planDecisions func() []planusage.PlanAction
 	// providerHardBlock observes classified provider refusals / successes so
 	// the MCP fleet-intent store can enter or clear blocked_provider (🎯T406).
 	// Wired from main to mcpserver.ObserveProviderFailure / ObserveProviderOK.
@@ -597,6 +600,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/capacity", s.handleCapacity)    // 🎯T359: background admission
 	mux.HandleFunc("GET /api/plan-usage", s.handlePlanUsage) // 🎯T390: subscription plan remaining
 	mux.HandleFunc("GET /api/plan-usage/thresholds", s.handlePlanUsageThresholds)
+	mux.HandleFunc("GET /api/plan-usage/decisions", s.handlePlanUsageDecisions)
 	mux.HandleFunc("POST /api/plan-usage/sweep", s.handlePlanUsageSweep)
 	// 🎯T285.2: fleet-tree icon menu — per-provider bands + models, and the
 	// thin HTTP wrapper over the fleet migrate path (non-overseer seats).

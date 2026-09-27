@@ -41,6 +41,7 @@ type PlanAction struct {
 	From   string
 	To     string
 	Model  string
+	Action claudia.SeatPlacementAction
 	Reason string
 	// Author names who resolved the dest (🎯T691). Product placement is
 	// "claudia"; a prompt-level choice is a different decision.
@@ -214,19 +215,15 @@ func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool)
 	return strings.ToLower(string(pick.Provider)), true
 }
 
-// PlanActions lists migrate/park steps for seats whose own provider is
-// weekly-hot or exhausted (🎯T850). The overseer and a stratum-1 PO are
-// the same as any other seat: they move when their provider is hot, and
-// they stay when MigrateOff is false. There is no control-plane
-// exemption. Aside seats stay out (🎯T543). To is empty when dest is
-// empty (park).
-func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
+// PlanDecisions reports Claudia's placement verdict for every non-aside seat,
+// including reasoned stays and deferrals. It does not move a seat.
+func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
 	view := CockpitSnapshot(snap)
 	var usage []claudia.PlanUsage
 	for _, be := range view.Backends {
 		usage = append(usage, backendToPlanUsage(be))
 	}
-	var out []PlanAction
+	out := make([]PlanAction, 0, len(agents))
 	for _, a := range agents {
 		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
 			continue
@@ -235,18 +232,32 @@ func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds)
 			CurrentProvider: claudia.Provider(a.Provider), Usage: usage, Now: now,
 			Thresholds: claudiaThresholdsPtr(th),
 		})
-		if err != nil || decision.Action == claudia.SeatStay || decision.Action == claudia.SeatDefer {
+		if err != nil {
+			out = append(out, PlanAction{Name: a.Name, From: a.Provider, Action: claudia.SeatDefer,
+				Reason: err.Error(), Author: claudia.DecisionAuthor})
 			continue
 		}
-		to := ""
-		if decision.Action == claudia.SeatMigrate {
-			to = string(decision.Pick.Provider)
-		}
 		out = append(out, PlanAction{
-			Name: a.Name, From: string(decision.From), To: to,
-			Model:  decision.Pick.Model,
+			Name: a.Name, From: string(decision.From), To: string(decision.Pick.Provider),
+			Model: decision.Pick.Model, Action: decision.Action,
 			Reason: decision.Reason, Author: decision.Author,
 		})
+	}
+	return out
+}
+
+// PlanActions lists migrate/park steps for seats whose own provider is
+// weekly-hot or exhausted (🎯T850). The overseer and a stratum-1 PO are
+// the same as any other seat: they move when their provider is hot, and
+// they stay when MigrateOff is false. There is no control-plane
+// exemption. Aside seats stay out (🎯T543). To is empty when dest is
+// empty (park).
+func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
+	var out []PlanAction
+	for _, decision := range PlanDecisions(snap, agents, now, th) {
+		if decision.Action == claudia.SeatMigrate || decision.Action == claudia.SeatPark {
+			out = append(out, decision)
+		}
 	}
 	return out
 }
