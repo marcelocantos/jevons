@@ -43,10 +43,14 @@ func (s *suite) jUndeliveredResend() error {
 func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error {
 	provider := string(s.provider)
 	var ready error
-	if provider == "cursor" {
-		_, ready = exec.LookPath("cursor-agent")
-	} else {
-		ready = backendCLIReady(provider)
+	// Brokered subscriptions already proved their sidecar during overseer
+	// startup; a vendor CLI is not a prerequisite for that product path.
+	if s.brokerSocket == "" {
+		if provider == "cursor" {
+			_, ready = exec.LookPath("cursor-agent")
+		} else {
+			ready = backendCLIReady(provider)
+		}
 	}
 	if ready != nil {
 		return &outageError{step: "J30 provider prerequisite", class: agenterr.ClassBackendUnavailable, msg: ready.Error()}
