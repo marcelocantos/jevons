@@ -119,8 +119,8 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 			note = "\nNOTE (🎯T790): the successor's session id could not be read, so the registry row is a fresh mint, not Materialized; a daemon restart starts a new conversation on the destination."
 		}
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"%s migrated %s → %s via claudia Agent.Migrate. Host brief (%s) was gathered before the swap; the destination already received the inert seed.\n%s%s",
-			name, pending.From, pending.To, pending.BriefSource, pending.Describe(), note)), nil
+			"%s migrated %s → %s via Claudia Agent.Migrate. Claudia owns the context transfer (%s) and seeded the destination; session %s → %s.%s",
+			name, pending.From, pending.To, pending.BriefSource, pending.OldSessionID, pending.NewSessionID, note)), nil
 	}
 	pending, err = s.migrator.CompleteThinBrief(pending)
 	if err != nil {
