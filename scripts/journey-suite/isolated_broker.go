@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia/omp"
+	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
 // A live migration needs Claudia's disposable summary seat, which deliberately
@@ -28,62 +29,74 @@ type isolatedBroker struct {
 	socket string
 }
 
-func (s *suite) withIsolatedBroker(run func() error) (result error) {
-	if err := s.signalStop(8 * time.Second); err != nil {
-		return fmt.Errorf("stop direct-mode isolate: %w", err)
-	}
-	// A direct Codex or Grok session cannot be adopted as the subscription
-	// sidecar's session. Give the brokered journey a fresh registry and workdir,
-	// then restore the surrounding suite's direct-mode state afterward.
-	oldState, oldConfig, oldLogPath, oldLog, oldWork := s.stateDir, s.cfgPath, s.logPath, s.logFile, s.workdir
+func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
+	// A direct Codex session cannot be adopted as a subscription sidecar
+	// session. Run this journey on a second port and state tree so the
+	// surrounding direct-mode suite never changes provider or registry.
 	state, err := os.MkdirTemp("", "jevons-broker-journey-")
 	if err != nil {
-		return errors.Join(err, s.startDaemon())
+		return err
 	}
-	config, err := os.ReadFile(oldConfig)
+	port, err := freePort()
 	if err != nil {
 		_ = os.RemoveAll(state)
-		return errors.Join(err, s.startDaemon())
+		return err
 	}
-	config = []byte(strings.ReplaceAll(string(config), oldState, state))
-	if err := os.WriteFile(filepath.Join(state, "config.yaml"), config, 0o600); err != nil {
+	if err := portguard.RefuseDevelopment(port); err != nil {
 		_ = os.RemoveAll(state)
-		return errors.Join(err, s.startDaemon())
+		return err
+	}
+	config, err := os.ReadFile(s.cfgPath)
+	if err != nil {
+		_ = os.RemoveAll(state)
+		return err
+	}
+	configText := strings.ReplaceAll(string(config), s.stateDir, state)
+	oldPort := fmt.Sprintf("port: %d\n", s.port)
+	if !strings.Contains(configText, oldPort) {
+		_ = os.RemoveAll(state)
+		return fmt.Errorf("migration isolate config has no port %d", s.port)
+	}
+	configText = strings.Replace(configText, oldPort, fmt.Sprintf("port: %d\n", port), 1)
+	if err := os.WriteFile(filepath.Join(state, "config.yaml"), []byte(configText), 0o600); err != nil {
+		_ = os.RemoveAll(state)
+		return err
 	}
 	logFile, err := os.Create(filepath.Join(state, "jevonsd.log"))
 	if err != nil {
 		_ = os.RemoveAll(state)
-		return errors.Join(err, s.startDaemon())
+		return err
 	}
-	s.stateDir, s.cfgPath, s.logPath, s.logFile, s.workdir =
-		state, filepath.Join(state, "config.yaml"), filepath.Join(state, "jevonsd.log"), logFile, state
+	child := &suite{
+		host: fmt.Sprintf("127.0.0.1:%d", port), stateDir: state, provider: s.provider,
+		port: port, cfgPath: filepath.Join(state, "config.yaml"),
+		logPath: filepath.Join(state, "jevonsd.log"), logFile: logFile,
+		workdir: state, daemonBin: s.daemonBin,
+		daemonEnv: append([]string(nil), s.daemonEnv...),
+	}
 	var b *isolatedBroker
 	defer func() {
-		stopErr := s.signalStop(8 * time.Second)
-		s.brokerSocket = ""
+		stopErr := child.signalStop(8 * time.Second)
 		brokerErr := b.close()
 		if result != nil {
 			for _, name := range []string{"jevonsd.log", "claudia-broker.log", "omp-sidecar.log"} {
 				if body, err := os.ReadFile(filepath.Join(state, name)); err == nil {
-					_ = os.WriteFile(filepath.Join(oldState, "migration-"+name), body, 0o600)
+					_ = os.WriteFile(filepath.Join(s.stateDir, "migration-"+name), body, 0o600)
 				}
 			}
 		}
 		logErr := logFile.Close()
-		s.stateDir, s.cfgPath, s.logPath, s.logFile, s.workdir =
-			oldState, oldConfig, oldLogPath, oldLog, oldWork
-		restartErr := s.startDaemon()
-		result = errors.Join(result, stopErr, brokerErr, logErr, restartErr, os.RemoveAll(state))
+		result = errors.Join(result, stopErr, brokerErr, logErr, os.RemoveAll(state))
 	}()
-	b, err = s.startIsolatedBroker()
+	b, err = child.startIsolatedBroker()
 	if err != nil {
 		return err
 	}
-	s.brokerSocket = b.socket
-	if err := s.startDaemon(); err != nil {
+	child.brokerSocket = b.socket
+	if err := child.startDaemon(); err != nil {
 		return fmt.Errorf("start brokered isolate: %w", err)
 	}
-	return run()
+	return run(child)
 }
 
 func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {

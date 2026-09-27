@@ -696,7 +696,7 @@ func migrationJourneyDestination(from claudia.Provider) claudia.Provider {
 }
 
 func (s *suite) jProviderMigration() error {
-	return s.withIsolatedBroker(s.providerMigrationWithBroker)
+	return s.withIsolatedBroker((*suite).providerMigrationWithBroker)
 }
 
 func (s *suite) providerMigrationWithBroker() error {
