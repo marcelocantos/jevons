@@ -3,12 +3,11 @@
 
 package seatreg
 
-// T866.7 homes that must live in this repo (not in claudia as the
-// product owner). The seat broker is cmd/jevons-broker — a separate
-// process — so a jevonsd bounce still reclaims seats by name.
+// Jevons owns its fleet registry, tools, and conversation log. Claudia
+// owns the shared host broker; Jevons remints its fleet on daemon boot
+// (🎯T875).
 const (
 	HomeRegistry        = "internal/seatreg"
-	HomeBroker          = "cmd/jevons-broker"
 	HomeToolBodies      = "internal/mcpserver"
 	HomeConversationLog = "internal/spool"
 )
