@@ -127,13 +127,15 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		if strings.HasPrefix(entry, "CLAUDIA_BROKER_SOCKET=") ||
 			strings.HasPrefix(entry, "CLAUDIA_NO_BROKER=") ||
 			strings.HasPrefix(entry, "CLAUDIA_OMP_SOCKET=") ||
+			strings.HasPrefix(entry, "JEVONS_SPOOL_DIR=") ||
 			strings.HasPrefix(entry, "XDG_STATE_HOME=") {
 			continue
 		}
 		cmd.Env = append(cmd.Env, entry)
 	}
 	cmd.Env = append(cmd.Env, "CLAUDIA_BROKER_SOCKET="+socket, "CLAUDIA_NO_BROKER=0",
-		"CLAUDIA_OMP_SOCKET="+ompSocket, "XDG_STATE_HOME="+root)
+		"CLAUDIA_OMP_SOCKET="+ompSocket, "XDG_STATE_HOME="+root,
+		"JEVONS_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"))
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()

@@ -1,8 +1,9 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package handover carries an agent's working context across a provider
-// switch (🎯T285).
+// Package handover reads and recovers Jevons provider-switch records made
+// before Claudia became the migration owner (🎯T691). New migrations keep
+// their pending destination and seed in Claudia's registry.
 //
 // A session cannot move between backends: Grok's ACP session and Claude's
 // JSONL transcript are different stores, and claudia fails closed rather

@@ -31,6 +31,7 @@ func (s *suite) isolateDaemonEnv() []string {
 		if strings.HasPrefix(entry, "CLAUDIA_NO_BROKER=") ||
 			strings.HasPrefix(entry, "CLAUDIA_BROKER_SOCKET=") ||
 			strings.HasPrefix(entry, "CLAUDIA_OMP_SOCKET=") ||
+			strings.HasPrefix(entry, "JEVONS_SPOOL_DIR=") ||
 			strings.HasPrefix(entry, "XDG_STATE_HOME=") {
 			continue
 		}
@@ -44,6 +45,7 @@ func (s *suite) isolateDaemonEnv() []string {
 	}
 	env = append(env,
 		"XDG_STATE_HOME="+s.stateDir,
+		"JEVONS_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"),
 		// 🎯T811: arms the daemon's isolate-only broker fault seam; inert
 		// until a journey writes the fault file.
 		"JEVONS_TEST_FAULTS=1",

@@ -16,9 +16,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
-// Migrator is the fleet capability behind jevons_agent_migrate (🎯T285):
-// rotate an agent onto a new backend, then hand its successor the
-// predecessor's transcript. Implemented by *fleet.Claudia; an optional
+// Migrator is the fleet capability behind jevons_agent_migrate (🎯T691):
+// ask Claudia to move one seat with its context. Implemented by *fleet.Claudia; an optional
 // dependency so the tool is simply unavailable when it is not wired,
 // rather than half-working.
 type Migrator interface {
@@ -41,16 +40,13 @@ func (s *Server) registerAgentMigrate() {
 	s.addTool(
 		mcp.NewTool("jevons_agent_migrate",
 			mcp.WithDescription(
-				"Move an existing agent to a different backend (claudia provider id: grok, claude, …) "+
-					"WITHOUT losing what it was doing. Sessions cannot cross backends, so the agent is "+
-					"rotated onto a fresh work session and seeded with a predecessor brief (live "+
-					"self-brief if the outgoing session is still up, otherwise Distill from disk; a "+
-					"model read of the predecessor is a throwaway compact session on the new provider, "+
-					"never the work session). When the live session supports it, claudia Agent.Migrate "+
-					"remaps the process (🎯T622) — Distill stays host-side. "+
-					"(🎯T285 / 🎯T285.1). The owner-visible chat log is untouched. "+
-					"Refuses when the predecessor's transcript cannot be found — pass force=true to "+
-					"switch cold on purpose. Same-provider is refused (that is a resume, not a migrate). "+
+				"Move an existing agent to a different provider through Claudia. "+
+					"Claudia runs one disposable context-transfer agent on the destination provider, "+
+					"then starts a distinct work session with a bounded handover. A live seat is remapped; "+
+					"a stopped seat is recovered through Claudia's registry. Failed delivery stays pending "+
+					"on that destination for retry. Jevons keeps no second handover record. "+
+					"A missing predecessor transcript refuses the move, including when force=true. "+
+					"Same-provider is refused (that is a resume, not a migrate). "+
 					"Use this instead of stopping and re-creating an agent, which starts it with no history at all. "+
 					"A CONTEXT BLOW is not a migrate reason (🎯T561): while the seat's own provider still has weekly "+
 					"remaining, remint it in place — jevons_agent_kill then jevons_agent_start with the same name, "+
@@ -63,7 +59,7 @@ func (s *Server) registerAgentMigrate() {
 			mcp.WithString("model",
 				mcp.Description("Model to pin on the destination (e.g. claude-sonnet-5); empty = the destination provider's default. Visible afterwards in jevons_agent_list (🎯T790)")),
 			mcp.WithBoolean("force",
-				mcp.Description("Switch even when no predecessor transcript is found — a deliberate cold start")),
+				mcp.Description("Interrupt an in-flight turn if needed; predecessor context is still required")),
 			mcp.WithBoolean("owner_asked",
 				mcp.Description("The owner explicitly asked for this cross-provider move (🎯T561); without it a seat whose provider still has weekly remaining is kept on that provider")),
 		),
@@ -119,7 +115,7 @@ func (s *Server) handleAgentMigrate(_ context.Context, req mcp.CallToolRequest) 
 			note = "\nNOTE (🎯T790): the successor's session id could not be read, so the registry row is a fresh mint, not Materialized; a daemon restart starts a new conversation on the destination."
 		}
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"%s migrated %s → %s via Claudia Agent.Migrate. Claudia owns the context transfer (%s) and seeded the destination; session %s → %s.%s",
+			"%s migrated %s → %s via Claudia. Claudia owns the context transfer (%s) and seeded the destination; session %s → %s.%s",
 			name, pending.From, pending.To, pending.BriefSource, pending.OldSessionID, pending.NewSessionID, note)), nil
 	}
 	pending, err = s.migrator.CompleteThinBrief(pending)
