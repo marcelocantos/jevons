@@ -101,6 +101,12 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 					a.Execution, a.Failure = "deferred", "turn in flight; Jevons host policy forbids interruption"
 					continue
 				}
+				if def := s.registry.Def(a.Name); def != nil && def.MigrationSeed != "" {
+					// Claudia has already saved the destination and brief. The
+					// next sweep retries that state; this is not a failed move.
+					a.Execution, a.Failure = "pending", err.Error()
+					continue
+				}
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
 				a.Execution, a.Failure = "failed", err.Error()
 				// The old seat is still the only working seat when preparation

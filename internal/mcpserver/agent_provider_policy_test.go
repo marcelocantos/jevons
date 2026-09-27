@@ -29,6 +29,24 @@ type pendingClaudiaMigrator struct {
 	fail     bool
 }
 
+type failedAfterPersistMigrator struct {
+	sweepLedger
+	registry *claudia.Registry
+}
+
+func (m *failedAfterPersistMigrator) PrepareMigration(name string, to claudia.Provider, _ bool) (handover.Pending, error) {
+	def := *m.registry.Def(name)
+	def.MigrationFrom, def.MigrationFromSession = def.Provider, def.SessionID
+	def.Provider = claudia.SubscriptionSeatProvider(to)
+	def.SessionID = "persisted-destination"
+	def.MigrationSeed = "bounded handover awaiting delivery"
+	def.MigrationPendingStart = true
+	if err := m.registry.Register(def); err != nil {
+		return handover.Pending{}, err
+	}
+	return handover.Pending{Agent: name, To: string(to)}, fmt.Errorf("destination launch unavailable")
+}
+
 func (m *pendingClaudiaMigrator) PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error) {
 	m.attempts++
 	if force || to != claudia.ProviderCodex {
@@ -241,5 +259,37 @@ func TestT691PendingClaudiaHandoverRetriesWithoutHotSourceOrPlanFeed(t *testing.
 	hot = false
 	if acts := s.SweepPlanPolicy(); len(acts) != 0 || migrator.attempts != 2 {
 		t.Fatalf("completed handover was retried: acts=%+v attempts=%d", acts, migrator.attempts)
+	}
+}
+
+func TestT691FirstFailedLaunchReportsClaudiaPendingInsteadOfFailed(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "worker", SessionID: "source", Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetMigrator(&failedAfterPersistMigrator{registry: reg})
+	now := time.Now()
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("claude", 20, 80, now),
+			t39015Weekly("codex", 80, 20, now),
+		}}
+	})
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].Author != claudia.DecisionAuthor || acts[0].Execution != "pending" ||
+		!strings.Contains(acts[0].Failure, "destination launch unavailable") {
+		t.Fatalf("persisted Claudia destination reported as a failed move: %+v", acts)
+	}
+	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Execution != "pending" ||
+		got[0].Author != claudia.DecisionAuthor || !strings.Contains(got[0].Failure, "destination launch unavailable") {
+		t.Fatalf("decision surface hid the pending launch: %+v", got)
 	}
 }
