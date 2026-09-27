@@ -161,6 +161,23 @@ func TestLiveMigrationDelegatesContextTransferToClaudia(t *testing.T) {
 	}
 }
 
+func TestLiveMigrateFallbackDoesNotMistakeTransferSeatForDeadSource(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{errNoLiveAgent, true},
+		{errors.New("agent process not running"), true},
+		{errors.New("agent not ready: predecessor window vanished"), true},
+		{errors.New("Migrate: context transfer: migration transfer: agent process not running"), false},
+		{errors.New("Migrate: context transfer: agent not ready: disposable seat failed"), false},
+	} {
+		if got := isLiveMigrateFallback(tc.err); got != tc.want {
+			t.Errorf("isLiveMigrateFallback(%q)=%v want %v", tc.err, got, tc.want)
+		}
+	}
+}
+
 func TestLiveDestinationRetrySkipsSecondTransferSummary(t *testing.T) {
 	t.Setenv("CLAUDIA_NO_BROKER", "1")
 	const sourceSession = "019fd13d-e500-7913-b96c-981e50aa6229"

@@ -976,9 +976,13 @@ func isLiveMigrateFallback(err error) bool {
 	if errors.Is(err, errNoLiveAgent) {
 		return true
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "agent process not running") ||
-		strings.Contains(msg, "agent not ready")
+	// Claudia's disposable transfer seat can fail with the same process
+	// wording. A nested transfer failure says nothing about the source seat;
+	// treating it as dead invokes MigrateStopped while its live handle still
+	// exists and hides the real error behind "live handle exists".
+	msg := strings.TrimSpace(err.Error())
+	return strings.HasPrefix(msg, "agent process not running") ||
+		strings.HasPrefix(msg, "agent not ready")
 }
 
 // seatTranscript is the handover pointer for def. Sidecar seats read
