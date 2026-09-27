@@ -306,7 +306,7 @@ func TestDeliverOverseerEventBroadcastsUIShape(t *testing.T) {
 	for len(lines) < 2 {
 		select {
 		case l := <-ch:
-			if isPhaseFrame(l) {
+			if isNonBubbleFrame(l) {
 				continue
 			}
 			lines = append(lines, l)
@@ -570,7 +570,7 @@ func TestDeliverOverseerEventVisibleStreamEmptyEndTurnSealedBodyNonEmpty(t *test
 	for len(lines) < 4 {
 		select {
 		case l := <-ch:
-			if isPhaseFrame(l) {
+			if isNonBubbleFrame(l) {
 				continue
 			}
 			lines = append(lines, l)
@@ -1040,14 +1040,25 @@ func isPhaseFrame(l string) bool {
 	return json.Unmarshal([]byte(l), &m) == nil && m["type"] == "progress" && m["phase"] != nil
 }
 
-// drainPhaseFrames consumes any phase chrome already fanned onto ch so a
-// "no bubble" assertion is about bubbles.
-func drainPhaseFrames(t *testing.T, ch chan string) {
+func isFleetRefreshFrame(l string) bool {
+	var m map[string]any
+	return json.Unmarshal([]byte(l), &m) == nil && m["type"] == "agents_changed"
+}
+
+// The owner chat stream also carries fleet refresh and phase control frames.
+// Bubble assertions must ignore only those named controls, not unknown data.
+func isNonBubbleFrame(l string) bool {
+	return isPhaseFrame(l) || isFleetRefreshFrame(l)
+}
+
+// drainNonBubbleFrames consumes control frames already fanned onto ch so a
+// "no bubble" assertion remains about bubbles.
+func drainNonBubbleFrames(t *testing.T, ch chan string) {
 	t.Helper()
 	for {
 		select {
 		case l := <-ch:
-			if !isPhaseFrame(l) {
+			if !isNonBubbleFrame(l) {
 				t.Fatalf("unexpected wire line: %s", l)
 			}
 		default:

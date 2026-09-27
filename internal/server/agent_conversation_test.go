@@ -181,7 +181,7 @@ func TestOverseerSendByNameAgentOrigin(t *testing.T) {
 	if len(delivered) != 1 || strings.HasPrefix(delivered[0], userTurnPrefix) {
 		t.Fatalf("delivered=%v, want unmarked notification", delivered)
 	}
-	drainPhaseFrames(t, ch) // 🎯T555.1 fleet-chew chrome is not an owner bubble
+	drainNonBubbleFrames(t, ch) // fleet and phase controls are not owner bubbles
 }
 
 // Root and another name share the same send handler (not a second product).
@@ -285,7 +285,7 @@ func TestDeliverToOverseerAsCarriesOrigin(t *testing.T) {
 		t.Fatalf("delivered=%v, want unmarked notification", delivered)
 	}
 	s.HandleAgentEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
-	drainPhaseFrames(t, ch) // 🎯T555.1 fleet-chew chrome is not an owner bubble
+	drainNonBubbleFrames(t, ch) // fleet and phase controls are not owner bubbles
 
 	// Owner origin: owner marker + owner bubble.
 	if err := s.DeliverToOverseerAs("owner words", sendOriginOwner); err != nil {

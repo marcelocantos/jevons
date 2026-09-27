@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // 🎯T806: an owner message the daemon cannot deliver must not stay displayed
@@ -176,7 +178,9 @@ func TestT811IdenticalTextsKeepTheirOwnIDs(t *testing.T) {
 		t.Fatalf("frames %q", got)
 	}
 	refuse = true
-	s.drainOverseerNotes()
+	// A successful send owns the provider turn. The next queued owner
+	// message is offered only after that turn seals.
+	s.HandleAgentEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	if got := frames(); got != "undelivered:om-b" {
 		t.Fatalf("second identical message frames %q", got)
 	}

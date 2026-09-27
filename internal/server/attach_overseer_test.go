@@ -59,7 +59,7 @@ func TestAttachOverseerIdempotentNoDoubleBroadcast(t *testing.T) {
 	for len(lines) < 3 {
 		select {
 		case l := <-ch:
-			if isPhaseFrame(l) {
+			if isNonBubbleFrame(l) {
 				continue // 🎯T555.1 phase chrome, not a bubble
 			}
 			lines = append(lines, l)
@@ -69,7 +69,7 @@ func TestAttachOverseerIdempotentNoDoubleBroadcast(t *testing.T) {
 	}
 	// No extras.
 	time.Sleep(50 * time.Millisecond)
-	drainPhaseFrames(t, ch) // any extra bubble line is a double broadcast
+	drainNonBubbleFrames(t, ch) // any extra bubble line is a double broadcast
 
 	if len(lines) != 3 {
 		t.Fatalf("wire lines=%d want 3 (one per event, not doubled)", len(lines))

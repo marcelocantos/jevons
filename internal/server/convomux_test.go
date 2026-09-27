@@ -901,9 +901,10 @@ func TestMuxFirstPaintIsUserTurnsNotEvents(t *testing.T) {
 		rows = append(rows,
 			statedb.Event{Index: idx, ID: "u:" + itoa(i), Type: "user", Kind: 1, Body: `{"type":"user"}`},
 			statedb.Event{Index: idx + 1, ID: "a:" + itoa(i), Type: "assistant", Kind: 2, Body: `{"type":"assistant"}`},
-			statedb.Event{Index: idx + 2, ID: "t:" + itoa(i), Type: "tool_use", Kind: 3, Body: `{"type":"tool_use"}`},
 		)
-		idx += 3
+		// Thirty two-event turns fit under MaxConnectEvents (80). A third
+		// event per turn would test the connect cap, not the turn count.
+		idx += 2
 	}
 	if err := db.ReplaceAll("jevons", rows); err != nil {
 		t.Fatal(err)

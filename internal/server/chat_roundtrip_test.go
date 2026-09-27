@@ -99,13 +99,17 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 
 	wantTypes := []string{"user", "assistant", "assistant"}
 	var got []map[string]any
+	fleetRefreshes := 0
 	for i := 0; i < len(wantTypes); i++ {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("read %d: %v (got so far %v)", i, err, got)
 		}
-		if isPhaseFrame(string(data)) {
-			i-- // 🎯T555.1 phase chrome interleaved on the wire, not a bubble
+		if isFleetRefreshFrame(string(data)) {
+			fleetRefreshes++
+		}
+		if isNonBubbleFrame(string(data)) {
+			i-- // phase and fleet-refresh controls are not transcript bubbles
 			continue
 		}
 		var m map[string]any
@@ -116,6 +120,9 @@ func TestChatWireRoundTripOverWebSocket(t *testing.T) {
 		if m["type"] != wantTypes[i] {
 			t.Fatalf("msg %d type=%v want %s raw=%s", i, m["type"], wantTypes[i], data)
 		}
+	}
+	if fleetRefreshes == 0 {
+		t.Fatal("overseer progress did not publish a fleet refresh control frame")
 	}
 
 	// User bubble content.
@@ -207,7 +214,7 @@ func TestMultiChunkStreamWire(t *testing.T) {
 	for len(lines) < len(tokens)+1 {
 		select {
 		case l := <-ch:
-			if isPhaseFrame(l) {
+			if isNonBubbleFrame(l) {
 				continue // 🎯T555.1 phase chrome, not a bubble
 			}
 			lines = append(lines, l)
