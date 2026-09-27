@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -440,10 +441,36 @@ func deliverToSender(s *Server, name, text string, interrupt bool, proc agentSen
 }
 
 // deliverToSenderWith is deliverToSender with the confirmation owner named.
-// The bool is the deprecated interrupt alias (🎯T657); a mode stashed by
-// deliverByNameMode for this call wins over it.
+// The bool is the deprecated interrupt alias (🎯T657); named modes use
+// deliverToSenderMode directly.
 func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
-	return deliverToSenderMode(s, name, text, s.takeSendMode(name, interrupt), proc, rehydrated, confirm)
+	mode := delivery.ModeSubmit
+	if interrupt {
+		mode = delivery.ModeInterrupt
+	}
+	return deliverToSenderMode(s, name, text, mode, proc, rehydrated, confirm)
+}
+
+func (s *Server) lockAgentSend(name string) func() {
+	s.mu.Lock()
+	if s.agentSendLocks == nil {
+		s.agentSendLocks = make(map[string]*sync.Mutex)
+	}
+	lock := s.agentSendLocks[name]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.agentSendLocks[name] = lock
+	}
+	s.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+// The provider may know a turn is open before Jevons has observed a turn
+// event. OMP marks that phase before writing the prompt to its sidecar.
+func senderTurnInFlight(proc agentSender) bool {
+	phase, ok := proc.(interface{ TurnPhase() claudia.TurnPhase })
+	return ok && phase.TurnPhase() == claudia.TurnInTurn
 }
 
 // deliverToSenderMode is the mode-carrying send path (🎯T657).
@@ -460,6 +487,11 @@ func deliverToSenderWith(s *Server, name, text string, interrupt bool, proc agen
 //   - queue: hold for the next turn boundary when a turn is open; an idle seat
 //     has no boundary coming, so the text is submitted (mechanism submit).
 func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
+	// A sidecar socket write returns before the provider accepts or rejects
+	// the prompt. Serialize sends to one seat through the witness verdict so
+	// simultaneous callers cannot both mistake that interval for idle.
+	unlock := s.lockAgentSend(name)
+	defer unlock()
 	if proc == nil || !proc.Alive() {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
 	}
@@ -492,7 +524,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	// 🎯T657: a steer with a seam does not take it either — folding into the
 	// open turn is the point, and the seam decides on the process's own
 	// phase reading rather than this one.
-	if !interrupt && seam == nil && s.flightState(name) == FlightInFlight {
+	if !interrupt && seam == nil && (s.flightState(name) == FlightInFlight || senderTurnInFlight(proc)) {
 		// 🎯T426 clause 3: "in flight" is a claim this process wrote when it
 		// last saw a send begin, and it is only worth anything while the sink
 		// that would retract it is still attached. Attaching one HERE means it

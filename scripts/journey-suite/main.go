@@ -229,6 +229,7 @@ persona_notes: |
 		s.cmd.Process.Pid, host, stateDir, mcpName, provider)
 	s.run("J1-health", s.jHealth)
 	s.run("J2-chat-round-trip", s.jChatRoundTrip)
+	s.run("J32-overseer-overlap-queue", s.jOverseerOverlapQueue)
 	s.run("J3-cancel-and-send", s.jCancelAndSend)
 	s.run("J4-reconnect-sealed", s.jReconnectSealed)
 

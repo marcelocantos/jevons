@@ -601,7 +601,10 @@ func notifyErrClass(err error) string {
 // (🎯T62 — nothing dropped). Drain-in-progress serializes concurrent callers.
 func (s *Server) drainOverseerNotes() {
 	s.mu.Lock()
-	if s.notifyDraining || len(s.notifyQueue) == 0 {
+	// A successful socket write does not mean the provider has accepted the
+	// prompt. OMP can reject a second prompt asynchronously, so do not offer
+	// another batch while the first turn is still open (🎯T623).
+	if s.notifyDraining || s.waiting || len(s.notifyQueue) == 0 {
 		s.mu.Unlock()
 		return
 	}

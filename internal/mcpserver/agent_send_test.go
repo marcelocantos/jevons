@@ -8,8 +8,85 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/delivery"
 )
+
+type acceptingSender struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (f *acceptingSender) Alive() bool      { return true }
+func (f *acceptingSender) Interrupt() error { return nil }
+func (f *acceptingSender) Send(string) error {
+	if f.calls.Add(1) == 1 {
+		close(f.entered)
+		<-f.release
+	}
+	return nil
+}
+
+// A second caller must not submit while the first socket write is still
+// pending. OMP reports a prompt collision asynchronously, after Send returns.
+func TestAgentSendSerializesConcurrentSubmissions(t *testing.T) {
+	s := &Server{}
+	f := &acceptingSender{entered: make(chan struct{}), release: make(chan struct{})}
+	type result struct {
+		status string
+		err    error
+	}
+	first := make(chan result, 1)
+	second := make(chan result, 1)
+	go func() {
+		res, err := deliverToSenderMode(s, "po", "first", delivery.ModeSubmit, f, false, confirmByCaller)
+		first <- result{res.Status, err}
+	}()
+	<-f.entered
+	go func() {
+		res, err := deliverToSenderMode(s, "po", "second", delivery.ModeSubmit, f, false, confirmByCaller)
+		second <- result{res.Status, err}
+	}()
+	const collisionWindow = 100 * time.Millisecond
+	select {
+	case got := <-second:
+		close(f.release)
+		<-first
+		t.Fatalf("second submission raced the first: %+v", got)
+	case <-time.After(collisionWindow):
+	}
+	close(f.release)
+	if got := <-first; got.err != nil || got.status != "sent" {
+		t.Fatalf("first=%+v", got)
+	}
+	if got := <-second; got.err != nil || got.status != "queued" {
+		t.Fatalf("second=%+v", got)
+	}
+	if got := f.calls.Load(); got != 1 {
+		t.Fatalf("provider submissions=%d, want one", got)
+	}
+}
+
+type phaseOnlySender struct{ calls int }
+
+func (f *phaseOnlySender) Alive() bool                  { return true }
+func (f *phaseOnlySender) Interrupt() error             { return nil }
+func (f *phaseOnlySender) Send(string) error            { f.calls++; return nil }
+func (f *phaseOnlySender) TurnPhase() claudia.TurnPhase { return claudia.TurnInTurn }
+
+func TestAgentSendQueuesWhenProviderKnowsTurnButDaemonDoesNot(t *testing.T) {
+	s := &Server{}
+	f := &phaseOnlySender{}
+	res, err := deliverToSenderMode(s, "po", "close-out", delivery.ModeSubmit, f, false, confirmByCaller)
+	if err != nil || res.Status != "queued" || res.Queued != 1 || f.calls != 0 {
+		t.Fatalf("send=%+v err=%v provider calls=%d", res, err, f.calls)
+	}
+}
 
 // slogCapture records Info-level records for 🎯T120.2 field assertions.
 type slogCapture struct {

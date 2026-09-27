@@ -8,7 +8,37 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/claudia"
 )
+
+// The OMP sidecar acknowledges a socket write before it can reject an
+// overlapping prompt. A second note must stay in Jevons's queue even when
+// the first Send returned nil rather than a synchronous busy error.
+func TestOverseerNoteWaitsForAcceptedTurnToEnd(t *testing.T) {
+	s := &Server{}
+	var delivered []string
+	s.notifySender = func(text string) error {
+		delivered = append(delivered, text)
+		return nil
+	}
+	if err := s.SendToOverseer(userTurnPrefix + "owner asks"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SendToOverseer("[Agent multimaze2-po responded]\nclose-out"); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivered) != 1 || !strings.Contains(delivered[0], "owner asks") {
+		t.Fatalf("second prompt overlapped accepted owner turn: %v", delivered)
+	}
+	if len(s.notifyQueue) != 1 {
+		t.Fatalf("reply was not retained for turn end: %v", s.notifyQueue)
+	}
+	s.HandleAgentEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
+	if len(delivered) != 2 || !strings.Contains(delivered[1], "close-out") {
+		t.Fatalf("reply did not drain after owner turn: %v", delivered)
+	}
+}
 
 // 🎯T62: a worker reply that arrives while the overseer is mid-turn must be
 // queued and delivered when the turn completes — never dropped on "prompt

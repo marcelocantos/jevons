@@ -91,6 +91,7 @@ every run today; live is the default truth.
 ### Owner chat
 1. **J1-health** — `/health`
 2. **J2-chat-round-trip** — idle send → terminal
+2b. **J32-overseer-overlap-queue** — a live overseer turn waits inside Bash while a second owner message is accepted into Jevons's durable queue; after release, that second request produces its own exact terminal reply (🎯T623).
 3. **J3-cancel-and-send** — canonical `/ws/mux`. Fresh-nonce long turn → observe
    **this request** streaming while the overseer phase says working → interrupt →
    settle on the owner level → fresh-nonce replacement → exact terminal strictly

@@ -5,13 +5,13 @@ package server
 
 import (
 	"encoding/json"
-	"github.com/marcelocantos/claudia"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 )
 
@@ -284,6 +284,7 @@ func TestDeliverToOverseerAsCarriesOrigin(t *testing.T) {
 	if len(delivered) != 1 || strings.HasPrefix(delivered[0], userTurnPrefix) {
 		t.Fatalf("delivered=%v, want unmarked notification", delivered)
 	}
+	s.HandleAgentEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	drainPhaseFrames(t, ch) // 🎯T555.1 fleet-chew chrome is not an owner bubble
 
 	// Owner origin: owner marker + owner bubble.
@@ -298,6 +299,7 @@ func TestDeliverToOverseerAsCarriesOrigin(t *testing.T) {
 	default:
 		t.Fatal("owner-origin deliver did not broadcast an owner bubble")
 	}
+	s.HandleAgentEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 
 	// An unknown origin must not silently become an unmarked injection:
 	// default is owner, matching the HTTP handler's default.

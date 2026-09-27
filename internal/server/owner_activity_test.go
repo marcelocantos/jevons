@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cost"
 )
 
@@ -64,6 +65,9 @@ func TestT623_1BudgetNotificationDoesNotDeadlockNextOwnerSend(t *testing.T) {
 	if got := <-delivered; got != "budget: budget warning" {
 		t.Fatalf("budget notice missing: %q", got)
 	}
+	// The provider must finish that accepted notice before the next prompt
+	// can be offered. A socket write alone is not an idle transition.
+	s.HandleAgentEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	if got := <-delivered; !strings.HasSuffix(got, "next owner request") {
 		t.Fatalf("owner send missing: %q", got)
 	}

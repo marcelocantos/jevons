@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/provider"
 )
@@ -131,6 +132,9 @@ func TestAutomationLivenessFaultInjection(t *testing.T) {
 	waitFor("stall notification fired", 3*time.Second, func() bool {
 		return hasNote("Automation stall: fake-auto")
 	})
+	// The second notification is held until this accepted overseer turn
+	// reaches a terminal boundary.
+	s.HandleAgentEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 
 	// The aggregated model (the same registry the feed hub snapshots for
 	// client init frames) carries the liveness stall event.

@@ -15,13 +15,9 @@ import (
 
 // 🎯T657: delivery.Mode threaded through the fleet send path.
 //
-// The bool entry points (interrupt=true) stay as shims: they are the
-// deprecated alias for mode=interrupt and every daemon-internal caller still
-// speaks them. The mode reaches deliverToSenderMode either directly or —
-// for callers routed through deliverByNameWith, whose file is owned by
-// another in-flight slice (🎯T658) — through a per-agent stash the shim
-// reads back (stashSendMode / takeSendMode). The stash is scoped to the
-// synchronous call that set it and released on return.
+// The bool entry points (interrupt=true) stay as shims for daemon-internal
+// callers. An explicit mode travels as an argument through delivery so
+// concurrent sends cannot overwrite each other's intent.
 
 // statusSteered is the wire status for text folded into an open turn.
 const statusSteered = "steered"
@@ -35,51 +31,9 @@ type sendMech struct {
 	Mechanism string
 }
 
-// stashSendMode records the mode the next deliverToSenderWith call for name
-// should honour, and returns the release that clears it. Scoped to the
-// synchronous deliverByNameWith call: the shim reads it inside the same
-// stack, and the release runs when that stack unwinds.
-func (s *Server) stashSendMode(name string, mode delivery.Mode) func() {
-	s.mu.Lock()
-	if s.sendModes == nil {
-		s.sendModes = map[string]delivery.Mode{}
-	}
-	prev, had := s.sendModes[name]
-	s.sendModes[name] = mode
-	s.mu.Unlock()
-	return func() {
-		s.mu.Lock()
-		if had {
-			s.sendModes[name] = prev
-		} else {
-			delete(s.sendModes, name)
-		}
-		s.mu.Unlock()
-	}
-}
-
-// takeSendMode is the shim's read: a stashed mode wins; otherwise the bool
-// alias decides between interrupt and submit.
-func (s *Server) takeSendMode(name string, interrupt bool) delivery.Mode {
-	s.mu.Lock()
-	mode, ok := s.sendModes[name]
-	s.mu.Unlock()
-	if ok {
-		return mode
-	}
-	if interrupt {
-		return delivery.ModeInterrupt
-	}
-	return delivery.ModeSubmit
-}
-
 // deliverByNameMode is deliverByNameAs with the owner's delivery mode named.
-// It carries the mode past deliverByNameWith's bool signature via the stash.
 func (s *Server) deliverByNameMode(actor, name, text string, origin SendOrigin, mode delivery.Mode, confirm sendConfirmation) (agentSendResult, error) {
-	name = strings.TrimSpace(name)
-	release := s.stashSendMode(name, mode)
-	defer release()
-	return s.deliverByNameWith(actor, name, text, origin, mode.Interrupts(), confirm)
+	return s.deliverByNameWithMode(actor, name, text, origin, mode, confirm)
 }
 
 // sendToAgentMode is the MCP fleet form of sendToAgentAs with a mode.

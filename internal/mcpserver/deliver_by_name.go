@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
 )
@@ -157,6 +158,14 @@ func (s *Server) deliverByNameAs(actor, name, text string, origin SendOrigin, in
 
 // deliverByNameWith is deliverByNameAs with the confirmation owner named.
 func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, interrupt bool, confirm sendConfirmation) (res agentSendResult, err error) {
+	mode := delivery.ModeSubmit
+	if interrupt {
+		mode = delivery.ModeInterrupt
+	}
+	return s.deliverByNameWithMode(actor, name, text, origin, mode, confirm)
+}
+
+func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrigin, mode delivery.Mode, confirm sendConfirmation) (res agentSendResult, err error) {
 	name = strings.TrimSpace(name)
 	actor = strings.TrimSpace(actor)
 	defer func() { s.observeBirthAcceptance(name, res, err) }()
@@ -384,7 +393,7 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 			}
 		}
 	}
-	return deliverToSenderWith(s, name, text, interrupt, proc, rehydrated, confirm)
+	return deliverToSenderMode(s, name, text, mode, proc, rehydrated, confirm)
 }
 
 // relayReportBody returns the sender's report for 🎯T392.7 classification and

@@ -28,7 +28,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
-	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -58,11 +57,11 @@ type ScreenshotFunc func() (string, error)
 
 // TranscriptOps provides transcript manipulation functions.
 type TranscriptOps struct {
-	Read     func(sessionID string) ([]map[string]any, error)
+	Read func(sessionID string) ([]map[string]any, error)
 	// ReadForSeat prefers the dated sidecar spool for seat (🎯T866.4).
 	ReadForSeat func(seat, sessionID string) ([]map[string]any, error)
-	Truncate func(sessionID string, keepTurns int) error
-	GetID    func() string // current Jevon claude session ID (from claudia registry)
+	Truncate    func(sessionID string, keepTurns int) error
+	GetID       func() string // current Jevon claude session ID (from claudia registry)
 	// Locate answers where Read would look for sessionID: the resolved path
 	// ("" when absent) and every candidate location searched. 🎯T597: a
 	// not-found must name the paths it is a claim about.
@@ -175,10 +174,10 @@ type Server struct {
 	// resolveSender overrides fleet-agent process resolution on that same
 	// path. Nil — the product path — resolves via the registry. Test seam.
 	resolveSender senderResolver
-	// sendModes carries a delivery.Mode from deliverByNameMode to the bool
-	// deliverToSenderWith shim for the same synchronous call (🎯T657).
-	// Guarded by mu.
-	sendModes map[string]delivery.Mode
+	// agentSendLocks serialize admission to each provider seat. OMP's socket
+	// write can succeed before the sidecar rejects an overlapping prompt.
+	// Guarded by mu; each named lock is held only across that seat's send.
+	agentSendLocks map[string]*sync.Mutex
 	// unconfirmedSends remembers a delivered_unconfirmed verdict per seat so
 	// stop / kill can refuse to act on an undecided delivery (🎯T664).
 	// Guarded by mu.
