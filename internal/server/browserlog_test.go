@@ -4,15 +4,19 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/jevons/internal/eventlog"
 )
@@ -102,7 +106,7 @@ func TestHandleBrowserLogDurableAndStructured(t *testing.T) {
 	}
 
 	// GET /api/logs
-	req2 := httptest.NewRequest(http.MethodGet, "/api/logs?decision=match&limit=5", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/logs?source=browser&decision=match&limit=5", nil)
 	req2.Header.Set("Origin", "http://localhost")
 	req2.Host = "localhost"
 	rr2 := httptest.NewRecorder()
@@ -120,6 +124,111 @@ func TestHandleBrowserLogDurableAndStructured(t *testing.T) {
 	}
 	if payload.Count != 1 || !strings.Contains(payload.Path, "events.jsonl") {
 		t.Fatalf("payload=%+v", payload)
+	}
+}
+
+func TestLogsAPIPagesFiltersAndStreams(t *testing.T) {
+	dir := t.TempDir()
+	s := New("test", dir)
+	j, err := eventlog.Open(eventlog.DefaultPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	s.SetEventLog(j)
+	for _, ev := range []eventlog.Event{
+		{TS: "2026-09-27T10:00:00Z", Source: "server", Level: "info", Component: "route", Decision: "send", Msg: "sent alpha"},
+		{TS: "2026-09-27T10:00:01Z", Source: "browser", Level: "debug", Component: "history", Msg: "hydrate page"},
+		{TS: "2026-09-27T10:00:02Z", Source: "server", Level: "warn", Component: "route", Decision: "retry", Msg: "retry beta"},
+	} {
+		if err := j.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	get := func(path string) (int, struct {
+		Events       []eventlog.Event `json:"events"`
+		NextCursor   *int64           `json:"next_cursor"`
+		HeadCursor   int64            `json:"head_cursor"`
+		ScannedBytes int64            `json:"scanned_bytes"`
+	}) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		var payload struct {
+			Events       []eventlog.Event `json:"events"`
+			NextCursor   *int64           `json:"next_cursor"`
+			HeadCursor   int64            `json:"head_cursor"`
+			ScannedBytes int64            `json:"scanned_bytes"`
+		}
+		if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &payload) != nil {
+			t.Fatalf("bad response: %s", rec.Body.String())
+		}
+		return rec.Code, payload
+	}
+	status, first := get("/api/logs?limit=1")
+	if status != http.StatusOK || len(first.Events) != 1 || first.Events[0].Msg != "retry beta" || first.NextCursor == nil || first.HeadCursor <= 0 {
+		t.Fatalf("first page: %d %+v", status, first)
+	}
+	status, older := get(fmt.Sprintf("/api/logs?limit=1&before=%d", *first.NextCursor))
+	if status != http.StatusOK || len(older.Events) != 1 || older.Events[0].Msg != "sent alpha" {
+		t.Fatalf("older page: %d %+v", status, older)
+	}
+	status, browser := get("/api/logs?source=browser&level=debug&q=HYDRATE&since=2026-09-27T10:00:01Z")
+	if status != http.StatusOK || len(browser.Events) != 1 || browser.Events[0].Msg != "hydrate page" {
+		t.Fatalf("browser filter: %d %+v", status, browser)
+	}
+	for _, path := range []string{"/api/logs?level=nope", "/api/logs?limit=-1", "/api/logs?before=bogus", "/api/logs?unknown=yes"} {
+		if status, _ := get(path); status != http.StatusBadRequest {
+			t.Errorf("%s status %d, want 400", path, status)
+		}
+	}
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/logs/stream?after=%d", server.URL, first.HeadCursor), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("stream response %s", response.Status)
+	}
+	if err := j.Append(eventlog.Event{Source: "browser", Level: "debug", Msg: "ignore me"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(eventlog.Event{Source: "server", Level: "error", Msg: "new failure"}); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(response.Body)
+	var gotID int64
+	var gotEvent eventlog.Event
+	for gotEvent.Msg == "" {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read stream: %v", err)
+		}
+		if strings.HasPrefix(line, "id: ") {
+			gotID, err = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "id: ")), 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if strings.HasPrefix(line, "data: ") {
+			if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data: "))), &gotEvent); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if gotEvent.Msg != "new failure" || gotID <= first.HeadCursor {
+		t.Fatalf("stream id=%d event=%+v", gotID, gotEvent)
 	}
 }
 

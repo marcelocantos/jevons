@@ -78,10 +78,10 @@ type Server struct {
 	// handoverSeeding is the single-flight guard for delivering a pending
 	// handover (🎯T285); guarded by mu.
 	handoverSeeding    bool
-	overseerDownSince  time.Time // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
-	overseerPaged      bool      // owner already paged for this outage (🎯T775); guarded by mu
+	overseerDownSince  time.Time                                       // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
+	overseerPaged      bool                                            // owner already paged for this outage (🎯T775); guarded by mu
 	overseerPager      func(subject, body, key string, recovered bool) // out-of-band pager (🎯T775); nil → blurter
-	overseerDownReason string // legible cause when the overseer isn't running (🎯T54); guarded by mu
+	overseerDownReason string                                          // legible cause when the overseer isn't running (🎯T54); guarded by mu
 	// overseerOutageOpen is set when a degraded/down/stuck state has been
 	// broadcast and cleared by the one "overseer is back" that answers it
 	// (🎯T567). Keyed on the outage, not the reconcile tick. Guarded by mu.
@@ -208,23 +208,23 @@ type Server struct {
 	// 🎯T291: same-worker idle notes coalesce on enqueue; owner turns drain
 	// first and alone; overseerOwnerTurn tracks whether the in-flight prompt
 	// is owner speech (working chrome) vs fleet note chew.
-	notifyQueue       []string
-	notifyDraining    bool
-	notifySender      func(string) error
+	notifyQueue    []string
+	notifyDraining bool
+	notifySender   func(string) error
 	// 🎯T806: owner-message honesty. Ids ride beside the queued wire text (FIFO
 	// per text); ownerUndelivered marks texts whose refusal was announced so a
 	// retry storm tells the owner once; the timer re-drains a refused batch.
-	notifyOwnerIDs    map[string][]string
-	ownerUndelivered  map[string]bool
-	notifyRetryDelay  time.Duration
-	notifyRetryTimer  *time.Timer
-	notifyRetryN      int
+	notifyOwnerIDs       map[string][]string
+	ownerUndelivered     map[string]bool
+	notifyRetryDelay     time.Duration
+	notifyRetryTimer     *time.Timer
+	notifyRetryN         int
 	overseerReattachWait time.Duration
 	brokerFaultDir       string // 🎯T811 isolate-only fault seam
-	ownerQueueMu     sync.Mutex
-	ownerQueuePath   string
-	ownerDelivered   []string
-	overseerOwnerTurn bool
+	ownerQueueMu         sync.Mutex
+	ownerQueuePath       string
+	ownerDelivered       []string
+	overseerOwnerTurn    bool
 	// overseerPhase is the current reduce of the interleaved turn-state
 	// stream (🎯T555.1); overseerCorrespondent is the in-flight notify batch
 	// stamped onto non-idle samples.
@@ -604,6 +604,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("POST /api/agents/migrate", s.handleAgentMigrateHTTP)
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
+	mux.HandleFunc("GET /api/logs/stream", s.handleLogsStream)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)

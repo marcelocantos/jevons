@@ -109,6 +109,8 @@ conversation across restarts.
 
 ## Usage
 
+The read-only product log API supports bounded filtering, paging, and a live event stream; see [Product log API](docs/logs-api.md).
+
 ```bash
 # Start the coordinator (if not using brew services)
 jevonsd --port 13705 --workdir ~/projects

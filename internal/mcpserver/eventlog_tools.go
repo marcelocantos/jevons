@@ -66,11 +66,11 @@ func (s *Server) LogEvent(component, decision string, fields map[string]any) {
 func (s *Server) registerEventLogTools() {
 	s.addTool(
 		mcp.NewTool("jevons_logs_tail",
-			mcp.WithDescription("Tail durable product event logs under state_dir/logs/events.jsonl (browser decisions + lifecycle). Newest first. Use component/decision filters (e.g. component=thread_route, decision=match). Logs first — not DevTools-only (🎯T120)."),
+			mcp.WithDescription("Tail a bounded window of durable product events newest first. Server decisions are the default; set source=browser for browser telemetry or source=all for both. Use component/decision filters (e.g. component=thread_route, decision=match). Logs first — not DevTools-only (🎯T120)."),
 			mcp.WithNumber("limit", mcp.Description("Max events (default 100, max 2000)")),
 			mcp.WithString("component", mcp.Description("Filter by component (thread_route, attention, send_queue, browser, …)")),
 			mcp.WithString("decision", mcp.Description("Filter by decision enum (match, enqueue, send, …)")),
-			mcp.WithString("source", mcp.Description("browser | server")),
+			mcp.WithString("source", mcp.Description("server (default) | browser | all")),
 			mcp.WithString("q", mcp.Description("Substring match on msg (case-insensitive)")),
 		),
 		s.handleLogsTail,
@@ -89,6 +89,11 @@ func (s *Server) handleLogsTail(_ context.Context, req mcp.CallToolRequest) (*mc
 	comp, _ := args["component"].(string)
 	dec, _ := args["decision"].(string)
 	src, _ := args["source"].(string)
+	if src == "" {
+		src = "server"
+	} else if src == "all" {
+		src = ""
+	}
 	q, _ := args["q"].(string)
 
 	events, path, err := s.eventLogTail(eventlog.TailOptions{

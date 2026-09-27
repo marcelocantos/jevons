@@ -722,8 +722,21 @@ func main() {
 	mcpSrv.SetSelfTestEnv(srv.SelfTestEnv)
 	// ð¯T120: product log introspection (durable events.jsonl).
 	mcpSrv.SetEventLogTailer(func(opt eventlog.TailOptions) ([]eventlog.Event, string, error) {
-		ev, err := srv.TailEventLog(opt)
-		return ev, srv.EventLogPath(), err
+		path := srv.EventLogPath()
+		limit := opt.Limit
+		if limit <= 0 {
+			limit = 100
+		}
+		if limit > eventlog.MaxPageEvents {
+			limit = eventlog.MaxPageEvents
+		}
+		page, err := eventlog.Page(path, nil, limit, eventlog.Query{
+			Component: opt.Component,
+			Decision:  opt.Decision,
+			Source:    opt.Source,
+			Contains:  opt.Contains,
+		})
+		return page.Events, path, err
 	})
 	// ð¯T128.4: fleet MCP tools dual-write lifecycle events (source=server)
 	// into the same journal so GET /api/logs / jevons_logs_tail see them.

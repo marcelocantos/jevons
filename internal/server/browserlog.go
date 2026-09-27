@@ -5,8 +5,11 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -118,34 +121,197 @@ func (s *Server) handleBrowserLog(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleLogsTail serves GET /api/logs?limit=&component=&decision=&source=&q=
-// — newest-first events from the durable journal (product introspection).
+// handleLogsTail pages backward through the durable journal. The default
+// source is server so browser hydration telemetry cannot hide decisions.
 func (s *Server) handleLogsTail(w http.ResponseWriter, r *http.Request) {
 	if rejectCrossSite(w, r) {
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	path := s.eventJournalPath()
-	events, err := eventlog.Tail(path, eventlog.TailOptions{
-		Limit:     limit,
-		Component: r.URL.Query().Get("component"),
-		Decision:  r.URL.Query().Get("decision"),
-		Source:    r.URL.Query().Get("source"),
-		Contains:  r.URL.Query().Get("q"),
-	})
+	query, err := parseLogQuery(r, false)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > eventlog.MaxPageEvents {
+			http.Error(w, "limit must be 1..2000", http.StatusBadRequest)
+			return
+		}
+	}
+	var before *int64
+	if raw := r.URL.Query().Get("before"); raw != "" {
+		cursor, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || cursor < 0 {
+			http.Error(w, "invalid before cursor", http.StatusBadRequest)
+			return
+		}
+		before = &cursor
+	}
+	path := s.eventJournalPath()
+	page, err := eventlog.Page(path, before, limit, query)
+	if err != nil {
+		if errors.Is(err, eventlog.ErrCursor) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, `{"error":"log tail failed"}`, http.StatusInternalServerError)
 		return
 	}
-	if events == nil {
-		events = []eventlog.Event{}
-	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"path":   path,
-		"count":  len(events),
-		"events": events,
+		"path":          path,
+		"count":         len(page.Events),
+		"events":        page.Events,
+		"next_cursor":   page.NextCursor,
+		"head_cursor":   page.HeadCursor,
+		"scanned_bytes": page.ScannedBytes,
 	})
+}
+
+func parseLogQuery(r *http.Request, stream bool) (eventlog.Query, error) {
+	allowed := map[string]bool{"component": true, "decision": true, "source": true, "level": true, "q": true, "since": true, "until": true}
+	if stream {
+		allowed["after"] = true
+	} else {
+		allowed["before"] = true
+		allowed["limit"] = true
+	}
+	for key, values := range r.URL.Query() {
+		if !allowed[key] || len(values) != 1 {
+			return eventlog.Query{}, fmt.Errorf("unsupported or repeated log filter %q", key)
+		}
+		if len(values[0]) > 256 {
+			return eventlog.Query{}, fmt.Errorf("log filter %q is too long", key)
+		}
+	}
+	values := r.URL.Query()
+	query := eventlog.Query{
+		Component: strings.TrimSpace(values.Get("component")),
+		Decision:  strings.TrimSpace(values.Get("decision")),
+		Source:    strings.TrimSpace(values.Get("source")),
+		Level:     strings.TrimSpace(values.Get("level")),
+		Contains:  strings.TrimSpace(values.Get("q")),
+	}
+	if query.Source == "" {
+		query.Source = "server"
+	}
+	if query.Source == "all" {
+		query.Source = ""
+	} else if query.Source != "server" && query.Source != "browser" {
+		return eventlog.Query{}, errors.New("source must be server, browser, or all")
+	}
+	if query.Level != "" && query.Level != "debug" && query.Level != "info" && query.Level != "warn" && query.Level != "error" {
+		return eventlog.Query{}, errors.New("level must be debug, info, warn, or error")
+	}
+	for _, bound := range []struct {
+		name string
+		dest *time.Time
+	}{{"since", &query.Since}, {"until", &query.Until}} {
+		if raw := values.Get(bound.name); raw != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				return eventlog.Query{}, fmt.Errorf("%s must be RFC3339", bound.name)
+			}
+			*bound.dest = parsed
+		}
+	}
+	if !query.Since.IsZero() && !query.Until.IsZero() && query.Since.After(query.Until) {
+		return eventlog.Query{}, errors.New("since must not be after until")
+	}
+	return query, nil
+}
+
+// handleLogsStream sends new matching rows as Server-Sent Events. Each id is
+// the byte offset after that row; reconnect with Last-Event-ID or ?after=.
+func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	if rejectCrossSite(w, r) {
+		return
+	}
+	query, err := parseLogQuery(r, true)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	path := s.eventJournalPath()
+	var after int64
+	raw := r.URL.Query().Get("after")
+	if raw == "" {
+		raw = r.Header.Get("Last-Event-ID")
+	}
+	if raw == "" {
+		info, err := os.Stat(path)
+		if err == nil {
+			after = info.Size()
+		} else if !os.IsNotExist(err) {
+			http.Error(w, "log stream unavailable", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		after, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || after < 0 {
+			http.Error(w, "invalid after cursor", http.StatusBadRequest)
+			return
+		}
+	}
+	// Reject a stale cursor before committing the streaming response.
+	info, err := os.Stat(path)
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, "log stream unavailable", http.StatusInternalServerError)
+		return
+	}
+	if info == nil && after != 0 || info != nil && after > info.Size() {
+		http.Error(w, "eventlog: cursor out of range", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	controller := http.NewResponseController(w)
+	if _, err := fmt.Fprint(w, "retry: 1000\n\n"); err != nil {
+		return
+	}
+	if err := controller.Flush(); err != nil {
+		return
+	}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	lastKeepalive := time.Now()
+	for {
+		page, err := eventlog.ReadAfter(path, after, 100, query)
+		if err != nil {
+			_, _ = fmt.Fprint(w, "event: error\ndata: log stream unavailable\n\n")
+			_ = controller.Flush()
+			return
+		}
+		_ = controller.SetWriteDeadline(time.Now().Add(3 * time.Second))
+		for _, row := range page.Events {
+			data, err := json.Marshal(row.Event)
+			if err != nil {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "id: %d\nevent: log\ndata: %s\n\n", row.Cursor, data); err != nil {
+				return
+			}
+		}
+		if len(page.Events) > 0 && controller.Flush() != nil {
+			return
+		}
+		after = page.NextCursor
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if len(page.Events) == 0 && time.Since(lastKeepalive) >= 15*time.Second {
+				_ = controller.SetWriteDeadline(time.Now().Add(3 * time.Second))
+				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil || controller.Flush() != nil {
+					return
+				}
+				lastKeepalive = time.Now()
+			}
+		}
+	}
 }
 
 func (s *Server) eventJournal() *eventlog.Journal {
