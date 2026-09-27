@@ -39,7 +39,7 @@ func TestStitchOmitProviderFollowsConfigNotCompiledSeed(t *testing.T) {
 	if existed {
 		t.Fatal("mint reported existed")
 	}
-	if def.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("omit-provider mint → %q, want grok (config)", def.Provider)
 	}
 	if strings.Contains(strings.ToLower(def.Model), "claude") {
@@ -83,7 +83,7 @@ func TestStitchOmitProviderFollowsConfigNotLeftoverFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("leftover file won: provider=%q note=%q", def.Provider, note)
 	}
 	if def.Model == "claude-opus-5" || strings.Contains(strings.ToLower(def.Model), "claude") {

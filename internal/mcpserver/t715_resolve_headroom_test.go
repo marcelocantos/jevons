@@ -100,7 +100,7 @@ func TestT715OmitProviderMintsGrokWhenClaudeAtCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("omit spawn minted %q, want grok; note=%q", def.Provider, note)
 	}
 }

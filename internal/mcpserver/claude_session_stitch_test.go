@@ -218,7 +218,9 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderGrok {
+	// Selection is a subscription identity; an unpinned seat stores the
+	// sidecar's runtime id. The exact runtime mapping has its own T866.5 oracle.
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("empty provider work mint → %q, want grok (config); note=%q", def.Provider, note)
 	}
 	if !strings.Contains(note, "provider_knob: config") {
@@ -238,7 +240,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mech.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(mech.Provider) != claudia.ProviderGrok {
 		t.Fatalf("mechanical omit-provider → %q want grok; note=%q", mech.Provider, note)
 	}
 	if !strings.Contains(note, "provider_knob: config") {
@@ -263,7 +265,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spread.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(spread.Provider) != claudia.ProviderGrok {
 		t.Fatalf("after claude at soft cap, omit mint → %q want config grok; note=%q", spread.Provider, note)
 	}
 }

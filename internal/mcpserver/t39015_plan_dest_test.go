@@ -106,7 +106,7 @@ func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderCodex {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderCodex {
 		t.Fatalf("omit mint dest=%q want codex (grok ahead)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {

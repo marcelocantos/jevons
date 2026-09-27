@@ -41,7 +41,7 @@ func TestStitchFastCheapPinsGrokPeerOnMechanicalAndOps(t *testing.T) {
 	s.SetDefaultProvider(string(claudia.ProviderGrok))
 
 	mech := t32521Mint(t, s, "jv-mech", "", "", "mechanical", claudia.PurposeWork, "")
-	if mech.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(mech.Provider) != claudia.ProviderGrok {
 		t.Fatalf("mechanical provider=%q want grok", mech.Provider)
 	}
 	if mech.Model != cost.ModelGrokFast {
@@ -148,7 +148,7 @@ func TestStitchDoesNotPinSparkOnRedCodexWeekly(t *testing.T) {
 	})
 
 	omit := t32521Mint(t, s, "jv-no-spark-omit", "", "", "mechanical", claudia.PurposeWork, "")
-	if omit.Provider == claudia.ProviderCodex {
+	if claudia.PlanProvider(omit.Provider) == claudia.ProviderCodex {
 		t.Fatalf("omit mint landed on red Codex: %+v", omit)
 	}
 	if omit.Model == cost.ModelCodexSpark {

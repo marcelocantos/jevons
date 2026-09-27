@@ -44,7 +44,7 @@ func TestT475POMintDefaultsCEONotCodeImplement(t *testing.T) {
 	if existed {
 		t.Fatal("PO mint reported existed")
 	}
-	if po.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(po.Provider) != claudia.ProviderGrok {
 		t.Fatalf("PO provider=%q want grok", po.Provider)
 	}
 	if strings.Contains(strings.ToLower(po.Model), "claude") ||
@@ -65,7 +65,7 @@ func TestT475POMintDefaultsCEONotCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if worker.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(worker.Provider) != claudia.ProviderGrok {
 		t.Fatalf("worker provider=%q want grok (config)", worker.Provider)
 	}
 	if !strings.Contains(wnote, "task_type: code_implement") {
