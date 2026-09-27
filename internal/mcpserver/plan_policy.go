@@ -27,6 +27,8 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	if s == nil {
 		return nil
 	}
+	s.planSweepMu.Lock()
+	defer s.planSweepMu.Unlock()
 	// A failed destination launch has already changed Claudia's registry row.
 	// Retry its persisted handover before reading plan usage: the old hot
 	// provider is no longer on that row, and a stale feed must not strand it.
@@ -209,6 +211,25 @@ func (s *Server) rememberPlanResults(actions []planusage.PlanAction) {
 		s.planLastResults[action.Name] = action
 	}
 	s.planDecisionMu.Unlock()
+}
+
+// MarkPlanRetryAfterReauth records that the owner has just repaired the
+// destination login for provider: a remembered failed move to it is now a
+// pending retry, not a destination auth failure still waiting on the owner.
+// The next sweep replaces it with its own result.
+func (s *Server) MarkPlanRetryAfterReauth(provider claudia.Provider) {
+	if s == nil {
+		return
+	}
+	plan := claudia.PlanProvider(provider)
+	s.planDecisionMu.Lock()
+	defer s.planDecisionMu.Unlock()
+	for name, last := range s.planLastResults {
+		if last.Execution == "failed" && claudia.PlanProvider(claudia.Provider(last.To)) == plan {
+			last.Execution, last.Failure = "pending", "destination login recovered; retrying"
+			s.planLastResults[name] = last
+		}
+	}
 }
 
 // PlanPolicyDecisions is the read-only placement picture, including stays and

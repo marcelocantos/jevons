@@ -327,6 +327,10 @@ type Server struct {
 	migrator Migrator
 	// Latest host execution result for each Claudia placement verdict. Read
 	// alongside a fresh decision so a failed launch cannot look like a move.
+	// planSweepMu serialises SweepPlanPolicy: the periodic tick and an
+	// owner reauth can both start one, and two sweeps moving the same seat
+	// race Claudia's migration (one sees the other's live handle).
+	planSweepMu     sync.Mutex
 	planDecisionMu  sync.RWMutex
 	planLastResults map[string]planusage.PlanAction
 

@@ -174,6 +174,12 @@ type Server struct {
 	planUsageRefresh func(ctx context.Context) error
 	// planSweep runs the 🎯T390.1.5 hot/exhausted migrate-or-park actuator.
 	planSweep func() any
+	// planRetryAfterReauth marks remembered failed moves to a provider as
+	// retrying once the owner has repaired that destination login.
+	planRetryAfterReauth func(provider claudia.Provider)
+	// planAuthRevive relaunches seats that broke on a provider's plan login
+	// once that login is known good (skip names a seat already handled).
+	planAuthRevive func(provider claudia.Provider, skip string)
 	// planDecisions reports Claudia's per-seat placement verdict without moving a seat.
 	planDecisions func() []planusage.PlanAction
 	// providerHardBlock observes classified provider refusals / successes so

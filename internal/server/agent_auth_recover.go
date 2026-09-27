@@ -85,6 +85,16 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusConflict, "agent changed while authentication was being recovered")
 		return
 	}
+	// The login is the plan's, not this seat's: every seat that broke on it
+	// can come back now, whether or not this one starts.
+	if s.planAuthRevive != nil {
+		defer func() {
+			go func() {
+				s.planAuthRevive(def.Provider, name)
+				s.NotifyAgentsChanged()
+			}()
+		}()
+	}
 	if _, err := fleet.LaunchReconciled(reg, name); err != nil {
 		s.NotifyAgentsChanged()
 		writeJSONError(w, http.StatusBadGateway, "Authentication recovered, but the agent did not start: "+err.Error())
@@ -182,6 +192,17 @@ func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http
 	if err := recoverAuth(r.Context(), provider); err != nil {
 		writeJSONError(w, http.StatusBadGateway, "Claudia could not recover authentication: "+err.Error())
 		return
+	}
+	// The failures that offered this action are now answered; say so before
+	// the retry sweep, which can take minutes of context transfer, reports.
+	if s.planRetryAfterReauth != nil {
+		s.planRetryAfterReauth(provider)
+	}
+	if s.planAuthRevive != nil {
+		go func() {
+			s.planAuthRevive(provider, "")
+			s.NotifyAgentsChanged()
+		}()
 	}
 	// The broker has repaired the destination login. Retry from the current
 	// Claudia registry state without holding the HTTP request through a paid

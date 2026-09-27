@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -55,6 +57,18 @@ func wantsPlanUsageRefresh(r *http.Request) bool {
 // SetPlanSweep registers the hot/exhausted migrate-or-park actuator
 // (🎯T390.1.5), served at POST /api/plan-usage/sweep.
 func (s *Server) SetPlanSweep(f func() any) { s.planSweep = f }
+
+// SetPlanRetryAfterReauth wires the marker a successful destination reauth
+// uses, so the Reauth action clears before the retry sweep finishes.
+func (s *Server) SetPlanRetryAfterReauth(f func(provider claudia.Provider)) {
+	s.planRetryAfterReauth = f
+}
+
+// SetPlanAuthRevive wires the relaunch of seats that broke on a provider's
+// plan login, run after an owner reauth of that provider succeeds.
+func (s *Server) SetPlanAuthRevive(f func(provider claudia.Provider, skip string)) {
+	s.planAuthRevive = f
+}
 
 // SetPlanDecisions wires the read-only per-seat placement picture.
 func (s *Server) SetPlanDecisions(f func() []planusage.PlanAction) { s.planDecisions = f }

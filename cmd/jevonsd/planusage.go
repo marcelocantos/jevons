@@ -8,10 +8,16 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/server"
 )
+
+// planAuthReviveInterval is how often a running seat on a plan is taken as
+// evidence that its login works, reviving peers that broke on it.
+const planAuthReviveInterval = 30 * time.Second
 
 // startPlanUsage wires the subscription plan-usage reader (🎯T390): how much
 // of each backend's allowance is left and when it rolls over, polled from
@@ -48,6 +54,27 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 	mcpSrv.SetPlanUsageSource(func() planusage.Snapshot { return reader.Snapshot() })
 	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
 	srv.SetPlanDecisions(mcpSrv.PlanPolicyDecisions)
+	srv.SetPlanRetryAfterReauth(mcpSrv.MarkPlanRetryAfterReauth)
+	srv.SetPlanAuthRevive(func(provider claudia.Provider, skip string) {
+		mcpSrv.RevivePlanAuthPeers(provider, skip)
+	})
+	// A plan login repaired anywhere (one seat's Reauth, the CLI, another
+	// host) shows up as a running seat on that plan; its auth-broken peers
+	// then come back without another owner click.
+	go func() {
+		tick := time.NewTicker(planAuthReviveInterval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if revived := mcpSrv.RevivePlanAuthWhereHealthy(); len(revived) > 0 {
+					srv.NotifyAgentsChanged()
+				}
+			}
+		}
+	}()
 	go reader.Run(ctx)
 	// A daemon restart clears the in-memory execution result. Re-evaluate
 	// after both the first plan reading and HTTP/MCP setup, so a rejected
