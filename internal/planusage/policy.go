@@ -51,6 +51,9 @@ type PlanAction struct {
 	// placement choice is not proof that a migration finished.
 	Execution string
 	Failure   string
+	// ReauthAvailable is an owner action for a failed destination login.
+	// The server decorates the read-only decision; Claudia owns recovery.
+	ReauthAvailable bool
 	// Author names who resolved the dest (🎯T691). Product placement is
 	// "claudia"; a prompt-level choice is a different decision.
 	Author string

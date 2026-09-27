@@ -22,12 +22,56 @@ import { PlanTipTable } from '../plan/tipTable';
 /** HTTP fallback only when mux is not connected (tests / non-cockpit). */
 export const PLAN_POLL_MS = 60_000;
 export const PLAN_POLL_PENDING_MS = 5_000;
+const PLAN_DECISIONS_POLL_MS = 15_000;
+
+type PlanDecision = {
+  Name: string;
+  From: string;
+  To: string;
+  Execution: string;
+  Failure: string;
+  ReauthAvailable: boolean;
+};
 
 function hasNumericRemaining(snap: PlanSnapshot | undefined): boolean {
   return tickerGroups(snap).some((g) => g.windows.some((w) => typeof w.remaining_percent === 'number'));
 }
 
+function migrationFailureSummary(failure: string): string {
+  if (/invalid_grant/i.test(failure)) return 'Destination refresh token was rejected (invalid_grant).';
+  return failure.split('\n').find((line) => line.trim())?.trim() || 'Authentication failed.';
+}
+
 export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
+  const [reauthBusy, setReauthBusy] = useState('');
+  const [reauthMessage, setReauthMessage] = useState('');
+  const decisions = useQuery({
+    queryKey: ['plan-usage-decisions'],
+    queryFn: async ({ signal }) => {
+      const r = await fetch('/api/plan-usage/decisions', { signal });
+      if (!r.ok) throw new Error(String(r.status));
+      const body: unknown = await r.json();
+      return Array.isArray(body) ? body as PlanDecision[] : [];
+    },
+    refetchInterval: PLAN_DECISIONS_POLL_MS,
+  });
+  const failedMigrations = (decisions.data || []).filter((d) => d.ReauthAvailable);
+  const recoveryProviders = [...new Set(failedMigrations.map((d) => d.To))];
+  const recoverDestination = async (provider: string) => {
+    setReauthBusy(provider);
+    setReauthMessage('');
+    try {
+      const r = await fetch('/api/plan-usage/auth/recover/' + encodeURIComponent(provider), { method: 'POST' });
+      const body = await r.json() as { error?: string };
+      if (!r.ok) throw new Error(body.error || 'Claudia could not recover the login');
+      setReauthMessage('Claudia recovered ' + provider + '; migration will retry automatically.');
+      await decisions.refetch();
+    } catch (err) {
+      setReauthMessage(err instanceof Error ? err.message : 'Authentication recovery failed');
+    } finally {
+      setReauthBusy('');
+    }
+  };
   useQuery({
     queryKey: ['plan-usage-thresholds'],
     queryFn: async () => {
@@ -85,11 +129,39 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
   heldReadings.current = held.last;
   const groups = held.groups;
   // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
-  const tip = <PlanTipTable groups={groups} nowMs={now()} />;
-  const inner = !groups.length ? (
-    <span className="plan-chip">{q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
-  ) : (
-    groups.map((g) => (
+  const tip = <>
+    <PlanTipTable groups={groups} nowMs={now()} />
+    {failedMigrations.length ? (
+      <div className="plan-migration-failures">
+        <strong>Claudia could not switch these running agents:</strong>
+        {failedMigrations.map((d) => (
+          <div key={d.Name}>
+            {d.Name}: {d.From} → {d.To} — {migrationFailureSummary(d.Failure)}
+          </div>
+        ))}
+        {reauthMessage ? <div role="status">{reauthMessage}</div> : null}
+      </div>
+    ) : null}
+  </>;
+  const inner = <>
+    {recoveryProviders.map((provider) => (
+      <button
+        key={provider}
+        type="button"
+        className="plan-reauth"
+        disabled={!!reauthBusy}
+        aria-label={'Reauth ' + provider + ' for failed migration'}
+        onClick={(e) => {
+          e.stopPropagation();
+          void recoverDestination(provider);
+        }}
+      >
+        {reauthBusy === provider ? 'Signing in…' : 'Reauth ' + provider}
+      </button>
+    ))}
+    {!groups.length ? (
+      <span className="plan-chip">{q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
+    ) : groups.map((g) => (
       <span
         key={g.provider}
         className={
@@ -157,8 +229,8 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
           </span>
         ) : null}
       </span>
-    ))
-  );
+    ))}
+  </>;
   return (
     <InstantTip
       id="plan-ticker"
