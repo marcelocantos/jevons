@@ -20,101 +20,68 @@ import (
 const destAuthor = "claudia"
 
 // ResolveMint is the omit-provider dest pick (🎯T691 / 🎯T652 / 🎯T693).
-// Prefer Claude among dest-band backends. Published v0.40.0 Resolve
-// ranks by slack, which is the T693 false-green the sibling replace
-// hid; pickDest is the pin-compat destBandRank (🎯T707). Providers whose
-// seats cannot be steered are never chosen (🎯T791).
+// Claudia owns ranking; this adapter supplies Jevons' session-cap and
+// steerability constraints. A preference for Claude is not a ban on others.
 func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	_ = ctx
-	return pickDest(cands, string(claudia.ProviderClaude), "", true, now, th)
+	return resolvePlanCandidates(ctx, cands, claudia.ProviderClaude, "", true, now, th)
 }
 
 // ResolveDest is the migrate/park dest pick (🎯T691 / 🎯T693). exclude
 // drops the seat's current provider. No PreferProvider — not Claude-first.
 // Steerability is not filtered here: 🎯T791 scopes the exclusion to mint.
 func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	_ = ctx
-	return pickDest(cands, "", exclude, false, now, th)
+	return resolvePlanCandidates(ctx, cands, "", claudia.Provider(exclude), false, now, th)
 }
 
-type destRow struct {
-	provider string
-	band     WeeklyBand
-	pressure float64
-}
-
-func pickDest(cands []DestCand, prefer, exclude string, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	prefer = strings.ToLower(strings.TrimSpace(prefer))
-	exclude = strings.ToLower(strings.TrimSpace(exclude))
-	var dests []destRow
+func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclude claudia.Provider, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
+	excluded := map[claudia.Provider]bool{claudia.PlanProvider(exclude): exclude != ""}
+	usage := make([]claudia.PlanUsage, 0, len(cands))
 	var capped, unsteer []string
 	for _, c := range cands {
 		p := strings.ToLower(strings.TrimSpace(c.Provider))
 		if p == "" {
 			p = strings.ToLower(strings.TrimSpace(c.Backend.Provider))
 		}
-		if p == "" || p == exclude {
+		if p == "" {
 			continue
 		}
+		provider := claudia.PlanProvider(claudia.Provider(p))
+		u := backendToPlanUsage(c.Backend)
+		u.Provider = provider
+		usage = append(usage, u)
 		if why := UnsteerableReason(p); steerableOnly && why != "" {
 			unsteer = append(unsteer, fmt.Sprintf("%s (%s)", p, why))
-			continue
-		}
-		if !DestEligible(c.Backend, now, th) {
+			excluded[provider] = true
 			continue
 		}
 		if destAtSessionCap(c) {
 			capped = append(capped, fmt.Sprintf("%s %d/%d", p, c.Load, c.Cap))
-			continue
+			excluded[provider] = true
 		}
-		dests = append(dests, destRow{
-			provider: p,
-			band:     WeeklyBandOf(c.Backend, now, th),
-			pressure: destPressure(c.Backend, now, th),
-		})
 	}
-	if len(dests) == 0 {
-		// 🎯T791: name the cap and the unsteerable providers so the refusal
-		// says why headroom elsewhere did not help.
-		msg := "resolve: no dest-band dest"
+	var exclusions []claudia.Provider
+	for _, row := range claudia.ModelCatalog() {
+		if excluded[row.Provider] {
+			exclusions = append(exclusions, row.Provider)
+		}
+	}
+	pick, err := claudia.Resolve(ctx, claudia.ModelPredicates{
+		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
+		PreferPlan: true, Background: true, RequireUsage: true,
+		PreferProvider: prefer, ExcludeProviders: exclusions,
+		Usage: usage, Now: now, Thresholds: claudiaThresholdsPtr(th),
+	})
+	if err != nil {
+		parts := []string{err.Error()}
 		if len(capped) > 0 {
-			msg += "; soft cap reached: " + strings.Join(capped, ", ")
+			parts = append(parts, "soft cap reached: "+strings.Join(capped, ", "))
 		}
 		if len(unsteer) > 0 {
-			msg += "; excluded unsteerable: " + strings.Join(unsteer, ", ")
+			parts = append(parts, "excluded unsteerable: "+strings.Join(unsteer, ", "))
 		}
-		return claudia.ModelPick{}, fmt.Errorf("%s", msg)
+		return claudia.ModelPick{}, fmt.Errorf("%s", strings.Join(parts, "; "))
 	}
-	pool := dests
-	if prefer != "" {
-		var pref []destRow
-		for _, d := range dests {
-			if d.provider == prefer {
-				pref = append(pref, d)
-			}
-		}
-		if len(pref) > 0 {
-			pool = pref
-		}
-	}
-	best := pool[0]
-	for _, d := range pool[1:] {
-		if better, ok := destBetter(d.band, d.pressure, best.band, best.pressure); ok && better {
-			best = d
-		}
-	}
-	reason := fmt.Sprintf("band=%s", best.band)
-	if prefer != "" && best.provider == prefer {
-		reason += " prefer_provider"
-	}
-	if len(unsteer) > 0 {
-		reason += " excluded_unsteerable=" + strings.Join(unsteer, ",")
-	}
-	return claudia.ModelPick{
-		Provider: claudia.Provider(best.provider),
-		Band:     claudia.PlanBand(best.band),
-		Reason:   reason,
-	}, nil
+	return pick, nil
 }
 
 // destAtSessionCap reports a dest whose published session soft cap is
@@ -126,45 +93,6 @@ func destAtSessionCap(c DestCand) bool {
 		return false
 	}
 	return c.Load >= c.Cap
-}
-
-func destBandRank(b WeeklyBand) (int, bool) {
-	switch b {
-	case BandLocked:
-		return 0, true
-	case BandUnder:
-		return 1, true
-	case BandOK:
-		return 2, true
-	default:
-		return 0, false
-	}
-}
-
-func destBetter(cBand WeeklyBand, cPress float64, bestBand WeeklyBand, bestPress float64) (cBetter bool, decided bool) {
-	cr, cOK := destBandRank(cBand)
-	br, bOK := destBandRank(bestBand)
-	if cOK != bOK {
-		return cOK, true
-	}
-	if !cOK {
-		return false, false
-	}
-	if cr != br {
-		return cr < br, true
-	}
-	return slackDecides(cPress, bestPress)
-}
-
-func slackDecides(c, best float64) (cBetter bool, decided bool) {
-	const slackEps = 0.05
-	if c < best-slackEps {
-		return true, true
-	}
-	if c > best+slackEps {
-		return false, true
-	}
-	return false, false
 }
 
 // shouldVacate is the T691 bounce bar. Published v0.40.0 does not
@@ -272,6 +200,12 @@ func backendToPlanUsage(be Backend) claudia.PlanUsage {
 			Status:   claudia.PlanUsageStatus(be.Status),
 			Reason:   be.Reason,
 		}
+	}
+	// Keep stale readings visible in the cockpit, but never let them move
+	// a seat or admit a new one. Claudia sees an unavailable policy input.
+	if be.Stale {
+		out[0].Status = claudia.PlanUsageUnavailable
+		out[0].Reason = "stale plan reading"
 	}
 	return out[0]
 }

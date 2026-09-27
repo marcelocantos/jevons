@@ -43,6 +43,9 @@ func TestT625_9MigrateFindsGrokHomesSession(t *testing.T) {
 		f := NewClaudia(reg)
 		f.SetSessionRoots(roots)
 		f.SetHandoverStore(handover.NewStore(filepath.Join(t.TempDir(), "handover")))
+		f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+			return claudia.MigrationTransferResult{Brief: "- user: hello"}, nil
+		}
 		return f
 	}
 

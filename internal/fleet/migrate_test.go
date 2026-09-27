@@ -11,7 +11,6 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -51,6 +50,9 @@ func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claud
 	f := NewClaudia(reg)
 	f.SetSessionRoots(discovery.Roots{GrokSessions: grokSessions})
 	f.SetHandoverStore(store)
+	f.migrationTransfer = func(args claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		return claudia.MigrationTransferResult{Brief: "In-flight work: " + args.Goal + "\nRecent context: " + args.Transcript}, nil
+	}
 	return f, store, transcript
 }
 
@@ -103,13 +105,10 @@ func TestT543ThrowawayCompactIsNotAWorkSeat(t *testing.T) {
 
 func TestT543CompleteThinBriefMintsCompactOnce(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e54"
-	f, _, _ := migrateFixture(t, oldSession, false)
+	f, _, _ := migrateFixture(t, oldSession, true)
 	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderCodex, true)
 	if err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
-	}
-	if !handover.DistillTooThin(pending.Brief) && !handover.DistillTooThin(handover.Distill(pending.TranscriptPath)) {
-		t.Fatalf("fixture is not DistillTooThin: source=%q brief=%q", pending.BriefSource, pending.Brief)
 	}
 	mints := 0
 	f.compactBrief = func(handover.Pending) (string, string, error) {
@@ -126,8 +125,8 @@ func TestT543CompleteThinBriefMintsCompactOnce(t *testing.T) {
 	if _, err := f.CompleteThinBrief(saved); err != nil {
 		t.Fatalf("second CompleteThinBrief: %v", err)
 	}
-	if mints != 1 {
-		t.Fatalf("compact mints=%d; DistillTooThin must launch throwaway compact once", mints)
+	if mints != 0 {
+		t.Fatalf("compact mints=%d; completed Claudia transfer must not run a second summarizer", mints)
 	}
 }
 
@@ -155,7 +154,7 @@ func TestPrepareMigrationPersistsPointerBeforeRotating(t *testing.T) {
 	if saved.TranscriptPath != transcript || saved.OldSessionID != oldSession {
 		t.Fatalf("persisted record lost the pointer: %+v", saved)
 	}
-	if saved.From != string(claudia.ProviderGrok) || saved.To != string(claudia.ProviderClaude) {
+	if claudia.PlanProvider(claudia.Provider(saved.From)) != claudia.ProviderGrok || claudia.PlanProvider(claudia.Provider(saved.To)) != claudia.ProviderClaude {
 		t.Errorf("persisted providers wrong: %+v", saved)
 	}
 
@@ -165,7 +164,7 @@ func TestPrepareMigrationPersistsPointerBeforeRotating(t *testing.T) {
 	if def == nil {
 		t.Fatal("agent vanished from the registry")
 	}
-	if def.Provider != claudia.ProviderClaude {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Errorf("provider = %s, want claude", def.Provider)
 	}
 	if def.SessionID == oldSession || def.SessionID == "" {
@@ -194,7 +193,7 @@ func TestPrepareMigrationKeepsGoal(t *testing.T) {
 	if got == nil || got.Goal != "Achieve 🎯T510" {
 		t.Fatalf("Goal after Grok→Codex remint = %+v", got)
 	}
-	if got.Provider != claudia.ProviderCodex {
+	if claudia.PlanProvider(got.Provider) != claudia.ProviderCodex {
 		t.Fatalf("provider = %q", got.Provider)
 	}
 }
@@ -214,25 +213,30 @@ func TestPrepareMigrationClearsModelPin(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Fixture roots only know Grok sessions; force the cold switch so we
-	// exercise pin rewrite without a Claude transcript on disk.
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderGrok, true); err != nil {
+	// A migration now requires the predecessor transcript even when forced.
+	projects := t.TempDir()
+	bucket := filepath.Join(projects, discovery.EncodeCWDBucket("/work/repo"))
+	if err := os.MkdirAll(bucket, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bucket, oldSession+".jsonl"), []byte(`{"type":"user","message":{"role":"user","content":"continue"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.SetSessionRoots(discovery.Roots{ClaudeProjects: projects})
+	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderGrok, false); err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
 	}
 	def := f.reg.Def("jevons-po")
 	if def == nil {
 		t.Fatal("agent vanished")
 	}
-	if def.Provider != claudia.ProviderGrok {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("provider=%s want grok", def.Provider)
 	}
 	if def.Model == "fable" || strings.Contains(strings.ToLower(def.Model), "fable") {
 		t.Fatalf("Model pin survived migrate: %q — Anthropic residue under Grok", def.Model)
 	}
-	// Bound to Grok default (condensable), not left as bare empty forever.
-	if def.Model != cli.DefaultGrokModel {
-		t.Fatalf("Model after migrate=%q want provider default %q", def.Model, cli.DefaultGrokModel)
-	}
+	// The sidecar resolves its own default; no stale source pin may remain.
 }
 
 // TestPrepareMigrationRefusesWhenHistoryCannotBeHandedOver: no transcript
@@ -253,19 +257,12 @@ func TestPrepareMigrationRefusesWhenHistoryCannotBeHandedOver(t *testing.T) {
 		t.Error("refused migration left a pending record")
 	}
 
-	// force is the deliberate cold switch: it proceeds and says so.
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, true)
-	if err != nil {
-		t.Fatalf("forced migration: %v", err)
+	// Force may interrupt a turn, but cannot bypass the transfer step.
+	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, true); err == nil {
+		t.Fatal("forced migration bypassed the required transfer")
 	}
-	if pending.Usable() {
-		t.Error("cold switch produced a usable handover")
-	}
-	if got := pending.Describe(); !strings.Contains(got, "COLD") {
-		t.Errorf("forced migration does not admit the cold start: %q", got)
-	}
-	if f.reg.Def("jevons-po").Provider != claudia.ProviderClaude {
-		t.Error("forced migration did not rotate the row")
+	if f.reg.Def("jevons-po").Provider != claudia.ProviderGrok {
+		t.Error("failed forced migration rotated the row")
 	}
 }
 

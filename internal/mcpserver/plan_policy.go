@@ -42,14 +42,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	}
 	pending := s.pendingPlanHandovers()
 	acts := planusage.PlanActions(snap, agents, now, th)
-	for i, a := range acts {
-		if a.To != "" && !s.planDestAllowed(a.To) {
-			slog.Info("🎯T542 plan dest refused by owner-provider pin",
-				"name", a.Name, "to", a.To, "pin", s.resolvedDefaultProvider())
-			a.To = ""
-			a.Reason += "; dest refused by owner-provider pin — park"
-			acts[i] = a
-		}
+	for _, a := range acts {
 		if a.To != "" && s.migrator != nil {
 			// PrepareMigration persists the handover before CompleteThinBrief.
 			// If launch then fails, the next policy tick must leave that durable
@@ -70,8 +63,17 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			prepared, err := s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), true)
 			if err != nil {
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
-				s.MarkAgentParked(a.Name, "jevons", a.Reason+": migrate failed, parked")
-				s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason+": migrate failed, parked"), "jevons", "")
+				// The old seat is still the only working seat when preparation
+				// fails. Leave it eligible and retry on the next policy tick;
+				// parking here turns a transient transfer failure into an outage.
+				continue
+			}
+			if prepared.Remap == handover.RemapClaudiaMigrate {
+				// Claudia has already moved this live seat and delivered its inert
+				// continuation. Delivered=true makes Usable false; treating that
+				// as a cold rotate would launch a second session on the dest.
+				s.MarkAgentWorking(a.Name, "jevons", a.Reason+": Claudia migration complete")
+				stayed[a.Name] = true
 				continue
 			}
 			if !prepared.Usable() {
@@ -110,19 +112,6 @@ func hotNames(acts []planusage.PlanAction) map[string]bool {
 		hot[a.Name] = true
 	}
 	return hot
-}
-
-// planDestAllowed reports whether plan-usage migrate may land on dest.
-// A standing no-Claude / owner-provider pin (config.yaml provider /
-// SetDefaultProvider) is not overwritten by picking Claude just because
-// another backend is hot (🎯T542).
-func (s *Server) planDestAllowed(dest string) bool {
-	d := strings.ToLower(strings.TrimSpace(dest))
-	if d == "" || d != "claude" {
-		return true
-	}
-	pin := strings.ToLower(string(s.resolvedDefaultProvider()))
-	return pin == "claude"
 }
 
 // clearPlanHandover drops a COLD record so it cannot survive a restart

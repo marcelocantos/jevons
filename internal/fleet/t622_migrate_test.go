@@ -63,11 +63,14 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	if calls != 1 || got == nil {
 		t.Fatal("claudia Agent.Migrate was not invoked")
 	}
-	if got.Provider != claudia.ProviderClaude {
+	if got.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
 		t.Fatalf("MigrateArgs.Provider=%s", got.Provider)
 	}
 	if got.Model != "claude-sonnet-5" {
 		t.Fatalf("MigrateArgs.Model=%q", got.Model)
+	}
+	if got.ContextBrief == "" || strings.Contains(got.ContextBrief, "INERT PREDECESSOR") {
+		t.Fatalf("work successor did not receive the transfer brief: %q", got.ContextBrief)
 	}
 	if pending.Remap != handover.RemapClaudiaMigrate {
 		t.Fatalf("Remap=%q, want %s", pending.Remap, handover.RemapClaudiaMigrate)
@@ -79,7 +82,7 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	if def == nil {
 		t.Fatal("row vanished")
 	}
-	if def.Provider != claudia.ProviderClaude {
+	if def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
 		t.Fatalf("provider=%s", def.Provider)
 	}
 	if def.SessionID == oldSession {
@@ -88,12 +91,8 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	if !def.Materialized {
 		t.Fatal("Materialized=false — that is the rotate fallback, not Agent.Migrate")
 	}
-	saved, ok, err := store.Get("jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("handover missing: ok=%v err=%v", ok, err)
-	}
-	if saved.Remap != handover.RemapClaudiaMigrate || saved.Usable() {
-		t.Fatalf("saved remap=%q usable=%v", saved.Remap, saved.Usable())
+	if saved, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("Claudia-owned migration left a host handover: %+v ok=%v err=%v", saved, ok, err)
 	}
 
 	mints := 0
@@ -109,6 +108,51 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	}
 	if _, ok, err := f.SeedSuccessor("jevons-po"); err != nil || ok {
 		t.Fatalf("SeedSuccessor after remap: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestMigrationTransferUsesDestinationProviderAndFailureKeepsPredecessor(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6223"
+	f, store, _ := migrateFixture(t, oldSession, true)
+	transferCalls, migrateCalls := 0, 0
+	f.migrationTransfer = func(args claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		transferCalls++
+		if claudia.PlanProvider(args.Destination) != claudia.ProviderClaude || !strings.Contains(args.Transcript, "hello") {
+			t.Fatalf("transfer args = %+v", args)
+		}
+		return claudia.MigrationTransferResult{Brief: "The work remains open."}, nil
+	}
+	f.liveMigrate = func(args *claudia.MigrateArgs) error {
+		migrateCalls++
+		if args.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) || args.ContextBrief != "The work remains open." {
+			t.Fatalf("work successor args = %+v", args)
+		}
+		return nil
+	}
+	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
+		t.Fatal(err)
+	}
+	if transferCalls != 1 || migrateCalls != 1 {
+		t.Fatalf("transfer=%d migrate=%d; want one of each", transferCalls, migrateCalls)
+	}
+	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("live migration wrote a second handover: ok=%v err=%v", ok, err)
+	}
+
+	f2, _, _ := migrateFixture(t, oldSession, true)
+	f2.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		return claudia.MigrationTransferResult{}, errors.New("summarizer unavailable")
+	}
+	f2.liveMigrate = func(*claudia.MigrateArgs) error {
+		t.Fatal("work successor started after transfer failed")
+		return nil
+	}
+	if _, err := f2.PrepareMigration("jevons-po", claudia.ProviderClaude, true); err == nil {
+		t.Fatal("transfer failure was treated as a cold-start migration")
+	}
+	def := f2.reg.Def("jevons-po")
+	if def.Provider != claudia.ProviderGrok || def.SessionID != oldSession {
+		t.Fatalf("transfer failure changed predecessor: %+v", def)
 	}
 }
 
@@ -135,11 +179,10 @@ func TestT646_1RemapDoesNotDeliverHostSeed(t *testing.T) {
 	if _, ok, err := f.SeedSuccessor("jevons-po"); err != nil || ok {
 		t.Fatalf("SeedSuccessor: ok=%v err=%v", ok, err)
 	}
-	saved, ok, err := store.Get("jevons-po")
-	if err != nil || !ok {
-		t.Fatalf("handover missing: ok=%v err=%v", ok, err)
+	if saved, ok, err := store.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("live remap left a host handover: %+v ok=%v err=%v", saved, ok, err)
 	}
-	f.handOffSeed("jevons-po", saved)
+	f.handOffSeed("jevons-po", pending)
 	if delivers != 0 {
 		t.Fatalf("host Delivered a continue-seed %d times after Claudia migrate", delivers)
 	}
@@ -165,7 +208,7 @@ func TestT622CapabilityErrorFallsBackToRotate(t *testing.T) {
 	if def == nil || def.Materialized {
 		t.Fatalf("rotate fallback must mint an unmaterialized successor: %+v", def)
 	}
-	if def.Provider != claudia.ProviderClaude {
+	if def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
 		t.Fatalf("provider=%s", def.Provider)
 	}
 }

@@ -95,6 +95,9 @@ type Claudia struct {
 	// on the new provider). Tests inject dead/live/thin fixtures.
 	selfBrief    func(p handover.Pending) (string, error)
 	compactBrief func(p handover.Pending) (sessionID, text string, err error)
+	// migrationTransfer replaces the one-shot Claudia summary in fixtures.
+	// Nil is the real on-demand transfer task.
+	migrationTransfer func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error)
 
 	// liveMigrate is the 🎯T622 seam for claudia Agent.Migrate. Nil is the
 	// product path (reg.Get(name).Migrate). Tests inject a recorder so the

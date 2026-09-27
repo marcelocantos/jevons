@@ -58,6 +58,9 @@ func t519WorkerFixture(t *testing.T) (*Claudia, *handover.Store) {
 	f := NewClaudia(reg)
 	f.SetSessionRoots(discovery.Roots{ClaudeProjects: claudeProjects})
 	f.SetHandoverStore(store)
+	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		return claudia.MigrationTransferResult{Brief: "- user: hello"}, nil
+	}
 	return f, store
 }
 
@@ -74,7 +77,7 @@ func TestT519CodexPhantomJSONLBusyIsNotNeverBegun(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("no pending record: ok=%v err=%v", ok, err)
 	}
-	if def := f.reg.Def("jv-t519-w"); def == nil || def.Provider != claudia.ProviderCodex {
+	if def := f.reg.Def("jv-t519-w"); def == nil || def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderCodex) {
 		t.Fatalf("successor provider = %v, want codex", def)
 	}
 

@@ -4,6 +4,7 @@
 package fleet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/thread"
+	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -38,6 +40,42 @@ import (
 // SetSessionRoots attaches the provider session stores used to resolve a
 // predecessor's transcript (Grok sessions + Claude projects, 🎯T213).
 func (f *Claudia) SetSessionRoots(r discovery.Roots) { f.roots = r }
+
+func (f *Claudia) prepareMigrationBrief(def claudia.AgentDef, destination claudia.Provider, path string) (string, claudia.Provider, error) {
+	if path == "" {
+		return "", "", fmt.Errorf("no predecessor transcript for session %s", def.SessionID)
+	}
+	logical, err := transcript.ReadLogical(path)
+	if err != nil {
+		return "", "", fmt.Errorf("read predecessor transcript: %w", err)
+	}
+	if len(logical.Turns) == 0 {
+		return "", "", fmt.Errorf("predecessor transcript has no readable turns")
+	}
+	var history strings.Builder
+	for _, turn := range logical.Turns {
+		if text := strings.TrimSpace(turn.Text); text != "" {
+			fmt.Fprintf(&history, "%s: %s\n", turn.Role, text)
+		}
+	}
+	provider := claudia.PlanProvider(destination)
+	args := claudia.MigrationTransferArgs{
+		Destination: destination, Goal: def.Goal, Transcript: history.String(),
+	}
+	var result claudia.MigrationTransferResult
+	if f.migrationTransfer != nil {
+		result, err = f.migrationTransfer(args)
+	} else {
+		result, err = claudia.SummarizeForMigration(context.Background(), args)
+	}
+	if err != nil {
+		return "", provider, err
+	}
+	if strings.TrimSpace(result.Brief) == "" {
+		return "", provider, fmt.Errorf("transfer agent returned an empty brief")
+	}
+	return result.Brief, provider, nil
+}
 
 // SetHandoverStore attaches the durable pending-handover store.
 func (f *Claudia) SetHandoverStore(s *handover.Store) { f.handovers = s }
@@ -92,7 +130,7 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	if f == nil || f.reg == nil {
 		return handover.Pending{}, fmt.Errorf("migrate: no agent registry")
 	}
-	target := claudia.Provider(strings.TrimSpace(string(to)))
+	target := claudia.SubscriptionSeatProvider(claudia.Provider(strings.TrimSpace(string(to))))
 	if target == "" {
 		return handover.Pending{}, fmt.Errorf("migrate %q: target provider is required", name)
 	}
@@ -100,45 +138,31 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	if def == nil {
 		return handover.Pending{}, fmt.Errorf("migrate: no agent %q", name)
 	}
-	if def.Provider == target {
+	if claudia.PlanProvider(def.Provider) == claudia.PlanProvider(target) {
 		return handover.Pending{}, fmt.Errorf("migrate %q: already on %s", name, target)
 	}
 
-	// Gather the work-session brief BEFORE rotate stops the outgoing
-	// process. Live self-brief needs that process; Distill and the
-	// throwaway compact do not. Rotate then mints the WORK session
-	// — a different id from any compact session (🎯T285.1).
 	oldSession := def.SessionID
-	transcript := seatTranscript(*def, f.roots)
-	if transcript == "" && !force {
-		return handover.Pending{}, fmt.Errorf(
-			"migrate %q: no transcript found for session %s under the configured session roots — "+
-				"its history cannot be handed over; pass force to switch cold anyway",
-			name, oldSession)
-	}
+	// The one-shot transfer task reads the predecessor history. The work
+	// successor receives only its bounded brief; no fallback asks the
+	// predecessor or the work successor to summarize that history.
 	draft := handover.Pending{
-		Agent:          name,
-		From:           string(def.Provider),
-		To:             string(target),
-		Kind:           handover.KindMigrate,
-		OldSessionID:   oldSession,
-		TranscriptPath: transcript,
+		Agent: name, From: string(def.Provider), To: string(target),
+		Kind: handover.KindMigrate, OldSessionID: oldSession,
+		TranscriptPath: seatTranscript(*def, f.roots),
 	}
-	brief := handover.GatherBrief(draft, handover.GatherHooks{
-		SelfBrief: f.trySelfBrief,
-		// Compact is the test hook only. The product throwaway session
-		// is launched from CompleteThinBrief after PrepareMigration, so
-		// hermetic rotate tests never block on a live provider.
-		Compact: f.compactBrief,
-	})
-	draft.Brief = brief.Text
-	draft.BriefSource = string(brief.Source)
-	draft.CompactSessionID = brief.CompactSessionID
-
+	brief, transferProvider, err := f.prepareMigrationBrief(*def, target, draft.TranscriptPath)
+	if err != nil {
+		return handover.Pending{}, fmt.Errorf("migrate %q: context transfer: %w", name, err)
+	}
+	draft.Brief = brief
+	draft.BriefSource = "claudia-transfer/" + string(transferProvider)
 	if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
 		return pending, err
 	}
 
+	// A stopped seat still needs Jevons' durable registry rotation, but its
+	// context was prepared by the same Claudia transfer operation above.
 	pending, err := f.rotate(name, target, force, "migrate")
 	if err != nil {
 		return pending, err
@@ -174,6 +198,9 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 // the compact session (🎯T285.1).
 func (f *Claudia) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
 	if p.Remap == handover.RemapClaudiaMigrate {
+		return p, nil
+	}
+	if strings.HasPrefix(p.BriefSource, "claudia-transfer/") {
 		return p, nil
 	}
 	if !handover.ProviderSwitch(p.From, p.To) {
@@ -674,9 +701,10 @@ func (f *Claudia) launchThrowawayCompact(p handover.Pending) (string, string, er
 
 var errNoLiveAgent = errors.New("migrate: no live session to remap")
 
-// remapViaClaudia is the 🎯T622 live path: claudia Agent.Migrate does the
-// Session remapping. Distill / GatherBrief stay host-side and are already
-// on draft. ok is false when the caller should fall through to rotate.
+// remapViaClaudia is the 🎯T622 live path: Claudia owns the session switch
+// and inert handover. The returned Pending is a result for existing host
+// callers, not a second durable handover. ok is false only when no live
+// session can perform the move and the caller must use the cold fallback.
 func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model string, force bool, draft handover.Pending) (handover.Pending, bool, error) {
 	if f == nil || f.reg == nil {
 		return handover.Pending{}, false, nil
@@ -689,7 +717,14 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 			return handover.Pending{}, true, fmt.Errorf("migrate %q: %w", name, err)
 		}
 	}
-	args := &claudia.MigrateArgs{Provider: target, Model: model, Force: force, Reason: "explicit"}
+	if f.handovers != nil {
+		// An old Jevons handover must be removed before the live Claudia
+		// operation starts. Refuse before moving if that cleanup fails.
+		if err := f.handovers.Clear(name); err != nil {
+			return handover.Pending{}, true, fmt.Errorf("migrate %q: clear obsolete host handover: %w", name, err)
+		}
+	}
+	args := &claudia.MigrateArgs{Provider: target, Model: model, Force: force, Reason: "explicit", ContextBrief: draft.Brief}
 	err := f.invokeMigrate(name, args)
 	if force && err != nil && strings.Contains(err.Error(), "turn in flight") {
 		// A seat that is reported to every minute has no gap between turns:
@@ -775,23 +810,13 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	pending.NewSessionID = nextSession
 	pending.SessionUnread = !sessionRead
 	pending.Remap = handover.RemapClaudiaMigrate
+	pending.Delivered = true // Claudia seeded the successor; Jevons must not.
 	pending.Purpose = next.Purpose
 	pending.WorkDir = next.WorkDir
 	pending.Parent = next.Parent
 	pending.Model = next.Model
 	pending.TargetID = next.TargetID
 	pending.Goal = next.Goal
-	if f.handovers != nil {
-		if err := f.handovers.Put(pending); err != nil {
-			return pending, true, fmt.Errorf("migrate %q: persist remapped brief: %w", name, err)
-		}
-		if err := f.handovers.MarkDelivered(name); err != nil {
-			slog.Error("claudia migrate seeded but handover not marked delivered",
-				"name", name, "err", err)
-		} else {
-			pending.Delivered = true
-		}
-	}
 	if f.rotations != nil {
 		_ = f.rotations.Put(handover.Rotation{Agent: name, Kind: "migrate"})
 	}
@@ -837,7 +862,8 @@ var migrateInterruptSettle = 3 * time.Second
 // while the row went on saying codex — so the next daemon bounce would have
 // relaunched the overseer on the provider it had just been moved off.
 func alreadyMigratedTo(err error, target claudia.Provider) bool {
-	return err != nil && strings.Contains(err.Error(), "Migrate: same provider "+string(target))
+	return err != nil && (strings.Contains(err.Error(), "Migrate: same provider "+string(target)) ||
+		strings.Contains(err.Error(), "Migrate: same provider "+string(claudia.PlanProvider(target))))
 }
 
 func isLiveMigrateFallback(err error) bool {

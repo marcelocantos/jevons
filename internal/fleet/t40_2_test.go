@@ -50,25 +50,19 @@ func TestSeedSuccessorDoesNotInjectCompactSeed(t *testing.T) {
 	}
 }
 
-func TestThinDistillProducesTwoSessionIDs(t *testing.T) {
+func TestMigrationTransferSeedsSeparateWorkSession(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e41"
-	f, store, _ := migrateFixture(t, oldSession, false)
-	f.compactBrief = func(handover.Pending) (string, string, error) {
-		return "compact-sess-bbb", "in flight: T999 still open", nil
+	f, store, _ := migrateFixture(t, oldSession, true)
+	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		return claudia.MigrationTransferResult{Brief: "in flight: T999 still open"}, nil
 	}
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, true)
+	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
 	if err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
-	}
-	if pending.CompactSessionID != "compact-sess-bbb" {
-		t.Fatalf("compact session=%q", pending.CompactSessionID)
 	}
 	def := f.reg.Def("jevons-po")
 	if def.SessionID == "" || def.SessionID == oldSession {
 		t.Fatalf("work session not minted: %q", def.SessionID)
-	}
-	if def.SessionID == pending.CompactSessionID {
-		t.Fatal("work session is the compact-read session")
 	}
 	seed := pending.Seed()
 	if !strings.Contains(seed, "in flight: T999") {
@@ -81,29 +75,34 @@ func TestThinDistillProducesTwoSessionIDs(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("brief not persisted: ok=%v err=%v", ok, err)
 	}
-	if saved.CompactSessionID != pending.CompactSessionID {
-		t.Fatalf("persisted compact id=%q", saved.CompactSessionID)
+	if saved.Brief != "in flight: T999 still open" || saved.BriefSource != "claudia-transfer/claude" {
+		t.Fatalf("persisted transfer brief = %+v", saved)
 	}
 }
 
-func TestLiveSelfBriefSeedsWorkSession(t *testing.T) {
+func TestMigrationDoesNotAskOutgoingAgentForSelfBrief(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e42"
 	f, _, _ := migrateFixture(t, oldSession, true)
+	called := false
 	f.selfBrief = func(handover.Pending) (string, error) {
+		called = true
 		return "from memory: hold the hard-stop", nil
 	}
 	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
 	if err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
 	}
-	if pending.BriefSource != string(handover.SourceSelf) {
-		t.Fatalf("source=%q want self-brief", pending.BriefSource)
+	if called {
+		t.Fatal("migration asked the outgoing work agent for a self-brief")
+	}
+	if pending.BriefSource != "claudia-transfer/claude" {
+		t.Fatalf("source=%q want one-shot transfer", pending.BriefSource)
 	}
 	if pending.CompactSessionID != "" {
 		t.Fatalf("self-brief allocated compact session %q", pending.CompactSessionID)
 	}
-	if !strings.Contains(pending.Seed(), "from memory: hold the hard-stop") {
-		t.Fatalf("seed lost self-brief:\n%s", pending.Seed())
+	if strings.Contains(pending.Seed(), "from memory: hold the hard-stop") || !strings.Contains(pending.Seed(), "Recent context") {
+		t.Fatalf("seed did not use transfer brief:\n%s", pending.Seed())
 	}
 }
 

@@ -194,8 +194,8 @@ func TestHandoverHandOffFailsClosedAndSaysSo(t *testing.T) {
 		}
 		return true
 	})
-	if !strings.Contains(detail, "no transcript was ever created") {
-		t.Errorf("the line blames the clock rather than the receiver: err=%q", detail)
+	if strings.Contains(detail, "no transcript was ever created") {
+		t.Errorf("sidecar successor was falsely treated as a Claude JSONL writer: err=%q", detail)
 	}
 	if !strings.Contains(detail, context.DeadlineExceeded.Error()) {
 		t.Errorf("the line drops the corroborating delivery error: err=%q", detail)

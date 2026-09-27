@@ -30,8 +30,8 @@ func TestT691OmitMintCitesClaudia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderClaude {
-		t.Fatalf("omit mint = %q, want claude", def.Provider)
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
+		t.Fatalf("omit mint = %q, want a Claude plan seat", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {
 		t.Fatalf("product pick must name claudia: %q", note)

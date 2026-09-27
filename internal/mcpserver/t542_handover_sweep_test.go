@@ -130,7 +130,7 @@ func TestT542SweepHandoversMissingAfterClearIsNotListed(t *testing.T) {
 	}
 }
 
-func TestT542SweepPlanPolicyDoesNotOverwriteNoClaudePin(t *testing.T) {
+func TestSweepDefaultGrokDoesNotProhibitClaudeMigration(t *testing.T) {
 	reg, err := claudia.NewRegistry(t.TempDir() + "/agents.json")
 	if err != nil {
 		t.Fatal(err)
@@ -155,10 +155,10 @@ func TestT542SweepPlanPolicyDoesNotOverwriteNoClaudePin(t *testing.T) {
 	})
 
 	acts := s.SweepPlanPolicy()
-	if led.prepared != 0 {
-		t.Fatalf("prepared=%d; standing no-Claude pin must not migrate to Claude", led.prepared)
+	if led.prepared != 1 {
+		t.Fatalf("prepared=%d; default Grok is a preference, not a Claude prohibition", led.prepared)
 	}
-	if len(acts) != 1 || acts[0].Name != "jv-t542-pin" || acts[0].To != "" {
-		t.Fatalf("want park (empty dest), got %+v", acts)
+	if len(acts) != 1 || acts[0].Name != "jv-t542-pin" || acts[0].To != "claude" {
+		t.Fatalf("want migration to eligible Claude, got %+v", acts)
 	}
 }

@@ -87,7 +87,7 @@ func TestMigrateRelaunchKeepsExplicitWorkPurpose(t *testing.T) {
 	if def.Purpose != claudia.PurposeWork {
 		t.Fatalf("purpose = %q after migrate + relaunch, want work", def.Purpose)
 	}
-	if def.Provider != claudia.ProviderClaude {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Fatalf("provider = %q, want claude", def.Provider)
 	}
 }

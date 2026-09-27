@@ -26,11 +26,11 @@ func TestRetriedMigrateRecordsAMoveClaudiaAlreadyMade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry of a migration claudia already made was refused: %v", err)
 	}
-	if pending.Remap != handover.RemapClaudiaMigrate || pending.To != string(claudia.ProviderClaude) {
+	if pending.Remap != handover.RemapClaudiaMigrate || pending.To != string(claudia.SubscriptionSeatProvider(claudia.ProviderClaude)) {
 		t.Fatalf("pending = %+v", pending)
 	}
 	def := f.reg.Def("jevons-po")
-	if def == nil || def.Provider != claudia.ProviderClaude {
+	if def == nil || def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
 		t.Fatalf("registry row still names the old provider: %+v", def)
 	}
 	if def.SessionID == oldSession {

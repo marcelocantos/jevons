@@ -23,7 +23,7 @@ func TestT790UnreadableSessionIsNotMaterialized(t *testing.T) {
 		t.Fatal(err)
 	}
 	def := f.reg.Def("jevons-po")
-	if def.Provider != claudia.ProviderClaude {
+	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Fatalf("provider=%s", def.Provider)
 	}
 	if def.Materialized {
@@ -92,7 +92,7 @@ func TestMigrationNotesTheModelSwitch(t *testing.T) {
 		t.Fatal("migration landed with no model switch note")
 	}
 	if got.Name != "jevons-po" || got.From != "grok-4.6" || got.To != "claude-opus-5" ||
-		got.FromProvider != string(claudia.ProviderGrok) || got.Provider != string(claudia.ProviderClaude) ||
+		got.FromProvider != string(claudia.ProviderGrok) || claudia.PlanProvider(claudia.Provider(got.Provider)) != claudia.ProviderClaude ||
 		got.How != ModelSwitchHowMigrate {
 		t.Fatalf("switch = %+v", got)
 	}

@@ -221,41 +221,29 @@ func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool)
 // empty (park).
 func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
 	view := CockpitSnapshot(snap)
-	byProv := map[string]Backend{}
-	var cands []DestCand
-	load := map[string]int{}
-	for _, a := range agents {
-		p := strings.ToLower(strings.TrimSpace(a.Provider))
-		if p != "" {
-			load[p]++
-		}
-	}
+	var usage []claudia.PlanUsage
 	for _, be := range view.Backends {
-		p := strings.ToLower(strings.TrimSpace(be.Provider))
-		byProv[p] = be
-		cands = append(cands, DestCand{Provider: p, Backend: be, Load: load[p]})
+		usage = append(usage, backendToPlanUsage(be))
 	}
-	dest, destOK := PickPlanDest(cands, now, th)
 	var out []PlanAction
 	for _, a := range agents {
 		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
 			continue
 		}
-		from := strings.ToLower(strings.TrimSpace(a.Provider))
-		be, ok := byProv[from]
-		if !ok || !MigrateOff(be, now, th) {
+		decision, err := claudia.ResolveSeatPlacement(context.Background(), &claudia.SeatPlacementArgs{
+			CurrentProvider: claudia.Provider(a.Provider), Usage: usage, Now: now,
+			Thresholds: claudiaThresholdsPtr(th),
+		})
+		if err != nil || decision.Action == claudia.SeatStay || decision.Action == claudia.SeatDefer {
 			continue
 		}
 		to := ""
-		reason := migrateOffReason(be, now, th)
-		if destOK && dest != from {
-			to = dest
-		} else {
-			reason += "; no eligible dest — park"
+		if decision.Action == claudia.SeatMigrate {
+			to = string(decision.Pick.Provider)
 		}
 		out = append(out, PlanAction{
-			Name: a.Name, From: from, To: to, Reason: reason,
-			Author: destAuthor,
+			Name: a.Name, From: string(decision.From), To: to,
+			Reason: decision.Reason, Author: decision.Author,
 		})
 	}
 	return out
