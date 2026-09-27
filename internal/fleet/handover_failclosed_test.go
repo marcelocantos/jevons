@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/handover"
 )
 
 // 🎯T416 clause 9, EXERCISED INSTRUMENT (A).
@@ -111,9 +111,12 @@ func (x *seedInbox) submitted(text string) {
 // the defect in place for any turn that runs longer still.
 func TestSlowSeedThatArrivesIsNotCondemnedByAReplyTimeout(t *testing.T) {
 	const session = "019fd13d-e500-7913-b96c-981e50aa2e28"
-	f, store, _ := migrateFixture(t, session, true)
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
+	f, store, transcript := migrateFixture(t, session, true)
+	if err := store.Put(handover.Pending{
+		Agent: "jevons-po", From: "grok", To: "claude", Kind: handover.KindMigrate,
+		OldSessionID: session, TranscriptPath: transcript, Brief: "user said hello",
+	}); err != nil {
+		t.Fatal(err)
 	}
 	pending, ok, err := store.Get("jevons-po")
 	if err != nil || !ok {
@@ -153,9 +156,14 @@ func TestSlowSeedThatArrivesIsNotCondemnedByAReplyTimeout(t *testing.T) {
 // fail-closed line and leave the record pending — never a silent success.
 func TestHandoverHandOffFailsClosedAndSaysSo(t *testing.T) {
 	const session = "019fd13d-e500-7913-b96c-981e50aa2e26"
-	f, store, _ := migrateFixture(t, session, true)
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
+	f, store, transcript := migrateFixture(t, session, true)
+	// Existing Jevons handovers from before Claudia took ownership still
+	// need fail-closed recovery. New migrations never write this record.
+	if err := store.Put(handover.Pending{
+		Agent: "jevons-po", From: "grok", To: "claude", Kind: handover.KindMigrate,
+		OldSessionID: session, TranscriptPath: transcript, Brief: "user said hello",
+	}); err != nil {
+		t.Fatal(err)
 	}
 	pending, ok, err := store.Get("jevons-po")
 	if err != nil || !ok {
@@ -217,9 +225,12 @@ func TestHandoverHandOffFailsClosedAndSaysSo(t *testing.T) {
 // constant: a seed that IS delivered marks the record and logs no failure.
 func TestHandoverHandOffMarksDeliveredWhenTheTurnHappens(t *testing.T) {
 	const session = "019fd13d-e500-7913-b96c-981e50aa2e27"
-	f, store, _ := migrateFixture(t, session, true)
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
+	f, store, transcript := migrateFixture(t, session, true)
+	if err := store.Put(handover.Pending{
+		Agent: "jevons-po", From: "grok", To: "claude", Kind: handover.KindMigrate,
+		OldSessionID: session, TranscriptPath: transcript, Brief: "user said hello",
+	}); err != nil {
+		t.Fatal(err)
 	}
 	pending, _, err := store.Get("jevons-po")
 	if err != nil {
