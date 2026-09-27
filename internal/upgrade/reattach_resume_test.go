@@ -57,6 +57,38 @@ func TestCursorRestartStartsFreshWithoutLoad(t *testing.T) {
 	}
 }
 
+func TestBrokerHeldCursorMigrationKeepsDestinationSessionOnRestart(t *testing.T) {
+	t.Setenv("CLAUDIA_NO_BROKER", "1")
+	prev := brokerMayOwnSeats
+	brokerMayOwnSeats = func() bool { return true }
+	t.Cleanup(func() { brokerMayOwnSeats = prev })
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.SetDirect(true)
+	const destinationSession = "cursor-migrated-destination"
+	if err := reg.Register(claudia.AgentDef{
+		Name: "worker", Provider: claudia.ProviderCursor, SessionID: destinationSession,
+		Model: "composer-2.5", WorkDir: t.TempDir(), AutoStart: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+		if cfg.SessionID != destinationSession || !cfg.AdoptOnly {
+			t.Fatalf("broker destination was reminted before adoption: %+v", cfg)
+		}
+		return claudia.StartStub(ctx, cfg, nil)
+	}})
+	if _, err := adoptOrLaunchRetryingHeld(context.Background(), reg, "worker"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reg.Stop("worker") })
+	if got := reg.Def("worker"); got == nil || got.SessionID != destinationSession {
+		t.Fatalf("restart changed the broker destination: %+v", got)
+	}
+}
+
 func TestCursorBootStartRemembersCLIModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

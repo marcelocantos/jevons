@@ -258,15 +258,17 @@ var (
 // refused because the broker's own client already holds the session, waits and
 // adopts again instead of stacking a second client.
 func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name string) (*claudia.Agent, error) {
-	// A Cursor restart does not session/load the stored id and then brief
-	// only if that fails. The fresh session is the start, and the
-	// post-restart wake sends the brief either way.
+	// Direct Cursor ACP cannot resume its stored id, so a brokerless restart
+	// starts fresh. A broker-held seat is still running under the stored id:
+	// reminting before its grant is reclaimed would destroy migration identity.
 	prevSession := ""
 	if d := reg.Def(name); d != nil {
 		prevSession = d.SessionID
 	}
-	if err := fleet.RestartCursorFresh(reg, name); err != nil {
-		slog.Warn("cursor restart fresh session failed", "agent", name, "err", err)
+	if !brokerMayOwnSeats() {
+		if err := fleet.RestartCursorFresh(reg, name); err != nil {
+			slog.Warn("cursor restart fresh session failed", "agent", name, "err", err)
+		}
 	}
 	freshSession := ""
 	if d := reg.Def(name); d != nil {
