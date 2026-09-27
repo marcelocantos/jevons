@@ -169,7 +169,7 @@ func TestColdSwitchParkLiftsWhenProviderIsCool(t *testing.T) {
 	}
 }
 
-func TestSweepParksWhenDestEmpty(t *testing.T) {
+func TestSweepDefersWhenDestinationFeedIsIncomplete(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -204,11 +204,49 @@ func TestSweepParksWhenDestEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	acts := s.SweepPlanPolicy()
-	if len(acts) != 1 || acts[0].Name != "w1" || acts[0].To != "" {
-		t.Fatalf("want park w1, got %+v", acts)
+	if len(acts) != 0 {
+		t.Fatalf("incomplete feed must defer rather than park w1: %+v", acts)
 	}
-	if got := s.fleetIntent().AgentState("w1"); string(got) != string(fleetintent.Parked) {
-		t.Fatalf("intent=%q want parked", got)
+	decisions := s.PlanPolicyDecisions()
+	if len(decisions) != 1 || string(decisions[0].Action) != "defer" || decisions[0].Reason == "" {
+		t.Fatalf("decision surface must explain the defer: %+v", decisions)
+	}
+	if got := s.fleetIntent().AgentState("w1"); got == fleetintent.Parked {
+		t.Fatalf("incomplete feed parked w1: %q", got)
+	}
+}
+
+func TestSweepDoesNotParkWhenMigratorIsUnavailable(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "claudia-po", SessionID: "source", Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork, Parent: "jevons",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	store, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(store)
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("claude", 10, 90, now),
+			t39015Weekly("cursor", 80, 20, now),
+		}}
+	})
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].To != "cursor" {
+		t.Fatalf("fixture must request a migration: %+v", acts)
+	}
+	if got := store.Snapshot().Agents["claudia-po"].State; got == fleetintent.Parked {
+		t.Fatalf("missing migrator parked a seat with a valid destination: %q", got)
 	}
 }
 

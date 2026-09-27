@@ -29,6 +29,15 @@ func TestPlanActionsUsesClaudiaForSidecarProviderIdentity(t *testing.T) {
 	if acts[0].Model == "" {
 		t.Fatalf("Claudia's destination model must reach the migration action: %+v", acts[0])
 	}
+	capSnap := snap
+	capSnap.Backends = append([]Backend(nil), snap.Backends...)
+	capSnap.Backends[1] = reading("codex", 60, 40, now.Add(3*24*time.Hour))
+	withCap := PlanActions(capSnap, seats, now, DefaultThresholds(), DestCand{
+		Provider: "claude", Backend: capSnap.Backends[2], Load: 2, Cap: 2,
+	})
+	if len(withCap) != 1 || withCap[0].To != "codex" {
+		t.Fatalf("Claudia must choose an eligible provider outside the host's full fleet cap: %+v", withCap)
+	}
 	seats[0].Provider = "anthropic"
 	if again := PlanActions(snap, seats, now, DefaultThresholds()); len(again) != 0 {
 		t.Fatalf("second sweep on Claude must stay: %+v", again)

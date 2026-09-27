@@ -4,7 +4,6 @@
 package mcpserver
 
 import (
-	"github.com/marcelocantos/jevons/internal/seatstop"
 	"log/slog"
 	"strings"
 
@@ -13,26 +12,32 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
 // SweepPlanPolicy migrates or parks every running seat whose own
 // provider is weekly-hot or exhausted (🎯T390.1.5, 🎯T850). The
 // overseer and stratum-1 product owners are included on that same
-// rule. Dest empty → park. Aside seats stay out (🎯T543).
+// rule. Claudia's park verdict stops a seat; an incomplete feed defers it.
+// Aside seats stay out (🎯T543).
 func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	if s == nil {
 		return nil
 	}
-	snap, _, now, th, ok := s.planPolicyInputs()
+	snap, cands, now, th, ok := s.planPolicyInputs()
 	if !ok {
 		return nil
 	}
 	stayed := map[string]bool{}
 	pending := s.pendingPlanHandovers()
-	acts := planusage.PlanActions(snap, s.planPolicyAgents(), now, th)
+	acts := planusage.PlanActions(snap, s.planPolicyAgents(), now, th, cands...)
 	for _, a := range acts {
-		if a.To != "" && s.migrator != nil {
+		if a.To != "" {
+			if s.migrator == nil {
+				slog.Warn("plan policy migration unavailable", "name", a.Name, "to", a.To, "reason", "migrator not configured")
+				continue
+			}
 			// PrepareMigration persists the handover before CompleteThinBrief.
 			// If launch then fails, the next policy tick must leave that durable
 			// handover alone: completing it again can mint another throwaway
@@ -107,11 +112,11 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 	if s == nil {
 		return nil
 	}
-	snap, _, now, th, ok := s.planPolicyInputs()
+	snap, cands, now, th, ok := s.planPolicyInputs()
 	if !ok {
 		return nil
 	}
-	return planusage.PlanDecisions(snap, s.planPolicyAgents(), now, th)
+	return planusage.PlanDecisions(snap, s.planPolicyAgents(), now, th, cands...)
 }
 
 func (s *Server) planPolicyAgents() []planusage.AgentRef {

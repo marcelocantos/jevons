@@ -35,7 +35,8 @@ type AgentRef struct {
 	Parent   string
 }
 
-// PlanAction is one sweep decision: migrate to To, or park when To is empty.
+// PlanAction is Claudia's per-seat verdict. Only migrate and park are actions
+// the sweep executes; stay and defer are reported for inspection.
 type PlanAction struct {
 	Name   string
 	From   string
@@ -217,11 +218,24 @@ func PickPlanDest(cands []DestCand, now time.Time, th Thresholds) (string, bool)
 
 // PlanDecisions reports Claudia's placement verdict for every non-aside seat,
 // including reasoned stays and deferrals. It does not move a seat.
-func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
+func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds, destinations ...DestCand) []PlanAction {
 	view := CockpitSnapshot(snap)
 	var usage []claudia.PlanUsage
 	for _, be := range view.Backends {
 		usage = append(usage, backendToPlanUsage(be))
+	}
+	var exclusions []claudia.Provider
+	var capped []string
+	for _, c := range destinations {
+		if !destAtSessionCap(c) {
+			continue
+		}
+		p := c.Provider
+		if p == "" {
+			p = c.Backend.Provider
+		}
+		exclusions = append(exclusions, claudia.PlanProvider(claudia.Provider(p)))
+		capped = append(capped, p)
 	}
 	out := make([]PlanAction, 0, len(agents))
 	for _, a := range agents {
@@ -230,12 +244,15 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		}
 		decision, err := claudia.ResolveSeatPlacement(context.Background(), &claudia.SeatPlacementArgs{
 			CurrentProvider: claudia.Provider(a.Provider), Usage: usage, Now: now,
-			Thresholds: claudiaThresholdsPtr(th),
+			Thresholds: claudiaThresholdsPtr(th), ExcludeProviders: exclusions,
 		})
 		if err != nil {
 			out = append(out, PlanAction{Name: a.Name, From: a.Provider, Action: claudia.SeatDefer,
 				Reason: err.Error(), Author: claudia.DecisionAuthor})
 			continue
+		}
+		if decision.Action == claudia.SeatPark && len(capped) > 0 {
+			decision.Reason += "; fleet session cap reached on " + strings.Join(capped, ", ")
 		}
 		out = append(out, PlanAction{
 			Name: a.Name, From: string(decision.From), To: string(decision.Pick.Provider),
@@ -252,9 +269,9 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 // they stay when MigrateOff is false. There is no control-plane
 // exemption. Aside seats stay out (🎯T543). To is empty when dest is
 // empty (park).
-func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds) []PlanAction {
+func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds, destinations ...DestCand) []PlanAction {
 	var out []PlanAction
-	for _, decision := range PlanDecisions(snap, agents, now, th) {
+	for _, decision := range PlanDecisions(snap, agents, now, th, destinations...) {
 		if decision.Action == claudia.SeatMigrate || decision.Action == claudia.SeatPark {
 			out = append(out, decision)
 		}
