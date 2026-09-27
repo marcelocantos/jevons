@@ -14,19 +14,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/omp"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
-// A live migration needs Claudia's disposable summary seat, which deliberately
-// runs through a broker. Keep that broker and its sidecar separate from the
-// owner's services; the rest of the suite still exercises direct-mode drains.
+// A subscription sidecar seat needs Claudia's credential shot at broker
+// startup. The isolate owns that broker and its sidecar; migration journeys
+// get a second disposable broker so they cannot change the primary fleet.
 type isolatedBroker struct {
 	cmd    *exec.Cmd
 	done   chan error
 	log    *os.File
 	root   string
 	socket string
+}
+
+func journeyNeedsBroker(provider claudia.Provider) bool {
+	switch provider {
+	case claudia.ProviderGrok, claudia.ProviderCursor,
+		claudia.Provider(omp.Anthropic), claudia.Provider(omp.OpenAICodex),
+		claudia.Provider(omp.XAIOAuth):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {

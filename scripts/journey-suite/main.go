@@ -32,6 +32,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -188,6 +189,8 @@ persona_notes: |
 		daemonBin: daemon, cfgPath: cfgPath, logPath: logPath,
 		workdir: stateDir, port: p, logFile: logFile,
 	}
+	var primaryBroker *isolatedBroker
+	var brokerStopErr error
 
 	// Always tear down daemon + journey MCP. Normal path stops before J5 so
 	// isolation assertions see post-teardown MCP state; defer covers early
@@ -200,6 +203,10 @@ persona_notes: |
 		stopped = true
 		started := s.cmd != nil && s.cmd.Process != nil
 		_ = s.signalStop(5 * time.Second)
+		if primaryBroker != nil {
+			brokerStopErr = primaryBroker.close()
+			primaryBroker = nil
+		}
 		_ = logFile.Close()
 		// Remove journey MCP only — never touch the development MCP name — and
 		// through the CLI that an older daemon used (🎯T282). Current
@@ -223,6 +230,13 @@ persona_notes: |
 	// user-scope journey name).
 	cleanups.Add(stop)
 	catchSignals()
+	if journeyNeedsBroker(provider) {
+		primaryBroker, err = s.startIsolatedBroker()
+		if err != nil {
+			fatal(fmt.Errorf("start journey broker: %w", err))
+		}
+		s.brokerSocket = primaryBroker.socket
+	}
 
 	if err := s.startDaemon(); err != nil {
 		dumpTail(logPath, 40)
@@ -273,7 +287,7 @@ persona_notes: |
 	stop()
 
 	s.run("J5-isolation", func() error {
-		return assertIsolation(provider, hadDailyMCP, stateDir, p)
+		return errors.Join(assertIsolation(provider, hadDailyMCP, stateDir, p), brokerStopErr)
 	})
 
 	if s.failures > 0 {
