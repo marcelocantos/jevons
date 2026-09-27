@@ -95,33 +95,6 @@ func destAtSessionCap(c DestCand) bool {
 	return c.Load >= c.Cap
 }
 
-// shouldVacate is the T691 bounce bar. Published v0.40.0 does not
-// export claudia.ShouldVacate; the predicate is session exhausted or
-// weekly hot/exhausted.
-func shouldVacate(be Backend, now time.Time, th Thresholds) bool {
-	v := classifyPlan(be, now, th)
-	if v.Session == claudia.PlanSessionExhausted {
-		return true
-	}
-	switch v.Weekly {
-	case claudia.PlanBandHot, claudia.PlanBandExhausted:
-		return true
-	default:
-		return false
-	}
-}
-
-// isDestBand reports locked / under / ok. hot, ahead, exhausted, and
-// unpublished are never destinations (🎯T693).
-func isDestBand(b WeeklyBand) bool {
-	switch b {
-	case BandLocked, BandUnder, BandOK:
-		return true
-	default:
-		return false
-	}
-}
-
 func windowToClaudia(w Window) claudia.PlanWindow {
 	pw := claudia.PlanWindow{
 		Name:             claudia.PlanWindowName(w.Name),

@@ -187,11 +187,10 @@ func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
 	}
 }
 
-// MigrateOff reports that running seats on this provider must leave.
-// Same bar as unpublished claudia.ShouldVacate (🎯T691); the published
-// pin does not export that helper, so the predicate is local (🎯T707).
+// MigrateOff reports Claudia's decision that running seats on this provider
+// should leave (🎯T691).
 func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
-	return shouldVacate(be, now, th)
+	return claudia.ShouldVacate(backendToPlanUsage(be), now, claudiaThresholdsPtr(th))
 }
 
 // DestEligible reports a published dest that may receive work (🎯T693):
@@ -206,7 +205,7 @@ func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 	if !claudia.HasAvailableTokens(u, now, claudiaThresholdsPtr(th)) {
 		return false
 	}
-	return isDestBand(WeeklyBandOf(be, now, th))
+	return claudia.IsDestBand(claudia.ClassifyPlan(u, now, claudiaThresholdsPtr(th)).Weekly)
 }
 
 // PickPlanDest chooses dest through claudia.Resolve (🎯T691 / 🎯T693).
