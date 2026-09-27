@@ -114,6 +114,7 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 }
 
 func TestLiveDestinationRetrySkipsSecondTransferSummary(t *testing.T) {
+	t.Setenv("CLAUDIA_NO_BROKER", "1")
 	const sourceSession = "019fd13d-e500-7913-b96c-981e50aa6229"
 	f, _, _ := migrateFixture(t, sourceSession, false)
 	def := f.reg.Def("jevons-po")
