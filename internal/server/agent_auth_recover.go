@@ -171,6 +171,10 @@ func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http
 		writeJSONError(w, http.StatusConflict, "no current migration has a destination authentication failure on this provider")
 		return
 	}
+	if s.planSweep == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "migration retry is unavailable")
+		return
+	}
 	recoverAuth := s.authRecover
 	if recoverAuth == nil {
 		recoverAuth = runClaudiaAuthRecover
@@ -179,6 +183,10 @@ func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http
 		writeJSONError(w, http.StatusBadGateway, "Claudia could not recover authentication: "+err.Error())
 		return
 	}
+	// The broker has repaired the destination login. Retry from the current
+	// Claudia registry state without holding the HTTP request through a paid
+	// context transfer and provider start.
+	go s.planSweep()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status": "recovered", "provider": string(provider), "migration": "retry_pending",

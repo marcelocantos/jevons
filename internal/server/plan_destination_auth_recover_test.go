@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -25,6 +26,8 @@ func TestPlanDestinationAuthRecoveryKeepsRunningSourceAndRetriesAfterCancellatio
 	}
 	s := New("test", t.TempDir())
 	s.SetPlanDecisions(func() []planusage.PlanAction { return []planusage.PlanAction{decision} })
+	retried := make(chan struct{}, 1)
+	s.SetPlanSweep(func() any { retried <- struct{}{}; return nil })
 	var calls []claudia.Provider
 	s.authRecover = func(_ context.Context, provider claudia.Provider) error {
 		calls = append(calls, provider)
@@ -66,12 +69,22 @@ func TestPlanDestinationAuthRecoveryKeepsRunningSourceAndRetriesAfterCancellatio
 	if w := request(http.MethodGet, "/api/plan-usage/decisions"); !strings.Contains(w.Body.String(), `"ReauthAvailable":true`) {
 		t.Fatalf("cancelled sign-in hid retry: %s", w.Body.String())
 	}
+	select {
+	case <-retried:
+		t.Fatal("cancelled sign-in retried the migration")
+	default:
+	}
 	w = request(http.MethodPost, "/api/plan-usage/auth/recover/claude")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"migration":"retry_pending"`) {
 		t.Fatalf("recovered status=%d body=%s", w.Code, w.Body.String())
 	}
 	if len(calls) != 2 || calls[0] != "anthropic" || calls[1] != "anthropic" {
 		t.Fatalf("Claudia recovery calls = %v, want only destination anthropic twice", calls)
+	}
+	select {
+	case <-retried:
+	case <-time.After(2 * time.Second):
+		t.Fatal("successful sign-in did not retry the current migration")
 	}
 }
 
@@ -93,6 +106,25 @@ func TestPlanDestinationAuthRecoveryOnlyOffersRejectedLogins(t *testing.T) {
 				t.Fatalf("recoverable=%v want %v for %+v", got, tc.want, tc.action)
 			}
 		})
+	}
+}
+
+func TestPlanDestinationAuthRecoveryRequiresMigrationRetry(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetPlanDecisions(func() []planusage.PlanAction {
+		return []planusage.PlanAction{{
+			Name: "worker", From: "grok", To: "claude", Action: claudia.SeatMigrate,
+			Execution: "failed", Failure: "invalid_grant",
+		}}
+	})
+	called := false
+	s.authRecover = func(context.Context, claudia.Provider) error { called = true; return nil }
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/plan-usage/auth/recover/claude", nil))
+	if w.Code != http.StatusServiceUnavailable || called {
+		t.Fatalf("unwired recovery status=%d called=%v body=%s", w.Code, called, w.Body.String())
 	}
 }
 
