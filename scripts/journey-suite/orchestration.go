@@ -688,6 +688,13 @@ func (s *suite) jWorkerTranscriptVisible() error {
 // isolate persona. If the successor can state it, the brief carried
 // predecessor context. A second live agent with a shell will grep the
 // host session tree and find the plant — that is not a handover leak.
+func migrationJourneyDestination(from claudia.Provider) claudia.Provider {
+	if claudia.PlanProvider(from) == claudia.ProviderCodex {
+		return claudia.ProviderCursor
+	}
+	return claudia.ProviderCodex
+}
+
 func (s *suite) jProviderMigration() error {
 	id := fmt.Sprintf("orch-mig-%d", time.Now().Unix()%100000)
 	work := filepath.Join(s.stateDir, "migrate-work")
@@ -698,11 +705,7 @@ func (s *suite) jProviderMigration() error {
 		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id})
 	}()
 
-	// Migrate to whichever backend the isolate is NOT running.
-	to := claudia.ProviderClaude
-	if s.provider == claudia.ProviderClaude {
-		to = claudia.ProviderGrok
-	}
+	to := migrationJourneyDestination(s.provider)
 
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey migration worker",
@@ -724,6 +727,14 @@ func (s *suite) jProviderMigration() error {
 	}); err != nil {
 		return fmt.Errorf("plant fact: %w", err)
 	}
+	before, err := bounceRegistrySnapshot(s.agentsPath())
+	if err != nil {
+		return fmt.Errorf("source registry: %w", err)
+	}
+	source := before[id]
+	if source.SessionID == "" || claudia.PlanProvider(source.Provider) != claudia.PlanProvider(s.provider) {
+		return fmt.Errorf("source identity is not the running provider: %+v", source)
+	}
 
 	// owner_asked: the journey plays the owner requesting this move (T561
 	// refuses an un-asked leave of a provider with weekly remaining; that
@@ -736,6 +747,15 @@ func (s *suite) jProviderMigration() error {
 	}
 	if strings.Contains(strings.ToUpper(migrateOut), "COLD") {
 		return fmt.Errorf("migration carried nothing: %s", trim(migrateOut, 200))
+	}
+	after, err := bounceRegistrySnapshot(s.agentsPath())
+	if err != nil {
+		return fmt.Errorf("destination registry: %w", err)
+	}
+	destination := after[id]
+	if claudia.PlanProvider(destination.Provider) != claudia.PlanProvider(to) ||
+		destination.SessionID == "" || destination.SessionID == source.SessionID {
+		return fmt.Errorf("migration did not record one distinct destination: source=%+v destination=%+v", source, destination)
 	}
 
 	// The successor is a different backend with an empty session. Only its
@@ -809,6 +829,27 @@ func (s *suite) jProviderMigration() error {
 			return fmt.Errorf("passphrase leaked into handover %s — the probe proves nothing", e.Name())
 		}
 	}
+	if err := s.bounceDrain(); err != nil {
+		return fmt.Errorf("restart after migration: %w", err)
+	}
+	reopened, err := bounceRegistrySnapshot(s.agentsPath())
+	if err != nil {
+		return fmt.Errorf("reopened registry: %w", err)
+	}
+	if got := reopened[id]; got.SessionID != destination.SessionID ||
+		claudia.PlanProvider(got.Provider) != claudia.PlanProvider(to) {
+		return fmt.Errorf("restart moved the seat again: destination=%+v reopened=%+v", destination, got)
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		reply, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe})
+		if err == nil && strings.Contains(strings.ToUpper(reply), passphrase) {
+			return nil
+		}
+		if attempt == 2 {
+			return fmt.Errorf("destination retained its id but not its context after restart: reply=%q err=%v", trim(reply, 200), err)
+		}
+		time.Sleep(3 * time.Second)
+	}
 	return nil
 }
 
@@ -823,10 +864,7 @@ func (s *suite) jProviderMigration() error {
 // answer must come back, so the journey exercises exactly the path the
 // owner uses.
 func (s *suite) jOverseerMigration() error {
-	to := claudia.ProviderClaude
-	if s.provider == claudia.ProviderClaude {
-		to = claudia.ProviderGrok
-	}
+	to := migrationJourneyDestination(s.provider)
 	const codeword = "TANGERINEHARBOUR77"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*turnTimeout)
