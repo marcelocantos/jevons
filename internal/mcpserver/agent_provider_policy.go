@@ -28,8 +28,10 @@ func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRe
 	_, setPrefer := args["prefer_provider"]
 	_, setAllowed := args["allowed_providers"]
 	_, setExcluded := args["exclude_providers"]
+	_, setInterrupt := args["allow_interrupt"]
+	_, setPark := args["allow_park"]
 	allowAny := boolArg(args["allow_any"])
-	if !setPrefer && !setAllowed && !setExcluded && !allowAny {
+	if !setPrefer && !setAllowed && !setExcluded && !setInterrupt && !setPark && !allowAny {
 		return mcp.NewToolResultText(formatAgentProviderPolicy(*def)), nil
 	}
 	actor := strings.TrimSpace(str(args["actor"]))
@@ -65,12 +67,29 @@ func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRe
 		}
 		excluded = parsed
 	}
-	if err := s.registry.SetSeatProviderPolicy(name, prefer, allowed, excluded); err != nil {
+	mayInterrupt := def.HostMayInterrupt
+	if setInterrupt {
+		value, ok := args["allow_interrupt"].(bool)
+		if !ok {
+			return mcp.NewToolResultError("allow_interrupt must be a boolean"), nil
+		}
+		mayInterrupt = value
+	}
+	neverPark := def.HostNeverPark
+	if setPark {
+		value, ok := args["allow_park"].(bool)
+		if !ok {
+			return mcp.NewToolResultError("allow_park must be a boolean"), nil
+		}
+		neverPark = !value
+	}
+	if err := s.registry.SetSeatPlanPolicy(name, prefer, allowed, excluded, mayInterrupt, neverPark); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	s.logLifecycle(compAgentLifecycle, "provider_policy", "ok", map[string]any{
 		"name": name, "actor": actor, "prefer_provider": prefer,
 		"allowed_providers": allowed, "exclude_providers": excluded,
+		"allow_interrupt": mayInterrupt, "allow_park": !neverPark,
 	})
 	return mcp.NewToolResultText(formatAgentProviderPolicy(*s.registry.Def(name))), nil
 }
@@ -110,6 +129,6 @@ func formatAgentProviderPolicy(def claudia.AgentDef) string {
 	if prefer == "" {
 		prefer = "none"
 	}
-	return fmt.Sprintf("Agent %q provider policy (Claudia): current=%s, prefer=%s, allowed=%s, excluded=%v. Changes affect future placement; no move was triggered.",
-		def.Name, def.Provider, prefer, allowed, def.ExcludeProviders)
+	return fmt.Sprintf("Agent %q provider policy (Claudia): current=%s, prefer=%s, allowed=%s, excluded=%v; Jevons host policy: allow_interrupt=%t, allow_park=%t. Changes affect future placement; no move was triggered.",
+		def.Name, def.Provider, prefer, allowed, def.ExcludeProviders, def.HostMayInterrupt, !def.HostNeverPark)
 }

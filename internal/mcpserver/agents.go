@@ -67,6 +67,8 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithArray("allowed_providers", mcp.Description("Explicitly allowed migration destinations; [] allows none. Omit to preserve the current set."), mcp.WithStringItems()),
 			mcp.WithBoolean("allow_any", mcp.Description("Clear the allowed-provider restriction. Cannot be combined with allowed_providers.")),
 			mcp.WithArray("exclude_providers", mcp.Description("Explicitly banned migration destinations; [] clears all bans. Omit to preserve current bans."), mcp.WithStringItems()),
+			mcp.WithBoolean("allow_interrupt", mcp.Description("Opt this seat into interruption of an in-flight turn during automatic migration. Default false; omit to preserve.")),
+			mcp.WithBoolean("allow_park", mcp.Description("Allow plan policy to park this seat if Claudia finds no eligible destination. Default true; false defers with a host-policy reason. Omit to preserve.")),
 		),
 		s.handleAgentProviderPolicy,
 	)

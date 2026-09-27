@@ -70,6 +70,26 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Action != claudia.SeatPark || got[0].Author != claudia.DecisionAuthor {
 		t.Fatalf("allow-none should park through Claudia: %+v", got)
 	}
+	if res := call(map[string]any{"name": "worker", "actor": s.overseerName(), "allow_park": false}); res.IsError {
+		t.Fatalf("forbid host park: %s", toolText(res))
+	}
+	if res := call(map[string]any{"name": "worker", "actor": s.overseerName(), "allow_interrupt": true}); res.IsError {
+		t.Fatalf("opt in to host interruption: %s", toolText(res))
+	}
+	policyReload, err := claudia.NewRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def := policyReload.Def("worker"); def == nil || !def.HostMayInterrupt || !def.HostNeverPark {
+		t.Fatalf("host constraints were not durable: %+v", def)
+	}
+	if got := s.SweepPlanPolicy(); len(got) != 1 || got[0].Action != claudia.SeatPark ||
+		got[0].Execution != "deferred" || !strings.Contains(got[0].Failure, "forbids parking") {
+		t.Fatalf("Jevons should defer Claudia's park verdict: %+v", got)
+	}
+	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Execution != "deferred" {
+		t.Fatalf("read-only view hid host deferral: %+v", got)
+	}
 	if res := call(map[string]any{"name": "worker", "actor": s.overseerName(), "allow_any": true}); res.IsError {
 		t.Fatalf("allow-any: %s", toolText(res))
 	}
@@ -81,5 +101,21 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	}
 	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].To != "codex" {
 		t.Fatalf("preferred Codex should be eligible again: %+v", got)
+	}
+}
+
+func TestT691HostInterruptPolicyDefersBusySeatUnlessOptedIn(t *testing.T) {
+	action := planusage.PlanAction{Action: claudia.SeatMigrate}
+	def := &claudia.AgentDef{}
+	if got := hostPlanDeferral(action, def, true); !strings.Contains(got, "forbids interruption") {
+		t.Fatalf("default in-flight migration was not deferred: %q", got)
+	}
+	def.HostMayInterrupt = true
+	if got := hostPlanDeferral(action, def, true); got != "" {
+		t.Fatalf("opted-in interrupt still deferred: %q", got)
+	}
+	def.HostNeverPark = true
+	if got := hostPlanDeferral(planusage.PlanAction{Action: claudia.SeatPark}, def, false); !strings.Contains(got, "forbids parking") {
+		t.Fatalf("host park ban was lost: %q", got)
 	}
 }

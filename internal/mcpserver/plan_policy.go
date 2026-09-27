@@ -20,7 +20,8 @@ import (
 // SweepPlanPolicy migrates or parks every running seat whose own
 // provider is weekly-hot or exhausted (🎯T390.1.5, 🎯T850). The
 // overseer and stratum-1 product owners are included on that same
-// rule. Claudia's park verdict stops a seat; an incomplete feed defers it.
+// rule. A host park ban defers Claudia's park verdict; an incomplete feed
+// also defers it.
 // Aside seats stay out (🎯T543).
 func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	if s == nil {
@@ -36,6 +37,16 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 	for i := range acts {
 		a := &acts[i]
 		if a.To != "" {
+			if p, ok := pending[a.Name]; ok && p.Usable() {
+				a.Execution = "pending"
+				continue
+			}
+		}
+		if reason := s.planHostDeferral(*a); reason != "" {
+			a.Execution, a.Failure = "deferred", reason
+			continue
+		}
+		if a.To != "" {
 			if s.migrator == nil {
 				slog.Warn("plan policy migration unavailable", "name", a.Name, "to", a.To, "reason", "migrator not configured")
 				a.Execution, a.Failure = "deferred", "migrator not configured"
@@ -49,8 +60,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			if p, ok := pending[a.Name]; ok {
 				if !p.Usable() {
 					// A COLD leftover is not a handover to retry. Drop it
-					// and prepare once: force-rotate already mints a fresh
-					// session when there is no transcript.
+					// and prepare once under the seat's current host policy.
 					s.clearPlanHandover(a.Name)
 				} else {
 					slog.Info("plan policy migration already pending", "name", a.Name, "to", a.To)
@@ -60,10 +70,14 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			}
 			var prepared handover.Pending
 			var err error
+			allowInterrupt := false
+			if def := s.registry.Def(a.Name); def != nil {
+				allowInterrupt = def.HostMayInterrupt
+			}
 			if p, ok := s.migrator.(migratePinner); ok {
-				prepared, err = p.PrepareMigrationPinned(a.Name, claudia.Provider(a.To), a.Model, true)
+				prepared, err = p.PrepareMigrationPinned(a.Name, claudia.Provider(a.To), a.Model, allowInterrupt)
 			} else {
-				prepared, err = s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), true)
+				prepared, err = s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), allowInterrupt)
 			}
 			if err != nil {
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
@@ -160,8 +174,44 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 				d.Failure = "handover awaiting delivery"
 			}
 		}
+		if reason := s.planHostDeferral(*d); reason != "" && d.Execution == "" {
+			d.Execution, d.Failure = "deferred", reason
+		}
 	}
 	return decisions
+}
+
+// Claudia authors the placement verdict. Jevons decides whether acting on it
+// may interrupt or park this particular seat, and reports a host deferral
+// instead of silently changing the provider decision.
+func (s *Server) planHostDeferral(action planusage.PlanAction) string {
+	if s == nil || s.registry == nil {
+		return ""
+	}
+	def := s.registry.Def(action.Name)
+	if def == nil {
+		return "agent is no longer registered"
+	}
+	inFlight := false
+	if action.Action == claudia.SeatMigrate {
+		if proc := s.registry.Get(action.Name); proc != nil {
+			inFlight = proc.PromptInFlight()
+		}
+	}
+	return hostPlanDeferral(action, def, inFlight)
+}
+
+func hostPlanDeferral(action planusage.PlanAction, def *claudia.AgentDef, inFlight bool) string {
+	if def == nil {
+		return "agent is no longer registered"
+	}
+	if action.Action == claudia.SeatPark && def.HostNeverPark {
+		return "Jevons host policy forbids parking this seat"
+	}
+	if action.Action == claudia.SeatMigrate && inFlight && !def.HostMayInterrupt {
+		return "turn in flight; Jevons host policy forbids interruption"
+	}
+	return ""
 }
 
 func (s *Server) planPolicyAgents() []planusage.AgentRef {
