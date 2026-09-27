@@ -873,6 +873,10 @@ func (s *suite) providerMigrationWithBroker() error {
 // answer must come back, so the journey exercises exactly the path the
 // owner uses.
 func (s *suite) jOverseerMigration() error {
+	return s.withIsolatedBroker((*suite).overseerMigrationWithBroker)
+}
+
+func (s *suite) overseerMigrationWithBroker() error {
 	to := migrationJourneyDestination(s.provider)
 	const codeword = "TANGERINEHARBOUR77"
 
