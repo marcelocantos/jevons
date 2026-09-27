@@ -35,7 +35,9 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
-	defer func() { _, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id}) }()
+	defer func() {
+		_, _ = s.mcpText("jevons_agent_kill", map[string]any{"name": id, "actor": "jevons", "force": true})
+	}()
 	if _, err := s.mcpText("jevons_agent_start", map[string]any{
 		"name": id, "workdir": work, "actor": "jevons", "parent": "jevons", "purpose": "work",
 		"provider": "cursor", "model": "composer-2.5", "owner_asked": true,
@@ -43,10 +45,14 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return fmt.Errorf("spawn Cursor worker: %w", err)
 	}
 	const codeword = "COPPERFINCH83"
-	if _, err := s.mcpText("jevons_thread_direct", map[string]any{
-		"id": id, "text": "Remember this mission codeword: " + codeword + ". Reply exactly: STORED",
+	if _, err := s.mcpText("jevons_agent_send", map[string]any{
+		"name": id, "actor": "jevons",
+		"text": "Remember this mission codeword: " + codeword + ". Reply exactly: STORED",
 	}); err != nil {
 		return fmt.Errorf("plant codeword: %w", err)
+	}
+	if _, err := s.waitHotMigrationReply(id, 0, "STORED", 90*time.Second); err != nil {
+		return fmt.Errorf("predecessor did not acknowledge codeword: %w", err)
 	}
 	before, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
@@ -125,15 +131,18 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	probe := "What is the mission codeword? Reply with the codeword only."
-	for attempt := 0; attempt < 12; attempt++ {
-		reply, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe})
-		if err == nil && strings.Contains(strings.ToUpper(reply), codeword) {
-			break
-		}
-		if attempt == 11 {
-			return fmt.Errorf("hot successor lost context: reply=%q err=%v", trim(reply, 200), err)
-		}
-		time.Sleep(5 * time.Second)
+	payload, err := s.agentTranscriptHTTP(id)
+	if err != nil {
+		return err
+	}
+	beforeProbe, _ := payload["turns"].([]any)
+	if _, err := s.mcpText("jevons_agent_send", map[string]any{
+		"name": id, "actor": "jevons", "text": probe,
+	}); err != nil {
+		return fmt.Errorf("ask hot successor: %w", err)
+	}
+	if _, err := s.waitHotMigrationReply(id, len(beforeProbe), codeword, 90*time.Second); err != nil {
+		return fmt.Errorf("hot successor lost context: %w", err)
 	}
 	if err := s.bounceDrain(); err != nil {
 		return fmt.Errorf("restart after hot migration: %w", err)
@@ -146,15 +155,41 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		claudia.PlanProvider(got.Provider) != claudia.ProviderCodex {
 		return fmt.Errorf("hot seat moved again after restart: destination=%+v reopened=%+v", destination, got)
 	}
-	for attempt := 0; attempt < 3; attempt++ {
-		reply, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe})
-		if err == nil && strings.Contains(strings.ToUpper(reply), codeword) {
-			return nil
-		}
-		if attempt == 2 {
-			return fmt.Errorf("hot destination lost context after restart: reply=%q err=%v", trim(reply, 200), err)
-		}
-		time.Sleep(3 * time.Second)
+	payload, err = s.agentTranscriptHTTP(id)
+	if err != nil {
+		return err
+	}
+	beforeProbe, _ = payload["turns"].([]any)
+	if _, err := s.mcpText("jevons_agent_send", map[string]any{
+		"name": id, "actor": "jevons", "text": probe,
+	}); err != nil {
+		return fmt.Errorf("ask hot successor after restart: %w", err)
+	}
+	if _, err := s.waitHotMigrationReply(id, len(beforeProbe), codeword, 90*time.Second); err != nil {
+		return fmt.Errorf("hot destination lost context after restart: %w", err)
 	}
 	return nil
+}
+
+func (s *suite) waitHotMigrationReply(name string, after int, want string, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		payload, err := s.agentTranscriptHTTP(name)
+		if err != nil {
+			return 0, err
+		}
+		turns, _ := payload["turns"].([]any)
+		for _, item := range turns[after:] {
+			turn, _ := item.(map[string]any)
+			if turn["role"] != "assistant" {
+				continue
+			}
+			raw, _ := json.Marshal(turn["raw"])
+			if strings.Contains(strings.ToUpper(string(raw)), strings.ToUpper(want)) {
+				return len(turns), nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return 0, fmt.Errorf("no assistant reply containing %q within %s", want, timeout)
 }
