@@ -248,6 +248,7 @@ persona_notes: |
 	s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
 	s.run("J12-provider-migration", s.jProviderMigration)
 	s.run("J13-overseer-migration", s.jOverseerMigration)
+	s.run("J16-stopped-provider-migration", s.jStoppedProviderMigration)
 	s.run("J14-bounce-resume", s.jBounceResume)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J18-t418-handover-mute", s.jT418HandoverMute)

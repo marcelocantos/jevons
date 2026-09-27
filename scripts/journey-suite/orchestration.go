@@ -700,6 +700,75 @@ func (s *suite) jProviderMigration() error {
 	return s.withIsolatedBroker((*suite).providerMigrationWithBroker)
 }
 
+func (s *suite) jStoppedProviderMigration() error {
+	return s.withIsolatedBroker((*suite).stoppedProviderMigrationWithBroker)
+}
+
+// A stopped seat has no in-memory Agent handle. Claudia must still run its
+// disposable transfer, persist the destination and handover, then launch
+// that same destination without a Jevons handover record.
+func (s *suite) stoppedProviderMigrationWithBroker() error {
+	id := fmt.Sprintf("orch-stopped-mig-%d", time.Now().Unix()%100000)
+	work := filepath.Join(s.stateDir, "stopped-migrate-work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return err
+	}
+	defer func() { _, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id}) }()
+	to := migrationJourneyDestination(s.provider)
+	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
+		"id": id, "workdir": work, "description": "journey stopped migration worker",
+	}); err != nil {
+		return fmt.Errorf("spawn: %w", err)
+	}
+	const codeword = "AMBERPINE59"
+	if _, err := s.mcpText("jevons_thread_direct", map[string]any{
+		"id": id, "text": "Remember this mission codeword: " + codeword + ". Reply exactly: STORED",
+	}); err != nil {
+		return fmt.Errorf("plant codeword: %w", err)
+	}
+	before, err := bounceRegistrySnapshot(s.agentsPath())
+	if err != nil {
+		return err
+	}
+	source := before[id]
+	if _, err := s.mcpText("jevons_agent_stop", map[string]any{
+		"name": id, "force": true, "reason": "journey: test migration of a stopped seat",
+	}); err != nil {
+		return fmt.Errorf("stop predecessor: %w", err)
+	}
+	if out, err := s.mcpText("jevons_agent_migrate", map[string]any{
+		"name": id, "provider": string(to), "owner_asked": true,
+	}); err != nil {
+		return fmt.Errorf("migrate stopped seat: %w (%s)", err, trim(out, 200))
+	}
+	after, err := bounceRegistrySnapshot(s.agentsPath())
+	if err != nil {
+		return err
+	}
+	destination := after[id]
+	if claudia.PlanProvider(destination.Provider) != claudia.PlanProvider(to) ||
+		destination.SessionID == "" || destination.SessionID == source.SessionID {
+		return fmt.Errorf("stopped migration did not persist one destination: source=%+v destination=%+v", source, destination)
+	}
+	if _, err := os.Stat(s.handoverPath(id)); err == nil {
+		return fmt.Errorf("stopped migration wrote a second Jevons handover")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	const probe = "What is the mission codeword? Reply with the codeword only."
+	for attempt := 0; attempt < 4; attempt++ {
+		reply, err := s.mcpText("jevons_thread_direct", map[string]any{"id": id, "text": probe})
+		if err == nil && strings.Contains(strings.ToUpper(reply), codeword) {
+			return nil
+		}
+		if attempt == 3 {
+			return fmt.Errorf("stopped successor lost context: reply=%q err=%v", trim(reply, 200), err)
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return nil
+}
+
 func (s *suite) providerMigrationWithBroker() error {
 	id := fmt.Sprintf("orch-mig-%d", time.Now().Unix()%100000)
 	work := filepath.Join(s.stateDir, "migrate-work")
