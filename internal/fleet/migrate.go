@@ -169,9 +169,9 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 			}
 			return handover.Pending{}, fmt.Errorf("migrate %q: live destination could not be reconciled", name)
 		}
-		// A running seat carries its own retained turns. Claudia performs the
-		// disposable transfer and switch; Jevons must not require a provider-
-		// specific transcript path or pay for a second summary.
+		// Claudia performs the disposable transfer and switch. Jevons supplies
+		// its durable transcript because an adopted live handle may have no
+		// process-local turns after a daemon restart.
 		if pending, ok, err := f.remapViaClaudia(name, target, model, force, draft); ok {
 			return pending, err
 		}

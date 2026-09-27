@@ -433,7 +433,7 @@ func (s *Server) agentJournalTurns(name string) ([]map[string]any, error) {
 }
 
 // AgentMigrationHistory supplies Claudia with inert retained conversation
-// text when a stopped provider seat has no discoverable session transcript.
+// text for adopted live seats and stopped seats without a transcript path.
 // The product SQLite transcript is authoritative; pre-SQLite journals remain
 // readable for old seats and isolated tests.
 func (s *Server) AgentMigrationHistory(name string) (string, error) {
