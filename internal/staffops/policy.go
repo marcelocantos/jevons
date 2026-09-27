@@ -283,6 +283,40 @@ func LoadNameNotice(sig Signal) bool {
 	return looksLikeLoadNameLine(sig.Detail)
 }
 
+// costGlobalRateKind is the monitor alert kind (cost.AlertGlobalRate) that
+// BuildSignals prefixes as symptom "cost:global-rate".
+const costGlobalRateKind = "global-rate"
+
+// namesGlobalRate reports whether a symptom fingerprint names the
+// global-rate cost alert. Symptoms arrive as "cost:global-rate", so the
+// match is on a whole colon-separated field — collector-stale and
+// fleet-rate stay residual, and prose that merely mentions the phrase
+// is not the enforcer speaking.
+func namesGlobalRate(s string) bool {
+	for _, field := range strings.Split(strings.ToLower(strings.TrimSpace(s)), ":") {
+		if strings.TrimSpace(field) == costGlobalRateKind {
+			return true
+		}
+	}
+	return false
+}
+
+// InformationalGlobalRate reports whether a signal is the cost enforcer's
+// informational global-rate notice — the owner's own sessions, which
+// internal/cost.Enforcer records as awareness only and never lets halt
+// spawning (TestGlobalIsInformational) — rather than a residual product gap.
+//
+// 🎯T851: on 2026-09-22 the T219 sentinel prescribed file+PO for
+// cost:global-rate: global burn 10.64 API-eq est USD (not billed)/hr.
+// Observe marks every CostAlert Mechanical:false, so medium became file+PO.
+func InformationalGlobalRate(sig Signal) bool {
+	if !namesGlobalRate(sig.Symptom) {
+		return false
+	}
+	kind := strings.TrimSpace(sig.Kind)
+	return kind == "" || kind == "cost_alert"
+}
+
 // Classify maps one signal to harness-ok | repair | file+PO | ignore.
 // Cooldown and rate budget are applied by the caller (or RunCycle).
 func Classify(sig Signal) Decision {
@@ -341,6 +375,20 @@ func Classify(sig Signal) Decision {
 			Signal: sig,
 			Action: ActionHarnessOK,
 			Reason: "🎯T708 load notice — governor already named the load to its seat; nothing to file",
+		}
+	}
+
+	// 🎯T851: informational global-rate is awareness, not a gap to file.
+	// On 2026-09-22 the sentinel prescribed file+PO for cost:global-rate:
+	// global burn 10.64 API-eq est USD (not billed)/hr. The enforcer
+	// already records global burn as informational and does not halt
+	// spawning (TestGlobalIsInformational). Filing would clamp the
+	// owner's own sessions.
+	if InformationalGlobalRate(sig) {
+		return Decision{
+			Signal: sig,
+			Action: ActionHarnessOK,
+			Reason: "informational global-rate — enforcer does not clamp the owner's sessions; nothing to file",
 		}
 	}
 

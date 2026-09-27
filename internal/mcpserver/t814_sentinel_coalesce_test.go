@@ -28,7 +28,7 @@ func t814Server(t *testing.T, detail *string) (*Server, *[]string) {
 	s.SetNotify(func(text string) { delivered = append(delivered, text) })
 	s.SetCostMonitor(func() (*cost.Snapshot, error) {
 		return &cost.Snapshot{
-			Alerts: []cost.Alert{{Kind: "global-rate", Level: cost.LevelWarn, Detail: *detail}},
+			Alerts: []cost.Alert{{Kind: "fleet-rate", Level: cost.LevelWarn, Detail: *detail}},
 		}, nil
 	})
 	return s, &delivered

@@ -53,7 +53,7 @@ func TestStaffOpsCycleCostAlertClassifiesFilePO(t *testing.T) {
 			SpentTodayUSD:    3,
 			Sessions:         []cost.BurnRow{{SessionID: "sess1", CostUSD: 1}},
 			Alerts: []cost.Alert{
-				{Kind: cost.AlertGlobalRate, Level: cost.LevelWarn, Detail: "rate high"},
+				{Kind: cost.AlertFleetRate, Level: cost.LevelWarn, Detail: "rate high"},
 			},
 		}, nil
 	})
@@ -176,7 +176,7 @@ func TestStaffOpsPurePolicyWiring(t *testing.T) {
 	cd := &staffops.Cooldown{Duration: time.Hour}
 	res := staffops.RunCycle(staffops.CycleArgs{
 		Signals: []staffops.Signal{{
-			Kind: "cost_alert", Symptom: "cost:global-rate", Severity: "medium",
+			Kind: "cost_alert", Symptom: "cost:fleet-rate", Severity: "medium",
 		}},
 		Cooldown: cd,
 		Now:      time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC),

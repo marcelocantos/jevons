@@ -64,7 +64,7 @@ targets:
 	s.SetNotify(func(text string) { delivered = append(delivered, text) })
 	s.SetCostMonitor(func() (*cost.Snapshot, error) {
 		return &cost.Snapshot{
-			Alerts: []cost.Alert{{Kind: "global-rate", Level: cost.LevelWarn, Detail: "hot"}},
+			Alerts: []cost.Alert{{Kind: "fleet-rate", Level: cost.LevelWarn, Detail: "hot"}},
 		}, nil
 	})
 
@@ -102,7 +102,7 @@ func TestSentinelCycleRateLimitAndCooldown(t *testing.T) {
 	s := New("/tmp", nil, nil)
 	s.SetCostMonitor(func() (*cost.Snapshot, error) {
 		return &cost.Snapshot{
-			Alerts: []cost.Alert{{Kind: "global-rate", Level: cost.LevelWarn, Detail: "hot"}},
+			Alerts: []cost.Alert{{Kind: "fleet-rate", Level: cost.LevelWarn, Detail: "hot"}},
 		}, nil
 	})
 	var delivered []string
