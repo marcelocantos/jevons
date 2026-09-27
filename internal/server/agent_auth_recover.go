@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -95,10 +96,15 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 }
 
 func runClaudiaAuthRecover(ctx context.Context, provider claudia.Provider) error {
-	// The installed Claudia CLI is the versioned control-plane client. Keep
-	// Jevons buildable against its pinned Claudia module while the broker
-	// protocol rolls out with the next Claudia binary.
-	out, err := exec.CommandContext(ctx, "claudia", "broker", "auth-recover", string(provider)).CombinedOutput()
+	// The Claudia CLI is the versioned control-plane client. An explicit
+	// CLAUDIA_BIN pin keeps development on the same broker/client build;
+	// the default is the installed release. Jevons remains buildable against
+	// its pinned Claudia module while the broker protocol rolls out.
+	bin := strings.TrimSpace(os.Getenv("CLAUDIA_BIN"))
+	if bin == "" {
+		bin = "claudia"
+	}
+	out, err := exec.CommandContext(ctx, bin, "broker", "auth-recover", string(provider)).CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(out))
 		if message == "" {

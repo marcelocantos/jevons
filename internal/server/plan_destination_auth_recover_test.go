@@ -95,3 +95,11 @@ func TestPlanDestinationAuthRecoveryOnlyOffersRejectedLogins(t *testing.T) {
 		})
 	}
 }
+
+func TestPlanDestinationAuthRecoveryUsesPinnedClaudiaBinary(t *testing.T) {
+	t.Setenv("CLAUDIA_BIN", "/usr/bin/false")
+	err := runClaudiaAuthRecover(context.Background(), "anthropic")
+	if err == nil || !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("pinned Claudia client was not run: %v", err)
+	}
+}
