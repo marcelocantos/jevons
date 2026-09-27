@@ -26,13 +26,6 @@ bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE) ui-build
 	@mkdir -p bin
 	go build $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
 
-.PHONY: jevons-broker
-jevons-broker: bin/jevons-broker
-
-bin/jevons-broker: $(GO_SRC)
-	@mkdir -p bin
-	go build -tags sibling_claudia $(LDFLAGS) -o bin/jevons-broker ./cmd/jevons-broker
-
 # Desktop menu-bar/tray head (🎯T27.7) — pure-Go model client.
 # macOS chrome: make macos-head (Swift status item).
 .PHONY: jevons-head
@@ -333,12 +326,11 @@ ui-check-bundle: ui-deps
 # Vite :5173 is not a standing program — make ui-dev is opt-in HMR.
 # jevonsd-install (launchd KeepAlive) remains until SUPERVISOR_TAKEOVER=1.
 .PHONY: supervisor-install supervisor-status
-supervisor-install: bin/jevonsd bin/jevons-broker
+supervisor-install: bin/jevonsd
 	supervisor/install.sh
 
 supervisor-status:
 	-supervisorctl status jevonsd
-	-supervisorctl status jevons-broker
 
 # Daily UI LaunchAgents (legacy 🎯T540.4 path). Prefer make supervisor-install.
 UI_DAEMON_LABEL := com.marcelocantos.jevons-ui

@@ -24,7 +24,6 @@ fi
 mkdir -p "$CONF_DIR"
 mkdir -p "$HOME/.local/var/log"
 chmod +x "$REPO/supervisor/run-jevonsd.sh"
-chmod +x "$REPO/supervisor/run-jevons-broker.sh"
 
 render() {
   name="$1"
@@ -36,8 +35,14 @@ render() {
 }
 
 if [ "${SUPERVISOR_RETIRE_VANILLA_ONLY:-}" != 1 ]; then
+  if [ "${SUPERVISOR_SKIP_CTL:-}" != 1 ] && [ "${SUPERVISOR_NO_TAKEOVER:-}" != 1 ] && ! command -v claudia >/dev/null 2>&1; then
+    echo "claudia is required before replacing jevons-broker" >&2
+    exit 1
+  fi
   render jevonsd
-  render jevons-broker
+  # Claudia owns the host broker socket. Retire the Jevons broker
+  # definition so a later supervisord reload cannot reclaim it.
+  rm -f "$CONF_DIR/jevons-broker.ini"
 fi
 # Retire the comparison program. supervisorctl update removes the old group;
 # there is no template left that can recreate it on the next installation.
@@ -83,14 +88,37 @@ else
   # state we want.
   if command -v launchctl >/dev/null 2>&1; then
     launchctl bootout "gui/$(id -u)/com.marcelocantos.jevonsd" 2>/dev/null || true
-    # jevons-broker is the seat broker now (🎯T866.7). Evict the
-    # Claudia launchd agent so it cannot reclaim broker.sock.
-    launchctl bootout "gui/$(id -u)/com.marcelocantos.claudia-broker" 2>/dev/null || true
   fi
-  # The seat broker now lives in this repo (🎯T866.7). Evict the
-  # Homebrew/claudia supervisor program so it cannot reclaim broker.sock.
-  supervisorctl stop claudia 2>/dev/null || true
-  rm -f "$CONF_DIR/claudia.ini"
+  supervisorctl stop jevons-broker 2>/dev/null || true
+  supervisorctl update jevons-broker 2>/dev/null || true
+  # Both brokers speak the same status protocol, so a successful status
+  # alone cannot prove the old process released the socket.
+  if command -v pgrep >/dev/null 2>&1 && pgrep -f '[j]evons-broker serve' >/dev/null 2>&1; then
+    echo "jevons-broker is still running; refusing to restart jevonsd against the old owner" >&2
+    exit 1
+  fi
+  if [ -f "$CONF_DIR/claudia.ini" ]; then
+    supervisorctl update claudia
+  fi
+  if ! claudia broker status >/dev/null 2>&1; then
+    if [ -f "$CONF_DIR/claudia.ini" ]; then
+      supervisorctl start claudia 2>/dev/null || supervisorctl restart claudia
+    elif command -v brew >/dev/null 2>&1; then
+      brew services start claudia
+    else
+      echo "claudia broker is down and no supervisor or Homebrew service is available" >&2
+      exit 1
+    fi
+  fi
+  i=0
+  while [ "$i" -lt 20 ] && ! claudia broker status >/dev/null 2>&1; do
+    sleep 0.5
+    i=$((i + 1))
+  done
+  if ! claudia broker status >/dev/null 2>&1; then
+    echo "claudia broker did not become ready; leaving jevonsd untouched" >&2
+    exit 1
+  fi
   # Stop the Cellar service too. brew services would otherwise reclaim
   # :13705 on the next boot and win the race against supervisord.
   if command -v brew >/dev/null 2>&1; then
@@ -115,9 +143,7 @@ else
   # replaces its loaded configuration. Scope this to the primary daemon.
   supervisorctl update jevonsd
   supervisorctl restart jevonsd 2>/dev/null || supervisorctl start jevonsd
-  supervisorctl update jevons-broker
-  supervisorctl restart jevons-broker 2>/dev/null || supervisorctl start jevons-broker
 fi
 
 supervisorctl status jevonsd || true
-supervisorctl status jevons-broker || true
+claudia broker status

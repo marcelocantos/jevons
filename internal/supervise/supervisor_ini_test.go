@@ -27,7 +27,7 @@ func supervisorDir(t *testing.T) string {
 
 func TestSupervisorTemplatesAreVellumShaped(t *testing.T) {
 	dir := supervisorDir(t)
-	for _, name := range []string{"jevonsd.ini", "jevons-broker.ini"} {
+	for _, name := range []string{"jevonsd.ini"} {
 		body, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -59,12 +59,8 @@ func TestSupervisorTemplatesAreVellumShaped(t *testing.T) {
 	if !strings.Contains(string(d), "[program:jevonsd]") {
 		t.Fatal("jevonsd.ini must name program:jevonsd")
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "jevons-broker.ini"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), "[program:jevons-broker]") {
-		t.Fatal("jevons-broker.ini must name program:jevons-broker")
+	if _, err := os.Stat(filepath.Join(dir, "jevons-broker.ini")); !os.IsNotExist(err) {
+		t.Fatal("jevons-broker must have no installable template")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "jevons-vanilla.ini")); !os.IsNotExist(err) {
 		t.Fatal("retired vanilla program must have no installable template")
@@ -93,7 +89,7 @@ func TestSupervisorInstallRendersRepoRoot(t *testing.T) {
 		t.Fatalf("installer retained legacy comparison config: %v", err)
 	}
 	repo := filepath.Clean(filepath.Join(dir, ".."))
-	for _, name := range []string{"jevonsd.ini", "jevons-broker.ini"} {
+	for _, name := range []string{"jevonsd.ini"} {
 		body, err := os.ReadFile(filepath.Join(conf, name))
 		if err != nil {
 			t.Fatalf("rendered %s: %v", name, err)
@@ -109,6 +105,9 @@ func TestSupervisorInstallRendersRepoRoot(t *testing.T) {
 	jevonsd, _ := os.ReadFile(filepath.Join(conf, "jevonsd.ini"))
 	if strings.Contains(string(jevonsd), "/opt/homebrew/opt/jevons") {
 		t.Fatal("rendered jevonsd must not point at Cellar")
+	}
+	if _, err := os.Stat(filepath.Join(conf, "jevons-broker.ini")); !os.IsNotExist(err) {
+		t.Fatal("installer retained a jevons-broker definition")
 	}
 }
 
@@ -173,19 +172,18 @@ set -e
 printf '%s\n' "$*" >>"$CALLS"
 case "$*" in
   reread) printf 'jevonsd: %s\nother: changed\n' "$INITIAL_STATE" ;;
-  'stop claudia') : ;;
+  'stop jevons-broker'|'update jevons-broker') : ;;
   'update jevonsd') cp "$SUPERVISOR_CONF_DIR/jevonsd.ini" "$LOADED" ;;
   'restart jevonsd'|'start jevonsd') cmp "$LOADED" "$SUPERVISOR_CONF_DIR/jevonsd.ini" ;;
   'status jevonsd') : ;;
-  'update jevons-broker') : ;;
-  'restart jevons-broker'|'start jevons-broker') : ;;
-  'status jevons-broker') : ;;
   *) echo "unexpected supervisor operation: $*" >&2; exit 1 ;;
 esac
 `,
+				"claudia": "#!/bin/sh\nprintf 'claudia %s\\n' \"$*\" >>\"$CALLS\"\n[ \"$*\" = 'broker status' ]\n",
 				"launchctl": "#!/bin/sh\nexit 0\n",
 				"brew":      "#!/bin/sh\nexit 0\n",
 				"lsof":      "#!/bin/sh\nexit 1\n",
+				"pgrep":     "#!/bin/sh\nexit 1\n",
 			} {
 				if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
 					t.Fatal(err)
@@ -204,18 +202,121 @@ esac
 			}
 			want := []string{
 				"reread",
-				"stop claudia",
+				"stop jevons-broker",
+				"update jevons-broker",
+				"claudia broker status",
+				"claudia broker status",
+				"claudia broker status",
 				"update jevonsd",
 				"restart jevonsd",
-				"update jevons-broker",
-				"restart jevons-broker",
 				"status jevonsd",
-				"status jevons-broker",
+				"claudia broker status",
 			}
 			got := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if strings.Join(got, "|") != strings.Join(want, "|") {
 				t.Fatalf("primary definition not applied before restart: %q", got)
 			}
 		})
+	}
+}
+
+func TestSupervisorInstallStartsClaudiaBeforeRestartingJevonsd(t *testing.T) {
+	home, conf, fakeBin := t.TempDir(), t.TempDir(), t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	ready := filepath.Join(t.TempDir(), "broker-ready")
+	if err := os.WriteFile(filepath.Join(conf, "claudia.ini"), []byte("[program:claudia]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"supervisorctl": `#!/bin/sh
+printf '%s\n' "$*" >>"$CALLS"
+case "$*" in
+  reread|'stop jevons-broker'|'update jevons-broker'|'update claudia'|'update jevonsd'|'status jevonsd') : ;;
+  'start claudia') touch "$READY" ;;
+  'restart jevonsd') test -f "$READY" ;;
+  *) echo "unexpected supervisor operation: $*" >&2; exit 1 ;;
+esac
+`,
+		"claudia": `#!/bin/sh
+printf 'claudia %s\n' "$*" >>"$CALLS"
+test "$*" = 'broker status' && test -f "$READY"
+`,
+		"launchctl": "#!/bin/sh\nexit 0\n",
+		"lsof":      "#!/bin/sh\nexit 1\n",
+		"pgrep":     "#!/bin/sh\nexit 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
+		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+		"PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls, "READY="+ready)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	out, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, want := range []string{"stop jevons-broker", "update jevons-broker", "update claudia", "start claudia", "restart jevonsd"} {
+		if !strings.Contains(got, want+"\n") {
+			t.Fatalf("missing %q in installer operations:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "start claudia\n") > strings.Index(got, "restart jevonsd\n") {
+		t.Fatalf("jevonsd restarted before Claudia was started:\n%s", got)
+	}
+	if strings.Contains(got, "stop claudia") {
+		t.Fatalf("installer evicted Claudia:\n%s", got)
+	}
+}
+
+func TestSupervisorInstallKeepsOldDefinitionWithoutClaudia(t *testing.T) {
+	home, conf, fakeBin := t.TempDir(), t.TempDir(), t.TempDir()
+	old := filepath.Join(conf, "jevons-broker.ini")
+	if err := os.WriteFile(old, []byte("[program:jevons-broker]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
+		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+		"PATH="+fakeBin+":/usr/bin:/bin")
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "claudia is required") {
+		t.Fatalf("install without Claudia: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatalf("old broker definition was removed before preflight: %v", err)
+	}
+}
+
+func TestSupervisorInstallRefusesOldBrokerStillRunning(t *testing.T) {
+	home, conf, fakeBin := t.TempDir(), t.TempDir(), t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	for name, body := range map[string]string{
+		"supervisorctl": "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$CALLS\"\nexit 0\n",
+		"claudia":      "#!/bin/sh\n[ \"$*\" = 'broker status' ]\n",
+		"pgrep":        "#!/bin/sh\nexit 0\n",
+		"launchctl":    "#!/bin/sh\nexit 0\n",
+	} {
+		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join(supervisorDir(t), "install.sh"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "SUPERVISOR_CONF_DIR="+conf,
+		"SUPERVISOR_RETIRE_VANILLA_ONLY=0", "SUPERVISOR_SKIP_CTL=0", "SUPERVISOR_NO_TAKEOVER=0",
+		"PATH="+fakeBin+":/usr/bin:/bin", "CALLS="+calls)
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "jevons-broker is still running") {
+		t.Fatalf("install with old broker still running: %v\n%s", err, out)
+	}
+	out, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "restart jevonsd") {
+		t.Fatalf("jevonsd restarted against the old broker:\n%s", out)
 	}
 }
