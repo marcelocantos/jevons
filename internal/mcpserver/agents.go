@@ -59,6 +59,19 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 	)
 
 	s.addTool(
+		mcp.NewTool("jevons_agent_provider_policy",
+			mcp.WithDescription("Read or change one registered seat's future provider placement constraints (🎯T691). Omit all policy fields to read. Set fields are patches: omitted fields stay unchanged; prefer_provider=\"\" clears a preference, allowed_providers=[] allows no migration destination, allow_any=true restores the unrestricted allowed set, and exclude_providers=[] clears explicit bans. Setting requires actor=the overseer. Claudia validates provider identities and persists the policy; this does not interrupt or migrate the seat immediately."),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Registered agent name")),
+			mcp.WithString("actor", mcp.Description("Overseer agent name; required when changing policy")),
+			mcp.WithString("prefer_provider", mcp.Description("Preferred destination provider; empty clears the preference")),
+			mcp.WithArray("allowed_providers", mcp.Description("Explicitly allowed migration destinations; [] allows none. Omit to preserve the current set."), mcp.WithStringItems()),
+			mcp.WithBoolean("allow_any", mcp.Description("Clear the allowed-provider restriction. Cannot be combined with allowed_providers.")),
+			mcp.WithArray("exclude_providers", mcp.Description("Explicitly banned migration destinations; [] clears all bans. Omit to preserve current bans."), mcp.WithStringItems()),
+		),
+		s.handleAgentProviderPolicy,
+	)
+
+	s.addTool(
 		mcp.NewTool("jevons_agent_start",
 			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Omit provider unless the owner named one (🎯T652) — Claudia Resolve picks the session harness (prefer plan, prefer Claude) and skips weekly-hot / exhausted / session-low dests; do not write provider=grok as habit. An explicit provider= that is mint-ineligible is treated as omit unless owner_asked. Resume keeps the stored provider. A leftover llm-portfolio.json or the compiled T325.2 seed must not silently override the dest (🎯T476). The start result cites which knob selected the provider. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
