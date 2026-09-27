@@ -73,3 +73,52 @@ func TestAuthRecoverRechecksSeatAndReportsClaudiaFailure(t *testing.T) {
 		t.Fatalf("failed sign-in hid the retry action: %q", got)
 	}
 }
+
+func TestAuthRecoverRelaunchesOnlyTheStoppedSeatAndClearsItsFailure(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.SetDirect(true)
+	const affected = "auth-recover-affected"
+	const healthy = "auth-recover-healthy"
+	for _, name := range []string{affected, healthy} {
+		if err := reg.Register(claudia.AgentDef{Name: name, WorkDir: t.TempDir(), Provider: "anthropic", SessionID: name + "-sid"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var launched []string
+	reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(_ context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+		launched = append(launched, cfg.Name)
+		return claudia.NewStubAgent(nil), nil
+	}})
+	if _, err := reg.Launch(healthy); err != nil {
+		t.Fatal(err)
+	}
+	fleet.RecordRehydrateFailure(affected, errors.New("invalid_grant"))
+	t.Cleanup(func() { fleet.RecordRehydrateFailure(affected, nil) })
+	s := New("test", t.TempDir())
+	s.SetRegistry(reg)
+	recovered := 0
+	s.authRecover = func(_ context.Context, provider claudia.Provider) error {
+		recovered++
+		if provider != "anthropic" {
+			t.Fatalf("provider = %q", provider)
+		}
+		return nil
+	}
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/agents/"+affected+"/auth/recover", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"running"`) {
+		t.Fatalf("recovery status=%d body=%s", w.Code, w.Body.String())
+	}
+	if recovered != 1 || len(launched) != 2 || launched[0] != healthy || launched[1] != affected ||
+		!reg.Get(healthy).Alive() || !reg.Get(affected).Alive() {
+		t.Fatalf("recovered=%d launched=%v healthy=%v affected=%v", recovered, launched, reg.Get(healthy), reg.Get(affected))
+	}
+	if got := fleet.RehydrateHealth(*reg.Def(affected)); got != "resumable" {
+		t.Fatalf("stale failure after successful relaunch = %q", got)
+	}
+}
