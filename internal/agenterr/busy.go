@@ -32,6 +32,8 @@ func IsPromptBusy(err error) bool {
 	switch {
 	case strings.Contains(msg, "already in flight"):
 		return true
+	case strings.Contains(msg, "turn in flight"):
+		return true
 	case strings.Contains(msg, " is busy"):
 		return true
 	default:

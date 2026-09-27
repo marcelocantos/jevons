@@ -50,6 +50,14 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 	if _, err := s.waitHotMigrationReply(id, 0, codeword, 90*time.Second); err != nil {
 		return fmt.Errorf("predecessor did not acknowledge codeword: %w", err)
 	}
+	// The reply is visible, but a provider may still report the turn as in
+	// flight. This disposable worker explicitly allows the host to finish
+	// that turn before migration; production seats default to waiting.
+	if _, err := s.mcpText("jevons_agent_provider_policy", map[string]any{
+		"name": id, "actor": "jevons", "allow_interrupt": true,
+	}); err != nil {
+		return fmt.Errorf("opt journey worker into interruption: %w", err)
+	}
 	before, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
 		return err

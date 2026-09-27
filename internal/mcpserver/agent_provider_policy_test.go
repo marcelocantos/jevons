@@ -5,15 +5,27 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+type busyPlanMigrator struct {
+	sweepLedger
+	force bool
+}
+
+func (m *busyPlanMigrator) PrepareMigration(_ string, _ claudia.Provider, force bool) (handover.Pending, error) {
+	m.force = force
+	return handover.Pending{}, fmt.Errorf("Migrate: turn in flight; wait for the current response or Interrupt first")
+}
 
 func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agents.json")
@@ -117,5 +129,38 @@ func TestT691HostInterruptPolicyDefersBusySeatUnlessOptedIn(t *testing.T) {
 	def.HostNeverPark = true
 	if got := hostPlanDeferral(planusage.PlanAction{Action: claudia.SeatPark}, def, false); !strings.Contains(got, "forbids parking") {
 		t.Fatalf("host park ban was lost: %q", got)
+	}
+}
+
+func TestT691BrokerBusyRaceIsHostDeferralNotMigrationFailure(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "worker", SessionID: "source", Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	migrator := &busyPlanMigrator{}
+	s.SetMigrator(migrator)
+	now := time.Now()
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("claude", 20, 80, now),
+			t39015Weekly("codex", 80, 20, now),
+		}}
+	})
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].Author != claudia.DecisionAuthor ||
+		acts[0].Execution != "deferred" || !strings.Contains(acts[0].Failure, "forbids interruption") ||
+		migrator.force {
+		t.Fatalf("broker busy race was not a host deferral: acts=%+v force=%t", acts, migrator.force)
+	}
+	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Execution != "deferred" {
+		t.Fatalf("decision surface lost busy deferral: %+v", got)
 	}
 }

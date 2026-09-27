@@ -105,6 +105,12 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		return nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(root) }
+	sidecarScript, err := s.stageIsolatedSidecar()
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	s.daemonEnv = append(s.daemonEnv, "CLAUDIA_OMP_SERVER="+sidecarScript)
 	bin := filepath.Join(s.stateDir, "claudia-broker")
 	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -127,6 +133,7 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		if strings.HasPrefix(entry, "CLAUDIA_BROKER_SOCKET=") ||
 			strings.HasPrefix(entry, "CLAUDIA_NO_BROKER=") ||
 			strings.HasPrefix(entry, "CLAUDIA_OMP_SOCKET=") ||
+			strings.HasPrefix(entry, "CLAUDIA_OMP_SERVER=") ||
 			strings.HasPrefix(entry, "JEVONS_SPOOL_DIR=") ||
 			strings.HasPrefix(entry, "XDG_STATE_HOME=") {
 			continue
@@ -134,7 +141,7 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		cmd.Env = append(cmd.Env, entry)
 	}
 	cmd.Env = append(cmd.Env, "CLAUDIA_BROKER_SOCKET="+socket, "CLAUDIA_NO_BROKER=0",
-		"CLAUDIA_OMP_SOCKET="+ompSocket, "XDG_STATE_HOME="+root,
+		"CLAUDIA_OMP_SOCKET="+ompSocket, "CLAUDIA_OMP_SERVER="+sidecarScript, "XDG_STATE_HOME="+root,
 		"JEVONS_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"))
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
@@ -162,6 +169,52 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return nil, errors.Join(fmt.Errorf("isolated Claudia broker did not listen at %s", socket), b.close())
+}
+
+// A clean checkout has no sidecar/node_modules. Copy only the locked source
+// into the journey state and install there, so Bun cannot silently resolve a
+// different version from its global cache and the test never mutates a repo.
+func (s *suite) stageIsolatedSidecar() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("CLAUDIA_OMP_SERVER")); override != "" {
+		return override, nil
+	}
+	src := filepath.Dir(omp.ServerScript())
+	dst := filepath.Join(s.stateDir, "omp-sidecar")
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return "", fmt.Errorf("stage isolated sidecar: %w", err)
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return "", fmt.Errorf("read Claudia sidecar source: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name != "package.json" && name != "bun.lockb" && !strings.HasSuffix(name, ".ts") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(src, name))
+		if err != nil {
+			return "", fmt.Errorf("read Claudia sidecar %s: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dst, name), body, 0o600); err != nil {
+			return "", fmt.Errorf("stage Claudia sidecar %s: %w", name, err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	install := exec.CommandContext(ctx, "bun", "install", "--frozen-lockfile")
+	install.Dir = dst
+	if out, err := install.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("install isolated Claudia sidecar: %w: %s", err, trim(string(out), 500))
+	}
+	script := filepath.Join(dst, "server.ts")
+	if _, err := os.Stat(script); err != nil {
+		return "", fmt.Errorf("isolated Claudia sidecar script: %w", err)
+	}
+	return script, nil
 }
 
 func (b *isolatedBroker) close() error {

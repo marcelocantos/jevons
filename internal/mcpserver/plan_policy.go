@@ -80,6 +80,10 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				prepared, err = s.migrator.PrepareMigration(a.Name, claudia.Provider(a.To), allowInterrupt)
 			}
 			if err != nil {
+				if !allowInterrupt && isPromptInFlight(err) {
+					a.Execution, a.Failure = "deferred", "turn in flight; Jevons host policy forbids interruption"
+					continue
+				}
 				slog.Warn("plan policy migrate prepare failed", "name", a.Name, "to", a.To, "err", err)
 				a.Execution, a.Failure = "failed", err.Error()
 				// The old seat is still the only working seat when preparation

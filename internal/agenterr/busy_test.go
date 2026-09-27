@@ -22,6 +22,7 @@ func TestIsPromptBusy(t *testing.T) {
 		// Grok ACP (historical 🎯T111.1 path).
 		{fmt.Errorf("grok acp: prompt already in flight"), true},
 		{fmt.Errorf("send to x: grok acp: prompt already in flight"), true},
+		{fmt.Errorf("broker protocol: agent_failed: Migrate: turn in flight; wait for the current response or Interrupt first"), true},
 		// Claudia Task.
 		{fmt.Errorf("task abc is busy"), true},
 		// 🎯T766.4: "prompt in progress", "session busy" and "turn in
