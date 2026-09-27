@@ -38,21 +38,17 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 	defer func() {
 		_, _ = s.mcpText("jevons_agent_kill", map[string]any{"name": id, "actor": "jevons", "force": true})
 	}()
+	const codeword = "COPPERFINCH83"
 	if _, err := s.mcpText("jevons_agent_start", map[string]any{
 		"name": id, "workdir": work, "actor": "jevons", "parent": "jevons", "purpose": "work",
 		"provider": "cursor", "model": "composer-2.5", "owner_asked": true,
+		"prompt": "Your continuing task is to remember the mission codeword " + codeword +
+			" for a later question. Reply with exactly ACK " + codeword + " and remain available; do not declare the task complete.",
 	}); err != nil {
 		return fmt.Errorf("spawn Cursor worker: %w", err)
 	}
-	const codeword = "COPPERFINCH83"
-	if _, err := s.mcpText("jevons_agent_send", map[string]any{
-		"name": id, "actor": "jevons",
-		"text": "Remember this mission codeword: " + codeword + ". Reply exactly: STORED",
-	}); err != nil {
-		return fmt.Errorf("plant codeword: %w", err)
-	}
-	if err := s.waitHotMigrationSource(id, codeword, 90*time.Second); err != nil {
-		return fmt.Errorf("predecessor did not record codeword: %w", err)
+	if _, err := s.waitHotMigrationReply(id, 0, codeword, 90*time.Second); err != nil {
+		return fmt.Errorf("predecessor did not acknowledge codeword: %w", err)
 	}
 	before, err := bounceRegistrySnapshot(s.agentsPath())
 	if err != nil {
@@ -195,20 +191,4 @@ func (s *suite) waitHotMigrationReply(name string, after int, want string, timeo
 		time.Sleep(2 * time.Second)
 	}
 	return 0, fmt.Errorf("no assistant reply containing %q within %s", want, timeout)
-}
-
-func (s *suite) waitHotMigrationSource(name, codeword string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		payload, err := s.agentTranscriptHTTP(name)
-		if err != nil {
-			return err
-		}
-		journal, _ := payload["journal"].(string)
-		if strings.Contains(strings.ToUpper(journal), codeword) {
-			return nil
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return fmt.Errorf("codeword absent from durable transcript after %s", timeout)
 }
