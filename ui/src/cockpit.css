@@ -972,6 +972,16 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-group.plan-unavail { opacity: 0.55; }
 #plan-ticker .plan-group.plan-stale { opacity: 0.7; }
 #plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
+#plan-ticker .plan-reauth {
+  flex-shrink: 0;
+  border: 1px solid var(--amber);
+  border-radius: 3px;
+  background: var(--surface-high);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+#plan-ticker .plan-reauth:disabled { cursor: wait; opacity: 0.6; }
 #plan-ticker .plan-sep { color: var(--text-muted); user-select: none; }
 #plan-ticker.plan-stale { color: var(--text-muted); }
 #plan-ticker.plan-low,
@@ -1658,6 +1668,14 @@ body.rhs-resizing-row { cursor: row-resize; }
      seat underneath, and the yield rect closes it once the pointer is there. */
   pointer-events: none;
 }
+.plan-migration-failures {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  line-height: 1.45;
+  white-space: normal;
+}
+.plan-migration-failures > div { overflow-wrap: anywhere; }
 
 /* 🎯T588.2: the available figure wears the same colour as the bar fill it
    describes, and only that figure is bold — the row the owner scans first.

@@ -66,7 +66,11 @@ func (s *Server) handlePlanUsageDecisions(w http.ResponseWriter, _ *http.Request
 		w.Write([]byte(`{"error":"plan decisions not enabled"}`))
 		return
 	}
-	decisions := s.planDecisions()
+	// Decoration belongs to this response; do not mutate a source-owned slice.
+	decisions := append([]planusage.PlanAction(nil), s.planDecisions()...)
+	for i := range decisions {
+		decisions[i].ReauthAvailable = destinationAuthRecoverable(decisions[i])
+	}
 	if decisions == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte(`{"error":"plan decisions unavailable until a plan reading arrives"}`))
