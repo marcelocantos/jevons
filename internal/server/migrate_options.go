@@ -121,7 +121,7 @@ func (s *Server) migrateOptions(now time.Time) []migrateProviderOption {
 	running := map[string][]string{}
 	if reg != nil {
 		for _, def := range reg.List() {
-			p := strings.ToLower(strings.TrimSpace(string(def.Provider)))
+			p := strings.ToLower(strings.TrimSpace(string(claudia.PlanProvider(def.Provider))))
 			if p == "" {
 				continue
 			}

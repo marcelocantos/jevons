@@ -90,7 +90,13 @@ func TestT285_2MigrateOptionsPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := reg.Register(claudia.AgentDef{
-		Name: "jv-codex-seat", Provider: "codex", Model: "gpt-5-codex", SessionID: "s-codex",
+		Name: "jv-codex-seat", Provider: "openai-codex", Model: "gpt-5-codex", SessionID: "s-codex",
+		WorkDir: t.TempDir(), Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-grok-seat", Provider: "xai-oauth", Model: "grok-4.5", SessionID: "s-grok",
 		WorkDir: t.TempDir(), Purpose: claudia.PurposeWork,
 	}); err != nil {
 		t.Fatal(err)
@@ -105,6 +111,9 @@ func TestT285_2MigrateOptionsPayload(t *testing.T) {
 	byProv := map[string]migrateProviderOption{}
 	for _, p := range providers {
 		byProv[p.Provider] = p
+	}
+	if len(byProv) != len(providers) || len(byProv) != 3 {
+		t.Fatalf("runtime aliases produced duplicate or missing plan rows: %+v", providers)
 	}
 
 	grok := byProv["grok"]
