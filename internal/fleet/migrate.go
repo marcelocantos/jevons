@@ -237,7 +237,12 @@ func (f *Claudia) migrateStoppedViaClaudia(name string, def claudia.AgentDef, ta
 	if f.stoppedMigrate != nil {
 		result, err = f.stoppedMigrate(name, args, history)
 	} else {
+		// MigrateStopped launches its destination inside Claudia. Bracket
+		// that hidden launch so the host wires the new event stream as soon
+		// as the operation returns, not on the next orphan-repair sweep.
+		done := f.launching(name)
 		result, err = f.reg.MigrateStopped(context.Background(), name, args, history)
+		done()
 	}
 	fromProvider, fromSession := def.Provider, def.SessionID
 	if def.MigrationFrom != "" {

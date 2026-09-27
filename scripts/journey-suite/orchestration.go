@@ -20,6 +20,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // Orchestration journeys (MCP-direct against the isolated daemon).
@@ -754,6 +755,35 @@ func (s *suite) stoppedProviderMigrationWithBroker() error {
 		return fmt.Errorf("stopped migration wrote a second Jevons handover")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	// The cold path sends the durable handover into the new sidecar seat.
+	// Wait for that turn to finish before probing: a concurrent direct would
+	// collide with the seed and say "already processing" rather than test
+	// whether context arrived.
+	seedDeadline := time.Now().Add(2 * time.Minute)
+	seedDone := false
+	for time.Now().Before(seedDeadline) {
+		recs, err := spool.ReadSeat(filepath.Join(s.stateDir, "spool"), id)
+		if err != nil {
+			return fmt.Errorf("read successor seed turn: %w", err)
+		}
+		for _, rec := range recs {
+			if rec.Type != "turn" {
+				continue
+			}
+			if rec.Stop != "end_turn" && rec.Stop != "stop_token" {
+				return fmt.Errorf("successor seed turn stopped as %q", rec.Stop)
+			}
+			seedDone = true
+			break
+		}
+		if seedDone {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if !seedDone {
+		return fmt.Errorf("successor seed turn did not complete within two minutes")
 	}
 	const probe = "What is the mission codeword? Reply with the codeword only."
 	deadline := time.Now().Add(2 * time.Minute)

@@ -49,6 +49,7 @@ type Record struct {
 	RawTS    string          `json:"ts"`
 	Seat     string          `json:"seat"`
 	Type     string          `json:"type"`
+	Stop     string          `json:"stop,omitempty"`
 	Text     string          `json:"text,omitempty"`
 	CallID   string          `json:"call_id,omitempty"`
 	Name     string          `json:"name,omitempty"`
