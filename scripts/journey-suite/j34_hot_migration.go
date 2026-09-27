@@ -36,8 +36,8 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	defer func() { _, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id}) }()
-	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
-		"id": id, "workdir": work, "description": "journey hot provider worker",
+	if _, err := s.mcpText("jevons_agent_start", map[string]any{
+		"name": id, "workdir": work, "actor": "jevons", "parent": "jevons", "purpose": "work",
 		"provider": "cursor", "model": "composer-2.5", "owner_asked": true,
 	}); err != nil {
 		return fmt.Errorf("spawn Cursor worker: %w", err)
