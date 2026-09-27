@@ -1054,6 +1054,7 @@ func (s *Server) muxCoalescedFromDB(name string) ([]muxwin.Event, bool) {
 			lo = 1
 		}
 	}
+	lo = muxwin.CapFollowingLo(lo, n, muxwin.MaxConnectEvents)
 	events := s.statedbRange(name, lo, n+1)
 	if s.mux != nil {
 		s.mux.replaceCacheN(name, events, 0, lo > 1, n)
@@ -1136,6 +1137,9 @@ func (s *Server) writeMuxWindow(ctx context.Context, conn muxConn, sess *muxSess
 	if err != nil {
 		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": err.Error()})
 		return err
+	}
+	if hi == 0 {
+		resolved.Lo = muxwin.CapFollowingLo(resolved.Lo, n, muxwin.MaxConnectEvents)
 	}
 	// Absolute n: do not walk a cache-relative halo (that is what made
 	// first-paint claim older=0 at cache index 1). Page-up fetches more.

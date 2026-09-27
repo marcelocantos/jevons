@@ -139,6 +139,29 @@ func TestHaloProseDefault(t *testing.T) {
 	if HaloMaxExtra != 200 {
 		t.Fatalf("HaloMaxExtra=%d want 200", HaloMaxExtra)
 	}
+	if MaxConnectEvents != 80 {
+		t.Fatalf("MaxConnectEvents=%d", MaxConnectEvents)
+	}
+	if MaxConnectEvents > HaloMaxExtra {
+		t.Fatalf("MaxConnectEvents=%d > HaloMaxExtra=%d", MaxConnectEvents, HaloMaxExtra)
+	}
+}
+
+func TestCapFollowingLoWordDeltaStorm(t *testing.T) {
+	// Last 30 user turns spanning 2432 events (T65 storm). Connect must
+	// not hydrate the whole span.
+	n := 129700
+	lo := 127268 // TailStart of 30 users
+	got := CapFollowingLo(lo, n, MaxConnectEvents)
+	if span := n - got + 1; span > MaxConnectEvents {
+		t.Fatalf("span=%d lo=%d n=%d", span, got, n)
+	}
+	if CapFollowingLo(n-10, n, MaxConnectEvents) != n-10 {
+		t.Fatal("short window must stay")
+	}
+	if CapFollowingLo(1, 10, MaxConnectEvents) != 1 {
+		t.Fatal("journal shorter than cap must start at 1")
+	}
 }
 
 func TestSubscribeCapsStepSea(t *testing.T) {

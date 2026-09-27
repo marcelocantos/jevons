@@ -21,6 +21,38 @@ const HaloProse = 100
 // reaches meta — empty transcript.
 const HaloMaxExtra = 200
 
+// MaxConnectEvents caps a following first-paint window in coalesced
+// events. DefaultFollow is last-N *user turns*; a word-delta storm
+// between two owner turns is thousands of rows, and the browser will
+// not paint until every frame hydrates (reload stall). Page-up still
+// fetches older. Keep this below HaloMaxExtra.
+const MaxConnectEvents = 80
+
+// CapFollowingLo raises lo so a following window spans at most max
+// events of an n-long journal. lo is 1-based inclusive.
+func CapFollowingLo(lo, n, max int) int {
+	if n <= 0 {
+		if lo < 1 {
+			return 1
+		}
+		return lo
+	}
+	if max <= 0 {
+		max = MaxConnectEvents
+	}
+	minLo := n - max + 1
+	if minLo < 1 {
+		minLo = 1
+	}
+	if lo < minLo {
+		return minLo
+	}
+	if lo < 1 {
+		return 1
+	}
+	return lo
+}
+
 // Kind is a coalesced display event class.
 type Kind int
 
