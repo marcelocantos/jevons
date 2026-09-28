@@ -105,3 +105,48 @@ func TestBypassAndDrift(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 }
+
+// 🎯T862.17: a missing/malformed writ manifest (m == nil, e.g. Parse failed
+// on unloadable JSON) must fail closed on filesystem access, exactly as it
+// already fails closed on network access, rather than silently allowing the
+// write because there was nothing to check against.
+func TestClassifyAccess_NilManifestDeniesFS(t *testing.T) {
+	ev := writconf.ClassifyAccess(nil, "w1", "", "/etc/passwd", "read")
+	if ev == nil {
+		t.Fatal("nil manifest allowed filesystem access; want fail-closed deny")
+	}
+	if ev.Kind != writconf.KindDenyFS {
+		t.Fatalf("kind = %v, want KindDenyFS", ev.Kind)
+	}
+}
+
+// A manifest that loaded successfully but deliberately declares no fs scope
+// (net-only thin vertical, m.FS == nil by validated intent — not a load
+// failure) keeps its prior, non-restrictive fs behaviour: that omission was
+// explicit, not malformed.
+func TestClassifyAccess_LoadedNetOnlyManifestStillAllowsFS(t *testing.T) {
+	m, err := writconf.FleetManifest(writconf.FleetManifestArgs{
+		NetHosts: []string{"example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.FS != nil {
+		t.Fatal("expected net-only manifest to have nil FS")
+	}
+	if ev := writconf.ClassifyAccess(m, "w1", "", "/etc/passwd", "read"); ev != nil {
+		t.Fatalf("net-only manifest unexpectedly denied fs: %+v", ev)
+	}
+}
+
+// Malformed JSON must fail Parse (no manifest returned), which is the load
+// path that feeds the nil-manifest fail-closed check above.
+func TestParse_MalformedJSONFailsClosed(t *testing.T) {
+	m, err := writconf.Parse([]byte(`{"schema_version": "1", "net": [`))
+	if err == nil {
+		t.Fatalf("malformed JSON parsed without error, manifest=%+v", m)
+	}
+	if m != nil {
+		t.Fatalf("malformed JSON returned non-nil manifest: %+v", m)
+	}
+}

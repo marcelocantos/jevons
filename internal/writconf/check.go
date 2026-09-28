@@ -188,13 +188,31 @@ func ClassifyAccess(m *Manifest, agent, host, path, mode string) *Event {
 			}
 		}
 	}
-	if path != "" && m != nil && m.FS != nil && !PathDeclared(m, path, mode) {
-		return &Event{
-			Kind:          KindDenyFS,
-			Agent:         agent,
-			Path:          path,
-			ManifestField: "fs.read|fs.edit",
-			Message:       "undeclared filesystem access",
+	if path != "" {
+		// A nil manifest means the writ intent document never loaded (missing
+		// or malformed) — fail closed on fs the same way NetAllowed already
+		// fails closed on net, rather than treating "no manifest" as "no
+		// restriction". A manifest that loaded but deliberately omits fs
+		// (m.FS == nil, the net-only thin-vertical shape from
+		// FleetManifestArgs.IncludeFS=false) is unaffected: that omission is
+		// an explicit, validated intent, not a load failure.
+		if m == nil {
+			return &Event{
+				Kind:          KindDenyFS,
+				Agent:         agent,
+				Path:          path,
+				ManifestField: "fs.read|fs.edit",
+				Message:       "no writ manifest loaded — refusing filesystem access closed",
+			}
+		}
+		if m.FS != nil && !PathDeclared(m, path, mode) {
+			return &Event{
+				Kind:          KindDenyFS,
+				Agent:         agent,
+				Path:          path,
+				ManifestField: "fs.read|fs.edit",
+				Message:       "undeclared filesystem access",
+			}
 		}
 	}
 	return nil
