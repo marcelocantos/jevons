@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -201,5 +202,70 @@ func writeHelper(t *testing.T, repo, name string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 🎯T606: the restart script builds several helpers on demand, and only
+// RestartHelpers being a stale list is silent — a helper the script starts
+// hard-failing on (die/exit, not the buildident "|| return 0" skip) has to
+// show up here too, or a cold machine misses the go build it needs before
+// the script gets there. This test reads the shipped script itself, so a
+// new hard-required `go build -o "$X" ./cmd/y` line the source list has
+// not been told about fails it, instead of only a manual audit finding it.
+func TestRestartHelpersNamesEveryHardRequiredBuild(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("could not find repo root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "scripts", "restart-jevonsd.sh"))
+	if err != nil {
+		t.Fatalf("could not read restart-jevonsd.sh: %v", err)
+	}
+
+	// buildsnap is conditionally required (only when there is no bin/jevonsd
+	// to fall back on) and RestartBlocker already accounts for it separately
+	// from the unconditional RestartHelpers list — not a gap this test
+	// checks. buildident is documented above RestartHelpers as excluded on
+	// purpose because its build failure is caught by `|| return 0`.
+	exempt := map[string]bool{"buildsnap": true, "buildident": true}
+
+	buildLineRE := regexp.MustCompile(`go build -o "\$\w+" \./cmd/(\w+)\)([^\n]*)`)
+	named := map[string]bool{}
+	for _, h := range supervise.RestartHelpers {
+		named[h] = true
+	}
+
+	for _, m := range buildLineRE.FindAllStringSubmatch(string(src), -1) {
+		helper, tail := m[1], m[2]
+		if exempt[helper] {
+			continue
+		}
+		if strings.Contains(tail, "return 0") {
+			// This build is allowed to fail silently — not a hard
+			// dependency, so RestartHelpers does not need to name it.
+			continue
+		}
+		if !named[helper] {
+			t.Errorf("scripts/restart-jevonsd.sh hard-requires bin/%s (no `|| return 0` "+
+				"escape) but supervise.RestartHelpers does not name it — "+
+				"add it or document why it is exempt", helper)
+		}
+	}
+}
+
+func findRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New("go.mod not found")
+		}
+		dir = parent
 	}
 }
