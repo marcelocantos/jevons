@@ -78,7 +78,7 @@ func SeatHasHistory(dir, seat string) bool {
 	if dir == "" || seat == "" {
 		return false
 	}
-	hits, err := seatIndex(dir)
+	hits, _, err := seatIndex(dir)
 	return err == nil && hits[seat] != ""
 }
 
@@ -138,11 +138,31 @@ func LatestPath(dir, seat string) string {
 	if dir == "" || seat == "" {
 		return ""
 	}
-	hits, err := seatIndex(dir)
+	hits, _, err := seatIndex(dir)
 	if err != nil {
 		return ""
 	}
 	return hits[seat]
+}
+
+// LatestSeatTime is the "ts" field of the newest spool line naming seat,
+// across all dated files. LatestPath's file is shared by every sidecar
+// seat writing that day, so the file's mtime is the day's last write from
+// ANY seat, not this one's (🎯T893: all anthropic sidecar seats read back
+// the identical age because they share one events-YYYY-MM-DD.log). The
+// per-line "ts" field is per-seat; this is the value readers must use for
+// recency, not os.Stat on LatestPath's result. The ok=false zero value
+// means no readable ts was found for seat, not "just now".
+func LatestSeatTime(dir, seat string) (time.Time, bool) {
+	if dir == "" || seat == "" {
+		return time.Time{}, false
+	}
+	_, ts, err := seatIndex(dir)
+	if err != nil {
+		return time.Time{}, false
+	}
+	t, ok := ts[seat]
+	return t, ok
 }
 
 // Files returns dated log names, older first.
@@ -174,12 +194,15 @@ func listDayFiles(dir string) ([]string, error) {
 	return names, nil
 }
 
-// seatIndex maps a seat to the newest dated log that names it. The
-// signature is file name, size, and mtime, so an append rebuilds and a
-// quiet poll does not read the spool again.
+// seatIndex maps a seat to the newest dated log that names it, and
+// separately to the "ts" of that seat's own newest line (🎯T893: the file
+// is shared, the ts field is not). The signature is file name, size, and
+// mtime, so an append rebuilds and a quiet poll does not read the spool
+// again.
 type indexedSeats struct {
 	sig  string
 	hits map[string]string
+	ts   map[string]time.Time
 }
 
 var (
@@ -187,32 +210,33 @@ var (
 	seatIndexes = map[string]*indexedSeats{}
 )
 
-func seatIndex(dir string) (map[string]string, error) {
+func seatIndex(dir string) (map[string]string, map[string]time.Time, error) {
 	names, err := listDayFiles(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]string{}, nil
+			return map[string]string{}, map[string]time.Time{}, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	sig, err := daySig(dir, names)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	seatIndexMu.Lock()
 	defer seatIndexMu.Unlock()
 	if idx, ok := seatIndexes[dir]; ok && idx.sig == sig {
-		return idx.hits, nil
+		return idx.hits, idx.ts, nil
 	}
 	hits := map[string]string{}
+	ts := map[string]time.Time{}
 	for _, name := range names {
 		path := filepath.Join(dir, name)
-		if err := scanSeatNames(path, hits); err != nil {
-			return nil, err
+		if err := scanSeatNames(path, hits, ts); err != nil {
+			return nil, nil, err
 		}
 	}
-	seatIndexes[dir] = &indexedSeats{sig: sig, hits: hits}
-	return hits, nil
+	seatIndexes[dir] = &indexedSeats{sig: sig, hits: hits, ts: ts}
+	return hits, ts, nil
 }
 
 func daySig(dir string, names []string) (string, error) {
@@ -232,9 +256,11 @@ func daySig(dir string, names []string) (string, error) {
 	return b.String(), nil
 }
 
-// scanSeatNames records seats named in path. The seat field is at the
-// front of each line; the snapshot after it is not decoded.
-func scanSeatNames(path string, hits map[string]string) error {
+// scanSeatNames records, per seat named in path, the file (last one wins
+// across files in date order) and the "ts" of that seat's own newest line
+// (last-in-file wins within a file, since lines are chronological). Only
+// the line prefix is read; the snapshot after it is not decoded.
+func scanSeatNames(path string, hits map[string]string, ts map[string]time.Time) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -242,9 +268,14 @@ func scanSeatNames(path string, hits map[string]string) error {
 	defer f.Close()
 	r := bufio.NewReaderSize(f, 64*1024)
 	for {
-		seat, err := nextSeat(r)
-		if seat != "" {
-			hits[seat] = path
+		prefix, err := nextRecordPrefix(r)
+		if len(prefix) > 0 {
+			if seat := seatField(prefix); seat != "" {
+				hits[seat] = path
+				if t, ok := tsField(prefix); ok {
+					ts[seat] = t
+				}
+			}
 		}
 		if err == io.EOF {
 			return nil
@@ -255,7 +286,7 @@ func scanSeatNames(path string, hits map[string]string) error {
 	}
 }
 
-func nextSeat(r *bufio.Reader) (string, error) {
+func nextRecordPrefix(r *bufio.Reader) ([]byte, error) {
 	var prefix []byte
 	for {
 		chunk, err := r.ReadSlice('\n')
@@ -271,12 +302,12 @@ func nextSeat(r *bufio.Reader) (string, error) {
 			continue
 		}
 		if err != nil && err != io.EOF {
-			return "", err
+			return nil, err
 		}
 		if err == io.EOF && len(chunk) == 0 && len(prefix) == 0 {
-			return "", io.EOF
+			return nil, io.EOF
 		}
-		return seatField(prefix), err
+		return prefix, err
 	}
 }
 
@@ -292,4 +323,28 @@ func seatField(prefix []byte) string {
 		return ""
 	}
 	return string(rest[:j])
+}
+
+// tsField extracts the "ts" field from a record prefix, parsing it as
+// RFC3339 (with or without sub-second precision). ok is false when the
+// field is missing or unparseable — callers must not treat that as "now".
+func tsField(prefix []byte) (time.Time, bool) {
+	const key = `"ts":"`
+	i := bytes.Index(prefix, []byte(key))
+	if i < 0 {
+		return time.Time{}, false
+	}
+	rest := prefix[i+len(key):]
+	j := bytes.IndexByte(rest, '"')
+	if j <= 0 {
+		return time.Time{}, false
+	}
+	raw := string(rest[:j])
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
 }

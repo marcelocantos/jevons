@@ -128,9 +128,17 @@ func Locate(q Query) Location {
 	}
 }
 
-// Lookup reports when the seat's transcript last moved. One stat, no decode
-// (🎯T705).
+// Lookup reports when the seat's transcript last moved. Ordinarily one
+// stat, no decode (🎯T705). Sidecar/OMP seats are the 🎯T893 exception: the
+// dated spool file is shared by every sidecar seat writing that day, so the
+// file's os.Stat mtime is the day's last write from ANY seat — every seat
+// on that file reads back the identical age regardless of which one just
+// moved. For those, the per-line "ts" field (indexed once per file-set
+// change, not re-decoded per request) is the per-seat recency instead.
 func Lookup(q Query) Reading {
+	if name := strings.TrimSpace(q.Name); name != "" && spool.SeatHasHistory(spool.Dir(), name) {
+		return lookupSpool(name, q.Now)
+	}
 	loc := Locate(q)
 	if loc.State != discovery.LookupPresent || strings.TrimSpace(loc.Path) == "" {
 		reason := loc.Reason
@@ -160,6 +168,30 @@ func Lookup(q Query) Reading {
 		age = 0
 	}
 	return Reading{Verdict: VerdictKnown, Path: loc.Path, LastMove: mod, Age: age}
+}
+
+// lookupSpool is the 🎯T893 per-seat path for sidecar/OMP seats: the seat's
+// own newest "ts" field, never the shared dated file's mtime.
+func lookupSpool(seat string, now time.Time) Reading {
+	dir := spool.Dir()
+	path := spool.LatestPath(dir, seat)
+	ts, ok := spool.LatestSeatTime(dir, seat)
+	if !ok {
+		return Reading{
+			Verdict: VerdictUnknown,
+			Reason:  "sidecar spool has a file for seat but no readable per-seat ts field",
+			Path:    path,
+		}
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	age := now.Sub(ts)
+	if age < 0 {
+		// Clock skew, not negative age — see the ordinary-path comment above.
+		age = 0
+	}
+	return Reading{Verdict: VerdictKnown, Path: path, LastMove: ts, Age: age}
 }
 
 func locateClaude(sessionID, workDir string) Location {
