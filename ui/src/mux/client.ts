@@ -34,6 +34,7 @@ export class MuxClient {
   private closed = false;
   private attempts = 0;
   private outageLogged = false;
+  private sendSeq = 0;
   private readonly url: string;
   private readonly rand: () => number;
   onOpen?: () => void;
@@ -168,14 +169,26 @@ export class MuxClient {
     this.send(encodeMux(transcriptChannel(name), 'page', body));
   }
 
-  sendTranscript(name: string, text: string, opts?: { mode?: DeliveryMode; interrupt?: boolean }): void {
+  /**
+   * 🎯T562.5: sendId correlates the reply (status = ack, error = definite
+   * failure) to THIS send, not merely "some send happened" — two rapid
+   * sends on the same channel must not have the second's ack satisfy the
+   * first's caller. Returns the id so the caller can match the outcome.
+   */
+  sendTranscript(
+    name: string,
+    text: string,
+    opts?: { mode?: DeliveryMode; interrupt?: boolean },
+  ): string {
     // 🎯T657: mode is the wire; interrupt=true rides along as the deprecated
     // alias so a daemon that predates send.mode still cancels the turn.
     const mode = deliveryModeOf(opts);
-    const body: { text: string; mode?: DeliveryMode; interrupt?: boolean } = { text };
+    const id = 's' + (++this.sendSeq) + '-' + Math.round(this.rand() * 1e9).toString(36);
+    const body: { text: string; mode?: DeliveryMode; interrupt?: boolean; id: string } = { text, id };
     if (mode !== 'submit') body.mode = mode;
     if (mode === 'interrupt') body.interrupt = true;
     this.send(encodeMux(transcriptChannel(name), 'send', body));
+    return id;
   }
 
   /** Retry a queued, undelivered owner message now; never re-sends the text (🎯T811). */

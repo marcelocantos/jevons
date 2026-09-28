@@ -1279,3 +1279,71 @@ func TestT657MuxSteerFallbackIsNamedQueueUntilIdle(t *testing.T) {
 		t.Fatalf("fallback misreported: %+v", body)
 	}
 }
+
+// 🎯T562.5: the composer sends a per-send correlation id; the daemon echoes
+// it back on BOTH the ack (status) and the definite-failure (error) reply,
+// so the client can tell "my send" from "some other send's reply" when two
+// sends race, and can tell an ack from a pre-delivery echo.
+func TestT5625MuxSendStatusEchoesCorrelationID(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	s.SetAgentSendOriginHook(func(string, string, string, delivery.Mode) (AgentSendOutcome, error) {
+		return AgentSendOutcome{Status: "sent", Mechanism: delivery.MechanismSubmit}, nil
+	})
+	conn := &t657Conn{wrote: make(chan struct{}, 4)}
+	s.handleMuxEnvelope(t.Context(), conn, &muxSession{transcripts: make(map[string]*muxWatch)}, muxEnvelope{
+		Ch:   transcriptChannel("jevons"),
+		T:    "send",
+		Body: json.RawMessage(`{"text":"hello","id":"s7-abc"}`),
+	})
+	select {
+	case <-conn.wrote:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no status event followed the send")
+	}
+	body := conn.statusFrame(transcriptChannel("jevons"))
+	if body == nil {
+		t.Fatal("no status frame followed the send")
+	}
+	if body["id"] != "s7-abc" {
+		t.Fatalf("status id = %+v, want s7-abc", body["id"])
+	}
+	if body["status"] != "sent" {
+		t.Fatalf("status = %+v", body)
+	}
+}
+
+// A definite send failure echoes the same id on the error frame, so the
+// composer knows exactly which pending send to keep (not clear the draft).
+func TestT5625MuxSendErrorEchoesCorrelationID(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.overseerName = "jevons"
+	s.SetAgentSendOriginHook(func(string, string, string, delivery.Mode) (AgentSendOutcome, error) {
+		return AgentSendOutcome{}, fmt.Errorf("boom")
+	})
+	conn := &t657Conn{wrote: make(chan struct{}, 4)}
+	s.handleMuxEnvelope(t.Context(), conn, &muxSession{transcripts: make(map[string]*muxWatch)}, muxEnvelope{
+		Ch:   transcriptChannel("jevons"),
+		T:    "send",
+		Body: json.RawMessage(`{"text":"hello","id":"s8-def"}`),
+	})
+	select {
+	case <-conn.wrote:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no error event followed the send")
+	}
+	var body map[string]any
+	conn.mu.Lock()
+	for _, f := range conn.frames {
+		if f.T == "error" && f.Ch == transcriptChannel("jevons") {
+			_ = json.Unmarshal(f.Body, &body)
+		}
+	}
+	conn.mu.Unlock()
+	if body == nil {
+		t.Fatal("no error frame found")
+	}
+	if body["id"] != "s8-def" {
+		t.Fatalf("error id = %+v, want s8-def", body["id"])
+	}
+}

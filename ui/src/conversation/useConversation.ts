@@ -11,15 +11,33 @@ import type { MuxEnvelope } from '../mux/protocol';
 import { normalizeOwnerEchoText, shouldAckPendingSend } from './display';
 import { useDrafts } from '../store/drafts';
 
-type PendingSend = { text: string; at: number };
+// 🎯T562.5: id correlates the daemon's per-send reply (status = ack,
+// error = definite failure) to exactly THIS send. Text-echo matching alone
+// cannot tell "the daemon confirmed my send" from "a pre-delivery paint of
+// the same text arrived for some other reason" — the id-matched status/error
+// is the real definite outcome; the echo match stays as a resilience
+// fallback for a status frame that never arrives (dropped connection).
+type PendingSend = { text: string; at: number; id?: string };
+
+function clearDraftForText(name: string, text: string): void {
+  const cur = useDrafts.getState().drafts[name] || '';
+  if (normalizeOwnerEchoText(cur) === normalizeOwnerEchoText(text)) {
+    useDrafts.getState().setDraft(name, '');
+  }
+}
 
 function clearDraftIfEchoed(name: string, pending: PendingSend | null, frames: unknown[]): boolean {
   if (!pending || !shouldAckPendingSend(pending.text, frames, pending.at)) return false;
-  const cur = useDrafts.getState().drafts[name] || '';
-  if (normalizeOwnerEchoText(cur) === normalizeOwnerEchoText(pending.text)) {
-    useDrafts.getState().setDraft(name, '');
-  }
+  clearDraftForText(name, pending.text);
   return true;
+}
+
+/** True when `env` is a status/error reply correlated to `pending` by id. */
+function matchesPendingId(env: MuxEnvelope, pending: PendingSend | null): boolean {
+  if (!pending || !pending.id) return false;
+  if (env.t !== 'status' && env.t !== 'error') return false;
+  const body = env.body && typeof env.body === 'object' ? (env.body as Record<string, unknown>) : {};
+  return typeof body.id === 'string' && body.id === pending.id;
 }
 
 export type { ConversationMeta } from './reduce';
@@ -54,6 +72,23 @@ export function useConversation(mux: MuxClient | null, name: string) {
       if (hydrating && env.t === 'frame') {
         if (env.body !== undefined) buffer.push(env.body);
         return;
+      }
+      // 🎯T562.5: the definite per-send outcome. status = daemon confirmed
+      // this exact send (ack) — clear the draft NOW, do not wait for a
+      // transcript echo that may be a same-text coincidence or may never
+      // paint before the owner navigates away. error = definite failure —
+      // stop waiting on this id but leave the draft alone (falls through to
+      // the generic path below, which still paints the send_error diagnostic).
+      const idMatch = matchesPendingId(env, pendingSendRef.current);
+      if (idMatch) {
+        const pending = pendingSendRef.current;
+        pendingSendRef.current = null;
+        if (env.t === 'status' && pending) {
+          clearDraftForText(name, pending.text);
+          return;
+        }
+        // env.t === 'error': fall through so the send_error diagnostic frame
+        // still paints; the draft is deliberately left untouched.
       }
       if (env.t === 'meta') {
         hydrating = false;
@@ -107,7 +142,6 @@ export function useConversation(mux: MuxClient | null, name: string) {
         mux?.interruptTranscript(name);
         return;
       }
-      pendingSendRef.current = { text: t, at: stateRef.current.frames.length };
       // Optimistic received on send; the next interleaved progress/meta frame wins (🎯T555.2).
       if (name === 'jevons') {
         const env = {
@@ -120,7 +154,8 @@ export function useConversation(mux: MuxClient | null, name: string) {
         stateRef.current = next;
         dispatch(env);
       }
-      mux?.sendTranscript(name, t, mode === 'submit' ? undefined : { mode });
+      const id = mux?.sendTranscript(name, t, mode === 'submit' ? undefined : { mode });
+      pendingSendRef.current = { text: t, at: stateRef.current.frames.length, id };
     },
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),
     pageOlder: (limit = 50) => {

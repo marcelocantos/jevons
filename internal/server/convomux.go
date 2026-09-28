@@ -829,12 +829,18 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			Text      string `json:"text"`
 			Mode      string `json:"mode"`
 			Interrupt bool   `json:"interrupt"`
+			ID        string `json:"id"`
 		}
 		_ = json.Unmarshal(env.Body, &body)
 		text := strings.TrimSpace(body.Text)
+		sendID := body.ID
 		mode, perr := delivery.Parse(strings.TrimSpace(body.Mode), body.Interrupt)
 		if perr != nil {
-			s.muxWrite(ctx, conn, env.Ch, "error", map[string]any{"error": perr.Error()})
+			errBody := map[string]any{"error": perr.Error()}
+			if sendID != "" {
+				errBody["id"] = sendID
+			}
+			s.muxWrite(ctx, conn, env.Ch, "error", errBody)
 			return
 		}
 		if text == "" && !mode.Interrupts() {
@@ -864,15 +870,31 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			}
 			out, err := s.sendToNamedAgentMode(name, text, sendOriginOwner, mode)
 			if err != nil {
-				s.muxWrite(context.Background(), conn, ch, "error", map[string]any{"error": err.Error()})
+				// 🎯T562.5: this IS the definite-failure half of the per-send
+				// correlated outcome — id echoed back so the composer keeps the
+				// draft for exactly this send and does not treat some other
+				// send's later echo as this one succeeding.
+				errBody := map[string]any{"error": err.Error()}
+				if sendID != "" {
+					errBody["id"] = sendID
+				}
+				s.muxWrite(context.Background(), conn, ch, "error", errBody)
 				return
 			}
-			// 🎯T657: the status event carries the mode the send ran under and
-			// the mechanism that ran, so a steer that was honestly queued reads
-			// as queue_until_idle in the cockpit rather than as "steered".
-			s.muxWrite(context.Background(), conn, ch, "status", map[string]any{
+			// 🎯T657 / 🎯T562.5: the status event carries the mode the send ran
+			// under and the mechanism that ran, so a steer that was honestly
+			// queued reads as queue_until_idle in the cockpit rather than as
+			// "steered"; the echoed id is the definite-ack half of the
+			// per-send correlated outcome (composer clears the draft only on
+			// a status matching the id it sent, never on a bare transcript
+			// echo that might be the pre-delivery paint of someone else's turn).
+			statusBody := map[string]any{
 				"status": out.Status, "mode": string(mode), "mechanism": out.Mechanism,
-			})
+			}
+			if sendID != "" {
+				statusBody["id"] = sendID
+			}
+			s.muxWrite(context.Background(), conn, ch, "status", statusBody)
 		}()
 	}
 }

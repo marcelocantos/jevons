@@ -38,7 +38,8 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); client.close(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-const sends = () => Socket.latest.sent.map((s) => JSON.parse(s)).filter((m) => m.t === 'send').map((m) => m.body);
+// 🎯T562.5: send bodies carry a per-send correlation id; strip it for text-shape assertions.
+const sends = () => Socket.latest.sent.map((s) => JSON.parse(s)).filter((m) => m.t === 'send').map((m) => ({ text: m.body.text }));
 const SEAT = 'jv-t562.2-seat-phase';
 const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: `transcript:${SEAT}`, t, body }) });
 const win = { start: 1, older: 0, total: 0, n: 0, following: true };

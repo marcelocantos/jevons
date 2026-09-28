@@ -40,7 +40,11 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); client.close(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-const sends = () => Socket.latest.sent.map((s) => JSON.parse(s)).filter((m) => m.t === 'send').map((m) => m.body);
+// 🎯T562.5: send bodies carry a per-send correlation id; drop it for shape assertions here.
+const sends = () => Socket.latest.sent.map((s) => JSON.parse(s)).filter((m) => m.t === 'send').map((m) => {
+  const { id: _id, ...rest } = m.body;
+  return rest;
+});
 
 describe('send queue wiring (T657 / T113)', () => {
   it('busy overseer: Enter queues above the composer; idle drains it to the wire; Cmd+Enter steers past it', async () => {
