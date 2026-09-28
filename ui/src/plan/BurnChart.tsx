@@ -2,15 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useId, useLayoutEffect, useRef, useState } from 'react';
-import {
-  burnPaths,
-  burnStops,
-  currentMark,
-  localeWeekStartsOn,
-  periodBoundaryXs,
-  BURN_HEIGHT,
-  BURN_WIDTH,
-} from './burnGeom';
+import { burnPaths, burnStops, currentMark, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 /**
@@ -19,9 +11,7 @@ import type { PlanWindow } from './tickerGroups';
  * line shifts colour along the period through a horizontal wash; without
  * bands the chart keeps its single inherited pace colour. The wash stops
  * at the line. The mark is the cell's current colour, so a band change
- * under the dot cannot paint it as two halves. Faint verticals mark the
- * period's own boundaries: hours on a session, midnights on a week, week
- * starts on a month.
+ * under the dot cannot paint it as two halves.
  */
 export function BurnChart(props: { window: PlanWindow }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -48,7 +38,6 @@ export function BurnChart(props: { window: PlanWindow }) {
   // value lands on an edge.
   const mark = currentMark(props.window);
   const stops = spec ? burnStops(props.window, width) : [];
-  const bounds = periodBoundaryXs(props.window, undefined, localeWeekStartsOn());
   const gradId = 'plan-burn-grad-' + useId().replace(/[^A-Za-z0-9_-]/g, '');
   const paint = stops.length ? `url(#${gradId})` : undefined;
   return (
@@ -75,12 +64,6 @@ export function BurnChart(props: { window: PlanWindow }) {
         width={BURN_WIDTH}
         height={BURN_HEIGHT}
       />
-      {bounds.map((x, i) => {
-        const px = (Math.round(x * 10) / 10).toString();
-        return (
-          <line key={i} className="plan-burn-bound" x1={px} x2={px} y1="0" y2={BURN_HEIGHT} />
-        );
-      })}
       {spec ? <path className="plan-burn-line" d={spec.line} style={paint ? { stroke: paint } : undefined} /> : null}
       {mark ? <path className="plan-burn-now" d={mark} /> : null}
     </svg>

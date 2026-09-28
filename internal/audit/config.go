@@ -87,7 +87,9 @@ const (
 // DefaultCommand is the headless advanced-model invocation. The literal
 // "{model}" is substituted with the configured model at dispatch. The
 // auditor reads the manifest files itself (it has file tools) and answers
-// with the JSON report; the prompt arrives on stdin.
+// with the JSON report; the prompt is appended as the command's trailing
+// positional argument (see ExecRunner.RunAudit — grok's headless mode
+// requires this and does not read stdin).
 func DefaultCommand() []string {
 	return []string{"claude", "-p", "--model", "{model}"}
 }

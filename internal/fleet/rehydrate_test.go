@@ -152,7 +152,6 @@ func TestRehydrateSkipsHealthySession(t *testing.T) {
 func TestSessionLostGate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("JEVONS_SPOOL_DIR", filepath.Join(home, "spool"))
 	workDir := t.TempDir()
 
 	claudeLost := &claudia.AgentDef{
@@ -182,18 +181,8 @@ func TestSessionLostGate(t *testing.T) {
 
 	cursor := *claudeLost
 	cursor.Provider = claudia.ProviderCursor
-	if !SessionLost(&cursor) {
-		t.Fatal("materialized cursor sidecar row with no spool not reported lost")
-	}
-	if err := os.MkdirAll(filepath.Join(home, "spool"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, "spool", "events-2026-09-25.log"),
-		[]byte(`{"ts":"2026-09-25T00:00:00.000Z","seat":"a","type":"ready"}`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if SessionLost(&cursor) {
-		t.Fatal("cursor sidecar row with spool history reported lost")
+		t.Fatal("cursor row judged lost from a provider-private store")
 	}
 
 	// Empty provider means Claude, and the transcript exists.

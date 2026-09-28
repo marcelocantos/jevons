@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BurnChart } from './BurnChart';
-import { burnStops, localeWeekStartsOn, periodBoundaryXs } from './burnGeom';
+import { burnStops } from './burnGeom';
 import { CLASS_AHEAD, CLASS_HOT, CLASS_LOCKED, CLASS_UNDER, paceClassForBand } from './pace';
 import type { PlanWindow } from './tickerGroups';
 
@@ -109,31 +109,6 @@ describe('burn chart colour follows the band over time (🎯T667)', () => {
     expect(rule![1]).toContain('border-color');
     // currentColor here is the cell's pace colour, which drew red and blue
     // dividers between the columns.
-    expect(rule![1]).not.toContain('currentColor');
-  });
-
-  it('paints one faint vertical per period boundary, under the usage line', () => {
-    const w = week([{ at: iso(start + 1 * day), remaining_percent: 80 }]);
-    const { container } = render(<BurnChart window={w} />);
-    const lines = [...container.querySelectorAll('.plan-burn-bound')];
-    const want = periodBoundaryXs(w, undefined, localeWeekStartsOn()).map((x) =>
-      (Math.round(x * 10) / 10).toString(),
-    );
-    expect(lines.map((el) => el.getAttribute('x1'))).toEqual(want);
-    expect(lines.every((el) => el.getAttribute('y1') === '0' && el.getAttribute('y2') === '32')).toBe(true);
-    const svg = container.querySelector('svg')!;
-    const plot = svg.querySelector('.plan-burn-plot');
-    const stroke = svg.querySelector('.plan-burn-line');
-    expect(plot && lines[0] && stroke).toBeTruthy();
-    expect(plot!.compareDocumentPosition(lines[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(lines[0].compareDocumentPosition(stroke!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it('keeps the boundary stroke off the pace colour', () => {
-    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cockpit.css'), 'utf8');
-    const rule = /\.plan-burn-bound \{([^}]*)\}/.exec(css);
-    expect(rule, 'boundary rule').toBeTruthy();
-    expect(rule![1]).toContain('rgb(0 0 0 / 0.14)');
     expect(rule![1]).not.toContain('currentColor');
   });
 

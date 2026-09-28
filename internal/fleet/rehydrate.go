@@ -12,7 +12,6 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // Lost-session rehydrate (🎯T313).
@@ -96,16 +95,14 @@ const StatusDeadUnmaterialized = "dead_unmaterialized"
 // the row is Materialized (so Launch will pass RequireResume) but the
 // Claude transcript backing its session id is not on disk.
 //
-// Sidecar seats (anthropic, openai-codex, cursor, xai-oauth) read
-// ~/.jevons/spool, not a vendor JSONL (🎯T866.3). Grok without a remint
-// is not probed here. A missing exclusive home is not evidence that a
-// conversation was lost (🎯T627.1).
+// Grok is not probed here. A missing exclusive home is not evidence that
+// a conversation was lost (🎯T627.1): session/load can fail for a store
+// that still exists, and rotating on that discards it. A home that was
+// never published is a different error — exclusive GROK_HOME unavailable
+// — and LaunchRecovering remints on that wording only.
 func SessionLost(def *claudia.AgentDef) bool {
 	if def == nil || !def.Materialized || def.SessionID == "" {
 		return false
-	}
-	if spool.SidecarProvider(string(def.Provider)) {
-		return !spool.SeatHasHistory(spool.Dir(), def.Name)
 	}
 	switch def.Provider {
 	case "", claudia.ProviderClaude:

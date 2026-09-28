@@ -49,10 +49,16 @@ func (f RunnerFunc) RunAudit(ctx context.Context, a Assignment) (RunOutput, erro
 	return f(ctx, a)
 }
 
-// ExecRunner invokes the configured advanced-model CLI, feeding the prompt
-// on stdin and reading the report from stdout. The auditor runs in the
-// repository with its own file tools: the prompt carries the bounded file
-// list, not the file contents, so a full-scan manifest stays affordable.
+// ExecRunner invokes the configured advanced-model CLI, passing the prompt
+// as the command's trailing positional argument and reading the report
+// from stdout. Both supported CLIs (`claude [options] [prompt]` and
+// `grok [OPTIONS] [PROMPT]`) accept the prompt this way; grok's headless
+// `-p`/`--single <PROMPT>` in particular requires it as an argument and
+// does not read stdin at all (verified 2026-09-23: a bare `-p -m <model>`
+// with the prompt on stdin fails with "a value is required for '--single
+// <PROMPT>'"). The auditor runs in the repository with its own file tools:
+// the prompt carries the bounded file list, not the file contents, so a
+// full-scan manifest stays affordable and well under argv limits.
 type ExecRunner struct {
 	// Env optionally overrides the child environment (nil = inherit).
 	Env []string
@@ -71,14 +77,18 @@ func (r ExecRunner) RunAudit(ctx context.Context, a Assignment) (RunOutput, erro
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, a.Command[0], a.Command[1:]...)
+	args := append(append([]string{}, a.Command[1:]...), a.Prompt)
+	cmd := exec.CommandContext(ctx, a.Command[0], args...)
 	if w := strings.TrimSpace(a.Workdir); w != "" {
 		cmd.Dir = w
 	}
 	if r.Env != nil {
 		cmd.Env = r.Env
 	}
-	cmd.Stdin = strings.NewReader(a.Prompt)
+	// Stdin is left disconnected (reads from the null device): both
+	// supported CLIs take the prompt as an argument above, and leaving
+	// stdin open on a non-interactive invocation risks a hang if either
+	// CLI ever probes for interactive input.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -19,14 +19,8 @@ const PROVIDER_COMPANY: Record<string, string> = {
   cursor: CURSOR,
 };
 
-const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'grok', 'gpt', 'composer'];
-const FAMILY_INITIAL: Record<string, string> = {
-  opus: 'O',
-  sonnet: 'S',
-  haiku: 'H',
-  fable: 'F',
-  composer: 'C',
-};
+const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'grok', 'gpt'];
+const FAMILY_INITIAL: Record<string, string> = { opus: 'O', sonnet: 'S', haiku: 'H', fable: 'F' };
 const COMPANY_LABEL: Record<string, string> = {
   anthropic: 'Anthropic',
   xai: 'xAI',
@@ -42,7 +36,6 @@ function norm(s: unknown): string {
 export function companyFromModel(model: string): string {
   const m = norm(model);
   if (!m) return '';
-  if (/composer/.test(m)) return CURSOR;
   if (/claude|opus|sonnet|haiku|fable/.test(m)) return ANTHROPIC;
   if (/grok/.test(m)) return XAI;
   if (/gpt|codex|^o\d/.test(m)) return OPENAI;
@@ -135,18 +128,18 @@ export function modelPrefix(agent: { provider?: string; model?: string } | null 
   const model = String(a.model || '');
   const company = companyFor(provider, model);
   if (!company) return { company: '', initial: '', version: '', label: '', title: '' };
-  // The mark is the provider. The subscript is the model this poll names.
-  // An empty model is the mark alone. This function does not decide that a
-  // model change happened; mergeAgentChrome drops the previous id when it did.
+  // The mark is the provider. The condensed text is the model that is
+  // actually running, including a Claude model on a Cursor seat. Hiding
+  // that text because the model company differs left every Cursor PO
+  // looking model-less (2026-09-22).
   const initial = familyInitial(model);
   const version = versionOf(model);
-  const title = (COMPANY_LABEL[company] || company) + (model ? ' · ' + model : '');
+  const shown = model || provider;
+  const title = (COMPANY_LABEL[company] || company) + (shown ? ' · ' + shown : '');
   return { company, initial, version, label: initial + version, title };
 }
 
-// Hold provider and model only when a poll omits both. A stated provider
-// with no model cleared the version: the previous id is not carried, on
-// any provider. A stated model replaces it.
+/** Keep last provider/model when a poll omits them (omitempty). */
 export function mergeAgentChrome<T extends { name: string; provider?: string; model?: string }>(
   prev: T[],
   next: T[],
@@ -155,12 +148,10 @@ export function mergeAgentChrome<T extends { name: string; provider?: string; mo
   return next.map((a) => {
     const old = by.get(a.name);
     if (!old) return a;
-    const providerStated = norm(a.provider) !== '';
-    const modelStated = norm(a.model) !== '';
-    const provider = providerStated ? a.provider || '' : old.provider || '';
-    let model = '';
-    if (modelStated) model = a.model || '';
-    else if (!providerStated) model = old.model || '';
-    return { ...a, provider, model };
+    return {
+      ...a,
+      provider: a.provider || old.provider,
+      model: a.model || old.model,
+    };
   });
 }
