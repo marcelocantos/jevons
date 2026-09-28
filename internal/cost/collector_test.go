@@ -224,6 +224,11 @@ func TestSessionIDFromPath(t *testing.T) {
 // USD/hr — permanent zero under real burn is the failure mode.
 func TestGrokBurnProducesNonZeroRate(t *testing.T) {
 	dir := t.TempDir()
+	// Isolate spool.Dir() from the owner's real ~/.jevons/spool (T892):
+	// ScanOnce also walks the spool root, and a real one on the dev
+	// machine makes this test's active set depend on whatever is lying
+	// around outside the fixture.
+	t.Setenv("JEVONS_SPOOL_DIR", filepath.Join(dir, "spool"))
 	sid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	sessDir := filepath.Join(dir, "projects", "enc-cwd", sid)
 	if err := os.MkdirAll(sessDir, 0o755); err != nil {
@@ -360,6 +365,9 @@ func TestStoreDedupAndWindows(t *testing.T) {
 // and idempotent replay after truncation (the rewind case).
 func TestCollectorEndToEnd(t *testing.T) {
 	dir := t.TempDir()
+	// Isolate spool.Dir() from the owner's real ~/.jevons/spool (T892);
+	// see TestGrokBurnProducesNonZeroRate for why.
+	t.Setenv("JEVONS_SPOOL_DIR", filepath.Join(dir, "spool"))
 	proj := filepath.Join(dir, "projects", "-work-repo")
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatal(err)

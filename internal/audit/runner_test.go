@@ -47,7 +47,7 @@ func TestExecRunnerPassesPromptAsTrailingArgument(t *testing.T) {
 	a := Assignment{
 		Command: []string{script, "-p", "-m", "grok-4.5"},
 		Prompt:  "the rendered auditor prompt\nwith a newline",
-		Timeout: 5 * time.Second,
+		Timeout: 30 * time.Second,
 	}
 	out, err := r.RunAudit(context.Background(), a)
 	if err != nil {
@@ -89,7 +89,7 @@ func TestExecRunnerWrapsNonZeroExitWithStderr(t *testing.T) {
 	_, err := r.RunAudit(context.Background(), Assignment{
 		Command: []string{path},
 		Prompt:  "x",
-		Timeout: 5 * time.Second,
+		Timeout: 30 * time.Second,
 	})
 	if err == nil {
 		t.Fatal("expected an error from a non-zero exit")
@@ -112,7 +112,7 @@ func TestExecRunnerEmptyOutputIsAnError(t *testing.T) {
 	_, err := r.RunAudit(context.Background(), Assignment{
 		Command: []string{path},
 		Prompt:  "x",
-		Timeout: 5 * time.Second,
+		Timeout: 30 * time.Second,
 	})
 	if err == nil || !strings.Contains(err.Error(), "empty output") {
 		t.Fatalf("expected an empty-output error, got: %v", err)

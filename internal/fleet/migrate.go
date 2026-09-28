@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -118,6 +119,24 @@ func (f *Claudia) ClearHandover(name string) error {
 	return f.handovers.Clear(name)
 }
 
+// seatInFlight asks the shared seat-state authority (🎯T766.2, census
+// derivation 5) whether a turn is running, instead of migrate deriving its
+// own answer from a bare .PromptInFlight() nobody else sees. Unknown (no
+// authority wired, or the seat has never been observed) is read as not
+// in-flight: a migrate that cannot tell is not the caller that should
+// invent a false positive and refuse to move a quiescent seat.
+func (f *Claudia) seatInFlight(name string, live *claudia.Agent) bool {
+	if live == nil {
+		return false
+	}
+	if f != nil && f.seats != nil {
+		if st, ok := f.seats.Get(name); ok {
+			return st.InFlight == seatstate.Yes
+		}
+	}
+	return false
+}
+
 // PrepareMigration asks Claudia to move an agent to provider `to`. A live
 // handle moves in place; a stopped seat is transferred, persisted, and
 // launched by Claudia. The returned Pending is a compatibility result for
@@ -152,7 +171,7 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 		return f.migrateStoppedViaClaudia(name, *def, target, model, force)
 	}
 	if live := f.reg.Get(name); live != nil && live.Alive() {
-		if live.PromptInFlight() && !force {
+		if f.seatInFlight(name, live) && !force {
 			return handover.Pending{}, fmt.Errorf("migrate %q: turn in flight; wait or interrupt before context transfer", name)
 		}
 		draft := handover.Pending{

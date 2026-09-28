@@ -13,6 +13,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
@@ -311,9 +312,7 @@ func (s *Server) planHostDeferral(action planusage.PlanAction) string {
 	}
 	inFlight := false
 	if action.Action == claudia.SeatMigrate {
-		if proc := s.registry.Get(action.Name); proc != nil {
-			inFlight = proc.PromptInFlight()
-		}
+		inFlight = s.seatInFlight(action.Name) == seatstate.Yes
 	}
 	return hostPlanDeferral(action, def, inFlight)
 }
