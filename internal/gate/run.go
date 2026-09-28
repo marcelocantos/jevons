@@ -111,6 +111,18 @@ func Run(args *RunArgs) (*Record, error) {
 	cmd.Stdout = &teeWriter{mu: &mu, buf: &captured, out: stdout}
 	cmd.Stderr = &teeWriter{mu: &mu, buf: &captured, out: stderr}
 
+	// 🎯T603 — a heavy package run (go test, or a make target that runs one)
+	// waits for the host-pressure lease before it starts, so N seats each
+	// running the same heavy suite queue rather than collectively OOM the
+	// host. A store-less Run (tests only) skips the lease.
+	if args.Store != nil && HeavyCommand(args.Command) {
+		release, err := AcquireHeavyLease(args.Store.Root)
+		if err != nil {
+			return rec, fmt.Errorf("gate run %s: heavy lease: %w", rec.ID, err)
+		}
+		defer release()
+	}
+
 	runErr := cmd.Run()
 	rec.Ended = now()
 
