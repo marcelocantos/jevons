@@ -69,8 +69,12 @@ async function main() {
   });
   await page.route('https://fonts.**/*', route => route.abort());
   await page.goto(base.href);
+  // 🎯T866.5: Launch rewrites a subscription-plan fleet id onto the sidecar
+  // runtime identity before /api/agents reports it (grok\u2192xai-oauth,
+  // claude\u2192anthropic, codex\u2192openai-codex); cursor is unchanged.
+  const sidecarLaunchProvider = provider => ({ grok: 'xai-oauth', claude: 'anthropic', codex: 'openai-codex' })[provider] || provider;
   const agents = await (await fetch(new URL('/api/agents', base))).json();
-  assert.equal(agents.find(a => a.name === 'jevons')?.provider, values.provider);
+  assert.equal(agents.find(a => a.name === 'jevons')?.provider, sidecarLaunchProvider(values.provider));
   const sideWork = await fs.mkdtemp(path.join(values.workdir, 'boundary-aside-'));
   await mcp('jevons_thread_spawn', { id: values.aside, provider: values.provider, owner_asked: true, workdir: sideWork, description: 'isolated owner-boundary check' });
   asideCreated = true;
