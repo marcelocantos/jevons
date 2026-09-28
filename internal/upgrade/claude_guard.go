@@ -115,7 +115,7 @@ func reapClaudeSessionHolders(sessionID string) ([]int, error) {
 var ErrClaudeHeldByBroker = errors.New("a claude client the broker owns already holds the session")
 
 // guardClaudeSession is the pre-launch half of the one-client guard. With a
-// broker reachable, or one that cannot be ruled out ([brokerStateNow] unknown:
+// broker reachable, or one that cannot be ruled out ([brokerMayOwnSeats]:
 // a socket exists but did not answer, as under host load), it never stops
 // anything: a holder is refused (retriable, see [ReattachSeatsContext]); a free
 // session launches. Only with positive evidence of no broker are the holders

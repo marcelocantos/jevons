@@ -20,11 +20,10 @@ import (
 // returns false because its 2s round trip timed out, while a socket exists.
 func timedOutBroker(t *testing.T) {
 	t.Helper()
-	pa, ps, pr, pp := brokerAvailable, brokerSocketProbe, brokerUnknownReprobes, brokerUnknownPause
-	t.Cleanup(func() { brokerAvailable, brokerSocketProbe, brokerUnknownReprobes, brokerUnknownPause = pa, ps, pr, pp })
+	pa, ps := brokerAvailable, brokerSocketProbe
+	t.Cleanup(func() { brokerAvailable, brokerSocketProbe = pa, ps })
 	brokerAvailable = func() bool { return false }
 	brokerSocketProbe = func() brokerSocketState { return socketMaybe }
-	brokerUnknownReprobes, brokerUnknownPause = 2, time.Millisecond
 }
 
 // A probe timeout with a holder on the session: the launch is refused and no
@@ -48,16 +47,27 @@ func TestT796_1ProbeTimeoutRefusesLaunchAndSignalsNothing(t *testing.T) {
 	}
 }
 
-// The re-probe answers on a later try: that is present, not unknown.
-func TestT796_1SlowBrokerAnswersOnReprobe(t *testing.T) {
+// 🎯T883: a socket that exists is enough to say a broker may own the seats.
+// The broker itself is not asked, so one that accepts and never answers
+// costs nothing here; with no socket, an answering broker is still a yes and
+// a silent one is the positive-evidence no.
+func TestT883SocketAloneMeansBrokerMayOwnSeats(t *testing.T) {
 	timedOutBroker(t)
 	calls := 0
-	brokerAvailable = func() bool { calls++; return calls == 3 }
-	if got := brokerStateNow(); got != brokerPresent {
-		t.Fatalf("state = %v, want present", got)
+	brokerAvailable = func() bool { calls++; return false }
+	if !brokerMayOwnSeats() {
+		t.Fatal("an existing broker socket was ruled out")
 	}
-	if calls != 3 {
-		t.Fatalf("calls = %d", calls)
+	if calls != 0 {
+		t.Fatalf("asked the broker %d times though its socket exists", calls)
+	}
+	brokerSocketProbe = func() brokerSocketState { return socketNone }
+	if brokerMayOwnSeats() {
+		t.Fatal("no socket and no answer should rule the broker out")
+	}
+	brokerAvailable = func() bool { return true }
+	if !brokerMayOwnSeats() {
+		t.Fatal("a broker that answers was ruled out because the socket probe missed it")
 	}
 }
 

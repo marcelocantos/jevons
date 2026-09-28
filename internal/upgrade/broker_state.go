@@ -5,7 +5,6 @@ package upgrade
 
 import (
 	"errors"
-	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,30 +13,13 @@ import (
 	"time"
 )
 
-// brokerState is what the jevons side can honestly say about a claudia broker.
+// Every guard that would signal a seat's process, or reap what a broker may
+// have parented, asks one question: could a claudia broker own the seats?
 // [brokerAvailable] is a bool, and false conflates "nothing is there" with "it
 // did not answer in 2s". Under host load (100-200) the second is common, and
 // every guard that read false as "no broker" stopped the broker's own client
-// (🎯T796, 03:19 pid 4864; 🎯T796.1).
-type brokerState int
-
-const (
-	// brokerAbsent: definitively no broker (switched off, no socket, or a
-	// socket file nobody listens on). Only this state may signal a holder.
-	brokerAbsent brokerState = iota
-	// brokerPresent: the broker answered.
-	brokerPresent
-	// brokerUnknown: a socket exists but did not answer within the bounded
-	// re-probes. Treated as present: refuse and retry, signal nothing.
-	brokerUnknown
-)
-
-// Re-probes after an unanswered first probe. Each claudia probe is itself
-// bounded at 2s, so the worst case is about (retries+1)*2s + retries*pause.
-var (
-	brokerUnknownReprobes = 3
-	brokerUnknownPause    = time.Second
-)
+// (🎯T796, 03:19 pid 4864; 🎯T796.1). So false needs positive evidence that no
+// broker listens; a socket that exists but does not answer is a yes.
 
 // brokerSocketState is the seam over the filesystem: does a socket exist that
 // could belong to a broker?
@@ -50,31 +32,20 @@ const (
 
 var brokerSocketProbe = probeBrokerSocket
 
-// brokerStateNow classifies the broker. Present when it answers; absent only
-// on positive evidence there is no listener; unknown otherwise, after bounded
-// re-probes.
-func brokerStateNow() brokerState {
-	if brokerAvailable() {
-		return brokerPresent
-	}
-	if brokerSocketProbe() == socketNone {
-		return brokerAbsent
-	}
-	for range brokerUnknownReprobes {
-		time.Sleep(brokerUnknownPause)
-		if brokerAvailable() {
-			return brokerPresent
-		}
-	}
-	slog.Warn("claudia broker socket exists but did not answer; treating it as present and signalling nothing")
-	return brokerUnknown
-}
-
-// brokerMayOwnSeats is true for a broker that is present or that could not be
-// ruled out. Every guard that would signal a seat's process, or reap what a
-// broker may have parented, gates on this rather than on brokerAvailable.
+// brokerMayOwnSeats is true for a broker that answers or that cannot be ruled
+// out. It asks the socket first: when one exists the answer is yes whether or
+// not the broker replies, so an unanswering broker costs one bounded dial
+// instead of re-probing it. Re-probes told "present" from "unknown", which no
+// caller distinguishes, and held shutdown ~11 s behind a wedged broker
+// (🎯T883). Only when no socket is found is the broker itself asked, in case
+// this probe's socket resolution ever diverges from claudia's; that fails fast.
 // Tests replace it; it is a var for that reason.
-var brokerMayOwnSeats = func() bool { return brokerStateNow() != brokerAbsent }
+var brokerMayOwnSeats = func() bool {
+	if brokerSocketProbe() == socketMaybe {
+		return true
+	}
+	return brokerAvailable()
+}
 
 // probeBrokerSocket mirrors claudia's own socket resolution (its broker
 // package is internal): CLAUDIA_NO_BROKER off, CLAUDIA_BROKER_SOCKET, else
