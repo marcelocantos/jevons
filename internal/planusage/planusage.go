@@ -299,6 +299,18 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 			b.AgeSeconds = int64(age / time.Second)
 			b.Stale = staleAfter > 0 && age > staleAfter
 		}
+		// 🎯T842: a reading fetched well inside staleAfter can still
+		// describe a window whose rollover has already passed — the
+		// provider's own resets_at is a stronger honesty signal than our
+		// poll cadence. Without this, a broker restart (or any gap that
+		// outlives one window but not staleAfter) serves last night's
+		// percentages under a fresh-looking timestamp as if they were the
+		// new period's numbers. Any published resets_at in the past marks
+		// the whole backend stale; the numbers are still served (best we
+		// have), just honestly labelled.
+		if windowRolledOver(b.Windows, now) {
+			b.Stale = true
+		}
 		snap.Backends = append(snap.Backends, b)
 	}
 	sortBackends(snap.Backends)
@@ -349,4 +361,17 @@ func copyLimitSeconds(d time.Duration) *int64 {
 		return nil
 	}
 	return &sec
+}
+
+// windowRolledOver reports whether any window in bs publishes a resets_at
+// that has already passed as of now (🎯T842). A window's own rollover is a
+// harder staleness signal than our poll cadence: the provider is telling us
+// the period this reading describes is over.
+func windowRolledOver(bs []Window, now time.Time) bool {
+	for _, w := range bs {
+		if w.ResetsAt != nil && !w.ResetsAt.IsZero() && w.ResetsAt.Before(now) {
+			return true
+		}
+	}
+	return false
 }
