@@ -93,8 +93,18 @@ func AgentPATH(lookPath LookPath, tools []string) (path string, missing []string
 }
 
 // RestartHelpers are the binaries under <repo>/bin that the restart script
-// re-execs itself through, in the order it needs them.
-var RestartHelpers = []string{"detach", "runlock"}
+// needs and (like buildsnap below) will `go build` on demand when they are
+// absent — the set 🎯T606 exists to keep honest as the script grows.
+//
+// detach, runlock: re-exec'd through, in the order the script needs them.
+// claudiapin: 🎯T448 hard-fails the whole restart ("refusing a silent
+// claudia pin") when it is missing and cannot be built — the same
+// no-go-on-launchd failure this file exists to name, so it belongs here.
+//
+// buildident is deliberately NOT listed: the script's own fallback
+// (`|| return 0`) treats a failed build as silently skippable, so a
+// missing `go` degrades that one check rather than blocking the restart.
+var RestartHelpers = []string{"detach", "runlock", "claudiapin"}
 
 // RestartBlocker names why an attempted restart cannot succeed, or returns
 // empty when nothing stands in the way.

@@ -111,6 +111,7 @@ func TestRestartBlockerIsSilentWhenTheHelpersAreThere(t *testing.T) {
 	repo := t.TempDir()
 	writeHelper(t, repo, "detach")
 	writeHelper(t, repo, "runlock")
+	writeHelper(t, repo, "claudiapin")
 	writeHelper(t, repo, "jevonsd")
 
 	// No `go` anywhere, and it does not matter: nothing needs building.
@@ -144,6 +145,7 @@ func TestRestartBlockerNamesTheMissingHelperAndTheFix(t *testing.T) {
 	for _, want := range []string{
 		"bin/detach",
 		"bin/runlock",
+		"bin/claudiapin",
 		repo,
 		supervise.LaunchdDefaultPATH,
 		"make watchdog-install",
@@ -154,10 +156,27 @@ func TestRestartBlockerNamesTheMissingHelperAndTheFix(t *testing.T) {
 	}
 }
 
+// 🎯T606: claudiapin is a hard-fail dependency of the restart script
+// (🎯T448 "refusing a silent claudia pin"), same as detach/runlock — a
+// machine with no `go` and no bin/claudiapin must be told, not left to
+// discover the die() at 03:00.
+func TestRestartBlockerNamesAMissingClaudiapinAlone(t *testing.T) {
+	repo := t.TempDir()
+	writeHelper(t, repo, "detach")
+	writeHelper(t, repo, "runlock")
+	writeHelper(t, repo, "jevonsd")
+
+	got := supervise.RestartBlocker(repo, fakeLookPath(nil), supervise.LaunchdDefaultPATH)
+	if !strings.Contains(got, "bin/claudiapin") {
+		t.Errorf("missing claudiapin with no go was not reported: %q", got)
+	}
+}
+
 func TestRestartBlockerWantsBuildsnapOnlyWithNoBinaryToFallBackOn(t *testing.T) {
 	repo := t.TempDir()
 	writeHelper(t, repo, "detach")
 	writeHelper(t, repo, "runlock")
+	writeHelper(t, repo, "claudiapin")
 
 	// No bin/jevonsd, so the restart has to rebuild one, which needs
 	// buildsnap, which needs go.
