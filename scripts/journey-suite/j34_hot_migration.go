@@ -21,14 +21,19 @@ import (
 
 // A live seat on a hot provider must follow Claudia's placement verdict once,
 // retain its predecessor context, and stay on the chosen destination after
-// the daemon restarts. The overseer stays on the healthy Codex provider.
+// the daemon restarts. The destination is the isolate's own subscription
+// provider (Grok or Codex), which stays healthy so the overseer does not move.
+// Run it on whichever of the two has real allowance left: the fixture only
+// shapes Claudia's placement, and the transfer and successor turns spend the
+// destination plan for real.
 func (s *suite) jHotProviderMigration() error {
 	return s.withIsolatedBroker((*suite).hotProviderMigrationWithBroker)
 }
 
 func (s *suite) hotProviderMigrationWithBroker() error {
-	if claudia.PlanProvider(s.provider) != claudia.ProviderCodex {
-		return fmt.Errorf("J34 requires a Codex isolate, got %s", s.provider)
+	dest := claudia.PlanProvider(s.provider)
+	if dest != claudia.ProviderGrok && dest != claudia.ProviderCodex {
+		return fmt.Errorf("J34 requires a Grok or Codex isolate, got %s", s.provider)
 	}
 	id := fmt.Sprintf("orch-hot-mig-%d", time.Now().Unix()%100000)
 	work := filepath.Join(s.stateDir, "hot-migrate-work")
@@ -68,10 +73,10 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 	}
 
 	// The isolate already reads this file on each placement check. Only
-	// Cursor becomes hot; Codex remains an eligible destination for this
+	// Cursor becomes hot; the isolate provider remains an eligible destination for this
 	// worker and the healthy overseer does not need to move.
 	hot := planFixtureSnapshot("cursor", 0, 100)
-	green := planFixtureSnapshot("codex", defaultPlanRemaining, defaultPlanUsed)
+	green := planFixtureSnapshot(string(dest), defaultPlanRemaining, defaultPlanUsed)
 	hot.Backends = append(hot.Backends, green.Backends...)
 	raw, err := json.Marshal(hot)
 	if err != nil {
@@ -98,7 +103,7 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		}
 	}
 	if choice == nil || choice.Author != claudia.DecisionAuthor || choice.Action != claudia.SeatMigrate ||
-		claudia.PlanProvider(claudia.Provider(choice.To)) != claudia.ProviderCodex || choice.Reason == "" {
+		claudia.PlanProvider(claudia.Provider(choice.To)) != dest || choice.Reason == "" {
 		return fmt.Errorf("Claudia did not explain an eligible move: choice=%+v decisions=%+v", choice, decisions)
 	}
 	resp, err = http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
@@ -125,9 +130,9 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	destination := after[id]
-	if claudia.PlanProvider(destination.Provider) != claudia.ProviderCodex ||
+	if claudia.PlanProvider(destination.Provider) != dest ||
 		destination.SessionID == "" || destination.SessionID == source.SessionID {
-		return fmt.Errorf("migration did not persist a distinct Codex destination: source=%+v destination=%+v", source, destination)
+		return fmt.Errorf("migration did not persist a distinct %s destination: source=%+v destination=%+v", dest, source, destination)
 	}
 	if _, err := os.Stat(s.handoverPath(id)); err == nil {
 		return fmt.Errorf("broker-owned migration wrote a Jevons handover")
@@ -156,7 +161,7 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	if got := reopened[id]; got.SessionID != destination.SessionID ||
-		claudia.PlanProvider(got.Provider) != claudia.ProviderCodex {
+		claudia.PlanProvider(got.Provider) != dest {
 		return fmt.Errorf("hot seat moved again after restart: destination=%+v reopened=%+v", destination, got)
 	}
 	payload, err = s.agentTranscriptHTTP(id)
