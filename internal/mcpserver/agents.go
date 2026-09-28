@@ -30,6 +30,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/upgrade"
+	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
 // prefixRehydrate puts the lost-session account in front of whatever
@@ -470,6 +471,24 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	}
 	life["role"] = resolved.Name
 
+	// 🎯T254.2: same-repo multi-worker fan-out defaults to isolation. A plain
+	// worker whose exact workdir is already held by another live work agent
+	// gets redirected into its own git worktree rather than sharing one dirty
+	// tree — only an integrator (role=boss) or a PO/auditor/aside/overseer
+	// touches the shared workdir directly.
+	if shared := s.workdirSharedWithLiveWorker(workdir, name); worktree.NeedsIsolation(purpose, resolved.Name, shared) {
+		if wt, err := worktree.Ensure(workdir, name); err == nil {
+			life["base_workdir"] = workdir
+			workdir = wt
+			life["workdir"] = workdir
+			life["worktree_isolated"] = true
+		} else {
+			// Not a git repo, or git refused: fall back to the shared workdir
+			// rather than refusing the spawn outright.
+			life["worktree_isolate_err"] = err.Error()
+		}
+	}
+
 	// 🎯T222: work + target_id → no second implementer; closed targets refused.
 	if purpose == claudia.PurposeWork && targetID != "" {
 		if msg := s.refuseEngagedOrClosedTarget(name, workdir, targetID, forceEngage); msg != "" {
@@ -721,6 +740,38 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 
 // formatAgentStartResult is the owner-visible jevons_agent_start text.
 // 🎯T476: routeNote must already cite which knob selected the provider.
+// workdirSharedWithLiveWorker reports whether some OTHER registered work
+// agent is already live with the identical workdir string as name is about
+// to be started in — the concrete 🎯T254.2 sharing condition that triggers
+// worktree isolation. Exact-string match, not path normalization: two
+// distinct spellings of the same directory are not treated as sharing here,
+// matching how the registry itself keys workdir.
+func (s *Server) workdirSharedWithLiveWorker(workdir, excludeName string) bool {
+	if s == nil || s.registry == nil || strings.TrimSpace(workdir) == "" {
+		return false
+	}
+	for _, d := range s.registry.List() {
+		if strings.TrimSpace(d.Name) == "" || d.Name == excludeName {
+			continue
+		}
+		if d.WorkDir != workdir {
+			continue
+		}
+		purpose := strings.TrimSpace(d.Purpose)
+		if purpose == "" {
+			purpose = claudia.PurposeWork
+		}
+		if purpose != claudia.PurposeWork {
+			continue
+		}
+		proc := s.registry.Get(d.Name)
+		if proc != nil && proc.Alive() {
+			return true
+		}
+	}
+	return false
+}
+
 func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, provider, model, session, routeNote, prompt string) string {
 	msg := fmt.Sprintf(
 		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, role: %s, provider: %s",
