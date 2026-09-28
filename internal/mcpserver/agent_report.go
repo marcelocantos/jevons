@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/notice"
 )
 
 // SetAgentReportDir wires the durable agent-report store (🎯T388) under
@@ -74,13 +75,45 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 	if dir == "" {
 		return agentreport.Handle{}
 	}
-	rec, err := agentreport.Save(dir, agentName, text, time.Now())
+	now := time.Now()
+	rec, err := agentreport.Save(dir, agentName, text, now)
 	if err != nil {
 		slog.Error("agent report store failed",
 			"agent", agentName, "len", len(text), "err", err)
 		return agentreport.Handle{}
 	}
+	s.recordTerminalNotice(dir, agentName, text, now)
 	return rec.Handle()
+}
+
+// recordTerminalNotice extracts a structured 🎯T254.4 terminal-outcome notice
+// from a stored report and appends it to the reporting agent's parent's
+// durable inbox. Best-effort: a non-terminal report (status-ping, ack, plain
+// prose) yields ok=false and nothing is written — free text remains the only
+// surface for those, unchanged from before this existed.
+func (s *Server) recordTerminalNotice(dir, agentName, text string, at time.Time) {
+	parent := s.agentParent(agentName)
+	n, ok := notice.FromReport(agentName, parent, text, at)
+	if !ok {
+		return
+	}
+	if err := notice.Append(dir, n); err != nil {
+		slog.Error("terminal notice append failed",
+			"agent", agentName, "parent", parent, "err", err)
+	}
+}
+
+// agentParent reads the registry's Parent for name, empty when unknown or
+// the registry is unwired.
+func (s *Server) agentParent(name string) string {
+	if s == nil || s.registry == nil {
+		return ""
+	}
+	def := s.registry.Def(name)
+	if def == nil {
+		return ""
+	}
+	return def.Parent
 }
 
 func (s *Server) registerAgentReportTools() {
@@ -90,6 +123,13 @@ func (s *Server) registerAgentReportTools() {
 	if s.mcpSrv == nil {
 		return
 	}
+	s.addTool(
+		mcp.NewTool("jevons_inbox_list",
+			mcp.WithDescription("List durable structured terminal-outcome notices (🎯T254.4) for a parent PO/overseer — one small record per worker finish-report/scout-report (agent, kind, outcome done|blocked|needs-design|other, target, sha, gate id, verdict, oracle/risk flags, a summary line), oldest first. This does not replace the full free-text report (still read via jevons_agent_report_read); it is structure added on top so terminal outcomes are queryable instead of requiring a manual re-read of transcript prose for every worker that finished."),
+			mcp.WithString("parent", mcp.Required(), mcp.Description("Parent agent name whose inbox to read, e.g. jevons-po")),
+		),
+		s.handleInboxList,
+	)
 	s.addTool(
 		mcp.NewTool("jevons_agent_report_read",
 			mcp.WithDescription("Read an agent's stored turn report in full (🎯T388). Every report an agent delivers is stored before delivery, so this works AFTER the agent auto-deregisters on its terminal report. Compose with 🎯T401: jevons_agent_send to a reaped agent reports reaped-with-reason and holds gate feedback in sendq rather than answering bare \"not running\"; this tool is the read path for the stored report itself. Use it when a delivered report carries the [⚠️ REPORT TRUNCATED] marker, or when you need one part of a report again: the bytes come from the store, so the agent never re-derives (and so cannot rewrite) what it already said. Omit report_id for the latest report; omit section for the whole text; pass list=true to see what is stored."),
@@ -158,4 +198,32 @@ func (s *Server) handleAgentReportRead(_ context.Context, req mcp.CallToolReques
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"[%s report %s — %d bytes, full text from the store]\n\n%s",
 		name, rec.ID, rec.Bytes, rec.Text)), nil
+}
+
+// handleInboxList implements jevons_inbox_list: the 🎯T254.4 durable
+// structured-notice surface for a parent PO/overseer.
+func (s *Server) handleInboxList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	dir := s.agentReportStateDir()
+	if dir == "" {
+		return mcp.NewToolResultError("agent report store not configured (state_dir)"), nil
+	}
+	args := req.GetArguments()
+	parent := strings.TrimSpace(str(args["parent"]))
+	if parent == "" {
+		return mcp.NewToolResultError("parent is required"), nil
+	}
+	notices, err := notice.List(dir, parent)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("list notices for %q: %v", parent, err)), nil
+	}
+	if len(notices) == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("No structured terminal notices for parent %q.", parent)), nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d structured terminal notice(s) for parent %s (oldest first):\n", len(notices), parent)
+	for _, n := range notices {
+		fmt.Fprintf(&b, "  %s  agent=%s kind=%s outcome=%s target=%s sha=%s gate=%s verdict=%s oracle=%v risk=%v — %s\n",
+			n.Time.Format(time.RFC3339), n.Agent, n.Kind, n.Outcome, n.Target, n.SHA, n.GateID, n.Verdict, n.HasOracle, n.HasRisk, n.Summary)
+	}
+	return mcp.NewToolResultText(b.String()), nil
 }
