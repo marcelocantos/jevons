@@ -289,9 +289,16 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// 🎯T406: transport-level provider refusals on the overseer wire enter
 	// (or leave alone) the fleet hard-block. Authored prose never fires —
 	// ClassifyFrom(SourceAuthored) is ClassNone (🎯T455).
+	// The mirror: authored assistant text is the provider accepting a turn,
+	// which is what clears the hard-block. Without it only an owner chat send
+	// cleared it, so a block entered on this wire outlived the provider's
+	// recovery while the overseer kept answering its POs (2026-09-28, 🎯T885).
 	if ev.Type == "assistant" && ev.Text != "" {
-		if class := agenterr.ClassifyFrom(assistantTextSource(ev), ev.Text); class.IsFailure() {
+		source := assistantTextSource(ev)
+		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
+		} else if source == agenterr.SourceAuthored {
+			s.observeProviderOK()
 		}
 	}
 
