@@ -268,6 +268,16 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 		os.RemoveAll(scratch)
 		return nil, fmt.Errorf("gate clean: check out %s: %w: %s", shortCommit(commit), err, out)
 	}
+
+	// 🎯T888: the detached worktree sits outside the shared clone's
+	// ../go.work, so an unpublished sibling module (claudia et al, pinned
+	// ahead of its published version) is invisible to it even though the
+	// shared tree resolves it fine. Same seam buildsnap already closed for
+	// 🎯T254.2 snapshots (internal/buildsnap/gowork.go): write a go.work in
+	// the worktree that replaces the sibling with the org-level checkout
+	// next to root, when one exists. Committed pins in go.mod stay clean
+	// (🎯T448); this file never enters the commit.
+	restoreGoWork := injectCleanSiblingGoWork(root, wt)
 	// 🎯T440: stamp the owner before running anything. A gate that dies on a
 	// timeout, a SIGKILL or a dropped session skips every cleanup path this
 	// function has, and the leaked directory still looks healthy to
@@ -295,6 +305,8 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 		Now:        args.Now,
 	})
 
+	restoreGoWork()
+
 	res := &CleanResult{Record: rec, Worktree: wt}
 	keep := args.Keep
 	if keep {
@@ -303,6 +315,54 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 		removeWorktree(root, wt, scratch)
 	}
 	return res, runErr
+}
+
+// cleanSiblingModules are the org repos a jevons build may need alongside the
+// published pin, mirroring the ../go.work used in the shared dev clone.
+var cleanSiblingModules = []string{"claudia", "vellum"}
+
+// injectCleanSiblingGoWork writes a go.work into the clean-checkout worktree
+// that replaces any unpublished sibling module with the org-level checkout
+// found next to root (root's parent directory — the shared clone layout).
+// A sibling that is not present, or a worktree that already has its own
+// go.work (an explicit workspace committed into that commit), is left alone.
+// Returns a restore func that removes the injected file; always safe to call.
+func injectCleanSiblingGoWork(root, wt string) func() {
+	noop := func() {}
+	path := filepath.Join(wt, "go.work")
+	if _, err := os.Stat(path); err == nil {
+		// Checkout already carries its own go.work — do not override it.
+		return noop
+	}
+	base := filepath.Dir(root)
+	var replaces strings.Builder
+	found := false
+	for _, mod := range cleanSiblingModules {
+		sib := filepath.Join(base, mod)
+		if _, err := os.Stat(filepath.Join(sib, "go.mod")); err != nil {
+			continue
+		}
+		modPath, err := gitOut(sib, "rev-parse", "--show-toplevel")
+		if err != nil {
+			modPath = sib
+		}
+		_ = modPath
+		fmt.Fprintf(&replaces, "\nreplace github.com/marcelocantos/%s => %s\n", mod, sib)
+		found = true
+	}
+	if !found {
+		return noop
+	}
+	body := "go 1.26.1\n\nuse .\n" + replaces.String()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "gate clean: could not write sibling go.work:", err)
+		return noop
+	}
+	return func() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "gate clean: could not remove sibling go.work:", err)
+		}
+	}
 }
 
 // removeWorktree takes the checkout back out. Failures are reported and not
