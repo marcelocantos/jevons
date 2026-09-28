@@ -277,6 +277,10 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 	// the worktree that replaces the sibling with the org-level checkout
 	// next to root, when one exists. Committed pins in go.mod stay clean
 	// (🎯T448); this file never enters the commit.
+	// Probe the checkout before injecting the sibling go.work: that file is
+	// untracked and would otherwise read as this worker's own uncommitted
+	// change, turning a clean checkout into a false "dirty" (🎯T888).
+	preProbed := ProbeTree(wt)
 	restoreGoWork := injectCleanSiblingGoWork(root, wt)
 	// 🎯T440: stamp the owner before running anything. A gate that dies on a
 	// timeout, a SIGKILL or a dropped session skips every cleanup path this
@@ -294,15 +298,16 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 	}
 
 	rec, runErr := Run(&RunArgs{
-		Command:    args.Command,
-		Dir:        wt,
-		Name:       args.Name,
-		Stdout:     args.Stdout,
-		Stderr:     args.Stderr,
-		Store:      args.Store,
-		Explicit:   args.Explicit,
-		SharedTree: shared,
-		Now:        args.Now,
+		Command:       args.Command,
+		Dir:           wt,
+		Name:          args.Name,
+		Stdout:        args.Stdout,
+		Stderr:        args.Stderr,
+		Store:         args.Store,
+		Explicit:      args.Explicit,
+		SharedTree:    shared,
+		PreProbedTree: preProbed,
+		Now:           args.Now,
 	})
 
 	restoreGoWork()
