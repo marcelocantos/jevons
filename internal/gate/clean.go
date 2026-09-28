@@ -339,10 +339,21 @@ func injectCleanSiblingGoWork(root, wt string) func() {
 		// Checkout already carries its own go.work — do not override it.
 		return noop
 	}
+	// 🎯T894: when -clean is run FROM one of the sibling repos itself (e.g.
+	// verifying a claudia commit from inside the claudia checkout), root IS
+	// that sibling. Injecting a replace of the workspace's own module with
+	// itself is refused by `go` ("workspace module ... is replaced at all
+	// versions in the go.work file") and no tests run at all. Detect the
+	// repo under test by its own module name and skip only that one entry;
+	// the other siblings still get injected normally.
+	selfModule := ownModuleName(root)
 	base := filepath.Dir(root)
 	var replaces strings.Builder
 	found := false
 	for _, mod := range cleanSiblingModules {
+		if mod == selfModule {
+			continue
+		}
 		sib := filepath.Join(base, mod)
 		if _, err := os.Stat(filepath.Join(sib, "go.mod")); err != nil {
 			continue
@@ -368,6 +379,25 @@ func injectCleanSiblingGoWork(root, wt string) func() {
 			fmt.Fprintln(os.Stderr, "gate clean: could not remove sibling go.work:", err)
 		}
 	}
+}
+
+// ownModuleName reads root/go.mod's module line and returns the last path
+// segment (e.g. "claudia" for github.com/marcelocantos/claudia), or "" if it
+// cannot be determined. Used to skip self-replacement (🎯T894).
+func ownModuleName(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			modPath := strings.TrimSpace(strings.TrimPrefix(line, "module"))
+			parts := strings.Split(modPath, "/")
+			return parts[len(parts)-1]
+		}
+	}
+	return ""
 }
 
 // removeWorktree takes the checkout back out. Failures are reported and not
