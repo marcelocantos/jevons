@@ -28,3 +28,12 @@ func (s *Server) RevivePlanAuthWhereHealthy() []fleet.PlanAuthRevival {
 	}
 	return fleet.RevivePlanAuthWhereHealthy(s.registry, s.fleetIntent(), time.Now())
 }
+
+// ReattachRunningSeats re-adopts auto-start seats the broker still runs but
+// this host lost its handle for, under the intent revive gate.
+func (s *Server) ReattachRunningSeats() []string {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return fleet.ReattachRunningSeats(s.registry, s.fleetIntent(), time.Now())
+}

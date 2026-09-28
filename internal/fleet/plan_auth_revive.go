@@ -133,3 +133,58 @@ func RevivePlanAuthWhereHealthy(reg *claudia.Registry, intent fleetintent.Snapsh
 	}
 	return out
 }
+
+// A broker restart relaunches its seats, but this host's handles died with
+// the old connection and nothing re-attached them: the owner saw four
+// working POs as stopped while the broker ran them unowned (2026-09-28,
+// 🎯T884). Adopt only re-attaches a seat that is already running; it never
+// launches one, so an adopt that fails leaves the seat exactly as it was.
+
+// brokerReattachCooldown spaces failed re-attach attempts for one seat.
+const brokerReattachCooldown = 2 * time.Minute
+
+var brokerReattachTried sync.Map // name -> time.Time
+
+// reattachCandidates lists auto-start seats with no live handle whose
+// intent allows revival.
+func reattachCandidates(defs []claudia.AgentDef, alive func(string) bool, intent fleetintent.Snapshot) []string {
+	var out []string
+	for _, d := range defs {
+		if d.Name == "" || !d.AutoStart || alive(d.Name) {
+			continue
+		}
+		if dec := intent.Allow(d.Name, fleetintent.ControlRevive); !dec.Allow {
+			continue
+		}
+		out = append(out, d.Name)
+	}
+	return out
+}
+
+// ReattachRunningSeats re-adopts seats the broker is still running but this
+// host holds no live handle for. A seat that is not running stays stopped.
+func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, now time.Time) []string {
+	if reg == nil {
+		return nil
+	}
+	alive := func(name string) bool {
+		p := reg.Get(name)
+		return p != nil && p.Alive()
+	}
+	var attached []string
+	for _, name := range reattachCandidates(reg.List(), alive, intent) {
+		if last, ok := brokerReattachTried.Load(name); ok && now.Sub(last.(time.Time)) < brokerReattachCooldown {
+			continue
+		}
+		brokerReattachTried.Store(name, now)
+		if _, err := reg.Adopt(name); err != nil {
+			continue
+		}
+		brokerReattachTried.Delete(name)
+		// It is running: an older launch refusal no longer describes it.
+		noteRehydrate(name, nil)
+		slog.Info("re-attached running seat after its host handle was lost", "name", name)
+		attached = append(attached, name)
+	}
+	return attached
+}

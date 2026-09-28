@@ -52,3 +52,24 @@ func TestPlanAuthCandidatesArePlanPeersThatBrokeOnLogin(t *testing.T) {
 		t.Fatalf("claude candidates = %v", got)
 	}
 }
+
+// 🎯T884: after a broker restart, the seats to re-attach are the auto-start
+// seats with no live handle whose intent allows revival. A running seat, a
+// seat that is not auto-start, and a parked or reaped seat are left alone.
+func TestReattachCandidatesAreStoppedAutoStartSeatsIntentAllows(t *testing.T) {
+	defs := []claudia.AgentDef{
+		{Name: "po-down", AutoStart: true},
+		{Name: "po-live", AutoStart: true},
+		{Name: "po-parked", AutoStart: true},
+		{Name: "po-reaped", AutoStart: true},
+		{Name: "worker-done"},
+	}
+	alive := func(name string) bool { return name == "po-live" }
+	intent := fleetintent.Snapshot{Agents: map[string]fleetintent.Record{
+		"po-parked": {State: fleetintent.Parked},
+		"po-reaped": {State: fleetintent.Reaped},
+	}}
+	if got := reattachCandidates(defs, alive, intent); !reflect.DeepEqual(got, []string{"po-down"}) {
+		t.Fatalf("candidates = %v, want [po-down]", got)
+	}
+}

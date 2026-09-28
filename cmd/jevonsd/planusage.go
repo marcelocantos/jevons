@@ -69,7 +69,8 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				if revived := mcpSrv.RevivePlanAuthWhereHealthy(); len(revived) > 0 {
+				attached := mcpSrv.ReattachRunningSeats()
+				if revived := mcpSrv.RevivePlanAuthWhereHealthy(); len(revived) > 0 || len(attached) > 0 {
 					srv.NotifyAgentsChanged()
 				}
 			}
