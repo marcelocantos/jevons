@@ -282,6 +282,7 @@ persona_notes: |
 	s.run("J31-packaged-react-owner-boundary", s.jPackagedReactOwnerBoundary)
 	s.run("J32-packaged-react-send-cutin", s.jPackagedReactSendCutIn)
 	s.run("J33-undelivered-resend", s.jUndeliveredResend)
+	s.run("J35-worker-busy-visible-queue", s.jWorkerBusyVisibleQueue)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()
