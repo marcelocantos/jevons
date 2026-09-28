@@ -332,15 +332,43 @@ func (s *Server) watchAgentTurnForCancelable(name, payload string, window time.D
 		return witness(name, payload), func() {}
 	}
 	var obs turnObserver
+	var filter func(claudia.Event) bool
 	if s.registry != nil {
 		if proc := s.registry.Get(name); proc != nil {
 			obs = proc
 			if def := s.registry.Def(name); def != nil && !providerKeepsClaudeTranscript(def.Provider) {
 				obs = liveStreamObserver{proc}
+				if def.Provider == claudia.ProviderCodex {
+					// 🎯T857: a codex app-server thread publishes a bare
+					// "system"/thread-start ack the instant the session
+					// object is created — before codex has accepted, let
+					// alone begun, the turn this brief just submitted. Two
+					// live probes (jv-t849-codex-probe,
+					// jv-t849-git-write-probe, 2026-09-22) each got exactly
+					// one such event, logged prompt_delivered=true on the
+					// strength of it, and then ran nothing at all: no
+					// rollout file, no transcript, no tool call, ever.
+					// codexSubstantiveEvent excludes that ack so the watch
+					// keeps waiting for evidence the turn itself started.
+					filter = codexSubstantiveEvent
+				}
 			}
 		}
 	}
-	return observeTurnForCancelable(obs, payload, window)
+	return observeTurnForCancelableFiltered(obs, payload, window, filter)
+}
+
+// codexSubstantiveEvent reports whether ev is evidence a codex turn actually
+// started, as opposed to the thread/start lifecycle ack claudia's codex
+// app-server backend emits the moment the thread object is created
+// (Type="system", no TurnID, not an error — see claudia codex_app_server.go
+// agentEvent() case "thread/start"). An error event and any event carrying a
+// TurnID are real signal and still count.
+func codexSubstantiveEvent(ev claudia.Event) bool {
+	if ev.IsError || ev.TurnID != "" {
+		return true
+	}
+	return ev.Type != "system"
 }
 
 // providerKeepsClaudeTranscript reports whether this provider's backend
@@ -391,6 +419,15 @@ func observeTurnFor(obs turnObserver, payload string, window time.Duration) turn
 }
 
 func observeTurnForCancelable(obs turnObserver, payload string, window time.Duration) (turnWatch, func()) {
+	return observeTurnForCancelableFiltered(obs, payload, window, nil)
+}
+
+// observeTurnForCancelableFiltered is observeTurnForCancelable with an
+// optional predicate over published live-stream events (🎯T857). A nil
+// filter accepts every event, unchanged behaviour. It is consulted only on
+// the live-stream (path=="") branch; durable-transcript backends never call
+// it.
+func observeTurnForCancelableFiltered(obs turnObserver, payload string, window time.Duration, filter func(claudia.Event) bool) (turnWatch, func()) {
 	if obs == nil {
 		return func() TurnEvidence {
 			return TurnEvidence{Detail: "no live agent process to observe"}
@@ -410,7 +447,10 @@ func observeTurnForCancelable(obs turnObserver, payload string, window time.Dura
 	var token int64
 	if path == "" {
 		seen = make(chan struct{}, 1)
-		token = obs.SubscribeEvents(func(claudia.Event) {
+		token = obs.SubscribeEvents(func(ev claudia.Event) {
+			if filter != nil && !filter(ev) {
+				return
+			}
 			select {
 			case seen <- struct{}{}:
 			default:
