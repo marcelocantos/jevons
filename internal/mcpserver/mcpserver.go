@@ -870,7 +870,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 		bootAt:     time.Now(),
 	}
 
-	mcpSrv := server.NewMCPServer("jevons", "1.0.0", server.WithToolFilter(filterToolsByProfile))
+	mcpSrv := server.NewMCPServer("jevons", "1.0.0", server.WithToolFilter(filterAndBudgetTools))
 	s.mcpSrv = mcpSrv
 
 	if s.screenshot != nil {
