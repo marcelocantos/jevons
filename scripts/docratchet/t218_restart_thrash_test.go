@@ -564,6 +564,15 @@ func TestRestartThrashPolicy(t *testing.T) {
 		t.Errorf("%d of %d concurrent callers bounced; %d coalesced; want 1 bounce and %d coalesced:%s",
 			restarts, callers, noops, callers-1, b.String())
 	}
+	// 🎯T892: activation of a changed build inside/around the thrash window
+	// is deferred (🎯T815) — a concurrent caller's run() can return before
+	// the deferred activation lands, especially under fleet load. Poll the
+	// same way the single-caller "b" case above does instead of asserting
+	// on the instant wg.Wait() returns.
+	deadlineC := time.Now().Add(90 * time.Second)
+	for e.variantServed() != "c" && time.Now().Before(deadlineC) {
+		time.Sleep(500 * time.Millisecond)
+	}
 	if got := e.variantServed(); got != "c" {
 		t.Errorf("after the coalesced restart, :%d serves variant %q, want %q", e.port, got, "c")
 	}

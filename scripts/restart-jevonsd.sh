@@ -806,8 +806,20 @@ record_active_identity() {
   # `setsid` forks when the caller is already a process-group leader, which
   # would make $! a wrapper that no longer exists. The process actually
   # holding :$PORT is the only pid worth recording.
+  #
+  # 🎯T892: use $WANT_SHA — the hash decided BEFORE this run started the
+  # daemon — never re-hash $BIN here. start_daemon_detached forked the
+  # daemon from whatever $BIN held at that moment; re-reading $BIN now is a
+  # TOCTOU race against anything that rebuilds $BIN in the gap between
+  # "daemon is up" (wait_until_serving, polled externally over HTTP) and
+  # this stamp. A caller who observes /health=200 and immediately rebuilds
+  # $BIN for its own next bounce would otherwise poison the active stamp
+  # with a sha nothing ever actually served — a real daemon serving build
+  # "b" gets recorded as "c", and every subsequent already_activated() call
+  # wrongly believes "c" is already up. Reproduced by
+  # TestRestartThrashPolicy's 4-concurrent-caller case under load.
   local sha listeners ident
-  sha="$(binary_sha "$BIN" || true)"
+  sha="$WANT_SHA"
   listeners="$(list_listen_pids | tr -d '[:space:]')"
   # 🎯T580: third field is the source identity this build came from, so the
   # next caller can see a sibling-only change the hash cannot show. Absent
