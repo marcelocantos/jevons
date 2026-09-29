@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -396,6 +397,91 @@ func waitOwnerMuxSettled(ctx context.Context, frames <-chan []byte, d time.Durat
 			}
 		case <-deadline:
 			return fmt.Errorf("cancel never settled on the canonical owner level")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// Boot-sweep bounds for J3 (🎯T840). The post-boot sweep hands the overseer
+// its restart event about 12s after boot; the turn it starts can run for
+// minutes under load, and the quiet window must outlast the gap between the
+// daemon logging the hand-off and the phase sample saying the turn began.
+const (
+	bootSweepDeadline = 3 * time.Minute
+	bootSweepQuiet    = 5 * time.Second
+)
+
+// bootSweepLineRE matches the daemon's own record that its post-boot sweep
+// is finished with the overseer: the restart event was handed over (or
+// failed to be), or a broker holds the fleet and no event is sent. The
+// target is anchored so a jevons-po line does not answer for jevons.
+var bootSweepLineRE = regexp.MustCompile(
+	`msg="daemon restart resume event deliver(?:ed| failed)"[^\n]* target=` +
+		regexp.QuoteMeta(overseerName) + `(?:\s|$)` +
+		`|msg="claudia daemon holds fleet; reclaimed seats stay silent"`)
+
+// bootSweepHandled reports whether the daemon log records that the post-boot
+// sweep is done with the overseer.
+func bootSweepHandled(logs []byte) bool {
+	return bootSweepLineRE.Match(logs)
+}
+
+// waitBootSweepQuiet holds J3 until the post-boot sweep has reached the
+// overseer and the turn it started is over (🎯T840). Run in isolation, J3's
+// held turn otherwise overlaps the sweep: the restart event queues inside
+// the provider behind the held turn, the owner's cancel lets it run as the
+// next turn, and the owner's replacement waits behind it (🎯T915 owns that
+// product defect). J3 asserts cancel ordering for an owner turn, so it
+// starts from the same quiescent overseer the full suite reaches by the
+// time J3 runs.
+//
+// A fresh subscription carries no phase sample until the phase changes, so
+// the overseer counts as idle until a sample says otherwise, and the
+// overseer must also have been silent for the quiet window: no phase
+// sample and no transcript frame.
+func waitBootSweepQuiet(ctx context.Context, frames <-chan []byte, logPath string, quiet, d time.Duration) error {
+	deadline := time.After(d)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	phase, lastActivity := "idle", time.Now()
+	for {
+		select {
+		case data, ok := <-frames:
+			if !ok {
+				return fmt.Errorf("mux closed before the post-boot sweep settled")
+			}
+			env, _, err := decodeOwnerMux(data)
+			if err != nil {
+				return err
+			}
+			if env.Channel != ownerMuxChannel {
+				continue
+			}
+			if env.Type == "meta" {
+				p, ok := ownerMuxPhase(env.Body)
+				if !ok {
+					continue
+				}
+				phase = p
+			}
+			lastActivity = time.Now()
+		case <-tick.C:
+			idle := phase == "idle" || phase == ""
+			if !idle || time.Since(lastActivity) < quiet {
+				continue
+			}
+			logs, err := os.ReadFile(logPath)
+			if err != nil {
+				return err
+			}
+			if bootSweepHandled(logs) {
+				return nil
+			}
+		case <-deadline:
+			logs, _ := os.ReadFile(logPath)
+			return fmt.Errorf("post-boot sweep never settled (sweep logged=%v phase=%q quiet for %s)",
+				bootSweepHandled(logs), phase, time.Since(lastActivity).Round(time.Second))
 		case <-ctx.Done():
 			return ctx.Err()
 		}

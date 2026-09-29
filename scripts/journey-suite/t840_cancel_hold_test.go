@@ -89,7 +89,7 @@ func TestT840HoldWaitRefusesATurnThatEndedFirst(t *testing.T) {
 		return ownerMuxFixture(t, ownerMuxChannel, "assistant", index, "x", stop, "", "append")
 	}
 	for _, tc := range []struct {
-		name   string
+		name    string
 		ready   string // "" leaves the marker absent
 		frames  [][]byte
 		wantErr string // "" wants success
@@ -129,5 +129,117 @@ func TestT840HoldWaitRefusesATurnThatEndedFirst(t *testing.T) {
 				t.Fatalf("err=%v, want %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// J3 waits for the post-boot sweep to reach the overseer and for the turn it
+// started to finish before sending its long request (gates 12cd6ca6,
+// 0bb5f13a: the restart event ran ahead of the replacement after the cancel).
+
+func TestT840BootSweepHandledNamesTheOverseer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		logs string
+		want bool
+	}{
+		{"delivered to the overseer",
+			`time=x level=INFO msg="daemon restart resume event delivered" target=jevons event=daemon-restarted workers=0`, true},
+		{"delivered to the overseer at end of line",
+			`time=x level=INFO msg="daemon restart resume event delivered" workers=0 target=jevons`, true},
+		{"deliver failed for the overseer",
+			`time=x level=WARN msg="daemon restart resume event deliver failed" target=jevons event=daemon-restarted err=x`, true},
+		{"broker holds the fleet",
+			`time=x level=INFO msg="claudia daemon holds fleet; reclaimed seats stay silent"`, true},
+		{"a PO delivery does not answer for the overseer",
+			`time=x level=INFO msg="daemon restart resume event delivered" target=jevons-po event=daemon-restarted`, false},
+		{"a PO skip is not the overseer's event",
+			`time=x level=INFO msg="daemon restart skip sleeping coordinator" target=jevons-po reason=sleeping_po`, false},
+		{"intent read precedes the send",
+			`time=x level=INFO msg="no recoverable open owner intent after restart" overseer=jevons`, false},
+		{"empty log", ``, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bootSweepHandled([]byte(tc.logs)); got != tc.want {
+				t.Fatalf("bootSweepHandled=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestT840BootSweepQuietWaitsForTheSweepTurn(t *testing.T) {
+	const delivered = `time=x level=INFO msg="daemon restart resume event delivered" target=jevons event=daemon-restarted` + "\n"
+	const quiet = 200 * time.Millisecond
+	for _, tc := range []struct {
+		name    string
+		logs    string
+		frames  [][]byte
+		wantErr string // "" wants success
+	}{
+		{"sweep handed over and the overseer is idle", delivered, nil, ""},
+		{"sweep turn ran and finished",
+			delivered, [][]byte{phaseMeta(t, "thinking"), phaseMeta(t, "idle")}, ""},
+		{"a window meta is not a phase sample",
+			delivered, [][]byte{windowMeta(t)}, ""},
+
+		// The 12cd6ca6 shape: the sweep has not reached the overseer yet, so
+		// a held turn started now would have the restart event queued behind it.
+		{"sweep not yet sent", "", nil, "never settled"},
+		{"only the PO's event was sent",
+			`time=x level=INFO msg="daemon restart resume event delivered" target=jevons-po` + "\n", nil, "never settled"},
+		// The sweep's own turn is still running.
+		{"sweep turn still working", delivered, [][]byte{phaseMeta(t, "thinking")}, "never settled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "jevonsd.log")
+			if err := os.WriteFile(logPath, []byte(tc.logs), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			frames := make(chan []byte, len(tc.frames))
+			for _, f := range tc.frames {
+				frames <- f
+			}
+			err := waitBootSweepQuiet(context.Background(), frames, logPath, quiet, 1500*time.Millisecond)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("err=%v, want success", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err=%v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The quiet window restarts on every sign of life: a turn that is still
+// streaming transcript frames is not quiescent even between phase samples.
+func TestT840BootSweepQuietRestartsOnActivity(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "jevonsd.log")
+	if err := os.WriteFile(logPath, []byte(`msg="daemon restart resume event delivered" target=jevons`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	frames := make(chan []byte)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for i := 1; ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				select {
+				case frames <- ownerMuxFixture(t, ownerMuxChannel, "assistant", i, "x", "", "", "append"):
+				case <-stop:
+					return
+				}
+			}
+		}
+	}()
+	err := waitBootSweepQuiet(context.Background(), frames, logPath, 400*time.Millisecond, 1500*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "never settled") {
+		t.Fatalf("err=%v, want the wait to refuse a still-streaming overseer", err)
 	}
 }

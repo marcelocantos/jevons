@@ -475,7 +475,7 @@ func (s *suite) jChatRoundTrip() error {
 // assistant frame at all, and accepted a terminal that a late frame from the
 // interrupted turn could supply. All three could pass without a cancel.
 func (s *suite) jCancelAndSend() error {
-	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout+60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bootSweepDeadline+turnTimeout+60*time.Second)
 	defer cancel()
 	conn, frames, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
@@ -483,6 +483,12 @@ func (s *suite) jCancelAndSend() error {
 	}
 	defer conn.CloseNow()
 	if _, err := collectOwnerMuxReplay(ctx, frames); err != nil {
+		return err
+	}
+	// 🎯T840: start from a quiescent overseer. Run alone, J3's held turn
+	// otherwise overlaps the post-boot restart event, which the cancel then
+	// lets run ahead of the replacement (gates 12cd6ca6, 0bb5f13a).
+	if err := waitBootSweepQuiet(ctx, frames, s.logPath, bootSweepQuiet, bootSweepDeadline); err != nil {
 		return err
 	}
 
