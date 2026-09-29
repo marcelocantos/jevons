@@ -46,7 +46,7 @@ func TestT474ReapDefersWhileRotationPending(t *testing.T) {
 	if reg.Def(name) == nil {
 		t.Fatal("reap_done removed the agent while a rotation was pending")
 	}
-	got := findLifecycle(cap.records, compAgentLifecycle, "reap_done")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
 	if got == nil {
 		t.Fatal("expected reap_done skipped lifecycle record")
 	}
@@ -56,7 +56,7 @@ func TestT474ReapDefersWhileRotationPending(t *testing.T) {
 
 	// Control: once the seed is delivered, a finish report reaps normally.
 	led.pending[0].Delivered = true
-	cap.records = nil
+	cap.reset()
 	s.maybeReapDoneWorkAgent(name, "Done.")
 	if reg.Def(name) != nil {
 		t.Fatal("delivered rotation must not block a genuine finished-work reap")

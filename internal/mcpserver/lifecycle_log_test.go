@@ -68,9 +68,9 @@ func TestAgentStopLifecycleLog(t *testing.T) {
 		t.Fatalf("stop: %s", toolText(res))
 	}
 
-	got := findLifecycle(cap.records, compAgentLifecycle, "stop")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "stop")
 	if got == nil {
-		t.Fatalf("no agent_lifecycle stop slog; records=%d", len(cap.records))
+		t.Fatalf("no agent_lifecycle stop slog; records=%d", len(cap.snapshot()))
 	}
 	if got["outcome"] != "ok" || got["name"] != "worker" {
 		t.Fatalf("slog attrs=%v", got)
@@ -119,9 +119,9 @@ func TestModelSwitchLifecycleLog(t *testing.T) {
 		How:          fleet.ModelSwitchHowSetModel,
 	})
 
-	got := findLifecycle(cap.records, compAgentLifecycle, "model_switch")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "model_switch")
 	if got == nil {
-		t.Fatalf("no model_switch slog; records=%d", len(cap.records))
+		t.Fatalf("no model_switch slog; records=%d", len(cap.snapshot()))
 	}
 	if got["outcome"] != "ok" || got["name"] != "jevons-po" || got["from"] != "claude-fable-5" ||
 		got["to"] != "composer-2.5" || got["model"] != "composer-2.5" || got["provider"] != "cursor" ||
@@ -160,7 +160,7 @@ func TestAgentKillLifecycleLog(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("kill: %s", toolText(res))
 	}
-	got := findLifecycle(cap.records, compAgentLifecycle, "kill")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "kill")
 	if got == nil {
 		t.Fatal("expected kill lifecycle slog")
 	}
@@ -187,7 +187,7 @@ func TestAgentKillDeniedLifecycleLog(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected deny")
 	}
-	got := findLifecycle(cap.records, compAgentLifecycle, "kill")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "kill")
 	if got == nil || got["outcome"] != "error" {
 		t.Fatalf("attrs=%v", got)
 	}
@@ -211,7 +211,7 @@ func TestAgentKillAlreadyGoneLifecycleLog(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("already-gone: %s", toolText(res))
 	}
-	got := findLifecycle(cap.records, compAgentLifecycle, "kill")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "kill")
 	if got == nil {
 		t.Fatal("expected kill lifecycle slog")
 	}
@@ -243,7 +243,7 @@ func TestAgentStartErrorLifecycleLog(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected parent==name error")
 	}
-	got := findLifecycle(cap.records, compAgentLifecycle, "start")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "start")
 	if got == nil || got["outcome"] != "error" {
 		t.Fatalf("attrs=%v", got)
 	}
@@ -287,7 +287,7 @@ func TestThreadSpawnLifecycleLog(t *testing.T) {
 		t.Fatalf("spawn: %s", toolText(res))
 	}
 
-	got := findLifecycle(cap.records, compThread, "spawn")
+	got := findLifecycle(cap.snapshot(), compThread, "spawn")
 	if got == nil {
 		t.Fatal("expected thread spawn slog")
 	}
@@ -339,7 +339,7 @@ func TestEventPushLifecycleLog(t *testing.T) {
 		t.Fatalf("push: %s", toolText(res))
 	}
 
-	got := findLifecycle(cap.records, compEventPush, "push")
+	got := findLifecycle(cap.snapshot(), compEventPush, "push")
 	if got == nil || got["outcome"] != "ok" || got["target"] != "jevons-po" {
 		t.Fatalf("attrs=%v", got)
 	}
@@ -378,7 +378,7 @@ func TestEventPushErrorLifecycleLog(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected error")
 	}
-	got := findLifecycle(cap.records, compEventPush, "push")
+	got := findLifecycle(cap.snapshot(), compEventPush, "push")
 	if got == nil || got["outcome"] != "error" {
 		t.Fatalf("attrs=%v", got)
 	}

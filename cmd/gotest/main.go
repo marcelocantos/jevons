@@ -3,7 +3,7 @@
 
 // gotest runs `go test` and reports a verdict instead of a transcript.
 //
-//	gotest [-timeout 45m] [-p n] [packages...]   # default ./...
+//	gotest [-race] [-timeout 45m] [-p n] [packages...]   # default ./...
 //
 // Why this exists: `go test ./...` emits thousands of lines of legitimate
 // log output from passing tests, and the failure signal is a handful of
@@ -73,9 +73,14 @@ func run(argv []string) int {
 	// worktrees) give each child its own scheduler, so N binaries x a full
 	// build each still saturates the machine. Empty leaves go's default.
 	par := ""
+	// -race is passed through (🎯T939). A detected race fails the test that
+	// was running, so it reaches the verdict as an ordinary failure.
+	race := false
 	var pkgs []string
 	for i := 0; i < len(argv); i++ {
 		switch argv[i] {
+		case "-race":
+			race = true
 		case "-timeout":
 			if i+1 < len(argv) {
 				i++
@@ -87,7 +92,7 @@ func run(argv []string) int {
 				par = argv[i]
 			}
 		case "-h", "--help":
-			fmt.Fprintln(os.Stderr, "usage: gotest [-timeout d] [-p n] [packages...]")
+			fmt.Fprintln(os.Stderr, "usage: gotest [-race] [-timeout d] [-p n] [packages...]")
 			return 2
 		default:
 			pkgs = append(pkgs, argv[i])
@@ -107,6 +112,9 @@ func run(argv []string) int {
 
 	res := &result{Packages: map[string]bool{}, transcript: f}
 	args := []string{"test", "-json", "-timeout", timeout}
+	if race {
+		args = append(args, "-race")
+	}
 	if par != "" {
 		args = append(args, "-p", par)
 	}

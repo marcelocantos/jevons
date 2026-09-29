@@ -276,9 +276,9 @@ func TestT439ReapLogRecordsDecisionAndSpan(t *testing.T) {
 	s := &Server{registry: reg}
 	s.maybeReapDoneWorkAgent("jv-t435-reap-event", report)
 
-	got := findLifecycle(cap.records, compAgentLifecycle, "reap_done")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
 	if got == nil {
-		t.Fatalf("no agent_lifecycle reap_done record; records=%d", len(cap.records))
+		t.Fatalf("no agent_lifecycle reap_done record; records=%d", len(cap.snapshot()))
 	}
 	if got["outcome"] != "skipped" {
 		t.Fatalf("outcome = %v, want skipped", got["outcome"])
@@ -298,12 +298,12 @@ func TestT439ReapLogRecordsDecisionAndSpan(t *testing.T) {
 	}
 
 	// A genuine finish reaps, and its log line quotes the completion word.
-	cap.records = nil
+	cap.reset()
 	reg2 := t439Registry(t, "jv-worker")
 	s2 := &Server{registry: reg2}
 	s2.maybeReapDoneWorkAgent("jv-worker", "Done.")
 
-	got = findLifecycle(cap.records, compAgentLifecycle, "reap_done")
+	got = findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
 	if got == nil {
 		t.Fatal("no reap_done record for a genuine finish")
 	}
