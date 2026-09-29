@@ -21,6 +21,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -1484,6 +1485,22 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			// message to become a turn, and blocking an agent's event stream
 			// for that window would stall its own progress reporting.
 			go s.drainAgentSendQueue(name)
+			// 🎯T793: a malformed load-bearing envelope (e.g. a silent-decision
+			// confidence written as a 1-10 rank instead of [0,1]) gets the
+			// author itself told the exact field and range, on its own
+			// channel, in this same cycle — instead of only flagging the
+			// parent's copy and reaping an author who now has no route to
+			// resend. Skip the reap this turn so a corrected resend has a
+			// worker left to send it.
+			if notice := envelope.CorrectionNotice(text); notice != "" {
+				if _, err := s.deliverByName(name, notice, OriginAgent, false); err != nil {
+					slog.Warn("T793 correction notice undeliverable", "agent", name, "err", err)
+				}
+				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", map[string]any{
+					"agent": name,
+				})
+				return
+			}
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
 			s.maybeReapDoneWorkAgent(name, text)
 		}

@@ -270,12 +270,19 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
 - Residual: instructional doctrine + pure classifier; hard daemon sleep
   gate may follow.
 
-## Silent-decision ledger (🎯T536.1)
+## Silent-decision ledger (🎯T536.1 / 🎯T793)
 - Terminal finish-report envelopes MUST carry a silent-decision ledger:
   "jevons: silent-ledger none" when the brief was not silent on anything
   material, OR "jevons: silent-ledger ranked" plus one or more
   "jevons: silent-decision confidence=N choice=... why=..." lines,
   least-confident first.
+- confidence is a **float in the range 0 to 1** (0 = least confident, 1 =
+  fully confident) — not a 1-10 score and not a rank. Worked example:
+  "jevons: silent-decision confidence=0.3 choice=optimistic-concurrency
+  why=spec silent on locking". confidence=4 or confidence=7 is malformed
+  (🎯T793); the daemon replies to the author, on its own channel, with the
+  exact field and range before it is reaped, so a corrected resend is
+  possible — internal/envelope.CorrectionNotice.
 - A green oracle with a missing ledger (no explicit none) is flagged —
   not treated as complete. Schema: internal/envelope. The independent
   gate reads the ledger (ReadSilentLedger), not the implementation diff.

@@ -559,9 +559,12 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   YAML front matter (`---`) is not this format.
 - **Silent-decision ledger (🎯T536.1):** finish-reports must carry
   `silent-ledger none` or ranked `silent-decision` slots (least-confident
-  first). A green oracle with a missing ledger is flagged, not complete.
-  Read `envelope.ReadSilentLedger` rather than the implementation diff.
-  Quality of decisions is judgment; presence of the artifact is the gate.
+  first). confidence is a float in the range 0 to 1, e.g.
+  `silent-decision confidence=0.3 choice=... why=...` — not a 1-10 score
+  or a rank (🎯T793). A green oracle with a missing ledger is flagged, not
+  complete. Read `envelope.ReadSilentLedger` rather than the
+  implementation diff. Quality of decisions is judgment; presence of the
+  artifact is the gate.
 - **Fog-of-war scout (🎯T536.3):** non-trivial Build work is scouted
   before implement. Spawn-briefs carry `phase scout|implement`; a scout
   terminal is `kind scout-report` (ledger + fog-known/unknown/blindspot),

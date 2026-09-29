@@ -112,6 +112,14 @@ func parseSilentLedger(raw string) (SilentLedgerState, error) {
 	}
 }
 
+// 🎯T793 residual: whether an integer rank (1..N, most-confident last or
+// first) should be *accepted and normalised* into [0,1] instead of refused
+// is a design choice this ticket does not make. Decided: refuse and tell
+// the author (see CorrectionNotice), not silently coerce. Three workers
+// wrote a 1-10 score or a rank where 0-1 confidence goes; normalising would
+// have to guess the author's scale (1-5? 1-10? 1-N decisions?) and could
+// silently invert least-confident-first. A named, correctable refusal the
+// author can fix in its own words costs one more turn and stays honest.
 func parseSilentDecision(raw string) (SilentDecision, error) {
 	d := SilentDecision{Confidence: -1}
 	for _, tok := range splitDecisionTokens(raw) {
