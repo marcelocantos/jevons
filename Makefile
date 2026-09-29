@@ -304,6 +304,13 @@ test-go-raw:
 test-t553-oracle:
 	JEVONS_T553_ORACLE=1 CLAUDIA_NO_BROKER=1 go test -count=1 -timeout 40m -v -run TestT553SeededThrowNotExecutedByDaily ./internal/t553oracle
 
+# 🎯T505: read-only probe of the development daemon itself. GET / and every
+# asset it references must be byte-identical to ui/bundle.zip at the commit
+# restart-jevonsd.sh last recorded as served (~/.jevons/restart-jevonsd.served).
+.PHONY: test-t505-live
+test-t505-live:
+	JEVONS_T505_LIVE=1 go test -count=1 -v -run TestT505DevelopmentServesCommittedBundle ./internal/t553oracle
+
 # React cockpit (🎯T540). The daemon embeds the tracked bundle (T540.2).
 .PHONY: ui-dev ui-build test-ui-react ui-deps ui-daemon-install ui-daemon-stop ui-daemon-status
 ui-dev:
