@@ -22,7 +22,7 @@ func TestT925BrokerBurstAlertsDespiteADaemonBoot(t *testing.T) {
 		}
 		return rs
 	}
-	reason := BrokerReason("claudia broker connection closed")
+	reason := BrokerReason("claudia broker connection closed", false)
 	a, ok := MassStop(burst(SourceBroker, reason), DefaultWindow, DefaultMinSeats, boot)
 	if !ok || !a.Broker || a.Shared != reason {
 		t.Fatalf("broker burst: ok=%v alert=%+v", ok, a)

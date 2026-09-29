@@ -42,15 +42,24 @@ func (s *Server) seatStops() *seatstop.Ledger {
 
 // noteSeatStop records one stop and journals it.
 func (s *Server) noteSeatStop(name string, source seatstop.Source, reason, actor, detail string) {
+	s.noteSeatStopRecord(seatstop.Record{Seat: name, Source: source, Reason: reason, Actor: actor, Detail: detail})
+}
+
+// noteSeatStopRecord is noteSeatStop for a full record (🎯T944: Planned).
+func (s *Server) noteSeatStopRecord(r seatstop.Record) {
+	name := r.Seat
 	if s == nil || strings.TrimSpace(name) == "" {
 		return
 	}
 	rec := s.seatStops().Note(seatstop.Record{
-		Seat: name, Source: source, Reason: strings.TrimSpace(reason),
-		Actor: strings.TrimSpace(actor), Detail: strings.TrimSpace(detail),
+		Seat: name, Source: r.Source, Reason: strings.TrimSpace(r.Reason),
+		Actor: strings.TrimSpace(r.Actor), Detail: strings.TrimSpace(r.Detail), Planned: r.Planned,
 	})
 	fields := map[string]any{
 		"name": name, "source": string(rec.Source), "reason": rec.Reason, "at": rec.At.UTC().Format(time.RFC3339Nano),
+	}
+	if rec.Planned {
+		fields["planned"] = true
 	}
 	if rec.Actor != "" {
 		fields["actor"] = rec.Actor
@@ -87,13 +96,15 @@ func (s *Server) noteDeadSeats(reps []DeadAgentReport) {
 			detail = r.Detail
 		}
 		source, reason := seatstop.SourceExit, seatstop.Unknown
+		planned := false
 		switch {
 		case fleet.BrokerCaused(r.Cause):
-			source, reason = seatstop.SourceBroker, seatstop.BrokerReason(r.Cause)
+			planned = fleet.BrokerPlanned(r.Cause)
+			source, reason = seatstop.SourceBroker, seatstop.BrokerReason(r.Cause, planned)
 		case r.Cause != "":
 			reason = r.Cause
 		}
-		s.noteSeatStop(r.Name, source, reason, "", detail)
+		s.noteSeatStopRecord(seatstop.Record{Seat: r.Name, Source: source, Reason: reason, Detail: detail, Planned: planned})
 	}
 }
 
@@ -141,7 +152,20 @@ func (s *Server) massStop() (seatstop.Alert, bool) {
 	s.mu.Lock()
 	boot := s.bootAt
 	s.mu.Unlock()
-	return seatstop.MassStop(s.seatStops().Recent(now, massStopLookback), seatstop.DefaultWindow, seatstop.DefaultMinSeats, boot)
+	// Only stops that still warrant attention count (🎯T944): not a seat
+	// that is running again, nor one stopped on purpose that is still inside
+	// its grace to come back.
+	recent := seatstop.Unresolved(s.seatStops().Recent(now, massStopLookback), now, s.seatRunning)
+	return seatstop.MassStop(recent, seatstop.DefaultWindow, seatstop.DefaultMinSeats, boot)
+}
+
+// seatRunning reports that name has a live process now.
+func (s *Server) seatRunning(name string) bool {
+	if s == nil || s.registry == nil {
+		return false
+	}
+	p := s.registry.Get(name)
+	return p != nil && p.Alive()
 }
 
 // MassStopLine is the alert for agent_list, /api/agents and the RHS; empty

@@ -47,8 +47,34 @@ const (
 
 // BrokerReason is the stop reason for a seat the broker took down. cause is
 // the harness's own words for it.
-func BrokerReason(cause string) string {
+func BrokerReason(cause string, planned bool) string {
+	if planned {
+		return "broker: planned Claudia broker restart"
+	}
 	return "broker: " + cause + " (the Claudia broker stopped or restarted)"
+}
+
+// PlannedGrace is how long a seat stopped on purpose has to come back before
+// its stop counts as unexpected (🎯T944).
+const PlannedGrace = 3 * time.Minute
+
+// Unresolved keeps the stops that still warrant the owner's attention
+// (🎯T944): the owner is drawn in only when something has gone unexpectedly
+// off script. A seat running again needs no one; a seat stopped on purpose
+// is expected back and is only a problem once PlannedGrace has passed
+// without it.
+func Unresolved(records []Record, now time.Time, running func(seat string) bool) []Record {
+	var out []Record
+	for _, r := range records {
+		if running != nil && running(r.Seat) {
+			continue
+		}
+		if r.Planned && now.Sub(r.At) < PlannedGrace {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // Record is one seat stop.
@@ -60,6 +86,9 @@ type Record struct {
 	Reason string
 	Actor  string
 	Detail string
+	// Planned marks a stop the system made on purpose: a planned broker
+	// restart, announced before it closed its connections (🎯T944).
+	Planned bool
 }
 
 // Unknown is the reason recorded for a stop nothing explained.

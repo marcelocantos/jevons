@@ -20,6 +20,12 @@ func ExitCause(proc any) string {
 	return strings.TrimSpace(c.ExitCause())
 }
 
+// BrokerPlanned reports that the broker said it was stopping on purpose
+// before it closed the seat's connection: a planned restart (🎯T944).
+func BrokerPlanned(cause string) bool {
+	return strings.Contains(cause, "stopped on purpose")
+}
+
 // BrokerCaused reports that cause is the broker's doing — it stopped,
 // restarted or dropped the seat — rather than the seat's own exit.
 func BrokerCaused(cause string) bool {
