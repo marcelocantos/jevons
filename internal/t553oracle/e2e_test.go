@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -181,6 +182,9 @@ func TestT553SeededThrowNotExecutedByDaily(t *testing.T) {
 	goCtl := BytesContain(binBytes, marker)
 	ctlJS := servedScripts(t, ctlBin, scratch, "control")
 	servedCtl := strings.Contains(ctlJS, marker)
+	// 🎯T505: the explicit opt-in hot-reload path (`make ui-dev`) still
+	// serves disk edits — the guard must not have broken the dev server.
+	viteCtl := strings.Contains(viteServedMain(t, clone), marker)
 
 	// SNAPSHOT: the development surface (buildsnap of committed HEAD), over the same
 	// clone whose working tree — including its rebuilt bundle.zip — is dirty.
@@ -209,7 +213,7 @@ func TestT553SeededThrowNotExecutedByDaily(t *testing.T) {
 	snapJS := servedScripts(t, snapBin, scratch, "snapshot")
 	servedSnap := strings.Contains(snapJS, marker)
 
-	controls := []Verdict{{"working-tree ui bundle (make ui-build)", uiCtl}, {"working-tree go binary", goCtl}, {"working-tree binary, served JS", servedCtl}}
+	controls := []Verdict{{"working-tree ui bundle (make ui-build)", uiCtl}, {"working-tree go binary", goCtl}, {"working-tree binary, served JS", servedCtl}, {"opt-in vite dev server, served main.tsx", viteCtl}}
 	snaps := []Verdict{{"HEAD-snapshot ui bundle", uiSnap}, {"HEAD-snapshot go binary", goSnap}, {"HEAD-snapshot binary, served JS", servedSnap}}
 	for _, v := range append(controls, snaps...) {
 		t.Logf("%-40s throw present=%v", v.Surface, v.Found)
@@ -217,6 +221,47 @@ func TestT553SeededThrowNotExecutedByDaily(t *testing.T) {
 	if err := Judge(controls, snaps); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// viteServedMain starts the opt-in Vite dev server (what `make ui-dev` runs)
+// in clone/ui on a throwaway port and returns the transformed main.tsx it
+// serves. Vite runs in its own process group so the kill reaches it.
+func viteServedMain(t *testing.T, clone string) string {
+	t.Helper()
+	port := freePort(t)
+	uiDir := filepath.Join(clone, "ui")
+	cmd := exec.Command(filepath.Join(uiDir, "node_modules", ".bin", "vite"), "--port", fmt.Sprint(port), "--strictPort", "--host", "127.0.0.1")
+	cmd.Dir = uiDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	logPath := filepath.Join(filepath.Dir(clone), "vite.log")
+	logf, _ := os.Create(logPath)
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+	url := fmt.Sprintf("http://127.0.0.1:%d/%s", port, UIThrowPath[len("ui/"):])
+	var lastErr error
+	for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(time.Second) {
+		resp, err := http.Get(url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Logf("vite dev served %s: %d bytes", url, len(b))
+			return string(b)
+		}
+		lastErr = fmt.Errorf("GET %s: %s", url, resp.Status)
+	}
+	lb, _ := os.ReadFile(logPath)
+	t.Fatalf("vite dev never served %s: %v\n%s", url, lastErr, tail(lb))
+	return ""
 }
 
 func dirExists(p string) bool {
