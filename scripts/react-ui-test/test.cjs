@@ -14,8 +14,11 @@ const { chromium } = require('./playwright.cjs')();
 
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, screenshot: { type: 'string' },
-  workdir: { type: 'string' }, aside: { type: 'string' },
+  workdir: { type: 'string' }, aside: { type: 'string' }, 'overseer-provider': { type: 'string' },
 } });
+// 🎯T866.5: /api/agents names a subscription seat by its sidecar runtime id
+// (xai-oauth) where the journey names the plan (grok); compare plans.
+const plan = provider => ({ 'xai-oauth': 'grok', anthropic: 'claude', 'openai-codex': 'codex' })[provider] || provider;
 const dist = path.resolve(__dirname, '../../ui/dist');
 const live = Boolean(values.host);
 let server;
@@ -120,7 +123,11 @@ async function main() {
     const agents = await page.evaluate(async () => (await fetch('/api/agents')).json());
     const root = agents.find(agent => agent.name === 'jevons');
     assert(root?.provider, 'selected overseer provider is unavailable');
-    if (values.provider) assert.equal(root.provider, values.provider, 'selected provider differs from the journey request');
+    // 🎯T832: the overseer is shared with earlier journeys, which may have
+    // moved it (J13 once migrated it in place). Expect its current provider;
+    // the aside below is minted here and must match the journey request.
+    const expected = values['overseer-provider'] || values.provider;
+    if (expected) assert.equal(plan(root.provider), plan(expected), 'overseer provider differs from its current registry provider');
     console.log(`Selected provider: ${root.provider}`);
   }
 
@@ -239,7 +246,7 @@ async function main() {
       };
       const first = await direct();
       const agents = await (await fetch(new URL('/api/agents', base))).json();
-      assert.equal(agents.find(agent => agent.name === name)?.provider, values.provider, 'aside selected provider matches the journey');
+      assert.equal(plan(agents.find(agent => agent.name === name)?.provider), plan(values.provider), 'aside selected provider matches the journey');
       await page.goto(new URL(`/?agent=${encodeURIComponent(name)}&tab=transcript`, base).href);
       await page.locator(`#agent-inspect[data-agent-id="${name}"]`).waitFor({ state: 'visible' });
       const assertPair = async ({ prompt, token }) => {
