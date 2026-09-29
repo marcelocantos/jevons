@@ -85,6 +85,9 @@ func run(args []string) int {
 		}
 		return exitUsage
 	}
+	if res.IndexWarning != "" {
+		fmt.Fprintln(os.Stderr, "commitbase: warning: "+res.IndexWarning)
+	}
 	fmt.Printf("%s\n", res.CommitSHA)
 	return exitOK
 }

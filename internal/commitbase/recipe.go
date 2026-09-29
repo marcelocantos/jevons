@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -46,6 +47,9 @@ type Result struct {
 	CommitSHA string
 	BaseSHA   string
 	IndexFile string
+	// IndexWarning is set when the commit landed but the shared index could
+	// not be brought up to it for the committed paths (🎯T901).
+	IndexWarning string
 }
 
 // Commit runs the blessed recipe:
@@ -161,7 +165,48 @@ func Commit(args *CommitArgs) (*Result, error) {
 	if tempIndex {
 		_ = os.Remove(index)
 	}
-	return &Result{CommitSHA: commit, BaseSHA: base, IndexFile: index}, nil
+	res := &Result{CommitSHA: commit, BaseSHA: base, IndexFile: index}
+	// 🎯T901: the commit was built in a private index, so the shared one
+	// still describes the old tree for these paths: new files read as staged
+	// deletions and changed ones as staged reversals, and a later commit of
+	// the index would undo this one. Point exactly these entries at the new
+	// commit; the work tree and every other entry are left alone.
+	if err := syncSharedIndex(dir, commit, committedPaths(args)); err != nil {
+		res.IndexWarning = fmt.Sprintf("committed %s, but the shared index still lists the old content for the committed paths "+
+			"(run `git reset -q HEAD -- <paths>`): %v", short(commit), err)
+	}
+	return res, nil
+}
+
+// committedPaths lists every path the commit staged, sorted for a stable
+// command line.
+func committedPaths(args *CommitArgs) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range args.Paths {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for p := range args.Blobs {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// syncSharedIndex resets the shared index entries for paths to commit,
+// without touching the work tree (a path-limited mixed reset).
+func syncSharedIndex(dir, commit string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	_, err := runGit(dir, nil, append([]string{"reset", "-q", commit, "--"}, paths...)...)
+	return err
 }
 
 // RefuseError is a deliberate 🎯T432 refusal (HEAD moved since seed).
