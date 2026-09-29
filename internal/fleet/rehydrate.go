@@ -274,8 +274,35 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 	return agent, err
 }
 
+// Resume refusals that report the conversation absent, not unresumable.
+// Claude has no transcript at all; a sidecar seat (anthropic, openai, …) has
+// no spool record under its name. Each is the 🎯T313 case: nothing exists to
+// discard, and every later launch refuses the same way.
+const (
+	absentClaudeJSONL  = "existing conversation required but JSONL not found at"
+	absentSidecarSpool = "existing conversation required but no spool records for seat"
+)
+
+// HistoryAbsent reports that err is a resume refusal because the seat has no
+// conversation history anywhere, so minting a fresh session loses nothing.
+//
+// A seat the broker took down while it was on a sidecar provider hit this
+// forever (🎯T935, 2026-09-30): jv-t928-mcp-attach had no spool records, the
+// broker-lost relaunch retried every 20s for twelve minutes, and the owner
+// killed and reminted it by hand — the same mint this makes. A refusal to
+// resume a store that does exist (Grok or Cursor session/load, Codex
+// thread/resume) is not this, and still fails closed.
+func HistoryAbsent(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, absentClaudeJSONL) || strings.Contains(msg, absentSidecarSpool)
+}
+
 // remintAfterResumeError is the 🎯T627.1 gate: a failed Launch may rotate
-// onto a fresh session only in two cases.
+// onto a fresh session when the history is absent (HistoryAbsent), and
+// otherwise only in two cases.
 //
 // Cursor session/load Invalid params, where stacking a second ACP writer
 // on the same store is 🎯T541.1.
@@ -289,6 +316,9 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
 	if err == nil || def == nil {
 		return false
+	}
+	if HistoryAbsent(err) {
+		return true
 	}
 	switch def.Provider {
 	case claudia.ProviderCursor:

@@ -216,14 +216,39 @@ func reattachCandidates(defs []claudia.AgentDef, alive func(string) bool, intent
 	return out
 }
 
+// ReattachResult is one pass of the reattach loop.
+type ReattachResult struct {
+	// Back names the seats running again, adopted or relaunched.
+	Back []string
+	// Fresh are the seats in Back relaunched on a new session because no
+	// history existed to resume (HistoryAbsent): they are running, but
+	// remember nothing, and their parent must re-brief them (🎯T935).
+	Fresh []LostSession
+	// Stuck are seats lost to a broker restart that are still down
+	// brokerLostFlagAfter after the first failed relaunch. Each is reported
+	// once per outage; the loop keeps trying at the slow cooldown.
+	Stuck []BrokerLostStuck
+}
+
+// BrokerLostStuck is a seat the broker took down that could not be brought
+// back within brokerLostFlagAfter.
+type BrokerLostStuck struct {
+	Name     string
+	Parent   string
+	Since    time.Time // the first failed relaunch
+	Attempts int
+	Err      string // the last relaunch error
+}
+
 // ReattachRunningSeats re-adopts seats the broker is still running but this
 // host holds no live handle for. A seat that is not running stays stopped,
 // unless lostToBroker says this host lost it to a broker restart: then the
 // broker did not bring it back, and it is relaunched on its own
-// conversation, brief intact (🎯T925). lostToBroker may be nil.
-func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) []string {
+// conversation, brief intact (🎯T925) — or on a fresh one when it has none
+// (🎯T935). lostToBroker may be nil.
+func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) ReattachResult {
 	if reg == nil {
-		return nil
+		return ReattachResult{}
 	}
 	return reattachWith(registryReattach{reg}, intent, now, lostToBroker)
 }
@@ -233,7 +258,9 @@ type reattachReg interface {
 	List() []claudia.AgentDef
 	Alive(name string) bool
 	Adopt(name string) error
-	Relaunch(name string) error
+	// Relaunch starts a stopped seat. fresh is non-nil when the launch had
+	// to rotate onto a new session because the old one had no history.
+	Relaunch(name string) (fresh *LostSession, err error)
 }
 
 type registryReattach struct{ reg *claudia.Registry }
@@ -247,9 +274,26 @@ func (r registryReattach) Adopt(name string) error {
 	_, err := r.reg.Adopt(name)
 	return err
 }
-func (r registryReattach) Relaunch(name string) error {
-	_, err := LaunchRecovering(r.reg, name)
-	return err
+func (r registryReattach) Relaunch(name string) (*LostSession, error) {
+	var before claudia.AgentDef
+	if d := r.reg.Def(name); d != nil {
+		before = *d
+	}
+	if _, err := LaunchRecovering(r.reg, name); err != nil {
+		return nil, err
+	}
+	// LaunchRecovering rotates the row when the history is gone; the
+	// session id is the evidence it did.
+	after := r.reg.Def(name)
+	if after == nil || before.SessionID == "" || after.SessionID == before.SessionID {
+		return nil, nil
+	}
+	return &LostSession{
+		Name: name, WorkDir: before.WorkDir, Provider: before.Provider, Model: after.Model,
+		Parent: before.Parent, Purpose: before.Purpose, TargetID: before.TargetID,
+		OldSession: before.SessionID, NewSession: after.SessionID,
+		JSONLPath: claudia.SessionJSONLPath(before.SessionID, before.WorkDir),
+	}, nil
 }
 
 // brokerLostRetry spaces relaunch attempts for a seat lost to a broker
@@ -257,12 +301,56 @@ func (r registryReattach) Relaunch(name string) error {
 // would leave the seat down for minutes after it is (🎯T925).
 const brokerLostRetry = 20 * time.Second
 
-func reattachWith(reg reattachReg, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) []string {
+// brokerLostFlagAfter bounds how long a seat lost to a broker restart may
+// fail to come back before its parent and the overseer are told. On
+// 2026-09-30 jv-t928-mcp-attach retried every 20s for twelve minutes, each
+// attempt refused the same way, and nothing said so until the owner looked
+// (🎯T935). Past the bound the loop keeps trying at brokerReattachCooldown:
+// a broker that comes back later still gets the seat back.
+const brokerLostFlagAfter = 5 * time.Minute
+
+// brokerLostOutage is one seat's run of failed broker-lost relaunches.
+type brokerLostOutage struct {
+	since    time.Time
+	attempts int
+	flagged  bool
+}
+
+var (
+	brokerLostMu      sync.Mutex
+	brokerLostOutages = map[string]*brokerLostOutage{}
+)
+
+func reattachWith(reg reattachReg, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) ReattachResult {
 	lost := func(name string) bool { return lostToBroker != nil && lostToBroker(name) }
-	var attached []string
-	for _, name := range reattachCandidates(reg.List(), reg.Alive, intent, lostToBroker) {
-		cooldown := brokerReattachCooldown
+	var res ReattachResult
+	defs := reg.List()
+	parents := map[string]string{}
+	for _, d := range defs {
+		parents[d.Name] = d.Parent
+	}
+	candidates := reattachCandidates(defs, reg.Alive, intent, lostToBroker)
+
+	// An outage ends when its seat is no longer a down seat lost to the
+	// broker: running again, stopped on purpose, parked, or removed. A
+	// later loss of the same name is a new outage with its own bound.
+	down := map[string]bool{}
+	for _, name := range candidates {
 		if lost(name) {
+			down[name] = true
+		}
+	}
+	brokerLostMu.Lock()
+	for name := range brokerLostOutages {
+		if !down[name] {
+			delete(brokerLostOutages, name)
+		}
+	}
+	brokerLostMu.Unlock()
+
+	for _, name := range candidates {
+		cooldown := brokerReattachCooldown
+		if lost(name) && !brokerLostFlagged(name) {
 			cooldown = brokerLostRetry
 		}
 		if last, ok := brokerReattachTried.Load(name); ok && now.Sub(last.(time.Time)) < cooldown {
@@ -276,20 +364,59 @@ func reattachWith(reg reattachReg, intent fleetintent.Snapshot, now time.Time, l
 			}
 			// The broker did not bring this seat back. It went down with the
 			// broker, not on purpose, so it comes back on its own conversation.
-			if lerr := reg.Relaunch(name); lerr != nil {
+			fresh, lerr := reg.Relaunch(name)
+			if lerr != nil {
 				noteAdoptFailure(name, lerr)
 				slog.Warn("seat lost to a broker restart: relaunch failed", "name", name, "adopt_err", err, "err", lerr)
+				if stuck, ok := noteBrokerLostFailure(name, now, lerr); ok {
+					stuck.Parent = parents[name]
+					res.Stuck = append(res.Stuck, stuck)
+				}
 				continue
 			}
-			slog.Info("relaunched seat the broker did not bring back after it restarted", "name", name)
+			if fresh != nil {
+				res.Fresh = append(res.Fresh, *fresh)
+				slog.Warn("relaunched seat lost to a broker restart on a fresh session: it had no history to resume",
+					"name", name, "detail", fresh.Describe())
+			} else {
+				slog.Info("relaunched seat the broker did not bring back after it restarted", "name", name)
+			}
 		}
 		brokerReattachTried.Delete(name)
+		brokerLostMu.Lock()
+		delete(brokerLostOutages, name)
+		brokerLostMu.Unlock()
 		// It is running: an older launch refusal no longer describes it.
 		noteRehydrate(name, nil)
 		slog.Info("re-attached running seat after its host handle was lost", "name", name)
-		attached = append(attached, name)
+		res.Back = append(res.Back, name)
 	}
-	return attached
+	return res
+}
+
+func brokerLostFlagged(name string) bool {
+	brokerLostMu.Lock()
+	defer brokerLostMu.Unlock()
+	o := brokerLostOutages[name]
+	return o != nil && o.flagged
+}
+
+// noteBrokerLostFailure counts a failed broker-lost relaunch and reports the
+// seat stuck the first time its outage outlasts brokerLostFlagAfter.
+func noteBrokerLostFailure(name string, now time.Time, err error) (BrokerLostStuck, bool) {
+	brokerLostMu.Lock()
+	defer brokerLostMu.Unlock()
+	o := brokerLostOutages[name]
+	if o == nil {
+		o = &brokerLostOutage{since: now}
+		brokerLostOutages[name] = o
+	}
+	o.attempts++
+	if o.flagged || now.Sub(o.since) < brokerLostFlagAfter {
+		return BrokerLostStuck{}, false
+	}
+	o.flagged = true
+	return BrokerLostStuck{Name: name, Since: o.since, Attempts: o.attempts, Err: err.Error()}, true
 }
 
 // noteAdoptFailure records an adopt that failed on the plan login (🎯T905):

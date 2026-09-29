@@ -39,16 +39,20 @@ func (s *Server) RevivePlanAuthWhereHealthy() []fleet.PlanAuthRevival {
 }
 
 // ReattachRunningSeats re-adopts auto-start seats the broker still runs but
-// this host lost its handle for, under the intent revive gate.
+// this host lost its handle for, under the intent revive gate. Seats lost to
+// a broker restart are relaunched, on a fresh session when they have no
+// history, and one that stays down is reported (🎯T925 / 🎯T935).
 func (s *Server) ReattachRunningSeats() []string {
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	attached := fleet.ReattachRunningSeats(s.registry, s.fleetIntent(), time.Now(), s.lostToBroker)
-	for _, name := range attached {
+	now := time.Now()
+	res := fleet.ReattachRunningSeats(s.registry, s.fleetIntent(), now, s.lostToBroker)
+	for _, name := range res.Back {
 		// Running again: the broker stop no longer describes it, and must
 		// not license a later relaunch of a seat stopped on purpose.
 		s.seatStops().Forget(name)
 	}
-	return attached
+	s.noteBrokerLostOutcome(res, now)
+	return res.Back
 }
