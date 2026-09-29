@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { classifyInjectUserText } from './inject';
-import { isSealedAssistant, joinAssistantTexts } from './stream';
+import { coalesceAssistantText, isSealedAssistant, joinAssistantTexts, streamIdOf } from './stream';
 import { turnOriginOf, type TurnOrigin } from './paint';
 import { isGenericToolName, summariseInput } from './toolSummary';
 
@@ -54,6 +54,10 @@ export type DisplayRow = {
   msgId?: string;
   /** User only: delivery state painted into the message row (🎯T811). */
   delivery?: { state: 'undelivered' | 'delivered'; reason?: string };
+  /** Assistant only, during displayRows: the bubble's stream (🎯T907). */
+  streamId?: string;
+  /** Assistant only, during displayRows: its untrimmed text (🎯T907). */
+  raw?: string;
 };
 
 function asRec(frame: unknown): Record<string, unknown> {
@@ -255,10 +259,85 @@ function pushAssistant(
   text: string,
   when: number | undefined,
   sealed: boolean,
+  streamId?: string,
+  raw?: string,
 ): void {
   if (alreadyPaintedAssistant(out, text)) return;
   flush();
-  out.push({ kind: 'assistant', text, when, sealed });
+  const row: DisplayRow = { kind: 'assistant', text, when, sealed };
+  if (streamId) {
+    row.streamId = streamId;
+    row.raw = raw ?? text;
+  }
+  out.push(row);
+}
+
+/** How far the rest of a cut line may run (🎯T907). */
+const CUT_TAIL_MAX = 240;
+
+/** Whether text stops at the end of a line or sentence. */
+function endsAtBoundary(text: string): boolean {
+  return text.trim() === '' || /[\n\r]\s*$/.test(text) || /[.!?:;]["')\]]?\s*$/.test(text);
+}
+
+/**
+ * Where the rest of a cut line ends in text: just past the first line break
+ * or sentence end; -1 when text holds neither yet (🎯T907).
+ */
+export function tailBoundary(text: string): number {
+  const nl = text.search(/[\n\r]/);
+  const sentence = /[.!?]["')\]]?(?=\s)/.exec(text);
+  const ends = [nl >= 0 ? nl + 1 : -1, sentence ? sentence.index + sentence[0].length : -1].filter((n) => n >= 0);
+  return ends.length ? Math.min(...ends) : -1;
+}
+
+/**
+ * 🎯T907: an owner message that lands while an answer is streaming is
+ * painted where it lands, and the answer continues below it — but a
+ * sentence the owner's bubble cut into is finished above it. The rest of
+ * the cut line (up to its line or sentence end) moves up to the cut bubble.
+ * When the stream is interrupted before the line ends (another stream takes
+ * over, the turn ends, a tool runs), what it said is all the rest of that
+ * line and moves up whole; so do late fragments of it. Only owner bubbles
+ * and other streams' bubbles may sit between the cut and its rest.
+ */
+function joinCutLines(rows: DisplayRow[]): DisplayRow[] {
+  const dropped = new Set<number>();
+  for (let i = 0; i < rows.length; i++) {
+    const cut = rows[i];
+    if (cut.kind !== 'assistant' || !cut.streamId || dropped.has(i)) continue;
+    for (let j = i + 1; j < rows.length && !endsAtBoundary(cut.raw ?? cut.text); j++) {
+      const r = rows[j];
+      if (dropped.has(j)) continue;
+      if (r.kind === 'steps') break; // a tool ran: the line is over
+      if (r.kind !== 'assistant' || r.streamId !== cut.streamId) continue;
+      if (!rows.slice(i + 1, j).some((x) => x.kind === 'user')) break; // not cut by the owner
+      const rest = r.raw ?? r.text;
+      const end = tailBoundary(rest);
+      const interrupted = !!r.sealed || rows.slice(j + 1).some((x) => x.kind === 'assistant' && x.streamId !== cut.streamId) ||
+        rows.slice(i + 1, j).some((x) => x.kind === 'assistant' && x.streamId !== cut.streamId);
+      let head: string;
+      if (end >= 0 && end <= CUT_TAIL_MAX) head = rest.slice(0, end);
+      else if (interrupted && rest.length <= CUT_TAIL_MAX) head = rest;
+      else break; // still streaming toward the end of the line
+      cut.raw = coalesceAssistantText(cut.raw ?? cut.text, head);
+      cut.text = cut.raw.trim();
+      const left = rest.slice(head.length);
+      if (left.trim()) {
+        r.raw = left.replace(/^\s+/, '');
+        r.text = r.raw.trim();
+      } else {
+        dropped.add(j);
+      }
+    }
+  }
+  const out = dropped.size ? rows.filter((_, k) => !dropped.has(k)) : rows;
+  // The join state is not part of a painted row.
+  for (const r of out) {
+    delete r.raw;
+    delete r.streamId;
+  }
+  return out;
 }
 
 export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayRow[] {
@@ -383,7 +462,7 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
         if (!isProseBlock(b)) continue;
         const t = String(b.text || '').trim();
         if (!t || isSilentAssistantText(t)) continue;
-        pushAssistant(out, flush, t, when, isSealedAssistant(f));
+        pushAssistant(out, flush, t, when, isSealedAssistant(f), streamIdOf(f), String(b.text || ''));
       }
       continue;
     }
@@ -391,10 +470,11 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       addStep({ cls: 'tool-use', text: summariseToolUse(rec) });
       continue;
     }
-    const t = proseText(f).trim();
+    const rawText = proseText(f);
+    const t = rawText.trim();
     if (!t || isSilentAssistantText(t)) continue;
-    pushAssistant(out, flush, t, when, isSealedAssistant(f));
+    pushAssistant(out, flush, t, when, isSealedAssistant(f), streamIdOf(f), rawText);
   }
   flush();
-  return out;
+  return joinCutLines(out);
 }

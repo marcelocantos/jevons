@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { reduceTranscriptBodies, tailBoundary } from './stream';
-import { displayRows } from './display';
+import { reduceTranscriptBodies } from './stream';
+import { displayRows, tailBoundary } from './display';
+import { applyConversationEvent, emptyConversation } from './reduce';
 
 function assistant(text: string, sid?: string, stop?: string) {
   return {
@@ -69,6 +70,7 @@ describe('steered owner bubble and a streaming answer (T907)', () => {
     const got = rows([
       assistant('Running the', 's1'),
       owner('go on'),
+      { type: 'assistant', stream_id: 's1', message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
       { type: 'tool_result', content: 'ok' },
       assistant('Done.', 's1', 'end_turn'),
     ]).filter(([kind]) => kind !== 'tool_result' && kind !== 'tool');
@@ -125,6 +127,34 @@ describe('steered owner bubble and a streaming answer (T907)', () => {
       ['user', 'Reply with exactly: cut-held-a'],
       ['assistant', 'aborted'],
       ['assistant', 'held-a'],
+    ]);
+  });
+
+  it('the live pane path: window frames from the daemon, as the T789.1 run delivered them', () => {
+    // The cockpit receives statedb rows as window frames (id + index) and
+    // puts them in place; the join has to hold on that path too.
+    const win = (i: number, event: Record<string, unknown>) => ({ id: `e:${i}`, index: i, op: 'put', event });
+    const a = (text: string, stop?: string) => ({ type: 'assistant', stream_id: 'A', message: { role: 'assistant', content: [{ type: 'text', text }], ...(stop ? { stop_reason: stop } : {}) } });
+    const o = (text: string) => ({ type: 'user', turn_origin: 'owner', message: { role: 'user', content: [{ type: 'text', text }] } });
+    let state = emptyConversation();
+    const bodies = [
+      win(11, a("4. The apprentice printer set type by hand for the newspaper's ev")),
+      win(12, o('Reply with exactly: held-a')),
+      win(13, a("ening edition.\n5. A sudden avalanche closed the ski resort's up")),
+      win(14, o('Reply with exactly: held-b')),
+      win(15, a('per slopes for the weekend.\n6. The retired dentist volunteered at a free clinic in')),
+      win(16, o('Reply with exactly: cut-held-a')),
+      win(17, { type: 'assistant', stream_id: 'B', message: { role: 'assistant', content: [{ type: 'text', text: 'aborted' }], stop_reason: 'end_turn' } }),
+    ];
+    for (const body of bodies) state = applyConversationEvent(state, { v: 1, ch: 'transcript:jevons', t: 'frame', body } as never);
+    expect(displayRows(state.frames).map((r) => [r.kind, r.text])).toEqual([
+      ['assistant', "4. The apprentice printer set type by hand for the newspaper's evening edition."],
+      ['user', 'Reply with exactly: held-a'],
+      ['assistant', "5. A sudden avalanche closed the ski resort's upper slopes for the weekend."],
+      ['user', 'Reply with exactly: held-b'],
+      ['assistant', '6. The retired dentist volunteered at a free clinic in'],
+      ['user', 'Reply with exactly: cut-held-a'],
+      ['assistant', 'aborted'],
     ]);
   });
 
