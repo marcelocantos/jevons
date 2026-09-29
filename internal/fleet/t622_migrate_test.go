@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -28,7 +29,7 @@ func migrateSource(t *testing.T) string {
 // The capability path must be tried before Stop+Register+Launch (🎯T622).
 func TestT622MigratePrefersClaudiaPrimitive(t *testing.T) {
 	src := migrateSource(t)
-	invoke := strings.Index(src, "live.Migrate(args)")
+	invoke := strings.Index(src, "live.Migrate(")
 	remap := strings.Index(src, "remapViaClaudia")
 	stop := strings.Index(src, "f.reg.Stop(name)")
 	if invoke < 0 {
@@ -48,10 +49,10 @@ func TestT622MigratePrefersClaudiaPrimitive(t *testing.T) {
 func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6220"
 	f, store, _ := migrateFixture(t, oldSession, true)
-	var got *claudia.MigrateArgs
+	var got *MigrateRequest
 	calls := 0
 	f.liveSession = func(string) (string, string) { return "live-successor-session", "" }
-	f.liveMigrate = func(args *claudia.MigrateArgs) error {
+	f.liveMigrate = func(args *MigrateRequest) error {
 		calls++
 		cp := *args
 		got = &cp
@@ -65,7 +66,7 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	if calls != 1 || got == nil {
 		t.Fatal("claudia Agent.Migrate was not invoked")
 	}
-	if got.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
+	if got.Provider != cli.SubscriptionSeatProvider(claudia.ProviderClaude) {
 		t.Fatalf("MigrateArgs.Provider=%s", got.Provider)
 	}
 	if got.Model != "claude-sonnet-5" {
@@ -84,7 +85,7 @@ func TestT622PrepareMigrationInvokesClaudiaMigrate(t *testing.T) {
 	if def == nil {
 		t.Fatal("row vanished")
 	}
-	if def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
+	if def.Provider != cli.SubscriptionSeatProvider(claudia.ProviderClaude) {
 		t.Fatalf("provider=%s", def.Provider)
 	}
 	if def.SessionID == oldSession {
@@ -128,9 +129,9 @@ func TestLiveMigrationDelegatesContextTransferToClaudia(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(live.Stop)
-	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+	f.migrationTransfer = func(MigrationTransferArgs) (MigrationTransferResult, error) {
 		t.Fatal("Jevons paid for a context transfer before delegating the live seat")
-		return claudia.MigrationTransferResult{}, nil
+		return MigrationTransferResult{}, nil
 	}
 	const retained = "user: Continue T691 and remember VIOLET67\nassistant: Current work remains on Grok\n"
 	f.SetRetainedHistory(func(name string) (string, error) {
@@ -139,7 +140,7 @@ func TestLiveMigrationDelegatesContextTransferToClaudia(t *testing.T) {
 		}
 		return retained, nil
 	})
-	f.liveMigrate = func(args *claudia.MigrateArgs) error {
+	f.liveMigrate = func(args *MigrateRequest) error {
 		if args.ContextBrief != "" || args.RetainedTranscript != retained {
 			t.Fatalf("Jevons must supply only inert history, never a second brief: %+v", args)
 		}
@@ -189,7 +190,7 @@ func TestLiveDestinationRetrySkipsSecondTransferSummary(t *testing.T) {
 	}
 	f.reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(_ context.Context, _ claudia.Config) (*claudia.Agent, error) {
 		return claudia.StartStub(t.Context(), claudia.Config{
-			Provider:  claudia.SubscriptionSeatProvider(claudia.ProviderCursor),
+			Provider:  cli.SubscriptionSeatProvider(claudia.ProviderCursor),
 			SessionID: sourceSession, WorkDir: t.TempDir(),
 		}, nil)
 	}})
@@ -198,14 +199,14 @@ func TestLiveDestinationRetrySkipsSecondTransferSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(live.Stop)
-	if claudia.PlanProvider(live.Provider()) != claudia.ProviderCursor {
+	if cli.PlanProvider(live.Provider()) != claudia.ProviderCursor {
 		t.Fatalf("fixture did not create a live destination: %s", live.Provider())
 	}
-	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+	f.migrationTransfer = func(MigrationTransferArgs) (MigrationTransferResult, error) {
 		t.Fatal("retry paid for a second context-transfer summary")
-		return claudia.MigrationTransferResult{}, nil
+		return MigrationTransferResult{}, nil
 	}
-	f.liveMigrate = func(*claudia.MigrateArgs) error { return fmt.Errorf("Migrate: same provider cursor") }
+	f.liveMigrate = func(*MigrateRequest) error { return fmt.Errorf("Migrate: same provider cursor") }
 	f.liveSession = func(string) (string, string) { return "destination-session", "composer-2.5" }
 	pending, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderCursor, "composer-2.5", false)
 	if err != nil {
@@ -221,16 +222,16 @@ func TestMigrationTransferUsesDestinationProviderAndFailureKeepsPredecessor(t *t
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6223"
 	f, store, _ := migrateFixture(t, oldSession, true)
 	transferCalls, migrateCalls := 0, 0
-	f.migrationTransfer = func(args claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+	f.migrationTransfer = func(args MigrationTransferArgs) (MigrationTransferResult, error) {
 		transferCalls++
-		if claudia.PlanProvider(args.Destination) != claudia.ProviderClaude || !strings.Contains(args.Transcript, "hello") {
+		if cli.PlanProvider(args.Destination) != claudia.ProviderClaude || !strings.Contains(args.Transcript, "hello") {
 			t.Fatalf("transfer args = %+v", args)
 		}
-		return claudia.MigrationTransferResult{Brief: "The work remains open."}, nil
+		return MigrationTransferResult{Brief: "The work remains open."}, nil
 	}
-	f.liveMigrate = func(args *claudia.MigrateArgs) error {
+	f.liveMigrate = func(args *MigrateRequest) error {
 		migrateCalls++
-		if args.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) || args.ContextBrief != "The work remains open." {
+		if args.Provider != cli.SubscriptionSeatProvider(claudia.ProviderClaude) || args.ContextBrief != "The work remains open." {
 			t.Fatalf("work successor args = %+v", args)
 		}
 		return nil
@@ -246,10 +247,10 @@ func TestMigrationTransferUsesDestinationProviderAndFailureKeepsPredecessor(t *t
 	}
 
 	f2, _, _ := migrateFixture(t, oldSession, true)
-	f2.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
-		return claudia.MigrationTransferResult{}, errors.New("summarizer unavailable")
+	f2.migrationTransfer = func(MigrationTransferArgs) (MigrationTransferResult, error) {
+		return MigrationTransferResult{}, errors.New("summarizer unavailable")
 	}
-	f2.liveMigrate = func(*claudia.MigrateArgs) error {
+	f2.liveMigrate = func(*MigrateRequest) error {
 		t.Fatal("work successor started after transfer failed")
 		return nil
 	}
@@ -268,7 +269,7 @@ func TestMigrationTransferUsesDestinationProviderAndFailureKeepsPredecessor(t *t
 func TestT646_1RemapDoesNotDeliverHostSeed(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6461"
 	f, store, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*claudia.MigrateArgs) error { return nil }
+	f.liveMigrate = func(*MigrateRequest) error { return nil }
 	delivers := 0
 	f.seedDeliver = func(string, string) (string, error) {
 		delivers++
@@ -297,7 +298,7 @@ func TestT646_1RemapDoesNotDeliverHostSeed(t *testing.T) {
 func TestT691CapabilityErrorDoesNotFallBackToHostRotation(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6221"
 	f, store, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*claudia.MigrateArgs) error {
+	f.liveMigrate = func(*MigrateRequest) error {
 		return &claudia.CapabilityError{
 			Provider:   claudia.ProviderGrok,
 			Capability: claudia.CapabilityMigrate,
@@ -319,7 +320,7 @@ func TestT691CapabilityErrorDoesNotFallBackToHostRotation(t *testing.T) {
 func TestT622HardFailureDoesNotRotate(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6222"
 	f, store, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*claudia.MigrateArgs) error {
+	f.liveMigrate = func(*MigrateRequest) error {
 		return errors.New("turn in flight")
 	}
 	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err == nil {

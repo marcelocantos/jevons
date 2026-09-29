@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
@@ -69,7 +70,7 @@ func t519LegacyPending(t *testing.T, f *Claudia, store *handover.Store, to claud
 	if _, err := os.Stat(predecessor); err != nil {
 		t.Fatalf("historical predecessor transcript: %v", err)
 	}
-	def.Provider = claudia.SubscriptionSeatProvider(to)
+	def.Provider = cli.SubscriptionSeatProvider(to)
 	def.SessionID = "legacy-successor"
 	def.Materialized = false
 	if err := f.reg.Register(def); err != nil {
@@ -97,7 +98,7 @@ func TestT519CodexPhantomJSONLBusyIsNotNeverBegun(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("no pending record: ok=%v err=%v", ok, err)
 	}
-	if def := f.reg.Def("jv-t519-w"); def == nil || def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderCodex) {
+	if def := f.reg.Def("jv-t519-w"); def == nil || def.Provider != cli.SubscriptionSeatProvider(claudia.ProviderCodex) {
 		t.Fatalf("successor provider = %v, want codex", def)
 	}
 

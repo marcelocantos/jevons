@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -121,7 +122,7 @@ func (s *Server) migrateOptions(now time.Time) []migrateProviderOption {
 	running := map[string][]string{}
 	if reg != nil {
 		for _, def := range reg.List() {
-			p := strings.ToLower(strings.TrimSpace(string(claudia.PlanProvider(def.Provider))))
+			p := strings.ToLower(strings.TrimSpace(string(cli.PlanProvider(def.Provider))))
 			if p == "" {
 				continue
 			}

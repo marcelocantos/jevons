@@ -33,6 +33,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
+	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/handover"
@@ -42,6 +43,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/seatreg"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -711,8 +713,16 @@ func main() {
 		slog.Info("sidecar remint", "seats", n)
 	}
 
+	// Placement and migration fields the published AgentDef does not carry.
+	seatPlans, err := seatplan.Open(filepath.Join(cfg.StateDir, "seatplan.json"))
+	if err != nil {
+		slog.Error("seat plan store failed", "err", err)
+		os.Exit(1)
+	}
+
 	// Wire registry and scanner into MCP server.
 	mcpSrv.SetRegistry(registry)
+	mcpSrv.SetSeatPlan(seatPlans)
 	// 🎯T407: the sentinel must see the owner pause. frontier_consume.disabled
 	// already stops auto-spawn; without this stamp the stall alarm still
 	// tells the PO to spawn into that wall.
@@ -797,6 +807,7 @@ func main() {
 	// (agent-only names) so Deliver/PushEvent share one id space.
 	// ð¯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
+	fleetAdapter.SetSeatPlan(seatPlans)
 	fleetAdapter.SetSeats(seats)
 	fleetAdapter.SetRemovalAccount(removals)
 	fleetAdapter.SetDefaultProvider(defaultProvider)
@@ -1057,7 +1068,7 @@ func main() {
 	// in the HTTP server, which owns those semantics.
 	// 🎯T903: an owner message to an overseer mid owner turn takes the owner
 	// ladder, as one to any agent does.
-	srv.SetOwnerEscalation(func() (claudia.Escalation, bool) {
+	srv.SetOwnerEscalation(func() (escalate.Ladder, bool) {
 		return mcpSrv.EscalationLadderFor(config.EscalationOwner)
 	})
 	mcpSrv.SetOverseerDeliver(func(text string, origin mcpserver.SendOrigin) error {

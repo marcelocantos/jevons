@@ -23,7 +23,7 @@ import (
 
 // escalatingSender is a seat that can run an escalation ladder.
 type escalatingSender interface {
-	SendEscalating(string, claudia.Escalation) (claudia.DeliveryOutcome, error)
+	SendEscalating(string, escalate.Ladder) (claudia.DeliveryOutcome, error)
 }
 
 // SetDeliveryEscalation installs the urgency profile from config.
@@ -48,11 +48,11 @@ func (s *Server) escalationClass(actor string, origin SendOrigin, rel DeliverRel
 // escalationLadder is the Claudia ladder for class, or ok=false.
 // EscalationLadderFor is the configured ladder for an urgency class, for the
 // owner-chat layer's overseer arm (🎯T903).
-func (s *Server) EscalationLadderFor(class string) (claudia.Escalation, bool) {
+func (s *Server) EscalationLadderFor(class string) (escalate.Ladder, bool) {
 	return s.escalationLadder(class)
 }
 
-func (s *Server) escalationLadder(class string) (claudia.Escalation, bool) {
+func (s *Server) escalationLadder(class string) (escalate.Ladder, bool) {
 	if class == "" {
 		return nil, false
 	}
@@ -63,9 +63,9 @@ func (s *Server) escalationLadder(class string) (claudia.Escalation, bool) {
 	if !ok {
 		return nil, false
 	}
-	ladder := claudia.Escalation{{Mode: claudia.DeliveryMode(first)}}
+	ladder := escalate.Ladder{{Mode: claudia.DeliveryMode(first)}}
 	if after > 0 {
-		ladder = append(ladder, claudia.EscalationStep{Mode: claudia.DeliveryInterrupt, After: after})
+		ladder = append(ladder, escalate.Step{Mode: claudia.DeliveryInterrupt, After: after})
 	}
 	return ladder, true
 }
@@ -80,6 +80,12 @@ func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSende
 		return agentSendResult{}, false, nil
 	}
 	es, ok := proc.(escalatingSender)
+	if !ok {
+		if ag, isAgent := proc.(*claudia.Agent); isAgent {
+			es = escalate.Handle{Agent: ag}
+			ok = true
+		}
+	}
 	if !ok {
 		return agentSendResult{}, false, nil
 	}

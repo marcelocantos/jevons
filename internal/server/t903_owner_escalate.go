@@ -23,7 +23,7 @@ import (
 
 // SetOwnerEscalation installs the owner urgency ladder (config, via the fleet
 // layer). A nil func or a false return leaves the queue-behind-turn path.
-func (s *Server) SetOwnerEscalation(fn func() (claudia.Escalation, bool)) {
+func (s *Server) SetOwnerEscalation(fn func() (escalate.Ladder, bool)) {
 	s.mu.Lock()
 	s.ownerEscalation = fn
 	s.mu.Unlock()
@@ -33,7 +33,7 @@ func (s *Server) SetOwnerEscalation(fn func() (claudia.Escalation, bool)) {
 type overseerEscalator interface {
 	Alive() bool
 	TurnPhase() claudia.TurnPhase
-	SendEscalating(text string, esc claudia.Escalation) (claudia.DeliveryOutcome, error)
+	SendEscalating(text string, esc escalate.Ladder) (claudia.DeliveryOutcome, error)
 }
 
 // escalateOwnerToOverseer steers text into the overseer's running owner
@@ -56,7 +56,7 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	if seat != nil {
 		proc = seat
 	} else if p := s.CurrentProcess(); p != nil {
-		proc = p
+		proc = escalate.Handle{Agent: p}
 	}
 	// Only a turn the seat itself reports running is steered; the chat
 	// layer's flag alone could send a fresh prompt past the notify queue.

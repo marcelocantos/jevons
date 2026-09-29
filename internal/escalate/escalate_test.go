@@ -12,7 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-var ownerLadder = claudia.Escalation{
+var ownerLadder = Ladder{
 	{Mode: claudia.DeliverySteer},
 	{Mode: claudia.DeliveryInterrupt, After: time.Minute},
 }
@@ -31,7 +31,7 @@ func TestT931FitKeepsOnlySupportedRungs(t *testing.T) {
 	if got := Fit(ownerLadder, noInterrupt); len(got) != 1 || got[0] != ownerLadder[0] {
 		t.Fatalf("a seat that cannot interrupt loses the interrupt rung: got %+v", got)
 	}
-	submitFirst := claudia.Escalation{{Mode: claudia.DeliverySubmit}, {Mode: claudia.DeliveryInterrupt, After: time.Minute}}
+	submitFirst := Ladder{{Mode: claudia.DeliverySubmit}, {Mode: claudia.DeliveryInterrupt, After: time.Minute}}
 	if got := Fit(submitFirst, claude); len(got) != 2 {
 		t.Fatalf("a submit-first ladder needs no steer: got %+v", got)
 	}

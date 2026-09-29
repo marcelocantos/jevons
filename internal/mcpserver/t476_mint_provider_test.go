@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/cost"
 )
@@ -39,7 +40,7 @@ func TestStitchOmitProviderFollowsConfigNotCompiledSeed(t *testing.T) {
 	if existed {
 		t.Fatal("mint reported existed")
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("omit-provider mint → %q, want grok (config)", def.Provider)
 	}
 	if strings.Contains(strings.ToLower(def.Model), "claude") {
@@ -83,7 +84,7 @@ func TestStitchOmitProviderFollowsConfigNotLeftoverFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("leftover file won: provider=%q note=%q", def.Provider, note)
 	}
 	if def.Model == "claude-opus-5" || strings.Contains(strings.ToLower(def.Model), "claude") {

@@ -10,9 +10,11 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -90,10 +92,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			}
 			var prepared handover.Pending
 			var err error
-			allowInterrupt := false
-			if def := s.registry.Def(a.Name); def != nil {
-				allowInterrupt = def.HostMayInterrupt
-			}
+			allowInterrupt := s.seatPlans.Get(a.Name).HostMayInterrupt
 			if p, ok := s.migrator.(migratePinner); ok {
 				prepared, err = p.PrepareMigrationPinned(a.Name, claudia.Provider(a.To), a.Model, allowInterrupt)
 			} else {
@@ -111,7 +110,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 					a.Execution, a.Failure = "deferred", "seat is live in Claudia but not yet attached to this host; retrying next sweep"
 					continue
 				}
-				if def := s.registry.Def(a.Name); def != nil && def.MigrationSeed != "" {
+				if s.seatPlans.Get(a.Name).MigrationSeed != "" {
 					// Claudia has already saved the destination and brief. The
 					// next sweep retries that state; this is not a failed move.
 					a.Execution, a.Failure = "pending", err.Error()
@@ -182,17 +181,18 @@ func (s *Server) resumeClaudiaMigrations() []planusage.PlanAction {
 	}
 	var results []planusage.PlanAction
 	for _, def := range s.registry.List() {
-		if def.MigrationSeed == "" {
+		st := s.seatPlans.Get(def.Name)
+		if st.MigrationSeed == "" {
 			continue
 		}
-		action := pendingClaudiaMigration(def)
+		action := pendingClaudiaMigration(def, st)
 		if s.migrator == nil {
 			action.Failure = "migrator not configured"
 		} else {
 			_, err := s.migrator.PrepareMigration(def.Name, def.Provider, false)
 			if err != nil {
 				action.Failure = err.Error()
-			} else if current := s.registry.Def(def.Name); current != nil && current.MigrationSeed == "" {
+			} else if s.seatPlans.Get(def.Name).MigrationSeed == "" {
 				action.Execution, action.Failure = "migrated", ""
 			} else {
 				action.Failure = "Claudia has not confirmed handover delivery"
@@ -203,10 +203,10 @@ func (s *Server) resumeClaudiaMigrations() []planusage.PlanAction {
 	return results
 }
 
-func pendingClaudiaMigration(def claudia.AgentDef) planusage.PlanAction {
+func pendingClaudiaMigration(def claudia.AgentDef, st seatplan.State) planusage.PlanAction {
 	return planusage.PlanAction{
-		Name: def.Name, From: string(def.MigrationFrom), To: string(def.Provider), Model: def.Model,
-		Action: claudia.SeatMigrate, Author: claudia.DecisionAuthor,
+		Name: def.Name, From: string(st.MigrationFrom), To: string(def.Provider), Model: def.Model,
+		Action: planusage.SeatMigrate, Author: claudia.DecisionAuthor,
 		Reason:    "Claudia destination persisted; handover awaiting delivery",
 		Execution: "pending",
 	}
@@ -229,11 +229,11 @@ func (s *Server) MarkPlanRetryAfterReauth(provider claudia.Provider) {
 	if s == nil {
 		return
 	}
-	plan := claudia.PlanProvider(provider)
+	plan := cli.PlanProvider(provider)
 	s.planDecisionMu.Lock()
 	defer s.planDecisionMu.Unlock()
 	for name, last := range s.planLastResults {
-		if last.Execution == "failed" && claudia.PlanProvider(claudia.Provider(last.To)) == plan {
+		if last.Execution == "failed" && cli.PlanProvider(claudia.Provider(last.To)) == plan {
 			last.Execution, last.Failure = "pending", "destination login recovered; retrying"
 			s.planLastResults[name] = last
 		}
@@ -261,10 +261,11 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 	}
 	if s.registry != nil {
 		for _, def := range s.registry.List() {
-			if def.MigrationSeed == "" {
+			st := s.seatPlans.Get(def.Name)
+			if st.MigrationSeed == "" {
 				continue
 			}
-			pending := pendingClaudiaMigration(def)
+			pending := pendingClaudiaMigration(def, st)
 			if last, ok := s.planLastResults[def.Name]; ok && last.Execution == "pending" {
 				pending.Failure = last.Failure
 			}
@@ -286,7 +287,7 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 	for i := range decisions {
 		d := &decisions[i]
 		if p, ok := pending[d.Name]; ok && p.Kind == handover.KindMigrate && !p.Delivered &&
-			d.Action == claudia.SeatMigrate {
+			d.Action == planusage.SeatMigrate {
 			d.Execution = "pending"
 			if d.Failure == "" {
 				d.Failure = "handover awaiting delivery"
@@ -306,28 +307,33 @@ func (s *Server) planHostDeferral(action planusage.PlanAction) string {
 	if s == nil || s.registry == nil {
 		return ""
 	}
-	def := s.registry.Def(action.Name)
-	if def == nil {
+	if s.registry.Def(action.Name) == nil {
 		return "agent is no longer registered"
 	}
 	inFlight := false
-	if action.Action == claudia.SeatMigrate {
+	if action.Action == planusage.SeatMigrate {
 		inFlight = s.seatInFlight(action.Name) == seatstate.Yes
 	}
-	return hostPlanDeferral(action, def, inFlight)
+	return hostPlanDeferral(action, s.seatPlans.Get(action.Name), inFlight)
 }
 
-func hostPlanDeferral(action planusage.PlanAction, def *claudia.AgentDef, inFlight bool) string {
-	if def == nil {
-		return "agent is no longer registered"
-	}
-	if action.Action == claudia.SeatPark && def.HostNeverPark {
+func hostPlanDeferral(action planusage.PlanAction, st seatplan.State, inFlight bool) string {
+	if action.Action == planusage.SeatPark && st.HostNeverPark {
 		return "Jevons host policy forbids parking this seat"
 	}
-	if action.Action == claudia.SeatMigrate && inFlight && !def.HostMayInterrupt {
+	if action.Action == planusage.SeatMigrate && inFlight && !st.HostMayInterrupt {
 		return "turn in flight; Jevons host policy forbids interruption"
 	}
 	return ""
+}
+
+// SetSeatPlan attaches the sidecar store for placement and migration
+// fields the published AgentDef does not carry.
+func (s *Server) SetSeatPlan(st *seatplan.Store) {
+	if s == nil {
+		return
+	}
+	s.seatPlans = st
 }
 
 func (s *Server) planPolicyAgents() []planusage.AgentRef {
@@ -336,11 +342,17 @@ func (s *Server) planPolicyAgents() []planusage.AgentRef {
 	}
 	var agents []planusage.AgentRef
 	for _, d := range s.registry.List() {
-		agents = append(agents, planusage.AgentRef{
+		st := s.seatPlans.Get(d.Name)
+		allowed, restricted := st.Allowed()
+		ref := planusage.AgentRef{
 			Name: d.Name, Provider: string(d.Provider), Purpose: d.Purpose, Parent: d.Parent,
-			PreferProvider: d.PreferProvider, AllowedProviders: d.AllowedProviders,
-			ExcludeProviders: d.ExcludeProviders,
-		})
+			PreferProvider: st.PreferProvider, ExcludeProviders: st.ExcludeProviders,
+		}
+		if restricted {
+			ref.AllowedProviders = allowed
+			ref.AllowNone = len(allowed) == 0
+		}
+		agents = append(agents, ref)
 	}
 	return agents
 }

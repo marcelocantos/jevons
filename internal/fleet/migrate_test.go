@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
@@ -52,38 +53,38 @@ func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claud
 	f := NewClaudia(reg)
 	f.SetSessionRoots(discovery.Roots{GrokSessions: grokSessions})
 	f.SetHandoverStore(store)
-	f.migrationTransfer = func(args claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
-		return claudia.MigrationTransferResult{Brief: "In-flight work: " + args.Goal + "\nRecent context: " + args.Transcript}, nil
+	f.migrationTransfer = func(args MigrationTransferArgs) (MigrationTransferResult, error) {
+		return MigrationTransferResult{Brief: "In-flight work: " + args.Goal + "\nRecent context: " + args.Transcript}, nil
 	}
-	f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (claudia.StoppedMigration, error) {
+	f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (StoppedMigration, error) {
 		source := reg.Def(name)
 		if source == nil {
-			return claudia.StoppedMigration{}, fmt.Errorf("missing fixture seat %s", name)
+			return StoppedMigration{}, fmt.Errorf("missing fixture seat %s", name)
 		}
 		if history == "" && !args.Force {
-			return claudia.StoppedMigration{}, fmt.Errorf("no predecessor context")
+			return StoppedMigration{}, fmt.Errorf("no predecessor context")
 		}
 		if history == "" {
 			history = "system: forced cold start; no predecessor turns were retained"
 		}
-		transfer, err := f.migrationTransfer(claudia.MigrationTransferArgs{
+		transfer, err := f.migrationTransfer(MigrationTransferArgs{
 			Destination: args.Provider, Goal: source.Goal, Transcript: history,
 		})
 		if err != nil {
-			return claudia.StoppedMigration{}, err
+			return StoppedMigration{}, err
 		}
 		if strings.TrimSpace(transfer.Brief) == "" {
-			return claudia.StoppedMigration{}, fmt.Errorf("empty transfer brief")
+			return StoppedMigration{}, fmt.Errorf("empty transfer brief")
 		}
 		next := *source
-		next.Provider = claudia.SubscriptionSeatProvider(args.Provider)
+		next.Provider = cli.SubscriptionSeatProvider(args.Provider)
 		next.Model = args.Model
 		next.SessionID = uuid.NewString()
 		next.Materialized = false
 		if err := reg.Register(next); err != nil {
-			return claudia.StoppedMigration{}, err
+			return StoppedMigration{}, err
 		}
-		return claudia.StoppedMigration{Source: *source, Destination: next, Transfer: transfer}, nil
+		return StoppedMigration{Source: *source, Destination: next, Transfer: transfer}, nil
 	}
 	return f, store, transcript
 }
@@ -185,7 +186,7 @@ func TestStoppedMigrationDelegatesHandoverWithoutHostLedger(t *testing.T) {
 	if def == nil {
 		t.Fatal("agent vanished from the registry")
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Errorf("provider = %s, want claude", def.Provider)
 	}
 	if def.SessionID == oldSession || def.SessionID == "" {
@@ -237,7 +238,7 @@ func TestPrepareMigrationKeepsGoal(t *testing.T) {
 	if got == nil || got.Goal != "Achieve 🎯T510" {
 		t.Fatalf("Goal after Grok→Codex remint = %+v", got)
 	}
-	if claudia.PlanProvider(got.Provider) != claudia.ProviderCodex {
+	if cli.PlanProvider(got.Provider) != claudia.ProviderCodex {
 		t.Fatalf("provider = %q", got.Provider)
 	}
 }
@@ -274,7 +275,7 @@ func TestPrepareMigrationClearsModelPin(t *testing.T) {
 	if def == nil {
 		t.Fatal("agent vanished")
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("provider=%s want grok", def.Provider)
 	}
 	if def.Model == "fable" || strings.Contains(strings.ToLower(def.Model), "fable") {

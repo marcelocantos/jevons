@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/thread"
 )
@@ -87,7 +88,7 @@ func TestMigrateRelaunchKeepsExplicitWorkPurpose(t *testing.T) {
 	if def.Purpose != claudia.PurposeWork {
 		t.Fatalf("purpose = %q after migrate + relaunch, want work", def.Purpose)
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Fatalf("provider = %q, want claude", def.Provider)
 	}
 }

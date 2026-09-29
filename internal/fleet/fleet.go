@@ -27,6 +27,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
+	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -75,6 +76,9 @@ type Claudia struct {
 	// before and migration is unavailable rather than silently cold.
 	roots     discovery.Roots
 	handovers *handover.Store
+	// seatPlans holds migration and placement fields the published
+	// AgentDef does not carry.
+	seatPlans *seatplan.Store
 	rotations *handover.RotationStore
 	// retainedHistory reads the host's durable agent journal when a stopped
 	// predecessor has no provider transcript (notably direct Codex seats).
@@ -101,15 +105,15 @@ type Claudia struct {
 	compactBrief func(p handover.Pending) (sessionID, text string, err error)
 	// migrationTransfer replaces the one-shot Claudia summary in fixtures.
 	// Nil is the real on-demand transfer task.
-	migrationTransfer func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error)
+	migrationTransfer func(MigrationTransferArgs) (MigrationTransferResult, error)
 
 	// liveMigrate is the 🎯T622 seam for claudia Agent.Migrate. Nil is the
 	// product path (reg.Get(name).Migrate). Tests inject a recorder so the
 	// primitive is asserted without a live provider process.
-	liveMigrate func(args *claudia.MigrateArgs) error
+	liveMigrate func(args *MigrateRequest) error
 	// stoppedMigrate replaces Registry.MigrateStopped in hermetic fixtures.
 	// Nil runs Claudia's persisted transfer-and-launch operation.
-	stoppedMigrate func(name string, args claudia.MigrateArgs, history string) (claudia.StoppedMigration, error)
+	stoppedMigrate func(name string, args claudia.MigrateArgs, history string) (StoppedMigration, error)
 	// liveSession is the 🎯T790 seam for reading the live agent's session id
 	// and model after a remap. Nil reads the registry's live agent.
 	liveSession func(name string) (sessionID, model string)

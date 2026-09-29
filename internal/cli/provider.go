@@ -71,5 +71,5 @@ func SelectAgentProvider(override string, stored, defaultProv claudia.Provider) 
 // is anthropic; ChatGPT Codex is openai-codex; grok is xai-oauth.
 // cursor already launches through the sidecar under that name.
 func SidecarLaunchProvider(p claudia.Provider) claudia.Provider {
-	return claudia.SubscriptionSeatProvider(p)
+	return SubscriptionSeatProvider(p)
 }

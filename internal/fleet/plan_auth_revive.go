@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
@@ -57,13 +58,13 @@ type PlanAuthRevival struct {
 // rehydrate failed on plan authentication and whose intent allows revival.
 func planAuthCandidates(defs []claudia.AgentDef, alive func(string) bool,
 	intent fleetintent.Snapshot, provider claudia.Provider) []string {
-	plan := claudia.PlanProvider(provider)
+	plan := cli.PlanProvider(provider)
 	if plan == "" {
 		return nil
 	}
 	var out []string
 	for _, d := range defs {
-		if d.Name == "" || claudia.PlanProvider(d.Provider) != plan || alive(d.Name) {
+		if d.Name == "" || cli.PlanProvider(d.Provider) != plan || alive(d.Name) {
 			continue
 		}
 		v, ok := rehydrateFailures.Load(d.Name)
@@ -99,13 +100,13 @@ func RevivePlanAuthPeers(reg *claudia.Registry, intent fleetintent.Snapshot,
 // them; a seat the owner stopped is parked and stays stopped.
 func ownerReauthCandidates(defs []claudia.AgentDef, alive func(string) bool,
 	intent fleetintent.Snapshot, provider claudia.Provider) []string {
-	plan := claudia.PlanProvider(provider)
+	plan := cli.PlanProvider(provider)
 	if plan == "" {
 		return nil
 	}
 	var out []string
 	for _, d := range defs {
-		if d.Name == "" || claudia.PlanProvider(d.Provider) != plan || alive(d.Name) {
+		if d.Name == "" || cli.PlanProvider(d.Provider) != plan || alive(d.Name) {
 			continue
 		}
 		failed := false
@@ -173,7 +174,7 @@ func RevivePlanAuthWhereHealthy(reg *claudia.Registry, intent fleetintent.Snapsh
 	healthy := map[claudia.Provider]bool{}
 	for _, d := range reg.List() {
 		if p := reg.Get(d.Name); p != nil && p.Alive() {
-			if plan := claudia.PlanProvider(d.Provider); plan != "" {
+			if plan := cli.PlanProvider(d.Provider); plan != "" {
 				healthy[plan] = true
 			}
 		}

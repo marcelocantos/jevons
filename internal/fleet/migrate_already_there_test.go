@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -18,7 +19,7 @@ import (
 func TestRetriedMigrateRecordsAMoveClaudiaAlreadyMade(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6461"
 	f, _, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*claudia.MigrateArgs) error {
+	f.liveMigrate = func(*MigrateRequest) error {
 		return errors.New("broker protocol: agent_failed: Migrate: same provider claude; use SetModel")
 	}
 
@@ -26,11 +27,11 @@ func TestRetriedMigrateRecordsAMoveClaudiaAlreadyMade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry of a migration claudia already made was refused: %v", err)
 	}
-	if pending.Remap != handover.RemapClaudiaMigrate || pending.To != string(claudia.SubscriptionSeatProvider(claudia.ProviderClaude)) {
+	if pending.Remap != handover.RemapClaudiaMigrate || pending.To != string(cli.SubscriptionSeatProvider(claudia.ProviderClaude)) {
 		t.Fatalf("pending = %+v", pending)
 	}
 	def := f.reg.Def("jevons-po")
-	if def == nil || def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) {
+	if def == nil || def.Provider != cli.SubscriptionSeatProvider(claudia.ProviderClaude) {
 		t.Fatalf("registry row still names the old provider: %+v", def)
 	}
 	if def.SessionID == oldSession {
@@ -43,7 +44,7 @@ func TestMigrateRefusedForAnotherReasonRecordsNothing(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa6461"
 	f, _, _ := migrateFixture(t, oldSession, true)
 	before := *f.reg.Def("jevons-po")
-	f.liveMigrate = func(*claudia.MigrateArgs) error {
+	f.liveMigrate = func(*MigrateRequest) error {
 		return errors.New("broker protocol: agent_failed: Migrate: turn in flight; wait for the current response or Interrupt first")
 	}
 
@@ -68,7 +69,7 @@ func TestForcedMigrateAsksAgainAfterATurnInFlight(t *testing.T) {
 	asks := func(force bool) int {
 		f, _, _ := migrateFixture(t, oldSession, true)
 		n := 0
-		f.liveMigrate = func(*claudia.MigrateArgs) error {
+		f.liveMigrate = func(*MigrateRequest) error {
 			n++
 			return errors.New("Migrate: turn in flight; wait for the current response or Interrupt first")
 		}

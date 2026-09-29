@@ -20,6 +20,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -691,7 +692,7 @@ func (s *suite) jWorkerTranscriptVisible() error {
 // predecessor context. A second live agent with a shell will grep the
 // host session tree and find the plant — that is not a handover leak.
 func migrationJourneyDestination(from claudia.Provider) claudia.Provider {
-	if claudia.PlanProvider(from) == claudia.ProviderCodex {
+	if cli.PlanProvider(from) == claudia.ProviderCodex {
 		return claudia.ProviderCursor
 	}
 	return claudia.ProviderCodex
@@ -747,7 +748,7 @@ func (s *suite) stoppedProviderMigrationWithBroker() error {
 		return err
 	}
 	destination := after[id]
-	if claudia.PlanProvider(destination.Provider) != claudia.PlanProvider(to) ||
+	if cli.PlanProvider(destination.Provider) != cli.PlanProvider(to) ||
 		destination.SessionID == "" || destination.SessionID == source.SessionID {
 		return fmt.Errorf("stopped migration did not persist one destination: source=%+v destination=%+v", source, destination)
 	}
@@ -837,7 +838,7 @@ func (s *suite) providerMigrationWithBroker() error {
 		return fmt.Errorf("source registry: %w", err)
 	}
 	source := before[id]
-	if source.SessionID == "" || claudia.PlanProvider(source.Provider) != claudia.PlanProvider(s.provider) {
+	if source.SessionID == "" || cli.PlanProvider(source.Provider) != cli.PlanProvider(s.provider) {
 		return fmt.Errorf("source identity is not the running provider: %+v", source)
 	}
 
@@ -858,7 +859,7 @@ func (s *suite) providerMigrationWithBroker() error {
 		return fmt.Errorf("destination registry: %w", err)
 	}
 	destination := after[id]
-	if claudia.PlanProvider(destination.Provider) != claudia.PlanProvider(to) ||
+	if cli.PlanProvider(destination.Provider) != cli.PlanProvider(to) ||
 		destination.SessionID == "" || destination.SessionID == source.SessionID {
 		return fmt.Errorf("migration did not record one distinct destination: source=%+v destination=%+v", source, destination)
 	}
@@ -941,7 +942,7 @@ func (s *suite) providerMigrationWithBroker() error {
 		return fmt.Errorf("reopened registry: %w", err)
 	}
 	if got := reopened[id]; got.SessionID != destination.SessionID ||
-		claudia.PlanProvider(got.Provider) != claudia.PlanProvider(to) {
+		cli.PlanProvider(got.Provider) != cli.PlanProvider(to) {
 		return fmt.Errorf("restart moved the seat again: destination=%+v reopened=%+v", destination, got)
 	}
 	if _, err := os.Stat(s.handoverPath(id)); err == nil {

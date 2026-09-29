@@ -4,7 +4,6 @@
 package fleet
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +18,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
+	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -42,15 +42,15 @@ func (f *Claudia) prepareMigrationBrief(def claudia.AgentDef, destination claudi
 	if err != nil {
 		return "", "", err
 	}
-	provider := claudia.PlanProvider(destination)
-	args := claudia.MigrationTransferArgs{
+	provider := cli.PlanProvider(destination)
+	args := MigrationTransferArgs{
 		Destination: destination, Goal: def.Goal, Transcript: history,
 	}
-	var result claudia.MigrationTransferResult
+	var result MigrationTransferResult
 	if f.migrationTransfer != nil {
 		result, err = f.migrationTransfer(args)
 	} else {
-		result, err = claudia.SummarizeForMigration(context.Background(), args)
+		err = fmt.Errorf("migration summary is not in the published claudia module")
 	}
 	if err != nil {
 		return "", provider, err
@@ -83,6 +83,17 @@ func migrationHistory(path string) (string, error) {
 
 // SetHandoverStore attaches the durable pending-handover store.
 func (f *Claudia) SetHandoverStore(s *handover.Store) { f.handovers = s }
+
+// SetSeatPlan attaches placement and migration fields the published
+// AgentDef does not carry.
+func (f *Claudia) SetSeatPlan(s *seatplan.Store) { f.seatPlans = s }
+
+func (f *Claudia) seatState(name string) seatplan.State {
+	if f == nil || f.seatPlans == nil {
+		return seatplan.State{}
+	}
+	return f.seatPlans.Get(name)
+}
 
 // SetRetainedHistory supplies the durable host journal to Claudia when a
 // live seat was adopted without process-local turns, or a stopped seat has
@@ -156,7 +167,7 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	if f == nil || f.reg == nil {
 		return handover.Pending{}, fmt.Errorf("migrate: no agent registry")
 	}
-	target := claudia.SubscriptionSeatProvider(claudia.Provider(strings.TrimSpace(string(to))))
+	target := cli.SubscriptionSeatProvider(claudia.Provider(strings.TrimSpace(string(to))))
 	if target == "" {
 		return handover.Pending{}, fmt.Errorf("migrate %q: target provider is required", name)
 	}
@@ -164,10 +175,10 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	if def == nil {
 		return handover.Pending{}, fmt.Errorf("migrate: no agent %q", name)
 	}
-	if claudia.PlanProvider(def.Provider) == claudia.PlanProvider(target) && def.MigrationSeed == "" {
+	if cli.PlanProvider(def.Provider) == cli.PlanProvider(target) && f.seatState(name).MigrationSeed == "" {
 		return handover.Pending{}, fmt.Errorf("migrate %q: already on %s", name, target)
 	}
-	if def.MigrationSeed != "" {
+	if f.seatState(name).MigrationSeed != "" {
 		return f.migrateStoppedViaClaudia(name, *def, target, model, force)
 	}
 	if live := f.reg.Get(name); live != nil && live.Alive() {
@@ -177,9 +188,9 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 		draft := handover.Pending{
 			Agent: name, From: string(def.Provider), To: string(target),
 			Kind: handover.KindMigrate, OldSessionID: def.SessionID,
-			BriefSource: "claudia-transfer/" + string(claudia.PlanProvider(target)),
+			BriefSource: "claudia-transfer/" + string(cli.PlanProvider(target)),
 		}
-		if claudia.PlanProvider(live.Provider()) == claudia.PlanProvider(target) {
+		if cli.PlanProvider(live.Provider()) == cli.PlanProvider(target) {
 			// Claudia may have moved the live process while this host's row
 			// still names the source. Reconcile that move without paying for
 			// a second transfer summary or minting another destination.
@@ -224,7 +235,8 @@ func (f *Claudia) migrateStoppedViaClaudia(name string, def claudia.AgentDef, ta
 		}
 	}
 	var history string
-	if def.MigrationSeed == "" {
+	pendingMig := f.seatState(name).MigrationSeed
+	if pendingMig == "" {
 		path := seatTranscript(def, f.roots)
 		var err error
 		if path == "" && f.retainedHistory != nil {
@@ -236,34 +248,25 @@ func (f *Claudia) migrateStoppedViaClaudia(name string, def claudia.AgentDef, ta
 			return handover.Pending{}, fmt.Errorf("migrate %q: predecessor context: %w", name, err)
 		}
 	}
-	if f.migrationTransfer != nil {
-		f.reg.SetMigrationSummarizer(func(_ context.Context, args claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
-			return f.migrationTransfer(args)
-		})
-	}
 	args := claudia.MigrateArgs{
 		Provider: target, Model: model, Force: force, Reason: "explicit",
 	}
-	var result claudia.StoppedMigration
+	var result StoppedMigration
 	var err error
 	if f.stoppedMigrate != nil {
 		result, err = f.stoppedMigrate(name, args, history)
 	} else {
-		// MigrateStopped launches its destination inside Claudia. Bracket
-		// that hidden launch so the host wires the new event stream as soon
-		// as the operation returns, not on the next orphan-repair sweep.
-		done := f.launching(name)
-		result, err = f.reg.MigrateStopped(context.Background(), name, args, history)
-		done()
+		return handover.Pending{}, fmt.Errorf("migrate %q: stopped migration is not in the published claudia module", name)
 	}
 	fromProvider, fromSession := def.Provider, def.SessionID
-	if def.MigrationFrom != "" {
-		fromProvider, fromSession = def.MigrationFrom, def.MigrationFromSession
+	mig := f.seatState(name)
+	if mig.MigrationFrom != "" {
+		fromProvider, fromSession = mig.MigrationFrom, mig.MigrationFromSession
 	}
 	pending := handover.Pending{
 		Agent: name, From: string(fromProvider), To: string(target),
 		Kind: handover.KindMigrate, OldSessionID: fromSession,
-		BriefSource: "claudia-transfer/" + string(claudia.PlanProvider(target)),
+		BriefSource: "claudia-transfer/" + string(cli.PlanProvider(target)),
 		Remap:       handover.RemapClaudiaMigrate,
 	}
 	if result.Destination.SessionID != "" {
@@ -828,7 +831,7 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 			return handover.Pending{}, true, fmt.Errorf("migrate %q: retained predecessor context: %w", name, err)
 		}
 	}
-	args := &claudia.MigrateArgs{
+	args := &MigrateRequest{
 		Provider: target, Model: model, Force: force, Reason: "explicit",
 		ContextBrief: draft.Brief, RetainedTranscript: retained,
 	}
@@ -871,7 +874,7 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	// A registered Claudia Agent.Migrate has already committed the provider,
 	// model and real destination session id. Re-registering that row from a
 	// host reconstruction can replace the real id with an invented UUID.
-	claudiaRecorded := claudia.PlanProvider(def.Provider) == claudia.PlanProvider(target) &&
+	claudiaRecorded := cli.PlanProvider(def.Provider) == cli.PlanProvider(target) &&
 		def.SessionID != "" && def.SessionID != sourceDef.SessionID
 	if !claudiaRecorded {
 		if err := switchProvider(&next, target, "migrate"); err != nil {
@@ -960,7 +963,7 @@ func (f *Claudia) liveSessionOf(name string) (sessionID, model string) {
 	return "", ""
 }
 
-func (f *Claudia) invokeMigrate(name string, args *claudia.MigrateArgs) error {
+func (f *Claudia) invokeMigrate(name string, args *MigrateRequest) error {
 	if f.liveMigrate != nil {
 		return f.liveMigrate(args)
 	}
@@ -968,7 +971,7 @@ func (f *Claudia) invokeMigrate(name string, args *claudia.MigrateArgs) error {
 	if live == nil {
 		return errNoLiveAgent
 	}
-	return live.Migrate(args)
+	return live.Migrate(args.migrateArgs())
 }
 
 // migrateInterruptSettle is how long a forced migrate waits after
@@ -985,7 +988,7 @@ var migrateInterruptSettle = 3 * time.Second
 // relaunched the overseer on the provider it had just been moved off.
 func alreadyMigratedTo(err error, target claudia.Provider) bool {
 	return err != nil && (strings.Contains(err.Error(), "Migrate: same provider "+string(target)) ||
-		strings.Contains(err.Error(), "Migrate: same provider "+string(claudia.PlanProvider(target))))
+		strings.Contains(err.Error(), "Migrate: same provider "+string(cli.PlanProvider(target))))
 }
 
 func isLiveMigrateFallback(err error) bool {

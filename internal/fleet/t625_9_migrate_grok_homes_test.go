@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -44,22 +45,22 @@ func TestT625_9MigrateFindsGrokHomesSession(t *testing.T) {
 		f := NewClaudia(reg)
 		f.SetSessionRoots(roots)
 		f.SetHandoverStore(handover.NewStore(filepath.Join(t.TempDir(), "handover")))
-		f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
-			return claudia.MigrationTransferResult{Brief: "- user: hello"}, nil
+		f.migrationTransfer = func(MigrationTransferArgs) (MigrationTransferResult, error) {
+			return MigrationTransferResult{Brief: "- user: hello"}, nil
 		}
-		f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (claudia.StoppedMigration, error) {
+		f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (StoppedMigration, error) {
 			if history == "" {
-				return claudia.StoppedMigration{}, fmt.Errorf("missing predecessor history")
+				return StoppedMigration{}, fmt.Errorf("missing predecessor history")
 			}
 			source := reg.Def(name)
 			next := *source
-			next.Provider = claudia.SubscriptionSeatProvider(args.Provider)
+			next.Provider = cli.SubscriptionSeatProvider(args.Provider)
 			next.SessionID = "claudia-destination"
 			if err := reg.Register(next); err != nil {
-				return claudia.StoppedMigration{}, err
+				return StoppedMigration{}, err
 			}
-			return claudia.StoppedMigration{Source: *source, Destination: next,
-				Transfer: claudia.MigrationTransferResult{Brief: "- user: hello"}}, nil
+			return StoppedMigration{Source: *source, Destination: next,
+				Transfer: MigrationTransferResult{Brief: "- user: hello"}}, nil
 		}
 		return f
 	}

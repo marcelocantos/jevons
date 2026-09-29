@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
 // 🎯T902: a busy PO answers a steered question mid-turn and carries on. The
@@ -29,7 +31,7 @@ func TestT902MidTurnAnswerReachesAskerBeforeTurnEnd(t *testing.T) {
 	// The PO is mid-turn on other work; its text before the absorb is not
 	// the answer.
 	sink(claudia.Event{Type: "assistant", Text: "Refactoring the loader.", StopReason: "tool_use"})
-	sink(claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: question})
+	sink(claudia.Event{Type: "progress", ProgressType: delivery.ProgressDeliveryAbsorbed, Text: question})
 	sink(claudia.Event{Type: "assistant", Text: "T540 is waiting on "})
 	sink(claudia.Event{Type: "assistant", Text: "the fidelity audit.", StopReason: "tool_use"})
 
@@ -61,7 +63,7 @@ func TestT902MidTurnAnswerReachesAskerBeforeTurnEnd(t *testing.T) {
 func TestT902AnswerAtTurnEndIsNotDuplicated(t *testing.T) {
 	m := &midTurnAnswers{}
 	m.expect("po", "jevons", "q")
-	if _, _, ok := m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "q"}); ok {
+	if _, _, ok := m.observe("po", claudia.Event{Type: "progress", ProgressType: delivery.ProgressDeliveryAbsorbed, Text: "q"}); ok {
 		t.Fatal("absorb alone relayed")
 	}
 	if _, _, ok := m.observe("po", claudia.Event{Type: "assistant", Text: "answer", StopReason: "end_turn"}); ok {
@@ -79,12 +81,12 @@ func TestT902AnswerAtTurnEndIsNotDuplicated(t *testing.T) {
 func TestT902CaptureWaitsForText(t *testing.T) {
 	m := &midTurnAnswers{}
 	m.expect("po", "jevons", "q")
-	m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "other"})
+	m.observe("po", claudia.Event{Type: "progress", ProgressType: delivery.ProgressDeliveryAbsorbed, Text: "other"})
 	m.observe("po", claudia.Event{Type: "assistant", Text: "unrelated"})
 	if _, _, ok := m.observe("po", claudia.Event{Type: "assistant", StopReason: "tool_use"}); ok {
 		t.Fatal("an absorb of different text started a capture")
 	}
-	m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "q"})
+	m.observe("po", claudia.Event{Type: "progress", ProgressType: delivery.ProgressDeliveryAbsorbed, Text: "q"})
 	if _, _, ok := m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressToolUse}); ok {
 		t.Fatal("a tool call with no answer yet relayed")
 	}
@@ -101,7 +103,7 @@ func TestT902ForgetAndExpiry(t *testing.T) {
 	m := &midTurnAnswers{now: func() time.Time { return now }}
 	m.expect("po", "jevons", "q")
 	m.forget("po", "q")
-	m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "q"})
+	m.observe("po", claudia.Event{Type: "progress", ProgressType: delivery.ProgressDeliveryAbsorbed, Text: "q"})
 	m.observe("po", claudia.Event{Type: "assistant", Text: "x"})
 	if _, _, ok := m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressToolUse}); ok {
 		t.Fatal("forgotten question relayed")
@@ -125,7 +127,7 @@ func TestT902QuietAnswerRelaysWithoutAToolEvent(t *testing.T) {
 		relay:      func(agent, asker, answer string) { got <- [3]string{agent, asker, answer} },
 	}
 	m.expect("po", "jevons", "capital of France?")
-	m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "capital of France?"})
+	m.observe("po", claudia.Event{Type: "progress", ProgressType: delivery.ProgressDeliveryAbsorbed, Text: "capital of France?"})
 	m.observe("po", claudia.Event{Type: "assistant", Text: "Par", PreviewUpdate: claudia.PreviewUpdateAppend})
 	time.Sleep(10 * time.Millisecond) // streaming: each piece pushes the boundary back
 	m.observe("po", claudia.Event{Type: "assistant", Text: "is.", PreviewUpdate: claudia.PreviewUpdateAppend})
@@ -155,7 +157,7 @@ func TestT902TurnEndBeatsTheQuietTimer(t *testing.T) {
 		relay:      func(_, _, answer string) { got <- answer },
 	}
 	m.expect("po", "jevons", "q")
-	m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "q"})
+	m.observe("po", claudia.Event{Type: "progress", ProgressType: delivery.ProgressDeliveryAbsorbed, Text: "q"})
 	m.observe("po", claudia.Event{Type: "assistant", Text: "answer"})
 	m.observe("po", claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	select {

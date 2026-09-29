@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
@@ -27,7 +28,7 @@ func TestT925ABrokerStopIsRecordedAsTheBrokers(t *testing.T) {
 		},
 		hasProc:   map[string]bool{"w-broker": true, "w-plain": true},
 		alive:     map[string]bool{},
-		causes:    map[string]string{"w-broker": claudia.ExitCauseBrokerLost},
+		causes:    map[string]string{"w-broker": fleet.ExitCauseBrokerLost},
 		launchErr: errBrokerDown,
 	}
 	reps := sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{})
@@ -48,7 +49,7 @@ func TestT925ABrokerStopIsRecordedAsTheBrokers(t *testing.T) {
 	}
 
 	// The fleet feed's own record of a dead seat.
-	s.NoteDeadSeat("w-feed", claudia.ExitCauseBrokerLost, "found not alive by the fleet feed; re-launch failed")
+	s.NoteDeadSeat("w-feed", fleet.ExitCauseBrokerLost, "found not alive by the fleet feed; re-launch failed")
 	if reason, _, _ := s.SeatStopReason("w-feed"); !strings.HasPrefix(reason, "broker: ") {
 		t.Fatalf("feed-noted reason = %q", reason)
 	}

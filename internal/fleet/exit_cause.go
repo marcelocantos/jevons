@@ -9,6 +9,13 @@ import "strings"
 // handle: its connection lost, or the broker reporting the seat gone.
 const brokerCausePrefix = "claudia broker"
 
+// Exit causes the published claudia module does not export. These are the
+// spellings BrokerCaused and BrokerPlanned already match.
+const (
+	ExitCauseBrokerLost      = "claudia broker connection closed"
+	ExitCauseBrokerRestarted = "claudia broker stopped on purpose (planned restart)"
+)
+
 // ExitCause is why a dead handle died, when its harness knew (🎯T925). It
 // reads a Claudia that exposes the cause and is empty on one that does not,
 // so jevons still builds against the published Claudia pin.

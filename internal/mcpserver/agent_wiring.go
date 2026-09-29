@@ -187,6 +187,9 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	turn, turnInFlight := s.wedges.turnAt(name)
 	token := proc.SubscribeEvents(s.agentEventSink(name))
 	s.wiredSinks[name] = wiredSink{proc: proc, token: token}
+	// 🎯T426: a launch in progress is the successor being wired early, not a
+	// handle that replaced a turn the daemon is still waiting on.
+	duringLaunch := s.launching[name] > 0
 	// 🎯T744: the sink sees only future events, so a turn that ended before
 	// this attach (boot resume is serial; the wire pass runs after it) is
 	// read back from the transcript and delivered instead of lost. Off the
@@ -198,7 +201,10 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	go func() {
 		// 🎯T927: a turn the daemon believes in flight was observed on the
 		// handle this attach replaces. Off wireMu: it reads flight under mu.
-		s.noteReattachedMidTurn(name, turn, turnInFlight)
+		// A launch still in progress is not that replacement (🎯T426).
+		if !duringLaunch {
+			s.noteReattachedMidTurn(name, turn, turnInFlight)
+		}
 		if s.registry != nil {
 			if def := s.registry.Def(name); def != nil &&
 				spool.SidecarProvider(string(def.Provider)) &&

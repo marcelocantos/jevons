@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/cli"
 )
 
 // destAuthor is the placement stamp T691 records on PlanAction. The
@@ -34,7 +36,7 @@ func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time
 }
 
 func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclude claudia.Provider, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	excluded := map[claudia.Provider]bool{claudia.PlanProvider(exclude): exclude != ""}
+	excluded := map[claudia.Provider]bool{cli.PlanProvider(exclude): exclude != ""}
 	usage := make([]claudia.PlanUsage, 0, len(cands))
 	var capped, unsteer []string
 	for _, c := range cands {
@@ -45,7 +47,7 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		if p == "" {
 			continue
 		}
-		provider := claudia.PlanProvider(claudia.Provider(p))
+		provider := cli.PlanProvider(claudia.Provider(p))
 		u := backendToPlanUsage(c.Backend)
 		u.Provider = provider
 		usage = append(usage, u)
@@ -59,6 +61,10 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 			excluded[provider] = true
 		}
 	}
+	cth := claudiaThresholdsPtr(th)
+	for p := range overspendProviders(usage, now, cth) {
+		excluded[p] = true
+	}
 	var exclusions []claudia.Provider
 	for _, row := range claudia.ModelCatalog() {
 		if excluded[row.Provider] {
@@ -67,9 +73,9 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 	}
 	pick, err := claudia.Resolve(ctx, claudia.ModelPredicates{
 		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
-		PreferPlan: true, Background: true, RequireUsage: true,
+		PreferPlan: true, RequireUsage: true,
 		PreferProvider: prefer, ExcludeProviders: exclusions,
-		Usage: usage, Now: now, Thresholds: claudiaThresholdsPtr(th),
+		Usage: usage, Now: now, Thresholds: cth,
 	})
 	if err != nil {
 		parts := []string{err.Error()}
@@ -181,6 +187,23 @@ func backendToPlanUsage(be Backend) claudia.PlanUsage {
 		out[0].Reason = "stale plan reading"
 	}
 	return out[0]
+}
+
+// overspendProviders names plans whose weekly band is ahead, hot, or
+// exhausted. The pinned Resolve skips hot and exhausted on its own;
+// ahead is the Background predicate that landed after v0.42.0.
+func overspendProviders(usage []claudia.PlanUsage, now time.Time, th *claudia.PlanThresholds) map[claudia.Provider]bool {
+	out := map[claudia.Provider]bool{}
+	for _, u := range usage {
+		if u.Status != "" && u.Status != claudia.PlanUsageAvailable {
+			continue
+		}
+		switch claudia.ClassifyPlan(u, now, th).Weekly {
+		case claudia.PlanBandAhead, claudia.PlanBandHot, claudia.PlanBandExhausted:
+			out[cli.PlanProvider(u.Provider)] = true
+		}
+	}
+	return out
 }
 
 func claudiaThresholdsPtr(th Thresholds) *claudia.PlanThresholds {

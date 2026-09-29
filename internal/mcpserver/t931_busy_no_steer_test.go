@@ -10,6 +10,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/escalate"
 )
 
 // relayedSteerRefusal is the 2026-09-29 refusal, verbatim as the broker
@@ -21,7 +22,7 @@ var relayedSteerRefusal = errors.New("broker protocol: agent_failed: steer unsup
 // relays it.
 type noSteerSeat struct {
 	fakeSender
-	ladders []claudia.Escalation
+	ladders []escalate.Ladder
 }
 
 func (f *noSteerSeat) base() *noSteerSeat { return f }
@@ -33,7 +34,7 @@ func (f *noSteerSeat) TurnPhase() claudia.TurnPhase {
 	return claudia.TurnIdle
 }
 
-func (f *noSteerSeat) SendEscalating(_ string, esc claudia.Escalation) (claudia.DeliveryOutcome, error) {
+func (f *noSteerSeat) SendEscalating(_ string, esc escalate.Ladder) (claudia.DeliveryOutcome, error) {
 	f.ladders = append(f.ladders, esc)
 	return claudia.DeliveryOutcome{}, relayedSteerRefusal
 }

@@ -53,8 +53,8 @@ func TestSeedSuccessorDoesNotInjectCompactSeed(t *testing.T) {
 func TestMigrationTransferSeedsSeparateWorkSession(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e41"
 	f, store, _ := migrateFixture(t, oldSession, true)
-	f.migrationTransfer = func(claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
-		return claudia.MigrationTransferResult{Brief: "in flight: T999 still open"}, nil
+	f.migrationTransfer = func(MigrationTransferArgs) (MigrationTransferResult, error) {
+		return MigrationTransferResult{Brief: "in flight: T999 still open"}, nil
 	}
 	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
 	if err != nil {

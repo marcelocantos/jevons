@@ -17,7 +17,7 @@ func TestPlanUsageDecisionsShowsClaudiaDeferral(t *testing.T) {
 	s := &Server{}
 	s.SetPlanDecisions(func() []planusage.PlanAction {
 		return []planusage.PlanAction{{
-			Name: "jevons", From: "grok", Action: claudia.SeatDefer,
+			Name: "jevons", From: "grok", Action: planusage.SeatDefer,
 			Reason: "destination plan readings incomplete or stale", Author: claudia.DecisionAuthor,
 		}}
 	})
@@ -30,7 +30,7 @@ func TestPlanUsageDecisionsShowsClaudiaDeferral(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &decisions); err != nil {
 		t.Fatal(err)
 	}
-	if len(decisions) != 1 || decisions[0].Action != claudia.SeatDefer ||
+	if len(decisions) != 1 || decisions[0].Action != planusage.SeatDefer ||
 		decisions[0].Author != claudia.DecisionAuthor || decisions[0].Reason == "" {
 		t.Fatalf("decision missing author or reason: %+v", decisions)
 	}

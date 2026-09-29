@@ -10,6 +10,18 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/cli"
+)
+
+// SeatAction is Claudia's placement verb for one seat.
+type SeatAction string
+
+const (
+	SeatStay    SeatAction = "stay"
+	SeatDefer   SeatAction = "defer"
+	SeatPark    SeatAction = "park"
+	SeatMigrate SeatAction = "migrate"
 )
 
 // WeeklyBand is the daemon policy class for one provider's weekly window.
@@ -35,6 +47,9 @@ type AgentRef struct {
 	Parent           string
 	PreferProvider   claudia.Provider
 	AllowedProviders []claudia.Provider
+	// AllowNone is an explicit empty destination allow-list. A nil
+	// AllowedProviders means every published dest is eligible.
+	AllowNone        bool
 	ExcludeProviders []claudia.Provider
 }
 
@@ -45,7 +60,7 @@ type PlanAction struct {
 	From   string
 	To     string
 	Model  string
-	Action claudia.SeatPlacementAction
+	Action SeatAction
 	Reason string
 	// Execution is the host's result of acting on Claudia's verdict. A
 	// placement choice is not proof that a migration finished.
@@ -243,7 +258,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		if p == "" {
 			p = c.Backend.Provider
 		}
-		exclusions = append(exclusions, claudia.PlanProvider(claudia.Provider(p)))
+		exclusions = append(exclusions, cli.PlanProvider(claudia.Provider(p)))
 		capped = append(capped, p)
 	}
 	out := make([]PlanAction, 0, len(agents))
@@ -253,17 +268,8 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		}
 		seatExclusions := append([]claudia.Provider(nil), exclusions...)
 		seatExclusions = append(seatExclusions, a.ExcludeProviders...)
-		decision, err := claudia.ResolveSeatPlacement(context.Background(), &claudia.SeatPlacementArgs{
-			CurrentProvider: claudia.Provider(a.Provider), Usage: usage, Now: now,
-			Thresholds: claudiaThresholdsPtr(th), ExcludeProviders: seatExclusions,
-			AllowedProviders: a.AllowedProviders, PreferProvider: a.PreferProvider,
-		})
-		if err != nil {
-			out = append(out, PlanAction{Name: a.Name, From: a.Provider, Action: claudia.SeatDefer,
-				Reason: err.Error(), Author: claudia.DecisionAuthor})
-			continue
-		}
-		if decision.Action == claudia.SeatPark && len(capped) > 0 {
+		decision := resolveSeatPlacement(a, usage, now, th, seatExclusions)
+		if decision.Action == SeatPark && len(capped) > 0 {
 			decision.Reason += "; fleet session cap reached on " + strings.Join(capped, ", ")
 		}
 		out = append(out, PlanAction{
@@ -275,6 +281,118 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 	return out
 }
 
+// seatDecision is one placement verdict. The published claudia module
+// does not export ResolveSeatPlacement; this is the same stay / defer /
+// park / migrate split the sweep already tests.
+type seatDecision struct {
+	Action SeatAction
+	From   claudia.Provider
+	Pick   claudia.ModelPick
+	Reason string
+	Author string
+}
+
+// resolveSeatPlacement leaves a seat that is not vacating, defers when
+// the feed names no other provider, parks an explicit allow-none (or a
+// resolve with no eligible dest), and otherwise migrates through
+// claudia.Resolve. Ahead / hot / exhausted dests are excluded here
+// because the pinned module's Resolve has no Background predicate.
+func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, th Thresholds, extraExclude []claudia.Provider) seatDecision {
+	current := cli.PlanProvider(claudia.Provider(a.Provider))
+	byProv := map[claudia.Provider]claudia.PlanUsage{}
+	normalized := make([]claudia.PlanUsage, 0, len(usage))
+	for _, u := range usage {
+		u.Provider = cli.PlanProvider(u.Provider)
+		if u.Provider == "" {
+			continue
+		}
+		byProv[u.Provider] = u
+		normalized = append(normalized, u)
+	}
+	cth := claudiaThresholdsPtr(th)
+	reading, has := byProv[current]
+	if !has || !claudia.ShouldVacate(reading, now, cth) {
+		return seatDecision{Action: SeatStay, From: current, Author: claudia.DecisionAuthor, Reason: "provider is not vacating"}
+	}
+	others := 0
+	for p := range byProv {
+		if p != current {
+			others++
+		}
+	}
+	if others == 0 {
+		return seatDecision{Action: SeatDefer, From: current, Author: claudia.DecisionAuthor, Reason: "destination feed is incomplete"}
+	}
+	if a.AllowNone || (a.AllowedProviders != nil && len(a.AllowedProviders) == 0) {
+		return seatDecision{Action: SeatPark, From: current, Author: claudia.DecisionAuthor, Reason: "no allowed destination"}
+	}
+	excluded := map[claudia.Provider]bool{current: current != ""}
+	for _, p := range extraExclude {
+		if id := cli.PlanProvider(p); id != "" {
+			excluded[id] = true
+		}
+	}
+	for _, p := range a.ExcludeProviders {
+		if id := cli.PlanProvider(p); id != "" {
+			excluded[id] = true
+		}
+	}
+	if len(a.AllowedProviders) > 0 {
+		allow := map[claudia.Provider]bool{}
+		for _, p := range a.AllowedProviders {
+			allow[cli.PlanProvider(p)] = true
+		}
+		for _, row := range claudia.ModelCatalog() {
+			if !allow[row.Provider] {
+				excluded[row.Provider] = true
+			}
+		}
+	}
+	for p := range overspendProviders(normalized, now, cth) {
+		excluded[p] = true
+	}
+	var exclusions []claudia.Provider
+	for _, row := range claudia.ModelCatalog() {
+		if excluded[row.Provider] {
+			exclusions = append(exclusions, row.Provider)
+		}
+	}
+	prefer := cli.PlanProvider(a.PreferProvider)
+	pick, err := claudia.Resolve(context.Background(), claudia.ModelPredicates{
+		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
+		PreferPlan: true, RequireUsage: true,
+		PreferProvider: prefer, ExcludeProviders: exclusions,
+		Usage: normalized, Now: now, Thresholds: cth,
+	})
+	if err != nil || pick.Provider == "" {
+		reason := "no eligible destination"
+		if err != nil {
+			reason = err.Error()
+		}
+		return seatDecision{Action: SeatPark, From: current, Author: claudia.DecisionAuthor, Reason: reason}
+	}
+	reason := vacateReason(reading, now, cth)
+	author := pick.Author
+	if author == "" {
+		author = claudia.DecisionAuthor
+	}
+	return seatDecision{Action: SeatMigrate, From: current, Pick: pick, Reason: reason, Author: author}
+}
+
+func vacateReason(u claudia.PlanUsage, now time.Time, th *claudia.PlanThresholds) string {
+	v := claudia.ClassifyPlan(u, now, th)
+	sess := v.Session == claudia.PlanSessionExhausted
+	week := v.Weekly == claudia.PlanBandHot || v.Weekly == claudia.PlanBandExhausted
+	switch {
+	case sess && week:
+		return "session or weekly exhausted"
+	case sess:
+		return "session exhausted"
+	default:
+		return "weekly hot or exhausted"
+	}
+}
+
 // PlanActions lists migrate/park steps for seats whose own provider is
 // weekly-hot or exhausted (🎯T850). The overseer and a stratum-1 PO are
 // the same as any other seat: they move when their provider is hot, and
@@ -284,7 +402,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 func PlanActions(snap Snapshot, agents []AgentRef, now time.Time, th Thresholds, destinations ...DestCand) []PlanAction {
 	var out []PlanAction
 	for _, decision := range PlanDecisions(snap, agents, now, th, destinations...) {
-		if decision.Action == claudia.SeatMigrate || decision.Action == claudia.SeatPark {
+		if decision.Action == SeatMigrate || decision.Action == SeatPark {
 			out = append(out, decision)
 		}
 	}

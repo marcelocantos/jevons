@@ -11,13 +11,14 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/escalate"
 )
 
 // escalatingFake is a seat whose phase and verbs the test sets and reads.
 type escalatingFake struct {
 	phase   claudia.TurnPhase
 	sent    []string
-	ladders []claudia.Escalation
+	ladders []escalate.Ladder
 	err     error
 }
 
@@ -25,7 +26,7 @@ func (f *escalatingFake) Send(text string) error       { f.sent = append(f.sent,
 func (f *escalatingFake) Interrupt() error             { return nil }
 func (f *escalatingFake) Alive() bool                  { return true }
 func (f *escalatingFake) TurnPhase() claudia.TurnPhase { return f.phase }
-func (f *escalatingFake) SendEscalating(text string, esc claudia.Escalation) (claudia.DeliveryOutcome, error) {
+func (f *escalatingFake) SendEscalating(text string, esc escalate.Ladder) (claudia.DeliveryOutcome, error) {
 	f.ladders = append(f.ladders, esc)
 	if f.err != nil {
 		return claudia.DeliveryOutcome{}, f.err
@@ -70,7 +71,7 @@ func TestT899EscalateIfBusy(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
-	want := claudia.Escalation{{Mode: claudia.DeliverySteer}, {Mode: claudia.DeliveryInterrupt, After: config.DefaultOwnerInterruptAfter}}
+	want := escalate.Ladder{{Mode: claudia.DeliverySteer}, {Mode: claudia.DeliveryInterrupt, After: config.DefaultOwnerInterruptAfter}}
 	if len(busy.ladders) != 1 || len(busy.ladders[0]) != 2 || busy.ladders[0][0] != want[0] || busy.ladders[0][1] != want[1] {
 		t.Fatalf("ladder = %+v, want %+v", busy.ladders, want)
 	}
