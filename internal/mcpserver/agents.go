@@ -473,21 +473,37 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	life["role"] = resolved.Name
 
 	// 🎯T254.2: same-repo multi-worker fan-out defaults to isolation. A plain
-	// worker whose exact workdir is already held by another live work agent
-	// gets redirected into its own git worktree rather than sharing one dirty
-	// tree — only an integrator (role=boss) or a PO/auditor/aside/overseer
-	// touches the shared workdir directly.
-	if shared := s.workdirSharedWithLiveWorker(workdir, name); worktree.NeedsIsolation(purpose, resolved.Name, shared) {
+	// worker whose repo already holds another work agent — in the shared
+	// clone or in an isolated tree made from it — gets its own git worktree
+	// rather than sharing one dirty tree, and a re-minted worker goes back
+	// into the tree it already has. Only an integrator (role=boss) or a
+	// PO/auditor/aside/overseer touches the shared clone directly, and
+	// worker commits reach its branch through worktree.Integrate.
+	isolationNote := ""
+	_, hasTree := worktree.Existing(workdir, name)
+	if shared := hasTree || s.repoSharedWithWorker(workdir, name); worktree.NeedsIsolation(purpose, resolved.Name, shared) {
 		if wt, err := worktree.Ensure(workdir, name); err == nil {
-			life["base_workdir"] = workdir
+			base := workdir
+			life["base_workdir"] = base
 			workdir = wt
 			life["workdir"] = workdir
 			life["worktree_isolated"] = true
+			if _, err := worktree.MirrorGoWork(base, wt); err != nil {
+				life["worktree_gowork_err"] = err.Error()
+			}
+			isolationNote = fmt.Sprintf(
+				"Worktree isolation (🎯T254.2): workdir %s is your own git worktree on branch %s, made from the shared clone %s. "+
+					"Commit there; do not commit in, merge into, or check out the shared clone. "+
+					"Your commits land through the integrator: go run ./cmd/integrate -repo %s %s.",
+				wt, worktree.BranchName(name), base, base, name)
 		} else {
-			// Not a git repo, or git refused: fall back to the shared workdir
-			// rather than refusing the spawn outright.
+			// Not a git repo, already a linked worktree, or git refused:
+			// keep the given workdir rather than refusing the spawn outright.
 			life["worktree_isolate_err"] = err.Error()
 		}
+	}
+	if isolationNote != "" && strings.TrimSpace(prompt) != "" {
+		prompt = isolationNote + "\n\n" + prompt
 	}
 
 	// 🎯T222: work + target_id → no second implementer; closed targets refused.
@@ -728,6 +744,9 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	msg := formatAgentStartResult(name, def.WorkDir, def.Parent, string(def.Purpose), s.roleDisplay(*def), def.TargetID,
 		string(def.Provider), def.Model, sessionDisplay(def.SessionID), routeNote, prompt)
 	msg += briefNote
+	if isolationNote != "" {
+		msg += " [" + isolationNote + "]"
+	}
 	if cite := upgrade.ClaudeSingleClientCite(def.SessionID); cite != "" {
 		msg += " [" + cite + "]" // 🎯T796
 	}
@@ -739,15 +758,14 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	return mcp.NewToolResultText(prefixRehydrate(rehydrated, msg)), nil
 }
 
-// formatAgentStartResult is the owner-visible jevons_agent_start text.
-// 🎯T476: routeNote must already cite which knob selected the provider.
-// workdirSharedWithLiveWorker reports whether some OTHER registered work
-// agent is already live with the identical workdir string as name is about
-// to be started in — the concrete 🎯T254.2 sharing condition that triggers
-// worktree isolation. Exact-string match, not path normalization: two
-// distinct spellings of the same directory are not treated as sharing here,
-// matching how the registry itself keys workdir.
-func (s *Server) workdirSharedWithLiveWorker(workdir, excludeName string) bool {
+// repoSharedWithWorker reports whether some OTHER registered work agent
+// already occupies workdir's repo — the shared clone itself or an isolated
+// tree made from it (worktree.SharesRepo). Registered, not only alive: an
+// idle seat the butler stopped on purpose rehydrates into the same tree, and
+// a spawn racing another spawn sees the row before the process is up.
+// Finished workers are removed from the registry (🎯T165), so they do not
+// count.
+func (s *Server) repoSharedWithWorker(workdir, excludeName string) bool {
 	if s == nil || s.registry == nil || strings.TrimSpace(workdir) == "" {
 		return false
 	}
@@ -755,24 +773,19 @@ func (s *Server) workdirSharedWithLiveWorker(workdir, excludeName string) bool {
 		if strings.TrimSpace(d.Name) == "" || d.Name == excludeName {
 			continue
 		}
-		if d.WorkDir != workdir {
-			continue
-		}
 		purpose := strings.TrimSpace(d.Purpose)
 		if purpose == "" {
 			purpose = claudia.PurposeWork
 		}
-		if purpose != claudia.PurposeWork {
-			continue
-		}
-		proc := s.registry.Get(d.Name)
-		if proc != nil && proc.Alive() {
+		if purpose == claudia.PurposeWork && worktree.SharesRepo(workdir, d.WorkDir) {
 			return true
 		}
 	}
 	return false
 }
 
+// formatAgentStartResult is the owner-visible jevons_agent_start text.
+// 🎯T476: routeNote must already cite which knob selected the provider.
 func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, provider, model, session, routeNote, prompt string) string {
 	msg := fmt.Sprintf(
 		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, role: %s, provider: %s",
