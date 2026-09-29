@@ -180,6 +180,11 @@ type Server struct {
 	// planAuthRevive relaunches seats that broke on a provider's plan login
 	// once that login is known good (skip names a seat already handled).
 	planAuthRevive func(provider claudia.Provider, skip string)
+	// planAuthFailed reports a running seat whose turns its provider refuses
+	// on the plan login; planAuthRecovered forgets that for the named seats
+	// once the owner repaired the login (🎯T905).
+	planAuthFailed    func(name string) bool
+	planAuthRecovered func(names []string)
 	// planDecisions reports Claudia's per-seat placement verdict without moving a seat.
 	planDecisions func() []planusage.PlanAction
 	// providerHardBlock observes classified provider refusals / successes so

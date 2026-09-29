@@ -22,15 +22,55 @@ import (
 // a failed Keychain read can surface as an OS error with no "keychain" token.
 // The broker decides whether to retry the read, refresh, or open sign-in.
 func reauthablePlanFailure(provider claudia.Provider, health string) bool {
-	if !strings.HasPrefix(health, "broken:") {
-		return false
-	}
+	return strings.HasPrefix(health, "broken:") && reauthablePlanProvider(provider)
+}
+
+func reauthablePlanProvider(provider claudia.Provider) bool {
 	switch provider {
 	case "anthropic", "openai-codex", "grok", "xai-oauth", "cursor":
 		return true
 	default:
 		return false
 	}
+}
+
+// runningPlanAuthFailure reports a running seat whose turns its provider
+// refuses on the plan login — a revoked token (🎯T905).
+func (s *Server) runningPlanAuthFailure(def claudia.AgentDef) bool {
+	return s.planAuthFailed != nil && reauthablePlanProvider(def.Provider) && s.planAuthFailed(def.Name)
+}
+
+// decoratePlanAuth offers Reauth on a running seat whose provider refuses
+// its login (🎯T905); a stopped one is offered it by its rehydrate health.
+func (s *Server) decoratePlanAuth(reg *claudia.Registry, agents []agentInfo) []agentInfo {
+	if s.planAuthFailed == nil || reg == nil {
+		return agents
+	}
+	for i := range agents {
+		if !agents[i].Running {
+			continue
+		}
+		if def := reg.Def(agents[i].Name); def != nil && s.runningPlanAuthFailure(*def) {
+			agents[i].ReauthAvailable = true
+		}
+	}
+	return agents
+}
+
+// notePlanAuthRecovered forgets the login refusals of every registered seat
+// on provider's plan, now that the owner has repaired it (🎯T905).
+func (s *Server) notePlanAuthRecovered(reg *claudia.Registry, provider claudia.Provider) {
+	if s.planAuthRecovered == nil || reg == nil {
+		return
+	}
+	plan := recoverableDestinationProvider(provider)
+	var names []string
+	for _, d := range reg.List() {
+		if d.Provider == provider || (plan != "" && recoverableDestinationProvider(d.Provider) == plan) {
+			names = append(names, d.Name)
+		}
+	}
+	s.planAuthRecovered(names)
 }
 
 // handleAgentAuthRecover asks Claudia's running broker to repair one plan login.
@@ -54,7 +94,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if proc := reg.Get(name); proc != nil && proc.Alive() {
-		writeJSONError(w, http.StatusConflict, "agent is already running")
+		s.recoverRunningSeatAuth(w, r, reg, *def)
 		return
 	}
 	if !reauthablePlanFailure(def.Provider, fleet.RehydrateHealth(*def)) {
@@ -103,6 +143,37 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 	s.NotifyAgentsChanged()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
+}
+
+// recoverRunningSeatAuth repairs the plan login of a seat that is still
+// running but refused on it (🎯T905). Claudia reloads the seats running on
+// that plan with the recovered token, so the seat is not relaunched: its
+// next turn runs on the repaired login.
+func (s *Server) recoverRunningSeatAuth(w http.ResponseWriter, r *http.Request, reg *claudia.Registry, def claudia.AgentDef) {
+	if !s.runningPlanAuthFailure(def) {
+		writeJSONError(w, http.StatusConflict, "agent is already running")
+		return
+	}
+	recoverAuth := s.authRecover
+	if recoverAuth == nil {
+		recoverAuth = runClaudiaAuthRecover
+	}
+	if err := recoverAuth(r.Context(), def.Provider); err != nil {
+		s.NotifyAgentsChanged()
+		writeJSONError(w, http.StatusBadGateway, "Claudia could not recover authentication: "+err.Error())
+		return
+	}
+	s.notePlanAuthRecovered(reg, def.Provider)
+	// Seats that broke on the same login and stopped come back too.
+	if s.planAuthRevive != nil {
+		go func() {
+			s.planAuthRevive(def.Provider, def.Name)
+			s.NotifyAgentsChanged()
+		}()
+	}
+	s.NotifyAgentsChanged()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "recovered"})
 }
 
 func runClaudiaAuthRecover(ctx context.Context, provider claudia.Provider) error {
@@ -198,6 +269,10 @@ func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http
 	if s.planRetryAfterReauth != nil {
 		s.planRetryAfterReauth(provider)
 	}
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+	s.notePlanAuthRecovered(reg, provider) // 🎯T905
 	if s.planAuthRevive != nil {
 		go func() {
 			s.planAuthRevive(provider, "")

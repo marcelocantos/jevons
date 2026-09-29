@@ -1313,7 +1313,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
 	}, s.agentProgress, models)
-	rows := s.decorateSeatActivity(reg, s.decoratePlanWalls(s.decorateSeatStops(agents)), time.Now())
+	rows := s.decorateSeatActivity(reg, s.decoratePlanAuth(reg, s.decoratePlanWalls(s.decorateSeatStops(agents))), time.Now())
 	_ = json.NewEncoder(w).Encode(rows)
 }
 

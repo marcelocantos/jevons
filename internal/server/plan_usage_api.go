@@ -70,6 +70,14 @@ func (s *Server) SetPlanAuthRevive(f func(provider claudia.Provider, skip string
 	s.planAuthRevive = f
 }
 
+// SetPlanAuthFailure wires the running-seat half of Reauth (🎯T905): which
+// running seats the provider refuses on their login, and forgetting that for
+// seats whose plan the owner has repaired.
+func (s *Server) SetPlanAuthFailure(failed func(name string) bool, recovered func(names []string)) {
+	s.planAuthFailed = failed
+	s.planAuthRecovered = recovered
+}
+
 // SetPlanDecisions wires the read-only per-seat placement picture.
 func (s *Server) SetPlanDecisions(f func() []planusage.PlanAction) { s.planDecisions = f }
 
