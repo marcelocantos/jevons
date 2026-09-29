@@ -141,20 +141,7 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 	ompSocket := filepath.Join(root, "omp.sock")
 	cmd := exec.Command(bin, "broker", "serve", "-state-dir", filepath.Join(root, "state"),
 		"-socket", socket, "-no-resume", "-restart-nudge", "-")
-	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "CLAUDIA_BROKER_SOCKET=") ||
-			strings.HasPrefix(entry, "CLAUDIA_NO_BROKER=") ||
-			strings.HasPrefix(entry, "CLAUDIA_OMP_SOCKET=") ||
-			strings.HasPrefix(entry, "CLAUDIA_OMP_SERVER=") ||
-			strings.HasPrefix(entry, "JEVONS_SPOOL_DIR=") ||
-			strings.HasPrefix(entry, "XDG_STATE_HOME=") {
-			continue
-		}
-		cmd.Env = append(cmd.Env, entry)
-	}
-	cmd.Env = append(cmd.Env, "CLAUDIA_BROKER_SOCKET="+socket, "CLAUDIA_NO_BROKER=0",
-		"CLAUDIA_OMP_SOCKET="+ompSocket, "CLAUDIA_OMP_SERVER="+sidecarScript, "XDG_STATE_HOME="+root,
-		"JEVONS_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"))
+	cmd.Env = isolatedBrokerEnv(os.Environ(), socket, ompSocket, sidecarScript, root, filepath.Join(s.stateDir, "spool"))
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -227,6 +214,41 @@ func (s *suite) stageIsolatedSidecar() (string, error) {
 		return "", fmt.Errorf("isolated Claudia sidecar script: %w", err)
 	}
 	return script, nil
+}
+
+// isolatedBrokerEnv builds the environment for a journey's isolated Claudia
+// broker: base with any prior isolate/broker vars stripped, plus this run's
+// own socket, sidecar and state paths.
+//
+// 🎯T940: omp.DefaultDataPath does not follow XDG_STATE_HOME (the Keychain
+// key is per user, not per process env), so this broker's Anthropic /
+// OpenAI-Codex / Cursor / xAI plan login is the real, shared one a
+// production broker also holds. CLAUDIA_OMP_NO_REFRESH refuses every
+// login/refresh call against the OAuth provider, so this broker can only
+// ever use whatever unexpired access token that shared item already holds
+// — it can never rotate (and so invalidate) the shared refresh token, even
+// racing a production broker's own refresh.
+func isolatedBrokerEnv(base []string, socket, ompSocket, sidecarScript, stateHome, spoolDir string) []string {
+	strip := []string{
+		"CLAUDIA_BROKER_SOCKET=", "CLAUDIA_NO_BROKER=", "CLAUDIA_OMP_SOCKET=",
+		"CLAUDIA_OMP_SERVER=", "JEVONS_SPOOL_DIR=", "XDG_STATE_HOME=", "CLAUDIA_OMP_NO_REFRESH=",
+	}
+	env := make([]string, 0, len(base)+6)
+	for _, entry := range base {
+		stripped := false
+		for _, prefix := range strip {
+			if strings.HasPrefix(entry, prefix) {
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "CLAUDIA_BROKER_SOCKET="+socket, "CLAUDIA_NO_BROKER=0",
+		"CLAUDIA_OMP_SOCKET="+ompSocket, "CLAUDIA_OMP_SERVER="+sidecarScript, "XDG_STATE_HOME="+stateHome,
+		"JEVONS_SPOOL_DIR="+spoolDir, "CLAUDIA_OMP_NO_REFRESH=1")
 }
 
 func (b *isolatedBroker) close() error {
