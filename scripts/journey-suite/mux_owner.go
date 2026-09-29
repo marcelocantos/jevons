@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -310,6 +311,62 @@ func waitOwnerMuxTurnWorking(ctx context.Context, frames <-chan []byte, prompt s
 				ownerIndex, started, working)
 		case <-ctx.Done():
 			return 0, ctx.Err()
+		}
+	}
+}
+
+// cancelHoldSeconds bounds J3's held tool call. It outlasts the cancel's
+// settle deadline, so a turn that reaches idle while the hold is unreleased
+// was ended by the cancel, not by the tool returning (🎯T840).
+const cancelHoldSeconds = 150
+
+// cancelHoldCommand is the shell hold J3's long turn runs: it announces
+// itself on ready, waits for release (which the journey writes only after
+// the cancel has settled), and records completed only if it returned on
+// its own.
+func cancelHoldCommand(ready, release, completed, nonce string) string {
+	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", "'\"'\"'") + "'" }
+	return fmt.Sprintf("printf '%%s\\n' %s > %s; n=0; while [ ! -f %s ] && [ \"$n\" -lt %d ]; do sleep 1; n=$((n+1)); done; printf '%%s\\n' %s > %s",
+		quote(nonce), quote(ready), quote(release), cancelHoldSeconds, quote(nonce), quote(completed))
+}
+
+// waitOwnerMuxHold waits until the held tool call is observably running —
+// its ready marker carries this request's nonce — while refusing a turn
+// that ended first: an assistant terminal after this request's echo means
+// the provider answered without the hold, and there is nothing left to
+// cancel (🎯T840).
+func waitOwnerMuxHold(ctx context.Context, frames <-chan []byte, ownerIndex int, ready, nonce string, d time.Duration) error {
+	deadline := time.After(d)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if body, err := os.ReadFile(ready); err == nil && strings.TrimSpace(string(body)) == nonce {
+			return nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		select {
+		case data, ok := <-frames:
+			if !ok {
+				return fmt.Errorf("mux closed before the held tool call started")
+			}
+			env, frame, err := decodeOwnerMux(data)
+			if err != nil {
+				return err
+			}
+			if env.Channel != ownerMuxChannel || env.Type != "frame" ||
+				frame.Type != "assistant" || frame.Index <= ownerIndex {
+				continue
+			}
+			switch frame.Event.Message.Stop {
+			case "end_turn", "stop_sequence", "max_tokens":
+				return fmt.Errorf("the request to cancel ended before its held tool call started")
+			}
+		case <-tick.C:
+		case <-deadline:
+			return fmt.Errorf("held tool call never started (no ready marker at %s)", ready)
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
