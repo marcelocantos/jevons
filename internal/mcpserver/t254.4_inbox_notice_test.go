@@ -95,3 +95,54 @@ func TestInboxListToolReturnsStructuredSummary(t *testing.T) {
 		t.Fatalf("unexpected inbox listing: %s", text)
 	}
 }
+
+// The overseer's view: omitting parent lists every parent's notices,
+// including one filed as unowned because its reporter had no known parent.
+func TestInboxListToolFleetWideForOverseer(t *testing.T) {
+	s, _, _ := reportServer(t)
+	s.registry = newLineageRegistry(t, map[string]string{
+		"jv-worker-d": "jevons-po",
+		"jv-worker-e": "other-po",
+	})
+	s.storeAgentReport("jv-worker-d", finishReportFixture("T1", "aaa", "a1"))
+	s.storeAgentReport("jv-worker-e", finishReportFixture("T2", "bbb", "b2"))
+	s.storeAgentReport("jv-reaped-f", finishReportFixture("T3", "ccc", "c3"))
+
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{}
+	res, err := s.handleInboxList(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("handleInboxList: %v %+v", err, res)
+	}
+	text := inboxText(res)
+	for _, want := range []string{"jv-worker-d", "jv-worker-e", "jv-reaped-f", "overseer view"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("fleet-wide listing missing %q:\n%s", want, text)
+		}
+	}
+
+	req.Params.Arguments = map[string]any{"parent": "jevons-po", "outcome": "done"}
+	res, _ = s.handleInboxList(context.Background(), req)
+	text = inboxText(res)
+	if !strings.Contains(text, "jv-worker-d") || strings.Contains(text, "jv-worker-e") {
+		t.Fatalf("parent-scoped listing wrong:\n%s", text)
+	}
+
+	req.Params.Arguments = map[string]any{"outcome": "finished"}
+	res, _ = s.handleInboxList(context.Background(), req)
+	if !res.IsError {
+		t.Fatalf("unknown outcome must be refused, got %s", inboxText(res))
+	}
+}
+
+// inboxText is the whole tool text; toolResultText caps at 500 bytes, which
+// cuts a multi-notice listing short.
+func inboxText(res *mcp.CallToolResult) string {
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
+}

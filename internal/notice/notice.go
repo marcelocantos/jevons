@@ -19,8 +19,11 @@ package notice
 import (
 	"bufio"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,7 +58,8 @@ type Notice struct {
 }
 
 // FromReport extracts a Notice from a stored terminal report, or ok=false
-// when the text is not a typed finish-report / scout-report (envelope.Parse
+// when the text is not a typed finish-report / scout-report / escalation
+// (envelope.Parse
 // returns nil, or the kind is not terminal) — the caller in that case has
 // nothing structured to record and free-text prose remains the only surface,
 // which is unchanged behaviour, not a regression.
@@ -65,7 +69,7 @@ func FromReport(agent, parent, text string, at time.Time) (n Notice, ok bool) {
 		return Notice{}, false
 	}
 	switch m.Kind {
-	case envelope.KindFinishReport, envelope.KindScoutReport:
+	case envelope.KindFinishReport, envelope.KindScoutReport, envelope.KindEscalation:
 	default:
 		return Notice{}, false
 	}
@@ -80,31 +84,114 @@ func FromReport(agent, parent, text string, at time.Time) (n Notice, ok bool) {
 		Verdict:   m.Verdict.String(),
 		HasOracle: m.HasOracle(),
 		HasRisk:   m.HasRisk(),
-		Outcome:   classifyOutcome(m, text),
+		Outcome:   classifyOutcome(m),
 		Summary:   summaryLine(m.Payload, text),
 	}
 	n.ID = NewID(at, agent, text)
 	return n, true
 }
 
-// classifyOutcome derives done / blocked / needs-design / other. done
-// requires the finish-report/scout-report to also carry an executable oracle
-// or explicit accepted-risk (🎯T31/T31.1) — a claimed-done with neither is
-// not recorded as done here; that is exactly the ambiguity this inbox exists
-// to surface, not paper over.
-func classifyOutcome(m *envelope.Message, raw string) Outcome {
-	low := strings.ToLower(raw)
-	switch {
-	case strings.Contains(low, "needs-design") || strings.Contains(low, "needs design") ||
-		strings.Contains(low, "design-gated") || strings.Contains(low, "parked-for-design"):
-		return OutcomeNeedsDesign
-	case strings.Contains(low, "blocked"):
+// classifyOutcome derives done / blocked / needs-design / other, strongest
+// signal first:
+//
+//  1. an explicit "jevons: outcome done|blocked|needs-design" slot (carried in
+//     envelope.Extra, so no schema change is needed to emit it);
+//  2. an escalation envelope, which is a blocked / needs-owner raise by kind;
+//  3. the payload's headline paragraph saying blocked or needs-design — only
+//     the headline, because a done report routinely names a design-gated
+//     follow-up or an "unblocked" dependency further down, and whole-text
+//     substring matching filed those as blocked;
+//  4. done, which needs a finish-report carrying an executable oracle or
+//     explicit accepted-risk (🎯T31/T31.1) AND no failing verdict — a report
+//     citing verdict RED ("J3 fails 3 of 3 runs") is not done however much
+//     evidence it carries.
+//
+// A claimed-done with neither oracle nor risk is recorded as other, not done:
+// that ambiguity is what this inbox exists to surface.
+func classifyOutcome(m *envelope.Message) Outcome {
+	if o, ok := ParseOutcome(m.Extra["outcome"]); ok {
+		return o
+	}
+	head := headline(m.Payload)
+	if m.Kind == envelope.KindEscalation {
+		if saysNeedsDesign(head) {
+			return OutcomeNeedsDesign
+		}
 		return OutcomeBlocked
+	}
+	switch {
+	case saysNeedsDesign(head):
+		return OutcomeNeedsDesign
+	case saysBlocked(head):
+		return OutcomeBlocked
+	}
+	switch m.Verdict {
+	case envelope.VerdictNone, envelope.VerdictGreen:
+	case envelope.VerdictRed:
+		return OutcomeBlocked
+	default:
+		// SUSPECT / DIRTY / EMPTY / UNKNOWN / KILLED / VOID: not a pass, and
+		// not necessarily blocked either — the parent has to read it.
+		return OutcomeOther
 	}
 	if m.Kind == envelope.KindFinishReport && (m.HasOracle() || m.HasRisk()) {
 		return OutcomeDone
 	}
 	return OutcomeOther
+}
+
+// ParseOutcome maps a slot or query value onto an Outcome. Spaces and
+// underscores collapse to a hyphen so "needs design" matches.
+func ParseOutcome(raw string) (Outcome, bool) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	s = strings.ReplaceAll(s, "_", "-")
+	s = strings.Join(strings.Fields(s), "-")
+	switch o := Outcome(s); o {
+	case OutcomeDone, OutcomeBlocked, OutcomeNeedsDesign, OutcomeOther:
+		return o, true
+	}
+	return "", false
+}
+
+// headline is the payload's first paragraph: text up to the first blank line
+// after some content, skipping fence lines.
+func headline(payload string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(payload, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "```") {
+			continue
+		}
+		if t == "" {
+			if b.Len() > 0 {
+				break
+			}
+			continue
+		}
+		b.WriteString(t)
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
+var (
+	needsDesignRE = regexp.MustCompile(`(?i)\b(needs[- ]design|design[- ]gated|parked[- ]for[- ]design)\b`)
+	blockedRE     = regexp.MustCompile(`(?i)\b(blocked|blocker|blocking)\b`)
+	// negationRE matches a negating word immediately before a hit:
+	// "not blocked", "no longer design-gated", "nothing blocking".
+	negationRE = regexp.MustCompile(`(?i)\b(not|no|never|nothing|no longer|isn't|wasn't|aren't)\s+$`)
+)
+
+func saysNeedsDesign(s string) bool { return hasUnnegated(needsDesignRE, s) }
+func saysBlocked(s string) bool     { return hasUnnegated(blockedRE, s) }
+
+func hasUnnegated(re *regexp.Regexp, s string) bool {
+	for _, loc := range re.FindAllStringIndex(s, -1) {
+		if !negationRE.MatchString(s[:loc[0]]) {
+			return true
+		}
+	}
+	return false
 }
 
 // summaryLine returns the first non-empty payload line (falling back to the
@@ -212,19 +299,81 @@ func List(stateDir, parent string) ([]Notice, error) {
 	var out []Notice
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	lineNo := 0
 	for sc.Scan() {
+		lineNo++
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
 		}
 		var n Notice
 		if err := json.Unmarshal([]byte(line), &n); err != nil {
-			continue // one corrupt line must not sink the rest of the inbox
+			// One corrupt line must not sink the rest of the inbox, but it
+			// is not skipped silently either.
+			slog.Warn("notice inbox: corrupt line skipped",
+				"path", path, "line", lineNo, "err", err)
+			continue
 		}
 		out = append(out, n)
 	}
 	if err := sc.Err(); err != nil {
 		return out, err
+	}
+	return out, nil
+}
+
+// ListAll reads every parent's inbox — the overseer's fleet-wide view,
+// including notices filed under "unowned" because the reporting agent's
+// parent could not be resolved (e.g. it was already reaped). Notices are
+// merged oldest first.
+func ListAll(stateDir string) ([]Notice, error) {
+	paths, err := filepath.Glob(filepath.Join(stateDir, "notices", "*.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	var out []Notice
+	for _, p := range paths {
+		got, err := List(stateDir, strings.TrimSuffix(filepath.Base(p), ".jsonl"))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, got...)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
+	return out, nil
+}
+
+// Query selects notices for a reader. A blank Parent is the fleet-wide
+// (overseer) view; a blank Outcome keeps every outcome; Limit > 0 keeps only
+// the most recent Limit notices.
+type Query struct {
+	Parent  string
+	Outcome Outcome
+	Limit   int
+}
+
+// Select runs q against the durable inbox, oldest first.
+func Select(stateDir string, q Query) ([]Notice, error) {
+	var (
+		all []Notice
+		err error
+	)
+	if strings.TrimSpace(q.Parent) == "" {
+		all, err = ListAll(stateDir)
+	} else {
+		all, err = List(stateDir, q.Parent)
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, n := range all {
+		if q.Outcome == "" || n.Outcome == q.Outcome {
+			out = append(out, n)
+		}
+	}
+	if q.Limit > 0 && len(out) > q.Limit {
+		out = out[len(out)-q.Limit:]
 	}
 	return out, nil
 }

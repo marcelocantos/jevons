@@ -125,8 +125,10 @@ func (s *Server) registerAgentReportTools() {
 	}
 	s.addTool(
 		mcp.NewTool("jevons_inbox_list",
-			mcp.WithDescription("List durable structured terminal-outcome notices (🎯T254.4) for a parent PO/overseer — one small record per worker finish-report/scout-report (agent, kind, outcome done|blocked|needs-design|other, target, sha, gate id, verdict, oracle/risk flags, a summary line), oldest first. This does not replace the full free-text report (still read via jevons_agent_report_read); it is structure added on top so terminal outcomes are queryable instead of requiring a manual re-read of transcript prose for every worker that finished."),
-			mcp.WithString("parent", mcp.Required(), mcp.Description("Parent agent name whose inbox to read, e.g. jevons-po")),
+			mcp.WithDescription("List durable structured terminal-outcome notices (🎯T254.4) — one small record per worker finish-report/scout-report/escalation (agent, parent, kind, outcome done|blocked|needs-design|other, target, sha, gate id, verdict, oracle/risk flags, a summary line), oldest first. Pass parent for a PO's own inbox; omit parent for the overseer's fleet-wide view (every parent, including notices filed as \"unowned\" because the reporter's parent was unknown). done means a finish-report with oracle or accepted-risk and no failing verdict; a RED verdict is blocked. Workers may state the outcome explicitly with a \"jevons: outcome done|blocked|needs-design\" slot. This does not replace the full free-text report (still read via jevons_agent_report_read); it is structure added on top. HTTP: GET /api/inbox?parent=&outcome=&limit=."),
+			mcp.WithString("parent", mcp.Description("Parent agent name whose inbox to read, e.g. jevons-po. Omit for the fleet-wide overseer view.")),
+			mcp.WithString("outcome", mcp.Description("Optional filter: done | blocked | needs-design | other")),
+			mcp.WithNumber("limit", mcp.Description("Keep only the most recent N notices (default 50; 0 = all)")),
 		),
 		s.handleInboxList,
 	)
@@ -200,30 +202,45 @@ func (s *Server) handleAgentReportRead(_ context.Context, req mcp.CallToolReques
 		name, rec.ID, rec.Bytes, rec.Text)), nil
 }
 
+// defaultInboxLimit bounds an unfiltered listing so a long-lived inbox stays
+// scannable; limit=0 asks for everything.
+const defaultInboxLimit = 50
+
 // handleInboxList implements jevons_inbox_list: the 🎯T254.4 durable
-// structured-notice surface for a parent PO/overseer.
+// structured-notice surface for a parent PO, or fleet-wide for the overseer.
 func (s *Server) handleInboxList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dir := s.agentReportStateDir()
 	if dir == "" {
 		return mcp.NewToolResultError("agent report store not configured (state_dir)"), nil
 	}
 	args := req.GetArguments()
-	parent := strings.TrimSpace(str(args["parent"]))
-	if parent == "" {
-		return mcp.NewToolResultError("parent is required"), nil
+	q := notice.Query{Parent: strings.TrimSpace(str(args["parent"])), Limit: defaultInboxLimit}
+	if raw := strings.TrimSpace(str(args["outcome"])); raw != "" {
+		o, ok := notice.ParseOutcome(raw)
+		if !ok {
+			return mcp.NewToolResultError(fmt.Sprintf("unknown outcome %q (want done|blocked|needs-design|other)", raw)), nil
+		}
+		q.Outcome = o
 	}
-	notices, err := notice.List(dir, parent)
+	if v, ok := args["limit"].(float64); ok && v >= 0 {
+		q.Limit = int(v)
+	}
+	scope := "parent " + q.Parent
+	if q.Parent == "" {
+		scope = "the whole fleet (overseer view)"
+	}
+	notices, err := notice.Select(dir, q)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("list notices for %q: %v", parent, err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("list notices for %s: %v", scope, err)), nil
 	}
 	if len(notices) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf("No structured terminal notices for parent %q.", parent)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("No structured terminal notices for %s.", scope)), nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d structured terminal notice(s) for parent %s (oldest first):\n", len(notices), parent)
+	fmt.Fprintf(&b, "%d structured terminal notice(s) for %s (oldest first):\n", len(notices), scope)
 	for _, n := range notices {
-		fmt.Fprintf(&b, "  %s  agent=%s kind=%s outcome=%s target=%s sha=%s gate=%s verdict=%s oracle=%v risk=%v — %s\n",
-			n.Time.Format(time.RFC3339), n.Agent, n.Kind, n.Outcome, n.Target, n.SHA, n.GateID, n.Verdict, n.HasOracle, n.HasRisk, n.Summary)
+		fmt.Fprintf(&b, "  %s  agent=%s parent=%s kind=%s outcome=%s target=%s sha=%s gate=%s verdict=%s oracle=%v risk=%v — %s\n",
+			n.Time.Format(time.RFC3339), n.Agent, n.Parent, n.Kind, n.Outcome, n.Target, n.SHA, n.GateID, n.Verdict, n.HasOracle, n.HasRisk, n.Summary)
 	}
 	return mcp.NewToolResultText(b.String()), nil
 }

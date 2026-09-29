@@ -4,6 +4,7 @@
 package notice
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -128,5 +129,165 @@ func TestListIsolatesParents(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("po-2's inbox must not see po-1's notice, got %v", got)
+	}
+}
+
+func envelopeReport(slots []string, payload string) string {
+	s := "```jevons\n"
+	for _, slot := range slots {
+		s += "jevons: " + slot + "\n"
+	}
+	return s + "```\n\n" + payload
+}
+
+// 🎯T254.4 regression from the live inbox (2026-09-29, jv-t840-merge-reconcile):
+// a finish-report citing sha + gate with verdict RED was recorded as done.
+func TestFromReportRedVerdictIsNotDone(t *testing.T) {
+	text := envelopeReport([]string{
+		"kind finish-report", "target T840", "sha c1df1dec", "gate 88cd5aba",
+		"verdict RED", "risk residual", "silent-ledger none",
+	}, "T840 should not be achieved yet. The merge onto mainline is clean, but J3 fails 3 of 3 runs.\n")
+	n, ok := FromReport("jv-t840-merge-reconcile", "jevons-po", text, time.Now())
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if n.Outcome != OutcomeBlocked {
+		t.Fatalf("RED verdict outcome = %q, want blocked", n.Outcome)
+	}
+}
+
+func TestFromReportNonPassVerdictIsOther(t *testing.T) {
+	text := envelopeReport([]string{
+		"kind finish-report", "target T1", "sha abc", "verdict DIRTY", "silent-ledger none",
+	}, "Measured in a dirty tree.\n")
+	n, _ := FromReport("w", "po", text, time.Now())
+	if n.Outcome != OutcomeOther {
+		t.Fatalf("DIRTY verdict outcome = %q, want other", n.Outcome)
+	}
+}
+
+// A done report routinely names a design-gated follow-up or an unblocked
+// dependency below its headline; whole-text substring matching filed those as
+// needs-design / blocked.
+func TestFromReportDoneWithDesignGatedFollowUpStaysDone(t *testing.T) {
+	text := envelopeReport([]string{
+		"kind finish-report", "target T254.4", "sha abc123", "gate deadbeef",
+		"verdict GREEN", "silent-ledger none",
+	}, "Landed the fleet-wide inbox view.\n\nResidual: dedup is T847, design-gated. T12 is unblocked now; nothing blocked here.\n")
+	n, _ := FromReport("w", "po", text, time.Now())
+	if n.Outcome != OutcomeDone {
+		t.Fatalf("outcome = %q, want done", n.Outcome)
+	}
+}
+
+func TestFromReportNegatedHeadlineIsNotBlocked(t *testing.T) {
+	text := envelopeReport([]string{
+		"kind finish-report", "target T5", "sha abc", "silent-ledger none",
+	}, "Not blocked: the dependency landed and this is done.\n")
+	n, _ := FromReport("w", "po", text, time.Now())
+	if n.Outcome != OutcomeDone {
+		t.Fatalf("outcome = %q, want done", n.Outcome)
+	}
+}
+
+func TestFromReportNeedsDesignHeadline(t *testing.T) {
+	text := envelopeReport([]string{
+		"kind scout-report", "target T5", "silent-ledger none",
+	}, "Needs design: the retention contract is owner taste.\n")
+	n, _ := FromReport("w", "po", text, time.Now())
+	if n.Outcome != OutcomeNeedsDesign {
+		t.Fatalf("outcome = %q, want needs-design", n.Outcome)
+	}
+}
+
+func TestFromReportExplicitOutcomeSlotWins(t *testing.T) {
+	text := envelopeReport([]string{
+		"kind finish-report", "target T5", "sha abc", "verdict GREEN",
+		"outcome needs design", "silent-ledger none",
+	}, "Partial slice landed; the rest waits on the owner.\n")
+	n, _ := FromReport("w", "po", text, time.Now())
+	if n.Outcome != OutcomeNeedsDesign {
+		t.Fatalf("outcome = %q, want needs-design from the explicit slot", n.Outcome)
+	}
+}
+
+func TestFromReportEscalationIsBlocked(t *testing.T) {
+	text := envelopeReport([]string{"kind escalation", "target T5"}, "The provider refuses every turn.\n")
+	n, ok := FromReport("w", "po", text, time.Now())
+	if !ok {
+		t.Fatal("escalation is a terminal raise and must be recorded")
+	}
+	if n.Outcome != OutcomeBlocked {
+		t.Fatalf("outcome = %q, want blocked", n.Outcome)
+	}
+	text = envelopeReport([]string{"kind escalation", "target T5"}, "Design-gated: retention policy is the owner's call.\n")
+	if n, _ := FromReport("w", "po", text, time.Now()); n.Outcome != OutcomeNeedsDesign {
+		t.Fatalf("design escalation outcome = %q, want needs-design", n.Outcome)
+	}
+}
+
+// The overseer reads every parent's inbox, including "unowned" notices whose
+// reporting agent's parent could not be resolved.
+func TestListAllMergesParentsOldestFirst(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	for i, p := range []struct{ agent, parent string }{
+		{"w1", "jevons-po"}, {"w2", ""}, {"w3", "other-po"}, {"w4", "jevons-po"},
+	} {
+		n, _ := FromReport(p.agent, p.parent, doneReport(), base.Add(time.Duration(i)*time.Minute))
+		if err := Append(dir, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := ListAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agents []string
+	for _, n := range all {
+		agents = append(agents, n.Agent)
+	}
+	if got := strings.Join(agents, ","); got != "w1,w2,w3,w4" {
+		t.Fatalf("fleet-wide order = %s, want w1,w2,w3,w4", got)
+	}
+}
+
+func TestSelectFiltersOutcomeAndLimit(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	reports := []string{doneReport(), blockedReport(), doneReport(), blockedReport(), blockedReport()}
+	for i, r := range reports {
+		n, _ := FromReport("w"+string(rune('a'+i)), "jevons-po", r, base.Add(time.Duration(i)*time.Minute))
+		if err := Append(dir, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Select(dir, Query{Outcome: OutcomeBlocked, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Agent != "wd" || got[1].Agent != "we" {
+		t.Fatalf("Select blocked limit 2 = %+v, want wd,we", got)
+	}
+	got, err = Select(dir, Query{Parent: "jevons-po", Outcome: OutcomeDone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Select done = %d, want 2", len(got))
+	}
+}
+
+func TestParseOutcome(t *testing.T) {
+	for raw, want := range map[string]Outcome{
+		"done": OutcomeDone, "Blocked": OutcomeBlocked, "needs design": OutcomeNeedsDesign,
+		"needs_design": OutcomeNeedsDesign, "other": OutcomeOther,
+	} {
+		if got, ok := ParseOutcome(raw); !ok || got != want {
+			t.Fatalf("ParseOutcome(%q) = %q,%v want %q", raw, got, ok, want)
+		}
+	}
+	if _, ok := ParseOutcome("finished"); ok {
+		t.Fatal("unknown outcome must not parse")
 	}
 }

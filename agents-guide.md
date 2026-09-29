@@ -525,6 +525,29 @@ Owner sparks via `idea:`, `capture:`, aside, or mid-chat must land in a
 Do not leave product-shaped sparks as main-chat-only prose. Ceremony:
 `docs/design/idea-capture.md`. Residual: opportunity-cost optimiser parked.
 
+### Fleet ops inbox (🎯T254.4) — terminal outcomes as records
+
+Every worker `finish-report`, `scout-report`, or `escalation` the daemon
+stores also lands as one structured notice in the durable inbox
+(`state_dir/notices/<parent>.jsonl`): agent, parent, kind, **outcome**
+(`done` / `blocked` / `needs-design` / `other`), target, sha, gate id,
+verdict, oracle/risk flags, and the headline line.
+
+| Reader | Tool / surface |
+|--------|----------------|
+| PO reads its own workers | `jevons_inbox_list parent=<po>` / `GET /api/inbox?parent=<po>` |
+| Overseer reads the fleet | `jevons_inbox_list` (no parent) / `GET /api/inbox` |
+| Filter | `outcome=done\|blocked\|needs-design\|other`, `limit=N` (most recent) |
+
+`done` means a finish-report carrying an oracle or accepted-risk and no
+failing verdict; a RED verdict is `blocked`. Otherwise the outcome comes
+from the report's **headline paragraph** ("Blocked: …", "Needs design:
+…"), so a done report that mentions a design-gated follow-up further
+down stays done. A worker can state it outright with a
+`jevons: outcome blocked` slot. The full free-text report is unchanged
+and still read with `jevons_agent_report_read`. Notices whose reporter's
+parent was unknown are filed as `unowned` and appear in the fleet view.
+
 ### Filing reflex (🎯T130) — doctrine first, narrative second
 
 When a **real product gap**, **repeated failure mode**, or **standing
