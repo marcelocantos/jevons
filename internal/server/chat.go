@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -1056,6 +1058,48 @@ type agentInfo struct {
 	TranscriptActivityReason string   `json:"transcript_activity_reason,omitempty"`
 }
 
+// feedRelaunch is one dead seat's relaunch in progress, per registry
+// (🎯T936): a seat is relaunched once however many feed requests see it dead.
+type feedRelaunch struct {
+	reg  *claudia.Registry
+	name string
+}
+
+var feedRelaunching sync.Map // feedRelaunch -> struct{}
+
+// feedLaunch is the relaunch itself; tests replace it.
+var feedLaunch = fleet.LaunchRecording
+
+// relaunchDeadSeat relaunches a dead AutoStart seat in the background and
+// reports the outcome as the inline relaunch did. A seat whose lifecycle
+// another path holds (the health sweep relaunching it too) is left to that
+// path: stopping it here would stop the other path's fresh process.
+func relaunchDeadSeat(reg *claudia.Registry, name, cause string, onRecovered func([]string), onDead func(name, cause, detail string)) {
+	key := feedRelaunch{reg, name}
+	if _, busy := feedRelaunching.LoadOrStore(key, struct{}{}); busy {
+		return
+	}
+	go func() {
+		defer feedRelaunching.Delete(key)
+		if _, err := feedLaunch(reg, name); err != nil {
+			if errors.Is(err, claudia.ErrLifecycleInProgress) {
+				return
+			}
+			reg.Stop(name)
+			if onDead != nil {
+				onDead(name, cause, "found not alive by the fleet feed; re-launch failed: "+err.Error())
+			}
+			return
+		}
+		if onDead != nil {
+			onDead(name, cause, "found not alive by the fleet feed; re-launched (AutoStart)")
+		}
+		if onRecovered != nil {
+			onRecovered([]string{name})
+		}
+	}()
+}
+
 // SetDeadSeatNoter installs the 🎯T925 record the fleet feed makes of each
 // dead seat it handles (mcpserver.NoteDeadSeat in production).
 func (s *Server) SetDeadSeatNoter(fn func(name, cause, detail string)) {
@@ -1244,17 +1288,12 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		}
 		cause := fleet.ExitCause(proc)
 		if d.AutoStart {
-			if _, err := fleet.LaunchRecording(reg, d.Name); err != nil {
-				reg.Stop(d.Name)
-				if onDead != nil {
-					onDead(d.Name, cause, "found not alive by the fleet feed; re-launch failed: "+err.Error())
-				}
-			} else {
-				recovered = append(recovered, d.Name)
-				if onDead != nil {
-					onDead(d.Name, cause, "found not alive by the fleet feed; re-launched (AutoStart)")
-				}
-			}
+			// Off the request path (🎯T936): a relaunch waits on the broker,
+			// and during a broker restart every seat is dead at once, so the
+			// fleet list went unanswered for minutes exactly while the fleet
+			// was recovering. The row answers as it is now; the owner hears
+			// when the seat is back.
+			relaunchDeadSeat(reg, d.Name, cause, onRecovered, onDead)
 		} else if fleet.DeadSeatRemovable(d.Purpose) {
 			// 🎯T544: a dead work seat leaves the tree instead of lingering as
 			// a "stopped" row. Stop first so the dead handle is not left
@@ -1443,13 +1482,33 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]agentInfo{})
 		return
 	}
+	// Where a slow answer spent its time (🎯T936), logged past agentsSlow.
+	start := time.Now()
+	var phases []string
+	mark := func(name string) {
+		phases = append(phases, fmt.Sprintf("%s=%s", name, time.Since(start).Round(time.Millisecond)))
+	}
 	agents := listFleetAgentsNoting(reg, s.RemovalAccount(), func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
 	}, s.noteDeadSeat, s.agentProgress, models)
-	rows := s.decorateSeatActivity(reg, s.decoratePlanAuth(reg, s.decoratePlanWalls(s.decorateSeatStops(agents))), time.Now())
+	mark("list")
+	rows := s.decorateSeatStops(agents)
+	mark("stops")
+	rows = s.decoratePlanWalls(rows)
+	mark("walls")
+	rows = s.decoratePlanAuth(reg, rows)
+	mark("auth")
+	rows = s.decorateSeatActivity(reg, rows, time.Now())
+	mark("activity")
+	if took := time.Since(start); took > agentsSlow {
+		slog.Warn("🎯T936 /api/agents slow", "took", took.Round(time.Millisecond), "phases", strings.Join(phases, " "), "rows", len(rows))
+	}
 	_ = json.NewEncoder(w).Encode(rows)
 }
+
+// agentsSlow is when /api/agents logs where its time went (🎯T936).
+const agentsSlow = 2 * time.Second
 
 // handleChatControlFrame consumes a client→server protocol frame arriving on
 // /ws/chat and reports whether msg was one.
