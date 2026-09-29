@@ -138,6 +138,12 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 	if mode == "" {
 		mode = delivery.ModeSubmit
 	}
+	// 🎯T903: the owner's message to an overseer mid owner turn is steered in.
+	if origin == sendOriginOwner && mode == delivery.ModeSubmit && s.isOverseerAgent(name) {
+		if out, handled, err := s.escalateOwnerToOverseer(text); handled {
+			return out, err
+		}
+	}
 	s.mu.RLock()
 	originHook := s.agentSendOriginHook
 	s.mu.RUnlock()

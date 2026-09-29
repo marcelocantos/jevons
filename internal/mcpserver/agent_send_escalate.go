@@ -46,6 +46,12 @@ func (s *Server) escalationClass(actor string, origin SendOrigin, rel DeliverRel
 }
 
 // escalationLadder is the Claudia ladder for class, or ok=false.
+// EscalationLadderFor is the configured ladder for an urgency class, for the
+// owner-chat layer's overseer arm (🎯T903).
+func (s *Server) EscalationLadderFor(class string) (claudia.Escalation, bool) {
+	return s.escalationLadder(class)
+}
+
 func (s *Server) escalationLadder(class string) (claudia.Escalation, bool) {
 	if class == "" {
 		return nil, false

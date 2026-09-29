@@ -1052,6 +1052,11 @@ func main() {
 	// overseer's process directly and bypass the owner chat journal and the
 	// notify queue â the ð¯T62 drop. Delivery itself stays implemented once,
 	// in the HTTP server, which owns those semantics.
+	// 🎯T903: an owner message to an overseer mid owner turn takes the owner
+	// ladder, as one to any agent does.
+	srv.SetOwnerEscalation(func() (claudia.Escalation, bool) {
+		return mcpSrv.EscalationLadderFor(config.EscalationOwner)
+	})
 	mcpSrv.SetOverseerDeliver(func(text string, origin mcpserver.SendOrigin) error {
 		return srv.DeliverToOverseerAs(text, string(origin))
 	})

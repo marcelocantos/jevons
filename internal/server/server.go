@@ -326,6 +326,10 @@ type Server struct {
 	authRecover func(context.Context, claudia.Provider) error
 	// The product hook owns admission and retains the speaker's origin.
 	agentSendOriginHook func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)
+	// ownerEscalation is the owner urgency ladder for a busy overseer
+	// (🎯T903); overseerEscalatorSeam stands in for its seat in tests.
+	ownerEscalation       func() (claudia.Escalation, bool)
+	overseerEscalatorSeam overseerEscalator
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
 	seatStopReader func(name string) (reason string, at time.Time, ok bool)
