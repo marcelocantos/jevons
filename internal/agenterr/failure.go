@@ -23,6 +23,8 @@ import (
 //   - retry_exhausted: the CLI's own retry budget ran out on a transient
 //     step-level failure (🎯T862.12) — not the same as the transient
 //     backend_unavailable/rate_limit cause that first triggered the retry
+//   - context_overflow: the prompt is longer than the model's context
+//     window (🎯T926) — terminal for that seat, never a hard-block
 //   - unknown: classified as failure but not mapped
 //   - none: empty / not a failure signal (including busy)
 type Class string
@@ -105,6 +107,13 @@ func ClassifyText(msg string) Class {
 	// exists to replace.
 	if IsRetryExhausted(low) {
 		return ClassRetryExhausted
+	}
+
+	// 🎯T926: a prompt longer than the model's window. Ahead of client_bug,
+	// where its "400 invalid_request_error" would otherwise land, and of
+	// rate_limit, whose "maximum" markers it must not trip.
+	if IsContextOverflow(s) {
+		return ClassContextOverflow
 	}
 
 	// Auth first — "unauthorized" before generic "error". Account/key walls
@@ -210,6 +219,8 @@ func OwnerCopy(class Class, raw string) string {
 		return fmt.Sprintf(
 			"Provider retry budget exhausted (retry_exhausted). The CLI's own retry loop (default budget %d) gave up on a transient step-level failure — this is not an ambiguous unknown failure, and the turn ended without finishing. ",
 			DefaultRetryBudget) + detailSuffix(raw)
+	case ClassContextOverflow:
+		return contextOverflowCopy(raw)
 	case ClassUnknown:
 		return "Provider failure (unknown). Class not pinned from the error string; see detail. " +
 			detailSuffix(raw)
