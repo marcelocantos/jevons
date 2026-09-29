@@ -88,6 +88,46 @@ describe('steered owner bubble and a streaming answer (T907)', () => {
     expect(got[2][1]).toContain('end.');
   });
 
+  it('live 2026-09-29 18:37: a cut stream interrupted before its line ended keeps the line whole', () => {
+    // Frames 11–19 of the T789.1 run on a real Anthropic overseer.
+    const got = rows([
+      assistant('4. Coins came first.\n5. The oboist ad', 'A'),
+      owner('Reply with exactly: held-a'),
+      assistant("y before the orchestra's tuning note.\n6. Deep beneath the se", 'A'),
+      owner('Reply with exactly: held-b'),
+      assistant('afloor, methane hydrates remain a', 'A'),
+      owner('Reply with exactly: cut-held-a'),
+      assistant('aborted', 'B', 'end_turn'),
+      assistant('', 'C', 'end_turn'),
+      assistant('held-aheld-bcut-held-a', 'D', 'end_turn'),
+    ]);
+    expect(got).toEqual([
+      ['assistant', "4. Coins came first.\n5. The oboist ady before the orchestra's tuning note."],
+      ['user', 'Reply with exactly: held-a'],
+      ['assistant', '6. Deep beneath the seafloor, methane hydrates remain a'],
+      ['user', 'Reply with exactly: held-b'],
+      ['user', 'Reply with exactly: cut-held-a'],
+      ['assistant', 'aborted'],
+      ['assistant', 'held-aheld-bcut-held-a'],
+    ]);
+  });
+
+  it('live 2026-09-29 18:31: a fragment arriving after the abort joins the cut line, not a bubble of its own', () => {
+    const got = rows([
+      assistant('1. The tinsmith hammered patterns into the lantern until light', 'A'),
+      owner('Reply with exactly: cut-held-a'),
+      assistant('aborted', 'B', 'end_turn'),
+      assistant(' sc', 'A'),
+      assistant('held-a', 'D', 'end_turn'),
+    ]);
+    expect(got).toEqual([
+      ['assistant', '1. The tinsmith hammered patterns into the lantern until light sc'],
+      ['user', 'Reply with exactly: cut-held-a'],
+      ['assistant', 'aborted'],
+      ['assistant', 'held-a'],
+    ]);
+  });
+
   it('tailBoundary finds the first line or sentence end', () => {
     expect(tailBoundary(' prints on paper.\n5. Red')).toBe(' prints on paper.'.length);
     expect(tailBoundary('\n5. Red')).toBe(1);

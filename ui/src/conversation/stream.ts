@@ -18,7 +18,7 @@ export type StreamJoin = {
    * mid-line. The stream's next text, up to the end of that line or
    * sentence, still belongs to that bubble; the rest goes below the owner's.
    */
-  owedTail?: { sid: string; idx: number } | null;
+  owedTail?: { sid: string; idx: number; dead?: boolean } | null;
 };
 
 export function emptyStream(): StreamJoin {
@@ -80,6 +80,25 @@ function settleOwedTail(frames: unknown[], stream: StreamJoin, sid: string): unk
   const out = frames.slice();
   out[owed.idx] = concatIntoFrame(out[owed.idx], text.slice(0, cut), false);
   out[at] = concatIntoFrame(withoutText(out[at]), text.slice(cut).replace(/^\s+/, ''), false);
+  return out;
+}
+
+/**
+ * 🎯T907: the cut stream was interrupted — another stream took over, it
+ * ended, or a tool ran — before its continuation reached the end of the
+ * line. Everything it said below the owner's bubble is still the rest of
+ * that line, so it all moves up (within the budget).
+ */
+function foldOwedTail(frames: unknown[], stream: StreamJoin): unknown[] {
+  const owed = stream.owedTail;
+  if (!owed || owed.dead || owed.idx >= frames.length) return frames;
+  const at = continuationIdx(stream, owed.sid);
+  if (at < 0 || at === owed.idx || at >= frames.length) return frames;
+  const text = frameText(frames[at]);
+  if (!text || text.length > OWED_TAIL_MAX) return frames;
+  const out = frames.slice();
+  out[owed.idx] = concatIntoFrame(out[owed.idx], text, false);
+  out[at] = concatIntoFrame(withoutText(out[at]), '', false);
   return out;
 }
 
@@ -255,6 +274,7 @@ export function applyTranscriptFrame(
   const type = m.type;
 
   if (type === 'tool_result' || type === 'result') {
+    frames = foldOwedTail(frames, stream);
     let s: StreamJoin = { ...markEdge(stream, ''), owedTail: null };
     for (const id of Object.keys(s.openById)) {
       if (s.openById[id]) s = markEdge(s, id);
@@ -270,10 +290,19 @@ export function applyTranscriptFrame(
     if (isOwnerUserBarrierFrame(body)) {
       // 🎯T907: a bubble cut off mid-line is owed the rest of that line.
       let owedTail = stream.owedTail ?? null;
-      const open = stream.openStream;
-      if (open >= 0 && !endsAtBoundary(frameText(frames[open]))) {
-        const sid = Object.keys(stream.streamBubbles).find((k) => stream.streamBubbles[k] === open) ?? '';
-        owedTail = { sid, idx: open };
+      if (owedTail && !owedTail.dead) {
+        // Cut again before the line ended: what came between belongs to
+        // the first cut, which stays owed.
+        frames = foldOwedTail(frames, stream);
+        if (endsAtBoundary(frameText(frames[owedTail.idx]))) owedTail = null;
+      } else {
+        const open = stream.openStream;
+        if (open >= 0 && !endsAtBoundary(frameText(frames[open]))) {
+          const sid = Object.keys(stream.streamBubbles).find((k) => stream.streamBubbles[k] === open) ?? '';
+          owedTail = { sid, idx: open };
+        } else if (owedTail?.dead) {
+          owedTail = null;
+        }
       }
       return { frames: [...frames, body], stream: { ...emptyStream(), owedTail } };
     }
@@ -288,6 +317,13 @@ export function applyTranscriptFrame(
   let textParts = 0;
 
   const takeText = (text: string) => {
+    const dead = nextStream.owedTail;
+    if (dead && dead.dead && sid && dead.sid === sid && dead.idx < nextFrames.length) {
+      // 🎯T907: a late fragment of a stream that was cut and then
+      // interrupted is the rest of the cut line, not a bubble of its own.
+      nextFrames = replaceFrame(nextFrames, dead.idx, concatIntoFrame(nextFrames[dead.idx], text, false));
+      return;
+    }
     let idx = -1;
     let edge = false;
     if (sid) {
@@ -350,12 +386,26 @@ export function applyTranscriptFrame(
     pushedSelf = true;
   }
 
-  nextFrames = settleOwedTail(nextFrames, nextStream, sid);
-  if (nextStream.owedTail && (nextStream.owedTail.sid !== sid || owedTailSettled(nextFrames, nextStream, sid))) {
-    nextStream = { ...nextStream, owedTail: null };
+  const owed = nextStream.owedTail;
+  if (owed && !owed.dead) {
+    if (owed.sid !== sid) {
+      // Another stream took over: the cut stream is interrupted. Its late
+      // fragments still go to the cut line.
+      nextFrames = foldOwedTail(nextFrames, nextStream);
+      nextStream = { ...nextStream, owedTail: { ...owed, dead: true } };
+    } else {
+      nextFrames = settleOwedTail(nextFrames, nextStream, sid);
+      if (owedTailSettled(nextFrames, nextStream, sid)) {
+        nextStream = { ...nextStream, owedTail: null };
+      } else if (isTerminalAssistant(m)) {
+        nextFrames = foldOwedTail(nextFrames, nextStream);
+        nextStream = { ...nextStream, owedTail: null };
+      }
+    }
   }
   if (isTerminalAssistant(m)) {
-    nextStream = { ...seal(nextStream, sid), owedTail: null };
+    const keep = nextStream.owedTail?.dead && nextStream.owedTail.sid !== sid ? nextStream.owedTail : null;
+    nextStream = { ...seal(nextStream, sid), owedTail: keep };
   }
   return { frames: nextFrames, stream: nextStream };
 }
