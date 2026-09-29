@@ -11,6 +11,8 @@ import { usePendingImages } from '../store/pendingImages';
 // 🎯T657 slice 2a, owner path end to end inside the widget: a busy overseer
 // phase turns plain Enter into a queued follow-up that paints above the
 // composer and drains to the mux socket on idle. Only the socket is a fixture.
+// 🎯T903: panes escalate by default, so these render with escalate={false}
+// to exercise the hold-until-idle queue itself.
 class Socket {
   static OPEN = 1;
   static CONNECTING = 0;
@@ -48,7 +50,7 @@ const sends = () => Socket.latest.sent.map((s) => JSON.parse(s)).filter((m) => m
 
 describe('send queue wiring (T657 / T113)', () => {
   it('busy overseer: Enter queues above the composer; idle drains it to the wire; Cmd+Enter steers past it', async () => {
-    const view = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const view = render(<AgentInteraction mux={client} name="jevons" escalate={false} density="comfortable" connected />);
     const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
     act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'thinking' }); });
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
@@ -86,7 +88,7 @@ describe('send queue wiring (T657 / T113)', () => {
   it('an image queued while busy survives a reload, returns as a chip on Edit, and is delivered with its marker', async () => {
     const img = { id: 'abc123', url: '/api/images/abc123', thumbUrl: '/api/images/abc123/thumb', marker: '[image: abc123]' };
     usePendingImages.setState({ images: { jevons: [img] } });
-    const first = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const first = render(<AgentInteraction mux={client} name="jevons" escalate={false} density="comfortable" connected />);
     const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
     act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'thinking' }); });
     fireEvent.change(first.getByRole('textbox'), { target: { value: 'with a picture' } });
@@ -97,7 +99,7 @@ describe('send queue wiring (T657 / T113)', () => {
     first.unmount();
 
     // Reload: the queue comes back from localStorage with the marker intact.
-    const second = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const second = render(<AgentInteraction mux={client} name="jevons" escalate={false} density="comfortable" connected />);
     act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'thinking' }); });
     const strip = second.container.querySelector('#send-queue') as HTMLElement;
     expect(strip.querySelector('.sq-thumb')?.getAttribute('src')).toBe(img.thumbUrl);
@@ -116,7 +118,7 @@ describe('send queue wiring (T657 / T113)', () => {
   });
 
   it('Alt+↑/↓ focus the queue before history; ⌘Enter steers and ⌘⇧Enter interrupts with the focused item (T657 2b)', async () => {
-    const view = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const view = render(<AgentInteraction mux={client} name="jevons" escalate={false} density="comfortable" connected />);
     const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
     const userFrame = { id: 'e:1', index: 1, op: 'put', type: 'user', event: { type: 'user', turn_origin: 'owner', message: { role: 'user', content: [{ type: 'text', text: 'earlier request' }] } } };
     act(() => { emit('frame', userFrame); emit('meta', { start: 1, older: 0, total: 1, n: 1, following: true, phase: 'thinking' }); });
@@ -161,7 +163,7 @@ describe('send queue wiring (T657 / T113)', () => {
   });
 
   it('Escape drops queue focus without touching the queue; a drained item drops its own focus', async () => {
-    const view = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const view = render(<AgentInteraction mux={client} name="jevons" escalate={false} density="comfortable" connected />);
     const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
     act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'streaming' }); });
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
@@ -183,7 +185,7 @@ describe('send queue wiring (T657 / T113)', () => {
   });
 
   it('strip buttons: Steer sends with mode=steer, Cut in with mode=interrupt, Remove drops it', async () => {
-    const view = render(<AgentInteraction mux={client} name="jevons" density="comfortable" connected />);
+    const view = render(<AgentInteraction mux={client} name="jevons" escalate={false} density="comfortable" connected />);
     const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
     act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'tool' }); });
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
@@ -206,7 +208,7 @@ describe('send queue wiring (T657 / T113)', () => {
   // 🎯T562.1: the strip and its per-item actions are the same in both densities.
   describe.each(['comfortable', 'compact'] as const)('queue strip (T562.1, %s)', (density) => {
     const mount = async (texts: string[]) => {
-      const view = render(<AgentInteraction mux={client} name="jevons" density={density} connected />);
+      const view = render(<AgentInteraction mux={client} name="jevons" escalate={false} density={density} connected />);
       const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
       act(() => { emit('meta', { start: 1, older: 0, total: 0, n: 0, following: true, phase: 'thinking' }); });
       const box = view.getByRole('textbox') as HTMLTextAreaElement;
@@ -260,7 +262,7 @@ describe('send queue wiring (T657 / T113)', () => {
   describe.each(['comfortable', 'compact'] as const)('Alt+Enter force-send (T562.7, %s)', (density) => {
     const SEED = '\u200B.\u200B';
     const mount = () => {
-      const view = render(<AgentInteraction mux={client} name="jevons" density={density} connected />);
+      const view = render(<AgentInteraction mux={client} name="jevons" escalate={false} density={density} connected />);
       const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: 'transcript:jevons', t, body }) });
       const userFrame = { id: 'e:1', index: 1, op: 'put', type: 'user', event: { type: 'user', turn_origin: 'owner', message: { role: 'user', content: [{ type: 'text', text: 'earlier request' }] } } };
       act(() => { emit('frame', userFrame); emit('meta', { start: 1, older: 0, total: 1, n: 1, following: true, phase: 'thinking' }); });

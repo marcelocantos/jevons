@@ -16,13 +16,13 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
-// J35 (🎯T562.2): a real WORKER seat holds an actual tool call while the
-// owner drives THAT seat's real packaged composer (#agent-inspect-input,
-// never a raw mux submit around it). The seat's transcript meta must carry a
-// live phase sample; while it reads non-idle, an ordinary Enter must stay
-// client-side (visible queue strip, nothing on /ws/mux) and must drain onto
-// the wire on its own once the tool releases and phase returns to idle. This
-// is the live half of T562.2's acceptance — its hermetic half is
+// J35 (🎯T562.2, re-pointed by 🎯T899 / 🎯T903): a real WORKER seat holds an
+// actual tool call while the owner drives THAT seat's real packaged composer
+// (#agent-inspect-input, never a raw mux submit around it). The seat's
+// transcript meta must carry a live phase sample; while it reads non-idle,
+// an ordinary Enter escalates: it reaches /ws/mux at once, nothing waits in
+// the client queue, the pane counts down to the interrupt, and the text
+// lands in the seat's transcript. Its hermetic half is
 // ui/src/components/AgentInteraction.seatPhase.test.tsx.
 func (s *suite) jWorkerBusyVisibleQueue() error {
 	provider := string(s.provider)
@@ -83,7 +83,7 @@ const poll = setInterval(() => { if (fs.existsSync(%q)) { clearInterval(poll); c
 	out, err := cmd.CombinedOutput()
 	fmt.Fprint(os.Stdout, string(out))
 	if err != nil {
-		return fmt.Errorf("J35 worker busy visible queue: %w\n%s", err, out)
+		return fmt.Errorf("J35 worker busy escalates: %w\n%s", err, out)
 	}
 	return nil
 }

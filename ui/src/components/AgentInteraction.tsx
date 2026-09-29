@@ -28,6 +28,12 @@ export function AgentInteraction(props: {
   connected?: boolean;
   /** Vendor stop, such as a spent plan. The composer stays closed until it clears. */
   planWall?: string;
+  /**
+   * 🎯T899 / 🎯T903: a busy seat takes a plain Enter at once and the daemon
+   * escalates it (steer, then interrupt). False holds it in the pane's queue
+   * until idle instead. Default true for every pane, the overseer included.
+   */
+  escalate?: boolean;
   onMeta?: (meta: ConversationMeta | null) => void;
 }) {
   const density = normalizeDensity(props.density);
@@ -60,7 +66,7 @@ export function AgentInteraction(props: {
     // 🎯T899 / 🎯T903: a message to a busy agent — the overseer included —
     // goes to the daemon at once, which steers it into the turn and
     // interrupts later if it is not taken.
-    escalate: true,
+    escalate: props.escalate ?? true,
   });
   // 🎯T657 slice 2b: Alt+↑/↓ focus over the queue; a drained or removed
   // item drops the focus rather than pointing at nothing.
