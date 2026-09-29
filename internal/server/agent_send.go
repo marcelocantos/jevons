@@ -248,6 +248,10 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 			"component", "agent_send", "name", name, "declared_origin", req.Origin)
 	}
 	out, err := s.sendToNamedAgentMode(name, text, origin, mode)
+	if supervisor && err == nil && s.isOverseerAgent(name) {
+		// 🎯T921: the overseer's pane shows the pass, as the supervisor's.
+		s.NotifyOwner(OwnerNotice{Subject: "supervisor", Kind: "supervisor-pass", Text: text})
+	}
 	status := out.Status
 	if err != nil {
 		// 🎯T237: structured class for T236 recovery; owner copy beyond bare Internal error.

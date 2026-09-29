@@ -12,6 +12,38 @@ import (
 	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
+// A pass to the overseer is painted in the owner's chat as a supervisor
+// notice, not an owner bubble.
+func TestT921SupervisorPassToTheOverseerIsASupervisorNotice(t *testing.T) {
+	s := New("test", t.TempDir())
+	s.SetAgentSendOriginHook(func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error) {
+		return AgentSendOutcome{Status: "sent"}, nil
+	})
+	ch := make(chan string, 16)
+	s.chatListeners = append(s.chatListeners, ch)
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/agents/jevons/send",
+		strings.NewReader(`{"text":"Automated supervisor pass, not the owner. The fleet is idle."}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("send: %d %s", w.Code, w.Body.String())
+	}
+	var lines []string
+	for len(ch) > 0 {
+		lines = append(lines, <-ch)
+	}
+	var note string
+	for _, l := range lines {
+		if strings.Contains(l, `"supervisor-pass"`) {
+			note = l
+		}
+	}
+	if note == "" || !strings.Contains(note, `"type":"agent_note"`) || strings.Contains(note, `"turn_origin":"owner"`) {
+		t.Fatalf("no supervisor notice in the owner's chat: %v", lines)
+	}
+}
+
 // 🎯T921: the owner's overnight Codex supervisor posts through the owner's
 // HTTP send with no origin. Its passes declare themselves ("Automated
 // supervisor pass, not the owner", "no authority claimed"); they are
