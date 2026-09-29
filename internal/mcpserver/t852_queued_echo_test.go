@@ -84,7 +84,7 @@ func TestT852BusySeatQueuesOnTheRecordAndAdmitsTheOwnerTurn(t *testing.T) {
 	// Clause 1: the queue is on the record, with the mode and mechanism that
 	// say the DAEMON holds it rather than the agent's own composer (🎯T418).
 	var lines []map[string]any
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		if r.Message != "agent_send" {
 			continue
 		}

@@ -52,3 +52,10 @@ jobs:
         env:
           CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"
         run: go test -timeout 45m -tags "sqlite_preupdate_hook sqlite_fts5" ./...
+
+      # 🎯T939: packages held race-clean (Makefile RACE_PKGS).
+      - name: Test (race)
+        env:
+          CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"
+          CLAUDIA_NO_BROKER: "1"
+        run: go test -race -timeout 45m -tags "sqlite_preupdate_hook sqlite_fts5" ./internal/mcpserver

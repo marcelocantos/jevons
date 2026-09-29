@@ -244,7 +244,7 @@ func TestRecoveryDispatchesTheDetachedDiagnostician(t *testing.T) {
 // indistinguishability is how the diagnosis half stayed a hermetic no-op
 // unnoticed (🎯T420).
 func TestRecoveryWithoutBinaryTakesTheWarnPath(t *testing.T) {
-	cap := &captureHandler{}
+	cap := &slogCapture{}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(cap))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -259,7 +259,7 @@ func TestRecoveryWithoutBinaryTakesTheWarnPath(t *testing.T) {
 	s.spawnRecoveryAgent(IdleNudgeReport{Name: "jv-x", Action: IdleNudgeMaxed})
 
 	var warned, dispatched bool
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		if r.Level == slog.LevelWarn && strings.Contains(r.Message, "no recover binary wired") {
 			warned = true
 		}

@@ -768,7 +768,7 @@ func TestHandleAgentSendDenialLogsActorAndRelation(t *testing.T) {
 	}
 
 	var found map[string]any
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		m := attrsMap(r)
 		if m["status"] == "denied" && m["component"] == "agent_send" {
 			found = m

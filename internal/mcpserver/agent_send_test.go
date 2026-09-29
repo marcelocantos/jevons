@@ -110,6 +110,14 @@ func (h *slogCapture) snapshot() []slog.Record {
 	defer h.mu.Unlock()
 	return append([]slog.Record(nil), h.records...)
 }
+
+// reset discards what has been captured so far.
+func (h *slogCapture) reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = nil
+}
+
 func (h *slogCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *slogCapture) WithGroup(string) slog.Handler      { return h }
 
@@ -247,10 +255,10 @@ func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
 		t.Fatal("should not have sent while busy without interrupt")
 	}
 	// 🎯T120.2: structured slog on success path (not MCP text alone).
-	if len(cap.records) < 1 {
+	if len(cap.snapshot()) < 1 {
 		t.Fatal("expected agent_send slog record")
 	}
-	got := attrsMap(cap.records[0])
+	got := attrsMap(cap.snapshot()[0])
 	if got["component"] != "agent_send" || got["name"] != "po" || got["status"] != "queued" {
 		t.Fatalf("slog attrs=%v", got)
 	}
@@ -373,7 +381,7 @@ func TestDeliverToSenderHappyPath(t *testing.T) {
 	if len(fs.sent) != 1 {
 		t.Fatalf("sent=%v", fs.sent)
 	}
-	got := attrsMap(cap.records[0])
+	got := attrsMap(cap.snapshot()[0])
 	if got["status"] != "rehydrated_sent" || got["rehydrated"] != true || got["component"] != "agent_send" {
 		t.Fatalf("slog attrs=%v", got)
 	}

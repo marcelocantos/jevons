@@ -283,13 +283,24 @@ TEST_PKG_PAR ?= 4
 # and matches the docratchet gates already run with -timeout 45m.
 GO_TEST_TIMEOUT ?= 45m
 
-.PHONY: test test-go test-go-raw test-web test-ui
+# Packages held race-clean (🎯T939). mcpserver is the concurrency hub (send
+# queue drain, idle-nudge loop, restart-brief retry, re-attach watchers) and
+# regressed under -race while test-go stayed green, because nothing ran it.
+# Add a package here once `go test -race` over it is clean.
+RACE_PKGS ?= ./internal/mcpserver
+
+.PHONY: test test-go test-go-raw test-go-race test-web test-ui
 # Hermetic Go tests never reach a claudia daemon installed on this machine:
 # with one reachable, every Registry launch in a fixture would be granted a
 # real seat with a real provider process behind it.
-test-go test-go-raw: export CLAUDIA_NO_BROKER = 1
+test-go test-go-raw test-go-race: export CLAUDIA_NO_BROKER = 1
 test-go: bin/gotest
 	@bin/gotest -timeout $(GO_TEST_TIMEOUT) -p $(TEST_PKG_PAR) ./...
+	@bin/gotest -race -timeout $(GO_TEST_TIMEOUT) $(RACE_PKGS)
+
+# The race step alone, when that is the thing being fixed.
+test-go-race: bin/gotest
+	@bin/gotest -race -timeout $(GO_TEST_TIMEOUT) $(RACE_PKGS)
 
 # Escape hatch when the transcript itself is what you need.
 test-go-raw:
