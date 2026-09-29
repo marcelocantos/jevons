@@ -83,6 +83,7 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
   const queryClient = useQueryClient();
   const [reauthBusy, setReauthBusy] = useState('');
   const [reauthMessage, setReauthMessage] = useState('');
+  const [overrideTip, setOverrideTip] = useState('');
   const decisions = useQuery({
     queryKey: ['plan-usage-decisions'],
     queryFn: async ({ signal }) => {
@@ -210,7 +211,14 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
   heldReadings.current = held.last;
   const groups = held.groups;
   // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
-  const tip = <>
+  const overridden = groups.find((g) => g.provider === overrideTip && g.override)?.override;
+  const tip = overridden ? (
+    <div className="plan-override-card">
+      <strong>{overrideTip + ' shown ' + overridden.band + ' by override'}</strong>
+      <div className="plan-override-reason">{overridden.reason}</div>
+      <div className="plan-override-note">The bars still show real usage.</div>
+    </div>
+  ) : <>
     <PlanTipTable groups={groups} nowMs={now()} />
     {failedMigrations.length ? (
       <div className="plan-migration-failures">
@@ -311,18 +319,14 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
               );
             })}
             {g.override ? (
-              // 🎯T948: the band is the owner's, not the readings'; say why.
-              <InstantTip
-                cardClassName="plan-override-card"
-                placement="below-host"
-                content={<>
-                  <strong>{'Shown ' + g.override.band + ' by override'}</strong>
-                  <div className="plan-override-reason">{g.override.reason}</div>
-                  <div className="plan-override-note">The bars still show real usage.</div>
-                </>}
-              >
-                <span className="plan-override" aria-label={'Override: ' + g.override.reason}>?</span>
-              </InstantTip>
+              // 🎯T948: the band is the owner's, not the readings'. The
+              // ticker's one tip card says why while the pointer is on the ?.
+              <span
+                className="plan-override"
+                aria-label={'Override: ' + g.override.reason}
+                onPointerEnter={() => setOverrideTip(g.provider)}
+                onPointerLeave={() => setOverrideTip('')}
+              >?</span>
             ) : null}
           </span>
         ) : null}

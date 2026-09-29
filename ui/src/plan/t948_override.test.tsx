@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PlanUsageBar } from '../components/PlanUsageBar';
 
@@ -39,4 +39,26 @@ it('marks an overridden plan with a ? that carries the reason', async () => {
   const mark = await screen.findByLabelText('Override: ' + reason);
   expect(mark.closest('[data-provider]')?.getAttribute('data-provider')).toBe('claude');
   expect(container.querySelectorAll('.plan-override')).toHaveLength(1);
+});
+
+// The ticker has one tip card; on the ? it carries the override's reason.
+it('shows the override reason in the tip while the pointer is on the ?', async () => {
+  const reason = 'Owner has a Claude reset available.';
+  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+    if (input === '/api/plan-usage') {
+      return { ok: true, json: async () => ({ backends: [{
+        provider: 'claude', status: 'available', override: { band: 'ok', reason },
+        windows: [{ name: 'weekly', used_percent: 92, remaining_percent: 8, band: 'ok' }],
+      }] }) };
+    }
+    if (input === '/api/plan-usage/decisions') return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => ({ plans: [] }) };
+  }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { container } = render(<QueryClientProvider client={client}><PlanUsageBar /></QueryClientProvider>);
+  const mark = await screen.findByLabelText('Override: ' + reason);
+  fireEvent.pointerEnter(container.querySelector('[data-instant-tip-host]')!);
+  fireEvent.pointerEnter(mark);
+  expect(document.body.textContent).toContain('claude shown ok by override');
+  expect(document.body.textContent).toContain(reason);
 });
