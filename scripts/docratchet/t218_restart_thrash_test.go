@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/testreap"
 )
 
 // 🎯T218 — executable oracle for the restart thrash policy.
@@ -130,6 +132,10 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 		t.Fatalf("refusing development port %d", port)
 	}
 
+	// 🎯T932: killDaemon below runs only when cleanups do. -timeout and a
+	// SIGKILLed test binary run none, and the daemons are detached, so the
+	// sweep must outlive the binary. Armed before anything is started.
+	testreap.Arm(t)
 	root := t.TempDir()
 	home := t.TempDir()
 	srcDir := t.TempDir()
