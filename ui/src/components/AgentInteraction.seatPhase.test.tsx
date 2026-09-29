@@ -84,6 +84,22 @@ describe('seat composer busy from its own phase (T562.2)', () => {
     await waitFor(() => expect(view.container.querySelector('.escalation-strip')?.textContent).toMatch(/interrupts in \d+s unless it takes the message/));
   });
 
+  // 🎯T903 (found by J35 live): a steered message usually paints in the
+  // transcript before the daemon's status arrives. The echo must not cost
+  // the pane its countdown.
+  it('the countdown survives the echo landing before the status', async () => {
+    const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected />);
+    act(() => { emit('meta', { ...win, phase: { phase: 'tool', step: 'Bash' } }); });
+    const box = view.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'echo first' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    const id = Socket.latest.sent.map((m) => JSON.parse(m)).filter((m) => m.t === 'send').pop().body.id;
+    const echo = { id: 'e:9', index: 9, op: 'put', type: 'user', event: { type: 'user', turn_origin: 'owner', message: { role: 'user', content: [{ type: 'text', text: 'echo first' }] } } };
+    act(() => { emit('frame', echo); });
+    act(() => { emit('status', { id, status: 'steered', mode: 'submit', mechanism: 'steer', interrupt_after_ms: 60000, message: 'steered' }); });
+    await waitFor(() => expect(view.container.querySelector('.escalation-strip')?.textContent).toMatch(/interrupts in \d+s unless it takes the message/));
+  });
+
   it('a plan wall holds the composer closed', () => {
     const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected planWall="Upgrade your plan to continue" />);
     const box = view.getByRole('textbox') as HTMLTextAreaElement;

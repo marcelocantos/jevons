@@ -67,12 +67,17 @@ export function useConversation(mux: MuxClient | null, name: string) {
 
   const frozenRef = useRef(false);
   const pendingSendRef = useRef<PendingSend | null>(null);
+  // 🎯T903: the last send, kept past its echo. A steered message usually
+  // paints in the transcript before the daemon's status arrives, and the
+  // echo retires pendingSendRef; the countdown still belongs to this send.
+  const lastSendRef = useRef<PendingSend | null>(null);
   const [escalation, setEscalation] = useState<EscalationNotice | null>(null);
 
   useEffect(() => {
     if (!mux || !name) return;
     frozenRef.current = false;
     pendingSendRef.current = null;
+    lastSendRef.current = null;
     dispatch({ v: 1, ch: transcriptChannel(name), t: 'reset' });
     const ch = transcriptChannel(name);
     let buffer: unknown[] = [];
@@ -94,21 +99,27 @@ export function useConversation(mux: MuxClient | null, name: string) {
       // paint before the owner navigates away. error = definite failure —
       // stop waiting on this id but leave the draft alone (falls through to
       // the generic path below, which still paints the send_error diagnostic).
+      // 🎯T899 / 🎯T903: an escalating send's status starts the countdown,
+      // whether or not its echo already retired the pending send.
+      if (env.t === 'status' && matchesPendingId(env, lastSendRef.current)) {
+        const sent = lastSendRef.current;
+        lastSendRef.current = null;
+        const ms = interruptAfterMs(env.body);
+        if (sent && ms > 0) {
+          const body = rec(env.body);
+          setEscalation({
+            text: sent.text,
+            deadline: clockNow() + ms,
+            message: typeof body.message === 'string' ? body.message : '',
+          });
+        }
+      }
       const idMatch = matchesPendingId(env, pendingSendRef.current);
       if (idMatch) {
         const pending = pendingSendRef.current;
         pendingSendRef.current = null;
         if (env.t === 'status' && pending) {
           clearDraftForText(name, pending.text);
-          const ms = interruptAfterMs(env.body);
-          if (ms > 0) {
-            const body = rec(env.body);
-            setEscalation({
-              text: pending.text,
-              deadline: clockNow() + ms,
-              message: typeof body.message === 'string' ? body.message : '',
-            });
-          }
           return;
         }
         // env.t === 'error': fall through so the send_error diagnostic frame
@@ -193,6 +204,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
       }
       const id = mux?.sendTranscript(name, t, mode === 'submit' ? undefined : { mode });
       pendingSendRef.current = { text: t, at: stateRef.current.frames.length, id };
+      lastSendRef.current = pendingSendRef.current;
     },
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),
     pageOlder: (limit = 50) => {
