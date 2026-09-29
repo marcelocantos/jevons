@@ -165,8 +165,12 @@ func (s *Server) handleAgentReportRead(_ context.Context, req mcp.CallToolReques
 			return mcp.NewToolResultText(fmt.Sprintf("No stored reports for %q.", name)), nil
 		}
 		var b strings.Builder
+		shown, older := newestItems(recs, toolListLimit)
 		fmt.Fprintf(&b, "%d stored report(s) for %s (newest last):\n", len(recs), name)
-		for _, r := range recs {
+		if older > 0 {
+			fmt.Fprintf(&b, "  (%d older reports not listed; read one by report_id)\n", older)
+		}
+		for _, r := range shown {
 			fmt.Fprintf(&b, "  %s  %s  %d bytes\n", r.ID, r.At.Format(time.RFC3339), r.Bytes)
 		}
 		return mcp.NewToolResultText(b.String()), nil
@@ -192,12 +196,12 @@ func (s *Server) handleAgentReportRead(_ context.Context, req mcp.CallToolReques
 		}
 		return mcp.NewToolResultText(fmt.Sprintf(
 			"[%s report %s — section %q, %d bytes, verbatim from the store]\n\n%s",
-			name, rec.ID, sec.Heading, len(sec.Text), sec.Text)), nil
+			name, rec.ID, sec.Heading, len(sec.Text), boundText(sec.Text, "the section is longer than one page"))), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"[%s report %s — %d bytes, full text from the store]\n\n%s",
-		name, rec.ID, rec.Bytes, rec.Text)), nil
+		name, rec.ID, rec.Bytes, boundText(rec.Text, "ask for one part with section=<heading>"))), nil
 }
 
 // handleInboxList implements jevons_inbox_list: the 🎯T254.4 durable
@@ -220,8 +224,12 @@ func (s *Server) handleInboxList(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultText(fmt.Sprintf("No structured terminal notices for parent %q.", parent)), nil
 	}
 	var b strings.Builder
+	shown, older := newestItems(notices, toolListLimit)
 	fmt.Fprintf(&b, "%d structured terminal notice(s) for parent %s (oldest first):\n", len(notices), parent)
-	for _, n := range notices {
+	if older > 0 {
+		fmt.Fprintf(&b, "  (%d older notices not listed; the newest %d follow)\n", older, len(shown))
+	}
+	for _, n := range shown {
 		fmt.Fprintf(&b, "  %s  agent=%s kind=%s outcome=%s target=%s sha=%s gate=%s verdict=%s oracle=%v risk=%v — %s\n",
 			n.Time.Format(time.RFC3339), n.Agent, n.Kind, n.Outcome, n.Target, n.SHA, n.GateID, n.Verdict, n.HasOracle, n.HasRisk, n.Summary)
 	}

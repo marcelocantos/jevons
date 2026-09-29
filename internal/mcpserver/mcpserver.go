@@ -898,8 +898,10 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	if s.transcript != nil {
 		s.addTool(
 			mcp.NewTool("jevons_transcript_read",
-				mcp.WithDescription("Read a conversation transcript. With agent=<name>, returns THAT agent's transcript only (registry session_id) — never substitutes the caller's/overseer transcript (🎯T304). Omit agent to read the active overseer/Jevon session. Returns turns with role and text."),
+				mcp.WithDescription("Read a conversation transcript, one page at a time (🎯T942): by default the newest 40 turns, never more than about 16k tokens. The header says how many turns there are and how to ask for the previous page (before=<turn>). With agent=<name>, returns THAT agent's transcript only (registry session_id) — never substitutes the caller's/overseer transcript (🎯T304). Omit agent to read the active overseer/Jevon session. Returns turns with role and text."),
 				mcp.WithString("agent", mcp.Description("Fleet agent name whose transcript to read (e.g. jv-t300-loading-earlier). Required for supervision of workers; omit for the active overseer session.")),
+				mcp.WithNumber("limit", mcp.Description("Turns per page (default 40, at most 200). The page also stops at about 16k tokens.")),
+				mcp.WithNumber("before", mcp.Description("Show the turns before this turn number (1-based), for the previous page. Omit for the newest turns.")),
 			),
 			s.handleTranscriptRead,
 		)
@@ -1124,18 +1126,57 @@ func (s *Server) handleTranscriptRead(_ context.Context, req mcp.CallToolRequest
 		return mcp.NewToolResultText("Transcript is empty."), nil
 	}
 
+	limit := transcriptPageTurns
+	if n, ok := args["limit"].(float64); ok && n >= 1 {
+		limit = min(int(n), transcriptMaxPageTurns)
+	}
+	end := len(turns) // exclusive
+	if n, ok := args["before"].(float64); ok && n >= 1 {
+		end = min(int(n)-1, len(turns))
+	}
+	// One page, newest first up to the limit and the byte budget, printed in
+	// order (🎯T942): a whole transcript once put 673 KB into the overseer's
+	// context in one call, twice in 18 minutes.
+	var lines []string
+	size := 0
+	start := end
+	for i := end - 1; i >= 0 && len(lines) < limit; i-- {
+		role, _ := turns[i]["role"].(string)
+		text, _ := turns[i]["text"].(string)
+		line := fmt.Sprintf("Turn %d [%s]: %s\n", i+1, role, truncate(text, 200))
+		if size+len(line) > transcriptPageBytes && len(lines) > 0 {
+			break
+		}
+		lines = append(lines, line)
+		size += len(line)
+		start = i
+	}
 	var b strings.Builder
 	if agentName != "" {
-		fmt.Fprintf(&b, "agent=%s session=%s turns=%d\n",
-			agentName, sessionDisplay(sessionID), len(turns))
+		fmt.Fprintf(&b, "agent=%s session=%s ", agentName, sessionDisplay(sessionID))
 	}
-	for i, turn := range turns {
-		role, _ := turn["role"].(string)
-		text, _ := turn["text"].(string)
-		fmt.Fprintf(&b, "Turn %d [%s]: %s\n", i+1, role, truncate(text, 200))
+	switch {
+	case len(lines) == 0:
+		fmt.Fprintf(&b, "turns=%d; nothing before turn %d.\n", len(turns), end+1)
+	case start > 0:
+		fmt.Fprintf(&b, "turns=%d showing %d-%d; %d earlier turns not shown: call again with before=%d for the previous page.\n",
+			len(turns), start+1, end, start, start+1)
+	default:
+		fmt.Fprintf(&b, "turns=%d showing %d-%d.\n", len(turns), start+1, end)
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		b.WriteString(lines[i])
 	}
 	return mcp.NewToolResultText(b.String()), nil
 }
+
+// A transcript page (🎯T942): turns by default and at most, and the byte
+// budget a page never passes (about 16k tokens).
+const (
+	transcriptPageTurns    = 40
+	transcriptMaxPageTurns = 200
+	transcriptPageBytes    = 64 << 10
+)
 
 func (s *Server) handleTranscriptRewind(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
