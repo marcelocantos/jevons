@@ -286,3 +286,51 @@ func TestT927MotionOnTheNewHandleIsNotALostTurn(t *testing.T) {
 		t.Fatalf("interrupted a turn that was moving on its new handle (%d)", n)
 	}
 }
+
+// 🎯T937: the re-attach note runs on a goroutine after the attach. A turn
+// that begins in between began on the new handle and is not lost — before the
+// fix, the note read flight when it ran, called that turn lost, and the sweep
+// interrupted it (TestT927QuietTurnOnItsOwnHandleIsFlaggedOnceNotInterrupted
+// failed 15/20). Each arm drives the note in the order the scheduler may pick.
+func TestT937ReattachNoteNamesTheTurnSeenAtAttach(t *testing.T) {
+	for _, tc := range []struct {
+		arm        string
+		beforeSnap func(s *Server, name string)
+		afterSnap  func(s *Server, name string)
+		wantLost   bool
+	}{
+		{
+			arm:       "turn begins after the attach: on the new handle, not lost",
+			afterSnap: func(s *Server, name string) { s.noteTurnInFlight(name) },
+		},
+		{
+			arm:        "turn in flight across the attach: lost",
+			beforeSnap: func(s *Server, name string) { s.noteTurnInFlight(name) },
+			wantLost:   true,
+		},
+		{
+			arm:        "turn ends and another begins before the note runs: not lost",
+			beforeSnap: func(s *Server, name string) { s.noteTurnInFlight(name) },
+			afterSnap: func(s *Server, name string) {
+				s.noteTurnEnded(name)
+				s.noteTurnInFlight(name)
+			},
+		},
+	} {
+		t.Run(tc.arm, func(t *testing.T) {
+			const name = "jevons-po"
+			s, _, _, _ := t927Fixture(t, name)
+			if tc.beforeSnap != nil {
+				tc.beforeSnap(s, name)
+			}
+			turn, inFlight := s.wedges.turnAt(name)
+			if tc.afterSnap != nil {
+				tc.afterSnap(s, name)
+			}
+			s.noteReattachedMidTurn(name, turn, inFlight)
+			if _, lost := s.wedges.quietSince(name); lost != tc.wantLost {
+				t.Fatalf("lost handle recorded=%v; want %v", lost, tc.wantLost)
+			}
+		})
+	}
+}

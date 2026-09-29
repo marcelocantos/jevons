@@ -182,6 +182,9 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 		prev.proc.UnsubscribeEvents(prev.token)
 	}
 	attachedAt := time.Now()
+	// 🎯T937: the turn believed in flight as this process is subscribed. The
+	// wedges lock is a leaf, so it is safe under wireMu.
+	turn, turnInFlight := s.wedges.turnAt(name)
 	token := proc.SubscribeEvents(s.agentEventSink(name))
 	s.wiredSinks[name] = wiredSink{proc: proc, token: token}
 	// 🎯T744: the sink sees only future events, so a turn that ended before
@@ -195,7 +198,7 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	go func() {
 		// 🎯T927: a turn the daemon believes in flight was observed on the
 		// handle this attach replaces. Off wireMu: it reads flight under mu.
-		s.noteReattachedMidTurn(name)
+		s.noteReattachedMidTurn(name, turn, turnInFlight)
 		if s.registry != nil {
 			if def := s.registry.Def(name); def != nil &&
 				spool.SidecarProvider(string(def.Provider)) &&
