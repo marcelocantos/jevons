@@ -71,7 +71,11 @@ async function main() {
     await page.locator('#input').press('Enter');
     await page.waitForTimeout(300);
   }
-  await page.locator('.escalation-strip').first().waitFor();
+  // The daemon took both sends: a seat that can steer counts down in the
+  // escalation strip; one that cannot (Claude in tmux) queues them behind
+  // the turn, and the owner bubbles are what is painted.
+  await page.waitForFunction(text => !!document.querySelector('.escalation-strip') ||
+    [...document.querySelectorAll('#messages [data-kind="user"] .msg-body')].some(e => e.textContent.includes(text)), held[1]);
   const queued = await gap();
   await page.locator('#input').fill(`Reply with exactly: cut-${held[0]}`);
   await page.locator('#input').press('Meta+Shift+Enter');
