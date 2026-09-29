@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -80,6 +81,12 @@ func (s *suite) startDaemon() error {
 	cmd.Stderr = s.logFile
 	cmd.Dir = s.workdir
 	cmd.Env = s.isolateDaemonEnv()
+	// 🎯T837: the log is shared by every start in the run; the stop reason
+	// is read from this start's bytes only.
+	var logStart int64
+	if fi, err := os.Stat(s.logPath); err == nil {
+		logStart = fi.Size()
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -87,11 +94,35 @@ func (s *suite) startDaemon() error {
 	go func() { waitCh <- cmd.Wait() }()
 	s.cmd = cmd
 	s.cmdWait = waitCh
-	if err := s.waitReadyOwned(readyTimeout); err != nil {
+	wait := readyTimeout
+	if s.readyWait > 0 {
+		wait = s.readyWait
+	}
+	if err := s.waitReadyOwned(wait); err != nil {
+		// Read the cause BEFORE signalling: an interrupted launch logs
+		// "auto-start failed ... context canceled", which is the teardown
+		// talking, not the reason the overseer was stopped.
+		var notRunning *overseerNotRunningError
+		if errors.As(err, &notRunning) {
+			err = &isolateOutageError{err: err, cause: s.overseerStopCause(logStart, time.Now(), wait)}
+		}
 		_ = s.signalStop(2 * time.Second)
 		return err
 	}
 	return nil
+}
+
+// overseerStopCause names why the overseer is stopped from the isolate
+// daemon's log written since offset (🎯T837).
+func (s *suite) overseerStopCause(offset int64, gaveUp time.Time, budget time.Duration) string {
+	body, err := os.ReadFile(s.logPath)
+	if err != nil {
+		return fmt.Sprintf("overseer %s stopped: cause unknown — isolate log unreadable: %v", overseerName, err)
+	}
+	if offset < 0 || offset > int64(len(body)) {
+		offset = 0
+	}
+	return overseerStopReason(body[offset:], overseerName, gaveUp, budget)
 }
 
 func (s *suite) signalStop(timeout time.Duration) error {

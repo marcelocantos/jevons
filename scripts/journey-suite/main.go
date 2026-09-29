@@ -87,6 +87,8 @@ type suite struct {
 	// brokerSocket is set only while a migration journey owns a throwaway
 	// Claudia broker. Other journeys keep their direct-mode drain semantics.
 	brokerSocket string
+	// readyWait overrides readyTimeout when non-zero (hermetic tests only).
+	readyWait time.Duration
 }
 
 func main() {
@@ -240,6 +242,12 @@ persona_notes: |
 
 	if err := s.startDaemon(); err != nil {
 		dumpTail(logPath, 40)
+		// 🎯T837: an isolate whose overseer never ran is a harness outage —
+		// no journey got to assert anything — and says why it is stopped.
+		if isOutage(err) {
+			fmt.Fprintln(os.Stderr, "OUTAGE: start jevonsd:", err)
+			exitNow(2)
+		}
 		fatal(fmt.Errorf("start jevonsd: %w (build with make jevonsd?)", err))
 	}
 	fmt.Printf("started isolated jevonsd pid=%d host=%s state=%s mcp=%s provider=%s\n",
@@ -778,7 +786,7 @@ func probeReady(host string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("overseer not running yet: %v", agents)
+	return &overseerNotRunningError{agents: fmt.Sprint(agents)}
 }
 
 func waitReady(host string, d time.Duration) error {

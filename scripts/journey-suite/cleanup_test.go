@@ -38,6 +38,12 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case fakeDaemonMode:
+		if err := runFakeStoppedDaemon(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	case "":
 		os.Exit(m.Run())
 
