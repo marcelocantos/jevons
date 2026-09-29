@@ -521,10 +521,13 @@ func (a ownerActuator) requeueOwnerSend(g converge.OwnerGap, now time.Time) erro
 	}
 	// Text still sitting in the notify queue will be delivered by the drain.
 	// Re-injecting it would ask the owner's question twice; the gap stays
-	// standing instead, and escalates if the queue never moves.
+	// standing instead, and escalates if the queue never moves. A batch the
+	// drain has taken but is still handing over is as queued as one that
+	// waits: re-injecting it mid-send left a second copy that ran again
+	// after the owner cancelled the first (🎯T915, session e9620c51).
 	wire := userTurnPrefix + text
 	a.s.mu.RLock()
-	queued := slices.Contains(a.s.notifyQueue, wire)
+	queued := slices.Contains(a.s.notifyQueue, wire) || slices.Contains(a.s.notifyInFlight, wire)
 	a.s.mu.RUnlock()
 	if queued {
 		return converge.ErrOwnerStepNotApplicable

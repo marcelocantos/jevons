@@ -491,7 +491,17 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 	}
 
 	s.mu.Lock()
-	if owner {
+	released := false
+	if owner && msgID != "" && s.ownerCancelHold {
+		// 🎯T915: the owner's first send after their cancel is the next
+		// turn — ahead of anything queued while the cancelled turn ran,
+		// owner words included. Only a send with a message id is the
+		// owner's; owner-health re-injections carry none.
+		s.notifyQueue = append([]string{text}, s.notifyQueue...)
+		s.releaseOwnerCancelHoldLocked()
+		released = true
+		s.registerOwnerMessageIDLocked(text, msgID)
+	} else if owner {
 		// Owner turns never coalesce with each other; append then peel first
 		// at drain (partition). Keep enqueue order among owners.
 		s.notifyQueue = append(s.notifyQueue, text)
@@ -516,12 +526,14 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 		"decision", "enqueue",
 		"depth", depth,
 		"owner", owner,
+		"released_cancel_hold", released,
 	)
 
 	if owner && fleetBusy {
+		// A seat that settles on interrupt is free now; otherwise its
+		// terminal stop will drain with owner-first partition. Try now
+		// either way in case the session is already free.
 		s.interruptOverseerForOwner()
-		// Terminal stop will drain with owner-first partition; still try now
-		// in case the session is already free.
 	}
 
 	s.drainOverseerNotes()
@@ -530,31 +542,82 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 
 // interruptOverseerForOwner cancels a fleet-note chew so an owner turn can
 // claim the ACP session (🎯T291). No-op when notifySender is stubbed (tests
-// drive busy via the seam) or the process is missing.
-func (s *Server) interruptOverseerForOwner() {
-	if s.notifySender != nil {
-		// Hermetic path: tests model busy via notifySender; no real process.
-		// Callers re-drain on simulated terminal / idle.
-		return
+// drive busy via the seam, or ownerInterruptSeam) or the process is missing.
+//
+// It reports whether the chew was settled here. A Claude seat is a TUI that
+// simply stops on Esc — no terminal event ever arrives (🎯T282) — so waiting
+// the stop out left the owner's message queued behind a turn that had
+// already ended: J3 sat 2m30s that way (🎯T915). For such a seat the server
+// ends the chew itself and the caller drains; a seat that does emit a stop
+// (Grok ACP, OMP) is left to it, since a second prompt before its stop can
+// be refused asynchronously (🎯T623).
+func (s *Server) interruptOverseerForOwner() bool {
+	settles := false
+	if seam := s.ownerInterruptSeam; seam != nil {
+		ok, err := seam()
+		if err != nil {
+			slog.Info("notify_queue",
+				"component", "notify_queue",
+				"decision", "owner_interrupt",
+				"err", err,
+			)
+			return false
+		}
+		settles = ok
+	} else {
+		if s.notifySender != nil {
+			// Hermetic path: tests model busy via notifySender; no real process.
+			// Callers re-drain on simulated terminal / idle.
+			return false
+		}
+		proc := s.CurrentProcess()
+		if proc == nil || !proc.Alive() {
+			return false
+		}
+		if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
+			func(a *claudia.Agent) error { return a.Interrupt() }); err != nil {
+			slog.Info("notify_queue",
+				"component", "notify_queue",
+				"decision", "owner_interrupt",
+				"err", err,
+			)
+			return false
+		}
+		settles = interruptEmitsNoStop(proc.Provider())
 	}
-	proc := s.CurrentProcess()
-	if proc == nil || !proc.Alive() {
-		return
-	}
-	if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
-		func(a *claudia.Agent) error { return a.Interrupt() }); err != nil {
-		slog.Info("notify_queue",
-			"component", "notify_queue",
-			"decision", "owner_interrupt",
-			"err", err,
-		)
-		return
-	}
+	settled := settles && s.settleFleetChew()
 	slog.Info("notify_queue",
 		"component", "notify_queue",
 		"decision", "owner_interrupt",
 		"ok", true,
+		"settled", settled,
 	)
+	return settled
+}
+
+// interruptEmitsNoStop reports whether an interrupted turn on provider ends
+// without a terminal event reaching the server: Claude's tmux Session (empty
+// means Claude). Grok ACP reports its own turn end.
+func interruptEmitsNoStop(p claudia.Provider) bool {
+	return p == claudia.ProviderClaude || p == ""
+}
+
+// settleFleetChew ends an interrupted fleet-note turn on the server. It
+// touches only a fleet chew: an owner turn that began in the meantime is the
+// owner's, and settling it would let a second prompt in over it.
+func (s *Server) settleFleetChew() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.waiting || s.overseerOwnerTurn {
+		return false
+	}
+	s.turnBuf = ""
+	s.waiting = false
+	s.overseerStreamID = ""
+	s.overseerStreamAcc = ""
+	s.overseerStreamSilent = false
+	s.overseerStreamHold = nil
+	return true
 }
 
 // sendNotes delivers one coalesced note batch to the overseer. The
@@ -615,9 +678,22 @@ func (s *Server) drainOverseerNotes() {
 		s.mu.Unlock()
 		return
 	}
+	// 🎯T915: after the owner's cancel, nothing queued runs until the
+	// owner's own next send (which releases the hold) or the window lapses.
+	if s.ownerCancelHold {
+		depth := len(s.notifyQueue)
+		s.mu.Unlock()
+		slog.Info("notify_queue",
+			"component", "notify_queue",
+			"decision", "hold_after_owner_cancel",
+			"depth", depth,
+		)
+		return
+	}
 	batch, rest, ownerBatch := takeNotifyDrainBatch(s.notifyQueue)
 	s.notifyQueue = rest
 	s.notifyDraining = true
+	s.notifyInFlight = batch
 	s.mu.Unlock()
 
 	if len(batch) == 0 {
@@ -631,6 +707,7 @@ func (s *Server) drainOverseerNotes() {
 
 	s.mu.Lock()
 	s.notifyDraining = false
+	s.notifyInFlight = nil
 	if err != nil {
 		// Overseer busy or down — put the batch back at the front so order
 		// is preserved, re-coalesce with anything that arrived during send.
@@ -659,6 +736,10 @@ func (s *Server) drainOverseerNotes() {
 	// in-flight turn even when only notify/owner notes are on the wire.
 	s.waiting = true
 	s.overseerOwnerTurn = ownerBatch
+	s.overseerOwnerTurnText = ""
+	if ownerBatch {
+		s.overseerOwnerTurnText = batch[0]
+	}
 	s.overseerLastProgress = time.Now()
 	depth := len(s.notifyQueue)
 	ownerPending := queueHasOwner(s.notifyQueue)
@@ -680,8 +761,10 @@ func (s *Server) drainOverseerNotes() {
 		"owner_batch", ownerBatch,
 	)
 	// Fleet batch just took the session but an owner is waiting — free it.
-	if !ownerBatch && ownerPending {
-		s.interruptOverseerForOwner()
+	// A seat that settles on interrupt is free at once, so the owner goes
+	// now rather than on a terminal stop that seat will never emit.
+	if !ownerBatch && ownerPending && s.interruptOverseerForOwner() {
+		s.drainOverseerNotes()
 	}
 }
 
@@ -1354,7 +1437,7 @@ func (s *Server) handleChatControlFrame(ctx context.Context, conn *websocket.Con
 				return true
 			}
 		}
-		s.settleCancel()
+		s.settleOwnerCancel() // 🎯T915
 		return true
 	}
 
@@ -1637,6 +1720,7 @@ func (s *Server) settleCancel() {
 	s.turnBuf = ""
 	s.waiting = false
 	s.overseerOwnerTurn = false // 🎯T291
+	s.overseerOwnerTurnText = ""
 	s.overseerStreamID = ""
 	s.overseerStreamAcc = ""
 	s.overseerStreamSilent = false
@@ -1654,7 +1738,8 @@ func (s *Server) settleCancel() {
 	}
 	s.setOverseerPhase(PhaseSample{Phase: PhaseIdle}) // 🎯T555.1 after the settle frame
 	s.Broadcast(frame)
-	// Notes deferred while the turn held the session can go out now.
+	// Notes deferred while the turn held the session can go out now —
+	// unless the owner's cancel holds them for the owner's next send (🎯T915).
 	s.drainOverseerNotes()
 }
 

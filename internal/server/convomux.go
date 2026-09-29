@@ -910,7 +910,7 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 // thinking chrome drops even when the provider emits no terminal event.
 func (s *Server) interruptMuxSeat(name string) {
 	if s.isOverseerAgent(name) {
-		s.interruptOwnerTurn()
+		s.interruptOwnerTurnWith(s.settleOwnerCancel) // 🎯T915: the owner's cancel
 		return
 	}
 	if s.registry == nil {
@@ -926,6 +926,12 @@ func (s *Server) interruptMuxSeat(name string) {
 // interruptOwnerTurn cancels the overseer owner turn when one is actually
 // in flight. Idle Cmd+Enter must not flash cancel_settled.
 func (s *Server) interruptOwnerTurn() {
+	s.interruptOwnerTurnWith(s.settleCancel)
+}
+
+// interruptOwnerTurnWith is interruptOwnerTurn with the settle named: the
+// owner's own cancel also holds the queue for the owner's next send (🎯T915).
+func (s *Server) interruptOwnerTurnWith(settle func()) {
 	proc := s.CurrentProcess()
 	alive := proc != nil && proc.Alive()
 	if alive {
@@ -937,7 +943,7 @@ func (s *Server) interruptOwnerTurn() {
 	inFlight := s.waiting || s.overseerOwnerTurn
 	s.mu.RUnlock()
 	if alive || inFlight {
-		s.settleCancel()
+		settle()
 	}
 }
 
