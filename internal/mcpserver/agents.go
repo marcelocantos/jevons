@@ -648,87 +648,48 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 			prompt = "" // do not claim prompt_delivered=true on the start RPC
 		}
 	} else if prompt != "" {
-		// 🎯T305 Failure A: optional start prompt must reach the pane and
-		// begin a turn, or start fails loudly (no silent outcome=ok).
-		deliverErr := s.deliverStartPrompt(name, prompt)
-		fallbackProvider := ""
-		stalledProvider := string(def.Provider)
-		if deliverErr != nil && !existed && startBriefNeverReached(deliverErr) {
-			// 🎯T890: a fresh mint that splash-stalled gets one retry on a
-			// provider that is currently starting seats before the leaf is
-			// reported lost to a CLI that never drew a composer. Distinct
-			// from 🎯T729's same-provider grace retry, already exhausted by
-			// the time deliverStartPrompt returned this error.
-			if fp, ferr := s.attemptStallFallbackMint(ctx, name, workdir, model, taskTypeArg, parent, purpose, targetID, prompt, stalledProvider); fp != "" {
-				fallbackProvider = fp
-				if ferr == nil {
-					deliverErr = nil
-					if d := s.registry.Def(name); d != nil {
-						def = d
-					}
-					life["stall_fallback_provider"] = fp
-					life["stall_fallback_from"] = stalledProvider
-				} else {
-					deliverErr = fmt.Errorf("%w (fallback provider %s after startup_stall on %s also failed: %v)",
-						deliverErr, fp, stalledProvider, ferr)
-				}
+		// 🎯T922: confirming the brief can take minutes (the 45 s evidence
+		// window, a stall retry, a fallback mint), past the caller's 30 s tool
+		// deadline, while the worker launches anyway. The caller waits at most
+		// startAnswerBudget; after that it is told the brief is pending, and the
+		// confirmation finishes in the background, where a failure tears the
+		// seat down and tells the parent by name exactly as before.
+		done := make(chan startBriefResult, 1)
+		bgLife := cloneLife(life)
+		bgCtx := context.WithoutCancel(ctx)
+		// The goroutine gets its own copies: the timeout arm below rewrites
+		// prompt and def while it may still be running.
+		bgPrompt, bgDef := prompt, *def
+		go func() {
+			done <- s.confirmStartBrief(bgCtx, name, existed, bgPrompt, workdir, model, taskTypeArg, parent, purpose, targetID, &bgDef, bgLife, rehydrated)
+		}()
+		select {
+		case r := <-done:
+			for k, v := range r.life {
+				life[k] = v
 			}
-		}
-		if err := deliverErr; err != nil {
-			released, kept := s.startBriefFailureTeardown(name, existed, err)
-			if kept {
-				// 🎯T518: queued / delivered_unconfirmed means the brief is
-				// HELD — by this daemon's queue or by the receiver — or the
-				// instrument could not decide. Neither is never-landed, and
-				// retiring the seat here is what removed jv-t515-relayrecord
-				// as unbriefed_seat seven minutes after a healthy queued
-				// start, destroying the very queue that would have finished
-				// the delivery. The seat stays; the caller is told the brief
-				// is pending and must not re-send it (🎯T416: a re-send on
-				// this verdict stacks a second copy).
-				life["brief_in_flight"] = true
-				life["brief_verdict"] = err.Error()
-				briefNote = fmt.Sprintf(
-					" Opening brief is IN FLIGHT, not yet confirmed as a turn: %v."+
-						" The daemon holds it for delivery at the next turn boundary."+
-						" Do NOT re-send it — a re-send stacks a second copy (🎯T416/🎯T518).",
-					err)
+			if r.failed != "" {
+				return mcp.NewToolResultError(r.failed), nil
+			}
+			if r.def != nil {
+				def = r.def
+			}
+			briefNote = r.note
+			if !r.delivered {
 				prompt = "" // the result must not claim prompt_delivered=true
-			} else {
-				// Stop the process so agent_list does not report a phantom
-				// running/never_briefed seat as successful work, and (🎯T387)
-				// retire a row this call minted so the target is not left
-				// engaged by a worker that never ran.
-				if released {
-					life["seat_released"] = true
-					// 🎯T433: the tool error below reaches only the caller, and a
-					// caller LLM dropping it is how a mint died twice with nobody
-					// told. The seat's parent hears about the lost mint by name,
-					// with the error verbatim, on the durable send path.
-					// 🎯T890: when a fallback provider was tried, name BOTH —
-					// the stalled provider and the one tried next — so the
-					// parent does not blindly re-order the same stalling
-					// provider.
-					notifyText := err.Error()
-					if fallbackProvider != "" {
-						notifyText = fmt.Sprintf("stalled on %s; also tried fallback provider %s: %s",
-							stalledProvider, fallbackProvider, err.Error())
-					}
-					s.notifySpawnFailure(def.Parent, def.TargetID, name, notifyText)
-				}
-				// 🎯T729: the eventlog says which of the two this was. The
-				// specimen's three lines were readable only as a contradiction
-				// because the removal reason and the start error disagreed and
-				// neither carried the class.
-				life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
-				life["err"] = err.Error()
-				life["session_id"] = sessionDisplay(def.SessionID)
-				s.logLifecycle(compAgentLifecycle, "start", "error", life)
-				return mcp.NewToolResultError(prefixRehydrate(rehydrated,
-					fmt.Sprintf("start failed: %v", err))), nil
 			}
-		} else {
-			life["prompt_delivered"] = true
+		case <-time.After(startAnswerBudget):
+			life["brief_pending"] = true
+			briefNote = fmt.Sprintf(
+				" Opening brief sent; its turn was not confirmed within %s, so this call returns now (🎯T922)."+
+					" Confirmation continues: if the brief never lands, the seat is released and its parent is told."+
+					" Do NOT re-send it — a re-send stacks a second copy (🎯T416).", startAnswerBudget)
+			prompt = ""
+			go func() {
+				r := <-done
+				slog.Info("🎯T922 opening brief settled after the start call returned",
+					"component", compAgentLifecycle, "name", name, "delivered", r.delivered, "failed", r.failed)
+			}()
 		}
 	}
 
@@ -1665,4 +1626,116 @@ func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	if hook != nil {
 		hook(name, ev)
 	}
+}
+
+// startAnswerBudget is how long jevons_agent_start waits for its opening
+// brief to be confirmed before answering (🎯T922): inside the harness's 30 s
+// tool deadline, with room for the launch before it.
+var startAnswerBudget = 20 * time.Second
+
+// startBriefResult is the outcome of confirming a start's opening brief.
+type startBriefResult struct {
+	life      map[string]any
+	def       *claudia.AgentDef
+	note      string // appended to the start result
+	delivered bool   // prompt_delivered
+	failed    string // non-empty: the start failed; the tool error text
+}
+
+func cloneLife(life map[string]any) map[string]any {
+	out := make(map[string]any, len(life))
+	for k, v := range life {
+		out[k] = v
+	}
+	return out
+}
+
+// confirmStartBrief delivers a start's opening brief and confirms it began a
+// turn (🎯T305 Failure A), with the 🎯T890 stall fallback and the 🎯T387 /
+// 🎯T518 teardown rules. It may finish after the start call has answered
+// (🎯T922), so it writes only to its own lifecycle map.
+func (s *Server) confirmStartBrief(ctx context.Context, name string, existed bool, prompt, workdir, model, taskTypeArg, parent, purpose, targetID string, def *claudia.AgentDef, life map[string]any, rehydrated string) startBriefResult {
+	briefNote := ""
+	// 🎯T305 Failure A: optional start prompt must reach the pane and
+	// begin a turn, or start fails loudly (no silent outcome=ok).
+	deliverErr := s.deliverStartPrompt(name, prompt)
+	fallbackProvider := ""
+	stalledProvider := string(def.Provider)
+	if deliverErr != nil && !existed && startBriefNeverReached(deliverErr) {
+		// 🎯T890: a fresh mint that splash-stalled gets one retry on a
+		// provider that is currently starting seats before the leaf is
+		// reported lost to a CLI that never drew a composer. Distinct
+		// from 🎯T729's same-provider grace retry, already exhausted by
+		// the time deliverStartPrompt returned this error.
+		if fp, ferr := s.attemptStallFallbackMint(ctx, name, workdir, model, taskTypeArg, parent, purpose, targetID, prompt, stalledProvider); fp != "" {
+			fallbackProvider = fp
+			if ferr == nil {
+				deliverErr = nil
+				if d := s.registry.Def(name); d != nil {
+					def = d
+				}
+				life["stall_fallback_provider"] = fp
+				life["stall_fallback_from"] = stalledProvider
+			} else {
+				deliverErr = fmt.Errorf("%w (fallback provider %s after startup_stall on %s also failed: %v)",
+					deliverErr, fp, stalledProvider, ferr)
+			}
+		}
+	}
+	if err := deliverErr; err != nil {
+		released, kept := s.startBriefFailureTeardown(name, existed, err)
+		if kept {
+			// 🎯T518: queued / delivered_unconfirmed means the brief is
+			// HELD — by this daemon's queue or by the receiver — or the
+			// instrument could not decide. Neither is never-landed, and
+			// retiring the seat here is what removed jv-t515-relayrecord
+			// as unbriefed_seat seven minutes after a healthy queued
+			// start, destroying the very queue that would have finished
+			// the delivery. The seat stays; the caller is told the brief
+			// is pending and must not re-send it (🎯T416: a re-send on
+			// this verdict stacks a second copy).
+			life["brief_in_flight"] = true
+			life["brief_verdict"] = err.Error()
+			briefNote = fmt.Sprintf(
+				" Opening brief is IN FLIGHT, not yet confirmed as a turn: %v."+
+					" The daemon holds it for delivery at the next turn boundary."+
+					" Do NOT re-send it — a re-send stacks a second copy (🎯T416/🎯T518).",
+				err)
+			return startBriefResult{life: life, def: def, note: briefNote}
+		} else {
+			// Stop the process so agent_list does not report a phantom
+			// running/never_briefed seat as successful work, and (🎯T387)
+			// retire a row this call minted so the target is not left
+			// engaged by a worker that never ran.
+			if released {
+				life["seat_released"] = true
+				// 🎯T433: the tool error below reaches only the caller, and a
+				// caller LLM dropping it is how a mint died twice with nobody
+				// told. The seat's parent hears about the lost mint by name,
+				// with the error verbatim, on the durable send path.
+				// 🎯T890: when a fallback provider was tried, name BOTH —
+				// the stalled provider and the one tried next — so the
+				// parent does not blindly re-order the same stalling
+				// provider.
+				notifyText := err.Error()
+				if fallbackProvider != "" {
+					notifyText = fmt.Sprintf("stalled on %s; also tried fallback provider %s: %s",
+						stalledProvider, fallbackProvider, err.Error())
+				}
+				s.notifySpawnFailure(def.Parent, def.TargetID, name, notifyText)
+			}
+			// 🎯T729: the eventlog says which of the two this was. The
+			// specimen's three lines were readable only as a contradiction
+			// because the removal reason and the start error disagreed and
+			// neither carried the class.
+			life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
+			life["err"] = err.Error()
+			life["session_id"] = sessionDisplay(def.SessionID)
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			return startBriefResult{life: life, failed: prefixRehydrate(rehydrated,
+				fmt.Sprintf("start failed: %v", err))}
+		}
+	}
+	life["prompt_delivered"] = true
+	return startBriefResult{life: life, def: def, delivered: true}
 }
