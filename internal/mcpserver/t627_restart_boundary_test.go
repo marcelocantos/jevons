@@ -4,7 +4,6 @@
 package mcpserver
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -142,9 +141,7 @@ func TestDelayedRestartSweepIgnoresIntentAcceptedDuringSettle(t *testing.T) {
 	text := "Please implement the settle-window owner request."
 	s, inbox := t452Fixture(t, "jevons", "session", claudia.AgentDef{Name: "jevons", Purpose: claudia.PurposeOverseer}, claudia.AgentDef{Name: "jevons-po", Parent: "jevons", Purpose: claudia.PurposeWork})
 	s.bootAt = boot
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go StartIdleNudgeLoop(ctx, IdleNudgeLoopArgs{
+	runIdleNudgeLoop(t, IdleNudgeLoopArgs{
 		Server:       s,
 		StateDir:     stateDir,
 		PostDelay:    80 * time.Millisecond,
@@ -172,9 +169,7 @@ func TestDelayedRestartSweepResumesPreBootIntent(t *testing.T) {
 	t592WriteChatlog(t, stateDir, []string{t592UserLine(text, boot.Add(-time.Minute))})
 	s, inbox := t452Fixture(t, "jevons", "session", claudia.AgentDef{Name: "jevons", Purpose: claudia.PurposeOverseer}, claudia.AgentDef{Name: "jevons-po", Parent: "jevons", Purpose: claudia.PurposeWork})
 	s.bootAt = boot
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go StartIdleNudgeLoop(ctx, IdleNudgeLoopArgs{
+	runIdleNudgeLoop(t, IdleNudgeLoopArgs{
 		Server:       s,
 		StateDir:     stateDir,
 		PostDelay:    40 * time.Millisecond,

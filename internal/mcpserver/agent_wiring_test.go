@@ -356,7 +356,7 @@ func TestT426SweepRepairsAnUnwiredLaunchRoadAndSaysSo(t *testing.T) {
 
 	// Loud, with the cost named — a dark stream is not a debug detail.
 	var found bool
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		if r.Level != slog.LevelWarn || !strings.Contains(r.Message, "🎯T426") {
 			continue
 		}
@@ -414,7 +414,7 @@ func TestT426BootPassIsQuietAndTheSweepStaysLoud(t *testing.T) {
 	if n := s.WireRunningAgents("jevons"); n != 3 {
 		t.Fatalf("boot pass wired %d want 3", n)
 	}
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		if r.Level >= slog.LevelWarn {
 			t.Fatalf("boot pass raised %v: %q %v — resuming the fleet is not a fault",
 				r.Level, r.Message, attrsMap(r))
@@ -423,7 +423,7 @@ func TestT426BootPassIsQuietAndTheSweepStaysLoud(t *testing.T) {
 	// Quiet is not silent: the count is stated once, so a boot that wires
 	// nothing at all is still distinguishable from one that wires the fleet.
 	var counted bool
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		if attrsMap(r)["count"] != nil && equalsInt(attrsMap(r)["count"], 3) {
 			counted = true
 		}
@@ -435,13 +435,13 @@ func TestT426BootPassIsQuietAndTheSweepStaysLoud(t *testing.T) {
 	// Now the daemon has been running, and a rotation lands on a road that
 	// does not wire. That one is a fault, and it must be audible over a log
 	// the boot pass no longer filled.
-	mark := len(cap.records)
+	mark := len(cap.snapshot())
 	procs.set(name, &claudia.Agent{})
 	if n := s.sweepAgentWiring("jevons"); n != 1 {
 		t.Fatalf("sweep repaired %d want 1", n)
 	}
 	var warned bool
-	for _, r := range cap.records[mark:] {
+	for _, r := range cap.snapshot()[mark:] {
 		if r.Level == slog.LevelWarn && attrsMap(r)["agent"] == name {
 			warned = true
 		}
@@ -480,7 +480,7 @@ func TestT426QueuedSendOverADarkStreamIsFailLoud(t *testing.T) {
 		t.Fatalf("message does not name the recovery: %q", res.Message)
 	}
 	var warned bool
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		if r.Level == slog.LevelWarn && strings.Contains(r.Message, "🎯T426") {
 			warned = true
 		}
@@ -538,7 +538,7 @@ func TestT426ALaunchInFlightIsNotADarkStream(t *testing.T) {
 	if n := successor.EventSubscriberCount(); n != 1 {
 		t.Fatalf("successor subscribers=%d want 1", n)
 	}
-	for _, r := range cap.records {
+	for _, r := range cap.snapshot() {
 		if r.Level >= slog.LevelWarn {
 			t.Fatalf("sweep raised %v: %q %v — a launch in progress is not an outage",
 				r.Level, r.Message, attrsMap(r))
@@ -561,13 +561,13 @@ func TestT426ALaunchInFlightIsNotADarkStream(t *testing.T) {
 	})
 
 	// And with no launch to explain it, the same shape is a fault again.
-	mark := len(cap.records)
+	mark := len(cap.snapshot())
 	procs.set(name, &claudia.Agent{})
 	if n := s.sweepAgentWiring(name + "-no-overseer-here"); n != 1 {
 		t.Fatalf("sweep wired %d want 1", n)
 	}
 	var warned bool
-	for _, r := range cap.records[mark:] {
+	for _, r := range cap.snapshot()[mark:] {
 		if r.Level == slog.LevelWarn && attrsMap(r)["agent"] == name {
 			warned = true
 		}
