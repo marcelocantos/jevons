@@ -20,6 +20,9 @@ import (
 //   - client_bug: local config, wire, session, bad request
 //   - startup_stall: ready timeout over startup notices only, no composer (🎯T565)
 //   - workspace_trust: ready timeout on Claude Code's trust modal (🎯T709)
+//   - retry_exhausted: the CLI's own retry budget ran out on a transient
+//     step-level failure (🎯T862.12) — not the same as the transient
+//     backend_unavailable/rate_limit cause that first triggered the retry
 //   - unknown: classified as failure but not mapped
 //   - none: empty / not a failure signal (including busy)
 type Class string
@@ -94,6 +97,16 @@ func ClassifyText(msg string) Class {
 		return ClassStartupStall
 	}
 
+	// 🎯T862.12: the retry budget itself ran out. Checked ahead of the
+	// backend/timeout markers because the underlying transient cause
+	// ("timed out", "500") is often quoted alongside the exhaustion
+	// phrase and would otherwise mask it as a plain backend_unavailable —
+	// an ambiguous generic failure is exactly the outcome this class
+	// exists to replace.
+	if IsRetryExhausted(low) {
+		return ClassRetryExhausted
+	}
+
 	// Auth first — "unauthorized" before generic "error". Account/key walls
 	// that Classify would otherwise miss (revoked, suspended) also land here
 	// so 🎯T406 HardBlock sees ClassAuth rather than ClassNone.
@@ -142,6 +155,13 @@ func TransientBackend(c Class) bool {
 	switch c {
 	case ClassBackendUnavailable, ClassRateLimit, ClassUnknown, ClassStartupStall:
 		return true
+	case ClassRetryExhausted:
+		// Not transient in the poll-and-hope sense: the CLI already spent
+		// its own retry budget on this step and gave up. Re-pressuring the
+		// identical step again is what 🎯T862.12 exists to name rather than
+		// hide — the turn needs a fresh attempt (new turn), not a blind
+		// retry of one already declared exhausted.
+		return false
 	default:
 		return false
 	}
@@ -186,6 +206,10 @@ func OwnerCopy(class Class, raw string) string {
 			return "Agent CLI stalled on startup (startup_stall): it printed its settings notices but never drew the composer within the ready timeout — not a cloud outage, not a wire bug; the seat is retried. Last frame: " +
 				truncate(LastFrame(raw), 400)
 		}
+	case ClassRetryExhausted:
+		return fmt.Sprintf(
+			"Provider retry budget exhausted (retry_exhausted). The CLI's own retry loop (default budget %d) gave up on a transient step-level failure — this is not an ambiguous unknown failure, and the turn ended without finishing. ",
+			DefaultRetryBudget) + detailSuffix(raw)
 	case ClassUnknown:
 		return "Provider failure (unknown). Class not pinned from the error string; see detail. " +
 			detailSuffix(raw)
