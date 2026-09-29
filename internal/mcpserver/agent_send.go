@@ -959,6 +959,9 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	}
 	s.markAgentTurnBegan(name)
 	ended := s.noteQueuedTurnBegan(name, generation)
+	if !ended {
+		s.wedges.handedOver(name, entry.ID)
+	}
 	s.clearSendqPin(name)
 	slog.Info("agent send queue: drained one message", "name", name, "entry_id", entry.ID,
 		"remaining", s.pendingAgentSends(name))

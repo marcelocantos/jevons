@@ -309,6 +309,10 @@ func (s *Server) SweepSendBacklogs() {
 			// A name that is registered again is a live seat: a later hold
 			// under it deserves its own notice (🎯T582).
 			s.forgetReapedBacklogNotice(b.Agent)
+			// 🎯T927: a turn nothing has been heard from is wedged, not busy.
+			if s.reconcileWedgedTurn(b, now) {
+				continue
+			}
 			s.reportStalledBacklog(b, now, "its turn is still in flight")
 		default:
 			s.forgetReapedBacklogNotice(b.Agent)

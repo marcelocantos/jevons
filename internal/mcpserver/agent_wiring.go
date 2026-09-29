@@ -193,6 +193,9 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	// read takes s.mu, which this function must not touch while it holds
 	// wireMu (see the lock-order note above).
 	go func() {
+		// 🎯T927: a turn the daemon believes in flight was observed on the
+		// handle this attach replaces. Off wireMu: it reads flight under mu.
+		s.noteReattachedMidTurn(name)
 		if s.registry != nil {
 			if def := s.registry.Def(name); def != nil &&
 				spool.SidecarProvider(string(def.Provider)) &&

@@ -3,7 +3,10 @@
 
 package mcpserver
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // 🎯T416 — what a send DID, in four answers rather than two.
 //
@@ -207,6 +210,8 @@ func (s *Server) noteTurnEnded(name string) {
 	if s == nil || strings.TrimSpace(name) == "" {
 		return
 	}
+	// 🎯T927: an observed end answers every question a wedge asked.
+	s.wedges.turnEnded(name)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.agentTerminalGeneration == nil {
@@ -239,6 +244,7 @@ func (s *Server) noteQueuedTurnBegan(name string, generation uint64) bool {
 		s.agentFlight = map[string]TurnFlight{}
 	}
 	s.agentFlight[name] = FlightInFlight
+	s.wedges.flightBegan(name, time.Now())
 	return false
 }
 
@@ -254,6 +260,9 @@ func (s *Server) setFlight(name string, f TurnFlight) {
 	defer s.mu.Unlock()
 	if s.agentFlight == nil {
 		s.agentFlight = map[string]TurnFlight{}
+	}
+	if f == FlightInFlight && s.agentFlight[name] != FlightInFlight {
+		s.wedges.flightBegan(name, time.Now())
 	}
 	s.agentFlight[name] = f
 }

@@ -239,6 +239,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if pinned {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
 		}
+		if line, wedged := s.WedgedSeat(d.Name); wedged {
+			fmt.Fprintf(&b, "  ^ %s\n", line)
+		}
 		// 🎯T661: a session the broker wire cannot carry is named on the row,
 		// so a PO sees why sends to it fail before trying one.
 		if lines := s.seatOversized(d, DefaultSessionRoots()); len(lines) > 0 {
@@ -1433,6 +1436,12 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		// motion, so it feeds the authority. Every event proves the seat is
 		// alive and moved; a terminal stop additionally ends the turn.
 		s.Seats().FromTurnEvent(name, ev.IsTerminalStop(), time.Now())
+		// 🎯T927: motion is what tells a running turn from one that died
+		// with its host handle. A bare acceptance is not motion: a sidecar
+		// accepts a prompt it only queues behind a turn that never ends.
+		if !ev.IsTerminalStop() && ev.ProgressType != claudia.ProgressPromptAccepted {
+			s.wedges.moved(name, time.Now())
+		}
 		if ev.IsTerminalStop() {
 			text := responseText.String()
 			n := toolCalls
