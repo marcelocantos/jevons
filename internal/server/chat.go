@@ -293,11 +293,17 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// which is what clears the hard-block. Without it only an owner chat send
 	// cleared it, so a block entered on this wire outlived the provider's
 	// recovery while the overseer kept answering its POs (2026-09-28, 🎯T885).
+	//
+	// 🎯T897: clearing requires a SERVED turn — ev.IsTerminalStop(), one of
+	// end_turn/stop_sequence/max_tokens — not merely a non-empty authored
+	// text fragment. A provisional/interim assistant event (a tool_use
+	// pause, a mid-stream preview delta) is not evidence the provider
+	// finished accepting the turn; only the terminal event of a message is.
 	if ev.Type == "assistant" && ev.Text != "" {
 		source := assistantTextSource(ev)
 		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
-		} else if source == agenterr.SourceAuthored {
+		} else if source == agenterr.SourceAuthored && ev.IsTerminalStop() {
 			s.observeProviderOK()
 		}
 	}
