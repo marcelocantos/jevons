@@ -286,3 +286,103 @@ func TestT927MotionOnTheNewHandleIsNotALostTurn(t *testing.T) {
 		t.Fatalf("interrupted a turn that was moving on its new handle (%d)", n)
 	}
 }
+
+// 🎯T937: the re-attach note runs on a goroutine after the attach. A turn
+// that begins in between began on the new handle and is not lost — before the
+// fix, the note read flight when it ran, called that turn lost, and the sweep
+// interrupted it (TestT927QuietTurnOnItsOwnHandleIsFlaggedOnceNotInterrupted
+// failed 15/20). Each arm drives the note in the order the scheduler may pick.
+func TestT937ReattachNoteNamesTheTurnSeenAtAttach(t *testing.T) {
+	for _, tc := range []struct {
+		arm        string
+		beforeSnap func(s *Server, name string)
+		afterSnap  func(s *Server, name string)
+		wantLost   bool
+	}{
+		{
+			arm:       "turn begins after the attach: on the new handle, not lost",
+			afterSnap: func(s *Server, name string) { s.noteTurnInFlight(name) },
+		},
+		{
+			arm:        "turn in flight across the attach: lost",
+			beforeSnap: func(s *Server, name string) { s.noteTurnInFlight(name) },
+			wantLost:   true,
+		},
+		{
+			arm:        "turn ends and another begins before the note runs: not lost",
+			beforeSnap: func(s *Server, name string) { s.noteTurnInFlight(name) },
+			afterSnap: func(s *Server, name string) {
+				s.noteTurnEnded(name)
+				s.noteTurnInFlight(name)
+			},
+		},
+	} {
+		t.Run(tc.arm, func(t *testing.T) {
+			const name = "jevons-po"
+			s, _, _, _ := t927Fixture(t, name)
+			if tc.beforeSnap != nil {
+				tc.beforeSnap(s, name)
+			}
+			turn, inFlight := s.wedges.turnAt(name)
+			if tc.afterSnap != nil {
+				tc.afterSnap(s, name)
+			}
+			s.noteReattachedMidTurn(name, turn, inFlight)
+			if _, lost := s.wedges.quietSince(name); lost != tc.wantLost {
+				t.Fatalf("lost handle recorded=%v; want %v", lost, tc.wantLost)
+			}
+		})
+	}
+}
+
+// syncAbortSidecar is a fakeSidecar whose abort ends the turn before
+// Interrupt returns: the terminal stop is published on the caller's goroutine.
+type syncAbortSidecar struct{ *fakeSidecar }
+
+func (f syncAbortSidecar) Interrupt() error {
+	f.mu.Lock()
+	f.interrupts++
+	f.hung = false
+	proc := f.procs.get(f.name)
+	f.mu.Unlock()
+	proc.PublishEvent(terminalStop("aborted"))
+	return nil
+}
+
+// 🎯T937: when the abort's terminal stop lands before Interrupt returns, it
+// ends the turn and forgets the wedge record. The clear used to re-read that
+// record and announce a zero WedgedTurn — "believed in flight for
+// 2562047h…", zero messages waiting, and the manual-interrupt remedy for a
+// turn the daemon had just interrupted.
+func TestT937AbortEndingTheTurnFirstStillAnnouncesTheClear(t *testing.T) {
+	const name = "jevons-po"
+	s, procs, side, up := t927Fixture(t, name)
+	s.SetSenderResolver(func(string) (agentSender, bool, error) { return syncAbortSidecar{side}, false, nil })
+	reattachMidTurn(t, s, procs, name)
+	if _, err := deliverToSender(s, name, "queued behind the lost turn", false, side, false); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	start := time.Now()
+	s.SetSweepClock(func() time.Time { return start.Add(WedgedTurnAfter + time.Minute) })
+	s.SweepSendBacklogs()
+
+	var notice string
+	for _, l := range up.all() {
+		if strings.Contains(l, "WEDGED "+name) {
+			notice = l
+		}
+	}
+	if !strings.Contains(notice, "interrupted it so the queue drains") ||
+		!strings.Contains(notice, "1 message(s) wait") ||
+		!strings.Contains(notice, "for 16m0s") {
+		t.Fatalf("the notice misreports the clear: %q", up.all())
+	}
+	waitFor(t, "the queued message to be answered", func() bool {
+		_, answered, _ := side.snapshot()
+		return len(answered) == 1
+	})
+	if f := s.flightState(name); f == FlightUnknown {
+		t.Fatalf("flight=%v; the abort's terminal stop already settled it", f)
+	}
+}

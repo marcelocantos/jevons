@@ -67,6 +67,9 @@ type WedgedTurn struct {
 type turnWedges struct {
 	mu         sync.Mutex
 	inflightAt map[string]time.Time
+	// began counts turn beginnings per seat, so a re-attach can name the
+	// turn it saw in flight rather than whichever one is in flight later.
+	began      map[string]uint64
 	motion     map[string]time.Time
 	lostHandle map[string]time.Time
 	handed     map[string][]string
@@ -80,6 +83,19 @@ func (w *turnWedges) flightBegan(name string, at time.Time) {
 		w.inflightAt = map[string]time.Time{}
 	}
 	w.inflightAt[name] = at
+	if w.began == nil {
+		w.began = map[string]uint64{}
+	}
+	w.began[name]++
+}
+
+// turnAt names the turn believed in flight right now: its beginning count,
+// and whether one is believed in flight at all.
+func (w *turnWedges) turnAt(name string) (uint64, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, inFlight := w.inflightAt[name]
+	return w.began[name], inFlight
 }
 
 // moved records motion from the seat. Motion on the current handle means the
@@ -107,13 +123,21 @@ func (w *turnWedges) handedOver(name, entryID string) {
 	w.handed[name] = append(w.handed[name], entryID)
 }
 
-func (w *turnWedges) lostHandleUnder(name string, at time.Time) {
+// lostHandleUnder records that the turn named by turn (from turnAt, taken at
+// the re-attach) began on a replaced handle. It records nothing, and says so,
+// when that turn has since ended or another has begun: a turn that began
+// after the re-attach began on the new handle.
+func (w *turnWedges) lostHandleUnder(name string, turn uint64, at time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if _, inFlight := w.inflightAt[name]; !inFlight || w.began[name] != turn {
+		return false
+	}
 	if w.lostHandle == nil {
 		w.lostHandle = map[string]time.Time{}
 	}
 	w.lostHandle[name] = at
+	return true
 }
 
 // turnEnded forgets everything about the turn: an observed end is an answer.
@@ -187,14 +211,22 @@ func (w *turnWedges) forget(name string) {
 	delete(w.wedged, name)
 }
 
-// noteReattachedMidTurn is called whenever a new process for name is wired.
-// If the daemon believes a turn is in flight, that belief was formed on the
-// handle this one replaces.
-func (s *Server) noteReattachedMidTurn(name string) {
-	if s == nil || s.flightState(name) != FlightInFlight {
+// noteReattachedMidTurn is called whenever a new process for name is wired,
+// with the turn that was believed in flight at that moment (turnAt, read
+// before the new process was subscribed). If that turn is still the one
+// believed in flight, the belief was formed on the handle this one replaces.
+//
+// 🎯T937: the turn is named at the attach, not read here. This runs on a
+// goroutine, and a turn that begins between the attach and this call began on
+// the new handle; reading flight here alone called it lost, and the sweep
+// interrupted a seat that was working on the only handle it ever had.
+func (s *Server) noteReattachedMidTurn(name string, turn uint64, inFlight bool) {
+	if s == nil || !inFlight || s.flightState(name) != FlightInFlight {
 		return
 	}
-	s.wedges.lostHandleUnder(name, time.Now())
+	if !s.wedges.lostHandleUnder(name, turn, time.Now()) {
+		return
+	}
 	slog.Warn("🎯T927 re-attached a seat whose turn is believed in flight",
 		"component", "agent_send", "agent", name,
 		"queued", s.pendingAgentSends(name),
@@ -230,6 +262,10 @@ func (s *Server) reconcileWedgedTurn(b sendq.Backlog, now time.Time) bool {
 
 	clear := lost && !wt.Cleared && wt.ClearErr == "" && s.isSidecarSeat(name)
 	if clear {
+		// 🎯T937: the abort's terminal stop may land before Interrupt
+		// returns. It ends the turn, which forgets the wedge record and sets
+		// flight idle, so what happens next is read from here, not the map.
+		generation := s.terminalGeneration(name)
 		errText := ""
 		if proc, live := s.liveSender(name); !live {
 			errText = "no live process to interrupt"
@@ -237,11 +273,15 @@ func (s *Server) reconcileWedgedTurn(b sendq.Backlog, now time.Time) bool {
 			errText = err.Error()
 		}
 		s.wedges.setCleared(name, errText)
+		wt.Cleared = errText == ""
+		wt.ClearErr = errText
 		if errText == "" {
 			// The daemon no longer knows of a running turn. The abort's
 			// terminal stop drains the queue; if it never arrives, the next
-			// sweep re-offers the head as it would for any unknown seat.
-			s.setFlight(name, FlightUnknown)
+			// sweep re-offers the head as it would for any unknown seat. If
+			// it has already arrived, flight says so, and a turn the drain
+			// has since begun is not unknown.
+			s.clearFlightUnlessEnded(name, generation)
 			slog.Warn("🎯T927 cleared a turn that did not survive its host handle",
 				"component", "agent_send", "agent", name, "queued", b.Depth,
 				"silent", now.Sub(quiet).Round(time.Second).String())
@@ -249,7 +289,6 @@ func (s *Server) reconcileWedgedTurn(b sendq.Backlog, now time.Time) bool {
 			slog.Error("🎯T927 could not clear a wedged turn",
 				"component", "agent_send", "agent", name, "err", errText)
 		}
-		wt, _ = s.wedges.get(name)
 	}
 
 	if !fresh && !clear {
