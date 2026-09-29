@@ -30,8 +30,8 @@ func mustTime(t *testing.T, s string) time.Time {
 }
 
 // The a20944c1 specimen (make test-journey ONLY=J31 PROVIDER=claude,
-// 2026-09-22): boot took 42s of the 45s budget, the overseer launched and the
-// daemon served for 3s before the readiness wait gave up. No cause logged.
+// 2026-09-22): boot took 42s of the 45s budget, the overseer launched and
+// boot finished 3s before the readiness wait gave up. No cause logged.
 const specimenSlowBoot = `time=2026-09-22T08:31:11.353+10:00 level=INFO msg="xAI API key loaded from Keychain"
 time=2026-09-22T08:31:41.493+10:00 level=WARN msg="budget clamp-down" level=warn msg="budget: cost collector has not polled since never"
 time=2026-09-22T08:31:41.499+10:00 level=INFO msg=notify_queue component=notify_queue decision=defer depth=1 deferred=1 err_class=not_running err="overseer not running" owner_batch=false
@@ -56,7 +56,7 @@ func TestT837StopReasonSlowBootIsStartTimeout(t *testing.T) {
 	for _, want := range []string{
 		"start timeout after 45s",
 		"overseer launched at 08:31:50.401, 3.2s before the deadline but had not reported running",
-		"daemon began serving at 08:31:50.706, 2.9s before the deadline",
+		`daemon boot finished ("jevonsd starting") at 08:31:50.706, 2.9s before the deadline`,
 		"no launch error or plan-policy park",
 	} {
 		if !strings.Contains(got, want) {
@@ -74,7 +74,7 @@ func TestT837StopReasonIgnoresTeardownCancel(t *testing.T) {
 	for _, want := range []string{
 		"start timeout",
 		"overseer launch (provider=grok resume=false) began at 18:43:47.408, 36s before the deadline and never finished",
-		"daemon never logged that it began serving",
+		`daemon boot never finished (no "jevonsd starting" logged)`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("reason missing %q:\n%s", want, got)
