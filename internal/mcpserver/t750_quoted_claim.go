@@ -40,6 +40,7 @@ func claimScanText(lower string) string {
 	maskFencedCode(b)
 	maskInlineCode(b)
 	maskQuotedAndCitedLines(b)
+	maskAttributedClauses(b) // 🎯T829
 	maskNegatedClauses(b)
 	return string(b)
 }
