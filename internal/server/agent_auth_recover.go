@@ -228,31 +228,32 @@ func destinationAuthRecoverable(action planusage.PlanAction) bool {
 	return false
 }
 
-// handlePlanDestinationAuthRecover repairs the destination login of a failed
-// move while leaving its running source seat alone. The periodic plan sweep
-// retries the same Claudia-owned migration after recovery.
+// handlePlanDestinationAuthRecover repairs a plan login on the owner's click:
+// the destination of a failed move, or any plan whose login the broker
+// reports missing, expired or rejected (🎯T924). A running source seat is
+// left alone, and the periodic plan sweep retries a failed migration after.
 func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http.Request) {
 	provider := recoverableDestinationProvider(claudia.Provider(strings.TrimSpace(r.PathValue("provider"))))
 	if provider == "" {
 		writeJSONError(w, http.StatusBadRequest, "provider has no recoverable subscription login")
 		return
 	}
-	if s.planDecisions == nil {
-		writeJSONError(w, http.StatusServiceUnavailable, "plan decisions are unavailable")
-		return
+	var decisions []planusage.PlanAction
+	if s.planDecisions != nil {
+		decisions = s.planDecisions()
 	}
 	matched := false
-	for _, action := range s.planDecisions() {
+	for _, action := range decisions {
 		if recoverableDestinationProvider(claudia.Provider(action.To)) == provider && destinationAuthRecoverable(action) {
 			matched = true
 			break
 		}
 	}
-	if !matched {
-		writeJSONError(w, http.StatusConflict, "no current migration has a destination authentication failure on this provider")
+	if !matched && !s.planLoginUnhealthy(r.Context(), provider) {
+		writeJSONError(w, http.StatusConflict, "this provider's plan login is healthy and no migration is waiting on it")
 		return
 	}
-	if s.planSweep == nil {
+	if matched && s.planSweep == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "migration retry is unavailable")
 		return
 	}
@@ -260,7 +261,9 @@ func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http
 	if recoverAuth == nil {
 		recoverAuth = runClaudiaAuthRecover
 	}
-	if err := recoverAuth(r.Context(), provider); err != nil {
+	err := recoverAuth(r.Context(), provider)
+	s.forgetPlanAuthStatus()
+	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, "Claudia could not recover authentication: "+err.Error())
 		return
 	}
@@ -278,6 +281,11 @@ func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http
 			s.planAuthRevive(provider, "")
 			s.NotifyAgentsChanged()
 		}()
+	}
+	if !matched {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "recovered", "provider": string(provider)})
+		return
 	}
 	// The broker has repaired the destination login. Retry from the current
 	// Claudia registry state without holding the HTTP request through a paid

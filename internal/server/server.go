@@ -329,6 +329,10 @@ type Server struct {
 	agentSendHook func(name, text string) (status string, err error)
 	// Tests replace the broker auth call; production leaves this nil.
 	authRecover func(context.Context, claudia.Provider) error
+	// authStatus reads plan login health from Claudia (🎯T924). Tests
+	// replace it.
+	authStatus func(context.Context) ([]PlanAuth, error)
+	planAuth   planAuthCache
 	// The product hook owns admission and retains the speaker's origin.
 	agentSendOriginHook func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)
 	// ownerEscalation is the owner urgency ladder for a busy overseer
@@ -632,6 +636,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/plan-usage/thresholds", s.handlePlanUsageThresholds)
 	mux.HandleFunc("GET /api/plan-usage/decisions", s.handlePlanUsageDecisions)
 	mux.HandleFunc("POST /api/plan-usage/auth/recover/{provider}", s.handlePlanDestinationAuthRecover)
+	mux.HandleFunc("GET /api/plan-usage/auth", s.handlePlanAuthStatus)
 	mux.HandleFunc("POST /api/plan-usage/sweep", s.handlePlanUsageSweep)
 	// 🎯T285.2: fleet-tree icon menu — per-provider bands + models, and the
 	// thin HTTP wrapper over the fleet migrate path (non-overseer seats).

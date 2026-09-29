@@ -23,6 +23,28 @@ import { PlanTipTable } from '../plan/tipTable';
 export const PLAN_POLL_MS = 60_000;
 export const PLAN_POLL_PENDING_MS = 5_000;
 const PLAN_DECISIONS_POLL_MS = 15_000;
+const PLAN_AUTH_POLL_MS = 30_000;
+
+type PlanAuth = { provider: string; state: string; detail?: string };
+
+/** 🎯T924: the broker names plans by subscription id; the bar by plan. */
+const PLAN_OF_SUBSCRIPTION: Record<string, string> = {
+  anthropic: 'claude',
+  'openai-codex': 'codex',
+  'xai-oauth': 'grok',
+  cursor: 'cursor',
+};
+
+const LOGIN_STATE: Record<string, string> = {
+  missing: 'no saved login',
+  expired: 'login expired',
+  rejected: 'login rejected',
+};
+
+function loginStateText(p: PlanAuth): string {
+  const said = LOGIN_STATE[p.state] || 'login ' + p.state;
+  return p.detail ? said + ' (' + p.detail + ')' : said;
+}
 
 type PlanDecision = {
   Name: string;
@@ -55,8 +77,25 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
     },
     refetchInterval: PLAN_DECISIONS_POLL_MS,
   });
+  // 🎯T924: any plan whose login needs the owner, whether or not a seat or
+  // a migration is waiting on it. Reading this never starts a sign-in.
+  const planAuth = useQuery({
+    queryKey: ['plan-usage-auth'],
+    queryFn: async ({ signal }) => {
+      const r = await fetch('/api/plan-usage/auth', { signal });
+      // An unreadable status is not a verdict: offer nothing rather than guess.
+      if (!r.ok) return [] as PlanAuth[];
+      const body = await r.json() as { plans?: PlanAuth[] };
+      return Array.isArray(body.plans) ? body.plans : [];
+    },
+    refetchInterval: PLAN_AUTH_POLL_MS,
+  });
   const failedMigrations = (decisions.data || []).filter((d) => d.ReauthAvailable);
-  const recoveryProviders = [...new Set(failedMigrations.map((d) => d.To))];
+  const migrationProviders = [...new Set(failedMigrations.map((d) => d.To))];
+  const unhealthyLogins = (planAuth.data || [])
+    .filter((p) => p.state !== 'ok')
+    .map((p) => ({ ...p, plan: PLAN_OF_SUBSCRIPTION[p.provider] || p.provider }))
+    .filter((p) => !migrationProviders.includes(p.plan));
   const recoverDestination = async (provider: string) => {
     setReauthBusy(provider);
     setReauthMessage('');
@@ -64,8 +103,10 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
       const r = await fetch('/api/plan-usage/auth/recover/' + encodeURIComponent(provider), { method: 'POST' });
       const body = await r.json() as { error?: string };
       if (!r.ok) throw new Error(body.error || 'Claudia could not recover the login');
-      setReauthMessage('Claudia recovered ' + provider + '; migration will retry automatically.');
-      await decisions.refetch();
+      setReauthMessage(migrationProviders.includes(provider)
+        ? 'Claudia recovered ' + provider + '; migration will retry automatically.'
+        : 'Claudia recovered the ' + provider + ' login.');
+      await Promise.all([decisions.refetch(), planAuth.refetch()]);
     } catch (err) {
       setReauthMessage(err instanceof Error ? err.message : 'Authentication recovery failed');
     } finally {
@@ -139,18 +180,29 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
             {d.Name}: {d.From} → {d.To} — {migrationFailureSummary(d.Failure)}
           </div>
         ))}
-        {reauthMessage ? <div role="status">{reauthMessage}</div> : null}
       </div>
     ) : null}
+    {unhealthyLogins.length ? (
+      <div className="plan-login-health">
+        <strong>These plan logins need you to sign in:</strong>
+        {unhealthyLogins.map((p) => (
+          <div key={p.provider}>{p.plan}: {loginStateText(p)}</div>
+        ))}
+      </div>
+    ) : null}
+    {reauthMessage ? <div role="status">{reauthMessage}</div> : null}
   </>;
   const inner = <>
-    {recoveryProviders.map((provider) => (
+    {[
+      ...migrationProviders.map((provider) => ({ provider, why: 'for failed migration' })),
+      ...unhealthyLogins.map((p) => ({ provider: p.plan, why: '— ' + loginStateText(p) })),
+    ].map(({ provider, why }) => (
       <button
         key={provider}
         type="button"
         className="plan-reauth"
         disabled={!!reauthBusy}
-        aria-label={'Reauth ' + provider + ' for failed migration'}
+        aria-label={'Reauth ' + provider + ' ' + why}
         onClick={(e) => {
           e.stopPropagation();
           void recoverDestination(provider);

@@ -1673,14 +1673,16 @@ body.rhs-resizing-row { cursor: row-resize; }
      seat underneath, and the yield rect closes it once the pointer is there. */
   pointer-events: none;
 }
-.plan-migration-failures {
+.plan-migration-failures,
+.plan-login-health {
   margin-top: 8px;
   padding-top: 6px;
   border-top: 1px solid var(--border);
   line-height: 1.45;
   white-space: normal;
 }
-.plan-migration-failures > div { overflow-wrap: anywhere; }
+.plan-migration-failures > div,
+.plan-login-health > div { overflow-wrap: anywhere; }
 
 /* 🎯T588.2: the available figure wears the same colour as the bar fill it
    describes, and only that figure is bold — the row the owner scans first.
