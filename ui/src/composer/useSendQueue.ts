@@ -52,7 +52,7 @@ export type SendQueueApi = {
 
 export function useSendQueue(
   name: string,
-  opts: { busy: boolean; wireOpen: boolean; sendNow: SendNow },
+  opts: { busy: boolean; wireOpen: boolean; sendNow: SendNow; escalate?: boolean },
 ): SendQueueApi {
   const key = queueStorageKey(name);
   const [state, setState] = useState<QueueState>(() => load(browserStorage(), key));
@@ -80,6 +80,7 @@ export function useSendQueue(
   // reload restores queued items while busy is still false, and draining then
   // would drop the queue before the transcript paints thinking.
   const { busy, wireOpen } = opts;
+  const escalate = !!opts.escalate;
   const prevBusyRef = useRef<boolean | null>(null);
   const prevWireRef = useRef(wireOpen);
   const idleAfterBusyRef = useRef(false);
@@ -116,7 +117,7 @@ export function useSendQueue(
         setState((s) => enqueue(s, raw));
         return { queued: true };
       }
-      const d = decideSend({ busy, interrupt: mode === 'steer' || mode === 'interrupt', text, wireOpen });
+      const d = decideSend({ busy, interrupt: mode === 'steer' || mode === 'interrupt', text, wireOpen, escalate });
       if (d.action === 'noop') return { queued: false };
       if (d.action === 'enqueue') {
         setState((s) => enqueue(s, d.text));
@@ -125,7 +126,7 @@ export function useSendQueue(
       sendNowRef.current(d.text, mode);
       return { queued: false };
     },
-    [busy, wireOpen],
+    [busy, wireOpen, escalate],
   );
 
   const remove = useCallback((id: string) => setState((s) => takeById(s, id).state), []);

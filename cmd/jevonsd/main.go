@@ -717,6 +717,7 @@ func main() {
 	// already stops auto-spawn; without this stamp the stall alarm still
 	// tells the PO to spawn into that wall.
 	mcpSrv.SetAutoSpawnPaused(cfg.FrontierConsume.Disabled)
+	mcpSrv.SetDeliveryEscalation(cfg.DeliveryEscalation)
 	mcpSrv.SetScanner(scanner)
 	// ð¯T110 self-test packs â same in-process env as POST /api/self_test/run.
 	mcpSrv.SetSelfTestEnv(srv.SelfTestEnv)
@@ -1032,7 +1033,8 @@ func main() {
 		if err != nil {
 			return server.AgentSendOutcome{}, err
 		}
-		return server.AgentSendOutcome{Status: res.Status, Mechanism: res.Mechanism}, nil
+		return server.AgentSendOutcome{Status: res.Status, Mechanism: res.Mechanism,
+			Message: res.Message, InterruptAfterMS: res.InterruptAfterMS}, nil
 	})
 	// 🎯T662: /api/agents rows carry why a seat stopped and the mass-stop line.
 	srv.SetSeatStopReader(mcpSrv.SeatStopReason)

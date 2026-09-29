@@ -748,6 +748,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .conversation-widget.density-compact .send-queue-item .sq-text { flex: 1 1 100%; }
 .conversation-widget.density-compact .send-queue-item .sq-actions { margin-left: 0; }
 .send-queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.35; color: var(--text-dim); }
+/* 🎯T899: a message steered into a busy agent's turn, counting down to its interrupt. */
+.escalation-strip { display: flex; align-items: center; gap: 8px; margin: 4px 0; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.35; color: var(--text-dim); }
+.conversation-widget.density-compact .escalation-strip { padding: 4px 8px; font-size: 11px; }
+.escalation-strip .escalation-text { flex: 1; min-width: 0; }
+.escalation-strip .escalation-dismiss { border: none; background: none; color: var(--text-dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
 .send-queue-item.focused { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
 .send-queue-item .sq-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .send-queue-item .sq-thumb { flex: none; height: 24px; width: 24px; object-fit: cover; border-radius: 4px; }

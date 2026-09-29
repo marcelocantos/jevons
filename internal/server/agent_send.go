@@ -65,6 +65,11 @@ type agentSendResponse struct {
 type AgentSendOutcome struct {
 	Status    string
 	Mechanism string
+	// Message is the deliver path's own account of what happened.
+	Message string
+	// InterruptAfterMS is when an escalating send (🎯T899) interrupts the
+	// agent's busy turn unless it takes the message first; 0 = never.
+	InterruptAfterMS int64
 }
 
 // agentSendHook is the product/test deliver seam: (name, text) → (status, error).

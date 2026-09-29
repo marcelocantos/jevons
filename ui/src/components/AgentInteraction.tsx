@@ -17,6 +17,7 @@ import { imageFromId, splitImageMarkers } from '../composer/images';
 import { usePendingImages } from '../store/pendingImages';
 import { reconcileQueueFocus } from '../composer/queueFocus';
 import { SendQueueStrip } from './SendQueueStrip';
+import { EscalationStrip } from './EscalationStrip';
 
 export function AgentInteraction(props: {
   mux: MuxClient | null;
@@ -56,6 +57,10 @@ export function AgentInteraction(props: {
     busy,
     wireOpen: connected,
     sendNow: (text, mode) => conv.send(text, { mode }),
+    // 🎯T899: a message to a busy agent goes to the daemon at once, which
+    // steers it into the turn and interrupts later if it is not taken. The
+    // overseer keeps its own owner-message handling.
+    escalate: props.name !== 'jevons',
   });
   // 🎯T657 slice 2b: Alt+↑/↓ focus over the queue; a drained or removed
   // item drops the focus rather than pointing at nothing.
@@ -133,6 +138,7 @@ export function AgentInteraction(props: {
           </div>
         </>
       ) : null}
+      <EscalationStrip notice={conv.escalation} agent={props.name} onDismiss={conv.dismissEscalation} />
       <SendQueueStrip
         id={comfortable ? 'send-queue' : 'agent-inspect-send-queue'}
         items={queue.items}

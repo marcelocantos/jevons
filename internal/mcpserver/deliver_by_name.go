@@ -393,6 +393,14 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 			}
 		}
 	}
+	// 🎯T899: an urgent sender presses a busy seat instead of waiting for
+	// its turn to end. An explicit mode (steer, interrupt, queue) is the
+	// caller's own choice and is left alone.
+	if mode == delivery.ModeSubmit {
+		if res, handled, err := s.escalateIfBusy(name, text, s.escalationClass(actor, origin, rel), proc); handled {
+			return res, err
+		}
+	}
 	return deliverToSenderMode(s, name, text, mode, proc, rehydrated, confirm)
 }
 

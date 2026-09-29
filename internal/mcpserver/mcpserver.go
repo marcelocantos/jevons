@@ -27,6 +27,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/doit"
@@ -330,9 +331,11 @@ type Server struct {
 	// planSweepMu serialises SweepPlanPolicy: the periodic tick and an
 	// owner reauth can both start one, and two sweeps moving the same seat
 	// race Claudia's migration (one sees the other's live handle).
-	planSweepMu     sync.Mutex
-	planDecisionMu  sync.RWMutex
-	planLastResults map[string]planusage.PlanAction
+	planSweepMu sync.Mutex
+	// deliveryEscalation is 🎯T899's urgency profile (config).
+	deliveryEscalation config.DeliveryEscalationConfig
+	planDecisionMu     sync.RWMutex
+	planLastResults    map[string]planusage.PlanAction
 
 	// defaultProvider is the daemon-wide claudia backend for new agents
 	// when agent_start / thread_spawn / jwork omit provider (🎯T148).

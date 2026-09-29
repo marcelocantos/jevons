@@ -32,6 +32,10 @@ const (
 	progressTypePlan           = "plan"
 	progressTypePromptAccepted = "prompt_accepted"
 	progressTypePermission     = "permission"
+	// 🎯T899 / claudia 🎯T138: a message queued or steered behind the turn
+	// was taken, or its escalation fired. Neither is a phase of the turn.
+	progressTypeDeliveryAbsorbed  = "delivery_absorbed"
+	progressTypeDeliveryEscalated = "delivery_escalated"
 )
 
 // CorrespondentFleet names a fleet note that carries no agent name.
@@ -71,6 +75,8 @@ func phaseFromEvent(ev claudia.Event) (PhaseSample, bool) {
 			return PhaseSample{Phase: PhaseAccepted, Tokens: tokens}, true
 		case progressTypePermission:
 			return PhaseSample{Phase: PhasePermission, Tokens: tokens}, true
+		case progressTypeDeliveryAbsorbed, progressTypeDeliveryEscalated:
+			return PhaseSample{}, false
 		}
 		if toolStatusTerminal(ev.ToolStatus) || (ev.ToolStatus == "" && toolCallTerminal(ev.Raw)) {
 			// A finished tool is not a new phase: the stream stays wherever

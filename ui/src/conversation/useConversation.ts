@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { deliveryModeOf, type DeliveryMode } from '../composer/deliveryMode';
-import { useEffect, useReducer, useRef } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { MuxClient } from '../mux/client';
 import { transcriptChannel } from '../mux/protocol';
 import { applyConversationEvent, emptyConversation, type ConversationEvent } from './reduce';
-import { optimisticReceived } from './overseerPhase';
+import { optimisticReceived, PHASE_IDLE, phaseSampleFromUnknown } from './overseerPhase';
 import type { MuxEnvelope } from '../mux/protocol';
 import { normalizeOwnerEchoText, shouldAckPendingSend } from './display';
 import { useDrafts } from '../store/drafts';
@@ -42,6 +42,19 @@ function matchesPendingId(env: MuxEnvelope, pending: PendingSend | null): boolea
 
 export type { ConversationMeta } from './reduce';
 
+/**
+ * 🎯T899: a message the daemon steered into this agent's busy turn, with the
+ * moment the turn is interrupted unless the agent takes it first. Cleared
+ * when the agent goes idle, which is when anything still queued is taken.
+ */
+export type EscalationNotice = { text: string; deadline: number; message: string };
+
+/** Escalation deadline from a send's status body, in ms; 0 = none. */
+export function interruptAfterMs(body: unknown): number {
+  const v = body && typeof body === 'object' ? (body as Record<string, unknown>).interrupt_after_ms : undefined;
+  return typeof v === 'number' && v > 0 ? v : 0;
+}
+
 function rec(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 }
@@ -53,6 +66,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
 
   const frozenRef = useRef(false);
   const pendingSendRef = useRef<PendingSend | null>(null);
+  const [escalation, setEscalation] = useState<EscalationNotice | null>(null);
 
   useEffect(() => {
     if (!mux || !name) return;
@@ -85,6 +99,15 @@ export function useConversation(mux: MuxClient | null, name: string) {
         pendingSendRef.current = null;
         if (env.t === 'status' && pending) {
           clearDraftForText(name, pending.text);
+          const ms = interruptAfterMs(env.body);
+          if (ms > 0) {
+            const body = rec(env.body);
+            setEscalation({
+              text: pending.text,
+              deadline: Date.now() + ms,
+              message: typeof body.message === 'string' ? body.message : '',
+            });
+          }
           return;
         }
         // env.t === 'error': fall through so the send_error diagnostic frame
@@ -121,6 +144,19 @@ export function useConversation(mux: MuxClient | null, name: string) {
       unsub();
     };
   }, [mux, name]);
+
+  // 🎯T899: the agent going idle ends the wait; whatever was still queued
+  // is taken now, so the notice has nothing left to count down to.
+  const idleNow = (() => {
+    const phase = phaseSampleFromUnknown(state.meta);
+    return !!phase && phase.phase === PHASE_IDLE;
+  })();
+  useEffect(() => {
+    if (escalation && idleNow) setEscalation(null);
+  }, [escalation, idleNow]);
+  useEffect(() => {
+    setEscalation(null);
+  }, [name]);
 
   const rejoinLive = () => {
     frozenRef.current = false;
@@ -179,5 +215,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
     },
     rejoinLive,
     resend: (msgId: string) => mux?.resendTranscript(name, msgId),
+    escalation,
+    dismissEscalation: () => setEscalation(null),
   };
 }

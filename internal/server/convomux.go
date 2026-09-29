@@ -891,6 +891,12 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			statusBody := map[string]any{
 				"status": out.Status, "mode": string(mode), "mechanism": out.Mechanism,
 			}
+			// 🎯T899: an escalating send says when the busy turn is
+			// interrupted unless the agent takes the message first.
+			if out.InterruptAfterMS > 0 {
+				statusBody["interrupt_after_ms"] = out.InterruptAfterMS
+				statusBody["message"] = out.Message
+			}
 			if sendID != "" {
 				statusBody["id"] = sendID
 			}

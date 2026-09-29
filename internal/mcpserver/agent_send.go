@@ -42,6 +42,9 @@ type agentSendResult struct {
 	// (🎯T657). Spellings: internal/delivery.
 	Mode      delivery.Mode
 	Mechanism string
+	// InterruptAfter is when an escalating send (🎯T899) interrupts the
+	// busy turn if the agent has not taken the message; 0 = no rung.
+	InterruptAfter time.Duration
 }
 
 // agentSender is the process surface sendToAgent needs (testable).
@@ -128,6 +131,8 @@ type AgentDeliverResult struct {
 	// Mode and Mechanism: the owner's intent and what ran (🎯T657).
 	Mode      string
 	Mechanism string
+	// InterruptAfterMS: see agentSendResult.InterruptAfter (🎯T899).
+	InterruptAfterMS int64
 }
 
 // DeliverAgentMessage is the product deliver path shared by HTTP

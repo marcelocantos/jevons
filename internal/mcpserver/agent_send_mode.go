@@ -49,11 +49,12 @@ func (s *Server) DeliverAgentMessageMode(name, text string, origin SendOrigin, m
 		return AgentDeliverResult{}, err
 	}
 	return AgentDeliverResult{
-		Status:    res.Status,
-		Message:   res.Message,
-		Queued:    res.Queued,
-		Mode:      string(res.Mode),
-		Mechanism: res.Mechanism,
+		Status:           res.Status,
+		Message:          res.Message,
+		Queued:           res.Queued,
+		Mode:             string(res.Mode),
+		Mechanism:        res.Mechanism,
+		InterruptAfterMS: res.InterruptAfter.Milliseconds(),
 	}, nil
 }
 

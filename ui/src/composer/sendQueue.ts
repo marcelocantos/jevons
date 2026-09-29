@@ -21,13 +21,18 @@ export type SendDecision =
   | { action: 'enqueue'; text: string; reason?: 'busy' | 'offline' }
   | { action: 'send'; text: string; interrupt: boolean };
 
-/** Pure send decision (T113 / T228). Plain Enter while busy enqueues. */
+/**
+ * Pure send decision (T113 / T228). Plain Enter while busy enqueues, unless
+ * the pane escalates (🎯T899): then it sends at once and the daemon steers
+ * the message into the busy turn, interrupting it later if it is not taken.
+ */
 export function decideSend(opts: {
   busy?: boolean;
   interrupt?: boolean;
   text?: string;
   hasImages?: boolean;
   wireOpen?: boolean;
+  escalate?: boolean;
 }): SendDecision {
   const busy = !!opts.busy;
   const interrupt = !!opts.interrupt;
@@ -38,8 +43,11 @@ export function decideSend(opts: {
   if (!wireOpen) {
     return { action: 'enqueue', text: raw, reason: 'offline' };
   }
-  if (busy && !interrupt) {
+  if (busy && !interrupt && !opts.escalate) {
     return { action: 'enqueue', text: raw, reason: 'busy' };
+  }
+  if (busy && !interrupt) {
+    return { action: 'send', text: raw, interrupt: false };
   }
   return { action: 'send', text: raw, interrupt: busy && interrupt };
 }

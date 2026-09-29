@@ -111,6 +111,11 @@ type Config struct {
 	// loop (daemon auto-spawns workers for unengaged ready frontier leaves
 	// under the product PO). Zero value = enabled with conservative defaults.
 	FrontierConsume FrontierConsumeConfig `yaml:"frontier_consume"`
+
+	// DeliveryEscalation sets how hard a message presses an agent that is
+	// busy with its own turn, by who sent it (🎯T899). Zero value = compiled
+	// defaults.
+	DeliveryEscalation DeliveryEscalationConfig `yaml:"delivery_escalation"`
 }
 
 // FrontierConsumeConfig is the 🎯T254.1 enforcement loop tuning. The loop is
@@ -568,4 +573,81 @@ func (c Config) Persona() (string, error) {
 		out += "\n## Owner Notes\n\n" + notes + "\n"
 	}
 	return out, nil
+}
+
+// DeliveryEscalationConfig is 🎯T899's urgency profile. A message to an
+// agent busy with its own turn is, by default, held until that turn ends.
+// An owner message, or the overseer directing its product owner, instead
+// steers into the running turn at once and, if the agent has not taken it
+// by the deadline, interrupts the turn so it does. Other traffic (reports,
+// daemon notices, supervisors) keeps waiting for the turn boundary.
+type DeliveryEscalationConfig struct {
+	// Disabled restores hold-until-idle for every sender.
+	Disabled bool `yaml:"disabled"`
+	// Owner applies to the owner's own messages to an agent.
+	Owner EscalationProfile `yaml:"owner"`
+	// Overseer applies to the overseer directing an agent below it.
+	Overseer EscalationProfile `yaml:"overseer"`
+}
+
+// EscalationProfile is one sender class's ladder.
+type EscalationProfile struct {
+	// First is how the message is offered at once: "steer" (default: fold
+	// it into the running turn), "submit" (queue it behind the turn), or
+	// "queue" (hold until idle; no escalation at all).
+	First string `yaml:"first"`
+	// InterruptAfterSeconds is how long an unabsorbed message waits before
+	// the turn is interrupted. 0 = compiled default; negative = never.
+	InterruptAfterSeconds int `yaml:"interrupt_after_seconds"`
+}
+
+// Compiled escalation defaults (🎯T899): the owner's message presses
+// harder than the overseer's.
+const (
+	DefaultOwnerInterruptAfter    = 60 * time.Second
+	DefaultOverseerInterruptAfter = 120 * time.Second
+)
+
+// Escalation sender classes.
+const (
+	EscalationOwner    = "owner"
+	EscalationOverseer = "overseer"
+)
+
+// Ladder resolves a sender class to its first rung and interrupt deadline.
+// ok=false means hold the message until the turn ends, as for any sender
+// without a profile. interruptAfter=0 means never interrupt.
+func (c DeliveryEscalationConfig) Ladder(class string) (first string, interruptAfter time.Duration, ok bool) {
+	if c.Disabled {
+		return "", 0, false
+	}
+	var p EscalationProfile
+	var def time.Duration
+	switch class {
+	case EscalationOwner:
+		p, def = c.Owner, DefaultOwnerInterruptAfter
+	case EscalationOverseer:
+		p, def = c.Overseer, DefaultOverseerInterruptAfter
+	default:
+		return "", 0, false
+	}
+	first = strings.ToLower(strings.TrimSpace(p.First))
+	switch first {
+	case "":
+		first = "steer"
+	case "steer", "submit":
+	case "queue":
+		return "", 0, false
+	default:
+		first = "steer"
+	}
+	switch {
+	case p.InterruptAfterSeconds < 0:
+		interruptAfter = 0
+	case p.InterruptAfterSeconds == 0:
+		interruptAfter = def
+	default:
+		interruptAfter = time.Duration(p.InterruptAfterSeconds) * time.Second
+	}
+	return first, interruptAfter, true
 }
