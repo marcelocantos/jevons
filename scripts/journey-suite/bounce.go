@@ -245,13 +245,16 @@ func (s *suite) jBounceResume() error {
 		}
 		return nil
 	}
+	// 🎯T834: the aside's reply notice below races the owner turn for the
+	// overseer, so a stall diagnosis reads the daemon log from here.
+	logStart := s.logSize()
 	secret := "bounce-memory-" + uuid.NewString()
 	ack := "bounce-stored-" + uuid.NewString()
 	seed := "Remember this journey continuity secret for my next question: " + secret + ". Reply with exactly: " + ack
 	if err := direct(seed, ack); err != nil {
 		return fmt.Errorf("pre-bounce seed turn: %w", err)
 	}
-	if err := s.completeBounceOwnerTurn(); err != nil {
+	if err := s.completeBounceOwnerTurn(logStart); err != nil {
 		return err
 	}
 
@@ -387,10 +390,14 @@ func (s *suite) jBounceResume() error {
 
 // completeBounceOwnerTurn is the 🎯T627.1 main-conversation half of J14:
 // the isolate overseer must finish a fresh owner request before drain.
-func (s *suite) completeBounceOwnerTurn() error {
+//
+// 🎯T834: a reply that misses the bounded wait fails with the causes the
+// isolate recorded — busy notice, other backend, silent provider, down
+// overseer — rather than a bare deadline. The wait is not lengthened.
+func (s *suite) completeBounceOwnerTurn(logStart int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	defer cancel()
-	conn, frames, err := dialOwnerMux(ctx, s.host)
+	conn, raw, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
 		if outage := asOutage("bounce owner mux", err); outage != nil {
 			return outage
@@ -398,23 +405,87 @@ func (s *suite) completeBounceOwnerTurn() error {
 		return fmt.Errorf("bounce owner mux: %w", err)
 	}
 	defer conn.CloseNow()
+	watch := &ownerStallWatch{}
+	frames := watch.tap(ctx, raw)
 	if _, err := collectOwnerMuxReplay(ctx, frames); err != nil {
 		return fmt.Errorf("bounce owner replay: %w", err)
 	}
 	token := "bounce-main-" + uuid.NewString()
 	prompt := "Reply with exactly: " + token + ". Do not use tools."
+	phases, _, _, _ := watch.snapshot()
+	var atSend ownerStallPhase
+	if len(phases) > 0 {
+		atSend = phases[len(phases)-1]
+	}
+	sentAt := time.Now()
 	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": prompt}); err != nil {
 		return fmt.Errorf("bounce owner send: %w", err)
 	}
 	if err := waitOwnerMuxReplyMatching(ctx, frames, prompt, token, func(text string) bool {
 		return bounceDirectMatches(text, token)
-	}, nil); err != nil {
+	}, watch.observe); err != nil {
 		if outage := asOutage("bounce owner turn", err); outage != nil {
 			return outage
 		}
-		return fmt.Errorf("pre-bounce owner turn: %w", err)
+		if isOutage(err) {
+			return err
+		}
+		return fmt.Errorf("pre-bounce owner turn: %w — %s", err, s.ownerStallDiagnosis(watch, atSend, sentAt, logStart, err))
 	}
 	return nil
+}
+
+// ownerStallDiagnosis gathers the isolate's own record of the stalled owner
+// turn — registry, daemon log since logStart, mux observations — for
+// diagnoseOwnerStall. A read failure is named in the diagnosis, not hidden.
+func (s *suite) ownerStallDiagnosis(watch *ownerStallWatch, atSend ownerStallPhase, sentAt time.Time, logStart int64, waitErr error) string {
+	phases, assistant, ended, lastEnded := watch.snapshot()
+	ev := ownerStallEvidence{
+		Requested: string(s.provider), SentAt: sentAt, AtSend: atSend, Phases: phases,
+		EchoIndex: ownerEchoIndex(waitErr), Assistant: assistant, Ended: ended, LastEnded: lastEnded,
+	}
+	var readErrs []string
+	if reg, err := bounceRegistrySnapshot(s.agentsPath()); err != nil {
+		readErrs = append(readErrs, "registry unread: "+err.Error())
+	} else {
+		ev.OverseerProvider = string(reg[overseerName].Provider)
+	}
+	if logs, err := os.ReadFile(s.logPath); err != nil {
+		readErrs = append(readErrs, "daemon log unread: "+err.Error())
+	} else if logStart <= int64(len(logs)) {
+		ev.Logs = logs[logStart:]
+	} else {
+		ev.Logs = logs
+	}
+	out := diagnoseOwnerStall(ev)
+	if len(readErrs) > 0 {
+		out += "; " + strings.Join(readErrs, "; ")
+	}
+	return out
+}
+
+// ownerEchoIndex recovers the owner echo index from the reply wait's error;
+// the wait reports it as "(owner index=N)".
+func ownerEchoIndex(err error) int {
+	var index int
+	if err == nil {
+		return 0
+	}
+	msg := err.Error()
+	if i := strings.Index(msg, "owner index="); i >= 0 {
+		_, _ = fmt.Sscanf(msg[i:], "owner index=%d", &index)
+	}
+	return index
+}
+
+// logSize is the daemon log's current length: a start offset for reading
+// what the isolate logged afterwards. 0 when the log cannot be read.
+func (s *suite) logSize() int64 {
+	info, err := os.Stat(s.logPath)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
 
 func bounceDirectMatches(out, expected string) bool {
