@@ -171,7 +171,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	// list call is sufficient to mark and notify but is not required.
 	s.sweepBornStuck()
 	tm.mark("sweep_born_stuck")
-	s.sweepSeatMCP() // 🎯T797
+	s.sweepSeatMCPOnRequest() // 🎯T797, cache only on the request path (🎯T804)
 	tm.mark("sweep_seat_mcp")
 	s.notifyDeadAgents(reps)
 	// 🎯T459: reap fleet panes the registry does not know about before
@@ -232,7 +232,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 			fmt.Fprintf(&b, "  ^ %s\n", FormatBornStuckLine(d, diag.Elapsed))
 		}
 		if alive {
-			if diag := s.diagnoseSeatMCP(d, s.birthClock()); len(diag.Missing) > 0 {
+			if diag := s.diagnoseSeatMCPOnRequest(d, s.birthClock()); len(diag.Missing) > 0 {
 				fmt.Fprintf(&b, "  ^ %s\n", FormatSeatMCPNotice(d, diag.Missing, diag.Age))
 			}
 		}

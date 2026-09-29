@@ -61,6 +61,14 @@ func t797Setup(t *testing.T, transcript string) *t679_2Env {
 	return e
 }
 
+// warmList is agent_list after the background sweep has run, as in the
+// product: the request path reads only the cache that sweep keeps (🎯T804).
+func (e *t679_2Env) warmList() string {
+	e.t.Helper()
+	e.s.sweepSeatMCP()
+	return e.list()
+}
+
 func (e *t679_2Env) mcpNotices() []string {
 	var out []string
 	for _, m := range e.parent.sent {
@@ -74,11 +82,11 @@ func (e *t679_2Env) mcpNotices() []string {
 func TestT797MissingRequiredServerFlaggedAndParentTold(t *testing.T) {
 	e := t797Setup(t, t797Transcript("jevonsmcp")) // bullseye never attached
 	e.clock.add(SeatMCPGrace - time.Second)
-	if strings.Contains(e.list(), "mcp-missing") {
+	if strings.Contains(e.warmList(), "mcp-missing") {
 		t.Fatal("flagged inside the grace window")
 	}
 	e.clock.add(2 * time.Second)
-	out := e.list()
+	out := e.warmList()
 	if !strings.Contains(out, "mcp-missing: "+e.name) || !strings.Contains(out, "bullseye") {
 		t.Fatalf("agent_list does not mark the seat missing bullseye:\n%s", out)
 	}
@@ -88,7 +96,7 @@ func TestT797MissingRequiredServerFlaggedAndParentTold(t *testing.T) {
 	if strings.Contains(out, "orthograph") {
 		t.Fatalf("non-critical server flagged:\n%s", out)
 	}
-	e.list()
+	e.warmList()
 	e.s.sweepSeatMCP()
 	if n := e.mcpNotices(); len(n) != 1 {
 		t.Fatalf("parent notices = %d, want exactly 1: %v", len(n), n)
@@ -98,7 +106,7 @@ func TestT797MissingRequiredServerFlaggedAndParentTold(t *testing.T) {
 func TestT797AllAttachedIsQuiet(t *testing.T) {
 	e := t797Setup(t, t797Transcript("jevonsmcp", "bullseye"))
 	e.clock.add(SeatMCPGrace + time.Hour)
-	if out := e.list(); strings.Contains(out, "mcp-missing") {
+	if out := e.warmList(); strings.Contains(out, "mcp-missing") {
 		t.Fatalf("healthy seat flagged:\n%s", out)
 	}
 	if n := e.mcpNotices(); len(n) != 0 {
@@ -109,13 +117,13 @@ func TestT797AllAttachedIsQuiet(t *testing.T) {
 func TestT797LateAttachClearsFlag(t *testing.T) {
 	e := t797Setup(t, t797Transcript("jevonsmcp"))
 	e.clock.add(SeatMCPGrace + time.Minute)
-	if !strings.Contains(e.list(), "mcp-missing") {
+	if !strings.Contains(e.warmList(), "mcp-missing") {
 		t.Fatal("expected flag")
 	}
 	body := t797Transcript("jevonsmcp") +
 		t797Line(t797Start.Add(SeatMCPGrace), `{"type":"deferred_tools_delta","addedNames":["mcp__bullseye__bullseye_query"]}`)
 	e.plantTranscript(body)
-	if out := e.list(); strings.Contains(out, "mcp-missing") {
+	if out := e.warmList(); strings.Contains(out, "mcp-missing") {
 		t.Fatalf("flag survived the server attaching:\n%s", out)
 	}
 }
@@ -125,7 +133,7 @@ func TestT797UnobservableIsNotFlagged(t *testing.T) {
 	// providers prove nothing.
 	e := t797Setup(t, `{"type":"user","timestamp":"2026-09-20T08:00:00Z"}`+"\n")
 	e.clock.add(SeatMCPGrace + time.Hour)
-	if out := e.list(); strings.Contains(out, "mcp-missing") {
+	if out := e.warmList(); strings.Contains(out, "mcp-missing") {
 		t.Fatalf("flagged with no delta observation:\n%s", out)
 	}
 }

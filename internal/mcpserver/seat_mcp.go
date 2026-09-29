@@ -7,10 +7,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -67,9 +69,10 @@ type seatMCPSeen struct {
 }
 
 type seatMCPCacheEntry struct {
-	size  int64
-	mtime time.Time
-	seen  seatMCPSeen
+	size   int64
+	mtime  time.Time
+	offset int64 // bytes consumed: complete lines only (🎯T804)
+	seen   seatMCPSeen
 }
 
 var seatMCPCache sync.Map // transcript path -> seatMCPCacheEntry
@@ -94,76 +97,142 @@ func requiredSeatServers(d claudia.AgentDef) []string {
 	return out
 }
 
-// scanSeatMCP reads the attach records out of a Claude session file.
+// seatMCPScans counts transcript reads (🎯T804 test seam: the request path
+// must not add to it).
+var seatMCPScans atomic.Int64
+
+// seatMCPWarming dedupes background scans by transcript path.
+var seatMCPWarming sync.Map
+
+// scanSeatMCP reads the attach records out of a Claude session file. It is
+// incremental (🎯T804): a live seat's transcript grows on every turn, and a
+// cache keyed on size alone re-read the whole file each time. Only the
+// bytes appended since the last scan are read; a file that shrank is read
+// again from the start.
 func scanSeatMCP(path string) (seatMCPSeen, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return seatMCPSeen{}, err
 	}
+	var prev seatMCPCacheEntry
 	if v, ok := seatMCPCache.Load(path); ok {
-		if c := v.(seatMCPCacheEntry); c.size == fi.Size() && c.mtime.Equal(fi.ModTime()) {
-			return c.seen, nil
+		prev = v.(seatMCPCacheEntry)
+		if prev.size == fi.Size() && prev.mtime.Equal(fi.ModTime()) {
+			return prev.seen, nil
+		}
+		if fi.Size() < prev.offset {
+			prev = seatMCPCacheEntry{}
 		}
 	}
+	seatMCPScans.Add(1)
 	f, err := os.Open(path)
 	if err != nil {
 		return seatMCPSeen{}, err
 	}
 	defer f.Close()
-	seen := seatMCPSeen{servers: map[string]bool{}}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 64<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if seen.first.IsZero() {
-			var h struct {
-				Timestamp time.Time `json:"timestamp"`
-			}
-			if json.Unmarshal(line, &h) == nil {
-				seen.first = h.Timestamp
-			}
-		}
-		if !strings.Contains(string(line), `_delta"`) {
-			continue
-		}
-		var rec struct {
-			Attachment struct {
-				Type         string   `json:"type"`
-				AddedNames   []string `json:"addedNames"`
-				RemovedNames []string `json:"removedNames"`
-			} `json:"attachment"`
-		}
-		if json.Unmarshal(line, &rec) != nil {
-			continue
-		}
-		switch rec.Attachment.Type {
-		case "deferred_tools_delta":
-			seen.deltas++
-			for _, n := range rec.Attachment.AddedNames {
-				if srv, ok := mcpToolServer(n); ok {
-					seen.servers[srv] = true
-				}
-			}
-			for _, n := range rec.Attachment.RemovedNames {
-				if srv, ok := mcpToolServer(n); ok {
-					delete(seen.servers, srv)
-				}
-			}
-		case "mcp_instructions_delta":
-			seen.deltas++
-			for _, n := range rec.Attachment.AddedNames {
-				seen.servers[n] = true
-			}
-			for _, n := range rec.Attachment.RemovedNames {
-				delete(seen.servers, n)
-			}
-		}
+	seen := seatMCPSeen{servers: map[string]bool{}, first: prev.seen.first, deltas: prev.seen.deltas}
+	for k, v := range prev.seen.servers {
+		seen.servers[k] = v
 	}
-	if err := sc.Err(); err != nil {
+	offset := prev.offset
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return seatMCPSeen{}, err
 	}
-	seatMCPCache.Store(path, seatMCPCacheEntry{size: fi.Size(), mtime: fi.ModTime(), seen: seen})
+	r := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		if err == io.EOF {
+			break // an incomplete last line is read next time
+		}
+		if err != nil {
+			return seatMCPSeen{}, err
+		}
+		offset += int64(len(line))
+		foldSeatMCPLine(&seen, line)
+	}
+	seatMCPCache.Store(path, seatMCPCacheEntry{size: fi.Size(), mtime: fi.ModTime(), offset: offset, seen: seen})
 	return seen, nil
+}
+
+// cachedSeatMCP answers from what is already known about path, never
+// reading the file on the caller's time (🎯T804): a missing or stale entry
+// starts a background scan and the last known answer, if any, is used.
+func cachedSeatMCP(path string) (seatMCPSeen, bool) {
+	var entry seatMCPCacheEntry
+	v, ok := seatMCPCache.Load(path)
+	if ok {
+		entry = v.(seatMCPCacheEntry)
+	}
+	fresh := false
+	if fi, err := os.Stat(path); err == nil && ok {
+		fresh = entry.size == fi.Size() && entry.mtime.Equal(fi.ModTime())
+	}
+	if !fresh {
+		seatMCPWarm(path)
+	}
+	return entry.seen, ok
+}
+
+// seatMCPWarm starts one background scan of path (test seam).
+var seatMCPWarm = seatMCPWarmDefault
+
+func seatMCPWarmDefault(path string) {
+	if _, busy := seatMCPWarming.LoadOrStore(path, struct{}{}); busy {
+		return
+	}
+	go func() {
+		defer seatMCPWarming.Delete(path)
+		if _, err := scanSeatMCP(path); err != nil {
+			slog.Debug("seat mcp: background scan failed", "path", path, "err", err)
+		}
+	}()
+}
+
+// foldSeatMCPLine applies one transcript line to seen.
+func foldSeatMCPLine(seen *seatMCPSeen, line []byte) {
+	if seen.first.IsZero() {
+		var h struct {
+			Timestamp time.Time `json:"timestamp"`
+		}
+		if json.Unmarshal(line, &h) == nil {
+			seen.first = h.Timestamp
+		}
+	}
+	if !strings.Contains(string(line), `_delta"`) {
+		return
+	}
+	var rec struct {
+		Attachment struct {
+			Type         string   `json:"type"`
+			AddedNames   []string `json:"addedNames"`
+			RemovedNames []string `json:"removedNames"`
+		} `json:"attachment"`
+	}
+	if json.Unmarshal(line, &rec) != nil {
+		return
+	}
+	switch rec.Attachment.Type {
+	case "deferred_tools_delta":
+		seen.deltas++
+		for _, n := range rec.Attachment.AddedNames {
+			if srv, ok := mcpToolServer(n); ok {
+				seen.servers[srv] = true
+			}
+		}
+		for _, n := range rec.Attachment.RemovedNames {
+			if srv, ok := mcpToolServer(n); ok {
+				delete(seen.servers, srv)
+			}
+		}
+	case "mcp_instructions_delta":
+		seen.deltas++
+		for _, n := range rec.Attachment.AddedNames {
+			seen.servers[n] = true
+		}
+		for _, n := range rec.Attachment.RemovedNames {
+			delete(seen.servers, n)
+		}
+	}
 }
 
 // mcpToolServer extracts <server> from mcp__<server>__<tool>.
@@ -177,6 +246,17 @@ func mcpToolServer(name string) (string, bool) {
 }
 
 func (s *Server) diagnoseSeatMCP(d claudia.AgentDef, now time.Time) seatMCPDiagnosis {
+	return s.diagnoseSeatMCPWith(d, now, true)
+}
+
+// diagnoseSeatMCPOnRequest is diagnoseSeatMCP for a caller waiting on the
+// answer (jevons_agent_list): it never reads a transcript, only the cache
+// the background sweep keeps warm (🎯T804).
+func (s *Server) diagnoseSeatMCPOnRequest(d claudia.AgentDef, now time.Time) seatMCPDiagnosis {
+	return s.diagnoseSeatMCPWith(d, now, false)
+}
+
+func (s *Server) diagnoseSeatMCPWith(d claudia.AgentDef, now time.Time, scan bool) seatMCPDiagnosis {
 	var out seatMCPDiagnosis
 	if d.Provider != claudia.ProviderClaude || strings.TrimSpace(d.SessionID) == "" {
 		return out
@@ -188,10 +268,15 @@ func (s *Server) diagnoseSeatMCP(d claudia.AgentDef, now time.Time) seatMCPDiagn
 	if ex.Verdict != ExistencePresent || ex.Path == "" {
 		return out
 	}
-	seen, err := scanSeatMCP(ex.Path)
-	if err != nil {
-		slog.Debug("seat mcp: unreadable transcript", "agent", d.Name, "err", err)
-		return out
+	var seen seatMCPSeen
+	if scan {
+		var err error
+		if seen, err = scanSeatMCP(ex.Path); err != nil {
+			slog.Debug("seat mcp: unreadable transcript", "agent", d.Name, "err", err)
+			return out
+		}
+	} else if seen, _ = cachedSeatMCP(ex.Path); seen.servers == nil {
+		return out // not known yet; the background scan is under way
 	}
 	if seen.deltas == 0 || seen.first.IsZero() {
 		return out
@@ -219,8 +304,8 @@ func FormatSeatMCPNotice(d claudia.AgentDef, missing []string, age time.Duration
 		d.Name, strings.TrimSpace(d.SessionID), age.Round(time.Second), strings.Join(missing, ", "))
 }
 
-func (s *Server) notifySeatMCPIfDue(d claudia.AgentDef, now time.Time) {
-	diag := s.diagnoseSeatMCP(d, now)
+func (s *Server) notifySeatMCPIfDue(d claudia.AgentDef, now time.Time, scan bool) {
+	diag := s.diagnoseSeatMCPWith(d, now, scan)
 	if len(diag.Missing) == 0 {
 		return
 	}
@@ -251,7 +336,13 @@ func (s *Server) notifySeatMCPIfDue(d claudia.AgentDef, now time.Time) {
 
 // sweepSeatMCP diagnoses live Claude seats and delivers at most one parent
 // notice per (seat, session, missing set).
-func (s *Server) sweepSeatMCP() {
+func (s *Server) sweepSeatMCP() { s.sweepSeatMCPWith(true) }
+
+// sweepSeatMCPOnRequest is the sweep a waiting caller runs: cache only
+// (🎯T804).
+func (s *Server) sweepSeatMCPOnRequest() { s.sweepSeatMCPWith(false) }
+
+func (s *Server) sweepSeatMCPWith(scan bool) {
 	if s == nil || s.registry == nil {
 		return
 	}
@@ -260,6 +351,6 @@ func (s *Server) sweepSeatMCP() {
 		if strings.TrimSpace(d.Name) == "" || !s.seatAlive(d.Name) {
 			continue
 		}
-		s.notifySeatMCPIfDue(d, now)
+		s.notifySeatMCPIfDue(d, now, scan)
 	}
 }
