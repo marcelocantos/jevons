@@ -445,6 +445,7 @@ func waitBootSweepQuiet(ctx context.Context, frames <-chan []byte, logPath strin
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	phase, lastActivity := "idle", time.Now()
+	var lastLevel json.RawMessage // the most recent phase-bearing meta, for the failure
 	for {
 		select {
 		case data, ok := <-frames:
@@ -463,6 +464,7 @@ func waitBootSweepQuiet(ctx context.Context, frames <-chan []byte, logPath strin
 				if !ok {
 					continue
 				}
+				lastLevel = env.Body
 				// The cockpit converge loop republishes the level every few
 				// seconds (4da3b8ae never saw 5s of quiet on an idle seat);
 				// an unchanged idle sample is not a sign of life.
@@ -488,8 +490,8 @@ func waitBootSweepQuiet(ctx context.Context, frames <-chan []byte, logPath strin
 			}
 		case <-deadline:
 			logs, _ := os.ReadFile(logPath)
-			return fmt.Errorf("post-boot sweep never settled (sweep logged=%v phase=%q quiet for %s)",
-				bootSweepHandled(logs), phase, time.Since(lastActivity).Round(time.Second))
+			return fmt.Errorf("post-boot sweep never settled (sweep logged=%v phase=%q quiet for %s level=%s)",
+				bootSweepHandled(logs), phase, time.Since(lastActivity).Round(time.Second), trim(string(lastLevel), 400))
 		case <-ctx.Done():
 			return ctx.Err()
 		}
