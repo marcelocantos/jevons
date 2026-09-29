@@ -265,6 +265,7 @@ persona_notes: |
 	s.run("J16-stopped-provider-migration", s.jStoppedProviderMigration)
 	s.run("J34-hot-provider-migration", s.jHotProviderMigration)
 	s.run("J37-busy-escalation", s.jBusyEscalation)
+	s.run("J38-midturn-answer", s.jMidTurnAnswer)
 	s.run("J14-bounce-resume", s.jBounceResume)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
