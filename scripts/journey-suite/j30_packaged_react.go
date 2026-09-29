@@ -5,13 +5,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
@@ -63,19 +67,31 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	if err != nil {
 		return err
 	}
+	// 🎯T832: the shared overseer is not a seat this journey minted. An
+	// earlier journey may have moved it to another backend (J13 once
+	// migrated it in place), so its expectation is its CURRENT provider,
+	// and its latest launch must match that. The aside is minted here on the
+	// requested provider and keeps the strict check.
+	overseer, err := s.registryProvider(overseerName)
+	if err != nil {
+		return err
+	}
+	if claudia.PlanProvider(overseer) != claudia.PlanProvider(s.provider) {
+		fmt.Printf("NOTE %s is on %s, not the suite's %s: an earlier journey moved it; its checks follow its current provider (T832)\n", overseerName, overseer, provider)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	aside := "react-aside-" + uuid.NewString()
-	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", script), "--host", surface.host, "--provider", provider, "--workdir", s.stateDir, "--aside", aside)
-	names := []string{"jevons", aside}
+	cmd := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts", "react-ui-test", script), "--host", surface.host, "--provider", provider, "--overseer-provider", string(overseer), "--workdir", s.stateDir, "--aside", aside)
+	asides := []string{aside}
 	if script == "t789-live.cjs" {
 		// Drives the overseer only; no aside is minted. The screenshot must
 		// outlive the sandbox so the T493.1 visual verdict can be read.
-		names = []string{"jevons"}
+		asides = nil
 		cmd.Args = append(cmd.Args, "--screenshot", filepath.Join(os.TempDir(), "t789-live.png"))
 	}
 	if script == "t811-undelivered.cjs" {
-		names = []string{"jevons"}
+		asides = nil
 		cmd.Args = append(cmd.Args, "--fault", filepath.Join(s.stateDir, "fault-owner-not-owner"),
 			"--screenshot", filepath.Join(os.TempDir(), "t811-undelivered.png"))
 	}
@@ -102,10 +118,62 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	if err != nil {
 		return fmt.Errorf("read runtime provider evidence: %w", err)
 	}
-	for _, name := range names {
+	for _, name := range asides {
 		if err := queueJourneyProvider(logs, name, provider); err != nil {
 			return err
 		}
+	}
+	return latestLaunchProvider(logs, overseerName, overseer)
+}
+
+// registryProvider is name's current provider as /api/agents reports it.
+func (s *suite) registryProvider(name string) (claudia.Provider, error) {
+	resp, err := http.Get("http://" + s.host + "/api/agents")
+	if err != nil {
+		return "", fmt.Errorf("read %s provider: %w", name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("read %s provider: /api/agents HTTP %d", name, resp.StatusCode)
+	}
+	var agents []struct {
+		Name     string `json:"name"`
+		Provider string `json:"provider"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
+		return "", fmt.Errorf("read %s provider: %w", name, err)
+	}
+	for _, a := range agents {
+		if a.Name == name {
+			if a.Provider == "" {
+				return "", fmt.Errorf("%s has no provider in /api/agents", name)
+			}
+			return claudia.Provider(a.Provider), nil
+		}
+	}
+	return "", fmt.Errorf("%s not in /api/agents (%d agents)", name, len(agents))
+}
+
+// latestLaunchProvider certifies a seat the journey did not mint (🎯T832):
+// its most recent runtime launch must be on current, the provider the
+// registry names now. Earlier launches on another backend are that seat's
+// history, not this journey's evidence. /api/agents may name the sidecar
+// runtime id (xai-oauth) where the launch log names the plan (grok), so
+// both sides compare as plans (🎯T866.5).
+func latestLaunchProvider(logs []byte, name string, current claudia.Provider) error {
+	latest := ""
+	for _, line := range strings.Split(string(logs), "\n") {
+		event, err := queueJourneyLogFields(line)
+		if err != nil || event["msg"] != "agent started" || event["name"] != name {
+			continue
+		}
+		latest = event["provider"]
+	}
+	if latest == "" {
+		return fmt.Errorf("no named runtime launch evidence for %s", name)
+	}
+	if claudia.PlanProvider(claudia.Provider(latest)) != claudia.PlanProvider(current) {
+		return fmt.Errorf("agent %s last launched on %q, but the registry names %q", name, latest, current)
 	}
 	return nil
 }

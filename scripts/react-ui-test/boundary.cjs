@@ -13,7 +13,7 @@ const { submitAside, ownerEcho } = require('./boundary-oracle.cjs');
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
   'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' }, screenshot: { type: 'string' },
-  'aside-only': { type: 'boolean', default: false },
+  'aside-only': { type: 'boolean', default: false }, 'overseer-provider': { type: 'string' },
 } });
 const base = new URL(`http://${values.host}`);
 assert(['localhost', '127.0.0.1', '[::1]'].includes(base.hostname));
@@ -69,12 +69,15 @@ async function main() {
   });
   await page.route('https://fonts.**/*', route => route.abort());
   await page.goto(base.href);
-  // 🎯T866.5: Launch rewrites a subscription-plan fleet id onto the sidecar
-  // runtime identity before /api/agents reports it (grok\u2192xai-oauth,
-  // claude\u2192anthropic, codex\u2192openai-codex); cursor is unchanged.
-  const sidecarLaunchProvider = provider => ({ grok: 'xai-oauth', claude: 'anthropic', codex: 'openai-codex' })[provider] || provider;
+  // 🎯T866.5: /api/agents names a subscription seat by its sidecar runtime id
+  // (xai-oauth, anthropic, openai-codex) where the journey names the plan
+  // (grok, claude, codex); cursor is unchanged. Compare plans.
+  const plan = provider => ({ 'xai-oauth': 'grok', anthropic: 'claude', 'openai-codex': 'codex' })[provider] || provider;
+  // 🎯T832: the overseer is shared with earlier journeys, which may have moved
+  // it (J13 once migrated it in place). Expect its current provider; the aside
+  // this journey mints below carries the requested one.
   const agents = await (await fetch(new URL('/api/agents', base))).json();
-  assert.equal(agents.find(a => a.name === 'jevons')?.provider, sidecarLaunchProvider(values.provider));
+  assert.equal(plan(agents.find(a => a.name === 'jevons')?.provider), plan(values['overseer-provider'] || values.provider), 'overseer provider differs from its current registry provider');
   const sideWork = await fs.mkdtemp(path.join(values.workdir, 'boundary-aside-'));
   await mcp('jevons_thread_spawn', { id: values.aside, provider: values.provider, owner_asked: true, workdir: sideWork, description: 'isolated owner-boundary check' });
   asideCreated = true;

@@ -12,7 +12,7 @@ const { parseArgs } = require('node:util');
 const { chromium } = require('../browser-loop-test/node_modules/playwright');
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
-  screenshot: { type: 'string' },
+  screenshot: { type: 'string' }, 'overseer-provider': { type: 'string' },
 } });
 const base = new URL(`http://${values.host}`);
 assert(['localhost', '127.0.0.1', '[::1]'].includes(base.hostname));
