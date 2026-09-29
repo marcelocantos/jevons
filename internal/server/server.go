@@ -335,6 +335,20 @@ type Server struct {
 	// (🎯T903); overseerEscalatorSeam stands in for its seat in tests.
 	ownerEscalation       func() (claudia.Escalation, bool)
 	overseerEscalatorSeam overseerEscalator
+	// 🎯T915: the owner's cancel holds the notify queue until the owner's
+	// next send (or the window lapses), so nothing queued during the
+	// cancelled turn runs ahead of it. Guarded by mu. overseerOwnerTurnText
+	// is the wire text of the owner batch in flight; notifyInFlight is the
+	// batch a drain has taken but not yet handed over. ownerInterruptSeam
+	// stands in for the overseer's interrupt in tests (settled = the seat
+	// emits no terminal event, so the server ends the turn itself).
+	ownerCancelHold       bool
+	ownerCancelHoldGen    uint64
+	ownerCancelHoldTimer  *time.Timer
+	ownerCancelHoldWindow time.Duration
+	overseerOwnerTurnText string
+	notifyInFlight        []string
+	ownerInterruptSeam    func() (settled bool, err error)
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
 	seatStopReader func(name string) (reason string, at time.Time, ok bool)
@@ -508,7 +522,8 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.turnBuf = ""
 		s.waiting = false
 		s.overseerOwnerTurn = false // 🎯T291: seal clears owner-turn chrome level
-		s.overseerStreamID = ""     // 🎯T223: terminal settle closes stream label
+		s.overseerOwnerTurnText = ""
+		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
 		s.overseerStreamAcc = ""
 		s.overseerStreamSilent = false
 		s.overseerStreamHold = nil // 🎯T240 silent stream state
