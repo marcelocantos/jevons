@@ -51,6 +51,7 @@ func (s *suite) midTurnAnswerWithBroker() error {
 	base, _ := payload["turns"].([]any)
 
 	// The overseer's question, on the overseer's own path.
+	sentAt := time.Now()
 	out, err := s.mcpText("jevons_agent_send", map[string]any{
 		"name": id, "actor": "jevons",
 		"text": "Overseer here: what is the capital of France? Answer in one word, then carry on.",
@@ -82,7 +83,15 @@ func (s *suite) midTurnAnswerWithBroker() error {
 	if ahead < 5*time.Second {
 		return fmt.Errorf("the answer reached the overseer only %s before the turn ended; it was not relayed mid-turn", ahead.Round(time.Second))
 	}
-	fmt.Printf("J38: the worker's mid-turn answer reached the overseer %s before its turn ended\n", ahead.Round(time.Second))
+	fmt.Printf("J38: the worker's mid-turn answer reached the overseer %s before its turn ended (asked at %s)\n",
+		ahead.Round(time.Second), sentAt.Format("15:04:05"))
+	if raw, err := os.ReadFile(s.logPath); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.Contains(line, "🎯T902") && strings.Contains(line, id) {
+				fmt.Println("J38:", line)
+			}
+		}
+	}
 	return nil
 }
 
