@@ -1428,6 +1428,10 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	return func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
+		// 🎯T902: a mid-turn answer to a steered question goes to its asker now.
+		if asker, answer, ok := s.midTurn().observe(name, ev); ok {
+			go s.relayMidTurnAnswer(name, asker, answer)
+		}
 
 		mu.Lock()
 		defer mu.Unlock()

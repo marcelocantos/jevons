@@ -332,6 +332,10 @@ type Server struct {
 	// owner reauth can both start one, and two sweeps moving the same seat
 	// race Claudia's migration (one sees the other's live handle).
 	planSweepMu sync.Mutex
+	// midTurnAnswers relays a busy agent's mid-turn answer to a steered
+	// question straight to its asker (🎯T902).
+	midTurnOnce    sync.Once
+	midTurnAnswers *midTurnAnswers
 	// deliveryEscalation is 🎯T899's urgency profile (config).
 	deliveryEscalation config.DeliveryEscalationConfig
 	planDecisionMu     sync.RWMutex

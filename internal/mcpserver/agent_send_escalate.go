@@ -68,7 +68,7 @@ func (s *Server) escalationLadder(class string) (claudia.Escalation, bool) {
 // handled=false means the seat is idle, the sender has no ladder, or the
 // seat cannot run one: the caller continues on the ordinary path, which
 // submits to an idle seat and holds a message for a busy one.
-func (s *Server) escalateIfBusy(name, text, class string, proc agentSender) (agentSendResult, bool, error) {
+func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSender) (agentSendResult, bool, error) {
 	ladder, ok := s.escalationLadder(class)
 	if !ok {
 		return agentSendResult{}, false, nil
@@ -82,8 +82,18 @@ func (s *Server) escalateIfBusy(name, text, class string, proc agentSender) (age
 	if proc == nil || !proc.Alive() || !(s.flightState(name) == FlightInFlight || senderTurnInFlight(proc)) {
 		return agentSendResult{}, false, nil
 	}
+	// 🎯T902: the overseer (or any non-owner asker) hears the mid-turn
+	// answer as soon as it is given; the owner reads it in the agent's pane.
+	// Registered before the send, because the seat may take it at once.
+	relay := class != config.EscalationOwner && asker != ""
+	if relay {
+		s.midTurn().expect(name, asker, text)
+	}
 	out, err := es.SendEscalating(text, ladder)
 	if err != nil {
+		if relay {
+			s.midTurn().forget(name, text)
+		}
 		if errors.Is(err, claudia.ErrSteerUnsupported) || errors.Is(err, claudia.ErrTurnIdle) {
 			// Nothing reached the seat; the ordinary path holds or submits it.
 			slog.Info("🎯T899 escalation not available on this seat; ordinary delivery",
