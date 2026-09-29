@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { diagnosticLabel, displayRows, shouldAckPendingSend, stepsLabel } from './display';
+import { diagnosticLabel, displayRows, shouldAckPendingSend, stepItems, stepsLabel } from './display';
 
 describe('displayRows', () => {
   it('nested MCP tool_input shows the real tool name, not a key dump (🎯T116)', () => {
@@ -286,5 +286,14 @@ describe('displayRows', () => {
     ]);
     expect(rows.map((r) => r.kind + ':' + r.text)).toEqual(['user:hi', 'assistant:ok']);
     expect(rows.some((r) => String(r.text).includes('overseer'))).toBe(false);
+  });
+});
+
+describe('T921 supervisor pass', () => {
+  it('names the supervisor as the sender of its note', () => {
+    const note = { type: 'agent_note', text: 'Check T804.', notice: { kind: 'supervisor-pass', subject: 'supervisor' } };
+    expect(stepItems(note)).toEqual([{ cls: 'agent-note', text: 'Supervisor: Check T804.' }]);
+    expect(stepItems({ type: 'agent_note', text: 'plain' })).toEqual([{ cls: 'agent-note', text: 'plain' }]);
+    expect(displayRows([note]).some((r) => r.kind === 'user')).toBe(false);
   });
 });

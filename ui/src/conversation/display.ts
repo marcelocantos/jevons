@@ -202,7 +202,9 @@ export function summariseToolUse(c: Record<string, unknown>): string {
 export function stepItems(frame: unknown): StepItem[] {
   if (isAgentNote(frame)) {
     const t = String(asRec(frame).text || '').trim();
-    return t ? [{ cls: 'agent-note', text: t }] : [];
+    // 🎯T921: a supervisor's pass names its sender; it is not the owner's.
+    const who = asRec(asRec(frame).notice).kind === 'supervisor-pass' ? 'Supervisor: ' : '';
+    return t ? [{ cls: 'agent-note', text: who + t }] : [];
   }
   const f = asRec(frame);
   if (f.type === 'tool_result' || f.type === 'result') return [];
