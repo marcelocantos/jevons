@@ -48,7 +48,7 @@ func toolProfileFromRequest(ctx context.Context, r *http.Request) context.Contex
 // pre-🎯T114 thread API, and the daemon's own self-test.
 var ambientToolPrefixes = []string{
 	"jevons_audit_", "jevons_research_", "jevons_rsi_", "jevons_idea_",
-	"jevons_thread_", "self_test.",
+	"jevons_thread_", "self_test_",
 }
 
 // ambientTools are the single tools outside the core surface.

@@ -21,8 +21,8 @@ curl -sS -X POST http://127.0.0.1:13705/api/self_test/run \
 curl -sS http://127.0.0.1:13705/api/self_test/packs
 
 # MCP tools on the jevons MCP server
-#   self_test.run  { pack?, site? }
-#   self_test.list
+#   self_test_run  { pack?, site? }
+#   self_test_list
 ```
 
 `pack` may be a single id (`health-L1`, `composer-growth-L2`,

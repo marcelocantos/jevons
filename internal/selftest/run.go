@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// RunRequest is the kick payload for self_test.run / POST /api/self_test/run.
+// RunRequest is the kick payload for self_test_run / POST /api/self_test/run.
 type RunRequest struct {
 	Pack string `json:"pack"` // pack id, or "all"
 	Site Site   `json:"site"` // live | drill | ci

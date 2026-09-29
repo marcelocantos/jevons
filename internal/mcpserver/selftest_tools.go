@@ -17,16 +17,17 @@ import (
 // jevonsd / HTTP server so MCP and POST /api/self_test/run share hooks).
 type SelfTestEnvFunc func() *selftest.Env
 
-// SetSelfTestEnv wires 🎯T110 self_test.* tools.
+// SetSelfTestEnv wires 🎯T110 self_test_* tools.
 func (s *Server) SetSelfTestEnv(fn SelfTestEnvFunc) {
 	s.selfTestEnv = fn
 	s.registerSelfTestTools()
 }
 
 func (s *Server) registerSelfTestTools() {
-	// Tool names match acceptance (self_test.run / list).
+	// Names match ^[a-zA-Z0-9_-]{1,128}$: a dot is refused by the Anthropic
+	// API when a seat harness passes MCP names through verbatim (🎯T908).
 	s.addTool(
-		mcp.NewTool("self_test.run",
+		mcp.NewTool("self_test_run",
 			mcp.WithDescription("Run a self-test pack (🎯T110). Accepts pack id (or 'all') and site live|drill|ci. Returns the shared report schema; grade is derived from measurements only."),
 			mcp.WithString("pack", mcp.Description("Pack id (health-L1, composer-growth-L2, agents-parent-L1) or 'all'. Default all.")),
 			mcp.WithString("site", mcp.Description("Site class: live | drill | ci. Default ci.")),
@@ -34,7 +35,7 @@ func (s *Server) registerSelfTestTools() {
 		s.handleSelfTestRun,
 	)
 	s.addTool(
-		mcp.NewTool("self_test.list",
+		mcp.NewTool("self_test_list",
 			mcp.WithDescription("List registered self-test packs with class and allowed sites (🎯T110)."),
 		),
 		s.handleSelfTestList,

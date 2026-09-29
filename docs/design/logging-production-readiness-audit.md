@@ -122,7 +122,7 @@ Fire-and-forget; CSRF/origin guard; always 204 (even on decode failure — **mal
 
 ### 3.5 MCP surface
 
-Tools include: `jevons_agent_{list,start,send,stop,kill}`, `jevons_thread_*`, `jevons_event_push`, `jwork`, `jevons_cost`, `jevons_logs_tail`, `jevons_mcp_reconnect`, `jevons_target_file`, `jevons_active_work`, `self_test.*`, transcript/screenshot helpers.
+Tools include: `jevons_agent_{list,start,send,stop,kill}`, `jevons_thread_*`, `jevons_event_push`, `jwork`, `jevons_cost`, `jevons_logs_tail`, `jevons_mcp_reconnect`, `jevons_target_file`, `jevons_active_work`, `self_test_*`, transcript/screenshot helpers.
 
 | Tool class | Lifecycle slog |
 |------------|----------------|

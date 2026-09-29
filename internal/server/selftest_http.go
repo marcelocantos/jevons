@@ -60,7 +60,7 @@ func (s *Server) handleSelfTestRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // SelfTestEnv builds an in-process Env so packs do not need loopback HTTP.
-// Shared by POST /api/self_test/run and MCP self_test.run (🎯T110).
+// Shared by POST /api/self_test/run and MCP self_test_run (🎯T110).
 func (s *Server) SelfTestEnv() *selftest.Env {
 	return &selftest.Env{
 		OverseerName: s.overseerName,

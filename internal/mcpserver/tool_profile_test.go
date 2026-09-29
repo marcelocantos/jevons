@@ -36,7 +36,7 @@ func TestCoreProfileListsFleetControlAndNotAmbientKnobs(t *testing.T) {
 		"jevons_agent_list", "jevons_agent_start", "jevons_agent_send", "jevons_target_file",
 		"jevons_gate_show", "jevons_sendq_reconcile", "jwork",
 		"jevons_audit_configure", "jevons_research_cycle", "jevons_rsi_coach_status",
-		"jevons_idea_list", "jevons_thread_spawn", "self_test.run", "jevons_writ_exec",
+		"jevons_idea_list", "jevons_thread_spawn", "self_test_run", "jevons_writ_exec",
 	)
 
 	core := listedFor(t, "/mcp?tools=core", all)
@@ -47,7 +47,7 @@ func TestCoreProfileListsFleetControlAndNotAmbientKnobs(t *testing.T) {
 		}
 	}
 	for _, not := range []string{"jevons_audit_configure", "jevons_research_cycle",
-		"jevons_rsi_coach_status", "jevons_idea_list", "jevons_thread_spawn", "self_test.run", "jevons_writ_exec"} {
+		"jevons_rsi_coach_status", "jevons_idea_list", "jevons_thread_spawn", "self_test_run", "jevons_writ_exec"} {
 		if core[not] {
 			t.Errorf("core profile lists %s", not)
 		}
@@ -81,7 +81,7 @@ func liveSurface() []mcp.Tool {
 		"jevons_target_file", "jevons_thread_adopt", "jevons_thread_direct", "jevons_thread_list",
 		"jevons_thread_remove", "jevons_thread_spawn", "jevons_thread_status",
 		"jevons_thread_takeover", "jevons_transcript_read", "jevons_transcript_rewind",
-		"jevons_writ_exec", "jwork", "self_test.list", "self_test.run",
+		"jevons_writ_exec", "jwork", "self_test_list", "self_test_run",
 	)
 }
 
