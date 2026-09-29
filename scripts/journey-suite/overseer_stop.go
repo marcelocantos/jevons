@@ -14,7 +14,7 @@ import (
 // suite with "overseer not running yet: [{jevons stopped}]" and nothing
 // else — no launch error, no park, no hint that the readiness budget had
 // simply run out. Both recorded specimens were the last: a20944c1 spent 42s
-// of the 45s budget booting and served for 3s; 3d88ee5a's Grok overseer was
+// of the 45s budget booting and finished boot 3s before it; 3d88ee5a's Grok overseer was
 // still launching 36s after it began. And the one "auto-start failed" line in
 // 3d88ee5a ("context canceled") was written AFTER the suite's own interrupt,
 // so a reader of the log tail blamed the teardown for the stop it reported.
@@ -106,7 +106,7 @@ func (l logLine) clock() string {
 // RUNNING diagnosis — and otherwise calls it a start timeout, saying how far
 // the start got and when.
 func overseerStopReason(log []byte, overseer string, gaveUp time.Time, budget time.Duration) string {
-	var launchErr, park, notRunning, launchBegan, launched, serving logLine
+	var launchErr, park, notRunning, launchBegan, launched, booted logLine
 	for _, raw := range strings.Split(string(log), "\n") {
 		l := parseLogLine(raw)
 		if l == nil {
@@ -133,7 +133,7 @@ func overseerStopReason(log []byte, overseer string, gaveUp time.Time, budget ti
 			msg == "cockpit: overseer launched and attached" && l["name"] == overseer:
 			launched = l
 		case msg == "jevonsd starting":
-			serving = l
+			booted = l
 		}
 	}
 
@@ -178,10 +178,13 @@ func overseerStopReason(log []byte, overseer string, gaveUp time.Time, budget ti
 	default:
 		progress = append(progress, "overseer launch never began")
 	}
-	if serving != nil {
-		progress = append(progress, "daemon began serving at "+before(serving))
+	// The daemon listens before it launches the overseer, and logs
+	// "jevonsd starting" only once that launch returns: a missing line
+	// means boot is still waiting on the overseer, not that nothing served.
+	if booted != nil {
+		progress = append(progress, "daemon boot finished (\"jevonsd starting\") at "+before(booted))
 	} else {
-		progress = append(progress, "daemon never logged that it began serving")
+		progress = append(progress, "daemon boot never finished (no \"jevonsd starting\" logged)")
 	}
 	return fmt.Sprintf("overseer %s stopped: start timeout after %s — %s; no launch error or plan-policy park in the isolate log",
 		overseer, budget, strings.Join(progress, "; "))
