@@ -36,6 +36,12 @@ const (
 	// was taken, or its escalation fired. Neither is a phase of the turn.
 	progressTypeDeliveryAbsorbed  = "delivery_absorbed"
 	progressTypeDeliveryEscalated = "delivery_escalated"
+	// 🎯T919: a Claude TUI text preview is the assistant's reply being
+	// written, not a tool. Its fault report and a superseded prompt are
+	// diagnostics, not phases of the turn.
+	progressTypeTUIPreview       = "tui_preview"
+	progressTypeTUIPreviewFault  = "tui_preview_fault"
+	progressTypePromptSuperseded = "prompt_superseded"
 )
 
 // CorrespondentFleet names a fleet note that carries no agent name.
@@ -75,7 +81,10 @@ func phaseFromEvent(ev claudia.Event) (PhaseSample, bool) {
 			return PhaseSample{Phase: PhaseAccepted, Tokens: tokens}, true
 		case progressTypePermission:
 			return PhaseSample{Phase: PhasePermission, Tokens: tokens}, true
-		case progressTypeDeliveryAbsorbed, progressTypeDeliveryEscalated:
+		case progressTypeTUIPreview:
+			return PhaseSample{Phase: PhaseStreaming, Tokens: tokens}, true
+		case progressTypeDeliveryAbsorbed, progressTypeDeliveryEscalated,
+			progressTypeTUIPreviewFault, progressTypePromptSuperseded:
 			return PhaseSample{}, false
 		}
 		if toolStatusTerminal(ev.ToolStatus) || (ev.ToolStatus == "" && toolCallTerminal(ev.Raw)) {

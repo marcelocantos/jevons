@@ -366,7 +366,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 				}
 				s.clearOverseerStreamID()
 			}
-			s.HandleAgentEvent(ev)
+			s.finishOverseerEvent(ev)
 			return
 		}
 
@@ -380,7 +380,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 				s.overseerStreamHold = append(s.overseerStreamHold, line)
 				s.mu.Unlock()
 			}
-			s.HandleAgentEvent(ev)
+			s.finishOverseerEvent(ev)
 			return
 		}
 
@@ -426,6 +426,15 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	if ev.IsTerminalStop() {
 		s.clearOverseerStreamID()
 	}
+	s.finishOverseerEvent(ev)
+}
+
+// finishOverseerEvent is the tail every overseer event runs once its wire
+// frame (if any) is out: turn/idle status, the fleet row, and the published
+// phase. The 🎯T240 silent and held-prefix branches return early and must
+// still come through here — a silent turn that skipped the phase reduce left
+// the /ws/mux level on its last busy phase until shutdown (🎯T919).
+func (s *Server) finishOverseerEvent(ev claudia.Event) {
 	s.HandleAgentEvent(ev)
 	// The fleet row reads AgentProgressHub, which workers fill from the
 	// MCP event hook. The overseer stream never went through that hook,

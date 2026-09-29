@@ -192,8 +192,8 @@ func TestT555_3MapperConsumesTypedProgressAndUsage(t *testing.T) {
 		t.Fatalf("permission: %+v ok=%v", p, ok)
 	}
 	p, ok = phaseFromEvent(claudia.Event{
-		Type: "assistant",
-		Text: "hi",
+		Type:  "assistant",
+		Text:  "hi",
 		Usage: claudia.Usage{OutputTokens: 9},
 	})
 	if !ok || p.Phase != PhaseStreaming || p.Tokens != 9 {
@@ -262,5 +262,82 @@ func TestT555_2MuxMetaAndFanCarryPhaseSample(t *testing.T) {
 		}
 	default:
 		t.Fatal("mux fan did not publish phase")
+	}
+}
+
+// 🎯T919: a silent turn (the post-boot resume "[silent] …" reply) must still
+// return the published phase to idle when it ends. The 🎯T240 silent branch of
+// DeliverOverseerEvent used to return before the phase reduce, so the level
+// stayed on whatever the turn last showed — "tool" on a Claude seat, whose TUI
+// text previews were read as a tool — until the daemon shut down.
+func TestT919SilentTurnEndPublishesIdle(t *testing.T) {
+	cases := []struct {
+		name   string
+		events []claudia.Event
+	}{
+		{"text then bare stop", []claudia.Event{
+			{Type: "assistant", Text: "[silent] The development daemon has reattached"},
+			{Type: "assistant", StopReason: "end_turn"},
+		}},
+		{"text and stop in one event", []claudia.Event{
+			{Type: "assistant", Text: "[silent] The development daemon has reattached", StopReason: "end_turn"},
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := New("test", t.TempDir())
+			s.overseerName = "jevons"
+			h := newMuxHub()
+			sess := &muxSession{send: make(chan []byte, 64), transcripts: map[string]*muxWatch{"jevons": {subscribed: true}}}
+			h.add(sess)
+			s.mux = h
+
+			s.beginOverseerPhase(nil)
+			s.DeliverOverseerEvent(claudia.Event{Type: "progress", ProgressType: "tui_preview", Text: "[silent] The dev"})
+			for _, ev := range c.events {
+				s.DeliverOverseerEvent(ev)
+			}
+
+			if p := s.OverseerPhase(); p.Phase != PhaseIdle {
+				t.Fatalf("OverseerPhase after silent turn end = %+v, want idle", p)
+			}
+			last := ""
+			for {
+				select {
+				case raw := <-sess.send:
+					var env muxEnvelope
+					if err := json.Unmarshal(raw, &env); err != nil {
+						t.Fatal(err)
+					}
+					var body map[string]any
+					if err := json.Unmarshal(env.Body, &body); err != nil {
+						continue
+					}
+					if phase, ok := body["phase"].(map[string]any); ok {
+						last, _ = phase["phase"].(string)
+					}
+					continue
+				default:
+				}
+				break
+			}
+			if last != PhaseIdle {
+				t.Fatalf("last /ws/mux level phase = %q, want idle", last)
+			}
+		})
+	}
+}
+
+// 🎯T919: a Claude TUI text preview is the assistant streaming, not a tool.
+// Progress kinds that describe no phase of the turn mint none.
+func TestT919ProgressKindsThatAreNotTools(t *testing.T) {
+	p, ok := phaseFromEvent(claudia.Event{Type: "progress", ProgressType: claudia.ProgressTUIPreview, Text: "hi"})
+	if !ok || p.Phase != PhaseStreaming {
+		t.Fatalf("tui_preview: %+v ok=%v, want streaming", p, ok)
+	}
+	for _, kind := range []string{claudia.ProgressTUIPreviewFault, claudia.ProgressPromptSuperseded} {
+		if p, ok := phaseFromEvent(claudia.Event{Type: "progress", ProgressType: kind}); ok {
+			t.Fatalf("%s must carry no phase, got %+v", kind, p)
+		}
 	}
 }
