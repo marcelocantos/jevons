@@ -334,3 +334,55 @@ func TestT937ReattachNoteNamesTheTurnSeenAtAttach(t *testing.T) {
 		})
 	}
 }
+
+// syncAbortSidecar is a fakeSidecar whose abort ends the turn before
+// Interrupt returns: the terminal stop is published on the caller's goroutine.
+type syncAbortSidecar struct{ *fakeSidecar }
+
+func (f syncAbortSidecar) Interrupt() error {
+	f.mu.Lock()
+	f.interrupts++
+	f.hung = false
+	proc := f.procs.get(f.name)
+	f.mu.Unlock()
+	proc.PublishEvent(terminalStop("aborted"))
+	return nil
+}
+
+// 🎯T937: when the abort's terminal stop lands before Interrupt returns, it
+// ends the turn and forgets the wedge record. The clear used to re-read that
+// record and announce a zero WedgedTurn — "believed in flight for
+// 2562047h…", zero messages waiting, and the manual-interrupt remedy for a
+// turn the daemon had just interrupted.
+func TestT937AbortEndingTheTurnFirstStillAnnouncesTheClear(t *testing.T) {
+	const name = "jevons-po"
+	s, procs, side, up := t927Fixture(t, name)
+	s.SetSenderResolver(func(string) (agentSender, bool, error) { return syncAbortSidecar{side}, false, nil })
+	reattachMidTurn(t, s, procs, name)
+	if _, err := deliverToSender(s, name, "queued behind the lost turn", false, side, false); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	start := time.Now()
+	s.SetSweepClock(func() time.Time { return start.Add(WedgedTurnAfter + time.Minute) })
+	s.SweepSendBacklogs()
+
+	var notice string
+	for _, l := range up.all() {
+		if strings.Contains(l, "WEDGED "+name) {
+			notice = l
+		}
+	}
+	if !strings.Contains(notice, "interrupted it so the queue drains") ||
+		!strings.Contains(notice, "1 message(s) wait") ||
+		!strings.Contains(notice, "for 16m0s") {
+		t.Fatalf("the notice misreports the clear: %q", up.all())
+	}
+	waitFor(t, "the queued message to be answered", func() bool {
+		_, answered, _ := side.snapshot()
+		return len(answered) == 1
+	})
+	if f := s.flightState(name); f == FlightUnknown {
+		t.Fatalf("flight=%v; the abort's terminal stop already settled it", f)
+	}
+}

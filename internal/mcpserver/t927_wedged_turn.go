@@ -262,6 +262,10 @@ func (s *Server) reconcileWedgedTurn(b sendq.Backlog, now time.Time) bool {
 
 	clear := lost && !wt.Cleared && wt.ClearErr == "" && s.isSidecarSeat(name)
 	if clear {
+		// 🎯T937: the abort's terminal stop may land before Interrupt
+		// returns. It ends the turn, which forgets the wedge record and sets
+		// flight idle, so what happens next is read from here, not the map.
+		generation := s.terminalGeneration(name)
 		errText := ""
 		if proc, live := s.liveSender(name); !live {
 			errText = "no live process to interrupt"
@@ -269,11 +273,15 @@ func (s *Server) reconcileWedgedTurn(b sendq.Backlog, now time.Time) bool {
 			errText = err.Error()
 		}
 		s.wedges.setCleared(name, errText)
+		wt.Cleared = errText == ""
+		wt.ClearErr = errText
 		if errText == "" {
 			// The daemon no longer knows of a running turn. The abort's
 			// terminal stop drains the queue; if it never arrives, the next
-			// sweep re-offers the head as it would for any unknown seat.
-			s.setFlight(name, FlightUnknown)
+			// sweep re-offers the head as it would for any unknown seat. If
+			// it has already arrived, flight says so, and a turn the drain
+			// has since begun is not unknown.
+			s.clearFlightUnlessEnded(name, generation)
 			slog.Warn("🎯T927 cleared a turn that did not survive its host handle",
 				"component", "agent_send", "agent", name, "queued", b.Depth,
 				"silent", now.Sub(quiet).Round(time.Second).String())
@@ -281,7 +289,6 @@ func (s *Server) reconcileWedgedTurn(b sendq.Backlog, now time.Time) bool {
 			slog.Error("🎯T927 could not clear a wedged turn",
 				"component", "agent_send", "agent", name, "err", errText)
 		}
-		wt, _ = s.wedges.get(name)
 	}
 
 	if !fresh && !clear {

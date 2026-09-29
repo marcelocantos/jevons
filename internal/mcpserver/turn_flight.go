@@ -248,6 +248,18 @@ func (s *Server) noteQueuedTurnBegan(name string, generation uint64) bool {
 	return false
 }
 
+// clearFlightUnlessEnded moves an in-flight turn to unknown, unless a terminal
+// stop has been observed since generation was read: that stop already said
+// what flight is, and a turn begun after it is a turn the daemon can see.
+func (s *Server) clearFlightUnlessEnded(name string, generation uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agentTerminalGeneration[name] != generation || s.agentFlight[name] != FlightInFlight {
+		return
+	}
+	s.agentFlight[name] = FlightUnknown
+}
+
 // Forgetting is clearAgentTurnBegan's job: a seat torn down drops its
 // turn-began mark and its flight record together, since both are claims about
 // an agent that no longer exists.
