@@ -11,11 +11,14 @@ import "github.com/marcelocantos/jevons/internal/agenterr"
 // is, and forgetting it once the owner has repaired the login.
 
 // PlanAuthFailed reports that name's latest turn was refused on its login.
+// The backend must have reported the turn as failed: a reply that talks
+// about a 401 is a seat whose login works (🎯T945).
 func (s *Server) PlanAuthFailed(name string) bool {
 	s.mu.Lock()
 	tracker := s.idleActivity
 	s.mu.Unlock()
-	return tracker.Get(name).FailureClass == agenterr.ClassAuth
+	act := tracker.Get(name)
+	return act.FailureClass == agenterr.ClassAuth && act.TurnErrored
 }
 
 // ClearPlanAuthFailures forgets the login refusals of the named seats after

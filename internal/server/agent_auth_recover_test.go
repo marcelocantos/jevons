@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,6 +100,12 @@ func TestAuthRecoverRelaunchesOnlyTheStoppedSeatAndClearsItsFailure(t *testing.T
 	t.Cleanup(func() { fleet.RecordRehydrateFailure(affected, nil) })
 	s := New("test", t.TempDir())
 	s.SetRegistry(reg)
+	// 🎯T945: the running seat's refusal on the same plan is answered too.
+	var cleared []string
+	s.SetPlanAuthFailure(
+		func(name string) bool { return name == healthy && len(cleared) == 0 },
+		func(names []string) { cleared = append(cleared, names...) },
+	)
 	recovered := 0
 	s.authRecover = func(_ context.Context, provider claudia.Provider) error {
 		recovered++
@@ -111,6 +118,9 @@ func TestAuthRecoverRelaunchesOnlyTheStoppedSeatAndClearsItsFailure(t *testing.T
 	s.RegisterRoutes(mux)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/agents/"+affected+"/auth/recover", nil))
+	if !slices.Contains(cleared, healthy) {
+		t.Fatalf("cleared = %v, want the running seat on the repaired plan", cleared)
+	}
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"running"`) {
 		t.Fatalf("recovery status=%d body=%s", w.Code, w.Body.String())
 	}

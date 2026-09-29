@@ -1463,6 +1463,7 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			s.mu.Unlock()
 			if tracker != nil {
 				tracker.NoteTerminalTurn(name, text, n)
+				tracker.NoteTurnErrored(name, ev.IsError)
 			}
 			if text != "" {
 				// Notify overseer first so the done report is delivered before

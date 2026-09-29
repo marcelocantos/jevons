@@ -469,6 +469,9 @@ type IdleActivity struct {
 	PlanOnly bool
 	// LastToolCalls is how many tools that latest turn called.
 	LastToolCalls int
+	// TurnErrored is true when the backend reported the latest turn as a
+	// failure (Event.IsError), not a reply that merely reads like one.
+	TurnErrored bool
 	// ProseWorking is set by an assistant event that moved the phase to
 	// working without a tool call. It is not satisfaction (🎯T869). A
 	// caller that stamps Phase directly leaves this false, so a positive

@@ -639,6 +639,22 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	t.by[name] = prev
 }
 
+// NoteTurnErrored records whether the backend reported the latest turn as
+// a failure (🎯T945). A reply that talks about a 401 is not one.
+func (t *IdleActivityTracker) NoteTurnErrored(name string, errored bool) {
+	if t == nil || name == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.by == nil {
+		t.by = make(map[string]IdleActivity)
+	}
+	prev := t.by[name]
+	prev.TurnErrored = errored
+	t.by[name] = prev
+}
+
 // NoteTerminalTurn is NoteTerminalOutcome plus whether the turn called a
 // tool (🎯T869). Assistant prose and no tool call stays idle: it does not
 // pulse satisfaction and does not clear a plan-only hold. A finish-shaped

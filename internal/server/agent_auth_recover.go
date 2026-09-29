@@ -113,6 +113,10 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusBadGateway, "Claudia could not recover authentication: "+err.Error())
 		return
 	}
+	// The repaired login is the plan's: running seats refused on it are
+	// answered too, and the plan bar re-reads its status (🎯T945).
+	s.forgetPlanAuthStatus()
+	s.notePlanAuthRecovered(reg, def.Provider)
 	if proc := reg.Get(name); proc != nil && proc.Alive() {
 		s.NotifyAgentsChanged()
 		w.Header().Set("Content-Type", "application/json")
