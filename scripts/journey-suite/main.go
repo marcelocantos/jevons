@@ -88,6 +88,9 @@ type suite struct {
 	// brokerSocket is set only while a migration journey owns a throwaway
 	// Claudia broker. Other journeys keep their direct-mode drain semantics.
 	brokerSocket string
+	// broker is the throwaway broker withIsolatedBroker started, so a
+	// journey can restart it (🎯T935). Nil outside withIsolatedBroker.
+	broker *isolatedBroker
 	// readyWait overrides readyTimeout when non-zero (hermetic tests only).
 	readyWait time.Duration
 
@@ -297,6 +300,7 @@ persona_notes: |
 	s.run("J34-hot-provider-migration", s.jHotProviderMigration)
 	s.run("J37-busy-escalation", s.jBusyEscalation)
 	s.run("J38-midturn-answer", s.jMidTurnAnswer)
+	s.run("J39-broker-restart-return", s.jBrokerRestartReturn)
 	s.run("J14-bounce-resume", s.jBounceResume)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J18-t418-handover-mute", s.jT418HandoverMute)

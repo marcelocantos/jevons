@@ -28,6 +28,10 @@ type isolatedBroker struct {
 	log    *os.File
 	root   string
 	socket string
+	// bin, args and env start the same broker again (restart, 🎯T935).
+	bin  string
+	args []string
+	env  []string
 }
 
 func journeyNeedsBroker(provider claudia.Provider) bool {
@@ -105,6 +109,7 @@ func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
 		return err
 	}
 	child.brokerSocket = b.socket
+	child.broker = b
 	if err := child.startDaemon(); err != nil {
 		return fmt.Errorf("start brokered isolate: %w", err)
 	}
@@ -161,26 +166,67 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		cleanup()
 		return nil, err
 	}
-	b := &isolatedBroker{cmd: cmd, done: make(chan error, 1), log: logFile, root: root, socket: socket}
+	b := &isolatedBroker{cmd: cmd, done: make(chan error, 1), log: logFile, root: root, socket: socket,
+		bin: bin, args: cmd.Args[1:], env: cmd.Env}
 	go func() { b.done <- cmd.Wait() }()
+	if err := b.waitListening(); err != nil {
+		body, _ := os.ReadFile(filepath.Join(s.stateDir, "claudia-broker.log"))
+		return nil, errors.Join(fmt.Errorf("%w: %s", err, trim(string(body), 500)), b.close())
+	}
+	return b, nil
+}
+
+// waitListening waits for the broker socket to accept a connection.
+func (b *isolatedBroker) waitListening() error {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-b.done:
-			_ = logFile.Close()
-			body, _ := os.ReadFile(filepath.Join(s.stateDir, "claudia-broker.log"))
-			cleanup()
-			return nil, fmt.Errorf("isolated Claudia broker exited before ready: %v: %s", err, trim(string(body), 500))
+			b.done <- err
+			return fmt.Errorf("isolated Claudia broker exited before ready: %v", err)
 		default:
 		}
-		conn, err := net.DialTimeout("unix", socket, 200*time.Millisecond)
+		conn, err := net.DialTimeout("unix", b.socket, 200*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			return b, nil
+			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return nil, errors.Join(fmt.Errorf("isolated Claudia broker did not listen at %s", socket), b.close())
+	return fmt.Errorf("isolated Claudia broker did not listen at %s", b.socket)
+}
+
+// restart stops the broker and its sidecar, runs between (with nothing
+// writing the spool), and starts the same broker again on the same socket
+// and state: the shape of the supervisor restart on 2026-09-30 (🎯T935).
+// The broker runs with -no-resume, so it does not bring seats back itself.
+func (b *isolatedBroker) restart(between func() error) error {
+	if err := b.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	select {
+	case <-b.done:
+	case <-time.After(10 * time.Second):
+		_ = b.cmd.Process.Kill()
+		<-b.done
+	}
+	if err := omp.StopSidecar(filepath.Join(b.root, "omp.sock")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stop isolated sidecar: %w", err)
+	}
+	if between != nil {
+		if err := between(); err != nil {
+			return err
+		}
+	}
+	cmd := exec.Command(b.bin, b.args...)
+	cmd.Env = b.env
+	cmd.Stdout, cmd.Stderr = b.log, b.log
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	b.cmd = cmd
+	go func() { b.done <- cmd.Wait() }()
+	return b.waitListening()
 }
 
 // A clean checkout has no sidecar/node_modules. Copy only the locked source
