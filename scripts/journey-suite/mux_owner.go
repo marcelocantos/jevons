@@ -463,7 +463,15 @@ func waitBootSweepQuiet(ctx context.Context, frames <-chan []byte, logPath strin
 				if !ok {
 					continue
 				}
+				// The cockpit converge loop republishes the level every few
+				// seconds (4da3b8ae never saw 5s of quiet on an idle seat);
+				// an unchanged idle sample is not a sign of life.
+				wasIdle := phase == "idle" || phase == ""
+				nowIdle := p == "idle" || p == ""
 				phase = p
+				if wasIdle && nowIdle {
+					continue
+				}
 			}
 			lastActivity = time.Now()
 		case <-tick.C:

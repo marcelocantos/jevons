@@ -212,16 +212,11 @@ func TestT840BootSweepQuietWaitsForTheSweepTurn(t *testing.T) {
 	}
 }
 
-// The quiet window restarts on every sign of life: a turn that is still
-// streaming transcript frames is not quiescent even between phase samples.
-func TestT840BootSweepQuietRestartsOnActivity(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "jevonsd.log")
-	if err := os.WriteFile(logPath, []byte(`msg="daemon restart resume event delivered" target=jevons`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+// feedEvery sends one frame from next every 100ms until the test ends.
+func feedEvery(t *testing.T, next func(i int) []byte) <-chan []byte {
 	frames := make(chan []byte)
 	stop := make(chan struct{})
-	defer close(stop)
+	t.Cleanup(func() { close(stop) })
 	go func() {
 		tick := time.NewTicker(100 * time.Millisecond)
 		defer tick.Stop()
@@ -231,15 +226,50 @@ func TestT840BootSweepQuietRestartsOnActivity(t *testing.T) {
 				return
 			case <-tick.C:
 				select {
-				case frames <- ownerMuxFixture(t, ownerMuxChannel, "assistant", i, "x", "", "", "append"):
+				case frames <- next(i):
 				case <-stop:
 					return
 				}
 			}
 		}
 	}()
-	err := waitBootSweepQuiet(context.Background(), frames, logPath, 400*time.Millisecond, 1500*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "never settled") {
-		t.Fatalf("err=%v, want the wait to refuse a still-streaming overseer", err)
+	return frames
+}
+
+// The quiet window restarts on every sign of life: a turn that is still
+// streaming transcript frames is not quiescent even between phase samples.
+// The converge loop's repeated idle sample is not a sign of life (4da3b8ae
+// waited out its whole deadline on an idle overseer).
+func TestT840BootSweepQuietRestartsOnActivity(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "jevonsd.log")
+	if err := os.WriteFile(logPath, []byte(`msg="daemon restart resume event delivered" target=jevons`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		next    func(i int) []byte
+		wantErr string // "" wants success
+	}{
+		{"still streaming", func(i int) []byte {
+			return ownerMuxFixture(t, ownerMuxChannel, "assistant", i, "x", "", "", "append")
+		}, "never settled"},
+		{"still working", func(int) []byte { return phaseMeta(t, "tool") }, "never settled"},
+		{"idle level republished", func(int) []byte { return phaseMeta(t, "idle") }, ""},
+		{"another seat streaming", func(i int) []byte {
+			return ownerMuxFixture(t, "transcript:jevons-po", "assistant", i, "x", "", "", "append")
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := waitBootSweepQuiet(context.Background(), feedEvery(t, tc.next), logPath, 400*time.Millisecond, 1500*time.Millisecond)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("err=%v, want success", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err=%v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }
