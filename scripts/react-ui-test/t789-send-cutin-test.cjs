@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // 🎯T789: the transcript stays pinned to the latest message through an owner
-// send while the seat is busy (queued) and a Cut in. Drives the REAL composer
-// and strip buttons against the built bundle over a mocked mux transport; a
+// send while the seat is busy and a Cut in. Since 🎯T903 a busy send escalates:
+// the daemon steers it and the pane grows an escalation strip above the
+// composer (it used to grow the queue strip), and Cut in is ⌘⇧Enter. Drives
+// the REAL composer against the built bundle over a mocked mux transport; a
 // passive pane cannot reproduce this (it stays pinned while idle).
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -58,9 +60,14 @@ async function main() {
         if (f.type === 'ping') return socket.send(JSON.stringify({ type: 'pong' }));
         if (f.t === 'open' || f.t === 'window') return replay(f.ch);
         if (f.t !== 'send') return;
-        // Cut in: the interrupt lands the owner turn and the seat starts answering.
-        phase = 'thinking';
         add('user', f.body.text, 'owner');
+        if (f.body.mode === 'interrupt') {
+          // Cut in: the interrupt lands the owner turn and the seat starts answering.
+          phase = 'thinking';
+        } else {
+          // A plain send to the busy seat: steered, as the daemon answers it.
+          send(f.ch, 'status', { id: f.body.id, status: 'steered', mode: 'submit', mechanism: 'steer', interrupt_after_ms: 60000, message: 'steered' });
+        }
         setImmediate(() => replay(f.ch));
       });
     });
@@ -72,25 +79,27 @@ async function main() {
     assert(atLoad.fromBottom <= 8, `pinned at load: ${JSON.stringify(atLoad)}`);
     assert(atLoad.scrollHeight > 6000, 'fixture is a long transcript');
 
-    // Several held messages: the queue strip is taller than FOLLOW_END_PX, so a
-    // pane that is not re-pinned when the strip appears reads as a user leave.
-    for (const text of ['please cut in with this', 'second held message', 'third held message']) {
+    // Several sends while busy: each escalates and the escalation strip grows
+    // above the composer, so a pane that is not re-pinned when it appears
+    // reads as a user leave.
+    for (const text of ['first held message', 'second held message', 'third held message']) {
       await page.locator('#input').fill(text);
       await page.locator('#input').press('Enter');
       await page.waitForTimeout(200);
     }
-    await page.getByRole('button', { name: 'Cut in' }).first().waitFor();
+    await page.locator('.escalation-strip').first().waitFor();
     const queued = await settle();
-    await page.getByRole('button', { name: 'Cut in' }).first().click();
-    await page.waitForFunction(() => [...document.querySelectorAll('#messages [data-kind="user"] .msg-body')].some(e => /held|cut in/.test(e.textContent)));
+    await page.locator('#input').fill('please cut in with this');
+    await page.locator('#input').press('Meta+Shift+Enter');
+    await page.waitForFunction(() => [...document.querySelectorAll('#messages [data-kind="user"] .msg-body')].some(e => /cut in/.test(e.textContent)));
     const after = await settle();
     const latestShown = await page.locator('#jump-bottom').isVisible();
     console.log(`at load ${JSON.stringify(atLoad)}; queued ${JSON.stringify(queued)}; after cut in ${JSON.stringify(after)}; latest button visible=${latestShown}`);
-    assert(queued.fromBottom <= 8, `pinned with the message queued: ${JSON.stringify(queued)}`);
+    assert(queued.fromBottom <= 8, `pinned with the escalation strip showing: ${JSON.stringify(queued)}`);
     assert(after.fromBottom <= 8, `pinned after Cut in: ${JSON.stringify(after)}`);
     assert.equal(latestShown, false, '↓ Latest must not be showing');
     assert.deepEqual(errors, []);
-    console.log('PASS: T789 pinned through a queued send and Cut in');
+    console.log('PASS: T789 pinned through an escalated send and Cut in');
   } finally {
     await browser.close();
     server.close();

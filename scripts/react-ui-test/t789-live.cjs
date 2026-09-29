@@ -3,7 +3,7 @@
 
 // 🎯T789.1: real provider, packaged React, isolate only. Builds a transcript
 // taller than 12,000 px with real turns, then sends while the seat is busy
-// (the composer holds the message in the queue strip) and clicks Cut in. The
+// (escalated since 🎯T903: steered, with a countdown) and cuts in. The
 // pane must end within one row of the bottom with no 'Latest' button — the
 // 2026-09-22 observation was 12,180 px above the bottom after this sequence.
 const assert = require('node:assert/strict');
@@ -58,7 +58,10 @@ async function main() {
   assert(tall.scrollHeight > TALL_PX, `transcript is taller than ${TALL_PX}px: ${JSON.stringify(tall)}`);
   assert(tall.fromBottom <= ONE_ROW_PX, `pinned before the send: ${JSON.stringify(tall)}`);
 
-  // Busy seat: start a long answer, then queue two more messages behind it.
+  // Busy seat: start a long answer, then send two more while it runs. Since
+  // 🎯T903 a plain Enter to the busy overseer escalates — steered into the
+  // turn, the pane counting down to the interrupt — instead of waiting in the
+  // queue strip, and Cut in is the ⌘⇧Enter chord.
   await page.locator('#input').fill(LONG(200));
   await page.locator('#input').press('Enter');
   await page.waitForTimeout(3000);
@@ -68,9 +71,10 @@ async function main() {
     await page.locator('#input').press('Enter');
     await page.waitForTimeout(300);
   }
-  await page.getByRole('button', { name: 'Cut in' }).first().waitFor();
+  await page.locator('.escalation-strip').first().waitFor();
   const queued = await gap();
-  await page.getByRole('button', { name: 'Cut in' }).first().click();
+  await page.locator('#input').fill(`Reply with exactly: cut-${held[0]}`);
+  await page.locator('#input').press('Meta+Shift+Enter');
   await page.waitForFunction(text => [...document.querySelectorAll('#messages [data-kind="user"] .msg-body')].some(e => e.textContent.includes(text)), held[0]);
   const samples = [];
   for (let i = 0; i < 12; i++) { await page.waitForTimeout(2500); samples.push(await gap()); }
