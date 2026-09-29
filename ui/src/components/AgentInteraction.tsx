@@ -57,10 +57,13 @@ export function AgentInteraction(props: {
     busy,
     wireOpen: connected,
     sendNow: (text, mode) => conv.send(text, { mode }),
-    // 🎯T899: a message to a busy agent goes to the daemon at once, which
-    // steers it into the turn and interrupts later if it is not taken. The
-    // overseer keeps its own owner-message handling.
-    escalate: props.name !== 'jevons',
+    // 🎯T899/🎯T903: a message to a busy agent goes to the daemon at once,
+    // which steers it into the turn and interrupts later if it is not
+    // taken. The overseer pane escalates identically to any other agent
+    // pane (T899 originally excluded it, leaving an owner message to a busy
+    // overseer waiting in the client-side queue for minutes); the strip and
+    // Steer/Cut in controls are unconditional already.
+    escalate: true,
   });
   // 🎯T657 slice 2b: Alt+↑/↓ focus over the queue; a drained or removed
   // item drops the focus rather than pointing at nothing.
