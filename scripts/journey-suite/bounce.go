@@ -83,10 +83,7 @@ func (s *suite) startDaemon() error {
 	cmd.Env = s.isolateDaemonEnv()
 	// 🎯T837: the log is shared by every start in the run; the stop reason
 	// is read from this start's bytes only.
-	var logStart int64
-	if fi, err := os.Stat(s.logPath); err == nil {
-		logStart = fi.Size()
-	}
+	logStart := s.logSize()
 	if err := cmd.Start(); err != nil {
 		return err
 	}
