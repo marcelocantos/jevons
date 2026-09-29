@@ -86,13 +86,16 @@ func (m *midTurnAnswers) observe(agent string, ev claudia.Event) (string, string
 	defer m.mu.Unlock()
 	m.init()
 	if ev.Type == "progress" && ev.ProgressType == claudia.ProgressDeliveryAbsorbed {
+		matched := false
 		for i, a := range m.pending[agent] {
 			if a.text == ev.Text {
 				m.pending[agent] = append(m.pending[agent][:i], m.pending[agent][i+1:]...)
 				m.capturing[agent] = &midTurnCapture{asker: a.asker}
+				matched = true
 				break
 			}
 		}
+		slog.Info("🎯T902 seat absorbed a message", "agent", agent, "awaited", matched, "len", len(ev.Text))
 		return "", "", false
 	}
 	c := m.capturing[agent]
