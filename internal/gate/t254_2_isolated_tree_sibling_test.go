@@ -15,6 +15,10 @@ import (
 // so the checkout's own parent holds no sibling modules. `gate -clean` run from
 // that tree must still find claudia next to the shared clone, or every clean
 // gate a worker runs builds against the published pin and fails.
+//
+// 🎯T440 //worktreereap:exempt — the worktree lives, with the repo it belongs to, inside
+// t.TempDir: no shared clone ever lists it, so there is nothing for the 🎯T440
+// sweeper to reap even if this test dies before cleanup.
 func TestInjectCleanSiblingGoWorkFromIsolatedTree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
