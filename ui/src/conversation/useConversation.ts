@@ -10,6 +10,7 @@ import { optimisticReceived, PHASE_IDLE, phaseSampleFromUnknown } from './overse
 import type { MuxEnvelope } from '../mux/protocol';
 import { normalizeOwnerEchoText, shouldAckPendingSend } from './display';
 import { useDrafts } from '../store/drafts';
+import { now as clockNow } from '../clock';
 
 // 🎯T562.5: id correlates the daemon's per-send reply (status = ack,
 // error = definite failure) to exactly THIS send. Text-echo matching alone
@@ -104,7 +105,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
             const body = rec(env.body);
             setEscalation({
               text: pending.text,
-              deadline: Date.now() + ms,
+              deadline: clockNow() + ms,
               message: typeof body.message === 'string' ? body.message : '',
             });
           }

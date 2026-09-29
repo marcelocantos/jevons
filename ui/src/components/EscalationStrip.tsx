@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import type { EscalationNotice } from '../conversation/useConversation';
+import { now as clockNow } from '../clock';
 
 /** Seconds left before the deadline, floored at zero. */
 export function secondsLeft(deadline: number, now: number): number {
@@ -14,10 +15,10 @@ export function secondsLeft(deadline: number, now: number): number {
  * interrupt that fires unless the agent takes it first.
  */
 export function EscalationStrip(props: { notice: EscalationNotice | null; agent: string; onDismiss: () => void }) {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => clockNow());
   useEffect(() => {
     if (!props.notice) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    const t = setInterval(() => setNow(clockNow()), 1000);
     return () => clearInterval(t);
   }, [props.notice]);
   if (!props.notice) return null;

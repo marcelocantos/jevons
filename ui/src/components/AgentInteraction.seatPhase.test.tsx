@@ -45,9 +45,33 @@ const emit = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JS
 const win = { start: 1, older: 0, total: 0, n: 0, following: true };
 
 describe('seat composer busy from its own phase (T562.2)', () => {
-  it('busy seat: Enter queues visibly, nothing reaches the wire; idle drains it', async () => {
+  // 🎯T899: a busy agent seat sends at once; the daemon steers the message into
+  // the turn and says when it will interrupt, and the pane counts down to it.
+  it('busy seat: Enter reaches the wire at once and the escalation counts down; idle clears it', async () => {
     const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected />);
     act(() => { emit('meta', { ...win, phase: { phase: 'tool', step: 'Read' } }); });
+    const box = view.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'while busy' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(sends()).toEqual([{ text: 'while busy' }]);
+    expect(view.container.querySelectorAll('#agent-inspect-send-queue .send-queue-item')).toHaveLength(0);
+
+    const id = Socket.latest.sent.map((m) => JSON.parse(m)).filter((m) => m.t === 'send').pop().body.id;
+    act(() => { emit('status', { id, status: 'steered', mode: 'submit', mechanism: 'stub_steer', interrupt_after_ms: 60000, message: 'steered' }); });
+    await waitFor(() => expect(view.container.querySelector('.escalation-strip')?.textContent).toMatch(/interrupts in \d+s unless it takes the message/));
+    expect(box.value).toBe('');
+
+    act(() => { emit('meta', { phase: { phase: 'idle' } }); });
+    await waitFor(() => expect(view.container.querySelector('.escalation-strip')).toBeNull());
+  });
+
+  // 🎯T562.2 still holds for the overseer pane: a busy overseer queues a plain
+  // Enter visibly and drains it when idle.
+  it('busy overseer: Enter queues visibly, nothing reaches the wire; idle drains it', async () => {
+    const OVERSEER = 'jevons';
+    const emitO = (t: string, body?: unknown) => Socket.latest.onmessage?.({ data: JSON.stringify({ v: 1, ch: `transcript:${OVERSEER}`, t, body }) });
+    const view = render(<AgentInteraction mux={client} name={OVERSEER} density="compact" connected />);
+    act(() => { emitO('meta', { ...win, phase: { phase: 'tool', step: 'Read' } }); });
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: 'while busy' } });
     fireEvent.keyDown(box, { key: 'Enter' });
@@ -56,7 +80,7 @@ describe('seat composer busy from its own phase (T562.2)', () => {
     await waitFor(() => expect(strip.classList.contains('visible')).toBe(true));
     expect([...strip.querySelectorAll('.send-queue-item .sq-text')].map((el) => el.textContent)).toEqual(['while busy']);
 
-    act(() => { emit('meta', { phase: { phase: 'idle' } }); });
+    act(() => { emitO('meta', { phase: { phase: 'idle' } }); });
     await waitFor(() => expect(sends()).toEqual([{ text: 'while busy' }]));
   });
 
