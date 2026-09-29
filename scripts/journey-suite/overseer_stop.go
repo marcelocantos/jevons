@@ -32,19 +32,20 @@ func (e *overseerNotRunningError) Error() string {
 	return "overseer not running yet: " + e.agents
 }
 
-// isolateOutageError marks an isolate that never became usable. It is a
+// isolateStartError marks an isolate start that never became usable (as
+// opposed to an isolate that died mid-suite, 🎯T839). It is a
 // harness outage — the suite never got to assert anything — so it reports
 // OUT / exit 2, never a journey verdict.
-type isolateOutageError struct {
+type isolateStartError struct {
 	err   error
 	cause string
 }
 
-func (e *isolateOutageError) Error() string {
+func (e *isolateStartError) Error() string {
 	return fmt.Sprintf("isolate outage, not a journey verdict: %v — %s", e.err, e.cause)
 }
 
-func (e *isolateOutageError) Unwrap() error { return e.err }
+func (e *isolateStartError) Unwrap() error { return e.err }
 
 // logLine is one slog text-handler line: its attributes by key.
 type logLine map[string]string

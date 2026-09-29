@@ -104,7 +104,7 @@ func (s *suite) startDaemon() error {
 		// talking, not the reason the overseer was stopped.
 		var notRunning *overseerNotRunningError
 		if errors.As(err, &notRunning) {
-			err = &isolateOutageError{err: err, cause: s.overseerStopCause(logStart, time.Now(), wait)}
+			err = &isolateStartError{err: err, cause: s.overseerStopCause(logStart, time.Now(), wait)}
 		}
 		_ = s.signalStop(2 * time.Second)
 		return err

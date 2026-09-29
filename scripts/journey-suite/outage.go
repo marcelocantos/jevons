@@ -60,6 +60,6 @@ func replyOutage(step, reply string) error {
 // isOutage reports whether err is an outage verdict.
 func isOutage(err error) bool {
 	var oe *outageError
-	var ie *isolateOutageError
-	return errors.As(err, &oe) || errors.As(err, &ie)
+	var se *isolateStartError
+	return errors.As(err, &oe) || errors.As(err, &se)
 }
