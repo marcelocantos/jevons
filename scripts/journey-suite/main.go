@@ -35,6 +35,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -89,6 +90,24 @@ type suite struct {
 	brokerSocket string
 	// readyWait overrides readyTimeout when non-zero (hermetic tests only).
 	readyWait time.Duration
+
+	// 🎯T839: isolateDown is the current isolate outage (nil while the
+	// isolate answers); isolateOutages keeps every one for the summary.
+	// tornDown stops the check once the suite has stopped the isolate on
+	// purpose (J5 runs after teardown).
+	isolateDown    *isolateOutage
+	isolateOutages []*isolateOutage
+	tornDown       bool
+	// aliveProbe and stdout replace the real probe and os.Stdout in tests.
+	aliveProbe func() error
+	stdout     io.Writer
+}
+
+func (s *suite) out() io.Writer {
+	if s.stdout != nil {
+		return s.stdout
+	}
+	return os.Stdout
 }
 
 func main() {
@@ -203,6 +222,7 @@ persona_notes: |
 			return
 		}
 		stopped = true
+		s.tornDown = true
 		started := s.cmd != nil && s.cmd.Process != nil
 		_ = s.signalStop(5 * time.Second)
 		if primaryBroker != nil {
@@ -217,6 +237,9 @@ persona_notes: |
 		mcpRemoveFor(provider, mcpName)
 		if started {
 			fmt.Println("stopped isolated jevonsd; removed MCP", mcpName)
+		} else if s.isolateDown != nil {
+			fmt.Printf("isolate already down at teardown (outage since %s); removed MCP %s\n",
+				s.isolateDown.journey, mcpName)
 		} else {
 			fmt.Println("isolate never started; removed MCP", mcpName)
 		}
@@ -302,6 +325,11 @@ persona_notes: |
 		return errors.Join(assertIsolation(provider, hadDailyMCP, stateDir, p), brokerStopErr)
 	})
 
+	// 🎯T839: each isolate death once, with its first cause, however many
+	// journeys it took with it.
+	for _, o := range s.isolateOutages {
+		fmt.Printf("ISOLATE OUTAGE: %s; %d later journey(s) OUT without an isolate\n", o, o.later)
+	}
 	if s.failures > 0 {
 		dumpTail(logPath, 60)
 		fmt.Printf("FAIL: %d journey(s) failed\n", s.failures)
@@ -312,7 +340,11 @@ persona_notes: |
 	// a broken product.
 	if s.outages > 0 {
 		dumpTail(logPath, 30)
-		fmt.Printf("OUTAGE: %d journey(s) could not run — provider backend unavailable, not a product defect. Re-run when the backend is healthy.\n", s.outages)
+		if len(s.isolateOutages) > 0 {
+			fmt.Printf("OUTAGE: %d journey(s) could not run — the isolate died (see ISOLATE OUTAGE above for the first cause); not a journey verdict.\n", s.outages)
+		} else {
+			fmt.Printf("OUTAGE: %d journey(s) could not run — provider backend unavailable, not a product defect. Re-run when the backend is healthy.\n", s.outages)
+		}
 		exitNow(2)
 	}
 	fmt.Println("PASS: journey suite green (isolated; daily stream untouched)")
@@ -370,19 +402,25 @@ func (s *suite) run(name string, fn func() error) {
 		return
 	}
 	start := time.Now()
-	if err := fn(); err != nil {
+	err := fn()
+	// 🎯T839: a journey that killed the isolate, or ran without one, is
+	// judged by that, not by whatever its dead-port error happened to say.
+	if !s.tornDown {
+		err = s.classifyIsolate(name, err)
+	}
+	if err != nil {
 		// 🎯T283: a backend outage did not let the assertion run, so it is
 		// not evidence of a product defect and must not be scored as one.
 		if isOutage(err) {
 			s.outages++
-			fmt.Printf("OUT  %-22s %v (%s)\n", name, err, time.Since(start).Round(time.Millisecond))
+			fmt.Fprintf(s.out(), "OUT  %-22s %v (%s)\n", name, err, time.Since(start).Round(time.Millisecond))
 			return
 		}
 		s.failures++
-		fmt.Printf("FAIL %-22s %v (%s)\n", name, err, time.Since(start).Round(time.Millisecond))
+		fmt.Fprintf(s.out(), "FAIL %-22s %v (%s)\n", name, err, time.Since(start).Round(time.Millisecond))
 		return
 	}
-	fmt.Printf("ok   %-22s (%s)\n", name, time.Since(start).Round(time.Millisecond))
+	fmt.Fprintf(s.out(), "ok   %-22s (%s)\n", name, time.Since(start).Round(time.Millisecond))
 }
 
 func (s *suite) jHealth() error {

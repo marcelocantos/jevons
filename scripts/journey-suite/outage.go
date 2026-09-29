@@ -57,9 +57,12 @@ func replyOutage(step, reply string) error {
 	return &outageError{step: step, class: class, msg: reply}
 }
 
-// isOutage reports whether err is an outage verdict.
+// isOutage reports whether err is an outage verdict: a provider outage, an
+// isolate start that never became usable (🎯T837), or a journey the
+// isolate's own outage kept from running (🎯T839).
 func isOutage(err error) bool {
 	var oe *outageError
 	var se *isolateStartError
-	return errors.As(err, &oe) || errors.As(err, &se)
+	var ie *isolateOutageError
+	return errors.As(err, &oe) || errors.As(err, &se) || errors.As(err, &ie)
 }

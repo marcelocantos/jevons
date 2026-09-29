@@ -11,6 +11,15 @@ but they are not a substitute. Needing a signed-in provider CLI is a
 dependency of `make test`, not a reason to omit this net. A missing
 provider is OUTAGE (exit 2), not skip-and-green.
 
+**One isolate death is one outage (🎯T839):** after every journey the suite
+checks its isolate is still there (process alive, port answering). The
+journey during which it died is `OUT … ISOLATE OUTAGE`, naming that journey's
+error and the isolate log's last `level=ERROR` records; every later journey
+that runs while it is still down is `OUT … no isolate since <journey>`, never
+FAIL, and the summary prints the outage once. A journey that restarts the
+isolate (J20, J29) ends the outage, and a journey that fails while the isolate
+answers is FAIL as before.
+
 **Agent interaction:** each journey drives a real isolate (`jevonsd` + Grok ACP
 or fleet tools that reach an agent). After a **successful** live run, caching
 that agent interaction for replay is allowed (🎯T107) — not inventing stubs
