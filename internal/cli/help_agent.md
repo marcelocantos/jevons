@@ -339,6 +339,32 @@ allows it; until then this convention plus jevons MCP tools is the
 enforced path. Brief every new agent with target IDs and ownership —
 never bare "go".
 
+### Same-repo fan-out: worktrees and one integrator (🎯T254.2)
+
+A work agent started in a repo that already holds another work agent (in
+the shared clone or in an isolated tree made from it) is sent into its own
+git worktree at `../.jevons-worktrees-<repo>/<name>` on branch
+`jevons-worktree/<name>`. A re-minted worker goes back into the tree it
+already has. The spawn result and the worker's brief both name the tree.
+The tree gets its own `go.work` mirroring the org workspace (🎯T448), kept
+out of git by `info/exclude`. Integrators (role `boss`) and POs, auditors,
+asides, and the overseer are never redirected.
+
+Workers commit in their own tree and never in the shared clone. Their
+commits land on the shared clone's checked-out branch only through the
+integrator:
+
+    go run ./cmd/integrate -repo <shared clone> <worker-name>...
+
+It computes the merge with no working tree, so a conflict is refused and
+named, never left as markers. It advances the branch by a fast-forward to
+that result, so another worker's uncommitted edits stay where they are, and
+an edit to a path the landing touches refuses the landing whole. Landings
+are serialized by a lock in the git dir. Worker commits are kept (a
+fast-forward or a merge, never a rebase), so SHAs cited in finish reports
+stay reachable (🎯T427). A dirty worker tree is refused. Nothing is pushed
+(🎯T104).
+
 ### Worker names: literal dots for hierarchical target ids (🎯T197)
 
 Agent names are free-form. When a name encodes a **hierarchical** bullseye
