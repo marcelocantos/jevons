@@ -494,3 +494,21 @@ func Annotate(text string, err error) string {
 	}
 	return Banner(err) + "\n\n" + text
 }
+
+// CorrectionNotice is what the daemon sends BACK TO THE AUTHOR (not the
+// parent) when a load-bearing envelope is malformed (🎯T793). The author is
+// usually about to be reaped as done (🎯T165), so without this the only
+// record of the defect is a banner on the parent's copy — nobody with write
+// access to the report is ever told. Returns "" when text has no malformed
+// load-bearing envelope (nothing to correct).
+func CorrectionNotice(text string) string {
+	m, err := Parse(text)
+	if m == nil || err == nil || !m.Kind.LoadBearing() {
+		return ""
+	}
+	return "⚠ Your " + m.Kind.String() + " envelope did not parse (🎯T793): " + err.Error() +
+		"\nThis reply is not your terminal report; the parent copy is flagged malformed. " +
+		"Resend a corrected " + m.Kind.String() + " in your next reply. " +
+		"Reminder: a silent-decision confidence is a float in the range 0 to 1 " +
+		"(e.g. confidence=0.3), least-confident first — not a 1-10 score or an integer rank."
+}

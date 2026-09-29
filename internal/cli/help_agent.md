@@ -756,6 +756,12 @@ jevons: silent-decision confidence=0.2 choice="optimistic concurrency" why="spec
 jevons: silent-decision confidence=0.5 choice=shared-sqlite-table why="no isolation guidance"
 ```
 
+`confidence` is a float in the range **0 to 1** (0 = least confident, 1 =
+fully confident) — never a 1-10 score or an integer rank. `confidence=4`
+or `confidence=7` is malformed (🎯T793); the daemon tells the author the
+exact field and range on its own channel before it is reaped, so a
+corrected resend is possible — see `envelope.CorrectionNotice`.
+
 A green oracle with a **missing** silent-ledger (and no explicit `none`)
 is flagged, not treated as complete. Quality of the decisions is judgment;
 this rule is that the artifact exists and the independent gate can read it
