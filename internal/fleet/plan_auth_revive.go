@@ -88,12 +88,63 @@ func RevivePlanAuthPeers(reg *claudia.Registry, intent fleetintent.Snapshot,
 	if reg == nil {
 		return nil
 	}
-	alive := func(name string) bool {
+	return relaunchPlanSeats(reg, planAuthCandidates(reg.List(), registryAlive(reg), intent, provider), provider, skip, now)
+}
+
+// ownerReauthCandidates are the seats an owner's repair of provider's plan
+// brings back (🎯T905): every stopped seat on that plan whose intent allows
+// revival and that was either meant to run (auto-start) or last failed on
+// the plan login. A broker that could not open the plan when it resumed its
+// seats records nothing on this host, so the recorded failure alone misses
+// them; a seat the owner stopped is parked and stays stopped.
+func ownerReauthCandidates(defs []claudia.AgentDef, alive func(string) bool,
+	intent fleetintent.Snapshot, provider claudia.Provider) []string {
+	plan := claudia.PlanProvider(provider)
+	if plan == "" {
+		return nil
+	}
+	var out []string
+	for _, d := range defs {
+		if d.Name == "" || claudia.PlanProvider(d.Provider) != plan || alive(d.Name) {
+			continue
+		}
+		failed := false
+		if v, ok := rehydrateFailures.Load(d.Name); ok {
+			failed = PlanAuthFailure(v.(string))
+		}
+		if !d.AutoStart && !failed {
+			continue
+		}
+		if dec := intent.Allow(d.Name, fleetintent.ControlRevive); !dec.Allow {
+			continue
+		}
+		out = append(out, d.Name)
+	}
+	return out
+}
+
+// RevivePlanAfterOwnerReauth relaunches the seats an owner's successful
+// reauth of provider's plan brings back; skip names the seat the caller
+// already handled.
+func RevivePlanAfterOwnerReauth(reg *claudia.Registry, intent fleetintent.Snapshot,
+	provider claudia.Provider, skip string, now time.Time) []PlanAuthRevival {
+	if reg == nil {
+		return nil
+	}
+	return relaunchPlanSeats(reg, ownerReauthCandidates(reg.List(), registryAlive(reg), intent, provider), provider, skip, now)
+}
+
+func registryAlive(reg *claudia.Registry) func(string) bool {
+	return func(name string) bool {
 		p := reg.Get(name)
 		return p != nil && p.Alive()
 	}
+}
+
+// relaunchPlanSeats relaunches names, each at most once per cooldown.
+func relaunchPlanSeats(reg *claudia.Registry, names []string, provider claudia.Provider, skip string, now time.Time) []PlanAuthRevival {
 	var out []PlanAuthRevival
-	for _, name := range planAuthCandidates(reg.List(), alive, intent, provider) {
+	for _, name := range names {
 		if name == skip {
 			continue
 		}
@@ -178,6 +229,7 @@ func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, no
 		}
 		brokerReattachTried.Store(name, now)
 		if _, err := reg.Adopt(name); err != nil {
+			noteAdoptFailure(name, err)
 			continue
 		}
 		brokerReattachTried.Delete(name)
@@ -187,4 +239,14 @@ func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, no
 		attached = append(attached, name)
 	}
 	return attached
+}
+
+// noteAdoptFailure records an adopt that failed on the plan login (🎯T905):
+// the broker could not open the plan to resume the seat, and nothing else on
+// this host would say so. The standing sweep then relaunches it once a seat
+// on the plan runs again. Any other adopt failure is not recorded.
+func noteAdoptFailure(name string, err error) {
+	if err != nil && PlanAuthFailure(err.Error()) {
+		noteRehydrate(name, err)
+	}
 }

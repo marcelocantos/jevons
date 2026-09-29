@@ -20,6 +20,15 @@ func (s *Server) RevivePlanAuthPeers(provider claudia.Provider, skip string) []f
 	return fleet.RevivePlanAuthPeers(s.registry, s.fleetIntent(), provider, skip, time.Now())
 }
 
+// RevivePlanAfterOwnerReauth relaunches the seats an owner's successful
+// reauth of provider's plan brings back (🎯T905), under the revive gate.
+func (s *Server) RevivePlanAfterOwnerReauth(provider claudia.Provider, skip string) []fleet.PlanAuthRevival {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return fleet.RevivePlanAfterOwnerReauth(s.registry, s.fleetIntent(), provider, skip, time.Now())
+}
+
 // RevivePlanAuthWhereHealthy relaunches auth-broken seats on every plan
 // that has a running seat, the evidence that its login works again.
 func (s *Server) RevivePlanAuthWhereHealthy() []fleet.PlanAuthRevival {

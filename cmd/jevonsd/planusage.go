@@ -56,7 +56,7 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 	srv.SetPlanDecisions(mcpSrv.PlanPolicyDecisions)
 	srv.SetPlanRetryAfterReauth(mcpSrv.MarkPlanRetryAfterReauth)
 	srv.SetPlanAuthRevive(func(provider claudia.Provider, skip string) {
-		mcpSrv.RevivePlanAuthPeers(provider, skip)
+		mcpSrv.RevivePlanAfterOwnerReauth(provider, skip) // 🎯T905
 	})
 	// A plan login repaired anywhere (one seat's Reauth, the CLI, another
 	// host) shows up as a running seat on that plan; its auth-broken peers
