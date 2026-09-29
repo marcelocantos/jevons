@@ -347,7 +347,7 @@ func injectCleanSiblingGoWork(root, wt string) func() {
 	// repo under test by its own module name and skip only that one entry;
 	// the other siblings still get injected normally.
 	selfModule := ownModuleName(root)
-	base := filepath.Dir(root)
+	base := filepath.Dir(sharedCloneRoot(root))
 	var replaces strings.Builder
 	found := false
 	for _, mod := range cleanSiblingModules {
@@ -379,6 +379,19 @@ func injectCleanSiblingGoWork(root, wt string) func() {
 			fmt.Fprintln(os.Stderr, "gate clean: could not remove sibling go.work:", err)
 		}
 	}
+}
+
+// sharedCloneRoot is the main working tree of root's repo. Run from a
+// worker's isolated tree (🎯T254.2), root sits under
+// ../.jevons-worktrees-<repo>/, where no sibling checkout lives; the siblings
+// are next to the shared clone the tree was made from. Falls back to root when
+// git cannot say, or when the repo's git dir is not a plain .git directory.
+func sharedCloneRoot(root string) string {
+	common, err := gitOut(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || filepath.Base(common) != ".git" {
+		return root
+	}
+	return filepath.Dir(common)
 }
 
 // ownModuleName reads root/go.mod's module line and returns the last path
