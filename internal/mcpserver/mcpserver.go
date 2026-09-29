@@ -240,6 +240,12 @@ type Server struct {
 	// default — see turn_flight.go. Guarded by mu.
 	agentFlight map[string]TurnFlight
 
+	// wedges holds what the daemon has seen of each in-flight turn since it
+	// began: motion, a host handle lost under it, messages handed over, and
+	// whether it has been called wedged (🎯T927). Its own leaf lock, so the
+	// flight writers can feed it while holding mu.
+	wedges turnWedges
+
 	// wiredSinks records which process object currently carries this
 	// daemon's event sink, per agent (🎯T426). Guarded by wireMu and NOT by
 	// mu: the sink reaches into mu while claudia holds the agent lock, so

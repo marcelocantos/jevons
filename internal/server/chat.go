@@ -1027,6 +1027,10 @@ type agentInfo struct {
 	// since this daemon started.
 	DroppedCaps string `json:"dropped_caps,omitempty"`
 	MassStop    string `json:"mass_stop,omitempty"`
+	// Wedged is set while a running seat's turn is believed in flight but
+	// nothing has been heard from it and messages wait behind it (🎯T927).
+	// phase stays "working"; this says the work is not happening.
+	Wedged string `json:"wedged,omitempty"`
 	// SpawnOrders: one line per open spawn order given to this seat
 	// (🎯T762). An incomplete order names every seat it listed that was never
 	// minted and why (refused: the start error; not_attempted: no start was
@@ -1093,11 +1097,20 @@ func (s *Server) SetSpawnOrderReader(fn func(parent string) ([]string, error)) {
 	s.spawnOrderReader = fn
 }
 
+// SetWedgedReader installs the 🎯T927 wedged-turn lookup
+// (mcpserver.WedgedSeat in production).
+func (s *Server) SetWedgedReader(fn func(name string) (string, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wedgedReader = fn
+}
+
 // decorateSeatStops applies the 🎯T662 fields to the rows.
 func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 	s.mu.RLock()
 	stopReader := s.seatStopReader
 	massReader := s.massStopReader
+	wedgedReader := s.wedgedReader
 	orderReader := s.spawnOrderReader
 	s.mu.RUnlock()
 	mass := ""
@@ -1118,6 +1131,11 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 			}
 		}
 		agents[i].MassStop = mass
+		if wedgedReader != nil && agents[i].Running {
+			if line, ok := wedgedReader(agents[i].Name); ok {
+				agents[i].Wedged = line
+			}
+		}
 		if orderReader != nil {
 			lines, err := orderReader(agents[i].Name)
 			agents[i].SpawnOrders = lines
