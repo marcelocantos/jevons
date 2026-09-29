@@ -4,13 +4,13 @@
 package server
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/escalate"
 )
 
 // 🎯T903: an owner message to an overseer that is mid-way through an owner
@@ -63,6 +63,15 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	if proc == nil || !proc.Alive() || proc.TurnPhase() != claudia.TurnInTurn {
 		return AgentSendOutcome{}, false, nil
 	}
+	// 🎯T931: only rungs the overseer's seat can run. One that cannot steer
+	// takes the ordinary queue-behind-turn path.
+	if caps, ok := escalate.CapsOf(proc); ok {
+		if ladder = escalate.Fit(ladder, caps); len(ladder) == 0 {
+			slog.Info("🎯T931 overseer cannot start the owner ladder; owner message queued behind its turn",
+				"steer_policy", string(caps.SteerPolicy))
+			return AgentSendOutcome{}, false, nil
+		}
+	}
 
 	msgID := newOwnerMessageID()
 	echo := chatUserEchoID(text, msgID)
@@ -70,7 +79,7 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	s.BroadcastChat(echo)
 	out, err := proc.SendEscalating(userTurnPrefix+text, ladder)
 	if err != nil {
-		if errors.Is(err, claudia.ErrSteerUnsupported) || errors.Is(err, claudia.ErrTurnIdle) {
+		if escalate.NotStarted(err) {
 			// Nothing reached the seat. The bubble is painted; queue behind
 			// the turn as before.
 			slog.Info("🎯T903 overseer cannot steer; owner message queued behind its turn", "err", err)

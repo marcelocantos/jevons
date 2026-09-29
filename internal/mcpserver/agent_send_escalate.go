@@ -4,7 +4,6 @@
 package mcpserver
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -12,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/escalate"
 )
 
 // 🎯T899: a product owner that gets its own hands dirty must stay reachable.
@@ -88,6 +88,19 @@ func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSende
 	if proc == nil || !proc.Alive() || !(s.flightState(name) == FlightInFlight || senderTurnInFlight(proc)) {
 		return agentSendResult{}, false, nil
 	}
+	// 🎯T931: the ladder holds only rungs this seat can run. A steer-first
+	// ladder cannot start on a seat with no steer mechanism (Claude Code in
+	// tmux), so the ordinary path holds the message for the turn boundary.
+	if caps, ok := escalate.CapsOf(proc); ok {
+		fitted := escalate.Fit(ladder, caps)
+		if len(fitted) == 0 {
+			slog.Info("🎯T931 seat cannot start the escalation ladder; ordinary delivery",
+				"component", "agent_send", "name", name, "class", class,
+				"steer_policy", string(caps.SteerPolicy))
+			return agentSendResult{}, false, nil
+		}
+		ladder = fitted
+	}
 	// 🎯T902: the overseer (or any non-owner asker) hears the mid-turn
 	// answer as soon as it is given; the owner reads it in the agent's pane.
 	// Registered before the send, because the seat may take it at once.
@@ -100,7 +113,7 @@ func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSende
 		if relay {
 			s.midTurn().forget(name, text)
 		}
-		if errors.Is(err, claudia.ErrSteerUnsupported) || errors.Is(err, claudia.ErrTurnIdle) {
+		if escalate.NotStarted(err) {
 			// Nothing reached the seat; the ordinary path holds or submits it.
 			slog.Info("🎯T899 escalation not available on this seat; ordinary delivery",
 				"component", "agent_send", "name", name, "class", class, "err", err.Error())
