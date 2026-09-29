@@ -242,7 +242,12 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := s.sendToNamedAgentMode(name, text, strings.TrimSpace(req.Origin), mode)
+	origin, supervisor := supervisorOrigin(strings.TrimSpace(req.Origin), text)
+	if supervisor {
+		slog.Info("🎯T921 supervisor message delivered as the supervisor's, not the owner's",
+			"component", "agent_send", "name", name, "declared_origin", req.Origin)
+	}
+	out, err := s.sendToNamedAgentMode(name, text, origin, mode)
 	status := out.Status
 	if err != nil {
 		// 🎯T237: structured class for T236 recovery; owner copy beyond bare Internal error.
