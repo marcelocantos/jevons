@@ -40,7 +40,16 @@ const (
 	// SourceExit: the process was found not alive by a sweep; the harness
 	// reported no exit status or signal, so the reason is unknown.
 	SourceExit Source = "exit"
+	// SourceBroker: the Claudia broker ended the seat's connection (it
+	// stopped or restarted) or reported the seat gone (🎯T925).
+	SourceBroker Source = "broker"
 )
+
+// BrokerReason is the stop reason for a seat the broker took down. cause is
+// the harness's own words for it.
+func BrokerReason(cause string) string {
+	return "broker: " + cause + " (the Claudia broker stopped or restarted)"
+}
 
 // Record is one seat stop.
 type Record struct {
@@ -154,6 +163,8 @@ type Alert struct {
 	// Shared is the reason every seat in the burst carries, or the
 	// "unknown: N seats, no reason recorded" form, or "mixed: …".
 	Shared string
+	// Broker marks a burst the Claudia broker caused (🎯T925).
+	Broker bool
 }
 
 // DefaultWindow is the burst width a mass stop is measured over.
@@ -165,7 +176,10 @@ const DefaultMinSeats = 3
 
 // MassStop finds the densest window-wide burst in records. bootAt is the
 // daemon's own start: a burst that straddles it is a restart, not a mass
-// stop, and is not reported here (the restart path has its own notice).
+// stop, and is not reported here (the restart path has its own notice) —
+// unless the burst carries a broker stop. A broker restart is its own
+// cause, and a daemon that happened to boot beside it does not explain it
+// (🎯T925).
 func MassStop(records []Record, window time.Duration, minSeats int, bootAt time.Time) (Alert, bool) {
 	if window <= 0 {
 		window = DefaultWindow
@@ -197,7 +211,7 @@ func MassStop(records []Record, window time.Duration, minSeats int, bootAt time.
 		// A daemon boot within one window either side of the burst's start is
 		// a restart story: seats found dead by the first sweep after a boot,
 		// or stopped just before one, are the restart path's to explain.
-		if !bootAt.IsZero() && !bootAt.Before(from.Add(-window)) && !bootAt.After(from.Add(window)) {
+		if !bootAt.IsZero() && !bootAt.Before(from.Add(-window)) && !bootAt.After(from.Add(window)) && !brokerBurst(seats) {
 			continue
 		}
 		names := make([]string, 0, len(seats))
@@ -206,9 +220,18 @@ func MassStop(records []Record, window time.Duration, minSeats int, bootAt time.
 		}
 		sort.Strings(names)
 		bestN = len(seats)
-		best = Alert{Seats: names, From: from, To: last, Window: window, Shared: sharedReason(seats)}
+		best = Alert{Seats: names, From: from, To: last, Window: window, Shared: sharedReason(seats), Broker: brokerBurst(seats)}
 	}
 	return best, bestN > 0
+}
+
+func brokerBurst(seats map[string]Record) bool {
+	for _, r := range seats {
+		if r.Source == SourceBroker {
+			return true
+		}
+	}
+	return false
 }
 
 func sharedReason(seats map[string]Record) string {
@@ -254,9 +277,13 @@ func FormatAlert(a Alert) string {
 	if len(a.Seats) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("MASS STOP (🎯T662): %d seats stopped within %s (%s–%s) with no daemon restart in the window — %s. Seats: %s.",
+	cause := "with no daemon restart in the window"
+	if a.Broker {
+		cause = "when the Claudia broker stopped or restarted"
+	}
+	return fmt.Sprintf("MASS STOP (🎯T662): %d seats stopped within %s (%s–%s) %s — %s. Seats: %s.",
 		len(a.Seats), a.Window, a.From.Local().Format("15:04:05"), a.To.Local().Format("15:04:05"),
-		a.Shared, strings.Join(a.Seats, ", "))
+		cause, a.Shared, strings.Join(a.Seats, ", "))
 }
 
 // Key identifies a burst for once-only delivery: the burst's first stop.

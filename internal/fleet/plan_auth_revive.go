@@ -196,12 +196,16 @@ const brokerReattachCooldown = 2 * time.Minute
 
 var brokerReattachTried sync.Map // name -> time.Time
 
-// reattachCandidates lists auto-start seats with no live handle whose
-// intent allows revival.
-func reattachCandidates(defs []claudia.AgentDef, alive func(string) bool, intent fleetintent.Snapshot) []string {
+// reattachCandidates lists seats with no live handle whose intent allows
+// revival: auto-start seats, and any seat this host lost to a broker
+// restart (🎯T925).
+func reattachCandidates(defs []claudia.AgentDef, alive func(string) bool, intent fleetintent.Snapshot, lostToBroker func(string) bool) []string {
 	var out []string
 	for _, d := range defs {
-		if d.Name == "" || !d.AutoStart || alive(d.Name) {
+		if d.Name == "" || alive(d.Name) {
+			continue
+		}
+		if !d.AutoStart && (lostToBroker == nil || !lostToBroker(d.Name)) {
 			continue
 		}
 		if dec := intent.Allow(d.Name, fleetintent.ControlRevive); !dec.Allow {
@@ -213,24 +217,71 @@ func reattachCandidates(defs []claudia.AgentDef, alive func(string) bool, intent
 }
 
 // ReattachRunningSeats re-adopts seats the broker is still running but this
-// host holds no live handle for. A seat that is not running stays stopped.
-func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, now time.Time) []string {
+// host holds no live handle for. A seat that is not running stays stopped,
+// unless lostToBroker says this host lost it to a broker restart: then the
+// broker did not bring it back, and it is relaunched on its own
+// conversation, brief intact (🎯T925). lostToBroker may be nil.
+func ReattachRunningSeats(reg *claudia.Registry, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) []string {
 	if reg == nil {
 		return nil
 	}
-	alive := func(name string) bool {
-		p := reg.Get(name)
-		return p != nil && p.Alive()
-	}
+	return reattachWith(registryReattach{reg}, intent, now, lostToBroker)
+}
+
+// reattachReg is what the reattach loop needs of the registry; tests fake it.
+type reattachReg interface {
+	List() []claudia.AgentDef
+	Alive(name string) bool
+	Adopt(name string) error
+	Relaunch(name string) error
+}
+
+type registryReattach struct{ reg *claudia.Registry }
+
+func (r registryReattach) List() []claudia.AgentDef { return r.reg.List() }
+func (r registryReattach) Alive(name string) bool {
+	p := r.reg.Get(name)
+	return p != nil && p.Alive()
+}
+func (r registryReattach) Adopt(name string) error {
+	_, err := r.reg.Adopt(name)
+	return err
+}
+func (r registryReattach) Relaunch(name string) error {
+	_, err := LaunchRecovering(r.reg, name)
+	return err
+}
+
+// brokerLostRetry spaces relaunch attempts for a seat lost to a broker
+// restart. The broker is usually back within seconds, and the full cooldown
+// would leave the seat down for minutes after it is (🎯T925).
+const brokerLostRetry = 20 * time.Second
+
+func reattachWith(reg reattachReg, intent fleetintent.Snapshot, now time.Time, lostToBroker func(string) bool) []string {
+	lost := func(name string) bool { return lostToBroker != nil && lostToBroker(name) }
 	var attached []string
-	for _, name := range reattachCandidates(reg.List(), alive, intent) {
-		if last, ok := brokerReattachTried.Load(name); ok && now.Sub(last.(time.Time)) < brokerReattachCooldown {
+	for _, name := range reattachCandidates(reg.List(), reg.Alive, intent, lostToBroker) {
+		cooldown := brokerReattachCooldown
+		if lost(name) {
+			cooldown = brokerLostRetry
+		}
+		if last, ok := brokerReattachTried.Load(name); ok && now.Sub(last.(time.Time)) < cooldown {
 			continue
 		}
 		brokerReattachTried.Store(name, now)
-		if _, err := reg.Adopt(name); err != nil {
-			noteAdoptFailure(name, err)
-			continue
+		if err := reg.Adopt(name); err != nil {
+			if !lost(name) {
+				noteAdoptFailure(name, err)
+				continue
+			}
+			// The broker did not bring this seat back. It went down with the
+			// broker, not on purpose, so it comes back on its own conversation.
+			if lerr := reg.Relaunch(name); lerr != nil {
+				noteAdoptFailure(name, lerr)
+				slog.Warn("seat lost to a broker restart: relaunch failed", "name", name, "adopt_err", err, "err", lerr)
+				continue
+			}
+			slog.Info("relaunched seat the broker did not bring back after it restarted", "name", name)
 		}
 		brokerReattachTried.Delete(name)
 		// It is running: an older launch refusal no longer describes it.

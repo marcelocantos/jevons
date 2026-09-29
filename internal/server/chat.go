@@ -1052,6 +1052,23 @@ type agentInfo struct {
 	TranscriptActivityReason string   `json:"transcript_activity_reason,omitempty"`
 }
 
+// SetDeadSeatNoter installs the 🎯T925 record the fleet feed makes of each
+// dead seat it handles (mcpserver.NoteDeadSeat in production).
+func (s *Server) SetDeadSeatNoter(fn func(name, cause, detail string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deadSeatNoter = fn
+}
+
+func (s *Server) noteDeadSeat(name, cause, detail string) {
+	s.mu.RLock()
+	fn := s.deadSeatNoter
+	s.mu.RUnlock()
+	if fn != nil {
+		fn(name, cause, detail)
+	}
+}
+
 // SetSeatStopReader installs the 🎯T662 seat-stop lookup the /api/agents
 // rows are decorated with (mcpserver.SeatStopReason in production).
 func (s *Server) SetSeatStopReader(fn func(name string) (reason string, at time.Time, ok bool)) {
@@ -1184,6 +1201,15 @@ func listFleetAgents(reg *claudia.Registry) []agentInfo {
 // notify=nil. progress may be nil (no ACP snapshots); models may be nil (no
 // session-log lookup — rows then carry only what the live hub saw).
 func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, onRecovered func(names []string), progress *AgentProgressHub, models *fleetModelResolver) []agentInfo {
+	return listFleetAgentsNoting(reg, account, onRecovered, nil, progress, models)
+}
+
+// listFleetAgentsNoting is listFleetAgentsNotifying that also reports each
+// dead seat it handles to onDead, with why its handle died when the harness
+// knew (🎯T925). This path stops dead seats as the sweep does, and a stop it
+// made with no record behind it painted "unknown" on a seat the broker took
+// down.
+func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onRecovered func(names []string), onDead func(name, cause, detail string), progress *AgentProgressHub, models *fleetModelResolver) []agentInfo {
 	if reg == nil {
 		return []agentInfo{}
 	}
@@ -1198,11 +1224,18 @@ func listFleetAgentsNotifying(reg *claudia.Registry, account *fleetlog.Account, 
 		if reg.ResumeDenied(d.Name) != nil {
 			continue
 		}
+		cause := fleet.ExitCause(proc)
 		if d.AutoStart {
 			if _, err := fleet.LaunchRecording(reg, d.Name); err != nil {
 				reg.Stop(d.Name)
+				if onDead != nil {
+					onDead(d.Name, cause, "found not alive by the fleet feed; re-launch failed: "+err.Error())
+				}
 			} else {
 				recovered = append(recovered, d.Name)
+				if onDead != nil {
+					onDead(d.Name, cause, "found not alive by the fleet feed; re-launched (AutoStart)")
+				}
 			}
 		} else if fleet.DeadSeatRemovable(d.Purpose) {
 			// 🎯T544: a dead work seat leaves the tree instead of lingering as
@@ -1392,10 +1425,10 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]agentInfo{})
 		return
 	}
-	agents := listFleetAgentsNotifying(reg, s.RemovalAccount(), func(names []string) {
+	agents := listFleetAgentsNoting(reg, s.RemovalAccount(), func(names []string) {
 		// 🎯T85: push UI refresh + optional client-visible signal after recovery.
 		s.NotifyAgentsChanged()
-	}, s.agentProgress, models)
+	}, s.noteDeadSeat, s.agentProgress, models)
 	rows := s.decorateSeatActivity(reg, s.decoratePlanAuth(reg, s.decoratePlanWalls(s.decorateSeatStops(agents))), time.Now())
 	_ = json.NewEncoder(w).Encode(rows)
 }

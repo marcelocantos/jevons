@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 )
@@ -82,8 +83,32 @@ func (s *Server) noteDeadSeats(reps []DeadAgentReport) {
 		case r.Declined != "":
 			detail += "; left down per intent: " + r.Declined
 		}
-		s.noteSeatStop(r.Name, seatstop.SourceExit, seatstop.Unknown, "", detail)
+		if r.Detail != "" {
+			detail = r.Detail
+		}
+		source, reason := seatstop.SourceExit, seatstop.Unknown
+		switch {
+		case fleet.BrokerCaused(r.Cause):
+			source, reason = seatstop.SourceBroker, seatstop.BrokerReason(r.Cause)
+		case r.Cause != "":
+			reason = r.Cause
+		}
+		s.noteSeatStop(r.Name, source, reason, "", detail)
 	}
+}
+
+// NoteDeadSeat records a dead seat another path handled: the fleet feed
+// stops and relaunches them as the sweep does (🎯T925).
+func (s *Server) NoteDeadSeat(name, cause, detail string) {
+	s.noteDeadSeats([]DeadAgentReport{{Name: name, Cause: cause, Detail: detail}})
+}
+
+// lostToBroker reports that name's latest recorded stop is the broker's
+// doing, so the reattach loop may relaunch it if the broker did not bring it
+// back (🎯T925). A deliberate stop never carries this source.
+func (s *Server) lostToBroker(name string) bool {
+	rec, ok := s.seatStops().Last(name)
+	return ok && rec.Source == seatstop.SourceBroker
 }
 
 // sweepDeadAccounted is SweepDeadAgents with the 🎯T662 record kept.

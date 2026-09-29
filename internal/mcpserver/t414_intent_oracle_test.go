@@ -87,6 +87,7 @@ func (r *t414SweepReg) ProcState(string) (bool, bool) { return true, false }
 func (r *t414SweepReg) Launch(string) error           { r.launched = true; return nil }
 func (r *t414SweepReg) Stop(string)                   {}
 func (r *t414SweepReg) RemoveDeadSeat(string) error   { return nil }
+func (r *t414SweepReg) ExitCause(string) string       { return "" }
 
 func t414Controls() []t414Control {
 	return []t414Control{

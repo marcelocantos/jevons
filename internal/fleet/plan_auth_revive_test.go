@@ -70,7 +70,7 @@ func TestReattachCandidatesAreStoppedAutoStartSeatsIntentAllows(t *testing.T) {
 		"po-parked": {State: fleetintent.Parked},
 		"po-reaped": {State: fleetintent.Reaped},
 	}}
-	if got := reattachCandidates(defs, alive, intent); !reflect.DeepEqual(got, []string{"po-down"}) {
+	if got := reattachCandidates(defs, alive, intent, nil); !reflect.DeepEqual(got, []string{"po-down"}) {
 		t.Fatalf("candidates = %v, want [po-down]", got)
 	}
 }

@@ -26,6 +26,11 @@ type DeadAgentReport struct {
 	// reports the agent: the owner should see that a process is gone, just
 	// not see the daemon start it again.
 	Declined string
+	// Cause is why the handle died, when the harness knew (🎯T925).
+	Cause string
+	// Detail, when set, is the handling path's own account of what it did;
+	// otherwise the seat-stop record derives one from the flags above.
+	Detail string
 }
 
 // deadRecoveryPlan is the pure policy for a single agent (hermetic oracle).
@@ -75,6 +80,8 @@ type fleetSweepReg interface {
 	Stop(name string)
 	// RemoveDeadSeat drops the row entirely (🎯T544 dead work seat).
 	RemoveDeadSeat(name string) error
+	// ExitCause is why name's dead handle died, when the harness knew.
+	ExitCause(name string) string
 }
 
 // claudiaSweep adapts *claudia.Registry to fleetSweepReg. account may be
@@ -100,6 +107,13 @@ func (c claudiaSweep) ProcState(name string) (hasProc, alive bool) {
 		return false, false
 	}
 	return true, proc.Alive()
+}
+
+func (c claudiaSweep) ExitCause(name string) string {
+	if c.reg == nil {
+		return ""
+	}
+	return fleet.ExitCause(c.reg.Get(name))
 }
 
 func (c claudiaSweep) Launch(name string) error {
@@ -152,7 +166,8 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 		if !detect {
 			continue
 		}
-		rep := DeadAgentReport{Name: d.Name}
+		// Read before any Stop or Launch replaces the dead handle.
+		rep := DeadAgentReport{Name: d.Name, Cause: reg.ExitCause(d.Name)}
 		if !dec.Allow {
 			rep.Declined = dec.Reason
 			slog.Info("fleet health: dead handle left alone — intent says do not run",

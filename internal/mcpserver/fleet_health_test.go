@@ -23,9 +23,13 @@ type fakeSweepReg struct {
 	removes   []string
 	launchErr error
 	removeErr error
+	// causes is each dead handle's exit cause (🎯T925).
+	causes map[string]string
 }
 
 func (f *fakeSweepReg) List() []claudia.AgentDef { return f.defs }
+
+func (f *fakeSweepReg) ExitCause(name string) string { return f.causes[name] }
 
 func (f *fakeSweepReg) ProcState(name string) (bool, bool) {
 	return f.hasProc[name], f.alive[name]

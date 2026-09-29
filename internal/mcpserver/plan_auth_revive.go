@@ -44,5 +44,11 @@ func (s *Server) ReattachRunningSeats() []string {
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	return fleet.ReattachRunningSeats(s.registry, s.fleetIntent(), time.Now())
+	attached := fleet.ReattachRunningSeats(s.registry, s.fleetIntent(), time.Now(), s.lostToBroker)
+	for _, name := range attached {
+		// Running again: the broker stop no longer describes it, and must
+		// not license a later relaunch of a seat stopped on purpose.
+		s.seatStops().Forget(name)
+	}
+	return attached
 }
