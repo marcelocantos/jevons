@@ -310,6 +310,20 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
                 </span>
               );
             })}
+            {g.override ? (
+              // 🎯T948: the band is the owner's, not the readings'; say why.
+              <InstantTip
+                cardClassName="plan-override-card"
+                placement="below-host"
+                content={<>
+                  <strong>{'Shown ' + g.override.band + ' by override'}</strong>
+                  <div className="plan-override-reason">{g.override.reason}</div>
+                  <div className="plan-override-note">The bars still show real usage.</div>
+                </>}
+              >
+                <span className="plan-override" aria-label={'Override: ' + g.override.reason}>?</span>
+              </InstantTip>
+            ) : null}
           </span>
         ) : null}
       </span>

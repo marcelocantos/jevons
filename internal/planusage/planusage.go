@@ -157,6 +157,8 @@ type Backend struct {
 	// backend right now — this is what makes a backend one the fleet is
 	// "actually running on" rather than one we merely support.
 	FleetAgents int `json:"fleet_agents,omitempty"`
+	// Override is the owner's band for this plan, when set (🎯T948).
+	Override *Override `json:"override,omitempty"`
 }
 
 // Available reports whether this backend published anything usable.

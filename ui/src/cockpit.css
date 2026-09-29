@@ -918,6 +918,24 @@ body.rhs-resizing-row { cursor: row-resize; }
    It carried --anthropic-mark and was the only coloured icon in the UI. */
 #plan-ticker .plan-icon .model-icon[data-mark="cursor"],
 #plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--text-muted); }
+/* 🎯T948: the owner overrode this plan's band; the ? explains why. */
+#plan-ticker .plan-override {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #06140a;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: help;
+}
+.plan-override-card { max-width: 320px; white-space: normal; }
+.plan-override-card .plan-override-reason { margin-top: 4px; }
+.plan-override-card .plan-override-note { margin-top: 4px; color: var(--text-dim); }
 #plan-ticker .plan-box { display: inline-flex; align-items: flex-end; gap: 5px; padding: 2px 5px 1px; border: 1px solid var(--border-focus); border-radius: 3px; }
 #plan-ticker .plan-win { display: inline-flex; align-items: flex-end; gap: 2px; }
 #plan-ticker .plan-track { position: relative; display: inline-block; width: 36px; padding-bottom: 5px; flex-shrink: 0; }

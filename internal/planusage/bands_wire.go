@@ -58,6 +58,9 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 				continue
 			}
 			windows[j].Band = string(BandOfWindow(windows[j], now, th))
+			if be.Override != nil {
+				windows[j].Band = string(be.Override.Band) // 🎯T948
+			}
 			windows[j].Pressure = pressureOfWindow(windows[j], now, th)
 			windows[j].History = historyWithBands(windows[j], th)
 		}

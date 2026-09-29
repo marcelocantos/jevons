@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -48,10 +49,16 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 		History:  hist,
 		OnUpdate: srv.FanPlanUsage,
 	})
-	srv.SetPlanUsageSource(func() any { return reader.Snapshot() })
+	// 🎯T948: the owner's band overrides ride the snapshot from its source,
+	// so the bars, the sweep and the mint pick read one verdict.
+	overrides := planusage.NewOverrideStore(filepath.Join(stateDir, planusage.OverrideFile))
+	snapshot := func() planusage.Snapshot { return overrides.Apply(reader.Snapshot()) }
+	overrides.OnChange(srv.FanPlanUsage)
+	mcpSrv.SetPlanOverrides(overrides)
+	srv.SetPlanUsageSource(func() any { return snapshot() })
 	srv.SetPlanUsageWaitReady(reader.WaitReady)
 	srv.SetPlanUsageRefresh(reader.RefreshNow)
-	mcpSrv.SetPlanUsageSource(func() planusage.Snapshot { return reader.Snapshot() })
+	mcpSrv.SetPlanUsageSource(snapshot)
 	srv.SetPlanSweep(func() any { return mcpSrv.SweepPlanPolicy() })
 	srv.SetPlanDecisions(mcpSrv.PlanPolicyDecisions)
 	srv.SetPlanRetryAfterReauth(mcpSrv.MarkPlanRetryAfterReauth)

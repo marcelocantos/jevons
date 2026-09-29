@@ -204,6 +204,8 @@ type Server struct {
 	costSnapshot         func() (*cost.Snapshot, error)
 	// planUsage is GET /api/plan-usage as an overseer tool (🎯T390.1.4).
 	planUsage func() planusage.Snapshot
+	// planOverrides is the owner's band override per plan (🎯T948).
+	planOverrides *planusage.OverrideStore
 
 	// grokRun shells out to the Grok CLI for mid-session MCP reconnect (🎯T60).
 	// Nil uses defaultGrokRun (exec of grok on PATH). Tests inject a fake.
@@ -778,6 +780,12 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 			droppedUnsteerable = fmt.Sprintf("explicit %s dropped: unsteerable (%s)", explicit, why)
 			explicit = ""
 		}
+	}
+	// 🎯T948: a plan the owner has overridden into a dest band is where a
+	// new seat goes. Claudia's Resolve classifies from the readings alone
+	// and would send it elsewhere.
+	if explicit == "" && !existed {
+		explicit = s.planOverrideMint()
 	}
 	if explicit == "" && !existed && feedOK {
 		resolved, err := planusage.ResolveMint(context.Background(), cands, now, th)

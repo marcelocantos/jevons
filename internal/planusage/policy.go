@@ -181,6 +181,9 @@ func SessionStatusOf(be Backend, th Thresholds) SessionStatus {
 // (session remaining-low / exhausted, or weekly ahead/hot/exhausted).
 // Unpublished is not spent (🎯T677).
 func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
+	if be.Override != nil {
+		return !IsDestBandOverride(be.Override.Band)
+	}
 	switch SessionStatusOf(be, th) {
 	case SessionLow, SessionExhausted:
 		return true
@@ -196,6 +199,9 @@ func MintIneligible(be Backend, now time.Time, th Thresholds) bool {
 // MigrateOff reports Claudia's decision that running seats on this provider
 // should leave (🎯T691).
 func MigrateOff(be Backend, now time.Time, th Thresholds) bool {
+	if be.Override != nil {
+		return !IsDestBandOverride(be.Override.Band) // 🎯T948
+	}
 	return claudia.ShouldVacate(backendToPlanUsage(be), now, claudiaThresholdsPtr(th))
 }
 
@@ -207,6 +213,9 @@ func DestEligible(be Backend, now time.Time, th Thresholds) bool {
 	u := backendToPlanUsage(be)
 	if u.Status != claudia.PlanUsageAvailable {
 		return false
+	}
+	if be.Override != nil {
+		return IsDestBandOverride(be.Override.Band) // 🎯T948
 	}
 	if !claudia.HasAvailableTokens(u, now, claudiaThresholdsPtr(th)) {
 		return false
@@ -246,9 +255,23 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		exclusions = append(exclusions, claudia.PlanProvider(claudia.Provider(p)))
 		capped = append(capped, p)
 	}
+	// 🎯T948: a seat on a plan the owner has put in a dest band stays,
+	// whatever the readings say. Claudia classifies from the readings alone.
+	held := map[string]*Override{}
+	for _, be := range snap.Backends {
+		if be.Override != nil && IsDestBandOverride(be.Override.Band) {
+			held[strings.ToLower(be.Provider)] = be.Override
+		}
+	}
 	out := make([]PlanAction, 0, len(agents))
 	for _, a := range agents {
 		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
+			continue
+		}
+		plan := strings.ToLower(string(claudia.PlanProvider(claudia.Provider(a.Provider))))
+		if ov := held[plan]; ov != nil {
+			out = append(out, PlanAction{Name: a.Name, From: plan, Action: claudia.SeatStay,
+				Reason: "owner override (" + string(ov.Band) + "): " + ov.Reason, Author: "owner"})
 			continue
 		}
 		seatExclusions := append([]claudia.Provider(nil), exclusions...)

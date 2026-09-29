@@ -33,7 +33,11 @@ export type PlanBackend = {
   stale?: boolean;
   plan_type?: string;
   windows?: PlanWindow[];
+  /** 🎯T948: the owner's band override; reason is free text. */
+  override?: PlanOverride;
 };
+
+export type PlanOverride = { band: string; reason: string; set_by?: string; set_at?: string };
 
 export type PlanSnapshot = {
   pending?: boolean;
@@ -48,6 +52,7 @@ export type TickerGroup = {
   stale?: boolean;
   reason?: string;
   windows: PlanWindow[];
+  override?: PlanOverride;
   /** 🎯T681: the last reading that did arrive, for a provider now unreadable. */
   last?: LastReading;
 };
@@ -161,6 +166,7 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
       stale: b.stale,
       reason: b.reason,
       windows: orderWindows(windows),
+      override: b.override,
     });
   }
   out.sort((a, b) => (PROVIDER_RANK[a.provider] ?? 50) - (PROVIDER_RANK[b.provider] ?? 50));
