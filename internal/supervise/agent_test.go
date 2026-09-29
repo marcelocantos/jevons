@@ -363,15 +363,35 @@ func TestAnUndeliveredNoticeIsNotRecordedAsTold(t *testing.T) {
 
 	told := make(chan string, 4)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go supervise.WatchAgentLoop(ctx,
-		supervise.AgentPaths{StateDir: stateDir, Home: t.TempDir(), Repo: t.TempDir()},
-		supervise.AgentConfig{Stale: 10 * time.Millisecond, Retry: time.Hour},
-		20*time.Millisecond,
-		func(subject, kind, text string) bool {
-			told <- text
-			return false // no journal to write to
-		})
+	stopped := make(chan struct{})
+	home, repo := t.TempDir(), t.TempDir()
+	go func() {
+		defer close(stopped)
+		supervise.WatchAgentLoop(ctx,
+			supervise.AgentPaths{StateDir: stateDir, Home: home, Repo: repo},
+			supervise.AgentConfig{Stale: 10 * time.Millisecond, Retry: time.Hour},
+			20*time.Millisecond,
+			func(subject, kind, text string) bool {
+				// Non-blocking: a full buffer must not pin this loop
+				// inside check(), or SaveAgentState keeps creating
+				// files under watchdog after the test has cancelled.
+				select {
+				case told <- text:
+				default:
+				}
+				return false // no journal to write to
+			})
+	}()
+	// TempDir cleanup fails the test if this loop is still writing
+	// supervisor.json under watchdog (Go reports ENOTEMPTY). Stop it
+	// before the test function returns, including on an early failure.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+		}
+	})
 
 	select {
 	case text := <-told:
@@ -389,6 +409,11 @@ func TestAnUndeliveredNoticeIsNotRecordedAsTold(t *testing.T) {
 		t.Fatal("an undelivered notice was recorded as told")
 	}
 	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch loop did not stop after cancel")
+	}
 
 	// And it kept no claim to have told anyone.
 	st, err := supervise.LoadAgentState(dir)
