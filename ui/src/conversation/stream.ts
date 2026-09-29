@@ -13,6 +13,12 @@ export type StreamJoin = {
   openStream: number;
   segmentEdgeById: Record<string, boolean>;
   segmentEdgePending: boolean;
+  /**
+   * 🎯T907: an owner bubble landed while the assistant bubble at idx ended
+   * mid-line. The stream's next text, up to the end of that line or
+   * sentence, still belongs to that bubble; the rest goes below the owner's.
+   */
+  owedTail?: { sid: string; idx: number } | null;
 };
 
 export function emptyStream(): StreamJoin {
@@ -22,7 +28,82 @@ export function emptyStream(): StreamJoin {
     openStream: -1,
     segmentEdgeById: {},
     segmentEdgePending: false,
+    owedTail: null,
   };
+}
+
+/** Whether text stops at the end of a line or sentence (🎯T907). */
+function endsAtBoundary(text: string): boolean {
+  return text === '' || /[\n\r]$/.test(text) || /[.!?:;]["')\]]?\s*$/.test(text);
+}
+
+/**
+ * Where the owed tail of a broken line ends in text (🎯T907): just past the
+ * first line break or sentence end. -1 when text holds neither yet.
+ */
+export function tailBoundary(text: string): number {
+  const nl = text.search(/[\n\r]/);
+  const sentence = /[.!?]["')\]]?(?=\s)/.exec(text);
+  const ends = [nl >= 0 ? nl + 1 : -1, sentence ? sentence.index + sentence[0].length : -1].filter((n) => n >= 0);
+  return ends.length ? Math.min(...ends) : -1;
+}
+
+function frameText(frame: unknown): string {
+  const msg = messageOf(frame);
+  if (typeof msg.content === 'string') return msg.content;
+  return contentBlocks(frame)
+    .filter((b) => b.type === 'text')
+    .map((b) => String(b.text || ''))
+    .join('');
+}
+
+/** How far the continuation may run looking for the end of the cut line. */
+const OWED_TAIL_MAX = 240;
+
+/** The bubble the continuation of sid is painting below the owner's. */
+function continuationIdx(stream: StreamJoin, sid: string): number {
+  const at = sid ? stream.streamBubbles[sid] : stream.openStream;
+  return at == null ? -1 : at;
+}
+
+/**
+ * 🎯T907: once the continuation below the owner's bubble reaches the end of
+ * the line it cut into, that head moves up to finish the line.
+ */
+function settleOwedTail(frames: unknown[], stream: StreamJoin, sid: string): unknown[] {
+  const owed = stream.owedTail;
+  const at = continuationIdx(stream, sid);
+  if (!owed || owed.sid !== sid || at < 0 || at === owed.idx || owed.idx >= frames.length) return frames;
+  const text = frameText(frames[at]);
+  const cut = tailBoundary(text);
+  if (cut < 0 || cut > OWED_TAIL_MAX) return frames;
+  const out = frames.slice();
+  out[owed.idx] = concatIntoFrame(out[owed.idx], text.slice(0, cut), false);
+  out[at] = concatIntoFrame(withoutText(out[at]), text.slice(cut).replace(/^\s+/, ''), false);
+  return out;
+}
+
+/** Whether the owed tail is resolved: moved up, or past its budget. */
+function owedTailSettled(frames: unknown[], stream: StreamJoin, sid: string): boolean {
+  const at = continuationIdx(stream, sid);
+  if (at < 0 || !stream.owedTail || at === stream.owedTail.idx) return false;
+  const text = frameText(frames[at]);
+  const cut = tailBoundary(text);
+  // A continuation that already gave up its head starts at a boundary.
+  return (cut >= 0 && cut <= OWED_TAIL_MAX) || text.length > OWED_TAIL_MAX || frameMovedUp(frames, stream);
+}
+
+function frameMovedUp(frames: unknown[], stream: StreamJoin): boolean {
+  return !!stream.owedTail && endsAtBoundary(frameText(frames[stream.owedTail.idx]));
+}
+
+/** frame with its text blocks removed (tool blocks kept). */
+function withoutText(frame: unknown): unknown {
+  const f = { ...rec(frame) };
+  const msg = { ...messageOf(f) };
+  msg.content = typeof msg.content === 'string' ? '' : contentBlocks(f).filter((b) => b.type !== 'text');
+  f.message = msg;
+  return f;
 }
 
 /**
@@ -174,7 +255,7 @@ export function applyTranscriptFrame(
   const type = m.type;
 
   if (type === 'tool_result' || type === 'result') {
-    let s = markEdge(stream, '');
+    let s: StreamJoin = { ...markEdge(stream, ''), owedTail: null };
     for (const id of Object.keys(s.openById)) {
       if (s.openById[id]) s = markEdge(s, id);
     }
@@ -187,7 +268,14 @@ export function applyTranscriptFrame(
     // new bubble below the user instead of growing the pre-user row. T329
     // inject / T362 protocol frames are not barriers.
     if (isOwnerUserBarrierFrame(body)) {
-      return { frames: [...frames, body], stream: emptyStream() };
+      // 🎯T907: a bubble cut off mid-line is owed the rest of that line.
+      let owedTail = stream.owedTail ?? null;
+      const open = stream.openStream;
+      if (open >= 0 && !endsAtBoundary(frameText(frames[open]))) {
+        const sid = Object.keys(stream.streamBubbles).find((k) => stream.streamBubbles[k] === open) ?? '';
+        owedTail = { sid, idx: open };
+      }
+      return { frames: [...frames, body], stream: { ...emptyStream(), owedTail } };
     }
     return { frames: [...frames, body], stream };
   }
@@ -262,8 +350,12 @@ export function applyTranscriptFrame(
     pushedSelf = true;
   }
 
+  nextFrames = settleOwedTail(nextFrames, nextStream, sid);
+  if (nextStream.owedTail && (nextStream.owedTail.sid !== sid || owedTailSettled(nextFrames, nextStream, sid))) {
+    nextStream = { ...nextStream, owedTail: null };
+  }
   if (isTerminalAssistant(m)) {
-    nextStream = seal(nextStream, sid);
+    nextStream = { ...seal(nextStream, sid), owedTail: null };
   }
   return { frames: nextFrames, stream: nextStream };
 }
