@@ -13,10 +13,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/testreap"
 )
 
 // 🎯T884: a broker restart relaunches its seats while jevonsd keeps running.
@@ -33,6 +35,10 @@ func TestT884BrokerRestartReattachesRunningSeat(t *testing.T) {
 	if err != nil {
 		t.Fatal("Python is required for the hermetic sidecar fixture")
 	}
+	// 🎯T932: the broker detaches its seats' sidecars, so killing the broker
+	// strands them, and -timeout runs no cleanup at all. Arm sweeps every
+	// process naming this test's temp dirs however the binary ends.
+	testreap.Arm(t)
 	bin := buildJevonsdT526(t)
 	brokerBin := filepath.Join(t.TempDir(), "claudia")
 	if out, err := exec.Command("go", "build", "-o", brokerBin, "github.com/marcelocantos/claudia/cmd/claudia").CombinedOutput(); err != nil {
@@ -121,6 +127,7 @@ func TestT884BrokerRestartReattachesRunningSeat(t *testing.T) {
 		t.Cleanup(func() { logs.Close() })
 		cmd := exec.Command(name, args...)
 		cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = root, env, logs, logs
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +135,8 @@ func TestT884BrokerRestartReattachesRunningSeat(t *testing.T) {
 		exited := make(chan struct{})
 		go func() { done <- cmd.Wait(); close(exited) }()
 		t.Cleanup(func() {
-			_ = cmd.Process.Kill()
+			// The whole group: whatever it started and did not detach.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			<-exited
 		})
 		return cmd, done
