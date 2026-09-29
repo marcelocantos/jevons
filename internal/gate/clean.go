@@ -347,15 +347,32 @@ func injectCleanSiblingGoWork(root, wt string) func() {
 	// repo under test by its own module name and skip only that one entry;
 	// the other siblings still get injected normally.
 	selfModule := ownModuleName(root)
-	base := filepath.Dir(root)
+	// 🎯T838: a fleet worker's root is a linked worktree
+	// (.jevons-worktrees-jevons/<name>), whose parent holds other workers'
+	// trees, not claudia. Looking only there built every worker's -clean
+	// gate against the published pin (gate 5361afa0: undefined
+	// claudia.SubscriptionSeatProvider). The shared clone's parent is the
+	// org directory the siblings actually live in, so it is the fallback.
+	bases := []string{filepath.Dir(root)}
+	if common, err := gitOut(root, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
+		if org := filepath.Dir(filepath.Dir(common)); org != bases[0] {
+			bases = append(bases, org)
+		}
+	}
 	var replaces strings.Builder
 	found := false
 	for _, mod := range cleanSiblingModules {
 		if mod == selfModule {
 			continue
 		}
-		sib := filepath.Join(base, mod)
-		if _, err := os.Stat(filepath.Join(sib, "go.mod")); err != nil {
+		sib := ""
+		for _, base := range bases {
+			if _, err := os.Stat(filepath.Join(base, mod, "go.mod")); err == nil {
+				sib = filepath.Join(base, mod)
+				break
+			}
+		}
+		if sib == "" {
 			continue
 		}
 		modPath, err := gitOut(sib, "rev-parse", "--show-toplevel")
