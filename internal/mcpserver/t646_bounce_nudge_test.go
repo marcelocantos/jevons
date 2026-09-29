@@ -21,9 +21,7 @@ func TestT646BrokerPresentSkipBounceNudge(t *testing.T) {
 	t.Cleanup(func() { brokerHoldsFleet = prev })
 
 	s, inbox := t452Fixture(t, "jevons", "sid-overseer", t452Fleet()...)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go StartIdleNudgeLoop(ctx, IdleNudgeLoopArgs{
+	cancel := runIdleNudgeLoop(t, IdleNudgeLoopArgs{
 		Server:       s,
 		PostDelay:    15 * time.Millisecond,
 		OverseerName: "jevons",
@@ -46,9 +44,7 @@ func TestT646NoBrokerStillRunsT171(t *testing.T) {
 	t.Cleanup(func() { brokerHoldsFleet = prev })
 
 	s, inbox := t452Fixture(t, "jevons", "sid-overseer", t452Fleet()...)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go StartIdleNudgeLoop(ctx, IdleNudgeLoopArgs{
+	runIdleNudgeLoop(t, IdleNudgeLoopArgs{
 		Server:       s,
 		PostDelay:    15 * time.Millisecond,
 		OverseerName: "jevons",
@@ -130,6 +126,25 @@ func TestRestartBriefArrivesWhenTheProcessDoes(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("no full brief after the process started: %v", inbox.snapshot())
+}
+
+// runIdleNudgeLoop runs StartIdleNudgeLoop for the life of the test. The
+// cleanup cancels the loop and waits for it to return, so its restart-brief
+// retry cannot outlive the test and read package state (brokerHoldsFleet,
+// restartBriefRetryFor/Every) that the next test rewrites (🎯T910).
+func runIdleNudgeLoop(t *testing.T, args IdleNudgeLoopArgs) context.CancelFunc {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		StartIdleNudgeLoop(ctx, args)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return cancel
 }
 
 func bounceNudgeCount(got map[string][]string) int {

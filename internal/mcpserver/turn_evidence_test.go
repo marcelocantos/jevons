@@ -409,8 +409,11 @@ func TestDeliverStartPromptAcrossProviders(t *testing.T) {
 // A seat this spawn minted and could not brief is retired, so 🎯T222 admits
 // the next implementer and the 🎯T155 leaf is not permanently masked by a
 // worker that never ran.
+//
+// Not parallel: it swaps the package-level loadTargetStatusForKickoff, which
+// parallel spawn tests (TestT751_1_…) read through refuseEngagedOrClosedTarget
+// (🎯T910).
 func TestReleaseUnbriefedSeatFreesTheTarget(t *testing.T) {
-	t.Parallel()
 	s, reg, _, dir := startPromptFixture(t, "jv-t387-phantom", claudia.ProviderGrok)
 
 	prevStatus := loadTargetStatusForKickoff

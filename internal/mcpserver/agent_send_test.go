@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -89,14 +90,25 @@ func TestAgentSendQueuesWhenProviderKnowsTurnButDaemonDoesNot(t *testing.T) {
 }
 
 // slogCapture records Info-level records for 🎯T120.2 field assertions.
+// Handle can run on a daemon goroutine (the send-queue drain) while the test
+// reads, so a test that logs asynchronously reads through snapshot (🎯T910).
 type slogCapture struct {
+	mu      sync.Mutex
 	records []slog.Record
 }
 
 func (h *slogCapture) Enabled(context.Context, slog.Level) bool { return true }
 func (h *slogCapture) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.records = append(h.records, r.Clone())
 	return nil
+}
+
+func (h *slogCapture) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]slog.Record(nil), h.records...)
 }
 func (h *slogCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *slogCapture) WithGroup(string) slog.Handler      { return h }
