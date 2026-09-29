@@ -113,3 +113,54 @@ func TestT902ForgetAndExpiry(t *testing.T) {
 		t.Fatalf("pending = %d, want the stale question expired", n)
 	}
 }
+
+// A sidecar seat (Oh My Pi) runs its own tools and tells the host nothing
+// between the answer and the end of its next tool: the events are text, then
+// silence. Found by J38: the tool-boundary rule alone never fired there. A
+// pause in the answer while the turn stays open is the boundary.
+func TestT902QuietAnswerRelaysWithoutAToolEvent(t *testing.T) {
+	got := make(chan [3]string, 2)
+	m := &midTurnAnswers{
+		quietAfter: 30 * time.Millisecond,
+		relay:      func(agent, asker, answer string) { got <- [3]string{agent, asker, answer} },
+	}
+	m.expect("po", "jevons", "capital of France?")
+	m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "capital of France?"})
+	m.observe("po", claudia.Event{Type: "assistant", Text: "Par", PreviewUpdate: claudia.PreviewUpdateAppend})
+	time.Sleep(10 * time.Millisecond) // streaming: each piece pushes the boundary back
+	m.observe("po", claudia.Event{Type: "assistant", Text: "is.", PreviewUpdate: claudia.PreviewUpdateAppend})
+	select {
+	case r := <-got:
+		if r != [3]string{"po", "jevons", "Paris."} {
+			t.Fatalf("relay = %q", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a quiet answer on a turn that stayed open was never relayed")
+	}
+	// Text after the relay belongs to the turn-end report, not a second relay.
+	m.observe("po", claudia.Event{Type: "assistant", Text: "Carrying on."})
+	select {
+	case r := <-got:
+		t.Fatalf("relayed twice: %q", r)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A turn that ends before the answer goes quiet reports it at turn end; the
+// quiet timer must not relay it again afterwards.
+func TestT902TurnEndBeatsTheQuietTimer(t *testing.T) {
+	got := make(chan string, 1)
+	m := &midTurnAnswers{
+		quietAfter: 50 * time.Millisecond,
+		relay:      func(_, _, answer string) { got <- answer },
+	}
+	m.expect("po", "jevons", "q")
+	m.observe("po", claudia.Event{Type: "progress", ProgressType: claudia.ProgressDeliveryAbsorbed, Text: "q"})
+	m.observe("po", claudia.Event{Type: "assistant", Text: "answer"})
+	m.observe("po", claudia.Event{Type: "assistant", StopReason: "end_turn"})
+	select {
+	case a := <-got:
+		t.Fatalf("relayed %q after the turn ended; the turn-end report carries it", a)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
