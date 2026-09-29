@@ -120,6 +120,13 @@ func IsGitRepo(dir string) bool {
 // rather than recreated. A dedicated branch per worker (named after the
 // worktree path's leaf) keeps `git worktree add` from refusing a branch
 // that's already checked out elsewhere.
+//
+// 🎯T440 //worktreereap:exempt — a worker's tree is not a verification worktree. It is
+// owned by a durable agent name that outlives any one pid (a re-minted worker
+// goes back into it), it sits on its own branch, which the 🎯T440 sweeper
+// holds rather than reaps, and it may carry the worker's uncommitted slice.
+// A pid marker would record an owner that is dead by design after the first
+// idle stop.
 func Ensure(baseWorkdir, agentName string) (string, error) {
 	if !IsGitRepo(baseWorkdir) {
 		return "", fmt.Errorf("worktree: %q is not a git repo", baseWorkdir)
