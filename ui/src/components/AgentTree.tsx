@@ -196,12 +196,9 @@ function Row(props: {
   selected: string;
   onSelect: (name: string) => void;
   onDismiss?: (name: string) => void;
-  onReauth?: (name: string) => Promise<void>;
   parentWorkdir?: string;
 }) {
   const dot = agentDotState(props.node);
-  const [reauthBusy, setReauthBusy] = useState(false);
-  const [reauthError, setReauthError] = useState('');
   // 🎯T269: hover-gated dismiss × only on purpose=aside rows (not work/PO/portfolio).
   const isAside = props.node.purpose !== 'portfolio' && isAsidePurpose(props.node.purpose);
   return (
@@ -240,31 +237,6 @@ function Row(props: {
         {!props.node.running && props.node.rehydrate && props.node.rehydrate !== 'resumable' ? (
           <span className="agent-rehydrate" title={props.node.rehydrate}>
             <span className="agent-rehydrate-text">{props.node.rehydrate}</span>
-            {props.node.reauth_available && props.onReauth ? (
-              <button
-                type="button"
-                className="agent-reauth"
-                disabled={reauthBusy}
-                aria-label={'Reauth ' + props.node.name}
-                onClick={async (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (reauthBusy) return;
-                  setReauthBusy(true);
-                  setReauthError('');
-                  try {
-                    await props.onReauth?.(props.node.name);
-                  } catch (err) {
-                    setReauthError(err instanceof Error ? err.message : 'Authentication recovery failed');
-                  } finally {
-                    setReauthBusy(false);
-                  }
-                }}
-              >
-                {reauthBusy ? 'Recovering…' : 'Reauth'}
-              </button>
-            ) : null}
-            {reauthError ? <span className="agent-reauth-error" role="alert">{reauthError}</span> : null}
           </span>
         ) : null}
         {isAside ? (
@@ -295,7 +267,6 @@ function Row(props: {
               selected={props.selected}
               onSelect={props.onSelect}
               onDismiss={props.onDismiss}
-              onReauth={props.onReauth}
               parentWorkdir={props.node.workdir}
             />
           ))}
@@ -310,7 +281,6 @@ export function AgentTree(props: {
   selected: string;
   onSelect: (name: string) => void;
   onDismiss?: (name: string) => void;
-  onReauth?: (name: string) => Promise<void>;
 }) {
   const roots = buildAgentForest(props.agents);
   const mass = massStopLine(props.agents);
@@ -329,7 +299,6 @@ export function AgentTree(props: {
           selected={props.selected}
           onSelect={props.onSelect}
           onDismiss={props.onDismiss}
-          onReauth={props.onReauth}
         />
       ))}
     </>

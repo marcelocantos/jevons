@@ -292,7 +292,10 @@ function Cockpit() {
           <span className="voice-dot" />
           <span id="voice-status-text">listening</span>
         </span>
-        <PlanUsageBar mux={mux} />
+        <PlanUsageBar
+          mux={mux}
+          refusedSeats={agents.filter((a) => a.reauth_available).map((a) => ({ name: a.name, provider: a.provider || '' }))}
+        />
         <button
           id="theme-toggle"
           type="button"
@@ -355,17 +358,6 @@ function Cockpit() {
                 selected={agent}
                 onSelect={(name) => navigate({ search: { agent: name, tab } })}
                 onDismiss={(name) => void dismissFleetAside(name)}
-                onReauth={async (name) => {
-                  try {
-                    const r = await fetch('/api/agents/' + encodeURIComponent(name) + '/auth/recover', { method: 'POST' });
-                    if (!r.ok) {
-                      const body = await r.json().catch(() => ({}));
-                      throw new Error(body.error || 'Authentication recovery failed (HTTP ' + r.status + ')');
-                    }
-                  } finally {
-                    await queryClient.invalidateQueries({ queryKey: ['agents'] });
-                  }
-                }}
               />
             </div>
             <div

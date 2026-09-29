@@ -4,12 +4,25 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { PlanUsageBar } from './PlanUsageBar';
+import { PlanUsageBar, type RefusedSeat } from './PlanUsageBar';
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+
+function renderBar(refusedSeats?: RefusedSeat[]) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <PlanUsageBar refusedSeats={refusedSeats} />
+    </QueryClientProvider>,
+  );
+}
+
+function menuItems(): string[] {
+  return screen.queryAllByRole('menuitem').map((b) => b.getAttribute('aria-label') || '');
+}
 
 it('shows Claudia destination failures for running seats and lets the owner retry canceled reauth', async () => {
   let recoveries = 0;
@@ -28,27 +41,24 @@ it('shows Claudia destination failures for running seats and lets the owner retr
     }
     return { ok: true, json: async () => ({ backends: [] }) };
   }));
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const { container } = render(<QueryClientProvider client={client}><PlanUsageBar /></QueryClientProvider>);
-  const button = await screen.findByRole('button', { name: 'Reauth claude for failed migration' });
-  expect(screen.getAllByRole('button', { name: 'Reauth claude for failed migration' })).toHaveLength(1);
-  expect(screen.queryByRole('button', { name: /Reauth codex/ })).toBeNull();
+  const { container } = renderBar();
+  const item = await screen.findByRole('menuitem', { name: 'Reauth claude: migration failed for jevons-po, ge-po' });
+  expect(menuItems()).toEqual(['Reauth claude: migration failed for jevons-po, ge-po']);
   fireEvent.pointerEnter(container.querySelector('[data-instant-tip-host]')!);
   expect(container.querySelector('.plan-migration-failures')?.textContent).toContain('jevons-po: grok → claude — Destination refresh token was rejected (invalid_grant)');
-  expect(container.querySelector('.plan-migration-failures')?.textContent).toContain('ge-po: grok → claude — Destination refresh token was rejected (invalid_grant)');
 
-  fireEvent.click(button);
+  fireEvent.click(item);
   await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Sign-in was canceled'));
-  expect(button.hasAttribute('disabled')).toBe(false);
-  fireEvent.click(button);
+  expect(item.hasAttribute('disabled')).toBe(false);
+  fireEvent.click(item);
   await waitFor(() => expect(screen.getByRole('status').textContent).toContain('migration will retry automatically'));
   expect(recoveries).toBe(2);
 });
 
-// 🎯T924: a plan whose login is missing or rejected gets Reauth with no
-// failed migration and no broken seat; a healthy plan gets none, and the
-// button goes once the login is good.
-it('offers Reauth for any plan whose login needs the owner', async () => {
+// 🎯T924: a plan whose login is missing or rejected is listed with no failed
+// migration and no broken seat; a healthy plan is not, and an entry goes once
+// the login is good.
+it('lists every plan whose login needs the owner, one entry each', async () => {
   let cursorState = 'missing';
   const recovered: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
@@ -67,18 +77,52 @@ it('offers Reauth for any plan whose login needs the owner', async () => {
     }
     return { ok: true, json: async () => ({ backends: [] }) };
   }));
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const { container } = render(<QueryClientProvider client={client}><PlanUsageBar /></QueryClientProvider>);
-  const cursor = await screen.findByRole('button', { name: 'Reauth cursor — no saved login' });
-  expect(screen.getByRole('button', { name: 'Reauth grok — login rejected (invalid_grant)' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /Reauth claude/ })).toBeNull();
+  renderBar();
+  const cursor = await screen.findByRole('menuitem', { name: 'Reauth cursor: no saved login' });
+  expect(menuItems()).toEqual(['Reauth cursor: no saved login', 'Reauth grok: login rejected (invalid_grant)']);
+  expect(screen.getByRole('button', { name: 'Sign in (2)' })).toBeTruthy();
   expect(recovered).toEqual([]);
-  fireEvent.pointerEnter(container.querySelector('[data-instant-tip-host]')!);
-  expect(container.querySelector('.plan-login-health')?.textContent).toContain('cursor: no saved login');
 
   fireEvent.click(cursor);
-  await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Claudia recovered the cursor login.'));
-  expect(recovered).toEqual(['cursor']);
-  await waitFor(() => expect(screen.queryByRole('button', { name: /Reauth cursor/ })).toBeNull());
-  expect(screen.getByRole('button', { name: /Reauth grok/ })).toBeTruthy();
+  await waitFor(() => expect(recovered).toEqual(['cursor']));
+  await waitFor(() => expect(menuItems()).toEqual(['Reauth grok: login rejected (invalid_grant)']));
+  expect(screen.getByRole('button', { name: 'Sign in (1)' })).toBeTruthy();
+});
+
+// 🎯T945: the menu exists only while some backend is known to be signed out.
+it('is absent when every known login is healthy', async () => {
+  const seen: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+    seen.push(input);
+    if (input === '/api/plan-usage/decisions') return { ok: true, json: async () => [] };
+    if (input === '/api/plan-usage/auth') return { ok: true, json: async () => ({ plans: [{ provider: 'anthropic', state: 'ok' }] }) };
+    return { ok: true, json: async () => ({ backends: [] }) };
+  }));
+  const { container } = renderBar([]);
+  await waitFor(() => expect(seen).toContain('/api/plan-usage/auth'));
+  expect(container.querySelector('#plan-reauth-menu')).toBeNull();
+  expect(screen.queryByRole('button', { name: /Sign in/ })).toBeNull();
+});
+
+// A seat refused on a login the broker still reports healthy is one entry
+// for its plan, however many seats share it, and signs in through a seat.
+it('folds refused seats into one entry per plan', async () => {
+  const posts: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      posts.push(input);
+      return { ok: true, json: async () => ({ status: 'running' }) };
+    }
+    if (input === '/api/plan-usage/decisions') return { ok: true, json: async () => [] };
+    if (input === '/api/plan-usage/auth') return { ok: true, json: async () => ({ plans: [{ provider: 'anthropic', state: 'ok' }] }) };
+    return { ok: true, json: async () => ({ backends: [] }) };
+  }));
+  renderBar([
+    { name: 'claudia-po', provider: 'anthropic' },
+    { name: 'ge-po', provider: 'anthropic' },
+  ]);
+  const item = await screen.findByRole('menuitem', { name: 'Reauth claude: login refused for claudia-po, ge-po' });
+  expect(menuItems()).toHaveLength(1);
+  fireEvent.click(item);
+  await waitFor(() => expect(posts).toEqual(['/api/agents/claudia-po/auth/recover']));
 });

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useRef, useState } from 'react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { now } from '../clock';
 import type { MuxClient } from '../mux/client';
 import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
@@ -41,6 +41,21 @@ const LOGIN_STATE: Record<string, string> = {
   rejected: 'login rejected',
 };
 
+/** The plan a seat's provider signs in to; plan ids map to themselves. */
+function planOfProvider(provider: string): string {
+  return PLAN_OF_SUBSCRIPTION[provider] || provider;
+}
+
+/** A seat whose provider refused its plan login (🎯T905). */
+export type RefusedSeat = { name: string; provider: string };
+
+/**
+ * One backend the owner can sign in to again. The menu lists only backends
+ * already known to be signed out: a refused login, a failed migration, or a
+ * plan with no saved login. Nothing here probes a provider to find out.
+ */
+type SignInNeed = { plan: string; why: string; url: string };
+
 function loginStateText(p: PlanAuth): string {
   const said = LOGIN_STATE[p.state] || 'login ' + p.state;
   return p.detail ? said + ' (' + p.detail + ')' : said;
@@ -64,7 +79,8 @@ function migrationFailureSummary(failure: string): string {
   return failure.split('\n').find((line) => line.trim())?.trim() || 'Authentication failed.';
 }
 
-export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
+export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly RefusedSeat[] } = {}) {
+  const queryClient = useQueryClient();
   const [reauthBusy, setReauthBusy] = useState('');
   const [reauthMessage, setReauthMessage] = useState('');
   const decisions = useQuery({
@@ -96,21 +112,45 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
     .filter((p) => p.state !== 'ok')
     .map((p) => ({ ...p, plan: PLAN_OF_SUBSCRIPTION[p.provider] || p.provider }))
     .filter((p) => !migrationProviders.includes(p.plan));
-  const recoverDestination = async (provider: string) => {
-    setReauthBusy(provider);
+  // One entry per backend, however many seats or migrations wait on it.
+  const needs: SignInNeed[] = [];
+  const planURL = (plan: string) => '/api/plan-usage/auth/recover/' + encodeURIComponent(plan);
+  for (const plan of migrationProviders) {
+    const names = failedMigrations.filter((d) => d.To === plan).map((d) => d.Name);
+    needs.push({ plan, why: 'migration failed for ' + names.join(', '), url: planURL(plan) });
+  }
+  for (const p of unhealthyLogins) needs.push({ plan: p.plan, why: loginStateText(p), url: planURL(p.plan) });
+  // A seat refused on a login the broker still calls healthy is recovered
+  // through that seat, which the broker accepts as the evidence.
+  for (const seat of props.refusedSeats || []) {
+    const plan = planOfProvider(seat.provider);
+    if (!plan || needs.some((n) => n.plan === plan)) continue;
+    const names = (props.refusedSeats || []).filter((s) => planOfProvider(s.provider) === plan).map((s) => s.name);
+    needs.push({
+      plan,
+      why: 'login refused for ' + names.join(', '),
+      url: '/api/agents/' + encodeURIComponent(seat.name) + '/auth/recover',
+    });
+  }
+  const signIn = async (need: SignInNeed) => {
+    setReauthBusy(need.plan);
     setReauthMessage('');
     try {
-      const r = await fetch('/api/plan-usage/auth/recover/' + encodeURIComponent(provider), { method: 'POST' });
-      const body = await r.json() as { error?: string };
+      const r = await fetch(need.url, { method: 'POST' });
+      const body = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(body.error || 'Claudia could not recover the login');
-      setReauthMessage(migrationProviders.includes(provider)
-        ? 'Claudia recovered ' + provider + '; migration will retry automatically.'
-        : 'Claudia recovered the ' + provider + ' login.');
-      await Promise.all([decisions.refetch(), planAuth.refetch()]);
+      setReauthMessage(migrationProviders.includes(need.plan)
+        ? 'Claudia recovered ' + need.plan + '; migration will retry automatically.'
+        : 'Claudia recovered the ' + need.plan + ' login.');
     } catch (err) {
       setReauthMessage(err instanceof Error ? err.message : 'Authentication recovery failed');
     } finally {
       setReauthBusy('');
+      await Promise.all([
+        decisions.refetch(),
+        planAuth.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['agents'] }),
+      ]);
     }
   };
   useQuery({
@@ -190,27 +230,8 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
         ))}
       </div>
     ) : null}
-    {reauthMessage ? <div role="status">{reauthMessage}</div> : null}
   </>;
   const inner = <>
-    {[
-      ...migrationProviders.map((provider) => ({ provider, why: 'for failed migration' })),
-      ...unhealthyLogins.map((p) => ({ provider: p.plan, why: '— ' + loginStateText(p) })),
-    ].map(({ provider, why }) => (
-      <button
-        key={provider}
-        type="button"
-        className="plan-reauth"
-        disabled={!!reauthBusy}
-        aria-label={'Reauth ' + provider + ' ' + why}
-        onClick={(e) => {
-          e.stopPropagation();
-          void recoverDestination(provider);
-        }}
-      >
-        {reauthBusy === provider ? 'Signing in…' : 'Reauth ' + provider}
-      </button>
-    ))}
     {!groups.length ? (
       <span className="plan-chip">{q.data?.pending ? 'plan usage: waiting for the first reading' : ''}</span>
     ) : groups.map((g) => (
@@ -294,7 +315,35 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
       </span>
     ))}
   </>;
+  // 🎯T945: visible only while some backend is known to be signed out; it opens on
+  // hover (or keyboard focus) and lists each one.
+  const menu = needs.length ? (
+    <span id="plan-reauth-menu" className="plan-reauth-menu">
+      <button type="button" className="plan-reauth-trigger" aria-haspopup="true">
+        {'Sign in (' + needs.length + ')'}
+      </button>
+      <span className="plan-reauth-list" role="menu">
+        {needs.map((n) => (
+          <button
+            key={n.plan}
+            type="button"
+            role="menuitem"
+            className="plan-reauth-item"
+            disabled={!!reauthBusy}
+            aria-label={'Reauth ' + n.plan + ': ' + n.why}
+            onClick={() => void signIn(n)}
+          >
+            <span className="plan-reauth-plan">{reauthBusy === n.plan ? 'Signing in to ' + n.plan + '…' : n.plan}</span>
+            <span className="plan-reauth-why">{n.why}</span>
+          </button>
+        ))}
+        {reauthMessage ? <span className="plan-reauth-message" role="status">{reauthMessage}</span> : null}
+      </span>
+    </span>
+  ) : null;
   return (
+    <>
+    {menu}
     <InstantTip
       id="plan-ticker"
       cardClassName="plan-tip-card"
@@ -304,5 +353,6 @@ export function PlanUsageBar(props: { mux?: MuxClient } = {}) {
     >
       {inner}
     </InstantTip>
+    </>
   );
 }

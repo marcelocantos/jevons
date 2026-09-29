@@ -977,16 +977,71 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-group.plan-unavail { opacity: 0.55; }
 #plan-ticker .plan-group.plan-stale { opacity: 0.7; }
 #plan-ticker .plan-chip { display: inline-flex; align-items: center; gap: 4px; }
-#plan-ticker .plan-reauth {
+/* The sign-in menu sits just left of the plan bars and exists only while a
+   backend is known to be signed out, so its colour is meant to catch the eye.
+   It lives outside #plan-ticker, whose overflow would clip the list. */
+#plan-reauth-menu {
+  position: relative;
+  margin-left: auto;
   flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+#plan-reauth-menu + #plan-ticker { margin-left: 0; }
+#plan-reauth-menu .plan-reauth-trigger {
+  padding: 2px 8px;
   border: 1px solid var(--amber);
   border-radius: 3px;
-  background: var(--surface-high);
-  color: var(--text);
+  background: var(--amber);
+  color: #1b1206;
   font: inherit;
+  font-weight: 700;
   cursor: pointer;
 }
-#plan-ticker .plan-reauth:disabled { cursor: wait; opacity: 0.6; }
+#plan-reauth-menu .plan-reauth-list {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  /* Padding, not margin: the pointer crosses it without leaving the menu. */
+  padding-top: 4px;
+  min-width: 260px;
+  flex-direction: column;
+}
+#plan-reauth-menu:hover .plan-reauth-list,
+#plan-reauth-menu:focus-within .plan-reauth-list { display: flex; }
+#plan-reauth-menu .plan-reauth-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--amber);
+  border-top-width: 0;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+#plan-reauth-menu .plan-reauth-item:first-child { border-top-width: 1px; border-radius: 3px 3px 0 0; }
+#plan-reauth-menu .plan-reauth-item:last-child { border-radius: 0 0 3px 3px; }
+#plan-reauth-menu .plan-reauth-item:only-child { border-radius: 3px; }
+#plan-reauth-menu .plan-reauth-item:hover:not(:disabled) { background: color-mix(in srgb, var(--amber) 22%, var(--surface-raised)); }
+#plan-reauth-menu .plan-reauth-item:disabled { cursor: wait; opacity: 0.6; }
+#plan-reauth-menu .plan-reauth-plan { font-weight: 700; }
+#plan-reauth-menu .plan-reauth-why { color: var(--text-dim); white-space: normal; }
+#plan-reauth-menu .plan-reauth-message {
+  padding: 5px 9px;
+  border: 1px solid var(--amber);
+  border-top-width: 0;
+  background: var(--surface-raised);
+  color: var(--text);
+  white-space: normal;
+}
 #plan-ticker .plan-sep { color: var(--text-muted); user-select: none; }
 #plan-ticker.plan-stale { color: var(--text-muted); }
 #plan-ticker.plan-low,
@@ -1870,16 +1925,3 @@ body.rhs-resizing-row { cursor: row-resize; }
   gap: 4px 7px;
 }
 .agent-node .agent-rehydrate-text { flex: 1 1 0; min-width: 0; }
-.agent-node .agent-reauth {
-  padding: 1px 6px;
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-.agent-node .agent-reauth:disabled { cursor: wait; opacity: 0.6; }
-.agent-node .agent-reauth-error { flex: 1 0 100%; color: #b33; }
