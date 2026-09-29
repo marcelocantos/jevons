@@ -68,7 +68,7 @@ func (s *Server) escalationLadder(class string) (claudia.Escalation, bool) {
 // handled=false means the seat is idle, the sender has no ladder, or the
 // seat cannot run one: the caller continues on the ordinary path, which
 // submits to an idle seat and holds a message for a busy one.
-func (s *Server) escalateIfBusy(name, text, class string, proc agentSender) (agentSendResult, bool, error) {
+func (s *Server) escalateIfBusy(name, text, class, actor string, proc agentSender) (agentSendResult, bool, error) {
 	ladder, ok := s.escalationLadder(class)
 	if !ok {
 		return agentSendResult{}, false, nil
@@ -95,6 +95,11 @@ func (s *Server) escalateIfBusy(name, text, class string, proc agentSender) (age
 	status, verb := "steered", "steered into its running turn"
 	if ladder[0].Mode == claudia.DeliverySubmit {
 		status, verb = "sent", "queued with the agent behind its running turn"
+	} else {
+		// 🎯T902: the message actually reached the seat mid-turn (not merely
+		// queued behind it) — track who is waiting so the sink can relay the
+		// agent's very next text to them, instead of only its turn-end report.
+		s.registerMidTurnAsk(name, actor)
 	}
 	msg := fmt.Sprintf("%q is busy: message %s (%s urgency", name, verb, class)
 	if len(ladder) > 1 {

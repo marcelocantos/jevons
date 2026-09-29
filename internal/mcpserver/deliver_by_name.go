@@ -397,7 +397,7 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 	// its turn to end. An explicit mode (steer, interrupt, queue) is the
 	// caller's own choice and is left alone.
 	if mode == delivery.ModeSubmit {
-		if res, handled, err := s.escalateIfBusy(name, text, s.escalationClass(actor, origin, rel), proc); handled {
+		if res, handled, err := s.escalateIfBusy(name, text, s.escalationClass(actor, origin, rel), actor, proc); handled {
 			return res, err
 		}
 	}

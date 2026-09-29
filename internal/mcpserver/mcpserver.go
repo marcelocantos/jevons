@@ -334,6 +334,11 @@ type Server struct {
 	planSweepMu sync.Mutex
 	// deliveryEscalation is 🎯T899's urgency profile (config).
 	deliveryEscalation config.DeliveryEscalationConfig
+	// midTurnAsks tracks a mid-turn steered ask per busy agent (🎯T902): the
+	// sender awaiting an immediate answer, and the text accumulated since the
+	// steer landed. Keyed by agent name; nil sender = nothing pending.
+	midTurnAsksMu sync.Mutex
+	midTurnAsks   map[string]*midTurnAskState
 	planDecisionMu     sync.RWMutex
 	planLastResults    map[string]planusage.PlanAction
 

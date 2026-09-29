@@ -1436,9 +1436,16 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		// carries its last content block is included before we flush.
 		if ev.Type == "assistant" && ev.Text != "" {
 			responseText.WriteString(ev.Text)
+			// 🎯T902: also feed anyone waiting on an immediate mid-turn answer.
+			s.noteMidTurnAskText(name, ev.Text)
 		}
 		if turnCountedTool(ev) {
 			toolCalls++
+			// 🎯T902: a tool call resuming the turn is the signal that
+			// whatever text preceded it was the answer, not a fragment still
+			// being composed — flush it to the waiting sender now rather than
+			// let it wait for the terminal report.
+			s.flushMidTurnAsk(name)
 		}
 		// tool_use pauses are mid-turn (the worker will continue after tool
 		// results); only a terminal stop ends the turn and delivers.
@@ -1447,6 +1454,10 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		// alive and moved; a terminal stop additionally ends the turn.
 		s.Seats().FromTurnEvent(name, ev.IsTerminalStop(), time.Now())
 		if ev.IsTerminalStop() {
+			// 🎯T902: the turn is ending either way; anything still pending
+			// (no tool call happened to trigger an earlier flush) goes now —
+			// still ahead of, or with, the terminal report, never after it.
+			s.flushMidTurnAsk(name)
 			text := responseText.String()
 			n := toolCalls
 			responseText.Reset()

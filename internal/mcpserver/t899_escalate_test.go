@@ -66,7 +66,7 @@ func TestT899EscalateIfBusy(t *testing.T) {
 	s := New(t.TempDir(), nil, nil)
 
 	busy := &escalatingFake{phase: claudia.TurnInTurn}
-	res, handled, err := s.escalateIfBusy("jevons-po", "status?", config.EscalationOwner, busy)
+	res, handled, err := s.escalateIfBusy("jevons-po", "status?", config.EscalationOwner, "jevons", busy)
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
@@ -78,23 +78,23 @@ func TestT899EscalateIfBusy(t *testing.T) {
 		t.Fatalf("res = %+v, sent = %v", res, busy.sent)
 	}
 
-	if _, handled, _ := s.escalateIfBusy("jevons-po", "hi", config.EscalationOwner, &escalatingFake{phase: claudia.TurnIdle}); handled {
+	if _, handled, _ := s.escalateIfBusy("jevons-po", "hi", config.EscalationOwner, "jevons", &escalatingFake{phase: claudia.TurnIdle}); handled {
 		t.Fatal("an idle seat takes the ordinary submit")
 	}
-	if _, handled, _ := s.escalateIfBusy("jevons-po", "hi", "", busy); handled {
+	if _, handled, _ := s.escalateIfBusy("jevons-po", "hi", "", "jevons", busy); handled {
 		t.Fatal("a sender without a profile waits for the turn")
 	}
-	if _, handled, _ := s.escalateIfBusy("jevons-po", "hi", config.EscalationOwner, &plainFake{phase: claudia.TurnInTurn}); handled {
+	if _, handled, _ := s.escalateIfBusy("jevons-po", "hi", config.EscalationOwner, "jevons", &plainFake{phase: claudia.TurnInTurn}); handled {
 		t.Fatal("a seat that cannot run a ladder takes the ordinary path")
 	}
 	noSteer := &escalatingFake{phase: claudia.TurnInTurn, err: claudia.ErrSteerUnsupported}
-	if _, handled, err := s.escalateIfBusy("jevons-po", "hi", config.EscalationOwner, noSteer); handled || err != nil {
+	if _, handled, err := s.escalateIfBusy("jevons-po", "hi", config.EscalationOwner, "jevons", noSteer); handled || err != nil {
 		t.Fatalf("steer unsupported: handled=%v err=%v; nothing reached the seat, so the ordinary path holds it", handled, err)
 	}
 
 	s.SetDeliveryEscalation(config.DeliveryEscalationConfig{Overseer: config.EscalationProfile{InterruptAfterSeconds: 5}})
 	busy.ladders = nil
-	if _, handled, _ := s.escalateIfBusy("jevons-po", "go", config.EscalationOverseer, busy); !handled ||
+	if _, handled, _ := s.escalateIfBusy("jevons-po", "go", config.EscalationOverseer, "jevons", busy); !handled ||
 		len(busy.ladders) != 1 || busy.ladders[0][1].After != 5*time.Second {
 		t.Fatalf("configured overseer ladder = %+v", busy.ladders)
 	}
