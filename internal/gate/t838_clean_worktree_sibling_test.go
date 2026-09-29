@@ -11,6 +11,9 @@ import (
 	"testing"
 )
 
+// 🎯T440 //worktreereap:exempt — both worktrees created here live inside
+// t.TempDir: no shared clone ever lists them, so there is nothing for the
+// 🎯T440 sweeper to reap even if this test dies before cleanup.
 // 🎯T838: a fleet worker runs `bin/gate -clean` from a linked worktree under
 // .jevons-worktrees-jevons/<name>. That directory's parent holds other
 // workers' trees, not claudia, so the sibling go.work was never injected and
