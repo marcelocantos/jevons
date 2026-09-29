@@ -58,6 +58,9 @@ type agentSendResponse struct {
 	// (🎯T657; spellings in internal/delivery, mirroring claudia's).
 	Mode      string `json:"mode,omitempty"`
 	Mechanism string `json:"mechanism,omitempty"`
+	// InterruptAfterMS: an escalating send (🎯T899) interrupts the agent's
+	// busy turn after this many ms unless it takes the message first.
+	InterruptAfterMS int64 `json:"interrupt_after_ms,omitempty"`
 }
 
 // AgentSendOutcome is what the product deliver hook answers (🎯T657): the
@@ -277,12 +280,16 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 		msg = fmt.Sprintf("Steered the in-flight turn on %q (%s)", name, out.Mechanism)
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if out.InterruptAfterMS > 0 && out.Message != "" {
+		msg = out.Message // the ladder, in the deliver path's own words
+	}
 	_ = json.NewEncoder(w).Encode(agentSendResponse{
-		Name:      name,
-		Status:    status,
-		Message:   msg,
-		Mode:      string(mode),
-		Mechanism: out.Mechanism,
+		Name:             name,
+		Status:           status,
+		Message:          msg,
+		Mode:             string(mode),
+		Mechanism:        out.Mechanism,
+		InterruptAfterMS: out.InterruptAfterMS,
 	})
 }
 
