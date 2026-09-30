@@ -54,6 +54,13 @@ func (c CompletionEvidenceClass) String() string {
 // via non-hex flanks so "pass" / common English words are not false hits.
 var commitSHARe = regexp.MustCompile(`(?i)(?:^|[^0-9a-f])([0-9a-f]{7,40})(?:[^0-9a-f]|$)`)
 
+// 🎯T784: bare "pass" is removed — "the scout pass is done" (a status
+// noun, not a test verdict) false-positived as oracle evidence, which
+// short-circuited hasFinishShape's bare-claim check and reaped a worker
+// mid-status (jv-t762-dropped-spawn-half, 2026-09-21). "passed" stays: it
+// is verb-shaped and paired oracle prose ("the test passed", "N passed")
+// is the common case; a bare "tests pass" / "suite passes" phrasing is
+// covered by the compound entries below instead of the single word.
 var oracleEvidenceMarkers = []string{
 	"go test",
 	"make test",
@@ -61,7 +68,9 @@ var oracleEvidenceMarkers = []string{
 	"test-go",
 	"test-journey",
 	"test-ui",
-	"pass",
+	"tests pass",
+	"test passes",
+	"suite passes",
 	"passed",
 	"green",
 	"oracle",
@@ -210,8 +219,13 @@ func hasOracleEvidence(lower string) bool {
 			return true
 		}
 	}
+	// 🎯T784: word-boundary match, not a bare substring scan. A short
+	// marker like "pass" false-positived inside "the scout pass is done"
+	// (jv-t762-dropped-spawn-half, 2026-09-21), reading a status update
+	// as oracle evidence and short-circuiting hasFinishShape's bare-claim
+	// check straight into a reap.
 	for _, m := range oracleEvidenceMarkers {
-		if strings.Contains(lower, m) {
+		if containsWordish(lower, strings.TrimSpace(m)) {
 			return true
 		}
 	}
