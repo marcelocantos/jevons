@@ -9,6 +9,7 @@ package eventlog
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -20,7 +21,7 @@ import (
 
 // Event is one structured journal line.
 type Event struct {
-	TS        string         `json:"ts"` // RFC3339Nano UTC
+	TS        string         `json:"ts"`     // RFC3339Nano UTC
 	Source    string         `json:"source"` // browser | server
 	Level     string         `json:"level"`
 	Msg       string         `json:"msg"`
@@ -153,10 +154,27 @@ func Tail(path string, opt TailOptions) ([]Event, error) {
 	src := strings.TrimSpace(opt.Source)
 	sub := strings.ToLower(strings.TrimSpace(opt.Contains))
 
+	// A line whose raw bytes lack a wanted value cannot match it, so it is
+	// skipped before decoding (🎯T936). Decoding every line of a journal
+	// that had reached 100 MB, under a caller's lock, held /api/agents for
+	// 22 s. The exact field match below still decides. Values are the plain
+	// identifiers callers pass; one JSON would escape needs its escaped form.
+	var need [][]byte
+	for _, v := range []string{comp, dec, src} {
+		if v != "" {
+			need = append(need, []byte(v))
+		}
+	}
+scan:
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+		for _, n := range need {
+			if !bytes.Contains(line, n) {
+				continue scan
+			}
 		}
 		var ev Event
 		if err := json.Unmarshal(line, &ev); err != nil {
