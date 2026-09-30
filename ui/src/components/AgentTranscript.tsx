@@ -87,6 +87,12 @@ export function AgentTranscript(props: {
     overscan,
     gap: density === 'comfortable' ? COMFORTABLE_ROW_GAP_PX : DEFAULT_ROW_GAP_PX,
     measureElement: (el) => measureTranscriptRow(el),
+    // 🎯T949: measure resized rows on the next animation frame, not inside
+    // the ResizeObserver callback. In the callback, an off-estimate row above
+    // the fold adjusts scrollTop and react-virtual flushSync-rerenders, so the
+    // canvas height changes mid-delivery and the browser raises "ResizeObserver
+    // loop completed with undelivered notifications" as a window error.
+    useAnimationFrameWithResizeObserver: true,
   });
 
   useEffect(() => {
