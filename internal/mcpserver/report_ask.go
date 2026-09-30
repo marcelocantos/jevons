@@ -377,6 +377,19 @@ var explicitIncompleteMarkers = []string{
 	"next step",
 	"i'll resume",
 	"i will resume",
+
+	// 🎯T946: jv-t906-accept-lifts-block and jv-t943-stale-token-reload were
+	// both reaped mid-turn on a stray "done"/"complete" sitting inside a
+	// sentence about waiting for a backgrounded gate — "That stash is my own
+	// reversion (expected, done deliberately to verify red)." and "I'll wait
+	// for the full test run to complete before committing." Neither worker
+	// had committed anything at the time. A worker naming what it is still
+	// waiting FOR has not finished, whatever completion word rides along.
+	"i'll wait for",
+	"i will wait for",
+	"will check back once",
+	"waiting for the background",
+	"running in the background",
 }
 
 // closingQuestionTailLines is how many trailing non-empty lines count as the

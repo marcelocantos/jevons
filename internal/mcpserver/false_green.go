@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -99,6 +100,32 @@ func envelopeGateFlags(id string, lookup func(string) (*gate.Record, bool)) []ga
 		}}
 	}
 	return nil
+}
+
+// FalseGreenFlagsForWorker is FalseGreenFlags plus the one check only the
+// reap path can make: it alone knows which directory the worker occupies
+// (🎯T946). A report that reads as oracle evidence on marker words alone —
+// no cited SHA, no cited gate id — while that worktree carries uncommitted
+// tracked changes or new untracked source files is flagged the same way a
+// contradicted attestation is: nothing was landed for "pass"/"green" to
+// describe. workDir == "" (a def the fixture never gave one, or a probe that
+// found no git repo) skips the check and this degrades to FalseGreenFlags.
+func FalseGreenFlagsForWorker(report, workDir string) []gate.Flag {
+	flags := FalseGreenFlags(report)
+	if strings.TrimSpace(workDir) == "" {
+		return flags
+	}
+	tree := gate.ProbeTree(workDir)
+	if !UncitedClaimAgainstDirtyWorktree(report, tree) {
+		return flags
+	}
+	return append(flags, gate.Flag{
+		Kind: gate.FlagUncitedClaimDirtyWorktree,
+		Detail: fmt.Sprintf(
+			"the report reads as oracle evidence on marker words alone (no SHA, no gate id) while %s carries %d uncommitted change(s) — nothing was landed for the claim to describe",
+			workDir, tree.DirtyFiles),
+		Evidence: strings.Join(tree.DirtySample, ", "),
+	})
 }
 
 // FalseGreenBanner is the note prepended to a flagged report on its way to

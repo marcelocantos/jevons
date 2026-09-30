@@ -57,6 +57,12 @@ const (
 	// names packages that executed no tests, and the report speaks of one of
 	// them (🎯T739). The gate passed; it proved nothing about that package.
 	FlagAttestationEmptyPackage FlagKind = "attestation_empty_package"
+	// FlagUncitedClaimDirtyWorktree: the report reads as oracle evidence on
+	// marker words alone ("pass", "green", "go test") — no cited SHA, no
+	// cited gate id — while the worktree that would have produced that
+	// evidence carries uncommitted tracked changes or new untracked source
+	// files (🎯T946). Nothing was landed for the marker words to describe.
+	FlagUncitedClaimDirtyWorktree FlagKind = "uncited_claim_dirty_worktree"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.
