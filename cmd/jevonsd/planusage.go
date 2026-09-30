@@ -113,8 +113,11 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 			case <-ready:
 				ready = nil // The first reading gets one sweep; later ticks continue it.
 				mcpSrv.SweepPlanPolicy()
+				mcpSrv.NoteCapacity() // 🎯T977: the first reading only records
 			case <-tick.C:
 				mcpSrv.SweepPlanPolicy()
+				// 🎯T977: a plan that came back wakes whoever stood down for it.
+				mcpSrv.NoteCapacity()
 			}
 		}
 	}()

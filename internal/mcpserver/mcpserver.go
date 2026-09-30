@@ -348,6 +348,10 @@ type Server struct {
 	// owner reauth can both start one, and two sweeps moving the same seat
 	// race Claudia's migration (one sees the other's live handle).
 	planSweepMu sync.Mutex
+	// capacityWatch notices a plan becoming admissible again (🎯T977).
+	capacityWatch planusage.CapacityWatch
+	// capacityDeliver replaces the capacity notice delivery (tests).
+	capacityDeliver func(name, text string) error
 	// midTurnAnswers relays a busy agent's mid-turn answer to a steered
 	// question straight to its asker (🎯T902).
 	midTurnOnce    sync.Once
