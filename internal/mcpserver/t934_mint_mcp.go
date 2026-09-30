@@ -23,6 +23,11 @@ import (
 
 // mintMCPMissing is the required servers the seat started without.
 func mintMCPMissing(d claudia.AgentDef, unavailable []string) []string {
+	// Every server answered: nothing to read, not even the seat's
+	// registrations, on the start path.
+	if len(unavailable) == 0 {
+		return nil
+	}
 	var out []string
 	for _, name := range requiredSeatServers(d) {
 		if slices.Contains(unavailable, name) {
