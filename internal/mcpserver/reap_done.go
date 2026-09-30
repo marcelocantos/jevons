@@ -177,6 +177,15 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if DurableFleetAgent(name, def.Purpose, isOverseer) {
 		return false, "durable_role"
 	}
+	// 🎯T972: a finished-work report is not reaped while it leaves scope
+	// outstanding — a declared blocking wait on a background gate, or
+	// uncommitted changes owned in the seat's own worktree that the report
+	// never mentioned. Checked after false-green (a contradicted claim is
+	// the stronger veto) and before the descendants check (a seat can be
+	// mid-gate with no descendants at all).
+	if scope := outstandingScopeReasonsForWorker(report, workDir); len(scope) > 0 {
+		return false, outstandingScopeReapReason(scope)
+	}
 	if len(reg.Descendants(name)) > 0 {
 		return false, "has_descendants"
 	}
@@ -294,6 +303,28 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			(strings.HasPrefix(reason, "awaits_overseer_") && hasForwardLookingPlan(report)) {
 			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",
 				"agent", name, "reason", reason)
+		}
+		// 🎯T972: a finished-work report was kept because it leaves scope
+		// outstanding (a pending background gate, or uncommitted changes
+		// owned in the seat's own worktree). The parent is notified by name
+		// — a retained seat that nobody hears about is indistinguishable
+		// from a stuck one.
+		if strings.HasPrefix(reason, outstandingScopeReapReasonPrefix) {
+			var workDir string
+			if def := s.registry.Def(name); def != nil {
+				workDir = def.WorkDir
+			}
+			scope := outstandingScopeReasonsForWorker(report, workDir)
+			fields := reapDecisionFields(name, reason, report)
+			var kinds []string
+			for _, sc := range scope {
+				kinds = append(kinds, sc.Kind)
+			}
+			fields["outstanding_scope"] = kinds
+			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
+			slog.Info("T972 kept agent with outstanding scope, not reaped",
+				"agent", name, "reason", reason, "outstanding_scope", kinds)
+			s.notifyParentOutstandingScope(parent, name, targetID, scope)
 		}
 		return
 	}
