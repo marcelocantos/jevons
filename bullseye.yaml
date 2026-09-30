@@ -24147,9 +24147,16 @@ targets:
       reason: 'Owner direction 2026-09-30 ("Do both"): the owner''s Claude Code session is doing T942. Do not spawn fleet workers on it.'
   T943:
     name: A running sidecar seat still refused on a revoked plan token takes its next turn on the repaired credential once its sibling seats on the same plan are being served
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    attestation: 'Landed: ea067c74 (internal/server/agent_auth_recover.go: RecoverRunningPlanAuthFailures; cmd/jevonsd/planusage.go wires it into the standing sweep tick). A running seat refused on a revoked plan token never retried its own login even after a sibling seat''s success repaired the plan for everyone else -- RevivePlanAuthWhereHealthy only covered stopped seats, and recoverRunningSeatAuth only fired on the owner''s Reauth click. The new sweep reaches every alive seat still marked plan-auth-failed, grouped per provider, calling the same claudia auth-recover path as the owner''s Reauth click, with a 2-minute per-provider cooldown so a still-broken plan is not hammered every tick.
+
+Merged locally: b343b937 onto steer-modes-stop-guards-seat-stops. Both ea067c74 and b343b937 confirmed reachable (git merge-base --is-ancestor), independently by the worker and the overseer.
+
+Gates: GATE go-test exit=0 GREEN id=0d022b39 tree=clean@ea067c74a47a (go test ./internal/server/... ./cmd/jevonsd/..., covering TestT943RunningSeatRefusedOnStaleTokenIsRecoveredBySweep, TestT943RunningSweepCooldownsAFailedRecovery, TestT943RunningSweepSkipsStoppedSeats). Overseer spot-check: go test -run TestT943 ./internal/server/... passes on the dirty tree (0.631s). go build ./... clean across the whole repo.
+
+Residual (tracked separately, not blocking): a full go test ./... at repo root REDs on scripts/journey-suite/isolated_broker.go importing claudia/omp, missing from the pinned claudia v0.42.0 -- filed as 🎯T950, unrelated to this fix, being worked in parallel.'
     acceptance:
     - When the anthropic plan credential has been repaired, so that other seats on the same plan complete turns, a running seat whose last turn ended `401 OAuth access token has been revoked` completes its next delivered turn without a 401. The owner does not relaunch it or click Reauth.
     - Failing that, the seat is reported in `/api/agents` as refused on a stale credential, not `running idle`, and the product relaunches it.
