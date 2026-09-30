@@ -475,7 +475,7 @@ func (s *suite) jChatRoundTrip() error {
 // assistant frame at all, and accepted a terminal that a late frame from the
 // interrupted turn could supply. All three could pass without a cancel.
 func (s *suite) jCancelAndSend() error {
-	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout+60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bootSweepDeadline+turnTimeout+60*time.Second)
 	defer cancel()
 	conn, frames, err := dialOwnerMux(ctx, s.host)
 	if err != nil {
@@ -485,18 +485,46 @@ func (s *suite) jCancelAndSend() error {
 	if _, err := collectOwnerMuxReplay(ctx, frames); err != nil {
 		return err
 	}
+	// 🎯T840: start from a quiescent overseer. Run alone, J3's held turn
+	// otherwise overlaps the post-boot restart event, which the cancel then
+	// lets run ahead of the replacement (gates 12cd6ca6, 0bb5f13a).
+	if err := waitBootSweepQuiet(ctx, frames, s.logPath, bootSweepQuiet, bootSweepDeadline); err != nil {
+		return err
+	}
 
-	// A fresh marker on the long turn makes the cancelled request
-	// identifiable: its own output can never be mistaken for the
-	// replacement's, and a stale count from an earlier run cannot stand in
-	// for a turn this journey never started.
+	// 🎯T840: the long turn is held open by a real shell tool call that
+	// waits on a file only this journey creates, and the journey never
+	// creates it before the cancel has settled. A fast provider cannot end
+	// the turn on its own ("the request to cancel ended before it could be
+	// interrupted", gate a80d7b58), and a settle observed while the hold is
+	// still unreleased can only be the cancel's doing. The fresh nonce keeps
+	// the marker files and the prompt identifiable to this request.
+	hold, err := os.MkdirTemp(s.stateDir, "j3-cancel-hold-")
+	if err != nil {
+		return err
+	}
+	ready := filepath.Join(hold, "ready")
+	release := filepath.Join(hold, "release")
+	completed := filepath.Join(hold, "completed")
+	defer func() {
+		// Free a hold the provider left running after the cancel.
+		if err := os.WriteFile(release, nil, 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "J3 release held turn: %v\n", err)
+		}
+	}()
 	longToken := "journey-cancel-long-" + uuid.NewString()
-	longPrompt := "Count slowly from 1 to 40, one number per line, " +
-		"prefixing every line with " + longToken + "."
+	longPrompt := "Use Bash to run exactly this command and wait for it to return. " +
+		"Do not create the release file, background the command, or finish early:\n" +
+		cancelHoldCommand(ready, release, completed, longToken) +
+		"\nThen reply with exactly: " + longToken
 	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": longPrompt}); err != nil {
 		return err
 	}
-	if _, err := waitOwnerMuxTurnWorking(ctx, frames, longPrompt, 45*time.Second); err != nil {
+	ownerIndex, err := waitOwnerMuxTurnWorking(ctx, frames, longPrompt, 45*time.Second)
+	if err != nil {
+		return fmt.Errorf("long turn: %w", err)
+	}
+	if err := waitOwnerMuxHold(ctx, frames, ownerIndex, ready, longToken, turnTimeout); err != nil {
 		return fmt.Errorf("long turn: %w", err)
 	}
 
@@ -507,6 +535,14 @@ func (s *suite) jCancelAndSend() error {
 	// first and reading a reply afterwards cannot distinguish a product
 	// that cancelled from one that simply queued behind the long turn.
 	if err := waitOwnerMuxSettled(ctx, frames, 45*time.Second); err != nil {
+		return err
+	}
+	// The hold outlasts the settle deadline, so reaching idle with the hold
+	// unreleased means the cancel ended the turn. A completed marker means
+	// the tool returned on its own and the cancel interrupted nothing.
+	if _, err := os.Stat(completed); err == nil {
+		return fmt.Errorf("long turn's held tool completed before the cancel settled; the cancel interrupted nothing")
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 
