@@ -25,6 +25,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 	s.registerEventPushTools()
 	s.registerTargetFileTool()
 	s.registerOwnerGateTool()
+	s.registerPlanStepTools()
 
 	s.addTool(
 		mcp.NewTool("jevons_thread_adopt",
