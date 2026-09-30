@@ -78,11 +78,11 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 			case <-tick.C:
 				attached := mcpSrv.ReattachRunningSeats()
 				revived := mcpSrv.RevivePlanAuthWhereHealthy()
-				// 🎯T943: a still-running seat refused on a revoked token does
-				// not retry its own login — this is its half of the sweep, the
-				// stopped-seat one is RevivePlanAuthWhereHealthy above.
-				recoveredRunning := srv.RecoverRunningPlanAuthFailures(ctx)
-				if len(revived) > 0 || len(attached) > 0 || len(recoveredRunning) > 0 {
+				// The running-seat half of 🎯T943 is off: it ran `claudia broker
+				// auth-recover` unattended, which rotated the plan's token under
+				// every other seat and, on invalid_grant, opened an interactive
+				// login the owner never asked for (2026-09-30, 🎯T971).
+				if len(revived) > 0 || len(attached) > 0 {
 					srv.NotifyAgentsChanged()
 				}
 			}
