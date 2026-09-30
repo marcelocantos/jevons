@@ -7,10 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -178,6 +181,73 @@ func (s *Server) recoverRunningSeatAuth(w http.ResponseWriter, r *http.Request, 
 	s.NotifyAgentsChanged()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "recovered"})
+}
+
+// runningAuthRecoverCooldown spaces automatic recovery calls for one
+// provider's plan, so a plan that is still broken is not hammered once per
+// standing-sweep tick.
+const runningAuthRecoverCooldown = 2 * time.Minute
+
+var runningAuthRecoverTried sync.Map // provider -> time.Time
+
+// RecoverRunningPlanAuthFailures is the standing-sweep half of 🎯T943: a
+// running seat refused on a revoked plan token never retries its own login,
+// so nothing repairs it once a sibling seat's success (or an owner's repair
+// through a different seat) has already cleared the plan for everyone else.
+// The 2026-09-29 owner-click path (recoverRunningSeatAuth) only reaches a
+// seat the owner happens to click Reauth on; this reaches every running seat
+// still marked plan-auth-failed, the same way RevivePlanAuthWhereHealthy
+// reaches every stopped one. On 2026-09-30 jv-t943's specimen (jevons-po)
+// sat "running idle" for twelve minutes after jevons and claudia-po had
+// already completed turns on the same anthropic plan.
+func (s *Server) RecoverRunningPlanAuthFailures(ctx context.Context) []string {
+	if s == nil || s.planAuthFailed == nil {
+		return nil
+	}
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+	if reg == nil {
+		return nil
+	}
+	byProvider := map[claudia.Provider][]string{}
+	for _, d := range reg.List() {
+		if d.Name == "" || !s.planAuthFailed(d.Name) {
+			continue
+		}
+		if proc := reg.Get(d.Name); proc == nil || !proc.Alive() {
+			continue
+		}
+		byProvider[d.Provider] = append(byProvider[d.Provider], d.Name)
+	}
+	if len(byProvider) == 0 {
+		return nil
+	}
+	recoverAuth := s.authRecover
+	if recoverAuth == nil {
+		recoverAuth = runClaudiaAuthRecover
+	}
+	now := time.Now()
+	var recovered []string
+	for provider, names := range byProvider {
+		if last, ok := runningAuthRecoverTried.Load(provider); ok && now.Sub(last.(time.Time)) < runningAuthRecoverCooldown {
+			continue
+		}
+		runningAuthRecoverTried.Store(provider, now)
+		if err := recoverAuth(ctx, provider); err != nil {
+			slog.Warn("running-seat plan auth recovery failed", "provider", provider, "seats", names, "err", err)
+			continue
+		}
+		runningAuthRecoverTried.Delete(provider)
+		s.forgetPlanAuthStatus()
+		s.notePlanAuthRecovered(reg, provider)
+		recovered = append(recovered, names...)
+		slog.Info("recovered running seats' plan login without a relaunch", "provider", provider, "seats", names)
+	}
+	if len(recovered) > 0 {
+		s.NotifyAgentsChanged()
+	}
+	return recovered
 }
 
 func runClaudiaAuthRecover(ctx context.Context, provider claudia.Provider) error {
