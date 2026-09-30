@@ -5,9 +5,19 @@
 # internal/treeguard, because a cursor-and-hash ledger shared by concurrent
 # processes is exactly what shell must not own.
 #
-# A missing binary degrades to a VISIBLE non-blocking error rather than a
-# silently disabled guard: exit 1 is reported to the agent, exit 2 is reserved
-# for a real refusal, so tooling problems never block the fleet.
+# 🎯T960: a stale binary is as dangerous as a missing one — it runs, looks
+# active, and silently enforces rules from weeks ago. Before exec, self-heal
+# rebuilds the binary when it's missing or older than the newest commit
+# touching its source; only when that rebuild itself fails does this print a
+# loud, specific stderr line (naming the binary, its build time, and the
+# newer commit) and refuse to exec a binary that might be stale — exit 1 is
+# reported to the agent as non-blocking, exit 2 is reserved for a real
+# refusal, so tooling problems never silently block the fleet either.
+#
+# guard_ensure_fresh is inlined (not sourced from a shared lib) on purpose:
+# this file is installed/copied standalone (commitscope --install, hook test
+# fixtures) with no sibling directory alongside it, so a `source lib/...`
+# would work in the repo and break silently everywhere it's copied to.
 set -uo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-}"
@@ -16,9 +26,60 @@ if [[ -z "$root" ]]; then
 fi
 bin="$root/bin/treeguard"
 
-if [[ ! -x "$bin" ]]; then
-    printf 'treeguard: %s not built — shared-file write guard INACTIVE. Run: make treeguard\n' \
-        "$bin" >&2
+guard_ensure_fresh() {
+    local root="$1" bin="$2" pkg="$3"
+    shift 3
+    local src_paths=("$@")
+
+    local newest_epoch="" newest_sha=""
+    if [[ ${#src_paths[@]} -gt 0 ]]; then
+        local line
+        line="$(cd "$root" 2>/dev/null && git log -1 --format='%ct %h' -- "${src_paths[@]}" 2>/dev/null)"
+        if [[ -n "$line" ]]; then
+            newest_epoch="${line%% *}"
+            newest_sha="${line#* }"
+        fi
+    fi
+
+    local need_build=0
+    if [[ ! -x "$bin" ]]; then
+        need_build=1
+    elif [[ -n "$newest_epoch" ]]; then
+        local bin_mtime
+        bin_mtime="$(stat -f %m "$bin" 2>/dev/null || stat -c %Y "$bin" 2>/dev/null)"
+        if [[ -n "$bin_mtime" && "$bin_mtime" -lt "$newest_epoch" ]]; then
+            need_build=1
+        fi
+    fi
+
+    if [[ "$need_build" -eq 0 ]]; then
+        return 0
+    fi
+
+    if (cd "$root" && go build -o "$bin" "$pkg") 2>/dev/null; then
+        return 0
+    fi
+
+    if [[ -x "$bin" && -n "$newest_sha" ]]; then
+        local build_time
+        build_time="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$bin" 2>/dev/null)"
+        if [[ -z "$build_time" ]]; then
+            local epoch
+            epoch="$(stat -c %Y "$bin" 2>/dev/null)"
+            if [[ -n "$epoch" ]]; then
+                build_time="$(date -d "@$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+            fi
+        fi
+        printf '%s: %s is STALE (built %s, older than commit %s touching its source) and rebuild failed — run: go build -o %s %s\n' \
+            "$(basename "$bin")" "$bin" "${build_time:-an unknown time}" "$newest_sha" "$bin" "$pkg" >&2
+    else
+        printf '%s: %s missing and `go build %s` failed — guard INACTIVE.\n' \
+            "$(basename "$bin")" "$bin" "$pkg" >&2
+    fi
+    return 1
+}
+
+if ! guard_ensure_fresh "$root" "$bin" ./cmd/treeguard internal/treeguard cmd/treeguard; then
     exit 1
 fi
 
