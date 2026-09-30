@@ -77,7 +77,12 @@ func startPlanUsage(ctx context.Context, mcpSrv *mcpserver.Server, srv *server.S
 				return
 			case <-tick.C:
 				attached := mcpSrv.ReattachRunningSeats()
-				if revived := mcpSrv.RevivePlanAuthWhereHealthy(); len(revived) > 0 || len(attached) > 0 {
+				revived := mcpSrv.RevivePlanAuthWhereHealthy()
+				// 🎯T943: a still-running seat refused on a revoked token does
+				// not retry its own login — this is its half of the sweep, the
+				// stopped-seat one is RevivePlanAuthWhereHealthy above.
+				recoveredRunning := srv.RecoverRunningPlanAuthFailures(ctx)
+				if len(revived) > 0 || len(attached) > 0 || len(recoveredRunning) > 0 {
 					srv.NotifyAgentsChanged()
 				}
 			}
