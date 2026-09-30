@@ -150,6 +150,10 @@ type Server struct {
 	mcpFlightMu  sync.Mutex
 	mcpFlightSeq uint64
 	mcpFlights   map[string][]mcpFlight
+	// mcpClients remembers each connection's initialize clientInfo so an
+	// actor-less fleet-intent change names the client, not the overseer
+	// (🎯T969, intent_actor.go).
+	mcpClients mcpClientLedger
 	// cursorSubmit / cursorBound are 🎯T541 seams. Bound means a live
 	// process; Claudia owns whether the conversation is resumable.
 	cursorSubmit func(name, text string) error
@@ -991,6 +995,9 @@ func (s *Server) mcpRequestLogger() http.Handler {
 			}
 		}
 		slog.Debug("mcp request", "http", r.Method, "rpc", method, "ua", r.UserAgent())
+		// 🎯T969: the transport builds each handler's context from the
+		// request's, so the caller identity rides into the tool call.
+		r = r.WithContext(withMCPOrigin(r.Context(), s.originOf(r, method, body)))
 		s.transport.ServeHTTP(w, r)
 	})
 }

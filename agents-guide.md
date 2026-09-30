@@ -718,6 +718,26 @@ Pure helpers: `LooksLikeUnverifiedLifecycleClaim` /
 `ClassifyLifecycleNarration` (`internal/mcpserver`). Residual:
 instructional + pure classifier; not a hard daemon block.
 
+## Fleet intent records who decided (🎯T969)
+
+Before reversing a fleet-intent change, or naming who made one in a stop
+reason, report or message, read the recorded actor and reason first
+(`jevons_fleet_intent` with no state, or `GET /api/fleet-intent`). An
+intent recorded **by owner** is not reversed without an owner instruction.
+An actor the record does not name as you is not you: never confess to a
+change it does not attribute to you.
+
+Pass `actor=` on every `jevons_fleet_intent`, `jevons_agent_stop` and
+`jevons_agent_kill`: your own agent name, or `owner` when relaying the
+owner's instruction. An actor-less change is recorded as the caller the
+request identifies (`client:<program>`) or `unattributed`, never as the
+overseer.
+
+**Concrete bad example:** on 2026-09-30 the owner's own session resumed the
+fleet without passing actor, the change was recorded "by jevons", and
+jevons-po re-paused the fleet and parked five workers with stop reasons
+confessing to an act nobody in the fleet had taken.
+
 ## Environments: development vs released (🎯T572)
 
 There is no third environment. Say **development** for the always-on

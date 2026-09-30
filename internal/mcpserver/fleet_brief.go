@@ -11,7 +11,7 @@ import (
 
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
-// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 under fan-out).
+// without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 / 🎯T969 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Status language: in progress vs live (🎯T176)
@@ -32,6 +32,20 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Pure helpers: LooksLikeUnverifiedLifecycleClaim /
   ClassifyLifecycleNarration. Residual: instructional + pure classifier;
   not a hard daemon block.
+
+## Fleet intent records who decided (🎯T969)
+- Before reversing a fleet-intent change, or naming who made one in a stop
+  reason, report or message, read the recorded actor and reason
+  (jevons_fleet_intent with no state, or GET /api/fleet-intent). An intent
+  recorded by owner is not reversed without an owner instruction. Never
+  confess to a change the record does not attribute to you.
+- Pass actor= on jevons_fleet_intent, jevons_agent_stop and
+  jevons_agent_kill: your agent name, or owner when relaying the owner. An
+  actor-less change is recorded as client:<program> or unattributed, never
+  as the overseer.
+- Concrete bad example: 2026-09-30, the owner's session resumed the fleet
+  without actor, it was recorded "by jevons", and jevons-po re-paused the
+  fleet and parked five workers confessing to an act nobody took.
 
 ## Environments: development vs released (🎯T572)
 - **development** = always-on jevonsd from this machine's development source tree (:13705 / ~/.jevons). Not a scheduled build and not a separately named cockpit.

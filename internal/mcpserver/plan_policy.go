@@ -128,7 +128,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				// Claudia has already moved this live seat and delivered its inert
 				// continuation. Delivered=true makes Usable false; treating that
 				// as a cold rotate would launch a second session on the dest.
-				s.MarkAgentWorking(a.Name, "jevons", a.Reason+": Claudia migration complete")
+				s.MarkAgentWorking(a.Name, planPolicyActor, a.Reason+": Claudia migration complete")
 				a.Execution = "migrated"
 				stayed[a.Name] = true
 				continue
@@ -163,9 +163,9 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				"execution", a.Execution, "failure", a.Failure)
 			continue
 		}
-		s.MarkAgentParked(a.Name, "jevons", a.Reason)
+		s.MarkAgentParked(a.Name, planPolicyActor, a.Reason)
 		a.Execution = "parked"
-		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason), "jevons", "")
+		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason), planPolicyActor, "")
 		if s.registry != nil {
 			s.registry.Stop(a.Name)
 		}
@@ -371,7 +371,7 @@ func (s *Server) clearPlanHandover(name string) {
 func (s *Server) finishColdPlanMigrate(a planusage.PlanAction) error {
 	s.clearPlanHandover(a.Name)
 	slog.Info("plan policy cold switch stays", "name", a.Name, "from", a.From, "to", a.To)
-	s.MarkAgentWorking(a.Name, "jevons", a.Reason+": cold switch, no predecessor, seat stays")
+	s.MarkAgentWorking(a.Name, planPolicyActor, a.Reason+": cold switch, no predecessor, seat stays")
 	if s.migrator == nil {
 		return fmt.Errorf("migrator not configured")
 	}
@@ -403,7 +403,7 @@ func (s *Server) releaseColdSwitched(stillHot, justStayed map[string]bool) {
 		}
 		slog.Info("plan policy lifting cold-switch park", "name", d.Name, "provider", d.Provider, "reason", rec.Reason)
 		if rec.State != fleetintent.Working {
-			s.MarkAgentWorking(d.Name, "jevons", "cold provider switch already landed; seat stays")
+			s.MarkAgentWorking(d.Name, planPolicyActor, "cold provider switch already landed; seat stays")
 		}
 		if s.migrator == nil {
 			continue

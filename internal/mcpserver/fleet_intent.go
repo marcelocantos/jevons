@@ -231,7 +231,7 @@ func (s *Server) FleetIntentSummary() string { return s.fleetIntent().Summarize(
 // nothing restarting this?", and the answer is only useful if it is cheap to
 // ask. Setting requires an explicit state, so a mistyped read can never
 // silently stand an agent down.
-func (s *Server) handleFleetIntent(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleFleetIntent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	name = strings.TrimSpace(name)
@@ -246,9 +246,12 @@ func (s *Server) handleFleetIntent(_ context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	actor, _ := args["actor"].(string)
-	if strings.TrimSpace(actor) == "" {
-		actor = s.overseerName()
+	// 🎯T969: an actor-less change is recorded as the caller this request can
+	// identify, or "unattributed" — never as the overseer by default.
+	actor := s.intentActor(ctx, args)
+	note := ""
+	if actorWasInferred(args) {
+		note = inferredActorNote(actor)
 	}
 	reason, _ := args["reason"].(string)
 	reason = strings.TrimSpace(reason)
@@ -258,8 +261,8 @@ func (s *Server) handleFleetIntent(_ context.Context, req mcp.CallToolRequest) (
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"Fleet-wide intent is now %s (by %s). %s\n\n%s",
-			fleetintent.Describe(st), actor, fleetIntentEffect(st, "the fleet"),
+			"Fleet-wide intent is now %s (by %s). %s%s\n\n%s",
+			fleetintent.Describe(st), actor, fleetIntentEffect(st, "the fleet"), note,
 			FormatFleetIntentReport(s.fleetIntent()))), nil
 	}
 
@@ -267,8 +270,8 @@ func (s *Server) handleFleetIntent(_ context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Intent for %q is now %s (by %s). %s",
-		name, fleetintent.Describe(st), actor, fleetIntentEffect(st, name))), nil
+		"Intent for %q is now %s (by %s). %s%s",
+		name, fleetintent.Describe(st), actor, fleetIntentEffect(st, name), note)), nil
 }
 
 // fleetIntentEffect states the consequence in the caller's terms. An intent

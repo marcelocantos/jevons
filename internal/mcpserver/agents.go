@@ -124,7 +124,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithDescription("Read or set the deliberate answer to \"should this agent be running?\" (🎯T414). Every fleet control — spawn, nudge, revive, repressure, repair mission, delivery start, worker-idle notification — reads this and declines when it says do not run, naming the intent. Observed process state alone never authorises a start. States: working, parked, blocked_provider, blocked_owner, reaped. Omit state to read the current intent; omit name to set the fleet-wide intent (a provider wall stands the whole fleet down)."),
 			mcp.WithString("name", mcp.Description("Agent name. Omit to read everything, or (with state) to set the FLEET-WIDE intent.")),
 			mcp.WithString("state", mcp.Description("working | parked | blocked_provider | blocked_owner | reaped. Omit to read.")),
-			mcp.WithString("actor", mcp.Description("Who is deciding (owner, overseer, a product path). Recorded with the intent.")),
+			mcp.WithString("actor", mcp.Description("Who is deciding: your agent name, or owner when the owner instructed it (🎯T969). Recorded with the intent. Omitted, the change is recorded as the identifiable caller (client:<program>) or 'unattributed' — never as the overseer. Before reversing an intent, or naming who set it in a stop reason or report, read its recorded actor and reason (call with no state); an intent recorded by the owner is not reversed without an owner instruction.")),
 			mcp.WithString("reason", mcp.Description("Why — recorded so the cockpit can say what is holding an agent down, not merely that something is.")),
 		),
 		s.handleFleetIntent,
@@ -429,7 +429,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
 				name, fleetintent.Describe(dec.Blocking), dec.Reason)), nil
 		}
-		s.MarkAgentWorking(name, actor, "fresh start under a previously reaped name")
+		s.MarkAgentWorking(name, s.intentActor(ctx, args), "fresh start under a previously reaped name")
 	}
 
 	// Expand ~ in workdir.
@@ -1143,7 +1143,7 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	return mcp.NewToolResultText(msg), nil
 }
 
-func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAgentStop(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	if name == "" {
@@ -1170,10 +1170,9 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	// instruction is the part that used to evaporate. The process ends here;
 	// the park outlives it, the delivery that would restart the agent, and the
 	// daemon restart that would reattach it.
-	actor, _ := args["actor"].(string)
-	if strings.TrimSpace(actor) == "" {
-		actor = s.overseerName()
-	}
+	// 🎯T969: the park is a fleet-intent change; an actor-less stop records
+	// the identifiable caller or "unattributed", never the overseer.
+	actor := s.intentActor(ctx, args)
 	reason, _ := args["reason"].(string)
 	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
 	// 🎯T662: the stop is a recorded reason on the seat, not a bare handle.
@@ -1192,7 +1191,7 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 		name, name)), nil
 }
 
-func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAgentKill(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	actor, _ := args["actor"].(string)
@@ -1221,7 +1220,9 @@ func (s *Server) handleAgentKill(_ context.Context, req mcp.CallToolRequest) (*m
 			}
 		}
 		if actor == "" {
-			actor = s.overseerName()
+			// 🎯T969: a kill with no actor names the caller this request can
+			// identify, never the overseer: its stop reason is read as who did it.
+			actor = s.intentActor(ctx, args)
 		}
 		life["actor"] = actor
 	}
