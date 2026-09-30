@@ -35,9 +35,9 @@ func TestT884BrokerRestartReattachesRunningSeat(t *testing.T) {
 	if err != nil {
 		t.Fatal("Python is required for the hermetic sidecar fixture")
 	}
-	// 🎯T932: the broker detaches its seats' sidecars, so killing the broker
-	// strands them, and -timeout runs no cleanup at all. Arm sweeps every
-	// process naming this test's temp dirs however the binary ends.
+	// 🎯T932: -timeout runs no cleanup at all, so arm a sweep of every process
+	// naming this test's temp dirs however the binary ends. (Since claudia
+	// T166 the sidecar also dies with the broker that started it.)
 	testreap.Arm(t)
 	bin := buildJevonsdT526(t)
 	brokerBin := filepath.Join(t.TempDir(), "claudia")

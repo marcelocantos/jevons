@@ -78,7 +78,16 @@ func TestT627StartupShutdownControl(t *testing.T) {
 }
 
 const t627Sidecar = `import json, os, socket, sys, threading
-path = sys.argv[-1]
+# argv: server.ts <socket> [--lifeline=stdin]
+path = [a for a in sys.argv[2:] if not a.startswith("--")][0]
+# claudia T166: started with a lifeline, the sidecar lives only as long as the
+# broker that holds the pipe's write end, as the real one does.
+if "--lifeline=stdin" in sys.argv:
+    def lifeline():
+        while sys.stdin.buffer.read(4096):
+            pass
+        os._exit(0)
+    threading.Thread(target=lifeline, daemon=True).start()
 withhold = os.environ["FAKE_SIDECAR_WITHHOLD"]
 try:
     os.unlink(path)
