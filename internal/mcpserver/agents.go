@@ -439,6 +439,24 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	}
 	life["workdir"] = workdir
 
+	// 🎯T957: refuse a workdir that does not exist on disk before any
+	// registry row or broker launch. worktree.Ensure's own "not a git repo"
+	// error only fires later, inside the isolation branch, and its failure
+	// path (agents.go, formerly lines 494-513) keeps the given workdir
+	// rather than refusing — so a nonexistent cwd previously reached the
+	// broker and died 45s later as a T433 "no transcript was ever created"
+	// or a sidecar "ENOENT posix_spawn '/bin/bash'" seat death. The daemon
+	// makes the .jevons-worktrees-<repo>/<name> isolated tree itself under
+	// 🎯T254.2 — the caller must pass the shared clone, not a worktree path
+	// that has not been created yet.
+	if st, err := os.Stat(workdir); err != nil || !st.IsDir() {
+		life["err"] = "workdir_missing"
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		return mcp.NewToolResultError(fmt.Sprintf(
+			"workdir %q does not exist on disk; pass the shared clone path (the daemon creates the .jevons-worktrees-<repo>/%s isolated tree itself, per 🎯T254.2) — no registry row, no broker launch",
+			workdir, name)), nil
+	}
+
 	// Lineage: parent defaults to actor, else overseer root.
 	if parent == "" {
 		parent = actor
