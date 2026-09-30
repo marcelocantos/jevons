@@ -12,8 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -183,23 +181,19 @@ func (s *Server) recoverRunningSeatAuth(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "recovered"})
 }
 
-// runningAuthRecoverCooldown spaces automatic recovery calls for one
-// provider's plan, so a plan that is still broken is not hammered once per
-// standing-sweep tick.
-const runningAuthRecoverCooldown = 2 * time.Minute
-
-var runningAuthRecoverTried sync.Map // provider -> time.Time
-
 // RecoverRunningPlanAuthFailures is the standing-sweep half of 🎯T943: a
-// running seat refused on a revoked plan token never retries its own login,
-// so nothing repairs it once a sibling seat's success (or an owner's repair
-// through a different seat) has already cleared the plan for everyone else.
-// The 2026-09-29 owner-click path (recoverRunningSeatAuth) only reaches a
-// seat the owner happens to click Reauth on; this reaches every running seat
-// still marked plan-auth-failed, the same way RevivePlanAuthWhereHealthy
-// reaches every stopped one. On 2026-09-30 jv-t943's specimen (jevons-po)
-// sat "running idle" for twelve minutes after jevons and claudia-po had
-// already completed turns on the same anthropic plan.
+// running seat marked refused on its plan login is cleared once the broker
+// reports that plan's login healthy again, the same way
+// RevivePlanAuthWhereHealthy reaches every stopped one. On 2026-09-30
+// jv-t943's specimen (jevons-po) sat "running idle" for twelve minutes after
+// jevons and claudia-po had already completed turns on the same plan.
+//
+// It never repairs the login itself (🎯T971). A refresh rotates the plan's
+// token under every other seat, and on invalid_grant Claudia falls back to
+// an interactive sign-in: run unattended from this sweep, it opened a login
+// tab the owner had not asked for. Claudia already moves a refused seat onto
+// the plan's current token; this sweep only forgets the refusal once the
+// plan is healthy. A plan that is not is the owner's, through Reauth.
 func (s *Server) RecoverRunningPlanAuthFailures(ctx context.Context) []string {
 	if s == nil || s.planAuthFailed == nil {
 		return nil
@@ -223,26 +217,29 @@ func (s *Server) RecoverRunningPlanAuthFailures(ctx context.Context) []string {
 	if len(byProvider) == 0 {
 		return nil
 	}
-	recoverAuth := s.authRecover
-	if recoverAuth == nil {
-		recoverAuth = runClaudiaAuthRecover
+	s.forgetPlanAuthStatus()
+	plans, err := s.planAuthStatus(ctx)
+	if err != nil {
+		// An unreadable status is not a verdict: leave the marks for the
+		// next tick or the owner.
+		return nil
 	}
-	now := time.Now()
+	healthy := map[claudia.Provider]bool{}
+	for _, p := range plans {
+		healthy[claudia.Provider(p.Provider)] = p.State == planAuthOK
+	}
 	var recovered []string
 	for provider, names := range byProvider {
-		if last, ok := runningAuthRecoverTried.Load(provider); ok && now.Sub(last.(time.Time)) < runningAuthRecoverCooldown {
+		plan := recoverableDestinationProvider(provider)
+		if plan == "" {
+			plan = provider
+		}
+		if !healthy[plan] {
 			continue
 		}
-		runningAuthRecoverTried.Store(provider, now)
-		if err := recoverAuth(ctx, provider); err != nil {
-			slog.Warn("running-seat plan auth recovery failed", "provider", provider, "seats", names, "err", err)
-			continue
-		}
-		runningAuthRecoverTried.Delete(provider)
-		s.forgetPlanAuthStatus()
 		s.notePlanAuthRecovered(reg, provider)
 		recovered = append(recovered, names...)
-		slog.Info("recovered running seats' plan login without a relaunch", "provider", provider, "seats", names)
+		slog.Info("running seats refused on a plan login that is healthy again; cleared", "provider", provider, "seats", names)
 	}
 	if len(recovered) > 0 {
 		s.NotifyAgentsChanged()
