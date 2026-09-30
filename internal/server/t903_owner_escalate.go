@@ -93,7 +93,8 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 		return AgentSendOutcome{}, true, fmt.Errorf("message not delivered: %w", err)
 	}
 	s.NoteOwnerDelivered()
-	s.observeProviderOK()
+	// 🎯T906: steering into a running turn is delivery, not proof the provider
+	// answered — that only comes from authored assistant text or a real reply.
 	status, verb := "steered", "steered into its running turn"
 	if ladder[0].Mode == claudia.DeliverySubmit {
 		status, verb = "sent", "queued with the overseer behind its running turn"

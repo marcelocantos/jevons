@@ -235,7 +235,9 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 		s.NoteOwnerResidual("delivery_failed")
 		return err
 	}
-	s.observeProviderOK()
+	// 🎯T906: SendToOverseerAs succeeding is the seat accepting delivery, not
+	// evidence the provider answered — that comes only from authored
+	// assistant text (chat.go DeliverOverseerEvent) or a real reply.
 	return nil
 }
 
