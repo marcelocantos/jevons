@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T679.2 — a seat that accepts a prompt and never produces a transcript
@@ -235,6 +236,15 @@ func (s *Server) transcriptRoots() discovery.Roots {
 	return DefaultSessionRoots()
 }
 
+// seatAlive is the one place internal/mcpserver answers whether a seat's
+// process exists (🎯T766.2, census derivation 4: kept as a direct read of
+// claudia — the party that knows — but folded into the shared authority so
+// every other reader sees the same answer this sweep did).
+//
+// The seatAliveFn override exists for hermetic list/sweep tests and is
+// deliberately not recorded: a test double is not an observation of a real
+// seat, and writing it into the authority would let a unit test's stub
+// leak into what the cockpit believes about a name it never saw.
 func (s *Server) seatAlive(name string) bool {
 	if s == nil {
 		return false
@@ -249,7 +259,20 @@ func (s *Server) seatAlive(name string) bool {
 		return false
 	}
 	proc := s.registry.Get(name)
-	return proc != nil && proc.Alive()
+	alive := proc != nil && proc.Alive()
+	if proc != nil && name != "" {
+		// Only Alive is a claim here: PromptInFlight is deliberately left
+		// zero-valued and unset in the Observation, which Observe treats as
+		// "no claim" rather than "false" — asserting not-in-flight from a
+		// liveness check alone would manufacture a fact seatAlive never
+		// looked at.
+		s.Seats().Observe(seatstate.Observation{
+			Name: name, Alive: seatstate.TriOf(alive),
+			QueueDepth: seatstate.QueueUnknown,
+			Source:     "claudia.report", At: time.Now(),
+		})
+	}
+	return alive
 }
 
 // observeBirthAcceptance records the first accepted prompt for name's
