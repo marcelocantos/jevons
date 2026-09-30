@@ -92,7 +92,9 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	}
 	if script == "t811-undelivered.cjs" {
 		asides = nil
+		// 🎯T920: the daemon log lets a failure say whether the fault fired.
 		cmd.Args = append(cmd.Args, "--fault", filepath.Join(s.stateDir, "fault-owner-not-owner"),
+			"--daemon-log", s.logPath,
 			"--screenshot", filepath.Join(os.TempDir(), "t811-undelivered.png"))
 	}
 	if script == "boundary.cjs" {

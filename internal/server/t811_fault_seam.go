@@ -5,6 +5,7 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,10 +15,18 @@ import (
 
 // 🎯T811: the smallest seam an isolate journey needs to reproduce the broker's
 // real not_owner refusal (claudia T124/T125) without touching the live overseer's
-// grant. The journey writes a count into <dir>/fault-owner-not-owner; each owner
-// delivery attempt consumes one and fails with the broker's own error text.
+// grant. The journey writes <dir>/fault-owner-not-owner; a matching owner
+// delivery attempt consumes it and fails with the broker's own error text.
 // The seam exists only when main wires it, which requires JEVONS_TEST_FAULTS=1
 // and a port other than the development one; a production daemon never looks.
+//
+// The file holds either a count (each owner delivery attempt consumes one) or
+// a token (the first owner delivery whose text contains it is refused, once).
+// 🎯T920: a journey uses the token. A count hits whatever owner message is at
+// the head of the queue, and on a Claude overseer — which cannot steer, so an
+// owner message waits behind the running turn — that was a message an earlier
+// journey left queued. J33's own message was then delivered normally and its
+// bubble never showed undelivered.
 
 const brokerFaultFile = "fault-owner-not-owner"
 
@@ -49,10 +58,18 @@ func (s *Server) injectedBrokerFault(text string) error {
 	if err != nil {
 		return nil
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || n <= 0 {
+	armed := strings.TrimSpace(string(b))
+	n, err := strconv.Atoi(armed)
+	switch {
+	case err == nil && n > 0:
+		_ = os.WriteFile(path, []byte(strconv.Itoa(n-1)), 0o600)
+	case err != nil && armed != "" && strings.Contains(text, armed):
+		_ = os.WriteFile(path, []byte("0"), 0o600)
+	default:
 		return nil
 	}
-	_ = os.WriteFile(path, []byte(strconv.Itoa(n-1)), 0o600)
+	// The journey's failure report reads this line to say whether the fault fired.
+	slog.Info("🎯T811 fault seam refused an owner delivery", "component", "fault_seam",
+		"armed", armed, "text_len", len(text))
 	return fmt.Errorf("%s", brokerNotOwnerText)
 }
