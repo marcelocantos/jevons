@@ -1,6 +1,15 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build claudia_omp
+
+// 🎯T950: github.com/marcelocantos/claudia/omp exists only on local claudia
+// master, past the published v0.42.0 pin this module builds against. Build
+// this file with -tags claudia_omp against a go.work'd local claudia
+// checkout (🎯T448) to exercise it; a pristine clone (no sibling, no tag)
+// gets isolated_broker_stub.go instead, so `go build ./...` stays green
+// until claudia publishes a release carrying the omp package.
+
 package main
 
 import (
