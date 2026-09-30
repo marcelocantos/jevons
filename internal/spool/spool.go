@@ -13,9 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -199,17 +199,34 @@ func listDayFiles(dir string) ([]string, error) {
 // is shared, the ts field is not). The signature is file name, size, and
 // mtime, so an append rebuilds and a quiet poll does not read the spool
 // again.
+// fileIndex is what one dated log says about its seats, as far as offset:
+// the byte just past its last complete line. The spool is append-only, so
+// a file that has grown is read from offset on, never from the start
+// (🎯T936: a full rescan of every day file on each append took /api/agents
+// past a minute once the spool reached gigabytes).
+type fileIndex struct {
+	offset int64
+	size   int64 // the file's size when last read; offset can trail it by a half-written line
+	mod    int64
+	seats  map[string]bool
+	ts     map[string]time.Time
+}
+
 type indexedSeats struct {
-	sig  string
-	hits map[string]string
-	ts   map[string]time.Time
+	files map[string]*fileIndex
 }
 
 var (
 	seatIndexMu sync.Mutex
 	seatIndexes = map[string]*indexedSeats{}
+	// scannedBytes counts spool bytes the index has read, for tests.
+	scannedBytes atomic.Int64
 )
 
+// seatIndex maps a seat to the newest dated log that names it, and
+// separately to the "ts" of that seat's own newest line (🎯T893: the file
+// is shared, the ts field is not). Unchanged files are not read again, and
+// a grown file is read only past what was already indexed.
 func seatIndex(dir string) (map[string]string, map[string]time.Time, error) {
 	names, err := listDayFiles(dir)
 	if err != nil {
@@ -218,78 +235,103 @@ func seatIndex(dir string) (map[string]string, map[string]time.Time, error) {
 		}
 		return nil, nil, err
 	}
-	sig, err := daySig(dir, names)
-	if err != nil {
-		return nil, nil, err
-	}
 	seatIndexMu.Lock()
 	defer seatIndexMu.Unlock()
-	if idx, ok := seatIndexes[dir]; ok && idx.sig == sig {
-		return idx.hits, idx.ts, nil
+	idx := seatIndexes[dir]
+	if idx == nil {
+		idx = &indexedSeats{files: map[string]*fileIndex{}}
+		seatIndexes[dir] = idx
 	}
+	live := make(map[string]bool, len(names))
+	for _, name := range names {
+		live[name] = true
+		path := filepath.Join(dir, name)
+		st, err := os.Stat(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		fi := idx.files[name]
+		if fi != nil && st.Size() == fi.size && st.ModTime().UnixNano() == fi.mod {
+			continue
+		}
+		if fi == nil || st.Size() < fi.offset {
+			// New, or rewritten shorter than what was read: start over.
+			fi = &fileIndex{seats: map[string]bool{}, ts: map[string]time.Time{}}
+			idx.files[name] = fi
+		}
+		off, err := scanSeatNamesFrom(path, fi.offset, fi.seats, fi.ts)
+		if err != nil {
+			return nil, nil, err
+		}
+		fi.offset = off
+		fi.size = st.Size()
+		fi.mod = st.ModTime().UnixNano()
+	}
+	for name := range idx.files {
+		if !live[name] {
+			delete(idx.files, name)
+		}
+	}
+	// Date order: a later file naming a seat wins, for its path and its ts.
 	hits := map[string]string{}
 	ts := map[string]time.Time{}
 	for _, name := range names {
-		path := filepath.Join(dir, name)
-		if err := scanSeatNames(path, hits, ts); err != nil {
-			return nil, nil, err
+		fi := idx.files[name]
+		for seat := range fi.seats {
+			hits[seat] = filepath.Join(dir, name)
+			if t, ok := fi.ts[seat]; ok {
+				ts[seat] = t
+			} else {
+				delete(ts, seat)
+			}
 		}
 	}
-	seatIndexes[dir] = &indexedSeats{sig: sig, hits: hits, ts: ts}
 	return hits, ts, nil
 }
 
-func daySig(dir string, names []string) (string, error) {
-	var b strings.Builder
-	for _, name := range names {
-		fi, err := os.Stat(filepath.Join(dir, name))
-		if err != nil {
-			return "", err
-		}
-		b.WriteString(name)
-		b.WriteByte(':')
-		b.WriteString(strconv.FormatInt(fi.Size(), 10))
-		b.WriteByte(':')
-		b.WriteString(strconv.FormatInt(fi.ModTime().UnixNano(), 10))
-		b.WriteByte(';')
-	}
-	return b.String(), nil
-}
-
-// scanSeatNames records, per seat named in path, the file (last one wins
-// across files in date order) and the "ts" of that seat's own newest line
-// (last-in-file wins within a file, since lines are chronological). Only
-// the line prefix is read; the snapshot after it is not decoded.
-func scanSeatNames(path string, hits map[string]string, ts map[string]time.Time) error {
+// scanSeatNamesFrom records, per seat named in path from byte offset on,
+// that the file names it and the "ts" of its newest line there (last in
+// file wins, since lines are chronological). Only each line's prefix is
+// decoded. It returns the offset just past the last complete line: a line
+// still being written is read again, whole, next time.
+func scanSeatNamesFrom(path string, offset int64, seats map[string]bool, ts map[string]time.Time) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return offset, err
 	}
 	defer f.Close()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return offset, err
+	}
 	r := bufio.NewReaderSize(f, 64*1024)
 	for {
-		prefix, err := nextRecordPrefix(r)
-		if len(prefix) > 0 {
+		prefix, n, complete, err := nextLinePrefix(r)
+		scannedBytes.Add(n)
+		if complete {
+			offset += n
 			if seat := seatField(prefix); seat != "" {
-				hits[seat] = path
+				seats[seat] = true
 				if t, ok := tsField(prefix); ok {
 					ts[seat] = t
 				}
 			}
 		}
 		if err == io.EOF {
-			return nil
+			return offset, nil
 		}
 		if err != nil {
-			return err
+			return offset, err
 		}
 	}
 }
 
-func nextRecordPrefix(r *bufio.Reader) ([]byte, error) {
-	var prefix []byte
+// nextLinePrefix reads one line: its first 512 bytes, its full length, and
+// whether it ended in a newline (a line cut short by EOF is still being
+// written).
+func nextLinePrefix(r *bufio.Reader) (prefix []byte, n int64, complete bool, err error) {
 	for {
 		chunk, err := r.ReadSlice('\n')
+		n += int64(len(chunk))
 		if len(prefix) < 512 {
 			room := 512 - len(prefix)
 			if len(chunk) > room {
@@ -301,13 +343,10 @@ func nextRecordPrefix(r *bufio.Reader) ([]byte, error) {
 		if err == bufio.ErrBufferFull {
 			continue
 		}
-		if err != nil && err != io.EOF {
-			return nil, err
+		if err != nil {
+			return prefix, n, false, err
 		}
-		if err == io.EOF && len(chunk) == 0 && len(prefix) == 0 {
-			return nil, io.EOF
-		}
-		return prefix, err
+		return prefix, n, true, nil
 	}
 }
 
