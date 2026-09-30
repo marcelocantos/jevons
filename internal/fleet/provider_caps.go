@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -230,8 +231,24 @@ func noteRehydrate(name string, err error) {
 		rehydrateFailures.Delete(name)
 	} else {
 		rehydrateFailures.Store(name, err.Error())
+		logPlanAuthLoss(name, err)
 	}
 	saveRehydrateFailures()
+}
+
+// logPlanAuthLoss writes the one line that makes a plan login loss
+// attributable from jevonsd.log alone (🎯T947): when it happened, this
+// process's pid (there is no cross-process way to name which broker or
+// sidecar consumed the refresh token), and the seat whose rehydrate
+// surfaced it. Every other consumer only reads the shared token; if one of
+// them is why it rotated, that fact lives in claudia's own log, not this
+// one — this line is jevons's half of "the logs alone" name the cause.
+func logPlanAuthLoss(name string, err error) {
+	if err == nil || !PlanAuthFailure(err.Error()) {
+		return
+	}
+	slog.Warn("plan auth: login failure recorded for seat",
+		"seat", name, "pid", os.Getpid(), "time", time.Now().UTC().Format(time.RFC3339), "err", err)
 }
 
 // RecordRehydrateFailure updates the fleet row after a recovery operation
