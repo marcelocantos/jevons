@@ -134,6 +134,38 @@ func (s *Store) SetAgent(name string, st State, by, reason string, at time.Time)
 	return s.persistLocked()
 }
 
+// SetAgentReaped records a Reaped intent carrying the structured stop_reason
+// category (🎯T972) alongside the free-text by/reason, so a reader can tell
+// a finished-work reap from any other removal (kill, dead process, startup
+// stall, ...) without parsing prose. stopReason is typically a
+// fleetlog.Reason* value; empty is accepted (pre-T972 callers).
+func (s *Store) SetAgentReaped(name, by, reason, stopReason string, at time.Time) error {
+	if s == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("fleetintent: agent name required")
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data.Agents == nil {
+		s.data.Agents = map[string]Record{}
+	}
+	s.data.Agents[name] = Record{
+		State:      Reaped,
+		By:         strings.TrimSpace(by),
+		Reason:     strings.TrimSpace(reason),
+		StopReason: strings.TrimSpace(stopReason),
+		At:         at.UTC(),
+	}
+	s.pruneReapedLocked(at)
+	return s.persistLocked()
+}
+
 // SetFleet records a fleet-wide intent — the provider wall of 🎯T406, or an
 // owner standing the whole fleet down.
 func (s *Store) SetFleet(st State, by, reason string, at time.Time) error {
