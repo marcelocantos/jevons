@@ -77,6 +77,14 @@ func phaseFromEvent(ev claudia.Event) (PhaseSample, bool) {
 			return PhaseSample{Phase: PhasePermission, Tokens: tokens}, true
 		case progressTypeDeliveryAbsorbed, progressTypeDeliveryEscalated:
 			return PhaseSample{}, false
+		case claudia.ProgressTUIPreview:
+			// 🎯T919: a Claude TUI pane preview is provisional assistant
+			// text scraped off the pane, not a tool call.
+			return PhaseSample{Phase: PhaseStreaming, Tokens: tokens}, true
+		case claudia.ProgressTUIPreviewFault, claudia.ProgressPromptSuperseded:
+			// A scrape-invariant report and a steered-over prompt's result
+			// are bookkeeping; the turn is whatever it already was.
+			return PhaseSample{}, false
 		}
 		if toolStatusTerminal(ev.ToolStatus) || (ev.ToolStatus == "" && toolCallTerminal(ev.Raw)) {
 			// A finished tool is not a new phase: the stream stays wherever
@@ -224,7 +232,49 @@ func (s *Server) OverseerPhase() PhaseSample {
 // in-flight correspondent; idle clears it. Unchanged samples are not
 // re-broadcast.
 func (s *Server) setOverseerPhase(next PhaseSample) {
+	s.reduceOverseerPhase(next, false)
+}
+
+// applyOverseerEventPhase folds one overseer event into the phase reduce.
+//
+// 🎯T919: a turn that has ended stays ended until the next one begins.
+// Claudia publishes from more than one goroutine — the Claude TUI pane
+// poller runs on its own 100ms clock beside the JSONL tail, and an ACP
+// tool_call_update can trail the prompt result — so a progress event can
+// land behind the terminal stop. Mapped as mid-turn work it moved the
+// reduce off idle, and nothing that follows a finished turn ever sets
+// idle again: the mux level said "tool" until shutdown. A progress event
+// that is not itself a turn opener therefore cannot move the reduce off
+// idle; the drain (beginOverseerPhase), the provider's prompt echo,
+// prompt_accepted, a permission request, and assistant output still do.
+func (s *Server) applyOverseerEventPhase(ev claudia.Event) {
+	p, ok := phaseFromEvent(ev)
+	if !ok {
+		return
+	}
+	s.reduceOverseerPhase(p, ev.Type == "progress" && !progressOpensTurn(ev))
+}
+
+// progressOpensTurn reports whether a progress event can start a turn from
+// rest: the provider taking a prompt, or a turn blocked on the owner.
+func progressOpensTurn(ev claudia.Event) bool {
+	switch ev.ProgressType {
+	case progressTypePromptAccepted, progressTypePermission:
+		return true
+	}
+	return false
+}
+
+// reduceOverseerPhase is setOverseerPhase with an optional rest guard:
+// midTurnOnly drops the sample when the reduce is at rest (idle). The
+// guard and the write share one lock hold, so a trailing event racing the
+// terminal stop cannot pass the check and then overwrite the idle it saw.
+func (s *Server) reduceOverseerPhase(next PhaseSample, midTurnOnly bool) {
 	s.mu.Lock()
+	if midTurnOnly && (s.overseerPhase.Phase == "" || s.overseerPhase.Phase == PhaseIdle) {
+		s.mu.Unlock()
+		return
+	}
 	if next.Phase == PhaseIdle {
 		next.Correspondent = nil
 		s.overseerCorrespondent = nil

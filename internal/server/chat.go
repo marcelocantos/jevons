@@ -367,6 +367,13 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 					s.BroadcastChat(line)
 				}
 				s.clearOverseerStreamID()
+				// 🎯T919: a silent turn still ends. Returning before the
+				// phase reduce left whatever the turn last showed (a
+				// tool, a pane preview) published until the next turn.
+				s.applyOverseerEventPhase(ev)
+				if s.ObserveAgentProgress(s.overseerAgentName(), ev) {
+					s.NotifyAgentsChanged()
+				}
 			}
 			s.HandleAgentEvent(ev)
 			return
@@ -428,6 +435,12 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	if ev.IsTerminalStop() {
 		s.clearOverseerStreamID()
 	}
+	// 🎯T555.1: interleave the phase reduce on the same stream, same clock,
+	// after the bubble frame it describes so the message stays line-first.
+	// 🎯T919: and before HandleAgentEvent, whose terminal-stop settle drains
+	// the next queued batch and stamps it accepted; the finished turn's idle
+	// landing after that stamp would paint the new turn as idle.
+	s.applyOverseerEventPhase(ev)
 	s.HandleAgentEvent(ev)
 	// The fleet row reads AgentProgressHub, which workers fill from the
 	// MCP event hook. The overseer stream never went through that hook,
@@ -435,11 +448,6 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	// the status bar said thinking.
 	if s.ObserveAgentProgress(s.overseerAgentName(), ev) {
 		s.NotifyAgentsChanged()
-	}
-	// 🎯T555.1: interleave the phase reduce on the same stream, same clock,
-	// after the bubble frame it describes so the message stays line-first.
-	if p, ok := phaseFromEvent(ev); ok {
-		s.setOverseerPhase(p)
 	}
 }
 
