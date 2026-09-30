@@ -95,7 +95,7 @@ func (s *Server) onAccountedRemoval(name string, rm fleetlog.Removal) {
 		}
 		by = "product:" + reason
 	}
-	s.MarkAgentReaped(name, by, strings.TrimSpace(rm.Detail))
+	s.MarkAgentReapedWithCause(name, by, strings.TrimSpace(rm.Detail), strings.TrimSpace(rm.Reason))
 	s.armPostReapCommitWatch(name, rm)
 }
 
@@ -185,11 +185,33 @@ func (s *Server) MarkAgentParked(name, by, reason string) {
 // stale fleet view can still name the agent, and without a recorded intent
 // that name reads as an idle worker somebody should restart.
 func (s *Server) MarkAgentReaped(name, by, reason string) {
+	s.MarkAgentReapedWithCause(name, by, reason, "")
+}
+
+// MarkAgentReapedWithCause is [MarkAgentReaped] plus the structured
+// stop_reason category (🎯T972): the fleetlog.Reason* vocabulary value that
+// distinguishes a finished-work reap (reap_done / reap_achieve) from any
+// other removal cause (kill, dead_seat, startup_stall, unbriefed_seat, ...).
+// Every accounted removal reaches this through onAccountedRemoval, so every
+// reap — not only the 🎯T165/🎯T195 finish path — carries its cause.
+func (s *Server) MarkAgentReapedWithCause(name, by, reason, stopReason string) {
 	if reason == "" {
 		reason = "terminal report — finished and deregistered"
 	}
-	if err := s.SetAgentIntent(name, fleetintent.Reaped, by, reason); err != nil {
+	store := s.intentStore()
+	if store == nil {
+		slog.Warn("fleet intent not recorded — no intent store installed",
+			"component", "fleet_intent", "name", name, "state", string(fleetintent.Reaped), "by", by)
+		s.drainSharedIndex(name)
+		return
+	}
+	if err := store.SetAgentReaped(name, by, reason, stopReason, time.Now()); err != nil {
 		slog.Warn("fleet intent reap stamp failed", "component", "fleet_intent", "name", name, "err", err)
+	} else {
+		slog.Info("fleet intent set",
+			"component", "fleet_intent",
+			"name", name, "state", string(fleetintent.Reaped), "by", by, "reason", reason, "stop_reason", stopReason,
+		)
 	}
 	s.drainSharedIndex(name)
 }

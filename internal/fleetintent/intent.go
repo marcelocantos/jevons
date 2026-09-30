@@ -273,13 +273,46 @@ type Record struct {
 	State  State     `json:"state"`
 	By     string    `json:"by,omitempty"`
 	Reason string    `json:"reason,omitempty"`
-	At     time.Time `json:"at"`
+	// StopReason is the closed-vocabulary removal cause (🎯T972) for a
+	// Reaped record — a fleetlog.Reason* value such as reap_done,
+	// reap_achieve, kill, dead_seat, startup_stall. Every accounted
+	// removal used to stamp every name Reaped alike, so "finished and
+	// reaped" read the same for a genuine finish and for an explicit
+	// jevons_agent_kill — a reader could not tell the two apart without
+	// parsing the free-text Reason prose. Empty for non-Reaped states and
+	// for records written before this field existed (pre-T972).
+	StopReason string    `json:"stop_reason,omitempty"`
+	At         time.Time `json:"at"`
+}
+
+// FinishedWorkStopReasons is the fleetlog.Reason* vocabulary that means the
+// agent itself said it was done — 🎯T165 (finished-work report) or 🎯T195
+// (bound target achieved). Every other reap cause (kill, dead process,
+// startup stall, unbriefed seat, plan-policy park, ...) is a removal the
+// agent did not choose, and stop_reason must not read the same as one it did.
+const (
+	StopReasonReapDone    = "reap_done"
+	StopReasonReapAchieve = "reap_achieve"
+)
+
+// IsFinishedWorkStopReason reports whether stopReason names a reap the agent
+// itself triggered by reporting done (as opposed to a kill, a dead process,
+// or any other removal cause it did not choose).
+func IsFinishedWorkStopReason(stopReason string) bool {
+	switch strings.TrimSpace(stopReason) {
+	case StopReasonReapDone, StopReasonReapAchieve:
+		return true
+	}
+	return false
 }
 
 // Describe renders a record for an owner-facing line.
 func (r Record) Describe() string {
 	b := &strings.Builder{}
 	b.WriteString(Describe(r.State))
+	if r.StopReason != "" {
+		fmt.Fprintf(b, " (stop_reason=%s)", r.StopReason)
+	}
 	if r.By != "" {
 		fmt.Fprintf(b, " by %s", r.By)
 	}
