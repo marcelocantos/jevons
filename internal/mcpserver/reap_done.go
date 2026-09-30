@@ -44,6 +44,12 @@ func typedFinishReport(report string) bool {
 }
 
 func LooksLikeFinishedWorkReport(report string) bool {
+	// 🎯T938: a finish-report declaring status blocked is a seat waiting on
+	// someone else, not finished work. Reaping it would strand the mission
+	// the moment the blocker clears.
+	if _, blocked := envelope.BlockedOn(report); blocked {
+		return false
+	}
 	if m, err := envelope.Parse(report); m != nil && err == nil {
 		switch m.Kind {
 		case envelope.KindFinishReport:
@@ -124,6 +130,9 @@ func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool 
 func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isOverseer func(string) bool) (bool, string) {
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
+	}
+	if _, blocked := envelope.BlockedOn(report); blocked {
+		return false, IdleSkipBlockedOnOwner
 	}
 	// 🎯T395 before the generic no-claim case: a report that asks for a decision
 	// is the opposite of a completion claim, and the lifecycle log should say so

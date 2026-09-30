@@ -182,9 +182,13 @@ type IdleNudgeObs struct {
 	TurnInFlight bool
 	// HasStoredTerminal: daemon stored finish-report or scout-report (🎯T761).
 	HasStoredTerminal bool
-	IdleThreshold     time.Duration // 0 → DefaultIdleNudgeThreshold
-	MaxNudges         int           // 0 → DefaultIdleNudgeMax
-	Backoffs          []time.Duration
+	// BlockedOnOwner names what the seat waits on when its latest stored
+	// finish-report declares status blocked and nothing has cleared it
+	// (🎯T938). Empty = not blocked.
+	BlockedOnOwner string
+	IdleThreshold  time.Duration // 0 → DefaultIdleNudgeThreshold
+	MaxNudges      int           // 0 → DefaultIdleNudgeMax
+	Backoffs       []time.Duration
 }
 
 // ClassifyIdleNudge decides skip | nudge | maxed for one agent.
@@ -206,6 +210,10 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	}
 	if o.HasStoredTerminal {
 		return IdleNudgeSkip, "stored_terminal_report"
+	}
+	// 🎯T938: the seat said what it waits on; the parent holds that blocker.
+	if strings.TrimSpace(o.BlockedOnOwner) != "" {
+		return IdleNudgeSkip, IdleSkipBlockedOnOwner
 	}
 	if o.LooksFinished {
 		return IdleNudgeSkip, "achieved_should_reap"
@@ -791,6 +799,10 @@ type IdleNudgeSweepArgs struct {
 	MissionOpen func(targetID string) bool
 	// LastTerminalReport optional: name → last terminal text for LooksFinished.
 	LastTerminalReport func(name string) string
+	// BlockerCleared optional: whether the blocked finish-report text for
+	// name was cleared by an owner/parent message or explicit clear (🎯T938).
+	// Nil = never cleared.
+	BlockerCleared func(name, report string) bool
 	// TurnInFlight optional: send-path flight ledger (🎯T761). Nil = not in flight.
 	TurnInFlight func(name string) bool
 	// MissionAcceptance optional: targetID → acceptance text for full brief.
@@ -958,15 +970,15 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 		hasMission = true
 	}
 
-	var reportText string
 	looksFinished := false
 	hasStoredTerminal := false
+	blockedOn := ""
 	if args.LastTerminalReport != nil {
-		reportText = args.LastTerminalReport(d.Name)
-		hasStoredTerminal, looksFinished = storedTerminalFromReport(reportText)
-		if !hasStoredTerminal && reportText != "" {
-			looksFinished = LooksLikeFinishedWorkReport(reportText)
+		var cleared func(string) bool
+		if args.BlockerCleared != nil {
+			cleared = func(r string) bool { return args.BlockerCleared(d.Name, r) }
 		}
+		hasStoredTerminal, looksFinished, blockedOn = classifyStoredReport(args.LastTerminalReport(d.Name), cleared)
 	}
 
 	briefPresent := false
@@ -1013,6 +1025,7 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 		WaitingOnGate:     DeclaresBlockingGateWait(act.LastTerminal),
 		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
 		HasStoredTerminal: hasStoredTerminal,
+		BlockedOnOwner:    blockedOn,
 	}
 	action, reason := ClassifyIdleNudge(obs)
 	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
@@ -1350,6 +1363,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		MissionOpen:        hooks.MissionOpen,
 		DesignGated:        hooks.DesignGated,
 		LastTerminalReport: hooks.LooksSatisfied,
+		BlockerCleared:     s.seatBlockerCleared,
 		TurnInFlight: func(name string) bool {
 			return s.flightState(name) == FlightInFlight
 		},
@@ -1445,6 +1459,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 		StuckTimeout:       DefaultFleetStuckTimeout,
 		SessionReminted:    s.bounceReminted,
 		LastTerminalReport: hooks.LooksSatisfied,
+		BlockerCleared:     s.seatBlockerCleared,
 		MissionOpen:        hooks.MissionOpen,
 		DesignGated:        hooks.DesignGated,
 		TurnInFlight: func(name string) bool {

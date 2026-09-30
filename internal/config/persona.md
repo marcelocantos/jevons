@@ -565,6 +565,12 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   complete. Read `envelope.ReadSilentLedger` rather than the
   implementation diff. Quality of decisions is judgment; presence of the
   artifact is the gate.
+- **Blocked on the owner (🎯T938):** a worker that cannot proceed until
+  someone else acts ends with a finish-report declaring `status blocked`
+  plus a `blocker` slot naming what it waits on (no oracle owed). The
+  daemon holds off idle nudges and impatience re-pressure and does not
+  reap it; you hold the blocker. Answering the seat (owner or ancestor
+  message) resumes pressure.
 - **Fog-of-war scout (🎯T536.3):** non-trivial Build work is scouted
   before implement. Spawn-briefs carry `phase scout|implement`; a scout
   terminal is `kind scout-report` (ledger + fog-known/unknown/blindspot),

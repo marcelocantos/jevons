@@ -405,6 +405,10 @@ type Server struct {
 	impatience *ImpatienceEngine
 	// idleEventLast debounces worker-idle events per agent name.
 	idleEventLast map[string]time.Time
+	// seatBlockerClears maps an agent to the content key of the blocked
+	// finish-report an owner/parent message (or an explicit clear) lifted
+	// (🎯T938). A newer stored report from the seat forgets the entry.
+	seatBlockerClears map[string]string
 
 	// ownerNotifier writes deterministic owner notices that depend on no
 	// agent (🎯T415). Nil means exhaustion is logged but not reported,

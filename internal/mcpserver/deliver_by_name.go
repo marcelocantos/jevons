@@ -210,6 +210,15 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 	if overseerArm {
 		dest = s.overseerSeatName()
 	}
+	// 🎯T938: the owner or an ancestor speaking to a blocked seat is the
+	// blocker being answered — pressure may resume once it lands.
+	if !overseerArm && clearsSeatBlocker(origin, rel, text) {
+		defer func() {
+			if err == nil {
+				s.ClearSeatBlocker(name, "message_from_"+string(rel))
+			}
+		}()
+	}
 	// 🎯T565: the receiver this call resolved to must be the one it was
 	// addressed to. The overseer arm answers for the overseer's own name (in
 	// any case) and nothing else; a name that resolved to the owner-chat seat

@@ -83,6 +83,8 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 		return agentreport.Handle{}
 	}
 	s.recordTerminalNotice(dir, agentName, text, now)
+	// 🎯T938: the seat's newest word supersedes any blocker clear.
+	s.forgetSeatBlockerClear(agentName)
 	return rec.Handle()
 }
 

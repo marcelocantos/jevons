@@ -25,7 +25,13 @@ func Validate(m *Message) error {
 		if strings.TrimSpace(m.Target) == "" {
 			return fmt.Errorf("finish-report requires target")
 		}
-		if !m.HasOracle() && !m.HasRisk() {
+		if m.Status == ProgressBlocked {
+			// 🎯T938: a blocked report claims no completion, so it owes no
+			// oracle — it owes the name of what it waits on.
+			if strings.TrimSpace(m.Blocker) == "" {
+				return fmt.Errorf("finish-report status blocked requires blocker (what the seat waits on)")
+			}
+		} else if !m.HasOracle() && !m.HasRisk() {
 			return fmt.Errorf("finish-report requires oracle (sha or gate-id) or risk")
 		}
 		// 🎯T536.1: silent-decision ledger is present or explicitly empty.

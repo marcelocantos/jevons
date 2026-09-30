@@ -51,7 +51,10 @@ type Notice struct {
 	Verdict   string    `json:"verdict,omitempty"`
 	HasOracle bool      `json:"has_oracle"`
 	HasRisk   bool      `json:"has_risk"`
-	Summary   string    `json:"summary"` // first non-empty prose line, elided
+	// Blocker is what a blocked seat waits on (🎯T938), from the envelope's
+	// blocker slot. The parent holds it; the seat is not re-pressured.
+	Blocker string `json:"blocker,omitempty"`
+	Summary string `json:"summary"` // first non-empty prose line, elided
 }
 
 // FromReport extracts a Notice from a stored terminal report, or ok=false
@@ -83,6 +86,9 @@ func FromReport(agent, parent, text string, at time.Time) (n Notice, ok bool) {
 		Outcome:   classifyOutcome(m, text),
 		Summary:   summaryLine(m.Payload, text),
 	}
+	if m.IsBlocked() {
+		n.Blocker = strings.TrimSpace(m.Blocker)
+	}
 	n.ID = NewID(at, agent, text)
 	return n, true
 }
@@ -93,6 +99,10 @@ func FromReport(agent, parent, text string, at time.Time) (n Notice, ok bool) {
 // not recorded as done here; that is exactly the ambiguity this inbox exists
 // to surface, not paper over.
 func classifyOutcome(m *envelope.Message, raw string) Outcome {
+	// 🎯T938: a declared status blocked is the field-first answer.
+	if m.IsBlocked() {
+		return OutcomeBlocked
+	}
 	low := strings.ToLower(raw)
 	switch {
 	case strings.Contains(low, "needs-design") || strings.Contains(low, "needs design") ||

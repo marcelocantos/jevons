@@ -121,6 +121,11 @@ type Observation struct {
 	// TurnInFlight is true when the send path knows a turn is in flight
 	// (🎯T761), same signal as jevons_agent_send's queued verdict.
 	TurnInFlight bool
+	// BlockedOnOwner is true while the seat's latest stored finish-report
+	// declares status blocked with a named blocker and nothing has cleared
+	// it since (🎯T938). The parent/overseer holds the blocker; pressing
+	// the seat cannot unblock it.
+	BlockedOnOwner bool
 }
 
 const purposeWork = "work"
@@ -145,6 +150,11 @@ func ClassifyObservation(o Observation) (Condition, GapKind, string) {
 	}
 	if o.StoredTerminalReport {
 		return ConditionSatisfied, "", "stored_terminal_report"
+	}
+	// 🎯T938: a declared, uncleared blocker scopes the seat out — the gap
+	// is the parent's to hold, not the seat's to be pressed about.
+	if o.BlockedOnOwner {
+		return ConditionOutOfScope, "", "blocked_on_owner"
 	}
 	if o.DeliberateStop {
 		return ConditionOutOfScope, "", "deliberate_stop"

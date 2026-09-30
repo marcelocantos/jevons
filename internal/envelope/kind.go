@@ -131,23 +131,33 @@ const (
 	ProgressLive       Progress = "live"
 	ProgressLanded     Progress = "landed"
 	ProgressShipped    Progress = "shipped"
+	// ProgressBlocked is a seat that cannot proceed until someone else acts
+	// (🎯T938). On a finish-report it must travel with a `blocker` slot
+	// naming what it waits on; the idle-nudge and impatience sweeps then
+	// hold off until the seat hears from its owner/parent or the blocker is
+	// cleared. Not product-visible.
+	ProgressBlocked Progress = "blocked"
 )
 
 // ParseProgress maps a slot value onto Progress. Spaces and underscores
 // collapse to a hyphen so "in progress" matches the canonical form.
+// A qualified blocked status ("blocked_design", "blocked-on-owner") reads
+// as ProgressBlocked; what the seat waits on belongs in the blocker slot.
 func ParseProgress(raw string) (Progress, bool) {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	s = strings.ReplaceAll(s, "_", "-")
 	s = strings.Join(strings.Fields(s), "-")
 	p := Progress(s)
 	switch p {
-	case ProgressInProgress, ProgressLive, ProgressLanded, ProgressShipped:
+	case ProgressInProgress, ProgressLive, ProgressLanded, ProgressShipped, ProgressBlocked:
 		return p, true
 	case ProgressNone:
 		return ProgressNone, true
-	default:
-		return "", false
 	}
+	if strings.HasPrefix(s, string(ProgressBlocked)+"-") {
+		return ProgressBlocked, true
+	}
+	return "", false
 }
 
 func (p Progress) String() string { return string(p) }

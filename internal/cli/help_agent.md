@@ -788,6 +788,24 @@ or `confidence=7` is malformed (🎯T793); the daemon tells the author the
 exact field and range on its own channel before it is reaped, so a
 corrected resend is possible — see `envelope.CorrectionNotice`.
 
+A seat that cannot proceed until someone else acts — an owner go-ahead,
+a decision, a restart only the owner may do — ends with a finish-report
+declaring `status blocked` and naming the `blocker` (🎯T938). It owes no
+oracle; it still carries the silent-ledger:
+
+```jevons
+jevons: kind finish-report
+jevons: target T935
+jevons: status blocked
+jevons: blocker daemon-restart-needs-owner-go-ahead
+jevons: silent-ledger none
+```
+
+The idle-nudge sweep, the impatience ladder and fleet recover skip that
+seat (`blocked_on_owner`), T165 does not reap it, and the parent's inbox
+notice carries the blocker. The hold ends when the owner or an ancestor
+messages the seat, or when the seat stores a newer report.
+
 A green oracle with a **missing** silent-ledger (and no explicit `none`)
 is flagged, not treated as complete. Quality of the decisions is judgment;
 this rule is that the artifact exists and the independent gate can read it

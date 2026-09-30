@@ -289,6 +289,15 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
 - Quality of the decisions is judgment; this rule is that the artifact
   exists.
 
+## Waiting on the owner (🎯T938)
+- When you cannot proceed until someone else acts (an owner go-ahead, a
+  decision, a restart only the owner may do), end with a finish-report
+  carrying "jevons: status blocked" and "jevons: blocker <what you wait
+  on>" plus the silent-ledger. No oracle is required for it.
+- The daemon then holds off idle nudges and impatience re-pressure and
+  does not reap you; your parent holds the blocker. Pressure resumes when
+  the owner or your parent messages you.
+
 ## Fog-of-war scout before implement (🎯T536.3)
 - Non-trivial Build work is scouted before implement. Spawn-briefs carry
   phase scout or phase implement; a scout terminal is kind scout-report

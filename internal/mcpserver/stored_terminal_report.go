@@ -77,16 +77,15 @@ func (s *Server) workerIdleSuppressReason(name string) (suppress bool, reason st
 	if s.flightState(name) == FlightInFlight {
 		return true, "turn_in_flight"
 	}
-	s.mu.Lock()
-	hook := s.idlePressureHooks.LooksSatisfied
-	s.mu.Unlock()
-	var report string
-	if hook != nil {
-		report = hook(name)
-	} else if dir := s.agentReportStateDir(); dir != "" {
-		if rec, err := agentreport.Latest(dir, name); err == nil {
-			report = rec.Text
-		}
+	report := s.latestStoredReport(name)
+	// 🎯T938: the parent already holds a declared blocker; once an
+	// owner/parent message cleared it, the seat is ordinary open-mission work
+	// again and its next idle is news to the parent.
+	if _, _, blocker := s.storedReportFor(name, report); blocker != "" {
+		return true, IdleSkipBlockedOnOwner
+	}
+	if _, blocked := envelope.BlockedOn(report); blocked {
+		return false, ""
 	}
 	if IsStoredTerminalReportKind(report) {
 		return true, "stored_terminal_report"

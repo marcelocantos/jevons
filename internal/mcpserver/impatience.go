@@ -445,16 +445,10 @@ func (s *Server) observeForImpatience(
 
 	claimsDone := false
 	storedTerminal := false
+	blockedOn := ""
 	if hooks.LooksSatisfied != nil {
-		if r := hooks.LooksSatisfied(d.Name); r != "" {
-			var looksFinished bool
-			storedTerminal, looksFinished = storedTerminalFromReport(r)
-			if !storedTerminal {
-				claimsDone = LooksLikeFinishedWorkReport(r)
-			} else {
-				claimsDone = looksFinished
-			}
-		}
+		// 🎯T938: an uncleared blocked finish-report scopes the seat out.
+		storedTerminal, claimsDone, blockedOn = s.storedReportFor(d.Name, hooks.LooksSatisfied(d.Name))
 	}
 
 	inFlight := s.flightState(d.Name) == FlightInFlight
@@ -482,5 +476,6 @@ func (s *Server) observeForImpatience(
 		WaitingOnGate:        waitingOnGate,
 		StoredTerminalReport: storedTerminal,
 		TurnInFlight:         inFlight,
+		BlockedOnOwner:       blockedOn != "",
 	}
 }

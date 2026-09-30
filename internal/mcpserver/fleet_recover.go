@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/modelladder"
 )
 
@@ -85,6 +86,9 @@ type FleetRecoverObs struct {
 	HasOpenMission bool
 	DesignGated    bool
 	LooksFinished  bool
+	// BlockedOnOwner names the blocker of an uncleared blocked finish-report
+	// (🎯T938). Empty = not blocked.
+	BlockedOnOwner string
 	// PromptInFlight from claudia (Grok ACP); false when unknown.
 	PromptInFlight bool
 	// SinceProgress is time since last ACP event; 0 when never.
@@ -148,6 +152,9 @@ func ClassifyFleetRecover(o FleetRecoverObs) (FleetRecoverAction, string) {
 	}
 	if o.HasStoredTerminal {
 		return FleetRecoverSkip, "stored_terminal_report"
+	}
+	if strings.TrimSpace(o.BlockedOnOwner) != "" {
+		return FleetRecoverSkip, IdleSkipBlockedOnOwner
 	}
 	if o.LooksFinished {
 		return FleetRecoverSkip, "achieved_should_reap"
@@ -291,7 +298,9 @@ type FleetRecoverSweepArgs struct {
 	DesignGated        func(targetID string) bool
 	MissionOpen        func(targetID string) bool
 	LastTerminalReport func(name string) string
-	MissionAcceptance  func(targetID string) string
+	// BlockerCleared optional: see IdleNudgeSweepArgs.BlockerCleared (🎯T938).
+	BlockerCleared    func(name, report string) bool
+	MissionAcceptance func(targetID string) string
 	// SessionReminted is optional: name → this boot reminted session_id
 	// (🎯T545.1). Nil = no remints.
 	SessionReminted func(name string) bool
@@ -389,13 +398,13 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 
 	looksFinished := false
 	hasStoredTerminal := false
+	blockedOn := ""
 	if args.LastTerminalReport != nil {
-		if r := args.LastTerminalReport(d.Name); r != "" {
-			hasStoredTerminal, looksFinished = storedTerminalFromReport(r)
-			if !hasStoredTerminal {
-				looksFinished = LooksLikeFinishedWorkReport(r)
-			}
+		var cleared func(string) bool
+		if args.BlockerCleared != nil {
+			cleared = func(r string) bool { return args.BlockerCleared(d.Name, r) }
 		}
+		hasStoredTerminal, looksFinished, blockedOn = classifyStoredReport(args.LastTerminalReport(d.Name), cleared)
 	}
 	briefPresent := false
 	if args.BriefPresent != nil {
@@ -436,6 +445,7 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		FallbackModel:     modelladder.Next(string(d.Provider), d.Model),
 		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
 		HasStoredTerminal: hasStoredTerminal,
+		BlockedOnOwner:    blockedOn,
 	}
 	action, reason := ClassifyFleetRecover(obs)
 	kind := ClassifyIdleNudgeKind(briefPresent)
@@ -669,7 +679,8 @@ func (t *IdleActivityTracker) NoteTerminalTurn(name, text string, toolCalls int)
 	defer t.mu.Unlock()
 	prev := t.by[name]
 	prev.LastToolCalls = toolCalls
-	if toolCalls > 0 || LooksLikeFinishedWorkReport(text) {
+	_, blocked := envelope.BlockedOn(text) // 🎯T938: a blocked report is a report, not a plan
+	if toolCalls > 0 || LooksLikeFinishedWorkReport(text) || blocked {
 		prev.PlanOnly = false
 		t.by[name] = prev
 		return

@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/staffops"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -43,6 +44,10 @@ func fillIdleResidueEvidence(ao *staffops.AgentObs, d claudia.AgentDef, stateDir
 		if rec, err := agentreport.Latest(stateDir, d.Name); err == nil && strings.TrimSpace(rec.Text) != "" {
 			ao.ReportLooksFinished = LooksLikeFinishedWorkReport(rec.Text)
 			if ReportAwaitsOverseer(rec.Text) {
+				ao.OwnerAskPresent = true
+			}
+			// 🎯T938: a declared blocker is an ask held by the parent.
+			if _, blocked := envelope.BlockedOn(rec.Text); blocked {
 				ao.OwnerAskPresent = true
 			}
 		}

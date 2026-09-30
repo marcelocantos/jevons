@@ -31,6 +31,9 @@ type Message struct {
 	Risk    Risk
 	Verdict Verdict
 	Status  Progress
+	// Blocker names what a blocked seat waits on (🎯T938). Required on a
+	// finish-report whose status is blocked.
+	Blocker string
 	Name    string // target-file-request title, optional elsewhere
 	// Phase is the mission phase (scout|implement) — 🎯T536.3.
 	Phase Phase
@@ -74,6 +77,27 @@ func (m *Message) HasRisk() bool {
 	return m.Risk.IsAccepted()
 }
 
+// IsBlocked is true when the envelope declares status blocked and names
+// the blocker it waits on (🎯T938).
+func (m *Message) IsBlocked() bool {
+	if m == nil {
+		return false
+	}
+	return m.Status == ProgressBlocked && strings.TrimSpace(m.Blocker) != ""
+}
+
+// BlockedOn reads a stored report: when it is a finish-report declaring
+// status blocked with a named blocker, it returns that blocker and true
+// (🎯T938). A slot error elsewhere in the fence does not hide a blocked
+// declaration that did parse — holding off pressure is the cheap side.
+func BlockedOn(text string) (blocker string, ok bool) {
+	m, _ := Parse(text)
+	if m == nil || m.Kind != KindFinishReport || !m.IsBlocked() {
+		return "", false
+	}
+	return strings.TrimSpace(m.Blocker), true
+}
+
 // HasActivation is true when the envelope cites that the development
 // surface was activated (🎯T194 field-read path). The wire slot is still
 // "daily", so reports written before the rename keep matching.
@@ -99,6 +123,7 @@ func (m *Message) SlotsFingerprint() string {
 		"risk=" + string(m.Risk),
 		"verdict=" + string(m.Verdict),
 		"status=" + string(m.Status),
+		"blocker=" + m.Blocker,
 		"name=" + m.Name,
 		"phase=" + string(m.Phase),
 		ledgerFingerprint(m),
@@ -305,6 +330,8 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 			return fmt.Errorf("unknown status %q", value)
 		}
 		msg.Status = p
+	case "blocker", "blocked-on", "blocked_on":
+		msg.Blocker = unquoteSlot(strings.TrimSpace(value))
 	case "name":
 		msg.Name = strings.TrimSpace(value)
 	case "phase", "mission-phase", "mission_phase":
@@ -429,6 +456,7 @@ func Format(m *Message) string {
 	}
 	writeSlot(&b, "verdict", string(m.Verdict))
 	writeSlot(&b, "status", string(m.Status))
+	writeSlot(&b, "blocker", m.Blocker)
 	writeSlot(&b, "name", m.Name)
 	writeSlot(&b, "phase", string(m.Phase))
 	switch m.SilentLedger {
