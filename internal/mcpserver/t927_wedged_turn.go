@@ -220,8 +220,13 @@ func (w *turnWedges) forget(name string) {
 // goroutine, and a turn that begins between the attach and this call began on
 // the new handle; reading flight here alone called it lost, and the sweep
 // interrupted a seat that was working on the only handle it ever had.
-func (s *Server) noteReattachedMidTurn(name string, turn uint64, inFlight bool) {
-	if s == nil || !inFlight || s.flightState(name) != FlightInFlight {
+//
+// 🎯T963: a process attached while a launch for the seat is in flight is
+// that launch's successor, not a replacement for a handle that lost the
+// turn: a launch in progress is not an outage (🎯T426). It is neither
+// warned about nor recorded as a lost handle.
+func (s *Server) noteReattachedMidTurn(name string, turn uint64, inFlight, launching bool) {
+	if s == nil || !inFlight || launching || s.flightState(name) != FlightInFlight {
 		return
 	}
 	if !s.wedges.lostHandleUnder(name, turn, time.Now()) {

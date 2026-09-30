@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -327,7 +328,7 @@ func TestT937ReattachNoteNamesTheTurnSeenAtAttach(t *testing.T) {
 			if tc.afterSnap != nil {
 				tc.afterSnap(s, name)
 			}
-			s.noteReattachedMidTurn(name, turn, inFlight)
+			s.noteReattachedMidTurn(name, turn, inFlight, false)
 			if _, lost := s.wedges.quietSince(name); lost != tc.wantLost {
 				t.Fatalf("lost handle recorded=%v; want %v", lost, tc.wantLost)
 			}
@@ -384,5 +385,36 @@ func TestT937AbortEndingTheTurnFirstStillAnnouncesTheClear(t *testing.T) {
 	})
 	if f := s.flightState(name); f == FlightUnknown {
 		t.Fatalf("flight=%v; the abort's terminal stop already settled it", f)
+	}
+}
+
+// 🎯T963: a process attached while its seat's launch is in flight is that
+// launch's successor. The turn believed in flight is not recorded as lost on
+// a replaced handle, and nothing is warned. The check runs on a goroutine
+// after the attach, so the launch state is the one captured at the attach:
+// T426A's sweep otherwise tripped the warning whenever the goroutine ran
+// before the test looked.
+func TestT963AttachDuringALaunchIsNotALostHandle(t *testing.T) {
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	const name = "jevons-po"
+	s, _, _, _ := t927Fixture(t, name)
+	s.noteTurnInFlight(name)
+	turn, inFlight := s.wedges.turnAt(name)
+	s.noteReattachedMidTurn(name, turn, inFlight, true)
+	if _, lost := s.wedges.quietSince(name); lost {
+		t.Fatal("an attach during a launch recorded a lost handle")
+	}
+	for _, r := range cap.snapshot() {
+		if r.Level >= slog.LevelWarn {
+			t.Fatalf("warned %q for an attach during a launch", r.Message)
+		}
+	}
+	// The control: the same attach with no launch in flight is a lost handle.
+	s.noteReattachedMidTurn(name, turn, inFlight, false)
+	if _, lost := s.wedges.quietSince(name); !lost {
+		t.Fatal("control: an attach mid-turn with no launch did not record a lost handle")
 	}
 }
