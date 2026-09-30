@@ -7,6 +7,7 @@ package treeguard
 // steer-modes-stop-guards-seat-stops, then fast-forwarded the wrong branch.
 
 import (
+	"github.com/marcelocantos/jevons/internal/worktreereap"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,6 +134,10 @@ func TestDecideBranchCheckoutAllowsSwitchInsideWorkerOwnWorktree(t *testing.T) {
 	runGit(t, base, "branch", "jevons-worktree/jv-x")
 	wt := filepath.Join(t.TempDir(), "wt")
 	runGit(t, base, "worktree", "add", "-q", wt, "jevons-worktree/jv-x")
+	// 🎯T440: a killed test run skips t.Cleanup; the reaper needs the mark.
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: wt, Note: t.Name()}); err != nil {
+		t.Fatal(err)
+	}
 
 	env := &Env{Store: &Store{Root: t.TempDir()}, RepoRoot: wt, Now: time.Now}
 	got, err := env.Pre(bashPayload(wt, "git checkout master"))
