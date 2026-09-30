@@ -49,6 +49,7 @@ import { planTargetAskFocus } from './frontier/targetAsk';
 import { TargetAskContext, type TargetAskHost } from './frontier/targetAskContext';
 import { useCockpitKeys } from './keys/useCockpitKeys';
 import { focusMainComposer } from './keys/composerFocus';
+import { ImageLightbox } from './components/ImageLightbox';
 
 
 const queryClient = new QueryClient();
@@ -423,6 +424,7 @@ function Cockpit() {
         </div>
       </div>
       <MermaidVizPanel open={graphOpen} graphNonce={graphNonce} onClose={() => setGraphOpen(false)} />
+      <ImageLightbox />
     </TargetAskContext.Provider>
     </FrontierRowsContext.Provider>
   );
