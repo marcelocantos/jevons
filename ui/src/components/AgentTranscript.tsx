@@ -3,6 +3,7 @@
 
 import { now as clockNow } from '../clock';
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
+import { useInnerHTML } from '../conversation/innerHTML';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationMeta } from '../conversation/useConversation';
 import { chromeModel } from '../frontier/targetAsk';
@@ -641,6 +642,7 @@ export function ClippedBubble(props: {
 
 function MarkdownBody(props: { text: string; bodyRef: React.RefObject<HTMLDivElement | null> }) {
   const html = parseAssistantMarkdown(props.text);
+  const inner = useInnerHTML(html);
   useEffect(() => {
     const el = props.bodyRef.current;
     if (!el) return;
@@ -649,7 +651,7 @@ function MarkdownBody(props: { text: string; bodyRef: React.RefObject<HTMLDivEle
   }, [html, props.bodyRef]);
   return (
     <>
-      <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={inner} />
       <TargetHotspotTips containerRef={props.bodyRef} html={html} />
     </>
   );
@@ -661,9 +663,10 @@ function UserBody(props: {
   bodyRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const html = paintUserHTML(props.text, props.origin);
+  const inner = useInnerHTML(html);
   return (
     <>
-      <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="msg-body" ref={props.bodyRef} dangerouslySetInnerHTML={inner} />
       <TargetHotspotTips containerRef={props.bodyRef} html={html} />
     </>
   );

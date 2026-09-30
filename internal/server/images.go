@@ -34,6 +34,15 @@ import (
 // Full-res stays on disk; clients render compact previews only.
 const ImageThumbMaxEdge = 320
 
+// ImageThumbMaxWidth / ImageThumbMaxHeight bound a thumb to how the
+// transcript draws it: 120 CSS px tall, up to the bubble's width, at 2x.
+// A longest-edge cap of 320 left a wide screenshot 24 px tall and drawn
+// ~3x upscaled, visibly smeared (2026-10-01). 🎯T976.
+const (
+	ImageThumbMaxWidth  = 960
+	ImageThumbMaxHeight = 240
+)
+
 // ImageThumbJPEGQuality is the dual-encode JPEG quality for thumbs (🎯T257).
 // Moderately high (~88–90) so photo-like previews stay sharp while still
 // beating PNG on continuous-tone imagery.
@@ -119,9 +128,13 @@ func (s *Server) imagesDir() string {
 	return filepath.Join(s.stateDir, "images")
 }
 
+// thumbsDir holds generated thumbs. v2 is the 🎯T976 box (960x240); thumbs
+// cut to the old 320 edge are left behind and regenerate on first request.
 func (s *Server) thumbsDir() string {
-	return filepath.Join(s.imagesDir(), "thumbs")
+	return filepath.Join(s.imagesDir(), thumbsSubdir)
 }
+
+const thumbsSubdir = "thumbs-v2"
 
 func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 	if rejectCrossSite(w, r) {
@@ -224,6 +237,11 @@ func (s *Server) handleImageGet(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
+// thumbCacheControl makes a browser revalidate a thumb (a cheap 304 against
+// Last-Modified) instead of keeping one for a day: a thumb regenerated at a
+// new size then reaches every open cockpit at once. 🎯T976.
+const thumbCacheControl = "private, no-cache"
+
 func (s *Server) handleImageThumbGet(w http.ResponseWriter, r *http.Request) {
 	id := sanitizeImageID(r.PathValue("id"))
 	if id == "" {
@@ -232,7 +250,7 @@ func (s *Server) handleImageThumbGet(w http.ResponseWriter, r *http.Request) {
 	}
 	if path, ct, ok := s.findThumb(id); ok {
 		w.Header().Set("Content-Type", ct)
-		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Header().Set("Cache-Control", thumbCacheControl)
 		http.ServeFile(w, r, path)
 		return
 	}
@@ -246,7 +264,7 @@ func (s *Server) handleImageThumbGet(w http.ResponseWriter, r *http.Request) {
 		// Undecodable (e.g. webp without decoder): fall back to full file.
 		slog.Debug("image thumb fallback full", "id", id, "err", err)
 		w.Header().Set("Content-Type", contentTypeForExt(filepath.Ext(full)))
-		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Header().Set("Cache-Control", thumbCacheControl)
 		http.ServeFile(w, r, full)
 		return
 	}
@@ -256,7 +274,7 @@ func (s *Server) handleImageThumbGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Header().Set("Cache-Control", thumbCacheControl)
 	http.ServeFile(w, r, path)
 }
 
@@ -311,7 +329,7 @@ func (s *Server) writeThumbFromFull(id, fullPath string) error {
 	if err != nil {
 		return err
 	}
-	thumb := resizeMaxEdge(img, ImageThumbMaxEdge)
+	thumb := resizeFit(img, ImageThumbMaxWidth, ImageThumbMaxHeight)
 	data, ext, err := chooseThumbFormat(thumb)
 	if err != nil {
 		return err
@@ -405,6 +423,22 @@ func (s *Server) writeThumbBytes(id string, data []byte, ext string) error {
 	}
 	_ = os.Remove(filepath.Join(s.thumbsDir(), id+alt))
 	return nil
+}
+
+// resizeFit returns img scaled down, preserving aspect, to fit maxW x maxH.
+// An image already inside the box is returned as it is.
+func resizeFit(img image.Image, maxW, maxH int) image.Image {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 || maxW <= 0 || maxH <= 0 || (w <= maxW && h <= maxH) {
+		return img
+	}
+	scale := min(float64(maxW)/float64(w), float64(maxH)/float64(h))
+	nw := max(int(float64(w)*scale+0.5), 1)
+	nh := max(int(float64(h)*scale+0.5), 1)
+	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
+	return dst
 }
 
 // resizeMaxEdge returns img scaled so max(width,height) <= maxEdge.

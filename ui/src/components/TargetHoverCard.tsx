@@ -4,6 +4,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import { parseAssistantMarkdown } from '../conversation/markdown';
 import { renderMermaidIn } from '../conversation/mermaidPaint';
+import { useInnerHTML } from '../conversation/innerHTML';
 
 /**
  * 🎯T660: the painted card, keyed by its raw HTML. renderMermaidIn is async
@@ -45,5 +46,6 @@ export function TargetHoverCard(props: { markdown: string; id?: string; name?: s
       cancelled = true;
     };
   }, [html, painted]);
-  return <div className="target-hover-md" ref={ref} dangerouslySetInnerHTML={{ __html: painted ?? html }} />;
+  const inner = useInnerHTML(painted ?? html);
+  return <div className="target-hover-md" ref={ref} dangerouslySetInnerHTML={inner} />;
 }

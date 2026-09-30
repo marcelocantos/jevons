@@ -92,7 +92,7 @@ func encodePNG(t *testing.T, img image.Image) []byte {
 func findThumbOnDisk(t *testing.T, stateDir, id string) (path, ext string) {
 	t.Helper()
 	for _, e := range []string{".jpg", ".png"} {
-		p := filepath.Join(stateDir, "images", "thumbs", id+e)
+		p := filepath.Join(stateDir, "images", thumbsSubdir, id+e)
 		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
 			return p, e
 		}

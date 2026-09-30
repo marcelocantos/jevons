@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { renderMermaidIn } from '../conversation/mermaidPaint';
+import { useInnerHTML } from '../conversation/innerHTML';
 import { copyImageStatus, copyMermaidImage, copyMermaidSource, svgMarkupFrom } from '../conversation/mermaidClipboard';
 
 type GraphDiagram = { id?: string; title?: string; mermaid?: string };
@@ -29,6 +30,7 @@ export function graphBodyHtml(diagrams: GraphDiagram[]): string {
 export function MermaidVizPanel(props: { open: boolean; onClose: () => void; graphNonce: number }) {
   const [status, setStatus] = useState('');
   const [bodyHtml, setBodyHtml] = useState('');
+  const bodyInner = useInnerHTML(bodyHtml);
   const [src, setSrc] = useState('');
   const [pack, setPack] = useState(false);
 
@@ -141,7 +143,7 @@ export function MermaidVizPanel(props: { open: boolean; onClose: () => void; gra
           Close
         </button>
       </div>
-      <div className={pack ? 'mvp-body mvp-pack' : 'mvp-body'} id="mvp-body" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+      <div className={pack ? 'mvp-body mvp-pack' : 'mvp-body'} id="mvp-body" dangerouslySetInnerHTML={bodyInner} />
       <div className="mvp-status" id="mvp-status">
         {status}
       </div>
