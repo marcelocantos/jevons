@@ -3,6 +3,15 @@
 #
 # prepare-commit-msg receives: $1 message file, $2 source, $3 amend SHA.
 # The stamp is best-effort and never blocks a commit.
+#
+# 🎯T960: commitscope is self-healed here too — rebuilt automatically when
+# missing or older than the newest commit touching its source — so trailer
+# stamping doesn't silently run a stale binary either.
+#
+# guard_ensure_fresh is inlined (not sourced from a shared lib) on purpose:
+# this file is installed/copied standalone, with no sibling directory
+# alongside it, so a `source lib/...` would work in the repo and break
+# silently everywhere it's copied to.
 set -uo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-}"
@@ -10,12 +19,63 @@ if [[ -z "$root" ]]; then
     root="$(cd "$(dirname "$0")/../.." && pwd)"
 fi
 
-bin="${JEVONS_COMMITSCOPE_BIN:-$root/bin/commitscope}"
-if [[ ! -x "$bin" ]]; then
-    if ! (cd "$root" && go build -o "$bin" ./cmd/commitscope) 2>/dev/null; then
-        printf 'commitattrib: %s missing — attribution trailers not stamped (🎯T760).\n' "$bin" >&2
-        exit 0
+guard_ensure_fresh() {
+    local root="$1" bin="$2" pkg="$3"
+    shift 3
+    local src_paths=("$@")
+
+    local newest_epoch="" newest_sha=""
+    if [[ ${#src_paths[@]} -gt 0 ]]; then
+        local line
+        line="$(cd "$root" 2>/dev/null && git log -1 --format='%ct %h' -- "${src_paths[@]}" 2>/dev/null)"
+        if [[ -n "$line" ]]; then
+            newest_epoch="${line%% *}"
+            newest_sha="${line#* }"
+        fi
     fi
+
+    local need_build=0
+    if [[ ! -x "$bin" ]]; then
+        need_build=1
+    elif [[ -n "$newest_epoch" ]]; then
+        local bin_mtime
+        bin_mtime="$(stat -f %m "$bin" 2>/dev/null || stat -c %Y "$bin" 2>/dev/null)"
+        if [[ -n "$bin_mtime" && "$bin_mtime" -lt "$newest_epoch" ]]; then
+            need_build=1
+        fi
+    fi
+
+    if [[ "$need_build" -eq 0 ]]; then
+        return 0
+    fi
+
+    if (cd "$root" && go build -o "$bin" "$pkg") 2>/dev/null; then
+        return 0
+    fi
+
+    if [[ -x "$bin" && -n "$newest_sha" ]]; then
+        local build_time
+        build_time="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$bin" 2>/dev/null)"
+        if [[ -z "$build_time" ]]; then
+            local epoch
+            epoch="$(stat -c %Y "$bin" 2>/dev/null)"
+            if [[ -n "$epoch" ]]; then
+                build_time="$(date -d "@$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+            fi
+        fi
+        printf '%s: %s is STALE (built %s, older than commit %s touching its source) and rebuild failed — run: go build -o %s %s\n' \
+            "$(basename "$bin")" "$bin" "${build_time:-an unknown time}" "$newest_sha" "$bin" "$pkg" >&2
+    else
+        printf '%s: %s missing and `go build %s` failed — guard INACTIVE.\n' \
+            "$(basename "$bin")" "$bin" "$pkg" >&2
+    fi
+    return 1
+}
+
+bin="${JEVONS_COMMITSCOPE_BIN:-$root/bin/commitscope}"
+if ! guard_ensure_fresh "$root" "$bin" ./cmd/commitscope internal/commitscope cmd/commitscope; then
+    printf 'commitattrib: %s unavailable — attribution trailers not stamped (🎯T760).\n' "$bin" >&2
+    exit 0
 fi
 
 "$bin" --stamp-trailers "${1:?}" || true

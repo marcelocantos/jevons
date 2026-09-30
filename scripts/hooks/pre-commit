@@ -21,6 +21,17 @@
 # clobbered. A missing treeguard binary is loud on stderr and non-blocking
 # for the same reason the Claude hook treats exit 1 as non-blocking — a
 # pre-commit exit 1 would block every commit in a clean clone mid-build.
+#
+# 🎯T960: both binaries are self-healed — rebuilt automatically when missing
+# OR older than the newest commit touching their source — so neither guard
+# can sit stale and silently enforce old rules; a rebuild that fails prints a
+# loud, specific stderr line instead.
+#
+# guard_ensure_fresh is inlined (not sourced from a shared lib) on purpose:
+# this file is installed/copied standalone (commitscope --install into
+# .git/hooks, hook test fixtures) with no sibling directory alongside it, so
+# a `source lib/...` would work in the repo and break silently everywhere
+# it's copied to.
 set -uo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-}"
@@ -28,19 +39,65 @@ if [[ -z "$root" ]]; then
     root="$(cd "$(dirname "$0")/../.." && pwd)"
 fi
 
+guard_ensure_fresh() {
+    local root="$1" bin="$2" pkg="$3"
+    shift 3
+    local src_paths=("$@")
+
+    local newest_epoch="" newest_sha=""
+    if [[ ${#src_paths[@]} -gt 0 ]]; then
+        local line
+        line="$(cd "$root" 2>/dev/null && git log -1 --format='%ct %h' -- "${src_paths[@]}" 2>/dev/null)"
+        if [[ -n "$line" ]]; then
+            newest_epoch="${line%% *}"
+            newest_sha="${line#* }"
+        fi
+    fi
+
+    local need_build=0
+    if [[ ! -x "$bin" ]]; then
+        need_build=1
+    elif [[ -n "$newest_epoch" ]]; then
+        local bin_mtime
+        bin_mtime="$(stat -f %m "$bin" 2>/dev/null || stat -c %Y "$bin" 2>/dev/null)"
+        if [[ -n "$bin_mtime" && "$bin_mtime" -lt "$newest_epoch" ]]; then
+            need_build=1
+        fi
+    fi
+
+    if [[ "$need_build" -eq 0 ]]; then
+        return 0
+    fi
+
+    if (cd "$root" && go build -o "$bin" "$pkg") 2>/dev/null; then
+        return 0
+    fi
+
+    if [[ -x "$bin" && -n "$newest_sha" ]]; then
+        local build_time
+        build_time="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$bin" 2>/dev/null)"
+        if [[ -z "$build_time" ]]; then
+            local epoch
+            epoch="$(stat -c %Y "$bin" 2>/dev/null)"
+            if [[ -n "$epoch" ]]; then
+                build_time="$(date -d "@$epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+            fi
+        fi
+        printf '%s: %s is STALE (built %s, older than commit %s touching its source) and rebuild failed — run: go build -o %s %s\n' \
+            "$(basename "$bin")" "$bin" "${build_time:-an unknown time}" "$newest_sha" "$bin" "$pkg" >&2
+    else
+        printf '%s: %s missing and `go build %s` failed — guard INACTIVE.\n' \
+            "$(basename "$bin")" "$bin" "$pkg" >&2
+    fi
+    return 1
+}
+
 # Tests point this at a prebuilt binary so they exercise this shim rather than
 # a copy of it.
 bin="${JEVONS_COMMITSCOPE_BIN:-$root/bin/commitscope}"
 
-if [[ ! -x "$bin" ]]; then
-    # Self-healing: the guard is worth ~200ms of warm `go build` per commit,
-    # and a fleet worker that has to remember `make` before it can commit is
-    # exactly the kind of habit this target exists to replace.
-    if ! (cd "$root" && go build -o "$bin" ./cmd/commitscope) 2>/dev/null; then
-        printf 'commitscope: %s missing and `go build ./cmd/commitscope` failed — shared-index guard INACTIVE.\n' \
-            "$bin" >&2
-        exit 1
-    fi
+if ! guard_ensure_fresh "$root" "$bin" ./cmd/commitscope internal/commitscope cmd/commitscope; then
+    exit 1
 fi
 
 # Do not exec: the treeguard sweep below must still run on an allow.
@@ -52,14 +109,8 @@ fi
 
 # 🎯T391 provider-independent half. Best-effort and never blocks the commit.
 tg="${JEVONS_TREEGUARD_BIN:-$root/bin/treeguard}"
-if [[ ! -x "$tg" ]]; then
-    if [[ -d "$root/cmd/treeguard" ]] && (cd "$root" && go build -o "$tg" ./cmd/treeguard) 2>/dev/null; then
-        :
-    else
-        printf 'treeguard: %s not built — shared-file write sweep INACTIVE at pre-commit (🎯T391). Run: make treeguard\n' \
-            "$tg" >&2
-        exit 0
-    fi
+if ! guard_ensure_fresh "$root" "$tg" ./cmd/treeguard internal/treeguard cmd/treeguard; then
+    exit 0
 fi
 
 # Sweep prints its own findings (and the unprotected-provider notice) on
