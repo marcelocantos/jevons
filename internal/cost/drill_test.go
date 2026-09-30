@@ -33,7 +33,19 @@ func TestDrillSyntheticRunawayKilled(t *testing.T) {
 		t.Skip("tmux not installed — drill requires it (CI installs tmux so criterion 8 runs)")
 	}
 	const nBurners = 5
-	const budgetDeadline = 30 * time.Second
+	// budgetDeadline bounds the whole drill (burn + confirm + kill). It is
+	// wide enough that a slow, CPU-contended host still clears the
+	// thin-rate guard below (🎯T941): under a loaded `make test-go` run,
+	// scheduling delays slow both the burner shell loops and the
+	// collector's poll cadence, so the fixed short burn window this test
+	// used to run undercounted events and tripped MinEventsForKill,
+	// capping the alert at pause instead of confirming kill.
+	const budgetDeadline = 60 * time.Second
+	// burnUntil must produce at least MinEventsForKill (30) fleet events
+	// even when burner/collector cadence is running well under its nominal
+	// rate (5 burners × 1 event/0.2s ≈ 25 events/sec) — 20s gives an ~8x
+	// margin over the nominal 6s that sufficed on an idle host.
+	const burnDuration = 20 * time.Second
 
 	dir := t.TempDir()
 	// The socket lives in a SHORT temp dir of its own: macOS caps Unix
@@ -122,7 +134,7 @@ func TestDrillSyntheticRunawayKilled(t *testing.T) {
 	// Let the runaway burn and the collector see it, until the store
 	// holds a kill-level burn (bounded).
 	deadline := time.Now().Add(budgetDeadline)
-	burnUntil := time.Now().Add(6 * time.Second)
+	burnUntil := time.Now().Add(burnDuration)
 	for time.Now().Before(burnUntil) {
 		if _, err := collector.ScanOnce(); err != nil {
 			t.Fatalf("scan: %v", err)
