@@ -79,24 +79,12 @@ type Reader struct {
 	readyOnce sync.Once
 
 	refreshing chan struct{}
-	lastKick   error
-	// lastFetchAt is when a producer round last completed, forced or not.
-	// A forced refresh inside ForcedRefreshFloor is served from it rather
-	// than from the vendor (🎯T689).
-	lastFetchAt time.Time
+	// refreshingForced says the round in flight is a RefreshNow. A forced
+	// refresh does not take an unforced round's answer: that round asked
+	// claudia for its cached snapshot, not for a new reading.
+	refreshingForced bool
+	lastKick         error
 }
-
-// ForcedRefreshFloor is how recently a reading must have arrived for an
-// explicit refresh to be answered from it instead of the vendor.
-//
-// 🎯T689: claudia's own floor is waived for a forced refresh, by design —
-// a caller saying "now" should get now. But this daemon is that caller on
-// every cockpit mount, so a reload storm was still a request storm, which
-// is exactly what rate-limited Anthropic's usage endpoint on 2026-09-20
-// and, through 🎯T677, parked a live worker. Plan windows are hours long:
-// a reading a minute old is not stale to a human reloading a page, and
-// the background poll keeps it moving regardless.
-const ForcedRefreshFloor = time.Minute
 
 // NewReader builds a Reader. It does not fetch — call Refresh or Run.
 func NewReader(args ReaderArgs) *Reader {
@@ -165,33 +153,37 @@ func (r *Reader) Refresh(ctx context.Context) error {
 
 // RefreshNow forces a producer poll even when the cache is still fresh
 // (🎯T653). Concurrent callers wait for the in-flight round.
+//
+// It always reaches claudia. The vendor request floor lives there, host-wide
+// and per provider (claudia 🎯T85, PlanThrottleForcedInterval), which is what
+// keeps a reload storm from being a request storm (🎯T689). A second floor
+// here only stopped a hard reload from asking claudia at all, so a reading
+// the owner had just watched move on the vendor's dashboard stayed put.
 func (r *Reader) RefreshNow(ctx context.Context) error {
 	return r.refresh(ctx, true)
 }
 
 func (r *Reader) refresh(ctx context.Context, force bool) error {
 	r.mu.Lock()
-	// A forced refresh on top of a reading this recent costs a vendor
-	// request and tells the owner nothing new (🎯T689).
-	if force && r.fetched && !r.lastFetchAt.IsZero() &&
-		r.args.Now().Sub(r.lastFetchAt) < ForcedRefreshFloor {
-		r.mu.Unlock()
-		return nil
-	}
-	if ch := r.refreshing; ch != nil {
+	for r.refreshing != nil {
+		ch := r.refreshing
+		joinable := r.refreshingForced || !force
 		r.mu.Unlock()
 		select {
 		case <-ch:
-			r.mu.Lock()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		r.mu.Lock()
+		if joinable {
 			err := r.lastKick
 			r.mu.Unlock()
 			return err
-		case <-ctx.Done():
-			return ctx.Err()
 		}
 	}
 	done := make(chan struct{})
 	r.refreshing = done
+	r.refreshingForced = force
 	r.mu.Unlock()
 
 	err := r.doRefresh(ctx, force)
@@ -199,6 +191,7 @@ func (r *Reader) refresh(ctx context.Context, force bool) error {
 	r.mu.Lock()
 	r.lastKick = err
 	r.refreshing = nil
+	r.refreshingForced = false
 	close(done)
 	r.mu.Unlock()
 	return err
@@ -221,7 +214,6 @@ func (r *Reader) doRefresh(ctx context.Context, force bool) error {
 		return err
 	}
 	r.readings = readings
-	r.lastFetchAt = r.args.Now()
 	r.fetched = true
 	r.lastErr = ""
 	r.readyOnce.Do(func() { close(r.ready) })
