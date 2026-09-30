@@ -50,7 +50,10 @@ func TestGuardHookIsWiredInProjectSettings(t *testing.T) {
 
 	// Pre must cover every tool that can replace file content; Post must also
 	// cover Read, because Read is what establishes a session's base.
-	wantPre := []string{"Write", "Edit", "MultiEdit", "StrReplace"}
+	// Bash is required in PreToolUse (🎯T955): a `git checkout` run as a
+	// shell command is invisible to the guard unless Bash calls reach it, and
+	// that gap is exactly how the 2026-09-30 shared-clone incident happened.
+	wantPre := []string{"Write", "Edit", "MultiEdit", "StrReplace", "Bash"}
 	wantPost := append([]string{"Read"}, wantPre...)
 	for event, wantTools := range map[string][]string{
 		"PreToolUse":  wantPre,

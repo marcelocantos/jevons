@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|StrReplace",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|StrReplace|Bash",
         "hooks": [
           {
             "type": "command",
@@ -13,7 +13,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|StrReplace",
+        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|StrReplace|Bash",
         "hooks": [
           {
             "type": "command",

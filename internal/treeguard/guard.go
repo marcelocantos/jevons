@@ -291,3 +291,36 @@ func lineSet(b []byte) map[string]bool {
 	}
 	return set
 }
+
+// BranchGuardArgs are the inputs to DecideBranchCheckout (🎯T955).
+type BranchGuardArgs struct {
+	// CurrentBranch is the shared clone's checked-out branch (from
+	// `git symbolic-ref --short HEAD`) — the integration branch a landing
+	// must never move off.
+	CurrentBranch string
+	// TargetRef is the ref DetectBranchCheckout found in the command.
+	TargetRef string
+}
+
+// DecideBranchCheckout refuses a `git checkout`/`git switch` run in the
+// shared clone that would move its checked-out branch away from the
+// integration branch (🎯T955). The 2026-09-30 incident this guards against:
+// jv-t946-resume2 ran `git checkout master` directly in the shared clone
+// while the live integration branch was steer-modes-stop-guards-seat-stops,
+// then fast-forwarded the wrong branch. Isolated worker worktrees are not
+// this guard's business — the caller only reaches here when the command runs
+// against the shared clone itself, not one of its linked worktrees.
+func DecideBranchCheckout(args *BranchGuardArgs) Decision {
+	if args.TargetRef == args.CurrentBranch {
+		return Decision{Verdict: Allow, Reason: "same-branch"}
+	}
+	return Decision{
+		Verdict: Deny,
+		Reason:  "branch-switch-in-shared-clone",
+		Message: "treeguard: refusing to check out " + args.TargetRef +
+			" in the shared clone — its checked-out branch is the integration" +
+			" branch " + args.CurrentBranch + ", and a landing must never switch" +
+			" it. Land through the integrator (cmd/integrate) instead, or check" +
+			" out " + args.TargetRef + " in your own worktree. 🎯T955",
+	}
+}

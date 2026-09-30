@@ -109,13 +109,7 @@ func scanSegment(toks []token, heredoc string, out *[]CommandWrite) {
 		}
 	}
 
-	var words []string
-	for i, t := range toks {
-		if t.kind == tokWord && !redirTarget[i] {
-			words = append(words, t.text)
-		}
-	}
-	words = stripPrefixes(words)
+	words := stripPrefixes(wordsOf(toks, redirTarget))
 	if len(words) == 0 {
 		return
 	}
@@ -169,6 +163,79 @@ func scanSegment(toks []token, heredoc string, out *[]CommandWrite) {
 			add(out, m[1], FormScriptWrite)
 		}
 	}
+}
+
+// wordsOf collects a segment's plain words, skipping the target word of any
+// output redirection (that word is a file, not a command token, and callers
+// that care about it already added it via FormRedirect).
+func wordsOf(toks []token, redirTarget map[int]bool) []string {
+	var words []string
+	for i, t := range toks {
+		if t.kind == tokWord && !redirTarget[i] {
+			words = append(words, t.text)
+		}
+	}
+	return words
+}
+
+// DetectBranchCheckout reports the ref a `git checkout` / `git switch`
+// invocation would move HEAD to, distinguishing a branch/ref switch from a
+// path restore (`git checkout -- file`, `git checkout .`) so the shared-clone
+// branch guard (🎯T955) only fires on commands that actually change what is
+// checked out.
+//
+// definite reports whether the switch is unambiguous from the command's own
+// shape alone: `git switch` is never a path operation, and `-b`/`-B`/`-c`/`-C`
+// always create-and-switch. A bare `git checkout <arg>` is ambiguous — <arg>
+// might be a path — so definite is false and the caller must additionally
+// confirm <arg> actually resolves to a ref before treating it as a switch.
+func DetectBranchCheckout(command string) (ref string, ok, definite bool) {
+	code, _ := splitHeredocs(command)
+	for _, seg := range segments(lex(code)) {
+		redirTarget := make(map[int]bool)
+		for i, t := range seg {
+			if t.kind == tokRedirOut && i+1 < len(seg) && seg[i+1].kind == tokWord {
+				redirTarget[i+1] = true
+			}
+		}
+		words := stripPrefixes(wordsOf(seg, redirTarget))
+		if len(words) < 2 || filepath.Base(words[0]) != "git" {
+			continue
+		}
+		args := words[1:]
+		var sub string
+		var rest []string
+		var createFlag bool
+		for _, a := range args {
+			if sub == "" {
+				if strings.HasPrefix(a, "-") {
+					continue
+				}
+				sub = a
+				continue
+			}
+			rest = append(rest, a)
+		}
+		if sub != "checkout" && sub != "switch" {
+			continue
+		}
+		for _, a := range args {
+			switch a {
+			case "-b", "-B", "-c", "-C":
+				createFlag = true
+			}
+		}
+		if slices.Contains(rest, "--") {
+			continue // `checkout <ref> -- <path>` or `checkout -- <path>`: a path restore
+		}
+		pos := positional(rest)
+		if len(pos) == 0 {
+			continue
+		}
+		ref, ok = pos[0], true
+		definite = sub == "switch" || createFlag
+	}
+	return ref, ok, definite
 }
 
 // scanGit handles the one git subcommand family that rewrites working-tree

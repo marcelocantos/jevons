@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
 // DisableEnv set to "off" (or "0"/"false") disables the guard. Disabling is a
@@ -150,6 +153,11 @@ func (e *Env) preBash(p *Payload) (Decision, error) {
 	if e.BashOff {
 		return Decision{Verdict: Allow, Reason: "bash-guard-off"}, nil
 	}
+	if ref, ok, definite := DetectBranchCheckout(p.ToolInput.Command); ok {
+		if d, checked := e.decideBranchCheckout(ref, definite); checked {
+			return d, nil
+		}
+	}
 	for _, write := range ScanCommand(p.ToolInput.Command) {
 		abs, rel, ok := e.resolve(e.expand(write.Path))
 		if !ok || !IsGuarded(rel, e.Guarded) {
@@ -245,6 +253,49 @@ func (e *Env) postBash(p *Payload) (string, error) {
 		return "", err
 	}
 	return FormatSweepReport(findings), nil
+}
+
+// decideBranchCheckout applies DecideBranchCheckout (🎯T955) when e.RepoRoot
+// is the shared clone itself, not one of its isolated worker worktrees — a
+// worker switching branches inside its OWN linked worktree is not this
+// guard's business, only the shared clone's checked-out branch is. checked
+// is false when the guard has nothing to say (linked worktree, detached
+// HEAD, already on ref, or — for an ambiguous `git checkout <arg>` — <arg>
+// does not actually resolve to a ref git would switch to).
+func (e *Env) decideBranchCheckout(ref string, definite bool) (Decision, bool) {
+	if worktree.IsLinkedWorktree(e.RepoRoot) {
+		return Decision{}, false
+	}
+	branch, err := gitSymbolicRefShort(e.RepoRoot)
+	if err != nil {
+		return Decision{}, false // detached HEAD or not a repo: no integration branch to protect
+	}
+	if ref == branch {
+		return Decision{}, false
+	}
+	if !definite && !isRefLike(e.RepoRoot, ref) {
+		// A bare `git checkout <arg>` where <arg> is not a real ref is a path
+		// restore (`git checkout .`, `git checkout some/file.go`), not a
+		// branch switch.
+		return Decision{}, false
+	}
+	return DecideBranchCheckout(&BranchGuardArgs{CurrentBranch: branch, TargetRef: ref}), true
+}
+
+// gitSymbolicRefShort is the shared clone's checked-out branch, or an error
+// when HEAD is detached (no branch to protect).
+func gitSymbolicRefShort(dir string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// isRefLike reports whether ref resolves to a commit git could check out —
+// the disambiguator for a bare `git checkout <arg>` (🎯T955).
+func isRefLike(dir, ref string) bool {
+	return exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}").Run() == nil
 }
 
 // expand resolves the variables a fleet worker's command actually carries.
