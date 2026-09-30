@@ -315,8 +315,11 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 		s.noteTurnInFlight(name)
 		// 🎯T417: durable delivery evidence survives later compaction.
 		s.recordDeliveryEvidence(name, payload, ev)
-		// 🎯T406: a begun turn is evidence the provider accepted the call.
-		s.ObserveProviderOK()
+		// 🎯T906: a begun turn is evidence the SEAT accepted the payload, not
+		// that the provider answered it — the seat's own next turn can still
+		// fail on the same wall (T885/T905 401 shape). Only authored assistant
+		// text (chat.go DeliverOverseerEvent) or a real reply
+		// (replyFailure/jwork/event_push) is evidence the provider is back.
 		return res, nil
 
 	case OutcomeUnconfirmed:
