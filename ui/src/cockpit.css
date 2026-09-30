@@ -133,7 +133,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .composer-images .img-chip button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; line-height: 18px; cursor: pointer; padding: 0; }
 .msg .chat-img {
   display: block; margin: 6px 0; border-radius: 8px; cursor: zoom-in;
-  height: 120px; width: auto; max-width: 100%; object-fit: contain;
+  /* 🎯T976: a compact thumb in the image's own shape, never enlarged. A fixed
+     120px height stretched across the bubble drew a wide screenshot as a
+     443x118 box, far bigger than a thumbnail. Click opens full size. */
+  width: auto; height: auto; max-width: min(100%, 320px); max-height: 120px;
   vertical-align: top; background: var(--surface);
 }
 .msg.user .chat-img { border: 1px solid var(--user-border); }

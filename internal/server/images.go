@@ -34,12 +34,11 @@ import (
 // Full-res stays on disk; clients render compact previews only.
 const ImageThumbMaxEdge = 320
 
-// ImageThumbMaxWidth / ImageThumbMaxHeight bound a thumb to how the
-// transcript draws it: 120 CSS px tall, up to the bubble's width, at 2x.
-// A longest-edge cap of 320 left a wide screenshot 24 px tall and drawn
-// ~3x upscaled, visibly smeared (2026-10-01). 🎯T976.
+// ImageThumbMaxWidth / ImageThumbMaxHeight bound a thumb to the box the
+// transcript draws it in (at most 320x120 CSS px, aspect kept), at 2x so it
+// stays sharp on a Retina display. 🎯T976.
 const (
-	ImageThumbMaxWidth  = 960
+	ImageThumbMaxWidth  = 640
 	ImageThumbMaxHeight = 240
 )
 
@@ -128,13 +127,13 @@ func (s *Server) imagesDir() string {
 	return filepath.Join(s.stateDir, "images")
 }
 
-// thumbsDir holds generated thumbs. v2 is the 🎯T976 box (960x240); thumbs
+// thumbsDir holds generated thumbs. v3 is the 🎯T976 box (640x240); thumbs
 // cut to the old 320 edge are left behind and regenerate on first request.
 func (s *Server) thumbsDir() string {
 	return filepath.Join(s.imagesDir(), thumbsSubdir)
 }
 
-const thumbsSubdir = "thumbs-v2"
+const thumbsSubdir = "thumbs-v3"
 
 func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 	if rejectCrossSite(w, r) {
