@@ -51,6 +51,12 @@ const (
 	// not an ancestor of HEAD (🎯T427). Distinguishes rewritten (object still
 	// present) from missing (never existed here).
 	FlagSHAUnreachable FlagKind = "sha_unreachable"
+	// FlagUncitedClaimDirtyWorktree: the report reads as oracle evidence on
+	// marker words alone ("pass", "green", "go test") — no cited SHA, no
+	// cited gate id — while the worktree that would have produced that
+	// evidence carries uncommitted tracked changes or new untracked source
+	// files (🎯T946). Nothing was landed for the marker words to describe.
+	FlagUncitedClaimDirtyWorktree FlagKind = "uncited_claim_dirty_worktree"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.

@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/shaevidence"
 )
 
 // CompletionEvidenceClass is a hermetic classification of a finish report
@@ -381,6 +383,40 @@ func HasDailyPathEvidence(report string) bool {
 		}
 	}
 	return false
+}
+
+// reportCitesOracleID is true when report names a checkable oracle artifact:
+// an envelope sha/gate-id slot, an evidence-shaped SHA in prose (🎯T427
+// shape), or a GATE attestation line (🎯T386 shape). Marker words alone —
+// "pass", "green", "oracle" — name nothing a reader can go check.
+func reportCitesOracleID(report string) bool {
+	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasOracle() {
+		return true
+	}
+	body := oracleScanBody(report)
+	if len(shaevidence.ExtractEvidenceSHAs(body)) > 0 {
+		return true
+	}
+	return len(gate.ParseAttestations(body)) > 0
+}
+
+// UncitedClaimAgainstDirtyWorktree is true when report reads as oracle
+// evidence purely on marker words (🎯T946) — no cited SHA, no cited gate id —
+// while tree says the worker's own worktree carries uncommitted tracked
+// changes or new untracked source files.
+//
+// jv-t906-accept-lifts-block and jv-t943-stale-token-reload were both scored
+// finished_work this way: neither report named a landed commit or a gate id,
+// and both worktrees were fully uncommitted at the moment of the reap.
+// Nothing existed for the "pass"/"green"/"go test" words to describe.
+func UncitedClaimAgainstDirtyWorktree(report string, tree *gate.TreeProvenance) bool {
+	if tree == nil || tree.Clean {
+		return false
+	}
+	if reportCitesOracleID(report) {
+		return false
+	}
+	return hasOracleEvidence(strings.ToLower(oracleScanBody(report)))
 }
 
 // LooksLikeHermeticOnlyDaemonClaim is true when the report claims completion

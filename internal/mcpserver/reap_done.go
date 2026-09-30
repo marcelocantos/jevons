@@ -136,7 +136,17 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	// 🎯T470: a report the false-green check flagged is never auto-reaped as
 	// finished_work in the same pass — jv-t391 was flagged
 	// attestation_not_green and reaped finished_work 447ms later.
-	if flags := FalseGreenFlags(report); len(flags) > 0 {
+	//
+	// 🎯T946: the check also reads the worker's own worktree when one is
+	// registered — a report that never cites a SHA or gate id but reads as
+	// oracle evidence on marker words alone, over an uncommitted worktree,
+	// is the same shape as a contradicted attestation (jv-t906-accept-lifts-block,
+	// jv-t943-stale-token-reload).
+	var workDir string
+	if wd := reg.Def(name); wd != nil {
+		workDir = wd.WorkDir
+	}
+	if flags := FalseGreenFlagsForWorker(report, workDir); len(flags) > 0 {
 		return false, "false_green_" + string(flags[0].Kind)
 	}
 	def := reg.Def(name)
@@ -237,8 +247,12 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		// that the evidence did not support the claim and must not also
 		// treat the claim as finished_work.
 		if strings.HasPrefix(reason, "false_green_") {
+			var workDir string
+			if def := s.registry.Def(name); def != nil {
+				workDir = def.WorkDir
+			}
 			fields := reapDecisionFields(name, reason, report)
-			fields["false_green_flags"] = falseGreenKinds(FalseGreenFlags(report))
+			fields["false_green_flags"] = falseGreenKinds(FalseGreenFlagsForWorker(report, workDir))
 			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
 			slog.Info("T470 kept agent whose finish report was false-green flagged",
 				"agent", name, "reason", reason)
