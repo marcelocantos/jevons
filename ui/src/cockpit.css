@@ -137,6 +137,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
      120px height stretched across the bubble drew a wide screenshot as a
      443x118 box, far bigger than a thumbnail. Click opens full size. */
   width: auto; height: auto; max-width: min(100%, 320px); max-height: 120px;
+  /* An unloaded lazy image sized auto is 0x0 and never loads. */
+  min-width: 48px; min-height: 24px; object-fit: contain;
   vertical-align: top; background: var(--surface);
 }
 .msg.user .chat-img { border: 1px solid var(--user-border); }
