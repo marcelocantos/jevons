@@ -80,7 +80,11 @@ func (s *Server) noteDeadSeats(reps []DeadAgentReport) {
 	}
 	now := time.Now()
 	for _, r := range reps {
-		if last, ok := s.seatStops().Last(r.Name); ok && now.Sub(last.At) < 2*time.Minute {
+		// A broker that announced its restart is the most authoritative
+		// cause there is: it replaces an unplanned record from the same
+		// minutes, or the row keeps saying the seat died (🎯T944).
+		announced := fleet.BrokerCaused(r.Cause) && fleet.BrokerPlanned(r.Cause)
+		if last, ok := s.seatStops().Last(r.Name); ok && now.Sub(last.At) < 2*time.Minute && (last.Planned || !announced) {
 			continue
 		}
 		detail := "found not alive by the fleet-health sweep"
@@ -210,6 +214,32 @@ func (s *Server) SeatStopReason(name string) (reason string, at time.Time, ok bo
 	rec, ok := s.seatStops().Last(name)
 	if !ok {
 		return "", time.Time{}, false
+	}
+	return rec.Reason, rec.At, true
+}
+
+// PlannedNotBack is the fleet row's reason for a seat a planned broker
+// restart stopped that has not come back within seatstop.PlannedGrace.
+const PlannedNotBack = "did not come back after a planned broker restart"
+
+// SeatStopShown is the stop reason the fleet row paints (🎯T944). A seat a
+// planned broker restart stopped is expected back: within
+// seatstop.PlannedGrace it shows nothing, and after it, that it did not come
+// back — the row's rehydrate health then says what holds it. Every other
+// stop shows its recorded reason, as SeatStopReason does.
+func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok bool) {
+	if s == nil {
+		return "", time.Time{}, false
+	}
+	rec, ok := s.seatStops().Last(name)
+	if !ok {
+		return "", time.Time{}, false
+	}
+	if rec.Planned {
+		if time.Since(rec.At) < seatstop.PlannedGrace {
+			return "", rec.At, true
+		}
+		return PlannedNotBack, rec.At, true
 	}
 	return rec.Reason, rec.At, true
 }

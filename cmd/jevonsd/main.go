@@ -1037,7 +1037,7 @@ func main() {
 			Message: res.Message, InterruptAfterMS: res.InterruptAfterMS}, nil
 	})
 	// 🎯T662: /api/agents rows carry why a seat stopped and the mass-stop line.
-	srv.SetSeatStopReader(mcpSrv.SeatStopReason)
+	srv.SetSeatStopReader(mcpSrv.SeatStopShown) // 🎯T944
 	srv.SetWedgedReader(mcpSrv.WedgedSeat) // 🎯T927
 	srv.SetDeadSeatNoter(mcpSrv.NoteDeadSeat)
 	srv.SetPlanAuthFailure(mcpSrv.PlanAuthFailed, mcpSrv.ClearPlanAuthFailures) // 🎯T905
