@@ -51,6 +51,10 @@ var structuredFlagKinds = []FlagKind{
 	FlagDirtyTreeGate,
 	FlagSHAUnreachable,
 	FlagAttestationEmptyPackage,
+	// FlagUncitedClaimDirtyWorktree is produced by FalseGreenFlagsForWorker
+	// (internal/mcpserver) from a git worktree probe, never a hazard
+	// substring scan here (🎯T946).
+	FlagUncitedClaimDirtyWorktree,
 	// 🎯T765 ledger-achieve flags. They never scan a finish report: CheckAchieve
 	// runs on a ledger attestation, which is a claim rather than narrative.
 	// Precedes-fix and tree-unknown read the record and git; uncited fires on
