@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,6 +67,10 @@ func TestAgentStartAllowsExistingWorkdir(t *testing.T) {
 	}
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
+	// The assertion is only about the workdir check; never launch a seat.
+	s.launchAgentFn = func(context.Context, string) (*claudia.Agent, error) {
+		return nil, errors.New("test: no launch")
+	}
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
