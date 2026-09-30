@@ -231,3 +231,11 @@ func (p *Plan) Progress() (done, total int, complete bool) {
 	}
 	return done, total, total > 0 && done == total
 }
+
+// DefaultDir returns the standard on-disk location for plan-step state
+// under a jevons state directory (e.g. Config.StateDir, typically
+// ~/.jevons): <stateDir>/planstep. Callers that want the daemon's
+// standing store construct NewStore(DefaultDir(cfg.StateDir)).
+func DefaultDir(stateDir string) string {
+	return filepath.Join(stateDir, "planstep")
+}
