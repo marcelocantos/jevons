@@ -613,6 +613,9 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	s.startMu.Unlock()
 	// 🎯T597: record the (re-)mint so seat-activity baselines measure from it.
 	s.noteSeatMinted(name)
+	// 🎯T934: a required MCP server the seat launched without is named now,
+	// to the parent and in the result, before the brief is delivered.
+	mintMCPNote := s.noteMintMCPUnavailable(*def, proc.HostMCPUnavailable())
 
 	// 🎯T541: Cursor ACP remints must not wait for prompt confirmation
 	// while anything that serializes MCP start is held. Start, unlock,
@@ -727,6 +730,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	// connecting" forever, silently costing this agent those tools — so say
 	// so here, where the caller who spawned it can act.
 	msg += s.noteAgentMCPHealth(name, def.Provider)
+	msg += mintMCPNote
 	return mcp.NewToolResultText(prefixRehydrate(rehydrated, msg)), nil
 }
 
