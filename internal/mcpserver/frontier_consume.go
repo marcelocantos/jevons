@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstop"
+
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/keepgoing"
@@ -738,6 +740,8 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
 	}
+	// 🎯T970: the registered row is starting, not stopped, until this returns.
+	defer s.markStarting(name)()
 	def, existed, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID), brief)
 	if err != nil {
 		return fmt.Errorf("register: %w", err)
@@ -746,6 +750,7 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	proc, err := s.launchAgentBounded(context.Background(), name)
 	if err != nil {
 		s.startMu.Unlock()
+		s.noteSeatStop(name, seatstop.SourceStartFailed, "start failed: "+err.Error(), parent, "")
 		return fmt.Errorf("launch: %w", err)
 	}
 	s.wireAgentEvents(name, proc)

@@ -43,6 +43,9 @@ const (
 	// SourceBroker: the Claudia broker ended the seat's connection (it
 	// stopped or restarted) or reported the seat gone (🎯T925).
 	SourceBroker Source = "broker"
+	// SourceStartFailed: jevons_agent_start registered the seat but its
+	// launch failed, so it never ran (🎯T970).
+	SourceStartFailed Source = "start_failed"
 )
 
 // BrokerReason is the stop reason for a seat the broker took down. cause is

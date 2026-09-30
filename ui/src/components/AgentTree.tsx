@@ -23,6 +23,8 @@ export type AgentRow = {
   ledger?: string;
   /** 🎯T662: why a not-running seat last stopped, from the daemon's seat-stop ledger. */
   stop_reason?: string;
+  /** 🎯T970: being brought up; it has not stopped, so it shows no stop reason. */
+  starting?: boolean;
   /** Set when the transcript ends on Cursor's plan wall. Shown on a running seat. */
   plan_wall?: string;
   stopped_at?: string;
@@ -47,7 +49,7 @@ const unrecordedStop = 'unknown: process exited and no reason was recorded';
 // A relaunch refusal already says why the seat is down. The synthesized
 // "no reason was recorded" line beside it only contradicts that.
 export function showSeatStopReason(node: AgentRow): boolean {
-  if (node.running || !node.stop_reason) return false;
+  if (node.running || node.starting || !node.stop_reason) return false;
   if (node.rehydrate && node.rehydrate !== 'resumable' && node.stop_reason === unrecordedStop) {
     return false;
   }

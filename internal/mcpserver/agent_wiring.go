@@ -258,6 +258,45 @@ func (s *Server) NoteAgentLaunch(name string) func() {
 	}
 }
 
+// markStarting holds name as starting until the returned func is called
+// (🎯T970). A row jevons_agent_start has registered can wait minutes on
+// startMu behind other launches before its process exists; until then it has
+// not stopped, and the panel must not say it exited.
+func (s *Server) markStarting(name string) func() {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return func() {}
+	}
+	s.wireMu.Lock()
+	if s.starting == nil {
+		s.starting = map[string]int{}
+	}
+	s.starting[name]++
+	s.wireMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.wireMu.Lock()
+			defer s.wireMu.Unlock()
+			if s.starting[name] <= 1 {
+				delete(s.starting, name)
+			} else {
+				s.starting[name]--
+			}
+		})
+	}
+}
+
+// AgentStarting reports whether something is bringing name up: a
+// jevons_agent_start that has not returned, or a launch in flight (🎯T970).
+func (s *Server) AgentStarting(name string) bool {
+	if s == nil {
+		return false
+	}
+	s.wireMu.Lock()
+	defer s.wireMu.Unlock()
+	return s.starting[name] > 0 || s.launching[name] > 0
+}
+
 // launchInFlight reports whether a launch is currently bringing name's process
 // up, which is the difference between "nobody wired this road" and "not yet".
 func (s *Server) launchInFlight(name string) bool {

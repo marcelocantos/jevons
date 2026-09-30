@@ -1019,6 +1019,10 @@ type agentInfo struct {
 	// restart; carried on every row so the RHS can show it once.
 	StopReason string `json:"stop_reason,omitempty"`
 	StoppedAt  string `json:"stopped_at,omitempty"`
+	// Starting marks a not-running seat that something is bringing up: a
+	// jevons_agent_start that has not returned, or a launch in flight
+	// (🎯T970). It carries no stop reason: it has not stopped.
+	Starting bool `json:"starting,omitempty"`
 	// PlanWall is set when the seat's transcript ends on Cursor's
 	// "Upgrade your plan to continue" turn. The process may still be
 	// running; the row shows it the way it shows a stop reason.
@@ -1125,6 +1129,14 @@ func (s *Server) noteDeadSeat(name, cause, detail string) {
 	}
 }
 
+// SetSeatStartingReader installs the 🎯T970 lookup for seats being brought up
+// (mcpserver.AgentStarting in production).
+func (s *Server) SetSeatStartingReader(fn func(name string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seatStartingReader = fn
+}
+
 // SetSeatStopReader installs the 🎯T662 seat-stop lookup the /api/agents
 // rows are decorated with (mcpserver.SeatStopReason in production).
 func (s *Server) SetSeatStopReader(fn func(name string) (reason string, at time.Time, ok bool)) {
@@ -1161,6 +1173,7 @@ func (s *Server) SetWedgedReader(fn func(name string) (string, bool)) {
 func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 	s.mu.RLock()
 	stopReader := s.seatStopReader
+	startingReader := s.seatStartingReader
 	massReader := s.massStopReader
 	wedgedReader := s.wedgedReader
 	orderReader := s.spawnOrderReader
@@ -1170,7 +1183,12 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 		mass = massReader()
 	}
 	for i := range agents {
-		if stopReader != nil && !agents[i].Running {
+		if startingReader != nil && !agents[i].Running && startingReader(agents[i].Name) {
+			// 🎯T970: a row registered minutes before its process exists
+			// has not exited; saying so is what the panel showed on
+			// 2026-09-30 for four workers queued behind other launches.
+			agents[i].Starting = true
+		} else if stopReader != nil && !agents[i].Running {
 			if reason, at, ok := stopReader(agents[i].Name); ok {
 				agents[i].StopReason = reason
 				agents[i].StoppedAt = at.UTC().Format(time.RFC3339)

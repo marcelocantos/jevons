@@ -582,6 +582,9 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 			}
 		}
 	}
+	// 🎯T970: from the moment the row exists until this start returns, the
+	// seat is starting, not stopped.
+	defer s.markStarting(name)()
 	def, existed, routeNote, err := s.stitchAgentStart(name, workdir, model, providerArg, taskTypeArg, parent, purpose, targetID, prompt)
 	s.mu.Lock()
 	s.pendingSpawnRole = ""
@@ -622,6 +625,8 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		life["err"] = err.Error()
 		life["session_id"] = sessionDisplay(def.SessionID)
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		// 🎯T970: the row stays, so it says why it never ran.
+		s.noteSeatStop(name, seatstop.SourceStartFailed, "start failed: "+err.Error(), strings.TrimSpace(actor), "")
 		return mcp.NewToolResultError(prefixRehydrate(rehydrated,
 			fmt.Sprintf("start failed: %v", err))), nil
 	}

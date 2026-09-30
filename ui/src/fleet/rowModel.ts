@@ -9,6 +9,8 @@ export type FleetAgent = {
   parent?: string;
   status?: string;
   running?: boolean;
+  /** 🎯T970: being brought up (registered, queued or launching); has not stopped. */
+  starting?: boolean;
   phase?: string;
   step?: string;
   last_tool?: string;
@@ -147,6 +149,11 @@ export function fleetSecondary(agent: FleetAgent, ctx: FleetSecondaryCtx = {}): 
   const purpose = collapse(agent.purpose).toLowerCase();
   if (purpose === 'aside' || purpose === 'side' || purpose === 'side-chat' || purpose === 'file-target') {
     return { kind: '', text: '' };
+  }
+  // 🎯T970: a seat still being brought up has not stopped. Before its process
+  // exists it read "stopped" with an exit it never had.
+  if (!agent.running && agent.starting) {
+    return { kind: 'status', text: 'starting…' };
   }
   // A stopped seat says so. A GitHub path in that slot looks like the
   // running product owners beside it; the grey dot is too easy to miss.

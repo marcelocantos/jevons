@@ -148,6 +148,7 @@ function Cockpit() {
           target_id?: string;
           ledger?: string;
           stop_reason?: string;
+          starting?: boolean;
           stopped_at?: string;
           mass_stop?: string;
           rehydrate?: string;
@@ -168,6 +169,7 @@ function Cockpit() {
           target_id: a.target_id,
           ledger: a.ledger,
           stop_reason: a.stop_reason,
+          starting: a.starting,
           stopped_at: a.stopped_at,
           mass_stop: a.mass_stop,
           rehydrate: a.rehydrate,

@@ -356,7 +356,9 @@ type Server struct {
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
 	seatStopReader func(name string) (reason string, at time.Time, ok bool)
-	wedgedReader   func(name string) (string, bool)
+	// seatStartingReader reports a seat being brought up (🎯T970).
+	seatStartingReader func(name string) bool
+	wedgedReader       func(name string) (string, bool)
 	// deadSeatNoter records a dead seat the fleet feed handled (🎯T925).
 	deadSeatNoter  func(name, cause, detail string)
 	massStopReader func() string

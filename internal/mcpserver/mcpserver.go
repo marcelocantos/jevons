@@ -265,6 +265,10 @@ type Server struct {
 	// running it is simply a launch. Guarded by wireMu, with wiredSinks,
 	// because the two are read together by the sweep.
 	launching map[string]int
+	// starting counts jevons_agent_start calls between registering a row and
+	// returning (🎯T970): worktree setup, the wait on startMu and the launch.
+	// Guarded by wireMu. launching alone covers only the launch hook.
+	starting map[string]int
 
 	// selfTestEnv builds the 🎯T110 pack environment (shared with HTTP).
 	selfTestEnv SelfTestEnvFunc
