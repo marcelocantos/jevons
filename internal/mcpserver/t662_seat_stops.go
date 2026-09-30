@@ -233,6 +233,12 @@ func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok boo
 	}
 	rec, ok := s.seatStops().Last(name)
 	if !ok {
+		// 🎯T965: not recorded yet — the sweep that records a broker stop
+		// runs after it. The handle already knows the broker said it was
+		// restarting on purpose, so the row is quiet rather than 'unknown'.
+		if cause, dead := stoppedSeatCause(s, name); dead && fleet.BrokerPlanned(cause) {
+			return "", time.Now(), true
+		}
 		return "", time.Time{}, false
 	}
 	if rec.Planned {
@@ -251,4 +257,18 @@ func (s *Server) rehydratedAfter(name string) string {
 		return fmt.Sprintf(" (rehydrated after %s)", rec.Reason)
 	}
 	return " (rehydrated after dead/stopped process)"
+}
+
+// stoppedSeatCause is a seat's handle exit cause and whether the handle is
+// dead (🎯T965). A variable so tests can stand in for a handle the broker
+// closed; claudia sets the cause only from its own connection.
+var stoppedSeatCause = func(s *Server, name string) (cause string, dead bool) {
+	if s == nil || s.registry == nil {
+		return "", false
+	}
+	p := s.registry.Get(name)
+	if p == nil || p.Alive() {
+		return "", false
+	}
+	return p.ExitCause(), true
 }
