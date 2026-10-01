@@ -242,12 +242,31 @@ func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok boo
 		return "", time.Time{}, false
 	}
 	if rec.Planned {
+		// 🎯T983: a seat deliberately stood down is not expected back. A
+		// planned restart's record replaced the park's own stop record, so
+		// the row said the seat had failed to come back.
+		if ir, ok := s.fleetIntent().Agents[name]; ok && !fleetintent.Runnable(ir.State) {
+			return intentStopLine(ir), ir.At, true
+		}
 		if time.Since(rec.At) < seatstop.PlannedGrace {
 			return "", rec.At, true
 		}
 		return PlannedNotBack, rec.At, true
 	}
 	return rec.Reason, rec.At, true
+}
+
+// intentStopLine is a fleet row's reason for a seat whose intent keeps it
+// down: what the intent is, who set it, and why.
+func intentStopLine(r fleetintent.Record) string {
+	line := fleetintent.Describe(r.State)
+	if r.By != "" {
+		line += " (" + r.By + ")"
+	}
+	if r.Reason != "" {
+		line += ": " + r.Reason
+	}
+	return line
 }
 
 // rehydratedAfter is the send-result suffix for a seat the send had to

@@ -66,3 +66,30 @@ func TestT944AnnouncedRestartReplacesARecentUnplannedStop(t *testing.T) {
 		t.Fatal("a repeated planned stop re-recorded within the dedupe window")
 	}
 }
+
+// 🎯T983: a seat its PO parked, then stopped by a planned broker restart, is
+// not one that failed to come back: the row names the park. On 2026-10-02
+// three finished or blocked workers read "did not come back after a planned
+// broker restart", and the owner took them for failing restarts.
+func TestT983ParkedSeatRowNamesTheParkNotTheRestart(t *testing.T) {
+	s := &Server{}
+	st, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(st)
+	if err := s.SetAgentIntent("done", fleetintent.Parked, "jevons-po", "T972 fully achieved"); err != nil {
+		t.Fatal(err)
+	}
+	s.seatStops().Note(recordAt("done", time.Now().Add(-seatstop.PlannedGrace-time.Minute)))
+	s.seatStops().Note(recordAt("open", time.Now().Add(-seatstop.PlannedGrace-time.Minute)))
+
+	reason, _, _ := s.SeatStopShown("done")
+	if want := "parked by owner/overseer (jevons-po): T972 fully achieved"; reason != want {
+		t.Fatalf("parked row = %q, want %q", reason, want)
+	}
+	// A seat whose intent is still working did fail to come back.
+	if reason, _, _ := s.SeatStopShown("open"); reason != PlannedNotBack {
+		t.Fatalf("working row = %q, want %q", reason, PlannedNotBack)
+	}
+}
