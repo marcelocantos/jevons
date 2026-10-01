@@ -57,6 +57,7 @@ export function UserRequest(props: UserRequestProps) {
 function NamedUserRequest(props: UserRequestProps) {
   const density = normalizeDensity(props.density);
   const compact = density === 'compact';
+  const hint = props.hold || (compact ? 'Message this agent…' : 'Message...');
   const liveDraft = useDrafts((s) => s.drafts[props.name] || '');
   const setDraft = useDrafts((s) => s.setDraft);
   // 🎯T562.3: pending images persist per agent (agent switch and reload).
@@ -273,98 +274,108 @@ function NamedUserRequest(props: UserRequestProps) {
           Compose a message for Jevons.
         </label>
       )}
-      <textarea
-        id={boxId}
-        ref={boxRef}
-        data-composer={compact ? 'sidebar' : 'main'}
-        value={raw}
-        onChange={(e) => recalled ? setRecalledText(e.target.value) : setDraft(props.name, e.target.value)}
-        placeholder={props.hold || (compact ? 'Message this agent…' : 'Message...')}
-        autoFocus={!compact && !props.hold}
-        rows={1}
-        title={props.hold || 'Enter send · ⌘Enter steer · ⌘⇧Enter interrupt · ⌥Enter force-send the draft (or the next queued item) · Alt+↑/↓ pick a queued item'}
-        disabled={rewinding || props.disabled === true}
-        onPaste={onPaste}
-        onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing) return;
-          if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-            e.preventDefault();
-            const dir = e.key === 'ArrowUp' ? -1 : 1;
-            // 🎯T657: a non-empty send queue owns Alt+↑/↓; history recall
-            // is only reachable once the queue is empty.
-            const q = props.queue;
-            if (q && q.items.length) {
-              const r = cycleQueueFocus(q.focusedId, q.items, dir);
-              if (r.handled) q.onFocus(r.focusedId);
+      {/* The hint is drawn over the empty box, not a placeholder attribute:
+          macOS accessibility reports an empty field's placeholder as its
+          value, so dictation (Wispr Flow) read "Message..." as text already
+          typed and continued it mid-sentence — lowercase, leading space. */}
+      <div className="composer-field">
+        <textarea
+          id={boxId}
+          ref={boxRef}
+          data-composer={compact ? 'sidebar' : 'main'}
+          value={raw}
+          onChange={(e) => recalled ? setRecalledText(e.target.value) : setDraft(props.name, e.target.value)}
+          autoFocus={!compact && !props.hold}
+          rows={1}
+          title={props.hold || 'Enter send · ⌘Enter steer · ⌘⇧Enter interrupt · ⌥Enter force-send the draft (or the next queued item) · Alt+↑/↓ pick a queued item'}
+          disabled={rewinding || props.disabled === true}
+          onPaste={onPaste}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+              e.preventDefault();
+              const dir = e.key === 'ArrowUp' ? -1 : 1;
+              // 🎯T657: a non-empty send queue owns Alt+↑/↓; history recall
+              // is only reachable once the queue is empty.
+              const q = props.queue;
+              if (q && q.items.length) {
+                const r = cycleQueueFocus(q.focusedId, q.items, dir);
+                if (r.handled) q.onFocus(r.focusedId);
+                return;
+              }
+              navigateHistory(dir);
               return;
             }
-            navigateHistory(dir);
-            return;
-          }
-          if (e.key === 'Escape' && props.queue?.focusedId) {
-            e.preventDefault();
-            props.queue.onFocus(null);
-            return;
-          }
-          if (e.key === 'Escape' && recalled && !rewinding) {
-            e.preventDefault();
-            leaveRecall();
-            return;
-          }
-          if (applyComposerHomeEnd(e.currentTarget, e)) return;
-          const action = classifyEnterAction(e.key, e, {
-            composerEmpty: !hasRealDraft,
-            queueLen: props.queue?.items.length ?? 0,
-            code: e.code,
-          });
-          if (action == null || action === 'newline') return;
-          e.preventDefault();
-          if (action === 'send') {
-            void submit(e);
-            return;
-          }
-          // 🎯T657 slice 2b: with a queue item focused, the steer and
-          // interrupt chords act on that item, not on the draft.
-          const focusedQueueId = props.queue?.focusedId && props.queue.items.some((it) => it.id === props.queue!.focusedId)
-            ? props.queue.focusedId
-            : null;
-          if (action === 'steer') {
-            if (focusedQueueId) {
-              props.queue!.onSend(focusedQueueId, 'steer');
-              props.queue!.onFocus(null);
+            if (e.key === 'Escape' && props.queue?.focusedId) {
+              e.preventDefault();
+              props.queue.onFocus(null);
               return;
             }
-            // Cmd+Enter (🎯T657): fold the draft into the running turn; the
-            // server sends plainly when the seat is idle. Nothing to steer
-            // with on an empty composer, so that is a noop.
-            if (canSend) void submit(e, !!recalled, { mode: 'steer' });
-            return;
-          }
-          if (action === 'interrupt') {
-            if (focusedQueueId) {
-              props.queue!.onSend(focusedQueueId, 'interrupt');
-              props.queue!.onFocus(null);
+            if (e.key === 'Escape' && recalled && !rewinding) {
+              e.preventDefault();
+              leaveRecall();
               return;
             }
-            // Cmd+Shift+Enter (🎯T657): cancel the open turn, then send.
-            if (canSend) void submit(e, !!recalled, { mode: 'interrupt' });
-            else props.onInterrupt?.();
-            return;
-          }
-          if (action === 'force_send') {
-            void submit(e, !!recalled, { mode: FORCE_SEND_MODE });
-            return;
-          }
-          if (action === 'send_queue_now') {
-            // Alt+Enter with no real draft (T241): the focused item, else the queue head.
-            const target = focusedQueueId ?? props.queue?.items[0]?.id;
-            if (target) {
-              props.queue!.onSend(target, FORCE_SEND_MODE);
-              props.queue!.onFocus(null);
+            if (applyComposerHomeEnd(e.currentTarget, e)) return;
+            const action = classifyEnterAction(e.key, e, {
+              composerEmpty: !hasRealDraft,
+              queueLen: props.queue?.items.length ?? 0,
+              code: e.code,
+            });
+            if (action == null || action === 'newline') return;
+            e.preventDefault();
+            if (action === 'send') {
+              void submit(e);
+              return;
             }
-          }
-        }}
-      />
+            // 🎯T657 slice 2b: with a queue item focused, the steer and
+            // interrupt chords act on that item, not on the draft.
+            const focusedQueueId = props.queue?.focusedId && props.queue.items.some((it) => it.id === props.queue!.focusedId)
+              ? props.queue.focusedId
+              : null;
+            if (action === 'steer') {
+              if (focusedQueueId) {
+                props.queue!.onSend(focusedQueueId, 'steer');
+                props.queue!.onFocus(null);
+                return;
+              }
+              // Cmd+Enter (🎯T657): fold the draft into the running turn; the
+              // server sends plainly when the seat is idle. Nothing to steer
+              // with on an empty composer, so that is a noop.
+              if (canSend) void submit(e, !!recalled, { mode: 'steer' });
+              return;
+            }
+            if (action === 'interrupt') {
+              if (focusedQueueId) {
+                props.queue!.onSend(focusedQueueId, 'interrupt');
+                props.queue!.onFocus(null);
+                return;
+              }
+              // Cmd+Shift+Enter (🎯T657): cancel the open turn, then send.
+              if (canSend) void submit(e, !!recalled, { mode: 'interrupt' });
+              else props.onInterrupt?.();
+              return;
+            }
+            if (action === 'force_send') {
+              void submit(e, !!recalled, { mode: FORCE_SEND_MODE });
+              return;
+            }
+            if (action === 'send_queue_now') {
+              // Alt+Enter with no real draft (T241): the focused item, else the queue head.
+              const target = focusedQueueId ?? props.queue?.items[0]?.id;
+              if (target) {
+                props.queue!.onSend(target, FORCE_SEND_MODE);
+                props.queue!.onFocus(null);
+              }
+            }
+          }}
+        />
+        {raw === '' && hint ? (
+          <div className="composer-hint" data-composer={compact ? 'sidebar' : 'main'} aria-hidden="true">
+            {hint}
+          </div>
+        ) : null}
+      </div>
       {recalled ? (
         <div className="composer-recall" role="group" aria-label="Editing an earlier request">
           <span>{props.onRewind ? 'Editing an earlier request. Enter rewinds and resends.' : 'Editing an earlier request. Rewind is not available yet.'}</span>
@@ -378,7 +389,6 @@ function NamedUserRequest(props: UserRequestProps) {
           <span id="input-hint" className="sr-only">
             Type a prompt for the Jevons assistant.
           </span>
-          <span id="wispr-context" className="sr-only" aria-live="polite" />
         </>
       )}
       <button

@@ -104,17 +104,34 @@ describe('seat composer busy from its own phase (T562.2)', () => {
     const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected planWall="Upgrade your plan to continue" />);
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
     expect(box.disabled).toBe(true);
-    expect(box.placeholder).toBe('Upgrade your plan to continue');
+    // The hint is drawn over the box, not a placeholder (Wispr Flow reads a
+    // placeholder as typed text).
+    expect(box.placeholder).toBe('');
+    expect(view.container.querySelector('.composer-hint')?.textContent).toBe('Upgrade your plan to continue');
     expect((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(box, { key: 'Enter' });
     expect(sends()).toEqual([]);
+  });
+
+  // macOS accessibility reports an empty field's placeholder as its value,
+  // so Wispr Flow read the hint as typed text and dictated mid-sentence. The
+  // empty box exposes no text; the hint is aria-hidden and leaves on typing.
+  it('the empty composer exposes no text to dictation; its hint is an overlay', () => {
+    const view = render(<AgentInteraction mux={client} name="jv-composer-hint" density="compact" connected />);
+    const box = view.getByRole('textbox') as HTMLTextAreaElement;
+    expect(box.hasAttribute('placeholder')).toBe(false);
+    const hint = view.container.querySelector('.composer-hint');
+    expect(hint?.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.change(box, { target: { value: 'Hello' } });
+    expect(view.container.querySelector('.composer-hint')).toBeNull();
   });
 
   it('an open seat still keeps Send off while the box is empty', () => {
     const view = render(<AgentInteraction mux={client} name={SEAT} density="compact" connected />);
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
     expect(box.disabled).toBe(false);
-    expect(box.placeholder).toBe('Message this agent…');
+    expect(box.placeholder).toBe('');
+    expect(view.container.querySelector('.composer-hint')?.textContent).toBe('Message this agent…');
     expect((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   });
 

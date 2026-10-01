@@ -783,6 +783,19 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    (🎯T70.1). */
 #input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: var(--control-h); max-height: 40vh; overflow-y: hidden; }
 #input.composer-scroll { overflow-y: auto; }
+/* The composer's hint is an aria-hidden element over the empty box, not a
+   placeholder: macOS accessibility reports an empty field's placeholder as
+   its value, and Wispr Flow then continued "Message..." mid-sentence. Each
+   hint matches its textarea's padding + border, font and line height. */
+.composer-field { position: relative; display: flex; flex: 1; min-width: 0; }
+.composer-field > textarea { flex: 1; min-width: 0; }
+.composer-hint {
+  position: absolute; inset: 0; pointer-events: none; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; color: var(--text-muted);
+  font-family: var(--sans);
+}
+.composer-hint[data-composer="main"] { padding: 12px 17px; font-size: 14px; line-height: 1.45; opacity: 0.45; }
+.composer-hint[data-composer="sidebar"] { padding: 8px 11px; font-size: 12px; line-height: 1.4; opacity: 0.5; }
 /* Fade the placeholder well below entered text so it's obviously a
    prompt, not typed content. Lower opacity blends it toward the input
    background — darker in dark mode, lighter in light mode. */
