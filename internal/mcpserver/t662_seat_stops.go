@@ -231,6 +231,13 @@ func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok boo
 	if s == nil {
 		return "", time.Time{}, false
 	}
+	// 🎯T983: a seat deliberately stood down is not expected back, whatever
+	// its last stop record says, or whether a fresh daemon has one at all.
+	// A planned restart's record replaced the park's own, so the row said
+	// the seat had failed to come back; with no record it said "unknown".
+	if ir, ok := s.fleetIntent().Agents[name]; ok && !fleetintent.Runnable(ir.State) {
+		return intentStopLine(ir), ir.At, true
+	}
 	rec, ok := s.seatStops().Last(name)
 	if !ok {
 		// 🎯T965: not recorded yet — the sweep that records a broker stop
@@ -242,12 +249,6 @@ func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok boo
 		return "", time.Time{}, false
 	}
 	if rec.Planned {
-		// 🎯T983: a seat deliberately stood down is not expected back. A
-		// planned restart's record replaced the park's own stop record, so
-		// the row said the seat had failed to come back.
-		if ir, ok := s.fleetIntent().Agents[name]; ok && !fleetintent.Runnable(ir.State) {
-			return intentStopLine(ir), ir.At, true
-		}
 		if time.Since(rec.At) < seatstop.PlannedGrace {
 			return "", rec.At, true
 		}

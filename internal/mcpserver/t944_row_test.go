@@ -93,3 +93,21 @@ func TestT983ParkedSeatRowNamesTheParkNotTheRestart(t *testing.T) {
 		t.Fatalf("working row = %q, want %q", reason, PlannedNotBack)
 	}
 }
+
+// 🎯T983: a fresh daemon has no stop record for a parked seat it left down;
+// the row names the park rather than "unknown".
+func TestT983ParkedSeatWithNoStopRecordNamesThePark(t *testing.T) {
+	s := &Server{}
+	st, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(st)
+	if err := s.SetAgentIntent("done", fleetintent.Parked, "jevons-po", "finished"); err != nil {
+		t.Fatal(err)
+	}
+	reason, _, ok := s.SeatStopShown("done")
+	if want := "parked by owner/overseer (jevons-po): finished"; !ok || reason != want {
+		t.Fatalf("row = %q (ok=%v), want %q", reason, ok, want)
+	}
+}
