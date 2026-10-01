@@ -816,6 +816,8 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 			if err != nil {
 				pick.Detail = strings.TrimSpace(err.Error())
 			}
+			// 🎯T978: say which plan refused and why, not only that none matched.
+			pick.Detail += ": " + planusage.MintRefusalDetail(cands, now, th)
 			return pick
 		}
 		p := strings.ToLower(string(resolved.Provider))
