@@ -116,13 +116,10 @@ describe('seat composer busy from its own phase (T562.2)', () => {
   // macOS accessibility reports an empty field's placeholder as its value,
   // so Wispr Flow read the hint as typed text and dictated mid-sentence. The
   // empty box exposes no text; the hint is aria-hidden and leaves on typing.
-  it('the empty composer exposes no text to dictation; its hint is an overlay', () => {
+  it('the empty composer exposes no text to dictation and draws no hint', () => {
     const view = render(<AgentInteraction mux={client} name="jv-composer-hint" density="compact" connected />);
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
     expect(box.hasAttribute('placeholder')).toBe(false);
-    const hint = view.container.querySelector('.composer-hint');
-    expect(hint?.getAttribute('aria-hidden')).toBe('true');
-    fireEvent.change(box, { target: { value: 'Hello' } });
     expect(view.container.querySelector('.composer-hint')).toBeNull();
   });
 
@@ -131,7 +128,7 @@ describe('seat composer busy from its own phase (T562.2)', () => {
     const box = view.getByRole('textbox') as HTMLTextAreaElement;
     expect(box.disabled).toBe(false);
     expect(box.placeholder).toBe('');
-    expect(view.container.querySelector('.composer-hint')?.textContent).toBe('Message this agent…');
+    expect(view.container.querySelector('.composer-hint')).toBeNull();
     expect((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
