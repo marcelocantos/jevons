@@ -35,6 +35,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/doit"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
@@ -1421,7 +1422,7 @@ func main() {
 		defer fleetStarted.Store(true)
 		started := time.Now()
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
-			func(name string) bool { return !isOverseerSeat(name) },
+			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl),
 			upgrade.DefaultReattachConcurrency))
 		// Workers started here never passed through handleAgentStart, so
 		// wire their completion-notify now (🎯T61); the standing sweep
@@ -2230,4 +2231,23 @@ func resolveRSIMintCwd(cfg config.Config) string {
 		return wd
 	}
 	return cfg.WorkDir
+}
+
+// fleetReattachInclude chooses the seats a restart reattaches after the
+// overseer: every other seat whose own intent is working (🎯T983). A seat its
+// PO or the owner stood down stays down across a restart; before this, every
+// daemon boot started parked seats again. Only the agent's intent is read: a
+// fleet-wide provider block is transient, and the seats it holds still belong
+// to this daemon.
+func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision) func(string) bool {
+	return func(name string) bool {
+		if overseer(name) {
+			return false
+		}
+		if d := allow(name, fleetintent.ControlRevive); d.Agent != fleetintent.Working {
+			slog.Info("restart reattach skipped — agent intent keeps it down", "agent", name, "intent", d.Agent)
+			return false
+		}
+		return true
+	}
 }
