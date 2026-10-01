@@ -923,7 +923,13 @@ body.rhs-resizing-row { cursor: row-resize; }
    It carried --anthropic-mark and was the only coloured icon in the UI. */
 #plan-ticker .plan-icon .model-icon[data-mark="cursor"],
 #plan-ticker .plan-icon .model-icon[data-mark="claude-splat"] { color: var(--text-muted); }
-/* 🎯T948: the owner overrode this plan's band; the ? explains why. */
+/* 🎯T948: the owner overrode this plan's band; the ? explains why.
+   🎯T979: the dot is the forced band's own colour — the colour its bars
+   take under that band — so a forced "under" is blue and a forced
+   "locked" is purple, not a green that says "forced to ok" whatever was
+   forced. An outright block (exhausted, hot, ahead, unpublished: the plan
+   takes no seat) is a white ? on a black dot. No colour here may read as
+   "fine" when the plan is barred. */
 #plan-ticker .plan-override {
   align-self: center;
   display: inline-flex;
@@ -932,11 +938,18 @@ body.rhs-resizing-row { cursor: row-resize; }
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--green);
-  color: #06140a;
   font-size: 9px;
   font-weight: 700;
   cursor: help;
+}
+#plan-ticker .plan-override-band[data-band="ok"] { background: var(--green); color: #06140a; }
+#plan-ticker .plan-override-band[data-band="under"] { background: var(--plan-under); color: #fff; }
+#plan-ticker .plan-override-band[data-band="locked"] { background: var(--plan-locked); color: #fff; }
+#plan-ticker .plan-override-block {
+  background: #000;
+  color: #fff;
+  /* A ring so the black dot keeps its edge on the dark ground. */
+  box-shadow: inset 0 0 0 1px var(--text-muted);
 }
 .plan-override-card { max-width: 320px; white-space: normal; }
 .plan-override-card .plan-override-reason { margin-top: 4px; }

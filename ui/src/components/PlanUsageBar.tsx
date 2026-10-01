@@ -18,6 +18,7 @@ import {
   type PlanSnapshot,
 } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
+import { overrideMark, overrideTipHeading } from '../plan/overrideMark';
 
 /** HTTP fallback only when mux is not connected (tests / non-cockpit). */
 export const PLAN_POLL_MS = 60_000;
@@ -214,7 +215,7 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
   const overridden = groups.find((g) => g.provider === overrideTip && g.override)?.override;
   const tip = overridden ? (
     <div className="plan-override-card">
-      <strong>{overrideTip + ' shown ' + overridden.band + ' by override'}</strong>
+      <strong>{overrideTipHeading(overrideTip, overridden)}</strong>
       <div className="plan-override-reason">{overridden.reason}</div>
       <div className="plan-override-note">The bars still show real usage.</div>
     </div>
@@ -321,8 +322,12 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
             {g.override ? (
               // 🎯T948: the band is the owner's, not the readings'. The
               // ticker's one tip card says why while the pointer is on the ?.
+              // 🎯T979: a forced band paints the mark in that band's colour
+              // (data-band, cockpit.css); an outright block is a white ? on
+              // a black dot, never a colour that could read as "fine".
               <span
-                className="plan-override"
+                className={'plan-override plan-override-' + overrideMark(g.override).kind}
+                data-band={overrideMark(g.override).band || undefined}
                 aria-label={'Override: ' + g.override.reason}
                 onPointerEnter={() => setOverrideTip(g.provider)}
                 onPointerLeave={() => setOverrideTip('')}
