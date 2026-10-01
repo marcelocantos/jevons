@@ -566,6 +566,8 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		s.mu.Unlock()
 		life["err"] = "plan_dest_empty"
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		// 🎯T980: the frontier row shows pause and why, not a spinner.
+		s.noteSeatWait(targetID, pick.Detail)
 		return mcp.NewToolResultError("plan dest empty; refusing to land on a hot or unsteerable dest (🎯T390.1.5 / 🎯T791): " + pick.Detail), nil
 	}
 	if !rowExisted {
@@ -636,6 +638,8 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	s.startMu.Unlock()
 	// 🎯T597: record the (re-)mint so seat-activity baselines measure from it.
 	s.noteSeatMinted(name)
+	// 🎯T980: the target is seated; its row stops showing pause.
+	s.ClearSeatWait(targetID)
 	// 🎯T934: a required MCP server the seat launched without is named now,
 	// to the parent and in the result, before the brief is delivered.
 	mintMCPNote := s.noteMintMCPUnavailable(*def, proc.HostMCPUnavailable())

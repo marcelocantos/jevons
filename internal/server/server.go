@@ -358,7 +358,9 @@ type Server struct {
 	seatStopReader func(name string) (reason string, at time.Time, ok bool)
 	// seatStartingReader reports a seat being brought up (🎯T970).
 	seatStartingReader func(name string) bool
-	wedgedReader       func(name string) (string, bool)
+	// seatWaitClear withdraws a frontier target's wait for a seat (🎯T980).
+	seatWaitClear func(target string)
+	wedgedReader  func(name string) (string, bool)
 	// deadSeatNoter records a dead seat the fleet feed handled (🎯T925).
 	deadSeatNoter  func(name, cause, detail string)
 	massStopReader func() string

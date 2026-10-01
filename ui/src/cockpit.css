@@ -1373,6 +1373,22 @@ body.rhs-resizing-row { cursor: row-resize; }
 #frontier-table .ft-play-btn.ft-stop-btn {
   color: var(--amber, #d4a017);
 }
+/* 🎯T980: acknowledged by the PO; red arrow when no plan can seat it yet
+   (click force-seats; hover shows stop to its left without moving the row). */
+#frontier-table .ft-play-wrap {
+  position: relative; display: inline-flex; align-items: center;
+}
+#frontier-table .ft-play-btn.ft-acked-btn {
+  color: var(--accent); opacity: 1; cursor: default;
+}
+#frontier-table .ft-play-btn.ft-waiting-btn,
+#frontier-table .ft-play-btn.ft-waiting-btn:hover {
+  color: var(--red);
+}
+#frontier-table .ft-play-btn.ft-wait-stop {
+  position: absolute; right: 100%; top: 0;
+  background: var(--surface-raised);
+}
 /* 🎯T278: immediate kickoff-submitted spinner (before PO reply / engage) */
 #frontier-table .ft-play-btn.ft-submitted-btn {
   color: var(--accent);

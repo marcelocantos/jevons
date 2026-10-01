@@ -153,6 +153,13 @@ func (s *Server) handleEngagementStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scope := s.frontierCwdOr(req.Cwd)
+	// 🎯T980: stopping a request that was waiting for a seat withdraws it.
+	s.mu.RLock()
+	clearWait := s.seatWaitClear
+	s.mu.RUnlock()
+	if clearWait != nil {
+		clearWait(tid)
+	}
 	stopped, err := stopEngagement(reg, s.RemovalAccount(), tid, scope)
 	if err != nil {
 		slog.Warn("engagement_stop",
@@ -177,4 +184,12 @@ func (s *Server) handleEngagementStop(w http.ResponseWriter, r *http.Request) {
 		Stopped:  stopped,
 		Status:   status,
 	})
+}
+
+// SetSeatWaitClear installs the 🎯T980 hook that withdraws a frontier
+// target's wait for a seat when the owner stops it.
+func (s *Server) SetSeatWaitClear(fn func(target string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seatWaitClear = fn
 }

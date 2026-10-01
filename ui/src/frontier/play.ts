@@ -9,10 +9,13 @@ import { normalizeTargetID, statusTitle, type FrontierRow } from './table';
 
 export const PLAY_GLYPH = '▶'; // ▶
 export const STOP_GLYPH = '■'; // ■
+/** 🎯T980: the PO has the request; it seats the work when a plan can take it. */
+export const ACKED_GLYPH = '⧗'; // ⧗
+export const SEAT_WAITS_PATH = '/api/seat-waits';
 export const DEFAULT_PLAY_PO = 'jevons-po';
 export const ENGAGEMENT_STOP_PATH = '/api/agents/engagement/stop';
 
-export type PlayMode = 'play' | 'submitted' | 'stop';
+export type PlayMode = 'play' | 'submitted' | 'acked' | 'waiting' | 'stop';
 
 export type PlayAgent = {
   name: string;
@@ -26,7 +29,17 @@ export type PlayAgent = {
   rehydrate?: string;
 };
 
-export type PlayRow = FrontierRow & { engaged?: boolean; engaged_agents?: string[]; kickoff_submitted?: boolean };
+export type PlayRow = FrontierRow & {
+  engaged?: boolean;
+  engaged_agents?: string[];
+  kickoff_submitted?: boolean;
+  /** 🎯T980: the kickoff reached the PO. */
+  kickoff_acked?: boolean;
+  /** 🎯T980: why no plan can seat this target yet (server truth). */
+  seat_wait?: string;
+};
+/** 🎯T980: GET /api/seat-waits — target id → why it cannot be seated yet. */
+export type SeatWaits = Record<string, { reason?: string; at?: string }>;
 
 export type PlayOpts = { po?: string; selectedAgent?: string | null; agents?: PlayAgent[]; force?: boolean };
 
@@ -186,6 +199,16 @@ export function buildPlayKickoffText(row: PlayRow, opts?: PlayOpts): string {
     // 🎯T222: if an implementer is already engaged, do not spawn a second.
     'If target_id=' + id + ' already has an engaged work agent, do not spawn a second — focus the existing engagement (🎯T222).',
   ];
+  if (opts && opts.force) {
+    // 🎯T980: play is only a nudge; force-play is the owner choosing to seat
+    // the work now although no plan is green.
+    lines.push(
+      '',
+      'Owner force-play: no plan is green, and the owner asks you to seat this now anyway. ' +
+        'Spawn with owner_asked=true and provider=claude (the fleet\'s plan). ' +
+        'Never use a plan the owner has overridden to exhausted.',
+    );
+  }
   const st = statusTitle(row.status) || String(row.status || '').trim();
   if (st) lines.push('', 'Status: ' + st);
   const acc = (Array.isArray(row.acceptance) ? row.acceptance : []).map((s) => String(s).trim()).filter(Boolean);
@@ -254,8 +277,25 @@ export function applyKickoffSubmitted(rows: PlayRow[], set: KickoffSubmittedSet)
 
 export function playChromeMode(row?: PlayRow | null): PlayMode {
   if (row && row.engaged) return 'stop';
+  if (row && row.seat_wait) return 'waiting';
+  if (row && row.kickoff_acked) return 'acked';
   if (row && row.kickoff_submitted) return 'submitted';
   return 'play';
+}
+
+/** 🎯T980: overlay the kickoffs the PO has acknowledged. */
+export function applyKickoffAcked(rows: PlayRow[], set: KickoffSubmittedSet): PlayRow[] {
+  return rows.map((row) => ({ ...row, kickoff_acked: !row.engaged && isKickoffSubmitted(set, row.id) }));
+}
+
+/** 🎯T980: overlay the server's waits for a seat on free rows. */
+export function applySeatWaits(rows: PlayRow[], waits: SeatWaits | null | undefined): PlayRow[] {
+  if (!waits) return rows;
+  return rows.map((row) => {
+    const w = waits[normalizeTargetID(row.id)];
+    if (row.engaged || !w) return row;
+    return { ...row, seat_wait: String(w.reason || 'no plan can take a seat yet') };
+  });
 }
 
 /** 🎯T182/T198/T278: free → play; submitted → spinner (disabled); engaged → stop. */
@@ -270,6 +310,30 @@ export function playChromeSpec(row: PlayRow | null | undefined, opts?: PlayOpts)
       ariaLabel: 'Stop work on 🎯' + id,
       title: 'Stop engaged worker(s) for this target',
       disabled: false,
+      spinning: false,
+    };
+  }
+  if (mode === 'waiting') {
+    // 🎯T980: a red arrow. Clicking it force-seats the work; hovering offers
+    // stop to its left. (❚❚ stays reserved for a real per-seat pause.)
+    return {
+      mode,
+      className: 'ft-play-btn ft-waiting-btn',
+      glyph: PLAY_GLYPH,
+      ariaLabel: 'Force-seat 🎯' + id + ' (no plan can take it yet)',
+      title: 'No plan can take a seat yet — ' + String(row?.seat_wait || '') + '. Click to force-seat it now.',
+      disabled: false,
+      spinning: false,
+    };
+  }
+  if (mode === 'acked') {
+    return {
+      mode,
+      className: 'ft-play-btn ft-acked-btn',
+      glyph: ACKED_GLYPH,
+      ariaLabel: 'Kickoff acknowledged for 🎯' + id,
+      title: 'Acknowledged by the PO — it seats the work when a plan can take it',
+      disabled: true,
       spinning: false,
     };
   }

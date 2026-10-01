@@ -352,6 +352,8 @@ type Server struct {
 	capacityWatch planusage.CapacityWatch
 	// capacityDeliver replaces the capacity notice delivery (tests).
 	capacityDeliver func(name, text string) error
+	// seatWait holds frontier targets whose spawn found no plan to seat on (🎯T980).
+	seatWait seatWaits
 	// midTurnAnswers relays a busy agent's mid-turn answer to a steered
 	// question straight to its asker (🎯T902).
 	midTurnOnce    sync.Once
@@ -964,6 +966,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/mcp", s.mcpRequestLogger())
 	// 🎯T406: owner-visible fleet intent / hard-block snapshot.
 	mux.HandleFunc("GET /api/fleet-intent", s.handleFleetIntentHTTP)
+	// 🎯T980: frontier targets waiting for a seat, for the play button.
+	mux.HandleFunc("GET /api/seat-waits", s.handleSeatWaits)
 }
 
 // SetToolCallObserver is notified on every JSON-RPC tools/call this
