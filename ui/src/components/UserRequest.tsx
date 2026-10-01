@@ -371,7 +371,7 @@ function NamedUserRequest(props: UserRequestProps) {
           }}
         />
         {raw === '' && hint ? (
-          <div className="composer-hint" data-composer={compact ? 'sidebar' : 'main'} aria-hidden="true">
+          <div className="composer-hint" data-composer={compact ? 'sidebar' : 'main'} data-hold={props.hold ? 'true' : undefined} aria-hidden="true">
             {hint}
           </div>
         ) : null}

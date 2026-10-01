@@ -796,6 +796,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .composer-hint[data-composer="main"] { padding: 12px 17px; font-size: 14px; line-height: 1.45; opacity: 0.45; }
 .composer-hint[data-composer="sidebar"] { padding: 8px 11px; font-size: 12px; line-height: 1.4; opacity: 0.5; }
+/* Owner experiment 2026-10-01: no "Message..." hint at all, to see whether
+   Wispr Flow still starts mid-sentence. A hold (plan wall) still shows. */
+.composer-hint:not([data-hold]) { display: none; }
 /* Fade the placeholder well below entered text so it's obviously a
    prompt, not typed content. Lower opacity blends it toward the input
    background — darker in dark mode, lighter in light mode. */
