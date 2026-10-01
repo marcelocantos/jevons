@@ -77,17 +77,43 @@ describe('the override mark on the plan box', () => {
     expect(rule).toContain('background: ' + colour);
   });
 
-  it('paints an outright block as a white ? on a black dot, in no band colour', async () => {
+  // 🎯T982: the block is a prohibition sign (ring + top-left-to-bottom-right
+  // diagonal, the ⊘ family), not a ? on a black dot and not a stop sign.
+  it('draws an outright block as a ⊘ prohibition sign in the text colour, on no dot and in no band colour', async () => {
     const { mark } = await renderOverride('exhausted');
-    expect(mark.textContent).toBe('?');
     expect(mark.classList.contains('plan-override-block')).toBe(true);
     expect(mark.classList.contains('plan-override-band')).toBe(false);
+    expect(mark.textContent).toBe('');
+    const svg = mark.querySelector('svg.plan-override-ban');
+    expect(svg).not.toBeNull();
+    expect(svg!.getAttribute('aria-hidden')).toBe('true');
+    const ring = svg!.querySelector('circle')!;
+    const bar = svg!.querySelector('line')!;
+    expect(ring.getAttribute('fill')).toBe('none');
+    expect(ring.getAttribute('stroke')).toBe('currentColor');
+    expect(bar.getAttribute('stroke')).toBe('currentColor');
+    // The diagonal runs top-left to bottom-right through the ring's centre.
+    const [x1, y1, x2, y2] = ['x1', 'y1', 'x2', 'y2'].map((a) => Number(bar.getAttribute(a)));
+    const cx = Number(ring.getAttribute('cx'));
+    const cy = Number(ring.getAttribute('cy'));
+    expect(x1).toBeLessThan(x2);
+    expect(y1).toBeLessThan(y2);
+    expect(x2 - x1).toBeCloseTo(y2 - y1);
+    expect((x1 + x2) / 2).toBeCloseTo(cx);
+    expect((y1 + y2) / 2).toBeCloseTo(cy);
+    // The ink is the theme's text colour; no dot behind it, no band colour on it.
     const rule = ruleFor('.plan-override-block');
-    expect(rule).toContain('background: #000');
-    expect(rule).toContain('color: #fff');
+    expect(rule).toContain('color: var(--text)');
+    expect(rule).not.toMatch(/background/);
     expect(rule).not.toMatch(/--green|--plan-under|--plan-locked|--amber|--red/);
     // The base rule carries no colour of its own: an unmatched shape paints nothing green.
     expect(ruleFor('.plan-override')).not.toMatch(/background/);
+  });
+
+  it('keeps the ? on a forced band: only the block changed shape', async () => {
+    const { mark } = await renderOverride('under');
+    expect(mark.textContent).toBe('?');
+    expect(mark.querySelector('svg')).toBeNull();
   });
 
   it('renders a block and a forced ok with different shape and band, never the same visual', async () => {

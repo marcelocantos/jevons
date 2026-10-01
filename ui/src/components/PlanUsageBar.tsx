@@ -18,6 +18,7 @@ import {
   type PlanSnapshot,
 } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
+import { OverrideBlockIcon } from '../plan/OverrideBlockIcon';
 import { overrideMark, overrideTipHeading } from '../plan/overrideMark';
 
 /** HTTP fallback only when mux is not connected (tests / non-cockpit). */
@@ -321,17 +322,18 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
             })}
             {g.override ? (
               // 🎯T948: the band is the owner's, not the readings'. The
-              // ticker's one tip card says why while the pointer is on the ?.
-              // 🎯T979: a forced band paints the mark in that band's colour
-              // (data-band, cockpit.css); an outright block is a white ? on
-              // a black dot, never a colour that could read as "fine".
+              // ticker's one tip card says why while the pointer is on the mark.
+              // 🎯T979: a forced band paints a ? in that band's colour
+              // (data-band, cockpit.css). 🎯T982: an outright block is a
+              // prohibition sign (ring with a diagonal, the ⊘ family) in the
+              // neutral text colour, never a colour that could read as "fine".
               <span
                 className={'plan-override plan-override-' + overrideMark(g.override).kind}
                 data-band={overrideMark(g.override).band || undefined}
                 aria-label={'Override: ' + g.override.reason}
                 onPointerEnter={() => setOverrideTip(g.provider)}
                 onPointerLeave={() => setOverrideTip('')}
-              >?</span>
+              >{overrideMark(g.override).kind === 'block' ? <OverrideBlockIcon /> : '?'}</span>
             ) : null}
           </span>
         ) : null}
