@@ -57,6 +57,7 @@ export function UserRequest(props: UserRequestProps) {
 function NamedUserRequest(props: UserRequestProps) {
   const density = normalizeDensity(props.density);
   const compact = density === 'compact';
+  const hint = props.hold || (compact ? 'Message this agent…' : 'Message...');
   const liveDraft = useDrafts((s) => s.drafts[props.name] || '');
   const setDraft = useDrafts((s) => s.setDraft);
   // 🎯T562.3: pending images persist per agent (agent switch and reload).
@@ -369,11 +370,9 @@ function NamedUserRequest(props: UserRequestProps) {
             }
           }}
         />
-        {/* Owner experiment 2026-10-01: no "Message..." hint in the DOM at
-            all, to rule it out for Wispr Flow. Only a hold (plan wall) shows. */}
-        {raw === '' && props.hold ? (
+        {raw === '' && hint ? (
           <div className="composer-hint" data-composer={compact ? 'sidebar' : 'main'} aria-hidden="true">
-            {props.hold}
+            {hint}
           </div>
         ) : null}
       </div>
