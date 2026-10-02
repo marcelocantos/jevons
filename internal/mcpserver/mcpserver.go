@@ -640,6 +640,25 @@ func (s *Server) seatInFlight(name string) seatstate.Tri {
 	return seatstate.Unknown
 }
 
+// observeRegistryLiveness feeds every registered seat's current liveness
+// into the shared authority (🎯T766.2, census derivation 8: SweepDeadAgents).
+// The sweep's own recovery decisions already read each seat's ProcState; this
+// makes the authority hear the same answer even when nobody has listed
+// agents recently, so a stale authority between agent_list calls is never
+// the reason a dead-seat sweep and the cockpit disagree about a name.
+func (s *Server) observeRegistryLiveness() {
+	if s == nil || s.registry == nil {
+		return
+	}
+	for _, d := range s.registry.List() {
+		if d.Name == "" {
+			continue
+		}
+		alive := s.seatAlive(d.Name)
+		s.observeSeat(d, alive)
+	}
+}
+
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn
 // tools omit provider (🎯T148). Pass the already-resolved default
 // (cli.ResolveProvider("", cfg.Provider)); empty re-resolves from env at use.
