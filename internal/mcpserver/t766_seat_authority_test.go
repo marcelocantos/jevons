@@ -4,6 +4,8 @@
 package mcpserver
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +107,31 @@ func TestT766SetSeatsSharesTheInjectedAuthority(t *testing.T) {
 	s.SetSeats(a)
 	if s.Seats() != a {
 		t.Fatal("Seats() is not the injected authority")
+	}
+}
+
+// 🎯T766.2: fleet_recover no longer holds a private PromptInFlight read.
+// Production wires PromptInFlight through seatInFlight (records + answers);
+// a nil hook is unobserved false, not a second derivation against the handle.
+func TestT766FleetRecoverDoesNotDeriveInFlight(t *testing.T) {
+	// Needle scan mirrors the docratchet: production fleet_recover.go must
+	// not contain a direct .PromptInFlight() call outside comments.
+	body, err := os.ReadFile("fleet_recover.go")
+	if err != nil {
+		// test runs with the package dir as cwd under go test.
+		body, err = os.ReadFile("internal/mcpserver/fleet_recover.go")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	needle := ".PromptInFlight()"
+	for i, line := range strings.Split(string(body), "\n") {
+		if !strings.Contains(line, needle) {
+			continue
+		}
+		if idx := strings.Index(line, "//"); idx >= 0 && idx < strings.Index(line, needle) {
+			continue
+		}
+		t.Fatalf("fleet_recover.go:%d still derives in-flight directly: %s", i+1, strings.TrimSpace(line))
 	}
 }

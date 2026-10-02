@@ -18,6 +18,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/turnev"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
@@ -1462,6 +1463,11 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 		BlockerCleared:     s.seatBlockerCleared,
 		MissionOpen:        hooks.MissionOpen,
 		DesignGated:        hooks.DesignGated,
+		// 🎯T766.2 census derivation 5: ask the shared authority (and record)
+		// rather than a private proc.PromptInFlight() read.
+		PromptInFlight: func(name string) bool {
+			return s.seatInFlight(name) == seatstate.Yes
+		},
 		TurnInFlight: func(name string) bool {
 			return s.flightState(name) == FlightInFlight
 		},

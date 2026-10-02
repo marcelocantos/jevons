@@ -287,7 +287,12 @@ type FleetRecoverSweepArgs struct {
 	Now          time.Time
 	OverseerName string
 	StuckTimeout time.Duration
-	// PromptInFlight: name → in flight. Nil → reg.Get(name).PromptInFlight().
+	// PromptInFlight: name → in flight, answered by the seat-state authority
+	// (🎯T766.2, census derivation 5). Production wires s.seatInFlight so the
+	// answer is recorded for every other reader. Nil means the sweep cannot
+	// observe — left as false rather than inventing a private process read
+	// nobody else sees (unknown is not in-flight on this bool surface; the
+	// classifier already treats false as "no stuck-busy signal").
 	PromptInFlight func(name string) bool
 	// TurnInFlight optional: send-path flight ledger (🎯T761). Nil = not in flight.
 	TurnInFlight func(name string) bool
@@ -365,8 +370,6 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	inFlight := false
 	if args.PromptInFlight != nil {
 		inFlight = args.PromptInFlight(d.Name)
-	} else if proc := args.Reg.Get(d.Name); proc != nil {
-		inFlight = proc.PromptInFlight()
 	}
 
 	count := 0
