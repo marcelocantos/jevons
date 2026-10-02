@@ -26,13 +26,21 @@ class CockpitSettings extends ChangeNotifier {
     return CockpitSettings._(prefs, url);
   }
 
-  Future<void> setUrl(String value) async {
+  /// Stores [value] and notifies listeners. Returns false when the URL did
+  /// not change, in which case nothing is written and nobody is notified.
+  Future<bool> setUrl(String value) async {
     final next = value.trim().isEmpty ? kDefaultCockpitUrl : value.trim();
-    if (next == _url) return;
+    if (next == _url) return false;
     _url = next;
     await _prefs.setString(_kCockpitUrlKey, next);
     notifyListeners();
+    return true;
   }
+
+  /// Asks the shell to reload the cockpit at the current URL. With no
+  /// visible reload button, the hidden Settings screen is the only manual
+  /// way to recover from a wedged page.
+  void requestReload() => notifyListeners();
 
   Future<void> resetUrl() => setUrl(kDefaultCockpitUrl);
 }
@@ -78,7 +86,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    await widget.settings.setUrl(_urlController.text);
+    final changed = await widget.settings.setUrl(_urlController.text);
+    // "Save and reload" means reload even when the URL is unchanged.
+    if (!changed) widget.settings.requestReload();
     if (mounted) Navigator.of(context).pop();
   }
 

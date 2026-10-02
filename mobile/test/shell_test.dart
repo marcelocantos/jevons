@@ -125,6 +125,25 @@ void main() {
     expect(find.text('Cockpit URL'), findsOneWidget);
   });
 
+  testWidgets('Save and reload with an unchanged URL reloads the cockpit', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+    await tester.longPress(find.byType(WebViewWidget));
+    await tester.pump(const Duration(seconds: 1));
+
+    await tester.tap(find.text('Save and reload'));
+    // One frame to start the pop transition, one to finish it.
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.byType(SettingsScreen), findsNothing);
+    expect(platform.lastController?.loaded, [
+      Uri.parse(kDefaultCockpitUrl),
+      Uri.parse(kDefaultCockpitUrl),
+    ]);
+  });
+
   testWidgets('a plain tap on the WebView does not open Settings', (
     tester,
   ) async {
