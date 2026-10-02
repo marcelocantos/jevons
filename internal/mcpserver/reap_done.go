@@ -151,8 +151,18 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 			return false, "awaits_overseer_" + ask.String()
 		}
 	}
+	// 🎯T985: a report with no Done. finish shape that says this seat has
+	// nothing left — its target already achieved by someone else, no
+	// further acceptance criteria open — is own-work-complete, and a seat
+	// with no more work is reaped, not left to idle until someone parks it.
+	// Every veto below (false-green, durable role, outstanding scope,
+	// descendants) still applies to it.
+	ownWorkComplete := false
 	if !LooksLikeFinishedWorkReport(report) {
-		return false, "not_finished_work_report"
+		if !LooksLikeOwnWorkCompleteReport(report) {
+			return false, "not_finished_work_report"
+		}
+		ownWorkComplete = true
 	}
 	// 🎯T470: a report the false-green check flagged is never auto-reaped as
 	// finished_work in the same pass — jv-t391 was flagged
@@ -188,6 +198,9 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	}
 	if len(reg.Descendants(name)) > 0 {
 		return false, "has_descendants"
+	}
+	if ownWorkComplete {
+		return true, ownWorkCompleteReapReason
 	}
 	return true, finishedWorkReapReason(report)
 }

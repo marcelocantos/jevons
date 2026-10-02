@@ -885,9 +885,30 @@ when a work agent's terminal report claims done — including imperfect bare
 done without oracle markers — the product stop+Removes them from the
 registry (RHS / `agent_list` omit the name). When a mission target is
 achieved on the bullseye ledger, work agents engaged on that TargetID are
-also reaped. Residual: POs and overseer stay; multi-target agents without
-a matching TargetID stay; deliberate `jevons_agent_stop` without kill
-still leaves registration for resume; 🎯T90 deep anomaly supervisor is separate.
+also reaped.
+
+**Reap vs park (🎯T985):** a worker whose own work is fully complete or
+superseded, with nothing left to do, is **reaped rather than parked** —
+including when its target was already achieved by someone else and no
+further acceptance criteria are open. The prior convention this session
+(park via `jevons_agent_stop` when own work was done — jv-t947-plan-token,
+jv-t972-reap-scope) is superseded. Parking (`jevons_agent_stop`, staying
+registered) is reserved for a worker blocked on something external that
+may resume later: cross-repo work outside its mandate, an owner decision
+pending, a design gate. The daemon enforces it on `jevons_agent_stop`:
+a `reason` that reads as finished work ("nothing left for this worker",
+"already achieved", "superseded") is converted to a reap (`reap_stop`); a
+reason naming an external block ("blocked on", "cross-repo", "owner
+decision", "design gate") parks; a silent reason reads the seat's latest
+stored report the same way, and an unclassifiable one parks.
+`disposition=park|reap` fixes the outcome. Durable roles (PO / aside /
+overseer) and seats with live descendants always park — kill those with
+`jevons_agent_kill`. A terminal report that says "already achieved,
+nothing left" with no Done. finish shape is reaped as
+`own_work_complete`. Pure helpers: `ClassifyWorkerIdleDisposition`,
+`ClassifyStopDisposition`, `LooksLikeOwnWorkCompleteReport`.
+Residual: POs and overseer stay; multi-target agents without a matching
+TargetID stay; 🎯T90 deep anomaly supervisor is separate.
 
 Do **not** re-expand a local merge order into continuous origin/PR
 shipping because a PO already opened remotes. Remote delivery only when

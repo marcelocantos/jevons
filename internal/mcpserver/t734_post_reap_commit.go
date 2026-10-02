@@ -250,7 +250,7 @@ func snapshotHEAD(workdir string) (string, string, error) {
 
 func reapReasonWatchesCommits(reason string) bool {
 	switch strings.TrimSpace(reason) {
-	case fleetlog.ReasonReapDone, fleetlog.ReasonReapAchieve:
+	case fleetlog.ReasonReapDone, fleetlog.ReasonReapAchieve, fleetlog.ReasonReapStop:
 		return true
 	default:
 		return false

@@ -287,6 +287,26 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   path → `agent_list` omits name. Residual: POs and overseer stay;
   multi-target agents without matching TargetID stay; deliberate stop
   without kill still resume-friendly; T90 anomaly supervisor separate.
+- **Reap, not park, when there is no more work (🎯T985):** a worker whose
+  own work is fully complete or superseded — including a target already
+  achieved by someone else with no further acceptance criteria open — is
+  **reaped rather than parked** (stop+Remove, the T165 path), never left as
+  a standing parked row. **Parking** (`jevons_agent_stop`, staying registered) is reserved
+  for a seat genuinely blocked on something external that may resume:
+  cross-repo work outside its mandate, an owner decision pending, a design
+  gate. The daemon enforces it: a `jevons_agent_stop` whose `reason` reads
+  as finished work ("nothing left for this worker", "already achieved",
+  "superseded") is converted to a reap (`reap_stop`); a reason naming an
+  external block ("blocked on", "cross-repo", "owner decision") parks;
+  `disposition=park|reap` fixes it outright. Durable roles and seats with
+  descendants always park (kill them with `jevons_agent_kill`). A terminal
+  report that says "already achieved, nothing left" with no Done. shape is
+  reaped as `own_work_complete`. The 2026-09-30 parks of
+  jv-t947-plan-token and jv-t972-reap-scope are the superseded shape;
+  jv-t765.1-worker's bullseye-side block is the park that stays correct.
+  Pure helpers: `ClassifyWorkerIdleDisposition`, `ClassifyStopDisposition`,
+  `LooksLikeOwnWorkCompleteReport`. Hermetic: `TestT985*` in
+  `internal/mcpserver`.
 - **Greenfield oracle elicitation (🎯T31.2):** for new software (no
   external reference), co-develop an **oracle-coverage map** alongside
   design — **pinned** / **fuzzy** / load-bearing **when X expect Y**

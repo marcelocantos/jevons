@@ -358,8 +358,12 @@ subagents that die with the parent).
    **Finished work agents auto-deregister** (stop+Remove) when their terminal
    report claims done — including imperfect bare done (🎯T165 / 🎯T195 product
    path — not persona-only). Ledger achieve of a bound TargetID also reaps
-   engaged implementers. POs and the overseer stay; stop without kill
-   remains resume-friendly.
+   engaged implementers. A worker whose own work is fully complete or
+   superseded is **reaped rather than parked** (🎯T985), including already
+   achieved by someone else with no further acceptance open. Parking is
+   reserved for a worker blocked on something external that may resume
+   (cross-repo outside mandate, owner decision pending, design gate).
+   `ClassifyWorkerIdleDisposition`. POs and the overseer stay.
 2. **Durable thread** — `jevons_thread_spawn` (id + workdir), then
    `jevons_thread_direct` when you need a reply; remove with
    `jevons_thread_remove` when done.
@@ -959,7 +963,10 @@ survive daemon restarts — you never lose one.
   is replayed into that turn as an attachment and never becomes a user message,
   so read the queue records before concluding anything is lost — flushing by
   hand on that reading delivers a second copy.
-- **jevons_agent_stop** — Stop a running agent. It resumes later.
+- **jevons_agent_stop** — Stop a running agent. Parked (still registered,
+  resumes later) when `reason` names an external block; **reaped** when the
+  reason reads as finished work — nothing left for this worker, already
+  achieved, superseded (🎯T985). `disposition=park|reap` fixes it.
   Required: name.
 
 ### MCP resilience (🎯T60)
