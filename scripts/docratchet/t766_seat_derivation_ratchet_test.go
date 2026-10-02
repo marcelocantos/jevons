@@ -37,7 +37,12 @@ import (
 // which are excluded below: it asks the
 // party that knows, records the answer, and is what every other site is
 // being converted to call.
-const seatInFlightPin = 2
+//
+// The remaining counted site is the observeSeat feed in
+// internal/mcpserver/mcpserver.go — how claudia's answer reaches the
+// authority. fleet_recover.go used to be the other one; it now asks
+// seatInFlight at the production call site (🎯T766.2, 2026-10-03).
+const seatInFlightPin = 1
 
 // Liveness — census derivation 4 — is deliberately NOT ratcheted here.
 // `.Alive()` is spelled the same by types that have nothing to do with a
