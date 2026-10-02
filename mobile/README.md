@@ -10,12 +10,18 @@ Tracked as 🎯T989 in the jevons ledger (cross-repo, same pattern as 🎯T765.1
 - Loads the cockpit URL in a full-screen WebView. The default
   (`https://jevons.canticode.com`) lives in exactly one place:
   `kDefaultCockpitUrl` in `lib/settings.dart`.
-- A settings screen (gear icon) changes the URL at runtime. The value is
-  persisted with `shared_preferences`, so pointing the shell at a different
-  transport (e.g. Pigeon) is a device-side setting, not a rebuild.
+- No browser chrome: no URL bar, no reload button, no visible settings
+  icon. The WebView is the whole screen, so the shell feels like a native
+  app rather than a browser.
+- A hidden Settings screen changes the URL at runtime: **long-press
+  anywhere on the WebView** to open it. The value is persisted with
+  `shared_preferences`, so pointing the shell at a different transport
+  (e.g. Pigeon) is a device-side setting, not a rebuild. "Save and reload"
+  also reloads the cockpit when the URL is unchanged, which is the manual
+  reload path now that there is no toolbar button.
 - Failed main-frame loads show the error with Retry and Change URL.
 
-Form-factor polish (foldables, hiding the toolbar, etc.) is deferred.
+Form-factor polish (foldables etc.) is deferred.
 
 ## Platform scaffolding
 
