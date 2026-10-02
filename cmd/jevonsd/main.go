@@ -2234,17 +2234,17 @@ func resolveRSIMintCwd(cfg config.Config) string {
 }
 
 // fleetReattachInclude chooses the seats a restart reattaches after the
-// overseer: every other seat whose own intent is working (🎯T983). A seat its
-// PO or the owner stood down stays down across a restart; before this, every
-// daemon boot started parked seats again. Only the agent's intent is read: a
-// fleet-wide provider block is transient, and the seats it holds still belong
-// to this daemon.
+// overseer: every other seat not stood down (🎯T983). A seat its PO or the
+// owner parked, or one reaped as finished, stays down across a restart;
+// before this, every daemon boot started parked seats again. A seat blocked
+// on the owner is still reattached, so the answer has somewhere to land, and
+// a fleet-wide provider block is transient.
 func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision) func(string) bool {
 	return func(name string) bool {
 		if overseer(name) {
 			return false
 		}
-		if d := allow(name, fleetintent.ControlRevive); d.Agent != fleetintent.Working {
+		if d := allow(name, fleetintent.ControlRevive); fleetintent.StoodDown(d.Agent) {
 			slog.Info("restart reattach skipped — agent intent keeps it down", "agent", name, "intent", d.Agent)
 			return false
 		}

@@ -151,6 +151,11 @@ type AgentObs struct {
 	ReportLooksFinished  bool
 	OwnerAskPresent      bool
 	IntentBlockedOwner   bool
+	// 🎯T984: AgainstIntent names a seat running although its intent stood
+	// it down; Diverged names a seat the broker runs while this daemon holds
+	// no live process for it. Empty when neither holds.
+	AgainstIntent string
+	Diverged      string
 }
 
 // EventObs is one eventlog-shaped anomaly sample.
@@ -204,6 +209,33 @@ func BuildSignals(in ObserveInput) []Signal {
 	for _, a := range in.Agents {
 		name := strings.TrimSpace(a.Name)
 		if name == "" {
+			continue
+		}
+		// 🎯T984: before deliberate_stop, which reads a seat this daemon
+		// holds no process for as stopped on purpose — the broker may still
+		// be running it.
+		if a.AgainstIntent != "" {
+			out = append(out, Signal{
+				Kind:         "intent_violation",
+				Symptom:      "intent:" + name,
+				Severity:     "high",
+				Mechanical:   true, // reconcile's stood-down sweep stops it first
+				GraceElapsed: a.GraceElapsed,
+				Intent:       in.agentIntent(name),
+				Detail:       a.AgainstIntent,
+			})
+			continue
+		}
+		if a.Diverged != "" {
+			out = append(out, Signal{
+				Kind:         "seat_divergence",
+				Symptom:      "diverge:" + name,
+				Severity:     "medium",
+				Mechanical:   true, // reconcile's dead-handle sweep reclaims it first
+				GraceElapsed: a.GraceElapsed,
+				Intent:       in.agentIntent(name),
+				Detail:       a.Diverged,
+			})
 			continue
 		}
 		if a.DeliberateStop {

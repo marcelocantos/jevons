@@ -28,7 +28,7 @@ func TestT983RestartReattachSkipsParkedSeats(t *testing.T) {
 	for name, want := range map[string]bool{
 		"jevons":  false, // the overseer reattaches first, on its own
 		"parked":  false,
-		"blocked": false,
+		"blocked": true, // waiting on the owner: the answer needs a live seat
 		"reaped":  false,
 		// A fleet-wide provider block does not keep a working seat from its
 		// daemon: the block is transient and the seat is still this one's.

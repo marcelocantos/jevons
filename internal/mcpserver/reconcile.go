@@ -51,6 +51,7 @@ func (s *Server) Reconcile() {
 		slog.Info("reconcile: fleet health", "report", FormatDeadAgentReport(reps))
 	}
 	s.ReapLostSeats()
+	s.sweepStoodDownSeats() // 🎯T984
 	s.SweepSeatLoad()
 	s.SweepPostReapCommits()
 	s.sweepBornStuck()

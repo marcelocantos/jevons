@@ -235,7 +235,7 @@ func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok boo
 	// its last stop record says, or whether a fresh daemon has one at all.
 	// A planned restart's record replaced the park's own, so the row said
 	// the seat had failed to come back; with no record it said "unknown".
-	if ir, ok := s.fleetIntent().Agents[name]; ok && !fleetintent.Runnable(ir.State) {
+	if ir, ok := s.fleetIntent().Agents[name]; ok && fleetintent.StoodDown(ir.State) {
 		return intentStopLine(ir), ir.At, true
 	}
 	rec, ok := s.seatStops().Last(name)

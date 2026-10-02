@@ -143,6 +143,19 @@ func Resolve(s State) State {
 // Only Working does.
 func Runnable(s State) bool { return Resolve(s) == Working }
 
+// StoodDown reports a seat someone deliberately took out of the fleet: parked
+// by the owner or a PO, or reaped as finished (🎯T983 / 🎯T984). Such a seat
+// is not reattached on a restart, and one found running is stopped. A seat
+// blocked on the owner or the provider is not stood down: it may be alive and
+// waiting for the answer that unblocks it.
+func StoodDown(s State) bool {
+	switch Resolve(s) {
+	case Parked, Reaped:
+		return true
+	}
+	return false
+}
+
 // Describe renders a state for an owner-facing line.
 func Describe(s State) string {
 	switch Resolve(s) {

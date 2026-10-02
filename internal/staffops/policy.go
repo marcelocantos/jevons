@@ -404,6 +404,26 @@ func Classify(sig Signal) Decision {
 		}
 	}
 
+	// 🎯T984: a seat running against its intent is the one signal about a
+	// stood-down agent that is a fault, so it is judged before the intent
+	// check below, which would ignore it for being parked. Reconcile stops
+	// it within seconds; one still running after the grace means that did
+	// not hold, and the repair runs reconcile again and tells the overseer.
+	if kind == "intent_violation" {
+		if !sig.GraceElapsed {
+			return Decision{
+				Signal: sig,
+				Action: ActionIgnore,
+				Reason: "running against its intent, within grace — reconcile stops it",
+			}
+		}
+		return Decision{
+			Signal: sig,
+			Action: ActionRepair,
+			Reason: "running against its intent after grace — reconcile did not stop it",
+		}
+	}
+
 	// 🎯T414: a repair mission is an action on an agent, so it needs the same
 	// permission as a spawn. Ignoring rather than repairing is the whole
 	// point — a parked agent is not a fault to fix, and prescribing an action

@@ -646,6 +646,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			}
 			in.Agents = append(in.Agents, ao)
 		}
+		s.observeSeatViews(&in, intent, now, grace)
 		resources.RunningAgents = running
 		resources.StoppedAgents = stopped
 		resources.IdlePOCount = idlePO
