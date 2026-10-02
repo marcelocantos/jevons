@@ -166,3 +166,24 @@ func IsDestBandOverride(b WeeklyBand) bool {
 	}
 	return false
 }
+
+// IsKeepOffBandOverride reports whether an override band is one the owner
+// sets to keep seats off a plan (🎯T987): exhausted, the shape of the
+// 2026-09-30 "quota is dangerously low" override.
+func IsKeepOffBandOverride(b WeeklyBand) bool {
+	return b == BandExhausted
+}
+
+// OwnerKeepOffReason is the exclusion a resolver cites for a plan whose
+// owner override is not a dest band: "owner override exhausted: <reason>".
+// Empty when the plan carries no override, or one seats may go to.
+func OwnerKeepOffReason(be Backend) string {
+	if be.Override == nil || IsDestBandOverride(be.Override.Band) {
+		return ""
+	}
+	why := "owner override " + string(be.Override.Band)
+	if r := strings.TrimSpace(be.Override.Reason); r != "" {
+		why += ": " + r
+	}
+	return why
+}
