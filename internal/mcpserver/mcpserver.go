@@ -48,6 +48,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/spawnorder"
+	"github.com/marcelocantos/jevons/internal/turnev"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -639,6 +640,27 @@ func (s *Server) observeRegistryLiveness() {
 		alive := s.seatAlive(d.Name)
 		s.observeSeat(d, alive)
 	}
+}
+
+// observeSessionPhase folds the transcript decoder's phase reading into the
+// shared authority (🎯T766.2, census derivation 1/3: ClassifyPhaseFile via
+// ClassifyAgentSessionPhase / ClassifyAgentPhase). This is the one place the
+// 🎯T423 decoder's idle/working/unknown answer is recorded for everyone else
+// to read, rather than staying local to whichever sweep happened to decode
+// the transcript this tick.
+//
+// Only Phase is asserted. Alive/InFlight are left unclaimed here: the
+// decoder read a transcript, not a process or an event stream, and it must
+// not manufacture claims about signals it never looked at.
+func (s *Server) observeSessionPhase(name string, phase turnev.Phase) {
+	if s == nil || name == "" || phase == turnev.PhaseUnknown {
+		return
+	}
+	s.Seats().Observe(seatstate.Observation{
+		Name: name, Phase: phase,
+		QueueDepth: seatstate.QueueUnknown,
+		Source:     "transcript.fold", At: time.Now(),
+	})
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn
