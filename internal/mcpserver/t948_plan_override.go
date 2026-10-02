@@ -32,7 +32,7 @@ func (s *Server) SetPlanOverrides(store *planusage.OverrideStore) {
 			mcp.WithDescription("Owner override on a subscription plan's band (🎯T948). action=set plan=claude reason=\"…\" [band=ok] paints the plan in that band on the cockpit (a ? on its box shows the reason verbatim), keeps every seat on it however hot or exhausted its readings are, and mints new seats on it. The readings are unchanged. action=clear removes it; action=status lists overrides. Only on the owner's word."),
 			mcp.WithString("action", mcp.Required(), mcp.Description("set | clear | status")),
 			mcp.WithString("plan", mcp.Description("claude, codex, grok or cursor (set / clear).")),
-			mcp.WithString("band", mcp.Description("Band to paint and act on: ok (default), under or locked.")),
+			mcp.WithString("band", mcp.Description("Band to paint and act on: ok (default), under or locked keep seats on the plan and mint new ones there; exhausted keeps every seat off it (🎯T987).")),
 			mcp.WithString("reason", mcp.Description("Free text shown on the plan's ? in the cockpit, e.g. 'Owner has a Claude reset available; spend it before other plans.' Required for set.")),
 		),
 		s.handlePlanOverride,
@@ -94,11 +94,16 @@ func (s *Server) handlePlanOverride(_ context.Context, req mcp.CallToolRequest) 
 			return mcp.NewToolResultError("reason is required: it is what the cockpit shows on the plan's ?"), nil
 		}
 		band := planusage.WeeklyBand(strings.ToLower(strings.TrimSpace(req.GetString("band", string(planusage.BandOK)))))
-		if !planusage.IsDestBandOverride(band) {
-			return mcp.NewToolResultError("band must be ok, under or locked"), nil
+		if !planusage.IsDestBandOverride(band) && !planusage.IsKeepOffBandOverride(band) {
+			return mcp.NewToolResultError("band must be ok, under or locked (seat on it) or exhausted (keep seats off it)"), nil
 		}
 		if err := store.Set(plan, planusage.Override{Band: band, Reason: reason, SetBy: "owner", SetAt: time.Now()}); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if planusage.IsKeepOffBandOverride(band) {
+			// 🎯T987: the keep-off half — no new seat resolves onto it
+			// whatever its readings say, and running seats leave.
+			return mcp.NewToolResultText(fmt.Sprintf("%s overridden to %s: no new seat is minted or migrated onto it, whatever its readings say. Reason shown: %s", plan, band, reason)), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("%s overridden to %s: seats stay on it and new seats mint on it. Reason shown: %s", plan, band, reason)), nil
 	default:

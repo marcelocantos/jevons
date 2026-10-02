@@ -38,7 +38,7 @@ func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time
 func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclude claudia.Provider, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	excluded := map[claudia.Provider]bool{cli.PlanProvider(exclude): exclude != ""}
 	usage := make([]claudia.PlanUsage, 0, len(cands))
-	var capped, unsteer []string
+	var capped, unsteer, keptOff []string
 	for _, c := range cands {
 		p := strings.ToLower(strings.TrimSpace(c.Provider))
 		if p == "" {
@@ -51,6 +51,16 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		u := backendToPlanUsage(c.Backend)
 		u.Provider = provider
 		usage = append(usage, u)
+		// 🎯T987: an owner override into a band seats leave (exhausted,
+		// hot, ahead) keeps the plan off the destination list, whatever
+		// its readings say. Claudia ranks from the readings alone; on
+		// 2026-10-02 two bare starts landed on grok through this seam
+		// while the owner's override said its quota was dangerously low.
+		if why := OwnerKeepOffReason(c.Backend); why != "" {
+			keptOff = append(keptOff, fmt.Sprintf("%s (%s)", p, why))
+			excluded[provider] = true
+			continue
+		}
 		if why := UnsteerableReason(p); steerableOnly && why != "" {
 			unsteer = append(unsteer, fmt.Sprintf("%s (%s)", p, why))
 			excluded[provider] = true
@@ -84,6 +94,9 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		}
 		if len(unsteer) > 0 {
 			parts = append(parts, "excluded unsteerable: "+strings.Join(unsteer, ", "))
+		}
+		if len(keptOff) > 0 {
+			parts = append(parts, "owner override keeps seats off: "+strings.Join(keptOff, ", "))
 		}
 		return claudia.ModelPick{}, fmt.Errorf("%s", strings.Join(parts, "; "))
 	}
