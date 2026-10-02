@@ -692,8 +692,10 @@ describeOracle(family('frontier'), () => {
       join(dirname(fileURLToPath(import.meta.url)), '../../App.tsx'),
       'utf8',
     );
-    expect(app).toMatch(/fetch\('\/api\/frontier'\)/);
-    expect(app).toMatch(/toFrontierRows/);
+    expect(app).toMatch(/useSeatFrontier\(frontierCwd\)/);
+    const loader = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../frontier/useSeatFrontier.ts'), 'utf8');
+    expect(loader).toContain("fetch('/api/frontier?cwd='");
+    expect(loader).toMatch(/toFrontierRows/);
     expect(app).not.toMatch(/id: t\.id \|\| ''/);
     expect(toFrontierRows({ targets: [{ id: 'T168', name: 'x', status: 'identified', acceptance: ['wired'] }] })[0].acceptance).toEqual([
       'wired',

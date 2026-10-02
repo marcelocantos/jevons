@@ -110,7 +110,9 @@ describe('pre-React UI census', () => {
       expect(frontier, id + ' must appear as an itOracle').toMatch(new RegExp("itOracle\\(('" + id + "'|\\[[^\\]]*" + id + ')'));
     }
     const app = readFileSync(join(here, '../App.tsx'), 'utf8');
-    expect(app).toMatch(/toFrontierRows/);
+    expect(app).toMatch(/useSeatFrontier\(frontierCwd\)/);
+    const loader = readFileSync(join(here, '../frontier/useSeatFrontier.ts'), 'utf8');
+    expect(loader).toMatch(/toFrontierRows/);
     expect(app).not.toMatch(/id: t\.id \|\| ''/);
   });
 

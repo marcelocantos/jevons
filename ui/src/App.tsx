@@ -19,7 +19,7 @@ import { AgentTree, type AgentRow } from './components/AgentTree';
 import { SidebarPanel, type SidebarTab } from './components/SidebarPanel';
 import { FrontierTable } from './components/FrontierTable';
 import { FrontierRowsContext } from './frontier/rows';
-import { toFrontierRows } from './frontier/table';
+import { useSeatFrontier } from './frontier/useSeatFrontier';
 import { PlanUsageBar } from './components/PlanUsageBar';
 // T988: the Workers/jwork strip is unmounted, not deleted. Restore by
 // re-enabling this import and the <WorkersList /> mount below.
@@ -69,7 +69,7 @@ type Search = { agent: string; tab: SidebarTab };
 
 function parseSearch(raw: Record<string, unknown>): Search {
   const agent =
-    typeof raw.agent === 'string' && raw.agent.trim() ? raw.agent.trim() : 'jevons-po';
+    typeof raw.agent === 'string' ? raw.agent.trim() : '';
   const tab: SidebarTab =
     raw.tab === 'transcript' || raw.tab === 'coach' ? raw.tab : 'frontier';
   return { agent, tab };
@@ -188,34 +188,18 @@ function Cockpit() {
     staleTime: 4_000,
     refetchInterval: 5000,
   });
-  const frontierQ = useQuery({
-    queryKey: ['frontier'],
-    queryFn: async () => {
-      const r = await fetch('/api/frontier');
-      // A failed ask is not an empty frontier. Returning [] here painted
-      // "0 ready" over 127 ready targets whenever the daemon was slow.
-      if (!r.ok) throw new Error('frontier: HTTP ' + r.status);
-      const body: unknown = await r.json();
-      // 🎯T990: the ledger these rows belong to routes play/force-play to
-      // its own PO, not to whichever seat the owner has selected.
-      const ledgerKey = body && typeof body === 'object' ? String((body as { ledger_key?: unknown }).ledger_key ?? '') : '';
-      return { rows: toFrontierRows(body), ledgerKey };
-    },
-    placeholderData: keepPreviousData,
-    refetchInterval: 8000,
-  });
-  // Until a first answer arrives there is no count to show: say which of
-  // "still asking" and "could not ask" it is, never a number.
-  const frontierNote = frontierQ.data
+  const agents = agentsQ.data && agentsQ.data.length
+    ? agentsQ.data
+    : [{ name: 'jevons' }, { name: 'jevons-po' }];
+  const frontierCwd = agents.find((a) => a.name === agent)?.workdir?.trim() || '';
+  const frontierQ = useSeatFrontier(frontierCwd);
+  const frontierNote = !frontierCwd || frontierQ.data
     ? undefined
     : frontierQ.isError
       ? 'frontier unavailable'
       : 'loading…';
-  const agents = agentsQ.data && agentsQ.data.length
-    ? agentsQ.data
-    : [{ name: 'jevons' }, { name: 'jevons-po' }];
-  const frontierRows = frontierQ.data?.rows || [];
-  const frontierLedger = frontierQ.data?.ledgerKey || '';
+  const frontierRows = frontierCwd ? frontierQ.data?.rows || [] : [];
+  const frontierLedger = frontierCwd ? frontierQ.data?.ledgerKey || '' : '';
   // 🎯T267: live target-ask → select owning PO (T253 rebinds Frontier) + highlight row.
   const [frontierHighlightId, setFrontierHighlightId] = useState('');
   const askHost = useMemo<TargetAskHost>(
@@ -366,7 +350,7 @@ function Cockpit() {
               <AgentTree
                 agents={agents}
                 selected={agent}
-                onSelect={(name) => navigate({ search: { agent: name, tab } })}
+                onSelect={(name) => navigate({ search: { agent: name === agent ? '' : name, tab } })}
                 onDismiss={(name) => void dismissFleetAside(name)}
               />
             </div>
@@ -384,7 +368,7 @@ function Cockpit() {
             />
             <SidebarPanel
               tab={tab}
-              readyCount={frontierQ.data ? frontierRows.length : undefined}
+              readyCount={!frontierCwd || frontierQ.data ? frontierRows.length : undefined}
               readyNote={frontierNote}
               onTab={(next) => {
                 navigate({ search: { agent, tab: next } });
@@ -424,7 +408,7 @@ function Cockpit() {
               }
             >
               {frontierNote ? <div className="frontier-note" role="status">{frontierNote}</div> : null}
-              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={agent} frontierLedger={frontierLedger} highlightId={frontierHighlightId} />
+              <FrontierTable key={frontierCwd} ledgerKey={frontierLedger} rows={frontierRows} agents={agents} selectedAgent={agent} frontierLedger={frontierLedger} highlightId={frontierHighlightId} />
             </SidebarPanel>
           </div>
           {/* T988: <WorkersList /> unmounted — see the import note above. */}
