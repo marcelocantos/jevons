@@ -396,7 +396,21 @@ func Classify(sig Signal) Decision {
 	// rehydrate/interrupt/nudge the worker. Before mechanical idle-residue
 	// repair so the same phase=idle observation does not fall through to
 	// ActionRepair.
+	//
+	// When the fleet (or seat) is deliberately stood down — owner park under
+	// token depletion, provider wall, etc. — filing another close-target
+	// mission is the chatter the park exists to stop: it burns the overseer
+	// and PO seats that are already short on plan. Intent is checked here
+	// (not only at the generic repair gate below) because this branch
+	// returns before that gate.
 	if kind == "finished_awaiting_gate" {
+		if d := fleetintent.Allows(sig.FleetIntent, sig.Intent, fleetintent.ControlRepair); !d.Allow {
+			return Decision{
+				Signal: sig,
+				Action: ActionIgnore,
+				Reason: "finished awaiting gate, but intent says do not run — " + fleetintent.Describe(d.Blocking) + " (" + d.Reason + "); defer close-target until working",
+			}
+		}
 		return Decision{
 			Signal: sig,
 			Action: ActionFilePO,

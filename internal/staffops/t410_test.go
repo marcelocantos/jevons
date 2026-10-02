@@ -343,3 +343,20 @@ func TestT410PhaseIdleAloneIsNotFinishedOrBlocked(t *testing.T) {
 		}
 	}
 }
+
+// Under a parked fleet (owner token-depletion quiet, provider wall, …),
+// finished_awaiting_gate must not file+PO — that delivery is the chatter
+// the park stands down.
+func TestFinishedAwaitingGateIgnoredWhenFleetParked(t *testing.T) {
+	sig := Signal{
+		Kind: "finished_awaiting_gate", Symptom: "finished:jv-x",
+		Severity: "medium", FleetIntent: fleetintent.Parked,
+	}
+	d := Classify(sig)
+	if d.Action != ActionIgnore {
+		t.Fatalf("action=%s want ignore under parked fleet: %s", d.Action, d.Reason)
+	}
+	if d.Action == ActionFilePO {
+		t.Fatal("parked fleet still filed close-target — burns overseer/PO under depletion")
+	}
+}
