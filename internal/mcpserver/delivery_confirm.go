@@ -199,9 +199,9 @@ func (s *Server) startBriefFailureTeardown(name string, existed bool, err error)
 		// — a never-ready row would consume the leaf exactly as 🎯T433
 		// describes — but it goes under its own reason, and the parent is
 		// told the class rather than being told its worker ignored a brief.
-		return s.releaseStalledSeat(name, existed), false
+		return s.releaseStalledSeat(name, existed, err), false
 	default:
-		return s.releaseUnbriefedSeat(name, existed), false
+		return s.releaseUnbriefedSeat(name, existed, err), false
 	}
 }
 

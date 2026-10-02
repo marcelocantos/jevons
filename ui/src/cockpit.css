@@ -1412,6 +1412,12 @@ body.rhs-resizing-row { cursor: row-resize; }
 #frontier-table .ft-play-btn.ft-waiting-btn:hover {
   color: var(--red);
 }
+/* 🎯T990: a seat was minted for the row and died before its brief landed.
+ * Same red arrow (click force-seats again), outlined so it reads as a
+ * failure to look at, not merely a plan that is full. */
+#frontier-table .ft-play-btn.ft-seat-failed-btn {
+  outline: 1px solid var(--red); outline-offset: -1px; border-radius: 3px;
+}
 #frontier-table .ft-play-btn.ft-wait-stop {
   position: absolute; right: 100%; top: 0;
   background: var(--surface-raised);

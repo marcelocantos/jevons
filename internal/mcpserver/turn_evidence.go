@@ -579,12 +579,17 @@ func fateEvidence(path string, baseline int64, hadTranscript bool, needle string
 // existed says whether the caller found the seat already registered. A seat
 // that predates this call is stopped but kept: failing to re-brief an
 // established agent must not delete it.
-func (s *Server) releaseUnbriefedSeat(name string, existed bool) bool {
+//
+// cause is the delivery verdict that proved the brief absent, quoted on the
+// frontier row so the owner reads the real failure rather than a bounce
+// (🎯T990); nil when the caller has none.
+func (s *Server) releaseUnbriefedSeat(name string, existed bool, cause error) bool {
 	return s.releaseSeatAfterFailedBrief(name, existed, seatRelease{
 		Source:        seatstop.SourceUnbriefed,
 		StopReason:    "opening brief proven undelivered; seat released (🎯T387)",
 		RemovalReason: fleetlog.ReasonUnbriefedSeat,
 		RemovalDetail: "retired a seat whose opening brief never landed (🎯T433)",
+		Cause:         cause,
 	})
 }
 
@@ -597,6 +602,10 @@ type seatRelease struct {
 	StopReason    string
 	RemovalReason string
 	RemovalDetail string
+	// Cause is the error that decided the release, when there is one. It
+	// reaches the frontier row (🎯T990), not the journal — the journal
+	// already carries it on the start event.
+	Cause error
 }
 
 func (s *Server) releaseSeatAfterFailedBrief(name string, existed bool, rel seatRelease) bool {
@@ -609,6 +618,9 @@ func (s *Server) releaseSeatAfterFailedBrief(name string, existed bool, rel seat
 	if existed {
 		return false
 	}
+	// Read the row before it goes: the frontier wait below needs the target
+	// and parent the registry is about to forget (🎯T990).
+	def := s.registry.Def(name)
 	// 🎯T435: the seat leaving the registry is accounted for. A seat retired
 	// here never began a turn, so its row vanishing is exactly the kind of
 	// diff a watcher would otherwise read as an agent lost mid-flight.
@@ -622,6 +634,12 @@ func (s *Server) releaseSeatAfterFailedBrief(name string, existed bool, rel seat
 		return false
 	}
 	s.clearAgentTurnBegan(name)
+	// 🎯T990: the target's frontier row says the seat failed and why, instead
+	// of reverting to a green arrow with nothing to show for the attempt.
+	if def != nil && strings.TrimSpace(def.TargetID) != "" {
+		s.noteSeatFailure(def.TargetID, name, def.Parent,
+			describeSeatFailure(def, name, rel.RemovalReason, rel.RemovalDetail, rel.Cause))
+	}
 	return true
 }
 

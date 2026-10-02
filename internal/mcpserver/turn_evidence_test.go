@@ -425,7 +425,7 @@ func TestReleaseUnbriefedSeatFreesTheTarget(t *testing.T) {
 		t.Fatal("fixture wrong: registered seat should engage the target")
 	}
 
-	if !s.releaseUnbriefedSeat("jv-t387-phantom", false) {
+	if !s.releaseUnbriefedSeat("jv-t387-phantom", false, nil) {
 		t.Fatal("a seat minted by this call must be retired")
 	}
 	if reg.Def("jv-t387-phantom") != nil {
@@ -442,7 +442,7 @@ func TestReleaseUnbriefedSeatKeepsPreexistingAgent(t *testing.T) {
 	t.Parallel()
 	s, reg, _, _ := startPromptFixture(t, "jv-t387-established", claudia.ProviderGrok)
 
-	if s.releaseUnbriefedSeat("jv-t387-established", true) {
+	if s.releaseUnbriefedSeat("jv-t387-established", true, nil) {
 		t.Fatal("a pre-existing agent must not be retired")
 	}
 	if reg.Def("jv-t387-established") == nil {

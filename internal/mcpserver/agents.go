@@ -597,6 +597,10 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		life["err"] = err.Error()
 		life["existed"] = existed
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		// 🎯T990: no row to carry the reason, so the frontier row does.
+		if targetID != "" && !existed {
+			s.noteSeatFailure(targetID, name, parent, "register failed: "+err.Error())
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
 	life["existed"] = existed

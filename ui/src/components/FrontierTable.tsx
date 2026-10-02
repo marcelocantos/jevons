@@ -57,11 +57,12 @@ function PlayCell(props: {
   row: PlayRow;
   agents: PlayAgent[];
   selectedAgent: string;
+  frontierLedger?: string;
   onPlay: (row: PlayRow) => void;
   onStop: (row: PlayRow) => void;
   onForce: (row: PlayRow) => void;
 }) {
-  const spec = playChromeSpec(props.row, { agents: props.agents, selectedAgent: props.selectedAgent });
+  const spec = playChromeSpec(props.row, { agents: props.agents, selectedAgent: props.selectedAgent, ledgerKey: props.frontierLedger });
   const [hover, setHover] = useState(false);
   const waiting = spec.mode === 'waiting';
   const onClick = () => {
@@ -100,6 +101,7 @@ function PlayCell(props: {
           title={spec.title}
           disabled={spec.disabled}
           data-play-mode={spec.mode}
+          data-seat-wait-kind={props.row.seat_wait_kind}
           onClick={onClick}
         >
           {spec.spinning ? <span className="ft-spin" aria-hidden="true" /> : spec.glyph}
@@ -114,6 +116,7 @@ function FrontierRowView(props: {
   cache: HoverCardCache;
   agents: PlayAgent[];
   selectedAgent: string;
+  frontierLedger?: string;
   highlighted: boolean;
   onPlay: (row: PlayRow) => void;
   onStop: (row: PlayRow) => void;
@@ -154,7 +157,15 @@ function FrontierRowView(props: {
       </td>
       <td className="ft-status">{formatStatus(props.row.status)}</td>
       <FanCell row={props.row} />
-      <PlayCell row={props.row} agents={props.agents} selectedAgent={props.selectedAgent} onPlay={props.onPlay} onStop={props.onStop} onForce={props.onForce} />
+      <PlayCell
+        row={props.row}
+        agents={props.agents}
+        selectedAgent={props.selectedAgent}
+        frontierLedger={props.frontierLedger}
+        onPlay={props.onPlay}
+        onStop={props.onStop}
+        onForce={props.onForce}
+      />
     </tr>
   );
 }
@@ -165,7 +176,12 @@ export function FrontierTable(props: {
   selectedAgent?: string;
   /** 🎯T267: target id to emphasize (target-ask focus). */
   highlightId?: string;
+  /** 🎯T389: engagement scope. Unset = every ledger (worktree seats carry
+   * their own key, so a scoped overlay would drop them). */
   ledgerKey?: string;
+  /** 🎯T990: ledger_key of the GET /api/frontier these rows came from. The
+   * kickoff is routed to the PO that owns it, not to the selected seat's. */
+  frontierLedger?: string;
   fetcher?: FrontierFetch;
   seatWaits?: SeatWaitsLoader;
   onNotice?: (text: string) => void;
@@ -176,6 +192,7 @@ export function FrontierTable(props: {
   }, [props.rows]);
   const agents = props.agents || [];
   const selectedAgent = props.selectedAgent || '';
+  const frontierLedger = props.frontierLedger || '';
   const fetcher = props.fetcher || defaultFetch;
   const [submitted, setSubmitted] = useState<KickoffSubmittedSet>({});
   // 🎯T980: kickoffs the PO has acknowledged, and the server's waits for a
@@ -220,7 +237,7 @@ export function FrontierTable(props: {
 
   const onPlay = useCallback(
     (row: PlayRow) => {
-      const req = playKickoffRequest(row, { agents, selectedAgent });
+      const req = playKickoffRequest(row, { agents, selectedAgent, ledgerKey: frontierLedger });
       if (req.blocked) {
         notice?.(req.message);
         return;
@@ -242,12 +259,12 @@ export function FrontierTable(props: {
           notice?.('Kickoff failed: ' + String(err instanceof Error ? err.message : err));
         });
     },
-    [agents, selectedAgent, fetcher, notice],
+    [agents, selectedAgent, frontierLedger, fetcher, notice],
   );
 
   const onForce = useCallback(
     (row: PlayRow) => {
-      const req = playKickoffRequest(row, { agents, selectedAgent, force: true });
+      const req = playKickoffRequest(row, { agents, selectedAgent, ledgerKey: frontierLedger, force: true });
       if (req.blocked) {
         notice?.(req.message);
         return;
@@ -270,7 +287,7 @@ export function FrontierTable(props: {
           notice?.('Force-play failed: ' + String(err instanceof Error ? err.message : err));
         });
     },
-    [agents, selectedAgent, fetcher, notice, waits],
+    [agents, selectedAgent, frontierLedger, fetcher, notice, waits],
   );
 
   const onStop = useCallback(
@@ -305,6 +322,7 @@ export function FrontierTable(props: {
             cache={cacheRef.current}
             agents={agents}
             selectedAgent={selectedAgent}
+            frontierLedger={frontierLedger}
             highlighted={rowMatchesHighlight(r.id, props.highlightId)}
             onPlay={onPlay}
             onStop={onStop}

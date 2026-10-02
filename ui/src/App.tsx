@@ -193,7 +193,11 @@ function Cockpit() {
       // A failed ask is not an empty frontier. Returning [] here painted
       // "0 ready" over 127 ready targets whenever the daemon was slow.
       if (!r.ok) throw new Error('frontier: HTTP ' + r.status);
-      return toFrontierRows(await r.json());
+      const body: unknown = await r.json();
+      // 🎯T990: the ledger these rows belong to routes play/force-play to
+      // its own PO, not to whichever seat the owner has selected.
+      const ledgerKey = body && typeof body === 'object' ? String((body as { ledger_key?: unknown }).ledger_key ?? '') : '';
+      return { rows: toFrontierRows(body), ledgerKey };
     },
     placeholderData: keepPreviousData,
     refetchInterval: 8000,
@@ -208,7 +212,8 @@ function Cockpit() {
   const agents = agentsQ.data && agentsQ.data.length
     ? agentsQ.data
     : [{ name: 'jevons' }, { name: 'jevons-po' }];
-  const frontierRows = frontierQ.data || [];
+  const frontierRows = frontierQ.data?.rows || [];
+  const frontierLedger = frontierQ.data?.ledgerKey || '';
   // 🎯T267: live target-ask → select owning PO (T253 rebinds Frontier) + highlight row.
   const [frontierHighlightId, setFrontierHighlightId] = useState('');
   const askHost = useMemo<TargetAskHost>(
@@ -417,7 +422,7 @@ function Cockpit() {
               }
             >
               {frontierNote ? <div className="frontier-note" role="status">{frontierNote}</div> : null}
-              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={agent} highlightId={frontierHighlightId} />
+              <FrontierTable rows={frontierRows} agents={agents} selectedAgent={agent} frontierLedger={frontierLedger} highlightId={frontierHighlightId} />
             </SidebarPanel>
           </div>
           <WorkersList />

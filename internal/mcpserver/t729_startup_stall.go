@@ -118,8 +118,9 @@ func startBriefNeverReached(err error) bool {
 // free for a fresh spawn rather than consumed by a seat that never ran),
 // but the journal records a launch that never completed — not a worker that
 // ignored its brief.
-func (s *Server) releaseStalledSeat(name string, existed bool) bool {
+func (s *Server) releaseStalledSeat(name string, existed bool, cause error) bool {
 	return s.releaseSeatAfterFailedBrief(name, existed, seatRelease{
+		Cause:  cause,
 		Source: seatstop.SourceStartupStall,
 		StopReason: "agent CLI never became ready; the opening brief had no composer to land in " +
 			"(startup_stall, 🎯T729)",

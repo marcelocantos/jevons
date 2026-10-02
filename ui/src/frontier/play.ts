@@ -37,11 +37,27 @@ export type PlayRow = FrontierRow & {
   kickoff_acked?: boolean;
   /** 🎯T980: why no plan can seat this target yet (server truth). */
   seat_wait?: string;
+  /** 🎯T990: 'plan' (no plan can take a seat) or 'seat_failed' (the seat
+   * minted for it died before its opening brief landed). */
+  seat_wait_kind?: SeatWaitKind;
+  /** 🎯T990: the retired seat, when the wait is a failed seat. */
+  seat_wait_seat?: string;
 };
-/** 🎯T980: GET /api/seat-waits — target id → why it cannot be seated yet. */
-export type SeatWaits = Record<string, { reason?: string; at?: string }>;
+export type SeatWaitKind = 'plan' | 'seat_failed';
+export const SEAT_WAIT_SEAT_FAILED: SeatWaitKind = 'seat_failed';
+/** 🎯T980 / 🎯T990: GET /api/seat-waits — target id → why it is not seated. */
+export type SeatWaits = Record<string, { reason?: string; at?: string; kind?: string; seat?: string; parent?: string }>;
 
-export type PlayOpts = { po?: string; selectedAgent?: string | null; agents?: PlayAgent[]; force?: boolean };
+export type PlayOpts = {
+  po?: string;
+  selectedAgent?: string | null;
+  agents?: PlayAgent[];
+  force?: boolean;
+  /** 🎯T990: ledger_key of the GET /api/frontier the table shows. The
+   * kickoff goes to the PO whose workdir resolves to that ledger, whatever
+   * the owner has selected in the fleet tree. */
+  ledgerKey?: string;
+};
 
 export type PlayChromeSpec = {
   mode: PlayMode;
@@ -85,12 +101,44 @@ function poHold(opts: PlayOpts | undefined, po: string): { reason: string; messa
   return null;
 }
 
-/** 🎯T255: kickoff recipient is the selected agent's PO, never a worker; overseer → default. */
+/** 🎯T990: the PO whose workdir resolves to ledgerKey — the ledger that owns
+ * the targets on the table. A running one first; ties by name, so the pick
+ * is a function of the registry and not of poll order. Empty when no PO
+ * carries that ledger. */
+export function ledgerOwningPO(agents: PlayAgent[], ledgerKey?: string): string {
+  const want = String(ledgerKey || '').trim();
+  if (!want) return '';
+  const owners = (Array.isArray(agents) ? agents : []).filter(
+    (a) => a && isProductOwnerName(a.name) && purposeOf(a) !== 'overseer' && String(a.ledger || '').trim() === want,
+  );
+  if (!owners.length) return '';
+  owners.sort((a, b) => Number(!!b.running) - Number(!!a.running) || String(a.name).localeCompare(String(b.name)));
+  return String(owners[0].name).trim();
+}
+
+/** 🎯T255: kickoff recipient is the selected agent's PO, never a worker; overseer → default.
+ * 🎯T990: when the table is bound to a ledger, that ledger's PO outranks the
+ * selection — on 2026-10-02 a 🎯T989 force-play went to yourworld2-po because
+ * that seat was selected, and the target was jevons's. A selected PO that
+ * carries a different ledger is never the answer; the default is. */
 export function resolvePlayPO(opts?: PlayOpts): string {
   const o = opts || {};
   if (o.po && o.po.trim()) return o.po.trim();
   const agents = Array.isArray(o.agents) ? o.agents : [];
-  const selected = o.selectedAgent ? String(o.selectedAgent).trim() : '';
+  const owning = ledgerOwningPO(agents, o.ledgerKey);
+  if (owning) return owning;
+  const po = selectedAgentPO(agents, o.selectedAgent);
+  const want = String(o.ledgerKey || '').trim();
+  if (want) {
+    const row = findAgentByName(agents, po);
+    const mine = String(row?.ledger || '').trim();
+    if (mine && mine !== want) return DEFAULT_PLAY_PO;
+  }
+  return po;
+}
+
+function selectedAgentPO(agents: PlayAgent[], selectedAgent?: string | null): string {
+  const selected = selectedAgent ? String(selectedAgent).trim() : '';
   if (!selected) return DEFAULT_PLAY_PO;
   const row = findAgentByName(agents, selected);
   if (!row) return isProductOwnerName(selected) ? selected : DEFAULT_PLAY_PO;
@@ -208,6 +256,10 @@ export function buildPlayKickoffText(row: PlayRow, opts?: PlayOpts): string {
         'Spawn with owner_asked=true and provider=claude (the fleet\'s plan). ' +
         'Never use a plan the owner has overridden to exhausted.',
     );
+    if (row.seat_wait_kind === SEAT_WAIT_SEAT_FAILED && row.seat_wait) {
+      // 🎯T990: the PO re-seating the work is told what killed the last seat.
+      lines.push('Previous attempt: ' + row.seat_wait + ' Fix that cause before re-seating, or say why it does not apply.');
+    }
   }
   const st = statusTitle(row.status) || String(row.status || '').trim();
   if (st) lines.push('', 'Status: ' + st);
@@ -294,7 +346,14 @@ export function applySeatWaits(rows: PlayRow[], waits: SeatWaits | null | undefi
   return rows.map((row) => {
     const w = waits[normalizeTargetID(row.id)];
     if (row.engaged || !w) return row;
-    return { ...row, seat_wait: String(w.reason || 'no plan can take a seat yet') };
+    const failed = String(w.kind || '') === SEAT_WAIT_SEAT_FAILED;
+    const out: PlayRow = {
+      ...row,
+      seat_wait: String(w.reason || (failed ? 'the seat for this target failed to start' : 'no plan can take a seat yet')),
+      seat_wait_kind: failed ? SEAT_WAIT_SEAT_FAILED : 'plan',
+    };
+    if (failed && w.seat) out.seat_wait_seat = String(w.seat);
+    return out;
   });
 }
 
@@ -316,6 +375,19 @@ export function playChromeSpec(row: PlayRow | null | undefined, opts?: PlayOpts)
   if (mode === 'waiting') {
     // 🎯T980: a red arrow. Clicking it force-seats the work; hovering offers
     // stop to its left. (❚❚ stays reserved for a real per-seat pause.)
+    if (row?.seat_wait_kind === SEAT_WAIT_SEAT_FAILED) {
+      // 🎯T990: the seat was minted and died. Say so, and why, where the
+      // owner is looking — not a bounce back to green.
+      return {
+        mode,
+        className: 'ft-play-btn ft-waiting-btn ft-seat-failed-btn',
+        glyph: PLAY_GLYPH,
+        ariaLabel: 'Force-seat 🎯' + id + ' again (its seat failed to start)',
+        title: 'Seat failed to start — ' + String(row?.seat_wait || '') + ' Click to force-seat it again.',
+        disabled: false,
+        spinning: false,
+      };
+    }
     return {
       mode,
       className: 'ft-play-btn ft-waiting-btn',
