@@ -16,6 +16,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  # Only for the fake WebView platform in test/shell_test.dart.
+  webview_flutter_platform_interface: ^2.15.1
 
 flutter:
   uses-material-design: true

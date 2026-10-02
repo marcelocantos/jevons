@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'settings.dart';
@@ -29,8 +30,12 @@ class JevonsMobileApp extends StatelessWidget {
   }
 }
 
-/// Full-screen WebView onto the cockpit, with a small toolbar for reload and
-/// settings. Layout polish for foldables and other form factors is deferred.
+/// Full-screen WebView onto the cockpit with no browser chrome: no URL bar,
+/// no reload button, no visible settings icon. The shell is a single-purpose
+/// app pointed at one cockpit URL, so navigation chrome would only make it
+/// feel like a browser. Settings stay reachable through a hidden trigger: a
+/// long-press anywhere on the WebView surface. Layout polish for foldables
+/// and other form factors is deferred.
 class CockpitShell extends StatefulWidget {
   const CockpitShell({super.key, required this.settings});
 
@@ -94,64 +99,56 @@ class _CockpitShellState extends State<CockpitShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.settings.url,
-          style: Theme.of(context).textTheme.bodySmall,
-          overflow: TextOverflow.ellipsis,
-        ),
-        toolbarHeight: 36,
-        actions: [
-          IconButton(
-            tooltip: 'Reload',
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadCockpit,
-          ),
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings),
-            onPressed: _openSettings,
-          ),
-        ],
-      ),
-      body: SafeArea(
-        top: false,
-        child: Stack(
-          children: [
-            WebViewWidget(controller: _web),
-            if (_loading) const LinearProgressIndicator(),
-            if (_loadError != null)
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Could not load ${widget.settings.url}',
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _loadError!,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton(
-                        onPressed: _loadCockpit,
-                        child: const Text('Retry'),
-                      ),
-                      TextButton(
-                        onPressed: _openSettings,
-                        child: const Text('Change URL'),
-                      ),
-                    ],
+    // No AppBar: the status bar sits over the WebView's black backdrop, so
+    // ask for light status-bar icons explicitly rather than inheriting the
+    // theme's AppBar-derived style.
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              // Hidden admin entry: the WebView claims only gestures nobody
+              // else wants, so a long-press here wins the arena and opens
+              // Settings without any visible control.
+              GestureDetector(
+                onLongPress: _openSettings,
+                child: WebViewWidget(controller: _web),
+              ),
+              if (_loading) const LinearProgressIndicator(),
+              if (_loadError != null)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Could not load ${widget.settings.url}',
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _loadError!,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: _loadCockpit,
+                          child: const Text('Retry'),
+                        ),
+                        TextButton(
+                          onPressed: _openSettings,
+                          child: const Text('Change URL'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

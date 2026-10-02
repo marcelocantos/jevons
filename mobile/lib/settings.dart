@@ -109,8 +109,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Row(
               children: [
                 TextButton(
-                  onPressed: () =>
-                      _urlController.text = kDefaultCockpitUrl,
+                  onPressed: () => _urlController.text = kDefaultCockpitUrl,
                   child: const Text('Reset to default'),
                 ),
                 const Spacer(),
