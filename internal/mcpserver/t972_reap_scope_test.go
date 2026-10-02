@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/gate"
+	"github.com/marcelocantos/jevons/internal/worktreereap"
 )
 
 // 🎯T972 (split from 🎯T784): a finished-work report must not reap a seat
@@ -104,6 +105,13 @@ func TestProbeOwnWorktreeDistinguishesLinkedWorktreeFromSharedClone(t *testing.T
 	shared := t972SeededSharedClone(t)
 	linked := filepath.Join(t.TempDir(), "linked-worktree")
 	gitRun(t, shared, "worktree", "add", "--detach", linked, "HEAD")
+	// 🎯T440: stamp the owner so the sweeper can reap this tree when the
+	// process dies before TempDir cleanup. A timeout panic, a SIGKILL, and
+	// a dropped session all skip t.Cleanup, and the directory still exists
+	// so `git worktree prune` leaves it.
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: linked, Note: t.Name()}); err != nil {
+		t.Fatalf("mark worktree owner: %v", err)
+	}
 
 	if probeOwnWorktree(shared) {
 		t.Fatal("the shared clone's own working tree must not read as a linked (owned) worktree")
@@ -141,6 +149,12 @@ func TestShouldAutoReapDoneWorkAgentKeepsSeatWithOwnedUncommittedScope(t *testin
 	shared := t972SeededSharedClone(t)
 	linked := filepath.Join(t.TempDir(), "linked-worktree")
 	gitRun(t, shared, "worktree", "add", "--detach", linked, "HEAD")
+	// 🎯T440: stamp the owner so the sweeper can reap this tree when the
+	// process dies before TempDir cleanup. The marker lives in git's admin
+	// directory, so it does not show up as uncommitted worktree scope.
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: linked, Note: t.Name()}); err != nil {
+		t.Fatalf("mark worktree owner: %v", err)
+	}
 	// Dirty the linked worktree (own scope), not the shared clone.
 	if err := os.WriteFile(filepath.Join(linked, "pending.go"), []byte("package x\n"), 0o644); err != nil {
 		t.Fatal(err)
