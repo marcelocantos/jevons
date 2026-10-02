@@ -11,6 +11,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/marcelocantos/jevons/internal/buildident"
 	"github.com/marcelocantos/jevons/ui"
 )
 
@@ -80,6 +81,11 @@ func TestReactBundleEveryAssetIsServed(t *testing.T) {
 		want, err := fs.ReadFile(files, name)
 		if err != nil {
 			return err
+		}
+		if name == "index.html" {
+			// The document alone is stamped with the build id (🎯T993);
+			// every other packaged byte is served verbatim.
+			want = stampBuildMeta(want, buildident.Binary())
 		}
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+name, nil))

@@ -2,7 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHAT_PING, HEARTBEAT_MS, MuxClient, RECONNECT_CAP_MS, reconnectDelayMs } from './client';
+import {
+  BUILD_META_NAME,
+  buildReloadVerdict,
+  CHAT_PING,
+  HEARTBEAT_MS,
+  loadedBuildFromDocument,
+  MuxClient,
+  type MuxClientOptions,
+  RECONNECT_CAP_MS,
+  RELOAD_DEBOUNCE_MS,
+  RELOAD_STAMP_KEY,
+  reconnectDelayMs,
+} from './client';
+import { encodeMux } from './protocol';
 
 class FakeWebSocket {
   static CONNECTING = 0;
@@ -191,5 +204,252 @@ describe('MuxClient reconnect backoff (T798)', () => {
     expect(errs).toHaveBeenCalledTimes(2);
     client.close();
     errs.mockRestore();
+  });
+});
+
+// 🎯T993: auto-reload on a genuinely new build, never on a disconnect.
+describe('MuxClient build-id auto-reload (T993)', () => {
+  const hello = (build?: string) =>
+    encodeMux('', 'hello', build === undefined ? { conn_id: 'c' } : { conn_id: 'c', build });
+
+  class MemoryStamps {
+    map = new Map<string, string>();
+    getItem(k: string): string | null {
+      return this.map.get(k) ?? null;
+    }
+    setItem(k: string, v: string): void {
+      this.map.set(k, v);
+    }
+  }
+
+  /** A page: a client with a counted reload, under fake timers, with a FakeWebSocket global. */
+  function page(opts: MuxClientOptions & { connect?: boolean } = {}) {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    const client = new MuxClient('ws://test/ws/mux', () => 0.5, {
+      loadedBuild: 'A',
+      reload,
+      now: () => Date.now(),
+      stamps: null,
+      ...opts,
+    });
+    if (opts.connect !== false) client.connect();
+    return { client, reload };
+  }
+
+  /** The socket the client constructed most recently. */
+  const latest = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!;
+
+  /** Wait out the backoff until the client constructs its next socket. */
+  function awaitReconnect(): FakeWebSocket {
+    const before = FakeWebSocket.instances.length;
+    vi.advanceTimersByTime(RECONNECT_CAP_MS);
+    if (FakeWebSocket.instances.length !== before + 1) {
+      throw new Error(`expected one reconnect, sockets ${before} -> ${FakeWebSocket.instances.length}`);
+    }
+    return latest();
+  }
+
+  it('verdict: unknown on either side never reloads; same never reloads; mismatch reloads unless debounced', () => {
+    expect(buildReloadVerdict('', 'B', 0, 1000)).toBe('unknown');
+    expect(buildReloadVerdict('A', '', 0, 1000)).toBe('unknown');
+    expect(buildReloadVerdict('A', 'A', 0, 1000)).toBe('same');
+    expect(buildReloadVerdict('A', 'B', 0, 1000)).toBe('reload');
+    const now = 10 * RELOAD_DEBOUNCE_MS;
+    expect(buildReloadVerdict('A', 'B', now - 1, now)).toBe('debounced');
+    expect(buildReloadVerdict('A', 'B', now - RELOAD_DEBOUNCE_MS + 1, now)).toBe('debounced');
+    expect(buildReloadVerdict('A', 'B', now - RELOAD_DEBOUNCE_MS, now)).toBe('reload');
+    // a clock that went backwards is inside the window, not a licence to reload
+    expect(buildReloadVerdict('A', 'B', now + 5000, now)).toBe('debounced');
+    expect(RELOAD_DEBOUNCE_MS).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('(a) disconnect and reconnect to the same build never reloads, however often', () => {
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { client, reload } = page();
+    latest().open();
+    latest().onmessage?.({ data: hello('A') });
+    expect(reload).not.toHaveBeenCalled();
+
+    // a routine daemon restart: drop, several refused attempts, then back on the same build
+    latest().close();
+    expect(reload).not.toHaveBeenCalled();
+    for (let i = 0; i < 4; i++) {
+      awaitReconnect().close(); // connect refused: closes without ever opening
+      expect(reload).not.toHaveBeenCalled();
+    }
+    const back = awaitReconnect();
+    back.open();
+    back.onmessage?.({ data: hello('A') });
+    expect(reload).not.toHaveBeenCalled();
+    expect(client.build).toBe('A');
+
+    // and again, to show the first cycle did not arm anything
+    back.close();
+    const again = awaitReconnect();
+    again.open();
+    again.onmessage?.({ data: hello('A') });
+    expect(reload).not.toHaveBeenCalled();
+    client.close();
+    errs.mockRestore();
+  });
+
+  it('(a) a drop that never comes back reloads nothing and keeps reconnecting in place', () => {
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { client, reload } = page();
+    latest().open();
+    latest().onmessage?.({ data: hello('A') });
+    latest().close();
+    for (let i = 0; i < 12; i++) awaitReconnect().close();
+    expect(reload).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances.length).toBe(1 + 12);
+    client.close();
+    errs.mockRestore();
+  });
+
+  it('(b) reconnect to a new build reloads exactly once, only after the hello', () => {
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { client, reload } = page();
+    latest().open();
+    latest().onmessage?.({ data: hello('A') });
+    latest().close();
+    const next = awaitReconnect();
+    next.open();
+    // open alone is not evidence of a new build
+    expect(reload).not.toHaveBeenCalled();
+    next.onmessage?.({ data: hello('B') });
+    expect(reload).toHaveBeenCalledTimes(1);
+    // whatever follows on this page — more hellos, another drop and reconnect — never reloads again
+    next.onmessage?.({ data: hello('B') });
+    next.onmessage?.({ data: hello('C') });
+    next.close();
+    const after = awaitReconnect();
+    after.open();
+    after.onmessage?.({ data: hello('C') });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(warns).toHaveBeenCalledTimes(1);
+    client.close();
+    errs.mockRestore();
+    warns.mockRestore();
+  });
+
+  it('(b) a stale document reloads on its very first hello, not only on a reconnect', () => {
+    const { client, reload } = page();
+    latest().open();
+    latest().onmessage?.({ data: hello('B') });
+    expect(reload).toHaveBeenCalledTimes(1);
+    client.close();
+  });
+
+  it('(c) the debounce window holds a repeated mismatch across the reload', () => {
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stamps = new MemoryStamps();
+    vi.setSystemTime(new Date(2026, 9, 2, 12, 0, 0));
+    const first = page({ stamps });
+    latest().open();
+    latest().onmessage?.({ data: hello('B') });
+    expect(first.reload).toHaveBeenCalledTimes(1);
+    const stampedAt = Date.now();
+    expect(stamps.getItem(RELOAD_STAMP_KEY)).toBe(String(stampedAt));
+    first.client.close();
+
+    // the reloaded page: loaded with B, and the server now flaps to C at once
+    vi.advanceTimersByTime(1000);
+    FakeWebSocket.instances = [];
+    const second = page({ stamps, loadedBuild: 'B' });
+    latest().open();
+    latest().onmessage?.({ data: hello('C') });
+    expect(second.reload).not.toHaveBeenCalled();
+    // a drop and a reconnect inside the window still hold
+    latest().close();
+    const held = awaitReconnect();
+    held.open();
+    held.onmessage?.({ data: hello('C') });
+    expect(second.reload).not.toHaveBeenCalled();
+    expect(stamps.getItem(RELOAD_STAMP_KEY)).toBe(String(stampedAt));
+
+    // once the window has passed, the next successful reconnect may reload again — once
+    held.close();
+    vi.advanceTimersByTime(RELOAD_DEBOUNCE_MS);
+    const later = latest();
+    later.open();
+    later.onmessage?.({ data: hello('C') });
+    expect(second.reload).toHaveBeenCalledTimes(1);
+    expect(stamps.getItem(RELOAD_STAMP_KEY)).toBe(String(Date.now()));
+    second.client.close();
+    warns.mockRestore();
+  });
+
+  it('(c) the stamp survives in sessionStorage by default', () => {
+    try {
+      sessionStorage.removeItem(RELOAD_STAMP_KEY);
+    } catch {
+      return; // environment without storage: nothing to assert
+    }
+    vi.setSystemTime(new Date(2026, 9, 2, 12, 0, 0));
+    const { client, reload } = page({ stamps: undefined });
+    latest().open();
+    latest().onmessage?.({ data: hello('B') });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem(RELOAD_STAMP_KEY)).toBe(String(Date.now()));
+    client.close();
+    sessionStorage.removeItem(RELOAD_STAMP_KEY);
+  });
+
+  it('an unknown build on either side never reloads', () => {
+    // daemon predates the id, or cannot read its own binary
+    const old = page();
+    latest().open();
+    latest().onmessage?.({ data: hello() });
+    latest().onmessage?.({ data: hello('') });
+    expect(old.reload).not.toHaveBeenCalled();
+    old.client.close();
+
+    // document without the meta: adopt the first hello as the baseline, then compare
+    FakeWebSocket.instances = [];
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bare = page({ loadedBuild: '' });
+    expect(bare.client.build).toBe('');
+    latest().open();
+    latest().onmessage?.({ data: hello('A') });
+    expect(bare.client.build).toBe('A');
+    expect(bare.reload).not.toHaveBeenCalled();
+    latest().close();
+    const same = awaitReconnect();
+    same.open();
+    same.onmessage?.({ data: hello('A') });
+    expect(bare.reload).not.toHaveBeenCalled();
+    same.close();
+    const fresh = awaitReconnect();
+    fresh.open();
+    fresh.onmessage?.({ data: hello('B') });
+    expect(bare.reload).toHaveBeenCalledTimes(1);
+    bare.client.close();
+    errs.mockRestore();
+  });
+
+  it('only the connection hello is consulted: a hello on another channel is ignored', () => {
+    const { client, reload } = page();
+    latest().open();
+    latest().onmessage?.({ data: encodeMux('transcript:jevons', 'hello', { build: 'B' }) });
+    expect(reload).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it('reads the loaded build from the document meta', () => {
+    const meta = document.createElement('meta');
+    meta.setAttribute('name', BUILD_META_NAME);
+    meta.setAttribute('content', ' deadbeefcafef00d ');
+    document.head.appendChild(meta);
+    try {
+      expect(loadedBuildFromDocument()).toBe('deadbeefcafef00d');
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      expect(new MuxClient('ws://test/ws/mux').build).toBe('deadbeefcafef00d');
+    } finally {
+      meta.remove();
+    }
+    expect(loadedBuildFromDocument()).toBe('');
   });
 });

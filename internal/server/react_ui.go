@@ -16,8 +16,34 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/marcelocantos/jevons/internal/buildident"
 	"github.com/marcelocantos/jevons/ui"
 )
+
+// BuildMetaName is the <meta name> under which the served index.html carries
+// the build id of the binary that served it (🎯T993). The cockpit reads it as
+// the build it was loaded with, and reloads when a mux hello names another.
+const BuildMetaName = "jevons-build"
+
+// stampBuildMeta inserts the build meta tag right after <head>. An index
+// without <head>, or an unknown ("") build, is served unchanged: the client
+// then adopts the first hello's id as its baseline rather than guessing.
+func stampBuildMeta(index []byte, buildID string) []byte {
+	if buildID == "" {
+		return index
+	}
+	i := bytes.Index(index, []byte("<head>"))
+	if i < 0 {
+		return index
+	}
+	i += len("<head>")
+	tag := fmt.Sprintf(`<meta name=%q content=%q>`, BuildMetaName, html.EscapeString(buildID))
+	out := make([]byte, 0, len(index)+len(tag))
+	out = append(out, index[:i]...)
+	out = append(out, tag...)
+	out = append(out, index[i:]...)
+	return out
+}
 
 // RegisterProductUIRoutes serves the same embedded React build for development,
 // isolates and released binaries. Vite is a separate, opt-in editing tool.
@@ -29,6 +55,12 @@ func RegisterProductUIRoutes(mux *http.ServeMux) error {
 	return RegisterReactUIRoutes(mux, files)
 }
 
+// RegisterReactUIRoutes serves files with the running binary's build id
+// stamped into the document (🎯T993).
+func RegisterReactUIRoutes(mux *http.ServeMux, files fs.FS) error {
+	return registerReactUIRoutes(mux, files, buildident.Binary())
+}
+
 func noCache(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
@@ -38,11 +70,12 @@ func noCache(w http.ResponseWriter) {
 // RegisterReactUIRoutes validates the document's local assets before serving.
 // API routes registered on the mux remain authoritative; missing assets never
 // fall back to HTML. The immutable bundle cannot catch a half-written build.
-func RegisterReactUIRoutes(mux *http.ServeMux, files fs.FS) error {
+func registerReactUIRoutes(mux *http.ServeMux, files fs.FS, buildID string) error {
 	index, err := fs.ReadFile(files, "index.html")
 	if err != nil {
 		return fmt.Errorf("React index: %w", err)
 	}
+	index = stampBuildMeta(index, buildID)
 	if !bytes.Contains(index, []byte(`id="root"`)) {
 		return fmt.Errorf("React bundle has no root mount")
 	}
@@ -97,7 +130,11 @@ func RegisterReactUIRoutes(mux *http.ServeMux, files fs.FS) error {
 			http.NotFound(w, r)
 			return
 		}
-		body, err := fs.ReadFile(files, name)
+		// The document is the stamped copy (🎯T993), whichever path names it.
+		body, err := index, error(nil)
+		if name != "index.html" {
+			body, err = fs.ReadFile(files, name)
+		}
 		if err != nil {
 			// Only navigation requests get the SPA document. A missing bundle
 			// chunk must be a 404, not a successful response containing HTML.

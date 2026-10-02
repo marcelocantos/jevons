@@ -677,9 +677,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 	s.mux.add(sess)
 	defer s.mux.remove(sess)
 
-	hello, _ := encodeMux("", "hello", map[string]any{
-		"conn_id": uuid.NewString(),
-	})
+	hello, _ := encodeMux("", "hello", s.muxHelloBody())
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	_ = conn.Write(wctx, websocket.MessageText, hello)
 	cancel()
@@ -709,6 +707,19 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleMuxRaw(ctx, conn, sess, data)
+	}
+}
+
+// muxHelloBody is the body of the hello frame every mux connection opens
+// with. `build` names the serving binary (🎯T993): the cockpit compares it
+// with the id its page loaded under and reloads on a genuinely new build.
+// It is sent only on a socket that opened, so a client that reads it has
+// by construction reconnected successfully — a disconnect never carries it.
+// "" (unknown) is still sent; clients never reload on it.
+func (s *Server) muxHelloBody() map[string]any {
+	return map[string]any{
+		"conn_id": uuid.NewString(),
+		"build":   s.buildID,
 	}
 }
 

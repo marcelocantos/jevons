@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/auth"
+	"github.com/marcelocantos/jevons/internal/buildident"
 	"github.com/marcelocantos/jevons/internal/chatlog"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
@@ -70,7 +71,11 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	version      string
+	version string
+	// buildID names the running binary (🎯T993). The mux hello, /health and
+	// the served index.html all carry it so a cockpit can tell a new build
+	// from a plain restart. "" means unknown; clients never reload on it.
+	buildID      string
 	stateDir     string // jevons state root (config-driven, 🎯T44/T49)
 	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
 	// overseerMigrator performs the registry half of a provider switch
@@ -483,6 +488,7 @@ func (s *Server) SetChatLog(l *chatlog.Log) {
 func New(version, stateDir string) *Server {
 	s := &Server{
 		version:       version,
+		buildID:       buildident.Binary(),
 		stateDir:      stateDir,
 		overseerName:  defaultOverseerName,
 		remotes:       make(map[int]remoteConn),
@@ -829,6 +835,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ok",
 		"version": s.version,
+		"build":   s.buildID,
 	})
 }
 
