@@ -63,7 +63,8 @@ const heldReapedRouteAfter = StalledBacklogAfter
 func reapRoutable(rec fleetintent.Record) bool {
 	by := strings.ToLower(rec.By)
 	return strings.Contains(by, fleetlog.ReasonReapAchieve) ||
-		strings.Contains(by, fleetlog.ReasonReapDone)
+		strings.Contains(by, fleetlog.ReasonReapDone) ||
+		strings.Contains(by, fleetlog.ReasonReapStop) // 🎯T985 stop-to-reap
 }
 
 // reapedOnAchieve distinguishes the two finish reaps. Only an achieve reap can

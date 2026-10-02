@@ -310,7 +310,27 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   on>" plus the silent-ledger. No oracle is required for it.
 - The daemon then holds off idle nudges and impatience re-pressure and
   does not reap you; your parent holds the blocker. Pressure resumes when
-  the owner or your parent messages you.
+  the owner or your parent messages you. That wait is a park-class
+  external block (🎯T985), not a finished-work reap.
+
+## Reap vs park (🎯T985)
+- A worker whose own work is fully complete or superseded, with nothing
+  left to do, is **reaped** (stop+Remove) rather than parked — including
+  when its target was already achieved by someone else and no further
+  acceptance criteria are open. Parking used to be the convention for
+  that shape (jv-t947-plan-token, jv-t972-reap-scope this session); that
+  convention is superseded.
+- Parking (jevons_agent_stop, staying registered) is reserved for a
+  worker genuinely blocked on something external that may resume later:
+  cross-repo work outside its mandate, an owner decision pending, a
+  design gate.
+- The daemon enforces it on jevons_agent_stop: a reason that reads as
+  finished work ("nothing left for this worker", "already achieved",
+  "superseded") is converted to a reap (reap_stop); a reason naming an
+  external block ("blocked on", "cross-repo", "owner decision", "design
+  gate") parks; disposition=park|reap fixes the outcome. Durable roles and
+  seats with descendants always park (use jevons_agent_kill). Pure
+  helpers: ClassifyWorkerIdleDisposition, ClassifyStopDisposition.
 
 ## Fog-of-war scout before implement (🎯T536.3)
 - Non-trivial Build work is scouted before implement. Spawn-briefs carry
@@ -383,9 +403,11 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
 - Finished work agents auto-deregister (stop+Remove) when the terminal
   report claims done — including imperfect bare done without oracle markers
   (🎯T165 / 🎯T195). Ledger achieve of a mission TargetID also reaps engaged
-  implementers. POs and the overseer stay; deliberate stop without kill
-  still leaves the agent registered for resume. Do not rely on hand-pruning
-  zombies from the RHS.
+  implementers. A worker whose own work is fully complete or superseded is
+  reaped rather than parked (🎯T985), including already-achieved-by-someone-else
+  with no further acceptance open. Parking is reserved for a worker blocked
+  on something external that may resume. POs and the overseer stay. Do not
+  rely on hand-pruning zombies from the RHS.
 
 ---
 `

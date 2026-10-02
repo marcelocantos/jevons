@@ -47,6 +47,11 @@ const (
 	ReasonReapDone = "reap_done"
 	// ReasonReapAchieve is 🎯T195 hygiene after the bound target is achieved.
 	ReasonReapAchieve = "reap_achieve"
+	// ReasonReapStop is a jevons_agent_stop whose reason read as finished
+	// work — own work complete or superseded, nothing left for the seat —
+	// converted to a reap (🎯T985). A seat with no more work is reaped, not
+	// parked; parking is for a seat blocked on something external.
+	ReasonReapStop = "reap_stop"
 	// ReasonKill is an explicit kill of an agent (and its subtree).
 	ReasonKill = "kill"
 	// ReasonStopEngagement is the owner's engagement-stop control surface.
@@ -87,7 +92,7 @@ const (
 func Reasons() []string {
 	out := []string{
 		ReasonAsideDismiss, ReasonBudgetKill, ReasonExpire, ReasonKill,
-		ReasonReapAchieve, ReasonReapDone, ReasonRotationDrop,
+		ReasonReapAchieve, ReasonReapDone, ReasonReapStop, ReasonRotationDrop,
 		ReasonStartupStall, ReasonStopEngagement, ReasonThreadRemove,
 		ReasonUnbriefedSeat,
 	}

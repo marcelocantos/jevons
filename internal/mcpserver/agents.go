@@ -110,10 +110,11 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.addTool(
 		mcp.NewTool("jevons_agent_stop",
-			mcp.WithDescription("Stop a running agent process and park it (🎯T414): the agent stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Not the same as kill (which deregisters)."),
+			mcp.WithDescription("Stop a running agent process. Parked (🎯T414) when the seat is blocked on something external that may resume later: it stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Reaped (🎯T985, stop+Remove like the finished-work path) when the reason reads as finished work — own work complete or superseded, nothing left for this seat: a worker with no more work to do is reaped, not parked. Durable roles (PO / aside / overseer) and seats with live descendants always park; kill those with jevons_agent_kill."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
-			mcp.WithString("actor", mcp.Description("Your agent name (who is parking it). Default: the overseer.")),
-			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it.")),
+			mcp.WithString("actor", mcp.Description("Your agent name (who is stopping it). Default: the overseer.")),
+			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it. It also decides park vs reap (🎯T985): 'nothing left for this worker' / 'already achieved' / 'superseded' reaps; 'blocked on' / 'cross-repo' / 'owner decision' / 'design gate' parks. Silent, the seat's latest stored report is read the same way; unclassifiable parks.")),
+			mcp.WithString("disposition", mcp.Description("park | reap — fix the outcome instead of classifying the reason (🎯T985). Durable roles and seats with descendants park regardless (use jevons_agent_kill).")),
 			mcp.WithBoolean("force", mcp.Description("🎯T664: stop even while a turn is in flight or a delivery is still delivered_unconfirmed. Without it the stop is refused and the check that decides it is named. Pass only with a reason you can state.")),
 		),
 		s.handleAgentStop,
@@ -1174,15 +1175,41 @@ func (s *Server) handleAgentStop(ctx context.Context, req mcp.CallToolRequest) (
 			"name": name, "actor": args["actor"], "reason": args["reason"], "why": why})
 	}
 
+	// 🎯T969: an actor-less stop records the identifiable caller or
+	// "unattributed", never the overseer.
+	actor := s.intentActor(ctx, args)
+	reason, _ := args["reason"].(string)
+
+	// 🎯T985: a worker with no more work to do is reaped, not parked. A stop
+	// whose reason (or, when silent, the seat's latest stored report) reads
+	// as finished work takes the finished-work path — stop+Remove — instead
+	// of leaving a standing parked row. Parking is reserved for a seat
+	// blocked on something external that may resume.
+	disposition := s.stopDispositionFor(name, args)
+	if disposition.Action == IdleActionReap {
+		s.closeSeatGoalBeforeRemoval(name, "reaped_on_stop")
+		stopWhy := "jevons_agent_stop by " + actor + " reaped as finished work"
+		if r := strings.TrimSpace(reason); r != "" {
+			stopWhy += ": " + r
+		}
+		s.noteSeatStop(name, seatstop.SourceReap, stopWhy, actor, "")
+		if err := killSubtree(s.registry, s.RemovalAccount(), name, reapStopRemoval(actor, disposition.Why)); err != nil {
+			s.logLifecycle(compAgentLifecycle, "stop", "error", map[string]any{
+				"name": name, "actor": actor, "reason": reason, "disposition": string(disposition.Action), "err": err.Error()})
+			return mcp.NewToolResultError(fmt.Sprintf("stop %q as reap: %v", name, err)), nil
+		}
+		s.logLifecycle(compAgentLifecycle, "stop", "reaped", map[string]any{
+			"name": name, "actor": actor, "reason": reason, "why": disposition.Why})
+		slog.Info("T985 stop reaped finished worker instead of parking", "agent", name, "actor", actor, "why", disposition.Why)
+		s.reportFleetMuteIfNeeded()
+		return mcp.NewToolResultText(FormatStopReapedResult(name, disposition.Why)), nil
+	}
+
 	s.registry.Stop(name)
 	// 🎯T408 via 🎯T414: stopping without killing is an instruction, and the
 	// instruction is the part that used to evaporate. The process ends here;
 	// the park outlives it, the delivery that would restart the agent, and the
 	// daemon restart that would reattach it.
-	// 🎯T969: the park is a fleet-intent change; an actor-less stop records
-	// the identifiable caller or "unattributed", never the overseer.
-	actor := s.intentActor(ctx, args)
-	reason, _ := args["reason"].(string)
 	s.MarkAgentParked(name, actor, strings.TrimSpace(reason))
 	// 🎯T662: the stop is a recorded reason on the seat, not a bare handle.
 	stopWhy := "jevons_agent_stop by " + actor
@@ -1190,14 +1217,14 @@ func (s *Server) handleAgentStop(ctx context.Context, req mcp.CallToolRequest) (
 		stopWhy += ": " + r
 	}
 	s.noteSeatStop(name, seatstop.SourceSupervisor, stopWhy, actor, "")
-	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor})
+	s.logLifecycle(compAgentLifecycle, "stop", "ok", map[string]any{"name": name, "actor": actor, "why": disposition.Why})
 	// 🎯T418 clause 6: if this stop left the fleet with queued work and
 	// nobody live to press Enter, say so now — the cockpit may relaunch
 	// the overseer on the next tick.
 	s.reportFleetMuteIfNeeded()
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Agent %q stopped and parked (still registered; nothing revives it — not a delivery, not a restart, not the idle sweep — until the park is lifted with jevons_fleet_intent name=%q state=working).",
-		name, name)), nil
+		"Agent %q stopped and parked (still registered; nothing revives it — not a delivery, not a restart, not the idle sweep — until the park is lifted with jevons_fleet_intent name=%q state=working). Park vs reap (🎯T985): %s.",
+		name, name, disposition.Why)), nil
 }
 
 func (s *Server) handleAgentKill(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
