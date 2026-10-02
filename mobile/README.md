@@ -1,7 +1,7 @@
 # jevons-mobile
 
 Cross-platform (iOS + Android) thin WebView shell for the jevons cockpit. Flutter + webview_flutter.
-Primary target devices: 'Jevons' iPad mini (A17 Pro, iOS 27.0, connected via Spyder) and a Pixel Fold phone (owner's daily device, connects on-demand for Android testing).
+Primary target devices: 'Jevons' iPad mini (A17 Pro, iOS 27.0, connected via Spyder) and the 'Fold' Pixel 11 Pro Fold (owner's daily device, Spyder alias `Fold`).
 
 Tracked as 🎯T989 in the jevons ledger (cross-repo, same pattern as 🎯T765.1).
 
@@ -69,4 +69,5 @@ deploy_app(device="Pixel", owner=..., bundle_id="com.canticode.jevons_mobile",
 ```
 
 Android deploys need `bundle_id` because Spyder derives it with `aapt`, which
-is not on `PATH` here. Pixel Fold verification is the owner's.
+is not on `PATH` here. The Pixel Fold is a verified deploy target, not a
+deferred one: `deploy_app(device="Fold", …)` with the same `bundle_id`.
