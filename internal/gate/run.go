@@ -116,11 +116,12 @@ func Run(args *RunArgs) (*Record, error) {
 	// running the same heavy suite queue rather than collectively OOM the
 	// host. A store-less Run (tests only) skips the lease.
 	if args.Store != nil && HeavyCommand(args.Command) {
-		release, err := AcquireHeavyLease(args.Store.Root)
+		release, token, err := acquireHeavyLease(args.Store.Root, os.Getenv(heavyLeaseEnv))
 		if err != nil {
 			return rec, fmt.Errorf("gate run %s: heavy lease: %w", rec.ID, err)
 		}
 		defer release()
+		cmd.Env = append(cmd.Environ(), heavyLeaseEnv+"="+token)
 	}
 
 	runErr := cmd.Run()

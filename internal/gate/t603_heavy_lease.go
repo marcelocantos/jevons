@@ -4,6 +4,9 @@
 package gate
 
 import (
+	"crypto/rand"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,22 +65,57 @@ func heavyLockPath(storeRoot string) string {
 // ever right in tests) — the lease is skipped rather than leased into a
 // directory nobody chose.
 func AcquireHeavyLease(storeRoot string) (func(), error) {
+	release, _, err := acquireHeavyLease(storeRoot, "")
+	return release, err
+}
+
+// The token is an invocation-chain capability, not a global skip switch.
+// Only Run's child environment receives it; concurrent Run calls in this
+// process still acquire distinct leases. Go exec wrappers preserve environment
+// variables even when they close inherited file descriptors (test-web-clean).
+const heavyLeaseEnv = "JEVONS_GATE_HEAVY_LEASE"
+
+func acquireHeavyLease(storeRoot, inherited string) (func(), string, error) {
 	if storeRoot == "" {
-		return func() {}, nil
+		return func() {}, "", nil
 	}
 	if err := os.MkdirAll(storeRoot, 0o755); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	f, err := os.OpenFile(heavyLockPath(storeRoot), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	// First try the real lock: an old token never resurrects a released lease.
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
+		owner, readErr := io.ReadAll(io.LimitReader(f, 256))
+		if readErr == nil && inherited != "" && string(owner) == inherited {
+			_ = f.Close()
+			// The ancestor owns both locking and unlocking. An inner gate must
+			// not release its lease while the outer command is still running.
+			return func() {}, inherited, nil
+		}
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+	}
+	if err != nil {
 		_ = f.Close()
-		return nil, err
+		return nil, "", err
 	}
-	return func() {
+	release := func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
-	}, nil
+	}
+	// Replace the owner record on every acquisition, including the public
+	// non-reentrant API, so tokens cannot refer to a previous lock holder.
+	token := fmt.Sprintf("%d:%s", os.Getpid(), rand.Text())
+	if err := f.Truncate(0); err != nil {
+		release()
+		return nil, "", err
+	}
+	if _, err := f.WriteAt([]byte(token), 0); err != nil {
+		release()
+		return nil, "", err
+	}
+	return release, token, nil
 }
