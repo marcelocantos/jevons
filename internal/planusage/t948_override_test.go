@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/marcelocantos/claudia"
 )
 
 // 🎯T948: an owner override paints the plan in its band, keeps the seats on
@@ -61,7 +59,7 @@ func TestT948OwnerOverrideKeepsTheFleetOnAHotPlan(t *testing.T) {
 		t.Fatal("an overridden plan still reads as one to leave")
 	}
 	acts := PlanDecisions(held, seats, now, th)
-	if len(acts) != 1 || acts[0].Action != claudia.SeatStay || acts[0].From != "claude" {
+	if len(acts) != 1 || acts[0].Action != SeatStay || acts[0].From != "claude" {
 		t.Fatalf("decisions = %+v, want the seat to stay on claude", acts)
 	}
 	if len(PlanActions(held, seats, now, th)) != 0 {

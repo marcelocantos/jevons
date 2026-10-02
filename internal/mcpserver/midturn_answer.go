@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
 // 🎯T902: a busy agent that takes a steered question answers it mid-turn,
@@ -98,7 +100,7 @@ func (m *midTurnAnswers) observe(agent string, ev claudia.Event) (string, string
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.init()
-	if ev.Type == "progress" && ev.ProgressType == claudia.ProgressDeliveryAbsorbed {
+	if ev.Type == "progress" && ev.ProgressType == delivery.ProgressDeliveryAbsorbed {
 		matched := false
 		for i, a := range m.pending[agent] {
 			if a.text == ev.Text {

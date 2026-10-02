@@ -20,7 +20,7 @@ import (
 // sign-in does neither.
 func TestDestinationReauthMarksRetryAndRevivesPlanPeers(t *testing.T) {
 	decision := planusage.PlanAction{
-		Name: "jevons", From: "grok", To: "claude", Action: claudia.SeatMigrate,
+		Name: "jevons", From: "grok", To: "claude", Action: planusage.SeatMigrate,
 		Execution: "failed", Failure: "anthropic refresh failed: invalid_grant",
 		Author: claudia.DecisionAuthor,
 	}

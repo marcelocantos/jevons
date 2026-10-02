@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -31,7 +32,7 @@ func (s *suite) jHotProviderMigration() error {
 }
 
 func (s *suite) hotProviderMigrationWithBroker() error {
-	dest := claudia.PlanProvider(s.provider)
+	dest := cli.PlanProvider(s.provider)
 	if dest != claudia.ProviderGrok && dest != claudia.ProviderCodex {
 		return fmt.Errorf("J34 requires a Grok or Codex isolate, got %s", s.provider)
 	}
@@ -68,7 +69,7 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	source := before[id]
-	if claudia.PlanProvider(source.Provider) != claudia.ProviderCursor || source.SessionID == "" {
+	if cli.PlanProvider(source.Provider) != claudia.ProviderCursor || source.SessionID == "" {
 		return fmt.Errorf("worker did not start on Cursor: %+v", source)
 	}
 
@@ -102,8 +103,8 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 			break
 		}
 	}
-	if choice == nil || choice.Author != claudia.DecisionAuthor || choice.Action != claudia.SeatMigrate ||
-		claudia.PlanProvider(claudia.Provider(choice.To)) != dest || choice.Reason == "" {
+	if choice == nil || choice.Author != claudia.DecisionAuthor || choice.Action != planusage.SeatMigrate ||
+		cli.PlanProvider(claudia.Provider(choice.To)) != dest || choice.Reason == "" {
 		return fmt.Errorf("Claudia did not explain an eligible move: choice=%+v decisions=%+v", choice, decisions)
 	}
 	resp, err = http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
@@ -130,7 +131,7 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	destination := after[id]
-	if claudia.PlanProvider(destination.Provider) != dest ||
+	if cli.PlanProvider(destination.Provider) != dest ||
 		destination.SessionID == "" || destination.SessionID == source.SessionID {
 		return fmt.Errorf("migration did not persist a distinct %s destination: source=%+v destination=%+v", dest, source, destination)
 	}
@@ -161,7 +162,7 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	if got := reopened[id]; got.SessionID != destination.SessionID ||
-		claudia.PlanProvider(got.Provider) != dest {
+		cli.PlanProvider(got.Provider) != dest {
 		return fmt.Errorf("hot seat moved again after restart: destination=%+v reopened=%+v", destination, got)
 	}
 	payload, err = s.agentTranscriptHTTP(id)

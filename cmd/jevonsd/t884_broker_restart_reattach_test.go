@@ -28,6 +28,9 @@ func TestT884BrokerRestartReattachesRunningSeat(t *testing.T) {
 	if _, ok := any(&claudia.Registry{}).(interface{ StartAllPreferAdoptContext(context.Context) }); !ok {
 		t.Skip("published Claudia predates contextual startup; run this control with the local dependency workspace")
 	}
+	// claudia v0.42.0's broker rejects anthropic / xai-oauth (no Oh My Pi
+	// sidecar). The fixture's seat is one of those ids.
+	t.Skip("published claudia does not launch Oh My Pi sidecar providers")
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX unix-socket control")
 	}

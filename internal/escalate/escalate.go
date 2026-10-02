@@ -41,11 +41,11 @@ func CapsOf(seat any) (claudia.TurnCaps, bool) {
 // returns nil and the caller holds the message for the turn boundary, as it
 // does for a sender with no ladder. Interrupt rungs are dropped from a seat
 // that cannot interrupt.
-func Fit(ladder claudia.Escalation, caps claudia.TurnCaps) claudia.Escalation {
+func Fit(ladder Ladder, caps claudia.TurnCaps) Ladder {
 	if len(ladder) == 0 || (ladder[0].Mode == claudia.DeliverySteer && !caps.CanSteer) {
 		return nil
 	}
-	fitted := claudia.Escalation{ladder[0]}
+	fitted := Ladder{ladder[0]}
 	for _, step := range ladder[1:] {
 		if step.Mode == claudia.DeliveryInterrupt && !caps.CanInterrupt {
 			continue

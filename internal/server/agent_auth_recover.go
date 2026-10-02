@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
@@ -270,7 +271,7 @@ func runClaudiaAuthRecover(ctx context.Context, provider claudia.Provider) error
 // recoverableDestinationProvider maps Claudia's plan identity to the
 // sidecar subscription id accepted by its auth-recovery broker request.
 func recoverableDestinationProvider(provider claudia.Provider) claudia.Provider {
-	id := claudia.SubscriptionSeatProvider(claudia.PlanProvider(provider))
+	id := cli.SubscriptionSeatProvider(cli.PlanProvider(provider))
 	switch id {
 	case "anthropic", "openai-codex", "cursor", "xai-oauth":
 		return id
@@ -283,7 +284,7 @@ func recoverableDestinationProvider(provider claudia.Provider) claudia.Provider 
 // already-failed migration. It never judges credential validity itself; the
 // Claudia broker does that when the owner explicitly asks it to recover.
 func destinationAuthRecoverable(action planusage.PlanAction) bool {
-	if action.Action != claudia.SeatMigrate || action.Execution != "failed" ||
+	if action.Action != planusage.SeatMigrate || action.Execution != "failed" ||
 		recoverableDestinationProvider(claudia.Provider(action.To)) == "" {
 		return false
 	}

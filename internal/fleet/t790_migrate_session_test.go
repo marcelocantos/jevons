@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 )
 
 // 🎯T790: a live remap whose successor session id cannot be read never
@@ -15,7 +16,7 @@ import (
 func TestT790UnreadableSessionIsNotMaterialized(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa7900"
 	f, _, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*claudia.MigrateArgs) error { return nil }
+	f.liveMigrate = func(*MigrateRequest) error { return nil }
 	f.liveSession = func(string) (string, string) { return "", "" }
 
 	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
@@ -23,7 +24,7 @@ func TestT790UnreadableSessionIsNotMaterialized(t *testing.T) {
 		t.Fatal(err)
 	}
 	def := f.reg.Def("jevons-po")
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Fatalf("provider=%s", def.Provider)
 	}
 	if def.Materialized {
@@ -41,7 +42,7 @@ func TestT790UnreadableSessionIsNotMaterialized(t *testing.T) {
 func TestT790PredecessorSessionIsNotMaterialized(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa7901"
 	f, _, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*claudia.MigrateArgs) error { return nil }
+	f.liveMigrate = func(*MigrateRequest) error { return nil }
 	f.liveSession = func(string) (string, string) { return oldSession, "" }
 	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
 		t.Fatal(err)
@@ -54,7 +55,7 @@ func TestT790PredecessorSessionIsNotMaterialized(t *testing.T) {
 func TestClaudiaRecordedDestinationIsNotRewrittenByJevons(t *testing.T) {
 	const destinationSession = "claudia-destination-session"
 	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7904", true)
-	f.liveMigrate = func(args *claudia.MigrateArgs) error {
+	f.liveMigrate = func(args *MigrateRequest) error {
 		def := f.reg.Def("jevons-po")
 		next := *def
 		next.Provider = args.Provider
@@ -68,7 +69,7 @@ func TestClaudiaRecordedDestinationIsNotRewrittenByJevons(t *testing.T) {
 		t.Fatal(err)
 	}
 	def := f.reg.Def("jevons-po")
-	if def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderClaude) ||
+	if def.Provider != cli.SubscriptionSeatProvider(claudia.ProviderClaude) ||
 		def.SessionID != destinationSession || def.Model != "claude-sonnet-5" {
 		t.Fatalf("Jevons rewrote Claudia's committed destination: %+v", def)
 	}
@@ -81,7 +82,7 @@ func TestClaudiaRecordedDestinationIsNotRewrittenByJevons(t *testing.T) {
 func TestT790ModelIsHonoured(t *testing.T) {
 	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7902", true)
 	var got string
-	f.liveMigrate = func(a *claudia.MigrateArgs) error { got = a.Model; return nil }
+	f.liveMigrate = func(a *MigrateRequest) error { got = a.Model; return nil }
 	f.liveSession = func(string) (string, string) { return "live-sid", "" }
 	if _, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "claude-opus-5", false); err != nil {
 		t.Fatal(err)
@@ -106,7 +107,7 @@ func TestMigrationNotesTheModelSwitch(t *testing.T) {
 	if err := f.reg.Register(row); err != nil {
 		t.Fatal(err)
 	}
-	f.liveMigrate = func(*claudia.MigrateArgs) error { return nil }
+	f.liveMigrate = func(*MigrateRequest) error { return nil }
 	f.liveSession = func(string) (string, string) { return "live-sid", "claude-opus-5" }
 	var got *ModelSwitch
 	f.SetModelSwitchHook(func(sw *ModelSwitch) { got = sw })
@@ -118,7 +119,7 @@ func TestMigrationNotesTheModelSwitch(t *testing.T) {
 		t.Fatal("migration landed with no model switch note")
 	}
 	if got.Name != "jevons-po" || got.From != "grok-4.6" || got.To != "claude-opus-5" ||
-		got.FromProvider != string(claudia.ProviderGrok) || claudia.PlanProvider(claudia.Provider(got.Provider)) != claudia.ProviderClaude ||
+		got.FromProvider != string(claudia.ProviderGrok) || cli.PlanProvider(claudia.Provider(got.Provider)) != claudia.ProviderClaude ||
 		got.How != ModelSwitchHowMigrate {
 		t.Fatalf("switch = %+v", got)
 	}
@@ -138,7 +139,7 @@ func TestModelChangeDropsThePreviousVersion(t *testing.T) {
 			if err := f.reg.Register(row); err != nil {
 				t.Fatal(err)
 			}
-			f.liveMigrate = func(*claudia.MigrateArgs) error { return nil }
+			f.liveMigrate = func(*MigrateRequest) error { return nil }
 			f.liveSession = func(string) (string, string) { return "live-sid", "grok-4.6" }
 			if _, err := f.PrepareMigrationPinned("jevons-po", target, "", false); err != nil {
 				t.Fatal(err)

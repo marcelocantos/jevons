@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cost"
@@ -100,7 +101,7 @@ func TestT715OmitProviderMintsGrokWhenClaudeAtCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("omit spawn minted %q, want grok; note=%q", def.Provider, note)
 	}
 }

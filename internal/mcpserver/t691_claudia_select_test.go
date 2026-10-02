@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
@@ -30,7 +31,7 @@ func TestT691OmitMintCitesClaudia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Fatalf("omit mint = %q, want a Claude plan seat", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {

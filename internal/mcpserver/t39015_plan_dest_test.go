@@ -12,9 +12,11 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatplan"
 )
 
 func t39015Weekly(name string, rem, used float64, now time.Time) planusage.Backend {
@@ -45,15 +47,26 @@ func TestT691PlanPolicyForwardsPersistedSeatProviderConstraints(t *testing.T) {
 			allowed: []claudia.Provider{claudia.ProviderClaude, claudia.ProviderGrok}, want: "grok"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "agents.json")
+			dir := t.TempDir()
+			path := filepath.Join(dir, "agents.json")
+			planPath := filepath.Join(dir, "seatplan.json")
 			reg, err := claudia.NewRegistry(path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := reg.Register(claudia.AgentDef{
 				Name: "worker", SessionID: "session-worker", Provider: claudia.ProviderClaude,
-				Purpose: claudia.PurposeWork, PreferProvider: tc.prefer,
-				AllowedProviders: tc.allowed, ExcludeProviders: tc.exclude,
+				Purpose: claudia.PurposeWork,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			plans, err := seatplan.Open(planPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plans.Put("worker", seatplan.State{
+				PreferProvider: tc.prefer, AllowedProviders: tc.allowed,
+				AllowNone: tc.allowed != nil && len(tc.allowed) == 0, ExcludeProviders: tc.exclude,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -61,8 +74,13 @@ func TestT691PlanPolicyForwardsPersistedSeatProviderConstraints(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			reloadedPlans, err := seatplan.Open(planPath)
+			if err != nil {
+				t.Fatal(err)
+			}
 			s := New(t.TempDir(), nil, nil)
 			s.SetRegistry(reloaded)
+			s.SetSeatPlan(reloadedPlans)
 			s.SetPlanUsageSource(func() planusage.Snapshot {
 				return planusage.Snapshot{At: now, Backends: []planusage.Backend{
 					t39015Weekly("claude", 20, 80, now),
@@ -71,7 +89,7 @@ func TestT691PlanPolicyForwardsPersistedSeatProviderConstraints(t *testing.T) {
 				}}
 			})
 			decisions := s.PlanPolicyDecisions()
-			if len(decisions) != 1 || decisions[0].Action != claudia.SeatMigrate ||
+			if len(decisions) != 1 || decisions[0].Action != planusage.SeatMigrate ||
 				decisions[0].To != tc.want || decisions[0].Author != claudia.DecisionAuthor {
 				t.Fatalf("Claudia placement with persisted seat policy = %+v; want %s", decisions, tc.want)
 			}
@@ -106,7 +124,7 @@ func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderCodex {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderCodex {
 		t.Fatalf("omit mint dest=%q want codex (grok ahead)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {

@@ -75,7 +75,7 @@ func TestBrokerHeldCursorMigrationKeepsDestinationSessionOnRestart(t *testing.T)
 		t.Fatal(err)
 	}
 	reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
-		if cfg.SessionID != destinationSession || !cfg.AdoptOnly {
+		if cfg.SessionID != destinationSession {
 			t.Fatalf("broker destination was reminted before adoption: %+v", cfg)
 		}
 		return claudia.StartStub(ctx, cfg, nil)

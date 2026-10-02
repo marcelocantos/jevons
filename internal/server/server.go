@@ -31,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -337,7 +338,7 @@ type Server struct {
 	agentSendOriginHook func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error)
 	// ownerEscalation is the owner urgency ladder for a busy overseer
 	// (🎯T903); overseerEscalatorSeam stands in for its seat in tests.
-	ownerEscalation       func() (claudia.Escalation, bool)
+	ownerEscalation       func() (escalate.Ladder, bool)
 	overseerEscalatorSeam overseerEscalator
 	// 🎯T915: the owner's cancel holds the notify queue until the owner's
 	// next send (or the window lapses), so nothing queued during the

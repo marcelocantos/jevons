@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -25,6 +27,7 @@ type busyPlanMigrator struct {
 type pendingClaudiaMigrator struct {
 	sweepLedger
 	registry *claudia.Registry
+	plans    *seatplan.Store
 	attempts int
 	fail     bool
 }
@@ -32,16 +35,21 @@ type pendingClaudiaMigrator struct {
 type failedAfterPersistMigrator struct {
 	sweepLedger
 	registry *claudia.Registry
+	plans    *seatplan.Store
 }
 
 func (m *failedAfterPersistMigrator) PrepareMigration(name string, to claudia.Provider, _ bool) (handover.Pending, error) {
 	def := *m.registry.Def(name)
-	def.MigrationFrom, def.MigrationFromSession = def.Provider, def.SessionID
-	def.Provider = claudia.SubscriptionSeatProvider(to)
+	from, session := def.Provider, def.SessionID
+	def.Provider = cli.SubscriptionSeatProvider(to)
 	def.SessionID = "persisted-destination"
-	def.MigrationSeed = "bounded handover awaiting delivery"
-	def.MigrationPendingStart = true
 	if err := m.registry.Register(def); err != nil {
+		return handover.Pending{}, err
+	}
+	if err := m.plans.Put(name, seatplan.State{
+		MigrationFrom: from, MigrationFromSession: session,
+		MigrationSeed: "bounded handover awaiting delivery", MigrationPendingStart: true,
+	}); err != nil {
 		return handover.Pending{}, err
 	}
 	return handover.Pending{Agent: name, To: string(to)}, fmt.Errorf("destination launch unavailable")
@@ -55,10 +63,10 @@ func (m *pendingClaudiaMigrator) PrepareMigration(name string, to claudia.Provid
 	if m.fail {
 		return handover.Pending{}, fmt.Errorf("destination launch unavailable")
 	}
-	def := *m.registry.Def(name)
-	def.MigrationSeed = ""
-	def.MigrationPendingStart = false
-	if err := m.registry.Register(def); err != nil {
+	if err := m.plans.Update(name, func(st *seatplan.State) {
+		st.MigrationSeed = ""
+		st.MigrationPendingStart = false
+	}); err != nil {
 		return handover.Pending{}, err
 	}
 	return handover.Pending{Agent: name, To: string(to), Remap: handover.RemapClaudiaMigrate, Delivered: true}, nil
@@ -70,7 +78,9 @@ func (m *busyPlanMigrator) PrepareMigration(_ string, _ claudia.Provider, force 
 }
 
 func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agents.json")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agents.json")
+	planPath := filepath.Join(dir, "seatplan.json")
 	reg, err := claudia.NewRegistry(path)
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +91,13 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	plans, err := seatplan.Open(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
+	s.SetSeatPlan(plans)
 	call := func(args map[string]any) *mcp.CallToolResult {
 		t.Helper()
 		res, err := s.handleAgentProviderPolicy(context.Background(), mcp.CallToolRequest{
@@ -108,7 +123,12 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	reloadedPlans, err := seatplan.Open(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.SetRegistry(reloaded)
+	s.SetSeatPlan(reloadedPlans)
 	if res := call(map[string]any{"name": "worker"}); res.IsError ||
 		!strings.Contains(toolText(res), "allowed=none") || !strings.Contains(toolText(res), "prefer=codex") {
 		t.Fatalf("reloaded policy: %s", toolText(res))
@@ -121,7 +141,7 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 			t39015Weekly("grok", 55, 45, now),
 		}}
 	})
-	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Action != claudia.SeatPark || got[0].Author != claudia.DecisionAuthor {
+	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Action != planusage.SeatPark || got[0].Author != claudia.DecisionAuthor {
 		t.Fatalf("allow-none should park through Claudia: %+v", got)
 	}
 	if res := call(map[string]any{"name": "worker", "actor": s.overseerName(), "allow_park": false}); res.IsError {
@@ -130,14 +150,14 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	if res := call(map[string]any{"name": "worker", "actor": s.overseerName(), "allow_interrupt": true}); res.IsError {
 		t.Fatalf("opt in to host interruption: %s", toolText(res))
 	}
-	policyReload, err := claudia.NewRegistry(path)
+	policyReload, err := seatplan.Open(planPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def := policyReload.Def("worker"); def == nil || !def.HostMayInterrupt || !def.HostNeverPark {
-		t.Fatalf("host constraints were not durable: %+v", def)
+	if st := policyReload.Get("worker"); !st.HostMayInterrupt || !st.HostNeverPark {
+		t.Fatalf("host constraints were not durable: %+v", st)
 	}
-	if got := s.SweepPlanPolicy(); len(got) != 1 || got[0].Action != claudia.SeatPark ||
+	if got := s.SweepPlanPolicy(); len(got) != 1 || got[0].Action != planusage.SeatPark ||
 		got[0].Execution != "deferred" || !strings.Contains(got[0].Failure, "forbids parking") {
 		t.Fatalf("Jevons should defer Claudia's park verdict: %+v", got)
 	}
@@ -159,17 +179,17 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 }
 
 func TestT691HostInterruptPolicyDefersBusySeatUnlessOptedIn(t *testing.T) {
-	action := planusage.PlanAction{Action: claudia.SeatMigrate}
-	def := &claudia.AgentDef{}
-	if got := hostPlanDeferral(action, def, true); !strings.Contains(got, "forbids interruption") {
+	action := planusage.PlanAction{Action: planusage.SeatMigrate}
+	st := seatplan.State{}
+	if got := hostPlanDeferral(action, st, true); !strings.Contains(got, "forbids interruption") {
 		t.Fatalf("default in-flight migration was not deferred: %q", got)
 	}
-	def.HostMayInterrupt = true
-	if got := hostPlanDeferral(action, def, true); got != "" {
+	st.HostMayInterrupt = true
+	if got := hostPlanDeferral(action, st, true); got != "" {
 		t.Fatalf("opted-in interrupt still deferred: %q", got)
 	}
-	def.HostNeverPark = true
-	if got := hostPlanDeferral(planusage.PlanAction{Action: claudia.SeatPark}, def, false); !strings.Contains(got, "forbids parking") {
+	st.HostNeverPark = true
+	if got := hostPlanDeferral(planusage.PlanAction{Action: planusage.SeatPark}, st, false); !strings.Contains(got, "forbids parking") {
 		t.Fatalf("host park ban was lost: %q", got)
 	}
 }
@@ -219,15 +239,24 @@ func TestT691PendingClaudiaHandoverRetriesWithoutHotSourceOrPlanFeed(t *testing.
 	}
 	if err := reg.Register(claudia.AgentDef{
 		Name: "worker", SessionID: "destination-session", Provider: claudia.ProviderCodex,
-		Purpose: claudia.PurposeWork, MigrationFrom: claudia.ProviderGrok,
-		MigrationFromSession: "source-session", MigrationSeed: "pending bounded handover",
-		MigrationPendingStart: true,
+		Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plans, err := seatplan.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plans.Put("worker", seatplan.State{
+		MigrationFrom: claudia.ProviderGrok, MigrationFromSession: "source-session",
+		MigrationSeed: "pending bounded handover", MigrationPendingStart: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
-	migrator := &pendingClaudiaMigrator{registry: reg, fail: true}
+	s.SetSeatPlan(plans)
+	migrator := &pendingClaudiaMigrator{registry: reg, plans: plans, fail: true}
 	s.SetMigrator(migrator)
 	if acts := s.SweepPlanPolicy(); len(acts) != 1 || acts[0].Execution != "pending" ||
 		!strings.Contains(acts[0].Failure, "destination launch unavailable") {
@@ -253,8 +282,8 @@ func TestT691PendingClaudiaHandoverRetriesWithoutHotSourceOrPlanFeed(t *testing.
 	if acts := s.SweepPlanPolicy(); len(acts) != 1 || acts[0].Execution != "migrated" || acts[0].Failure != "" {
 		t.Fatalf("retry did not finish Claudia's persisted handover: %+v", acts)
 	}
-	if migrator.attempts != 2 || reg.Def("worker").MigrationSeed != "" {
-		t.Fatalf("retry did not settle the same destination: attempts=%d def=%+v", migrator.attempts, reg.Def("worker"))
+	if migrator.attempts != 2 || plans.Get("worker").MigrationSeed != "" {
+		t.Fatalf("retry did not settle the same destination: attempts=%d state=%+v", migrator.attempts, plans.Get("worker"))
 	}
 	hot = false
 	if acts := s.SweepPlanPolicy(); len(acts) != 0 || migrator.attempts != 2 {
@@ -273,9 +302,14 @@ func TestT691FirstFailedLaunchReportsClaudiaPendingInsteadOfFailed(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	plans, err := seatplan.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
-	s.SetMigrator(&failedAfterPersistMigrator{registry: reg})
+	s.SetSeatPlan(plans)
+	s.SetMigrator(&failedAfterPersistMigrator{registry: reg, plans: plans})
 	now := time.Now()
 	s.SetPlanUsageSource(func() planusage.Snapshot {
 		return planusage.Snapshot{At: now, Backends: []planusage.Backend{

@@ -11,18 +11,19 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/escalate"
 )
 
 type fakeOverseerSeat struct {
 	phase   claudia.TurnPhase
 	sent    []string
-	ladders []claudia.Escalation
+	ladders []escalate.Ladder
 	err     error
 }
 
 func (f *fakeOverseerSeat) Alive() bool                  { return true }
 func (f *fakeOverseerSeat) TurnPhase() claudia.TurnPhase { return f.phase }
-func (f *fakeOverseerSeat) SendEscalating(text string, esc claudia.Escalation) (claudia.DeliveryOutcome, error) {
+func (f *fakeOverseerSeat) SendEscalating(text string, esc escalate.Ladder) (claudia.DeliveryOutcome, error) {
 	f.sent = append(f.sent, text)
 	f.ladders = append(f.ladders, esc)
 	if f.err != nil {
@@ -31,7 +32,7 @@ func (f *fakeOverseerSeat) SendEscalating(text string, esc claudia.Escalation) (
 	return claudia.DeliveryOutcome{Mechanism: "steer"}, nil
 }
 
-var ownerLadder = claudia.Escalation{
+var ownerLadder = escalate.Ladder{
 	{Mode: claudia.DeliverySteer},
 	{Mode: claudia.DeliveryInterrupt, After: time.Minute},
 }
@@ -39,7 +40,7 @@ var ownerLadder = claudia.Escalation{
 func t903Server(seat *fakeOverseerSeat, ownerTurn bool) *Server {
 	s := &Server{}
 	s.notifySender = func(string) error { return nil } // hermetic drain
-	s.SetOwnerEscalation(func() (claudia.Escalation, bool) { return ownerLadder, true })
+	s.SetOwnerEscalation(func() (escalate.Ladder, bool) { return ownerLadder, true })
 	s.mu.Lock()
 	s.overseerEscalatorSeam = seat
 	s.waiting, s.overseerOwnerTurn = true, ownerTurn
@@ -87,7 +88,7 @@ func TestT903OrdinaryPathsUnchanged(t *testing.T) {
 	} {
 		s := t903Server(c.seat, c.ownerTurn)
 		if !c.ladder {
-			s.SetOwnerEscalation(func() (claudia.Escalation, bool) { return nil, false })
+			s.SetOwnerEscalation(func() (escalate.Ladder, bool) { return nil, false })
 		}
 		if _, handled, err := s.escalateOwnerToOverseer("hi"); handled || err != nil {
 			t.Fatalf("%s: handled=%v err=%v; want the ordinary path", name, handled, err)

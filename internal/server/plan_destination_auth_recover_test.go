@@ -19,7 +19,7 @@ import (
 
 func TestPlanDestinationAuthRecoveryKeepsRunningSourceAndRetriesAfterCancellation(t *testing.T) {
 	decision := planusage.PlanAction{
-		Name: "jevons", From: "grok", To: "claude", Action: claudia.SeatMigrate,
+		Name: "jevons", From: "grok", To: "claude", Action: planusage.SeatMigrate,
 		Reason: "weekly hot or exhausted", Execution: "failed",
 		Failure: "Migrate: context transfer: anthropic refresh failed: invalid_grant",
 		Author:  claudia.DecisionAuthor,
@@ -94,12 +94,12 @@ func TestPlanDestinationAuthRecoveryOnlyOffersRejectedLogins(t *testing.T) {
 		action planusage.PlanAction
 		want   bool
 	}{
-		{"rejected refresh", planusage.PlanAction{To: "claude", Action: claudia.SeatMigrate, Execution: "failed", Failure: "OAuthError: invalid_grant"}, true},
-		{"missed keychain", planusage.PlanAction{To: "cursor", Action: claudia.SeatMigrate, Execution: "failed", Failure: "keychain was not read at startup"}, true},
-		{"healthy destination", planusage.PlanAction{To: "claude", Action: claudia.SeatMigrate, Execution: "migrated", Failure: ""}, false},
-		{"pending move", planusage.PlanAction{To: "claude", Action: claudia.SeatMigrate, Execution: "pending", Failure: "invalid_grant"}, false},
-		{"unrelated error", planusage.PlanAction{To: "claude", Action: claudia.SeatMigrate, Execution: "failed", Failure: "destination process exited"}, false},
-		{"non-plan provider", planusage.PlanAction{To: "ollama", Action: claudia.SeatMigrate, Execution: "failed", Failure: "invalid_grant"}, false},
+		{"rejected refresh", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "failed", Failure: "OAuthError: invalid_grant"}, true},
+		{"missed keychain", planusage.PlanAction{To: "cursor", Action: planusage.SeatMigrate, Execution: "failed", Failure: "keychain was not read at startup"}, true},
+		{"healthy destination", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "migrated", Failure: ""}, false},
+		{"pending move", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "pending", Failure: "invalid_grant"}, false},
+		{"unrelated error", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "failed", Failure: "destination process exited"}, false},
+		{"non-plan provider", planusage.PlanAction{To: "ollama", Action: planusage.SeatMigrate, Execution: "failed", Failure: "invalid_grant"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := destinationAuthRecoverable(tc.action); got != tc.want {
@@ -113,7 +113,7 @@ func TestPlanDestinationAuthRecoveryRequiresMigrationRetry(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.SetPlanDecisions(func() []planusage.PlanAction {
 		return []planusage.PlanAction{{
-			Name: "worker", From: "grok", To: "claude", Action: claudia.SeatMigrate,
+			Name: "worker", From: "grok", To: "claude", Action: planusage.SeatMigrate,
 			Execution: "failed", Failure: "invalid_grant",
 		}}
 	})

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 )
@@ -32,10 +33,10 @@ func TestT944PlannedBrokerRestartRaisesNoAlarm(t *testing.T) {
 		}
 		return a.Shared
 	}
-	if got := burst(claudia.ExitCauseBrokerRestarted); got != "" {
+	if got := burst(fleet.ExitCauseBrokerRestarted); got != "" {
 		t.Fatalf("a planned broker restart raised an alarm: %q", got)
 	}
-	if got := burst(claudia.ExitCauseBrokerLost); got == "" {
+	if got := burst(fleet.ExitCauseBrokerLost); got == "" {
 		t.Fatal("an unannounced broker loss raised no alarm")
 	}
 }

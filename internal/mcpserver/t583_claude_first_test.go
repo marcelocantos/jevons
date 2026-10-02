@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -70,7 +71,7 @@ func TestT583OmitProviderMintsClaudeWithHeadroom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
+	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
 		t.Fatalf("omit-provider mint = %q, want claude (grok 87%% is fresher but the owner rule is claude-first)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {
@@ -104,7 +105,7 @@ func TestT583ExhaustedClaudeFallsBack(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
+		if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
 			t.Fatalf("%s: fallback = %q, want grok", tc.name, def.Provider)
 		}
 		if strings.Contains(note, "claude-first") {
@@ -172,7 +173,7 @@ func TestT583EveryTaskTypeMintsClaude(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tt, err)
 		}
-		if claudia.PlanProvider(def.Provider) != claudia.ProviderClaude {
+		if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
 			t.Fatalf("task_type %s minted %q, want claude (note %q)", tt, def.Provider, note)
 		}
 		if m := strings.ToLower(def.Model); strings.Contains(m, "grok") || strings.Contains(m, "gpt") {
