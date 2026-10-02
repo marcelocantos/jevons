@@ -38,8 +38,8 @@ class CockpitSettings extends ChangeNotifier {
 }
 
 /// Returns null when [value] is an acceptable cockpit URL, else a message.
-String? validateCockpitUrl(String value) {
-  final text = value.trim();
+String? validateCockpitUrl(String? value) {
+  final text = (value ?? '').trim();
   if (text.isEmpty) return null; // empty means "use the default"
   final uri = Uri.tryParse(text);
   if (uri == null || !uri.hasScheme || uri.host.isEmpty) {

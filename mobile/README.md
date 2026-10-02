@@ -19,36 +19,48 @@ Form-factor polish (foldables, hiding the toolbar, etc.) is deferred.
 
 ## Platform scaffolding
 
-The `ios/` and `android/` directories are generated, not hand-written.
-Run once from the repo root with the Flutter SDK on `PATH`:
+The `ios/` and `android/` directories were generated with
 
 ```sh
 flutter create . --org com.canticode --project-name jevons_mobile --platforms ios,android
-flutter pub get
 ```
 
-This creates bundle ID `com.canticode.jevonsMobile` (iOS) and application ID
-`com.canticode.jevons_mobile` (Android). Commit the generated directories.
+and are committed. Bundle ID `com.canticode.jevonsMobile` (iOS), application
+ID `com.canticode.jevons_mobile` (Android). Hand edits on top of the template:
+`INTERNET` permission and app label in the main `AndroidManifest.xml`, and the
+display name in `ios/Runner/Info.plist`.
 
-After generating, add the network permission to
-`android/app/src/main/AndroidManifest.xml` (the template only grants it in
-the debug and profile manifests):
-
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
+Flutter SDK: `brew install --cask flutter`. Android builds use the JDK bundled
+with Android Studio (`flutter config --jdk-dir`).
 
 ## Build and deploy
 
 ```sh
-flutter analyze
-flutter test
-flutter build ios --release      # needs signing configured in Xcode for the bundle ID
-flutter build apk --debug        # debug-signed; good enough to verify on a device
+make check   # flutter analyze + flutter test
+make ios     # unsigned release build, then scripts/sign-ios.sh
+make apk     # release APK signed with the debug keystore
 ```
 
-iOS deploy to the physical iPad goes through Spyder
-(`deploy_app device="Jevons"`) with the built `.app` from
-`build/ios/iphoneos/Runner.app`. If signing for the new bundle ID is not
-already configured, stop and ask the owner; do not set up credentials
-autonomously.
+### iOS signing
+
+Xcode is deliberately kept out of signing. The team's wildcard development
+profile (`iOS Team Provisioning Profile: *`, team SWA3H3N7TW) and its
+certificate already exist on the build Mac and already include the Jevons
+iPad, but Xcode refuses to use an Xcode-managed profile under manual signing,
+and automatic signing would register a new App ID on the developer portal.
+`scripts/sign-ios.sh` therefore signs the unsigned `Runner.app` with
+`codesign` directly: it embeds the wildcard profile, derives entitlements for
+the bundle ID, and uses the keychain identity the profile embeds. No portal
+access, no new credentials. `JEVONS_IOS_TEAM` and `JEVONS_IOS_PROFILE`
+override the defaults.
+
+### Deploy via Spyder
+
+```python
+deploy_app(device="Jevons", owner=..., path=".../build/ios/iphoneos/Runner.app")
+deploy_app(device="Pixel", owner=..., bundle_id="com.canticode.jevons_mobile",
+           path=".../build/app/outputs/flutter-apk/app-release.apk")
+```
+
+Android deploys need `bundle_id` because Spyder derives it with `aapt`, which
+is not on `PATH` here. Pixel Fold verification is the owner's.
