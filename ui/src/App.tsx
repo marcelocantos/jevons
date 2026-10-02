@@ -21,7 +21,9 @@ import { FrontierTable } from './components/FrontierTable';
 import { FrontierRowsContext } from './frontier/rows';
 import { toFrontierRows } from './frontier/table';
 import { PlanUsageBar } from './components/PlanUsageBar';
-import { WorkersList } from './components/WorkersList';
+// T988: the Workers/jwork strip is unmounted, not deleted. Restore by
+// re-enabling this import and the <WorkersList /> mount below.
+// import { WorkersList } from './components/WorkersList';
 import { AsideHistoryPanel } from './components/AsideHistoryPanel';
 import { MermaidVizPanel } from './components/MermaidVizPanel';
 import {
@@ -425,7 +427,7 @@ function Cockpit() {
               <FrontierTable rows={frontierRows} agents={agents} selectedAgent={agent} frontierLedger={frontierLedger} highlightId={frontierHighlightId} />
             </SidebarPanel>
           </div>
-          <WorkersList />
+          {/* T988: <WorkersList /> unmounted — see the import note above. */}
         </div>
       </div>
       <MermaidVizPanel open={graphOpen} graphNonce={graphNonce} onClose={() => setGraphOpen(false)} />
