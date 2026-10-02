@@ -138,6 +138,7 @@ func (s *Server) sweepDeadAccountedWith(overseer string, intent fleetintent.Snap
 	if s == nil {
 		return nil
 	}
+	s.observeRegistryLiveness()
 	reps := SweepDeadAgents(s.registry, s.RemovalAccount(), overseer, intent)
 	s.noteDeadSeats(reps)
 	return reps
