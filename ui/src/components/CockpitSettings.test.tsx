@@ -38,6 +38,7 @@ test('cockpit status bar exposes the dialog with an explicit button', async () =
   const { dirname, join } = await import('node:path');
   const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../App.tsx'), 'utf8');
   expect(app).toMatch(/id="settings-button"[^>]*aria-label="Open settings"/);
+  expect(app).toMatch(/>\s*⚙\s*</);
   expect(app).toContain('onClick={() => setSettingsOpen(true)}');
   expect(app).toContain('<CockpitSettings open={settingsOpen}');
 });

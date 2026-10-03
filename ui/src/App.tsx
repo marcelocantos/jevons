@@ -294,9 +294,10 @@ function Cockpit() {
           mux={mux}
           refusedSeats={agents.filter((a) => a.reauth_available).map((a) => ({ name: a.name, provider: a.provider || '' }))}
         />
-        <button ref={settingsButton} id="settings-button" type="button" aria-label="Open settings"
-          aria-haspopup="dialog" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}>
-          Settings
+        <button ref={settingsButton} id="settings-button" type="button" title="Settings"
+          aria-label="Open settings" aria-haspopup="dialog" aria-expanded={settingsOpen}
+          onClick={() => setSettingsOpen(true)}>
+          ⚙
         </button>
         <button
           id="theme-toggle"

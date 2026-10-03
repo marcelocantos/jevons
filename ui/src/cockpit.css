@@ -2001,8 +2001,8 @@ body.rhs-resizing-row { cursor: row-resize; }
 /* Explicit web settings entry point; native long-press is not a web gesture. */
 #settings-button {
   flex-shrink: 0; border: 1px solid var(--border); border-radius: 5px;
-  background: var(--surface-raised); color: var(--text); padding: 3px 8px;
-  font: inherit; cursor: pointer;
+  background: var(--surface-raised); color: var(--text); padding: 3px 7px;
+  font: inherit; cursor: pointer; line-height: 1; min-width: 28px;
 }
 #settings-button:hover { border-color: var(--accent); }
 #cockpit-settings {
