@@ -138,6 +138,7 @@ place.
 | 2026-10-03 | **agentPhase prefers authority Phase when Known**: running seats show idle/working from Seats().Phase; born-stuck / never_briefed / dead-unmaterialized / stopped / phase_unknown stay first. Unknown Phase keeps ClassifyAgentPhase | census count unchanged until ClassifyAgentPhase disappears |
 | 2026-10-03 | **panecensus folds named panes as Alive=Yes**: `observePanePresence` before annotateFlight; absence is not Alive=No (headless seats). annotateFlight still uses flightState (authority-preferring) | census derivation 10 gains a feed; pin stays 1 |
 | 2026-10-03 | **seatIsBornStuck production symbol retired**: renamed `bornStuck` (diagnoseBirth + observeBornStuck fold); fleetcensus no longer matches the old name — **seat_state_derivations 10→9** | first census derivation count drop from a removal/rename, not only a feed |
+| 2026-10-03 | **in-flight ratchet pin 1→0**: `observeSeat` excluded as a feed alongside `seatInFlight`; zero control-side `.PromptInFlight()` sites remain | derivation-5 control needle cleared; fleetcensus still counts PromptInFlight() symbol while observeSeat keeps the call |
 | 2026-10-03 | **born-stuck folds into the authority**: diagnoseBirth Observes BornStuck=Yes only on the existing stuck claim (accepted + located-absent + past grace); Present transcript is No; unobservable / in-grace / no birth write nothing | census count unchanged until seatIsBornStuck disappears |
 
 Derivation 5 is the one being dismantled first, because it is the signal

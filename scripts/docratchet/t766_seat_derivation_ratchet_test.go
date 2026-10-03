@@ -38,11 +38,10 @@ import (
 // party that knows, records the answer, and is what every other site is
 // being converted to call.
 //
-// The remaining counted site is the observeSeat feed in
-// internal/mcpserver/mcpserver.go — how claudia's answer reaches the
-// authority. fleet_recover.go used to be the other one; it now asks
-// seatInFlight at the production call site (🎯T766.2, 2026-10-03).
-const seatInFlightPin = 1
+// observeSeat is a permitted feed (claudia → authority), excluded below
+// with seatInFlight. Pin 0 means no control-side .PromptInFlight() remains
+// (🎯T766.2, 2026-10-03).
+const seatInFlightPin = 0
 
 // Liveness — census derivation 4 — is deliberately NOT ratcheted here.
 // `.Alive()` is spelled the same by types that have nothing to do with a
@@ -108,7 +107,8 @@ func productionSites(t *testing.T, needle string) []string {
 			inFunnel := false
 			for i, line := range strings.Split(string(body), "\n") {
 				switch {
-				case strings.HasPrefix(line, "func (s *Server) seatInFlight("):
+				case strings.HasPrefix(line, "func (s *Server) seatInFlight("),
+					strings.HasPrefix(line, "func (s *Server) observeSeat("):
 					inFunnel = true
 				case inFunnel && line == "}":
 					inFunnel = false
