@@ -621,7 +621,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			}
 			// Idle residue via the 🎯T423 decoder, not ACP absence.
 			if alive {
-				decoded := ClassifyAgentSessionPhase(d, DefaultSessionRoots())
+				decoded := classifyAgentSessionPhase(d, DefaultSessionRoots())
 				s.observeSessionPhase(d.Name, decoded)
 				ao.Phase = decoded.String()
 				openMission := strings.TrimSpace(d.TargetID) != ""

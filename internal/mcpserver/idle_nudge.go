@@ -827,7 +827,7 @@ type IdleNudgeSweepArgs struct {
 	// did before intent existed.
 	Intent fleetintent.Snapshot
 	// SessionPhase is the 🎯T423 reading: T422 decoder over the agent's
-	// current session. Nil uses ClassifyAgentSessionPhase against
+	// current session. Nil uses classifyAgentSessionPhase against
 	// DefaultSessionRoots. Tests inject a fixture.
 	SessionPhase func(d claudia.AgentDef) turnev.Phase
 	// ObservePhase records the transcript decoder's phase into the shared
@@ -901,7 +901,7 @@ func sessionPhaseOf(d claudia.AgentDef, args IdleNudgeSweepArgs) turnev.Phase {
 	if args.SessionPhase != nil {
 		return args.SessionPhase(d)
 	}
-	return ClassifyAgentSessionPhase(d, DefaultSessionRoots())
+	return classifyAgentSessionPhase(d, DefaultSessionRoots())
 }
 
 func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time) IdleNudgeReport {

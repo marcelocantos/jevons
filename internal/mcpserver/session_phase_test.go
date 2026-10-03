@@ -29,12 +29,12 @@ func TestT423ClassifyAgentSessionPhaseReadsCurrentSession(t *testing.T) {
 	}
 	d := claudia.AgentDef{Name: "jv-t423", SessionID: sid, WorkDir: dir}
 	roots := discovery.Roots{ClaudeProjects: filepath.Join(dir, "projects")}
-	if got := ClassifyAgentSessionPhase(d, roots); got != turnev.PhaseIdle {
+	if got := classifyAgentSessionPhase(d, roots); got != turnev.PhaseIdle {
 		t.Fatalf("ended session classified %s, want idle (path=%s)", got, AgentTranscriptPath(d, roots))
 	}
 	// A stale id is unknown, not idle.
 	d.SessionID = "00000000-0000-4000-8000-000000000000"
-	if got := ClassifyAgentSessionPhase(d, roots); got != turnev.PhaseUnknown {
+	if got := classifyAgentSessionPhase(d, roots); got != turnev.PhaseUnknown {
 		t.Fatalf("stale id classified %s, want unknown", got)
 	}
 }
@@ -52,7 +52,7 @@ func TestClassifyAgentSessionPhaseReadsSpoolForSidecar(t *testing.T) {
 	if p := AgentTranscriptPath(d, discovery.Roots{}); p != "" {
 		t.Fatalf("sidecar path = %q, want empty (no vendor JSONL)", p)
 	}
-	if got := ClassifyAgentSessionPhase(d, discovery.Roots{}); got != turnev.PhaseIdle {
+	if got := classifyAgentSessionPhase(d, discovery.Roots{}); got != turnev.PhaseIdle {
 		t.Fatalf("sidecar spool classified %s, want idle", got)
 	}
 }

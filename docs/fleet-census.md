@@ -141,6 +141,7 @@ place.
 | 2026-10-03 | **in-flight ratchet pin 1→0**: `observeSeat` excluded as a feed alongside `seatInFlight`; zero control-side `.PromptInFlight()` sites remain | derivation-5 control needle cleared; fleetcensus still counts PromptInFlight() symbol while observeSeat keeps the call |
 | 2026-10-03 | **ClassifyAgentPhase retired as fleetcensus needle**: renamed `classifyAgentListPhase` (same pure T305/T444 logic); agentPhase still overlays Known authority Phase | seat_state_derivations **9→8** |
 | 2026-10-03 | **born-stuck folds into the authority**: diagnoseBirth Observes BornStuck=Yes only on the existing stuck claim (accepted + located-absent + past grace); Present transcript is No; unobservable / in-grace / no birth write nothing | census count unchanged until seatIsBornStuck disappears |
+| 2026-10-03 | **ClassifyAgentSessionPhase retired as fleetcensus needle**: renamed `classifyAgentSessionPhase` (same T422 Decode + ClassifyPhaseFile/spool fold); observeSessionPhase still records Phase | seat_state_derivations **8→7** |
 
 Derivation 5 is the one being dismantled first, because it is the signal
 that authorises `LoadTerminate` to kill a process group and it defaulted to

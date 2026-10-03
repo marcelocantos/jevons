@@ -30,7 +30,7 @@ func DefaultSessionRoots() discovery.Roots {
 func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
 	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		// Sidecar seats have no vendor JSONL. Callers that need bytes
-		// use ClassifyAgentSessionPhase / spool.ReadSeat (🎯T866.4).
+		// use classifyAgentSessionPhase / spool.ReadSeat (🎯T866.4).
 		return ""
 	}
 	sid := strings.TrimSpace(d.SessionID)
@@ -48,10 +48,10 @@ func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
 	return ""
 }
 
-// ClassifyAgentSessionPhase is the product idle/repair reading: T422
+// classifyAgentSessionPhase is the product idle/repair reading: T422
 // Decode via ClassifyPhase on the agent's current session. Missing or
 // unreadable is unknown, never idle.
-func ClassifyAgentSessionPhase(d claudia.AgentDef, roots discovery.Roots) turnev.Phase {
+func classifyAgentSessionPhase(d claudia.AgentDef, roots discovery.Roots) turnev.Phase {
 	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		recs, err := spool.ReadSeat(spool.Dir(), d.Name)
 		if err != nil || len(recs) == 0 {
