@@ -58,6 +58,10 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		if resumingNames[a.Name] {
 			continue // Claudia already retried this destination in this sweep.
 		}
+		if reason := s.planIntentDeferral(a.Name); reason != "" {
+			a.Execution, a.Failure = "deferred", reason
+			continue
+		}
 		if a.To != "" {
 			if p, ok := pending[a.Name]; ok && p.Usable() {
 				a.Execution = "pending"
@@ -72,6 +76,18 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 			if s.migrator == nil {
 				slog.Warn("plan policy migration unavailable", "name", a.Name, "to", a.To, "reason", "migrator not configured")
 				a.Execution, a.Failure = "deferred", "migrator not configured"
+				continue
+			}
+			// A policy-parked seat may now win on its original provider.
+			// Resume that session; a same-provider migration is a no-op error.
+			if a.From == a.To {
+				if err := s.migrator.Launch(&thread.Thread{ID: a.Name}); err != nil {
+					a.Execution, a.Failure = "pending", err.Error()
+				} else if err := s.SetAgentIntent(a.Name, fleetintent.Working, planPolicyActor, a.Reason); err != nil {
+					a.Execution, a.Failure = "pending", err.Error()
+				} else {
+					a.Execution = "resumed"
+				}
 				continue
 			}
 			// PrepareMigration persists the handover before CompleteThinBrief.
@@ -157,6 +173,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 				a.Execution, a.Failure = "pending", "successor seed not confirmed"
 			} else {
 				a.Execution = "migrated"
+				s.MarkAgentWorking(a.Name, planPolicyActor, a.Reason+": handover delivered")
 			}
 			slog.Info("plan policy migration step", "name", a.Name, "from", a.From, "to", a.To,
 				"execution", a.Execution, "failure", a.Failure)
@@ -196,6 +213,11 @@ func (s *Server) resumeClaudiaMigrations() []planusage.PlanAction {
 			continue
 		}
 		action := pendingClaudiaMigration(def, st)
+		if reason := s.planIntentDeferral(def.Name); reason != "" {
+			action.Execution, action.Failure = "deferred", reason
+			results = append(results, action)
+			continue
+		}
 		if s.migrator == nil {
 			action.Failure = "migrator not configured"
 		} else {
@@ -204,6 +226,7 @@ func (s *Server) resumeClaudiaMigrations() []planusage.PlanAction {
 				action.Failure = err.Error()
 			} else if s.seatPlans.Get(def.Name).MigrationSeed == "" {
 				action.Execution, action.Failure = "migrated", ""
+				s.MarkAgentWorking(def.Name, planPolicyActor, "Claudia pending migration complete")
 			} else {
 				action.Failure = "Claudia has not confirmed handover delivery"
 			}
@@ -342,11 +365,32 @@ func (s *Server) planHostDeferral(action planusage.PlanAction) string {
 	if s.registry.Def(action.Name) == nil {
 		return "agent is no longer registered"
 	}
+	if reason := s.planIntentDeferral(action.Name); reason != "" {
+		return reason
+	}
 	inFlight := false
 	if action.Action == planusage.SeatMigrate {
 		inFlight = s.seatInFlight(action.Name) == seatstate.Yes
 	}
 	return hostPlanDeferral(action, s.seatPlans.Get(action.Name), inFlight)
+}
+
+// A policy park is temporary placement state, not permission to reverse
+// someone else's deliberate stop. Fleet-wide holds always take precedence.
+func (s *Server) planIntentDeferral(name string) string {
+	snap := s.fleetIntent()
+	if !fleetintent.Runnable(snap.Fleet.State) {
+		return "fleet intent: " + snap.Fleet.Describe()
+	}
+	rec := snap.Agents[name]
+	if !fleetintent.Runnable(rec.State) && !planPolicyPark(rec) {
+		return "agent intent: " + rec.Describe()
+	}
+	return ""
+}
+
+func planPolicyPark(rec fleetintent.Record) bool {
+	return rec.State == fleetintent.Parked && rec.By == planPolicyActor
 }
 
 func hostPlanDeferral(action planusage.PlanAction, st seatplan.State, inFlight bool) string {
@@ -373,12 +417,14 @@ func (s *Server) planPolicyAgents() []planusage.AgentRef {
 		return nil
 	}
 	var agents []planusage.AgentRef
+	intent := s.fleetIntent()
 	for _, d := range s.registry.List() {
 		st := s.seatPlans.Get(d.Name)
 		allowed, restricted := st.Allowed()
 		ref := planusage.AgentRef{
 			Name: d.Name, Provider: string(d.Provider), Purpose: d.Purpose, Parent: d.Parent,
 			PreferProvider: st.PreferProvider, ExcludeProviders: st.ExcludeProviders,
+			RecoverPlanPark: planPolicyPark(intent.Agents[d.Name]),
 		}
 		if restricted {
 			ref.AllowedProviders = allowed
@@ -435,6 +481,9 @@ func (s *Server) releaseColdSwitched(stillHot, justStayed map[string]bool) {
 	}
 	snap := s.fleetIntent()
 	for _, d := range s.registry.List() {
+		if s.planIntentDeferral(d.Name) != "" {
+			continue
+		}
 		if stillHot[d.Name] || justStayed[d.Name] {
 			continue
 		}
