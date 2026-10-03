@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/missionbound"
+	"github.com/marcelocantos/jevons/internal/worktreereap"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -104,6 +105,10 @@ func TestT998LinkedWorktreesShareTargetBudget(t *testing.T) {
 	run("-C", base, "-c", "user.email=test@example.invalid", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init")
 	linked := filepath.Join(t.TempDir(), "renamed-worker")
 	run("-C", base, "worktree", "add", "-b", "worker", linked)
+	// Record ownership so the reaper can clean up after an interrupted test.
+	if err := worktreereap.Mark(&worktreereap.MarkArgs{Worktree: linked, Note: t.Name()}); err != nil {
+		t.Fatal(err)
+	}
 	if missionScope(base) != missionScope(linked) {
 		t.Fatalf("worktree got a fresh scope: %q vs %q", missionScope(base), missionScope(linked))
 	}
