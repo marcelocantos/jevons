@@ -35,6 +35,21 @@ per file over time:
 If 🎯T766 closes and those are still true, it became the twenty-fifth
 mechanism rather than the thing that replaced twenty-four.
 
+## Anti-Goodhart (owner 2026-10-03)
+
+This census is a **weak upper bound**, not a definition of done for 🎯T766.2+.
+
+**Failure mode already observed:** retiring a listed *name* via rename
+(`SweepDeadAgents` → `recoverDeadHandles`, etc.) drops `seat_state_derivations`
+while the same policy still derives seat truth. That is hiding from the meter.
+
+**Done means:** controls read `internal/seatstate` (or a thin Get wrapper);
+raw signals only feed Observe paths; call-site ratchets fail if control-side
+`Alive` / `InFlight` / phase derivation grow back outside an allowlist.
+Fleetcensus may fall as a *side effect* of real deletion — never as the goal.
+
+Protective mission-burn work: 🎯T998. Mid-work reap: 🎯T784.
+
 ## Seat-state derivations
 
 Eleven ways to answer "what is this seat doing", with no aggregator. They
