@@ -4,7 +4,7 @@
 /** React lift of vanilla T76/T224 paste → POST /api/images → [image: id] on send. */
 
 export type ClipboardLike = {
-  items?: ArrayLike<{ type?: string; getAsFile?: () => File | null }>;
+  items?: ArrayLike<{ type?: string; kind?: string; getAsFile?: () => File | null }>;
   files?: ArrayLike<File>;
 };
 
@@ -38,26 +38,47 @@ export function imageMarker(id: string): string {
   return n ? '[image: ' + n + ']' : '';
 }
 
-/** Clipboard or drop: image/* files only. Text-only paste yields []. */
+/** True if a File looks like an image (MIME and/or filename). */
+export function isImageFile(f: File | null | undefined): boolean {
+  if (!f) return false;
+  const t = String(f.type || '').toLowerCase();
+  if (t.indexOf('image/') === 0) return true;
+  // macOS / some browsers leave type empty or application/octet-stream on paste.
+  if (t && t !== 'application/octet-stream') return false;
+  return /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif)$/i.test(String(f.name || ''));
+}
+
+/** Clipboard item looks like an image payload (including empty type + file kind). */
+function isImageClipboardItem(it: { type?: string; kind?: string } | null | undefined): boolean {
+  if (!it) return false;
+  const t = String(it.type || '').toLowerCase();
+  if (t.indexOf('image/') === 0) return true;
+  // Some WebKit pastes report kind=file with empty type for screenshots.
+  if (it.kind === 'file' && (!t || t === 'application/octet-stream')) return true;
+  return false;
+}
+
+/** Clipboard or drop: image files only. Text-only paste yields []. */
 export function filesFromTransfer(data: ClipboardLike | null | undefined): File[] {
   const out: File[] = [];
+  const seen = new Set<File>();
+  const push = (f: File | null | undefined) => {
+    if (!f || !isImageFile(f) || seen.has(f)) return;
+    seen.add(f);
+    out.push(f);
+  };
   const items = data?.items;
   if (items) {
     for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (it && it.type && it.type.indexOf('image/') === 0) {
-        const f = typeof it.getAsFile === 'function' ? it.getAsFile() : null;
-        if (f) out.push(f);
-      }
+      const it = items[i] as { type?: string; kind?: string; getAsFile?: () => File | null };
+      if (!isImageClipboardItem(it)) continue;
+      const f = typeof it.getAsFile === 'function' ? it.getAsFile() : null;
+      push(f);
     }
   }
-  if (out.length) return out;
   const files = data?.files;
   if (files) {
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      if (f && f.type && f.type.indexOf('image/') === 0) out.push(f);
-    }
+    for (let i = 0; i < files.length; i++) push(files[i]);
   }
   return out;
 }

@@ -7,7 +7,7 @@ import { useInnerHTML } from '../conversation/innerHTML';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { ConversationMeta } from '../conversation/useConversation';
 import { chromeModel } from '../frontier/targetAsk';
-import { selectedWorkdir, useTargetAskHost } from '../frontier/targetAskContext';
+import { conversationWorkdir, useTargetAskHost } from '../frontier/targetAskContext';
 import {
   clipClassName,
   clipRowKey,
@@ -372,6 +372,7 @@ export function AgentTranscript(props: {
               clientHeight={clientHeight}
               clipKey={clipRowKey(row)}
               clipPersist={clipPersist.current}
+              conversationName={props.name}
             />
           );
         })}
@@ -396,6 +397,8 @@ export function AgentTranscript(props: {
 export function ClippedBubble(props: {
   index: number;
   kind: DisplayKind;
+  /** Seat whose transcript this bubble belongs to (🎯T1006). */
+  conversationName?: string;
   text: string;
   items?: StepItem[];
   inject?: string;
@@ -488,9 +491,14 @@ export function ClippedBubble(props: {
   const chrome = useMemo(
     () =>
       chromeSealed
-        ? chromeModel({ text: props.text, role: 'assistant', agents: askHost.agents, workdir: selectedWorkdir(askHost) })
+        ? chromeModel({
+            text: props.text,
+            role: 'assistant',
+            agents: askHost.agents,
+            workdir: conversationWorkdir(askHost, props.conversationName),
+          })
         : null,
-    [chromeSealed, props.text, askHost],
+    [chromeSealed, props.text, props.conversationName, askHost],
   );
   // 🎯T267: a live sealed ask selects the owning PO + highlights the row.
   // History/soft-reconnect replay must not steal fleet selection.

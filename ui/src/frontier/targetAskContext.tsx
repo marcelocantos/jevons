@@ -26,3 +26,17 @@ export function selectedWorkdir(host: TargetAskHost): string {
   const row = host.agents.find((a) => a && a.name === host.selectedAgent);
   return row && row.workdir ? String(row.workdir) : '';
 }
+
+/**
+ * Workdir for a transcript bubble's context tab (🎯T1006).
+ * Prefer the conversation seat — never the tree selection alone, or every
+ * sealed bubble retags when the owner clicks another agent.
+ */
+export function conversationWorkdir(host: TargetAskHost, conversationName?: string): string {
+  const name = String(conversationName || '').trim();
+  if (name) {
+    const row = host.agents.find((a) => a && a.name === name);
+    if (row && row.workdir) return String(row.workdir);
+  }
+  return selectedWorkdir(host);
+}

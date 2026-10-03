@@ -5,7 +5,7 @@ import '../../composer/ensureLocalStorage';
 import { createElement } from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, vi } from 'vitest';
-import { composeSendText, filesFromTransfer, parsePrefixAfterImages } from '../../composer/images';
+import { composeSendText, filesFromTransfer, isImageFile, parsePrefixAfterImages } from '../../composer/images';
 import { deserialize, load, save, serialize } from '../../composer/sendQueue';
 import { tidyDictationInsert } from '../../composer/wispr';
 import { OverseerPhaseStrip } from '../../components/OverseerPhaseStrip';
@@ -31,7 +31,18 @@ function pasteImageOn(el: Element, file: File): void {
 }
 
 describeOracle(family('composer-chrome'), () => {
-  itOracle('T76', 'pasted images reach the agent turn', async () => {
+    itOracle('T1005', 'clipboard image recovery when type is empty or getAsFile is sparse', () => {
+    const png = new File([new Uint8Array([137, 80, 78, 71])], 'paste.png', { type: 'image/png' });
+    const bare = new File([new Uint8Array([137, 80, 78, 71])], 'Screen Shot.png', { type: '' });
+    expect(isImageFile(bare)).toBe(true);
+    expect(filesFromTransfer({ items: [{ type: 'image/png', kind: 'file', getAsFile: () => png }] } as never).length).toBe(1);
+    expect(filesFromTransfer({ items: [{ type: '', kind: 'file', getAsFile: () => bare }] } as never).length).toBe(1);
+    expect(filesFromTransfer({ files: [bare] }).length).toBe(1);
+    expect(filesFromTransfer({ items: [{ type: 'image/png', getAsFile: () => null }], files: [png] }).length).toBe(1);
+    expect(filesFromTransfer({ items: [{ type: 'text/plain', getAsFile: () => null }] }).length).toBe(0);
+  });
+
+itOracle('T76', 'pasted images reach the agent turn', async () => {
     const png = new File([new Uint8Array([137, 80, 78, 71])], 'paste.png', { type: 'image/png' });
     expect(filesFromTransfer({ items: [{ type: 'image/png', getAsFile: () => png }] }).length).toBe(1);
     expect(composeSendText('see this', [{ id: 'deadbeef', marker: '[image: deadbeef]' }])).toBe(
