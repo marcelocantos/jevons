@@ -215,7 +215,7 @@ func TestColdSwitchParkLiftsWhenProviderIsCool(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.SetFleetIntentStore(store)
-	s.MarkAgentParked("claudia-po", "jevons", "weekly hot or exhausted: prepare returned COLD (no predecessor transcript)")
+	s.MarkAgentParked("claudia-po", planPolicyActor, "weekly hot or exhausted: prepare returned COLD (no predecessor transcript)")
 	s.MarkAgentParked("jv-deliberate", "jevons", "owner asked this seat to stop")
 	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
 	s.SetPlanUsageSource(func() planusage.Snapshot {

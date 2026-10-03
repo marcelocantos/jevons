@@ -51,6 +51,9 @@ type AgentRef struct {
 	// AllowedProviders means every published dest is eligible.
 	AllowNone        bool
 	ExcludeProviders []claudia.Provider
+	// RecoverPlanPark asks for a fresh destination even when the old provider
+	// no longer vacates. Only the host can authorize lifting its own park.
+	RecoverPlanPark bool
 }
 
 // PlanAction is Claudia's per-seat verdict. Only migrate and park are actions
@@ -284,7 +287,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 			continue
 		}
 		plan := strings.ToLower(string(claudia.PlanProvider(claudia.Provider(a.Provider))))
-		if ov := held[plan]; ov != nil {
+		if ov := held[plan]; ov != nil && !a.RecoverPlanPark {
 			out = append(out, PlanAction{Name: a.Name, From: plan, Action: SeatStay,
 				Reason: "owner override (" + string(ov.Band) + "): " + ov.Reason, Author: "owner"})
 			continue
@@ -334,7 +337,7 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 	}
 	cth := claudiaThresholdsPtr(th)
 	reading, has := byProv[current]
-	if !has || !claudia.ShouldVacate(reading, now, cth) {
+	if !a.RecoverPlanPark && (!has || !claudia.ShouldVacate(reading, now, cth)) {
 		return seatDecision{Action: SeatStay, From: current, Author: claudia.DecisionAuthor, Reason: "provider is not vacating"}
 	}
 	others := 0
@@ -343,13 +346,13 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 			others++
 		}
 	}
-	if others == 0 {
+	if others == 0 && !a.RecoverPlanPark {
 		return seatDecision{Action: SeatDefer, From: current, Author: claudia.DecisionAuthor, Reason: "destination feed is incomplete"}
 	}
 	if a.AllowNone || (a.AllowedProviders != nil && len(a.AllowedProviders) == 0) {
 		return seatDecision{Action: SeatPark, From: current, Author: claudia.DecisionAuthor, Reason: "no allowed destination"}
 	}
-	excluded := map[claudia.Provider]bool{current: current != ""}
+	excluded := map[claudia.Provider]bool{current: current != "" && !a.RecoverPlanPark}
 	for _, p := range extraExclude {
 		if id := cli.PlanProvider(p); id != "" {
 			excluded[id] = true
@@ -395,6 +398,9 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 		return seatDecision{Action: SeatPark, From: current, Author: claudia.DecisionAuthor, Reason: reason}
 	}
 	reason := vacateReason(reading, now, cth)
+	if a.RecoverPlanPark {
+		reason = "plan-policy park reconsidered: " + pick.Reason
+	}
 	author := pick.Author
 	if author == "" {
 		author = claudia.DecisionAuthor
