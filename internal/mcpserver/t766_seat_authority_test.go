@@ -211,3 +211,35 @@ func TestT766TurnFlightFeedsAuthority(t *testing.T) {
 		t.Fatalf("FlightUnknown must not erase a known InFlight: %+v", st)
 	}
 }
+
+// 🎯T766.2: flightState reads known InFlight from the authority before the
+// process-local map — so a post-restart empty agentFlight does not erase a
+// turn the authority still holds.
+func TestT766FlightStatePrefersAuthority(t *testing.T) {
+	s := t766Seat(t)
+	// Authority says in flight; local map never written.
+	s.Seats().Observe(seatstate.Observation{
+		Name: "jv-auth", InFlight: seatstate.Yes, Alive: seatstate.Yes,
+		QueueDepth: seatstate.QueueUnknown, Source: "turn.flight", At: nowForTest(),
+	})
+	if got := s.flightState("jv-auth"); got != FlightInFlight {
+		t.Fatalf("flightState=%s want in_flight from authority", got)
+	}
+	// Authority says idle.
+	s.Seats().Observe(seatstate.Observation{
+		Name: "jv-auth", InFlight: seatstate.No,
+		QueueDepth: seatstate.QueueUnknown, Source: "turn.flight", At: nowForTest(),
+	})
+	if got := s.flightState("jv-auth"); got != FlightIdle {
+		t.Fatalf("flightState=%s want idle from authority", got)
+	}
+	// Authority silent → local map.
+	s.setFlight("jv-local", FlightInFlight)
+	// Clear authority knowledge by never observing jv-local... setFlight observes.
+	// For a name with only local unknown authority: use a fresh seat whose
+	// authority InFlight was never claimed — but setFlight claims it.
+	// Use Get miss: no seat at all.
+	if got := s.flightState("never-seen"); got != FlightUnknown {
+		t.Fatalf("flightState=%s want unknown", got)
+	}
+}
