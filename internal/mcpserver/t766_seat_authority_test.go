@@ -5,12 +5,15 @@ package mcpserver
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/seatstate"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T766.2: the seat-load governor stopped deriving idleness for itself.
@@ -133,5 +136,52 @@ func TestT766FleetRecoverDoesNotDeriveInFlight(t *testing.T) {
 			continue
 		}
 		t.Fatalf("fleet_recover.go:%d still derives in-flight directly: %s", i+1, strings.TrimSpace(line))
+	}
+}
+
+// 🎯T766.2: idle-nudge folds the decoder phase it already paid for into the
+// shared authority (phase-only). Alive/InFlight stay unclaimed — a transcript
+// decode is not a process or event-stream claim.
+func TestT766IdleNudgeObservesSessionPhase(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t766-phase", WorkDir: dir, SessionID: "s1",
+		Purpose: claudia.PurposeWork, Materialized: true, AutoStart: true, TargetID: "T766.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := t766Seat(t)
+	var observed []string
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg:          reg,
+		Now:          time.Unix(5000, 0),
+		OverseerName: "jevons",
+		SessionPhase: func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
+		ObservePhase: func(name string, phase turnev.Phase) {
+			observed = append(observed, name+":"+phase.String())
+			s.observeSessionPhase(name, phase)
+		},
+		ProcessRunning: func(string) bool { return true },
+		// No push — we only care that the fold fired.
+	})
+	_ = reps
+	if len(observed) != 1 || observed[0] != "jv-t766-phase:idle" {
+		t.Fatalf("ObservePhase got %v", observed)
+	}
+	st, ok := s.Seats().Get("jv-t766-phase")
+	if !ok {
+		t.Fatal("authority never saw the seat")
+	}
+	if st.Phase != turnev.PhaseIdle {
+		t.Fatalf("phase=%s want idle", st.Phase)
+	}
+	// Phase-only: Alive/InFlight must stay unknown (anti-pattern T766.2 ends).
+	if st.Alive.Known() || st.InFlight.Known() {
+		t.Fatalf("transcript fold invented live fields: Alive=%s InFlight=%s", st.Alive, st.InFlight)
 	}
 }

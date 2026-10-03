@@ -830,6 +830,12 @@ type IdleNudgeSweepArgs struct {
 	// current session. Nil uses ClassifyAgentSessionPhase against
 	// DefaultSessionRoots. Tests inject a fixture.
 	SessionPhase func(d claudia.AgentDef) turnev.Phase
+	// ObservePhase records the transcript decoder's phase into the shared
+	// seat authority (🎯T766.2, census derivation 1). Production wires
+	// s.observeSessionPhase. This is record-only: it does not change the
+	// sweep's return shape or invent Alive/InFlight from the tape. Nil =
+	// hermetic tests that do not care about the authority.
+	ObservePhase func(name string, phase turnev.Phase)
 	// SessionReminted is optional: name → this boot reminted session_id
 	// (🎯T545.1). Nil = no remints.
 	SessionReminted func(name string) bool
@@ -999,6 +1005,9 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	// consulted for idle — unknown is not idle. Working from the tape
 	// outranks an ACP idle leftover.
 	decoded := sessionPhaseOf(d, args)
+	if args.ObservePhase != nil {
+		args.ObservePhase(d.Name, decoded)
+	}
 	phase := decoded.String()
 	if decoded == turnev.PhaseUnknown && strings.EqualFold(act.Phase, "working") {
 		phase = "working"
@@ -1339,6 +1348,8 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:          s.registry,
 		SessionPhase: deps.SessionPhase,
+		// 🎯T766.2: fold the decoder reading the sweep already paid for.
+		ObservePhase: s.observeSessionPhase,
 		Activity:     activity,
 		Ledger:       ledger,
 		Push:         push,
@@ -1948,6 +1959,8 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		PostRestart:  true,
 		OverseerName: overseer,
 		Eligible:     eligible,
+		// 🎯T766.2: record phase the decoder already produced (phase-only).
+		ObservePhase: s.observeSessionPhase,
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
 		HostLoadCritical: s.hostLoadCritical,
 		SessionReminted:  s.bounceReminted,
