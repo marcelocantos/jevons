@@ -153,7 +153,7 @@ func (s *Server) seatLoadSources() []capacity.LoadSource {
 	if s == nil {
 		return nil
 	}
-	raw, err := s.seatLoadTracker().Sources()
+	raw, err := s.seatLoadTracker().HostLoad()
 	if err != nil {
 		slog.Debug("seat load sources unavailable", "component", "seat_load", "err", err)
 		return nil

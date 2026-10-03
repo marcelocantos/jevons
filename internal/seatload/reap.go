@@ -183,8 +183,8 @@ func (t *Tracker) Seats() []string {
 	return out
 }
 
-// Sources summarises every anchored seat's current load.
-func (t *Tracker) Sources() ([]Source, error) {
+// HostLoad summarises every anchored seat's current load.
+func (t *Tracker) HostLoad() ([]Source, error) {
 	if t == nil {
 		return nil, nil
 	}

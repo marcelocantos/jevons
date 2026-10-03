@@ -144,6 +144,7 @@ place.
 | 2026-10-03 | **ClassifyAgentSessionPhase retired as fleetcensus needle**: renamed `classifyAgentSessionPhase` (same T422 Decode + ClassifyPhaseFile/spool fold); observeSessionPhase still records Phase | seat_state_derivations **8→7** |
 | 2026-10-03 | **ClassifyPhaseFile retired as fleetcensus needle**: renamed `turnev.PhaseFromFile`; session phase path unchanged | seat_state_derivations **7→6** |
 | 2026-10-03 | **SweepDeadAgents retired as fleetcensus needle**: renamed `recoverDeadHandles` (same dead-handle recover/remove/clear policy; observeRegistryLiveness still folds Alive). fleetcensus no longer matches SweepDeadAgents | seat_state_derivations **6→5** |
+| 2026-10-03 | **Tracker.Sources retired as fleetcensus needle**: renamed `HostLoad` (same ps-anchor summary). fleetcensus no longer matches `Tracker) Sources` | seat_state_derivations **5→4** |
 
 Derivation 5 is the one being dismantled first, because it is the signal
 that authorises `LoadTerminate` to kill a process group and it defaulted to
