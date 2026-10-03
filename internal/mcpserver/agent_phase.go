@@ -182,7 +182,7 @@ func ClassifyAgentPhase(alive, turnBegan, materialized bool, ev SessionEvidence)
 // a Known transcript phase must not hide those claims. Unknown Phase keeps
 // the ClassifyAgentPhase path (no invention).
 func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
-	if alive && s.seatIsBornStuck(d) {
+	if alive && s.bornStuck(d) {
 		return AgentStatusBornStuck
 	}
 	ev := ReadSessionEvidence(d.Provider, d.SessionID, d.WorkDir)

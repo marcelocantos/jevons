@@ -122,7 +122,7 @@ func TestT694GrokSeatWithUpdatesJSONLIsNotBornStuckAfterGrace(t *testing.T) {
 	if n := e.parentNotices(); len(n) != 0 {
 		t.Fatalf("Grok seat with updates.jsonl produced a born-stuck notice: %v", n)
 	}
-	if e.s.seatIsBornStuck(*e.reg.Def(e.name)) {
+	if e.s.bornStuck(*e.reg.Def(e.name)) {
 		t.Fatal("diagnoseBirth treated grok-homes updates.jsonl as absent")
 	}
 }

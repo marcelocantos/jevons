@@ -217,7 +217,7 @@ func TestT679_2PeriodicHookRunsWithoutList(t *testing.T) {
 	if n := e.parentNotices(); len(n) != 1 {
 		t.Fatalf("periodic sweep did not notify: %v", n)
 	}
-	if !e.s.seatIsBornStuck(*e.reg.Def(e.name)) {
+	if !e.s.bornStuck(*e.reg.Def(e.name)) {
 		t.Fatal("periodic sweep did not diagnose born-stuck")
 	}
 }
