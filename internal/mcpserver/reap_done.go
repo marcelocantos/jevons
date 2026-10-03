@@ -53,12 +53,8 @@ func LooksLikeFinishedWorkReport(report string) bool {
 	if m, err := envelope.Parse(report); m != nil && err == nil {
 		switch m.Kind {
 		case envelope.KindFinishReport:
-			// 🎯T577: a typed finish-report is terminal even when the
-			// payload still names a next step or echoes a checkpoint.
-			// Unenveloped remaining-work prose is kept below; a
-			// mis-enveloped checkpoint still reaps and the PO is
-			// notified to respawn.
-			return true
+			// T784: a slice's oracle does not make the mission terminal.
+			return midWorkReportScope(report) == nil
 		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest, envelope.KindScoutReport, envelope.KindEscalation:
 			// 🎯T536.3: scout-report is a fog handoff, not product-done.
 			return false
@@ -134,13 +130,15 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if _, blocked := envelope.BlockedOn(report); blocked {
 		return false, IdleSkipBlockedOnOwner
 	}
+	if scope := midWorkReportScope(report); scope != nil {
+		return false, outstandingScopeReapReason([]OutstandingScope{*scope})
+	}
 	// 🎯T395 before the generic no-claim case: a report that asks for a decision
 	// is the opposite of a completion claim, and the lifecycle log should say so
 	// rather than lumping it in with ordinary mid-turn chatter.
 	//
-	// 🎯T577: a typed finish-report envelope is terminal even when the
-	// payload still names remaining work. The ask veto stays for
-	// unenveloped prose; the envelope path reaps and notifies the PO.
+	// Typed remaining-work reports were retained above; the generic ask
+	// classifier below remains the fallback for unenveloped prose.
 	if !typedFinishReport(report) {
 		if ask := ClassifyReportAsk(report); ask != AskNone {
 			// 🎯T723: no-claim (empty / bare ack) keeps the seat but is not
@@ -378,12 +376,7 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			s.notifyFleetHealth(name, fmt.Sprintf("%s unreachable (%v) for: %s", pending.Owes, err, msg))
 		}
 	}
-	// 🎯T577: a typed finish-report still reaps, even when the payload
-	// names remaining work. That seat's target must not go ledger-only —
-	// tell the PO to respawn.
-	if hasForwardLookingPlan(report) {
-		s.notifyPORespawnAfterCheckpointReap(parent, name, targetID)
-	}
+
 }
 
 // FormatCheckpointReapRespawnNotice is the PO-facing 🎯T577 recovery: a

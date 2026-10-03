@@ -324,6 +324,9 @@ var checkpointDelimiters = []string{":", "—", "–", "-", ".", ",", ";", "("}
 var forwardLookingPlanMarkers = []string{
 	"next step",
 	"next turn:",
+	"next work:",
+	"remaining scope:",
+	"remaining work:",
 	"not yet committed",
 	"not yet tested",
 	"i'll resume",
@@ -362,6 +365,9 @@ var explicitIncompleteMarkers = []string{
 	"not yet committed",
 	"not yet tested",
 	"next turn:",
+	"next work:",
+	"remaining scope:",
+	"remaining work:",
 	"no commit, no gate",
 	"no product evidence yet",
 	"nothing here is achieved",
@@ -654,10 +660,8 @@ func jammedCheckpointDeclaration(s, lower string) (ReportAskFinding, bool) {
 	return ReportAskFinding{}, false
 }
 
-// hasForwardLookingPlan is true when unenveloped prose still names remaining
-// work (🎯T577). A typed finish-report envelope is terminal even when its
-// payload contains these phrases — that path notifies the PO to respawn
-// rather than keeping the seat.
+// hasForwardLookingPlan detects named remaining work (T577 / T784),
+// including the payload of a typed finish-report.
 func hasForwardLookingPlan(report string) bool {
 	lower := asciiLower(report)
 	for _, m := range forwardLookingPlanMarkers {
