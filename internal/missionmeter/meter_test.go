@@ -72,3 +72,22 @@ func TestPercentilesAndZeroVariance(t *testing.T) {
 		t.Fatalf("distribution %+v", m)
 	}
 }
+
+func TestScopedRequiresMatchingLifecycleWorkdir(t *testing.T) {
+	ev := fixture(t, "events.jsonl", `{"ts":"2026-10-03T01:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"jv-a","workdir":"/repo/worktree"}}`+"\n")
+	spool := fixture(t, "spool.log", `{"ts":"2026-10-03T02:00:00Z","seat":"jv-a","type":"turn_end","snapshot":{"messages":[]}}`+"\n"+`{"ts":"2026-10-03T02:00:00Z","seat":"jv-b","type":"turn_end","snapshot":{"messages":[]}}`+"\n")
+	r, err := ScanScoped([]string{spool}, []string{ev}, Window{}, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Seats) != 1 || r.Seats[0].Name != "jv-a" {
+		t.Fatalf("scope: %+v", r.Seats)
+	}
+	r, err = ScanScoped([]string{spool}, []string{ev}, Window{}, "/repository")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Seats) != 0 {
+		t.Fatalf("prefix boundary: %+v", r.Seats)
+	}
+}

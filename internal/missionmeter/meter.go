@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -87,8 +88,19 @@ func tier(s string) string {
 // JSON, invalid timestamp or oversized record is an error with path and line.
 // No results should be used when Scan returns an error.
 func Scan(spoolPaths, eventPaths []string, w Window) (Report, error) {
+	return ScanScoped(spoolPaths, eventPaths, w, "")
+}
+
+// ScanScoped restricts records to seats whose lifecycle workdir is inside
+// workdirPrefix. Such filtering requires lifecycle events; unassociated spool
+// seats are omitted rather than silently assigned to a repository.
+func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string) (Report, error) {
 	seats := map[string]*Seat{}
 	targets := map[string]string{}
+	eligible := map[string]bool{}
+	if workdirPrefix != "" {
+		workdirPrefix = filepath.Clean(workdirPrefix)
+	}
 	get := func(name string) *Seat {
 		s := seats[name]
 		if s == nil {
@@ -108,6 +120,7 @@ func Scan(spoolPaths, eventPaths []string, w Window) (Report, error) {
 					Outcome  string `json:"outcome"`
 					Name     string `json:"name"`
 					TargetID string `json:"target_id"`
+					Workdir  string `json:"workdir"`
 				} `json:"fields"`
 			}
 			if err := json.Unmarshal(b, &e); err != nil {
@@ -118,6 +131,13 @@ func Scan(spoolPaths, eventPaths []string, w Window) (Report, error) {
 			}
 			if e.Fields.Name == "" {
 				return fmt.Errorf("successful start missing name")
+			}
+			if workdirPrefix != "" {
+				d := filepath.Clean(e.Fields.Workdir)
+				if d != workdirPrefix && !strings.HasPrefix(d, workdirPrefix+string(os.PathSeparator)) {
+					return nil
+				}
+				eligible[e.Fields.Name] = true
 			}
 			if e.Fields.TargetID != "" {
 				targets[e.Fields.Name] = e.Fields.TargetID
@@ -159,6 +179,9 @@ func Scan(spoolPaths, eventPaths []string, w Window) (Report, error) {
 			}
 			if rec.Seat == "" {
 				return fmt.Errorf("turn_end missing seat")
+			}
+			if workdirPrefix != "" && !eligible[rec.Seat] {
+				return nil
 			}
 			yes, err := w.contains(rec.TS)
 			if err != nil {

@@ -17,11 +17,12 @@ func (p *paths) String() string     { return fmt.Sprint([]string(*p)) }
 func (p *paths) Set(s string) error { *p = append(*p, s); return nil }
 func main() {
 	var spool, events paths
-	var from, to string
+	var from, to, workdir string
 	flag.Var(&spool, "spool", "dated spool JSONL path (repeatable)")
 	flag.Var(&events, "events", "lifecycle event JSONL path (repeatable)")
 	flag.StringVar(&from, "from", "", "inclusive RFC3339 timestamp")
 	flag.StringVar(&to, "to", "", "exclusive RFC3339 timestamp")
+	flag.StringVar(&workdir, "workdir-prefix", "", "optional repository workdir prefix; requires lifecycle events")
 	flag.Parse()
 	if len(spool) == 0 && len(events) == 0 {
 		fail("provide -spool and/or -events paths")
@@ -43,7 +44,10 @@ func main() {
 	if !w.From.IsZero() && !w.To.IsZero() && !w.From.Before(w.To) {
 		fail("-from must precede -to")
 	}
-	report, err := missionmeter.Scan(spool, events, w)
+	if workdir != "" && len(events) == 0 {
+		fail("-workdir-prefix requires -events")
+	}
+	report, err := missionmeter.ScanScoped(spool, events, w, workdir)
 	if err != nil {
 		fail(err.Error())
 	}
