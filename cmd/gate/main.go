@@ -128,12 +128,13 @@ func main() {
 }
 
 // subcommands is the allowlist. A word outside it is a typo, not a gate.
-var subcommands = []string{"last", "show", "check", "check-ledger", "check-attestation", "sweep", "void", "help"}
+var subcommands = []string{"last", "show", "queue", "check", "check-ledger", "check-attestation", "sweep", "void", "help"}
 
 // usageForms is the shape each subcommand accepts, quoted back at a caller
 // whose arguments do not fit it. It lives next to the allowlist so that adding
 // a subcommand without saying how to call it is visibly incomplete.
 var usageForms = map[string]string{
+	"queue":             "gate queue",
 	"last":              "gate last",
 	"show":              "gate show <id>",
 	"check":             "gate check [report-path]   (or: gate check < report)",
@@ -192,6 +193,19 @@ func separated(osArgs, rest []string) bool {
 func cmdSubcommand(args []string, storeDir string) int {
 	sub, rest := args[0], args[1:]
 	switch sub {
+	case "queue":
+		if len(rest) > 0 {
+			return refuseSurplus(sub, rest)
+		}
+		store, err := gate.OpenStore(storeDir)
+		if err == nil {
+			err = gate.WriteHeavyLeaseStatus(os.Stdout, store.Root)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "gate queue:", err)
+			return exitError
+		}
+		return 0
 	case "last":
 		if len(rest) > 0 {
 			return refuseSurplus(sub, rest)
@@ -241,6 +255,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   gate [flags] -- <command> [args...]   run a gate and attest its real status
   gate -clean -- <command> [args...]    …in a fresh checkout of HEAD (🎯T397)
+  gate queue                            inspect heavy lease owner and open descriptors
   gate last                             show the most recent run
   gate show <id>                        show one run
   gate check [report-path]              flag a finish report's false greens (stdin if no path)

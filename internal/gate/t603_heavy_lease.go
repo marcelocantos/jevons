@@ -5,12 +5,15 @@ package gate
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // 🎯T603 — a gate must survive host load, and it must not contribute to it.
@@ -73,9 +76,15 @@ func AcquireHeavyLease(storeRoot string) (func(), error) {
 // Only Run's child environment receives it; concurrent Run calls in this
 // process still acquire distinct leases. Go exec wrappers preserve environment
 // variables even when they close inherited file descriptors (test-web-clean).
+// Reuse also requires a response from the owning gate: a dead owner's file
+// text and a wrapper-retained descriptor must never authorize nesting.
 const heavyLeaseEnv = "JEVONS_GATE_HEAVY_LEASE"
 
 func acquireHeavyLease(storeRoot, inherited string) (func(), string, error) {
+	return acquireHeavyLeaseCommand(storeRoot, inherited, nil, "")
+}
+
+func acquireHeavyLeaseCommand(storeRoot, inherited string, command []string, cwd string) (func(), string, error) {
 	if storeRoot == "" {
 		return func() {}, "", nil
 	}
@@ -88,15 +97,22 @@ func acquireHeavyLease(storeRoot, inherited string) (func(), string, error) {
 	}
 	// First try the real lock: an old token never resurrects a released lease.
 	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-	if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
+	for err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
+		if _, seekErr := f.Seek(0, 0); seekErr != nil {
+			_ = f.Close()
+			return nil, "", seekErr
+		}
 		owner, readErr := io.ReadAll(io.LimitReader(f, 256))
-		if readErr == nil && inherited != "" && string(owner) == inherited {
+		if readErr == nil && inherited != "" && string(owner) == inherited && leaseOwnerAlive(inherited) {
 			_ = f.Close()
 			// The ancestor owns both locking and unlocking. An inner gate must
 			// not release its lease while the outer command is still running.
 			return func() {}, inherited, nil
 		}
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		// Retry the live capability as well as the kernel lock: a delayed
+		// responder must not turn valid nesting into a permanent deadlock.
+		time.Sleep(100 * time.Millisecond)
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	}
 	if err != nil {
 		_ = f.Close()
@@ -108,7 +124,28 @@ func acquireHeavyLease(storeRoot, inherited string) (func(), string, error) {
 	}
 	// Replace the owner record on every acquisition, including the public
 	// non-reentrant API, so tokens cannot refer to a previous lock holder.
-	token := fmt.Sprintf("%d:%s", os.Getpid(), rand.Text())
+	// Only the gate retains this listener and lock FD. Both are close-on-exec;
+	// no ExtraFiles handoff to arbitrary wrappers or agent processes is allowed.
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		release()
+		return nil, "", err
+	}
+	unlock := release
+	release = func() { _ = listener.Close(); unlock() }
+	token := fmt.Sprintf("%d:%s:%d", os.Getpid(), rand.Text(), listener.Addr().(*net.TCPAddr).Port)
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	owner := HeavyLeaseOwner{PID: os.Getpid(), Command: command, CWD: cwd, Started: time.Now(), Token: token}
+	data, err := json.Marshal(owner)
+	if err == nil {
+		err = writeAtomic(heavyLockPath(storeRoot)+".owner", data, 0600)
+	}
+	if err != nil {
+		release()
+		return nil, "", err
+	}
 	if err := f.Truncate(0); err != nil {
 		release()
 		return nil, "", err
@@ -117,5 +154,6 @@ func acquireHeavyLease(storeRoot, inherited string) (func(), string, error) {
 		release()
 		return nil, "", err
 	}
+	go serveLeaseOwner(listener, token)
 	return release, token, nil
 }
