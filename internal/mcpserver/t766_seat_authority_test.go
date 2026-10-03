@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
@@ -315,5 +316,23 @@ func TestT766BornStuckFeedsAuthority(t *testing.T) {
 	s.observeBornStuck("jv-grace", birthDiagnosis{Accepted: true, PastGrace: false})
 	if _, ok := s.Seats().Get("jv-grace"); ok {
 		t.Fatal("inside grace must not invent a born-stuck claim")
+	}
+}
+
+// 🎯T766.2: a named fleet pane folds Alive=Yes; empty name is ignored.
+func TestT766PanePresenceFeedsAuthority(t *testing.T) {
+	s := t766Seat(t)
+	p := panecensus.Pane{AgentName: "jv-pane", ID: "%1"}
+	s.observePanePresence([]panecensus.Pane{p, {ID: "%2"}}) // unnamed
+	st, ok := s.Seats().Get("jv-pane")
+	if !ok || st.Alive != seatstate.Yes {
+		t.Fatalf("named pane did not claim alive: ok=%v %+v", ok, st)
+	}
+	if _, ok := s.Seats().Get(""); ok {
+		t.Fatal("empty name must not create a seat")
+	}
+	// Absence does not invent dead.
+	if _, ok := s.Seats().Get("no-pane"); ok {
+		t.Fatal("missing pane must not claim a seat")
 	}
 }
