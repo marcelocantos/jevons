@@ -13,13 +13,11 @@ Tracked as 🎯T989 in the jevons ledger (cross-repo, same pattern as 🎯T765.1
 - No browser chrome: no URL bar, no reload button, no visible settings
   icon. The WebView is the whole screen, so the shell feels like a native
   app rather than a browser.
-- A hidden Settings screen changes the URL at runtime: **long-press
-  anywhere on the WebView** to open it. The value is persisted with
-  `shared_preferences`, so pointing the shell at a different transport
-  (e.g. Pigeon) is a device-side setting, not a rebuild. "Save and reload"
-  also reloads the cockpit when the URL is unchanged, which is the manual
-  reload path now that there is no toolbar button.
-- Failed main-frame loads show the error with Retry and Change URL.
+- No long-press (or other hidden gesture) opens Settings. Owner 2026-10-03:
+  settings belong in the cockpit web UI when needed, not as a shell gesture.
+- Failed main-frame loads show the error with Retry and Change URL (the
+  recovery path into the local Settings screen for the cockpit URL).
+  The URL is still persisted with `shared_preferences` for transport swaps.
 
 Form-factor polish (foldables etc.) is deferred.
 

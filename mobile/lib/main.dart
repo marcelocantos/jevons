@@ -33,8 +33,10 @@ class JevonsMobileApp extends StatelessWidget {
 /// Full-screen WebView onto the cockpit with no browser chrome: no URL bar,
 /// no reload button, no visible settings icon. The shell is a single-purpose
 /// app pointed at one cockpit URL, so navigation chrome would only make it
-/// feel like a browser. Settings stay reachable through a hidden trigger: a
-/// long-press anywhere on the WebView surface. Layout polish for foldables
+/// feel like a browser. There is no long-press (or other hidden gesture) to
+/// Settings — owner 2026-10-03: that path was accidental UX; cockpit settings
+/// belong as a control in the web UI when needed. Failed main-frame loads
+/// still offer Change URL as a recovery path. Layout polish for foldables
 /// and other form factors is deferred.
 class CockpitShell extends StatefulWidget {
   const CockpitShell({super.key, required this.settings});
@@ -109,13 +111,7 @@ class _CockpitShellState extends State<CockpitShell> {
         body: SafeArea(
           child: Stack(
             children: [
-              // Hidden admin entry: the WebView claims only gestures nobody
-              // else wants, so a long-press here wins the arena and opens
-              // Settings without any visible control.
-              GestureDetector(
-                onLongPress: _openSettings,
-                child: WebViewWidget(controller: _web),
-              ),
+              WebViewWidget(controller: _web),
               if (_loading) const LinearProgressIndicator(),
               if (_loadError != null)
                 Center(

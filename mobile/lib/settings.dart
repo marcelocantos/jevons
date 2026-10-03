@@ -38,7 +38,7 @@ class CockpitSettings extends ChangeNotifier {
   }
 
   /// Asks the shell to reload the cockpit at the current URL. With no
-  /// visible reload button, the hidden Settings screen is the only manual
+  /// visible reload button, Save-and-reload on the Settings recovery path is the manual
   /// way to recover from a wedged page.
   void requestReload() => notifyListeners();
 
