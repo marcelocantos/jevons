@@ -642,7 +642,7 @@ func (s *Server) seatInFlight(name string) seatstate.Tri {
 }
 
 // observeRegistryLiveness feeds every registered seat's current liveness
-// into the shared authority (🎯T766.2, census derivation 8: SweepDeadAgents).
+// into the shared authority (🎯T766.2, census derivation 8: recoverDeadHandles).
 // The sweep's own recovery decisions already read each seat's ProcState; this
 // makes the authority hear the same answer even when nobody has listed
 // agents recently, so a stale authority between agent_list calls is never

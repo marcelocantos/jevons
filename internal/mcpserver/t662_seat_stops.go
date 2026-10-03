@@ -126,7 +126,7 @@ func (s *Server) lostToBroker(name string) bool {
 	return ok && rec.Source == seatstop.SourceBroker
 }
 
-// sweepDeadAccounted is SweepDeadAgents with the 🎯T662 record kept.
+// sweepDeadAccounted is recoverDeadHandles with the 🎯T662 record kept.
 func (s *Server) sweepDeadAccounted() []DeadAgentReport {
 	if s == nil {
 		return nil
@@ -139,7 +139,7 @@ func (s *Server) sweepDeadAccountedWith(overseer string, intent fleetintent.Snap
 		return nil
 	}
 	s.observeRegistryLiveness()
-	reps := SweepDeadAgents(s.registry, s.RemovalAccount(), overseer, intent)
+	reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent)
 	s.noteDeadSeats(reps)
 	return reps
 }

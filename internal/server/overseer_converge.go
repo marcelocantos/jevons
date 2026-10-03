@@ -26,7 +26,7 @@ import (
 //  1. Overseer Alive + AttachOverseer (chat stream wired)
 //  2. Overseer turn-usable: not stuck-busy (prompt in flight / waiting
 //     with no ACP progress beyond StuckBusyTimeout)
-//  3. Fleet dead-handle recovery (hook → SweepDeadAgents)
+//  3. Fleet dead-handle recovery (hook → recoverDeadHandles)
 //  4. Idle mission-worker nudge (hook → T207 SweepIdleNudges)
 //
 // Boot StartAll and passive waitForOverseer are not enough.
@@ -244,7 +244,7 @@ type cockpitState struct {
 // CockpitHooks are optional fleet actuators registered from main so
 // package server does not import mcpserver (🎯T204 fleet dimensions).
 type CockpitHooks struct {
-	// FleetHealth rehydrates/clears dead worker handles (SweepDeadAgents).
+	// FleetHealth rehydrates/clears dead worker handles (recoverDeadHandles).
 	// Reconcile runs the one fleet pass (🎯T766.3) on the cockpit tick.
 	Reconcile func()
 }

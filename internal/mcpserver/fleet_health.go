@@ -70,7 +70,7 @@ func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows bool, purpose stri
 	return true, false, true, false
 }
 
-// fleetSweepReg is the seam SweepDeadAgents needs so hermetic tests can
+// fleetSweepReg is the seam recoverDeadHandles needs so hermetic tests can
 // inject hasProc&&!Alive without a real OS process (🎯T85 oracle).
 type fleetSweepReg interface {
 	List() []claudia.AgentDef
@@ -134,7 +134,7 @@ func (c claudiaSweep) RemoveDeadSeat(name string) error {
 	return err
 }
 
-// SweepDeadAgents detects fleet agents whose process handle is present
+// recoverDeadHandles detects fleet agents whose process handle is present
 // but no longer Alive (silent death without Stop). Recovery policy:
 //   - AutoStart durable agents: re-Launch (rehydrate session)
 //   - Work seats (purpose work/unset): Remove the row (🎯T544), accounted
@@ -143,7 +143,7 @@ func (c claudiaSweep) RemoveDeadSeat(name string) error {
 //
 // overseerName is never recovered here (owner chat overseer has its own path).
 // Returns every detected dead name; Recovered true when Launch succeeded.
-func SweepDeadAgents(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
+func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}

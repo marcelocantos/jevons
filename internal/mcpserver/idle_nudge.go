@@ -233,7 +233,7 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	}
 	if !o.ProcessRunning {
 		// Not deliberate-stop path: dead handle without recover still skips
-		// nudge (SweepDeadAgents owns rehydrate).
+		// nudge (recoverDeadHandles owns rehydrate).
 		return IdleNudgeSkip, "not_running"
 	}
 
@@ -924,7 +924,7 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 		running = proc.Alive()
 	}
 	// Deliberate stop: registered, not running, and not a dead AutoStart
-	// handle we expect SweepDeadAgents to rehydrate — stop without kill.
+	// handle we expect recoverDeadHandles to rehydrate — stop without kill.
 	deliberateStop := !running && !d.AutoStart
 
 	act := IdleActivity{}

@@ -232,7 +232,7 @@ func TestSweepDeadAgentsEmptyOnHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Never launched → Get nil → not a dead-handle detection.
-	reps := SweepDeadAgents(reg, nil, "jevons", fleetintent.Snapshot{})
+	reps := recoverDeadHandles(reg, nil, "jevons", fleetintent.Snapshot{})
 	if len(reps) != 0 {
 		t.Fatalf("want no dead agents, got %+v", reps)
 	}
