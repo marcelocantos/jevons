@@ -47,3 +47,24 @@ cover restart, rename, rollback, window expiry, malformed state, and historical
 seeding. Provider-generated repeated remints would expend real budget without
 adding a different admission path. This exception does not stand in for
 activation and observation of the development daemon.
+
+## Development observation, 2026-10-03
+
+After parent integration and activation of the assembled implementation,
+`http://127.0.0.1:13705/mcp` tools/list exposed `remint_override`. Only after
+checking that schema, a tools/call request for `jv-t998-override-probe` used
+`actor=jv-t998-blowout`, `parent=jv-t998-blowout`, `target_id=T998`,
+`workdir=/private/tmp`, `force_engage=true`, `remint_override=true`, and a
+nonempty probe reason. It returned `isError=true` with:
+
+> T998 start refused: remint override requires owner/overseer actor and a reason
+
+GET `/api/agents` before and after contained zero rows named
+`jv-t998-override-probe`. The durable mission-start store existed. No provider
+seat was launched by this probe. The all-package clean gate for mcpserver,
+missionbound and missionmeter is `c7742213` at `2004853ec1a7`; the daemon build
+is `a3e26093` at the same commit. The package gate used
+`BULLSEYE_DATA_DIR=/private/tmp/jv-t998-bullseye-tests` for the sandbox-writable
+Bullseye test cache. These observations cover the activated admission guard;
+threshold crossing, single-notice behavior and attributed override persistence
+are covered by the hermetic production-path tests described above.
