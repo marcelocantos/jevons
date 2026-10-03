@@ -661,7 +661,7 @@ func (s *Server) observeRegistryLiveness() {
 }
 
 // observeSessionPhase folds the transcript decoder's phase reading into the
-// shared authority (🎯T766.2, census derivation 1/3: ClassifyPhaseFile via
+// shared authority (🎯T766.2, census derivation 1/3: PhaseFromFile via
 // classifyAgentSessionPhase / classifyAgentListPhase). This is the one place the
 // 🎯T423 decoder's idle/working/unknown answer is recorded for everyone else
 // to read, rather than staying local to whichever sweep happened to decode

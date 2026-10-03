@@ -56,7 +56,7 @@ func TestT423UnreadIsUnknownNotIdle(t *testing.T) {
 	if got := ClassifyPhase(nil); got != PhaseUnknown {
 		t.Fatalf("empty tape classified %s, want unknown", got)
 	}
-	if got := ClassifyPhaseFile("/no/such/session.jsonl"); got != PhaseUnknown {
+	if got := PhaseFromFile("/no/such/session.jsonl"); got != PhaseUnknown {
 		t.Fatalf("missing file classified %s, want unknown", got)
 	}
 }

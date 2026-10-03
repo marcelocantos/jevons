@@ -59,5 +59,5 @@ func classifyAgentSessionPhase(d claudia.AgentDef, roots discovery.Roots) turnev
 		}
 		return turnev.ClassifyPhase(turnev.DecodeAll(bytes.NewReader(spool.AsJSONL(recs))))
 	}
-	return turnev.ClassifyPhaseFile(AgentTranscriptPath(d, roots))
+	return turnev.PhaseFromFile(AgentTranscriptPath(d, roots))
 }

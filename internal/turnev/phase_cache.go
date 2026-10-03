@@ -13,7 +13,7 @@ import (
 // 🎯T705: classifying a seat's phase costs what was appended, not what the
 // file weighs.
 //
-// ClassifyPhaseFile used to open the transcript and decode every event from
+// PhaseFromFile used to open the transcript and decode every event from
 // byte zero, and the idle loop calls it for every seat every 30 seconds. The
 // live transcripts are megabytes and grow all night, so the cost per tick
 // climbed until a tick took about as long as its own interval: jevonsd sat
@@ -68,7 +68,7 @@ func ResetPhaseCache() {
 	phaseCache = map[string]phaseCacheEntry{}
 }
 
-// classifyFile is the incremental implementation behind ClassifyPhaseFile.
+// classifyFile is the incremental implementation behind PhaseFromFile.
 func classifyFile(path string) Phase {
 	st, err := os.Stat(path)
 	if err != nil || st.IsDir() {

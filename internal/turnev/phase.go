@@ -129,9 +129,9 @@ func DecodeAll(r io.Reader) []Record {
 	return out
 }
 
-// ClassifyPhaseFile opens path and classifies it. A missing or unreadable
+// PhaseFromFile opens path and classifies it. A missing or unreadable
 // file is PhaseUnknown — never idle.
-func ClassifyPhaseFile(path string) Phase {
+func PhaseFromFile(path string) Phase {
 	if strings.TrimSpace(path) == "" {
 		return PhaseUnknown
 	}

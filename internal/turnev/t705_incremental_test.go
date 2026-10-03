@@ -66,16 +66,16 @@ func TestT705IncrementalMatchesFullRead(t *testing.T) {
 			for i, lines := range tc.steps {
 				t705Write(t, path, lines, true)
 
-				incremental := ClassifyPhaseFile(path) // resumes the fold
+				incremental := PhaseFromFile(path) // resumes the fold
 				ResetPhaseCache()
-				full := ClassifyPhaseFile(path) // cold, whole file
+				full := PhaseFromFile(path) // cold, whole file
 
 				if incremental != full {
 					t.Fatalf("step %d: incremental=%s full=%s — the cache changed the answer",
 						i, incremental, full)
 				}
 				// Put the cache back where the next step expects it.
-				_ = ClassifyPhaseFile(path)
+				_ = PhaseFromFile(path)
 			}
 		})
 	}
@@ -87,12 +87,12 @@ func TestT705IncrementalMatchesFullRead(t *testing.T) {
 func TestT705PendingFromLongAgoStillReadsWorking(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "updates.jsonl")
 	t705Write(t, path, []string{t705Enqueue}, true)
-	if got := ClassifyPhaseFile(path); got != PhaseWorking {
+	if got := PhaseFromFile(path); got != PhaseWorking {
 		t.Fatalf("opening reading = %s, want working", got)
 	}
 	// Thousands of later events, none of them draining that queue.
 	t705Write(t, path, append([]string{t705Enqueue}, repeat(t705Terminal, 2000)...), true)
-	if got := ClassifyPhaseFile(path); got != PhaseWorking {
+	if got := PhaseFromFile(path); got != PhaseWorking {
 		t.Fatalf("after 2000 appended events = %s, want working: the pending enqueue was forgotten", got)
 	}
 }
@@ -102,12 +102,12 @@ func TestT705PendingFromLongAgoStillReadsWorking(t *testing.T) {
 func TestT705PartialLineIsNotCountedTwice(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "updates.jsonl")
 	t705Write(t, path, []string{t705Terminal}, true)
-	if got := ClassifyPhaseFile(path); got != PhaseIdle {
+	if got := PhaseFromFile(path); got != PhaseIdle {
 		t.Fatalf("baseline = %s, want idle", got)
 	}
 	// An enqueue lands without its newline yet.
 	t705Write(t, path, []string{t705Terminal, t705Enqueue}, false)
-	if got := ClassifyPhaseFile(path); got != PhaseWorking {
+	if got := PhaseFromFile(path); got != PhaseWorking {
 		t.Fatalf("partial enqueue = %s, want working: a just-written event must be visible", got)
 	}
 	// The newline arrives, then a drain. The enqueue must be counted once:
@@ -115,9 +115,9 @@ func TestT705PartialLineIsNotCountedTwice(t *testing.T) {
 	// stay at one forever and the seat would read working for the rest of
 	// its life. Compare against a cold read, which cannot double count.
 	t705Write(t, path, []string{t705Terminal, t705Enqueue}, true)
-	_ = ClassifyPhaseFile(path)
+	_ = PhaseFromFile(path)
 	t705Write(t, path, []string{t705Terminal, t705Enqueue, t705Drain}, true)
-	incremental := ClassifyPhaseFile(path)
+	incremental := PhaseFromFile(path)
 
 	phaseCacheMu.Lock()
 	pending := phaseCache[path].fold.pending
@@ -127,7 +127,7 @@ func TestT705PartialLineIsNotCountedTwice(t *testing.T) {
 	}
 
 	ResetPhaseCache()
-	if full := ClassifyPhaseFile(path); full != incremental {
+	if full := PhaseFromFile(path); full != incremental {
 		t.Fatalf("incremental=%s full=%s — the partial line changed the answer", incremental, full)
 	}
 }
@@ -137,11 +137,11 @@ func TestT705PartialLineIsNotCountedTwice(t *testing.T) {
 func TestT705ShrunkFileIsReadAfresh(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "updates.jsonl")
 	t705Write(t, path, append([]string{t705Enqueue}, repeat(t705Working, 20)...), true)
-	if got := ClassifyPhaseFile(path); got != PhaseWorking {
+	if got := PhaseFromFile(path); got != PhaseWorking {
 		t.Fatalf("baseline = %s, want working", got)
 	}
 	t705Write(t, path, []string{t705Terminal}, true)
-	if got := ClassifyPhaseFile(path); got != PhaseIdle {
+	if got := PhaseFromFile(path); got != PhaseIdle {
 		t.Fatalf("after truncation = %s, want idle: the stale fold survived a rewrite", got)
 	}
 }
@@ -151,7 +151,7 @@ func TestT705ShrunkFileIsReadAfresh(t *testing.T) {
 func TestT705UnchangedFileIsNotReparsed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "updates.jsonl")
 	t705Write(t, path, append([]string{t705Enqueue}, repeat(t705Working, 500)...), true)
-	first := ClassifyPhaseFile(path)
+	first := PhaseFromFile(path)
 
 	st, err := os.Stat(path)
 	if err != nil {
@@ -167,7 +167,7 @@ func TestT705UnchangedFileIsNotReparsed(t *testing.T) {
 		t.Fatalf("cached offset %d, file %d — a complete file should be fully consumed",
 			entry.offset, st.Size())
 	}
-	if again := ClassifyPhaseFile(path); again != first {
+	if again := PhaseFromFile(path); again != first {
 		t.Fatalf("second read = %s, first = %s", again, first)
 	}
 
@@ -181,7 +181,7 @@ func TestT705UnchangedFileIsNotReparsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Chmod(path, 0o600)
-	if got := ClassifyPhaseFile(path); got != first {
+	if got := PhaseFromFile(path); got != first {
 		t.Fatalf("unchanged unreadable file = %s, want %s: the second call parsed instead of statting",
 			got, first)
 	}
@@ -192,7 +192,7 @@ func TestT705UnchangedFileIsNotReparsed(t *testing.T) {
 func TestT705MtimeBackwardsIsReadAfresh(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "updates.jsonl")
 	t705Write(t, path, append([]string{t705Enqueue}, repeat(t705Working, 20)...), true)
-	if got := ClassifyPhaseFile(path); got != PhaseWorking {
+	if got := PhaseFromFile(path); got != PhaseWorking {
 		t.Fatalf("baseline = %s, want working", got)
 	}
 
@@ -207,7 +207,7 @@ func TestT705MtimeBackwardsIsReadAfresh(t *testing.T) {
 	if err := os.Chtimes(path, past, past); err != nil {
 		t.Fatal(err)
 	}
-	if got := ClassifyPhaseFile(path); got != PhaseIdle {
+	if got := PhaseFromFile(path); got != PhaseIdle {
 		t.Fatalf("mtime-backwards rewrite = %s, want idle: the stale fold survived a rotated tape", got)
 	}
 }
@@ -245,7 +245,7 @@ func t705AssertCheapRepeat(t *testing.T, path string) {
 	ResetPhaseCache()
 
 	t0 := time.Now()
-	cold := ClassifyPhaseFile(path)
+	cold := PhaseFromFile(path)
 	coldDur := time.Since(t0)
 	if cold == PhaseUnknown {
 		t.Fatal("cold classify returned unknown on a readable tape")
@@ -255,7 +255,7 @@ func t705AssertCheapRepeat(t *testing.T, path string) {
 	var again Phase
 	for i := range warm {
 		t1 := time.Now()
-		again = ClassifyPhaseFile(path)
+		again = PhaseFromFile(path)
 		warm[i] = time.Since(t1)
 		if again != cold {
 			t.Fatalf("repeat %d = %s, cold = %s", i, again, cold)
@@ -288,7 +288,7 @@ func t705AssertCheapRepeat(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 	t2 := time.Now()
-	appended := ClassifyPhaseFile(path)
+	appended := PhaseFromFile(path)
 	appendDur := time.Since(t2)
 	if appended != cold && appended != PhaseWorking {
 		t.Fatalf("after one-line append = %s, cold = %s", appended, cold)
@@ -298,7 +298,7 @@ func t705AssertCheapRepeat(t *testing.T, path string) {
 	}
 
 	ResetPhaseCache()
-	full := ClassifyPhaseFile(path)
+	full := PhaseFromFile(path)
 	if full != appended {
 		t.Fatalf("resumed fold %s != cold whole-file %s after the append", appended, full)
 	}

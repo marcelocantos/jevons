@@ -30,7 +30,7 @@ func TestClassifyPhaseReadsDatedSpool(t *testing.T) {
 	}
 }
 
-func TestClassifyPhaseFileReadsSpoolView(t *testing.T) {
+func TestPhaseFromFileReadsSpoolView(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "events-2026-09-25.log"), []byte(
 		`{"ts":"2026-09-25T00:00:00.000Z","seat":"w","type":"tool_call","name":"jevons_agent_list","call_id":"c1","text":"{}"}`+"\n",
@@ -41,7 +41,7 @@ func TestClassifyPhaseFileReadsSpoolView(t *testing.T) {
 	if err != nil || path == "" {
 		t.Fatalf("EnsureView: %v %q", err, path)
 	}
-	if got := ClassifyPhaseFile(path); got != PhaseWorking {
+	if got := PhaseFromFile(path); got != PhaseWorking {
 		t.Fatalf("spool view classified %s, want working", got)
 	}
 }
