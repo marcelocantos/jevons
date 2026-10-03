@@ -175,6 +175,12 @@ func ClassifyAgentPhase(alive, turnBegan, materialized bool, ev SessionEvidence)
 }
 
 // agentPhase derives the phase column for one registry row.
+//
+// 🎯T766.2: when ClassifyAgentPhase says running and the shared authority
+// already holds a positive idle/working Phase, that reading wins. Born-stuck,
+// never_briefed, dead-unmaterialized, stopped, and phase_unknown stay first —
+// a Known transcript phase must not hide those claims. Unknown Phase keeps
+// the ClassifyAgentPhase path (no invention).
 func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
 	if alive && s.seatIsBornStuck(d) {
 		return AgentStatusBornStuck
@@ -183,5 +189,12 @@ func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
 	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		ev = SessionEvidencePresent
 	}
-	return ClassifyAgentPhase(alive, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
+	status := ClassifyAgentPhase(alive, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
+	if status != AgentStatusRunning {
+		return status
+	}
+	if st, ok := s.Seats().Get(d.Name); ok && st.Phase.Positive() {
+		return st.Phase.String()
+	}
+	return status
 }

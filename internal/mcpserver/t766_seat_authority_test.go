@@ -243,3 +243,46 @@ func TestT766FlightStatePrefersAuthority(t *testing.T) {
 		t.Fatalf("flightState=%s want unknown", got)
 	}
 }
+
+// 🎯T766.2: agentPhase overlays Known idle/working from the authority onto
+// a running seat only. never_briefed / phase_unknown / stopped stay first.
+func TestT766AgentPhasePrefersAuthorityPhase(t *testing.T) {
+	s := t766Seat(t)
+	running := claudia.AgentDef{Name: "jv-t766-ap", Materialized: true}
+	s.markAgentTurnBegan(running.Name)
+
+	if got := s.agentPhase(running, true); got != AgentStatusRunning {
+		t.Fatalf("no authority phase: %s want running", got)
+	}
+
+	s.Seats().Observe(seatstate.Observation{
+		Name: running.Name, Phase: turnev.PhaseIdle,
+		QueueDepth: seatstate.QueueUnknown, Source: "test", At: nowForTest(),
+	})
+	if got := s.agentPhase(running, true); got != "idle" {
+		t.Fatalf("known idle: %s want idle", got)
+	}
+
+	s.Seats().Observe(seatstate.Observation{
+		Name: running.Name, Phase: turnev.PhaseWorking,
+		QueueDepth: seatstate.QueueUnknown, Source: "test", At: nowForTest(),
+	})
+	if got := s.agentPhase(running, true); got != "working" {
+		t.Fatalf("known working: %s want working", got)
+	}
+
+	// Stopped is not overridden by a Known working phase.
+	if got := s.agentPhase(running, false); got != AgentStatusStopped {
+		t.Fatalf("dead process: %s want stopped", got)
+	}
+
+	// phase_unknown (no session to read) is not overridden by Known idle.
+	unk := claudia.AgentDef{Name: "jv-t766-ap-unk"}
+	s.Seats().Observe(seatstate.Observation{
+		Name: unk.Name, Phase: turnev.PhaseIdle,
+		QueueDepth: seatstate.QueueUnknown, Source: "test", At: nowForTest(),
+	})
+	if got := s.agentPhase(unk, true); got != AgentStatusPhaseUnknown {
+		t.Fatalf("phase_unknown must stay first: %s", got)
+	}
+}
