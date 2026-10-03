@@ -1997,3 +1997,30 @@ body.rhs-resizing-row { cursor: row-resize; }
   gap: 4px 7px;
 }
 .agent-node .agent-rehydrate-text { flex: 1 1 0; min-width: 0; }
+
+/* Explicit web settings entry point; native long-press is not a web gesture. */
+#settings-button {
+  flex-shrink: 0; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--surface-raised); color: var(--text); padding: 3px 8px;
+  font: inherit; cursor: pointer;
+}
+#settings-button:hover { border-color: var(--accent); }
+#cockpit-settings {
+  position: fixed; margin: auto; width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px); overflow: auto; padding: 0;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text); box-shadow: 0 16px 50px #0005;
+  text-transform: none; letter-spacing: normal;
+}
+#cockpit-settings::backdrop { background: #0009; }
+#cockpit-settings .settings-content { padding: 20px; display: grid; gap: 20px; }
+#cockpit-settings header { display: flex; align-items: center; justify-content: space-between; }
+#cockpit-settings h2 { font-size: 18px; }
+#cockpit-settings h3 { font-size: 14px; margin-bottom: 8px; }
+#cockpit-settings section { display: grid; gap: 8px; font-size: 13px; }
+#cockpit-settings code { overflow-wrap: anywhere; user-select: all; }
+#cockpit-settings button, #cockpit-settings select {
+  border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px;
+  background: var(--surface-raised); color: var(--text); cursor: pointer;
+}
+#cockpit-settings select { margin-bottom: 8px; }

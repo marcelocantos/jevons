@@ -38,6 +38,7 @@ import {
 } from './theme';
 import {
   DEFAULT_FLEET_FRACTION,
+  defaultState,
   DEFAULT_SIDEBAR_WIDTH,
   fleetFractionFromPointer,
   load as loadRhsLayout,
@@ -52,6 +53,7 @@ import { TargetAskContext, type TargetAskHost } from './frontier/targetAskContex
 import { useCockpitKeys } from './keys/useCockpitKeys';
 import { focusMainComposer } from './keys/composerFocus';
 import { ImageLightbox } from './components/ImageLightbox';
+import { CockpitSettings } from './components/CockpitSettings';
 
 
 const queryClient = new QueryClient();
@@ -105,6 +107,8 @@ function Cockpit() {
   const [graphOpen, setGraphOpen] = useState(false);
   const [graphNonce, setGraphNonce] = useState(0);
   const [asideOpen, setAsideOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsButton = useRef<HTMLButtonElement>(null);
   const openGraph = useCallback(() => {
     setGraphOpen(true);
     setGraphNonce((n) => n + 1);
@@ -290,6 +294,10 @@ function Cockpit() {
           mux={mux}
           refusedSeats={agents.filter((a) => a.reauth_available).map((a) => ({ name: a.name, provider: a.provider || '' }))}
         />
+        <button ref={settingsButton} id="settings-button" type="button" aria-label="Open settings"
+          aria-haspopup="dialog" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}>
+          Settings
+        </button>
         <button
           id="theme-toggle"
           type="button"
@@ -415,6 +423,14 @@ function Cockpit() {
         </div>
       </div>
       <MermaidVizPanel open={graphOpen} graphNonce={graphNonce} onClose={() => setGraphOpen(false)} />
+      <CockpitSettings open={settingsOpen} connected={connected} theme={theme}
+        onClose={() => { setSettingsOpen(false); settingsButton.current?.focus(); }}
+        onTheme={(pref) => { persistTheme(pref); setTheme(pref); }}
+        onResetLayout={() => {
+          const next = defaultState();
+          setLayout(next);
+          saveRhsLayout(window.localStorage, next);
+        }} />
       <ImageLightbox />
     </TargetAskContext.Provider>
     </FrontierRowsContext.Provider>
