@@ -136,6 +136,7 @@ place.
 | 2026-10-03 | **turn-flight ledger feeds InFlight**: `setFlight` / `noteTurnEnded` / `noteQueuedTurnBegan` call `observeTurnFlight` so the send-path bookkeeping is a fold into the authority, not a private map only `flightState` can read | event-stream + flight-ledger feeds both write InFlight; ratchet pin unchanged (still the observeSeat PromptInFlight feed) |
 | 2026-10-03 | **flightState prefers authority InFlight when Known**: Yes→FlightInFlight, No→FlightIdle; process-local `agentFlight` only when authority does not know. All callers (send path, stop guard, idle suppress, backlog, …) share one answer; post-restart empty map no longer erases turn.flight claims | census count unchanged; ratchet pin stays 1 |
 | 2026-10-03 | **agentPhase prefers authority Phase when Known**: running seats show idle/working from Seats().Phase; born-stuck / never_briefed / dead-unmaterialized / stopped / phase_unknown stay first. Unknown Phase keeps ClassifyAgentPhase | census count unchanged until ClassifyAgentPhase disappears |
+| 2026-10-03 | **born-stuck folds into the authority**: diagnoseBirth Observes BornStuck=Yes only on the existing stuck claim (accepted + located-absent + past grace); Present transcript is No; unobservable / in-grace / no birth write nothing | census count unchanged until seatIsBornStuck disappears |
 
 Derivation 5 is the one being dismantled first, because it is the signal
 that authorises `LoadTerminate` to kill a process group and it defaulted to

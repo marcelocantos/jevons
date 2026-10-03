@@ -105,6 +105,10 @@ type State struct {
 	// QueueDepth is how many messages are waiting for this seat, or
 	// QueueUnknown.
 	QueueDepth int
+	// BornStuck is whether an accepted opening prompt never produced a
+	// transcript past grace (🎯T679.2 / census derivation 7). Unknown is
+	// the only honest answer when nobody has diagnosed this name.
+	BornStuck Tri
 
 	// Observed is when this state was learned, and Source names who said so.
 	// They are part of the answer: a control deciding to kill a process is
@@ -130,9 +134,10 @@ type Observation struct {
 	Provider string
 	Model    string
 
-	Alive    Tri
-	InFlight Tri
-	Phase    turnev.Phase
+	Alive     Tri
+	InFlight  Tri
+	Phase     turnev.Phase
+	BornStuck Tri
 
 	// LastActivity zero means no claim.
 	LastActivity time.Time
@@ -225,6 +230,9 @@ func (a *Authority) Observe(obs Observation) {
 	if obs.InFlight.Known() {
 		cur.InFlight = obs.InFlight
 	}
+	if obs.BornStuck.Known() {
+		cur.BornStuck = obs.BornStuck
+	}
 	if obs.Phase != turnev.PhaseUnknown {
 		cur.Phase = obs.Phase
 	}
@@ -291,6 +299,7 @@ func (a *Authority) decay(s State) State {
 	s.Alive = Unknown
 	s.InFlight = Unknown
 	s.Phase = turnev.PhaseUnknown
+	s.BornStuck = Unknown
 	s.QueueDepth = QueueUnknown
 	return s
 }

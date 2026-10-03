@@ -360,16 +360,44 @@ func (s *Server) diagnoseBirth(d claudia.AgentDef, now time.Time) birthDiagnosis
 	})
 	switch out.Existence.Verdict {
 	case ExistencePresent:
+		s.observeBornStuck(d.Name, out)
 		return out
 	case ExistenceUnobservable:
 		out.Unknown = true
+		s.observeBornStuck(d.Name, out)
 		return out
 	case ExistenceAbsent:
 		if out.PastGrace {
 			out.Stuck = true
 		}
 	}
+	s.observeBornStuck(d.Name, out)
 	return out
+}
+
+// observeBornStuck folds a real born-stuck diagnosis into the shared
+// authority (🎯T766.2, census derivation 7). Stuck is Yes only when
+// diagnoseBirth already required accepted prompt + located-absent
+// transcript + past grace. Present transcript is a positive No. Unknown
+// (no birth, unobservable lookup, still inside grace) writes nothing.
+func (s *Server) observeBornStuck(name string, diag birthDiagnosis) {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	var stuck seatstate.Tri
+	switch {
+	case diag.Stuck:
+		stuck = seatstate.Yes
+	case diag.Accepted && diag.Existence.Verdict == ExistencePresent:
+		stuck = seatstate.No
+	default:
+		return
+	}
+	s.Seats().Observe(seatstate.Observation{
+		Name: name, BornStuck: stuck,
+		QueueDepth: seatstate.QueueUnknown,
+		Source:     "born-stuck.claim", At: time.Now(),
+	})
 }
 
 func (s *Server) seatIsBornStuck(d claudia.AgentDef) bool {

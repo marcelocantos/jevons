@@ -286,3 +286,34 @@ func TestT766AgentPhasePrefersAuthorityPhase(t *testing.T) {
 		t.Fatalf("phase_unknown must stay first: %s", got)
 	}
 }
+
+// 🎯T766.2: a real born-stuck diagnosis folds into the authority. Unknown
+// (unobservable lookup, still inside grace) writes nothing — absence is not
+// a claim.
+func TestT766BornStuckFeedsAuthority(t *testing.T) {
+	s := t766Seat(t)
+	s.observeBornStuck("jv-bs", birthDiagnosis{Stuck: true})
+	st, ok := s.Seats().Get("jv-bs")
+	if !ok || st.BornStuck != seatstate.Yes {
+		t.Fatalf("stuck claim: ok=%v %+v", ok, st)
+	}
+
+	s.observeBornStuck("jv-ok", birthDiagnosis{
+		Accepted:  true,
+		Existence: TranscriptExistence{Verdict: ExistencePresent},
+	})
+	st, ok = s.Seats().Get("jv-ok")
+	if !ok || st.BornStuck != seatstate.No {
+		t.Fatalf("present transcript: ok=%v %+v", ok, st)
+	}
+
+	s.observeBornStuck("jv-unk", birthDiagnosis{Unknown: true, Accepted: true, PastGrace: true})
+	if _, ok := s.Seats().Get("jv-unk"); ok {
+		t.Fatal("unobservable must not invent a born-stuck claim")
+	}
+
+	s.observeBornStuck("jv-grace", birthDiagnosis{Accepted: true, PastGrace: false})
+	if _, ok := s.Seats().Get("jv-grace"); ok {
+		t.Fatal("inside grace must not invent a born-stuck claim")
+	}
+}
