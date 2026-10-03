@@ -96,8 +96,27 @@ func Scan(spoolPaths, eventPaths []string, w Window) (Report, error) {
 // seats are omitted rather than silently assigned to a repository.
 func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string) (Report, error) {
 	seats := map[string]*Seat{}
-	targets := map[string]string{}
-	eligible := map[string]bool{}
+	type binding struct {
+		at       time.Time
+		target   string
+		eligible bool
+	}
+	bindings := map[string][]binding{}
+	byTarget := map[string]*Target{}
+	targetSeats := map[string]map[string]bool{}
+	getTarget := func(id, seat string) *Target {
+		if id == "" {
+			return nil
+		}
+		t := byTarget[id]
+		if t == nil {
+			t = &Target{ID: id}
+			byTarget[id] = t
+			targetSeats[id] = map[string]bool{}
+		}
+		targetSeats[id][seat] = true
+		return t
+	}
 	if workdirPrefix != "" {
 		workdirPrefix = filepath.Clean(workdirPrefix)
 	}
@@ -132,25 +151,28 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 			if e.Fields.Name == "" {
 				return fmt.Errorf("successful start missing name")
 			}
+			eligible := true
 			if workdirPrefix != "" {
 				d := filepath.Clean(e.Fields.Workdir)
-				if d != workdirPrefix && !strings.HasPrefix(d, workdirPrefix+string(os.PathSeparator)) {
-					return nil
-				}
-				eligible[e.Fields.Name] = true
+				eligible = d == workdirPrefix || strings.HasPrefix(d, workdirPrefix+string(os.PathSeparator))
 			}
-			if e.Fields.TargetID != "" {
-				targets[e.Fields.Name] = e.Fields.TargetID
+			at, err := time.Parse(time.RFC3339Nano, e.TS)
+			if err != nil {
+				return fmt.Errorf("start timestamp: %w", err)
 			}
+			bindings[e.Fields.Name] = append(bindings[e.Fields.Name], binding{at, e.Fields.TargetID, eligible})
 			yes, err := w.contains(e.TS)
 			if err != nil {
 				return fmt.Errorf("start timestamp: %w", err)
 			}
-			if !yes {
+			if !yes || !eligible {
 				return nil
 			}
 			s := get(e.Fields.Name)
 			s.Starts++
+			if target := getTarget(e.Fields.TargetID, e.Fields.Name); target != nil {
+				target.Starts++
+			}
 			if e.Fields.TargetID == "" {
 				unscoped++
 			}
@@ -159,6 +181,17 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 		if err != nil {
 			return Report{}, err
 		}
+	}
+	for name := range bindings {
+		sort.SliceStable(bindings[name], func(i, j int) bool { return bindings[name][i].at.Before(bindings[name][j].at) })
+	}
+	bindingAt := func(name string, at time.Time) binding {
+		b := bindings[name]
+		i := sort.Search(len(b), func(i int) bool { return b[i].at.After(at) })
+		if i == 0 {
+			return binding{eligible: workdirPrefix == ""}
+		}
+		return b[i-1]
 	}
 	for _, p := range spoolPaths {
 		err := lines(p, func(b []byte) error {
@@ -180,9 +213,6 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 			if rec.Seat == "" {
 				return fmt.Errorf("turn_end missing seat")
 			}
-			if workdirPrefix != "" && !eligible[rec.Seat] {
-				return nil
-			}
 			yes, err := w.contains(rec.TS)
 			if err != nil {
 				return fmt.Errorf("turn_end timestamp: %w", err)
@@ -190,11 +220,22 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 			if !yes {
 				return nil
 			}
+			at, _ := time.Parse(time.RFC3339Nano, rec.TS) // validated above
+			binding := bindingAt(rec.Seat, at)
+			if !binding.eligible {
+				return nil
+			}
 			s := get(rec.Seat)
 			s.Turns++
 			var turnBytes int64
 			for _, msg := range rec.Snapshot.Messages {
 				turnBytes += int64(len(bytes.TrimSpace(msg)))
+			}
+			if target := getTarget(binding.target, rec.Seat); target != nil {
+				target.MessageBytes += turnBytes
+				if turnBytes > target.MaxMessageBytes {
+					target.MaxMessageBytes = turnBytes
+				}
 			}
 			s.MessageBytes += turnBytes
 			if turnBytes > s.MaxMessageBytes {
@@ -207,26 +248,23 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 		}
 	}
 	out := Report{Note: "Serialized snapshot message JSON bytes are a repeated per-turn context proxy, not billed tokens or provider usage. Starts count successful lifecycle events, not turns; target attribution depends on lifecycle target_id.", UnscopedStarts: unscoped}
-	byTarget := map[string]*Target{}
 	for name, s := range seats {
-		s.TargetID = targets[name]
-		out.Seats = append(out.Seats, *s)
-		if s.TargetID != "" {
-			t := byTarget[s.TargetID]
-			if t == nil {
-				t = &Target{ID: s.TargetID}
-				byTarget[s.TargetID] = t
+		at := w.To
+		if at.IsZero() {
+			if b := bindings[name]; len(b) > 0 {
+				at = b[len(b)-1].at
 			}
-			t.Seats++
-			t.MessageBytes += s.MessageBytes
-			t.Starts += s.Starts
-			if s.MaxMessageBytes > t.MaxMessageBytes {
-				t.MaxMessageBytes = s.MaxMessageBytes
-			}
+		} else {
+			at = at.Add(-time.Nanosecond)
 		}
+		if b := bindingAt(name, at); b.eligible {
+			s.TargetID = b.target
+		}
+		out.Seats = append(out.Seats, *s)
 	}
 	sort.Slice(out.Seats, func(i, j int) bool { return out.Seats[i].Name < out.Seats[j].Name })
-	for _, t := range byTarget {
+	for id, t := range byTarget {
+		t.Seats = len(targetSeats[id])
 		out.Targets = append(out.Targets, *t)
 	}
 	sort.Slice(out.Targets, func(i, j int) bool { return out.Targets[i].ID < out.Targets[j].ID })

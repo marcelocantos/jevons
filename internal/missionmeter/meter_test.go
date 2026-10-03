@@ -91,3 +91,50 @@ func TestScopedRequiresMatchingLifecycleWorkdir(t *testing.T) {
 		t.Fatalf("prefix boundary: %+v", r.Seats)
 	}
 }
+
+// A long-lived seat may move between targets. Every historical start and
+// turn belongs to its binding at that time, not the seat's final target.
+func TestReassignedSeatKeepsPerTargetHistory(t *testing.T) {
+	ev := fixture(t, "events.jsonl", strings.Join([]string{
+		`{"ts":"2026-10-03T03:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"worker","target_id":"T2"}}`,
+		`{"ts":"2026-10-03T01:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"worker","target_id":"T1"}}`,
+	}, "\n")+"\n")
+	spool := fixture(t, "spool.log", strings.Join([]string{
+		`{"ts":"2026-10-03T02:00:00Z","seat":"worker","type":"turn_end","snapshot":{"messages":[{"text":"first"}]}}`,
+		`{"ts":"2026-10-03T04:00:00Z","seat":"worker","type":"turn_end","snapshot":{"messages":[{"text":"second"}]}}`,
+	}, "\n")+"\n")
+	r, err := Scan([]string{spool}, []string{ev}, Window{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Targets) != 2 {
+		t.Fatalf("lost historical target: %+v", r.Targets)
+	}
+	for i, target := range r.Targets {
+		want := []int64{int64(len(`{"text":"first"}`)), int64(len(`{"text":"second"}`))}[i]
+		if target.Starts != 1 || target.Seats != 1 || target.MessageBytes != want {
+			t.Fatalf("misattributed target: %+v", target)
+		}
+	}
+	if r.Seats[0].Starts != 2 || r.Seats[0].TargetID != "T2" {
+		t.Fatalf("seat: %+v", r.Seats)
+	}
+}
+
+func TestScopeFollowsSeatAtTurnTime(t *testing.T) {
+	ev := fixture(t, "events.jsonl", strings.Join([]string{
+		`{"ts":"2026-10-03T01:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"worker","target_id":"T1","workdir":"/repo-a"}}`,
+		`{"ts":"2026-10-03T03:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"worker","target_id":"T2","workdir":"/repo-b"}}`,
+	}, "\n")+"\n")
+	spool := fixture(t, "spool.log", strings.Join([]string{
+		`{"ts":"2026-10-03T02:00:00Z","seat":"worker","type":"turn_end","snapshot":{"messages":[{"text":"first"}]}}`,
+		`{"ts":"2026-10-03T04:00:00Z","seat":"worker","type":"turn_end","snapshot":{"messages":[{"text":"second"}]}}`,
+	}, "\n")+"\n")
+	r, err := ScanScoped([]string{spool}, []string{ev}, Window{}, "/repo-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Targets) != 1 || r.Targets[0].ID != "T1" || r.Seats[0].Turns != 1 || r.Targets[0].MessageBytes != int64(len(`{"text":"first"}`)) {
+		t.Fatalf("scope leaked between turns: %+v", r)
+	}
+}
