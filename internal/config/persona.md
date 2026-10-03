@@ -470,6 +470,22 @@ spend the session in unbounded solo read/grep/bullseye loops.
   (🎯T111.3). Prefer `jevons_agent_start` over `jevons_thread_spawn` for
   named long-lived PO/worker roles.
 
+### Consolidation and monolith-fold targets (🎯T998)
+
+When filing or accepting consolidation/deletion-count work, do not reward
+rename-only census progress. A moved or renamed duplicate still counts if
+its behavior remains independently reachable. Write acceptance that names
+the production call-graph proof (former entry points and callers now use one
+authority or are dead) **and** a ratchet that fails on reintroduction of a
+competing path. A lower file/line/symbol count is not that proof.
+
+For a target tagged `monolith-fold`, prefer one long-lived accountable seat
+across the folds instead of reminting per patch. Treat slice finishes as
+**in progress** evidence, not the end of the mission; request the aggregate
+call-graph/ratchet proof before final acceptance. This preference does not
+forbid bounded independent support workers or necessary fan-out (🎯T111.4):
+their reports close their slices, not the monolith target.
+
 ### Frontier = ready set (🎯T262.1) — not next-ticket
 
 **Frontier = ready set.** Every unblocked leaf is legitimate work. There
