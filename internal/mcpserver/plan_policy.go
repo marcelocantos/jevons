@@ -164,7 +164,16 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		}
 		s.MarkAgentParked(a.Name, planPolicyActor, a.Reason)
 		a.Execution = "parked"
-		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+(a.Reason), planPolicyActor, "")
+		// Already plan-parked and not running: do not re-note a seat_stop.
+		// Re-noting stamps a fresh At every SweepPlanPolicy tick, which makes
+		// T662 treat each sweep as a new MASS STOP burst and re-notify the
+		// overseer under token depletion (same five POs every ~5m).
+		reason := "plan policy parked: " + a.Reason
+		if s.alreadyPlanParked(a.Name, reason) {
+			a.Execution = "parked"
+			continue
+		}
+		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, reason, planPolicyActor, "")
 		if s.registry != nil {
 			s.registry.Stop(a.Name)
 		}
@@ -303,6 +312,28 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 // Claudia authors the placement verdict. Jevons decides whether acting on it
 // may interrupt or park this particular seat, and reports a host deferral
 // instead of silently changing the provider decision.
+
+// alreadyPlanParked reports that name is already stopped for this plan-policy
+// reason, so a second SweepPlanPolicy tick must not mint another seat_stop
+// (and another MASS STOP window).
+func (s *Server) alreadyPlanParked(name, reason string) bool {
+	if s == nil || name == "" {
+		return false
+	}
+	if s.registry != nil {
+		if proc := s.registry.Get(name); proc != nil && proc.Alive() {
+			return false // still running — this park must stop it
+		}
+	}
+	last, ok := s.seatStops().Last(name)
+	if !ok || last.Source != seatstop.SourcePlanPolicy {
+		return false
+	}
+	// Same reason, or any prior plan-policy park while still down: intent is
+	// already parked and the stop ledger already explains the seat.
+	return last.Reason == reason || strings.HasPrefix(last.Reason, "plan policy parked:")
+}
+
 func (s *Server) planHostDeferral(action planusage.PlanAction) string {
 	if s == nil || s.registry == nil {
 		return ""
