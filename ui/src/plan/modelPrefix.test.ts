@@ -45,6 +45,23 @@ describe('modelPrefix', () => {
     expect(cursor.label).toBe('');
   });
 
+  it.each([
+    ['GPT 6.1 Sol', '6.1S'],
+    ['gpt-6.1-astra', '6.1A'],
+    ['gpt-6.1-luna', '6.1L'],
+    ['gpt-6.1-spark', '6.1Sp'],
+    ['gpt-6.1', '6.1'],
+    ['gpt-6.1-codex', '6.1'],
+    ['gpt-6.1-solar', '6.1'],
+    ['gpt-5.3-codex-spark', '5.3'],
+  ])('condenses GPT model %s as %s', (model, label) => {
+    const p = modelPrefix({ provider: 'codex', model });
+    expect(p.company).toBe('openai');
+    expect(p.label).toBe(label);
+    expect(p.initial).toBe('');
+    expect(p.version + p.flavour).toBe(label);
+  });
+
   it('unknown company paints nothing', () => {
     expect(modelPrefix({}).company).toBe('');
     expect(modelPrefix({ provider: 'mystery-llm' }).company).toBe('');

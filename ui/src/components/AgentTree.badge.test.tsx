@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { AgentTree } from './AgentTree';
 
 describe('AgentTree model badges', () => {
-  it('paints Claude and Cursor siblings, and does not invent a version', () => {
+  it('paints Claude, Cursor and Codex siblings, and does not invent a version', () => {
     const { container } = render(
       <AgentTree
         selected=""
@@ -25,6 +25,8 @@ describe('AgentTree model badges', () => {
             provider: 'cursor',
             model: 'claude-opus-5',
           },
+          { name: 'jv-codex-sol', parent: 'jevons-po', provider: 'codex', model: 'gpt-6.1-sol' },
+          { name: 'jv-codex-bare', parent: 'jevons-po', provider: 'codex', model: 'gpt-6.1' },
           { name: 'jv-bare-claude', parent: 'jevons-po', provider: 'claude' },
         ]}
       />,
@@ -46,6 +48,9 @@ describe('AgentTree model badges', () => {
     expect(byName.get('claudia-po')?.getAttribute('title')).toBe('Cursor · claude-opus-5');
     expect(byName.get('jv-bare-claude')?.getAttribute('data-company')).toBe('anthropic');
     expect(byName.get('jv-bare-claude')?.querySelector('sub')).toBeNull();
+    expect(byName.get('jv-codex-sol')?.getAttribute('data-company')).toBe('openai');
+    expect(byName.get('jv-codex-sol')?.querySelector('sub')?.textContent).toBe('6.1S');
+    expect(byName.get('jv-codex-bare')?.querySelector('sub')?.textContent).toBe('6.1');
     expect(byName.has('jevons-po')).toBe(false);
   });
 });

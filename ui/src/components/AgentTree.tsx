@@ -92,7 +92,7 @@ function ModelBadge({ node }: { node: AgentNode }) {
     p.initial || p.version ? (
       <sub>
         {p.initial ? <span className="model-family">{p.initial}</span> : null}
-        {p.version}
+        {p.version}{p.flavour}
       </sub>
     ) : null;
   async function openMenu(e: { preventDefault: () => void; stopPropagation: () => void; currentTarget: HTMLElement }) {

@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-/** Fleet badge: company mark + condensed model. Same rules as web/scripts/model_prefix.js (🎯T287). */
+/** Fleet badge: company mark + condensed model (🎯T287). */
 
 const ANTHROPIC = 'anthropic';
 const XAI = 'xai';
@@ -21,6 +21,8 @@ const PROVIDER_COMPANY: Record<string, string> = {
 
 const FAMILIES = ['opus', 'sonnet', 'haiku', 'fable', 'grok', 'gpt'];
 const FAMILY_INITIAL: Record<string, string> = { opus: 'O', sonnet: 'S', haiku: 'H', fable: 'F' };
+// OpenAI's named GPT flavours are distinct models at the same version (🎯T1000).
+const GPT_FLAVOUR: Record<string, string> = { sol: 'S', astra: 'A', luna: 'L', spark: 'Sp' };
 const COMPANY_LABEL: Record<string, string> = {
   anthropic: 'Anthropic',
   xai: 'xAI',
@@ -114,10 +116,19 @@ export function familyInitial(model: string): string {
   return family.charAt(0).toUpperCase();
 }
 
+/** Only a complete token after the GPT version is a flavour; never infer one
+ * from unrelated words (e.g. codex, snapshot) or a partial match. */
+function gptFlavour(model: string): string {
+  const m = norm(model);
+  const match = /(?:^|[^a-z0-9])gpt[^a-z0-9]+\d+(?:[.\-_]\d+)*(?:[^a-z0-9]+)(sol|astra|luna|spark)(?=$|[^a-z0-9])/i.exec(m);
+  return match ? GPT_FLAVOUR[match[1]] : '';
+}
+
 export type ModelPrefix = {
   company: string;
   initial: string;
   version: string;
+  flavour: string;
   label: string;
   title: string;
 };
@@ -127,16 +138,17 @@ export function modelPrefix(agent: { provider?: string; model?: string } | null 
   const provider = String(a.provider || '');
   const model = String(a.model || '');
   const company = companyFor(provider, model);
-  if (!company) return { company: '', initial: '', version: '', label: '', title: '' };
+  if (!company) return { company: '', initial: '', version: '', flavour: '', label: '', title: '' };
   // The mark is the provider. The condensed text is the model that is
   // actually running, including a Claude model on a Cursor seat. Hiding
   // that text because the model company differs left every Cursor PO
   // looking model-less (2026-09-22).
   const initial = familyInitial(model);
   const version = versionOf(model);
+  const flavour = version ? gptFlavour(model) : '';
   const shown = model || provider;
   const title = (COMPANY_LABEL[company] || company) + (shown ? ' · ' + shown : '');
-  return { company, initial, version, label: initial + version, title };
+  return { company, initial, version, flavour, label: initial + version + flavour, title };
 }
 
 /** Keep last provider/model when a poll omits them (omitempty). */
