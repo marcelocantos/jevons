@@ -139,7 +139,7 @@ func ReadSessionEvidence(provider claudia.Provider, sessionID, workDir string) S
 	}
 }
 
-// ClassifyAgentPhase is the agent_list phase column: the 🎯T305 answer, plus
+// classifyAgentListPhase is the agent_list phase column: the 🎯T305 answer, plus
 // what the agent's own session records say when that answer would otherwise be
 // never_briefed.
 //
@@ -147,7 +147,7 @@ func ReadSessionEvidence(provider claudia.Provider, sessionID, workDir string) S
 // and registry inputs still decide every case they can decide, and evidence is
 // consulted only at the one point where the old derivation had run out of
 // things it actually knew and asserted anyway.
-func ClassifyAgentPhase(alive, turnBegan, materialized bool, ev SessionEvidence) string {
+func classifyAgentListPhase(alive, turnBegan, materialized bool, ev SessionEvidence) string {
 	status := ClassifyAgentListStatus(alive, turnBegan, materialized)
 	switch status {
 	case AgentStatusNeverBriefed:
@@ -176,11 +176,11 @@ func ClassifyAgentPhase(alive, turnBegan, materialized bool, ev SessionEvidence)
 
 // agentPhase derives the phase column for one registry row.
 //
-// 🎯T766.2: when ClassifyAgentPhase says running and the shared authority
+// 🎯T766.2: when classifyAgentListPhase says running and the shared authority
 // already holds a positive idle/working Phase, that reading wins. Born-stuck,
 // never_briefed, dead-unmaterialized, stopped, and phase_unknown stay first —
 // a Known transcript phase must not hide those claims. Unknown Phase keeps
-// the ClassifyAgentPhase path (no invention).
+// the classifyAgentListPhase path (no invention).
 func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
 	if alive && s.bornStuck(d) {
 		return AgentStatusBornStuck
@@ -189,7 +189,7 @@ func (s *Server) agentPhase(d claudia.AgentDef, alive bool) string {
 	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		ev = SessionEvidencePresent
 	}
-	status := ClassifyAgentPhase(alive, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
+	status := classifyAgentListPhase(alive, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
 	if status != AgentStatusRunning {
 		return status
 	}

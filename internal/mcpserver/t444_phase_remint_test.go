@@ -60,7 +60,7 @@ func TestT444ReMintedSessionIsNotNeverBriefed(t *testing.T) {
 	}
 	// alive, no process-local turn (the daemon or the seat was restarted),
 	// Materialized false (promoted only at Launch, against the OLD session id).
-	got := ClassifyAgentPhase(true, false, false, ev)
+	got := classifyAgentListPhase(true, false, false, ev)
 	if got == AgentStatusNeverBriefed {
 		t.Fatal("a mid-turn agent with a 2-record transcript was reported never_briefed: " +
 			"the label that invites a duplicate brief onto a live turn (🎯T416)")
@@ -95,7 +95,7 @@ func TestT444AbsentTranscriptStillNeverBriefed(t *testing.T) {
 	if ev != SessionEvidenceAbsent {
 		t.Fatalf("session evidence with no transcript on disk: %s want absent", ev)
 	}
-	if got := ClassifyAgentPhase(true, false, false, ev); got != AgentStatusNeverBriefed {
+	if got := classifyAgentListPhase(true, false, false, ev); got != AgentStatusNeverBriefed {
 		t.Fatalf("live zero-turn seat with no session: %s want never_briefed", got)
 	}
 }
@@ -122,7 +122,7 @@ func TestT444UnlocatableRecordsAreUnknownNotNeverBriefed(t *testing.T) {
 			if ev != SessionEvidenceUnknown {
 				t.Fatalf("evidence: %s want unknown", ev)
 			}
-			got := ClassifyAgentPhase(true, false, false, ev)
+			got := classifyAgentListPhase(true, false, false, ev)
 			if got == AgentStatusNeverBriefed {
 				t.Fatal("a phase nobody could read must not be reported as never_briefed")
 			}
@@ -140,24 +140,24 @@ func TestT444UnlocatableRecordsAreUnknownNotNeverBriefed(t *testing.T) {
 // evidence value.
 func TestT444EvidenceDoesNotOverrideDecidedPhases(t *testing.T) {
 	for _, ev := range []SessionEvidence{SessionEvidenceUnknown, SessionEvidenceAbsent, SessionEvidencePresent} {
-		if got := ClassifyAgentPhase(false, false, false, ev); got != AgentStatusStopped {
+		if got := classifyAgentListPhase(false, false, false, ev); got != AgentStatusStopped {
 			t.Fatalf("dead seat with evidence=%s: %s want stopped", ev, got)
 		}
-		if got := ClassifyAgentPhase(true, true, false, ev); got != AgentStatusRunning {
+		if got := classifyAgentListPhase(true, true, false, ev); got != AgentStatusRunning {
 			t.Fatalf("process-local turn with evidence=%s: %s want running", ev, got)
 		}
 	}
 	// Materialized keeps running when evidence cannot prove absence (🎯T422:
 	// unknown never manufactures a death) or when the transcript is present.
 	for _, ev := range []SessionEvidence{SessionEvidenceUnknown, SessionEvidencePresent} {
-		if got := ClassifyAgentPhase(true, false, true, ev); got != AgentStatusRunning {
+		if got := classifyAgentListPhase(true, false, true, ev); got != AgentStatusRunning {
 			t.Fatalf("materialized with evidence=%s: %s want running", ev, got)
 		}
 	}
 	// 🎯T412 carve-out: the durable Materialized flag alone over an absent
 	// transcript is a dead seat — this is the one decided T305 answer evidence
 	// is allowed to demote.
-	if got := ClassifyAgentPhase(true, false, true, SessionEvidenceAbsent); got != AgentStatusDeadUnmaterialized {
+	if got := classifyAgentListPhase(true, false, true, SessionEvidenceAbsent); got != AgentStatusDeadUnmaterialized {
 		t.Fatalf("materialized with evidence=absent: %s want %s", got, AgentStatusDeadUnmaterialized)
 	}
 }

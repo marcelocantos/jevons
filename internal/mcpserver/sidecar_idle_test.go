@@ -14,7 +14,7 @@ func TestSidecarSeatWithoutClaudeJSONLIsNotIdle(t *testing.T) {
 	if ev != SessionEvidenceUnknown {
 		t.Fatalf("sidecar evidence = %v, want unknown (not absent/idle)", ev)
 	}
-	phase := ClassifyAgentPhase(true, false, true, ev)
+	phase := classifyAgentListPhase(true, false, true, ev)
 	if phase == AgentStatusDeadUnmaterialized || phase == "idle" {
 		t.Fatalf("sidecar with no Claude JSONL classified %q", phase)
 	}

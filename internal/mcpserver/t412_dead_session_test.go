@@ -90,17 +90,17 @@ func TestT412MaterializedSeatStillRunning(t *testing.T) {
 func TestT412DemotionBounds(t *testing.T) {
 	// A confirmed in-process turn keeps running: a session minted this
 	// instant legitimately has no JSONL yet (the mint window).
-	if got := ClassifyAgentPhase(true, true, true, SessionEvidenceAbsent); got != AgentStatusRunning {
+	if got := classifyAgentListPhase(true, true, true, SessionEvidenceAbsent); got != AgentStatusRunning {
 		t.Fatalf("turnBegan over absent evidence: %s want %s (mint window must stay running)",
 			got, AgentStatusRunning)
 	}
 	// Evidence Unknown (a grok/codex seat, or an unreadable store) keeps
 	// running: a failure to observe never manufactures a death (🎯T422).
-	if got := ClassifyAgentPhase(true, false, true, SessionEvidenceUnknown); got != AgentStatusRunning {
+	if got := classifyAgentListPhase(true, false, true, SessionEvidenceUnknown); got != AgentStatusRunning {
 		t.Fatalf("unknown evidence: %s want %s (no death from a failed look)", got, AgentStatusRunning)
 	}
 	// A dead process stays stopped — the new label is about live seats.
-	if got := ClassifyAgentPhase(false, false, true, SessionEvidenceAbsent); got != AgentStatusStopped {
+	if got := classifyAgentListPhase(false, false, true, SessionEvidenceAbsent); got != AgentStatusStopped {
 		t.Fatalf("dead process: %s want %s", got, AgentStatusStopped)
 	}
 	// Non-Claude providers read Unknown, so the production path cannot demote
