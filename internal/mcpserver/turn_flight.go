@@ -6,6 +6,8 @@ package mcpserver
 import (
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T416 — what a send DID, in four answers rather than two.
@@ -213,7 +215,6 @@ func (s *Server) noteTurnEnded(name string) {
 	// 🎯T927: an observed end answers every question a wedge asked.
 	s.wedges.turnEnded(name)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.agentTerminalGeneration == nil {
 		s.agentTerminalGeneration = map[string]uint64{}
 	}
@@ -224,6 +225,9 @@ func (s *Server) noteTurnEnded(name string) {
 		s.agentFlight = map[string]TurnFlight{}
 	}
 	s.agentFlight[name] = FlightIdle
+	s.mu.Unlock()
+	// 🎯T766.2: turn-flight write path feeds the shared authority (InFlight=No).
+	s.observeTurnFlight(name, FlightIdle)
 }
 
 func (s *Server) terminalGeneration(name string) uint64 {
@@ -236,8 +240,8 @@ func (s *Server) terminalGeneration(name string) uint64 {
 // state. Returning true preserves its drain request after the head is released.
 func (s *Server) noteQueuedTurnBegan(name string, generation uint64) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.agentTerminalGeneration[name] != generation {
+		s.mu.Unlock()
 		return true
 	}
 	if s.agentFlight == nil {
@@ -245,6 +249,9 @@ func (s *Server) noteQueuedTurnBegan(name string, generation uint64) bool {
 	}
 	s.agentFlight[name] = FlightInFlight
 	s.wedges.flightBegan(name, time.Now())
+	s.mu.Unlock()
+	// 🎯T766.2: queued turn begin is an InFlight claim the authority must hear.
+	s.observeTurnFlight(name, FlightInFlight)
 	return false
 }
 
@@ -269,7 +276,6 @@ func (s *Server) setFlight(name string, f TurnFlight) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.agentFlight == nil {
 		s.agentFlight = map[string]TurnFlight{}
 	}
@@ -277,4 +283,33 @@ func (s *Server) setFlight(name string, f TurnFlight) {
 		s.wedges.flightBegan(name, time.Now())
 	}
 	s.agentFlight[name] = f
+	s.mu.Unlock()
+	// 🎯T766.2: the send-path flight ledger is a knowing party for InFlight;
+	// fold every write into the shared authority so controls do not re-derive.
+	s.observeTurnFlight(name, f)
+}
+
+// observeTurnFlight records what the turn-flight ledger just wrote (🎯T766.2).
+// Only Idle and InFlight are claims; Unknown leaves the authority alone so a
+// forgotten bookkeeping slot cannot invent calm or busyness.
+func (s *Server) observeTurnFlight(name string, f TurnFlight) {
+	if s == nil || name == "" {
+		return
+	}
+	switch f {
+	case FlightInFlight:
+		s.Seats().Observe(seatstate.Observation{
+			Name: name, Alive: seatstate.Yes, InFlight: seatstate.Yes,
+			QueueDepth: seatstate.QueueUnknown,
+			Source:     "turn.flight", At: time.Now(),
+		})
+	case FlightIdle:
+		s.Seats().Observe(seatstate.Observation{
+			Name: name, InFlight: seatstate.No,
+			QueueDepth: seatstate.QueueUnknown,
+			Source:     "turn.flight", At: time.Now(),
+		})
+	default:
+		// FlightUnknown: no claim.
+	}
 }

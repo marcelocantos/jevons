@@ -185,3 +185,29 @@ func TestT766IdleNudgeObservesSessionPhase(t *testing.T) {
 		t.Fatalf("transcript fold invented live fields: Alive=%s InFlight=%s", st.Alive, st.InFlight)
 	}
 }
+
+// 🎯T766.2: setFlight / noteTurnEnded write InFlight into the shared authority
+// so other controls read one answer rather than re-deriving from agentFlight.
+func TestT766TurnFlightFeedsAuthority(t *testing.T) {
+	s := t766Seat(t)
+	s.noteTurnInFlight("jv-flight")
+	st, ok := s.Seats().Get("jv-flight")
+	if !ok || st.InFlight != seatstate.Yes {
+		t.Fatalf("in-flight write did not reach authority: ok=%v %+v", ok, st)
+	}
+	if st.Alive != seatstate.Yes {
+		t.Fatalf("in-flight should also claim alive: Alive=%s", st.Alive)
+	}
+	s.noteTurnEnded("jv-flight")
+	st, _ = s.Seats().Get("jv-flight")
+	if st.InFlight != seatstate.No {
+		t.Fatalf("turn end did not clear InFlight: %+v", st)
+	}
+	// Unknown is not a claim — must not overwrite a prior Yes with ignorance.
+	s.Seats().FromClaudia(seatstate.SeatReport{Name: "jv-u", Alive: true, PromptInFlight: true, Known: true}, nowForTest())
+	s.setFlight("jv-u", FlightUnknown)
+	st, _ = s.Seats().Get("jv-u")
+	if st.InFlight != seatstate.Yes {
+		t.Fatalf("FlightUnknown must not erase a known InFlight: %+v", st)
+	}
+}
