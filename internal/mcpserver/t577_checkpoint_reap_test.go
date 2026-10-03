@@ -100,10 +100,10 @@ func TestT577FinishReportEnvelopeStillReaps(t *testing.T) {
 		Target:       "T577",
 		SHA:          "abcdef0123456",
 		SilentLedger: envelope.SilentLedgerEmpty,
-		Payload:      "Done. Next step: overseer reviews.",
+		Payload:      "Done. Mission complete.",
 	})
 	if !LooksLikeFinishedWorkReport(raw) {
-		t.Fatal("typed finish-report must still reap even with next-step payload")
+		t.Fatal("terminal finish-report must still reap")
 	}
 	reg := t395Registry(t, "jv-t577-envelope")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t577-envelope", raw, nil)
@@ -222,14 +222,14 @@ func TestT577MisEnvelopedCheckpointNotifiesPO(t *testing.T) {
 		Payload:      "Checkpoint (turn-depth ceiling). Next step: implement the close rule.",
 	})
 	s.maybeReapDoneWorkAgent("jv-t577-envelope", raw)
-	if reg.Def("jv-t577-envelope") != nil {
-		t.Fatal("finish-report envelope must still reap")
+	if reg.Def("jv-t577-envelope") == nil {
+		t.Fatal("T784: mid-work finish-report must retain the seat")
 	}
 	if len(po.sent) != 1 {
 		t.Fatalf("PO deliveries = %d, want 1: %v", len(po.sent), po.sent)
 	}
 	got := po.sent[0]
-	for _, want := range []string{"🎯T577", "jv-t577-envelope", "Respawn"} {
+	for _, want := range []string{"🎯T577", "jv-t577-envelope", "remaining work", "kept"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PO notice missing %q:\n%s", want, got)
 		}

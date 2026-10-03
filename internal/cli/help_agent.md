@@ -388,6 +388,28 @@ exploration. Single-agent tasks remain fine. Zero children after planning
 on a multi-slice brief is a failure mode (`jevons_agent_list` fan-out
 check). Prefer agents over threads for named long-lived workers.
 
+### Consolidation and monolith-fold targets (🎯T998)
+
+A consolidation or deletion-count target measures **removed competing behavior**,
+not movement of names. **Rename-only** changes (renaming a helper or
+moving a file), or replacing a call
+with an equally independent implementation is **not** census progress. Before
+claiming a decrement, trace the production call graph: name the former entry
+points and callers, show their new single authority (or that they are dead),
+and count remaining independently reachable implementations. Acceptance must
+name both that call-graph proof and a ratchet that fails if the duplicate
+path returns; a lower line/file/symbol count alone is not an oracle.
+
+A target tagged `monolith-fold` prefers **one long-lived accountable seat**
+through its successive slices rather than re-minting a worker for each patch.
+A slice finish is evidence for the continuing mission, whose status remains
+**in progress**; it is not a terminal finish of the whole target. The seat
+reports the accumulated call-graph/ratchet proof for final independent
+acceptance only after all folds meet the target's criteria. This is a
+placement preference, not a ban on bounded independent support slices or
+necessary fan-out (🎯T111.4); support workers report their own slice to the
+long-lived seat without claiming the monolith complete.
+
 ### Frontier = ready set (🎯T262.1)
 
 **Frontier = ready set.** Every unblocked leaf is legitimate work. There is

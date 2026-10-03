@@ -776,6 +776,11 @@ func main() {
 		slog.Error("fleet intent store failed", "err", err)
 		os.Exit(1)
 	}
+	// T998: durable target churn bound, independent of provider quota.
+	if err := mcpSrv.OpenMissionProtection(cfg.StateDir); err != nil {
+		slog.Error("mission protection store failed", "err", err)
+		os.Exit(1)
+	}
 	// A relaunch refusal is what the fleet row calls "broken: …". It lived
 	// only in memory, so a bounce replaced it with "unknown".
 	if err := fleet.UseRehydrateFailureFile(filepath.Join(cfg.StateDir, "rehydrate-failures.json")); err != nil {

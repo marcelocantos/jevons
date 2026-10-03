@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/gate"
 )
 
@@ -50,6 +51,9 @@ type OutstandingScope struct {
 // regardless of where it runs.
 func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktree bool) []OutstandingScope {
 	var out []OutstandingScope
+	if scope := midWorkReportScope(report); scope != nil {
+		out = append(out, *scope)
+	}
 	if declaresBlockingGateWaitLocalized(report) {
 		out = append(out, OutstandingScope{
 			Kind:   "pending_gate",
@@ -70,6 +74,22 @@ func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktr
 		})
 	}
 	return out
+}
+
+// midWorkReportScope gives declared remaining work precedence over the
+// envelope kind (T784). Evidence for a slice does not close its mission.
+func midWorkReportScope(report string) *OutstandingScope {
+	m, err := envelope.Parse(report)
+	if m == nil || err != nil || m.Kind != envelope.KindFinishReport {
+		return nil
+	}
+	if m.Status == envelope.ProgressInProgress {
+		return &OutstandingScope{Kind: "in_progress", Detail: "the worker explicitly reports status in-progress"}
+	}
+	if hasForwardLookingPlan(m.Payload) || ClassifyReportAsk(m.Payload) == AskExplicitIncomplete || ClassifyReportAsk(m.Payload) == AskCheckpoint {
+		return &OutstandingScope{Kind: "remaining_work", Detail: "the worker names remaining work: " + m.Payload}
+	}
+	return nil
 }
 
 // probeOwnWorktree reports whether dir is its own linked git worktree
