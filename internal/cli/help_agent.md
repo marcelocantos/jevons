@@ -391,7 +391,8 @@ check). Prefer agents over threads for named long-lived workers.
 ### Consolidation and monolith-fold targets (🎯T998)
 
 A consolidation or deletion-count target measures **removed competing behavior**,
-not movement of names. Renaming a helper, moving a file, or replacing a call
+not movement of names. **Rename-only** changes (renaming a helper or
+moving a file), or replacing a call
 with an equally independent implementation is **not** census progress. Before
 claiming a decrement, trace the production call graph: name the former entry
 points and callers, show their new single authority (or that they are dead),
