@@ -740,6 +740,12 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
 	}
+	settleStart, err := s.reserveMissionStart(name, workdir, targetID, parent, "work", "auto:frontier", false, "")
+	if err != nil {
+		return fmt.Errorf("%s", s.missionStartRefusal(name, targetID, err))
+	}
+	missionStarted := false
+	defer func() { settleStart(missionStarted) }()
 	// 🎯T970: the registered row is starting, not stopped, until this returns.
 	defer s.markStarting(name)()
 	def, existed, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID), brief)
@@ -753,6 +759,8 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 		s.noteSeatStop(name, seatstop.SourceStartFailed, "start failed: "+err.Error(), parent, "")
 		return fmt.Errorf("launch: %w", err)
 	}
+	missionStarted = true
+	s.logLifecycle(compAgentLifecycle, "start", "ok", map[string]any{"name": name, "target_id": targetID, "workdir": workdir, "purpose": "work", "parent": parent, "actor": "auto:frontier"})
 	s.wireAgentEvents(name, proc)
 	s.startMu.Unlock()
 	if deferStartPrompt(def.Provider) {

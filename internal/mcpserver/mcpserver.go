@@ -36,6 +36,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
+	"github.com/marcelocantos/jevons/internal/missionbound"
 	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/reapverify"
@@ -73,7 +74,8 @@ type TranscriptOps struct {
 
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
-	registry *claudia.Registry
+	missionStarts *missionbound.Store
+	registry      *claudia.Registry
 	// seatPlans holds placement and migration fields the published
 	// AgentDef does not carry. Nil reads as empty state.
 	seatPlans  *seatplan.Store

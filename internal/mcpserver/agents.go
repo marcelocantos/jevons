@@ -89,6 +89,8 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
 			mcp.WithString("role", mcp.Description("Declarative fleet role (🎯T511 / 🎯T536.2): worker (default for Build), auditor (read-only ledger challenger), product-owner, boss, aside, overseer. Registry records the role; built-ins cannot be deleted. Empty → default from purpose/name.")),
 			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
+			mcp.WithBoolean("remint_override", mcp.Description("T998: authorize one start past the target start bound. Requires actor=owner or the overseer and override_reason; force_engage does not bypass the bound.")),
+			mcp.WithString("override_reason", mcp.Description("Reason for a one-start remint_override; durably recorded with actor and target.")),
 			mcp.WithBoolean("force_engage", mcp.Description("If true, allow a second work agent on an already-engaged or closed target (deliberate override 🎯T222). Default false.")),
 			mcp.WithString("prompt", mcp.Description("Optional opening brief delivered after Launch. Cursor ACP (🎯T541) starts without the prompt, releases the start mutex, then sends the brief — confirmed turn-begin is not waited on the start RPC (that hang blocked agent_list/send/kill). Other providers still require confirmed turn-begin (🎯T305).")),
 		),
@@ -546,6 +548,14 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		}
 	}
 
+	overrideReason, _ := args["override_reason"].(string)
+	settleStart, err := s.reserveMissionStart(name, workdir, targetID, parent, purpose, actor, boolArg(args["remint_override"]), overrideReason)
+	if err != nil {
+		return mcp.NewToolResultError(s.missionStartRefusal(name, targetID, err)), nil
+	}
+	missionStarted := false
+	defer func() { settleStart(missionStarted) }()
+
 	s.mu.Lock()
 	s.pendingSpawnRole = resolved.Name
 	s.pendingOwnerAsked = boolArg(args["owner_asked"])
@@ -638,6 +648,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 			fmt.Sprintf("start failed: %v", err))), nil
 	}
 
+	missionStarted = true
 	// Wire events: broadcast to web UI and notify Jevon on agent responses.
 	s.wireAgentEvents(name, proc)
 	s.startMu.Unlock()
