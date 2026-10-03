@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 const t3921Session = "019fd13d-e500-7913-b96c-981e50aa2e99"
@@ -41,6 +43,8 @@ func TestT392_1SendDefersWithoutRotatingSession(t *testing.T) {
 	t.Cleanup(func() { reg.Stop(name) })
 
 	f := NewClaudia(reg)
+	// StubAgent has no session identity; feed the fixture observation explicitly.
+	f.seats.FromClaudia(seatstate.SeatReport{Name: name, SessionID: t3921Session, Alive: true, Known: true}, time.Now())
 	var gatedSession string
 	f.SetTurnGate(func(agent, sessionID string) error {
 		gatedSession = sessionID
