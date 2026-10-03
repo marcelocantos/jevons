@@ -384,12 +384,22 @@ func (s *Server) observeBornStuck(name string, diag birthDiagnosis) {
 	if s == nil || strings.TrimSpace(name) == "" {
 		return
 	}
+	// Unobservable lookup must not invent Yes or No (🎯T422 / T679.2).
+	if diag.Unknown {
+		return
+	}
 	var stuck seatstate.Tri
 	switch {
 	case diag.Stuck:
 		stuck = seatstate.Yes
 	case diag.Accepted && diag.Existence.Verdict == ExistencePresent:
 		stuck = seatstate.No
+	case !diag.Accepted:
+		// No opening accepted on this birth (e.g. remint) — clear a stale Yes.
+		stuck = seatstate.No
+	case diag.Accepted && !diag.PastGrace:
+		// Inside grace: not stuck yet, and not a positive clear either.
+		return
 	default:
 		return
 	}
@@ -400,7 +410,16 @@ func (s *Server) observeBornStuck(name string, diag birthDiagnosis) {
 	})
 }
 
+// seatIsBornStuck reports whether d is born-stuck (🎯T766.2). When the
+// authority already holds a Known BornStuck claim, that answer is used.
+// Unknown falls back to diagnoseBirth (which also refreshes the fold).
 func (s *Server) seatIsBornStuck(d claudia.AgentDef) bool {
+	if s == nil || d.Name == "" {
+		return false
+	}
+	if st, ok := s.Seats().Get(d.Name); ok && st.BornStuck.Known() {
+		return st.BornStuck == seatstate.Yes
+	}
 	return s.diagnoseBirth(d, s.birthClock()).Stuck
 }
 
