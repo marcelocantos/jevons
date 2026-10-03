@@ -88,7 +88,7 @@ func t679_2Harness(t *testing.T, provider claudia.Provider, sid string) *t679_2E
 	s.SetSendQueueDir(dir)
 	s.SetBirthClock(clock.now)
 	s.SetSeatAliveFn(func(n string) bool { return n == name })
-	s.SetSenderResolver(func(n string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(n string) (agentSender, bool, error) {
 		switch n {
 		case name:
 			return child, false, nil
@@ -121,7 +121,7 @@ func (e *t679_2Env) accept() {
 
 func (e *t679_2Env) list() string {
 	e.t.Helper()
-	res, err := e.s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	res, err := observedAgentList(e.s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestT679_2AtDeadlineMarksAndNotifiesParentOnce(t *testing.T) {
 	}
 
 	body2 := e.list()
-	e.s.sweepBornStuck()
+	sweepObservedBirths(e.s)
 	if n := e.parentNotices(); len(n) != 1 {
 		t.Fatalf("repeated list/sweep resent the notice: %d\n%s", len(n), body2)
 	}
@@ -213,7 +213,7 @@ func TestT679_2PeriodicHookRunsWithoutList(t *testing.T) {
 	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-hook")
 	e.accept()
 	e.clock.add(BornStuckGrace)
-	e.s.sweepBornStuck()
+	sweepObservedBirths(e.s)
 	if n := e.parentNotices(); len(n) != 1 {
 		t.Fatalf("periodic sweep did not notify: %v", n)
 	}
@@ -378,7 +378,7 @@ func TestT679_2NoticeFailureRetriesAfterRestartWithoutManufacturingSuccess(t *te
 	e.accept()
 	e.parent.sendErr = fmt.Errorf("parent unreachable")
 	e.clock.add(BornStuckGrace)
-	e.s.sweepBornStuck()
+	sweepObservedBirths(e.s)
 	if n := e.parentNotices(); len(n) != 0 {
 		t.Fatalf("failed notice was treated as submitted: %v", n)
 	}
@@ -400,13 +400,13 @@ func TestT679_2NoticeFailureRetriesAfterRestartWithoutManufacturingSuccess(t *te
 	s2.SetBirthClock(e.clock.now)
 	s2.SetSeatAliveFn(func(n string) bool { return n == e.name })
 	parent2 := &fakeSender{alive: true}
-	s2.SetSenderResolver(func(n string) (agentSender, bool, error) {
+	setObservedSenderResolver(s2, func(n string) (agentSender, bool, error) {
 		if n == e.parentName {
 			return parent2, false, nil
 		}
 		return &fakeSender{alive: true}, false, nil
 	})
-	s2.sweepBornStuck()
+	sweepObservedBirths(s2)
 	var notices []string
 	for _, msg := range parent2.sent {
 		if strings.Contains(msg, "born-stuck:") {
@@ -416,7 +416,7 @@ func TestT679_2NoticeFailureRetriesAfterRestartWithoutManufacturingSuccess(t *te
 	if len(notices) != 1 {
 		t.Fatalf("restart must retry the unsubmitted notice once, got %d: %v", len(notices), notices)
 	}
-	s2.sweepBornStuck()
+	sweepObservedBirths(s2)
 	count := 0
 	for _, msg := range parent2.sent {
 		if strings.Contains(msg, "born-stuck:") {
@@ -433,7 +433,7 @@ func TestT679_2DiagnosisDoesNotStopKillMigrateOrWeakenT664(t *testing.T) {
 	e.accept()
 	e.s.noteUnconfirmedSend(e.name, "Execute 🎯T679.2.")
 	e.clock.add(BornStuckGrace)
-	e.s.sweepBornStuck()
+	sweepObservedBirths(e.s)
 	if e.reg.Def(e.name) == nil {
 		t.Fatal("diagnosis killed or removed the seat")
 	}

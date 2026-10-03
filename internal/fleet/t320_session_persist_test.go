@@ -49,7 +49,7 @@ func TestT320NeverWrittenDoesNotEngageRehydrate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if SessionLost(&def) {
+	if observedResumeLost(&def) {
 		t.Fatal("never-written (Materialized=false) reported SessionLost — would force T313")
 	}
 
@@ -92,7 +92,7 @@ func TestT320MaterializedMissingJSONLStillRehydrates(t *testing.T) {
 	if err := reg.Register(def); err != nil {
 		t.Fatal(err)
 	}
-	if !SessionLost(&def) {
+	if !observedResumeLost(&def) {
 		t.Fatal("Materialized+missing JSONL must still be SessionLost (T313 residual)")
 	}
 	lost, ok, err := RehydrateLostSessionIn(reg, def.Name)
@@ -123,12 +123,12 @@ func TestT320CompletedTurnJSONLNotLost(t *testing.T) {
 		Name: "ok", WorkDir: workDir, SessionID: sid,
 		Materialized: true, Provider: claudia.ProviderClaude,
 	}
-	if SessionLost(def) {
+	if observedResumeLost(def) {
 		t.Fatal("completed-turn JSONL reported lost")
 	}
 	// Pre-MarkMaterialized but JSONL already on disk: still not lost.
 	def.Materialized = false
-	if SessionLost(def) {
+	if observedResumeLost(def) {
 		t.Fatal("JSONL present with Materialized=false reported lost")
 	}
 }

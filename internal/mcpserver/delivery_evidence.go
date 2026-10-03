@@ -43,12 +43,7 @@ func (s *Server) agentIsComposing(name string) bool {
 	if s.flightState(name) == FlightInFlight {
 		return true
 	}
-	if s.idleActivity != nil {
-		if ph := strings.ToLower(strings.TrimSpace(s.idleActivity.Get(name).Phase)); ph == "working" {
-			return true
-		}
-	}
-	return false
+	return s.seatState(name).Phase == turnev.PhaseWorking
 }
 
 // deliveryStateDir is where confirmed deliveries persist (🎯T417). Prefer the

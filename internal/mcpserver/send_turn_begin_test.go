@@ -187,7 +187,7 @@ func sendFixture(t *testing.T, agent *sendingAgent, tr *sessionLog) (*Server, *o
 	inbox := &overseerInbox{}
 	s := &Server{}
 	s.SetOverseerDeliver(inbox.deliver)
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return agent, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return agent, false, nil })
 	obs := newFakeObserver(tr.path)
 	s.SetTurnWitness(func(_, payload string) turnWatch {
 		return observeTurnFor(obs, payload, shortWindow)
@@ -517,7 +517,7 @@ func TestDrainedMessageThatSticksIsNotRequeuedAndIsSurfaced(t *testing.T) {
 	if len(agent.sent) != 1 {
 		t.Fatalf("drain sent %d times want 1", len(agent.sent))
 	}
-	if n := s.pendingAgentSends("w"); n != 1 {
+	if n := observedPendingSends(s, "w"); n != 1 {
 		t.Fatalf("uncertain payload no longer retained: %d held", n)
 	}
 	s.drainAgentSendQueue("w")

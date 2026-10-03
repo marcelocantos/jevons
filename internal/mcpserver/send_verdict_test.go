@@ -97,7 +97,7 @@ func chipFixture(t *testing.T, agent *chipSender, tr *sessionLog) (*Server, *ove
 	inbox := &overseerInbox{}
 	s := &Server{}
 	s.SetOverseerDeliver(inbox.deliver)
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return agent, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return agent, false, nil })
 	obs := newFakeObserver(tr.path)
 	s.SetTurnWitness(func(_, payload string) turnWatch {
 		return observeTurnFor(obs, payload, shortWindow)
@@ -329,7 +329,7 @@ func TestDrainWithAnUnverifiedSubmitReadsTheReceiverInstead(t *testing.T) {
 	if len(inbox.texts) != 0 {
 		t.Fatalf("a delivered payload was reported to the overseer as an undelivered backlog: %v", inbox.texts)
 	}
-	if n := s.pendingAgentSends("w"); n != 0 {
+	if n := observedPendingSends(s, "w"); n != 0 {
 		t.Fatalf("pending=%d want 0 — the message was delivered", n)
 	}
 	// The discriminating assertion, and the reason this test is not satisfied

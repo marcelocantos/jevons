@@ -421,8 +421,11 @@ func (s *Server) Credentials() *CredentialStore { return s.creds }
 
 // SetOverseerName sets the registry name of the CEO agent (config-driven).
 func (s *Server) SetOverseerName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if name != "" {
 		s.overseerName = name
+		s.observeOwnerQueueLocked()
 	}
 }
 

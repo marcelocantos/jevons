@@ -34,13 +34,13 @@ func TestT763AgentsFeedCarriesRehydrateSignal(t *testing.T) {
 	for _, a := range listFleetAgents(reg) {
 		byName[a.Name] = a
 	}
-	if got := byName["clean-seat"]; got.Status != "stopped" || got.Rehydrate != "resumable" {
-		t.Fatalf("clean-seat status=%q rehydrate=%q, want stopped/resumable", got.Status, got.Rehydrate)
+	if got := byName["clean-seat"]; got.Status != "phase_unknown" || got.Rehydrate != "resumable" {
+		t.Fatalf("clean-seat status=%q rehydrate=%q, want phase_unknown/resumable", got.Status, got.Rehydrate)
 	}
 	po := byName["jevons-po"]
-	if po.Status != "stopped" || !strings.HasPrefix(po.Rehydrate, "repairable:") ||
+	if po.Status != "phase_unknown" || !strings.HasPrefix(po.Rehydrate, "repairable:") ||
 		!strings.Contains(po.Rehydrate, "sandbox_policy") {
-		t.Fatalf("jevons-po status=%q rehydrate=%q, want stopped with a repairable sandbox_policy signal",
+		t.Fatalf("jevons-po status=%q rehydrate=%q, want phase_unknown with a repairable sandbox_policy signal",
 			po.Status, po.Rehydrate)
 	}
 }

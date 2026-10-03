@@ -78,17 +78,17 @@ func TestT744RecoversTurnEndedBeforeSinkAttached(t *testing.T) {
 	// The parent's turn is in flight in this fixture, so the notice may sit in
 	// its send queue (delivered at the next turn boundary) rather than in sent.
 	noticeSent := strings.Contains(all, "🎯T744") && strings.Contains(all, "unobserved")
-	if !noticeSent && s.pendingAgentSends(t690Parent) != 1 {
-		t.Fatalf("parent got no missed-turn notice: sent=%v queued=%d", po.sent, s.pendingAgentSends(t690Parent))
+	if !noticeSent && observedPendingSends(s, t690Parent) != 1 {
+		t.Fatalf("parent got no missed-turn notice: sent=%v queued=%d", po.sent, observedPendingSends(s, t690Parent))
 	}
 
 	// Idempotent: the recovered report is now the latest, so a second attach
 	// (the sweep re-attaching) finds nothing new and does not re-announce.
-	before, queued := len(po.sent), s.pendingAgentSends(t690Parent)
+	before, queued := len(po.sent), observedPendingSends(s, t690Parent)
 	if n := s.recoverMissedTurns(t690Worker, path, now); n != 0 ||
-		len(po.sent) != before || s.pendingAgentSends(t690Parent) != queued {
+		len(po.sent) != before || observedPendingSends(s, t690Parent) != queued {
 		t.Fatalf("second recovery n=%d sent %d→%d queued %d→%d; want none",
-			n, before, len(po.sent), queued, s.pendingAgentSends(t690Parent))
+			n, before, len(po.sent), queued, observedPendingSends(s, t690Parent))
 	}
 }
 
@@ -102,7 +102,7 @@ func TestT744LeavesTurnsTheLiveSinkOwns(t *testing.T) {
 	if n := s.recoverMissedTurns(t690Worker, path, now); n != 0 {
 		t.Fatalf("missed turns = %d, want 0", n)
 	}
-	if len(po.sent) != 0 || s.pendingAgentSends(t690Parent) != 0 {
+	if len(po.sent) != 0 || observedPendingSends(s, t690Parent) != 0 {
 		t.Fatalf("parent was messaged for turns the sink owns or that are ancient: %v", po.sent)
 	}
 }

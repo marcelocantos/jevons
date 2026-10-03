@@ -63,7 +63,7 @@ func TestDeliverStartPromptMarksTurnBegan(t *testing.T) {
 	fs := &fakeSender{alive: true}
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		if name != "jv-t305-a" {
 			return nil, false, fmt.Errorf("unknown %s", name)
 		}
@@ -118,7 +118,7 @@ func TestDeliverLargeSendMarksTurnBegan(t *testing.T) {
 	fs := &fakeSender{alive: true}
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		return fs, false, nil
 	})
 
@@ -138,7 +138,7 @@ func TestDeliverLargeSendMarksTurnBegan(t *testing.T) {
 	if len(large) < 400 {
 		t.Fatalf("fixture too small: %d", len(large))
 	}
-	res, err := deliverToSender(s, "jv-t305-b", large, false, fs, false)
+	res, err := deliverObservedToSender(s, "jv-t305-b", large, false, fs, false)
 	if err != nil {
 		t.Fatalf("deliverToSender: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestDeliverStartPromptFailureNoPhantomRunning(t *testing.T) {
 	fs.sendErr = fmt.Errorf("turn not submitted: paste block still visible")
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		return fs, false, nil
 	})
 
@@ -205,10 +205,10 @@ func TestAgentListShowsNeverBriefed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// No live process → stopped (never_briefed only when alive).
+	// A missing handle is unknown, not observed death.
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
-	res, err := s.handleAgentList(nil, mcp.CallToolRequest{})
+	res, err := observedAgentList(s, nil, mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,8 +216,8 @@ func TestAgentListShowsNeverBriefed(t *testing.T) {
 	if !strings.Contains(text, "jv-t305-list") {
 		t.Fatalf("list missing agent: %s", text)
 	}
-	if !strings.Contains(text, AgentStatusStopped) {
-		t.Fatalf("stopped agent should show stopped: %s", text)
+	if !strings.Contains(text, AgentStatusPhaseUnknown) {
+		t.Fatalf("unobserved agent should show unknown: %s", text)
 	}
 
 	// Simulate: process up, no turn — pure status column.

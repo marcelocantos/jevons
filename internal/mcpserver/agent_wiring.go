@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
@@ -125,7 +127,7 @@ func (s *Server) lookupAgentProc(name string) *claudia.Agent {
 		return nil
 	}
 	proc := s.registry.Get(name)
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return nil
 	}
 	return proc

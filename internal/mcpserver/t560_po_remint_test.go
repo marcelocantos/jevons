@@ -113,7 +113,7 @@ func TestT560PreservedHeldChildKeepsRowAndQueue(t *testing.T) {
 	if strings.Contains(toolText(res), "restarted") {
 		t.Fatalf("preserved seat must not be drain-restarted: %s", toolText(res))
 	}
-	if s.pendingAgentSends(child) != 1 || s.pendingAgentSends("jevons-po") != 1 {
+	if observedPendingSends(s, child) != 1 || observedPendingSends(s, "jevons-po") != 1 {
 		t.Fatal("sendq depths must survive the preserve kill")
 	}
 }

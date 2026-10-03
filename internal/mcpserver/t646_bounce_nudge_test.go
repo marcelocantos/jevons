@@ -112,6 +112,7 @@ func TestRestartBriefArrivesWhenTheProcessDoes(t *testing.T) {
 	if proc := s.registry.Get(worker); proc == nil || !proc.Alive() {
 		t.Fatalf("launch did not leave an alive process: %#v", proc)
 	}
+	s.observeRegistryLiveness()
 	t.Cleanup(func() { s.registry.Stop(worker) })
 
 	deadline := time.Now().Add(2 * time.Second)

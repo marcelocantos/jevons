@@ -49,7 +49,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/secauditor"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/spawnorder"
-	"github.com/marcelocantos/jevons/internal/turnev"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -569,116 +568,20 @@ func (s *Server) SetSeats(a *seatstate.Authority) {
 	}
 }
 
-// observeSeat folds what claudia says about one registry row into the
-// authority (🎯T766.2).
-//
-// This is the feed the authority was missing: the event stream reports
-// motion, but it is silent for a seat that is merely sitting there, and it
-// is empty entirely whenever the sink is dark. claudia owns the process, so
-// it is the only honest source for alive and in-flight.
-//
-// alive is passed in rather than re-read because the caller has already
-// asked (seatAlive honours a test's override, which a second read here
-// would bypass).
-func (s *Server) observeSeat(d claudia.AgentDef, alive bool) {
-	if s == nil || d.Name == "" {
-		return
-	}
-	rep := seatstate.SeatReport{
-		Name:     d.Name,
-		Provider: string(d.Provider),
-		Model:    d.Model,
-		Alive:    alive,
-		Known:    true,
-	}
-	if s.registry != nil {
-		if proc := s.registry.Get(d.Name); proc != nil {
-			rep.PromptInFlight = proc.PromptInFlight()
-		} else if alive {
-			// seatAlive says yes but the registry has no handle: we cannot
-			// see the turn. Report identity and aliveness, and leave
-			// in-flight to decay to unknown rather than asserting calm.
-			rep.Known = false
-			s.Seats().Observe(seatstate.Observation{
-				Name: d.Name, Provider: string(d.Provider), Model: d.Model,
-				Alive: seatstate.Yes, QueueDepth: seatstate.QueueUnknown,
-				Source: "claudia.report", At: time.Now(),
-			})
-			return
-		}
-	}
-	s.Seats().FromClaudia(rep, time.Now())
+// seatState is the thin control-side Get wrapper.
+func (s *Server) seatState(name string) seatstate.State {
+	st, _ := s.Seats().Get(name)
+	return st
 }
 
-// seatInFlight is the one place that answers "is a turn running on this
-// seat" (🎯T766.2, census derivation 5).
-//
-// It asks claudia, records the answer, and returns it. Asking rather than
-// serving a cache is deliberate: the registry handle is right here, and a
-// control about to act on a seat should not act on a two-minute-old reading
-// when a current one costs nothing. The recording is what makes every other
-// reader — the cockpit, a sweep, a supervisor — see the same answer.
-//
-// Unknown is returned when there is no handle to ask, and it is a real
-// answer: callers must decide what to do about not knowing rather than
-// receiving a false.
+// seatInFlight reads observed truth. Unknown never falls back to a process
+// probe or a private turn ledger.
 func (s *Server) seatInFlight(name string) seatstate.Tri {
-	if s == nil || name == "" {
+	if s == nil {
 		return seatstate.Unknown
 	}
-	if s.registry != nil {
-		if proc := s.registry.Get(name); proc != nil {
-			inFlight := proc.PromptInFlight()
-			s.Seats().FromClaudia(seatstate.SeatReport{
-				Name: name, Alive: proc.Alive(), PromptInFlight: inFlight, Known: true,
-			}, time.Now())
-			return seatstate.TriOf(inFlight)
-		}
-	}
-	if st, ok := s.Seats().Get(name); ok {
-		return st.InFlight
-	}
-	return seatstate.Unknown
-}
-
-// observeRegistryLiveness feeds every registered seat's current liveness
-// into the shared authority (🎯T766.2, census derivation 8: recoverDeadHandles).
-// The sweep's own recovery decisions already read each seat's ProcState; this
-// makes the authority hear the same answer even when nobody has listed
-// agents recently, so a stale authority between agent_list calls is never
-// the reason a dead-seat sweep and the cockpit disagree about a name.
-func (s *Server) observeRegistryLiveness() {
-	if s == nil || s.registry == nil {
-		return
-	}
-	for _, d := range s.registry.List() {
-		if d.Name == "" {
-			continue
-		}
-		alive := s.seatAlive(d.Name)
-		s.observeSeat(d, alive)
-	}
-}
-
-// observeSessionPhase folds the transcript decoder's phase reading into the
-// shared authority (🎯T766.2, census derivation 1/3: PhaseFromFile via
-// classifyAgentSessionPhase / classifyAgentListPhase). This is the one place the
-// 🎯T423 decoder's idle/working/unknown answer is recorded for everyone else
-// to read, rather than staying local to whichever sweep happened to decode
-// the transcript this tick.
-//
-// Only Phase is asserted. Alive/InFlight are left unclaimed here: the
-// decoder read a transcript, not a process or an event stream, and it must
-// not manufacture claims about signals it never looked at.
-func (s *Server) observeSessionPhase(name string, phase turnev.Phase) {
-	if s == nil || name == "" || phase == turnev.PhaseUnknown {
-		return
-	}
-	s.Seats().Observe(seatstate.Observation{
-		Name: name, Phase: phase,
-		QueueDepth: seatstate.QueueUnknown,
-		Source:     "transcript.fold", At: time.Now(),
-	})
+	st, _ := s.Seats().Get(name)
+	return st.InFlight
 }
 
 // SetDefaultProvider sets the daemon-wide claudia backend used when spawn
@@ -1282,4 +1185,21 @@ func truncate(s string, max int) string {
 		return s[:max] + "\n... (truncated)"
 	}
 	return s
+}
+
+// StartSeatObservations runs the slow transcript/queue feed independently of
+// controls. Provider/process observations have their own fast registry feed.
+func (s *Server) StartSeatObservations(ctx context.Context, observers ...func(claudia.AgentDef)) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			s.observeSeatTranscripts(observers...)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }

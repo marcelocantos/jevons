@@ -59,7 +59,7 @@ func t451Server(t *testing.T, dir string, defs ...claudia.AgentDef) (*Server, *r
 	s.SetRegistry(reg)
 	s.SetIdlePressureHooks(IdlePressureHooks{MissionOpen: NewLedgerMissionOpen(reg.List)})
 	sender := &recordingSender{}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return sender, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
 	return s, sender
 }
 

@@ -40,6 +40,7 @@ func TestT977CapacityRestoredWakesOverseerAndPOs(t *testing.T) {
 	}
 	s := &Server{}
 	s.registry = reg
+	s.observeRegistryLiveness()
 	type sent struct{ to, text string }
 	var got []sent
 	s.capacityDeliver = func(name, text string) error {

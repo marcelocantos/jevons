@@ -137,7 +137,7 @@ func TestT418SweepRetriesAlivePending(t *testing.T) {
 		CreatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
 	}}}
 	s := &Server{registry: reg, migrator: led}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return &recordingSender{}, true, nil
 	})
 	s.SweepHandovers()
@@ -166,7 +166,7 @@ func TestT850SweepHandoversDoesNotReapPO(t *testing.T) {
 		{Agent: "jv-w", From: "claude", To: "codex", TranscriptPath: "/w.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
 	}}
 	s := &Server{registry: reg, migrator: led}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return &recordingSender{}, true, nil
 	})
 	s.SweepHandovers()
@@ -204,7 +204,7 @@ func TestT850SweepHandoversDoesNotReapAsideForParentage(t *testing.T) {
 		{Agent: "jv-aside", From: "claude", To: "grok", TranscriptPath: "/a.jsonl", CreatedAt: time.Now().UTC().Format(time.RFC3339)},
 	}}
 	s := &Server{registry: reg, migrator: led}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return &recordingSender{}, true, nil
 	})
 	s.SweepHandovers()
@@ -237,7 +237,7 @@ func TestT392SweepReapsSameProviderCompact(t *testing.T) {
 		CreatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
 	}}}
 	s := &Server{registry: reg, migrator: led}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return &recordingSender{}, true, nil
 	})
 	s.SweepHandovers()

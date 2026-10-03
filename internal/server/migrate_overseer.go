@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -116,6 +118,7 @@ func (s *Server) PinOverseerModel(model string) (handover.Pending, error) {
 		// No rotation: the session survives. Stop the process so the
 		// relaunch binds the new --model to that same session.
 		reg.Stop(n)
+		seatstate.ObserveStopped(reg, n)
 		return handover.Pending{}, nil
 	})
 }
@@ -278,7 +281,7 @@ func (s *Server) ResumePendingHandover() {
 			// Mirror a successful drain: a turn is now in flight, so
 			// stuck-busy detection must be able to see it.
 			s.waiting = true
-			s.overseerLastProgress = time.Now()
+			s.noteOverseerProgressLocked()
 		}
 		s.mu.Unlock()
 		if err != nil {

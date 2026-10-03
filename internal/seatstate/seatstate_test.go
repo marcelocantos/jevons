@@ -322,3 +322,85 @@ func TestBlockedSaysNothingAboutASeatItCannotSee(t *testing.T) {
 		t.Fatalf("InFlight = %s after staleness, want unknown", s.InFlight)
 	}
 }
+
+func TestT766PartialFeedDoesNotRefreshOtherSignals(t *testing.T) {
+	a, c := newAt(at("2026-10-03T00:00:00Z"), time.Minute)
+	a.FromTurnEvent("worker", false, c.now())
+	c.tick(2 * time.Minute)
+	a.FromQueue("worker", 2, c.now())
+	s, _ := a.Get("worker")
+	if s.Alive != Unknown || s.InFlight != Unknown || s.Phase != turnev.PhaseUnknown || s.LastActivity.IsZero() || s.QueueDepth != 2 {
+		t.Fatalf("queue feed revived stale evidence: %+v", s)
+	}
+}
+
+func TestT766OldSignalCannotOverwriteNewValue(t *testing.T) {
+	a, c := newAt(at("2026-10-03T00:00:00Z"), time.Minute)
+	old := c.now()
+	c.tick(time.Second)
+	a.Observe(Observation{Name: "worker", Source: "new", Alive: Yes, InFlight: Yes, QueueDepth: QueueUnknown, At: c.now()})
+	a.Observe(Observation{Name: "worker", Source: "old", Alive: No, InFlight: No, QueueDepth: QueueUnknown, At: old})
+	s, _ := a.Get("worker")
+	if s.Alive != Yes || s.InFlight != Yes {
+		t.Fatalf("old observation replaced new truth: %+v", s)
+	}
+}
+
+func TestT766SessionReplacementDropsPredecessorTruth(t *testing.T) {
+	a, c := newAt(at("2026-10-03T00:00:00Z"), time.Minute)
+	a.Observe(Observation{Name: "seat", SessionID: "old", Alive: Yes, InFlight: Yes, BornStuck: Yes, Phase: turnev.PhaseWorking, Source: "old.session", QueueDepth: QueueUnknown})
+	c.tick(time.Second)
+	a.FromClaudia(SeatReport{Name: "seat", SessionID: "new", Provider: "codex"}, c.now())
+	s, _ := a.Get("seat")
+	if s.Alive != Unknown || s.InFlight != Unknown || s.BornStuck != Unknown || s.Phase != turnev.PhaseUnknown {
+		t.Fatalf("predecessor truth leaked: %+v", s)
+	}
+}
+
+func TestT766RetractingSendCannotEraseProviderBoundary(t *testing.T) {
+	a, c := newAt(at("2026-10-03T00:00:00Z"), time.Minute)
+	a.Observe(Observation{Name: "seat", InFlight: Yes, Source: "turn.flight", QueueDepth: QueueUnknown})
+	a.RetractFlight("seat", "turn.flight")
+	st, _ := a.Get("seat")
+	if st.InFlight != Unknown {
+		t.Fatal("retracted claim remained known")
+	}
+	c.tick(time.Second)
+	a.FromTurnEvent("seat", true, c.now())
+	a.RetractFlight("seat", "turn.flight")
+	st, _ = a.Get("seat")
+	if st.InFlight != No {
+		t.Fatal("send bookkeeping erased provider boundary")
+	}
+}
+
+func TestDelayedSessionFeedCannotRestorePredecessorFacts(t *testing.T) {
+	a := New(Args{})
+	a.Observe(Observation{Name: "seat", SessionID: "new", Source: "registry", QueueDepth: QueueUnknown})
+	a.Observe(Observation{Name: "seat", ForSession: "old", Phase: turnev.PhaseWorking, BornStuck: Yes, Source: "slow.scan", QueueDepth: QueueUnknown})
+	st, _ := a.Get("seat")
+	if st.Phase != turnev.PhaseUnknown || st.BornStuck != Unknown {
+		t.Fatalf("old scan contaminated remint: %+v", st)
+	}
+	a.Observe(Observation{Name: "seat", ForSession: "new", Phase: turnev.PhaseIdle, Source: "slow.scan", QueueDepth: QueueUnknown})
+	st, _ = a.Get("seat")
+	if st.Phase != turnev.PhaseIdle {
+		t.Fatal("current session scan was lost")
+	}
+}
+
+func TestBrokerAndLocalLivenessFoldInAuthority(t *testing.T) {
+	a := New(Args{})
+	a.FromClaudia(SeatReport{Name: "seat", Known: true, Alive: false}, time.Now())
+	a.Observe(Observation{Name: "seat", BrokerAlive: Yes, BrokerOwned: No, Source: "broker", QueueDepth: QueueUnknown})
+	st, _ := a.Get("seat")
+	if st.Alive != Yes || st.LocalAlive != No || st.BrokerOwned != No {
+		t.Fatalf("detached broker seat: %+v", st)
+	}
+	a.Observe(Observation{Name: "seat", BrokerAlive: No, Source: "broker", QueueDepth: QueueUnknown})
+	a.FromTurnEvent("seat", false, time.Now())
+	st, _ = a.Get("seat")
+	if st.Alive != Yes {
+		t.Fatal("fresh provider event lost to older broker absence")
+	}
+}

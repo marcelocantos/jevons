@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -31,8 +33,6 @@ func (s *Server) SetOwnerEscalation(fn func() (escalate.Ladder, bool)) {
 
 // overseerEscalator is the part of the overseer's seat the ladder needs.
 type overseerEscalator interface {
-	Alive() bool
-	TurnPhase() claudia.TurnPhase
 	SendEscalating(text string, esc escalate.Ladder) (claudia.DeliveryOutcome, error)
 }
 
@@ -60,7 +60,7 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	}
 	// Only a turn the seat itself reports running is steered; the chat
 	// layer's flag alone could send a fresh prompt past the notify queue.
-	if proc == nil || !proc.Alive() || proc.TurnPhase() != claudia.TurnInTurn {
+	if proc == nil || s.seatState(s.overseerSeatName()).Alive != seatstate.Yes || s.seatState(s.overseerSeatName()).InFlight != seatstate.Yes {
 		return AgentSendOutcome{}, false, nil
 	}
 	// 🎯T931: only rungs the overseer's seat can run. One that cannot steer

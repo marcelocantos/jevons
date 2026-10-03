@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 )
 
@@ -159,7 +161,7 @@ func LookCursorStart(reg *claudia.Registry, name string) CursorStartLook {
 		return CursorStartLook{}
 	}
 	look := CursorStartLook{applicable: true}
-	if proc := reg.Get(name); proc != nil && proc.Alive() {
+	if proc := reg.Get(name); proc != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 		look.wasAlive = true
 		look.beforePID = proc.PID()
 		if look.beforePID <= 0 {

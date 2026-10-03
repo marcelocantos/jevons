@@ -74,7 +74,7 @@ func TestT599OverseerKillDiscardsHeldSendq(t *testing.T) {
 	if s.registry.Def(t599Seat) != nil {
 		t.Fatal("seat must be deregistered after overseer kill")
 	}
-	if depth := s.pendingAgentSends(t599Seat); depth != 0 {
+	if depth := observedPendingSends(s, t599Seat); depth != 0 {
 		t.Fatalf("held sendq must be discarded; depth=%d", depth)
 	}
 	if _, pinned := s.sendqPinFor(t599Seat); pinned {
@@ -124,7 +124,7 @@ func TestT599ParentKillRefusalNamesOverrideAndDrainPath(t *testing.T) {
 	if s.registry.Def(t599Seat) == nil {
 		t.Fatal("refused kill must leave the seat registered")
 	}
-	if depth := s.pendingAgentSends(t599Seat); depth != 1 {
+	if depth := observedPendingSends(s, t599Seat); depth != 1 {
 		t.Fatalf("refused kill must not touch the queue; depth=%d", depth)
 	}
 }
@@ -137,7 +137,7 @@ func TestT599AgentListReportsPinnedSeat(t *testing.T) {
 	entry := t599PlantUndeliverable(t, s)
 
 	req := mcp.CallToolRequest{}
-	res, err := s.handleAgentList(context.Background(), req)
+	res, err := observedAgentList(s, context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestT599NormalQueueIsNotPinnedAndDrainsKillable(t *testing.T) {
 	if _, pinned := s.sendqPinFor(t599Seat); pinned {
 		t.Fatal("below-threshold failures must not pin")
 	}
-	res, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	res, err := observedAgentList(s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

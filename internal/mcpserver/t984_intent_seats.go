@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
@@ -75,7 +77,7 @@ type seatAgainstIntent struct {
 
 // seatsAgainstIntent lists the registered seats running against their intent,
 // sorted by name. broker may be nil (unknown): only local processes are judged.
-func seatsAgainstIntent(names []string, localAlive func(string) bool, broker map[string]claudia.BrokerSeat, intent fleetintent.Snapshot) []seatAgainstIntent {
+func seatsAgainstIntent(names []string, localAlive func(string) bool, broker map[string]seatstate.State, intent fleetintent.Snapshot) []seatAgainstIntent {
 	var out []seatAgainstIntent
 	for _, name := range names {
 		st := intent.AgentState(name)
@@ -83,7 +85,7 @@ func seatsAgainstIntent(names []string, localAlive func(string) bool, broker map
 			continue
 		}
 		v := seatAgainstIntent{Name: name, State: st, Local: localAlive(name)}
-		if seat, ok := broker[name]; ok && seat.Alive && !seat.Owned {
+		if seat, ok := broker[name]; ok && seat.BrokerAlive == seatstate.Yes && seat.BrokerOwned == seatstate.No {
 			v.Broker = true
 		}
 		if v.Local || v.Broker {
@@ -97,13 +99,13 @@ func seatsAgainstIntent(names []string, localAlive func(string) bool, broker map
 // seatsDiverged lists registered seats this daemon holds no live process for
 // while the broker reports them alive, sorted by name. Seats against their
 // intent are left to seatsAgainstIntent.
-func seatsDiverged(names []string, localAlive func(string) bool, broker map[string]claudia.BrokerSeat, intent fleetintent.Snapshot) []string {
+func seatsDiverged(names []string, localAlive func(string) bool, broker map[string]seatstate.State, intent fleetintent.Snapshot) []string {
 	var out []string
 	for _, name := range names {
 		if fleetintent.StoodDown(intent.AgentState(name)) || localAlive(name) {
 			continue
 		}
-		if seat, ok := broker[name]; ok && seat.Alive {
+		if seat, ok := broker[name]; ok && seat.BrokerAlive == seatstate.Yes {
 			out = append(out, name)
 		}
 	}
@@ -125,7 +127,7 @@ func (s *Server) registeredSeatNames() []string {
 
 func (s *Server) localSeatAlive(name string) bool {
 	proc := s.registry.Get(name)
-	return proc != nil && proc.Alive()
+	return proc != nil && (s.seatState(name).LocalAlive == seatstate.Yes)
 }
 
 // sweepStoodDownSeats stops every seat running against its intent: a process
@@ -147,10 +149,12 @@ func (s *Server) sweepStoodDownSeats() {
 }
 
 func (s *Server) stopSeatsAgainstIntent(broker map[string]claudia.BrokerSeat) []seatAgainstIntent {
-	found := seatsAgainstIntent(s.registeredSeatNames(), s.localSeatAlive, broker, s.fleetIntent())
+	observed := s.observeBrokerSeats(broker)
+	found := seatsAgainstIntent(s.registeredSeatNames(), s.localSeatAlive, observed, s.fleetIntent())
 	for _, v := range found {
 		if v.Local {
 			s.registry.Stop(v.Name)
+			seatstate.ObserveStopped(s.registry, v.Name)
 		} else if v.Broker {
 			ctx, cancel := context.WithTimeout(context.Background(), brokerSeatsTimeout)
 			err := brokerSeatStop(ctx, v.Name)
@@ -173,7 +177,7 @@ func (s *Server) stopSeatsAgainstIntent(broker map[string]claudia.BrokerSeat) []
 // this daemon holds no process for it. Each must persist past grace before
 // the policy repairs it.
 func (s *Server) observeSeatViews(in *staffops.ObserveInput, intent fleetintent.Snapshot, now time.Time, grace time.Duration) {
-	broker := readBrokerSeats()
+	broker := s.observeBrokerSeats(readBrokerSeats())
 	names := s.registeredSeatNames()
 	marks := map[string]func(*staffops.AgentObs, bool){}
 	for _, v := range seatsAgainstIntent(names, s.localSeatAlive, broker, intent) {

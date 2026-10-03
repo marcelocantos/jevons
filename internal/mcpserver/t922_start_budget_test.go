@@ -33,7 +33,7 @@ func t922Start(t *testing.T, verdict TurnEvidence) (*Server, *claudia.Registry, 
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
 	s.launchAgentFn = func(context.Context, string) (*claudia.Agent, error) { return nil, nil }
-	s.SetSenderResolver(func(n string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(n string) (agentSender, bool, error) {
 		if n != "jv-t922-slow" {
 			return nil, false, errors.New("unknown seat")
 		}

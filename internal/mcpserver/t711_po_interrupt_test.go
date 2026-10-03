@@ -66,7 +66,7 @@ func TestT711InterruptCutsTheTurnBeforeTheTextIsOffered(t *testing.T) {
 	// The daemon knows this PO is working — phase=working in the specimen.
 	s.noteTurnInFlight(po)
 
-	res, err := deliverToSenderMode(s, po, "owner doctrine", delivery.ModeInterrupt, fs, false, confirmHere)
+	res, err := deliverObservedToSenderMode(s, po, "owner doctrine", delivery.ModeInterrupt, fs, false, confirmHere)
 	if err != nil {
 		t.Fatalf("interrupt send: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestT711SubmitStillQueuesBehindTheTurn(t *testing.T) {
 	fs := &poQueueSender{alive: true, turnOpen: true}
 	s.noteTurnInFlight(po)
 
-	res, err := deliverToSenderMode(s, po, "routine note", delivery.ModeSubmit, fs, false, confirmHere)
+	res, err := deliverObservedToSenderMode(s, po, "routine note", delivery.ModeSubmit, fs, false, confirmHere)
 	if err != nil {
 		t.Fatalf("submit send: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestT711InterruptFailureIsStillNotAQueue(t *testing.T) {
 	fs := &poQueueSender{alive: true, turnOpen: true, interruptErr: fmt.Errorf("session/cancel refused")}
 	s.noteTurnInFlight(po)
 
-	res, err := deliverToSenderMode(s, po, "owner doctrine", delivery.ModeInterrupt, fs, false, confirmHere)
+	res, err := deliverObservedToSenderMode(s, po, "owner doctrine", delivery.ModeInterrupt, fs, false, confirmHere)
 	if err == nil {
 		t.Fatalf("want an error, got status=%q mechanism=%q", res.Status, res.Mechanism)
 	}
@@ -156,7 +156,7 @@ func TestT711RefusedCancelOnAnUnobservedSeatStillDelivers(t *testing.T) {
 		t.Fatalf("flight=%v, want unknown for this fixture", got)
 	}
 
-	res, err := deliverToSenderMode(s, po, "owner doctrine", delivery.ModeInterrupt, fs, false, confirmHere)
+	res, err := deliverObservedToSenderMode(s, po, "owner doctrine", delivery.ModeInterrupt, fs, false, confirmHere)
 	if err != nil {
 		t.Fatalf("a refused cancel on an unobserved seat must not fail the send: %v", err)
 	}

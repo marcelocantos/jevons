@@ -578,7 +578,7 @@ func (s *Server) idleNoticeLive(name string) bool {
 	}
 	phase := ""
 	if s.idleActivity != nil {
-		phase = s.idleActivity.Get(name).Phase
+		phase = s.seatState(name).Phase.String()
 	}
 	return IdleNoticeStillCurrent(def, phase)
 }

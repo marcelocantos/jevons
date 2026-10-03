@@ -107,7 +107,7 @@ func TestT627_1GrokMissingStorageDoesNotLookLost(t *testing.T) {
 		Name: "bounce-aside", WorkDir: t.TempDir(), SessionID: t6271GrokSID,
 		Provider: claudia.ProviderGrok, Materialized: true,
 	}
-	if SessionLost(def) {
+	if observedResumeLost(def) {
 		t.Fatal("missing Grok home classified as Claude JSONL loss — would rotate")
 	}
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))

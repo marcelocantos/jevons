@@ -103,7 +103,7 @@ func t927Fixture(t *testing.T, name string) (*Server, *wiredProcs, *fakeSidecar,
 	procs := newWiredProcs()
 	s.SetProcResolver(procs.get)
 	side := &fakeSidecar{procs: procs, name: name}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return side, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return side, false, nil })
 	// A sidecar is a live-stream backend: its "accepted" is a session event,
 	// and that is all the drain has to go on — the 2026-09-29 reading.
 	s.SetTurnWitness(func(_, _ string) turnWatch {
@@ -170,7 +170,7 @@ func TestT927ReattachedSidecarTurnIsClearedAndQueueAnswered(t *testing.T) {
 				"Supervisor tick 21:57: the frontier is open and you hold no children",
 			}
 			for _, p := range payloads {
-				res, err := deliverToSender(s, name, p, false, side, false)
+				res, err := deliverObservedToSender(s, name, p, false, side, false)
 				if err != nil {
 					t.Fatalf("send: %v", err)
 				}
@@ -196,7 +196,7 @@ func TestT927ReattachedSidecarTurnIsClearedAndQueueAnswered(t *testing.T) {
 				joined := strings.Join(answered, "\n")
 				return strings.Contains(joined, payloads[0]) && strings.Contains(joined, payloads[1])
 			})
-			waitFor(t, "the daemon's queue to empty", func() bool { return s.pendingAgentSends(name) == 0 })
+			waitFor(t, "the daemon's queue to empty", func() bool { return observedPendingSends(s, name) == 0 })
 			if _, _, n := side.snapshot(); n != 1 {
 				t.Fatalf("interrupts=%d; want exactly one clear of the lost turn", n)
 			}
@@ -227,7 +227,7 @@ func TestT927QuietTurnOnItsOwnHandleIsFlaggedOnceNotInterrupted(t *testing.T) {
 	procs.set(name, proc)
 	s.EnsureAgentEventsWired(name)
 	s.noteTurnInFlight(name)
-	if _, err := deliverToSender(s, name, "a finish report the PO has not read", false, side, false); err != nil {
+	if _, err := deliverObservedToSender(s, name, "a finish report the PO has not read", false, side, false); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
@@ -267,7 +267,7 @@ func TestT927MotionOnTheNewHandleIsNotALostTurn(t *testing.T) {
 	const name = "jevons-po"
 	s, procs, side, _ := t927Fixture(t, name)
 	successor := reattachMidTurn(t, s, procs, name)
-	if _, err := deliverToSender(s, name, "queued behind a turn that is still working", false, side, false); err != nil {
+	if _, err := deliverObservedToSender(s, name, "queued behind a turn that is still working", false, side, false); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	// A bare acceptance is not motion…
@@ -358,9 +358,9 @@ func (f syncAbortSidecar) Interrupt() error {
 func TestT937AbortEndingTheTurnFirstStillAnnouncesTheClear(t *testing.T) {
 	const name = "jevons-po"
 	s, procs, side, up := t927Fixture(t, name)
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return syncAbortSidecar{side}, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return syncAbortSidecar{side}, false, nil })
 	reattachMidTurn(t, s, procs, name)
-	if _, err := deliverToSender(s, name, "queued behind the lost turn", false, side, false); err != nil {
+	if _, err := deliverObservedToSender(s, name, "queued behind the lost turn", false, side, false); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 

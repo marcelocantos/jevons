@@ -20,27 +20,22 @@ func (s *Server) SetSeats(a *seatstate.Authority) {
 		return
 	}
 	s.seats.Store(a)
+	s.mu.Lock()
+	s.observeOwnerQueueLocked()
+	s.mu.Unlock()
 }
 
-// seatInFlight is internal/server's one reading of whether a turn is running
-// on a seat — census derivation 5, of which this package held four copies.
-//
-// It asks claudia's process handle, which is the party that knows, and folds
-// the answer into the shared authority so every other reader sees what the
-// cockpit saw. A nil handle is not recorded at all: not having a handle is
-// ignorance, and ignorance must not be written down as a fact.
-func (s *Server) seatInFlight(name string, proc *claudia.Agent) bool {
-	if proc == nil {
-		return false
+// seatInFlight tests for a positively observed running turn.
+func (s *Server) seatInFlight(name string, _ *claudia.Agent) bool {
+	return s.seatState(name).InFlight == seatstate.Yes
+}
+
+func (s *Server) seatState(name string) seatstate.State {
+	if a := s.seats.Load(); a != nil {
+		st, _ := a.Get(name)
+		return st
 	}
-	alive := proc.Alive()
-	inFlight := alive && proc.PromptInFlight()
-	if a := s.seats.Load(); a != nil && name != "" {
-		a.FromClaudia(seatstate.SeatReport{
-			Name: name, Alive: alive, PromptInFlight: inFlight, Known: true,
-		}, time.Now())
-	}
-	return inFlight
+	return seatstate.State{Name: name, QueueDepth: seatstate.QueueUnknown, OwnerQueueDepth: seatstate.QueueUnknown}
 }
 
 // overseerSeatName is the registry name the overseer's process belongs to.
@@ -48,4 +43,23 @@ func (s *Server) overseerSeatName() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.overseerName
+}
+
+// observeOwnerQueueLocked feeds the queue at construction/mutation boundaries.
+// It is an in-memory queue: every mutation runs under mu, so its count remains
+// valid until the next mutation (unlike sampled provider condition).
+func (s *Server) observeOwnerQueueLocked() {
+	if a := s.seats.Load(); a != nil {
+		depth := len(s.notifyQueue)
+		a.Observe(seatstate.Observation{Name: s.overseerName, OwnerQueueDepth: &depth,
+			QueueDepth: seatstate.QueueUnknown, Source: "owner.queue"})
+	}
+}
+
+func (s *Server) noteOverseerProgressLocked() {
+	s.overseerLastProgress = time.Now()
+	if a := s.seats.Load(); a != nil {
+		a.Observe(seatstate.Observation{Name: s.overseerName, LastActivity: s.overseerLastProgress,
+			QueueDepth: seatstate.QueueUnknown, Source: "owner.activity"})
+	}
 }

@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
@@ -91,33 +93,6 @@ func dashIfEmpty(s string) string {
 // underlying predicate (SessionLost).
 const StatusDeadUnmaterialized = "dead_unmaterialized"
 
-// SessionLost reports whether def demands a resume that cannot succeed:
-// the row is Materialized (so Launch will pass RequireResume) but the
-// Claude transcript backing its session id is not on disk.
-//
-// Grok is not probed here. A missing exclusive home is not evidence that
-// a conversation was lost (🎯T627.1): session/load can fail for a store
-// that still exists, and rotating on that discards it. A home that was
-// never published is a different error — exclusive GROK_HOME unavailable
-// — and LaunchRecovering remints on that wording only.
-func SessionLost(def *claudia.AgentDef) bool {
-	if def == nil || !def.Materialized || def.SessionID == "" {
-		return false
-	}
-	switch def.Provider {
-	case "", claudia.ProviderClaude:
-		exists, err := claudia.SessionExists(def.SessionID, def.WorkDir)
-		if err != nil {
-			// A stat error (permission denied, unreadable mount) is not
-			// evidence of absence. Leave it to claudia to fail closed.
-			return false
-		}
-		return !exists
-	default:
-		return false
-	}
-}
-
 // RehydratedDef returns def rotated onto newSessionID: a fresh
 // conversation under the same identity.
 //
@@ -170,7 +145,11 @@ func RehydrateLostSessionIn(reg *claudia.Registry, name string) (LostSession, bo
 	if def == nil {
 		return LostSession{}, false, fmt.Errorf("rehydrate: no agent %q", name)
 	}
-	if !SessionLost(def) {
+	// Refresh the resume-evidence feed at the explicit launch boundary.
+	a := seatstate.RegistryAuthority(reg)
+	a.Observe(seatstate.Observation{Name: name, SessionID: def.SessionID, QueueDepth: seatstate.QueueUnknown, Source: "registry.identity"})
+	a.ObserveResumeEvidence(def)
+	if seatstate.ReadRegistry(reg, name).ResumeLost != seatstate.Yes {
 		return LostSession{}, false, nil
 	}
 	lost, err := rotateOntoFreshSession(reg, def)
@@ -192,7 +171,7 @@ func RestartCursorFresh(reg *claudia.Registry, name string) error {
 	if def == nil || def.Provider != claudia.ProviderCursor || def.SessionID == "" {
 		return nil
 	}
-	if proc := reg.Get(name); proc != nil && proc.Alive() {
+	if proc := reg.Get(name); proc != nil && seatstate.ReadRegistry(reg, name).Alive != seatstate.No {
 		return nil
 	}
 	_, err := rotateOntoFreshSession(reg, def)
@@ -249,6 +228,7 @@ func rotateOntoFreshSession(reg *claudia.Registry, def *claudia.AgentDef) (LostS
 // rather than in each of them — a guard that every caller must remember
 // is a guard that some caller will forget.
 func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error) {
+	defer seatstate.ObserveRegistrySeat(reg, name)
 	if reg == nil {
 		return nil, fmt.Errorf("launch %q: no agent registry", name)
 	}

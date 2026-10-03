@@ -173,6 +173,8 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 		return agentSendResult{}, fmt.Errorf("name and text are required")
 	}
 
+	s.observeQueue(name)
+
 	// 🎯T509: validate load-bearing envelopes and cap chatter on the one
 	// deliver path every fleet message already travels.
 	if origin == OriginAgent {

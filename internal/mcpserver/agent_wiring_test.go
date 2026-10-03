@@ -129,7 +129,7 @@ func t426Fixture(t *testing.T, name string) (*Server, *wiredProcs, *recordingSen
 	procs := newWiredProcs()
 	s.SetProcResolver(procs.get)
 	sender := &recordingSender{}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return sender, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
 	// The drained message is seen to land: this suite is about whether the
 	// drain HAPPENS, not about 🎯T416's judgement of what it produced.
 	s.SetTurnWitness(func(_, _ string) turnWatch {
@@ -186,7 +186,7 @@ func TestT426CompactedSuccessorDrainsQueueAndReturnsIdle(t *testing.T) {
 			}
 			s.noteTurnInFlight(name)
 
-			res, err := deliverToSender(s, name, queued, false, sender, false)
+			res, err := deliverObservedToSender(s, name, queued, false, sender, false)
 			if err != nil {
 				t.Fatalf("send: %v", err)
 			}
@@ -223,7 +223,7 @@ func TestT426CompactedSuccessorDrainsQueueAndReturnsIdle(t *testing.T) {
 				if got := up.all(); len(got) != 0 {
 					t.Fatalf("dark stream reported upward: %q", got)
 				}
-				if n := s.pendingAgentSends(name); n != 1 {
+				if n := observedPendingSends(s, name); n != 1 {
 					t.Fatalf("dark stream pending=%d want 1 (the wedged queue)", n)
 				}
 				return
@@ -242,7 +242,7 @@ func TestT426CompactedSuccessorDrainsQueueAndReturnsIdle(t *testing.T) {
 				// END was observed at all: before that, flight is pinned.
 				return s.flightState(name) != FlightUnknown
 			})
-			if n := s.pendingAgentSends(name); n != 0 {
+			if n := observedPendingSends(s, name); n != 0 {
 				t.Fatalf("pending=%d want 0", n)
 			}
 			// Clause 2's other two controls ride the same branch: the report
@@ -466,7 +466,7 @@ func TestT426QueuedSendOverADarkStreamIsFailLoud(t *testing.T) {
 	// sink. That is exactly the state the six stacked messages were in.
 	s.noteTurnInFlight(name)
 
-	res, err := deliverToSender(s, name, "another brief", false, sender, false)
+	res, err := deliverObservedToSender(s, name, "another brief", false, sender, false)
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestT426QueuedSendOverADarkStreamIsFailLoud(t *testing.T) {
 
 	// The send re-attached the stream on its way past, so the next send is an
 	// ordinary queue behind a live turn and must not cry wolf.
-	res2, err := deliverToSender(s, name, "and another", false, sender, false)
+	res2, err := deliverObservedToSender(s, name, "and another", false, sender, false)
 	if err != nil {
 		t.Fatalf("second send: %v", err)
 	}

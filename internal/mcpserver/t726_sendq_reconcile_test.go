@@ -143,7 +143,7 @@ func TestT726SupersededMessagesReachTheReceiverAsOne(t *testing.T) {
 	// the point of it — but it would race the consolidation this test is
 	// about. Keep the seat processless until the queue is the shape the
 	// receiver should see, then give it somewhere to deliver.
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
 
 	// Consolidation refuses while the head's outcome is unknown: folding it
 	// away would claim non-delivery on no evidence (🎯T416).
@@ -168,12 +168,12 @@ func TestT726SupersededMessagesReachTheReceiverAsOne(t *testing.T) {
 		t.Fatalf("consolidate refused: %s", resultText(t, res))
 	}
 
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return sender, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
 	s.drainAgentSendQueue(name)
 	if got := sender.delivered(); len(got) != 1 || got[0] != "authoritative: do B" {
 		t.Fatalf("receiver got %v; want exactly one authoritative message", got)
 	}
-	if depth := s.pendingAgentSends(name); depth != 0 {
+	if depth := observedPendingSends(s, name); depth != 0 {
 		t.Fatalf("queue depth after delivery = %d", depth)
 	}
 }
@@ -202,7 +202,7 @@ func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
 		if text := resultText(t, res); !strings.Contains(text, "1 still queued") {
 			t.Fatalf("drain does not account for what is left:\n%s", text)
 		}
-		if depth := s.pendingAgentSends(name); depth != 1 {
+		if depth := observedPendingSends(s, name); depth != 1 {
 			t.Fatalf("depth after drain = %d; want the tail still held", depth)
 		}
 		// And the seat keeps draining: the second call takes the tail.
@@ -210,7 +210,7 @@ func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
 		if got := sender.delivered(); len(got) != 2 || got[1] != "PO: and cite the gate id" {
 			t.Fatalf("delivered = %v; want the tail next, in order", got)
 		}
-		if depth := s.pendingAgentSends(name); depth != 0 {
+		if depth := observedPendingSends(s, name); depth != 0 {
 			t.Fatalf("depth after second drain = %d", depth)
 		}
 	})
@@ -251,12 +251,12 @@ func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
 		if _, _, err := s.sendQueue().Append(name, "gate feedback", time.Now().Add(-time.Hour)); err != nil {
 			t.Fatal(err)
 		}
-		s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
+		setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
 		text := resultText(t, reconcile(t, s, map[string]any{"name": name, "action": "drain"}))
 		if !strings.Contains(text, "jevons_agent_start") || !strings.Contains(text, name) {
 			t.Fatalf("drain with no process does not name the recovery call:\n%s", text)
 		}
-		if depth := s.pendingAgentSends(name); depth != 1 {
+		if depth := observedPendingSends(s, name); depth != 1 {
 			t.Fatalf("drain with no process lost the payload: depth=%d", depth)
 		}
 	})

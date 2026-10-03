@@ -85,7 +85,7 @@ func t425Fixture(t *testing.T, defs ...claudia.AgentDef) (*Server, *t425Sender) 
 	}
 	s := &Server{registry: reg, fleetBriefed: map[string]bool{}}
 	sender := &t425Sender{}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return sender, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
 	s.SetTurnWitness(func(_, _ string) turnWatch {
 		return func() TurnEvidence {
 			return TurnEvidence{Observed: true, Durable: true, PayloadSeen: true}
@@ -160,7 +160,7 @@ func TestT425SpawnOpeningPromptNamesItsRecipient(t *testing.T) {
 				if !injected {
 					t.Fatal("control arm did not inject the standing brief")
 				}
-				if _, err := deliverToSender(s, name, text, false, sender, false); err != nil {
+				if _, err := deliverObservedToSender(s, name, text, false, sender, false); err != nil {
 					t.Fatalf("control send: %v", err)
 				}
 			}
@@ -228,7 +228,7 @@ func TestT425FirstSendInjectionNamesItsRecipient(t *testing.T) {
 		t.Fatal("first send did not inject the standing brief")
 	}
 	text = s.withIdentity(name, text)
-	if _, err := deliverToSender(s, name, text, false, sender, false); err != nil {
+	if _, err := deliverObservedToSender(s, name, text, false, sender, false); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 

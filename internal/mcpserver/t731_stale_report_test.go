@@ -115,8 +115,8 @@ func TestT731QueuedReapedReportIsMarkedOnce(t *testing.T) {
 	if len(parent.sent) != 0 {
 		t.Fatalf("parent received while in flight: %v", parent.sent)
 	}
-	if s.pendingAgentSends(t731Parent) != 1 {
-		t.Fatalf("queued depth=%d want 1", s.pendingAgentSends(t731Parent))
+	if observedPendingSends(s, t731Parent) != 1 {
+		t.Fatalf("queued depth=%d want 1", observedPendingSends(s, t731Parent))
 	}
 	recs, err := agentreport.List(s.agentReportStateDir(), t731Worker)
 	if err != nil || len(recs) != 1 {
@@ -236,9 +236,9 @@ func TestT747IdenticalBodyUnderNewIDIsNotReDelivered(t *testing.T) {
 	if err != nil || len(recs) != 2 || recs[0].ID == recs[1].ID {
 		t.Fatalf("want two stored reports with distinct ids; got %d err=%v", len(recs), err)
 	}
-	if len(parent.sent) != 1 || s.pendingAgentSends(t731Parent) != 0 {
+	if len(parent.sent) != 1 || observedPendingSends(s, t731Parent) != 0 {
 		t.Fatalf("identical body re-delivered to the parent that already consumed it: %d sent, %d queued: %v",
-			len(parent.sent), s.pendingAgentSends(t731Parent), parent.sent)
+			len(parent.sent), observedPendingSends(s, t731Parent), parent.sent)
 	}
 }
 
@@ -251,7 +251,7 @@ func TestT747DifferentBodyStillDelivered(t *testing.T) {
 	// The parent is busy after its first copy, so the second may sit in sendq
 	// rather than be sent; either way it was not suppressed. The identical-body
 	// test above is the arm that must see neither.
-	if got := len(parent.sent) + s.pendingAgentSends(t731Parent); got != 2 {
+	if got := len(parent.sent) + observedPendingSends(s, t731Parent); got != 2 {
 		t.Fatalf("sent+queued=%d want 2 (sent=%d): %v", got, len(parent.sent), parent.sent)
 	}
 }

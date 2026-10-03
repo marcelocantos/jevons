@@ -36,7 +36,7 @@ func TestT984SeatViewsNameEveryFault(t *testing.T) {
 	}
 	alive := func(n string) bool { return local[n] }
 
-	got := seatsAgainstIntent(names, alive, broker, intent)
+	got := seatsAgainstIntent(names, alive, (&Server{}).observeBrokerSeats(broker), intent)
 	want := []seatAgainstIntent{
 		{Name: "parked-broker", State: fleetintent.Parked, Broker: true},
 		{Name: "parked-local", State: fleetintent.Parked, Local: true},
@@ -44,7 +44,7 @@ func TestT984SeatViewsNameEveryFault(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("against intent = %+v, want %+v", got, want)
 	}
-	if got := seatsDiverged(names, alive, broker, intent); !reflect.DeepEqual(got, []string{"lost"}) {
+	if got := seatsDiverged(names, alive, (&Server{}).observeBrokerSeats(broker), intent); !reflect.DeepEqual(got, []string{"lost"}) {
 		t.Fatalf("diverged = %v, want [lost]", got)
 	}
 	// An unreadable broker is unknown, not "nothing runs": only local

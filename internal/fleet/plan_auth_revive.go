@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
@@ -138,7 +140,7 @@ func RevivePlanAfterOwnerReauth(reg *claudia.Registry, intent fleetintent.Snapsh
 func registryAlive(reg *claudia.Registry) func(string) bool {
 	return func(name string) bool {
 		p := reg.Get(name)
-		return p != nil && p.Alive()
+		return p != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes)
 	}
 }
 
@@ -173,7 +175,7 @@ func RevivePlanAuthWhereHealthy(reg *claudia.Registry, intent fleetintent.Snapsh
 	}
 	healthy := map[claudia.Provider]bool{}
 	for _, d := range reg.List() {
-		if p := reg.Get(d.Name); p != nil && p.Alive() {
+		if p := reg.Get(d.Name); p != nil && (seatstate.ReadRegistry(reg, d.Name).Alive == seatstate.Yes) {
 			if plan := cli.PlanProvider(d.Provider); plan != "" {
 				healthy[plan] = true
 			}
@@ -269,7 +271,7 @@ type registryReattach struct{ reg *claudia.Registry }
 func (r registryReattach) List() []claudia.AgentDef { return r.reg.List() }
 func (r registryReattach) Alive(name string) bool {
 	p := r.reg.Get(name)
-	return p != nil && p.Alive()
+	return p != nil && (seatstate.ReadRegistry(r.reg, name).Alive == seatstate.Yes)
 }
 func (r registryReattach) Adopt(name string) error {
 	_, err := r.reg.Adopt(name)

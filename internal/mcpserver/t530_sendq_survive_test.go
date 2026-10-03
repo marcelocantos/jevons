@@ -148,7 +148,7 @@ func TestT530ParentKillRestartsHeldSendqForDrain(t *testing.T) {
 	if _, err := s.enqueueAgentSend(child, "gate: master red on your SHA — fix"); err != nil {
 		t.Fatal(err)
 	}
-	if depth := s.pendingAgentSends(child); depth != 1 {
+	if depth := observedPendingSends(s, child); depth != 1 {
 		t.Fatalf("planted depth=%d want 1", depth)
 	}
 
@@ -176,7 +176,7 @@ func TestT530ParentKillRestartsHeldSendqForDrain(t *testing.T) {
 	if def.Parent != "jevons" {
 		t.Fatalf("child parent=%q want jevons (surviving parent)", def.Parent)
 	}
-	if depth := s.pendingAgentSends(child); depth != 1 {
+	if depth := observedPendingSends(s, child); depth != 1 {
 		t.Fatalf("sendq depth after parent kill=%d; want 1 held (not abandoned)", depth)
 	}
 	at := s.drainRestartTimes()
@@ -205,7 +205,7 @@ func TestT530ParentKillRestartsHeldSendqForDrain(t *testing.T) {
 	// Sweep must not drop or reaped_held-abandon the held queue: seat is
 	// registered again (stall notice OK; depth stays until a live drain).
 	s.SweepSendBacklogs()
-	if depth := s.pendingAgentSends(child); depth != 1 {
+	if depth := observedPendingSends(s, child); depth != 1 {
 		t.Fatalf("after sweep depth=%d; want 1 still held for drain", depth)
 	}
 }
@@ -236,7 +236,7 @@ func TestT530RefuseKillOfHeldRecoverySeat(t *testing.T) {
 	if s.registry.Def(child) == nil {
 		t.Fatal("recovery seat must remain registered after refused kill")
 	}
-	if depth := s.pendingAgentSends(child); depth != 1 {
+	if depth := observedPendingSends(s, child); depth != 1 {
 		t.Fatalf("depth=%d; refuse must not abandon sendq", depth)
 	}
 }
@@ -295,10 +295,10 @@ func TestT530ParentKillWithOwnSendqStillRestartsHeldChild(t *testing.T) {
 	if s.registry.Def(child) == nil {
 		t.Fatal("held-sendq child must restart for drain")
 	}
-	if s.pendingAgentSends(child) != 1 {
-		t.Fatalf("child depth=%d want 1", s.pendingAgentSends(child))
+	if observedPendingSends(s, child) != 1 {
+		t.Fatalf("child depth=%d want 1", observedPendingSends(s, child))
 	}
-	if s.pendingAgentSends("jevons-po") != 1 {
-		t.Fatalf("PO sendq must survive keyed by name; depth=%d", s.pendingAgentSends("jevons-po"))
+	if observedPendingSends(s, "jevons-po") != 1 {
+		t.Fatalf("PO sendq must survive keyed by name; depth=%d", observedPendingSends(s, "jevons-po"))
 	}
 }

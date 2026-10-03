@@ -41,7 +41,7 @@ func chainServer(t *testing.T, fleet map[string]*fakeSender) (*Server, *overseer
 	inbox := &overseerInbox{}
 	s := &Server{}
 	s.SetOverseerDeliver(inbox.deliver)
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		fs, ok := fleet[name]
 		if !ok {
 			// Same shape ensureAgentProcess returns for an unknown peer.

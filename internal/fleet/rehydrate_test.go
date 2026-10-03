@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T313 hermetic surface. Everything here is decided from disk state
@@ -158,14 +159,14 @@ func TestSessionLostGate(t *testing.T) {
 		Name: "a", WorkDir: workDir, SessionID: "missing-id",
 		Materialized: true, Provider: claudia.ProviderClaude,
 	}
-	if !SessionLost(claudeLost) {
+	if !observedResumeLost(claudeLost) {
 		t.Fatal("materialized claude row with no JSONL not reported lost")
 	}
 
 	// Not yet materialized: a first launch legitimately has no JSONL.
 	fresh := *claudeLost
 	fresh.Materialized = false
-	if SessionLost(&fresh) {
+	if observedResumeLost(&fresh) {
 		t.Fatal("un-materialized row reported lost — first launch would rotate needlessly")
 	}
 
@@ -175,13 +176,13 @@ func TestSessionLostGate(t *testing.T) {
 	grok := *claudeLost
 	grok.Provider = claudia.ProviderGrok
 	grok.SessionID = "grok-missing-home"
-	if SessionLost(&grok) {
+	if observedResumeLost(&grok) {
 		t.Fatal("grok row judged lost from a missing exclusive home")
 	}
 
 	cursor := *claudeLost
 	cursor.Provider = claudia.ProviderCursor
-	if SessionLost(&cursor) {
+	if observedResumeLost(&cursor) {
 		t.Fatal("cursor row judged lost from a provider-private store")
 	}
 
@@ -190,11 +191,11 @@ func TestSessionLostGate(t *testing.T) {
 	present.Provider = ""
 	present.SessionID = "present-id"
 	writeSessionJSONL(t, present.SessionID, workDir)
-	if SessionLost(&present) {
+	if observedResumeLost(&present) {
 		t.Fatal("row with an existing transcript reported lost")
 	}
 
-	if SessionLost(nil) {
+	if observedResumeLost(nil) {
 		t.Fatal("nil def reported lost")
 	}
 }
@@ -312,4 +313,19 @@ func TestRehydrateUnknownAgent(t *testing.T) {
 	if _, ok, err := f.RehydrateLostSession("nobody"); err == nil || ok {
 		t.Fatalf("unknown agent rehydrated: ok=%v err=%v", ok, err)
 	}
+}
+
+func observedResumeLost(def *claudia.AgentDef) bool {
+	if def == nil {
+		return false
+	}
+	d := *def
+	if d.Name == "" {
+		d.Name = "fixture"
+	}
+	a := seatstate.New(seatstate.Args{})
+	a.Observe(seatstate.Observation{Name: d.Name, SessionID: d.SessionID, Source: "fixture", QueueDepth: seatstate.QueueUnknown})
+	a.ObserveResumeEvidence(&d)
+	st, _ := a.Get(d.Name)
+	return st.ResumeLost == seatstate.Yes
 }

@@ -6,6 +6,8 @@ package mcpserver
 import (
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/keepgoing"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -19,7 +21,7 @@ func workAgentsBoundOnTarget(reg *claudia.Registry, targetID, scopeWorkdir, excl
 	var bound []string
 	for _, name := range workAgentsEngagedOnTarget(reg, targetID, scopeWorkdir, excludeName) {
 		proc := reg.Get(name)
-		if proc == nil || proc.Alive() {
+		if proc == nil || seatstate.ReadRegistry(reg, name).Alive != seatstate.No {
 			bound = append(bound, name)
 		}
 	}
@@ -49,7 +51,7 @@ func keepgoingSeats(reg *claudia.Registry, workdir string) []keepgoing.Seat {
 		}
 		running := false
 		if proc := reg.Get(d.Name); proc != nil {
-			running = proc.Alive()
+			running = (seatstate.ReadRegistry(reg, d.Name).Alive == seatstate.Yes)
 		}
 		out = append(out, keepgoing.Seat{Name: d.Name, TargetID: tid, Running: running})
 	}

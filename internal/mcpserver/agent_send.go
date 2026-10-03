@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -51,7 +53,6 @@ type agentSendResult struct {
 type agentSender interface {
 	Send(text string) error
 	Interrupt() error
-	Alive() bool
 }
 
 // readoptDeliver runs op on proc and, when proc is the real broker-held agent
@@ -113,12 +114,8 @@ func (s *Server) dequeueAgentSend(name string) sendq.Entry {
 }
 
 func (s *Server) pendingAgentSends(name string) int {
-	depth, err := s.sendQueue().Depth(name)
-	if err != nil {
-		slog.Error("agent send queue: depth unreadable",
-			"component", "agent_send", "name", name, "err", err)
-	}
-	return depth
+	st, _ := s.Seats().Get(name)
+	return st.QueueDepth
 }
 
 // AgentDeliverResult is the public outcome of DeliverAgentMessage (🎯T275).
@@ -189,7 +186,10 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	}
 
 	proc := s.registry.Get(name)
-	if proc != nil && proc.Alive() {
+	if proc != nil && s.seatState(name).Alive == seatstate.Unknown {
+		return nil, false, fmt.Errorf("agent %q liveness is unknown; awaiting observation", name)
+	}
+	if proc != nil && (s.seatState(name).Alive == seatstate.Yes) {
 		return proc, false, nil
 	}
 	if s.registry.Def(name) == nil {
@@ -476,11 +476,6 @@ func (s *Server) lockAgentSend(name string) func() {
 
 // The provider may know a turn is open before Jevons has observed a turn
 // event. OMP marks that phase before writing the prompt to its sidecar.
-func senderTurnInFlight(proc agentSender) bool {
-	phase, ok := proc.(interface{ TurnPhase() claudia.TurnPhase })
-	return ok && phase.TurnPhase() == claudia.TurnInTurn
-}
-
 // deliverToSenderMode is the mode-carrying send path (🎯T657).
 //
 //   - submit: send when idle; queue behind a known or discovered open turn
@@ -495,12 +490,13 @@ func senderTurnInFlight(proc agentSender) bool {
 //   - queue: hold for the next turn boundary when a turn is open; an idle seat
 //     has no boundary coming, so the text is submitted (mechanism submit).
 func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
+	s.observeQueue(name)
 	// A sidecar socket write returns before the provider accepts or rejects
 	// the prompt. Serialize sends to one seat through the witness verdict so
 	// simultaneous callers cannot both mistake that interval for idle.
 	unlock := s.lockAgentSend(name)
 	defer unlock()
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
 	}
 	if mode == "" {
@@ -532,7 +528,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	// 🎯T657: a steer with a seam does not take it either — folding into the
 	// open turn is the point, and the seam decides on the process's own
 	// phase reading rather than this one.
-	if !interrupt && seam == nil && (s.flightState(name) == FlightInFlight || senderTurnInFlight(proc)) {
+	if !interrupt && seam == nil && (s.flightState(name) == FlightInFlight) {
 		// 🎯T426 clause 3: "in flight" is a claim this process wrote when it
 		// last saw a send begin, and it is only worth anything while the sink
 		// that would retract it is still attached. Attaching one HERE means it
@@ -846,7 +842,7 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 	s.mu.Unlock()
 	if resolve != nil {
 		proc, _, err := resolve(name)
-		if err != nil || proc == nil || !proc.Alive() {
+		if err != nil || proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 			return nil, false
 		}
 		return proc, true
@@ -855,7 +851,7 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 		return nil, false
 	}
 	proc := s.registry.Get(name)
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return nil, false
 	}
 	return proc, true

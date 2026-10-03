@@ -57,7 +57,7 @@ func TestAgentStartRehydratesLostSessionBeforeLaunch(t *testing.T) {
 	if _, _, requireResume := launchConfigFromDef(reg.Def(name)); !requireResume {
 		t.Fatal("fixture wrong: row does not demand a resume")
 	}
-	if !fleet.SessionLost(reg.Def(name)) {
+	if !observedResumeLost(reg.Def(name)) {
 		t.Fatal("fixture wrong: session not judged lost")
 	}
 

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
@@ -52,6 +54,7 @@ type NotifyFunc func(text string)
 // registers agent management tools.
 func (s *Server) SetRegistry(registry *claudia.Registry) {
 	s.registry = registry
+	s.Seats().ObserveRegistry(registry)
 
 	s.addTool(
 		mcp.NewTool("jevons_agent_list",
@@ -201,7 +204,6 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		// every seat, so it feeds the authority. The event stream reports
 		// motion but is silent for a seat that is merely sitting there, and
 		// empty entirely when the sink is dark; this is the standing feed.
-		s.observeSeat(d, alive)
 		// 🎯T305: zero-turn live seats are never_briefed, not running.
 		// 🎯T444: and the seat's own session records break the tie, because
 		// both of the other inputs go stale across a backend re-mint.
@@ -229,7 +231,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		fmt.Fprintf(&b, "%-20s %-14s purpose=%-8s role=%-14s parent=%-12s provider=%s model=%s %s (session: %s)\n",
 			d.Name, status, purpose, s.roleDisplay(d), parent, d.Provider, model, d.WorkDir, sessionDisplay(d.SessionID))
 		if status == AgentStatusBornStuck {
-			diag := s.diagnoseBirth(d, s.birthClock())
+			diag := s.birthDescription(d, s.birthClock())
 			fmt.Fprintf(&b, "  ^ %s\n", FormatBornStuckLine(d, diag.Elapsed))
 		}
 		if alive {
@@ -1210,6 +1212,8 @@ func (s *Server) handleAgentStop(ctx context.Context, req mcp.CallToolRequest) (
 	}
 
 	s.registry.Stop(name)
+
+	seatstate.ObserveStopped(s.registry, name)
 	// 🎯T408 via 🎯T414: stopping without killing is an instruction, and the
 	// instruction is the part that used to evaporate. The process ends here;
 	// the park outlives it, the delivery that would restart the agent, and the

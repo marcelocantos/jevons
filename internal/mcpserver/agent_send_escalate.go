@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/config"
@@ -91,7 +93,7 @@ func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSende
 	}
 	unlock := s.lockAgentSend(name)
 	defer unlock()
-	if proc == nil || !proc.Alive() || !(s.flightState(name) == FlightInFlight || senderTurnInFlight(proc)) {
+	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) || !(s.flightState(name) == FlightInFlight) {
 		return agentSendResult{}, false, nil
 	}
 	// 🎯T931: the ladder holds only rungs this seat can run. A steer-first

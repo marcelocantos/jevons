@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T806: the owner's echo lands in the transcript before delivery, so a
@@ -154,7 +156,7 @@ func (s *Server) awaitOverseerProcess() bool {
 	s.mu.RUnlock()
 	deadline := time.Now().Add(wait)
 	for {
-		if proc := s.CurrentProcess(); proc != nil && proc.Alive() {
+		if proc := s.CurrentProcess(); proc != nil && (s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
 			return true
 		}
 		if !time.Now().Before(deadline) {

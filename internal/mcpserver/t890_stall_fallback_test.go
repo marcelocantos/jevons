@@ -77,7 +77,7 @@ func TestT890SplashStallFallsBackToEligibleProvider(t *testing.T) {
 
 	const name = "jv-t890-splash"
 	sender := &t890StallSender{reg: reg, name: name, stallsOn: claudia.ProviderClaude}
-	s.SetSenderResolver(func(n string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(n string) (agentSender, bool, error) {
 		if n != name {
 			return nil, false, errors.New("unknown seat")
 		}

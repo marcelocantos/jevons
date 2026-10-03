@@ -137,7 +137,7 @@ func TestT752GrokGoalStatusStoresReportAndClearsGoal(t *testing.T) {
 	for _, m := range po.sent {
 		all += m + "\n"
 	}
-	if !strings.Contains(all, "finish-report") && s.pendingAgentSends(t690Parent) == 0 {
+	if !strings.Contains(all, "finish-report") && observedPendingSends(s, t690Parent) == 0 {
 		t.Fatalf("parent neither received nor queued the recovered report: %v", po.sent)
 	}
 

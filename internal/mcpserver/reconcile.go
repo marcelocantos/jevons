@@ -40,6 +40,7 @@ func (s *Server) Reconcile() {
 	overseer := s.overseerName()
 	reconcileFirst.Do(func() { slog.Info("reconcile: first fleet pass", "overseer", overseer) })
 
+	s.observeRegistryLiveness()
 	s.TrackSeatLoad()
 	s.SweepOrphanPanes()
 

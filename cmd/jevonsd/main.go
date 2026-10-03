@@ -655,6 +655,8 @@ func main() {
 			os.Exit(1)
 		}
 		registry = r
+		seats.ObserveRegistry(registry)
+		go seats.FollowRegistry(ctx, registry)
 		// 🎯T541.1: in-process Cursor Launch waits for leftover store.db
 		// writers to exit, then fail-loud (ErrCursorResumeDenied) rather
 		// than stacking a second ACP client. Daemon-held grants reclaim
@@ -1026,6 +1028,7 @@ func main() {
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
 
 	srv.SetRegistry(registry)
+	mcpSrv.StartSeatObservations(ctx, srv.ObserveSeatMetadata)
 	srv.SetOverseerReattachWait(5 * time.Second) // 🎯T806
 	// 🎯T806: undelivered owner messages survive a bounce; malformed state is fatal.
 	if err := srv.LoadOwnerQueue(filepath.Join(cfg.StateDir, "owner_queue.json")); err != nil {

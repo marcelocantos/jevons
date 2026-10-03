@@ -54,9 +54,9 @@ func TestListFleetAgentsIncludesEphemeralChildren(t *testing.T) {
 	byName := map[string]agentInfo{}
 	for _, a := range got {
 		byName[a.Name] = a
-		if a.Status != "stopped" {
-			// No Launch in hermetic test — processes are absent.
-			t.Fatalf("%s status=%q want stopped", a.Name, a.Status)
+		if a.Status != "phase_unknown" {
+			// An unobserved process is not known stopped.
+			t.Fatalf("%s status=%q want phase_unknown", a.Name, a.Status)
 		}
 	}
 	if byName["jv-ephemeral-child"].WorkDir != dir {
@@ -178,9 +178,9 @@ func TestListFleetAgentsProgressFields(t *testing.T) {
 	if w.Progress == "" {
 		t.Fatalf("worker progress empty: %+v", w)
 	}
-	// Stopped process baseline still present for po (no ACP events).
-	if byName["po"].Progress == "" {
-		t.Fatalf("po should have status baseline progress: %+v", byName["po"])
+	// No observation must not manufacture a stopped baseline.
+	if byName["po"].Status != "phase_unknown" {
+		t.Fatalf("po should retain unknown status: %+v", byName["po"])
 	}
 }
 

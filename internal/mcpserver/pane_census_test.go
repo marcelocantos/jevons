@@ -117,7 +117,7 @@ func TestT514SweepKeepsLiveClaudeSessionPane(t *testing.T) {
 
 func TestT459AgentListNamesHostCost(t *testing.T) {
 	s, _ := t459Server(t, []claudia.AgentDef{{Name: "jv-live", SessionID: "s1"}}, nil)
-	res, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	res, err := observedAgentList(s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

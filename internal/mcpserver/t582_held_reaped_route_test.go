@@ -50,7 +50,7 @@ func t582Server(t *testing.T, agent, parent, reason string) *t582Fixture {
 	f.now = time.Date(2026, 8, 29, 18, 43, 0, 0, time.UTC)
 	s.SetSweepClock(func() time.Time { return f.now })
 	s.SetOverseerDeliver(f.up.deliver)
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		if name == parent {
 			return f.parent, false, nil
 		}
@@ -137,7 +137,7 @@ func TestT582OneNoticePerReapedSeatOverTenMinutes(t *testing.T) {
 	if !strings.Contains(notice, "do NOT jevons_agent_start") {
 		t.Fatalf("notice does not say the seat is finished:\n%s", notice)
 	}
-	if depth := f.s.pendingAgentSends(agent); depth != 0 {
+	if depth := observedPendingSends(f.s, agent); depth != 0 {
 		t.Fatalf("depth = %d; want 0 — the hold is resolved, not left to re-alarm", depth)
 	}
 	// Gate feedback about the achieved target is dropped, not routed onward.
@@ -169,7 +169,7 @@ func TestT582NonGateHoldIsRoutedToTheParent(t *testing.T) {
 			t.Errorf("routed message missing %q:\n%s", want, sent)
 		}
 	}
-	if depth := f.s.pendingAgentSends(agent); depth != 0 {
+	if depth := observedPendingSends(f.s, agent); depth != 0 {
 		t.Fatalf("depth = %d; want 0 after routing", depth)
 	}
 	if got := heldReapedNotices(f.up.all()); got != 1 {
@@ -191,13 +191,13 @@ func TestT582ReapedNameStaysAReachableAddress(t *testing.T) {
 	if res.Status != StatusReapedHeld {
 		t.Fatalf("status = %q; want %s", res.Status, StatusReapedHeld)
 	}
-	if res.Queued < 1 || f.s.pendingAgentSends(agent) < 1 {
+	if res.Queued < 1 || observedPendingSends(f.s, agent) < 1 {
 		t.Fatalf("queued=%d depth=%d; a new message to a reaped name is still held",
-			res.Queued, f.s.pendingAgentSends(agent))
+			res.Queued, observedPendingSends(f.s, agent))
 	}
 	// And it is held, not routed, until it has aged past the threshold.
 	f.s.SweepSendBacklogs()
-	if depth := f.s.pendingAgentSends(agent); depth != 1 {
+	if depth := observedPendingSends(f.s, agent); depth != 1 {
 		t.Fatalf("depth = %d; want 1 — a fresh hold is not routed out from under a start", depth)
 	}
 }
@@ -215,7 +215,7 @@ func TestT582NonFinishReapKeepsTheT401Hold(t *testing.T) {
 	}
 	f.s.SweepSendBacklogs()
 
-	if depth := f.s.pendingAgentSends(agent); depth != 1 {
+	if depth := observedPendingSends(f.s, agent); depth != 1 {
 		t.Fatalf("depth = %d; want 1 — a non-finish reap still holds (🎯T401)", depth)
 	}
 	if got := len(f.parent.delivered()); got != 0 {

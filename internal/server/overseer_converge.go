@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/marcelocantos/jevons/internal/capacity"
 	"log/slog"
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -63,10 +65,12 @@ const (
 	cockpitUnstickBusy
 	cockpitLaunch
 	cockpitGiveUp
+	cockpitWaitObservation
 )
 
 // cockpitObs is a snapshot of overseer + chat attach + busy state.
 type cockpitObs struct {
+	Unknown      bool // a present handle has no fresh condition observation
 	Registered   bool
 	ProcAlive    bool
 	ChatAttached bool
@@ -100,6 +104,9 @@ func planCockpit(o cockpitObs, attempts, maxAttempts int, stuckTimeout time.Dura
 	}
 	if stuckTimeout <= 0 {
 		stuckTimeout = DefaultStuckBusyTimeout
+	}
+	if o.Unknown {
+		return cockpitWaitObservation
 	}
 	if !o.Registered {
 		return cockpitGiveUp
@@ -261,7 +268,7 @@ func (s *Server) SetCockpitHooks(h CockpitHooks) {
 func (s *Server) NoteOverseerProgress() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.overseerLastProgress = time.Now()
+	s.noteOverseerProgressLocked()
 }
 
 // ObserveCockpit reads registry + chat attach + busy for the overseer.
@@ -271,8 +278,8 @@ func (s *Server) ObserveCockpit() cockpitObs {
 	name := s.overseerName
 	chat := s.proc
 	waiting := s.waiting
-	lastProg := s.overseerLastProgress
-	qdepth := len(s.notifyQueue)
+	lastProg := s.seatState(name).LastActivity
+	qdepth := s.seatState(s.overseerName).OwnerQueueDepth
 	s.mu.RUnlock()
 
 	o := cockpitObs{Waiting: waiting, QueueDepth: qdepth}
@@ -287,7 +294,9 @@ func (s *Server) ObserveCockpit() cockpitObs {
 		o.ResumeDenied = true
 	}
 	proc := reg.Get(name)
-	if proc != nil && proc.Alive() {
+	st := s.seatState(name)
+	o.Unknown = proc != nil && (!st.Alive.Known() || !st.InFlight.Known())
+	if proc != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 		o.ProcAlive = true
 		o.PromptInFlight = s.seatInFlight(name, proc)
 		// 🎯T601: ask the pane, not only the event stream — but only
@@ -300,20 +309,17 @@ func (s *Server) ObserveCockpit() cockpitObs {
 		// says a prompt is outstanding", which is exactly the condition a
 		// wedge also satisfies; treating it as evidence of work would
 		// make the stuck-busy case 🎯T204 exists for unconvictable.
-		if def := reg.Def(name); def != nil && def.Provider == claudia.ProviderClaude {
+		if st.Provider == string(claudia.ProviderClaude) {
 			o.PaneWorking = o.PromptInFlight
 		}
 	}
-	if chat != nil && chat.Alive() && proc != nil && chat == proc {
+	if chat != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) && proc != nil && chat == proc {
 		o.ChatAttached = true
-	} else if chat != nil && chat.Alive() && o.ProcAlive {
+	} else if chat != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) && o.ProcAlive {
 		o.ChatAttached = false
 	}
 	if !lastProg.IsZero() {
 		o.SinceProgress = time.Since(lastProg)
-	} else if o.PromptInFlight || waiting || qdepth > 0 {
-		// Never seen progress while something claims work — treat as aged.
-		o.SinceProgress = DefaultStuckBusyTimeout + time.Second
 	}
 	return o
 }
@@ -343,6 +349,8 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 	state.mu.Unlock()
 
 	switch phase {
+	case cockpitWaitObservation:
+		return nil
 	case cockpitOK:
 		state.mu.Lock()
 		state.attempts = 0
@@ -399,7 +407,7 @@ func (s *Server) cockpitAttach(state *cockpitState) error {
 		return fmt.Errorf("cockpit: no registry")
 	}
 	proc := reg.Get(name)
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 		return fmt.Errorf("cockpit: attach raced; process gone")
 	}
 	s.AttachOverseer(proc)
@@ -441,7 +449,7 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 		"escalate", escalate,
 	)
 
-	if proc != nil && proc.Alive() && !escalate {
+	if proc != nil && s.seatState(name).Alive == seatstate.Yes && !escalate {
 		if err := proc.Interrupt(); err != nil {
 			slog.Warn("cockpit: interrupt failed", "err", err)
 		}
@@ -576,7 +584,7 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 	s.waiting = false
 	s.overseerOwnerTurn = false // 🎯T291
 	s.turnBuf = ""
-	s.overseerLastProgress = time.Now()
+	s.noteOverseerProgressLocked()
 	s.mu.Unlock()
 	s.SetOverseerDownReason("")
 	state.mu.Lock()

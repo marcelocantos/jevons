@@ -58,6 +58,7 @@ func (s *Server) LoadOwnerQueue(path string) error {
 		}
 		s.mu.Lock()
 		s.notifyQueue = append(s.notifyQueue, r.Text)
+		s.observeOwnerQueueLocked()
 		s.mu.Unlock()
 		replayed++
 	}

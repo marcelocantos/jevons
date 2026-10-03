@@ -10,11 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/converge"
 	"github.com/marcelocantos/jevons/internal/converge/attenuate"
-	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
@@ -112,7 +113,7 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 	// re-brief is exactly their cure, and the T416 confirm machinery judges
 	// whether it landed.
 	if s.registry != nil && !s.agentHasTurnBegan(agent) {
-		if def := s.registry.Def(agent); def != nil && fleet.SessionLost(def) {
+		if def := s.registry.Def(agent); def != nil && (s.seatState(agent).Status == AgentStatusDeadUnmaterialized || s.seatState(agent).ResumeLost == seatstate.Yes) {
 			return fmt.Errorf("repressure refused: agent %q is %s — its session %s has no conversation on disk (🎯T412); recover or reap it rather than nudging",
 				agent, AgentStatusDeadUnmaterialized, def.SessionID)
 		}
@@ -387,7 +388,7 @@ func (s *Server) observeForImpatience(
 	if deps.Running != nil {
 		running = deps.Running(d.Name)
 	} else if proc := s.registry.Get(d.Name); proc != nil {
-		running = proc.Alive()
+		running = (s.seatState(d.Name).Alive == seatstate.Yes)
 	}
 	deliberateStop := !running && !d.AutoStart
 
@@ -400,7 +401,7 @@ func (s *Server) observeForImpatience(
 	s.mu.Lock()
 	if s.idleActivity != nil {
 		act := s.idleActivity.Get(d.Name)
-		phase = act.Phase
+		phase = s.seatState(d.Name).Phase.String()
 		refusalHold = act.RefusalHold
 		waitingOnGate = DeclaresBlockingGateWait(act.LastTerminal)
 		planOnly = act.PlanOnly || act.ProseWorking
@@ -425,14 +426,8 @@ func (s *Server) observeForImpatience(
 	} else if purpose == claudia.PurposeWork {
 		// Unbound implementer residual (🎯T244 / T316): open until accounted for.
 		// 🎯T330: PO/boss with engaged children is not open for parent thrash.
-		phaseOf := func(name string) string {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if s.idleActivity == nil {
-				return ""
-			}
-			return s.idleActivity.Get(name).Phase
-		}
+		phaseOf := func(name string) string { return s.seatState(name).Phase.String() }
+
 		missionOpen = HasOpenMissionForIdle(d, hooks.MissionOpen,
 			CountWorkChildren(defs, d.Name),
 			CountEngagedWorkChildren(defs, d.Name, phaseOf, hooks.MissionOpen))

@@ -315,7 +315,7 @@ func (s *Server) settleOverseerAfterUnstick() {
 	s.waiting = false
 	s.overseerOwnerTurn = false // 🎯T291
 	s.turnBuf = ""
-	s.overseerLastProgress = time.Now()
+	s.noteOverseerProgressLocked()
 	s.mu.Unlock()
 	s.setOverseerPhase(PhaseSample{Phase: PhaseIdle})
 }

@@ -11,6 +11,64 @@ list with a disposition against every entry, and a script that counts.
 It is a survey, not a design. Where it quotes a conclusion from the
 2026-09-21 studies rather than a line I read myself, it says so.
 
+## T766.2 authority fold (2026-10-03)
+
+The tables below are the historical inventory. Grep totals and previous
+helper renames are not completion evidence for the fold. The executable
+boundary is now `scripts/docratchet/t766_seat_derivation_ratchet_test.go`:
+zero control-side provider observations or transcript phase derivations.
+It follows decoder declarations and Go receiver types, including broker
+fields and method values; mutation fixtures rename wrappers, imports, and
+decoders without making their violations disappear.
+`scripts/fleetcensus/count.sh` remains unchanged.
+
+The daemon injects one `internal/seatstate.Authority` into HTTP, MCP and
+fleet. Controls use `Get`, the Server projection, or `ReadRegistry`
+(the registry binding contains no second state cache). Observation feeds are:
+
+- Registry/attached-process reports in `internal/seatstate/registry_feed.go`,
+  sampled independently every second and at completed lifecycle boundaries.
+- Provider turn events and send queue mutations, reporting only facts they
+  know. QueueDepth denotes the durable fleet send queue; OwnerQueueDepth separately
+  reports the owner notification queue at its mutation boundaries.
+- Transcript phase/lifecycle, birth diagnosis, broker and pane reports in
+  `internal/mcpserver/seat_observations.go`; transcript/queue refresh runs
+  independently every 30 seconds. `session_phase.go` is its decoder library.
+  Model log/event metadata is observed by `internal/server/seat_observations.go`
+  on that same slow cadence. These are the only production file exemptions
+  outside the authority, alongside the data-only `seatactivity/activity.go`
+  library used by those feeds.
+
+Alive, InFlight, Phase, BornStuck, LastActivity, QueueDepth, Provider and Model
+have explicit unknown representations. Freshness is per signal: a queue
+write cannot refresh liveness. LastActivity is historical evidence, so silence
+does not erase its timestamp. Session changes discard predecessor conditions;
+delayed transcript/birth reports cannot restore them. Local attachment and
+broker liveness remain distinguishable inside the authority, so a disconnected
+handle does not prove a broker seat dead. A blank pane title cannot prove idle
+or authorize reaping. Registry configuration is desired Provider/Model;
+process reports and session/event evidence populate those fields in seat truth.
+
+The existing actuator families remain: send and stop guards, idle pressure,
+fleet recovery, born-stuck notices, pane reaping, migration, broker/intent
+repair, and owner cockpit recovery now consume the authority. Their scheduling
+and action arbitration are T766.3, not a claim made by this fold.
+
+### Oracle coverage and journey exception
+
+Hermetic tests cover per-field staleness, out-of-order and old-session reports,
+broker/local disagreement, unknown flight preventing pane reaping and migration,
+cheap transcript-independent reads, queue mutations, and the existing send,
+recovery, migration and owner-health paths with explicitly driven observation
+feeds. The ratchet checks production call sites, not just preferred symbol names.
+
+Journey exception for this structural fold: deterministic hermetic feeds are
+necessary to exercise absent, stale, contradictory and delayed facts without
+depending on provider timing. The assignment forbids Grok; no Grok journey is
+claimed. Hermetic and clean-build evidence establish the code boundary, but do
+not establish activation or observed development behavior. Integration and a
+development probe remain required before an owner-visible achieve claim.
+
 ## Baseline
 
 `scripts/fleetcensus/count.sh`, run at filing time:

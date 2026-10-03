@@ -41,7 +41,7 @@ func t518Harness(t *testing.T) (*Server, *claudia.Registry, *fakeSender) {
 	fs := &fakeSender{alive: true}
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		if name != "jv-t518-w" {
 			return nil, false, fmt.Errorf("unknown %s", name)
 		}
@@ -91,7 +91,7 @@ func TestT518QueuedStartBriefKeepsSeat(t *testing.T) {
 	if len(fs.sent) != 0 {
 		t.Fatalf("queued arm must hold the brief, not paste it: %v", fs.sent)
 	}
-	if n := s.pendingAgentSends("jv-t518-w"); n != 1 {
+	if n := observedPendingSends(s, "jv-t518-w"); n != 1 {
 		t.Fatalf("pending sends = %d, want 1 (the held brief)", n)
 	}
 

@@ -47,7 +47,7 @@ func (s *Server) TrackSeatLoad() {
 	tr := s.seatLoadTracker()
 	for _, def := range s.registry.List() {
 		proc := s.registry.Get(def.Name)
-		if proc == nil || !proc.Alive() {
+		if proc == nil || !(s.seatState(def.Name).Alive == seatstate.Yes) {
 			continue
 		}
 		pid := proc.PID()
@@ -71,7 +71,7 @@ func (s *Server) trackSeatLoadFor(name string) {
 		return
 	}
 	proc := s.registry.Get(name)
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return
 	}
 	if pid := proc.PID(); pid > 1 {
@@ -125,11 +125,10 @@ func (s *Server) ReapLostSeats() []seatload.Result {
 	tr := s.seatLoadTracker()
 	var out []seatload.Result
 	for _, name := range tr.Seats() {
-		if def := s.registry.Def(name); def != nil {
-			if proc := s.registry.Get(name); proc != nil && proc.Alive() {
-				continue
-			}
+		if s.registry.Def(name) != nil && s.seatState(name).Alive != seatstate.No {
+			continue
 		}
+
 		res, err := tr.Reap(name)
 		if err != nil {
 			slog.Warn("lost seat load reap failed", "component", "seat_load", "seat", name, "err", err)

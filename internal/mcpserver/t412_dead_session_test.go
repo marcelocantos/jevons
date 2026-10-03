@@ -53,7 +53,7 @@ func TestT412UnmaterializedSeatIsNotRunning(t *testing.T) {
 	s := New(t.TempDir(), nil, nil)
 	def := deadSeatDef(t, nil, "jv-t372-auto", "844f9956-dead-seat")
 
-	got := s.agentPhase(def, true)
+	got := observedAgentPhase(s, def, true)
 	if got == AgentStatusRunning {
 		t.Fatal("a live seat with no conversation on disk was reported running: " +
 			"the lie 🎯T412 exists to stop")
@@ -80,7 +80,7 @@ func TestT412MaterializedSeatStillRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := s.agentPhase(def, true); got != AgentStatusRunning {
+	if got := observedAgentPhase(s, def, true); got != "working" {
 		t.Fatalf("phase for a live seat with a real transcript: %s want %s", got, AgentStatusRunning)
 	}
 }
@@ -132,6 +132,7 @@ func TestT412LadderRefusesRePressureToDeadSeat(t *testing.T) {
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
 	deadSeatDef(t, reg, "jv-t374-script-abort-root", "0c8a2875-dead-seat")
+	s.observeRegistryLiveness()
 
 	sink := &rePressureSink{server: s}
 	err = sink.RePressure("jv-t374-script-abort-root", "T374")
@@ -158,7 +159,7 @@ func TestT412RotatedRowIsNeverBriefedNotRunning(t *testing.T) {
 		SessionID: "232f204d-fresh-mint",
 		// Materialized=false: RehydratedDef's contract after a 🎯T409 rotation.
 	}
-	if got := s.agentPhase(def, true); got != AgentStatusNeverBriefed {
+	if got := observedAgentPhase(s, def, true); got != AgentStatusNeverBriefed {
 		t.Fatalf("freshly rotated row: %s want %s", got, AgentStatusNeverBriefed)
 	}
 }

@@ -82,7 +82,7 @@ func TestT751_1_BornStuckReplacementForPOIsReportedNotRecovered(t *testing.T) {
 
 	const name = "jevons-po"
 	sender := t751NeverComposerSender{}
-	s.SetSenderResolver(func(n string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(n string) (agentSender, bool, error) {
 		if n != name {
 			return nil, false, errors.New("unknown seat")
 		}

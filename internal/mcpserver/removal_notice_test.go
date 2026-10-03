@@ -39,7 +39,7 @@ func t435Fleet(t *testing.T) (*Server, *claudia.Registry) {
 
 func t435AgentList(t *testing.T, s *Server) string {
 	t.Helper()
-	res, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	res, err := observedAgentList(s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

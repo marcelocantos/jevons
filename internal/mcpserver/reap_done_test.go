@@ -104,7 +104,7 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 		t.Fatal("reaped worker still in live registry")
 	}
 	listReq := mcp.CallToolRequest{}
-	listRes, err := s.handleAgentList(context.Background(), listReq)
+	listRes, err := observedAgentList(s, context.Background(), listReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestT195ImperfectDoneReportHermetic(t *testing.T) {
 	}
 
 	listReq := mcp.CallToolRequest{}
-	listRes, err := s.handleAgentList(context.Background(), listReq)
+	listRes, err := observedAgentList(s, context.Background(), listReq)
 	if err != nil {
 		t.Fatal(err)
 	}

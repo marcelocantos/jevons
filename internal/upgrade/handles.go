@@ -6,6 +6,8 @@ package upgrade
 import (
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 )
 
@@ -86,7 +88,7 @@ func FromRegistry(reg *claudia.Registry) []Handle {
 			PID:        d.ConnectPID,
 		}
 		if proc := reg.Get(d.Name); proc != nil {
-			if proc.Alive() {
+			if seatstate.ReadRegistry(reg, d.Name).Alive == seatstate.Yes {
 				h.Alive = true
 			}
 			// Prefer live process endpoint over persisted def (may be fresher).

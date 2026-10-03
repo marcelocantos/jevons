@@ -24,7 +24,7 @@ func TestT821ReapedSeatReceivesNoIdleNudge(t *testing.T) {
 			t.Fatalf("%s to reaped seat was held: %+v", ev, res)
 		}
 	}
-	if n := s.pendingAgentSends(t401Agent); n != 0 {
+	if n := observedPendingSends(s, t401Agent); n != 0 {
 		t.Fatalf("reaped seat sendq depth after nudges = %d, want 0", n)
 	}
 
@@ -36,7 +36,7 @@ func TestT821ReapedSeatReceivesNoIdleNudge(t *testing.T) {
 	if res.Status != StatusReapedHeld {
 		t.Fatalf("gate feedback status = %q, want %q", res.Status, StatusReapedHeld)
 	}
-	if n := s.pendingAgentSends(t401Agent); n != 1 {
+	if n := observedPendingSends(s, t401Agent); n != 1 {
 		t.Fatalf("depth after gate feedback = %d, want 1", n)
 	}
 }

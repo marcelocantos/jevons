@@ -67,7 +67,7 @@ func paneBusyRendering(err error, activity seatactivity.Reading, reminted bool) 
 		activity.Age >= 0 && activity.Age <= busyPaneFreshWindow
 }
 
-// sendStallIsBusyPane reads the seat's transcript and applies the verdict.
+// sendStallIsBusyPane reads observed activity from the authority.
 func (s *Server) sendStallIsBusyPane(name string, err error) bool {
 	if s == nil || s.registry == nil || err == nil ||
 		agenterr.ClassifyText(err.Error()) != agenterr.ClassStartupStall {
@@ -77,9 +77,13 @@ func (s *Server) sendStallIsBusyPane(name string, err error) bool {
 	if d == nil {
 		return false
 	}
-	reading := seatactivity.Lookup(seatactivity.Query{
-		Name: d.Name, Provider: d.Provider, SessionID: d.SessionID,
-		WorkDir: d.WorkDir, Roots: DefaultSessionRoots(),
-	})
+	st := s.seatState(name)
+	reading := seatactivity.Reading{Verdict: seatactivity.VerdictUnknown}
+	if !st.LastActivity.IsZero() {
+		reading.Verdict = seatactivity.VerdictKnown
+		reading.LastMove = st.LastActivity
+		reading.Age = time.Since(st.LastActivity)
+	}
+
 	return paneBusyRendering(err, reading, s.bounceReminted(name))
 }

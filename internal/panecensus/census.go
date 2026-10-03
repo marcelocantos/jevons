@@ -235,14 +235,15 @@ func InferFlight(title string) Flight {
 	}
 }
 
+// ObservedFlight returns only explicitly supplied evidence. Unset is unknown.
+func (p Pane) ObservedFlight() (Flight, bool) {
+	return p.Flight, p.flightSet && p.Flight != FlightUnknown
+}
 func (p Pane) flight() Flight {
 	if p.flightSet {
 		return p.Flight
 	}
-	if strings.TrimSpace(p.Title) != "" {
-		return InferFlight(p.Title)
-	}
-	return p.Flight
+	return FlightUnknown
 }
 
 // sessionWindowPrefix / sessionWindowIDLen match claudia

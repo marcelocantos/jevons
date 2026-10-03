@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
@@ -26,7 +28,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/briefaddr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -110,8 +111,14 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.
 func (s *Server) SetProcess(proc *claudia.Agent) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.proc = proc
+	s.mu.Unlock()
+	a := s.seats.Load()
+	if a == nil {
+		a = seatstate.New(seatstate.Args{})
+		s.SetSeats(a)
+	}
+	a.ObserveProcess(s.overseerAgentName(), proc)
 }
 
 // CurrentProcess returns the live overseer process (nil if none).
@@ -159,7 +166,7 @@ func (s *Server) waitForOverseer(ctx context.Context, conn *websocket.Conn) *cla
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if cur := s.CurrentProcess(); cur != nil && cur.Alive() {
+			if cur := s.CurrentProcess(); cur != nil && (s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
 				slog.Info("chat: overseer recovered; attaching live stream", "announce", sawDown)
 				if sawDown {
 					payload, _ := json.Marshal(map[string]string{
@@ -224,7 +231,9 @@ func (s *Server) AttachOverseer(agent *claudia.Agent) {
 	}
 	s.proc = agent
 	s.overseerEventSub = agent.SubscribeEvents(s.DeliverOverseerEvent)
+	reg, name := s.registry, s.overseerName
 	s.mu.Unlock()
+	seatstate.ObserveRegistrySeat(reg, name)
 }
 
 // ensureOverseerStreamIDLocked returns the open response stream id, minting
@@ -285,6 +294,9 @@ func emptyEndTurnWire(stopReason, streamID string) string {
 // body fragments are neither journaled nor broadcast; only an empty
 // end_turn is emitted on terminal so the UI clears working.
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
+	if a := s.seats.Load(); a != nil {
+		a.FromTurnEvent(s.overseerSeatName(), ev.IsTerminalStop(), time.Now())
+	}
 	// Any ACP traffic resets stuck-busy idle (🎯T204).
 	s.NoteOverseerProgress()
 
@@ -508,6 +520,7 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 		// owner words included. Only a send with a message id is the
 		// owner's; owner-health re-injections carry none.
 		s.notifyQueue = append([]string{text}, s.notifyQueue...)
+		s.observeOwnerQueueLocked()
 		s.releaseOwnerCancelHoldLocked()
 		released = true
 		s.registerOwnerMessageIDLocked(text, msgID)
@@ -515,11 +528,13 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 		// Owner turns never coalesce with each other; append then peel first
 		// at drain (partition). Keep enqueue order among owners.
 		s.notifyQueue = append(s.notifyQueue, text)
+		s.observeOwnerQueueLocked()
 		if msgID != "" {
 			s.registerOwnerMessageIDLocked(text, msgID)
 		}
 	} else {
 		s.notifyQueue = coalesceNotifyEnqueue(s.notifyQueue, text)
+		s.observeOwnerQueueLocked()
 	}
 	depth := len(s.notifyQueue)
 	// Fleet-only busy: interrupt so the owner can take the session (T291).
@@ -581,7 +596,7 @@ func (s *Server) interruptOverseerForOwner() bool {
 			return false
 		}
 		proc := s.CurrentProcess()
-		if proc == nil || !proc.Alive() {
+		if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
 			return false
 		}
 		if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
@@ -593,7 +608,7 @@ func (s *Server) interruptOverseerForOwner() bool {
 			)
 			return false
 		}
-		settles = interruptEmitsNoStop(proc.Provider())
+		settles = interruptEmitsNoStop(claudia.Provider(s.seatState(s.overseerSeatName()).Provider))
 	}
 	settled := settles && s.settleFleetChew()
 	slog.Info("notify_queue",
@@ -640,7 +655,7 @@ func (s *Server) sendNotes(text string) error {
 		return s.notifySender(text)
 	}
 	proc := s.CurrentProcess()
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
 		return fmt.Errorf("overseer not running")
 	}
 	return upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
@@ -702,6 +717,7 @@ func (s *Server) drainOverseerNotes() {
 	}
 	batch, rest, ownerBatch := takeNotifyDrainBatch(s.notifyQueue)
 	s.notifyQueue = rest
+	s.observeOwnerQueueLocked()
 	s.notifyDraining = true
 	s.notifyInFlight = batch
 	s.mu.Unlock()
@@ -722,6 +738,7 @@ func (s *Server) drainOverseerNotes() {
 		// Overseer busy or down — put the batch back at the front so order
 		// is preserved, re-coalesce with anything that arrived during send.
 		s.notifyQueue = requeueNotifyFront(batch, s.notifyQueue)
+		s.observeOwnerQueueLocked()
 		depth := len(s.notifyQueue)
 		s.mu.Unlock()
 		// 🎯T128.3: busy-defer must be Info (not Debug) with depth + err_class.
@@ -750,7 +767,7 @@ func (s *Server) drainOverseerNotes() {
 	if ownerBatch {
 		s.overseerOwnerTurnText = batch[0]
 	}
-	s.overseerLastProgress = time.Now()
+	s.noteOverseerProgressLocked()
 	depth := len(s.notifyQueue)
 	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
@@ -862,6 +879,8 @@ func (s *Server) RewindOverseer(n int) error {
 	}
 
 	reg.Stop(s.overseerName)
+
+	seatstate.ObserveStopped(reg, s.overseerName)
 	// Stop clears ConnectURL/PID on the registry copy, but `def` was
 	// snapshotted before Stop. Re-registering that snapshot re-persisted
 	// the dead serve endpoint and forced Launch into reattach → connection
@@ -932,6 +951,12 @@ func (s *Server) SetRegistry(reg *claudia.Registry) {
 	s.mu.Lock()
 	s.registry = reg
 	s.mu.Unlock()
+	a := s.seats.Load()
+	if a == nil {
+		a = seatstate.RegistryAuthority(reg)
+		s.SetSeats(a)
+	}
+	a.ObserveRegistry(reg)
 	s.projectAgents()
 }
 
@@ -1098,6 +1123,7 @@ func relaunchDeadSeat(reg *claudia.Registry, name, cause string, onRecovered fun
 				return
 			}
 			reg.Stop(name)
+			seatstate.ObserveStopped(reg, name)
 			if onDead != nil {
 				onDead(name, cause, "found not alive by the fleet feed; re-launch failed: "+err.Error())
 			}
@@ -1234,39 +1260,20 @@ func (s *Server) decorateSeatActivity(reg *claudia.Registry, agents []agentInfo,
 	if reg == nil {
 		return agents
 	}
-	s.mu.RLock()
-	roots := s.transcriptRoots
-	s.mu.RUnlock()
-	defs := make(map[string]claudia.AgentDef, len(agents))
-	for _, d := range reg.List() {
-		defs[d.Name] = d
-	}
 	for i := range agents {
-		d, ok := defs[agents[i].Name]
-		if !ok {
-			// The row outlived its registry def (removed between build and
-			// decorate). Unknown is the honest answer, not a missing field.
+		d := reg.Def(agents[i].Name)
+		st := s.seatState(agents[i].Name)
+		if d == nil || st.LastActivity.IsZero() || (st.SessionID != "" && st.SessionID != d.SessionID) {
 			agents[i].TranscriptActivity = string(seatactivity.VerdictUnknown)
-			agents[i].TranscriptActivityReason = "agent left the registry during the read"
+			agents[i].TranscriptActivityReason = "no activity observed for this session"
 			continue
 		}
-		got := seatactivity.Lookup(seatactivity.Query{
-			Name:      d.Name,
-			Provider:  d.Provider,
-			SessionID: d.SessionID,
-			WorkDir:   d.WorkDir,
-			Roots:     roots,
-			Now:       now,
-		})
-		agents[i].TranscriptActivity = string(got.Verdict)
-		if got.Verdict != seatactivity.VerdictKnown {
-			agents[i].TranscriptActivityReason = got.Reason
-			continue
-		}
-		age := got.Age.Seconds()
+		agents[i].TranscriptActivity = string(seatactivity.VerdictKnown)
+		age := max(0, now.Sub(st.LastActivity).Seconds())
 		agents[i].TranscriptAgeSeconds = &age
-		agents[i].TranscriptLastMove = got.LastMove.UTC().Format(time.RFC3339)
+		agents[i].TranscriptLastMove = st.LastActivity.UTC().Format(time.RFC3339)
 	}
+
 	return agents
 }
 
@@ -1306,7 +1313,7 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 	// HTTP feed path does not import mcpserver (cycle). Keep in sync.
 	for _, d := range reg.List() {
 		proc := reg.Get(d.Name)
-		if proc == nil || proc.Alive() {
+		if proc == nil || seatstate.ReadRegistry(reg, d.Name).Alive != seatstate.No {
 			continue
 		}
 		if reg.ResumeDenied(d.Name) != nil {
@@ -1325,6 +1332,7 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 			// a "stopped" row. Stop first so the dead handle is not left
 			// dangling should the accounted removal refuse.
 			reg.Stop(d.Name)
+			seatstate.ObserveStopped(reg, d.Name)
 			if _, err := account.Remove(reg, d.Name, fleetlog.Removal{
 				Reason: fleetlog.ReasonDeadSeat,
 				Detail: "work seat's process exited without a terminal report (🎯T544)",
@@ -1335,6 +1343,7 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 			recovered = append(recovered, d.Name) // row gone → surface the diff
 		} else {
 			reg.Stop(d.Name)
+			seatstate.ObserveStopped(reg, d.Name)
 			recovered = append(recovered, d.Name) // cleared → stopped, still surface
 		}
 	}
@@ -1359,19 +1368,19 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 	// per rebuild collapses the walk to one per repo.
 	ledgerOf := make(map[string]string, len(defs))
 	for _, d := range defs {
-		status := "stopped"
-		running := false
-		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
-			running = true
-			status = "running"
-			// 🎯T412: a live process whose registry row claims a conversation
-			// that is not on disk is a dead seat, not a running agent. The
-			// mint window is safe: an ACP working snapshot in the progress
-			// hub outranks this baseline (SetStatus never clobbers it).
-			if fleet.SessionLost(&d) {
-				status = fleet.StatusDeadUnmaterialized
+		st := seatstate.ReadRegistry(reg, d.Name)
+		status := st.Status
+		running := st.Alive == seatstate.Yes
+		if st.Alive == seatstate.No {
+			status = "stopped"
+		}
+		if status == "" {
+			status = "phase_unknown"
+			if running {
+				status = "running"
 			}
 		}
+
 		purpose := d.Purpose
 		if purpose == "" {
 			purpose = claudia.PurposeWork
@@ -1381,9 +1390,6 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		// run's observation before the baseline can carry it forward.
 		if progress != nil {
 			progress.SyncEpoch(d.Name, d.SessionID)
-			// A changed pin drops the previous version before the baseline
-			// or a model-less frame can carry it forward.
-			progress.SyncModel(d.Name, d.Model)
 			progress.SetStatus(d.Name, status)
 		}
 		ledger, seen := ledgerOf[d.WorkDir]
@@ -1416,61 +1422,17 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		if progress != nil {
 			p := progress.Get(d.Name)
 			if p.Summary != "" || p.Phase != "" || p.Step != "" {
-				info.Phase = p.Phase
+				info.Phase = st.Phase.String()
+				// A blocked goal is task content, independent of seat turn state.
+				if p.Phase == "blocked" {
+					info.Phase = "blocked"
+				}
 				info.Step = p.Step
 				info.Progress = p.Summary
 			}
-			// What the agent is running, seen on the wire this session.
-			info.Model = strings.TrimSpace(p.Model)
-			// 🎯T348 belt: a hub poisoned before the modelFromEvent filter
-			// existed (or by any future synthetic producer) must not serve
-			// '<synthetic>' as a model — drop it so the log/pin chain engages.
-			if info.Model == syntheticModel {
-				progress.ClearModel(d.Name)
-				info.Model = ""
-			}
-			// 🎯T323: drop sticky observations that belong to another company
-			// (Claude-era fable under provider=grok after migrate). Clear the
-			// hub so the next poll does not re-serve the foreign id.
-			if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
-				progress.ClearModel(d.Name)
-				info.Model = ""
-			}
 		}
-		// Nothing observed live — the daemon has not seen a turn yet (every
-		// agent right after a restart), or the frame named no model. The
-		// harness's own session log says what the process actually ran, so it
-		// seeds the badge at attach instead of leaving a live agent blank
-		// (🎯T311). Grok exclusive-MCP logs live under GROK_HOME (🎯T619).
-		if info.Model == "" {
-			info.Model = models.Model(d.Provider, d.WorkDir, d.SessionID)
-		}
-		// Launch pin / session binding (🎯T311 / 🎯T324). Intent for this
-		// SessionID — fills the gap before the first observation, never
-		// overrides one.
-		if info.Model == "" {
-			info.Model = strings.TrimSpace(d.Model)
-		}
-		// 🎯T323 residual belt: drop foreign-company residue if it still
-		// reaches the feed. Product strategy is session-truth binding at
-		// Launch/migrate (T324), not fail-closed sniff.
-		if info.Model != "" && !modelFitsProvider(info.Provider, info.Model) {
-			info.Model = ""
-		}
-		// started-model.json holds the CLI modelId read immediately before
-		// an unpinned Cursor Launch, and the ConnectPID of the process that
-		// Launch started. A later edit of cli-config.json does not rename
-		// it. It is not AgentDef.Model.
-		if info.Model == "" && d.Provider == claudia.ProviderCursor && d.ConnectPID > 0 {
-			if model, pid, ok := fleet.CursorStartedModel(d.SessionID); ok && pid == d.ConnectPID {
-				info.Model = model
-			}
-		}
-		// 🎯T324: unbound → provider default so cold Grok agents report a
-		// condensable id (badge version), not mark-only forever.
-		if info.Model == "" {
-			info.Model = cli.DefaultModelForProvider(d.Provider)
-		}
+		info.Model = st.Model
+
 		agents = append(agents, info)
 	}
 	sort.Slice(agents, func(i, j int) bool {
@@ -1489,6 +1451,14 @@ func (s *Server) ObserveAgentProgress(name string, ev claudia.Event) bool {
 		s.agentProgress = NewAgentProgressHub()
 	}
 	changed := s.agentProgress.Observe(name, ev)
+	if a := s.seats.Load(); a != nil {
+		a.FromTurnEvent(name, ev.IsTerminalStop(), time.Now())
+		if s.registry != nil {
+			if d := s.registry.Def(name); d != nil {
+				observeSeatModel(a, *d, s.agentProgress, nil)
+			}
+		}
+	}
 	if changed {
 		s.muxFanSeatPhase(name)
 	}
@@ -1757,7 +1727,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		sendHistory(conn, ctx, proc.JSONLPath())
 	}
 
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
 		// Overseer is down (budget pause, crash, missing Grok CLI, …).
 		// History was already replayed above — keep the socket OPEN so the
 		// resilient browser transport does not thrash reconnect → wipe DOM

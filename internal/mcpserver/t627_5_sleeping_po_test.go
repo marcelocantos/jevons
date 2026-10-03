@@ -188,7 +188,7 @@ func t627_5SleepingPOFixture(t *testing.T) (*Server, *t452Inbox, func() []map[st
 	})
 	var mu sync.Mutex
 	var poSends int
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		if name != "jevons-po" {
 			return t452Seat{dest: name, inbox: inbox}, false, nil
 		}

@@ -112,7 +112,7 @@ func TestT409TokenExhaustionScaleRecoversAll(t *testing.T) {
 			t.Fatalf("%s still phantom: sid=%s mat=%v (reported new=%s)",
 				se.name, def.SessionID, def.Materialized, lost.NewSession)
 		}
-		if fleet.SessionLost(def) {
+		if observedResumeLost(def) {
 			t.Fatalf("%s still SessionLost after recover", se.name)
 		}
 	}

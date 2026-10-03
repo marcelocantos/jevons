@@ -109,7 +109,7 @@ func TestT401SendToReapedReportsReasonAndHoldsMessage(t *testing.T) {
 	if res.Queued < 1 {
 		t.Fatalf("queued=%d want ≥1 — gate feedback must be held", res.Queued)
 	}
-	if depth := s.pendingAgentSends(t401Agent); depth != res.Queued {
+	if depth := observedPendingSends(s, t401Agent); depth != res.Queued {
 		t.Fatalf("sendq depth=%d status.Queued=%d", depth, res.Queued)
 	}
 }
@@ -128,7 +128,7 @@ func TestT401NeverRegisteredStillNotFound(t *testing.T) {
 	if strings.Contains(err.Error(), "reaped-with-reason") {
 		t.Fatalf("never-registered must not look reaped: %v", err)
 	}
-	if depth := s.pendingAgentSends("jv-t401-never-existed"); depth != 0 {
+	if depth := observedPendingSends(s, "jv-t401-never-existed"); depth != 0 {
 		t.Fatalf("queued=%d for a never-registered name", depth)
 	}
 }
@@ -140,7 +140,7 @@ func TestT401AgentListDistinguishesReapedFromNeverExisted(t *testing.T) {
 	t401ReapWithReport(t, s, dir, t401Agent,
 		"Done. SHA abcdef1234567890. GATE t401-list exit=0 GREEN id=cafebabe.")
 
-	res, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	res, err := observedAgentList(s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestT401BacklogForReapedIsHeldNotDropped(t *testing.T) {
 		t.Fatalf("snapshot: %v n=%d", err, len(entries))
 	}
 	s.SweepSendBacklogs()
-	if depth := s.pendingAgentSends(t401Agent); depth != 1 {
+	if depth := observedPendingSends(s, t401Agent); depth != 1 {
 		t.Fatalf("reaped backlog depth=%d; want 1 held (not dropped)", depth)
 	}
 
@@ -184,7 +184,7 @@ func TestT401BacklogForReapedIsHeldNotDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.SweepSendBacklogs()
-	if depth := s.pendingAgentSends("jv-t401-ghost"); depth != 0 {
+	if depth := observedPendingSends(s, "jv-t401-ghost"); depth != 0 {
 		t.Fatalf("ghost backlog depth=%d; want 0 dropped", depth)
 	}
 }
@@ -256,7 +256,7 @@ func TestT401OverBroadResurrectsEveryDeadNameFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("product held a never-registered send — over-broad resurrection")
 	}
-	if depth := s.pendingAgentSends(ghost); depth != 0 {
+	if depth := observedPendingSends(s, ghost); depth != 0 {
 		t.Fatalf("product queued for never-registered (depth=%d) — over-broad", depth)
 	}
 }

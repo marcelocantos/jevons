@@ -130,22 +130,11 @@ func (f *Claudia) ClearHandover(name string) error {
 	return f.handovers.Clear(name)
 }
 
-// seatInFlight asks the shared seat-state authority (🎯T766.2, census
-// derivation 5) whether a turn is running, instead of migrate deriving its
-// own answer from a bare .PromptInFlight() nobody else sees. Unknown (no
-// authority wired, or the seat has never been observed) is read as not
-// in-flight: a migrate that cannot tell is not the caller that should
-// invent a false positive and refuse to move a quiescent seat.
+// seatInFlight conservatively protects a present handle unless the authority
+// positively observed idle; unknown cannot authorize migration.
 func (f *Claudia) seatInFlight(name string, live *claudia.Agent) bool {
-	if live == nil {
-		return false
-	}
-	if f != nil && f.seats != nil {
-		if st, ok := f.seats.Get(name); ok {
-			return st.InFlight == seatstate.Yes
-		}
-	}
-	return false
+	// A present handle with unknown turn state cannot be moved as if idle.
+	return live != nil && seatstate.ReadRegistry(f.reg, name).InFlight != seatstate.No
 }
 
 // PrepareMigration asks Claudia to move an agent to provider `to`. A live
@@ -181,7 +170,7 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	if f.seatState(name).MigrationSeed != "" {
 		return f.migrateStoppedViaClaudia(name, *def, target, model, force)
 	}
-	if live := f.reg.Get(name); live != nil && live.Alive() {
+	if live := f.reg.Get(name); live != nil && seatstate.ReadRegistry(f.reg, name).Alive != seatstate.No {
 		if f.seatInFlight(name, live) && !force {
 			return handover.Pending{}, fmt.Errorf("migrate %q: turn in flight; wait or interrupt before context transfer", name)
 		}
@@ -190,7 +179,7 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 			Kind: handover.KindMigrate, OldSessionID: def.SessionID,
 			BriefSource: "claudia-transfer/" + string(cli.PlanProvider(target)),
 		}
-		if cli.PlanProvider(live.Provider()) == cli.PlanProvider(target) {
+		if cli.PlanProvider(claudia.Provider(seatstate.ReadRegistry(f.reg, name).Provider)) == cli.PlanProvider(target) {
 			// Claudia may have moved the live process while this host's row
 			// still names the source. Reconcile that move without paying for
 			// a second transfer summary or minting another destination.
@@ -536,7 +525,7 @@ func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 		return pending, false, nil
 	}
 	ag := f.reg.Get(name)
-	if ag == nil || !ag.Alive() {
+	if ag == nil || !(seatstate.ReadRegistry(f.reg, name).Alive == seatstate.Yes) {
 		// Leave the record pending: the next successful launch delivers it.
 		return pending, false, fmt.Errorf("seed %q: no live process to hand the transcript to", name)
 	}
@@ -720,7 +709,7 @@ func (f *Claudia) trySelfBrief(p handover.Pending) (string, error) {
 		return f.selfBrief(p)
 	}
 	ag := f.reg.Get(p.Agent)
-	if ag == nil || !ag.Alive() {
+	if ag == nil || !(seatstate.ReadRegistry(f.reg, p.Agent).Alive == seatstate.Yes) {
 		return "", errOutgoingDead
 	}
 	// Bounded: a live outgoing that is busy or slow must not stall the
@@ -842,7 +831,7 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		// as anyone kept asking on 2026-09-22. Force is the caller saying the
 		// move outranks the turn, so end the turn and ask once more.
 		slog.Warn("forced migrate found a turn in flight; interrupting it", "name", name, "to", target)
-		if live := f.reg.Get(name); live != nil && live.Alive() {
+		if live := f.reg.Get(name); live != nil && seatstate.ReadRegistry(f.reg, name).Alive != seatstate.No {
 			if ierr := live.Interrupt(); ierr != nil {
 				slog.Warn("interrupt before forced migrate failed", "name", name, "err", ierr)
 			}
@@ -958,7 +947,7 @@ func (f *Claudia) liveSessionOf(name string) (sessionID, model string) {
 		return f.liveSession(name)
 	}
 	if live := f.reg.Get(name); live != nil {
-		return strings.TrimSpace(live.SessionID()), strings.TrimSpace(live.Model())
+		return strings.TrimSpace(live.SessionID()), strings.TrimSpace(seatstate.ReadRegistry(f.reg, name).Model)
 	}
 	return "", ""
 }

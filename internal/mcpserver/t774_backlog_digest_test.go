@@ -59,7 +59,7 @@ func TestT774FiftyMixedEntriesDrainAsOneDigest(t *testing.T) {
 	s, sender, _ := t418Daemon(t, t.TempDir())
 	const seat = "claudia-po"
 	senders := t774Fill(t, s, seat)
-	if n := s.pendingAgentSends(seat); n != 50 {
+	if n := observedPendingSends(s, seat); n != 50 {
 		t.Fatalf("setup queued %d entries, want 50", n)
 	}
 
@@ -101,7 +101,7 @@ func TestT774FiftyMixedEntriesDrainAsOneDigest(t *testing.T) {
 	if !strings.Contains(digest, "collapsed") || !strings.Contains(digest, "50") {
 		t.Errorf("digest does not state what was collapsed:\n%s", digest)
 	}
-	if n := s.pendingAgentSends(seat); n != 0 {
+	if n := observedPendingSends(s, seat); n != 0 {
 		t.Fatalf("queue not empty after digest delivery: %d", n)
 	}
 
@@ -134,7 +134,7 @@ func TestT774SmallBacklogIsNotDigested(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != "msg 0" {
 		t.Fatalf("small backlog was digested: %v", got)
 	}
-	if n := s.pendingAgentSends("a"); n != sendq.DigestThreshold-1 {
+	if n := observedPendingSends(s, "a"); n != sendq.DigestThreshold-1 {
 		t.Fatalf("remaining = %d", n)
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 )
 
@@ -62,6 +64,7 @@ type Readopter struct {
 	MaxAttempts         int
 
 	// Seams. nil means the real registry and clock.
+	reg           *claudia.Registry
 	get           func(name string) *claudia.Agent
 	adopt         func(name string) (*claudia.Agent, error)
 	detach        func(a *claudia.Agent) error
@@ -84,6 +87,7 @@ type readoptSeat struct {
 // NewReadopter binds a Readopter to reg.
 func NewReadopter(reg *claudia.Registry) *Readopter {
 	return &Readopter{
+		reg: reg,
 		Gap: DefaultReadoptGap, MaxGap: DefaultReadoptMaxGap,
 		Window: DefaultReadoptWindow, MaxAttempts: DefaultReadoptMaxAttempts,
 		get:   reg.Get,
@@ -114,11 +118,11 @@ func (r *Readopter) wait(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (r *Readopter) isAlive(a *claudia.Agent) bool {
+func (r *Readopter) isAlive(name string, a *claudia.Agent) bool {
 	if r.alive != nil {
 		return r.alive(a)
 	}
-	return a != nil && a.Alive()
+	return a != nil && seatstate.ReadRegistry(r.reg, name).Alive == seatstate.Yes
 }
 
 func (r *Readopter) seat(name string) *readoptSeat {
@@ -144,7 +148,7 @@ func (r *Readopter) Readopt(ctx context.Context, name string, stale *claudia.Age
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	if cur := r.get(name); cur != nil && cur != stale && r.isAlive(cur) {
+	if cur := r.get(name); cur != nil && cur != stale && r.isAlive(name, cur) {
 		return cur, nil
 	}
 	if r.brokerPresent != nil && !r.brokerPresent() {
@@ -190,13 +194,14 @@ func (r *Readopter) Readopt(ctx context.Context, name string, stale *claudia.Age
 		// Adopt returns the registry's prior handle while it still reports
 		// alive; the detach kills it asynchronously.
 		deadline := r.clock().Add(readoptDeadWait)
-		for r.isAlive(stale) && r.clock().Before(deadline) {
+		for r.isAlive(name, stale) && r.clock().Before(deadline) {
 			if err := r.wait(ctx, 20*time.Millisecond); err != nil {
 				return nil, err
 			}
 		}
 	}
 	a, err := r.adopt(name)
+	seatstate.ObserveRegistrySeat(r.reg, name)
 	if err != nil {
 		return nil, fmt.Errorf("re-adopt %s: %w", name, err)
 	}

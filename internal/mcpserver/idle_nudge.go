@@ -500,9 +500,10 @@ type IdleActivity struct {
 
 // IdleActivityTracker records ACP-derived phase for the idle-nudge sweep.
 type IdleActivityTracker struct {
-	mu  sync.Mutex
-	by  map[string]IdleActivity
-	now func() time.Time
+	seats *seatstate.Authority
+	mu    sync.Mutex
+	by    map[string]IdleActivity
+	now   func() time.Time
 }
 
 // NewIdleActivityTracker returns an empty tracker.
@@ -581,6 +582,7 @@ func (t *IdleActivityTracker) ObserveTransition(name string, ev claudia.Event) (
 	// (NeedsRecover already false). If NeedsRecover is still true, keep it
 	// until ClearRecover so a flappy assistant crumb cannot drop the signal.
 	t.by[name] = next
+	t.observeActivity(name, next)
 	enteredIdle = nextPhase == "idle" && strings.ToLower(strings.TrimSpace(prevPhase)) == "working"
 	return prevPhase, nextPhase, enteredIdle
 }
@@ -814,7 +816,7 @@ type IdleNudgeSweepArgs struct {
 	// stall bar (🎯T708).
 	HostLoadCritical func() bool
 	// ProcessRunning optional override (hermetic tests without OS processes).
-	// Nil → reg.Get(name).Alive().
+	// Nil reads the shared seat authority.
 	ProcessRunning func(name string) bool
 	// Eligible optionally pre-filters agents before classification (🎯T315).
 	// False ⇒ skip with reason not_open_mission. Nil = every registered agent
@@ -827,8 +829,8 @@ type IdleNudgeSweepArgs struct {
 	// did before intent existed.
 	Intent fleetintent.Snapshot
 	// SessionPhase is the 🎯T423 reading: T422 decoder over the agent's
-	// current session. Nil uses classifyAgentSessionPhase against
-	// DefaultSessionRoots. Tests inject a fixture.
+	// current session. Nil reads the shared authority, without scanning
+	// transcripts. Tests inject a fixture.
 	SessionPhase func(d claudia.AgentDef) turnev.Phase
 	// ObservePhase records the transcript decoder's phase into the shared
 	// seat authority (🎯T766.2, census derivation 1). Production wires
@@ -901,7 +903,7 @@ func sessionPhaseOf(d claudia.AgentDef, args IdleNudgeSweepArgs) turnev.Phase {
 	if args.SessionPhase != nil {
 		return args.SessionPhase(d)
 	}
-	return classifyAgentSessionPhase(d, DefaultSessionRoots())
+	return seatstate.ReadRegistry(args.Reg, d.Name).Phase
 }
 
 func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time) IdleNudgeReport {
@@ -921,7 +923,7 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	if args.ProcessRunning != nil {
 		running = args.ProcessRunning(d.Name)
 	} else if proc := args.Reg.Get(d.Name); proc != nil {
-		running = proc.Alive()
+		running = (seatstate.ReadRegistry(args.Reg, d.Name).Alive == seatstate.Yes)
 	}
 	// Deliberate stop: registered, not running, and not a dead AutoStart
 	// handle we expect recoverDeadHandles to rehydrate — stop without kill.
@@ -930,6 +932,10 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 	act := IdleActivity{}
 	if args.Activity != nil {
 		act = args.Activity.Get(d.Name)
+	}
+	if args.ProcessRunning == nil {
+		st := seatstate.ReadRegistry(args.Reg, d.Name)
+		act.Updated = st.LastActivity
 	}
 	idleFor := time.Duration(0)
 	if !act.Updated.IsZero() {
@@ -1009,9 +1015,6 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 		args.ObservePhase(d.Name, decoded)
 	}
 	phase := decoded.String()
-	if decoded == turnev.PhaseUnknown && strings.EqualFold(act.Phase, "working") {
-		phase = "working"
-	}
 
 	obs := IdleNudgeObs{
 		Name:              d.Name,
@@ -1129,6 +1132,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 	}
 	args.Server.mu.Lock()
 	args.Server.idleActivity = activity
+	activity.SetAuthority(args.Server.Seats())
 	if args.Server.idleEventLast == nil {
 		args.Server.idleEventLast = map[string]time.Time{}
 	}
@@ -1150,7 +1154,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 
 	// Seed activity so boot seed-idle is not confused with working→idle.
 	for _, d := range args.Server.registry.List() {
-		if proc := args.Server.registry.Get(d.Name); proc != nil && proc.Alive() {
+		if proc := args.Server.registry.Get(d.Name); proc != nil && (args.Server.seatState(d.Name).Alive == seatstate.Yes) {
 			activity.SeedRunning(d.Name)
 		}
 	}
@@ -1181,7 +1185,7 @@ func StartIdleNudgeLoop(ctx context.Context, args IdleNudgeLoopArgs) {
 		if d.Name == "" || d.Name == overseer {
 			continue
 		}
-		if proc := args.Server.registry.Get(d.Name); proc != nil && proc.Alive() {
+		if proc := args.Server.registry.Get(d.Name); proc != nil && (args.Server.seatState(d.Name).Alive == seatstate.Yes) {
 			continue
 		}
 		born[d.Name] = true
@@ -1348,8 +1352,6 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:          s.registry,
 		SessionPhase: deps.SessionPhase,
-		// 🎯T766.2: fold the decoder reading the sweep already paid for.
-		ObservePhase: s.observeSessionPhase,
 		Activity:     activity,
 		Ledger:       ledger,
 		Push:         push,
@@ -1388,7 +1390,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 				if activity == nil {
 					return ""
 				}
-				return activity.Get(name).Phase
+				return s.seatState(name).Phase.String()
 			}
 			return HasOpenMissionForIdle(d, hooks.MissionOpen,
 				CountWorkChildren(defs, d.Name),
@@ -1451,7 +1453,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 	interruptFn := func(name string) error {
 		proc := s.registry.Get(name)
-		if proc == nil || !proc.Alive() {
+		if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 			s.cancelMCPFlights(name)
 			return fmt.Errorf("not running")
 		}
@@ -1566,7 +1568,7 @@ func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 		if activity == nil {
 			return ""
 		}
-		return activity.Get(child).Phase
+		return s.seatState(child).Phase.String()
 	}
 	// 🎯T451: this path used to pass nil for MissionOpen, so the ledger was
 	// never consulted on the edge that actually generates the event — a worker
@@ -1687,20 +1689,10 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	}
 	running := func(name string) bool {
 		proc := s.registry.Get(name)
-		return proc != nil && proc.Alive()
+		return proc != nil && (s.seatState(name).Alive == seatstate.Yes)
 	}
-	phaseOf := func(name string) string {
-		s.mu.Lock()
-		act := s.idleActivity
-		s.mu.Unlock()
-		if act == nil {
-			return "idle"
-		}
-		if p := act.Get(name).Phase; p != "" {
-			return p
-		}
-		return "idle"
-	}
+	phaseOf := func(name string) string { return s.seatState(name).Phase.String() }
+
 	defs := s.registry.List()
 	byParent := CollectWorkChildrenWithPhase(defs, running, phaseOf, defaultPO, overseer)
 	targets := DaemonRestartEventTargets(byParent, overseer, defaultPO)
@@ -1844,7 +1836,7 @@ func (s *Server) retryRestartBriefs(ctx context.Context, overseer, stateDir stri
 		})
 		alive := func(name string) bool {
 			proc := s.registry.Get(name)
-			return proc != nil && proc.Alive()
+			return proc != nil && (s.seatState(name).Alive == seatstate.Yes)
 		}
 		seen := map[string]bool{}
 		for _, r := range reps {
@@ -1959,8 +1951,6 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		PostRestart:  true,
 		OverseerName: overseer,
 		Eligible:     eligible,
-		// 🎯T766.2: record phase the decoder already produced (phase-only).
-		ObservePhase: s.observeSessionPhase,
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
 		HostLoadCritical: s.hostLoadCritical,
 		SessionReminted:  s.bounceReminted,

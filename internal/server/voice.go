@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/grok"
@@ -49,7 +51,7 @@ type VoiceBridge struct {
 	mu       sync.Mutex
 	voiceWS  *websocket.Conn // the connected browser/iOS client
 	voiceCtx context.Context
-	fsm      *voiceFSM // active FSM, or nil when no connection
+	fsm      *voiceFSM  // active FSM, or nil when no connection
 	conn     *voiceConn // active connection's transport bundle
 
 	// tasks tracks dispatched delegate() calls so task_status() can
@@ -122,18 +124,18 @@ func NewVoiceBridge(srv *Server, apiKey string) *VoiceBridge {
 // HandleVoiceWS handles /ws/voice connections. Protocol enforced by
 // voiceFSM (docs/voice-fsm.md):
 //
-//   Browser → server:
-//     - Binary frames    : raw 24 kHz mono PCM16 audio
-//     - {"type":"commit"}: PTT release, browser VAD detected speech
-//     - {"type":"clear"} : PTT release, browser VAD detected nothing
+//	Browser → server:
+//	  - Binary frames    : raw 24 kHz mono PCM16 audio
+//	  - {"type":"commit"}: PTT release, browser VAD detected speech
+//	  - {"type":"clear"} : PTT release, browser VAD detected nothing
 //
-//   Server → browser:
-//     - Binary frames                       : Grok's spoken audio
-//     - {"type":"state", "state":...}       : FSM transitions
-//     - {"type":"user_transcript", ...}     : user STT result
-//     - {"type":"assistant_transcript",...} : streaming assistant text
-//     - {"type":"assistant_transcript_done"}
-//     - {"type":"error", "error": ...}
+//	Server → browser:
+//	  - Binary frames                       : Grok's spoken audio
+//	  - {"type":"state", "state":...}       : FSM transitions
+//	  - {"type":"user_transcript", ...}     : user STT result
+//	  - {"type":"assistant_transcript",...} : streaming assistant text
+//	  - {"type":"assistant_transcript_done"}
+//	  - {"type":"error", "error": ...}
 func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, wsAcceptOptions())
 	if err != nil {
@@ -656,7 +658,7 @@ func (vb *VoiceBridge) toolListAgents() (string, error) {
 	out := make([]entry, 0, len(defs))
 	for _, d := range defs {
 		status := "stopped"
-		if a := vb.srv.GetAgent(d.Name); a != nil && a.Alive() {
+		if a := vb.srv.GetAgent(d.Name); a != nil && vb.srv.seatState(d.Name).Alive == seatstate.Yes {
 			status = "running"
 		}
 		out = append(out, entry{Name: d.Name, WorkDir: d.WorkDir, Status: status})

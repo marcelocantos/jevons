@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/muxwin"
 	"github.com/marcelocantos/jevons/internal/statedb"
@@ -270,7 +272,7 @@ func (s *Server) projectAgents() {
 	for _, d := range defs {
 		status := "stopped"
 		if reg != nil {
-			if p := reg.Get(d.Name); p != nil && p.Alive() {
+			if p := reg.Get(d.Name); p != nil && (seatstate.ReadRegistry(reg, d.Name).Alive == seatstate.Yes) {
 				status = "running"
 			}
 		}

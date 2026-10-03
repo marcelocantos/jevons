@@ -57,6 +57,9 @@ func t702GetAgents(t *testing.T, s *Server) []map[string]any {
 	s.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	for _, d := range s.registry.List() {
+		s.ObserveSeatMetadata(d)
+	}
 	resp, err := http.Get(srv.URL + "/api/agents")
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +180,10 @@ func TestT702DecorateRejectsWallClockNow(t *testing.T) {
 	}
 	s := New("test", t.TempDir())
 	s.SetTranscriptRoots(discovery.Roots{GrokSessions: sessions})
+	s.SetRegistry(reg)
+	for _, d := range reg.List() {
+		s.ObserveSeatMetadata(d)
+	}
 	got := s.decorateSeatActivity(reg, listFleetAgents(reg), now)
 	byName := map[string]agentInfo{}
 	for _, a := range got {

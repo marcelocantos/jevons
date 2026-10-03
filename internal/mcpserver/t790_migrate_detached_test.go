@@ -164,7 +164,7 @@ func TestT790AgentListShowsProviderAndModel(t *testing.T) {
 	}
 	s := New(t.TempDir(), nil, nil)
 	s.registry = reg
-	res, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	res, err := observedAgentList(s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

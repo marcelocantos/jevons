@@ -5,15 +5,17 @@ package mcpserver
 
 import (
 	"fmt"
-	"github.com/marcelocantos/jevons/internal/seatstop"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstop"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -263,7 +265,6 @@ type turnObserver interface {
 	SubscribeEvents(fn claudia.EventFunc) int64
 	UnsubscribeEvents(token int64)
 	JSONLPath() string
-	Alive() bool
 }
 
 // turnWatch is an observation opened BEFORE the send and awaited after it,
@@ -355,7 +356,7 @@ func (s *Server) watchAgentTurnForCancelable(name, payload string, window time.D
 			}
 		}
 	}
-	return observeTurnForCancelableFiltered(obs, payload, window, filter)
+	return observeTurnForCancelableFiltered(obs, payload, window, filter, func() seatstate.Tri { st, _ := s.Seats().Get(name); return st.Alive })
 }
 
 // codexSubstantiveEvent reports whether ev is evidence a codex turn actually
@@ -427,7 +428,7 @@ func observeTurnForCancelable(obs turnObserver, payload string, window time.Dura
 // filter accepts every event, unchanged behaviour. It is consulted only on
 // the live-stream (path=="") branch; durable-transcript backends never call
 // it.
-func observeTurnForCancelableFiltered(obs turnObserver, payload string, window time.Duration, filter func(claudia.Event) bool) (turnWatch, func()) {
+func observeTurnForCancelableFiltered(obs turnObserver, payload string, window time.Duration, filter func(claudia.Event) bool, alive ...func() seatstate.Tri) (turnWatch, func()) {
 	if obs == nil {
 		return func() TurnEvidence {
 			return TurnEvidence{Detail: "no live agent process to observe"}
@@ -500,7 +501,7 @@ func observeTurnForCancelableFiltered(obs turnObserver, payload string, window t
 					}
 				}
 			}
-			if !obs.Alive() {
+			if len(alive) > 0 && alive[0]() == seatstate.No {
 				return measured(TurnEvidence{
 					TranscriptAbsent: turnev.Missing(path),
 					Detail:           "the agent process exited before it did anything",
@@ -613,6 +614,7 @@ func (s *Server) releaseSeatAfterFailedBrief(name string, existed bool, rel seat
 		return false
 	}
 	s.registry.Stop(name)
+	seatstate.ObserveStopped(s.registry, name)
 	// 🎯T662: the release is a recorded reason on the seat.
 	s.noteSeatStop(name, rel.Source, rel.StopReason, "daemon", "")
 	if existed {

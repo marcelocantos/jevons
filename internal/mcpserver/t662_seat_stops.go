@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstop"
@@ -170,7 +172,7 @@ func (s *Server) seatRunning(name string) bool {
 		return false
 	}
 	p := s.registry.Get(name)
-	return p != nil && p.Alive()
+	return p != nil && (s.seatState(name).Alive == seatstate.Yes)
 }
 
 // MassStopLine is the alert for agent_list, /api/agents and the RHS; empty
@@ -288,7 +290,7 @@ var stoppedSeatCause = func(s *Server, name string) (cause string, dead bool) {
 		return "", false
 	}
 	p := s.registry.Get(name)
-	if p == nil || p.Alive() {
+	if p == nil || s.seatState(name).Alive != seatstate.No {
 		return "", false
 	}
 	return p.ExitCause(), true

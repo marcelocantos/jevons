@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
@@ -170,7 +172,7 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 				continue
 			}
 			proc := s.registry.Get(d.Name)
-			alive := proc != nil && proc.Alive()
+			alive := proc != nil && (s.seatState(d.Name).Alive == seatstate.Yes)
 			// 🎯T412: dead-unmaterialized seats are excluded from running.
 			deadSeat := alive && s.agentPhase(d, alive) == AgentStatusDeadUnmaterialized
 			if alive && !deadSeat {

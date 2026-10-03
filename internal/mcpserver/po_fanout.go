@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/capacity"
@@ -63,7 +65,7 @@ func (s *Server) samplePOFanout(rt *sentinelRuntime, leaves []poproactive.LeafOb
 	if running == nil {
 		running = func(name string) bool {
 			proc := s.registry.Get(name)
-			return proc != nil && proc.Alive()
+			return proc != nil && (s.seatState(name).Alive == seatstate.Yes)
 		}
 	}
 
@@ -96,7 +98,7 @@ func (s *Server) samplePOFanout(rt *sentinelRuntime, leaves []poproactive.LeafOb
 		alive := running(name)
 		phase := ""
 		if s.idleActivity != nil {
-			phase = s.idleActivity.Get(name).Phase
+			phase = s.seatState(name).Phase.String()
 		}
 		children := liveWorkChildren(defs, name, running)
 

@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -194,7 +196,7 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 
 	rehydrated := false
 	proc := reg.Get(name)
-	if proc == nil || !proc.Alive() {
+	if proc == nil || !(seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 		launched, err := fleet.LaunchReconciled(reg, name)
 		if err != nil {
 			return AgentSendOutcome{}, fmt.Errorf("agent %q rehydrate failed: %w", name, err)

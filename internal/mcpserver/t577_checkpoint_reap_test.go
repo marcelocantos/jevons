@@ -203,7 +203,7 @@ func TestT577MisEnvelopedCheckpointNotifiesPO(t *testing.T) {
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
 	po := &fakeSender{alive: true}
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		if name != "jevons-po" {
 			t.Fatalf("unexpected fleet delivery to %q", name)
 		}
@@ -252,7 +252,7 @@ func TestT577GenuineFinishDoesNotNotifyPO(t *testing.T) {
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
 	po := &fakeSender{alive: true}
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		t.Fatalf("genuine finish must not wake the PO, got %q", name)
 		return po, false, nil
 	})

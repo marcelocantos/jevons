@@ -165,7 +165,10 @@ type Claudia struct {
 // env / Grok (🎯T148); main should call SetDefaultProvider with the
 // config-resolved value.
 func NewClaudia(reg *claudia.Registry) *Claudia {
+	a := seatstate.RegistryAuthority(reg)
+	a.ObserveRegistry(reg)
 	return &Claudia{
+		seats:           a,
 		reg:             reg,
 		defaultProvider: cli.ResolveProvider("", ""),
 		readyTimeout:    defaultReadyTimeout,
@@ -564,7 +567,7 @@ func (f *Claudia) Launch(t *thread.Thread) error {
 // reply. It requires a live process (call Launch first).
 func (f *Claudia) Send(id, text string) (string, error) {
 	ag := f.reg.Get(id)
-	if ag == nil || !ag.Alive() {
+	if ag == nil || !(seatstate.ReadRegistry(f.reg, id).Alive == seatstate.Yes) {
 		return "", fmt.Errorf("no live process for thread %q", id)
 	}
 	if err := f.allowTurn(id); err != nil {
@@ -588,7 +591,7 @@ func (f *Claudia) Send(id, text string) (string, error) {
 // Alive reports whether a live process currently exists for the thread.
 func (f *Claudia) Alive(id string) bool {
 	ag := f.reg.Get(id)
-	return ag != nil && ag.Alive()
+	return ag != nil && (seatstate.ReadRegistry(f.reg, id).Alive == seatstate.Yes)
 }
 
 // Stop stops the thread's process resumably; the registry retains its
@@ -605,6 +608,7 @@ func (f *Claudia) Stop(id string) {
 func (f *Claudia) SetSeats(a *seatstate.Authority) {
 	if f != nil {
 		f.seats = a
+		a.ObserveRegistry(f.reg)
 	}
 }
 
@@ -665,7 +669,10 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		return "", fmt.Errorf("deliver %q: %w", id, err)
 	}
 	ag := f.reg.Get(id)
-	if ag == nil || !ag.Alive() {
+	if ag != nil && seatstate.ReadRegistry(f.reg, id).Alive == seatstate.Unknown {
+		return "", fmt.Errorf("deliver %q: liveness unknown; awaiting observation", id)
+	}
+	if ag == nil || seatstate.ReadRegistry(f.reg, id).Alive == seatstate.No {
 		// 🎯T426: rehydrate is a launch road too. Ended as soon as the process
 		// is ready rather than deferred to the end of this function, because
 		// the turn that follows can run for minutes and a launch that is

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 )
 
@@ -273,6 +275,7 @@ func CapDrop(name string) string {
 // then launches, explains a capability refusal, and records the outcome for
 // RehydrateHealth.
 func LaunchReconciled(reg *claudia.Registry, name string) (*claudia.Agent, error) {
+	defer seatstate.ObserveRegistrySeat(reg, name)
 	if reg == nil {
 		return nil, fmt.Errorf("launch %q: no agent registry", name)
 	}

@@ -185,7 +185,7 @@ func TestT620EventPushQueuesWhenPromptInFlight(t *testing.T) {
 	if p.delivers != 1 {
 		t.Fatalf("delivers=%d want 1 (flight unknown, so the provider is asked)", p.delivers)
 	}
-	if n := s.pendingAgentSends("jevons-po"); n != 1 {
+	if n := observedPendingSends(s, "jevons-po"); n != 1 {
 		t.Fatalf("pending=%d want 1", n)
 	}
 	want := butler.FormatEventPush("worker-finished", "slice A landed")
@@ -211,7 +211,7 @@ func TestT620EventPushQueuesWhenFlightInFlightWithoutCallingDeliver(t *testing.T
 	if p.delivers != 0 {
 		t.Fatalf("Deliver called %d times; FlightInFlight must not hit the provider", p.delivers)
 	}
-	if n := s.pendingAgentSends("jevons-po"); n != 1 {
+	if n := observedPendingSends(s, "jevons-po"); n != 1 {
 		t.Fatalf("pending=%d want 1", n)
 	}
 }
@@ -227,7 +227,7 @@ func TestT620EventPushQueuedDrainsOnTurnComplete(t *testing.T) {
 	assertQueuedPush(t, res, "jevons-po")
 
 	fs := &fakeSender{alive: true}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return fs, false, nil
 	})
 	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
@@ -236,7 +236,7 @@ func TestT620EventPushQueuedDrainsOnTurnComplete(t *testing.T) {
 	if len(fs.sent) != 1 || fs.sent[0] != want {
 		t.Fatalf("drained sent=%v want [%q]", fs.sent, want)
 	}
-	if n := s.pendingAgentSends("jevons-po"); n != 0 {
+	if n := observedPendingSends(s, "jevons-po"); n != 0 {
 		t.Fatalf("pending after drain=%d", n)
 	}
 }

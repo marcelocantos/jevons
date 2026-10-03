@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // A directed turn's reply is assembled here rather than by
@@ -250,14 +251,10 @@ func (f *Claudia) awaitReply(ag *claudia.Agent, provider claudia.Provider, text 
 	return asm.Wait(ctx)
 }
 
-// providerOf reports the registered backend for an agent, empty when the
-// row is gone (assembly then falls back to the block-shaped separator).
+// providerOf reports the observed backend; an unobserved seat stays unknown.
 func (f *Claudia) providerOf(id string) claudia.Provider {
 	if f == nil || f.reg == nil {
 		return ""
 	}
-	if def := f.reg.Def(id); def != nil {
-		return def.Provider
-	}
-	return ""
+	return claudia.Provider(seatstate.ReadRegistry(f.reg, id).Provider)
 }

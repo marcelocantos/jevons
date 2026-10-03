@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -138,7 +140,7 @@ func (s *Server) submitCursorStartBrief(name, prompt string) error {
 		return fmt.Errorf("no agent registry")
 	} else {
 		proc := s.registry.Get(name)
-		if proc == nil || !proc.Alive() {
+		if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 			return fmt.Errorf("no bound cursor-agent for %q", name)
 		}
 		// ACP session/prompt is fire-and-forget: do not wait for turn
@@ -184,5 +186,5 @@ func (s *Server) cursorProcessBound(name string) bool {
 		return false
 	}
 	proc := s.registry.Get(name)
-	return proc != nil && proc.Alive()
+	return proc != nil && (s.seatState(name).Alive == seatstate.Yes)
 }

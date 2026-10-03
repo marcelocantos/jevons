@@ -176,6 +176,7 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, reason, planPolicyActor, "")
 		if s.registry != nil {
 			s.registry.Stop(a.Name)
+			seatstate.ObserveStopped(s.registry, a.Name)
 		}
 		slog.Info("plan policy parked", "name", a.Name, "from", a.From)
 	}
@@ -321,7 +322,7 @@ func (s *Server) alreadyPlanParked(name, reason string) bool {
 		return false
 	}
 	if s.registry != nil {
-		if proc := s.registry.Get(name); proc != nil && proc.Alive() {
+		if proc := s.registry.Get(name); proc != nil && (s.seatState(name).Alive == seatstate.Yes) {
 			return false // still running — this park must stop it
 		}
 	}
@@ -441,7 +442,7 @@ func (s *Server) releaseColdSwitched(stillHot, justStayed map[string]bool) {
 		if !ok || !coldSwitchStay(rec) {
 			continue
 		}
-		if ag := s.registry.Get(d.Name); ag != nil && ag.Alive() {
+		if ag := s.registry.Get(d.Name); ag != nil && (s.seatState(d.Name).Alive == seatstate.Yes) {
 			continue
 		}
 		slog.Info("plan policy lifting cold-switch park", "name", d.Name, "provider", d.Provider, "reason", rec.Reason)

@@ -192,15 +192,8 @@ func ClassifySendOutcome(flight TurnFlight, ev TurnEvidence) SendOutcome {
 	}
 }
 
-// flightState reports what is known about name's turn.
-//
-// 🎯T766.2: when the shared seat authority holds a known InFlight claim, that
-// answer wins over the process-local agentFlight map. After a daemon restart
-// the map is empty while the authority may still carry turn.flight /
-// provider.event / claudia.report folds — reading the map alone would report
-// Unknown (and ClassifySendOutcome would accuse a healthy mid-turn send).
-// When the authority does not know, fall back to the local ledger exactly as
-// before.
+// flightState projects the shared authority, preserving unknown without
+// falling back to the process-local send ledger.
 func (s *Server) flightState(name string) TurnFlight {
 	if s == nil || strings.TrimSpace(name) == "" {
 		return FlightUnknown
@@ -211,9 +204,7 @@ func (s *Server) flightState(name string) TurnFlight {
 		}
 		return FlightIdle
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.agentFlight[name]
+	return FlightUnknown
 }
 
 // noteTurnInFlight records a turn started by a send this daemon confirmed.
@@ -279,6 +270,7 @@ func (s *Server) clearFlightUnlessEnded(name string, generation uint64) {
 		return
 	}
 	s.agentFlight[name] = FlightUnknown
+	s.Seats().RetractFlight(name, "turn.flight")
 }
 
 // Forgetting is clearAgentTurnBegan's job: a seat torn down drops its

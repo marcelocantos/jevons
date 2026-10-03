@@ -226,7 +226,7 @@ func TestMaybeReapDoneWorkAgentKeepsSeatAndNotifiesParentOfOutstandingScope(t *t
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
 	po := &fakeSender{alive: true}
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		if name != "jevons-po" {
 			t.Fatalf("unexpected fleet delivery to %q", name)
 		}
@@ -268,7 +268,7 @@ func TestMaybeReapDoneWorkAgentGenuineFinishDoesNotNotifyParentOfScope(t *testin
 	}
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		t.Fatalf("a genuine finish must not notify the parent about outstanding scope, got send to %q", name)
 		return nil, false, nil
 	})

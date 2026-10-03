@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/marcelocantos/jevons/internal/chatlog"
@@ -453,9 +455,9 @@ func (s *Server) overseerDownSample() string {
 	name := s.overseerName
 	reg := s.registry
 	s.mu.RUnlock()
-	alive := proc != nil && proc.Alive()
+	alive := proc != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes)
 	if !alive && reg != nil && name != "" {
-		if p := reg.Get(name); p != nil && p.Alive() {
+		if p := reg.Get(name); p != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 			alive = true
 		}
 	}
@@ -927,7 +929,7 @@ func (s *Server) interruptMuxSeat(name string) {
 	if s.registry == nil {
 		return
 	}
-	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
+	if proc := s.registry.Get(name); proc != nil && (s.seatState(name).Alive == seatstate.Yes) {
 		if err := proc.Interrupt(); err != nil {
 			slog.Error("mux: interrupt failed", "name", name, "err", err)
 		}
@@ -944,7 +946,7 @@ func (s *Server) interruptOwnerTurn() {
 // owner's own cancel also holds the queue for the owner's next send (🎯T915).
 func (s *Server) interruptOwnerTurnWith(settle func()) {
 	proc := s.CurrentProcess()
-	alive := proc != nil && proc.Alive()
+	alive := proc != nil && (s.seatState(s.overseerSeatName()).Alive == seatstate.Yes)
 	if alive {
 		if err := proc.Interrupt(); err != nil {
 			slog.Error("mux: interrupt failed", "name", s.overseerAgentName(), "err", err)

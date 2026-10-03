@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 func TestPlanCockpitDesiredOK(t *testing.T) {
@@ -126,5 +127,32 @@ func TestRewindRotateClearsConnect(t *testing.T) {
 	}
 	if rotated.SessionID == pre.SessionID || rotated.Materialized {
 		t.Fatalf("rotation incomplete: %+v", rotated)
+	}
+}
+
+func TestT766CockpitWaitsForUnknownSeatTruth(t *testing.T) {
+	if got := planCockpit(cockpitObs{Registered: true, Unknown: true}, 0, 8, 0); got != cockpitWaitObservation {
+		t.Fatalf("unknown seat triggered recovery: %v", got)
+	}
+}
+
+func TestT766OwnerQueueObservationIsSeparateFromFleetQueue(t *testing.T) {
+	s := &Server{overseerName: "jevons"}
+	s.SetSeats(seatstate.New(seatstate.Args{}))
+	s.mu.Lock()
+	s.notifyQueue = []string{"pending"}
+	s.observeOwnerQueueLocked()
+	s.mu.Unlock()
+	a := s.seats.Load()
+	a.FromQueue("jevons", 4, time.Now())
+	if got := s.seatState("jevons"); got.OwnerQueueDepth != 1 || got.QueueDepth != 4 {
+		t.Fatalf("queue observations collided: %+v", got)
+	}
+	s.mu.Lock()
+	s.notifyQueue = nil
+	s.observeOwnerQueueLocked()
+	s.mu.Unlock()
+	if got := s.seatState("jevons").OwnerQueueDepth; got != 0 {
+		t.Fatalf("drain observation=%d", got)
 	}
 }

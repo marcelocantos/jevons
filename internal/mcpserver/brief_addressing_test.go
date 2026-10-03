@@ -116,7 +116,7 @@ func t452Fixture(t *testing.T, overseerName, overseerSession string, defs ...cla
 		fleetBriefed: map[string]bool{},
 		transcript:   &TranscriptOps{GetID: func() string { return overseerSession }},
 	}
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		return t452Seat{dest: name, inbox: inbox}, false, nil
 	})
 	s.SetOverseerDeliver(func(text string, _ SendOrigin) error {

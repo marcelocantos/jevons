@@ -249,30 +249,8 @@ func (s *Server) seatAlive(name string) bool {
 	if s == nil {
 		return false
 	}
-	s.mu.Lock()
-	fn := s.seatAliveFn
-	s.mu.Unlock()
-	if fn != nil {
-		return fn(name)
-	}
-	if s.registry == nil {
-		return false
-	}
-	proc := s.registry.Get(name)
-	alive := proc != nil && proc.Alive()
-	if proc != nil && name != "" {
-		// Only Alive is a claim here: PromptInFlight is deliberately left
-		// zero-valued and unset in the Observation, which Observe treats as
-		// "no claim" rather than "false" — asserting not-in-flight from a
-		// liveness check alone would manufacture a fact seatAlive never
-		// looked at.
-		s.Seats().Observe(seatstate.Observation{
-			Name: name, Alive: seatstate.TriOf(alive),
-			QueueDepth: seatstate.QueueUnknown,
-			Source:     "claudia.report", At: time.Now(),
-		})
-	}
-	return alive
+	st, _ := s.Seats().Get(name)
+	return st.Alive == seatstate.Yes
 }
 
 // observeBirthAcceptance records the first accepted prompt for name's
@@ -332,86 +310,22 @@ type birthDiagnosis struct {
 	PastGrace bool
 }
 
-func (s *Server) diagnoseBirth(d claudia.AgentDef, now time.Time) birthDiagnosis {
-	var out birthDiagnosis
-	sid := strings.TrimSpace(d.SessionID)
-	if sid == "" || strings.TrimSpace(d.Name) == "" {
-		return out
-	}
+func (s *Server) birthDescription(d claudia.AgentDef, now time.Time) birthDiagnosis {
 	l := s.births()
 	l.mu.Lock()
-	rec, ok := l.births[birthKey(d.Name, sid)]
+	rec := l.births[birthKey(d.Name, d.SessionID)]
 	l.mu.Unlock()
-	if !ok {
-		return out
-	}
-	out.Accepted = true
-	out.Birth = rec
-	if now.IsZero() {
-		now = s.birthClock()
-	}
-	if !rec.AcceptedAt.IsZero() && !now.Before(rec.AcceptedAt) {
+	out := birthDiagnosis{Birth: rec}
+	if !rec.AcceptedAt.IsZero() && now.After(rec.AcceptedAt) {
 		out.Elapsed = now.Sub(rec.AcceptedAt)
 	}
-	out.PastGrace = out.Elapsed >= BornStuckGrace
-	out.Existence = LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: d.Name, Provider: d.Provider, SessionID: sid, WorkDir: d.WorkDir,
-		Roots: s.transcriptRoots(),
-	})
-	switch out.Existence.Verdict {
-	case ExistencePresent:
-		s.observeBornStuck(d.Name, out)
-		return out
-	case ExistenceUnobservable:
-		out.Unknown = true
-		s.observeBornStuck(d.Name, out)
-		return out
-	case ExistenceAbsent:
-		if out.PastGrace {
-			out.Stuck = true
-		}
-	}
-	s.observeBornStuck(d.Name, out)
 	return out
 }
 
-// observeBornStuck folds a real born-stuck diagnosis into the shared
-// authority (🎯T766.2, census derivation 7). Stuck is Yes only when
-// diagnoseBirth already required accepted prompt + located-absent
-// transcript + past grace. Present transcript is a positive No. Unknown
-// (no birth, unobservable lookup, still inside grace) writes nothing.
-func (s *Server) observeBornStuck(name string, diag birthDiagnosis) {
-	if s == nil || strings.TrimSpace(name) == "" {
-		return
-	}
-	if diag.Unknown {
-		return
-	}
-	var stuck seatstate.Tri
-	switch {
-	case diag.Stuck:
-		stuck = seatstate.Yes
-	case diag.Accepted && diag.Existence.Verdict == ExistencePresent:
-		stuck = seatstate.No
-	case !diag.Accepted:
-		stuck = seatstate.No
-	case diag.Accepted && !diag.PastGrace:
-		return
-	default:
-		return
-	}
-	s.Seats().Observe(seatstate.Observation{
-		Name: name, BornStuck: stuck,
-		QueueDepth: seatstate.QueueUnknown,
-		Source:     "born-stuck.claim", At: time.Now(),
-	})
-}
-
-// bornStuck reports whether d is born-stuck (🎯T766.2). Always runs
-// diagnoseBirth so remints refresh the authority fold; returns the diagnosis.
-// The fleetcensus needle that formerly named this check is absent from production.
+// bornStuck is a cheap read of an observed birth diagnosis.
 func (s *Server) bornStuck(d claudia.AgentDef) bool {
-	return s.diagnoseBirth(d, s.birthClock()).Stuck
+	st, _ := s.Seats().Get(d.Name)
+	return st.BornStuck == seatstate.Yes
 }
 
 // FormatBornStuckNotice is the one parent message: provider, session,
@@ -463,8 +377,8 @@ func (s *Server) markNoticeOutcome(key string, submitted bool, err error, now ti
 }
 
 func (s *Server) notifyBornStuckIfDue(d claudia.AgentDef, now time.Time) {
-	diag := s.diagnoseBirth(d, now)
-	if !diag.Stuck {
+	diag := s.birthDescription(d, now)
+	if s.seatState(d.Name).BornStuck != seatstate.Yes {
 		return
 	}
 	key := diag.Birth.NoticeKey

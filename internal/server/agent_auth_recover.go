@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
@@ -95,7 +97,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusNotFound, "agent is no longer registered")
 		return
 	}
-	if proc := reg.Get(name); proc != nil && proc.Alive() {
+	if proc := reg.Get(name); proc != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 		s.recoverRunningSeatAuth(w, r, reg, *def)
 		return
 	}
@@ -108,7 +110,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		recoverAuth = runClaudiaAuthRecover
 	}
 	if err := recoverAuth(r.Context(), def.Provider); err != nil {
-		if proc := reg.Get(name); proc == nil || !proc.Alive() {
+		if proc := reg.Get(name); proc == nil || !(seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 			fleet.RecordRehydrateFailure(name, fmt.Errorf("auth recovery: %w", err))
 		}
 		s.NotifyAgentsChanged()
@@ -119,7 +121,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 	// answered too, and the plan bar re-reads its status (🎯T945).
 	s.forgetPlanAuthStatus()
 	s.notePlanAuthRecovered(reg, def.Provider)
-	if proc := reg.Get(name); proc != nil && proc.Alive() {
+	if proc := reg.Get(name); proc != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 		s.NotifyAgentsChanged()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "already_running"})
@@ -210,7 +212,7 @@ func (s *Server) RecoverRunningPlanAuthFailures(ctx context.Context) []string {
 		if d.Name == "" || !s.planAuthFailed(d.Name) {
 			continue
 		}
-		if proc := reg.Get(d.Name); proc == nil || !proc.Alive() {
+		if proc := reg.Get(d.Name); proc == nil || !(seatstate.ReadRegistry(reg, d.Name).Alive == seatstate.Yes) {
 			continue
 		}
 		byProvider[d.Provider] = append(byProvider[d.Provider], d.Name)

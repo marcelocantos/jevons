@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
@@ -132,7 +134,7 @@ func (s *Server) ensureAsideAgent(id, title, parent, kind string) (createAsideRe
 			)
 		}
 		status := "stopped"
-		if proc := reg.Get(id); proc != nil && proc.Alive() {
+		if proc := reg.Get(id); proc != nil && (seatstate.ReadRegistry(reg, id).Alive == seatstate.Yes) {
 			status = "running"
 		}
 		return createAsideResponse{

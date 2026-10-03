@@ -157,6 +157,8 @@ type file struct {
 // file would serialise every drain behind every enqueue for the sake of a
 // single inode.
 type Store struct {
+	observe func(string, int)
+
 	mu  sync.Mutex
 	dir string
 	// mem holds the queues when there is no directory to hold them. The
@@ -173,6 +175,14 @@ type Store struct {
 // NewStore roots a store at dir (conventionally <state_dir>/sendq). An empty
 // dir is a memory-backed store: same behaviour, no durability.
 func NewStore(dir string) *Store { return &Store{dir: strings.TrimSpace(dir)} }
+
+// SetObserver installs the queue's observation feed. It runs under the queue
+// lock and must not call back into the store.
+func (s *Store) SetObserver(observe func(string, int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observe = observe
+}
 
 // Dir is where this store keeps its records, empty when it is memory-backed.
 func (s *Store) Dir() string {
@@ -202,7 +212,12 @@ func (s *Store) path(agent string) (string, error) {
 
 // load reads an agent's queue. A missing file is an empty queue; an
 // unreadable or unparseable one is an error.
-func (s *Store) load(agent string) (file, error) {
+func (s *Store) load(agent string) (out file, err error) {
+	defer func() {
+		if err == nil && s.observe != nil {
+			s.observe(agent, len(out.Entries))
+		}
+	}()
 	if !s.Durable() {
 		name := strings.TrimSpace(agent)
 		if name == "" {
@@ -240,7 +255,12 @@ func (s *Store) load(agent string) (file, error) {
 // save writes an agent's queue with atomic write-and-rename, removing the
 // record entirely when the queue is empty so an idle fleet does not leave a
 // directory of empty files for the age sweep to walk.
-func (s *Store) save(f file) error {
+func (s *Store) save(f file) (err error) {
+	defer func() {
+		if err == nil && s.observe != nil {
+			s.observe(f.Agent, len(f.Entries))
+		}
+	}()
 	if !s.Durable() {
 		if s.mem == nil {
 			s.mem = map[string][]Entry{}

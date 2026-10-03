@@ -11,7 +11,6 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
@@ -126,12 +125,12 @@ func TestSyntheticHubResidueNeverReachesTheFeed(t *testing.T) {
 	hub := NewAgentProgressHub()
 	hub.by = map[string]AgentProgress{"jv-poisoned": {Model: syntheticModel, Session: testClaudeSessionA}}
 
-	got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, claudeOnlyModels(t.TempDir())), "jv-poisoned")
+	got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, claudeOnlyModels(t.TempDir())), "jv-poisoned")
 	if got == syntheticModel {
 		t.Fatal("feed served '<synthetic>' as a model")
 	}
-	if got != "claude-fable-5" {
-		t.Fatalf("model=%q want the launch pin standing in", got)
+	if got != "" {
+		t.Fatalf("model=%q want unknown until observed", got)
 	}
 	if res := hub.Get("jv-poisoned").Model; res != "" {
 		t.Fatalf("hub still holds %q — residue should be cleared so it cannot return", res)
@@ -207,7 +206,7 @@ func TestListFleetAgentsCarriesProviderAndModel(t *testing.T) {
 	})
 
 	byName := map[string]agentInfo{}
-	for _, a := range listFleetAgentsNotifying(reg, nil, nil, hub, nil) {
+	for _, a := range listObservedFleetModels(reg, nil, nil, hub, nil) {
 		byName[a.Name] = a
 	}
 
@@ -215,8 +214,8 @@ func TestListFleetAgentsCarriesProviderAndModel(t *testing.T) {
 		t.Fatalf("grokker provider=%q want grok", got)
 	}
 	// 🎯T324: unbound Grok → provider default (condensable), not bare mark.
-	if got := byName["grokker"].Model; got != cli.DefaultGrokModel {
-		t.Fatalf("grokker model=%q want provider default %q", got, cli.DefaultGrokModel)
+	if got := byName["grokker"].Model; got != "" {
+		t.Fatalf("unobserved model=%q want unknown", got)
 	}
 	if got := byName["observed"].Model; got != "claude-opus-4-8" {
 		t.Fatalf("observed model=%q want claude-opus-4-8", got)
@@ -242,15 +241,14 @@ func TestAttachSeedsRunningModelFromSessionLog(t *testing.T) {
 
 	// Hub empty (daemon just restarted) — the badge must not be blank, and
 	// must not fall back to the launch pin when the log knows better.
-	got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, NewAgentProgressHub(), claudeOnlyModels(projects)), "jevons-po")
+	got := modelOf(t, listObservedFleetModels(reg, nil, nil, NewAgentProgressHub(), claudeOnlyModels(projects)), "jevons-po")
 	if got != "claude-fable-5" {
 		t.Fatalf("model=%q want claude-fable-5 seeded from the session log", got)
 	}
 }
 
-// Acceptance 1: a live agent is never blank. Even with no session log yet, the
-// launch pin stands in until the first observation.
-func TestLiveAgentNeverReportsEmptyModel(t *testing.T) {
+// T766.2: desired configuration cannot fill an unobserved running model.
+func TestT766UnobservedModelDoesNotBecomeLaunchPin(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -263,12 +261,9 @@ func TestLiveAgentNeverReportsEmptyModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Session root wired but the agent has written no turn yet.
-	got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, NewAgentProgressHub(), claudeOnlyModels(t.TempDir())), "jv-fresh")
-	if got == "" {
-		t.Fatal("live agent reported an empty model — the launch pin should stand in")
-	}
-	if got != "fable" {
-		t.Fatalf("model=%q want the pin as the pre-observation placeholder", got)
+	got := modelOf(t, listObservedFleetModels(reg, nil, nil, NewAgentProgressHub(), claudeOnlyModels(t.TempDir())), "jv-fresh")
+	if got != "" {
+		t.Fatalf("unobserved model=%q want unknown", got)
 	}
 }
 
@@ -289,7 +284,7 @@ func TestLiveFramesUpdateTheBadgeAheadOfTheLog(t *testing.T) {
 	}
 	hub := NewAgentProgressHub()
 	models := claudeOnlyModels(projects)
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, models), "jv-worker"); got != "claude-opus-5" {
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, models), "jv-worker"); got != "claude-opus-5" {
 		t.Fatalf("model=%q want the log's claude-opus-5 before any frame", got)
 	}
 
@@ -299,7 +294,7 @@ func TestLiveFramesUpdateTheBadgeAheadOfTheLog(t *testing.T) {
 		Type: "assistant",
 		Raw:  []byte(`{"message":{"model":"claude-fable-5"}}`),
 	})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, models), "jv-worker"); got != "claude-fable-5" {
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, models), "jv-worker"); got != "claude-fable-5" {
 		t.Fatalf("model=%q want claude-fable-5 from the live frame", got)
 	}
 }
@@ -325,7 +320,7 @@ func TestKillClearsObservationAndRestartShowsTheNewModel(t *testing.T) {
 		Type: "assistant",
 		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
 	})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, models), "jv-worker"); got != "claude-opus-5" {
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, models), "jv-worker"); got != "claude-opus-5" {
 		t.Fatalf("model=%q want the observation while the agent runs", got)
 	}
 
@@ -333,7 +328,7 @@ func TestKillClearsObservationAndRestartShowsTheNewModel(t *testing.T) {
 	if err := reg.Remove("jv-worker"); err != nil {
 		t.Fatal(err)
 	}
-	listFleetAgentsNotifying(reg, nil, nil, hub, models)
+	listObservedFleetModels(reg, nil, nil, hub, models)
 	if got := hub.Get("jv-worker").Model; got != "" {
 		t.Fatalf("after kill the hub still holds model=%q", got)
 	}
@@ -352,7 +347,7 @@ func TestKillClearsObservationAndRestartShowsTheNewModel(t *testing.T) {
 		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
 	})
 	hub.SyncEpoch("jv-worker", testClaudeSessionA) // stamp it as the dead run's
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, models), "jv-worker"); got != "claude-fable-5" {
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, models), "jv-worker"); got != "claude-fable-5" {
 		t.Fatalf("restarted model=%q want claude-fable-5 — stale observation inherited", got)
 	}
 }
@@ -391,13 +386,13 @@ func TestListFleetAgentsDropsForeignModelAfterMigrateResidue(t *testing.T) {
 		Raw:  []byte(`{"message":{"model":"claude-fable-5"}}`),
 	})
 
-	got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "jevons-po")
+	got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, nil), "jevons-po")
 	if strings.Contains(strings.ToLower(got), "fable") {
 		t.Fatalf("model=%q still carries Anthropic fable under provider=grok", got)
 	}
 	// Session-truth fill: after dropping residue, Grok default is bound.
-	if got != cli.DefaultGrokModel {
-		t.Fatalf("model=%q want provider default %q (not fable, not bare empty)", got, cli.DefaultGrokModel)
+	if got != "" {
+		t.Fatalf("model=%q want unknown after dropping foreign residue", got)
 	}
 	// Hub itself must be scrubbed so the next poll does not re-serve foreign id.
 	if hub.Get("jevons-po").Model != "" {
@@ -406,7 +401,7 @@ func TestListFleetAgentsDropsForeignModelAfterMigrateResidue(t *testing.T) {
 }
 
 // 🎯T324 hermetic (2): Launch-equivalent empty pin under grok → default bound.
-func TestListFleetAgentsBindsGrokDefaultWhenUnbound(t *testing.T) {
+func TestT766ListDoesNotInventModelFromDefaultOrPin(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -424,12 +419,12 @@ func TestListFleetAgentsBindsGrokDefaultWhenUnbound(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	agents := listFleetAgentsNotifying(reg, nil, nil, NewAgentProgressHub(), nil)
-	if got := modelOf(t, agents, "empty"); got != cli.DefaultGrokModel {
-		t.Fatalf("empty model=%q want default %q", got, cli.DefaultGrokModel)
+	agents := listObservedFleetModels(reg, nil, nil, NewAgentProgressHub(), nil)
+	if got := modelOf(t, agents, "empty"); got != "" {
+		t.Fatalf("unobserved model=%q want unknown", got)
 	}
-	if got := modelOf(t, agents, "pinned"); got != "grok-4.5-build" {
-		t.Fatalf("pinned model=%q want grok-4.5-build", got)
+	if got := modelOf(t, agents, "pinned"); got != "" {
+		t.Fatalf("unobserved pin=%q want unknown", got)
 	}
 }
 
@@ -458,7 +453,7 @@ func TestSyncModelClearsVersionOnAnyModelChange(t *testing.T) {
 	}
 }
 
-func TestListFleetAgentsModelChangeReplacesStickyVersion(t *testing.T) {
+func TestT766PinChangesDoNotReplaceObservedModel(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -479,20 +474,20 @@ func TestListFleetAgentsModelChangeReplacesStickyVersion(t *testing.T) {
 		Type: "assistant",
 		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
 	})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "w"); got != "claude-opus-5" {
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, nil), "w"); got != "claude-opus-5" {
 		t.Fatalf("before change model=%q", got)
 	}
 
 	register("claude-sonnet-5")
 	hub.Observe("w", claudia.Event{Type: "assistant", Raw: []byte(`{"message":{}}`)})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "w"); got != "claude-sonnet-5" {
-		t.Fatalf("model=%q want claude-sonnet-5, previous version kept", got)
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, nil), "w"); got != "claude-opus-5" {
+		t.Fatalf("model=%q want last observed model", got)
 	}
 
 	register("")
 	hub.Observe("w", claudia.Event{Type: "assistant", Raw: []byte(`{"message":{}}`)})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "w"); got != "" {
-		t.Fatalf("model=%q want empty after the pin was cleared", got)
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, nil), "w"); got != "claude-opus-5" {
+		t.Fatalf("model=%q want last observed model after pin clear", got)
 	}
 }
 
@@ -513,7 +508,7 @@ func TestListFleetAgentsKeepsTheModelACursorSeatIsRunning(t *testing.T) {
 		Type: "assistant",
 		Raw:  []byte(`{"message":{"model":"claude-opus-5"}}`),
 	})
-	if got := modelOf(t, listFleetAgentsNotifying(reg, nil, nil, hub, nil), "claudia-po"); got != "claude-opus-5" {
+	if got := modelOf(t, listObservedFleetModels(reg, nil, nil, hub, nil), "claudia-po"); got != "claude-opus-5" {
 		t.Fatalf("model=%q want claude-opus-5; a Cursor seat keeps the model it is running", got)
 	}
 }

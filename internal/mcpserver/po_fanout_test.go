@@ -109,7 +109,7 @@ func findPOFanout(sigs []staffops.Signal, name string) *staffops.Signal {
 // setPhase drives the activity tracker the way the ACP event stream does.
 func setPhase(s *Server, name, phase string, at time.Time) {
 	s.idleActivity.mu.Lock()
-	defer s.idleActivity.mu.Unlock()
+	defer func() { s.idleActivity.mu.Unlock(); s.idleActivity.SetAuthority(s.Seats()) }()
 	s.idleActivity.by[name] = IdleActivity{Phase: phase, Updated: at}
 }
 

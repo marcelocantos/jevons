@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 )
 
@@ -270,7 +272,8 @@ func TestObserveTurnDeadProcessFailsFast(t *testing.T) {
 	obs := newFakeObserver("")
 	obs.die()
 	start := time.Now()
-	ev := observeTurn(obs, 30*time.Second)()
+	watch, _ := observeTurnForCancelableFiltered(obs, "", 30*time.Second, nil, func() seatstate.Tri { return seatstate.No })
+	ev := watch()
 	if ev.Positive() {
 		t.Fatalf("dead process must not confirm: %+v", ev)
 	}
@@ -313,7 +316,7 @@ func startPromptFixture(t *testing.T, name string, provider claudia.Provider) (*
 	fs := &fakeSender{alive: true}
 	s := New(dir, nil, nil)
 	s.SetRegistry(reg)
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return fs, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return fs, false, nil })
 	return s, reg, fs, dir
 }
 

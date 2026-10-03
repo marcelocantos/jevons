@@ -79,7 +79,7 @@ func TestRestartRecoveryReadsOwnerStateAfterPONotification(t *testing.T) {
 			t592WriteChatlog(t, stateDir, []string{old})
 			s, inbox := t452Fixture(t, "jevons", "session", claudia.AgentDef{Name: "jevons", Purpose: claudia.PurposeOverseer}, claudia.AgentDef{Name: "jevons-po", Parent: "jevons", Purpose: claudia.PurposeWork})
 			s.bootAt = boot
-			s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+			setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 				if name != "jevons-po" {
 					return t452Seat{dest: name, inbox: inbox}, false, nil
 				}

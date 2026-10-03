@@ -28,20 +28,6 @@ const (
 	AgentStatusRunning      = "running"
 )
 
-// ClassifyAgentListStatus decides stopped | never_briefed | running.
-// turnBegan is process-local evidence (successful start prompt or send).
-// materialized is durable conversation evidence (registry Materialized /
-// session JSONL). Either counts as "has been briefed".
-func ClassifyAgentListStatus(alive, turnBegan, materialized bool) string {
-	if !alive {
-		return AgentStatusStopped
-	}
-	if turnBegan || materialized {
-		return AgentStatusRunning
-	}
-	return AgentStatusNeverBriefed
-}
-
 // ConfirmSendBeganTurn returns nil when a send/start-prompt outcome means
 // a turn actually began. Queued / interrupted_queued do not count — the
 // text is not yet in the pane as a submitted turn.
@@ -117,6 +103,7 @@ func (s *Server) clearAgentTurnBegan(name string) {
 	delete(s.agentTurnBegan, name)
 	delete(s.agentFlight, name)
 	s.mu.Unlock()
+	s.Seats().Forget(name)
 	// 🎯T426: the sink subscription is a claim about the same departed seat.
 	// Outside the lock on purpose — the wiring mutex is never taken under mu
 	// (see attachAgentSink on lock order).

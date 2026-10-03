@@ -129,6 +129,7 @@ func TestLiveMigrationDelegatesContextTransferToClaudia(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(live.Stop)
+	f.seats.ObserveRegistry(f.reg)
 	f.migrationTransfer = func(MigrationTransferArgs) (MigrationTransferResult, error) {
 		t.Fatal("Jevons paid for a context transfer before delegating the live seat")
 		return MigrationTransferResult{}, nil
@@ -199,6 +200,7 @@ func TestLiveDestinationRetrySkipsSecondTransferSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(live.Stop)
+	f.seats.ObserveRegistry(f.reg)
 	if cli.PlanProvider(live.Provider()) != claudia.ProviderCursor {
 		t.Fatalf("fixture did not create a live destination: %s", live.Provider())
 	}

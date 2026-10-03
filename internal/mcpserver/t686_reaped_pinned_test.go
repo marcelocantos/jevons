@@ -112,7 +112,7 @@ func TestT686ReapedUncertainHoldDoesNotRaisePinnedAlert(t *testing.T) {
 		t.Fatalf("uncertain hold must survive reap and kill: %+v %v", entries, err)
 	}
 
-	list, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	list, err := observedAgentList(s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

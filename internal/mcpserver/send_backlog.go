@@ -62,6 +62,7 @@ func (s *Server) sendQueue() *sendq.Store {
 	if s.agentSendQ == nil {
 		s.agentSendQ = sendq.NewStore("")
 	}
+	s.agentSendQ.SetObserver(func(name string, depth int) { s.Seats().FromQueue(name, depth, time.Now()) })
 	return s.agentSendQ
 }
 

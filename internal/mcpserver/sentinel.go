@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -524,14 +526,14 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	if s.registry != nil {
 		def := s.registry.Def(overseer)
 		proc := s.registry.Get(overseer)
-		alive := proc != nil && proc.Alive()
+		alive := proc != nil && (s.seatState(overseer).Alive == seatstate.Yes)
 		in.OverseerAlive = alive
 		// Attached: def present + alive is enough for pure sample; cockpit owns attach.
 		in.OverseerAttached = def != nil && alive
 		// Stuck-busy residual: cockpit T204 owns unstick; sentinel only observes
 		// via activity phase for reporting, not thrash.
 		if alive && s.idleActivity != nil {
-			phase := s.idleActivity.Get(overseer).Phase
+			phase := s.seatState(overseer).Phase.String()
 			if phase == "busy" || phase == "working" {
 				_ = phase
 			}
@@ -544,7 +546,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 				rt.firstSeen["overseer:down"] = now
 				fs = now
 			}
-			in.OverseerGraceDone = now.Sub(fs) >= grace
+			in.OverseerGraceDone = s.seatState(overseer).Alive == seatstate.No && now.Sub(fs) >= grace
 			// If overseer was alive last cycle, firstSeen resets when alive —
 			// handled below when alive.
 			rt.mu.Unlock()
@@ -575,8 +577,11 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			if d.Name == "" || d.Name == overseer {
 				continue
 			}
+			if !s.seatState(d.Name).Alive.Known() {
+				continue
+			}
 			proc := s.registry.Get(d.Name)
-			alive := proc != nil && proc.Alive()
+			alive := proc != nil && (s.seatState(d.Name).Alive == seatstate.Yes)
 			// 🎯T412: a live process over a session with no conversation on
 			// disk is a dead seat, not a running agent — excluded from the
 			// running count the sentinel plans against.
@@ -621,8 +626,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			}
 			// Idle residue via the 🎯T423 decoder, not ACP absence.
 			if alive {
-				decoded := classifyAgentSessionPhase(d, DefaultSessionRoots())
-				s.observeSessionPhase(d.Name, decoded)
+				decoded := s.seatState(d.Name).Phase
 				ao.Phase = decoded.String()
 				openMission := strings.TrimSpace(d.TargetID) != ""
 				ao.OpenMission = openMission
@@ -756,7 +760,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 					if strings.TrimSpace(d.TargetID) == "" {
 						continue
 					}
-					if proc := s.registry.Get(d.Name); proc != nil && proc.Alive() {
+					if proc := s.registry.Get(d.Name); proc != nil && (s.seatState(d.Name).Alive == seatstate.Yes) {
 						engaged++
 					}
 				}

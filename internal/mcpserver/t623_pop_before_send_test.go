@@ -25,12 +25,12 @@ func TestT623AcceptedPayloadIsPresentDuringProviderSubmit(t *testing.T) {
 			t.Errorf("accepted payload vanished during provider submission: %+v %v", entries, err)
 		}
 	}}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return proc, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return proc, false, nil })
 	s.drainAgentSendQueue("a")
 	if !called {
 		t.Fatal("the production drain never submitted")
 	}
-	if depth := s.pendingAgentSends("a"); depth != 0 {
+	if depth := observedPendingSends(s, "a"); depth != 0 {
 		t.Fatalf("healthy delivery left %d held", depth)
 	}
 }

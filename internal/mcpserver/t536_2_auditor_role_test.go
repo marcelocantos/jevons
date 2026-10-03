@@ -81,7 +81,7 @@ func TestT5362SpawnAuditorRecordsRoleAndAssemblesDoctrine(t *testing.T) {
 		t.Fatal("expected builtin delete refusal")
 	}
 
-	list, err := s.handleAgentList(context.Background(), mcp.CallToolRequest{})
+	list, err := observedAgentList(s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -98,7 +98,7 @@ func newT729Harness(t *testing.T, stalls int) *t729Harness {
 	h.reg = reg
 	h.s = New(dir, nil, nil)
 	h.s.SetRegistry(reg)
-	h.s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(h.s, func(name string) (agentSender, bool, error) {
 		if name != t729Seat {
 			return nil, false, fmt.Errorf("unknown %s", name)
 		}

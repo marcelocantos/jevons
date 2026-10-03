@@ -62,7 +62,7 @@ func TestT931PlainSendToBusyNonSteerableSeatQueuesThenDelivers(t *testing.T) {
 			const payload = "wind up: commit what you have and report"
 			s, _ := chainServer(t, nil)
 			s.stateDir = t.TempDir()
-			s.SetSenderResolver(func(n string) (agentSender, bool, error) {
+			setObservedSenderResolver(s, func(n string) (agentSender, bool, error) {
 				if n != worker {
 					return nil, false, errors.New("unknown")
 				}
@@ -84,7 +84,7 @@ func TestT931PlainSendToBusyNonSteerableSeatQueuesThenDelivers(t *testing.T) {
 			if len(b.sent) != 0 {
 				t.Fatalf("text offered to the busy process: %v", b.sent)
 			}
-			if n := s.pendingAgentSends(worker); n != 1 {
+			if n := observedPendingSends(s, worker); n != 1 {
 				t.Fatalf("daemon queue depth=%d want 1", n)
 			}
 
@@ -95,7 +95,7 @@ func TestT931PlainSendToBusyNonSteerableSeatQueuesThenDelivers(t *testing.T) {
 			if len(b.sent) != 1 || b.sent[0] != payload {
 				t.Fatalf("after the terminal stop the seat received %q, want [%q]", b.sent, payload)
 			}
-			if n := s.pendingAgentSends(worker); n != 0 {
+			if n := observedPendingSends(s, worker); n != 0 {
 				t.Fatalf("pending=%d after drain, want 0", n)
 			}
 		})

@@ -33,7 +33,7 @@ func t418Daemon(t *testing.T, dir string) (*Server, *recordingSender, *upward) {
 	s := &Server{}
 	s.SetSendQueueDir(dir)
 	sender := &recordingSender{}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return sender, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
 	s.SetTurnWitness(func(_, _ string) turnWatch {
 		return func() TurnEvidence {
 			return TurnEvidence{Observed: true, Durable: true, PayloadSeen: true}
@@ -53,7 +53,7 @@ func TestQueuedMessageSurvivesTheDaemonThatAcceptedIt(t *testing.T) {
 
 	accepting, _, _ := t418Daemon(t, dir)
 	busy := &fakeSender{alive: true, inFlight: true}
-	res, err := deliverToSender(accepting, name, payload, false, busy, false)
+	res, err := deliverObservedToSender(accepting, name, payload, false, busy, false)
 	if err != nil {
 		t.Fatalf("busy send must queue, not fail: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestQueuedMessageSurvivesTheDaemonThatAcceptedIt(t *testing.T) {
 
 	// The daemon dies here. Everything the next one knows, it reads off disk.
 	recovering, sender, up := t418Daemon(t, dir)
-	if depth := recovering.pendingAgentSends(name); depth != 1 {
+	if depth := observedPendingSends(recovering, name); depth != 1 {
 		t.Fatalf("recovered depth = %d; want 1 — the restart ate the queue", depth)
 	}
 	recovering.ReportRecoveredBacklog()
@@ -75,7 +75,7 @@ func TestQueuedMessageSurvivesTheDaemonThatAcceptedIt(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != payload {
 		t.Fatalf("delivered = %v; want the payload the previous daemon accepted", got)
 	}
-	if depth := recovering.pendingAgentSends(name); depth != 0 {
+	if depth := observedPendingSends(recovering, name); depth != 0 {
 		t.Fatalf("depth after delivery = %d; want 0", depth)
 	}
 }
@@ -89,7 +89,7 @@ func TestSweepDeliversABacklogNoBoundaryWillEverDrain(t *testing.T) {
 
 	accepting, _, _ := t418Daemon(t, dir)
 	busy := &fakeSender{alive: true, inFlight: true}
-	if _, err := deliverToSender(accepting, name, "held across the restart", false, busy, false); err != nil {
+	if _, err := deliverObservedToSender(accepting, name, "held across the restart", false, busy, false); err != nil {
 		t.Fatalf("queue: %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestBacklogForADepartedAgentIsSurfacedThenDropped(t *testing.T) {
 	if !containsLine(up.all(), "UNDELIVERED") {
 		t.Fatalf("a queue for a departed agent was dropped silently; overseer saw %q", up.all())
 	}
-	if depth := s.pendingAgentSends("jv-departed"); depth != 0 {
+	if depth := observedPendingSends(s, "jv-departed"); depth != 0 {
 		t.Fatalf("depth = %d; want 0 — a queue against a seat nobody will fill is not pending", depth)
 	}
 }
@@ -152,7 +152,7 @@ func TestOnlyAStalledBacklogRaisesANotice(t *testing.T) {
 			if raised != tc.alarm {
 				t.Fatalf("stall notice = %v, want %v; overseer saw %q", raised, tc.alarm, up.all())
 			}
-			if depth := s.pendingAgentSends(agent); depth != 1 {
+			if depth := observedPendingSends(s, agent); depth != 1 {
 				t.Fatalf("depth = %d; want 1 — a busy agent's queue is held, never dropped", depth)
 			}
 		})
@@ -172,7 +172,7 @@ func TestAQueueThatCannotBeWrittenIsReportedNotAnsweredQueued(t *testing.T) {
 	}
 
 	busy := &fakeSender{alive: true, inFlight: true}
-	res, err := deliverToSender(s, "jv-worker", "this one is not held", false, busy, false)
+	res, err := deliverObservedToSender(s, "jv-worker", "this one is not held", false, busy, false)
 	if err == nil {
 		t.Fatalf("an unwritable queue answered %q/%d instead of failing", res.Status, res.Queued)
 	}
@@ -187,7 +187,7 @@ func TestAQueueThatCannotBeWrittenIsReportedNotAnsweredQueued(t *testing.T) {
 func TestUndeliverableDrainReturnsTheMessageToTheHeadWithItsAge(t *testing.T) {
 	dir := t.TempDir()
 	s, _, _ := t418Daemon(t, dir)
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
 	const name = "jv-worker"
 
 	accepted := time.Now().Add(-2 * time.Hour)
@@ -248,7 +248,7 @@ func TestT527ParkedStalledBacklogHasNoInterruptPrescription(t *testing.T) {
 		}
 	}
 	s.noteTurnInFlight(agent)
-	s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
 
 	s.SweepSendBacklogs()
 
@@ -262,7 +262,7 @@ func TestT527ParkedStalledBacklogHasNoInterruptPrescription(t *testing.T) {
 	if !strings.Contains(text, "intentional stand-down") && !strings.Contains(text, "stood down") {
 		t.Fatalf("parked backlog did not name the park; overseer saw %q", text)
 	}
-	if depth := s.pendingAgentSends(agent); depth != 3 {
+	if depth := observedPendingSends(s, agent); depth != 3 {
 		t.Fatalf("depth = %d; want 3 — park holds the queue, never drops it", depth)
 	}
 }

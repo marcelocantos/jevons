@@ -34,11 +34,11 @@ import (
 // claudia's AgentInfoResponse that describe condition, and deliberately not
 // the ones that describe plumbing (window ids, attach commands, paths).
 //
-// Taking a struct rather than importing claudia keeps this package free of
-// the provider layer, so it can be tested without one and so a second
-// harness could feed it.
+// The value report keeps the fold independent of process handles, so a
+// second harness can supply the same observations.
 type SeatReport struct {
 	Name           string
+	SessionID      string
 	Provider       string
 	Model          string
 	Alive          bool
@@ -58,6 +58,7 @@ func (a *Authority) FromClaudia(rep SeatReport, at time.Time) {
 	}
 	obs := Observation{
 		Name:       rep.Name,
+		SessionID:  rep.SessionID,
 		Provider:   rep.Provider,
 		Model:      rep.Model,
 		QueueDepth: QueueUnknown,
@@ -66,6 +67,7 @@ func (a *Authority) FromClaudia(rep SeatReport, at time.Time) {
 	}
 	if rep.Known {
 		obs.Alive = TriOf(rep.Alive)
+		obs.LocalAlive = TriOf(rep.Alive)
 		obs.InFlight = TriOf(rep.PromptInFlight)
 	}
 	a.Observe(obs)
@@ -90,6 +92,8 @@ func (a *Authority) FromTurnEvent(name string, terminal bool, at time.Time) {
 	a.Observe(Observation{
 		Name:         name,
 		Alive:        Yes, // it just spoke
+		LocalAlive:   Yes,
+		Status:       "running",
 		InFlight:     inflight,
 		Phase:        phase,
 		LastActivity: at,

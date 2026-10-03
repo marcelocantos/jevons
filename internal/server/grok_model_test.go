@@ -196,7 +196,7 @@ func TestListFleetAgentsResolvesGrokModel(t *testing.T) {
 	}
 
 	byName := map[string]agentInfo{}
-	for _, a := range listFleetAgentsNotifying(reg, nil, nil, nil, grokOnlyModels(sessions)) {
+	for _, a := range listObservedFleetModels(reg, nil, nil, nil, grokOnlyModels(sessions)) {
 		byName[a.Name] = a
 	}
 	if got := byName["grokker"].Model; got != "grok-4.5-build" {
@@ -231,16 +231,16 @@ func TestListFleetAgentsPrefersSessionLogOverPinnedGrokModel(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	agents := listFleetAgentsNotifying(reg, nil, nil, nil, grokOnlyModels(sessions))
+	agents := listObservedFleetModels(reg, nil, nil, nil, grokOnlyModels(sessions))
 	if len(agents) != 1 || agents[0].Model != "grok-4.5-build" {
 		t.Fatalf("agents=%+v want the running grok-4.5-build, not the grok-4 pin", agents)
 	}
 
 	// With no session log yet, the pin is all there is — better than a blank
 	// badge on a live agent, and it yields the moment a turn is written.
-	agents = listFleetAgentsNotifying(reg, nil, nil, nil, grokOnlyModels(t.TempDir()))
-	if len(agents) != 1 || agents[0].Model != "grok-4" {
-		t.Fatalf("agents=%+v want the pin as the pre-observation placeholder", agents)
+	agents = listObservedFleetModels(reg, nil, nil, nil, grokOnlyModels(t.TempDir()))
+	if len(agents) != 1 || agents[0].Model != "grok-4.5-build" {
+		t.Fatalf("agents=%+v want the last observed model retained", agents)
 	}
 }
 
@@ -291,15 +291,15 @@ func TestListFleetAgentsPrefersGROKHomeSummaryOverPinnedGrokModel(t *testing.T) 
 		GrokSessions:     t.TempDir(),
 		GrokHomeSessions: []string{filepath.Join(home, "sessions")},
 	})
-	agents := listFleetAgentsNotifying(reg, nil, nil, nil, models)
+	agents := listObservedFleetModels(reg, nil, nil, nil, models)
 	if len(agents) != 1 || agents[0].Model != "grok-4.6" {
 		t.Fatalf("agents=%+v want GROK_HOME current_model_id grok-4.6, not the grok-4.5 pin", agents)
 	}
 
 	// Pin stands in when the exclusive home has no evidence yet.
-	agents = listFleetAgentsNotifying(reg, nil, nil, nil, grokHomeModels(t.TempDir()))
-	if len(agents) != 1 || agents[0].Model != "grok-4.5" {
-		t.Fatalf("agents=%+v want the pin as the pre-observation placeholder", agents)
+	agents = listObservedFleetModels(reg, nil, nil, nil, grokHomeModels(t.TempDir()))
+	if len(agents) != 1 || agents[0].Model != "grok-4.6" {
+		t.Fatalf("agents=%+v want the last observed model retained", agents)
 	}
 }
 

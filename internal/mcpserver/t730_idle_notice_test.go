@@ -148,6 +148,7 @@ func t730Batch(t *testing.T) (*Server, t730Fix) {
 	s, _ := t451Server(t, t.TempDir(), defs...)
 	activity := NewIdleActivityTracker()
 	s.idleActivity = activity
+	activity.SetAuthority(s.Seats())
 	s.SetWakeBatchWindow(time.Nanosecond)
 
 	for _, name := range all {

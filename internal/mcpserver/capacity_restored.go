@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/roles"
 )
@@ -88,7 +90,7 @@ func (s *Server) capacityNoticeRecipients() []string {
 		if roles.Normalize(s.agentRole(d.Name, d.Purpose)) != roles.ProductOwner {
 			continue
 		}
-		if p := s.registry.Get(d.Name); p == nil || !p.Alive() {
+		if p := s.registry.Get(d.Name); p == nil || !(s.seatState(d.Name).Alive == seatstate.Yes) {
 			continue
 		}
 		out = append(out, d.Name)

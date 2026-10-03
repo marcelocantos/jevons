@@ -314,8 +314,8 @@ func (s *Server) ObserveOwnerInteraction(now time.Time) converge.OwnerObservatio
 
 	s.mu.RLock()
 	clients := len(s.chatListeners)
-	queueDepth := len(s.notifyQueue)
-	lastProgress := s.overseerLastProgress
+	queueDepth := s.seatState(s.overseerName).OwnerQueueDepth
+	lastProgress := s.seatState(s.overseerName).LastActivity
 	proc := s.proc
 	s.mu.RUnlock()
 
@@ -577,7 +577,7 @@ func (a ownerActuator) publishLevelTruth(extra map[string]any) error {
 // observation that opened the gap.
 func (a ownerActuator) acpUnstick() error {
 	proc := a.s.CurrentProcess()
-	if !a.s.seatInFlight(a.s.overseerSeatName(), proc) {
+	if proc == nil || !a.s.seatInFlight(a.s.overseerSeatName(), proc) {
 		return converge.ErrOwnerStepNotApplicable
 	}
 	slog.Warn("owner health: interrupting stalled owner prompt")

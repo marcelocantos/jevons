@@ -8,11 +8,9 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/panecensus"
-	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 const (
@@ -116,28 +114,7 @@ func (s *Server) registryNames() map[string]bool {
 	return out
 }
 
-// observePanePresence folds named fleet panes into the shared authority as
-// Alive=Yes (🎯T766.2, census derivation 10). A pane tagged with a seat name
-// is host evidence the seat exists; absence of a pane is not Alive=No —
-// headless / sidecar seats have no tmux row to miss.
-func (s *Server) observePanePresence(panes []panecensus.Pane) {
-	if s == nil {
-		return
-	}
-	now := time.Now()
-	for _, p := range panes {
-		name := strings.TrimSpace(p.Name())
-		if name == "" {
-			continue
-		}
-		s.Seats().Observe(seatstate.Observation{
-			Name: name, Alive: seatstate.Yes,
-			QueueDepth: seatstate.QueueUnknown,
-			Source:     "pane.census", At: now,
-		})
-	}
-}
-
+// annotateFlight projects authority truth into the pure pane policy.
 func (s *Server) annotateFlight(panes []panecensus.Pane) {
 	if s == nil {
 		return
@@ -151,8 +128,7 @@ func (s *Server) annotateFlight(panes []panecensus.Pane) {
 		case FlightIdle:
 			panes[i] = panes[i].WithFlight(panecensus.FlightIdle)
 		default:
-			// Unknown: leave title inference in place so an empty-prompt
-			// orphan still classifies as idle.
+			panes[i] = panes[i].WithFlight(panecensus.FlightUnknown)
 		}
 	}
 }

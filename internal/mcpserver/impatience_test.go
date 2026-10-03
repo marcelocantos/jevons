@@ -84,7 +84,9 @@ func impatienceFixture(t *testing.T, now time.Time) (*Server, *IdleActivityTrack
 	activity := NewIdleActivityTracker()
 	// Gap dwell starts at first unsatisfied observe; phase stays idle.
 	activity.by["jv-t317-stuck"] = IdleActivity{Phase: "idle", Updated: now}
-	return &Server{registry: reg, idleActivity: activity, idleNudgeLedger: ledger}, activity
+	s := &Server{registry: reg, idleActivity: activity, idleNudgeLedger: ledger}
+	activity.SetAuthority(s.Seats())
+	return s, activity
 }
 
 // TestImpatienceEngineEscalatesFromIdlePressureSweep pins the 🎯T317 daemon
@@ -159,6 +161,7 @@ func TestImpatienceEngineEscalatesFromIdlePressureSweep(t *testing.T) {
 
 	tWork := tHum.Add(time.Minute)
 	activity.by["jv-t317-stuck"] = IdleActivity{Phase: "working", Updated: tWork}
+	activity.SetAuthority(s.Seats())
 	s.idlePressureSweep(idlePressureDeps{Now: tWork, Running: running})
 	eng.mu.Lock()
 	openAfter := eng.set.Len()
@@ -212,6 +215,7 @@ func TestImpatienceEngineClosesWithExactlyOnePostmortem(t *testing.T) {
 	// Satisfaction: phase=working → set+ladder clear, postmortem fires once.
 	tWork := tRep.Add(time.Minute)
 	activity.by["jv-t317-stuck"] = IdleActivity{Phase: "working", Updated: tWork}
+	activity.SetAuthority(s.Seats())
 	s.idlePressureSweep(idlePressureDeps{Now: tWork, Running: running})
 	if len(pm.texts) != 1 {
 		t.Fatalf("want exactly one postmortem on close, got %d: %v", len(pm.texts), pm.texts)

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -345,6 +347,9 @@ func SweepFleetRecover(args FleetRecoverSweepArgs) []FleetRecoverReport {
 }
 
 func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now time.Time) FleetRecoverReport {
+	if args.ProcessRunning == nil && seatstate.ReadRegistry(args.Reg, d.Name).Alive == seatstate.Unknown {
+		return FleetRecoverReport{Name: d.Name, Action: FleetRecoverSkip, Reason: "seat_truth_unknown"}
+	}
 	purpose := d.Purpose
 	if purpose == "" {
 		purpose = claudia.PurposeWork
@@ -353,13 +358,18 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	if args.ProcessRunning != nil {
 		running = args.ProcessRunning(d.Name)
 	} else if proc := args.Reg.Get(d.Name); proc != nil {
-		running = proc.Alive()
+		running = (seatstate.ReadRegistry(args.Reg, d.Name).Alive == seatstate.Yes)
 	}
 	deliberateStop := !running && !d.AutoStart
 
 	act := IdleActivity{}
 	if args.Activity != nil {
 		act = args.Activity.Get(d.Name)
+	}
+	if args.ProcessRunning == nil {
+		st := seatstate.ReadRegistry(args.Reg, d.Name)
+		act.Phase = st.Phase.String()
+		act.Updated = st.LastActivity
 	}
 	since := time.Duration(0)
 	never := act.Updated.IsZero()
@@ -418,6 +428,11 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	if !act.ToolCallSince.IsZero() {
 		sameToolSince = now.Sub(act.ToolCallSince)
 	}
+	provider, model := string(d.Provider), d.Model
+	if args.ProcessRunning == nil {
+		st := seatstate.ReadRegistry(args.Reg, d.Name)
+		provider, model = st.Provider, st.Model
+	}
 	obs := FleetRecoverObs{
 		Name:              d.Name,
 		Purpose:           purpose,
@@ -443,9 +458,9 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		SameToolID:        act.ToolCallID,
 		SameToolSince:     sameToolSince,
 		SessionReminted:   args.SessionReminted != nil && args.SessionReminted(d.Name),
-		Model:             strings.TrimSpace(d.Model),
+		Model:             strings.TrimSpace(model),
 		RateLimitStrikes:  act.RateLimitStrikes,
-		FallbackModel:     modelladder.Next(string(d.Provider), d.Model),
+		FallbackModel:     modelladder.Next(provider, model),
 		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
 		HasStoredTerminal: hasStoredTerminal,
 		BlockedOnOwner:    blockedOn,

@@ -73,6 +73,7 @@ func (s *Server) purgeCancelledOwnerCopiesLocked() int {
 		out = append(out, n)
 	}
 	s.notifyQueue = out
+	s.observeOwnerQueueLocked()
 	return dropped
 }
 

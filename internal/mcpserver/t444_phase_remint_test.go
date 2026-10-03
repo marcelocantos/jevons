@@ -195,13 +195,13 @@ func TestT444AgentListRowAfterReMint(t *testing.T) {
 	}
 	// The registry holds no live process here, so drive the derivation with the
 	// aliveness the incident had. handleAgentList reads the same two values.
-	if got := s.agentPhase(def, true); got != AgentStatusRunning {
+	if got := observedAgentPhase(s, def, true); got != "working" {
 		t.Fatalf("agent_list phase for a re-minted live agent: %s want running", got)
 	}
 
 	// And the rendered surface still names the agent, with no never_briefed on
 	// the row (the seat is not alive here, so the phase is honestly stopped).
-	res, err := s.handleAgentList(nil, mcp.CallToolRequest{})
+	res, err := observedAgentList(s, nil, mcp.CallToolRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

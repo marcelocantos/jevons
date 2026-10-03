@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
@@ -106,7 +108,8 @@ func (c claudiaSweep) ProcState(name string) (hasProc, alive bool) {
 	if proc == nil {
 		return false, false
 	}
-	return true, proc.Alive()
+	st := seatstate.ReadRegistry(c.reg, name)
+	return st.Alive.Known(), st.Alive == seatstate.Yes
 }
 
 func (c claudiaSweep) ExitCause(name string) string {
@@ -123,10 +126,12 @@ func (c claudiaSweep) Launch(name string) error {
 
 func (c claudiaSweep) Stop(name string) {
 	c.reg.Stop(name)
+	seatstate.ObserveStopped(c.reg, name)
 }
 
 func (c claudiaSweep) RemoveDeadSeat(name string) error {
 	c.reg.Stop(name)
+	seatstate.ObserveStopped(c.reg, name)
 	_, err := c.account.Remove(c.reg, name, fleetlog.Removal{
 		Reason: fleetlog.ReasonDeadSeat,
 		Detail: "work seat's process exited without a terminal report (🎯T544)",

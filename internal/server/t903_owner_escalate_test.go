@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatstate"
+
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -39,6 +41,10 @@ var ownerLadder = escalate.Ladder{
 
 func t903Server(seat *fakeOverseerSeat, ownerTurn bool) *Server {
 	s := &Server{}
+	s.SetOverseerName("jevons")
+	a := seatstate.New(seatstate.Args{})
+	s.SetSeats(a)
+	a.Observe(seatstate.Observation{Name: "jevons", Alive: seatstate.Yes, InFlight: seatstate.TriOf(seat == nil || seat.phase == claudia.TurnInTurn), QueueDepth: seatstate.QueueUnknown, Source: "test.seat"})
 	s.notifySender = func(string) error { return nil } // hermetic drain
 	s.SetOwnerEscalation(func() (escalate.Ladder, bool) { return ownerLadder, true })
 	s.mu.Lock()

@@ -45,12 +45,12 @@ func TestAgentSendSerializesConcurrentSubmissions(t *testing.T) {
 	first := make(chan result, 1)
 	second := make(chan result, 1)
 	go func() {
-		res, err := deliverToSenderMode(s, "po", "first", delivery.ModeSubmit, f, false, confirmByCaller)
+		res, err := deliverObservedToSenderMode(s, "po", "first", delivery.ModeSubmit, f, false, confirmByCaller)
 		first <- result{res.Status, err}
 	}()
 	<-f.entered
 	go func() {
-		res, err := deliverToSenderMode(s, "po", "second", delivery.ModeSubmit, f, false, confirmByCaller)
+		res, err := deliverObservedToSenderMode(s, "po", "second", delivery.ModeSubmit, f, false, confirmByCaller)
 		second <- result{res.Status, err}
 	}()
 	const collisionWindow = 100 * time.Millisecond
@@ -83,7 +83,7 @@ func (f *phaseOnlySender) TurnPhase() claudia.TurnPhase { return claudia.TurnInT
 func TestAgentSendQueuesWhenProviderKnowsTurnButDaemonDoesNot(t *testing.T) {
 	s := &Server{}
 	f := &phaseOnlySender{}
-	res, err := deliverToSenderMode(s, "po", "close-out", delivery.ModeSubmit, f, false, confirmByCaller)
+	res, err := deliverObservedToSenderMode(s, "po", "close-out", delivery.ModeSubmit, f, false, confirmByCaller)
 	if err != nil || res.Status != "queued" || res.Queued != 1 || f.calls != 0 {
 		t.Fatalf("send=%+v err=%v provider calls=%d", res, err, f.calls)
 	}
@@ -199,7 +199,7 @@ func TestIsPromptInFlight(t *testing.T) {
 func TestDeliverToSenderQueuesOnTaskBusy(t *testing.T) {
 	s := &Server{}
 	fs := &busyStringSender{alive: true, busyErr: "task abc is busy"}
-	res, err := deliverToSender(s, "po", "nudge", false, fs, false)
+	res, err := deliverObservedToSender(s, "po", "nudge", false, fs, false)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
 
 	s := &Server{}
 	fs := &fakeSender{alive: true, inFlight: true}
-	res, err := deliverToSender(s, "po", "nudge fan-out", false, fs, false)
+	res, err := deliverObservedToSender(s, "po", "nudge fan-out", false, fs, false)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestDeliverToSenderQueuesWhenBusy(t *testing.T) {
 		t.Fatalf("rehydrated=%v", got["rehydrated"])
 	}
 	// Second nudge stacks.
-	res2, err := deliverToSender(s, "po", "second", false, fs, false)
+	res2, err := deliverObservedToSender(s, "po", "second", false, fs, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestDeliverToSenderInterruptThenSend(t *testing.T) {
 	// mechanics, not the confirmation.
 	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
 	fs := &fakeSender{alive: true, inFlight: true, afterInterruptClears: true}
-	res, err := deliverToSender(s, "po", "force nudge", true, fs, false)
+	res, err := deliverObservedToSender(s, "po", "force nudge", true, fs, false)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestDeliverToSenderInterruptStillBusyQueues(t *testing.T) {
 	s := &Server{}
 	// Interrupt does not clear inFlight — stuck ACP flag.
 	fs := &fakeSender{alive: true, inFlight: true, afterInterruptClears: false}
-	res, err := deliverToSender(s, "po", "nudge", true, fs, false)
+	res, err := deliverObservedToSender(s, "po", "nudge", true, fs, false)
 	if err == nil {
 		t.Fatalf("interrupt still queued: status=%q queued=%d — 🎯T424 forbids this", res.Status, res.Queued)
 	}
@@ -335,11 +335,11 @@ func TestT424InterruptOnStoppedQueueDoesNotEnqueue(t *testing.T) {
 		}
 	}
 	fs := &fakeSender{alive: true, inFlight: true, afterInterruptClears: false}
-	_, err := deliverToSender(s, "po", "seventh", true, fs, false)
+	_, err := deliverObservedToSender(s, "po", "seventh", true, fs, false)
 	if err == nil {
 		t.Fatal("interrupt added to a stuck queue")
 	}
-	if n := s.pendingAgentSends("po"); n != 6 {
+	if n := observedPendingSends(s, "po"); n != 6 {
 		t.Fatalf("queue grew to %d, want 6", n)
 	}
 }
@@ -350,7 +350,7 @@ func TestT424InterruptIgnoresStaleInFlightAndDelivers(t *testing.T) {
 	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
 	// Process is actually idle — the flag is the 2026-08-10 stale reading.
 	fs := &fakeSender{alive: true, inFlight: false}
-	res, err := deliverToSender(s, "po", "unstick", true, fs, false)
+	res, err := deliverObservedToSender(s, "po", "unstick", true, fs, false)
 	if err != nil {
 		t.Fatalf("stale in-flight + interrupt should deliver: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestDeliverToSenderHappyPath(t *testing.T) {
 	s := &Server{}
 	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
 	fs := &fakeSender{alive: true}
-	res, err := deliverToSender(s, "w", "hello", false, fs, true)
+	res, err := deliverObservedToSender(s, "w", "hello", false, fs, true)
 	if err != nil {
 		t.Fatal(err)
 	}

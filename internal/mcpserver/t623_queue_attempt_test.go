@@ -28,7 +28,7 @@ func TestT623DrainDiesAfterSubmit(t *testing.T) {
 	const helper = "JEVONS_T623_CRASH_QUEUE"
 	if dir := os.Getenv(helper); dir != "" {
 		s, _, _ := t418Daemon(t, dir)
-		s.SetSenderResolver(func(string) (agentSender, bool, error) {
+		setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 			return queueAttemptSender{send: func(string) error { os.Exit(23); return nil }}, false, nil
 		})
 		s.drainAgentSendQueue("a")
@@ -97,7 +97,7 @@ func TestT623DrainErrorNeverLosesOrBlindlyRetriesPayload(t *testing.T) {
 			if _, _, err := s.sendQueue().Append("a", "later request", time.Now()); err != nil {
 				t.Fatal(err)
 			}
-			s.SetSenderResolver(func(string) (agentSender, bool, error) {
+			setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 				return queueAttemptSender{send: func(string) error { return tc.err }}, false, nil
 			})
 			// An unrelated live event is not a receipt for an errored send.
@@ -166,7 +166,7 @@ func TestT623DrainClaimAndResolutionMustReachDisk(t *testing.T) {
 			if at == "claim" {
 				block()
 			}
-			s.SetSenderResolver(func(string) (agentSender, bool, error) {
+			setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 				return queueAttemptSender{send: func(string) error { calls++; block(); return nil }}, false, nil
 			})
 			s.drainAgentSendQueue("a")
@@ -214,7 +214,7 @@ func TestT623TerminalDuringWitnessPreservesNextDrain(t *testing.T) {
 		}
 	}
 	var got []string
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return queueAttemptSender{send: func(text string) error {
 			got = append(got, text)
 			s.noteTurnEnded("a")
@@ -223,8 +223,8 @@ func TestT623TerminalDuringWitnessPreservesNextDrain(t *testing.T) {
 		}}, false, nil
 	})
 	s.drainAgentSendQueue("a")
-	if len(got) != 2 || got[0] != "first" || got[1] != "second" || s.pendingAgentSends("a") != 0 || s.flightState("a") != FlightIdle {
-		t.Fatalf("terminal wakeup lost: sent=%v depth=%d flight=%v", got, s.pendingAgentSends("a"), s.flightState("a"))
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" || observedPendingSends(s, "a") != 0 || s.flightState("a") != FlightIdle {
+		t.Fatalf("terminal wakeup lost: sent=%v depth=%d flight=%v", got, observedPendingSends(s, "a"), s.flightState("a"))
 	}
 }
 
@@ -256,7 +256,7 @@ func TestT623UnusableQueueDirectoryNeverFallsBackToMemory(t *testing.T) {
 	}
 	s := &Server{}
 	s.SetSendQueueDir(dir)
-	res, err := deliverToSender(s, "a", "must be durably held", false, &fakeSender{alive: true, inFlight: true}, false)
+	res, err := deliverObservedToSender(s, "a", "must be durably held", false, &fakeSender{alive: true, inFlight: true}, false)
 	if err == nil || res.Status == "queued" {
 		t.Fatalf("unusable spool falsely accepted message: %+v %v", res, err)
 	}
@@ -269,7 +269,7 @@ func TestT623SuccessfulLiveStreamVerdictStillDrains(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.drainAgentSendQueue("a")
-	if len(receiver.delivered()) != 1 || s.pendingAgentSends("a") != 0 {
+	if len(receiver.delivered()) != 1 || observedPendingSends(s, "a") != 0 {
 		t.Fatal("durability change froze the existing healthy stream path")
 	}
 }
@@ -281,7 +281,7 @@ func TestT623ConcurrentDrainAndAppendPreserveFIFO(t *testing.T) {
 	}
 	entered, proceed, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	calls := 0
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return queueAttemptSender{send: func(string) error { calls++; close(entered); <-proceed; return nil }}, false, nil
 	})
 	go func() { defer close(done); s.drainAgentSendQueue("a") }()
@@ -310,7 +310,7 @@ func TestT623BusyRefusalsRemainOrdinaryWaiting(t *testing.T) {
 	if _, err := s.enqueueAgentSend("a", "waiting for turn end"); err != nil {
 		t.Fatal(err)
 	}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return queueAttemptSender{send: func(string) error { return errors.New("grok acp: prompt already in flight") }}, false, nil
 	})
 	for range SendqPinFailureThreshold + 1 {
@@ -326,7 +326,7 @@ func TestT623BrokerWrappedBusyWithPayloadQueuedConfirms(t *testing.T) {
 	if _, err := s.enqueueAgentSend("a", "monitor objective"); err != nil {
 		t.Fatal(err)
 	}
-	s.SetSenderResolver(func(string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return queueAttemptSender{send: func(string) error {
 			return errors.New("broker protocol: agent_failed: grok acp: prompt already in flight")
 		}}, false, nil
@@ -352,7 +352,7 @@ func TestT623ReapedRoutingKeepsConcurrentArrivals(t *testing.T) {
 	if _, err := f.s.enqueueAgentSend(agent, "old held message"); err != nil {
 		t.Fatal(err)
 	}
-	f.s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(f.s, func(name string) (agentSender, bool, error) {
 		if name != parent {
 			return nil, false, nil
 		}
@@ -430,7 +430,7 @@ func TestT623ReapedRouteRetainsUnconfirmedAndFailedSuccessor(t *testing.T) {
 				if err := f.s.registry.Remove(parent); err != nil {
 					t.Fatal(err)
 				}
-				f.s.SetSenderResolver(func(string) (agentSender, bool, error) { return nil, false, nil })
+				setObservedSenderResolver(f.s, func(string) (agentSender, bool, error) { return nil, false, nil })
 				if err := os.Mkdir(filepath.Join(f.s.sendQueue().Dir(), parent+".json"), 0o700); err != nil {
 					t.Fatal(err)
 				}

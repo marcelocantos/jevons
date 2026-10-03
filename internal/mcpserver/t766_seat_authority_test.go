@@ -252,12 +252,12 @@ func TestT766AgentPhasePrefersAuthorityPhase(t *testing.T) {
 	running := claudia.AgentDef{Name: "jv-t766-ap", Materialized: true}
 	s.markAgentTurnBegan(running.Name)
 
-	if got := s.agentPhase(running, true); got != AgentStatusRunning {
-		t.Fatalf("no authority phase: %s want running", got)
+	if got := s.agentPhase(running, true); got != AgentStatusPhaseUnknown {
+		t.Fatalf("no authority phase: %s want phase_unknown", got)
 	}
 
 	s.Seats().Observe(seatstate.Observation{
-		Name: running.Name, Phase: turnev.PhaseIdle,
+		Name: running.Name, Alive: seatstate.Yes, Phase: turnev.PhaseIdle,
 		QueueDepth: seatstate.QueueUnknown, Source: "test", At: nowForTest(),
 	})
 	if got := s.agentPhase(running, true); got != "idle" {
@@ -273,6 +273,7 @@ func TestT766AgentPhasePrefersAuthorityPhase(t *testing.T) {
 	}
 
 	// Stopped is not overridden by a Known working phase.
+	s.Seats().Observe(seatstate.Observation{Name: running.Name, Alive: seatstate.No, QueueDepth: seatstate.QueueUnknown, Source: "test"})
 	if got := s.agentPhase(running, false); got != AgentStatusStopped {
 		t.Fatalf("dead process: %s want stopped", got)
 	}
@@ -334,5 +335,90 @@ func TestT766PanePresenceFeedsAuthority(t *testing.T) {
 	// Absence does not invent dead.
 	if _, ok := s.Seats().Get("no-pane"); ok {
 		t.Fatal("missing pane must not claim a seat")
+	}
+}
+
+// The controls must retain unknown even if the old process-local cache says
+// working. A queue-only feed cannot revive that old claim.
+func TestT766StaleAuthorityNeverFallsBackToPrivateFlight(t *testing.T) {
+	now := time.Now()
+	a := seatstate.New(seatstate.Args{Now: func() time.Time { return now }, Stale: time.Second})
+	s := &Server{}
+	s.SetSeats(a)
+	s.noteTurnInFlight("seat")
+	now = now.Add(2 * time.Second)
+	a.FromQueue("seat", 1, now)
+	if s.flightState("seat") != FlightUnknown || s.seatInFlight("seat") != seatstate.Unknown {
+		t.Fatal("stale authority fell back to private flight or was refreshed by queue traffic")
+	}
+}
+
+func TestT766AgentPhaseDoesNotReadTheTranscriptOnDemand(t *testing.T) {
+	s := &Server{}
+	def := claudia.AgentDef{Name: "seat", SessionID: "unresolvable", Provider: claudia.ProviderClaude, WorkDir: t.TempDir()}
+	s.Seats().Observe(seatstate.Observation{Name: def.Name, Alive: seatstate.Yes, Phase: turnev.PhaseWorking, Source: "test.feed", QueueDepth: seatstate.QueueUnknown})
+	// The definition cannot resolve a transcript. Re-reading files would demote
+	// this claim, while a cheap authority read retains exactly what was observed.
+	for range 100 {
+		if got := s.agentPhase(def, true); got != "working" {
+			t.Fatalf("control re-derived phase: %s", got)
+		}
+	}
+}
+
+func TestT766QueueMutationsFeedAuthority(t *testing.T) {
+	s := &Server{}
+	q := s.sendQueue()
+	s.observeQueue("seat")
+	if s.pendingAgentSends("seat") != 0 {
+		t.Fatal("observed empty queue not published")
+	}
+	if _, _, err := q.Append("seat", "one", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if s.pendingAgentSends("seat") != 1 {
+		t.Fatal("enqueue not published")
+	}
+	if err := q.Clear("seat"); err != nil {
+		t.Fatal(err)
+	}
+	if s.pendingAgentSends("seat") != 0 {
+		t.Fatal("clear not published")
+	}
+	if s.pendingAgentSends("unseen") != seatstate.QueueUnknown {
+		t.Fatal("unseen queue became empty")
+	}
+}
+
+func TestT766PaneWithNoFlightObservationCannotAuthorizeReaping(t *testing.T) {
+	s := &Server{}
+	panes := []panecensus.Pane{{AgentName: "jv-unobserved", ID: "%123", Title: ""}}
+	s.observePanePresence(panes)
+	s.annotateFlight(panes)
+	if s.seatState("jv-unobserved").InFlight != seatstate.Unknown {
+		t.Fatal("blank title became idle")
+	}
+	if reaps := panecensus.Plan(panes, nil, panecensus.DefaultWarmPoolMax).Reap(); len(reaps) != 0 {
+		t.Fatalf("unknown pane reaped: %+v", reaps)
+	}
+}
+
+func TestT766BusyPaneReadsObservedActivityWithoutTranscriptScan(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := claudia.AgentDef{Name: "jv-busy", SessionID: "unresolvable", Provider: claudia.ProviderClaude, WorkDir: t.TempDir()}
+	if err := reg.Register(d); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{registry: reg}
+	s.Seats().Observe(seatstate.Observation{Name: d.Name, LastActivity: time.Now(), QueueDepth: seatstate.QueueUnknown, Source: "test.provider"})
+	if !s.sendStallIsBusyPane(d.Name, t745Err("no_composer", t745Diff)) {
+		t.Fatal("control ignored observed movement and tried to locate a transcript")
+	}
+	s.Seats().Forget(d.Name)
+	if s.sendStallIsBusyPane(d.Name, t745Err("no_composer", t745Diff)) {
+		t.Fatal("unobserved movement became known busy")
 	}
 }

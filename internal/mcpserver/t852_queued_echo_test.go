@@ -53,7 +53,7 @@ func TestT852BusySeatQueuesOnTheRecordAndAdmitsTheOwnerTurn(t *testing.T) {
 	s.SetAgentRequestRecorder(func(name, text string, origin SendOrigin) error {
 		// Recorded before the text is queued, and before it is offered to the
 		// process: the journal is the admission, not a receipt.
-		admitted = append(admitted, admission{name, text, origin, s.pendingAgentSends(seat)})
+		admitted = append(admitted, admission{name, text, origin, observedPendingSends(s, seat)})
 		return nil
 	})
 
@@ -67,7 +67,7 @@ func TestT852BusySeatQueuesOnTheRecordAndAdmitsTheOwnerTurn(t *testing.T) {
 	if len(held.sent) != 0 {
 		t.Fatalf("a turn was in flight but the text was offered to the process anyway: %v", held.sent)
 	}
-	if n := s.pendingAgentSends(seat); n != 1 {
+	if n := observedPendingSends(s, seat); n != 1 {
 		t.Fatalf("daemon queue depth=%d want 1 — the owner message is not held anywhere", n)
 	}
 

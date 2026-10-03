@@ -41,17 +41,6 @@ type Handle struct {
 	Agent *claudia.Agent
 }
 
-func (h Handle) Alive() bool {
-	return h.Agent != nil && h.Agent.Alive()
-}
-
-func (h Handle) TurnPhase() claudia.TurnPhase {
-	if h.Agent == nil {
-		return claudia.TurnIdle
-	}
-	return h.Agent.TurnPhase()
-}
-
 func (h Handle) TurnCaps() claudia.TurnCaps {
 	if h.Agent == nil {
 		return claudia.TurnCaps{}

@@ -26,10 +26,9 @@
 // unknown rather than being served as current. A supervisor that cannot see
 // is not entitled to report calm.
 //
-// The authority does not observe anything itself. It is fed by the party
-// that knows — claudia's seat reports and its typed event stream — which is
-// why it can be a fold rather than a twelfth inference. Nothing in here
-// opens a transcript, runs tmux, globs a directory or parses prose.
+// The fold and Get do no I/O. Separate feed adapters translate claudia seat
+// reports, events and durable evidence into observations; controls never
+// open a transcript or probe a process to answer a state query.
 package seatstate
 
 import (
@@ -80,18 +79,46 @@ func TriOf(b bool) Tri {
 // QueueUnknown is the depth of a queue nobody has reported.
 const QueueUnknown = -1
 
+// Each independently observed signal has its own clock and provenance.
+type signal uint8
+
+const (
+	providerSignal signal = iota
+	modelSignal
+	aliveSignal
+	flightSignal
+	birthSignal
+	phaseSignal
+	activitySignal
+	queueSignal
+	statusSignal
+	localAliveSignal
+	brokerAliveSignal
+	brokerOwnedSignal
+	ownerQueueSignal
+	resumeSignal
+	signalCount
+)
+
 // State is what is true about one seat, as far as anyone has told us.
 //
 // Every field can be unknown, and a stale State returns unknown for the
 // fields that decay (see [Authority.Get]). Provider and Model do not decay:
 // they are identity, not condition.
 type State struct {
-	Name     string
-	Provider string
-	Model    string
+	Name      string
+	SessionID string
+	Provider  string
+	Model     string
 
 	// Alive is whether the seat's process exists, per claudia.
 	Alive Tri
+	// Local handle and broker reports remain distinguishable for reattachment.
+	LocalAlive  Tri
+	BrokerAlive Tri
+	BrokerOwned Tri
+	// ResumeLost is a located-absent conversation required by a resume.
+	ResumeLost Tri
 	// InFlight is whether a turn is running, per the provider — not per our
 	// own memory of having sent something.
 	InFlight Tri
@@ -99,12 +126,16 @@ type State struct {
 	// shares turnev's vocabulary deliberately; a second vocabulary for the
 	// same idea is how the eleven derivations happened.
 	Phase turnev.Phase
+	// Status is the observed lifecycle label; empty means unknown.
+	Status string
 	// LastActivity is when this seat last did anything observable. Zero
 	// means nobody has said.
 	LastActivity time.Time
 	// QueueDepth is how many messages are waiting for this seat, or
 	// QueueUnknown.
 	QueueDepth int
+	// OwnerQueueDepth is the separate owner notification queue.
+	OwnerQueueDepth int
 	// BornStuck is whether an accepted opening prompt never produced a
 	// transcript past grace (🎯T679.2 / census derivation 7). Unknown is
 	// the only honest answer when nobody has diagnosed this name.
@@ -115,6 +146,11 @@ type State struct {
 	// entitled to know how old its evidence is and where it came from.
 	Observed time.Time
 	Source   string
+
+	// Each signal ages independently; queue traffic cannot refresh liveness.
+	fieldAt     [signalCount]time.Time
+	fieldSource [signalCount]string
+	sessionAt   time.Time
 }
 
 // Fresh reports whether s was observed within stale of now.
@@ -130,19 +166,29 @@ func (s State) Fresh(now time.Time, stale time.Duration) bool {
 // "I am not telling you about this", so a partial report never overwrites a
 // better-informed one with ignorance.
 type Observation struct {
-	Name     string
-	Provider string
-	Model    string
+	Name      string
+	SessionID string
+	// ForSession guards a delayed feed without establishing a new incarnation.
+	ForSession string
+	Provider   string
+	Model      string
 
-	Alive     Tri
-	InFlight  Tri
-	Phase     turnev.Phase
-	BornStuck Tri
+	Alive       Tri
+	LocalAlive  Tri
+	BrokerAlive Tri
+	BrokerOwned Tri
+	ResumeLost  Tri
+	InFlight    Tri
+	Phase       turnev.Phase
+	BornStuck   Tri
+	Status      string
 
 	// LastActivity zero means no claim.
 	LastActivity time.Time
 	// QueueDepth QueueUnknown means no claim.
 	QueueDepth int
+	// OwnerQueueDepth nil makes no claim about the owner delivery queue.
+	OwnerQueueDepth *int
 
 	// Source names the reporter: "claudia.info", "acp.event", "sendq".
 	// Unnamed observations are refused, because an answer whose provenance
@@ -210,37 +256,97 @@ func (a *Authority) Observe(obs Observation) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cur, seen := a.seats[obs.Name]
+	if obs.ForSession != "" && cur.SessionID != obs.ForSession {
+		return
+	}
 	if !seen {
 		// QueueDepth is an int, so unlike Tri its zero value is a claim —
 		// "no messages waiting" — which nobody has made. Establish ignorance
 		// explicitly on first sight.
 		cur.QueueDepth = QueueUnknown
+		cur.OwnerQueueDepth = QueueUnknown
+	}
+	if obs.SessionID != "" && obs.SessionID != cur.SessionID {
+		// A remint is a different seat incarnation. No condition from its
+		// predecessor is evidence about the new session.
+		if at.Before(cur.sessionAt) {
+			return
+		}
+		ownerDepth := cur.OwnerQueueDepth
+		cur = State{Name: obs.Name, SessionID: obs.SessionID, QueueDepth: QueueUnknown, OwnerQueueDepth: ownerDepth, sessionAt: at}
 	}
 	cur.Name = obs.Name
 
-	if obs.Provider != "" {
+	if obs.ResumeLost.Known() && !at.Before(cur.fieldAt[resumeSignal]) {
+		cur.ResumeLost = obs.ResumeLost
+		cur.fieldAt[resumeSignal] = at
+		cur.fieldSource[resumeSignal] = obs.Source
+	}
+	if obs.LocalAlive.Known() && !at.Before(cur.fieldAt[localAliveSignal]) {
+		cur.LocalAlive = obs.LocalAlive
+		cur.fieldAt[localAliveSignal] = at
+		cur.fieldSource[localAliveSignal] = obs.Source
+	}
+	if obs.BrokerAlive.Known() && !at.Before(cur.fieldAt[brokerAliveSignal]) {
+		cur.BrokerAlive = obs.BrokerAlive
+		cur.fieldAt[brokerAliveSignal] = at
+		cur.fieldSource[brokerAliveSignal] = obs.Source
+	}
+	if obs.BrokerOwned.Known() && !at.Before(cur.fieldAt[brokerOwnedSignal]) {
+		cur.BrokerOwned = obs.BrokerOwned
+		cur.fieldAt[brokerOwnedSignal] = at
+		cur.fieldSource[brokerOwnedSignal] = obs.Source
+	}
+	if obs.Status != "" && !at.Before(cur.fieldAt[statusSignal]) {
+		cur.Status = obs.Status
+		cur.fieldAt[statusSignal] = at
+		cur.fieldSource[statusSignal] = obs.Source
+	}
+	if obs.Provider != "" && !at.Before(cur.fieldAt[providerSignal]) {
+		cur.fieldAt[providerSignal] = at
+		cur.fieldSource[providerSignal] = obs.Source
 		cur.Provider = obs.Provider
 	}
-	if obs.Model != "" {
+	if obs.Model != "" && !at.Before(cur.fieldAt[modelSignal]) {
+		cur.fieldAt[modelSignal] = at
+		cur.fieldSource[modelSignal] = obs.Source
 		cur.Model = obs.Model
 	}
-	if obs.Alive.Known() {
+	if obs.Alive.Known() && !at.Before(cur.fieldAt[aliveSignal]) {
+		cur.fieldAt[aliveSignal] = at
+		cur.fieldSource[aliveSignal] = obs.Source
 		cur.Alive = obs.Alive
 	}
-	if obs.InFlight.Known() {
+	if obs.InFlight.Known() && !at.Before(cur.fieldAt[flightSignal]) {
+		cur.fieldAt[flightSignal] = at
+		cur.fieldSource[flightSignal] = obs.Source
 		cur.InFlight = obs.InFlight
 	}
-	if obs.BornStuck.Known() {
+	if obs.BornStuck.Known() && !at.Before(cur.fieldAt[birthSignal]) {
+		cur.fieldAt[birthSignal] = at
+		cur.fieldSource[birthSignal] = obs.Source
 		cur.BornStuck = obs.BornStuck
 	}
-	if obs.Phase != turnev.PhaseUnknown {
+	if obs.Phase != turnev.PhaseUnknown && !at.Before(cur.fieldAt[phaseSignal]) {
+		cur.fieldAt[phaseSignal] = at
+		cur.fieldSource[phaseSignal] = obs.Source
 		cur.Phase = obs.Phase
 	}
-	if !obs.LastActivity.IsZero() && obs.LastActivity.After(cur.LastActivity) {
+	if !obs.LastActivity.IsZero() && obs.LastActivity.After(cur.LastActivity) && !at.Before(cur.fieldAt[activitySignal]) {
+		cur.fieldAt[activitySignal] = at
+		cur.fieldSource[activitySignal] = obs.Source
 		cur.LastActivity = obs.LastActivity
 	}
-	if obs.QueueDepth != QueueUnknown {
+	if obs.QueueDepth != QueueUnknown && !at.Before(cur.fieldAt[queueSignal]) {
+		cur.fieldAt[queueSignal] = at
+		cur.fieldSource[queueSignal] = obs.Source
 		cur.QueueDepth = obs.QueueDepth
+	}
+
+	if obs.OwnerQueueDepth != nil && !at.Before(cur.fieldAt[ownerQueueSignal]) {
+		cur.OwnerQueueDepth = *obs.OwnerQueueDepth
+		cur.fieldAt[ownerQueueSignal] = at
+		cur.fieldSource[ownerQueueSignal] = obs.Source
 	}
 
 	// An older report never rewinds the clock on what we know. A report at
@@ -265,7 +371,7 @@ func (a *Authority) Get(name string) (State, bool) {
 	defer a.mu.RUnlock()
 	s, ok := a.seats[name]
 	if !ok {
-		return State{}, false
+		return State{QueueDepth: QueueUnknown}, false
 	}
 	return a.decay(s), true
 }
@@ -293,13 +399,60 @@ func (a *Authority) Forget(name string) {
 // decay is where freshness becomes part of the answer. Condition fields
 // expire; identity does not.
 func (a *Authority) decay(s State) State {
-	if s.Fresh(a.now(), a.stale) {
-		return s
+	now := a.now()
+	stale := func(i signal) bool { return s.fieldAt[i].IsZero() || now.Sub(s.fieldAt[i]) > a.stale }
+	if stale(aliveSignal) {
+		s.Alive = Unknown
 	}
-	s.Alive = Unknown
-	s.InFlight = Unknown
-	s.Phase = turnev.PhaseUnknown
-	s.BornStuck = Unknown
-	s.QueueDepth = QueueUnknown
+	if stale(flightSignal) {
+		s.InFlight = Unknown
+	}
+	if stale(birthSignal) {
+		s.BornStuck = Unknown
+	}
+	if stale(phaseSignal) {
+		s.Phase = turnev.PhaseUnknown
+	}
+	// LastActivity is historical evidence, not a current condition.
+	// Lack of later activity does not erase its timestamp.
+	if stale(statusSignal) {
+		s.Status = ""
+	}
+	if stale(queueSignal) {
+		s.QueueDepth = QueueUnknown
+	}
+	if stale(resumeSignal) {
+		s.ResumeLost = Unknown
+	}
+	if stale(localAliveSignal) {
+		s.LocalAlive = Unknown
+	}
+	if stale(brokerAliveSignal) {
+		s.BrokerAlive = Unknown
+	}
+	if stale(brokerOwnedSignal) {
+		s.BrokerOwned = Unknown
+	}
+	// A closed local connection cannot contradict a broker that still runs
+	// the seat. Both reports live here, so every control gets the same fold.
+	if s.LocalAlive == Yes || s.BrokerAlive == Yes {
+		s.Alive = Yes
+	} else if s.BrokerAlive == No {
+		s.Alive = No
+	}
 	return s
+}
+
+// RetractFlight withdraws only a source's own provisional claim. A later
+// provider observation is never erased by send bookkeeping catching up.
+func (a *Authority) RetractFlight(name, source string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st, ok := a.seats[name]
+	if !ok || st.fieldSource[flightSignal] != source {
+		return
+	}
+	st.InFlight = Unknown
+	st.fieldAt[flightSignal] = time.Time{}
+	a.seats[name] = st
 }
