@@ -158,7 +158,7 @@ func TestT716NumberedCheckpointIsADeclaration(t *testing.T) {
 	}
 }
 
-func TestT716EnvelopedKindWinsOverProse(t *testing.T) {
+func TestT716CheckpointScopeWinsOverFinishKind(t *testing.T) {
 	payload := loadT716Fixture(t)
 	ping := envelope.Format(&envelope.Message{
 		Kind:    envelope.KindStatusPing,
@@ -181,13 +181,13 @@ func TestT716EnvelopedKindWinsOverProse(t *testing.T) {
 		SilentLedger: envelope.SilentLedgerEmpty,
 		Payload:      payload,
 	})
-	if !LooksLikeFinishedWorkReport(finish) {
-		t.Fatal("typed finish-report is terminal even when payload is a checkpoint")
+	if LooksLikeFinishedWorkReport(finish) {
+		t.Fatal("T784: checkpoint scope remains open even inside a finish-report")
 	}
 	reg = t395Registry(t, "jv-t716-finish")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t716-finish", finish, nil)
-	if !ok {
-		t.Fatalf("finish-report envelope did not reap (reason %s)", reason)
+	if ok {
+		t.Fatalf("checkpoint envelope reaped (reason %s)", reason)
 	}
 }
 

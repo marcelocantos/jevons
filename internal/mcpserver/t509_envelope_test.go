@@ -32,8 +32,8 @@ func TestT509ValidFinishReportIsOracleEvidence(t *testing.T) {
 	if !HasOracleEvidence(raw) {
 		t.Fatal("envelope sha/gate-id must count as oracle")
 	}
-	if !LooksLikeFinishedWorkReport(raw) {
-		t.Fatal("finish-report kind is a finish shape")
+	if LooksLikeFinishedWorkReport(raw) {
+		t.Fatal("T784: slice oracle with status in-progress must not finish the mission")
 	}
 }
 
