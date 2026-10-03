@@ -4,6 +4,8 @@
 package server
 
 import (
+	"time"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/seatstate"
@@ -16,4 +18,14 @@ func listObservedFleetModels(reg *claudia.Registry, account *fleetlog.Account, o
 		observeSeatModel(a, d, progress, models)
 	}
 	return listFleetAgentsNotifying(reg, account, onRecovered, progress, models)
+}
+
+// Sessionless transport stubs do not provide production identity evidence.
+// These auth fixtures explicitly declare which handles were launched.
+func observeLaunchedStubSeats(s *Server, reg *claudia.Registry) {
+	for _, d := range reg.List() {
+		if reg.Get(d.Name) != nil {
+			s.seats.Load().FromClaudia(seatstate.SeatReport{Name: d.Name, SessionID: d.SessionID, Provider: string(d.Provider), Alive: true, Known: true}, time.Now())
+		}
+	}
 }

@@ -46,6 +46,7 @@ func t943Server(t *testing.T, reg *claudia.Registry, failed map[string]bool, pla
 	t.Helper()
 	s := New("test", t.TempDir())
 	s.SetRegistry(reg)
+	observeLaunchedStubSeats(s, reg)
 	cleared := &[]string{}
 	s.SetPlanAuthFailure(
 		func(name string) bool { return failed[name] },

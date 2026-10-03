@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T977: when a plan comes back, the overseer and every running product
@@ -41,6 +42,10 @@ func TestT977CapacityRestoredWakesOverseerAndPOs(t *testing.T) {
 	s := &Server{}
 	s.registry = reg
 	s.observeRegistryLiveness()
+	for _, name := range []string{"jevons-po", "claudia-po", "jv-t977-worker"} {
+		d := reg.Def(name)
+		s.Seats().FromClaudia(seatstate.SeatReport{Name: name, SessionID: d.SessionID, Provider: string(d.Provider), Alive: true, Known: true}, time.Now())
+	}
 	type sent struct{ to, text string }
 	var got []sent
 	s.capacityDeliver = func(name, text string) error {

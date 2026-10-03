@@ -46,6 +46,7 @@ func TestT905RunningSeatRefusedOnItsLoginIsOfferedAndRecovered(t *testing.T) {
 
 	s := New("test", t.TempDir())
 	s.SetRegistry(reg)
+	observeLaunchedStubSeats(s, reg)
 	var cleared []string
 	s.SetPlanAuthFailure(
 		func(name string) bool { return name == refused },

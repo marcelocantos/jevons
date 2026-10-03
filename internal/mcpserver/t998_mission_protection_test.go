@@ -33,7 +33,7 @@ func t998Server(t *testing.T) (*Server, string, *fakeSender) {
 	}
 	s.missionStarts = st
 	parent := &fakeSender{alive: true}
-	s.SetSenderResolver(func(name string) (agentSender, bool, error) {
+	setObservedSenderResolver(s, func(name string) (agentSender, bool, error) {
 		if name != "jevons-po" {
 			t.Fatalf("unexpected recipient %s", name)
 		}
