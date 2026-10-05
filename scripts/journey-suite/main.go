@@ -495,6 +495,13 @@ func (s *suite) jCancelAndSend() error {
 	if err := waitBootSweepQuiet(ctx, frames, s.logPath, bootSweepQuiet, bootSweepDeadline); err != nil {
 		return err
 	}
+	// A quiet log is not an idle overseer: J32, just before this, leaves a
+	// queued owner turn the overseer may still be answering, and J3's
+	// request then waits behind it past the cancel window (2026-10-06 gate
+	// 3da61295: echoed, working, nothing streamed in 50s).
+	if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, 3*time.Minute); err != nil {
+		return fmt.Errorf("overseer never settled before the cancel journey: %w", err)
+	}
 
 	// 🎯T840: the long turn is held open by a real shell tool call that
 	// waits on a file only this journey creates, and the journey never
