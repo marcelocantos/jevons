@@ -92,6 +92,15 @@ func (r *statusRecorder) Flush() {
 
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
+// accessLogExemptPaths are the log's own endpoints. Recording them writes to
+// the log being read or written: every /api/logs poll and stream appended a
+// record of itself, and every browser log line arrived as two.
+var accessLogExemptPaths = map[string]struct{}{
+	"/api/log":         {},
+	"/api/logs":        {},
+	"/api/logs/stream": {},
+}
+
 // logAPIAccess wraps a handler so every request, regardless of outcome, is
 // recorded — independent of whatever the downstream service (e.g. Claudia)
 // logs on its own side. This is deliberate duplication (🎯 cross-service
@@ -103,6 +112,10 @@ func logAPIAccess(log apiAccessLog, next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, own := accessLogExemptPaths[r.URL.Path]; own {
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
