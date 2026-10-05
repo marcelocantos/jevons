@@ -4,6 +4,9 @@
 package server
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -66,6 +69,28 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
+
+// Hijack, Flush and Unwrap pass through to the wrapped writer. Without them
+// the access log broke every WebSocket upgrade (/ws/mux answered "does not
+// implement http.Hijacker") and every streamed response, so the cockpit
+// loaded but never connected (2026-10-05).
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("server: %T does not support hijacking", r.ResponseWriter)
+	}
+	// A hijacked connection never writes a status; 101 is what it became.
+	r.status = http.StatusSwitchingProtocols
+	return h.Hijack()
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 // logAPIAccess wraps a handler so every request, regardless of outcome, is
 // recorded — independent of whatever the downstream service (e.g. Claudia)
