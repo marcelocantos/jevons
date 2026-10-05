@@ -6,7 +6,6 @@ package planusage
 import (
 	"fmt"
 	"strings"
-
 )
 
 // ShowOnBar is the cockpit filter: idle Bedrock stays off the ticker
@@ -124,7 +123,39 @@ func formatCockpitBackend(be Backend) string {
 		parts = append(parts, label)
 	}
 	line := fmt.Sprintf("  %s  %s", head, strings.Join(parts, "  "))
+	if badge := creditsBadge(be.CreditsBalance); badge != "" {
+		line += "  " + badge
+	}
 	return line
+}
+
+// creditsBadge renders a provider-published supplementary credit balance
+// as a rounded raw number, e.g. "➕56k". Deliberately no color/band logic
+// yet (🎯 owner: report the raw number for now) — this is purely a
+// magnitude hint alongside the subscription window, not a replacement
+// for one, and shows whether the balance is zero or not.
+func creditsBadge(balance *float64) string {
+	if balance == nil {
+		return ""
+	}
+	return "➕" + roundedMagnitude(*balance)
+}
+
+// roundedMagnitude formats a count the way the owner described: "around
+// 56,000" becomes "56k". Rounds to the nearest k at that scale; below
+// 1000 shows the bare rounded integer.
+func roundedMagnitude(v float64) string {
+	if v < 0 {
+		v = 0
+	}
+	switch {
+	case v >= 1_000_000:
+		return fmt.Sprintf("%.1fm", v/1_000_000)
+	case v >= 1000:
+		return fmt.Sprintf("%.0fk", v/1000)
+	default:
+		return fmt.Sprintf("%.0f", v)
+	}
 }
 
 func backendRockBottom(be Backend) bool {

@@ -159,6 +159,12 @@ type Backend struct {
 	FleetAgents int `json:"fleet_agents,omitempty"`
 	// Override is the owner's band for this plan, when set (🎯T948).
 	Override *Override `json:"override,omitempty"`
+	// CreditsBalance is a supplementary provider-published balance
+	// alongside (not instead of) the subscription window — e.g. Codex
+	// reports non-zero credits even while the weekly window is 0%. Nil
+	// means the provider published no such balance. Reported as a raw
+	// number for now; no banding/thresholds (🎯 owner: raw number only).
+	CreditsBalance *float64 `json:"credits_balance,omitempty"`
 }
 
 // Available reports whether this backend published anything usable.
@@ -269,6 +275,10 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 			PlanType:    r.PlanType,
 			FetchedAt:   r.FetchedAt,
 			FleetAgents: norm[provider],
+		}
+		if r.Credits != nil && r.Credits.HasCredits {
+			bal := r.Credits.Balance
+			b.CreditsBalance = &bal
 		}
 		if b.Status == "" {
 			b.Status = StatusUnavailable
