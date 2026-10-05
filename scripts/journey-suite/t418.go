@@ -121,8 +121,11 @@ func (s *suite) jT418QueueBounce() error {
 	payload := fmt.Sprintf("Use your shell tool to run exactly: printf '%%s\\n' %s >> %s\nRun it once. Do not delegate. Then reply with only the value you wrote.", quote(token), quote(result))
 	// One acceptance only. Retrying until some reply says "queued" can
 	// accidentally prove a different send, or create duplicate obligations.
+	// 🎯T899: an overseer send to a busy seat escalates, and a seat that can
+	// steer takes it into the running turn without queuing it. This journey
+	// guards the durable queue across a restart, so it queues explicitly.
 	out, sendErr := s.mcpText("jevons_agent_send", map[string]any{
-		"name": name, "text": payload, "actor": "jevons",
+		"name": name, "text": payload, "actor": "jevons", "mode": "queue",
 	})
 	if outage := asOutage("queue send", sendErr); outage != nil {
 		return outage
@@ -347,7 +350,7 @@ func (s *suite) jT418HandoverMute() error {
 	for time.Now().Before(deadline) {
 		time.Sleep(800 * time.Millisecond)
 		out, err := s.mcpText("jevons_agent_send", map[string]any{
-			"name": name, "text": "MUTE-TOKEN-T418 queued while everyone is about to be stuck.", "actor": "jevons",
+			"name": name, "text": "MUTE-TOKEN-T418 queued while everyone is about to be stuck.", "actor": "jevons", "mode": "queue",
 		})
 		blob := strings.ToLower(out)
 		if err != nil {
@@ -385,11 +388,13 @@ func (s *suite) jT418HandoverMute() error {
 		}
 		others = append(others, a.Name)
 	}
+	// 🎯T664: a seat mid-turn refuses a plain stop, and the busy fixture is
+	// mid-turn by construction; this journey means every agent stopped.
 	for _, n := range others {
-		_, _ = s.AgentStop(n)
+		_, _ = s.MCPToolCall("jevons_agent_stop", map[string]any{"name": n, "force": true})
 	}
 	if overseer != "" {
-		_, _ = s.AgentStop(overseer)
+		_, _ = s.MCPToolCall("jevons_agent_stop", map[string]any{"name": overseer, "force": true})
 	}
 
 	wait := time.Now().Add(30 * time.Second)

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -330,7 +331,12 @@ func (s *suite) jBounceResume() error {
 	normalDrain := false
 	for _, line := range strings.Split(string(drainedLogs[len(preLogs):]), "\n") {
 		fields, err := queueJourneyLogFields(line)
-		if err == nil && fields["msg"] == "shutting down" && fields["exit_mode"] == "normal" && fields["stop_agents"] == "true" {
+		// With a Claudia broker the broker owns every seat across a daemon
+		// restart, so a normal drain leaves them running (stop_agents=false)
+		// and the replacement reclaims them; without one the daemon stops
+		// them itself.
+		if err == nil && fields["msg"] == "shutting down" && fields["exit_mode"] == "normal" &&
+			(fields["stop_agents"] == "true" || (s.brokerSocket != "" && fields["stop_agents"] == "false")) {
 			normalDrain = true
 		}
 	}
@@ -352,8 +358,12 @@ func (s *suite) jBounceResume() error {
 		return fmt.Errorf("snapshot after bounce: %w", err)
 	}
 	for name, agent := range before {
-		if next, ok := after[name]; !ok || next.SessionID != agent.SessionID || next.Provider != agent.Provider {
-			return fmt.Errorf("bounce changed existing session/provider for %s", name)
+		// The broker reclaims a seat under its plan's seat id (grok →
+		// xai-oauth), so the identity is the session and the plan.
+		if next, ok := after[name]; !ok || next.SessionID != agent.SessionID ||
+			cli.PlanProvider(next.Provider) != cli.PlanProvider(agent.Provider) {
+			return fmt.Errorf("bounce changed existing session/provider for %s: before %s/%s, after %s/%s (present=%v)",
+				name, agent.Provider, agent.SessionID, next.Provider, next.SessionID, ok)
 		}
 	}
 	if directErr != nil {
