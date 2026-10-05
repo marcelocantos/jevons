@@ -141,7 +141,7 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 	ompSocket := filepath.Join(root, "omp.sock")
 	cmd := exec.Command(bin, "broker", "serve", "-state-dir", filepath.Join(root, "state"),
 		"-socket", socket, "-no-resume", "-restart-nudge", "-")
-	cmd.Env = isolatedBrokerEnv(os.Environ(), socket, ompSocket, sidecarScript, root, filepath.Join(s.stateDir, "spool"))
+	cmd.Env = isolatedBrokerEnv(append(os.Environ(), brokerTmuxEnv(s.daemonEnv)...), socket, ompSocket, sidecarScript, root, filepath.Join(s.stateDir, "spool"))
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -277,4 +277,20 @@ func (b *isolatedBroker) close() error {
 	}
 	stopped = errors.Join(stopped, b.log.Close(), os.RemoveAll(b.root))
 	return stopped
+}
+
+// brokerTmuxEnv is the tmux environment a journey set for its daemon. The
+// broker launches tmux-hosted seats itself, so it needs the same socket and
+// the same refusal of the owner's default server (J29).
+func brokerTmuxEnv(daemonEnv []string) []string {
+	var out []string
+	for _, entry := range daemonEnv {
+		for _, prefix := range []string{"CLAUDIA_TMUX_SOCKET=", "TMUX_TMPDIR=", "TMUX=", "TMUX_PANE="} {
+			if strings.HasPrefix(entry, prefix) {
+				out = append(out, entry)
+				break
+			}
+		}
+	}
+	return out
 }

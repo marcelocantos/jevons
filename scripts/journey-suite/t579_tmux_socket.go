@@ -46,7 +46,10 @@ func (s *suite) j29TmuxAnchorSpawn() error {
 		return err
 	}
 
-	restoreEnv := append([]string(nil), s.daemonEnv...)
+	// Seats are launched by the Claudia broker, a process of its own, so the
+	// tmux environment must reach the broker as well as the daemon. Run in a
+	// child isolate whose broker starts with it; the shared broker started
+	// with the suite and never saw it (2026-10-05).
 	// TMUX / TMUX_PANE are cleared as well as TMUX_TMPDIR pointed at an
 	// empty directory: this suite is itself usually run from inside a
 	// claudia tmux pane, and tmux reads $TMUX in preference to
@@ -57,7 +60,19 @@ func (s *suite) j29TmuxAnchorSpawn() error {
 		"TMUX=",
 		"TMUX_PANE=",
 	}
+	restoreEnv := append([]string(nil), s.daemonEnv...)
 	s.daemonEnv = append(append(s.daemonEnv, "CLAUDIA_TMUX_SOCKET="+sock), noDefaultTmux...)
+	defer func() {
+		_ = exec.Command("tmux", "-S", sock, "kill-server").Run()
+		_ = os.RemoveAll(sockDir)
+		s.daemonEnv = restoreEnv
+	}()
+	return s.withIsolatedBroker(func(c *suite) error {
+		return c.j29OnSocket(sock, emptyTmux, noDefaultTmux)
+	})
+}
+
+func (s *suite) j29OnSocket(sock, emptyTmux string, noDefaultTmux []string) error {
 	defer func() {
 		_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{
 			"name": "jv-t579-j29a", "actor": "jevons",
@@ -65,14 +80,7 @@ func (s *suite) j29TmuxAnchorSpawn() error {
 		_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{
 			"name": "jv-t579-j29b", "actor": "jevons",
 		})
-		_ = exec.Command("tmux", "-S", sock, "kill-server").Run()
-		_ = os.RemoveAll(sockDir)
-		s.daemonEnv = restoreEnv
-		_ = s.bounceDrain()
 	}()
-	if err := s.bounceDrain(); err != nil {
-		return fmt.Errorf("bounce onto isolated tmux socket: %w", err)
-	}
 
 	// No default tmux server exists under TMUX_TMPDIR, and none is
 	// created: every tmux call the spawn path makes must carry -S.
