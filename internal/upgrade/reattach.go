@@ -15,6 +15,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleet"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // ReattachFleet is the T40.2 return: every jevonsd boot adopts leftover
@@ -102,7 +103,16 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 			if def == nil || !def.AutoStart {
 				return
 			}
-			if _, err := adoptOrLaunchRetryingHeld(ctx, reg, name); err != nil {
+			_, err := adoptOrLaunchRetryingHeld(ctx, reg, name)
+			if err == nil {
+				// A reattach is a lifecycle boundary, as readopt's is: record
+				// the seat now. The seat authority's own feed runs once a
+				// second, and the boot wiring pass right after this reads it;
+				// read unknown, the seat stayed unwired until the 30s sweep and
+				// its turns went unrecorded (journey J34, 2026-10-05).
+				seatstate.ObserveRegistrySeat(reg, name)
+			}
+			if err != nil {
 				slog.Error("auto-start failed", "agent", name, "err", err)
 				if errors.Is(err, ErrClaudeHeldByBroker) {
 					if notify := LaunchRefusedNotifier; notify != nil {

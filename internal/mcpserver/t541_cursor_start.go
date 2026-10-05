@@ -139,6 +139,11 @@ func (s *Server) submitCursorStartBrief(name, prompt string) error {
 	} else if s == nil || s.registry == nil {
 		return fmt.Errorf("no agent registry")
 	} else {
+		// The launch that just returned is a lifecycle boundary: record the
+		// seat before asking whether it is alive. The seat authority's own
+		// feed runs once a second, and read before it the new seat was
+		// unknown, so every Cursor start failed here (journey J34).
+		seatstate.ObserveRegistrySeat(s.registry, name)
 		proc := s.registry.Get(name)
 		if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 			return fmt.Errorf("no bound cursor-agent for %q", name)
