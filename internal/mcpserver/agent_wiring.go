@@ -248,6 +248,12 @@ func (s *Server) NoteAgentLaunch(name string) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			// The launch is a lifecycle boundary: record the seat before
+			// wiring, which reads its liveness. Read inside the authority's
+			// once-a-second feed the new seat was unknown, the wiring was
+			// skipped, and a first turn that ended before the 30s sweep was
+			// never seen; its phase stayed "working" (journey J21).
+			seatstate.ObserveRegistrySeat(s.registry, name)
 			s.EnsureAgentEventsWired(name)
 			s.wireMu.Lock()
 			defer s.wireMu.Unlock()
