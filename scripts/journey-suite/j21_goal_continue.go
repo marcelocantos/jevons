@@ -126,6 +126,16 @@ func (s *suite) goalContinueOneBackend(provider string) error {
 			// Host issued the Goal continuation. Do not AgentSend.
 			return nil
 		}
+		// A sidecar seat's transcript is built from its events, and the
+		// host's own continuation prompt is not one, so the second turn
+		// shows as assistant output after the first turn's terminal reply
+		// (it may still be working: the continuation can be long). The
+		// phase can go idle and working again between two polls. Claude is
+		// excluded: one Claude turn can repeat its terminal message across
+		// content blocks, and its transcript carries the prompt anyway.
+		if provider != "claude" && repliesAfterFirstTerminal(payload) > 0 {
+			return nil
+		}
 		// Codex (and any backend whose session is not a Claude JSONL)
 		// leaves /transcript empty. Phase still moves on the live
 		// event stream: working → idle → working is the second turn.
@@ -233,4 +243,27 @@ func (s *suite) waitStartRunning(name string) error {
 		time.Sleep(time.Second)
 	}
 	return fmt.Errorf("detached start of %s never registered as running within %s", name, startJoinTimeout)
+}
+
+// repliesAfterFirstTerminal counts assistant rows after the first one that
+// ends a turn: output of a later turn.
+func repliesAfterFirstTerminal(payload map[string]any) int {
+	turns, _ := payload["turns"].([]any)
+	n, ended := 0, false
+	for _, raw := range turns {
+		turn, _ := raw.(map[string]any)
+		if turn["role"] != "assistant" {
+			continue
+		}
+		if ended {
+			n++
+			continue
+		}
+		ev, _ := turn["raw"].(map[string]any)
+		msg, _ := ev["message"].(map[string]any)
+		if stop, _ := msg["stop_reason"].(string); stop == "end_turn" {
+			ended = true
+		}
+	}
+	return n
 }

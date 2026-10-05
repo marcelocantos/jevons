@@ -141,6 +141,12 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		return err
 	}
 	probe := "What is the mission codeword? Reply with the codeword only."
+	// The successor starts by taking its handover, so a turn may be open
+	// right after the move; a probe now is steered into it and answered as
+	// part of that turn (2026-10-06 gate). Ask once it has settled.
+	if err := s.waitAgentPhase(id, func(p string) bool { return p == "idle" }, 2*time.Minute); err != nil {
+		return fmt.Errorf("hot successor never settled after the move: %w", err)
+	}
 	payload, err := s.agentTranscriptHTTP(id)
 	if err != nil {
 		return err
