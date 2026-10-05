@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/claudia/omp"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -32,8 +33,8 @@ type isolatedBroker struct {
 func journeyNeedsBroker(provider claudia.Provider) bool {
 	switch provider {
 	case claudia.ProviderGrok, claudia.ProviderCursor,
-		claudia.Provider("anthropic"), claudia.Provider("openai-codex"),
-		claudia.Provider("xai-oauth"):
+		claudia.Provider(omp.Anthropic), claudia.Provider(omp.OpenAICodex),
+		claudia.Provider(omp.XAIOAuth):
 		return true
 	default:
 		return false
@@ -176,24 +177,43 @@ func (s *suite) stageIsolatedSidecar() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("CLAUDIA_OMP_SERVER")); override != "" {
 		return override, nil
 	}
-	// The published claudia module does not ship package omp or the
-	// sidecar sources ServerScript used to point at. Journeys that need
-	// a real sidecar set CLAUDIA_OMP_SERVER to that server.ts.
-	return "", fmt.Errorf("isolated Claudia sidecar source is not in the published claudia module; set CLAUDIA_OMP_SERVER")
-}
-
-// stopSidecar reports whether the isolate's sidecar socket is already
-// gone. The published module has no omp.StopSidecar client; a missing
-// socket is the same outcome the caller ignores.
-func stopSidecar(socket string) error {
-	if _, err := os.Stat(socket); err != nil {
-		return err
+	src := filepath.Dir(omp.ServerScript())
+	dst := filepath.Join(s.stateDir, "omp-sidecar")
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return "", fmt.Errorf("stage isolated sidecar: %w", err)
 	}
-	conn, err := net.DialTimeout("unix", socket, 200*time.Millisecond)
+	entries, err := os.ReadDir(src)
 	if err != nil {
-		return nil
+		return "", fmt.Errorf("read Claudia sidecar source: %w", err)
 	}
-	return conn.Close()
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name != "package.json" && name != "bun.lockb" && !strings.HasSuffix(name, ".ts") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(src, name))
+		if err != nil {
+			return "", fmt.Errorf("read Claudia sidecar %s: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dst, name), body, 0o600); err != nil {
+			return "", fmt.Errorf("stage Claudia sidecar %s: %w", name, err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	install := exec.CommandContext(ctx, "bun", "install", "--frozen-lockfile")
+	install.Dir = dst
+	if out, err := install.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("install isolated Claudia sidecar: %w: %s", err, trim(string(out), 500))
+	}
+	script := filepath.Join(dst, "server.ts")
+	if _, err := os.Stat(script); err != nil {
+		return "", fmt.Errorf("isolated Claudia sidecar script: %w", err)
+	}
+	return script, nil
 }
 
 // isolatedBrokerEnv builds the environment for a journey's isolated Claudia
@@ -252,7 +272,7 @@ func (b *isolatedBroker) close() error {
 	if body, err := os.ReadFile(filepath.Join(b.root, "omp-sidecar.log")); err == nil {
 		stopped = errors.Join(stopped, os.WriteFile(filepath.Join(filepath.Dir(b.log.Name()), "omp-sidecar.log"), body, 0o600))
 	}
-	if err := stopSidecar(filepath.Join(b.root, "omp.sock")); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := omp.StopSidecar(filepath.Join(b.root, "omp.sock")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		stopped = errors.Join(stopped, err)
 	}
 	stopped = errors.Join(stopped, b.log.Close(), os.RemoveAll(b.root))

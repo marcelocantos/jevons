@@ -5,9 +5,8 @@ package fleet
 
 import "github.com/marcelocantos/claudia"
 
-// MigrationTransferArgs is the inert-history summary request. The
-// published claudia module does not export this type; fixtures inject
-// the summary, and the product path records the same shape.
+// MigrationTransferArgs is the inert-history summary request: the shape of
+// claudia.MigrationTransferArgs, which the product path calls through.
 type MigrationTransferArgs struct {
 	Destination claudia.Provider
 	Goal        string
@@ -26,9 +25,8 @@ type StoppedMigration struct {
 	Transfer    MigrationTransferResult
 }
 
-// MigrateRequest is one live Agent.Migrate call plus the brief the
-// published MigrateArgs struct cannot carry. The product path forwards
-// only the published fields to Agent.Migrate.
+// MigrateRequest is one live Agent.Migrate call: the target and the brief
+// and retained history the successor starts from.
 type MigrateRequest struct {
 	Provider           claudia.Provider
 	Model              string
@@ -39,10 +37,14 @@ type MigrateRequest struct {
 }
 
 func (r MigrateRequest) migrateArgs() *claudia.MigrateArgs {
+	// The brief and retained history must reach Claudia: dropping them, as a
+	// stand-in for an older pin did, started every live successor blank.
 	return &claudia.MigrateArgs{
-		Provider: r.Provider,
-		Model:    r.Model,
-		Reason:   r.Reason,
-		Force:    r.Force,
+		Provider:           r.Provider,
+		Model:              r.Model,
+		Reason:             r.Reason,
+		Force:              r.Force,
+		ContextBrief:       r.ContextBrief,
+		RetainedTranscript: r.RetainedTranscript,
 	}
 }

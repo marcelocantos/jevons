@@ -4,6 +4,7 @@
 package fleet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,7 +51,11 @@ func (f *Claudia) prepareMigrationBrief(def claudia.AgentDef, destination claudi
 	if f.migrationTransfer != nil {
 		result, err = f.migrationTransfer(args)
 	} else {
-		err = fmt.Errorf("migration summary is not in the published claudia module")
+		var summary claudia.MigrationTransferResult
+		summary, err = claudia.SummarizeForMigration(context.Background(), claudia.MigrationTransferArgs{
+			Destination: args.Destination, Goal: args.Goal, Transcript: args.Transcript,
+		})
+		result = MigrationTransferResult{Brief: summary.Brief}
 	}
 	if err != nil {
 		return "", provider, err
@@ -245,7 +250,21 @@ func (f *Claudia) migrateStoppedViaClaudia(name string, def claudia.AgentDef, ta
 	if f.stoppedMigrate != nil {
 		result, err = f.stoppedMigrate(name, args, history)
 	} else {
-		return handover.Pending{}, fmt.Errorf("migrate %q: stopped migration is not in the published claudia module", name)
+		if f.migrationTransfer != nil {
+			f.reg.SetMigrationSummarizer(func(_ context.Context, a claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+				r, err := f.migrationTransfer(MigrationTransferArgs{Destination: a.Destination, Goal: a.Goal, Transcript: a.Transcript})
+				return claudia.MigrationTransferResult{Brief: r.Brief}, err
+			})
+		}
+		// MigrateStopped launches its destination inside Claudia. Bracket
+		// that hidden launch so the host wires the new event stream as soon
+		// as the operation returns, not on the next orphan-repair sweep.
+		done := f.launching(name)
+		var moved claudia.StoppedMigration
+		moved, err = f.reg.MigrateStopped(context.Background(), name, args, history)
+		done()
+		result = StoppedMigration{Source: moved.Source, Destination: moved.Destination,
+			Transfer: MigrationTransferResult{Brief: moved.Transfer.Brief}}
 	}
 	fromProvider, fromSession := def.Provider, def.SessionID
 	mig := f.seatState(name)
