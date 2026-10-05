@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,5 +106,60 @@ func TestPackRejectsMissingDocumentAndSymlinks(t *testing.T) {
 	}
 	if err := pack(source, output, false); err == nil {
 		t.Fatal("symlink bundle input was accepted")
+	}
+}
+
+// A bundle whose files match but whose compressed bytes differ, as when a
+// different Go release deflated it, passes the check and is not rewritten.
+// The v0.16.0 release CI (go1.26.1) failed a bundle built with go1.27.1
+// whose every file was identical.
+func TestCheckComparesContentsNotCompressedBytes(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "dist")
+	if err := os.MkdirAll(filepath.Join(src, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"index.html": "<html></html>", "assets/app.js": strings.Repeat("console.log(1);\n", 200)}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The same entries, stored uncompressed: different archive bytes.
+	var stored bytes.Buffer
+	w := zip.NewWriter(&stored)
+	for _, name := range []string{"assets/app.js", "index.html"} {
+		h := &zip.FileHeader{Name: name, Method: zip.Store}
+		h.SetMode(0o644)
+		f, err := w.CreateHeader(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte(files[name])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "bundle.zip")
+	if err := os.WriteFile(out, stored.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack(src, out, true); err != nil {
+		t.Fatalf("check failed on identical contents: %v", err)
+	}
+	if err := pack(src, out, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(out); !bytes.Equal(got, stored.Bytes()) {
+		t.Fatal("an identical bundle was rewritten")
+	}
+	// A real content change still fails the check.
+	if err := os.WriteFile(filepath.Join(src, "index.html"), []byte("<html>new</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack(src, out, true); err == nil {
+		t.Fatal("check passed a bundle whose contents changed")
 	}
 }

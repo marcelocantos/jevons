@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -66,8 +67,20 @@ func pack(source, output string, check bool) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	if previous, err := os.ReadFile(output); err == nil && bytes.Equal(previous, buf.Bytes()) {
-		return nil
+	// Compare what the archive holds, not its compressed bytes: two Go
+	// releases deflate identical files differently, so a bundle built with
+	// go1.27 never byte-matched the go1.26 release runner (v0.16.0 release
+	// CI, 2026-10-05) although every file in it was the same. An existing
+	// bundle with the same contents is also left as it is, so a toolchain
+	// change alone never rewrites the tracked file.
+	if previous, err := os.ReadFile(output); err == nil {
+		same, err := sameContents(previous, buf.Bytes())
+		if err != nil {
+			return fmt.Errorf("read %s: %w", output, err)
+		}
+		if same {
+			return nil
+		}
 	}
 	if check {
 		return fmt.Errorf("%s differs from the canonical React build; run make ui-build and commit the bundle with its source", output)
@@ -89,4 +102,47 @@ func pack(source, output string, check bool) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), output)
+}
+
+// sameContents reports whether two bundles hold the same files, in the same
+// order, with the same modes and bytes.
+func sameContents(a, b []byte) (bool, error) {
+	ra, err := zip.NewReader(bytes.NewReader(a), int64(len(a)))
+	if err != nil {
+		return false, err
+	}
+	rb, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		return false, err
+	}
+	if len(ra.File) != len(rb.File) {
+		return false, nil
+	}
+	for i, fa := range ra.File {
+		fb := rb.File[i]
+		if fa.Name != fb.Name || fa.Mode() != fb.Mode() {
+			return false, nil
+		}
+		da, err := readEntry(fa)
+		if err != nil {
+			return false, err
+		}
+		db, err := readEntry(fb)
+		if err != nil {
+			return false, err
+		}
+		if !bytes.Equal(da, db) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func readEntry(f *zip.File) ([]byte, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
