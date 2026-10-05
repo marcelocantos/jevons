@@ -261,10 +261,19 @@ func (f *Claudia) awaitReply(ag *claudia.Agent, provider claudia.Provider, text 
 	return asm.Wait(ctx)
 }
 
-// providerOf reports the observed backend; an unobserved seat stays unknown.
+// providerOf reports the observed backend, or the registered one while the
+// seat is still unobserved. It only chooses how reply chunks are joined: an
+// unknown provider joined a just-restarted sidecar seat's token fragments
+// with newlines (journey J12, 2026-10-05).
 func (f *Claudia) providerOf(id string) claudia.Provider {
 	if f == nil || f.reg == nil {
 		return ""
 	}
-	return claudia.Provider(seatstate.ReadRegistry(f.reg, id).Provider)
+	if p := seatstate.ReadRegistry(f.reg, id).Provider; p != "" {
+		return claudia.Provider(p)
+	}
+	if def := f.reg.Def(id); def != nil {
+		return def.Provider
+	}
+	return ""
 }
