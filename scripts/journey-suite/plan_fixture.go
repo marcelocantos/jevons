@@ -24,12 +24,17 @@ const (
 
 // planFixtureSnapshot builds a one-backend weekly snapshot for provider.
 func planFixtureSnapshot(provider string, rem, used float64) planusage.Snapshot {
+	return planFixtureSnapshotOf([]string{provider}, rem, used)
+}
+
+// planFixtureSnapshotOf gives every named plan the same weekly reading.
+func planFixtureSnapshotOf(providers []string, rem, used float64) planusage.Snapshot {
 	now := time.Now().UTC()
 	week := now.Add(3*24*time.Hour + 12*time.Hour)
 	lim := planusage.DefaultWeeklyWindowSeconds
-	return planusage.Snapshot{
-		At: now,
-		Backends: []planusage.Backend{{
+	snap := planusage.Snapshot{At: now}
+	for _, provider := range providers {
+		snap.Backends = append(snap.Backends, planusage.Backend{
 			Provider: provider,
 			Status:   planusage.StatusAvailable,
 			Windows: []planusage.Window{{
@@ -39,8 +44,9 @@ func planFixtureSnapshot(provider string, rem, used float64) planusage.Snapshot 
 				ResetsAt:           &week,
 				LimitWindowSeconds: &lim,
 			}},
-		}},
+		})
 	}
+	return snap
 }
 
 func writePlanFixtureFile(dir, name, provider string, rem, used float64) (string, error) {

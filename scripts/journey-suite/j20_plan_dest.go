@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -27,6 +28,11 @@ func (s *suite) j20PlanDest() error {
 		return err
 	}
 	s.daemonEnv = append(s.daemonEnv, planusage.FixtureEnv+"="+path)
+	// The daemon keeps reading this fixture for the rest of the run, and
+	// J20 leaves grok exhausted. Every later journey then found no plan
+	// destination (J21, J35 and J36 in the 2026-10-05 gate). Leave the plan
+	// healthy again; the file is read on each snapshot, so no restart.
+	defer func() { _, _ = s.writePlanFixture(defaultPlanRemaining, defaultPlanUsed) }()
 	if err := s.bounceDrain(); err != nil {
 		return fmt.Errorf("bounce with fixture: %w", err)
 	}
@@ -83,7 +89,15 @@ func (s *suite) j20PlanDest() error {
 	if err != nil {
 		return fmt.Errorf("explicit grok start: %w", err)
 	}
-	if _, err := s.writePlanFixture(0, 100); err != nil {
+	// Exhaust every plan, not grok alone. With other plans unread, Claudia's
+	// placement defers ("destination plan readings incomplete") rather than
+	// parking, since a destination may exist; a park needs every plan read
+	// and none eligible.
+	all, err := json.Marshal(planFixtureSnapshotOf([]string{"grok", "claude", "codex", "cursor"}, 0, 100))
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, all, 0o600); err != nil {
 		return err
 	}
 	sweep, err := http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
