@@ -340,6 +340,17 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 		}()
 	}
 
+	// A name that was never registered (and is not a reaped address, which
+	// stays reachable below) receives nothing, so nothing is recorded for it.
+	// Recording first wrote the owner's words into that name's transcript as a
+	// delivered turn, and the composer read that echo as success and dropped
+	// the draft of a send that had failed (journey J36, 2026-10-05).
+	if s.registry != nil && s.registry.Def(name) == nil {
+		if _, reaped := LookupReapedRecord(s.fleetIntent(), name); !reaped {
+			return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
+		}
+	}
+
 	if err := s.recordAgentRequest(name, text, origin); err != nil {
 		return agentSendResult{}, err
 	}
