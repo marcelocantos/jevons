@@ -278,7 +278,18 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		}
 		call := parseToolCall(ev.Raw)
 		if call.SessionUpdate != "tool_call" {
-			return "", false
+			// A sidecar seat (claudia omp) publishes one progress event per
+			// call with no ACP Raw: the name in ToolTitle, the arguments as
+			// JSON in Text. Dropping it hid every sidecar seat's tool calls
+			// from the chat (journey J6c, 2026-10-05).
+			if len(ev.Raw) > 0 || strings.TrimSpace(ev.ToolTitle) == "" {
+				return "", false
+			}
+			call = toolCall{SessionUpdate: "tool_call", ID: ev.ToolCallID, Title: ev.ToolTitle}
+			var input map[string]any
+			if json.Unmarshal([]byte(ev.Text), &input) == nil {
+				call.Input = input
+			}
 		}
 		name := call.DisplayName()
 		if name == "" {
