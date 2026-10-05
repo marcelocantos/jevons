@@ -317,6 +317,72 @@ func InformationalGlobalRate(sig Signal) bool {
 	return kind == "" || kind == "cost_alert"
 }
 
+// projectedOverspendKind is the monitor alert kind (cost.AlertProjection)
+// that BuildSignals prefixes as symptom "cost:projected-overspend".
+const projectedOverspendKind = "projected-overspend"
+
+// namesProjectedOverspend reports whether a symptom fingerprint names the
+// projected-overspend cost alert, matching a whole colon-separated field
+// (same discipline as namesGlobalRate) so prose that merely mentions the
+// phrase, or a different cost symptom, never matches.
+func namesProjectedOverspend(s string) bool {
+	for _, field := range strings.Split(strings.ToLower(strings.TrimSpace(s)), ":") {
+		if strings.TrimSpace(field) == projectedOverspendKind {
+			return true
+		}
+	}
+	return false
+}
+
+// subscriptionAccountingMarker is the monitor's own text (internal/cost
+// Monitor, usdLabel under AccountingSubscription) stamped onto every
+// subscription-accounting alert detail: "API-eq est USD (not billed)".
+// Matching on this exact phrase — not merely "not billed" or "subscription"
+// in isolation — ties the recognizer to the one emitter that can actually
+// tell billable dollars from an estimate, instead of trusting a sentinel
+// paraphrase of the accounting mode.
+const subscriptionAccountingMarker = "est usd (not billed)"
+
+// hasTrustworthySubscriptionEvidence reports whether a cost-alert detail
+// line carries the monitor's own subscription-accounting marker. This is
+// the "trustworthy accounting evidence" the recognizer requires (🎯T1007):
+// the monitor emits the marker only when cfg.EffectiveAccounting() is
+// AccountingSubscription (internal/cost.Monitor), so a true positive
+// traces back to the single place USD accounting mode is decided, not to
+// a guess in this package.
+func hasTrustworthySubscriptionEvidence(detail string) bool {
+	return strings.Contains(strings.ToLower(detail), subscriptionAccountingMarker)
+}
+
+// InformationalProjectedOverspend reports whether a signal is the cost
+// enforcer's subscription-accounting projected-overspend notice — an
+// end-of-day USD estimate that is not real billable spend — rather than a
+// residual product gap to file.
+//
+// 🎯T1007 (reproducing the 🎯T851 shape for a second cost symptom): unlike
+// 🎯T851's global-rate, which is unconditionally informational (jevons never
+// clamps the owner's own sessions regardless of accounting), a projected
+// end-of-day overspend under *billable* list_price accounting is exactly
+// the signal the cost auditor exists to catch (internal/cost.auditor.go
+// TripProjectedSpend feeds warn/throttle/pause/kill). Blanket-suppressing
+// every "cost:projected-overspend" symptom the way 🎯T851 suppresses
+// global-rate would silence that alarm for a billable fleet. So this
+// recognizer requires the monitor's own subscription marker in Detail
+// (hasTrustworthySubscriptionEvidence) before calling the symptom
+// informational — trustworthy accounting evidence, not a blanket rule on
+// the symptom name alone. A projected-overspend with no marker, or a
+// plain "USD" label (list_price), still files.
+func InformationalProjectedOverspend(sig Signal) bool {
+	if !namesProjectedOverspend(sig.Symptom) {
+		return false
+	}
+	kind := strings.TrimSpace(sig.Kind)
+	if kind != "" && kind != "cost_alert" {
+		return false
+	}
+	return hasTrustworthySubscriptionEvidence(sig.Detail)
+}
+
 // Classify maps one signal to harness-ok | repair | file+PO | ignore.
 // Cooldown and rate budget are applied by the caller (or RunCycle).
 func Classify(sig Signal) Decision {
@@ -389,6 +455,20 @@ func Classify(sig Signal) Decision {
 			Signal: sig,
 			Action: ActionHarnessOK,
 			Reason: "informational global-rate — enforcer does not clamp the owner's sessions; nothing to file",
+		}
+	}
+
+	// 🎯T1007: a projected-overspend alert carrying the monitor's own
+	// subscription-accounting marker is an end-of-day USD estimate, not
+	// real billable spend — informational, same as 🎯T851's global-rate,
+	// but gated on trustworthy accounting evidence (the marker) rather
+	// than suppressing the symptom unconditionally. A billable
+	// (list_price) projected-overspend — no marker — still files.
+	if InformationalProjectedOverspend(sig) {
+		return Decision{
+			Signal: sig,
+			Action: ActionHarnessOK,
+			Reason: "informational projected-overspend — subscription accounting estimate, not billable spend; nothing to file",
 		}
 	}
 
