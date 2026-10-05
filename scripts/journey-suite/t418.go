@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
@@ -197,7 +200,9 @@ func queueJourneyProvider(logs []byte, name, expected string) error {
 		if err != nil || event["msg"] != "agent started" || event["name"] != name {
 			continue
 		}
-		if event["provider"] != expected {
+		// A subscription plan launches under its seat id (grok → xai-oauth),
+		// so the evidence is the plan, not the literal launch id.
+		if cli.PlanProvider(claudia.Provider(event["provider"])) != cli.PlanProvider(claudia.Provider(expected)) {
 			return fmt.Errorf("agent %s launched on %q, requested %q", name, event["provider"], expected)
 		}
 		found = true

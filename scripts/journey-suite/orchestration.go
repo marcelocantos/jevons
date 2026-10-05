@@ -343,13 +343,25 @@ func (s *suite) jPOWorkerLineageFanout() error {
 		return fmt.Errorf("start worker: %w", err)
 	}
 
-	agents, err := s.listAgentsHTTP()
-	if err != nil {
-		return err
-	}
-	by := map[string]AgentInfo{}
-	for _, a := range agents {
-		by[a.Name] = a
+	// The seat authority refreshes from the registry once a second, so a
+	// seat read the instant its start returns is still phase_unknown (seen
+	// 2026-10-05). Give both a bounded moment to read running; the failure
+	// below still reports what they read if they never do.
+	var by map[string]AgentInfo
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		agents, err := s.listAgentsHTTP()
+		if err != nil {
+			return err
+		}
+		by = map[string]AgentInfo{}
+		for _, a := range agents {
+			by[a.Name] = a
+		}
+		if (by[po].Status == "running" && by[worker].Status == "running") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Second)
 	}
 	for _, name := range []string{po, worker, overseerName} {
 		if _, ok := by[name]; !ok {
