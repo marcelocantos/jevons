@@ -264,6 +264,10 @@ async function scenarioAside(page) {
 }
 
 async function scenarioFrontier(page) {
+  // 🎯T996: the Frontier follows the selected seat's repo and is empty with
+  // nothing selected. Select the overseer, whose workdir sits under the
+  // isolate's seeded ledger.
+  await page.goto('http://' + HOST + '/?agent=jevons', { waitUntil: 'domcontentloaded', timeout: 30000 });
   // T131 / T168 / T173 / T185: headerless table + Graph control.
   const tab = page.locator('#rhs-tab-frontier');
   if ((await tab.count()) < 1) fail('T131', 'RHS must have a Frontier tab (#rhs-tab-frontier)');

@@ -299,7 +299,6 @@ persona_notes: |
 	s.run("J38-midturn-answer", s.jMidTurnAnswer)
 	s.run("J14-bounce-resume", s.jBounceResume)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
-	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
 	s.run("J19-root-history-paint", s.j19RootHistoryPaint)
 	s.run("J22-send-once", s.jSendOnce)
 	s.run("J23-fold-md", s.jFoldMd)
@@ -317,6 +316,11 @@ persona_notes: |
 	s.run("J33-undelivered-resend", s.jUndeliveredResend)
 	s.run("J35-worker-busy-escalates", s.jWorkerBusyVisibleQueue)
 	s.run("J36-send-ack-correlation", s.jSendAckCorrelation)
+	// Last: J18 stops every agent and raises the fleet-mute alarm on
+	// purpose, and the overseer then works the alarm. Any journey after it
+	// shared the isolate with that work (J19's history window filled with
+	// it in the 2026-10-05 gate).
+	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

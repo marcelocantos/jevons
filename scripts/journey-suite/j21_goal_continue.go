@@ -82,8 +82,10 @@ func (s *suite) goalContinueOneBackend(provider string) error {
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
+	// Force: a worker mid-turn refuses a plain kill (🎯T664), and a survivor
+	// keeps T510 engaged, so the next backend's start was refused.
 	defer func() {
-		_, _ = s.AgentKill(name, "jevons")
+		_, _ = s.MCPToolCall("jevons_agent_kill", map[string]any{"name": name, "actor": "jevons", "force": true})
 	}()
 
 	// First user turn must not close the Goal.
