@@ -551,6 +551,9 @@ func (f *Claudia) SeedSuccessor(name string) (handover.Pending, bool, error) {
 
 	go f.handOffSeed(name, pending)
 	slog.Info("handover dispatched", "detail", pending.Describe())
+	f.logEvent("fleet_migrate", "handover_dispatched", map[string]any{
+		"name": name, "detail": pending.Describe(),
+	})
 	return pending, true, nil
 }
 
@@ -595,6 +598,10 @@ func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
 		if !arrived {
 			slog.Error("handover hand-off failed; it stays pending for the next launch",
 				"name", name, "err", handoffFailure(why, err))
+			f.logEvent("fleet_migrate", "handover_failed", map[string]any{
+				"name": name, "level": "error", "err": handoffFailure(why, err).Error(),
+				"msg": "handover hand-off failed; it stays pending for the next launch",
+			})
 			return
 		}
 	} else if err != nil {
@@ -616,6 +623,9 @@ func (f *Claudia) handOffSeed(name string, pending handover.Pending) {
 			"name", name, "err", err)
 	}
 	slog.Info("handover delivered", "detail", pending.Describe(), "evidence", why)
+	f.logEvent("fleet_migrate", "handover_delivered", map[string]any{
+		"name": name, "detail": pending.Describe(), "evidence": why,
+	})
 }
 
 // handoffFailure renders why the seed is being called undelivered. It carries
@@ -850,6 +860,10 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		// as anyone kept asking on 2026-09-22. Force is the caller saying the
 		// move outranks the turn, so end the turn and ask once more.
 		slog.Warn("forced migrate found a turn in flight; interrupting it", "name", name, "to", target)
+		f.logEvent("fleet_migrate", "interrupt_before_forced", map[string]any{
+			"name": name, "to": string(target), "level": "warn",
+			"msg": "forced migrate found a turn in flight; interrupting it",
+		})
 		if live := f.reg.Get(name); live != nil && seatstate.ReadRegistry(f.reg, name).Alive != seatstate.No {
 			if ierr := live.Interrupt(); ierr != nil {
 				slog.Warn("interrupt before forced migrate failed", "name", name, "err", ierr)
@@ -871,6 +885,10 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		// here. Record it now, so a retry converges.
 		slog.Warn("live agent was already on the target provider; recording the migration the registry missed",
 			"name", name, "to", target)
+		f.logEvent("fleet_migrate", "registry_missed", map[string]any{
+			"name": name, "to": string(target), "level": "warn",
+			"msg": "live agent was already on the target provider; recording the migration the registry missed",
+		})
 	}
 	def := f.reg.Def(name)
 	if def == nil {
@@ -914,6 +932,10 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 		nextSession = uuid.NewString()
 		slog.Warn("migrate: live session id unreadable; recording the row as a fresh mint, not Materialized",
 			"name", name, "to", target)
+		f.logEvent("fleet_migrate", "session_unreadable", map[string]any{
+			"name": name, "to": string(target), "level": "warn",
+			"msg": "live session id unreadable; recording the row as a fresh mint, not Materialized",
+		})
 	}
 	// The id the live agent still reports is the new version only when it
 	// is not the one this change left. A provider that does not report a
@@ -953,6 +975,10 @@ func (f *Claudia) remapViaClaudia(name string, target claudia.Provider, model st
 	if f.rotations != nil {
 		_ = f.rotations.Put(handover.Rotation{Agent: name, Kind: "migrate"})
 	}
+	f.logEvent("fleet_migrate", "remapped", map[string]any{
+		"name": name, "to": string(next.Provider), "from_provider": fromProvider,
+		"from_model": fromModel, "to_model": next.Model,
+	})
 	slog.Info("agent session remapped via claudia Migrate",
 		"name", name, "from", pending.From, "to", pending.To,
 		"old_session", pending.OldSessionID, "new_session", nextSession)

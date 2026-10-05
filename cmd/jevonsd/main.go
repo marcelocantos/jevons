@@ -820,6 +820,7 @@ func main() {
 	fleetAdapter.SetSeatPlan(seatPlans)
 	fleetAdapter.SetSeats(seats)
 	fleetAdapter.SetRemovalAccount(removals)
+	fleetAdapter.SetEventLogger(srv.LogEvent) // 🎯 migrate.go decisions -> durable eventlog
 	fleetAdapter.SetDefaultProvider(defaultProvider)
 	// ð¯T285: provider migration needs the session roots to find a
 	// predecessor's transcript, and a durable store to hold that pointer
