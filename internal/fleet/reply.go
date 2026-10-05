@@ -136,7 +136,12 @@ func (r *replyAssembler) Observe(ev claudia.Event) {
 	}
 
 	if ev.Text != "" {
-		if r.sep != "" && r.text.Len() > 0 {
+		// An append chunk continues the same message whatever the provider
+		// (claudia turn_text.go reads it the same way). Sidecar seats stream
+		// token fragments under their seat ids (xai-oauth, anthropic, …), so
+		// joining them on the provider name alone split "BLUEOTTER42" into
+		// "BLUE\nOT\nTER\n42" (journey J12, 2026-10-05).
+		if r.sep != "" && r.text.Len() > 0 && ev.PreviewUpdate != claudia.PreviewUpdateAppend {
 			r.text.WriteString(r.sep)
 		}
 		r.text.WriteString(ev.Text)

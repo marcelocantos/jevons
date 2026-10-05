@@ -288,3 +288,26 @@ func TestProviderOfMissingRowIsSafe(t *testing.T) {
 		t.Errorf("separator for unknown provider = %q, want newline", got)
 	}
 }
+
+// Sidecar seats stream token fragments marked as appends under their seat
+// ids, which are not "grok" or "cursor". Joined on the provider name alone,
+// "BLUEOTTER42" came back "BLUE\nOT\nTER\n42" and journey J12 read the
+// migrated seat as having lost its context (2026-10-05).
+func TestReplyAssemblerJoinsAppendChunksWhateverTheProvider(t *testing.T) {
+	r := testAssembler(chunkSeparator("xai-oauth"))
+	defer r.Close()
+	r.Started()
+
+	for _, piece := range []string{"BLUE", "OT", "TER"} {
+		ev := delta(piece)
+		ev.PreviewUpdate = claudia.PreviewUpdateAppend
+		r.Observe(ev)
+	}
+	last := final("42")
+	last.PreviewUpdate = claudia.PreviewUpdateAppend
+	r.Observe(last)
+
+	if got := mustWait(t, r); got != "BLUEOTTER42" {
+		t.Errorf("reply = %q, want %q", got, "BLUEOTTER42")
+	}
+}
