@@ -311,3 +311,20 @@ func TestReplyAssemblerJoinsAppendChunksWhateverTheProvider(t *testing.T) {
 		t.Errorf("reply = %q, want %q", got, "BLUEOTTER42")
 	}
 }
+
+// Over the broker the append marker does not arrive, so a sidecar seat's
+// fragments are joined by its seat id alone.
+func TestReplyAssemblerJoinsSidecarFragmentsWithoutTheMarker(t *testing.T) {
+	for _, seat := range []claudia.Provider{"xai-oauth", "anthropic", "openai-codex"} {
+		r := testAssembler(chunkSeparator(seat))
+		r.Started()
+		r.Observe(delta("BLUE"))
+		r.Observe(delta("OT"))
+		r.Observe(delta("TER"))
+		r.Observe(final("42"))
+		if got := mustWait(t, r); got != "BLUEOTTER42" {
+			t.Errorf("%s reply = %q, want %q", seat, got, "BLUEOTTER42")
+		}
+		r.Close()
+	}
+}

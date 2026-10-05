@@ -64,12 +64,17 @@ const (
 )
 
 // chunkSeparator is what goes between consecutive assistant events of one
-// turn for a provider. Grok and Cursor ACP publish token deltas that must
-// be concatenated verbatim — the same way the owner chat path accumulates
-// them. Every other provider publishes one event per content block or
+// turn for a provider. Grok and Cursor ACP, and every sidecar seat, publish
+// token deltas that must be concatenated verbatim — the same way the owner
+// chat path accumulates them. Every other provider publishes one event per content block or
 // whole message, where a newline preserves the author's paragraphing.
 func chunkSeparator(p claudia.Provider) string {
-	if p == claudia.ProviderGrok || p == claudia.ProviderCursor {
+	switch p {
+	// Sidecar seats stream token fragments under their seat ids. Since
+	// T766.2 a seat's observed provider is that id, not the plan name, and
+	// the broker's event wire does not carry claudia's append marker, so
+	// they must be named here (journey J12, 2026-10-05).
+	case claudia.ProviderGrok, claudia.ProviderCursor, "xai-oauth", "anthropic", "openai-codex":
 		return ""
 	}
 	return "\n"
