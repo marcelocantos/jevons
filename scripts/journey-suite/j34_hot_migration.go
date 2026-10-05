@@ -165,6 +165,14 @@ func (s *suite) hotProviderMigrationWithBroker() error {
 		cli.PlanProvider(got.Provider) != dest {
 		return fmt.Errorf("hot seat moved again after restart: destination=%+v reopened=%+v", destination, got)
 	}
+	// The broker resumes the seat with a restart nudge, so a turn is open
+	// right after the restart. A probe sent now is steered into that turn
+	// with the standing brief, and the answer is to the nudge. This journey
+	// guards context retention, not steering (J35 covers that): ask once the
+	// restart turn is over.
+	if err := s.waitAgentPhase(id, func(p string) bool { return p == "idle" }, 2*time.Minute); err != nil {
+		return fmt.Errorf("hot destination never settled after restart: %w", err)
+	}
 	payload, err = s.agentTranscriptHTTP(id)
 	if err != nil {
 		return err
