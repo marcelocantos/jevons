@@ -40,6 +40,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/portown"
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
@@ -316,6 +317,7 @@ func main() {
 	} else {
 		elog = j
 		srv.SetEventLog(elog)
+		planusage.SetEventLog(elog) // 🎯 cross-service resolve audit trail
 		slog.Info("event log ready", "path", elog.Path())
 	}
 

@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 )
 
 // destAuthor is the placement stamp T691 records on PlanAction. The
@@ -20,6 +22,36 @@ import (
 // the string is local; development still consumes sibling HEAD via
 // ../go.work (🎯T448).
 const destAuthor = "claudia"
+
+// eventJournal is the optional durable-log destination for every resolve
+// attempt this package makes against Claudia (🎯 cross-service audit trail).
+// Set once at startup via SetEventLog; nil keeps the package usable in
+// tests and logs nothing (eventlog.LogEvent is nil-journal safe).
+//
+// This is deliberately logged on the Jevons side even though Claudia may
+// log its own resolve internals: when a resolve fails opaquely (e.g.
+// "no catalog model matches predicates") and Claudia's own trace is thin
+// or missing, Jevons still has a record of exactly what it asked for and
+// what Claudia told it back, without needing to go spelunking in a
+// second service's logs.
+var (
+	eventJournalMu sync.RWMutex
+	eventJournal   *eventlog.Journal
+)
+
+// SetEventLog attaches the durable event journal used by ResolveMint and
+// ResolveDest to record resolve attempts. Call once at server startup.
+func SetEventLog(j *eventlog.Journal) {
+	eventJournalMu.Lock()
+	defer eventJournalMu.Unlock()
+	eventJournal = j
+}
+
+func currentEventJournal() *eventlog.Journal {
+	eventJournalMu.RLock()
+	defer eventJournalMu.RUnlock()
+	return eventJournal
+}
 
 // ResolveMint is the omit-provider dest pick (🎯T691 / 🎯T652 / 🎯T693).
 // Claudia owns ranking; this adapter supplies Jevons' session-cap and
@@ -81,6 +113,21 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 			exclusions = append(exclusions, row.Provider)
 		}
 	}
+	exclusionStrs := make([]string, 0, len(exclusions))
+	for _, p := range exclusions {
+		exclusionStrs = append(exclusionStrs, string(p))
+	}
+	j := currentEventJournal()
+	eventlog.LogEvent(j, "info", "claudia_resolve", "request", "resolve: requesting plan destination", map[string]any{
+		"prefer_provider":    string(prefer),
+		"exclude_provider":   string(exclude),
+		"steerable_only":     steerableOnly,
+		"catalog_exclusions": exclusionStrs,
+		"capped":             capped,
+		"unsteerable":        unsteer,
+		"owner_kept_off":     keptOff,
+		"candidate_count":    len(cands),
+	})
 	pick, err := claudia.Resolve(ctx, claudia.ModelPredicates{
 		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
 		PreferPlan: true, RequireUsage: true,
@@ -98,8 +145,25 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		if len(keptOff) > 0 {
 			parts = append(parts, "owner override keeps seats off: "+strings.Join(keptOff, ", "))
 		}
-		return claudia.ModelPick{}, fmt.Errorf("%s", strings.Join(parts, "; "))
+		combined := strings.Join(parts, "; ")
+		// 🎯 Logged on the Jevons side regardless of what Claudia itself
+		// logs (or fails to log) for this same resolve call — this is the
+		// record that would have answered "why did ge-po's resolve fail"
+		// without needing to inspect Claudia's internals at all.
+		eventlog.LogEvent(j, "error", "claudia_resolve", "failed", "resolve: "+combined, map[string]any{
+			"prefer_provider":  string(prefer),
+			"exclude_provider": string(exclude),
+			"error":            combined,
+			"claudia_error":    err.Error(),
+		})
+		return claudia.ModelPick{}, fmt.Errorf("%s", combined)
 	}
+	eventlog.LogEvent(j, "info", "claudia_resolve", "picked", "resolve: picked "+string(pick.Provider), map[string]any{
+		"prefer_provider":  string(prefer),
+		"exclude_provider": string(exclude),
+		"picked_provider":  string(pick.Provider),
+		"picked_model":     pick.Model,
+	})
 	return pick, nil
 }
 

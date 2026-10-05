@@ -612,7 +612,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	// 🎯T385: every route below is registered through the guarding router, so
 	// a state-changing handler is cross-site guarded by where it is mounted
 	// rather than by its author remembering to call rejectCrossSite.
-	mux := guardedRouter{m}
+	mux := newGuardedRouter(m, s.eventJournal())
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)

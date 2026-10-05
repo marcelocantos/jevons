@@ -6,6 +6,9 @@ package server
 import (
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/marcelocantos/jevons/internal/eventlog"
 )
 
 // Structural cross-site enforcement (🎯T385).
@@ -46,6 +49,42 @@ func safeMethod(m string) bool {
 // than becoming implicit again.
 var crossSiteExemptPaths = map[string]string{}
 
+// apiAccessLog is the hook guardedRouter uses to record every API call to
+// the jevons eventlog (🎯 API-layer audit trail). It is set once at server
+// construction via guardedRouter{mux, journal}; nil means no-op (tests that
+// build a bare guardedRouter{mux: m} keep working without a journal).
+type apiAccessLog func(method, path string, status int, dur time.Duration, remote string)
+
+// statusRecorder captures the status code a handler writes, defaulting to
+// 200 the way net/http does when WriteHeader is never called explicitly.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// logAPIAccess wraps a handler so every request, regardless of outcome, is
+// recorded — independent of whatever the downstream service (e.g. Claudia)
+// logs on its own side. This is deliberate duplication (🎯 cross-service
+// reconciliation): when Jevons and Claudia disagree about what happened,
+// both sides need their own record of the API traffic between them, not
+// just whichever side remembered to log first.
+func logAPIAccess(log apiAccessLog, next http.Handler) http.Handler {
+	if log == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		log(r.Method, r.URL.Path, rec.status, time.Since(start), r.RemoteAddr)
+	})
+}
+
 // guardCrossSite applies the cross-site check to every state-changing request
 // before next sees the body.
 func guardCrossSite(next http.Handler) http.Handler {
@@ -77,12 +116,40 @@ type router interface {
 }
 
 // guardedRouter registers every handler behind guardCrossSite.
-type guardedRouter struct{ mux *http.ServeMux }
+type guardedRouter struct {
+	mux *http.ServeMux
+	// journal is the eventlog destination for API-layer access records.
+	// Nil keeps guardedRouter usable in tests that only care about the
+	// cross-site guard.
+	journal *eventlog.Journal
+}
+
+// newGuardedRouter wires the API access logger for every route the
+// returned router mounts.
+func newGuardedRouter(mux *http.ServeMux, journal *eventlog.Journal) guardedRouter {
+	return guardedRouter{mux: mux, journal: journal}
+}
+
+func (g guardedRouter) accessLog() apiAccessLog {
+	if g.journal == nil {
+		return nil
+	}
+	journal := g.journal
+	return func(method, path string, status int, dur time.Duration, remote string) {
+		eventlog.LogEvent(journal, "info", "api_access", "handled", method+" "+path, map[string]any{
+			"method":      method,
+			"path":        path,
+			"status":      status,
+			"duration_ms": dur.Milliseconds(),
+			"remote":      remote,
+		})
+	}
+}
 
 func (g guardedRouter) Handle(pattern string, h http.Handler) {
-	g.mux.Handle(pattern, guardCrossSite(h))
+	g.mux.Handle(pattern, logAPIAccess(g.accessLog(), guardCrossSite(h)))
 }
 
 func (g guardedRouter) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
-	g.mux.Handle(pattern, guardCrossSite(http.HandlerFunc(h)))
+	g.mux.Handle(pattern, logAPIAccess(g.accessLog(), guardCrossSite(http.HandlerFunc(h))))
 }
