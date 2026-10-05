@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 // Passed to page.evaluate: use a real browser socket, without intercepting
 // React's connection or manufacturing received transcript events. A separate
 // socket submits only; the packaged UI's existing subscription observes echo.
-async function submitAside({ name, text }) {
+async function submitAside({ name, text, mode = 'submit' }) {
   const url = new URL('/ws/mux', location.href);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return new Promise((resolve, reject) => {
@@ -21,7 +21,7 @@ async function submitAside({ name, text }) {
       if (error) reject(error); else resolve(status);
     };
     const timer = setTimeout(() => settle(new Error('aside mux submit status timed out')), 90000);
-    socket.onopen = () => socket.send(JSON.stringify({ v: 1, ch, t: 'send', body: { text, mode: 'submit' } }));
+    socket.onopen = () => socket.send(JSON.stringify({ v: 1, ch, t: 'send', body: { text, mode } }));
     socket.onerror = () => settle(new Error('aside mux submit socket error'));
     socket.onclose = () => settle(new Error('aside mux submit closed before status'));
     socket.onmessage = ({ data }) => {

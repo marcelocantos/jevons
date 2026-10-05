@@ -158,8 +158,12 @@ async function main() {
         await page.locator(input).fill(owner);
         await page.locator(button).click();
       } else if (!control) {
-        const status = await page.evaluate(submitAside, { name, text: owner });
-        assert.equal(status.mode, 'submit', 'aside follow-up must use ordinary submit');
+        // 🎯T899: an ordinary owner submit to a busy agent escalates — it
+        // steers straight into the turn on a seat that can steer, and then
+        // never enters the durable send queue this phase guards. Queue it
+        // explicitly; J35 covers the escalation.
+        const status = await page.evaluate(submitAside, { name, text: owner, mode: 'queue' });
+        assert.equal(status.mode, 'queue', 'aside follow-up must be held in the queue');
         assert.equal(status.status, 'queued', 'held aside must queue in the daemon');
       }
       const echo = await until(() => main
