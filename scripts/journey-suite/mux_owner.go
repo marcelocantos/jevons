@@ -262,11 +262,26 @@ func ownerMuxPhase(body json.RawMessage) (string, bool) {
 // cancelled: interrupting a finished turn proves nothing about cancel
 // ordering. The residual race — the turn ending between this observation
 // and the interrupt arriving — is real and declared, not hidden.
-func waitOwnerMuxTurnWorking(ctx context.Context, frames <-chan []byte, prompt string, d time.Duration) (int, error) {
+func waitOwnerMuxTurnWorking(ctx context.Context, frames <-chan []byte, prompt string, d time.Duration, ready ...string) (int, error) {
 	deadline := time.After(d)
 	ownerIndex, working, started := 0, false, false
+	// A held tool's ready marker is direct proof this request is running.
+	// A sidecar seat publishes nothing while one of its own tools (Bash)
+	// runs, so a model that goes straight to the tool streamed no row and
+	// the cancel journey timed out with the request in flight (2026-10-06).
+	poll := time.NewTicker(250 * time.Millisecond)
+	defer poll.Stop()
 	for {
 		select {
+		case <-poll.C:
+			if ownerIndex == 0 {
+				continue
+			}
+			for _, marker := range ready {
+				if _, err := os.Stat(marker); err == nil {
+					return ownerIndex, nil
+				}
+			}
 		case data, ok := <-frames:
 			if !ok {
 				return 0, fmt.Errorf("mux closed before the request to cancel began working")

@@ -531,7 +531,7 @@ func (s *suite) jCancelAndSend() error {
 	if err := writeOwnerMux(ctx, conn, "send", map[string]string{"text": longPrompt}); err != nil {
 		return err
 	}
-	ownerIndex, err := waitOwnerMuxTurnWorking(ctx, frames, longPrompt, 45*time.Second)
+	ownerIndex, err := waitOwnerMuxTurnWorking(ctx, frames, longPrompt, 45*time.Second, ready)
 	if err != nil {
 		return fmt.Errorf("long turn: %w", err)
 	}
