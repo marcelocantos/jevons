@@ -105,19 +105,24 @@ func TestT791ExplicitCursorPinDroppedUnlessOwnerAsked(t *testing.T) {
 	}
 }
 
-// 🎯T841: with the table empty, codex and cursor are both destinations.
-func TestT791CodexAndCursorAreDestinations(t *testing.T) {
-	for _, p := range []string{"codex", "cursor"} {
-		if why := planusage.UnsteerableReason(p); why != "" {
-			t.Fatalf("%s still unsteerable: %q", p, why)
-		}
+// 🎯T841: codex is a destination again (the claudia bug that rejected its
+// seats' MCP calls is fixed, 5fa7f35/v0.42.0). 🎯T1013.3: cursor, by
+// contrast, is genuinely still excluded — claudia.Steerable reports
+// claudia T118's open tool-budget defect — so this exercises the real
+// table, not a synthetic one via SetUnsteerableForTest.
+func TestT791CodexIsDestinationCursorStaysExcluded(t *testing.T) {
+	if why := planusage.UnsteerableReason("codex"); why != "" {
+		t.Fatalf("codex still unsteerable: %q", why)
+	}
+	if why := planusage.UnsteerableReason("cursor"); why == "" {
+		t.Fatal("cursor must report unsteerable: claudia T118 is open")
 	}
 
-	// Claude at cap, only cursor with headroom: lands on cursor.
+	// Claude at cap, only cursor with headroom: refused, not landed on cursor.
 	s := t791Server(t, 12)
 	pick := s.mintProviderPick("", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-cursor", false)
-	if pick.Provider != "cursor" {
-		t.Fatalf("omitted-provider mint did not land on cursor: %+v", pick)
+	if strings.TrimSpace(pick.Provider) != "" {
+		t.Fatalf("omitted-provider mint landed on unsteerable cursor: %+v", pick)
 	}
 
 	// Claude at cap, only codex with headroom: lands on codex, not refused.
@@ -136,13 +141,20 @@ func TestT791CodexAndCursorAreDestinations(t *testing.T) {
 		t.Fatalf("exclusion cited: %q", pick.Detail)
 	}
 
-	// Explicit pins are honoured without owner_asked.
-	for _, p := range []string{"codex", "cursor"} {
-		s = t791Server(t, 0, "codex")
-		pick = s.mintProviderPick(p, "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-pin-"+p, false)
-		if pick.Provider != p {
-			t.Fatalf("explicit %s dropped: %+v", p, pick)
-		}
+	// An explicit codex pin is honoured without owner_asked.
+	s = t791Server(t, 0, "codex")
+	pick = s.mintProviderPick("codex", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-pin-codex", false)
+	if pick.Provider != "codex" {
+		t.Fatalf("explicit codex dropped: %+v", pick)
+	}
+
+	// An explicit cursor pin is dropped unless owner_asked (same shape as
+	// TestT791ExplicitCursorPinDroppedUnlessOwnerAsked, against the real
+	// table rather than a synthetic one).
+	s = t791Server(t, 0, "codex")
+	pick = s.mintProviderPick("cursor", "", false, "code_implement", string(claudia.PurposeWork), "jv-t841-pin-cursor", false)
+	if pick.Provider == "cursor" {
+		t.Fatalf("explicit cursor pin was honoured without owner_asked: %+v", pick)
 	}
 }
 
