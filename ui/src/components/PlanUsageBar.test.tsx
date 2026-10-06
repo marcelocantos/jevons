@@ -286,4 +286,103 @@ describe('PlanUsageBar mux wiring', () => {
       resetClock();
     }
   });
+
+  // 🎯T967.1: a dollar figure appears in bold red only while the backend
+  // is actually spending extra usage, and is absent otherwise.
+  it('shows the spend figure in bold red only while spending', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'claude',
+            status: 'available',
+            windows: [{ name: 'session', remaining_percent: 0, used_percent: 100, band: 'hot' }],
+            spend: { used_aud: 72.84, limit_aud: 100 },
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(container.querySelector('.plan-spend')).toBeTruthy());
+    const spend = container.querySelector('.plan-spend') as HTMLElement;
+    expect(spend.textContent).toBe('A$72.84 / A$100.00');
+  });
+
+  it('shows no dollar figure when the backend is not spending', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'claude',
+            status: 'available',
+            windows: [{ name: 'session', remaining_percent: 44, used_percent: 56, band: 'ok' }],
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(container.querySelector('[data-provider="claude"]')).toBeTruthy());
+    expect(container.querySelector('.plan-spend')).toBeFalsy();
+  });
+
+  it('spend figure survives an override that paints the bar ok (override-proof)', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'claude',
+            status: 'available',
+            windows: [{ name: 'session', remaining_percent: 0, used_percent: 100, band: 'ok' }],
+            spend: { used_aud: 72.84, limit_aud: 100 },
+            override: { band: 'ok', reason: 'owner override' },
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(container.querySelector('.plan-spend')).toBeTruthy());
+    const win = container.querySelector('.plan-win') as HTMLElement;
+    expect(win.className).not.toContain('plan-hot');
+    const spend = container.querySelector('.plan-spend') as HTMLElement;
+    expect(spend.textContent).toBe('A$72.84 / A$100.00');
+  });
 });

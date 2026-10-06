@@ -35,7 +35,19 @@ export type PlanBackend = {
   windows?: PlanWindow[];
   /** 🎯T948: the owner's band override; reason is free text. */
   override?: PlanOverride;
+  /**
+   * 🎯T967.1: the already-gated extra-usage spend figure, in AUD. Present
+   * only while the provider is actually spending past its subscription
+   * allowance; absent otherwise. Never recompute "is spending" from the
+   * windows here — the daemon already decided and this field's mere
+   * presence is the answer.
+   */
+  spend?: PlanSpend;
 };
+
+/** 🎯T967.1: AUD money the owner is being charged right now, past the
+ * subscription allowance. Always rendered bold red, override-proof. */
+export type PlanSpend = { used_aud: number; limit_aud: number };
 
 export type PlanOverride = { band: string; reason: string; set_by?: string; set_at?: string };
 
@@ -55,6 +67,8 @@ export type TickerGroup = {
   override?: PlanOverride;
   /** 🎯T681: the last reading that did arrive, for a provider now unreadable. */
   last?: LastReading;
+  /** 🎯T967.1: see PlanBackend.spend. */
+  spend?: PlanSpend;
 };
 
 /** A reading that has since gone unreadable, kept with the moment it held. */
@@ -167,6 +181,7 @@ export function tickerGroups(snap: PlanSnapshot | undefined): TickerGroup[] {
       reason: b.reason,
       windows: orderWindows(windows),
       override: b.override,
+      spend: b.spend,
     });
   }
   out.sort((a, b) => (PROVIDER_RANK[a.provider] ?? 50) - (PROVIDER_RANK[b.provider] ?? 50));
