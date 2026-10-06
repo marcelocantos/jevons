@@ -317,5 +317,12 @@ func (s *Server) submitStartBrief(name, text string) error {
 		return fmt.Errorf("start prompt not delivered to %q: %w", name, confErr)
 	}
 	s.markAgentTurnBegan(name)
+	// 🎯T956: a confirmed brief closes this parent's open mint round — the
+	// round was not a total loss, so there is nothing to report about it.
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			s.noteMintSucceeded(d.Parent)
+		}
+	}
 	return nil
 }
