@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.50.0
+	github.com/marcelocantos/claudia v0.51.0
 	github.com/marcelocantos/doit v0.9.0
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.47.0
@@ -58,3 +58,11 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+// 🎯T1015: the org go.work (~/work/github.com/marcelocantos/go.work) resolves
+// claudia to local master regardless of this require line, which is how a
+// pre-release pin kept working. Pin the real release (v0.51.0, carries
+// 🎯T1013.1) and fall back to this explicit local path so GOWORK=off builds
+// still see it without depending on that workspace file. Replace this
+// path with a real v0.51.0 fetch once the tag is pushed to origin.
+replace github.com/marcelocantos/claudia => /Users/marcelo/work/github.com/marcelocantos/claudia
