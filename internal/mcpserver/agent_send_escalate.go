@@ -83,12 +83,6 @@ func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSende
 	}
 	es, ok := proc.(escalatingSender)
 	if !ok {
-		if ag, isAgent := proc.(*claudia.Agent); isAgent {
-			es = escalate.Handle{Agent: ag}
-			ok = true
-		}
-	}
-	if !ok {
 		return agentSendResult{}, false, nil
 	}
 	unlock := s.lockAgentSend(name)

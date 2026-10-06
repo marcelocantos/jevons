@@ -4,48 +4,30 @@
 package escalate
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/marcelocantos/claudia"
 )
 
 // Step is one rung of an escalation ladder. Mode is what to try; After
-// is how long a later rung waits. Claudia's pinned module (since
-// v0.51.0) now exports the same shape as claudia.EscalationStep plus
-// *claudia.Agent.SendEscalating, which actually climbs the ladder
-// against a live turn (absorb detection, cancellation on supersede).
-// Jevons's own Step/Ladder/Send/Handle predate that export and are
-// kept only because escalate.Fit/CapsOf/NotStarted layer host-specific
-// policy on this shape across many call sites; migrating callers onto
-// claudia.Escalation/Agent.SendEscalating directly is tracked
-// separately (🎯T1008.1) rather than folded into this change.
-type Step struct {
-	Mode  claudia.DeliveryMode
-	After time.Duration
-}
+// is how long a later rung waits. Step and Ladder are now aliases for
+// claudia.EscalationStep and claudia.Escalation (🎯T1008.2): the shapes
+// were always identical, and *claudia.Agent.SendEscalating actually
+// climbs the ladder against a live turn (absorb detection, cancellation
+// on supersede), where jevons's own Send below only ever fired the
+// first rung. escalate.Fit/CapsOf/NotStarted remain jevons-only policy
+// on top of this shape, with no claudia equivalent.
+type Step = claudia.EscalationStep
 
 // Ladder is an ordered list of rungs. A nil ladder means the sender
 // waits for the turn boundary.
-type Ladder []Step
-
-// Send runs the first rung on seat. Later rungs (interrupt after a
-// deadline) are host policy the caller reports; this does not climb
-// the ladder itself. claudia.Agent.SendEscalating now does climb a
-// claudia.Escalation ladder against a live turn (🎯T1008.1 tracks
-// moving callers onto it).
-func Send(seat interface {
-	SendMode(string, claudia.DeliveryMode) (claudia.DeliveryOutcome, error)
-}, text string, ladder Ladder) (claudia.DeliveryOutcome, error) {
-	if seat == nil || len(ladder) == 0 {
-		return claudia.DeliveryOutcome{}, fmt.Errorf("empty escalation ladder")
-	}
-	return seat.SendMode(text, ladder[0].Mode)
-}
+type Ladder = claudia.Escalation
 
 // Handle adapts a published *claudia.Agent to the ladder interface.
-// claudia.Agent now has its own SendEscalating over claudia.Escalation
-// (🎯T1008.1 tracks moving this handle's callers onto it directly).
+// Since Step/Ladder are now aliases of claudia.EscalationStep/Escalation,
+// *claudia.Agent already satisfies escalatingSender/overseerEscalator
+// directly via its own SendEscalating; Handle is kept only for callers
+// that still hold a seat typed as something other than *claudia.Agent
+// (none remain in production code as of 🎯T1008.2, but tests exercise
+// the shape via their own fakes).
 type Handle struct {
 	Agent *claudia.Agent
 }
@@ -58,5 +40,8 @@ func (h Handle) TurnCaps() claudia.TurnCaps {
 }
 
 func (h Handle) SendEscalating(text string, ladder Ladder) (claudia.DeliveryOutcome, error) {
-	return Send(h.Agent, text, ladder)
+	if h.Agent == nil {
+		return claudia.DeliveryOutcome{}, claudia.ErrTurnIdle
+	}
+	return h.Agent.SendEscalating(text, ladder)
 }
