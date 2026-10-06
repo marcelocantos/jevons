@@ -93,39 +93,6 @@ type Claudia struct {
 	// It supplies inert history; Claudia still owns transfer and handover.
 	retainedHistory func(name string) (string, error)
 
-	// seedDeliver overrides how a handover seed reaches its successor
-	// (🎯T416). Nil is the product path, Deliver. Test seam: the handover
-	// dispatcher's fail-closed arm is one of clause 9's two exercised
-	// instruments, and asserting on it must not need a live tmux agent.
-	seedDeliver func(name, seed string) (string, error)
-
-	// seedTranscript resolves the successor's transcript, which is what
-	// decides whether a seed arrived (🎯T416). Nil reads the live claudia
-	// process. Test seam for the same reason as seedDeliver: the predicate
-	// this arm now uses is a file on the RECEIVER's disk, and a fixture must
-	// be able to write that file without launching a provider.
-	seedTranscript func(name string) string
-
-	// selfBrief / compactBrief are T285.1 gather hooks. Nil is the
-	// product path (try the live outgoing session; throwaway compact
-	// on the new provider). Tests inject dead/live/thin fixtures.
-	selfBrief    func(p handover.Pending) (string, error)
-	compactBrief func(p handover.Pending) (sessionID, text string, err error)
-	// migrationTransfer replaces the one-shot Claudia summary in fixtures.
-	// Nil is the real on-demand transfer task.
-	migrationTransfer func(MigrationTransferArgs) (MigrationTransferResult, error)
-
-	// liveMigrate is the 🎯T622 seam for claudia Agent.Migrate. Nil is the
-	// product path (reg.Get(name).Migrate). Tests inject a recorder so the
-	// primitive is asserted without a live provider process.
-	liveMigrate func(args *MigrateRequest) error
-	// stoppedMigrate replaces Registry.MigrateStopped in hermetic fixtures.
-	// Nil runs Claudia's persisted transfer-and-launch operation.
-	stoppedMigrate func(name string, args claudia.MigrateArgs, history string) (StoppedMigration, error)
-	// liveSession is the 🎯T790 seam for reading the live agent's session id
-	// and model after a remap. Nil reads the registry's live agent.
-	liveSession func(name string) (sessionID, model string)
-
 	// onModelSwitch records a model change that actually landed. Nil drops
 	// the note; the switch still happens. Same-model, same-provider calls
 	// are not delivered — a no-op must not look like a switch in the journal.

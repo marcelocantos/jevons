@@ -4,13 +4,12 @@
 package fleet
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cli"
 
@@ -18,75 +17,51 @@ import (
 	"github.com/marcelocantos/jevons/internal/handover"
 )
 
-// migrateFixture builds a registry holding one Grok agent whose session
-// transcript exists on disk, plus the roots and handover store the
-// migration path needs.
-func migrateFixture(t *testing.T, sessionID string, withTranscript bool) (*Claudia, *handover.Store, string) {
+// Since 🎯T1013.5, PrepareMigrationPinned is a thin wrapper over
+// [claudia.Registry.Migrate]: the live-vs-stopped dispatch, the
+// already-on-provider refusal, the turn-in-flight refusal and
+// force-interrupt-then-retry, and the pending-destination retry all live
+// in Claudia and are covered there (registry_migrate_seat_test.go). These
+// tests cover what the wrapper itself still owns: the 🎯T763
+// capability-drop refusal (checked before Claudia is asked to do
+// anything), best-effort retained-transcript plumbing, and translating
+// Claudia's result (or refusal) into the [handover.Pending] shape the
+// mcpserver/server callers already understand.
+
+// migrateStoppedFixture registers a non-live Grok seat and wires a
+// registry whose Launch goes through [claudia.StartStub] instead of a
+// real provider process.
+func migrateStoppedFixture(t *testing.T, sessionID string) (*Claudia, *claudia.Registry) {
 	t.Helper()
+	t.Setenv("CLAUDIA_NO_BROKER", "1")
 	dir := t.TempDir()
-	grokSessions := filepath.Join(dir, "grok-sessions")
-
-	transcript := ""
-	if withTranscript {
-		bucket := filepath.Join(grokSessions, discovery.EncodeCWDBucket("/work/repo"), sessionID)
-		if err := os.MkdirAll(bucket, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		transcript = filepath.Join(bucket, "updates.jsonl")
-		if err := os.WriteFile(transcript, []byte(`{"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"}}}}`+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Adopt: func(claudia.Config) (*claudia.Agent, error) { return nil, claudia.ErrNoSessionWindow },
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			if cfg.AdoptOnly {
+				return nil, claudia.ErrNoSessionWindow
+			}
+			return claudia.StartStub(ctx, cfg, nil)
+		},
+	})
+	reg.SetMigrationSummarizer(func(_ context.Context, a claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		return claudia.MigrationTransferResult{Brief: "In-flight work: " + a.Goal + "\nRecent context: " + a.Transcript}, nil
+	})
 	if err := reg.Register(claudia.AgentDef{
 		Name: "jevons-po", WorkDir: "/work/repo", SessionID: sessionID,
 		Provider: claudia.ProviderGrok, Materialized: true, Purpose: claudia.PurposeWork,
+		Goal: "Achieve 🎯T1013.5",
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	store := handover.NewStore(filepath.Join(dir, "handover"))
 	f := NewClaudia(reg)
-	f.SetSessionRoots(discovery.Roots{GrokSessions: grokSessions})
+	store := handover.NewStore(filepath.Join(dir, "handover"))
 	f.SetHandoverStore(store)
-	f.migrationTransfer = func(args MigrationTransferArgs) (MigrationTransferResult, error) {
-		return MigrationTransferResult{Brief: "In-flight work: " + args.Goal + "\nRecent context: " + args.Transcript}, nil
-	}
-	f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (StoppedMigration, error) {
-		source := reg.Def(name)
-		if source == nil {
-			return StoppedMigration{}, fmt.Errorf("missing fixture seat %s", name)
-		}
-		if history == "" && !args.Force {
-			return StoppedMigration{}, fmt.Errorf("no predecessor context")
-		}
-		if history == "" {
-			history = "system: forced cold start; no predecessor turns were retained"
-		}
-		transfer, err := f.migrationTransfer(MigrationTransferArgs{
-			Destination: args.Provider, Goal: source.Goal, Transcript: history,
-		})
-		if err != nil {
-			return StoppedMigration{}, err
-		}
-		if strings.TrimSpace(transfer.Brief) == "" {
-			return StoppedMigration{}, fmt.Errorf("empty transfer brief")
-		}
-		next := *source
-		next.Provider = cli.SubscriptionSeatProvider(args.Provider)
-		next.Model = args.Model
-		next.SessionID = uuid.NewString()
-		next.Materialized = false
-		if err := reg.Register(next); err != nil {
-			return StoppedMigration{}, err
-		}
-		return StoppedMigration{Source: *source, Destination: next, Transfer: transfer}, nil
-	}
-	return f, store, transcript
+	return f, reg
 }
 
 func TestSeatTranscriptReadsSpoolNotVendor(t *testing.T) {
@@ -117,203 +92,11 @@ func TestSeatTranscriptReadsSpoolNotVendor(t *testing.T) {
 	}
 }
 
-func TestT543ThrowawayCompactIsNotAWorkSeat(t *testing.T) {
-	got, err := throwawayCompactDef(claudia.AgentDef{
-		Name: "worker", Purpose: claudia.PurposeWork, TargetID: "T543",
-		AutoStart: true, Materialized: true, ConnectURL: "http://old", ConnectPID: 42,
-	}, "jv-compact-12345678", "compact-session", claudia.ProviderCodex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Purpose == claudia.PurposeWork || got.Purpose != claudia.PurposeAside {
-		t.Fatalf("purpose=%q; want aside, never work", got.Purpose)
-	}
-	if got.TargetID != "" {
-		t.Fatalf("target_id=%q; want empty", got.TargetID)
-	}
-	if got.AutoStart || got.Materialized || got.ConnectURL != "" || got.ConnectPID != 0 {
-		t.Fatalf("throwaway retained work lifecycle state: %+v", got)
-	}
-}
-
-func TestT543CompleteThinBriefMintsCompactOnce(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e54"
-	f, store, _ := migrateFixture(t, oldSession, true)
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderCodex, true)
-	if err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
-	mints := 0
-	f.compactBrief = func(handover.Pending) (string, string, error) {
-		mints++
-		return "compact-sess-t543", "in flight: T543 still open", nil
-	}
-	if _, err := f.CompleteThinBrief(pending); err != nil {
-		t.Fatalf("CompleteThinBrief: %v", err)
-	}
-	if _, err := f.CompleteThinBrief(pending); err != nil {
-		t.Fatalf("second CompleteThinBrief: %v", err)
-	}
-	if mints != 0 {
-		t.Fatalf("compact mints=%d; completed Claudia transfer must not run a second summarizer", mints)
-	}
-	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
-		t.Fatalf("Claudia-owned transfer wrote a host handover: ok=%v err=%v", ok, err)
-	}
-}
-
-// Jevons supplies normalized predecessor history, while Claudia owns the
-// persisted destination and handover. The host must not write a second one.
-func TestStoppedMigrationDelegatesHandoverWithoutHostLedger(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e21"
-	f, store, _ := migrateFixture(t, oldSession, true)
-
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
-	if err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
-	if pending.Remap != handover.RemapClaudiaMigrate || !pending.Delivered ||
-		!strings.Contains(pending.Brief, "hello") || pending.OldSessionID != oldSession {
-		t.Fatalf("Claudia transfer result lost context or source identity: %+v", pending)
-	}
-	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
-		t.Fatalf("stopped migration wrote a Jevons handover: ok=%v err=%v", ok, err)
-	}
-
-	// The row is rotated: new provider, NEW session, and not a resume —
-	// claudia would fail closed trying to resume a Grok id as Claude.
-	def := f.reg.Def("jevons-po")
-	if def == nil {
-		t.Fatal("agent vanished from the registry")
-	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
-		t.Errorf("provider = %s, want claude", def.Provider)
-	}
-	if def.SessionID == oldSession || def.SessionID == "" {
-		t.Errorf("session not rotated: %q", def.SessionID)
-	}
-	if def.Materialized {
-		t.Error("rotated row still marked Materialized — launch would demand a resume")
-	}
-	if def.WorkDir != "/work/repo" || def.Purpose != claudia.PurposeWork {
-		t.Errorf("rotation lost row fields: %+v", def)
-	}
-}
-
-func TestStoppedMigrationUsesDurableJournalWhenProviderHasNoTranscript(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e26"
-	f, _, _ := migrateFixture(t, oldSession, false)
-	def := f.reg.Def("jevons-po")
-	def.Provider = claudia.ProviderCodex
-	if err := f.reg.Register(*def); err != nil {
-		t.Fatal(err)
-	}
-	f.SetRetainedHistory(func(name string) (string, error) {
-		if name != "jevons-po" {
-			t.Fatalf("journal lookup for %q", name)
-		}
-		return "user: Remember AMBERPINE59\nassistant: STORED\n", nil
-	})
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderCursor, false)
-	if err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
-	if !strings.Contains(pending.Brief, "AMBERPINE59") {
-		t.Fatalf("transfer lost retained history: %+v", pending)
-	}
-}
-
-func TestPrepareMigrationKeepsGoal(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e99"
-	f, _, _ := migrateFixture(t, oldSession, true)
-	def := f.reg.Def("jevons-po")
-	def.Goal = "Achieve 🎯T510"
-	if err := f.reg.Register(*def); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderCodex, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
-	got := f.reg.Def("jevons-po")
-	if got == nil || got.Goal != "Achieve 🎯T510" {
-		t.Fatalf("Goal after Grok→Codex remint = %+v", got)
-	}
-	if cli.PlanProvider(got.Provider) != claudia.ProviderCodex {
-		t.Fatalf("provider = %q", got.Provider)
-	}
-}
-
-// 🎯T324: migrate claude→grok with prior model=fable never leaves fable under
-// grok — binding is rewritten to the new provider default (or empty when
-// none). Session-truth, not fail-closed sniff.
-func TestPrepareMigrationClearsModelPin(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e26"
-	f, _, _ := migrateFixture(t, oldSession, true)
-	// Stamp a Claude-family pin on the pre-migrate Grok→Claude path's
-	// counterpart: start on Claude with Model=fable, migrate to Grok.
-	if err := f.reg.Register(claudia.AgentDef{
-		Name: "jevons-po", WorkDir: "/work/repo", SessionID: oldSession,
-		Provider: claudia.ProviderClaude, Materialized: true,
-		Purpose: claudia.PurposeWork, Model: "fable",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// A migration now requires the predecessor transcript even when forced.
-	projects := t.TempDir()
-	bucket := filepath.Join(projects, discovery.EncodeCWDBucket("/work/repo"))
-	if err := os.MkdirAll(bucket, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bucket, oldSession+".jsonl"), []byte(`{"type":"user","message":{"role":"user","content":"continue"}}`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f.SetSessionRoots(discovery.Roots{ClaudeProjects: projects})
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderGrok, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
-	}
-	def := f.reg.Def("jevons-po")
-	if def == nil {
-		t.Fatal("agent vanished")
-	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
-		t.Fatalf("provider=%s want grok", def.Provider)
-	}
-	if def.Model == "fable" || strings.Contains(strings.ToLower(def.Model), "fable") {
-		t.Fatalf("Model pin survived migrate: %q — Anthropic residue under Grok", def.Model)
-	}
-	// The sidecar resolves its own default; no stale source pin may remain.
-}
-
-// TestPrepareMigrationRefusesWhenHistoryCannotBeHandedOver: no transcript
-// means a silent cold start, which is the outcome this path exists to
-// prevent — so it refuses, and leaves the agent untouched.
-func TestPrepareMigrationRefusesWhenHistoryCannotBeHandedOver(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e22"
-	f, store, _ := migrateFixture(t, oldSession, false)
-
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err == nil {
-		t.Fatal("migration proceeded with no transcript to hand over")
-	}
-	def := f.reg.Def("jevons-po")
-	if def.Provider != claudia.ProviderGrok || def.SessionID != oldSession {
-		t.Fatalf("refused migration still mutated the row: %+v", def)
-	}
-	if _, ok, _ := store.Get("jevons-po"); ok {
-		t.Error("refused migration left a pending record")
-	}
-
-	// Force may interrupt a turn, but cannot bypass the transfer step.
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, true); err == nil {
-		t.Fatal("forced migration bypassed the required transfer")
-	}
-	if f.reg.Def("jevons-po").Provider != claudia.ProviderGrok {
-		t.Error("failed forced migration rotated the row")
-	}
-}
-
-// TestPrepareMigrationRejectsNoOpAndUnknownAgents.
+// TestPrepareMigrationRejectsNoOpAndUnknownAgents: the wrapper's own input
+// checks (unknown agent, empty target) and Claudia's already-on-provider
+// refusal, all without needing a live or stub process.
 func TestPrepareMigrationRejectsNoOpAndUnknownAgents(t *testing.T) {
-	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa2e23", true)
+	f, _ := migrateStoppedFixture(t, "019fd13d-e500-7913-b96c-981e50aa2e23")
 
 	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderGrok, false); err == nil {
 		t.Error("migrating to the provider already in use was accepted")
@@ -326,28 +109,186 @@ func TestPrepareMigrationRejectsNoOpAndUnknownAgents(t *testing.T) {
 	}
 }
 
+// TestPrepareMigrationRefusesCapabilityDrop (🎯T763): the host-layer
+// refusal runs before Claudia touches the seat at all — a switch that
+// would drop a restriction the destination provider cannot enforce is
+// refused, and the row stays untouched.
+func TestPrepareMigrationRefusesCapabilityDrop(t *testing.T) {
+	t.Setenv("CLAUDIA_NO_BROKER", "1")
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started []claudia.Config
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			started = append(started, cfg)
+			return claudia.StartStub(ctx, cfg, nil)
+		},
+	})
+	const name = "jevons-po"
+	if err := reg.Register(claudia.AgentDef{
+		Name: name, WorkDir: dir, SessionID: "t763-codex-sid", Provider: claudia.ProviderCodex,
+		SandboxMode: "workspace-write", SandboxWritableRoots: []string{dir},
+		SandboxNetworkAccess: true, Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := NewClaudia(reg)
+
+	if _, err := f.PrepareMigration(name, claudia.ProviderClaude, true); err == nil {
+		t.Fatal("capability-dropping migrate was accepted")
+	}
+	if len(started) != 0 {
+		t.Fatalf("Claudia was asked to launch before the capability refusal: %+v", started)
+	}
+	def := reg.Def(name)
+	if def.Provider != claudia.ProviderCodex || def.SandboxMode == "" {
+		t.Fatalf("refused migrate still mutated the row: %+v", def)
+	}
+}
+
+// TestStoppedMigrationDelegatesHandoverWithoutHostLedger: a stopped seat
+// moves via Claudia's single Migrate call, and the wrapper's result
+// carries Claudia's outcome without jevons writing a second, host-owned
+// handover record.
+func TestStoppedMigrationDelegatesHandoverWithoutHostLedger(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e21"
+	f, reg := migrateStoppedFixture(t, oldSession)
+	f.SetRetainedHistory(func(name string) (string, error) {
+		return "user: continue the migration work\nassistant: on it\n", nil
+	})
+
+	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
+	if err != nil {
+		t.Fatalf("PrepareMigration: %v", err)
+	}
+	if pending.Remap != handover.RemapClaudiaMigrate || !pending.Delivered ||
+		pending.OldSessionID != oldSession {
+		t.Fatalf("Claudia transfer result lost context or source identity: %+v", pending)
+	}
+	if _, ok, err := f.handovers.Get("jevons-po"); err != nil || ok {
+		t.Fatalf("stopped migration wrote a jevons handover: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := f.SeedSuccessor("jevons-po"); ok || err != nil {
+		t.Fatalf("host attempted a second seed: ok=%v err=%v", ok, err)
+	}
+
+	def := reg.Def("jevons-po")
+	if def == nil {
+		t.Fatal("agent vanished from the registry")
+	}
+	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
+		t.Errorf("provider = %s, want claude", def.Provider)
+	}
+	if def.SessionID == oldSession || def.SessionID == "" {
+		t.Errorf("session not rotated: %q", def.SessionID)
+	}
+	if def.WorkDir != "/work/repo" || def.Purpose != claudia.PurposeWork {
+		t.Errorf("rotation lost row fields: %+v", def)
+	}
+	if def.Goal != "Achieve 🎯T1013.5" {
+		t.Errorf("Goal after Grok→Claude migrate = %+v", def)
+	}
+}
+
+// TestStoppedMigrationRefusesColdWithoutForce: Claudia's own refusal for
+// "nothing to hand over at all" surfaces through the wrapper unchanged,
+// and a refused attempt leaves the row untouched.
+func TestStoppedMigrationRefusesColdWithoutForce(t *testing.T) {
+	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e22"
+	f, reg := migrateStoppedFixture(t, oldSession)
+
+	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err == nil {
+		t.Fatal("cold migration with no retained history and no force was accepted")
+	}
+	def := reg.Def("jevons-po")
+	if def.Provider != claudia.ProviderGrok || def.SessionID != oldSession {
+		t.Fatalf("refused migration still mutated the row: %+v", def)
+	}
+}
+
 // TestSeedSuccessorWithoutPendingIsQuiet: the normal case — an agent that
 // did not just migrate is not seeded, and that is not an error.
 func TestSeedSuccessorWithoutPendingIsQuiet(t *testing.T) {
-	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa2e24", true)
+	f, _ := migrateStoppedFixture(t, "019fd13d-e500-7913-b96c-981e50aa2e24")
 	if _, ok, err := f.SeedSuccessor("jevons-po"); err != nil || ok {
 		t.Fatalf("SeedSuccessor on a non-migrating agent: ok=%v err=%v", ok, err)
 	}
 }
 
-// Claudia delivers the stopped-seat seed inside its registry operation;
-// Jevons' old SeedSuccessor path must remain inert.
-func TestStoppedMigrationNeedsNoHostSeed(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e25"
-	f, store, _ := migrateFixture(t, oldSession, true)
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
-		t.Fatalf("PrepareMigration: %v", err)
+// TestPrepareMigrationLiveSeatTurnInFlight exercises the live path end to
+// end through a [claudia.StartStub] seat: a turn in flight refuses the
+// move without force, and a forced call interrupts it and retries once —
+// Claudia's mechanics (🎯T1013.5), reached through the jevons wrapper.
+func TestPrepareMigrationLiveSeatTurnInFlight(t *testing.T) {
+	t.Setenv("CLAUDIA_NO_BROKER", "1")
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFlight := true
+	var interrupted int
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			return claudia.StartStub(ctx, cfg, &claudia.StubAgentOps{
+				PromptInFlight: func() bool { return inFlight },
+				Interrupt: func() error {
+					interrupted++
+					inFlight = false
+					return nil
+				},
+			})
+		},
+	})
+	reg.SetMigrationSummarizer(func(_ context.Context, a claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+		return claudia.MigrationTransferResult{Brief: "brief for " + string(a.Destination)}, nil
+	})
+	const name = "jevons-po"
+	if err := reg.Register(claudia.AgentDef{
+		Name: name, WorkDir: dir, SessionID: "live-src", Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	proc, err := reg.Launch(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(proc.Stop)
+	proc.PublishEvent(claudia.Event{Type: "user", Text: "patch migrate.go"})
+
+	f := NewClaudia(reg)
+
+	if _, err := f.PrepareMigration(name, claudia.ProviderGrok, false); err == nil ||
+		!strings.Contains(err.Error(), "turn in flight") {
+		t.Fatalf("err = %v, want turn-in-flight refusal", err)
+	}
+	if interrupted != 0 {
+		t.Fatalf("interrupted = %d, want 0 without force", interrupted)
+	}
+	if def := reg.Def(name); def.Provider != claudia.ProviderClaude {
+		t.Fatalf("seat moved despite the turn-in-flight refusal: %+v", def)
 	}
 
-	if _, ok, err := f.SeedSuccessor("jevons-po"); ok || err != nil {
-		t.Fatalf("host attempted a second seed: ok=%v err=%v", ok, err)
+	// The forced retry's own context-transfer step needs real provider
+	// credentials this hermetic fixture does not have (claudia's live
+	// Agent.Migrate summarizer seam is package-private — only
+	// Registry.MigrateStopped's summarizer is overridable from outside
+	// claudia, see migrateStoppedFixture). What this call site owns, and
+	// what stays assertable without those credentials, is that force
+	// actually interrupted the in-flight turn and retried past the
+	// turn-in-flight refusal rather than stopping at it a second time;
+	// claudia's own suite (registry_migrate_seat_test.go,
+	// TestRegistryMigrateLiveSeatForceInterruptsThenRetries) covers the
+	// retry succeeding end to end.
+	_, err = f.PrepareMigration(name, claudia.ProviderGrok, true)
+	if err == nil || strings.Contains(err.Error(), "turn in flight") {
+		t.Fatalf("forced migrate err = %v, want past the turn-in-flight refusal", err)
 	}
-	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
-		t.Fatalf("host kept a second handover: ok=%v err=%v", ok, err)
+	if interrupted != 1 {
+		t.Fatalf("interrupted = %d, want exactly 1 for the forced retry", interrupted)
 	}
 }

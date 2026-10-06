@@ -10,142 +10,79 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 )
 
-// 🎯T790: a live remap whose successor session id cannot be read never
-// records a fallback uuid as Materialized — that row would demand a resume
-// of a conversation that was never written.
-func TestT790UnreadableSessionIsNotMaterialized(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa7900"
-	f, _, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*MigrateRequest) error { return nil }
-	f.liveSession = func(string) (string, string) { return "", "" }
-
-	pending, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	def := f.reg.Def("jevons-po")
-	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
-		t.Fatalf("provider=%s", def.Provider)
-	}
-	if def.Materialized {
-		t.Fatal("unreadable live session id was recorded as Materialized")
-	}
-	if def.SessionID == "" || def.SessionID == oldSession {
-		t.Fatalf("row needs a fresh mint id, got %q", def.SessionID)
-	}
-	if !pending.SessionUnread {
-		t.Fatal("pending must say the session id was unread")
-	}
-}
-
-// A live session id equal to the predecessor's is not a successor id.
-func TestT790PredecessorSessionIsNotMaterialized(t *testing.T) {
-	const oldSession = "019fd13d-e500-7913-b96c-981e50aa7901"
-	f, _, _ := migrateFixture(t, oldSession, true)
-	f.liveMigrate = func(*MigrateRequest) error { return nil }
-	f.liveSession = func(string) (string, string) { return oldSession, "" }
-	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
-		t.Fatal(err)
-	}
-	if f.reg.Def("jevons-po").Materialized {
-		t.Fatal("predecessor session id recorded as Materialized")
-	}
-}
-
-func TestClaudiaRecordedDestinationIsNotRewrittenByJevons(t *testing.T) {
-	const destinationSession = "claudia-destination-session"
-	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7904", true)
-	f.liveMigrate = func(args *MigrateRequest) error {
-		def := f.reg.Def("jevons-po")
-		next := *def
-		next.Provider = args.Provider
-		next.SessionID = destinationSession
-		next.Model = "claude-sonnet-5"
-		return f.reg.Register(next)
-	}
-	f.liveSession = func(string) (string, string) { return destinationSession, "claude-sonnet-5" }
-	pending, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "claude-sonnet-5", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	def := f.reg.Def("jevons-po")
-	if def.Provider != cli.SubscriptionSeatProvider(claudia.ProviderClaude) ||
-		def.SessionID != destinationSession || def.Model != "claude-sonnet-5" {
-		t.Fatalf("Jevons rewrote Claudia's committed destination: %+v", def)
-	}
-	if pending.NewSessionID != destinationSession || pending.SessionUnread {
-		t.Fatalf("handoff result lost Claudia's destination: %+v", pending)
-	}
-}
+// 🎯T790 is the identity-after-remap story; 🎯T1013.5 moved the mechanics
+// it guards into claudia.Registry.Migrate. The scenarios that used to
+// exercise jevons' own re-derivation of the live successor's identity
+// (an unreadable session id, a live read that still echoes the
+// predecessor's id, a destination claudia had already committed) cannot
+// recur in the current wrapper: PrepareMigrationPinned no longer
+// reconstructs AgentDef from a live read at all — it forwards
+// moved.Destination exactly as claudia's registry already recorded it
+// after the move. What jevons still owns is the model parameter reaching
+// Claudia and the ModelSwitch note that fires once the move lands, which
+// these cover through the stopped-seat path (identical logic to the live
+// path: both read moved.Destination.Model).
 
 // The model parameter reaches claudia and the registry row.
 func TestT790ModelIsHonoured(t *testing.T) {
-	f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7902", true)
-	var got string
-	f.liveMigrate = func(a *MigrateRequest) error { got = a.Model; return nil }
-	f.liveSession = func(string) (string, string) { return "live-sid", "" }
+	f, reg := migrateStoppedFixture(t, "019fd13d-e500-7913-b96c-981e50aa7902")
+	f.SetRetainedHistory(func(string) (string, error) { return "user: continue\nassistant: ok\n", nil })
 	if _, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "claude-opus-5", false); err != nil {
 		t.Fatal(err)
 	}
-	if got != "claude-opus-5" {
-		t.Fatalf("MigrateArgs.Model=%q", got)
-	}
-	if m := f.reg.Def("jevons-po").Model; m == "" {
-		t.Fatal("row model not recorded")
+	if m := reg.Def("jevons-po").Model; m != "claude-opus-5" {
+		t.Fatalf("row model = %q, want claude-opus-5", m)
 	}
 }
 
 // A migration that changes the model (or the provider the model is bound
-// to) is a model switch. The note is what a later diagnosis reads; the
-// slog line on this path does not carry the model.
+// to) is a model switch. The note is what a later diagnosis reads.
 func TestMigrationNotesTheModelSwitch(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa7903"
-	f, _, _ := migrateFixture(t, oldSession, true)
-	def := f.reg.Def("jevons-po")
+	f, reg := migrateStoppedFixture(t, oldSession)
+	f.SetRetainedHistory(func(string) (string, error) { return "user: continue\nassistant: ok\n", nil })
+	def := reg.Def("jevons-po")
 	row := *def
 	row.Model = "grok-4.6"
-	if err := f.reg.Register(row); err != nil {
+	if err := reg.Register(row); err != nil {
 		t.Fatal(err)
 	}
-	f.liveMigrate = func(*MigrateRequest) error { return nil }
-	f.liveSession = func(string) (string, string) { return "live-sid", "claude-opus-5" }
 	var got *ModelSwitch
 	f.SetModelSwitchHook(func(sw *ModelSwitch) { got = sw })
 
-	if _, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "", false); err != nil {
+	if _, err := f.PrepareMigrationPinned("jevons-po", claudia.ProviderClaude, "claude-opus-5", false); err != nil {
 		t.Fatal(err)
 	}
 	if got == nil {
 		t.Fatal("migration landed with no model switch note")
 	}
 	if got.Name != "jevons-po" || got.From != "grok-4.6" || got.To != "claude-opus-5" ||
-		got.FromProvider != string(claudia.ProviderGrok) || cli.PlanProvider(claudia.Provider(got.Provider)) != claudia.ProviderClaude ||
+		got.FromProvider != string(claudia.ProviderGrok) ||
+		cli.PlanProvider(claudia.Provider(got.Provider)) != claudia.ProviderClaude ||
 		got.How != ModelSwitchHowMigrate {
 		t.Fatalf("switch = %+v", got)
 	}
 }
 
-// A model change clears the previous version. The live agent still
-// reporting that same id is the cache, not the model the seat moved to.
-// A different reported id is the successor and is kept (see
-// TestMigrationNotesTheModelSwitch).
+// A model change clears the previous version: an unpinned destination
+// binds its own default rather than carrying the source provider's id
+// forward.
 func TestModelChangeDropsThePreviousVersion(t *testing.T) {
 	for _, target := range []claudia.Provider{claudia.ProviderCursor, claudia.ProviderClaude} {
 		t.Run(string(target), func(t *testing.T) {
-			f, _, _ := migrateFixture(t, "019fd13d-e500-7913-b96c-981e50aa7910", true)
-			def := f.reg.Def("jevons-po")
+			f, reg := migrateStoppedFixture(t, "019fd13d-e500-7913-b96c-981e50aa7910")
+			f.SetRetainedHistory(func(string) (string, error) { return "user: continue\nassistant: ok\n", nil })
+			def := reg.Def("jevons-po")
 			row := *def
 			row.Model = "grok-4.6"
-			if err := f.reg.Register(row); err != nil {
+			if err := reg.Register(row); err != nil {
 				t.Fatal(err)
 			}
-			f.liveMigrate = func(*MigrateRequest) error { return nil }
-			f.liveSession = func(string) (string, string) { return "live-sid", "grok-4.6" }
 			if _, err := f.PrepareMigrationPinned("jevons-po", target, "", false); err != nil {
 				t.Fatal(err)
 			}
-			if m := f.reg.Def("jevons-po").Model; m != "" {
-				t.Fatalf("model=%q want empty; previous version kept across the change", m)
+			if m := reg.Def("jevons-po").Model; m == "grok-4.6" {
+				t.Fatalf("model=%q; previous version kept across the change", m)
 			}
 		})
 	}
