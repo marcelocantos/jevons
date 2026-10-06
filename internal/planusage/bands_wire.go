@@ -5,10 +5,7 @@ package planusage
 
 import (
 	"math"
-	"strings"
 	"time"
-
-	"github.com/marcelocantos/claudia"
 )
 
 // WithBands returns a copy of snap with every window's Band filled in at now.
@@ -46,11 +43,6 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 
 	for i := range out.Backends {
 		be := &out.Backends[i]
-		if be.Available() {
-			be.Spend = spendIfActive(be.rawSpend, be.Windows)
-		} else {
-			be.Spend = nil
-		}
 		if len(be.Windows) == 0 {
 			continue
 		}
@@ -117,65 +109,4 @@ func historyWithBands(w Window, th Thresholds) []HistoryPoint {
 		out[i] = p
 	}
 	return out
-}
-
-// spendIfActive is the 🎯T967.1 gate: a provider's extra-usage spend is
-// shown only while it is actually being spent, never merely because
-// spending is enabled.
-//
-// "Being spent" is spend.Enabled AND at least one plan window (session or
-// weekly — a per-model window does not count; Fable spent is not Claude
-// spending, 🎯T693) currently reads 100% used. Below 100% the account may
-// have overage turned on but is not drawing on it yet, and the rule from
-// the owner (2026-09-30) is silence until it actually happens.
-//
-// Returns nil whenever the figure must not be shown: no spend block, not
-// enabled, no window at 100%, or the provider's currency is not AUD and
-// there is no documented exchange rate to convert it (🎯T967 currency
-// rule — never a wrong-currency number, never a guessed rate).
-func spendIfActive(raw *claudia.PlanSpend, windows []Window) *BackendSpend {
-	if raw == nil || !raw.Enabled {
-		return nil
-	}
-	if !anyPlanWindowFull(windows) {
-		return nil
-	}
-	used := audMajorUnits(raw.Used)
-	limit := audMajorUnits(raw.Limit)
-	if used == nil || limit == nil {
-		// Missing or non-AUD money reads as unavailable with a reason at
-		// the Reason-surfacing layer; here it is simply not shown (🎯T967.1
-		// "missing data ... reads as unavailable ... never guessed").
-		return nil
-	}
-	return &BackendSpend{UsedAUD: *used, LimitAUD: *limit}
-}
-
-// anyPlanWindowFull reports whether the plan's own window (session or
-// weekly, never a per-model window) is at 100% used right now.
-func anyPlanWindowFull(windows []Window) bool {
-	for _, w := range windows {
-		if strings.EqualFold(w.Name, WindowModelWeekly) || strings.TrimSpace(w.Model) != "" {
-			continue
-		}
-		if !strings.EqualFold(w.Name, WindowSession) && !strings.EqualFold(w.Name, WindowWeekly) {
-			continue
-		}
-		if w.UsedPercent != nil && *w.UsedPercent >= 100 {
-			return true
-		}
-	}
-	return false
-}
-
-// audMajorUnits converts a provider money block to AUD major units
-// (dollars), when the provider's own currency is already AUD. Nil when the
-// block is absent or in a currency this package has no documented rate
-// for — never a guessed conversion (🎯T967 currency rule).
-func audMajorUnits(m *claudia.PlanMoney) *float64 {
-	if m == nil || !strings.EqualFold(strings.TrimSpace(m.Currency), "AUD") {
-		return nil
-	}
-	v := float64(m.AmountMinor) / math.Pow(10, float64(m.Exponent))
-	return &v
 }

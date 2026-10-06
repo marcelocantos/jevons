@@ -165,32 +165,6 @@ type Backend struct {
 	// means the provider published no such balance. Reported as a raw
 	// number for now; no banding/thresholds (🎯 owner: raw number only).
 	CreditsBalance *float64 `json:"credits_balance,omitempty"`
-	// Spend is the extra/overage-usage spend figure (🎯T967.1), filled at
-	// serve time by WithBands. Nil whenever it must not be shown: the
-	// provider has no spend block, spend is not enabled, or no plan
-	// window is currently at 100% — "only while spending" is the rule,
-	// not "whenever the provider could in principle spend".
-	Spend *BackendSpend `json:"spend,omitempty"`
-	// rawSpend is the raw provider-published spend block this backend's
-	// reading carried, before WithBands decides whether to show it. Not
-	// served on the wire; Spend above is the served, already-gated form.
-	rawSpend *claudia.PlanSpend `json:"-"`
-}
-
-// BackendSpend is the served, already-gated extra-usage spend figure
-// (🎯T967.1): money the owner is actually being charged right now, past
-// the subscription allowance, converted to AUD per the 🎯T967 currency
-// rule. Always bold red in the cockpit, override-proof — a planusage
-// override (🎯T948) that forces the bar green does not touch this field
-// or its styling.
-type BackendSpend struct {
-	// UsedAUD and LimitAUD are the provider's own used/limit money,
-	// converted to AUD. Currently populated only when the provider's own
-	// currency is already AUD (Claude, as of the 2026-09-30 live probe);
-	// a non-AUD spend block with no documented exchange rate is left
-	// unserved (Spend stays nil) rather than shown as a wrong currency.
-	UsedAUD  float64 `json:"used_aud"`
-	LimitAUD float64 `json:"limit_aud"`
 }
 
 // Available reports whether this backend published anything usable.
@@ -306,7 +280,6 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 			bal := r.Credits.Balance
 			b.CreditsBalance = &bal
 		}
-		b.rawSpend = r.Spend
 		if b.Status == "" {
 			b.Status = StatusUnavailable
 		}
