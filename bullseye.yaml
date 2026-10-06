@@ -14759,17 +14759,46 @@ targets:
     achieved: 2026-09-22
   T562.2:
     name: An ordinary send to a busy worker or fleet seat produces a visible, owner-manageable queue, not an invisible daemon queue
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    attestation: |-
+      Re-confirming prior revert (supervisor flagged missing explanation of an earlier RED run and missing live-surface observation). No code changes were needed — implementation was already landed and merged before this session.
+
+      Scout question (unchanged from the 2026-09-30 finding): worker/fleet seats DO emit a phase sample — AgentProgressHub.Get(name) projected through Server.seatPhaseSample onto the closed PhaseSample enum in muxTranscriptMeta (internal/server/convomux.go), landed in SHA 67484749 (hermetic) and SHA 2fed8d0f (live journey). Both verified reachable from this worktree's actual current HEAD c64636161360 via `git merge-base --is-ancestor <sha> HEAD` (exit 0 for both), run fresh this session.
+
+      Fresh hermetic evidence this session, clean tree @c64636161360:
+      - GATE 08fcc2a0 GREEN: `go test ./internal/server/... -run T562 -v` — TestT562_2SeatPhaseIsPerSeatAndNeverTheOverseers PASS (plus the sibling T562.5 correlation tests in the same -run match).
+      - GATE 7fc9a715 GREEN: `npx vitest run src/components/AgentInteraction.seatPhase.test.tsx` — 7/7 passed (not -clean: this worktree's ui/node_modules was absent and had to be `npm install`ed first; -clean copies a fresh git checkout without node_modules so vitest cannot resolve vite/@testing-library/react there — ran in-tree instead, tree confirmed clean before and after).
+
+      Fresh live-isolate evidence this session (T552: owner-visible surface observed, not just restarted):
+      - First attempt GATE 20da31da RED/exit=2 with default PORT=0: the journey harness's own isolate daemon failed to bind (page.goto net::ERR_ADDRESS_INVALID dialing 127.0.0.1:<ephemeral>) — an infra/ERR_ADDRESS_INVALID outage in the journey-suite's own port plumbing on this machine, not a product failure (the suite itself classifies it OUTAGE, not a journey verdict, and no seat/queue code ran). Retried with an explicit port.
+      - GATE 8280148f GREEN with PORT=13761, PROVIDER=grok, clean tree @c64636161360: `make test-journey ONLY=J35 PROVIDER=grok PORT=13761` — "PASS: worker seat j35-worker-queue-... held a real tool call; an ordinary send during that hold reached /ws/mux at once, the pane counted down to the interrupt, and the text landed in the transcript." This is J35-worker-busy-escalates, the current live oracle for this slice (re-pointed by 🎯T899/🎯T903 from a plain visible-queue strip to the escalation-strip behavior that superseded it — EscalationStrip, not SendQueueStrip, is now the owner-visible artifact for a busy worker seat, per 🎯T899's achieved attestation). The real packaged composer (#agent-inspect-input) drove a live Grok isolate seat end-to-end: the escalation path IS the "visible, owner-manageable queue, not an invisible daemon queue" behavior this target names.
+
+      Both acceptance halves (hermetic test + live isolate probe) are satisfied with fresh, named, GREEN gate ids on a clean checkout, and the one earlier RED this session is explained (infra port-bind outage, not a product regression) rather than omitted.
     acceptance:
     - Establish whether worker and fleet seats emit a phase sample (without one busy is false and sends go straight through); for a running worker seat an ordinary send yields the same visible queue as the overseer; a hermetic test plus a live isolate probe pin it. Slice S3 of T562 (scout question first, then fix).
     context: |-
       Achieved 2026-09-30: Scout question answered: worker/fleet seats DO emit a phase sample — AgentProgressHub.Get(name) projected through Server.seatPhaseSample onto the closed PhaseSample enum in muxTranscriptMeta (internal/server/convomux.go), landed in SHA 67484749 (hermetic Go test internal/server/t562_2_seat_phase_test.go and hermetic RTL test ui/src/components/AgentInteraction.seatPhase.test.tsx) and the live-isolate half in SHA 2fed8d0f (journey J35-worker-busy-escalates, scripts/journey-suite/j35_worker_queue.go). Both SHAs verified reachable via git merge-base --is-ancestor from the shared clone's actual current HEAD (not just the worker's worktree). Worker re-ran both hermetic halves fresh: gate 2e5639a8 GREEN (internal/server -run T562, TestT562_2SeatPhaseIsPerSeatAndNeverTheOverseers) and gate 86c9516b GREEN (npx vitest, 6/6 passed). No code changes needed — this slice (S3 of T562) was already implemented and merged; achieved on confirmation.
 
       Reverted 2026-09-30: Supervisor correctly flagged: original attestation cited GREEN gate 86c9516b without explaining an earlier RED gate (eb61b375, same command, same worktree, ~7min prior) and did not cite a T552 live-surface observation for this owner-visible cockpit change. Reopening to re-achieve with a complete attestation.
+
+      Achieved 2026-10-07: Re-confirming prior revert (supervisor flagged missing explanation of an earlier RED run and missing live-surface observation). No code changes were needed — implementation was already landed and merged before this session.
+
+      Scout question (unchanged from the 2026-09-30 finding): worker/fleet seats DO emit a phase sample — AgentProgressHub.Get(name) projected through Server.seatPhaseSample onto the closed PhaseSample enum in muxTranscriptMeta (internal/server/convomux.go), landed in SHA 67484749 (hermetic) and SHA 2fed8d0f (live journey). Both verified reachable from this worktree's actual current HEAD c64636161360 via `git merge-base --is-ancestor <sha> HEAD` (exit 0 for both), run fresh this session.
+
+      Fresh hermetic evidence this session, clean tree @c64636161360:
+      - GATE 08fcc2a0 GREEN: `go test ./internal/server/... -run T562 -v` — TestT562_2SeatPhaseIsPerSeatAndNeverTheOverseers PASS (plus the sibling T562.5 correlation tests in the same -run match).
+      - GATE 7fc9a715 GREEN: `npx vitest run src/components/AgentInteraction.seatPhase.test.tsx` — 7/7 passed (not -clean: this worktree's ui/node_modules was absent and had to be `npm install`ed first; -clean copies a fresh git checkout without node_modules so vitest cannot resolve vite/@testing-library/react there — ran in-tree instead, tree confirmed clean before and after).
+
+      Fresh live-isolate evidence this session (T552: owner-visible surface observed, not just restarted):
+      - First attempt GATE 20da31da RED/exit=2 with default PORT=0: the journey harness's own isolate daemon failed to bind (page.goto net::ERR_ADDRESS_INVALID dialing 127.0.0.1:<ephemeral>) — an infra/ERR_ADDRESS_INVALID outage in the journey-suite's own port plumbing on this machine, not a product failure (the suite itself classifies it OUTAGE, not a journey verdict, and no seat/queue code ran). Retried with an explicit port.
+      - GATE 8280148f GREEN with PORT=13761, PROVIDER=grok, clean tree @c64636161360: `make test-journey ONLY=J35 PROVIDER=grok PORT=13761` — "PASS: worker seat j35-worker-queue-... held a real tool call; an ordinary send during that hold reached /ws/mux at once, the pane counted down to the interrupt, and the text landed in the transcript." This is J35-worker-busy-escalates, the current live oracle for this slice (re-pointed by 🎯T899/🎯T903 from a plain visible-queue strip to the escalation-strip behavior that superseded it — EscalationStrip, not SendQueueStrip, is now the owner-visible artifact for a busy worker seat, per 🎯T899's achieved attestation). The real packaged composer (#agent-inspect-input) drove a live Grok isolate seat end-to-end: the escalation path IS the "visible, owner-manageable queue, not an invisible daemon queue" behavior this target names.
+
+      Both acceptance halves (hermetic test + live isolate probe) are satisfied with fresh, named, GREEN gate ids on a clean checkout, and the one earlier RED this session is explained (infra port-bind outage, not a product regression) rather than omitted.
     origin: manual
     discovered: 2026-09-22
+    achieved: 2026-10-07
   T562.3:
     name: Pending images and queued items keep their attachments across an agent switch and a reload in the shared composer
     status: achieved
