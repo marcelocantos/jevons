@@ -14,7 +14,7 @@ import {
   type PendingImage,
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
-import { classifyEnterAction, FORCE_SEND_MODE } from '../keys/composerEnter';
+import { classifyEnterAction, FORCE_SEND_MODE, isTouchPrimaryDevice } from '../keys/composerEnter';
 import { isEffectivelyEmpty } from '../composer/wispr';
 import type { DeliveryMode } from '../composer/deliveryMode';
 import type { QueueItem } from '../composer/sendQueue';
@@ -321,6 +321,7 @@ function NamedUserRequest(props: UserRequestProps) {
               composerEmpty: !hasRealDraft,
               queueLen: props.queue?.items.length ?? 0,
               code: e.code,
+              touchPrimary: isTouchPrimaryDevice(),
             });
             if (action == null || action === 'newline') return;
             e.preventDefault();
