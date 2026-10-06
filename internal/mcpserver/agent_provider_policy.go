@@ -111,6 +111,14 @@ func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRe
 	if err := s.seatPlans.Put(name, next); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	// 🎯T1008: push the same policy into Claudia's own registry, so the
+	// broker's own plan migrations (claudia.Registry.Migrate /
+	// ResolveSeatPlacementForSeat) honour it too, not only Jevons's sweep.
+	if err := s.registry.SetSeatPlanPolicy(name, prefer, allowed, excluded, mayInterrupt, neverPark); err != nil {
+		s.logLifecycle(compAgentLifecycle, "provider_policy", "registry_sync_failed", map[string]any{
+			"name": name, "error": err.Error(),
+		})
+	}
 	s.logLifecycle(compAgentLifecycle, "provider_policy", "ok", map[string]any{
 		"name": name, "actor": actor, "prefer_provider": prefer,
 		"allowed_providers": allowed, "exclude_providers": excluded,

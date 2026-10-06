@@ -326,3 +326,51 @@ func TestT691FirstFailedLaunchReportsClaudiaPendingInsteadOfFailed(t *testing.T)
 		t.Fatalf("decision surface hid the pending launch: %+v", got)
 	}
 }
+
+// 🎯T1008: jevons_agent_provider_policy must reach Claudia's own
+// Registry.SetSeatPlanPolicy, not only Jevons's seat-policy store, so the
+// broker's own plan migrations (claudia.Registry.Migrate) see the same
+// constraints Jevons's sweep does.
+func TestT1008ProviderPolicyReachesRegistrySetSeatPlanPolicy(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "worker", SessionID: "session-worker", Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plans, err := claudia.OpenSeatPolicyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetSeatPlan(plans)
+	res, err := s.handleAgentProviderPolicy(context.Background(), mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Arguments: map[string]any{
+			"name": "worker", "actor": s.overseerName(),
+			"prefer_provider": "openai-codex", "exclude_providers": []any{"codex"},
+			"allow_interrupt": true,
+		}},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("set policy: err=%v res=%v", err, res)
+	}
+	def := reg.Def("worker")
+	if def == nil {
+		t.Fatal("worker vanished from registry")
+	}
+	if def.PreferProvider != claudia.ProviderCodex {
+		t.Fatalf("registry PreferProvider = %q, want codex", def.PreferProvider)
+	}
+	if len(def.ExcludeProviders) != 1 || def.ExcludeProviders[0] != claudia.ProviderCodex {
+		t.Fatalf("registry ExcludeProviders = %v, want [codex]", def.ExcludeProviders)
+	}
+	if !def.HostMayInterrupt {
+		t.Fatal("registry HostMayInterrupt was not propagated")
+	}
+}

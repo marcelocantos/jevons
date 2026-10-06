@@ -3,11 +3,13 @@
 
 package delivery
 
-// Progress types Claudia's sibling checkout emits for an escalation
-// ladder (claudia 🎯T138). The published module does not export the
-// constants; these spellings are the ones the phase mapper and the
-// mid-turn relay already match.
+import "github.com/marcelocantos/claudia"
+
+// Progress types Claudia's escalation ladder emits (claudia 🎯T138),
+// now published as claudia.ProgressDeliveryAbsorbed and
+// claudia.ProgressDeliveryEscalated (🎯T1008). Aliased here so the
+// phase mapper and the mid-turn relay keep one import path.
 const (
-	ProgressDeliveryAbsorbed  = "delivery_absorbed"
-	ProgressDeliveryEscalated = "delivery_escalated"
+	ProgressDeliveryAbsorbed  = claudia.ProgressDeliveryAbsorbed
+	ProgressDeliveryEscalated = claudia.ProgressDeliveryEscalated
 )
