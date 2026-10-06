@@ -333,6 +333,10 @@ type Server struct {
 	seatAliveFn func(string) bool
 	// birthStore is the durable accepted-prompt + notice-key ledger (🎯T679.2).
 	birthStore *birthLedger
+	// mintRounds tracks, per parent, seats released unbriefed since that
+	// parent's last confirmed brief — closed by a quiet-period debounce into
+	// one parent notice when every seat in the round was lost (🎯T956).
+	mintRounds *mintRoundTracker
 
 	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
 	eventLogTail EventLogTailFunc

@@ -478,3 +478,139 @@ func ConfirmTurnBeganOK(t *testing.T, ev TurnEvidence) bool {
 	t.Helper()
 	return ConfirmTurnBegan("sent", nil, ev) == nil
 }
+
+// ── 🎯T956: a cold-starting CLI process survives past the base window ────
+
+// TestObserveTurnSurvivesSlowColdStartWhileAlive is acceptance 2's first
+// fixture: a CLI that creates its transcript well past the base
+// turn-confirm window — but still inside the T956 extension's hard bound —
+// while the process keeps reporting alive. The watch must confirm briefed,
+// not stop it unbriefed. Scaled to test time: base window 40ms stands in
+// for the old 45s, "70s past it" is a transcript write at 160ms, and the
+// hard bound (200ms) stands in for maxTurnConfirmWindow — the shape is the
+// same ratio (extension about 4x the base window) as 45s→5min.
+func TestObserveTurnSurvivesSlowColdStartWhileAlive(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cold-start.jsonl")
+	obs := newFakeObserver(path) // obs.alive stays true: never calls die()
+
+	const (
+		base = 40 * time.Millisecond
+		max  = 200 * time.Millisecond
+		late = 160 * time.Millisecond // past base, inside max
+	)
+	watch, _ := observeTurnForCancelableFilteredBounded(
+		obs, "", base, max, nil,
+		func() seatstate.Tri { return seatstate.Yes })
+
+	go func() {
+		time.Sleep(late)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		_, _ = f.WriteString(`{"type":"user","text":"finally, the opening brief"}` + "\n")
+	}()
+
+	start := time.Now()
+	ev := watch()
+	elapsed := time.Since(start)
+	if !ev.ConversationGrew {
+		t.Fatalf("a cold-starting-but-alive CLI must still confirm once its transcript appears: %+v", ev)
+	}
+	if elapsed < late-20*time.Millisecond {
+		t.Fatalf("watch returned too early (%s) to have seen the late write", elapsed)
+	}
+	if elapsed > max+100*time.Millisecond {
+		t.Fatalf("watch should have confirmed well inside the hard bound, took %s", elapsed)
+	}
+}
+
+// TestObserveTurnCondemnsPromptlyWhenDeadWellInsideExtension is acceptance
+// 2's second fixture: a process that exits promptly (base window analogue
+// of "10s") is stopped promptly with that reason — the extension exists for
+// a live process, not for a dead one, and must not be read as "wait out the
+// full hard bound regardless".
+func TestObserveTurnCondemnsPromptlyWhenDeadWellInsideExtension(t *testing.T) {
+	t.Parallel()
+	obs := newFakeObserver("")
+	obs.die()
+
+	const (
+		base = 40 * time.Millisecond
+		max  = 5 * time.Second // deliberately large: must not be waited out
+	)
+	start := time.Now()
+	watch, _ := observeTurnForCancelableFilteredBounded(
+		obs, "", base, max, nil,
+		func() seatstate.Tri { return seatstate.No })
+	ev := watch()
+	elapsed := time.Since(start)
+	if ev.Positive() {
+		t.Fatalf("dead process must not confirm: %+v", ev)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("a dead process must fail fast, not wait out the hard bound: took %s", elapsed)
+	}
+	if !strings.Contains(ev.Detail, "exited") {
+		t.Fatalf("detail must name the exit: %q", ev.Detail)
+	}
+}
+
+// TestObserveTurnExtensionHasAHardBound proves the extension itself is
+// bounded: a process that keeps reporting alive forever, and never produces
+// evidence, is still condemned once the hard bound closes — named with the
+// elapsed time and the live process state, not nursed indefinitely.
+func TestObserveTurnExtensionHasAHardBound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wedged.jsonl")
+	obs := newFakeObserver(path) // never dies, never writes
+
+	const (
+		base = 20 * time.Millisecond
+		max  = 80 * time.Millisecond
+	)
+	start := time.Now()
+	watch, _ := observeTurnForCancelableFilteredBounded(
+		obs, "", base, max, nil,
+		func() seatstate.Tri { return seatstate.Yes })
+	ev := watch()
+	elapsed := time.Since(start)
+
+	if ev.Positive() {
+		t.Fatalf("a process that never produces evidence must not confirm: %+v", ev)
+	}
+	if elapsed < max {
+		t.Fatalf("extension must run to the hard bound before condemning, took %s want >= %s", elapsed, max)
+	}
+	if elapsed > max+500*time.Millisecond {
+		t.Fatalf("condemnation must follow the hard bound promptly, took %s", elapsed)
+	}
+	if !strings.Contains(ev.Detail, "extended to") || !strings.Contains(ev.Detail, "elapsed=") ||
+		!strings.Contains(ev.Detail, "process state=alive") {
+		t.Fatalf("detail must name the extension, elapsed time, and process state: %q", ev.Detail)
+	}
+}
+
+// TestObserveTurnWithoutLivenessSignalUnchanged locks the back-compat shape:
+// a caller with no alive() instrument at all (the variadic is empty) never
+// extends, and condemns at the base window exactly as before 🎯T956.
+func TestObserveTurnWithoutLivenessSignalUnchanged(t *testing.T) {
+	t.Parallel()
+	obs := newFakeObserver(filepath.Join(t.TempDir(), "never-born.jsonl"))
+	start := time.Now()
+	ev := observeTurn(obs, shortWindow)()
+	elapsed := time.Since(start)
+	if ev.Positive() {
+		t.Fatalf("absent transcript must not confirm: %+v", ev)
+	}
+	if elapsed > shortWindow+500*time.Millisecond {
+		t.Fatalf("no liveness signal means no extension; took %s want ~%s", elapsed, shortWindow)
+	}
+	if strings.Contains(ev.Detail, "extended to") {
+		t.Fatalf("must not claim an extension with no liveness instrument: %q", ev.Detail)
+	}
+}
