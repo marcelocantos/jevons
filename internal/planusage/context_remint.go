@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // 🎯T561 — a context blow is not a provider problem.
@@ -19,6 +21,17 @@ import (
 // different provider — while Claude's weekly window still had plenty left.
 // Cross-provider migrate is the answer only when the seat's own provider is
 // exhausted or blocked (MigrateOff) or the owner asks for it.
+//
+// 🎯T1013.4 — the should-leave half of this decision (ShouldVacate, plus
+// the owner-ask escape) is computed by claudia.ShouldRemintMigrate, not
+// locally: this file only renders ShouldRemintMigrate's boolean into the
+// RemintMode/RemintPlan shape jevons_agent_migrate and the 🎯T417
+// unworkable notice consume, plus the human-facing reason text. The
+// scout's original plan to fold this into claudia.ResolveSeatPlacement's
+// full stay/defer/park/migrate placement was rejected after a prototype
+// showed it manufactures a destination-provider-reading dependency this
+// decision point never had (see T1013.4's bullseye ledger entry) — no
+// destination selection happens here, same as before.
 
 // RemintMode is how a context-blown seat is reminted.
 type RemintMode string
@@ -57,23 +70,35 @@ type RemintArgs struct {
 }
 
 // ContextRemintPlan decides whether a context-blown seat stays on its
-// provider (kill+start, thin brief) or leaves it (migrate). Pure.
+// provider (kill+start, thin brief) or leaves it (migrate). The should-
+// leave boolean itself comes from claudia.ShouldRemintMigrate (🎯T1013.4);
+// this function only shapes that answer into a RemintPlan and picks the
+// human-facing reason text — no local decision logic, no destination
+// selection.
 func ContextRemintPlan(a RemintArgs) RemintPlan {
 	prov := strings.ToLower(strings.TrimSpace(a.SeatProvider))
+	th := claudiaThresholdsPtr(a.Thresholds)
+	usage := claudia.PlanUsage{Provider: claudia.Provider(prov), Status: claudia.PlanUsageUnavailable}
+	if a.Known {
+		usage = backendToPlanUsage(a.Backend)
+	}
+	if !claudia.ShouldRemintMigrate(usage, a.OwnerAsked, a.Now, th) {
+		if !a.Known {
+			return RemintPlan{Mode: RemintSameProvider, Provider: prov,
+				Reason: fmt.Sprintf("%s has no plan-usage reading; unknown is not exhausted — stay on %s", titleProvider(prov), prov)}
+		}
+		detail := WeeklyBandDetail(a.Backend, a.Now, a.Thresholds)
+		return RemintPlan{Mode: RemintSameProvider, Provider: prov,
+			Reason: fmt.Sprintf("%s weekly is %s (%s) — context blow is not a provider problem", titleProvider(prov), detail.Band, detail.Reason)}
+	}
 	if a.OwnerAsked {
+		// Matches the pre-🎯T1013.4 contract exactly: owner-asked wins the
+		// reason text unconditionally, even when the provider itself was
+		// also exhausted/blocked.
 		return RemintPlan{Mode: RemintMigrate, Reason: "owner asked for a cross-provider move"}
 	}
-	if !a.Known {
-		return RemintPlan{Mode: RemintSameProvider, Provider: prov,
-			Reason: fmt.Sprintf("%s has no plan-usage reading; unknown is not exhausted — stay on %s", titleProvider(prov), prov)}
-	}
-	if MigrateOff(a.Backend, a.Now, a.Thresholds) {
-		return RemintPlan{Mode: RemintMigrate,
-			Reason: fmt.Sprintf("%s is exhausted/blocked: %s", titleProvider(prov), migrateOffReason(a.Backend, a.Now, a.Thresholds))}
-	}
-	detail := WeeklyBandDetail(a.Backend, a.Now, a.Thresholds)
-	return RemintPlan{Mode: RemintSameProvider, Provider: prov,
-		Reason: fmt.Sprintf("%s weekly is %s (%s) — context blow is not a provider problem", titleProvider(prov), detail.Band, detail.Reason)}
+	return RemintPlan{Mode: RemintMigrate,
+		Reason: fmt.Sprintf("%s is exhausted/blocked: %s", titleProvider(prov), migrateOffReason(a.Backend, a.Now, a.Thresholds))}
 }
 
 // Advice renders the plan as the one-line instruction a supervisor acts on
