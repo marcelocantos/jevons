@@ -89,9 +89,12 @@ func TestT474BareLaunchRecoversWorkIdentityFromHandover(t *testing.T) {
 // The old Jevons handover store is retained only for records from prior builds.
 func TestT474MigrationPreservesMintIdentityInClaudiaRegistry(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e44"
-	f, store, _ := migrateFixture(t, oldSession, true)
+	f, reg := migrateStoppedFixture(t, oldSession)
+	f.SetRetainedHistory(func(name string) (string, error) {
+		return "user: continue\nassistant: ok\n", nil
+	})
 	// Enrich the fixture row with the fields T474 must recover.
-	def := f.reg.Def("jevons-po")
+	def := reg.Def("jevons-po")
 	if def == nil {
 		t.Fatal("fixture missing")
 	}
@@ -99,7 +102,7 @@ func TestT474MigrationPreservesMintIdentityInClaudiaRegistry(t *testing.T) {
 	next.Parent = "jevons"
 	next.TargetID = "T285"
 	next.Model = "grok-4.5"
-	if err := f.reg.Register(next); err != nil {
+	if err := reg.Register(next); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,7 +110,7 @@ func TestT474MigrationPreservesMintIdentityInClaudiaRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareMigration: %v", err)
 	}
-	if _, ok, err := store.Get("jevons-po"); err != nil || ok {
+	if _, ok, err := f.handovers.Get("jevons-po"); err != nil || ok {
 		t.Fatalf("broker-owned move wrote a Jevons handover: ok=%v err=%v", ok, err)
 	}
 	if !pending.Delivered {
@@ -119,7 +122,7 @@ func TestT474MigrationPreservesMintIdentityInClaudiaRegistry(t *testing.T) {
 	if pending.NewSessionID == "" || pending.NewSessionID == oldSession {
 		t.Fatalf("NewSessionID=%q want fresh Claudia successor", pending.NewSessionID)
 	}
-	row := f.reg.Def("jevons-po")
+	row := reg.Def("jevons-po")
 	if row == nil || row.SessionID != pending.NewSessionID ||
 		row.Purpose != claudia.PurposeWork || row.Parent != "jevons" || row.TargetID != "T285" ||
 		row.WorkDir != def.WorkDir {

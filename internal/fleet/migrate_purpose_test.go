@@ -73,7 +73,10 @@ func TestMigrateRelaunchDoesNotStampAsideOnLegacyRow(t *testing.T) {
 // rotate-then-relaunch sequence as work, not aside.
 func TestMigrateRelaunchKeepsExplicitWorkPurpose(t *testing.T) {
 	const oldSession = "019fd13d-e500-7913-b96c-981e50aa2e26"
-	f, _, _ := migrateFixture(t, oldSession, true)
+	f, _ := migrateStoppedFixture(t, oldSession)
+	f.SetRetainedHistory(func(name string) (string, error) {
+		return "user: continue\nassistant: ok\n", nil
+	})
 
 	if _, err := f.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err != nil {
 		t.Fatalf("PrepareMigration: %v", err)

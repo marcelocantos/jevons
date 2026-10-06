@@ -4,13 +4,12 @@
 package fleet
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/handover"
 )
@@ -36,6 +35,19 @@ func TestT625_9MigrateFindsGrokHomesSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Setenv("CLAUDIA_NO_BROKER", "1")
+		reg.SetLaunchers(&claudia.RegistryLaunchers{
+			Adopt: func(claudia.Config) (*claudia.Agent, error) { return nil, claudia.ErrNoSessionWindow },
+			Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+				if cfg.AdoptOnly {
+					return nil, claudia.ErrNoSessionWindow
+				}
+				return claudia.StartStub(ctx, cfg, nil)
+			},
+		})
+		reg.SetMigrationSummarizer(func(_ context.Context, a claudia.MigrationTransferArgs) (claudia.MigrationTransferResult, error) {
+			return claudia.MigrationTransferResult{Brief: "- user: hello"}, nil
+		})
 		if err := reg.Register(claudia.AgentDef{
 			Name: "jevons-po", WorkDir: "/work/repo", SessionID: sid,
 			Provider: claudia.ProviderGrok, Materialized: true, Purpose: claudia.PurposeWork,
@@ -45,27 +57,11 @@ func TestT625_9MigrateFindsGrokHomesSession(t *testing.T) {
 		f := NewClaudia(reg)
 		f.SetSessionRoots(roots)
 		f.SetHandoverStore(handover.NewStore(filepath.Join(t.TempDir(), "handover")))
-		f.migrationTransfer = func(MigrationTransferArgs) (MigrationTransferResult, error) {
-			return MigrationTransferResult{Brief: "- user: hello"}, nil
-		}
-		f.stoppedMigrate = func(name string, args claudia.MigrateArgs, history string) (StoppedMigration, error) {
-			if history == "" {
-				return StoppedMigration{}, fmt.Errorf("missing predecessor history")
-			}
-			source := reg.Def(name)
-			next := *source
-			next.Provider = cli.SubscriptionSeatProvider(args.Provider)
-			next.SessionID = "claudia-destination"
-			if err := reg.Register(next); err != nil {
-				return StoppedMigration{}, err
-			}
-			return StoppedMigration{Source: *source, Destination: next,
-				Transfer: MigrationTransferResult{Brief: "- user: hello"}}, nil
-		}
 		return f
 	}
 
-	// Control: bare roots (the pre-fix wiring) cannot see the session.
+	// Control: bare roots (the pre-fix wiring) cannot see the session, so
+	// there is nothing to hand over and Claudia refuses the cold start.
 	bare := build(discovery.Roots{GrokSessions: filepath.Join(dir, "grok-sessions")})
 	if _, err := bare.PrepareMigration("jevons-po", claudia.ProviderClaude, false); err == nil {
 		t.Fatal("bare roots unexpectedly found a grok-homes session")
