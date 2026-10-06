@@ -222,6 +222,17 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
     </div>
   ) : <>
     <PlanTipTable groups={groups} nowMs={now()} />
+    {groups.some((g) => g.spend) ? (
+      // 🎯T967.1: the hover card's dollar-and-cents line, same bold red
+      // treatment as the bar — "A$72.84 of A$100 this month".
+      <div className="plan-spend-notice">
+        {groups.filter((g) => g.spend).map((g) => (
+          <div key={g.provider} className="plan-spend">
+            {g.provider}: A${g.spend!.used_aud.toFixed(2)} of A${g.spend!.limit_aud.toFixed(2)} this month
+          </div>
+        ))}
+      </div>
+    ) : null}
     {failedMigrations.length ? (
       <div className="plan-migration-failures">
         <strong>Claudia could not switch these running agents:</strong>
@@ -320,6 +331,20 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
                 </span>
               );
             })}
+            {g.spend ? (
+              // 🎯T967.1: bold red, override-proof — this figure's
+              // presence/absence and styling never depend on g.override
+              // or any band. The daemon already decided it is showing
+              // real money being spent right now.
+              <span
+                className="plan-spend"
+                aria-label={
+                  'Spending A$' + g.spend.used_aud.toFixed(2) + ' of A$' + g.spend.limit_aud.toFixed(2) + ' this month'
+                }
+              >
+                {'A$' + g.spend.used_aud.toFixed(2) + ' / A$' + g.spend.limit_aud.toFixed(2)}
+              </span>
+            ) : null}
             {g.override ? (
               // 🎯T948: the band is the owner's, not the readings'. The
               // ticker's one tip card says why while the pointer is on the mark.

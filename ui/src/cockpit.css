@@ -993,6 +993,14 @@ body.rhs-resizing-row { cursor: row-resize; }
    and both read as a second verdict rather than a ruler mark. */
 #plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--text-muted); transform: translateX(-50%); pointer-events: none; }
 #plan-ticker .plan-win-label { font-size: 9px; line-height: 1; color: var(--text-muted); padding-bottom: 5px; }
+/* 🎯T967.1: a provider's extra-usage spend, shown only while it is
+   actually being spent, past the subscription allowance. Always bold
+   red — a theme token legible in both themes (--red is not overridden
+   in [data-theme="light"], see the comment near its definition) — and
+   deliberately NOT derived from the pace/band classes above, so a
+   🎯T948 override that paints the bar green never touches this. */
+#plan-ticker .plan-spend { font-size: 9px; line-height: 1; font-weight: 700; color: var(--red); padding-left: 4px; white-space: nowrap; }
+.plan-spend-notice { margin-top: 6px; font-weight: 700; color: var(--red); }
 #plan-ticker .plan-win.plan-ahead .plan-bar-fill { background: var(--amber); }
 #plan-ticker .plan-win.plan-hot .plan-bar-fill,
 #plan-ticker .plan-win.plan-crit .plan-bar-fill { background: var(--red); }
