@@ -87,7 +87,9 @@ struct ChatView: View {
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
                 .focused($inputFocused)
-                .onSubmit(sendMessage)
+                // Deliberately no .onSubmit: pressing Return inserts a
+                // newline (default multiline TextField behaviour).
+                // Sending is button-only (🎯T1012).
 
             Button(action: sendMessage) {
                 Image(systemName: "arrow.up.circle.fill")
