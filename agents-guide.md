@@ -1126,13 +1126,16 @@ jwork(text=…, provider="claude", model=…?)
 
 Empty `provider` on resume keeps the **registry-stored** backend (not
 clobbered to Grok). New agents without an override ask Claudia / the
-plan feed — not a grok default when the feed is live. 🎯T476: a leftover
+plan feed — not a grok default when the feed is live, and (🎯T1013.6) not
+a Claude default either: the old "Claude unless exhausted/blocked"
+owner-economics rule (🎯T561 / 🎯T583) was removed outright from both
+jevons and claudia.Resolve, not relocated. 🎯T476: a leftover
 `~/.jevons/llm-portfolio.json` or the compiled T325.2 seed (which still
-prefers Claude for `code_implement` / `design_prose`) must not silently
-win. The start result cites which knob selected the provider
-(`provider_knob: config` | `explicit` | `resume` | `claudia` | `claude-first` |
-`plan_dest` | `claudia`) and names a disagreeing file or compiled seed as
-the loser.
+prefers Claude for `code_implement` / `design_prose` on task-fit grounds,
+unrelated to the removed economics rule) must not silently win. The
+start result cites which knob selected the provider
+(`provider_knob: config` | `explicit` | `resume` | `claudia` |
+`plan_dest`) and names a disagreeing file or compiled seed as the loser.
 Provider strings pass through to claudia (no allow-list) so future ids
 (e.g. Bedrock) are not blocked at the Jevons selection surface.
 

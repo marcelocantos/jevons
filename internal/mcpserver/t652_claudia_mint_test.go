@@ -28,7 +28,7 @@ func t652HotWeekly(provider string, now time.Time) planusage.Backend {
 }
 
 // 🎯T652: PO pins provider=grok while Grok is weekly-hot. That pin is not
-// a decision — Claudia / claude-first must land elsewhere.
+// a decision — Claudia must land elsewhere.
 func TestT652HotExplicitGrokDoesNotStick(t *testing.T) {
 	now := time.Date(2026, 9, 14, 11, 0, 0, 0, time.UTC)
 	s := t583Server(t, func(now time.Time) []planusage.Backend {
@@ -54,7 +54,7 @@ func TestT652HotExplicitGrokDoesNotStick(t *testing.T) {
 		t.Fatalf("hot explicit grok stuck: provider=%q note=%q", def.Provider, note)
 	}
 	if def.Provider != claudia.ProviderClaude {
-		t.Fatalf("want claude (Resolve / claude-first), got %q note=%q", def.Provider, note)
+		t.Fatalf("want claude (the only published, eligible dest left), got %q note=%q", def.Provider, note)
 	}
 	if strings.Contains(note, "provider_knob: explicit") {
 		t.Fatalf("ineligible pin still cited as explicit: %q", note)
@@ -115,7 +115,7 @@ func t652SessionLowWeeklyOK(provider string, now time.Time, th planusage.Thresho
 // 🎯T652 clause 2, session-low half: a PO pins provider=grok while Grok's
 // weekly is fine but its session window is low. A dest that empties
 // mid-turn is not a decision either — the pin is dropped and Claudia /
-// claude-first lands elsewhere. Guards the seam where mintProviderPick
+// Claudia lands elsewhere. Guards the seam where mintProviderPick
 // drops the pin on providerDestEligible (the T693 dest-band bar) rather
 // than planusage.MintIneligible: the two agree on session-low today, and
 // this tape is what fails if that stops being true.
