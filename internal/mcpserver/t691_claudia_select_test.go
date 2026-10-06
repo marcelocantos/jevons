@@ -49,7 +49,7 @@ func TestT691OmitMintCitesClaudia(t *testing.T) {
 
 // 🎯T691: ahead Claude + hot Grok used to refuse in jevons *before* asking
 // claudia (!destOK). The product path now asks claudia; dest-band ranking
-// (locked/under/ok) refuses, cited as claudia, not plan_dest/claude-first.
+// (locked/under/ok) refuses, cited as claudia, not plan_dest.
 func TestT691AheadOnlyRefusesThroughClaudia(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	s := t583Server(t, func(now time.Time) []planusage.Backend {
