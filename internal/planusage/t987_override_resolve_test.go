@@ -75,7 +75,7 @@ func TestT987ResolveMintRefusalNamesTheOwnerOverride(t *testing.T) {
 	if err == nil {
 		t.Fatal("ResolveMint picked a plan the owner keeps seats off")
 	}
-	for _, want := range []string{"owner override keeps seats off", "grok (owner override exhausted: " + reason + ")"} {
+	for _, want := range []string{"owner override: ", "grok (owner override exhausted: " + reason + ")"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not say %q", err.Error(), want)
 		}

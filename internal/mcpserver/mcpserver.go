@@ -749,12 +749,12 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 			explicit = ""
 		}
 	}
-	// 🎯T948: a plan the owner has overridden into a dest band is where a
-	// new seat goes. Claudia's Resolve classifies from the readings alone
-	// and would send it elsewhere.
-	if explicit == "" && !existed {
-		explicit = s.planOverrideMint()
-	}
+	// 🎯T1013.1: an owner band override used to be injected here as an
+	// explicit pin before ever calling Resolve (🎯T948) — Claudia's own
+	// Resolve now accepts the override as an input (planPolicyInputs'
+	// candidates already carry it on Backend.Override, applied by the
+	// override store at the snapshot source) and pins or excludes the
+	// provider internally. jevons no longer pre-empts that call.
 	if explicit == "" && !existed && feedOK {
 		resolved, err := planusage.ResolveMint(context.Background(), cands, now, th)
 		if err != nil || resolved.Provider == "" {

@@ -307,9 +307,16 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 	return out
 }
 
-// seatDecision is one placement verdict. The published claudia module
-// does not export ResolveSeatPlacement; this is the same stay / defer /
-// park / migrate split the sweep already tests.
+// seatDecision is one placement verdict: stay / defer / park / migrate,
+// the same split the sweep already tests. Claudia's pinned module (since
+// v0.45.0) does export claudia.ResolveSeatPlacement, a remint-shaped
+// decision over an existing seat's current provider; this local split
+// predates that export and is shaped differently (it is reached from
+// PlanDecisions' own held-override / exclusion bookkeeping above, not a
+// single ResolveSeatPlacement call). Migrating this seat-placement path
+// onto claudia.ResolveSeatPlacement is tracked separately (🎯T1013) —
+// this file only wires claudia.Resolve's new OwnerOverride input through
+// its own Resolve call below (🎯T1013.1 is the mint-side slice).
 type seatDecision struct {
 	Action SeatAction
 	From   claudia.Provider

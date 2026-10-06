@@ -70,7 +70,17 @@ func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time
 func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclude claudia.Provider, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
 	excluded := map[claudia.Provider]bool{cli.PlanProvider(exclude): exclude != ""}
 	usage := make([]claudia.PlanUsage, 0, len(cands))
-	var capped, unsteer, keptOff []string
+	// 🎯T1013.1: the owner's band override is an input to claudia.Resolve
+	// itself, not a filter jevons applies before calling it. Jevons used
+	// to pre-exclude an override-exhausted provider here (🎯T987) and
+	// separately inject an explicit pin before ever calling Resolve
+	// (🎯T948, mintProviderPick/planOverrideMint) — two call-site seams
+	// that had to agree with each other and with Resolve's own ranking.
+	// On 2026-10-02 a bare start bypassed the first seam and landed on
+	// grok while its override said the quota was dangerously low.
+	// ownerOverride is now just carried through for Resolve to apply.
+	ownerOverride := map[claudia.Provider]claudia.OwnerOverride{}
+	var capped, unsteer, overridden []string
 	for _, c := range cands {
 		p := strings.ToLower(strings.TrimSpace(c.Provider))
 		if p == "" {
@@ -83,15 +93,11 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		u := backendToPlanUsage(c.Backend)
 		u.Provider = provider
 		usage = append(usage, u)
-		// 🎯T987: an owner override into a band seats leave (exhausted,
-		// hot, ahead) keeps the plan off the destination list, whatever
-		// its readings say. Claudia ranks from the readings alone; on
-		// 2026-10-02 two bare starts landed on grok through this seam
-		// while the owner's override said its quota was dangerously low.
-		if why := OwnerKeepOffReason(c.Backend); why != "" {
-			keptOff = append(keptOff, fmt.Sprintf("%s (%s)", p, why))
-			excluded[provider] = true
-			continue
+		if ov := c.Backend.Override; ov != nil {
+			ownerOverride[provider] = claudia.OwnerOverride{
+				Band: claudia.PlanBand(ov.Band), Reason: ov.Reason,
+			}
+			overridden = append(overridden, fmt.Sprintf("%s (owner override %s: %s)", p, ov.Band, ov.Reason))
 		}
 		if why := UnsteerableReason(p); steerableOnly && why != "" {
 			unsteer = append(unsteer, fmt.Sprintf("%s (%s)", p, why))
@@ -104,7 +110,18 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		}
 	}
 	cth := claudiaThresholdsPtr(th)
+	// Overspend exclusion is a readings-only veto (ahead/hot/exhausted).
+	// A dest-band owner override is exactly the case where the readings
+	// are overruled — claudia.Resolve's OwnerOverride pin would never
+	// get a chance to run if jevons' own ExcludeProviders already
+	// dropped the row first (ExcludeProviders is checked ahead of any
+	// pin inside Resolve, by design: it is the caller's hard veto, e.g.
+	// a session cap or an unsteerable harness). So this veto does not
+	// apply to a provider the owner has pinned into a dest band.
 	for p := range overspendProviders(usage, now, cth) {
+		if ov, ok := ownerOverride[p]; ok && claudia.IsDestBand(ov.Band) {
+			continue
+		}
 		excluded[p] = true
 	}
 	var exclusions []claudia.Provider
@@ -133,6 +150,7 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		PreferPlan: true, RequireUsage: true,
 		PreferProvider: prefer, ExcludeProviders: exclusions,
 		Usage: usage, Now: now, Thresholds: cth,
+		OwnerOverride: ownerOverride,
 	})
 	if err != nil {
 		parts := []string{err.Error()}
@@ -142,8 +160,8 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		if len(unsteer) > 0 {
 			parts = append(parts, "excluded unsteerable: "+strings.Join(unsteer, ", "))
 		}
-		if len(keptOff) > 0 {
-			parts = append(parts, "owner override keeps seats off: "+strings.Join(keptOff, ", "))
+		if len(overridden) > 0 {
+			parts = append(parts, "owner override: "+strings.Join(overridden, ", "))
 		}
 		combined := strings.Join(parts, "; ")
 		// 🎯 Logged on the Jevons side regardless of what Claudia itself

@@ -6,13 +6,11 @@ package mcpserver
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -37,25 +35,6 @@ func (s *Server) SetPlanOverrides(store *planusage.OverrideStore) {
 		),
 		s.handlePlanOverride,
 	)
-}
-
-// planOverrideMint is the seat provider of a plan overridden into a dest
-// band, or "" when none is.
-func (s *Server) planOverrideMint() string {
-	if s.planUsage == nil {
-		return ""
-	}
-	var plans []string
-	for _, be := range s.planUsage().Backends {
-		if be.Override != nil && planusage.IsDestBandOverride(be.Override.Band) {
-			plans = append(plans, strings.ToLower(be.Provider))
-		}
-	}
-	if len(plans) == 0 {
-		return ""
-	}
-	sort.Strings(plans)
-	return string(claudia.SubscriptionSeatProvider(claudia.Provider(plans[0])))
 }
 
 func (s *Server) handlePlanOverride(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
