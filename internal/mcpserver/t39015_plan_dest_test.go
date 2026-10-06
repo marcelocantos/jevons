@@ -16,7 +16,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 )
 
 func t39015Weekly(name string, rem, used float64, now time.Time) planusage.Backend {
@@ -49,7 +48,7 @@ func TestT691PlanPolicyForwardsPersistedSeatProviderConstraints(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "agents.json")
-			planPath := filepath.Join(dir, "seatplan.json")
+			planPath := dir
 			reg, err := claudia.NewRegistry(path)
 			if err != nil {
 				t.Fatal(err)
@@ -60,11 +59,11 @@ func TestT691PlanPolicyForwardsPersistedSeatProviderConstraints(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			plans, err := seatplan.Open(planPath)
+			plans, err := claudia.OpenSeatPolicyStore(planPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := plans.Put("worker", seatplan.State{
+			if err := plans.Put("worker", claudia.SeatPolicy{
 				PreferProvider: tc.prefer, AllowedProviders: tc.allowed,
 				AllowNone: tc.allowed != nil && len(tc.allowed) == 0, ExcludeProviders: tc.exclude,
 			}); err != nil {
@@ -74,7 +73,7 @@ func TestT691PlanPolicyForwardsPersistedSeatProviderConstraints(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reloadedPlans, err := seatplan.Open(planPath)
+			reloadedPlans, err := claudia.OpenSeatPolicyStore(planPath)
 			if err != nil {
 				t.Fatal(err)
 			}

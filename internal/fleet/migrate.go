@@ -19,7 +19,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -91,11 +90,11 @@ func (f *Claudia) SetHandoverStore(s *handover.Store) { f.handovers = s }
 
 // SetSeatPlan attaches placement and migration fields the published
 // AgentDef does not carry.
-func (f *Claudia) SetSeatPlan(s *seatplan.Store) { f.seatPlans = s }
+func (f *Claudia) SetSeatPlan(s *claudia.SeatPolicyStore) { f.seatPlans = s }
 
-func (f *Claudia) seatState(name string) seatplan.State {
+func (f *Claudia) seatState(name string) claudia.SeatPolicy {
 	if f == nil || f.seatPlans == nil {
-		return seatplan.State{}
+		return claudia.SeatPolicy{}
 	}
 	return f.seatPlans.Get(name)
 }

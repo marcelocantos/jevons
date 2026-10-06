@@ -44,7 +44,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/seatload"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -77,7 +76,7 @@ type Server struct {
 	registry      *claudia.Registry
 	// seatPlans holds placement and migration fields the published
 	// AgentDef does not carry. Nil reads as empty state.
-	seatPlans  *seatplan.Store
+	seatPlans  *claudia.SeatPolicyStore
 	scanner    *discovery.Scanner
 	butler     *butler.Butler
 	workerWD   string
