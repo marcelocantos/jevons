@@ -58,11 +58,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-// 🎯T1015: the org go.work (~/work/github.com/marcelocantos/go.work) resolves
-// claudia to local master regardless of this require line, which is how a
-// pre-release pin kept working. Pin the real release (v0.51.0, carries
-// 🎯T1013.1) and fall back to this explicit local path so GOWORK=off builds
-// still see it without depending on that workspace file. Replace this
-// path with a real v0.51.0 fetch once the tag is pushed to origin.
-replace github.com/marcelocantos/claudia => /Users/marcelo/work/github.com/marcelocantos/claudia
