@@ -16,12 +16,10 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 )
 
-// destAuthor is the placement stamp T691 records on PlanAction. The
-// published pin (claudia v0.40.0) does not export DecisionAuthor —
-// that landed in unpublished claudia T691. 🎯T707 measures the pin, so
-// the string is local; development still consumes sibling HEAD via
-// ../go.work (🎯T448).
-const destAuthor = "claudia"
+// destAuthor is the placement stamp T691 records on PlanAction, now
+// aliased to claudia.DecisionAuthor (🎯T1008): the pin exports it as of
+// claudia v0.51.0.
+const destAuthor = claudia.DecisionAuthor
 
 // eventJournal is the optional durable-log destination for every resolve
 // attempt this package makes against Claudia (🎯 cross-service audit trail).

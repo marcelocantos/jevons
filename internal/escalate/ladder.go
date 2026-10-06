@@ -11,9 +11,15 @@ import (
 )
 
 // Step is one rung of an escalation ladder. Mode is what to try; After
-// is how long a later rung waits. The published claudia module does not
-// export this type; Jevons owns the ladder and runs the first rung
-// through Agent.SendMode.
+// is how long a later rung waits. Claudia's pinned module (since
+// v0.51.0) now exports the same shape as claudia.EscalationStep plus
+// *claudia.Agent.SendEscalating, which actually climbs the ladder
+// against a live turn (absorb detection, cancellation on supersede).
+// Jevons's own Step/Ladder/Send/Handle predate that export and are
+// kept only because escalate.Fit/CapsOf/NotStarted layer host-specific
+// policy on this shape across many call sites; migrating callers onto
+// claudia.Escalation/Agent.SendEscalating directly is tracked
+// separately (🎯T1008.1) rather than folded into this change.
 type Step struct {
 	Mode  claudia.DeliveryMode
 	After time.Duration
@@ -24,8 +30,10 @@ type Step struct {
 type Ladder []Step
 
 // Send runs the first rung on seat. Later rungs (interrupt after a
-// deadline) are host policy the caller reports; the published
-// Agent.SendMode does not schedule them.
+// deadline) are host policy the caller reports; this does not climb
+// the ladder itself. claudia.Agent.SendEscalating now does climb a
+// claudia.Escalation ladder against a live turn (🎯T1008.1 tracks
+// moving callers onto it).
 func Send(seat interface {
 	SendMode(string, claudia.DeliveryMode) (claudia.DeliveryOutcome, error)
 }, text string, ladder Ladder) (claudia.DeliveryOutcome, error) {
@@ -36,7 +44,8 @@ func Send(seat interface {
 }
 
 // Handle adapts a published *claudia.Agent to the ladder interface.
-// The pinned module has no Agent.SendEscalating.
+// claudia.Agent now has its own SendEscalating over claudia.Escalation
+// (🎯T1008.1 tracks moving this handle's callers onto it directly).
 type Handle struct {
 	Agent *claudia.Agent
 }
