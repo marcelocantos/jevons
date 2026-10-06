@@ -192,6 +192,17 @@ func (s *ReadingStore) Series(provider, window string, resetsAt *time.Time) ([]H
 
 // AttachHistory copies snap and fills each window's History from h.
 // A nil History or a query error leaves History empty — never invented.
+//
+// 🎯T842: a window's remaining_percent/band must never be older than the
+// newest entry in its own stored history. windowRolledOver only catches a
+// published resets_at that has already passed; it says nothing when the
+// live source stops advancing but keeps echoing an earlier cached payload
+// under a fresh-looking FetchedAt (the claudia v0.42.0 broker-restart
+// specimen: the response's own history held a 00:36Z sample while the
+// "live" reading being served was the 00:28Z one, both under a FetchedAt
+// only seconds old). Comparing the live reading's age against the newest
+// stored sample for the same window catches that shape even when
+// resets_at is silent.
 func AttachHistory(snap Snapshot, h History) Snapshot {
 	if h == nil || len(snap.Backends) == 0 {
 		return snap
@@ -213,6 +224,12 @@ func AttachHistory(snap Snapshot, h History) Snapshot {
 				continue
 			}
 			windows[j].History = Downsample(pts, MaxHistoryPoints)
+			if newest := pts[len(pts)-1].At; !be.FetchedAt.IsZero() && newest.After(be.FetchedAt) {
+				// The store already knows a sample from after this "live"
+				// reading was fetched: the reading we are about to serve
+				// predates what we already have on file for this period.
+				be.Stale = true
+			}
 		}
 		be.Windows = windows
 	}
