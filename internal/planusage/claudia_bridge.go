@@ -142,7 +142,7 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		"catalog_exclusions": exclusionStrs,
 		"capped":             capped,
 		"unsteerable":        unsteer,
-		"owner_kept_off":     keptOff,
+		"owner_kept_off":     overridden,
 		"candidate_count":    len(cands),
 	})
 	pick, err := claudia.Resolve(ctx, claudia.ModelPredicates{
