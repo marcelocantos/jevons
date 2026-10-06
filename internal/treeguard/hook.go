@@ -159,6 +159,12 @@ func (e *Env) preBash(p *Payload) (Decision, error) {
 		}
 	}
 	for _, write := range ScanCommand(p.ToolInput.Command) {
+		if write.Form == FormGitDiscardAll {
+			if d, checked := e.decideLedgerDiscard(); checked {
+				return d, nil
+			}
+			continue
+		}
 		abs, rel, ok := e.resolve(e.expand(write.Path))
 		if !ok || !IsGuarded(rel, e.Guarded) {
 			continue
@@ -185,6 +191,65 @@ func (e *Env) preBash(p *Payload) (Decision, error) {
 		}
 	}
 	return Decision{Verdict: Allow, Reason: "bash-no-guarded-write"}, nil
+}
+
+// decideLedgerDiscard is the 🎯T1011 guard: a `git reset --hard/--merge/--keep`
+// or path-less `git clean -f` names no pathspec, so command.go cannot tell
+// which guarded file is at risk — it can only report that EVERYTHING dirty in
+// the working tree is about to be discarded. This asks git directly whether
+// the ledger (bullseye.yaml) is currently dirty against HEAD; if so, the
+// command would silently wipe uncommitted ledger rows exactly the way the
+// 2026-10-06 incident did, and is refused. checked is false when the repo
+// cannot be queried (not a git repo at all) — the guard has nothing to say
+// and the caller falls through to its normal per-path handling.
+func (e *Env) decideLedgerDiscard() (Decision, bool) {
+	dirty, ledgerRel, err := ledgerDirty(e.RepoRoot)
+	if err != nil {
+		return Decision{}, false
+	}
+	if !dirty {
+		return Decision{Verdict: Allow, Reason: "ledger-clean"}, true
+	}
+	return Decision{
+		Verdict: Deny,
+		Reason:  "ledger-discard-all",
+		Message: "treeguard: refusing git reset/clean — " + ledgerRel +
+			" (the bullseye intent ledger) has uncommitted changes that this" +
+			" command would silently discard, the same way the 2026-10-06" +
+			" incident lost the T1012/T1013/T1014/T1015 rows. Commit " +
+			ledgerRel + " first (`git commit --only " + ledgerRel + " -m '...'`)," +
+			" then retry. 🎯T1011",
+	}, true
+}
+
+// ledgerDirty reports whether the ledger file differs from HEAD in the
+// working tree of the repo at root, and the repo-relative path git used to
+// find it. err is non-nil only when root is not inside a git repo (or git
+// itself cannot be run); a clean exec failure on `git diff` for any other
+// reason is treated as "cannot tell, so do not deny" by the caller via ok.
+func ledgerDirty(root string) (dirty bool, ledgerRel string, err error) {
+	top, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return false, "", err
+	}
+	repoRoot := strings.TrimSpace(string(top))
+	ledgerRel = "bullseye.yaml"
+	ledgerAbs := filepath.Join(repoRoot, ledgerRel)
+	if _, statErr := os.Stat(ledgerAbs); statErr != nil {
+		// No ledger at the repo root: nothing for this guard to protect.
+		return false, ledgerRel, nil
+	}
+	cmd := exec.Command("git", "-C", repoRoot, "diff", "--quiet", "HEAD", "--", ledgerRel)
+	runErr := cmd.Run()
+	if runErr == nil {
+		return false, ledgerRel, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		// git diff --quiet exits 1 when there IS a difference.
+		return exitErr.ExitCode() == 1, ledgerRel, nil
+	}
+	return false, ledgerRel, runErr
 }
 
 // Post is the PostToolUse entry point: it records what the session now holds
