@@ -226,7 +226,36 @@ func (t *Tracker) Reap(seat string) (Result, error) {
 	return res, err
 }
 
+// otherAnchors returns every anchor this tracker holds other than
+// excludeSeat, snapshotted under the lock.
+func (t *Tracker) otherAnchors(excludeSeat string) []Anchor {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]Anchor, 0, len(t.anchors))
+	for seat, a := range t.anchors {
+		if seat == excludeSeat {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // ReapAnchor terminates the processes an anchor owns.
+//
+// 🎯T844: the daemon (self, and self's ancestors) is not the only process a
+// selection bug must never reach. On 2026-09-22 a seat's turn ran the daily
+// activation bounce — the script that restarts jevonsd and the broker — and
+// the relaunched fleet came up as process-tree descendants of that seat's
+// own turn: the daemon, the broker's seat processes, and six sibling seats
+// all hung off the reaped seat's root. A pure parent-link/group selection
+// has no way to tell "my own detached loop" from "the fleet my turn happens
+// to have bootstrapped" — both are genuine descendants. The fix is not a
+// smarter walk; it is a second, independent fact the walk cannot see from
+// inside one seat's own subtree: every OTHER anchor this tracker currently
+// holds names a live, registered seat, and that seat's own process (and
+// whatever Descendants finds for it) is never a valid target for this
+// seat's reap, regardless of how it is connected in the process tree.
 func (t *Tracker) ReapAnchor(a Anchor) (Result, error) {
 	res := Result{Seat: a.Seat}
 	if !a.Valid() {
@@ -245,6 +274,20 @@ func (t *Tracker) ReapAnchor(a Anchor) (Result, error) {
 
 	self := t.self()
 	guard := ancestorsOf(tbl.byPID(), self)
+	// 🎯T844: no other registered seat's own process, nor anything that
+	// seat's own anchor owns, is ever a target of this seat's reap — even
+	// when it reads as a descendant of this seat's root (the activation-
+	// bounce shape). Each other anchor is resolved against the SAME table
+	// snapshot this reap is using, so the exclusion is self-consistent.
+	for _, other := range t.otherAnchors(a.Seat) {
+		if !other.Valid() {
+			continue
+		}
+		guard[other.PID] = true
+		for _, p := range Descendants(tbl, other) {
+			guard[p.PID] = true
+		}
+	}
 	var targets []int
 	for _, p := range procs {
 		if p.PID <= 1 || p.PID == self || guard[p.PID] {
