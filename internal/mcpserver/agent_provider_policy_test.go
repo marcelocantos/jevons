@@ -15,7 +15,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -27,7 +26,7 @@ type busyPlanMigrator struct {
 type pendingClaudiaMigrator struct {
 	sweepLedger
 	registry *claudia.Registry
-	plans    *seatplan.Store
+	plans    *claudia.SeatPolicyStore
 	attempts int
 	fail     bool
 }
@@ -35,7 +34,7 @@ type pendingClaudiaMigrator struct {
 type failedAfterPersistMigrator struct {
 	sweepLedger
 	registry *claudia.Registry
-	plans    *seatplan.Store
+	plans    *claudia.SeatPolicyStore
 }
 
 func (m *failedAfterPersistMigrator) PrepareMigration(name string, to claudia.Provider, _ bool) (handover.Pending, error) {
@@ -46,7 +45,7 @@ func (m *failedAfterPersistMigrator) PrepareMigration(name string, to claudia.Pr
 	if err := m.registry.Register(def); err != nil {
 		return handover.Pending{}, err
 	}
-	if err := m.plans.Put(name, seatplan.State{
+	if err := m.plans.Put(name, claudia.SeatPolicy{
 		MigrationFrom: from, MigrationFromSession: session,
 		MigrationSeed: "bounded handover awaiting delivery", MigrationPendingStart: true,
 	}); err != nil {
@@ -63,7 +62,7 @@ func (m *pendingClaudiaMigrator) PrepareMigration(name string, to claudia.Provid
 	if m.fail {
 		return handover.Pending{}, fmt.Errorf("destination launch unavailable")
 	}
-	if err := m.plans.Update(name, func(st *seatplan.State) {
+	if err := m.plans.Update(name, func(st *claudia.SeatPolicy) {
 		st.MigrationSeed = ""
 		st.MigrationPendingStart = false
 	}); err != nil {
@@ -80,7 +79,7 @@ func (m *busyPlanMigrator) PrepareMigration(_ string, _ claudia.Provider, force 
 func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agents.json")
-	planPath := filepath.Join(dir, "seatplan.json")
+	planPath := dir
 	reg, err := claudia.NewRegistry(path)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +90,7 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	plans, err := seatplan.Open(planPath)
+	plans, err := claudia.OpenSeatPolicyStore(planPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +122,7 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reloadedPlans, err := seatplan.Open(planPath)
+	reloadedPlans, err := claudia.OpenSeatPolicyStore(planPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +149,7 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 	if res := call(map[string]any{"name": "worker", "actor": s.overseerName(), "allow_interrupt": true}); res.IsError {
 		t.Fatalf("opt in to host interruption: %s", toolText(res))
 	}
-	policyReload, err := seatplan.Open(planPath)
+	policyReload, err := claudia.OpenSeatPolicyStore(planPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +179,7 @@ func TestT691OwnerProviderPolicyReachesClaudiaPlacementAfterReload(t *testing.T)
 
 func TestT691HostInterruptPolicyDefersBusySeatUnlessOptedIn(t *testing.T) {
 	action := planusage.PlanAction{Action: planusage.SeatMigrate}
-	st := seatplan.State{}
+	st := claudia.SeatPolicy{}
 	if got := hostPlanDeferral(action, st, true); !strings.Contains(got, "forbids interruption") {
 		t.Fatalf("default in-flight migration was not deferred: %q", got)
 	}
@@ -243,11 +242,11 @@ func TestT691PendingClaudiaHandoverRetriesWithoutHotSourceOrPlanFeed(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
-	plans, err := seatplan.Open("")
+	plans, err := claudia.OpenSeatPolicyStore("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := plans.Put("worker", seatplan.State{
+	if err := plans.Put("worker", claudia.SeatPolicy{
 		MigrationFrom: claudia.ProviderGrok, MigrationFromSession: "source-session",
 		MigrationSeed: "pending bounded handover", MigrationPendingStart: true,
 	}); err != nil {
@@ -302,7 +301,7 @@ func TestT691FirstFailedLaunchReportsClaudiaPendingInsteadOfFailed(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	plans, err := seatplan.Open("")
+	plans, err := claudia.OpenSeatPolicyStore("")
 	if err != nil {
 		t.Fatal(err)
 	}

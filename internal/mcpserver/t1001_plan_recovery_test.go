@@ -14,7 +14,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 )
 
 type recoveryMigrator struct {
@@ -172,11 +171,11 @@ func TestT1001PreservesDeliberateHolds(t *testing.T) {
 				s.MarkAgentParked("worker", by, "prepare returned COLD (owner copied diagnostic)")
 			}
 			if strings.HasPrefix(held, "pending") {
-				plans, err := seatplan.Open("")
+				plans, err := claudia.OpenSeatPolicyStore("")
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := plans.Put("worker", seatplan.State{MigrationSeed: "handover", MigrationFrom: claudia.ProviderGrok}); err != nil {
+				if err := plans.Put("worker", claudia.SeatPolicy{MigrationSeed: "handover", MigrationFrom: claudia.ProviderGrok}); err != nil {
 					t.Fatal(err)
 				}
 				s.SetSeatPlan(plans)
@@ -216,11 +215,11 @@ func TestT1001RecoveryHonorsProviderConstraints(t *testing.T) {
 			s, _, snap := recoveryFixture(t)
 			s.MarkAgentParked("worker", planPolicyActor, "resolve: token-tied")
 			snap.Backends = []planusage.Backend{t39015Weekly("claude", 6, 94, snap.At), t39015Weekly("codex", 80, 20, snap.At), t39015Weekly("grok", 50, 50, snap.At)}
-			plans, err := seatplan.Open("")
+			plans, err := claudia.OpenSeatPolicyStore("")
 			if err != nil {
 				t.Fatal(err)
 			}
-			st := seatplan.State{}
+			st := claudia.SeatPolicy{}
 			switch constraint {
 			case "exclude":
 				st.ExcludeProviders = []claudia.Provider{claudia.ProviderCodex}
@@ -264,11 +263,11 @@ func TestT1001PendingMigrationClearsPolicyParkAfterRetry(t *testing.T) {
 	if err := s.registry.Register(def); err != nil {
 		t.Fatal(err)
 	}
-	plans, err := seatplan.Open("")
+	plans, err := claudia.OpenSeatPolicyStore("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := plans.Put("worker", seatplan.State{MigrationFrom: claudia.ProviderClaude, MigrationSeed: "pending handover"}); err != nil {
+	if err := plans.Put("worker", claudia.SeatPolicy{MigrationFrom: claudia.ProviderClaude, MigrationSeed: "pending handover"}); err != nil {
 		t.Fatal(err)
 	}
 	s.SetSeatPlan(plans)

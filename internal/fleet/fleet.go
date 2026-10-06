@@ -27,7 +27,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -87,7 +86,7 @@ type Claudia struct {
 	handovers *handover.Store
 	// seatPlans holds migration and placement fields the published
 	// AgentDef does not carry.
-	seatPlans *seatplan.Store
+	seatPlans *claudia.SeatPolicyStore
 	rotations *handover.RotationStore
 	// retainedHistory reads the host's durable agent journal when a stopped
 	// predecessor has no provider transcript (notably direct Codex seats).

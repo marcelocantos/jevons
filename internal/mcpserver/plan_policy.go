@@ -14,7 +14,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -236,7 +235,7 @@ func (s *Server) resumeClaudiaMigrations() []planusage.PlanAction {
 	return results
 }
 
-func pendingClaudiaMigration(def claudia.AgentDef, st seatplan.State) planusage.PlanAction {
+func pendingClaudiaMigration(def claudia.AgentDef, st claudia.SeatPolicy) planusage.PlanAction {
 	return planusage.PlanAction{
 		Name: def.Name, From: string(st.MigrationFrom), To: string(def.Provider), Model: def.Model,
 		Action: planusage.SeatMigrate, Author: claudia.DecisionAuthor,
@@ -393,7 +392,7 @@ func planPolicyPark(rec fleetintent.Record) bool {
 	return rec.State == fleetintent.Parked && rec.By == planPolicyActor
 }
 
-func hostPlanDeferral(action planusage.PlanAction, st seatplan.State, inFlight bool) string {
+func hostPlanDeferral(action planusage.PlanAction, st claudia.SeatPolicy, inFlight bool) string {
 	if action.Action == planusage.SeatPark && st.HostNeverPark {
 		return "Jevons host policy forbids parking this seat"
 	}
@@ -405,7 +404,7 @@ func hostPlanDeferral(action planusage.PlanAction, st seatplan.State, inFlight b
 
 // SetSeatPlan attaches the sidecar store for placement and migration
 // fields the published AgentDef does not carry.
-func (s *Server) SetSeatPlan(st *seatplan.Store) {
+func (s *Server) SetSeatPlan(st *claudia.SeatPolicyStore) {
 	if s == nil {
 		return
 	}

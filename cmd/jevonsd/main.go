@@ -45,7 +45,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 	"github.com/marcelocantos/jevons/internal/seatreg"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -719,10 +718,19 @@ func main() {
 	}
 
 	// Placement and migration fields the published AgentDef does not carry.
-	seatPlans, err := seatplan.Open(filepath.Join(cfg.StateDir, "seatplan.json"))
+	// 🎯T1013.2: storage lives in Claudia now, keyed on agent name, shared
+	// by any client of that module -- not a jevons-private sidecar. The
+	// legacy jevons-only file (same JSON shape) is imported once, on first
+	// use, without overwriting anything Claudia already has an opinion on.
+	seatPlans, err := claudia.OpenSeatPolicyStore(filepath.Join(cfg.StateDir, "seat-policy"))
 	if err != nil {
-		slog.Error("seat plan store failed", "err", err)
+		slog.Error("seat policy store failed", "err", err)
 		os.Exit(1)
+	}
+	if n, err := seatPlans.ImportLegacyFile(filepath.Join(cfg.StateDir, "seatplan.json")); err != nil {
+		slog.Warn("seat policy legacy import failed", "err", err)
+	} else if n > 0 {
+		slog.Info("seat policy legacy import", "entries", n)
 	}
 
 	// Wire registry and scanner into MCP server.

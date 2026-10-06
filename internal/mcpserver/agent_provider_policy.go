@@ -12,7 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/seatplan"
 )
 
 func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -143,7 +142,7 @@ func providerPolicyArray(raw any) ([]claudia.Provider, error) {
 	return providers, nil
 }
 
-func formatAgentProviderPolicy(def claudia.AgentDef, st seatplan.State) string {
+func formatAgentProviderPolicy(def claudia.AgentDef, st claudia.SeatPolicy) string {
 	allowed := "any"
 	if provs, restricted := st.Allowed(); restricted {
 		allowed = fmt.Sprint(provs)
