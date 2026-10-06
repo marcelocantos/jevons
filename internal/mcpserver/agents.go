@@ -84,7 +84,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
-			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Omit unless the owner named one (🎯T652). Empty = keep stored provider on resume; on mint Claudia Resolve / claude-first / plan dest choose — not a habitual grok pin. An ineligible dest is dropped unless owner_asked. 🎯T148.")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, codex, …). Omit unless the owner named one (🎯T652). Empty = keep stored provider on resume; on mint Claudia Resolve / plan dest choose — not a habitual grok pin, and not a Claude pin either (🎯T1013.6 removed the old Claude-first owner-economics rule). An ineligible dest is dropped unless owner_asked. 🎯T148.")),
 			mcp.WithBoolean("owner_asked", mcp.Description("If true, keep an explicit provider= even when that dest is weekly-hot / exhausted / session-low (🎯T652). Pass only when the owner named that dest. Default false.")),
 			mcp.WithString("task_type", mcp.Description("LLM portfolio task class (🎯T325.2 / T325.2.1 / T475): ceo, code_implement, mechanical, design_prose, ops_classify, journey_grok, ideation. mechanical/ops_classify (and nudge/ack/small_edit aliases) auto-pin a fast-cheap model (Codex Spark or Grok grok-build) when model= is omitted. Recorded for capacity tables and loser-knob citation; omitted provider on mint follows config.yaml (🎯T476), not this class. Empty = derive from name/purpose (product-owner name→ceo, work→code_implement, aside→ideation, overseer→ceo).")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
@@ -860,8 +860,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// 🎯T148 + 🎯T476 + 🎯T652 provider selection:
 	//   1. eligible providerArg, or owner_asked → explicit
 	//   2. resume with stored provider → keep
-	//   3. omit (or dropped ineligible pin) + live plan feed → Claude
-	//      Resolve / claude-first / plan dest — not a grok default
+	//   3. omit (or dropped ineligible pin) + live plan feed → Claudia
+	//      Resolve / plan dest decides purely on plan-usage ranking — not
+	//      a grok default, and (🎯T1013.6) no Claude-first bias either
 	stored := ""
 	if def != nil {
 		stored = string(def.Provider)

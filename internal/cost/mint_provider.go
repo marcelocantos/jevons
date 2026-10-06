@@ -16,7 +16,6 @@ const (
 	KnobPortfolioFile = "portfolio_file"
 	KnobCompiledSeed  = "compiled_seed"
 	KnobPlanDest      = "plan_dest"
-	KnobClaudeFirst   = "claude-first"
 	KnobClaudia       = "claudia"
 )
 
@@ -44,17 +43,12 @@ type MintProviderArgs struct {
 	// PlanDestOK is false when every published dest fails the mint
 	// threshold — omit-provider mint must refuse, not land on a hot dest.
 	PlanDestOK bool
-	// ClaudeFirstOK is true when the plan feed says Claude is published
-	// and neither exhausted nor blocked. The owner rule (🎯T561 / 🎯T583)
-	// then puts every omit-provider mint on Claude, whatever the task
-	// class or which provider has the most remaining allowance.
-	ClaudeFirstOK bool
-	// ClaudeHeadroom is the remaining % the start result cites. Nil is
-	// published-but-unquantified ("plan headroom unknown").
-	ClaudeHeadroom *float64
 	// OwnerAsked is true when the owner explicitly asked for the fleet to
-	// go somewhere other than Claude. Only that, an explicit provider=, or
-	// Claude exhaustion moves a mint off Claude.
+	// go somewhere other than its usual dest. 🎯T1013.6 removed the old
+	// "Claude unless exhausted/blocked" owner-economics rule outright
+	// (🎯T561 / 🎯T583) rather than relocating it — this field no longer
+	// gates a Claude-specific knob, it is only threaded through to
+	// noteLoser's citation.
 	OwnerAsked bool
 }
 
@@ -65,8 +59,7 @@ type MintProviderPick struct {
 	LosingKnob     string
 	LosingProvider string
 	TaskType       string
-	// Detail is the knob's owner-visible figure, e.g. the claude-first
-	// citation "plan headroom 42%".
+	// Detail is the knob's owner-visible figure.
 	Detail string
 }
 
@@ -75,19 +68,19 @@ type MintProviderPick struct {
 // Precedence (🎯T476, usage-first per 🎯T495):
 //  1. non-empty ProviderArg → explicit
 //  2. resume with a stored provider → keep (never mid-flight reassign)
-//  3. mint that omits provider while Claude has plan headroom → claude
-//     (🎯T583: the owner rule outranks task class and usage-first —
-//     Grok/Codex/Cursor need Claude exhaustion, provider=, or owner_asked)
-//  4. mint that omits provider → the plan feed's usage-first green pick
+//  3. mint that omits provider → the plan feed's usage-first green pick
 //     (PickMintDest: highest remaining %, config only breaking green
 //     ties); when no green exists the mint refuses rather than landing
-//     on an ineligible default
-//  5. config.yaml / daemon default only when the plan feed is silent
+//     on an ineligible default. 🎯T1013.6: there is no Claude-specific
+//     step ahead of this one any more — the 🎯T561 / 🎯T583 owner rule
+//     ("Claude unless exhausted/blocked") was removed outright, not
+//     relocated, on both the jevons and claudia sides.
+//  4. config.yaml / daemon default only when the plan feed is silent
 //
 // A leftover llm-portfolio.json or the compiled DefaultPortfolio seed
-// (which still prefers Claude for code_implement / design_prose) must
-// not silently win. When they would have picked a different provider,
-// the loser is named on the pick so the start result can cite both knobs.
+// must not silently win. When they would have picked a different
+// provider, the loser is named on the pick so the start result can cite
+// both knobs.
 func PickMintProvider(a MintProviderArgs) MintProviderPick {
 	if p := strings.ToLower(strings.TrimSpace(a.ProviderArg)); p != "" {
 		pick := MintProviderPick{Provider: p, Knob: KnobExplicit, TaskType: a.Portfolio.TaskType}
@@ -102,21 +95,6 @@ func PickMintProvider(a MintProviderArgs) MintProviderPick {
 	cfg := strings.ToLower(strings.TrimSpace(a.ConfigProvider))
 	if cfg == "" {
 		cfg = HarnessGrok
-	}
-	if a.ClaudeFirstOK && !a.OwnerAsked {
-		pick := MintProviderPick{
-			Provider: HarnessClaude,
-			Knob:     KnobClaudeFirst,
-			Detail:   ClaudeHeadroomNote(a.ClaudeHeadroom),
-			TaskType: a.Portfolio.TaskType,
-		}
-		if cfg != HarnessClaude {
-			pick.LosingKnob = KnobConfig
-			pick.LosingProvider = cfg
-		} else {
-			pick.noteLoser(a)
-		}
-		return pick
 	}
 	if a.PlanFeedOK {
 		if !a.PlanDestOK {
@@ -220,11 +198,3 @@ func DescribeConfigPortfolioDisagreement(configProvider string, p *Portfolio, fr
 		KnobConfig, KnobPortfolioFile, loser, tt)
 }
 
-// ClaudeHeadroomNote renders the claude-first figure for the start result
-// (🎯T583). An unpublished figure is "unknown", never an invented 0%.
-func ClaudeHeadroomNote(headroom *float64) string {
-	if headroom == nil {
-		return "plan headroom unknown"
-	}
-	return fmt.Sprintf("plan headroom %.0f%%", *headroom)
-}

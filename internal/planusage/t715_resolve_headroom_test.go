@@ -34,23 +34,30 @@ func TestT715ResolveMintSkipsExhaustedPin(t *testing.T) {
 	}
 }
 
-// 🎯T715 mutation: restoring pin-first resolution when the pin is exhausted
-// goes RED. Cap omitted (zero) is unpublished — destAtSessionCap does not
-// skip — so prefer=claude still wins despite Load 12. The skip-at-cap tape
-// above fails if destAtSessionCap is deleted; this control pins that Cap
-// is the lever, not Load alone.
-func TestT715MutationPinFirstWhenPinExhaustedGoesRed(t *testing.T) {
+// 🎯T715 mutation (rewritten 🎯T1013.6: this used to lean on ResolveMint's
+// now-removed PreferProvider=Claude bias to prove Load alone is not the
+// skip lever — "prefer=claude still wins despite Load 12" only showed
+// that because the old hardcoded preference out-ranked everything else
+// in the pool, not because Cap specifically was the lever). Rewritten to
+// isolate the same claim without any provider preference: claude has
+// the higher Load (12) but no published Cap (destAtSessionCap only
+// skips when Cap > 0 and Load >= Cap), so it must still be eligible —
+// and it wins on its own greater remaining headroom, not on a pin. The
+// skip-at-cap tape above (TestT715ResolveMintSkipsExhaustedPin) fails if
+// destAtSessionCap is deleted; this control fails if Load alone (with no
+// Cap) started excluding a dest.
+func TestT715MutationLoadAloneWithNoCapDoesNotExcludeGoesRed(t *testing.T) {
 	now := time.Date(2026, 9, 21, 0, 50, 0, 0, time.UTC)
 	th := DefaultThresholds()
 	pick, err := ResolveMint(context.Background(), []DestCand{
-		{Provider: "claude", Backend: t495Backend("claude", t495pf(40), t495pf(60), t495Week(0.5), now), Load: 12},
-		{Provider: "grok", Backend: t495Backend("grok", t495pf(20), t495pf(80), t495Week(0.5), now), Load: 0, Cap: 12},
+		{Provider: "claude", Backend: t495Backend("claude", t495pf(20), t495pf(80), t495Week(0.5), now), Load: 12},
+		{Provider: "grok", Backend: t495Backend("grok", t495pf(40), t495pf(60), t495Week(0.5), now), Load: 0, Cap: 12},
 	}, now, th)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pick.Provider != claudia.ProviderClaude {
-		t.Fatalf("without Cap on the pin, ResolveMint = %q want claude (pin-first); Cap is the skip lever", pick.Provider)
+		t.Fatalf("ResolveMint = %q, want claude (greener headroom; Load 12 with no Cap must not exclude it)", pick.Provider)
 	}
 }
 

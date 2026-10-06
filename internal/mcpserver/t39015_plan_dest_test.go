@@ -107,10 +107,9 @@ func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	s.SetRegistry(reg)
 	s.SetDefaultProvider(string(claudia.ProviderGrok))
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
-	// 🎯T583: Claude is deliberately absent from this feed. When Claude is
-	// published with headroom the claude-first knob decides and plan_dest
-	// never runs; the usage-first question this test asks only arises
-	// among the other backends.
+	// Claude is absent from this feed so the usage-first question this
+	// test asks (grok ahead vs codex ok) is not entangled with anything
+	// Claude-specific — there is no such knob any more (🎯T1013.6).
 	s.SetPlanUsageSource(func() planusage.Snapshot {
 		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
 			t39015Weekly("grok", 45, 55, now),

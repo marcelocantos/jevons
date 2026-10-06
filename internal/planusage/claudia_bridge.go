@@ -55,9 +55,13 @@ func currentEventJournal() *eventlog.Journal {
 
 // ResolveMint is the omit-provider dest pick (🎯T691 / 🎯T652 / 🎯T693).
 // Claudia owns ranking; this adapter supplies Jevons' session-cap and
-// steerability constraints. A preference for Claude is not a ban on others.
+// steerability constraints. No PreferProvider: the owner-economics
+// "Claude first while it has headroom" rule (🎯T561 / 🎯T583) was removed
+// outright (🎯T1013.6), not relocated — an omit-provider mint is decided
+// purely by claudia.Resolve's own dest-band ranking (🎯T693: locked, then
+// under, then ok; slack breaks ties within a band).
 func ResolveMint(ctx context.Context, cands []DestCand, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	return resolvePlanCandidates(ctx, cands, claudia.ProviderClaude, "", true, now, th)
+	return resolvePlanCandidates(ctx, cands, "", "", true, now, th)
 }
 
 // ResolveDest is the migrate/park dest pick (🎯T691 / 🎯T693). exclude

@@ -258,3 +258,14 @@ func TestOverrideFileStrandsDrainedProvider(t *testing.T) {
 		t.Errorf("journey_grok routed to %q, want grok", d.Provider)
 	}
 }
+
+// The compiled task-class seed routes a default code-implement work mint
+// to Claude (quality task-fit, unrelated to the removed 🎯T561 / 🎯T583
+// owner-economics preference — see 🎯T1013.6). This moved out of the
+// now-deleted t583_claude_first_test.go, which tested the economics rule;
+// this assertion is about DefaultPortfolio's own task-fit table.
+func TestCompiledSeedWorkMintIsClaude(t *testing.T) {
+	if got := WorkMintPortfolioProvider(DefaultPortfolio()); got != HarnessClaude {
+		t.Fatalf("compiled seed work mint = %q, want claude", got)
+	}
+}

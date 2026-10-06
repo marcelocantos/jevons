@@ -69,7 +69,7 @@ func (s *Server) SetButler(b *butler.Butler) {
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory (absolute or ~-relative repo path)")),
 			mcp.WithString("description", mcp.Description("The owner's work-language label")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
-			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Omit unless the owner named one (🎯T652); empty = Claudia Resolve / claude-first / plan dest. An ineligible dest is dropped unless owner_asked. 🎯T148.")),
+			mcp.WithString("provider", mcp.Description("Agent backend override (claudia provider id: grok, claude, …). Omit unless the owner named one (🎯T652); empty = Claudia Resolve / plan dest (no Claude-first bias — 🎯T1013.6). An ineligible dest is dropped unless owner_asked. 🎯T148.")),
 			mcp.WithBoolean("owner_asked", mcp.Description("If true, keep an explicit provider= even when that dest is mint-ineligible (🎯T652). Pass only when the owner named that dest. Default false.")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is spawning). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer).")),
@@ -216,7 +216,8 @@ func (s *Server) handleThreadSpawn(_ context.Context, req mcp.CallToolRequest) (
 	}
 
 	// 🎯T583: thread_spawn is a mint like agent_start — an omitted provider
-	// goes through the same claude-first knob, not the bare config default.
+	// goes through the same claudia-resolve knob, not the bare config
+	// default (🎯T1013.6: no Claude-first bias in that knob any more).
 	stored := ""
 	existed := false
 	if s.registry != nil {

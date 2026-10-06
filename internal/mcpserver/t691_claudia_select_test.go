@@ -16,6 +16,11 @@ import (
 
 // 🎯T691: omit-provider mint with a live plan feed cites claudia as author
 // and does not re-adjudicate the pick through PickMintDest / publishedDestEligible.
+// 🎯T1013.6: with no Claude-first bias left, both providers here are "ok"
+// band so the greener one (Grok, 87% vs Claude's 56%) wins on slack —
+// before this change the same fixture minted Claude despite Grok's
+// larger headroom (see TestT1013_6OmitProviderMintHasNoClaudeBias for the
+// explicit before/after comparison).
 func TestT691OmitMintCitesClaudia(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	s := t583Server(t, func(now time.Time) []planusage.Backend {
@@ -31,8 +36,8 @@ func TestT691OmitMintCitesClaudia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
-		t.Fatalf("omit mint = %q, want a Claude plan seat", def.Provider)
+	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
+		t.Fatalf("omit mint = %q, want a Grok plan seat (greener; no Claude bias)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {
 		t.Fatalf("product pick must name claudia: %q", note)
