@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
@@ -81,5 +82,125 @@ func TestT977CapacityRestoredWakesOverseerAndPOs(t *testing.T) {
 	}
 	if told := s.NoteCapacity(); len(told) != 0 {
 		t.Fatalf("a plan that stayed ok told again: %v", told)
+	}
+}
+
+// 🎯T977 (2026-10-06 recurrence): a fleet-wide Parked intent recorded for
+// capacity by a product path is lifted automatically on restoration, so the
+// hold that otherwise defers every per-agent resume (planIntentDeferral
+// checks fleet-wide intent first) does not outlive the capacity it was
+// parked for.
+func TestT977CapacityRestoredLiftsCapacityParkedFleetIntent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{}
+	s.SetFleetIntentStore(store)
+	if err := s.SetFleetIntent(fleetintent.Parked, "product:plan_policy",
+		"claude weekly exhausted (98% used); standing the fleet down for capacity"); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	used := 92.0
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		rem := 100 - used
+		resets := now.Add(84 * time.Hour)
+		lim := planusage.DefaultWeeklyWindowSeconds
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{{
+			Provider: "claude", Status: planusage.StatusAvailable,
+			Windows: []planusage.Window{{Name: planusage.WindowWeekly, UsedPercent: &used, RemainingPercent: &rem, ResetsAt: &resets, LimitWindowSeconds: &lim}},
+		}}}
+	})
+	s.capacityDeliver = func(string, string) error { return nil }
+
+	s.NoteCapacity() // first reading only arms the watch; fleet intent stays held.
+	if got := s.fleetIntent().FleetState(); got != fleetintent.Parked {
+		t.Fatalf("fleet state after first reading = %v, want still parked", got)
+	}
+
+	used = 10 // the window reset
+	s.NoteCapacity()
+	if got := s.fleetIntent().FleetState(); got != fleetintent.Working {
+		t.Fatalf("fleet state after restoration = %v, want working", got)
+	}
+	if by := s.fleetIntent().Fleet.By; by != capacityRestoreActor {
+		t.Fatalf("fleet intent by = %q, want %q", by, capacityRestoreActor)
+	}
+}
+
+// An owner-recorded Parked intent is never lifted by this evidence (🎯T969),
+// even when its reason reads as capacity-related.
+func TestT977CapacityRestoredDoesNotLiftOwnerParkedFleetIntent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{}
+	s.SetFleetIntentStore(store)
+	if err := s.SetFleetIntent(fleetintent.Parked, "owner",
+		"standing the fleet down for capacity while I'm travelling"); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	used := 92.0
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		rem := 100 - used
+		resets := now.Add(84 * time.Hour)
+		lim := planusage.DefaultWeeklyWindowSeconds
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{{
+			Provider: "claude", Status: planusage.StatusAvailable,
+			Windows: []planusage.Window{{Name: planusage.WindowWeekly, UsedPercent: &used, RemainingPercent: &rem, ResetsAt: &resets, LimitWindowSeconds: &lim}},
+		}}}
+	})
+	s.capacityDeliver = func(string, string) error { return nil }
+
+	s.NoteCapacity()
+	used = 10
+	s.NoteCapacity()
+	if got := s.fleetIntent().FleetState(); got != fleetintent.Parked {
+		t.Fatalf("fleet state after restoration = %v, want still parked (owner-recorded, 🎯T969)", got)
+	}
+}
+
+// A fleet-wide BlockedProvider intent is left to its own, more conservative
+// clearance (🎯T406: a successful provider call) — a plan restoration alone
+// does not settle whether the provider itself is still refusing (revoked
+// key, spend wall).
+func TestT977CapacityRestoredDoesNotLiftBlockedProviderFleetIntent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{}
+	s.SetFleetIntentStore(store)
+	if err := s.SetFleetIntent(fleetintent.BlockedProvider, hardBlockBy,
+		"provider hard-block: revoked key"); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	used := 92.0
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		rem := 100 - used
+		resets := now.Add(84 * time.Hour)
+		lim := planusage.DefaultWeeklyWindowSeconds
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{{
+			Provider: "claude", Status: planusage.StatusAvailable,
+			Windows: []planusage.Window{{Name: planusage.WindowWeekly, UsedPercent: &used, RemainingPercent: &rem, ResetsAt: &resets, LimitWindowSeconds: &lim}},
+		}}}
+	})
+	s.capacityDeliver = func(string, string) error { return nil }
+
+	s.NoteCapacity()
+	used = 10
+	s.NoteCapacity()
+	if got := s.fleetIntent().FleetState(); got != fleetintent.BlockedProvider {
+		t.Fatalf("fleet state after restoration = %v, want still blocked_provider (🎯T406 owns this clearance)", got)
 	}
 }
