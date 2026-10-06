@@ -804,6 +804,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #send { min-height: var(--control-h); padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
+/* 🎯T1020: mobile/touch has no paste/drag-drop, so a visible attach
+   button + hidden file input is the only path to the camera/photo
+   picker. Sized and styled like #voice-btn's icon-button convention. */
+.composer-attach { min-height: var(--control-h); padding: 11px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; }
+.composer-attach:hover { border-color: var(--accent); color: var(--accent); }
+.composer-attach:disabled { opacity: 0.3; cursor: not-allowed; }
 #voice-btn { padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; position: relative; }
 #voice-btn:hover { border-color: var(--accent); color: var(--accent); }
 #voice-btn.active { background: var(--red); color: #fff; border-color: var(--red); box-shadow: 0 0 12px rgba(248,113,113,0.5); animation: pulse 1.5s ease-in-out infinite; }

@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type ChangeEvent, type ClipboardEvent, type DragEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useDrafts } from '../store/drafts';
 import { durableImage, usePendingImages } from '../store/pendingImages';
 import { normalizeDensity, type Density } from '../density';
@@ -77,6 +77,7 @@ function NamedUserRequest(props: UserRequestProps) {
     setStoredPending(props.name, (typeof next === 'function' ? next(cur) : next).map(durableImage));
   };
   const boxRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [recalledText, setRecalledText] = useState('');
   // Editing history never overwrites the ordinary persisted draft. Changing
   // agent cancels this local edit instead of turning it into an ordinary Send.
@@ -241,6 +242,16 @@ function NamedUserRequest(props: UserRequestProps) {
     if (attachFromTransfer(e.dataTransfer)) e.preventDefault();
   };
 
+  // 🎯T1020: mobile/touch devices have no paste/drag-drop clipboard access,
+  // so a visible button + hidden file input is the only affordance that
+  // reaches the camera/photo-picker sheet. Reuses attachFromTransfer
+  // unchanged — a FileList already satisfies ClipboardLike's {files} shape.
+  const onFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    attachFromTransfer({ files: e.target.files ?? undefined });
+    // Reset so picking the same file again still fires a change event.
+    e.target.value = '';
+  };
+
   const removeChip = (idx: number) => {
     setPending((cur) => {
       const img = cur[idx];
@@ -392,6 +403,29 @@ function NamedUserRequest(props: UserRequestProps) {
           </span>
         </>
       )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={onFileInputChange}
+      />
+      <button
+        id={compact ? 'agent-inspect-attach' : 'attach-image'}
+        type="button"
+        className="composer-attach"
+        title="Attach an image"
+        aria-label="Attach an image"
+        disabled={rewinding || props.disabled === true}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        {/* Plain glyph, matching the remove-chip × button's minimal style (🎯T1020: no existing icon-button convention in the composer to match). */}
+        {'\u{1F4CE}'}
+      </button>
       <button
         id={sendId}
         type="button"
