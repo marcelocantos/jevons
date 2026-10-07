@@ -16,6 +16,7 @@ import {
   tickerGroups,
   type LastReading,
   type PlanSnapshot,
+  type TickerGroup,
 } from '../plan/tickerGroups';
 import { PlanTipTable } from '../plan/tipTable';
 import { OverrideBlockIcon } from '../plan/OverrideBlockIcon';
@@ -79,6 +80,17 @@ function hasNumericRemaining(snap: PlanSnapshot | undefined): boolean {
 function migrationFailureSummary(failure: string): string {
   if (/invalid_grant/i.test(failure)) return 'Destination refresh token was rejected (invalid_grant).';
   return failure.split('\n').find((line) => line.trim())?.trim() || 'Authentication failed.';
+}
+
+function spendText(spend: NonNullable<TickerGroup['spend']>, compact: boolean): string {
+  const label = spend.unavailable_reason
+    ? 'spend unavailable (' + spend.unavailable_reason + ')'
+    : spend.used_aud != null && spend.limit_aud != null
+      ? compact
+        ? 'A$' + spend.used_aud.toFixed(2) + ' / A$' + spend.limit_aud.toFixed(2)
+        : 'A$' + spend.used_aud.toFixed(2) + ' of A$' + spend.limit_aud.toFixed(2) + ' this month'
+      : 'spend unavailable (incomplete spend reading)';
+  return label + (spend.limit_reached ? ' — limit reached' : '');
 }
 
 export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly RefusedSeat[] } = {}) {
@@ -214,7 +226,8 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
   const groups = held.groups;
   // 🎯T588.1: a grid, so comparing two providers is a glance along a row.
   const overridden = groups.find((g) => g.provider === overrideTip && g.override)?.override;
-  const tip = overridden ? (
+  const tip = <>
+  {overridden ? (
     <div className="plan-override-card">
       <strong>{overrideTipHeading(overrideTip, overridden)}</strong>
       <div className="plan-override-reason">{overridden.reason}</div>
@@ -222,17 +235,6 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
     </div>
   ) : <>
     <PlanTipTable groups={groups} nowMs={now()} />
-    {groups.some((g) => g.spend) ? (
-      // 🎯T967.1: the hover card's dollar-and-cents line, same bold red
-      // treatment as the bar — "A$72.84 of A$100 this month".
-      <div className="plan-spend-notice">
-        {groups.filter((g) => g.spend).map((g) => (
-          <div key={g.provider} className="plan-spend">
-            {g.provider}: A${g.spend!.used_aud.toFixed(2)} of A${g.spend!.limit_aud.toFixed(2)} this month
-          </div>
-        ))}
-      </div>
-    ) : null}
     {failedMigrations.length ? (
       <div className="plan-migration-failures">
         <strong>Claudia could not switch these running agents:</strong>
@@ -248,6 +250,18 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
         <strong>These plan logins need you to sign in:</strong>
         {unhealthyLogins.map((p) => (
           <div key={p.provider}>{p.plan}: {loginStateText(p)}</div>
+        ))}
+      </div>
+    ) : null}
+  </>}
+    {groups.some((g) => g.spend) ? (
+      // 🎯T967.1: the hover card's dollar-and-cents line, same bold red
+      // treatment as the bar — "A$72.84 of A$100 this month".
+      <div className="plan-spend-notice">
+        {groups.filter((g) => g.spend).map((g) => (
+          <div key={g.provider} className="plan-spend">
+            {g.provider}: {spendText(g.spend!, false)}
+          </div>
         ))}
       </div>
     ) : null}
@@ -338,11 +352,9 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
               // real money being spent right now.
               <span
                 className="plan-spend"
-                aria-label={
-                  'Spending A$' + g.spend.used_aud.toFixed(2) + ' of A$' + g.spend.limit_aud.toFixed(2) + ' this month'
-                }
+                aria-label={g.spend.unavailable_reason ? spendText(g.spend, false) : 'Spending ' + spendText(g.spend, false)}
               >
-                {'A$' + g.spend.used_aud.toFixed(2) + ' / A$' + g.spend.limit_aud.toFixed(2)}
+                {spendText(g.spend, true)}
               </span>
             ) : null}
             {g.override ? (

@@ -73,11 +73,11 @@ func TestT967_1SpendShownOnlyWhileSpending(t *testing.T) {
 		}
 	})
 
-	t.Run("absent with no spend block at all", func(t *testing.T) {
+	t.Run("unavailable with no spend block at all", func(t *testing.T) {
 		snap := Snapshot{Backends: []Backend{claudeBackendAt(100, 8, nil, now)}}
 		out := WithBands(snap, now, th)
-		if out.Backends[0].Spend != nil {
-			t.Fatalf("expected no Spend with nil raw spend block, got %+v", out.Backends[0].Spend)
+		if sp := out.Backends[0].Spend; sp == nil || sp.UnavailableReason == "" || sp.UsedAUD != 0 {
+			t.Fatalf("missing spend must say unavailable with a reason, not guess money: %+v", sp)
 		}
 	})
 
@@ -101,7 +101,7 @@ func TestT967_1SpendShownOnlyWhileSpending(t *testing.T) {
 		}
 	})
 
-	t.Run("non-AUD currency with no documented rate is not shown", func(t *testing.T) {
+	t.Run("non-AUD currency with no documented rate is unavailable", func(t *testing.T) {
 		spend := &claudia.PlanSpend{
 			Enabled: true,
 			Used:    &claudia.PlanMoney{AmountMinor: 7284, Exponent: 2, Currency: "USD"},
@@ -109,8 +109,24 @@ func TestT967_1SpendShownOnlyWhileSpending(t *testing.T) {
 		}
 		snap := Snapshot{Backends: []Backend{claudeBackendAt(100, 8, spend, now)}}
 		out := WithBands(snap, now, th)
-		if out.Backends[0].Spend != nil {
-			t.Fatalf("expected no Spend for undocumented currency, got %+v", out.Backends[0].Spend)
+		if sp := out.Backends[0].Spend; sp == nil || sp.UnavailableReason == "" {
+			t.Fatalf("undocumented currency must say unavailable, not guess AUD: %+v", sp)
+		}
+	})
+
+	t.Run("missing money at full window reports unavailable", func(t *testing.T) {
+		spend := &claudia.PlanSpend{Enabled: true, Limit: &claudia.PlanMoney{AmountMinor: 10000, Exponent: 2, Currency: "AUD"}}
+		out := WithBands(Snapshot{Backends: []Backend{claudeBackendAt(100, 8, spend, now)}}, now, th)
+		if sp := out.Backends[0].Spend; sp == nil || sp.UnavailableReason == "" || sp.UsedAUD != 0 {
+			t.Fatalf("missing money must say unavailable rather than guess: %+v", sp)
+		}
+	})
+	t.Run("spend limit reached is distinct", func(t *testing.T) {
+		spend := claudeSpendFixture(true)
+		spend.LimitReached = true
+		out := WithBands(Snapshot{Backends: []Backend{claudeBackendAt(100, 8, spend, now)}}, now, th)
+		if sp := out.Backends[0].Spend; sp == nil || !sp.LimitReached || sp.UsedAUD != 72.84 {
+			t.Fatalf("limit reached must retain both amount and flag: %+v", sp)
 		}
 	})
 }

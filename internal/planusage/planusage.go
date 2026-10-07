@@ -165,11 +165,9 @@ type Backend struct {
 	// means the provider published no such balance. Reported as a raw
 	// number for now; no banding/thresholds (🎯 owner: raw number only).
 	CreditsBalance *float64 `json:"credits_balance,omitempty"`
-	// Spend is the extra/overage-usage spend figure (🎯T967.1), filled at
-	// serve time by WithBands. Nil whenever it must not be shown: the
-	// provider has no spend block, spend is not enabled, or no plan
-	// window is currently at 100% — "only while spending" is the rule,
-	// not "whenever the provider could in principle spend".
+	// Spend is the extra/overage-usage reading (🎯T967.1), gated at
+	// serve time. At a full Claude plan window a missing/malformed spend
+	// block is explicitly unavailable, never silently interpreted as zero.
 	Spend *BackendSpend `json:"spend,omitempty"`
 	// rawSpend is the raw provider-published spend block this backend's
 	// reading carried, before WithBands decides whether to show it. Not
@@ -177,20 +175,15 @@ type Backend struct {
 	rawSpend *claudia.PlanSpend `json:"-"`
 }
 
-// BackendSpend is the served, already-gated extra-usage spend figure
-// (🎯T967.1): money the owner is actually being charged right now, past
-// the subscription allowance, converted to AUD per the 🎯T967 currency
-// rule. Always bold red in the cockpit, override-proof — a planusage
-// override (🎯T948) that forces the bar green does not touch this field
-// or its styling.
+// BackendSpend is the served Claude extra-usage reading. A money figure is
+// present only while spending past the subscription allowance; if the
+// provider's spend block is missing or malformed at a full window, the
+// reason is shown instead of guessing. LimitReached is the provider flag.
 type BackendSpend struct {
-	// UsedAUD and LimitAUD are the provider's own used/limit money,
-	// converted to AUD. Currently populated only when the provider's own
-	// currency is already AUD (Claude, as of the 2026-09-30 live probe);
-	// a non-AUD spend block with no documented exchange rate is left
-	// unserved (Spend stays nil) rather than shown as a wrong currency.
-	UsedAUD  float64 `json:"used_aud"`
-	LimitAUD float64 `json:"limit_aud"`
+	UsedAUD           float64 `json:"used_aud"`
+	LimitAUD          float64 `json:"limit_aud"`
+	UnavailableReason string  `json:"unavailable_reason,omitempty"`
+	LimitReached      bool    `json:"limit_reached,omitempty"`
 }
 
 // Available reports whether this backend published anything usable.

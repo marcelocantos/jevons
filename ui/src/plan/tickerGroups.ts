@@ -47,7 +47,7 @@ export type PlanBackend = {
 
 /** 🎯T967.1: AUD money the owner is being charged right now, past the
  * subscription allowance. Always rendered bold red, override-proof. */
-export type PlanSpend = { used_aud: number; limit_aud: number };
+export type PlanSpend = { used_aud?: number; limit_aud?: number; unavailable_reason?: string; limit_reached?: boolean };
 
 export type PlanOverride = { band: string; reason: string; set_by?: string; set_at?: string };
 
