@@ -205,3 +205,18 @@ func (s *Store) Resolve(id Identity, state State, note string) error {
 		return nil, fmt.Errorf("unknown owner question %s/%s/%s@%s", id.Repo, id.Target, id.ID, id.Version)
 	})
 }
+
+// OpenVersion checks the durable lifecycle of an exact question version.
+// Replayed blocked reports must not repage a question the owner answered.
+func (s *Store) OpenVersion(id Identity) (bool, error) {
+	rows, err := s.List(false)
+	if err != nil {
+		return false, err
+	}
+	for _, q := range rows {
+		if q.Identity.key() == id.key() {
+			return q.State == Open, nil
+		}
+	}
+	return false, nil
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/ownerquestions"
 	"github.com/marcelocantos/jevons/internal/ownerquestionview"
 	"github.com/mark3labs/mcp-go/mcp"
+	"time"
 )
 
 // SetOwnerQuestionsDir exposes the durable cross-repo question index. This is
@@ -138,6 +139,35 @@ func (s *Server) handleOwnerQuestions(_ context.Context, req mcp.CallToolRequest
 		}
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
+		}
+		key := repo + "#" + id.Target + "#" + id.ID
+		if op == "resolve" {
+			remaining, err := st.List(true)
+			if err != nil {
+				return mcp.NewToolResultError("lifecycle saved but open-list failed: " + err.Error()), nil
+			}
+			anyOpen := false
+			for _, q := range remaining {
+				if q.Identity.Repo == repo && q.Identity.Target == id.Target && q.Identity.ID == id.ID {
+					anyOpen = true
+					break
+				}
+			}
+			if !anyOpen {
+				if err := ownerquestions.New(s.ownerQuestionsDir).Resolve(key); err != nil {
+					return mcp.NewToolResultError("lifecycle saved but notification close failed: " + err.Error()), nil
+				}
+			}
+		} else if s.stateDir != "" {
+			open, err := st.OpenVersion(id)
+			if err != nil {
+				return mcp.NewToolResultError("intake saved but status read failed: " + err.Error()), nil
+			}
+			if open {
+				if _, err := ownerquestions.New(s.ownerQuestionsDir).Observe(ownerquestions.Question{Key: key, Text: str(a["text"])}, time.Now()); err != nil {
+					return mcp.NewToolResultError("intake saved but notification failed (retry retained): " + err.Error()), nil
+				}
+			}
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Owner question %s/%s/%s@%s %sed in durable index", repo, id.Target, id.ID, id.Version, op)), nil
 	default:
