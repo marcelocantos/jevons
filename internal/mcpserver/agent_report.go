@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/notice"
+	"github.com/marcelocantos/jevons/internal/ownerquestion"
 	"github.com/marcelocantos/jevons/internal/ownerquestions"
 	"github.com/marcelocantos/jevons/internal/ownerquestionview"
 )
