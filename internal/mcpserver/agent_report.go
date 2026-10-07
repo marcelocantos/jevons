@@ -16,6 +16,8 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/notice"
+	"github.com/marcelocantos/jevons/internal/ownerquestion"
+	"github.com/marcelocantos/jevons/internal/ownerquestions"
 )
 
 // SetAgentReportDir wires the durable agent-report store (🎯T388) under
@@ -83,6 +85,16 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 		return agentreport.Handle{}
 	}
 	s.recordTerminalNotice(dir, agentName, text, now)
+	// Only typed, validated owner-decision blocks enter the standing outbox;
+	// generic "blocked" prose never pages the owner.
+	if q, ok, qerr := ownerquestion.FromBlockedReport(text); qerr != nil {
+		slog.Warn("owner question intake rejected", "agent", agentName, "err", qerr)
+	} else if ok {
+		key := q.Identity.Repo + "#" + q.Identity.Target + "#" + q.Identity.ID
+		if _, err := ownerquestions.New(dir).Observe(ownerquestions.Question{Key: key, Text: q.Text}, now); err != nil {
+			slog.Error("owner question spool failed (retry retained)", "agent", agentName, "key", key, "err", err)
+		}
+	}
 	// 🎯T938: the seat's newest word supersedes any blocker clear.
 	s.forgetSeatBlockerClear(agentName)
 	return rec.Handle()
