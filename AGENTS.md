@@ -307,6 +307,25 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Pure helpers: `ClassifyWorkerIdleDisposition`, `ClassifyStopDisposition`,
   `LooksLikeOwnWorkCompleteReport`. Hermetic: `TestT985*` in
   `internal/mcpserver`.
+- **An active wait is not a finish (🎯T1024):** a worker narrating an
+  active wait on an alive external process it does not control — "my gate
+  run is alive and still queued", "queued fifth on the shared heavy lease",
+  "the monitor armed last turn is still watching" — is mid-wait, whatever
+  completion word a sub-step earned ("the landing is done and verified",
+  "50365 finished (another worker's gate)"). On 2026-10-07 two arrai seats
+  were reaped `finished_work` on exactly those sentences: completion word +
+  oracle evidence is the 🎯T445 finish shape, and the 🎯T972 pending-gate
+  veto only hears 🎯T565's wait verbs ("waiting on", "still running"), not
+  monitoring vocabulary. `FindActiveExternalWait` recognises a sentence
+  that states a continuing wait, names the thing waited on (gate, lease,
+  lock, queue, monitor, background process), and does not also say it
+  resolved (GREEN, exit=, passed, failed, came back, past tense). The
+  🎯T972 scan keeps the seat as `outstanding_scope_active_wait` and tells
+  the parent, quoting the sentence; 🎯T985 parks rather than reaps; the
+  sentinel's `finished_awaiting_gate` reads outstanding scope too. A finish
+  that recounts a wait it saw through still reaps. Specimens are the real
+  stored reports, byte for byte: `internal/mcpserver/testdata/t1024_*`;
+  hermetic `TestT1024*`.
 - **Greenfield oracle elicitation (🎯T31.2):** for new software (no
   external reference), co-develop an **oracle-coverage map** alongside
   design — **pinned** / **fuzzy** / load-bearing **when X expect Y**

@@ -42,7 +42,9 @@ func fillIdleResidueEvidence(ao *staffops.AgentObs, d claudia.AgentDef, stateDir
 
 	if strings.TrimSpace(stateDir) != "" && strings.TrimSpace(d.Name) != "" {
 		if rec, err := agentreport.Latest(stateDir, d.Name); err == nil && strings.TrimSpace(rec.Text) != "" {
-			ao.ReportLooksFinished = LooksLikeFinishedWorkReport(rec.Text)
+			// 🎯T1024: a finish shape that leaves scope outstanding (mid-gate,
+			// mid-wait, typed in-progress) is not finished_awaiting_gate.
+			ao.ReportLooksFinished = storedReportLooksFinished(rec.Text)
 			if ReportAwaitsOverseer(rec.Text) {
 				ao.OwnerAskPresent = true
 			}
