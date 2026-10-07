@@ -1659,14 +1659,23 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 	// here, in front of the report, before the overseer can accept it and
 	// before a target retires on it. The banner rides outside the elision so
 	// a long report cannot push the warning off the end.
-	if flags := FalseGreenFlags(text); len(flags) > 0 {
+	//
+	// 🎯T1027: the check also knows whose report this is. Cited gate ids are
+	// resolved against the author's own repository (foreign_repo_gate), and
+	// the banner names the author, so a banner delivered into a supervisor
+	// turn alongside another agent's report cannot be read as that one's.
+	var reportWorkDir string
+	if def := s.registry.Def(agentName); def != nil {
+		reportWorkDir = def.WorkDir
+	}
+	if flags := FalseGreenFlagsForReport(text, reportWorkDir); len(flags) > 0 {
 		kinds := falseGreenKinds(flags)
 		slog.Warn("T386 false-green flags on agent report",
 			"agent", agentName, "flags", kinds)
 		s.logLifecycle(compAgentLifecycle, "false_green", "flagged", map[string]any{
 			"agent": agentName, "flags": kinds,
 		})
-		banner := gate.Banner(flags) + "\n\n"
+		banner := gate.BannerFor(agentName, flags) + "\n\n"
 		msg = banner + msg
 		parentMsg = banner + parentMsg
 	}

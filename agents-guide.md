@@ -1011,7 +1011,19 @@ String-matching rules (`pipeline_masked`, `shell_array_trap`,
 names the hazard (🎯T742). A report quoting the hazard from its own cited
 run is still flagged. Do not weaken dirty_tree_gate.
 
-**Residual:** the banner marks a report, it does not block delivery.
+**The store is one namespace for every repo on this machine (🎯T1027).**
+A cited gate whose record measured a commit your own repository does not
+hold is flagged `foreign_repo_gate`, whatever its verdict — another repo's
+run is not evidence for work here. Before you cite an id you did not just
+watch `bin/gate` print, ask: `jevons_gate_show id=<id> workdir=<your
+workdir>` answers `scope: own | FOREIGN | unknown`. The FALSE-GREEN banner
+names the report it judged (`Report from <agent>.`), so a banner delivered
+beside another agent's report cannot be read as that one's — the
+2026-10-07 incident was that misreading by a supervisor, not a worker's
+citation.
+
+**Residual:** the banner marks a report, it does not block delivery; a
+record with no tree provenance is unknown, never foreign.
 
 ## Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194)
 

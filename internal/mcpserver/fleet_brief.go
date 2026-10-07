@@ -120,6 +120,13 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   quoted command/output, or output shape — and do not fire on prose that
   names the hazard (🎯T742). A report quoting the hazard from its own cited
   run is still flagged. Do not weaken dirty_tree_gate.
+- The store is one namespace for every repo on this machine (🎯T1027). A
+  cited gate whose record measured a commit YOUR repository does not hold is
+  flagged foreign_repo_gate, whatever its verdict — another repo's run is not
+  evidence for your work. Before citing an id you did not just watch bin/gate
+  print, ask jevons_gate_show id=<id> workdir=<your workdir>; it answers
+  scope: own | FOREIGN | unknown. The banner names the report it judged
+  ("Report from <agent>."): read the name, not the position.
 
 ## Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194)
 - Daemon/API product (HTTP API, compiled server, non-static) is **not

@@ -807,7 +807,13 @@ String-matching rules (`pipeline_masked`, `shell_array_trap`,
 `empty_status`, `output_contradicts`) each declare a scannable region
 (quoted command/output, or output shape) and do not fire on prose that
 names the hazard (🎯T742). A report quoting the hazard from its own cited
-run is still flagged. Do not weaken dirty_tree_gate.
+run is still flagged. Do not weaken dirty_tree_gate. The store is one
+namespace for every repo on this machine (🎯T1027): a cited gate whose
+record measured a commit the citing agent's repository does not hold is
+flagged `foreign_repo_gate`, whatever its verdict, and the banner names the
+report it judged (`Report from <agent>.`) — read the name, not the
+position, before attributing a flag; `jevons_gate_show id=<id>
+workdir=<workdir>` answers `scope: own | FOREIGN | unknown` for anyone.
 **Residual:** the banner marks a report, it does not block delivery;
 detection is textual and narrow on purpose (a checker that flags honest
 reports gets skimmed past, which launders the next real false green).
