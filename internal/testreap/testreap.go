@@ -37,7 +37,10 @@ const cleanupWait = 10 * time.Second
 // its cleanup closed the pipe — then kills everything matching $1. `exec`
 // matters: pkill never signals itself, but it would signal a shell whose own
 // argv carries the pattern before it finished the sweep.
-const watcherScript = `read -r _ ; exec "$1" -KILL -f -- "$2"`
+// The pattern begins with an absolute temp path, never a dash. Do not use
+// GNU's `--` terminator: macOS pkill rejects it, silently disabling the
+// emergency sweep on this machine.
+const watcherScript = `read -r _ ; exec "$1" -KILL -f "$2"`
 
 // Arm arranges that every process whose argv names the test's temp root is
 // killed when the test ends, pass, fail, or the binary dying under it. It
