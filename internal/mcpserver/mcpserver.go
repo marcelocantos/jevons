@@ -487,7 +487,8 @@ type Server struct {
 
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
-	ideaStateDir string
+	ideaStateDir      string
+	ownerQuestionsDir string
 
 	// agentReportDir roots the durable agent-report store (🎯T388) so a
 	// terminal report outlives the agent that wrote it. Empty until

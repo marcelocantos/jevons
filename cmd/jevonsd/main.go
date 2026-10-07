@@ -845,6 +845,7 @@ func main() {
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
 	// ð¯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)
+	mcpSrv.SetOwnerQuestionsDir(cfg.StateDir)
 	// ð¯T388: durable agent-report store (state_dir/agent-reports/) so a
 	// terminal report survives the ð¯T165/T195 reap of the agent that wrote it,
 	// and an over-bound delivery can name a call that returns the whole text.

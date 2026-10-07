@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/ownerquestion"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -81,6 +82,17 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 		slog.Error("agent report store failed",
 			"agent", agentName, "len", len(text), "err", err)
 		return agentreport.Handle{}
+	}
+	// Only explicit typed owner-decision envelopes enter the owner-question
+	// index. Ordinary blocked reports are not silently promoted by prose.
+	if s.ownerQuestionsDir != "" {
+		if q, ok, parseErr := ownerquestion.FromBlockedReport(text); parseErr != nil {
+			slog.Error("typed owner question invalid", "agent", agentName, "err", parseErr)
+		} else if ok {
+			if err := s.recordOwnerQuestion(q); err != nil {
+				slog.Error("owner question intake failed", "agent", agentName, "err", err)
+			}
+		}
 	}
 	s.recordTerminalNotice(dir, agentName, text, now)
 	// 🎯T938: the seat's newest word supersedes any blocker clear.

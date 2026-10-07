@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/ownerquestion"
+	"github.com/marcelocantos/jevons/internal/ownerquestionview"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -49,6 +50,14 @@ func (s *Server) recordedGateQuestion(cwd, target, question, by string, result *
 	if err != nil {
 		return result, err
 	}
+	if s.ownerQuestionsDir != "" {
+		if err := ownerquestionview.New(s.ownerQuestionsDir).Record(ownerquestionview.Question{
+			Identity: ownerquestionview.Identity{Repo: q.Identity.Repo, Target: q.Identity.Target, ID: q.Identity.ID, Version: q.Identity.Version},
+			Text:     q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute,
+		}); err != nil {
+			result.Content = append(result.Content, mcp.TextContent{Type: "text", Text: "question view intake FAILED: " + err.Error()})
+		}
+	}
 	entry, err := ownerquestions.New(s.stateDir).Observe(ownerquestions.Question{Key: q.Identity.Repo + "#" + q.Identity.Target + "#" + q.Identity.ID, Text: q.Text}, time.Now())
 	if err != nil {
 		result.Content = append(result.Content, mcp.TextContent{Type: "text", Text: "notification FAILED (retry retained): " + err.Error()})
@@ -64,6 +73,11 @@ func (s *Server) resolveGateNotification(cwd, target string) {
 	repo, err := ownerquestion.CanonicalRepo(cwd)
 	if err != nil {
 		return
+	}
+	if s.ownerQuestionsDir != "" {
+		if err := s.resolveGateQuestion(repo, target, "owner gate answered"); err != nil {
+			fmt.Printf("owner gate question view close failed: %v\n", err)
+		}
 	}
 	if err := ownerquestions.New(s.stateDir).Resolve(repo + "#" + target + "#owner-gate"); err != nil {
 		fmt.Printf("owner gate notification close failed: %v\n", err)
