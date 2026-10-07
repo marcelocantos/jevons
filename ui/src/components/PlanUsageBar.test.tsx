@@ -385,4 +385,31 @@ describe('PlanUsageBar mux wiring', () => {
     const spend = container.querySelector('.plan-spend') as HTMLElement;
     expect(spend.textContent).toBe('A$72.84 / A$100.00');
   });
+
+  it('renders an unavailable reason and a distinct limit-reached state on a full Claude window', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(), closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const { container } = render(createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux })));
+    const frame = (spend: unknown) => handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame', ch: PLAN_USAGE_CHANNEL,
+      body: { backends: [{ provider: 'claude', status: 'available',
+        windows: [{ name: 'session', remaining_percent: 0, used_percent: 100, band: 'ok' }],
+        override: { band: 'ok', reason: 'owner override' }, spend }] },
+    });
+    frame({ unavailable_reason: 'spend block missing from Claude usage reading' });
+    await waitFor(() => expect(container.querySelector('.plan-spend')?.textContent).toContain('spend unavailable'));
+    expect(container.querySelector('.plan-spend')?.textContent).toContain('spend block missing');
+    expect(container.querySelector('.plan-spend')?.textContent).not.toContain('A$');
+    frame({ used_aud: 72.84, limit_aud: 100, limit_reached: true });
+    await waitFor(() => expect(container.querySelector('.plan-spend')?.textContent).toContain('limit reached'));
+    expect(container.querySelector('.plan-spend')?.textContent).toContain('A$72.84 / A$100.00');
+  });
+
 });

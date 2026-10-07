@@ -47,7 +47,11 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 	for i := range out.Backends {
 		be := &out.Backends[i]
 		if be.Available() {
-			be.Spend = spendIfActive(be.rawSpend, be.Windows)
+			if strings.EqualFold(be.Provider, "claude") {
+				be.Spend = spendIfActive(be.rawSpend, be.Windows)
+			} else {
+				be.Spend = nil
+			}
 		} else {
 			be.Spend = nil
 		}
@@ -119,36 +123,25 @@ func historyWithBands(w Window, th Thresholds) []HistoryPoint {
 	return out
 }
 
-// spendIfActive is the 🎯T967.1 gate: a provider's extra-usage spend is
-// shown only while it is actually being spent, never merely because
-// spending is enabled.
-//
-// "Being spent" is spend.Enabled AND at least one plan window (session or
-// weekly — a per-model window does not count; Fable spent is not Claude
-// spending, 🎯T693) currently reads 100% used. Below 100% the account may
-// have overage turned on but is not drawing on it yet, and the rule from
-// the owner (2026-09-30) is silence until it actually happens.
-//
-// Returns nil whenever the figure must not be shown: no spend block, not
-// enabled, no window at 100%, or the provider's currency is not AUD and
-// there is no documented exchange rate to convert it (🎯T967 currency
-// rule — never a wrong-currency number, never a guessed rate).
+// spendIfActive gates Claude's provider-published extra-usage reading. At a
+// full plan window a missing or changed block is unknown, not zero spend:
+// show an explicit unavailable reason without inventing a dollar figure.
 func spendIfActive(raw *claudia.PlanSpend, windows []Window) *BackendSpend {
-	if raw == nil || !raw.Enabled {
+	if !anyPlanWindowFull(windows) {
 		return nil
 	}
-	if !anyPlanWindowFull(windows) {
+	if raw == nil {
+		return &BackendSpend{UnavailableReason: "spend block missing from Claude usage reading"}
+	}
+	if !raw.Enabled && !raw.LimitReached {
 		return nil
 	}
 	used := audMajorUnits(raw.Used)
 	limit := audMajorUnits(raw.Limit)
 	if used == nil || limit == nil {
-		// Missing or non-AUD money reads as unavailable with a reason at
-		// the Reason-surfacing layer; here it is simply not shown (🎯T967.1
-		// "missing data ... reads as unavailable ... never guessed").
-		return nil
+		return &BackendSpend{UnavailableReason: "Claude spend money missing or currency not AUD", LimitReached: raw.LimitReached}
 	}
-	return &BackendSpend{UsedAUD: *used, LimitAUD: *limit}
+	return &BackendSpend{UsedAUD: *used, LimitAUD: *limit, LimitReached: raw.LimitReached}
 }
 
 // anyPlanWindowFull reports whether the plan's own window (session or
