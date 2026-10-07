@@ -79,7 +79,11 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		// 🎯T720 outage permanently unrecordable. The sanctioned reopen is
 		// the ceremony, and it is a different sequence (🎯T728).
 		if row, ok := targetfile.LoadGateRowFromCwd(cwd, target); ok && row.IsAchieved() {
-			return recordGateOnAchievedRow(cwd, target, rec, row)
+			result, err := recordGateOnAchievedRow(cwd, target, rec, row)
+			if err != nil {
+				return result, err
+			}
+			return recordedGateQuestion(cwd, target, rec.Question, by, result)
 		}
 		reason, err := rec.Reason()
 		if err != nil {
@@ -89,9 +93,10 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye assign failed: %v\n%s", err, out)), nil
 		}
-		return mcp.NewToolResultText(fmt.Sprintf(
+		result := mcp.NewToolResultText(fmt.Sprintf(
 			"🎯%s recorded as %s (🎯T449). Frontier-consume will park it, not spawn against it; the owner's accept/reject is the only thing left.\nReason written:\n%s\n\n%s",
-			target, ownergate.MarkerAwaiting, reason, out)), nil
+			target, ownergate.MarkerAwaiting, reason, out))
+		return recordedGateQuestion(cwd, target, rec.Question, by, result)
 
 	case "answer":
 		verdict, err := ownergate.ParseVerdict(str(args["verdict"]))
