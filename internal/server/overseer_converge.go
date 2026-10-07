@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/ownerquestions"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -342,6 +343,7 @@ func (s *Server) EnsureOverseer(state *cockpitState) error {
 	attempts := state.attempts
 	state.mu.Unlock()
 	defer s.reconcileOverseerPage(now)
+	defer s.reconcileOwnerQuestionDigest(now)
 
 	phase := planCockpit(obs, attempts, DefaultCockpitMaxAttempts, s.stuckBusyTimeout())
 	state.mu.Lock()
@@ -660,4 +662,24 @@ func (s *Server) StartCockpitConverge(ctx context.Context, interval time.Duratio
 		"interval", interval.String(),
 		"stuck_busy", DefaultStuckBusyTimeout.String(),
 	)
+}
+
+// reconcileOwnerQuestionDigest is a bounded standing reminder, independent of
+// overseer liveness. A successful blurter invocation acknowledges only spool.
+func (s *Server) reconcileOwnerQuestionDigest(now time.Time) {
+	s.mu.Lock()
+	if !s.ownerQuestionDigestCheck.IsZero() && now.Sub(s.ownerQuestionDigestCheck) < time.Minute {
+		s.mu.Unlock()
+		return
+	}
+	s.ownerQuestionDigestCheck = now
+	dir := s.stateDir
+	s.mu.Unlock()
+	if dir == "" {
+		return
+	}
+	store := ownerquestions.New(dir)
+	if err := store.Remind(now); err != nil {
+		slog.Warn("owner questions: digest spool failed", "err", err)
+	}
 }
