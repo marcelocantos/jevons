@@ -132,6 +132,7 @@ func attrsMap(r slog.Record) map[string]any {
 
 // fakeSender implements agentSender for 🎯T111.1 hermetic busy/queue tests.
 type fakeSender struct {
+	mu         sync.Mutex // guards sender state; timer-driven deliveries can call Send asynchronously
 	alive      bool
 	inFlight   bool
 	sent       []string
@@ -145,27 +146,48 @@ type fakeSender struct {
 	sendHook func()
 }
 
-func (f *fakeSender) Alive() bool { return f.alive }
+func (f *fakeSender) Alive() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.alive
+}
+
+// sentSnapshot copies the messages under the same lock used by Send. Polling
+// the sender from a test must not race a timer-driven delivery (🎯T1021).
+func (f *fakeSender) sentSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.sent...)
+}
 
 func (f *fakeSender) Send(text string) error {
+	f.mu.Lock()
 	if !f.alive {
+		f.mu.Unlock()
 		return fmt.Errorf("not running")
 	}
 	if f.sendErr != nil {
-		return f.sendErr
+		err := f.sendErr
+		f.mu.Unlock()
+		return err
 	}
 	if f.inFlight {
+		f.mu.Unlock()
 		return fmt.Errorf("grok acp: prompt already in flight")
 	}
 	f.sent = append(f.sent, text)
 	f.inFlight = true
-	if f.sendHook != nil {
-		f.sendHook()
+	hook := f.sendHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return nil
 }
 
 func (f *fakeSender) Interrupt() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.interrupts++
 	if f.afterInterruptClears {
 		f.inFlight = false

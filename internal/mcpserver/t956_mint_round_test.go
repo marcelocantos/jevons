@@ -80,14 +80,14 @@ func TestT956MintRoundLossNotifiesParentOnce(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && len(parent.sent) == 0 {
+	for time.Now().Before(deadline) && len(parent.sentSnapshot()) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(parent.sent) != 1 {
-		t.Fatalf("want exactly one parent notice for the whole round, got %d: %v", len(parent.sent), parent.sent)
+	if len(parent.sentSnapshot()) != 1 {
+		t.Fatalf("want exactly one parent notice for the whole round, got %d: %v", len(parent.sentSnapshot()), parent.sentSnapshot())
 	}
-	notice := parent.sent[0]
+	notice := parent.sentSnapshot()[0]
 	for _, name := range names {
 		if !strings.Contains(notice, name) {
 			t.Fatalf("notice must name every lost seat; missing %s in %q", name, notice)
@@ -114,8 +114,8 @@ func TestT956MintRoundSurvivorSuppressesNotice(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	if len(parent.sent) != 0 {
-		t.Fatalf("a round with a survivor must not be reported as a total loss, got %v", parent.sent)
+	if len(parent.sentSnapshot()) != 0 {
+		t.Fatalf("a round with a survivor must not be reported as a total loss, got %v", parent.sentSnapshot())
 	}
 }
 
@@ -134,18 +134,18 @@ func TestT956MintRoundGrowingRoundExtendsDebounce(t *testing.T) {
 	// though 200ms have passed since the first (300ms > the original 400ms
 	// window would have closed on the first loss alone).
 	time.Sleep(200 * time.Millisecond)
-	if len(parent.sent) != 0 {
-		t.Fatalf("second loss must have extended the debounce; fired early: %v", parent.sent)
+	if len(parent.sentSnapshot()) != 0 {
+		t.Fatalf("second loss must have extended the debounce; fired early: %v", parent.sentSnapshot())
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && len(parent.sent) == 0 {
+	for time.Now().Before(deadline) && len(parent.sentSnapshot()) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(parent.sent) != 1 {
-		t.Fatalf("want one notice naming both losses, got %d: %v", len(parent.sent), parent.sent)
+	if len(parent.sentSnapshot()) != 1 {
+		t.Fatalf("want one notice naming both losses, got %d: %v", len(parent.sentSnapshot()), parent.sentSnapshot())
 	}
-	if !strings.Contains(parent.sent[0], "jv-t956-seat-a") || !strings.Contains(parent.sent[0], "jv-t956-seat-b") {
-		t.Fatalf("notice must name both seats from the extended round: %q", parent.sent[0])
+	if !strings.Contains(parent.sentSnapshot()[0], "jv-t956-seat-a") || !strings.Contains(parent.sentSnapshot()[0], "jv-t956-seat-b") {
+		t.Fatalf("notice must name both seats from the extended round: %q", parent.sentSnapshot()[0])
 	}
 }
