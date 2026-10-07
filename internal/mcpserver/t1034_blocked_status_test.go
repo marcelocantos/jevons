@@ -28,6 +28,8 @@ func TestT1034BlockedGoalAndInProgressDoNotReap(t *testing.T) {
 			reg := t439Registry(t, "jv-t1034-specimen")
 			if ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t1034-specimen", tc.report, nil); ok {
 				t.Fatalf("reaped as %s", reason)
+			} else if tc.action == IdleActionPark && reason != IdleSkipBlockedOnOwner {
+				t.Fatalf("blocked report retained for %s, want blocked-on-owner", reason)
 			}
 			d := ClassifyStopDisposition("", "", tc.report, false, false, false)
 			if tc.action == IdleActionPark && d.Action != IdleActionPark {

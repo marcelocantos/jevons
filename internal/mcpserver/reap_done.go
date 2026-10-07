@@ -127,14 +127,19 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
 	}
-	if action := reportOpenStatus(report); action != "" {
-		if action == IdleActionPark {
-			return false, IdleSkipBlockedOnOwner
-		}
-		return false, "in_progress_report"
+	// A declared blocked goal is an external wait, even when the envelope
+	// still says in-progress. Preserve T784's outstanding-scope reason for
+	// ordinary in-progress reports; its parent notice depends on that reason.
+	if reportOpenStatus(report) == IdleActionPark {
+		return false, IdleSkipBlockedOnOwner
 	}
 	if scope := midWorkReportScope(report); scope != nil {
 		return false, outstandingScopeReapReason([]OutstandingScope{*scope})
+	}
+	// A partially invalid envelope may still carry a parsed status slot;
+	// never turn that field into a finished-work inference.
+	if reportOpenStatus(report) == IdleActionKeep {
+		return false, "in_progress_report"
 	}
 	// 🎯T395 before the generic no-claim case: a report that asks for a decision
 	// is the opposite of a completion claim, and the lifecycle log should say so
