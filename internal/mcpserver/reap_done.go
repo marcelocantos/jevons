@@ -47,7 +47,7 @@ func LooksLikeFinishedWorkReport(report string) bool {
 	// 🎯T938: a finish-report declaring status blocked is a seat waiting on
 	// someone else, not finished work. Reaping it would strand the mission
 	// the moment the blocker clears.
-	if _, blocked := envelope.BlockedOn(report); blocked {
+	if reportOpenStatus(report) != "" {
 		return false
 	}
 	if m, err := envelope.Parse(report); m != nil && err == nil {
@@ -127,8 +127,11 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
 	}
-	if _, blocked := envelope.BlockedOn(report); blocked {
-		return false, IdleSkipBlockedOnOwner
+	if action := reportOpenStatus(report); action != "" {
+		if action == IdleActionPark {
+			return false, IdleSkipBlockedOnOwner
+		}
+		return false, "in_progress_report"
 	}
 	if scope := midWorkReportScope(report); scope != nil {
 		return false, outstandingScopeReapReason([]OutstandingScope{*scope})

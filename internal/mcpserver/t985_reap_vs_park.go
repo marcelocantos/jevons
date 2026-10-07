@@ -140,8 +140,8 @@ func ClassifyWorkerIdleDisposition(text string) WorkerIdleAction {
 	if strings.TrimSpace(text) == "" {
 		return IdleActionKeep
 	}
-	if _, blocked := envelope.BlockedOn(text); blocked {
-		return IdleActionPark
+	if action := reportOpenStatus(text); action != "" {
+		return action
 	}
 	lower := claimScanText(strings.ToLower(text))
 	// 🎯T1024: a seat narrating an active wait on an alive external process
@@ -187,7 +187,7 @@ func LooksLikeOwnWorkCompleteReport(report string) bool {
 	if strings.TrimSpace(report) == "" {
 		return false
 	}
-	if _, blocked := envelope.BlockedOn(report); blocked {
+	if reportOpenStatus(report) != "" {
 		return false
 	}
 	if m, err := envelope.Parse(report); m != nil && err == nil && m.Kind != envelope.KindFinishReport {
