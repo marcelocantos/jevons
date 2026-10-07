@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/ownergate"
+	"github.com/marcelocantos/jevons/internal/ownerquestions"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -89,9 +90,18 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye assign failed: %v\n%s", err, out)), nil
 		}
+		notification := "notification unavailable: daemon state directory not configured"
+		if s.stateDir != "" {
+			entry, notifyErr := ownerquestions.New(s.stateDir).Observe(ownerquestions.Question{Key: cwd + "#" + target, Text: rec.Question}, time.Now())
+			if notifyErr != nil {
+				notification = fmt.Sprintf("notification FAILED (question retained for retry): %v", notifyErr)
+			} else {
+				notification = fmt.Sprintf("notification %s (spooled, NOT owner-delivered): %s", entry.Status, entry.SpoolPath)
+			}
+		}
 		return mcp.NewToolResultText(fmt.Sprintf(
-			"🎯%s recorded as %s (🎯T449). Frontier-consume will park it, not spawn against it; the owner's accept/reject is the only thing left.\nReason written:\n%s\n\n%s",
-			target, ownergate.MarkerAwaiting, reason, out)), nil
+			"🎯%s recorded as %s (🎯T449). Frontier-consume will park it, not spawn against it; the owner's accept/reject is the only thing left.\nReason written:\n%s\n\n%s\n%s",
+			target, ownergate.MarkerAwaiting, reason, out, notification)), nil
 
 	case "answer":
 		verdict, err := ownergate.ParseVerdict(str(args["verdict"]))
@@ -113,6 +123,11 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		out, err := runBullseye(ownerGateAnswerArgs(cwd, target)...)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye unassign failed: %v\n%s", err, out)), nil
+		}
+		if s.stateDir != "" {
+			if err := ownerquestions.New(s.stateDir).Resolve(cwd + "#" + target); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("gate answered but notification close failed: %v", err)), nil
+			}
 		}
 		next := "Owner accepted: achieve the target now, citing the landed commit and the gate ids."
 		if verdict == ownergate.VerdictReject {
