@@ -63,6 +63,12 @@ const (
 	// evidence carries uncommitted tracked changes or new untracked source
 	// files (🎯T946). Nothing was landed for the marker words to describe.
 	FlagUncitedClaimDirtyWorktree FlagKind = "uncited_claim_dirty_worktree"
+	// FlagForeignRepoGate: the report cites a gate whose record measured a
+	// commit the citing agent's own repository does not contain (🎯T1027).
+	// The gate may well be a real pass; it is evidence for someone else's
+	// work. The store is one namespace for every repo on the machine, and
+	// this is the only flag that asks whose run a cited id was.
+	FlagForeignRepoGate FlagKind = "foreign_repo_gate"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.
@@ -656,11 +662,26 @@ const BannerHeading = "⚠ FALSE-GREEN CHECK (🎯T386): this report's own evide
 // to the overseer. Empty when there is nothing to say — silence is the normal
 // case and must stay cheap to read past.
 func Banner(flags []Flag) string {
+	return BannerFor("", flags)
+}
+
+// BannerFor is Banner with the flagged report's author named on the heading
+// line. The notify path delivers several agents' reports into one supervisor
+// turn, and on 2026-10-07 an anonymous banner riding in front of one report
+// was read as belonging to the report before it — the overseer told jevons-po
+// that a jevons worker had cited an arrai gate it had never seen (🎯T1027).
+// A banner that says whose evidence it judged cannot be misattributed by
+// position. Empty agent keeps the plain heading, which BannerHeading readers
+// prefix-match.
+func BannerFor(agent string, flags []Flag) string {
 	if len(flags) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(BannerHeading)
+	if agent = strings.TrimSpace(agent); agent != "" {
+		fmt.Fprintf(&b, " Report from %s.", agent)
+	}
 	for _, f := range flags {
 		b.WriteString("\n  • ")
 		b.WriteString(f.String())

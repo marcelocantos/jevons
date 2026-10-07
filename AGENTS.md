@@ -459,9 +459,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `empty_status`, `output_contradicts`) each declare a scannable region
   (quoted command/output, or output shape) and do not fire on prose that
   names the hazard (🎯T742). A report quoting the hazard from its own cited
-  run is still flagged. Do not weaken dirty_tree_gate. Ratcheted by
-  `scripts/docratchet`. Residual: the banner marks a report, it does not
-  block delivery.
+  run is still flagged. Do not weaken dirty_tree_gate. **The store is one
+  namespace for every repo on this machine (🎯T1027):** a cited gate whose
+  record measured a commit the citing agent's own repository does not hold
+  is flagged `foreign_repo_gate` on the notify and reap paths, whatever its
+  verdict — another repo's run is not evidence for work here. Ask before you
+  cite: `jevons_gate_show id=<id> workdir=<your workdir>` answers `scope:
+  own | FOREIGN | unknown`. The banner names the report it judged, so a
+  banner delivered beside another agent's report cannot be read as that
+  one's (the 2026-10-07 incident was that misreading, not a worker's
+  citation). Ratcheted by `scripts/docratchet`. Residual: the banner marks a
+  report, it does not block delivery; a record with no tree provenance is
+  unknown, never foreign.
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
