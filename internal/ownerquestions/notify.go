@@ -159,7 +159,7 @@ func (s *Store) Observe(q Question, now time.Time) (Entry, error) {
 				send = BlurterSend
 			}
 			// Key cannot substitute for local per-question dedup: blurter's LastDigest is per APP.
-			path, err := send("jevons: owner decision needed", q.Text, "owner-question-"+hash(q.Key)[:16], q.Link)
+			path, err := send("jevons: owner decision needed ["+hash(q.Key)[:8]+"]", q.Text, "owner-question-"+hash(q.Key)[:16], q.Link)
 			if err != nil {
 				e.Status = "failed"
 				e.LastError = err.Error()
@@ -228,7 +228,7 @@ func (s *Store) Remind(now time.Time) error {
 				continue
 			}
 			e.LastAttempt = now
-			path, err := send("jevons: owner decision needed", e.Question.Text, "owner-question-"+hash(key)[:16], e.Question.Link)
+			path, err := send("jevons: owner decision needed ["+hash(key)[:8]+"]", e.Question.Text, "owner-question-"+hash(key)[:16], e.Question.Link)
 			if err != nil {
 				e.Status = "failed"
 				e.LastError = err.Error()
