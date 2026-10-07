@@ -36,6 +36,12 @@ class _FakeController extends PlatformWebViewController {
   _FakeController(super.params) : super.implementation();
 
   final List<Uri> loaded = [];
+  String? channelName;
+
+  @override
+  Future<void> addJavaScriptChannel(JavaScriptChannelParams params) async {
+    channelName = params.name;
+  }
 
   @override
   Future<void> setJavaScriptMode(JavaScriptMode javaScriptMode) async {}
@@ -112,6 +118,7 @@ void main() {
   testWidgets('the shell loads the configured cockpit URL', (tester) async {
     await pumpShell(tester);
     expect(platform.lastController?.loaded, [Uri.parse(kDefaultCockpitUrl)]);
+    expect(platform.lastController?.channelName, 'JevonsImagePicker');
   });
 
   testWidgets('a long-press on the WebView does not open Settings', (

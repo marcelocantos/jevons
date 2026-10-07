@@ -69,3 +69,26 @@ deploy_app(device="Pixel", owner=..., bundle_id="com.canticode.jevons_mobile",
 Android deploys need `bundle_id` because Spyder derives it with `aapt`, which
 is not on `PATH` here. The Pixel Fold is a verified deploy target, not a
 deferred one: `deploy_app(device="Fold", …)` with the same `bundle_id`.
+
+## Mobile image attachments (🎯T1020)
+
+The cockpit's attach button asks the Flutter `JevonsImagePicker` JavaScript
+channel for a photo/camera image. The shell uses `image_picker` on both
+platforms; it sends a JSON-escaped `jevons-picked-image` event containing
+base64 bytes, image name/type, and composer ID back to the WebView. The web
+composer reconstructs a `File` and uses its existing paste/drag-drop upload
+pipeline; browser users use the ordinary hidden file input instead. Cancel
+returns no image. Android additionally wires `setOnShowFileSelector` so plain
+HTML file inputs can invoke the same native picker, returning a file URI.
+
+Why a JS channel for iOS rather than a custom WKUIDelegate: the latest
+`webview_flutter_wkwebview` available to this project (3.27.0) does not expose
+`runOpenPanelWithParameters` or any Dart file-selector callback. Replacing the
+WebView plugin or swizzling its owned WKUIDelegate would couple the shell to
+private implementation and risk breaking navigation/JS delegate behavior. The
+supported `webview_flutter` JavaScript channel plus the maintained Flutter
+`image_picker` plugin uses the native iOS photo/camera picker without owning
+WKUIDelegate at all. `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription`
+are present for native picker permission prompts. Android's legacy HTML input
+callback is retained for non-composer pages; the JS channel is the composer
+path on both platforms, avoiding file-URI WebView access differences.
