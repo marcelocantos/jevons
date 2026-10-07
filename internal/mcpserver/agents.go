@@ -1665,8 +1665,10 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 	// the banner names the author, so a banner delivered into a supervisor
 	// turn alongside another agent's report cannot be read as that one's.
 	var reportWorkDir string
-	if def := s.registry.Def(agentName); def != nil {
-		reportWorkDir = def.WorkDir
+	if s.registry != nil {
+		if def := s.registry.Def(agentName); def != nil {
+			reportWorkDir = def.WorkDir
+		}
 	}
 	if flags := FalseGreenFlagsForReport(text, reportWorkDir); len(flags) > 0 {
 		kinds := falseGreenKinds(flags)
