@@ -406,10 +406,11 @@ func (e *thrashEnv) killDaemon() {
 
 // spawnedPIDs lists live processes whose executable lives under the env's
 // temp root, whatever they are currently doing — listening, starting up, or
-// wedged. Paths are compared with a separator suffix so a sibling TempDir
-// sharing a name prefix cannot match.
+// wedged. Use argv, not ps comm: Darwin truncates comm paths to 16 bytes,
+// so even a healthy fixture daemon was invisible to the old cleanup.
+// The root separator prevents a sibling TempDir prefix from matching.
 func (e *thrashEnv) spawnedPIDs() []int {
-	out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
+	out, err := exec.Command("ps", "-Ao", "pid=,args=").Output()
 	if err != nil {
 		return nil
 	}
@@ -417,13 +418,15 @@ func (e *thrashEnv) spawnedPIDs() []int {
 	self := os.Getpid()
 	var pids []int
 	for _, line := range strings.Split(string(out), "\n") {
-		// Split on the first space only: executable paths may contain spaces.
 		line = strings.TrimSpace(line)
 		sp := strings.IndexByte(line, ' ')
 		if sp < 0 {
 			continue
 		}
-		if !strings.HasPrefix(strings.TrimSpace(line[sp+1:]), prefix) {
+		// argv starts with the executable path; a root mentioned only in
+		// another process's arguments must not make it eligible for SIGKILL.
+		args := strings.TrimSpace(line[sp+1:])
+		if !strings.HasPrefix(args, prefix) {
 			continue
 		}
 		pid, err := strconv.Atoi(line[:sp])
