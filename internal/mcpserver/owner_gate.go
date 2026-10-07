@@ -14,7 +14,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/ownergate"
-	"github.com/marcelocantos/jevons/internal/ownerquestions"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
@@ -80,7 +79,11 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		// 🎯T720 outage permanently unrecordable. The sanctioned reopen is
 		// the ceremony, and it is a different sequence (🎯T728).
 		if row, ok := targetfile.LoadGateRowFromCwd(cwd, target); ok && row.IsAchieved() {
-			return recordGateOnAchievedRow(cwd, target, rec, row)
+			result, err := recordGateOnAchievedRow(cwd, target, rec, row)
+			if err != nil {
+				return result, err
+			}
+			return s.recordedGateQuestion(cwd, target, rec.Question, by, result)
 		}
 		reason, err := rec.Reason()
 		if err != nil {
@@ -90,18 +93,10 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye assign failed: %v\n%s", err, out)), nil
 		}
-		notification := "notification unavailable: daemon state directory not configured"
-		if s.stateDir != "" {
-			entry, notifyErr := ownerquestions.New(s.stateDir).Observe(ownerquestions.Question{Key: cwd + "#" + target, Text: rec.Question}, time.Now())
-			if notifyErr != nil {
-				notification = fmt.Sprintf("notification FAILED (question retained for retry): %v", notifyErr)
-			} else {
-				notification = fmt.Sprintf("notification %s (spooled, NOT owner-delivered): %s", entry.Status, entry.SpoolPath)
-			}
-		}
-		return mcp.NewToolResultText(fmt.Sprintf(
-			"🎯%s recorded as %s (🎯T449). Frontier-consume will park it, not spawn against it; the owner's accept/reject is the only thing left.\nReason written:\n%s\n\n%s\n%s",
-			target, ownergate.MarkerAwaiting, reason, out, notification)), nil
+		result := mcp.NewToolResultText(fmt.Sprintf(
+			"🎯%s recorded as %s (🎯T449). Frontier-consume will park it, not spawn against it; the owner's accept/reject is the only thing left.\nReason written:\n%s\n\n%s",
+			target, ownergate.MarkerAwaiting, reason, out))
+		return s.recordedGateQuestion(cwd, target, rec.Question, by, result)
 
 	case "answer":
 		verdict, err := ownergate.ParseVerdict(str(args["verdict"]))
@@ -114,7 +109,11 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		// step later.
 		if row, ok := targetfile.LoadGateRowFromCwd(cwd, target); ok &&
 			!row.IsAchieved() && ownergate.IsReopenedGate(row.OwnedByReason) {
-			return answerGateOnReopenedRow(cwd, target, verdict, str(args["note"]), by, row)
+			result, err := answerGateOnReopenedRow(cwd, target, verdict, str(args["note"]), by, row)
+			if err == nil && result != nil && !result.IsError {
+				s.resolveGateNotification(cwd, target)
+			}
+			return result, err
 		}
 		line := ownergate.FormatAnswer(verdict, str(args["note"]), by, time.Now())
 		// Unassign first: the gate is answered, so the target must return to
@@ -124,11 +123,7 @@ func (s *Server) handleOwnerGate(_ context.Context, req mcp.CallToolRequest) (*m
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("bullseye unassign failed: %v\n%s", err, out)), nil
 		}
-		if s.stateDir != "" {
-			if err := ownerquestions.New(s.stateDir).Resolve(cwd + "#" + target); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("gate answered but notification close failed: %v", err)), nil
-			}
-		}
+		s.resolveGateNotification(cwd, target)
 		next := "Owner accepted: achieve the target now, citing the landed commit and the gate ids."
 		if verdict == ownergate.VerdictReject {
 			next = "Owner rejected: resume from the landed commit — do not reopen from scratch."

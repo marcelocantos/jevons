@@ -34,6 +34,13 @@ func Validate(m *Message) error {
 		} else if !m.HasOracle() && !m.HasRisk() {
 			return fmt.Errorf("finish-report requires oracle (sha or gate-id) or risk")
 		}
+		if m.BlockClass == BlockOwnerDecision {
+			if m.Status != ProgressBlocked || strings.TrimSpace(m.QuestionRepo) == "" || strings.TrimSpace(m.QuestionID) == "" || strings.TrimSpace(m.QuestionVersion) == "" || strings.TrimSpace(m.Question) == "" || strings.TrimSpace(m.QuestionAsker) == "" || strings.TrimSpace(m.AnswerRoute) == "" {
+				return fmt.Errorf("owner-decision block requires blocked status, question-repo, question-id, question-version, question, question-asker and answer-route")
+			}
+		} else if m.QuestionRepo != "" || m.QuestionID != "" || m.QuestionVersion != "" || m.Question != "" || m.QuestionAsker != "" || m.AnswerRoute != "" {
+			return fmt.Errorf("owner question slots require block-class owner-decision")
+		}
 		// 🎯T536.1: silent-decision ledger is present or explicitly empty.
 		if err := validateSilentLedger(m); err != nil {
 			return err
