@@ -25,6 +25,7 @@ import { PlanUsageBar } from './components/PlanUsageBar';
 // re-enabling this import and the <WorkersList /> mount below.
 // import { WorkersList } from './components/WorkersList';
 import { AsideHistoryPanel } from './components/AsideHistoryPanel';
+import { SettingsIcon, ThemeIcon } from './components/HeaderIcons';
 import { MermaidVizPanel } from './components/MermaidVizPanel';
 import {
   applyTheme,
@@ -33,7 +34,6 @@ import {
   readThemePref,
   systemAppearance,
   themeLabel,
-  THEME_GLYPH,
   type ThemePref,
 } from './theme';
 import {
@@ -297,7 +297,7 @@ function Cockpit() {
         <button ref={settingsButton} id="settings-button" type="button" title="Settings"
           aria-label="Open settings" aria-haspopup="dialog" aria-expanded={settingsOpen}
           onClick={() => setSettingsOpen(true)}>
-          ⚙
+          <SettingsIcon />
         </button>
         <button
           id="theme-toggle"
@@ -312,7 +312,7 @@ function Cockpit() {
             setTheme(next);
           }}
         >
-          {THEME_GLYPH[theme]}
+          <ThemeIcon theme={theme} />
         </button>
       </div>
       <div id="degraded-banner" className={degraded ? 'visible' : undefined} role="status" aria-live="polite">
