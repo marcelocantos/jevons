@@ -33,8 +33,15 @@ type Message struct {
 	Status  Progress
 	// Blocker names what a blocked seat waits on (🎯T938). Required on a
 	// finish-report whose status is blocked.
-	Blocker string
-	Name    string // target-file-request title, optional elsewhere
+	Blocker         string
+	BlockClass      BlockClass // explicit owner decision vs ordinary external block
+	QuestionRepo    string
+	QuestionID      string
+	QuestionVersion string
+	Question        string
+	QuestionAsker   string
+	AnswerRoute     string
+	Name            string // target-file-request title, optional elsewhere
 	// Phase is the mission phase (scout|implement) — 🎯T536.3.
 	Phase Phase
 	// SilentLedger is the 🎯T536.1 silent-decision ledger state.
@@ -124,6 +131,13 @@ func (m *Message) SlotsFingerprint() string {
 		"verdict=" + string(m.Verdict),
 		"status=" + string(m.Status),
 		"blocker=" + m.Blocker,
+		"block-class=" + string(m.BlockClass),
+		"question-repo=" + m.QuestionRepo,
+		"question-id=" + m.QuestionID,
+		"question-version=" + m.QuestionVersion,
+		"question=" + m.Question,
+		"question-asker=" + m.QuestionAsker,
+		"answer-route=" + m.AnswerRoute,
 		"name=" + m.Name,
 		"phase=" + string(m.Phase),
 		ledgerFingerprint(m),
@@ -332,6 +346,24 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 		msg.Status = p
 	case "blocker", "blocked-on", "blocked_on":
 		msg.Blocker = unquoteSlot(strings.TrimSpace(value))
+	case "block-class":
+		c, ok := ParseBlockClass(value)
+		if !ok {
+			return fmt.Errorf("unknown block-class %q", value)
+		}
+		msg.BlockClass = c
+	case "question-repo":
+		msg.QuestionRepo = unquoteSlot(value)
+	case "question-id":
+		msg.QuestionID = unquoteSlot(value)
+	case "question-version":
+		msg.QuestionVersion = unquoteSlot(value)
+	case "question":
+		msg.Question = unquoteSlot(value)
+	case "question-asker":
+		msg.QuestionAsker = unquoteSlot(value)
+	case "answer-route":
+		msg.AnswerRoute = unquoteSlot(value)
 	case "name":
 		msg.Name = strings.TrimSpace(value)
 	case "phase", "mission-phase", "mission_phase":
@@ -457,6 +489,13 @@ func Format(m *Message) string {
 	writeSlot(&b, "verdict", string(m.Verdict))
 	writeSlot(&b, "status", string(m.Status))
 	writeSlot(&b, "blocker", m.Blocker)
+	writeSlot(&b, "block-class", string(m.BlockClass))
+	writeSlot(&b, "question-repo", m.QuestionRepo)
+	writeSlot(&b, "question-id", m.QuestionID)
+	writeSlot(&b, "question-version", m.QuestionVersion)
+	writeSlot(&b, "question", quoteIfNeeded(m.Question))
+	writeSlot(&b, "question-asker", m.QuestionAsker)
+	writeSlot(&b, "answer-route", quoteIfNeeded(m.AnswerRoute))
 	writeSlot(&b, "name", m.Name)
 	writeSlot(&b, "phase", string(m.Phase))
 	switch m.SilentLedger {
