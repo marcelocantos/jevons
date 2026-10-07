@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -51,6 +55,7 @@ class _CockpitShellState extends State<CockpitShell> {
   late final WebViewController _web;
   bool _loading = true;
   String? _loadError;
+  final ImagePicker _imagePicker = ImagePicker();
 
   @override
   void initState() {
@@ -58,6 +63,13 @@ class _CockpitShellState extends State<CockpitShell> {
     _web = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.black)
+      // WKWebView has no file-input delegate exposed by webview_flutter.
+      // The composer asks this channel to pick on iOS; Android supports the
+      // same channel and also handles ordinary HTML file inputs below.
+      ..addJavaScriptChannel(
+        'JevonsImagePicker',
+        onMessageReceived: (message) => _pickForComposer(message.message),
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) => setState(() {
@@ -77,6 +89,10 @@ class _CockpitShellState extends State<CockpitShell> {
           },
         ),
       );
+    if (_web.platform is AndroidWebViewController) {
+      (_web.platform as AndroidWebViewController)
+          .setOnShowFileSelector(_selectWebViewFiles);
+    }
     widget.settings.addListener(_loadCockpit);
     _loadCockpit();
   }
@@ -85,6 +101,86 @@ class _CockpitShellState extends State<CockpitShell> {
   void dispose() {
     widget.settings.removeListener(_loadCockpit);
     super.dispose();
+  }
+
+  /// A single native picker for both the HTML chooser (Android) and the
+  /// explicit JS channel (iOS and Android). Cancellation returns no asset.
+  Future<XFile?> _pickImage({bool capture = false}) async {
+    if (!mounted) return null;
+    ImageSource? source;
+    if (capture) {
+      source = ImageSource.camera;
+    } else {
+      source = await showModalBottomSheet<ImageSource>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('Photo library'),
+                onTap: () => Navigator.pop(context, ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt),
+                title: const Text('Camera'),
+                onTap: () => Navigator.pop(context, ImageSource.camera),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (source == null || !mounted) return null;
+    try {
+      return await _imagePicker.pickImage(source: source);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not pick image: $error')),
+        );
+      }
+      return null;
+    }
+  }
+
+  Future<List<String>> _selectWebViewFiles(FileSelectorParams params) async {
+    if (params.mode == FileSelectorMode.save) return [];
+    final image = await _pickImage(capture: params.isCaptureEnabled);
+    return image == null ? [] : [Uri.file(image.path).toString()];
+  }
+
+  Future<void> _pickForComposer(String request) async {
+    // Never interpolate untrusted JS into the page. JSON-encode all values.
+    String id;
+    try {
+      final parsed = jsonDecode(request) as Map<String, dynamic>;
+      id = parsed['composerId'] as String;
+    } catch (_) {
+      return;
+    }
+    final image = await _pickImage();
+    if (image == null || !mounted) return;
+    final bytes = await image.readAsBytes();
+    final ext = image.name.split('.').last.toLowerCase();
+    final mime = switch (ext) {
+      'jpg' || 'jpeg' => 'image/jpeg',
+      'png' => 'image/png',
+      'gif' => 'image/gif',
+      'webp' => 'image/webp',
+      'heic' => 'image/heic',
+      _ => 'image/jpeg', // image_picker may return an extensionless JPEG.
+    };
+    final payload = jsonEncode({
+      'composerId': id,
+      'name': image.name,
+      'mime': mime,
+      'base64': base64Encode(bytes),
+    });
+    await _web.runJavaScript(
+      'window.dispatchEvent(new CustomEvent("jevons-picked-image", {detail: $payload}));',
+    );
   }
 
   void _loadCockpit() {
