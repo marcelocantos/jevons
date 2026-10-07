@@ -36,3 +36,6 @@ android/app/.cxx/
 
 # Tool output (never commit captures)
 .playwright-mcp/
+
+# Gradle Kotlin DSL local cache (generated during Android builds)
+/android/.kotlin/

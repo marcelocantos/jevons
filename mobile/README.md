@@ -1,9 +1,9 @@
-# jevons-mobile
+# Jevons mobile
 
 Cross-platform (iOS + Android) thin WebView shell for the jevons cockpit. Flutter + webview_flutter.
 Primary target devices: 'Jevons' iPad mini (A17 Pro, iOS 27.0, connected via Spyder) and the 'Fold' Pixel 11 Pro Fold (owner's daily device, Spyder alias `Fold`).
 
-Tracked as 🎯T989 in the jevons ledger (cross-repo, same pattern as 🎯T765.1).
+Lives in `jevons/mobile/`. Run the commands below from this directory (`cd mobile` from the jevons root). Historical standalone target attestations are preserved in `docs/bullseye-archive.yaml`; active targets belong to the root jevons ledger. The archived file is deliberately not named `bullseye.yaml`, so tools invoked from `mobile/` discover the root ledger.
 
 ## What it does
 
@@ -61,9 +61,9 @@ override the defaults.
 ### Deploy via Spyder
 
 ```python
-deploy_app(device="Jevons", owner=..., path=".../build/ios/iphoneos/Runner.app")
+deploy_app(device="Jevons", owner=..., path=".../jevons/mobile/build/ios/iphoneos/Runner.app")
 deploy_app(device="Pixel", owner=..., bundle_id="com.canticode.jevons_mobile",
-           path=".../build/app/outputs/flutter-apk/app-release.apk")
+           path=".../jevons/mobile/build/app/outputs/flutter-apk/app-release.apk")
 ```
 
 Android deploys need `bundle_id` because Spyder derives it with `aapt`, which
