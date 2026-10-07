@@ -97,6 +97,7 @@ function NamedUserRequest(props: UserRequestProps) {
   };
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nativePickerId = `${props.name}:${compact ? 'compact' : 'normal'}`;
   const [recalledText, setRecalledText] = useState('');
   // Editing history never overwrites the ordinary persisted draft. Changing
   // agent cancels this local edit instead of turning it into an ordinary Send.
@@ -335,14 +336,41 @@ function NamedUserRequest(props: UserRequestProps) {
     if (attachFromTransfer(e.dataTransfer)) e.preventDefault();
   };
 
-  // 🎯T1020: mobile/touch devices have no paste/drag-drop clipboard access,
-  // so a visible button + hidden file input is the only affordance that
-  // reaches the camera/photo-picker sheet. Reuses attachFromTransfer
-  // unchanged — a FileList already satisfies ClipboardLike's {files} shape.
+  // Browser fallback and Android HTML file chooser. Both reuse the desktop
+  // attachFromTransfer pipeline; the Flutter shell also supplies a JS channel.
   const onFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     attachFromTransfer({ files: e.target.files ?? undefined });
     // Reset so picking the same file again still fires a change event.
     e.target.value = '';
+  };
+
+  // The Flutter shell's WKWebView has no file-input hook. Its native picker
+  // returns image bytes through a JS event; use exactly the same upload path
+  // as desktop paste/drag-drop and Android's ordinary file input.
+  useEffect(() => {
+    const onNativeImage = (event: Event) => {
+      const detail = (event as CustomEvent<{ composerId: string; name: string; mime: string; base64: string }>).detail;
+      if (!detail || detail.composerId !== nativePickerId || !detail.mime.startsWith('image/')) return;
+      try {
+        const binary = atob(detail.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        attachFromTransfer({ files: [new File([bytes], detail.name || 'photo.jpg', { type: detail.mime })] });
+      } catch {
+        setUploadNotice('Could not read selected image. Please try again.');
+      }
+    };
+    window.addEventListener('jevons-picked-image', onNativeImage);
+    return () => window.removeEventListener('jevons-picked-image', onNativeImage);
+  });
+
+  const openImagePicker = () => {
+    const nativePicker = (window as Window & { JevonsImagePicker?: { postMessage: (value: string) => void } }).JevonsImagePicker;
+    if (nativePicker) {
+      nativePicker.postMessage(JSON.stringify({ composerId: nativePickerId }));
+    } else {
+      fileInputRef.current?.click();
+    }
   };
 
   const removeJob = (key: string) => {
@@ -540,7 +568,7 @@ function NamedUserRequest(props: UserRequestProps) {
         aria-label="Attach an image"
         disabled={rewinding || props.disabled === true}
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => fileInputRef.current?.click()}
+        onClick={openImagePicker}
       >
         {/* Plain glyph, matching the remove-chip × button's minimal style (🎯T1020: no existing icon-button convention in the composer to match). */}
         {'\u{1F4CE}'}
