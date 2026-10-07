@@ -131,6 +131,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .composer-images .img-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .composer-images .img-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .composer-images .img-chip button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; line-height: 18px; cursor: pointer; padding: 0; }
+/* 🎯T1025: an upload is a chip from the paste onward; a stalled one fails in view. */
+.composer-images .img-chip-uploading { border-style: dashed; background: var(--bg); }
+.composer-images .img-chip-failed { border-color: var(--red); background: var(--bg); }
+.composer-images .img-chip-uploading img, .composer-images .img-chip-failed img { opacity: 0.35; }
+.composer-images .img-chip-state { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; line-height: 14px; text-align: center; color: #fff; background: rgba(0,0,0,0.55); pointer-events: none; }
+.composer-images .img-chip-failed .img-chip-state { background: var(--red); }
 .msg .chat-img {
   display: block; margin: 6px 0; border-radius: 8px; cursor: zoom-in;
   /* 🎯T976: a compact thumb in the image's own shape, never enlarged. A fixed
@@ -261,7 +267,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .composer-recall { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-basis: 100%; order: -2; font-size: 12px; color: var(--text-dim); }
 .composer-recall > span { flex-basis: 100%; }
 .composer-recall button { border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; background: var(--bg); color: var(--text); cursor: pointer; }
-.composer-recall-error { flex-basis: 100%; order: -1; font-size: 12px; color: var(--red); }
+.composer-recall-error, .composer-upload-notice { flex-basis: 100%; order: -1; font-size: 12px; color: var(--red); }
 /* 🎯T106: assistant talk bubble — same geometry family as user, border only (no fill). */
 .msg.jevons { align-self: flex-start; background: transparent; color: var(--text); border: 1px solid var(--border); white-space: normal; word-wrap: break-word; }
 

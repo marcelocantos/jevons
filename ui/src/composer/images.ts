@@ -83,28 +83,82 @@ export function filesFromTransfer(data: ClipboardLike | null | undefined): File[
   return out;
 }
 
+/**
+ * 🎯T1025: a stalled upload fails visibly instead of hanging. A backgrounded
+ * tab throttles network work, so a bare fetch could sit for minutes and then
+ * resolve into whatever message the owner was composing by then. The longest
+ * legitimate upload is a phone photo over the pigeon relay, well under this.
+ */
+export const UPLOAD_TIMEOUT_MS = 60_000;
+
+/** Why an upload did not produce an image; `kind` is what the UI reports. */
+export class UploadError extends Error {
+  readonly kind: 'timeout' | 'cancelled' | 'rejected' | 'network';
+  constructor(kind: UploadError['kind'], message: string) {
+    super(message);
+    this.name = 'UploadError';
+    this.kind = kind;
+  }
+}
+
+export type UploadOptions = {
+  /** Caller-side cancel (chip removed, composition closed). */
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+function abortReason(signal: AbortSignal | undefined): unknown {
+  return signal && 'reason' in signal ? signal.reason : undefined;
+}
+
 export async function uploadPastedImage(
   file: File,
   fetchImpl: typeof fetch = fetch,
+  opts: UploadOptions = {},
 ): Promise<UploadedImage> {
+  const timeoutMs = opts.timeoutMs ?? UPLOAD_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutError = new UploadError('timeout', 'upload timed out after ' + Math.round(timeoutMs / 1000) + 's');
+  const cancelError = new UploadError('cancelled', 'upload cancelled');
+  const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  const onCancel = () => controller.abort(cancelError);
+  if (opts.signal) {
+    if (opts.signal.aborted) onCancel();
+    else opts.signal.addEventListener('abort', onCancel, { once: true });
+  }
   const fd = new FormData();
   fd.append('file', file, file.name || 'paste.png');
-  const res = await fetchImpl('/api/images', { method: 'POST', body: fd });
-  if (!res.ok) throw new Error('upload ' + res.status);
-  const meta = (await res.json()) as Record<string, unknown>;
-  const id = String(meta.id || '');
-  if (!id) throw new Error('upload missing id');
-  return {
-    id,
-    url: String(meta.url || imageFullSrc(id)),
-    thumbUrl: String(meta.thumb_url || imageThumbSrc(id)),
-    marker: String(meta.marker || imageMarker(id)),
-    width: Number(meta.width) || undefined,
-    height: Number(meta.height) || undefined,
-  };
+  try {
+    // Cancelled before the first byte: nothing to send.
+    if (controller.signal.aborted) throw cancelError;
+    let res: Response;
+    try {
+      res = await fetchImpl('/api/images', { method: 'POST', body: fd, signal: controller.signal });
+    } catch (err) {
+      const reason = abortReason(controller.signal);
+      if (reason instanceof UploadError) throw reason;
+      if (controller.signal.aborted) throw cancelError;
+      throw new UploadError('network', err instanceof Error && err.message ? err.message : 'upload failed');
+    }
+    if (!res.ok) throw new UploadError('rejected', 'upload ' + res.status);
+    const meta = (await res.json()) as Record<string, unknown>;
+    const id = String(meta.id || '');
+    if (!id) throw new UploadError('rejected', 'upload missing id');
+    return {
+      id,
+      url: String(meta.url || imageFullSrc(id)),
+      thumbUrl: String(meta.thumb_url || imageThumbSrc(id)),
+      marker: String(meta.marker || imageMarker(id)),
+      width: Number(meta.width) || undefined,
+      height: Number(meta.height) || undefined,
+    };
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', onCancel);
+  }
 }
 
-function objectUrlFor(file: File): string | undefined {
+export function objectUrlFor(file: File): string | undefined {
   if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return undefined;
   try {
     return URL.createObjectURL(file);
@@ -120,24 +174,6 @@ export function revokeObjectUrl(url: string | undefined): void {
   } catch {
     /* ignore */
   }
-}
-
-/** Upload each pasted image immediately (vanilla T76). Failed files are skipped. */
-export async function ingestPastedFiles(
-  files: File[],
-  fetchImpl: typeof fetch = fetch,
-): Promise<PendingImage[]> {
-  const out: PendingImage[] = [];
-  for (const file of files) {
-    const objectUrl = objectUrlFor(file);
-    try {
-      const meta = await uploadPastedImage(file, fetchImpl);
-      out.push({ ...meta, objectUrl });
-    } catch {
-      revokeObjectUrl(objectUrl);
-    }
-  }
-  return out;
 }
 
 /** Vanilla send: markers prepended so the overseer gets durable refs (T76). */

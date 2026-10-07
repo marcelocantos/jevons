@@ -8,10 +8,13 @@ import { normalizeDensity, type Density } from '../density';
 import {
   composeSendText,
   filesFromTransfer,
-  ingestPastedFiles,
+  objectUrlFor,
   revokeObjectUrl,
+  uploadPastedImage,
+  UploadError,
   type ClipboardLike,
   type PendingImage,
+  type UploadedImage,
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
 import { classifyEnterAction, FORCE_SEND_MODE, isTouchPrimaryDevice } from '../keys/composerEnter';
@@ -47,6 +50,22 @@ type UserRequestProps = {
 };
 
 const NO_IMAGES: PendingImage[] = [];
+
+/**
+ * 🎯T1025: one pasted file's upload, drawn as a chip from the instant of the
+ * paste. Never persisted: a reload cannot resume a fetch, and the store holds
+ * only durable server ids.
+ */
+type UploadJob = {
+  key: string;
+  name: string;
+  objectUrl?: string;
+  status: 'uploading' | 'failed';
+  error?: string;
+  controller: AbortController;
+};
+
+const UPLOAD_WAIT_NOTICE = 'Wait for the image upload to finish before sending.';
 
 // A selected-agent change owns a new composer lifetime, including uploads and
 // rewind responses still in flight for the previous agent.
@@ -85,16 +104,37 @@ function NamedUserRequest(props: UserRequestProps) {
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const activeRef = useRef(true);
-  const uploadsRef = useRef(0);
+  // 🎯T1025: in-flight and failed uploads for the composition open right now.
+  const [jobs, setJobs] = useState<UploadJob[]>([]);
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
+  const jobSeq = useRef(0);
+  const [uploadNotice, setUploadNotice] = useState('');
+  const uploading = jobs.some((job) => job.status === 'uploading');
+  // The composition an upload belongs to (🎯T1025): bumped when a message is
+  // sent, a recall is entered or left, never by typing. A late upload checks
+  // it before attaching, so it lands on the message it was pasted into or is
+  // reported, never on a later one.
   const draftGeneration = useRef(0);
   const [rewinding, setRewinding] = useState(false);
   const [recallError, setRecallError] = useState('');
   const canSend = raw.trim().length > 0 || pending.length > 0;
   // 🎯T562.7: a seed-only composer holds no owner draft (T192).
-  const hasRealDraft = !isEffectivelyEmpty(raw) || pending.length > 0;
+  const hasRealDraft = !isEffectivelyEmpty(raw) || pending.length > 0 || jobs.length > 0;
+
+  // The open composition is over (sent, recall entered or left): uploads
+  // still running belong to it and are cancelled, not carried forward.
+  const closeComposition = () => {
+    draftGeneration.current += 1;
+    jobsRef.current.forEach((job) => {
+      job.controller.abort();
+      revokeObjectUrl(job.objectUrl);
+    });
+    if (jobsRef.current.length) setJobs([]);
+  };
 
   const leaveRecall = () => {
-    draftGeneration.current += 1;
+    closeComposition();
     if (recalled) recalledPending.forEach((img) => revokeObjectUrl(img.objectUrl));
     setRecalledPending([]);
     setRecalled(null);
@@ -105,7 +145,7 @@ function NamedUserRequest(props: UserRequestProps) {
 
   const navigateHistory = (direction: -1 | 1) => {
     if (rewinding) return;
-    if (uploadsRef.current) {
+    if (uploading) {
       setRecallError('Wait for the image upload to finish before recalling another request.');
       return;
     }
@@ -126,7 +166,7 @@ function NamedUserRequest(props: UserRequestProps) {
       recalledPending.forEach((img) => revokeObjectUrl(img.objectUrl));
       setRecalledPending([]);
     }
-    draftGeneration.current += 1;
+    closeComposition();
     setRecalled(request);
     setRecallError('');
     setRecalledText(request.text);
@@ -156,6 +196,10 @@ function NamedUserRequest(props: UserRequestProps) {
     return () => {
       activeRef.current = false;
       pendingRef.current.forEach((img) => revokeObjectUrl(img.objectUrl));
+      jobsRef.current.forEach((job) => {
+        job.controller.abort();
+        revokeObjectUrl(job.objectUrl);
+      });
     };
   }, []);
 
@@ -166,6 +210,11 @@ function NamedUserRequest(props: UserRequestProps) {
     // the busy-disabled state must not swallow them.
     const mode = opts?.mode;
     if (props.disabled && mode !== 'interrupt' && mode !== 'steer') return;
+    // 🎯T1025: the pasted image is for this message; it goes when the image is attached, not before.
+    if (uploading) {
+      setUploadNotice(UPLOAD_WAIT_NOTICE);
+      return;
+    }
     const payload = composeSendText(raw, pending);
     if (!payload) return;
     let queued = false;
@@ -202,6 +251,8 @@ function NamedUserRequest(props: UserRequestProps) {
     }
     pending.forEach((img) => revokeObjectUrl(img.objectUrl));
     setPending([]);
+    closeComposition();
+    setUploadNotice('');
     // 🎯T545.3: keep the sent text until the transcript echoes a user row.
     // Failed send leaves composer + Send enabled for retry. A queued send
     // lives in the queue strip instead, so the composer clears at once.
@@ -211,22 +262,64 @@ function NamedUserRequest(props: UserRequestProps) {
     queueMicrotask(() => boxRef.current?.focus());
   };
 
+  // One upload, correlated to the composition that was open at paste time.
+  const runUpload = async (job: UploadJob, file: File, generation: number, recalledAtPaste: boolean) => {
+    let uploaded: UploadedImage | undefined;
+    let failure: UploadError | undefined;
+    try {
+      uploaded = await uploadPastedImage(file, fetch, { signal: job.controller.signal });
+    } catch (err) {
+      failure = err instanceof UploadError ? err : new UploadError('network', err instanceof Error && err.message ? err.message : 'upload failed');
+    }
+    const dropJob = () => setJobs((cur) => cur.filter((j) => j.key !== job.key));
+    if (!activeRef.current) {
+      revokeObjectUrl(job.objectUrl);
+      return;
+    }
+    if (generation !== draftGeneration.current) {
+      // The message this was pasted into was sent or closed meanwhile. Say
+      // so; never attach it to whatever the owner is composing now.
+      revokeObjectUrl(job.objectUrl);
+      dropJob();
+      if (!failure) setUploadNotice(`${job.name} finished uploading after the message it was pasted into was closed, so it was not attached. Paste it again.`);
+      else if (failure.kind !== 'cancelled') setUploadNotice(`Image upload failed: ${failure.message}.`);
+      return;
+    }
+    if (failure) {
+      if (failure.kind === 'cancelled') {
+        revokeObjectUrl(job.objectUrl);
+        dropJob();
+        return;
+      }
+      setJobs((cur) => cur.map((j) => (j.key === job.key ? { ...j, status: 'failed', error: failure!.message } : j)));
+      setUploadNotice(`Image upload failed: ${failure.message}. Remove it and paste again.`);
+      return;
+    }
+    dropJob();
+    const added: PendingImage = { ...uploaded!, objectUrl: job.objectUrl };
+    setPending((cur) => cur.concat([added]));
+    // A send held for this upload is no longer held.
+    setUploadNotice((cur) => (cur === UPLOAD_WAIT_NOTICE ? '' : cur));
+    // Persisted images render from the server thumb; only recall keeps blobs.
+    if (!recalledAtPaste) revokeObjectUrl(job.objectUrl);
+  };
+
   const attachFromTransfer = (data: ClipboardLike | null | undefined): boolean => {
     if (rewinding) return false;
     const files = filesFromTransfer(data);
     if (!files.length) return false;
-    uploadsRef.current += 1;
     const generation = draftGeneration.current;
-    void ingestPastedFiles(files).then((added) => {
-      if (!activeRef.current || generation !== draftGeneration.current) {
-        added.forEach((img) => revokeObjectUrl(img.objectUrl));
-        return;
-      }
-      if (!added.length) return;
-      setPending((cur) => cur.concat(added));
-      // Persisted images render from the server thumb; only recall keeps blobs.
-      if (!recalled) added.forEach((img) => revokeObjectUrl(img.objectUrl));
-    }).finally(() => { uploadsRef.current -= 1; });
+    setUploadNotice('');
+    // 🎯T1025: the chip is on screen before the first byte goes out.
+    const started: UploadJob[] = files.map((file) => ({
+      key: `upload-${(jobSeq.current += 1)}`,
+      name: file.name || 'Pasted image',
+      objectUrl: objectUrlFor(file),
+      status: 'uploading',
+      controller: new AbortController(),
+    }));
+    setJobs((cur) => cur.concat(started));
+    started.forEach((job, i) => void runUpload(job, files[i], generation, !!recalled));
     return true;
   };
 
@@ -252,6 +345,15 @@ function NamedUserRequest(props: UserRequestProps) {
     e.target.value = '';
   };
 
+  const removeJob = (key: string) => {
+    const job = jobsRef.current.find((j) => j.key === key);
+    if (!job) return;
+    job.controller.abort();
+    revokeObjectUrl(job.objectUrl);
+    setJobs((cur) => cur.filter((j) => j.key !== key));
+    setUploadNotice('');
+  };
+
   const removeChip = (idx: number) => {
     setPending((cur) => {
       const img = cur[idx];
@@ -275,6 +377,22 @@ function NamedUserRequest(props: UserRequestProps) {
           <div key={img.id + '-' + idx} className="img-chip">
             <img src={img.objectUrl || img.thumbUrl || img.url} alt={'attachment ' + img.id} />
             <button type="button" title="Remove" onClick={() => removeChip(idx)}>
+              ×
+            </button>
+          </div>
+        ))}
+        {jobs.map((job) => (
+          <div
+            key={job.key}
+            className={'img-chip img-chip-' + job.status}
+            data-upload={job.status}
+            role={job.status === 'uploading' ? 'status' : undefined}
+            aria-label={job.status === 'uploading' ? 'Uploading ' + job.name + '…' : 'Upload of ' + job.name + ' failed'}
+            title={job.status === 'uploading' ? 'Uploading ' + job.name + '…' : job.error}
+          >
+            {job.objectUrl ? <img src={job.objectUrl} alt="" /> : null}
+            <span className="img-chip-state">{job.status === 'uploading' ? 'Uploading…' : 'Failed'}</span>
+            <button type="button" title={job.status === 'uploading' ? 'Cancel upload' : 'Remove'} onClick={() => removeJob(job.key)}>
               ×
             </button>
           </div>
@@ -396,6 +514,7 @@ function NamedUserRequest(props: UserRequestProps) {
         </div>
       ) : null}
       {recallError ? <div className="composer-recall-error" role="alert">{recallError}</div> : null}
+      {uploadNotice ? <div className="composer-upload-notice" role="alert">{uploadNotice}</div> : null}
       {compact ? null : (
         <>
           <span id="input-hint" className="sr-only">
@@ -429,11 +548,11 @@ function NamedUserRequest(props: UserRequestProps) {
       <button
         id={sendId}
         type="button"
-        disabled={rewinding || (props.disabled === true ? true : props.disabled === false ? false : !canSend)}
+        disabled={rewinding || uploading || (props.disabled === true ? true : props.disabled === false ? false : !canSend)}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => submit(e as unknown as FormEvent)}
       >
-        {rewinding ? 'Rewinding…' : recalled ? 'Rewind and resend' : 'Send'}
+        {rewinding ? 'Rewinding…' : uploading ? 'Uploading…' : recalled ? 'Rewind and resend' : 'Send'}
       </button>
     </div>
   );
