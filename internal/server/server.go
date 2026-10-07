@@ -84,11 +84,12 @@ type Server struct {
 	overseerMigrator OverseerMigrator
 	// handoverSeeding is the single-flight guard for delivering a pending
 	// handover (🎯T285); guarded by mu.
-	handoverSeeding    bool
-	overseerDownSince  time.Time                                       // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
-	overseerPaged      bool                                            // owner already paged for this outage (🎯T775); guarded by mu
-	overseerPager      func(subject, body, key string, recovered bool) // out-of-band pager (🎯T775); nil → blurter
-	overseerDownReason string                                          // legible cause when the overseer isn't running (🎯T54); guarded by mu
+	handoverSeeding          bool
+	overseerDownSince        time.Time                                       // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
+	ownerQuestionDigestCheck time.Time                                       // last standing owner-question digest check (T1028.3)
+	overseerPaged            bool                                            // owner already paged for this outage (🎯T775); guarded by mu
+	overseerPager            func(subject, body, key string, recovered bool) // out-of-band pager (🎯T775); nil → blurter
+	overseerDownReason       string                                          // legible cause when the overseer isn't running (🎯T54); guarded by mu
 	// overseerOutageOpen is set when a degraded/down/stuck state has been
 	// broadcast and cleared by the one "overseer is back" that answers it
 	// (🎯T567). Keyed on the outage, not the reconcile tick. Guarded by mu.
