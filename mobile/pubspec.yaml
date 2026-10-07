@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   webview_flutter: ^4.10.0
   shared_preferences: ^2.3.0
+  image_picker: ^1.2.4
+  webview_flutter_android: ^4.14.1
 
 dev_dependencies:
   flutter_test:
