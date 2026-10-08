@@ -20,6 +20,13 @@ const (
 	// Prefix is the mux path under which proxied HTTP MCP servers are
 	// mounted. Public URL = PublicBase + Prefix + "/" + name.
 	Prefix = "/upstream"
+
+	// HopHeader marks a request the proxy sends upstream. A request that
+	// arrives carrying it has already been through a jevons upstream proxy,
+	// so it is refused rather than forwarded again (🎯T1035): a route that
+	// leads back to a proxy costs one refused hop, not a recursion that
+	// opens a connection per level until the host's ephemeral ports run out.
+	HopHeader = "X-Jevons-Upstream-Hop"
 )
 
 // MountArgs configures [Mount].
@@ -73,11 +80,21 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 		}
 		httpServers = resolved
 	}
+	httpServers = dropSelfRoutes(httpServers, publicBase+Prefix)
+	client := &http.Client{}
+	if args.Client != nil {
+		*client = *args.Client
+	}
+	next := client.Transport
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	client.Transport = hopTransport{next: next}
 	proxyArgs := &claudia.MCPProxyArgs{
 		Prefix:     Prefix,
 		PublicBase: publicBase,
 		Servers:    httpServers,
-		Client:     args.Client,
+		Client:     client,
 		OpenURL:    args.OpenURL,
 		Probe:      args.Probe,
 		Authorize:  args.Authorize,
@@ -109,7 +126,7 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 	if args.OnToolsCall != nil {
 		handler = toolsCallObserver(proxy, Prefix, args.OnToolsCall)
 	}
-	mux.Handle(Prefix+"/", handler)
+	mux.Handle(Prefix+"/", refuseHops(handler))
 	for _, adv := range proxy.Advertised() {
 		slog.Info("HTTP MCP proxied via loopback", "name", adv.Name, "url", adv.URL)
 	}
@@ -137,6 +154,43 @@ func toolsCallObserver(next http.Handler, prefix string, observe func(name strin
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hopTransport stamps HopHeader on every request the proxy sends.
+type hopTransport struct{ next http.RoundTripper }
+
+func (t hopTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set(HopHeader, "1")
+	return t.next.RoundTrip(req)
+}
+
+// refuseHops answers 508 Loop Detected to a request that already passed
+// through a jevons upstream proxy, instead of forwarding it again.
+func refuseHops(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(HopHeader) != "" {
+			slog.Warn("mcp upstream proxy loop refused: request already came through a jevons upstream proxy (🎯T1035)",
+				"path", r.URL.Path)
+			http.Error(w, "mcp upstream proxy loop: this server's upstream leads back to a jevons upstream proxy", http.StatusLoopDetected)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// dropSelfRoutes removes servers whose URL leads back to this proxy, which
+// no registry or inventory can make a real upstream (🎯T1035).
+func dropSelfRoutes(servers []claudia.MCPServer, prefix string) []claudia.MCPServer {
+	var out []claudia.MCPServer
+	for _, s := range servers {
+		if routesToPrefix(s.URL, prefix) {
+			slog.Warn("mcp upstream not proxied: its URL is this proxy (🎯T1035)", "name", s.Name, "url", s.URL)
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func parseToolsCall(body []byte) (name string, args map[string]any) {
