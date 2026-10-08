@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/supervise"
+	"github.com/marcelocantos/jevons/internal/testreap"
 )
 
 // newColdRepo is a repo the restart script can be run out of with nothing
@@ -122,42 +123,7 @@ func newColdRepo(t *testing.T, r *rig) string {
 // from, and is not necessarily holding a port to be found by — while keeping
 // the owner's real jevonsd, which lives outside any TempDir, unreachable.
 func reapUnder(t *testing.T, dir string) {
-	t.Helper()
-	prefix := dir + string(os.PathSeparator)
-	live := func() []int {
-		out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
-		if err != nil {
-			return nil
-		}
-		var pids []int
-		for _, line := range strings.Split(string(out), "\n") {
-			// Split on the first space only: paths may contain spaces.
-			line = strings.TrimSpace(line)
-			sp := strings.IndexByte(line, ' ')
-			if sp < 0 || !strings.HasPrefix(strings.TrimSpace(line[sp+1:]), prefix) {
-				continue
-			}
-			if pid, err := strconv.Atoi(line[:sp]); err == nil && pid != os.Getpid() {
-				pids = append(pids, pid)
-			}
-		}
-		return pids
-	}
-	for range 10 {
-		pids := live()
-		if len(pids) == 0 {
-			return
-		}
-		for _, pid := range pids {
-			if p, err := os.FindProcess(pid); err == nil {
-				_ = p.Kill()
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if left := live(); len(left) > 0 {
-		t.Errorf("leaked %d process(es) from %s that outlived the test: %v", len(left), dir, left)
-	}
+	testreap.ReapUnder(t, dir)
 }
 
 func copyFile(t *testing.T, src, dst string, mode os.FileMode) {
