@@ -25,6 +25,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -87,4 +89,47 @@ func Arm(t testing.TB) string {
 		}
 	})
 	return root
+}
+
+// ReapUnder stops detached fixture processes by executable path, not parent
+// process or current listener. A bounce can leave a previous daemon alive
+// without a port, and macOS ps comm truncates long executable paths. Arm
+// remains the fallback when the test binary exits without running cleanups.
+func ReapUnder(t testing.TB, dir string) {
+	t.Helper()
+	prefix := dir + string(os.PathSeparator)
+	live := func() []int {
+		out, err := exec.Command("ps", "-Ao", "pid=,args=").Output()
+		if err != nil {
+			t.Errorf("testreap: census %s: %v", dir, err)
+			return nil
+		}
+		var pids []int
+		for _, line := range strings.Split(string(out), "\n") {
+			fields := strings.Fields(strings.TrimSpace(line))
+			if len(fields) < 2 || !strings.HasPrefix(fields[1], prefix) {
+				continue
+			}
+			pid, err := strconv.Atoi(fields[0])
+			if err == nil && pid != os.Getpid() {
+				pids = append(pids, pid)
+			}
+		}
+		return pids
+	}
+	for range 10 {
+		pids := live()
+		if len(pids) == 0 {
+			return
+		}
+		for _, pid := range pids {
+			if p, err := os.FindProcess(pid); err == nil {
+				_ = p.Kill()
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if left := live(); len(left) > 0 {
+		t.Errorf("testreap: leaked processes from %s: %v", dir, left)
+	}
 }

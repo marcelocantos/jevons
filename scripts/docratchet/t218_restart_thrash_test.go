@@ -385,57 +385,7 @@ func (e *thrashEnv) variantServed() string {
 // Matching on the env's own temp root is what makes the sweep total while
 // keeping the owner's real jevonsd, which lives outside it, unreachable.
 func (e *thrashEnv) killDaemon() {
-	for range 10 {
-		pids := e.spawnedPIDs()
-		if len(pids) == 0 {
-			return
-		}
-		for _, pid := range pids {
-			if p, err := os.FindProcess(pid); err == nil {
-				_ = p.Kill()
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	// Failing here is the point: a silent leak is what let this go unnoticed
-	// for four days, so the test that causes one must report it.
-	if left := e.spawnedPIDs(); len(left) > 0 {
-		e.t.Errorf("leaked %d process(es) from %s that outlived the test: %v", len(left), e.root, left)
-	}
-}
-
-// spawnedPIDs lists live processes whose executable lives under the env's
-// temp root, whatever they are currently doing — listening, starting up, or
-// wedged. Use argv, not ps comm: Darwin truncates comm paths to 16 bytes,
-// so even a healthy fixture daemon was invisible to the old cleanup.
-// The root separator prevents a sibling TempDir prefix from matching.
-func (e *thrashEnv) spawnedPIDs() []int {
-	out, err := exec.Command("ps", "-Ao", "pid=,args=").Output()
-	if err != nil {
-		return nil
-	}
-	prefix := e.root + string(os.PathSeparator)
-	self := os.Getpid()
-	var pids []int
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		sp := strings.IndexByte(line, ' ')
-		if sp < 0 {
-			continue
-		}
-		// argv starts with the executable path; a root mentioned only in
-		// another process's arguments must not make it eligible for SIGKILL.
-		args := strings.TrimSpace(line[sp+1:])
-		if !strings.HasPrefix(args, prefix) {
-			continue
-		}
-		pid, err := strconv.Atoi(line[:sp])
-		if err != nil || pid == self {
-			continue
-		}
-		pids = append(pids, pid)
-	}
-	return pids
+	testreap.ReapUnder(e.t, e.root)
 }
 
 func freeTCPPort(t *testing.T) int {
