@@ -54,12 +54,11 @@ func OpenUpstreamRegistry(path string) (*UpstreamRegistry, error) {
 // Resolve returns proxy-ready servers: remote URLs are remembered;
 // already-advertised loopback URLs are replaced from the registry.
 //
-// A route back to the proxy is never an upstream (🎯T1035): a URL that
-// reaches publicPrefix — under any loopback spelling or server name — is
-// not remembered, and a remembered "real" URL that is itself such a route
-// is deleted rather than proxied. Proxying one meant every request
-// recursed through the proxy's own listener until the host ran out of
-// ephemeral ports.
+// A nested /upstream/ leftover — on this daemon's prefix or any other
+// loopback port — is never an upstream (🎯T1035 / 🎯T1039). Remembering
+// one poisoned mcp_upstreams.json (a dead isolate at :52322 overwrote
+// the owner's direct grant) and then every seat dialled the nested
+// proxy instead of the real server.
 func (r *UpstreamRegistry) Resolve(servers []claudia.MCPServer, publicPrefix string) ([]claudia.MCPServer, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -67,30 +66,30 @@ func (r *UpstreamRegistry) Resolve(servers []claudia.MCPServer, publicPrefix str
 	changed := false
 	var out []claudia.MCPServer
 	for _, s := range servers {
-		url := strings.TrimSpace(s.URL)
-		if url == "" || s.Name == "" {
+		raw := strings.TrimSpace(s.URL)
+		if raw == "" || s.Name == "" {
 			continue
 		}
-		if !routesToPrefix(url, prefix) {
-			if r.byName[s.Name] != url {
-				r.byName[s.Name] = url
+		if isLeftoverProxyURL(raw, prefix) {
+			real, ok := r.byName[s.Name]
+			if ok && isLeftoverProxyURL(real, prefix) {
+				slog.Warn("mcp upstream registry named a nested proxy as the upstream; dropped so a leftover cannot be dialled (🎯T1039)",
+					"name", s.Name, "url", real)
+				delete(r.byName, s.Name)
 				changed = true
+				real = ""
 			}
+			if real == "" {
+				continue // unknown leftover — drop rather than remember or proxy-to-self
+			}
+			s.URL = real
 			out = append(out, s)
 			continue
 		}
-		real, ok := r.byName[s.Name]
-		if ok && routesToPrefix(real, prefix) {
-			slog.Warn("mcp upstream registry named the proxy itself as the upstream; dropped so the proxy cannot dial itself (🎯T1035)",
-				"name", s.Name, "url", real)
-			delete(r.byName, s.Name)
+		if r.byName[s.Name] != raw {
+			r.byName[s.Name] = raw
 			changed = true
-			real = ""
 		}
-		if real == "" {
-			continue // unknown loopback — drop rather than proxy-to-self
-		}
-		s.URL = real
 		out = append(out, s)
 	}
 	if changed {
@@ -99,6 +98,51 @@ func (r *UpstreamRegistry) Resolve(servers []claudia.MCPServer, publicPrefix str
 		}
 	}
 	return out, nil
+}
+
+// isLeftoverProxyURL reports a URL that is this proxy (🎯T1035) or any
+// loopback nested /upstream/ leftover from another isolate (🎯T1039).
+func isLeftoverProxyURL(raw, prefix string) bool {
+	return IsNestedProxyURL(raw) || routesToPrefix(raw, prefix)
+}
+
+// IsNestedProxyURL reports a loopback URL whose path is /upstream or
+// /upstream/<name> — the shape jevonsd (and isolate daemons) advertise
+// as a proxy, on any port. A leftover on :52322 is the same class of
+// poison as a leftover on this daemon's :13705.
+func IsNestedProxyURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return isNestedProxyURL(u)
+}
+
+func isNestedProxyURL(u *url.URL) bool {
+	if u == nil || !isLoopbackHost(u.Hostname()) {
+		return false
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = u.Path
+	}
+	return path == Prefix || strings.HasPrefix(path, Prefix+"/")
+}
+
+// GrantDirect reports whether seats should dial raw itself rather than
+// a jevonsd /upstream/ loopback. Local MCP (bullseye, mnemo, …) is
+// already on loopback and is not OAuth; stamping the proxy URL is what
+// taught Claudia to persist :52322/upstream/bullseye (🎯T1039). Remote
+// HTTP (Atlassian) still takes the T520 proxy.
+func GrantDirect(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || strings.TrimSpace(u.Host) == "" {
+		return false
+	}
+	if !isLoopbackHost(u.Hostname()) {
+		return false
+	}
+	return !isNestedProxyURL(u)
 }
 
 // routesToPrefix reports whether rawURL reaches the proxy mounted at prefix

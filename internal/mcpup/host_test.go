@@ -65,14 +65,36 @@ func TestMountAdvertisesLoopback(t *testing.T) {
 	if len(adv) != 1 || adv[0].Name != "atlassian" {
 		t.Fatalf("Advertised = %+v", adv)
 	}
-	if adv[0].URL != "http://127.0.0.1:13705/upstream/atlassian" {
-		t.Fatalf("advertised URL = %q", adv[0].URL)
+	// httptest is loopback, so 🎯T1039 grants the direct upstream URL
+	// rather than this daemon's /upstream/ proxy.
+	if adv[0].URL != up.URL {
+		t.Fatalf("advertised URL = %q; want direct loopback grant %q", adv[0].URL, up.URL)
 	}
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/upstream/atlassian", strings.NewReader(`{}`)))
 	if rec.Code != 200 {
 		t.Fatalf("proxy status %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMountAdvertisesProxyForRemote(t *testing.T) {
+	mux := http.NewServeMux()
+	h, err := Mount(mux, &MountArgs{
+		PublicBase: "http://127.0.0.1:13705",
+		Servers: []claudia.MCPServer{
+			{Name: "atlassian", URL: "https://mcp.atlassian.com/v1/mcp/authv2"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adv := h.Advertised()
+	if len(adv) != 1 || adv[0].Name != "atlassian" {
+		t.Fatalf("Advertised = %+v", adv)
+	}
+	if adv[0].URL != "http://127.0.0.1:13705/upstream/atlassian" {
+		t.Fatalf("remote OAuth advertised URL = %q; want T520 proxy", adv[0].URL)
 	}
 }
 

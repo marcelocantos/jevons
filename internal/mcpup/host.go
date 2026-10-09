@@ -59,11 +59,17 @@ type MountArgs struct {
 type Host struct {
 	Proxy *claudia.MCPProxy
 	Store *Store
+	// resolved is the real upstream URL for each mounted server after
+	// Resolve (owner grant, not a nested leftover). Advertised rewrites
+	// loopback grants onto this list (🎯T1039).
+	resolved []claudia.MCPServer
 }
 
 // Mount builds a Claudia MCPProxy for HTTP owner-map servers, reseeds
 // stored tokens, and registers Prefix on mux. Advertised() is the
-// loopback list SessionServers stamps onto AgentDef.MCPServers (🎯T520).
+// grant list SessionServers stamps onto AgentDef.MCPServers: T520
+// loopback proxy URLs for remote OAuth, the owner's direct URL for
+// local loopback MCP (🎯T1039).
 func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 	if mux == nil || args == nil {
 		return nil, fmt.Errorf("mcpup: mux and args required")
@@ -112,7 +118,7 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Host{Proxy: proxy, Store: args.Store}
+	h := &Host{Proxy: proxy, Store: args.Store, resolved: httpServers}
 	if args.Store != nil {
 		for _, s := range httpServers {
 			if tok := args.Store.Get(s.Name); tok != nil {
@@ -127,18 +133,43 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 		handler = toolsCallObserver(proxy, Prefix, args.OnToolsCall)
 	}
 	mux.Handle(Prefix+"/", refuseHops(handler))
-	for _, adv := range proxy.Advertised() {
-		slog.Info("HTTP MCP proxied via loopback", "name", adv.Name, "url", adv.URL)
+	for _, adv := range h.Advertised() {
+		slog.Info("HTTP MCP granted on AgentDef.MCPServers", "name", adv.Name, "url", adv.URL)
 	}
 	return h, nil
 }
 
-// Advertised is the loopback name+URL list seats should carry (🎯T520).
+// Advertised is the name+URL list seats should carry. Remote OAuth
+// servers keep the T520 jevonsd /upstream/ loopback; a resolved
+// loopback MCP is granted its direct URL so Claudia does not persist a
+// nested leftover (🎯T1039).
 func (h *Host) Advertised() []claudia.MCPServer {
 	if h == nil || h.Proxy == nil {
 		return nil
 	}
-	return h.Proxy.Advertised()
+	adv := h.Proxy.Advertised()
+	if len(h.resolved) == 0 {
+		return adv
+	}
+	realByName := make(map[string]string, len(h.resolved))
+	for _, s := range h.resolved {
+		if s.Name == "" || strings.TrimSpace(s.URL) == "" {
+			continue
+		}
+		realByName[s.Name] = s.URL
+	}
+	out := append([]claudia.MCPServer(nil), adv...)
+	for i, s := range out {
+		real := realByName[s.Name]
+		if !GrantDirect(real) {
+			continue
+		}
+		out[i].URL = real
+		if out[i].Type == "" {
+			out[i].Type = "http"
+		}
+	}
+	return out
 }
 
 func toolsCallObserver(next http.Handler, prefix string, observe func(name string, args map[string]any)) http.Handler {
