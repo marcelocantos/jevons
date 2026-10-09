@@ -165,9 +165,10 @@ func hubPhase(phase string) string {
 	return "working"
 }
 
-// correspondentForBatch stamps who a drained notify batch is for: nothing
-// for the owner; [Agent <name> responded] names in drain order (deduped);
-// CorrespondentFleet for any nameless note.
+// correspondentForBatch stamps who a drained notify batch is answering
+// (🎯T576): nothing for the owner; [Agent <name> responded] or
+// [event:] Worker: <name> in drain order (deduped); CorrespondentFleet
+// only for a nameless system/daemon note.
 func correspondentForBatch(batch []string, ownerBatch bool) []string {
 	if ownerBatch {
 		return nil
@@ -175,10 +176,7 @@ func correspondentForBatch(batch []string, ownerBatch bool) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, note := range batch {
-		name, ok := notifyAgentRespondedName(note)
-		if !ok || name == "" {
-			name = CorrespondentFleet
-		}
+		name := correspondentName(note)
 		if seen[name] {
 			continue
 		}
@@ -186,6 +184,19 @@ func correspondentForBatch(batch []string, ownerBatch bool) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// correspondentName is who one notify note is answering. Agent-responded
+// wins; else a Worker: field (worker-idle and same-class events already
+// carry one); else the nameless fleet token.
+func correspondentName(note string) string {
+	if name, ok := notifyAgentRespondedName(note); ok && name != "" {
+		return name
+	}
+	if worker := notifyWorkerLine(note); worker != "" {
+		return worker
+	}
+	return CorrespondentFleet
 }
 
 // phaseWireLine is the interleaved progress frame on /ws/chat. It carries no

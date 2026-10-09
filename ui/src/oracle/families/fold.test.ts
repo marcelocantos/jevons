@@ -256,12 +256,12 @@ describeOracle(family('fold'), () => {
       v: 1, ch: 'transcript:jevons', t: 'frame',
       body: { type: 'progress', phase: 'thinking', correspondent: ['jevons-po'] },
     });
-    expect(statusBarText(true, s.meta)).toBe('thinking · jevons-po');
+    expect(statusBarText(true, s.meta)).toBe('thinking · answering jevons-po');
     s = applyConversationEvent(s, {
       v: 1, ch: 'transcript:jevons', t: 'frame',
       body: { type: 'progress', phase: 'streaming', correspondent: ['jevons-po', 'jv-t555'] },
     });
-    expect(statusBarText(true, s.meta)).toBe('writing · jevons-po, jv-t555');
+    expect(statusBarText(true, s.meta)).toBe('writing · answering jevons-po, jv-t555');
     s = applyConversationEvent(s, {
       v: 1, ch: 'transcript:jevons', t: 'frame',
       body: { type: 'progress', phase: 'idle' },

@@ -44,15 +44,16 @@ The overseer has one ACP session. A turn is either the owner’s words or a noti
 | In-flight batch | Correspondent | Status-bar example |
 |-----------------|---------------|--------------------|
 | Owner (`[user]\n` / `overseerOwnerTurn`) | omit (the owner is the default) | `thinking` |
-| One `[Agent <name> responded]` | that name | `thinking · jevons-po` |
-| Fleet drain of several notes (T291 takes the whole fleet backlog in one prompt) | the names in that batch, stable order | `writing · jevons-po, jv-t555` |
-| Event / system note with no agent name | `fleet` | `received · fleet` |
+| One `[Agent <name> responded]` | that name | `thinking · answering jevons-po` |
+| One `[event:]` with `Worker: <name>` (🎯T576) | that name | `writing · answering jevons-po` |
+| Fleet drain of several notes (T291 takes the whole fleet backlog in one prompt) | the names in that batch, stable order | `writing · answering jevons-po, jv-t555` |
+| Event / system note with no agent name | `fleet` | `received · answering fleet` |
 
 Idle has no correspondent. Do not leave a stale `· jevons-po` after seal.
 
 Queue waiting **behind** the current turn is not the correspondent. A later residual may show depth (`+2 queued`); v1 does not.
 
-Source of truth already exists on the drain path: `overseerOwnerTurn` plus `notifyAgentRespondedName` / the drained batch. Fan `correspondent: []string` on the same level sample as `phase`. Do not parse chat bubbles.
+Source of truth already exists on the drain path: `overseerOwnerTurn` plus `notifyAgentRespondedName` / `Worker:` on `[event:]` notes / the drained batch. Fan `correspondent: []string` on the same level sample as `phase`. Do not parse chat bubbles.
 
 ## Queue vs interrupt (as shipped — not a new policy)
 
@@ -174,7 +175,7 @@ Mapper (one function, both chrome and hub):
 
 ## React chrome
 
-**One ink:** the status bar (`#status`, next to `connected`). It always shows the phase word, plus ` · <correspondent>` when the in-flight batch is not the owner. Survives scroll and virtualization.
+**One ink:** the status bar (`#status`, next to `connected`). It always shows the phase word, plus ` · answering <correspondent>` when the in-flight batch is not the owner (🎯T576: answering, not a destination). Survives scroll and virtualization.
 
 Do not remount a transcript footer that says `Jevons is working …`. The bar is the account. Vanilla’s `.working-indicator` stays the frozen reference for T540.3 boolean parity, not the React product copy.
 
@@ -198,7 +199,7 @@ Do not drive this from “composer just submitted.” The client may *optimistic
 | Clause | Bucket | Example |
 |--------|--------|---------|
 | Status bar always has exactly one phase word, including after hard reload | **pinned** | Fixture: idle snapshot → `idle`; open owner turn with no ACP yet → `received`; thought → `thinking`; tool_call → title; message chunk → `writing`; end_turn → `idle`. No `Jevons` prefix. |
-| Fleet chew paints phase + correspondent, not owner-idle | **pinned** | Drain `[Agent jevons-po responded]` → `received · jevons-po` then ACP advances; owner boolean `working` may stay false for T291 owner-chrome tests, but the phase sample is not `idle`. |
+| Fleet chew paints phase + correspondent, not owner-idle | **pinned** | Drain `[Agent jevons-po responded]` → `received · answering jevons-po` then ACP advances; owner boolean `working` may stay false for T291 owner-chrome tests, but the phase sample is not `idle`. |
 | Owner in flight has no correspondent suffix | **pinned** | `thinking`, not `thinking · owner`. |
 | Queued-but-not-drained note does not become correspondent | **pinned** | Owner turn in flight, jevons-po queued → bar stays owner phase with no `· jevons-po`. |
 | Optimistic send then server idle sample clears chrome | **pinned** | T355 `chrome_false_working`. |
