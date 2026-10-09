@@ -70,11 +70,7 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 	}
 
 	// Register as a virtual remote client.
-	s.mu.Lock()
-	s.remoteSeq++
-	remoteID := s.remoteSeq
-	s.remotes[remoteID] = remoteConn{writer: pigeonWriter{conn: conn}, ctx: ctx}
-	s.mu.Unlock()
+	remoteID, _ := s.registerRemote(remoteConn{writer: pigeonWriter{conn: conn}, ctx: ctx})
 
 	// Send init + history + scripts.
 	s.sendJSON(ctx, conn, map[string]any{
@@ -89,9 +85,7 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 	// Read loop: process messages from the relay.
 	go func() {
 		defer func() {
-			s.mu.Lock()
-			delete(s.remotes, remoteID)
-			s.mu.Unlock()
+			s.unregisterRemote(remoteID)
 			conn.Close()
 			slog.Info("relay connection closed", "instance_id", instanceID)
 		}()
