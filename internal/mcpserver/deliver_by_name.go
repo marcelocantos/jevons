@@ -337,7 +337,7 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 				// A previous busy offer may still be pending in the daemon queue.
 				// Discharge it only when this send actually reached the receiver;
 				// queued is an offer, not a receipt.
-				if res.Status != "queued" && res.Status != "interrupted_queued" {
+				if res.ReceiverReceipt {
 					if removed, dischargeErr := s.sendQueue().DischargePending(name, func(body string) bool {
 						agent, id, ok := findAgentResponded(body)
 						return ok && agent == prep.Agent && id == offeredReportID

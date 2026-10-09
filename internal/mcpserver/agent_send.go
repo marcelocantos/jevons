@@ -47,6 +47,10 @@ type agentSendResult struct {
 	// InterruptAfter is when an escalating send (🎯T899) interrupts the
 	// busy turn if the agent has not taken the message; 0 = no rung.
 	InterruptAfter time.Duration
+	// ReceiverReceipt is positive evidence for this exact payload from the
+	// receiver's user-message or queue-operation records. A status of sent
+	// alone can be inferred from an unrelated live session event (🎯T416).
+	ReceiverReceipt bool
 }
 
 // agentSender is the process surface sendToAgent needs (testable).
@@ -307,7 +311,7 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 					"contradicted by %s)", claim, evidenceDetail(ev))
 		}
 		msg += describeMode(mm)
-		res := agentSendResult{Status: sentStatus(rehydrated, interrupted), Message: msg, Queued: s.pendingAgentSends(name), Mode: mm.Mode, Mechanism: mm.Mechanism}
+		res := agentSendResult{Status: sentStatus(rehydrated, interrupted), Message: msg, Queued: s.pendingAgentSends(name), Mode: mm.Mode, Mechanism: mm.Mechanism, ReceiverReceipt: ev.PayloadSeen || ev.PayloadEnteredTurn}
 		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
 		// 🎯T305: never_briefed → running. Now earned from the payload
 		// arriving rather than from the send call returning.
@@ -372,9 +376,10 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 			Message: fmt.Sprintf(
 				"busy: %q had a turn in flight; message queued (%d pending) for delivery when it ends.",
 				name, s.pendingAgentSends(name)),
-			Queued:    s.pendingAgentSends(name),
-			Mode:      mm.Mode,
-			Mechanism: delivery.MechanismClientQueue,
+			Queued:          s.pendingAgentSends(name),
+			Mode:            mm.Mode,
+			Mechanism:       delivery.MechanismClientQueue,
+			ReceiverReceipt: ev.PayloadQueued,
 		}
 		logAgentSendOutcome(name, res, rehydrated, outcome, flight, ev)
 		return res, nil

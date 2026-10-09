@@ -15,6 +15,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 const (
@@ -277,5 +278,75 @@ func TestT766ReportDeliveredDischargesPendingCopy(t *testing.T) {
 	s.drainAgentSendQueue(t731Parent)
 	if len(parent.sent) != 1 {
 		t.Fatalf("receiver saw %d copies, want 1: %v", len(parent.sent), parent.sent)
+	}
+}
+
+// A live stream event can make a send return "sent" without identifying this
+// report. It is not a receiver receipt and cannot erase a pending copy.
+func TestT766UnrelatedSessionEventDoesNotDischargeReport(t *testing.T) {
+	s, parent, _, _ := t731Server(t)
+	text := "[Agent " + t731Worker + " responded] report_id=no-receipt\n" + t731Report
+	if _, err := s.enqueueAgentSend(t731Parent, text); err != nil {
+		t.Fatal(err)
+	}
+	s.setFlight(t731Parent, FlightIdle)
+	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, SessionEvent: true}))
+	res, err := s.deliverByName(t731Parent, text, OriginAgent, false)
+	if err != nil || res.Status != "sent" {
+		t.Fatalf("live-stream send: %+v %v", res, err)
+	}
+	if n := observedPendingSends(s, t731Parent); n != 1 {
+		t.Fatalf("uncorroborated copy disappeared: depth=%d", n)
+	}
+	if len(parent.sent) != 1 {
+		t.Fatalf("send calls=%d", len(parent.sent))
+	}
+}
+
+// Even a separate positive receipt must not remove a claimed/uncertain entry:
+// its attempt may itself have landed and needs reconciliation, not a blind drop.
+func TestT766ReceiptPreservesUncertainReportAttempt(t *testing.T) {
+	s, _, _, _ := t731Server(t)
+	text := "[Agent " + t731Worker + " responded] report_id=held-receipt\n" + t731Report
+	q := s.sendQueue()
+	if _, _, err := q.Append(t731Parent, text, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok, err := q.ClaimFront(t731Parent)
+	if err != nil || !ok {
+		t.Fatalf("claim: %+v %v", entry, err)
+	}
+	if err := q.Resolve(t731Parent, entry, sendq.Unverified, "receiver unknown"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.deliverByName(t731Parent, text, OriginAgent, false)
+	if err != nil || res.Status != "sent" {
+		t.Fatalf("direct receipt: %+v %v", res, err)
+	}
+	entries, err := q.Snapshot(t731Parent)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].ID != entry.ID {
+		t.Fatalf("uncertain attempt erased: %+v %v", entries, err)
+	}
+}
+
+// The receiver may acknowledge the report in its queue-operation record,
+// without a user-message row. That receipt discharges the daemon's pending copy.
+func TestT766ReceiverQueueOperationDischargesReport(t *testing.T) {
+	s, parent, _, _ := t731Server(t)
+	text := "[Agent " + t731Worker + " responded] report_id=queue-receipt\n" + t731Report
+	if _, err := s.enqueueAgentSend(t731Parent, text); err != nil {
+		t.Fatal(err)
+	}
+	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, Durable: true, PayloadQueued: true}))
+	res, err := s.deliverByName(t731Parent, text, OriginAgent, false)
+	if err != nil || res.Status != "queued" {
+		t.Fatalf("receiver queue receipt: %+v %v", res, err)
+	}
+	if n := observedPendingSends(s, t731Parent); n != 0 {
+		t.Fatalf("receiver has report; daemon depth=%d", n)
+	}
+	s.drainAgentSendQueue(t731Parent)
+	if len(parent.sent) != 1 {
+		t.Fatalf("receiver got %d copies", len(parent.sent))
 	}
 }
