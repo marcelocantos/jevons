@@ -12,13 +12,13 @@
  * naturally than remaining trending left. The line starts at the first
  * stored sample — never a fabricated 0% at t=0.
  *
- * 🎯T688: there is no sample-count special case, and there should never be
- * one again. A series of one sample, or of twenty sitting on the same
- * minute of a week, used to be synthesised into an upright stem, because a
- * zero-length stroke with butt caps paints nothing and the cell looked
- * empty. That is a painting problem wearing a geometry costume: it bought
- * a stem band, a minimum width, a lone-sample branch and finally a
- * flat-cluster branch, and it drew a bar where the data was a point.
+ * 🎯T635: a cluster whose x-span is below the stem minimum (just-reset
+ * week, second Refresh) is an inward filled stem of that minimum width,
+ * so it is not a 1px line on the column border. A real curve that already
+ * spans more than the stem minimum is unchanged.
+ *
+ * 🎯T688: a wide flat series is still not a burn. T635 is the near-zero
+ * x-span exception only.
  *
  * 🎯T687: the current value is drawn as its own mark, always, in front of
  * the line. That is what makes the line's own degeneracy uninteresting —
@@ -42,13 +42,19 @@ import type { PlanHistoryPoint, PlanWindow } from './tickerGroups';
 
 export const BURN_WIDTH = 100;
 export const BURN_HEIGHT = 32;
-
+/** Half-width of a zero-span stem in viewBox units (🎯T635). */
+export const BURN_STEM_HALF = 3.5;
+export const BURN_STEM_MIN = BURN_STEM_HALF * 2;
+/** Keep the stem and stroke inside the viewBox so x=0 is not the cell border. */
+const BURN_EDGE_INSET = 1;
 
 export type BurnPoint = { x: number; y: number };
 
 export type BurnPaths = {
   line: string;
   points: BurnPoint[];
+  /** Present only for a near-zero x-span stem (🎯T635). Real curves stay a line. */
+  fill?: string;
 };
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -160,8 +166,61 @@ function xColumn(x: number, columns: number): number {
   return Math.min(columns - 1, Math.floor((x / BURN_WIDTH) * columns));
 }
 
+/** Place a stem of at least BURN_STEM_MIN fully inside the viewBox (🎯T635). */
+export function stemBand(x: number): { x0: number; x1: number; lineX: number } {
+  const lo = BURN_EDGE_INSET;
+  const hi = BURN_WIDTH - BURN_EDGE_INSET;
+  let x0 = x - BURN_STEM_HALF;
+  let x1 = x + BURN_STEM_HALF;
+  if (x0 < lo) {
+    x1 = Math.min(hi, x1 + (lo - x0));
+    x0 = lo;
+  }
+  if (x1 > hi) {
+    x0 = Math.max(lo, x0 - (x1 - hi));
+    x1 = hi;
+  }
+  if (x1 - x0 < BURN_STEM_MIN) {
+    if (x0 <= lo) x1 = Math.min(hi, x0 + BURN_STEM_MIN);
+    else if (x1 >= hi) x0 = Math.max(lo, x1 - BURN_STEM_MIN);
+  }
+  const lineX = clamp(x, x0, x1);
+  return { x0, x1, lineX };
+}
+
+function stemPaths(points: BurnPoint[]): BurnPaths {
+  const first = points[0];
+  const last = points[points.length - 1];
+  const midX = (first.x + last.x) / 2;
+  const { x0, x1, lineX } = stemBand(midX);
+  if (points.length === 1) {
+    const topY = first.y;
+    const line = `M${round(lineX)},${round(topY)} L${round(lineX)},${BURN_HEIGHT}`;
+    const fill = `M${round(x0)},${round(topY)} L${round(x1)},${round(topY)} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
+    return { fill, line, points };
+  }
+  // Keep the real slope; only the fill is fattened and the stroke is
+  // kept inside the stem so a week-start cluster is not the cell border.
+  const drawn = points.map((p) => ({ x: clamp(p.x, x0, x1), y: p.y }));
+  const line = drawn
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${round(p.x)},${round(p.y)}`)
+    .join(' ');
+  const fill = `${line} L${round(x1)},${BURN_HEIGHT} L${round(x0)},${BURN_HEIGHT} Z`;
+  return { fill, line, points };
+}
+
 export function burnPaths(w: PlanWindow, pixelWidth = BURN_WIDTH): BurnPaths | null {
-  const points = pixelColumns(burnPoints(w), pixelWidth);
+  const raw = burnPoints(w);
+  if (!raw.length) return null;
+  // 🎯T635: a cluster whose x-span is below the stem minimum is the same
+  // as a single sample — a filled stem of that minimum width, shifted
+  // inward so it stays inside the viewBox. Applied on the unthinned
+  // samples so two minutes-apart week-start readings keep both points.
+  const span = raw[raw.length - 1].x - raw[0].x;
+  if (raw.length === 1 || span < BURN_STEM_MIN) {
+    return stemPaths(raw);
+  }
+  const points = pixelColumns(raw, pixelWidth);
   if (!points.length) return null;
   // Every sample at the same usage is not a burn. A flat stroke across
   // an almost-empty period is what made the Cursor API card look like a

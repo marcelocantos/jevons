@@ -73,21 +73,22 @@ describe('the current reading always carries a mark (🎯T687)', () => {
 });
 
 describe('the mark renders in front of the line (🎯T687)', () => {
-  it('paints after the line, so an edge value is not hidden under the frame', () => {
+  it('paints the mark after the line, so an edge value is not hidden under the frame', () => {
     const { container } = render(<BurnChart window={win([0, 0, 0])} />);
     const svg = container.querySelector('svg.plan-burn-svg')!;
-    const kids = [...svg.querySelectorAll('path')].map((p) => p.getAttribute('class'));
-    expect(kids).toEqual(['plan-burn-now']);
+    const kids = [...svg.querySelectorAll('path')].map((el) => el.getAttribute('class'));
+    expect(kids[kids.length - 1]).toBe('plan-burn-now');
   });
 
-  it('still marks a single sample, and does not draw a line', () => {
+  it('still marks a single sample (🎯T687), which is an inward stem (🎯T635)', () => {
     const { container } = render(<BurnChart window={win([55])} />);
-    expect(container.querySelector('path.plan-burn-line')).toBeNull();
+    expect(container.querySelector('path.plan-burn-fill')).not.toBeNull();
+    expect(container.querySelector('path.plan-burn-line')).not.toBeNull();
     const mark = container.querySelector('path.plan-burn-now')!.getAttribute('d');
     expect(mark).toContain('L');
   });
 
-  it('draws no line when a 30-day window stays fully spent', () => {
+  it('stems a tight fully-spent cluster instead of leaving the cell empty (🎯T635)', () => {
     const start = Date.parse('2026-09-14T00:00:00Z');
     const month = 30 * 24 * 3600;
     const { container } = render(
@@ -105,7 +106,9 @@ describe('the mark renders in front of the line (🎯T687)', () => {
         }}
       />,
     );
-    expect(container.querySelector('path.plan-burn-line')).toBeNull();
+    // 🎯T635: a tight fully-spent cluster is an inward stem, not an empty cell.
+    expect(container.querySelector('path.plan-burn-fill')).not.toBeNull();
+    expect(container.querySelector('path.plan-burn-line')).not.toBeNull();
     expect(container.querySelector('path.plan-burn-now')).not.toBeNull();
   });
 

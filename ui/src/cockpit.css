@@ -1913,6 +1913,12 @@ body.rhs-resizing-row { cursor: row-resize; }
   stroke-linecap: butt;
   stroke-linejoin: round;
 }
+.plan-tip-table td.plan-burn .plan-burn-fill {
+  /* 🎯T635: inward stem for a near-zero x-span cluster. Real curves have no fill. */
+  fill: currentColor;
+  opacity: 0.22;
+  stroke: none;
+}
 /* 🎯T687: the reading as it stands now. A zero-length segment with a
    round cap paints a dot of the stroke's own width, and a non-scaling
    stroke keeps it circular under a viewBox scaled unequally on the two

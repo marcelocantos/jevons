@@ -10,7 +10,9 @@ import {
   periodBoundaryXs,
   periodBounds,
   pixelColumns,
+  stemBand,
   BURN_HEIGHT,
+  BURN_STEM_MIN,
   BURN_WIDTH,
 } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
@@ -81,30 +83,79 @@ describe('burn chart geometry (🎯T634 / T637)', () => {
     expect(spec?.points[0].y).toBeGreaterThan(spec!.points[1].y);
   });
 
-  it('leaves a lone sample to the current-value mark (🎯T687)', () => {
-    const mid = new Date(START + WEEK * 1000 * 0.25).toISOString();
-    const w = win({ history: [{ at: mid, remaining_percent: 71 }] });
-    expect(burnPaths(w)).toBeNull();
-    expect(currentMark(w)).toBe('M25,22.7 L25,22.7');
-  });
-
-  it('plots a just-reset cluster where it falls, at the period start (🎯T687)', () => {
+  it('keeps a just-reset cluster as an inward stem, not a 1px left border (🎯T635)', () => {
     const a = new Date(START).toISOString();
     const b = new Date(START + 5 * 60_000).toISOString();
-    const w = win({
+    const spec = burnPaths(
+      win({
+        remaining_percent: 100,
+        history: [
+          { at: a, remaining_percent: 100 },
+          { at: b, remaining_percent: 100 },
+        ],
+      }),
+    );
+    expect(spec?.points).toHaveLength(2);
+    expect(spec?.points[0].x).toBe(0);
+    expect(spec?.fill).toBeTruthy();
+    const ext = fillExtent(spec!.fill!);
+    expect(ext.x0).toBeGreaterThan(0);
+    expect(ext.x1 - ext.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
+    const lineX = Number(spec!.line.match(/^M([\d.]+),/)?.[1]);
+    expect(lineX).toBeGreaterThan(0);
+    // True sample position is still x=0; the stem is what is inset.
+    expect(currentMark(win({
       remaining_percent: 100,
       history: [
         { at: a, remaining_percent: 100 },
         { at: b, remaining_percent: 100 },
       ],
-    });
-    // Five minutes of a week, all untouched, share one height. There is
-    // no line. The mark sits on the period start because that is when
-    // the samples were taken.
-    expect(burnPaths(w)).toBeNull();
-    // 100% remaining is 0% used, so the mark sits in the bottom-left
-    // corner: the true position of an untouched, just-reset week.
-    expect(currentMark(w)).toBe('M0,32 L0,32');
+    }))).toBe('M0,32 L0,32');
+  });
+
+  it('shifts a period-start stem inward instead of sitting on x=0 (🎯T635)', () => {
+    const band = stemBand(0);
+    expect(band.x0).toBeGreaterThan(0);
+    expect(band.x1 - band.x0).toBeGreaterThanOrEqual(BURN_STEM_MIN);
+    expect(band.lineX).toBeGreaterThan(0);
+    expect(band.lineX).toBeGreaterThanOrEqual(band.x0);
+    expect(band.lineX).toBeLessThanOrEqual(band.x1);
+  });
+
+  it('plots a mid-window two-hour span as those two points only (🎯T635)', () => {
+    const a = new Date(START + WEEK * 1000 * 0.25).toISOString();
+    const b = new Date(START + WEEK * 1000 * 0.25 + 2 * 3600_000).toISOString();
+    const spec = burnPaths(
+      win({
+        history: [
+          { at: a, remaining_percent: 80 },
+          { at: b, remaining_percent: 50 },
+        ],
+      }),
+    );
+    expect(spec?.points).toHaveLength(2);
+    expect(spec?.points[0].x).toBeCloseTo(25, 5);
+    expect(spec?.points[1].x).toBeGreaterThan(spec!.points[0].x);
+    expect(spec?.points[0].x).not.toBe(0);
+  });
+
+  it('leaves a real curve whose span exceeds the stem minimum unchanged (🎯T635)', () => {
+    const a = new Date(START + WEEK * 1000 * 0.2).toISOString();
+    const b = new Date(START + WEEK * 1000 * 0.5).toISOString();
+    const spec = burnPaths(
+      win({
+        history: [
+          { at: a, remaining_percent: 80 },
+          { at: b, remaining_percent: 50 },
+        ],
+      }),
+    );
+    expect(spec?.points).toHaveLength(2);
+    expect(spec?.fill).toBeUndefined();
+    expect(spec?.points[0].x).toBeCloseTo(20, 5);
+    expect(spec?.points[1].x).toBeCloseTo(50, 5);
+    const lineX0 = Number(spec!.line.match(/^M([\d.]+),/)?.[1]);
+    expect(lineX0).toBeCloseTo(20, 5);
   });
 
   it('keeps a one-sample spike inside a crowded pixel column', () => {
@@ -240,7 +291,7 @@ describe('period boundary marks', () => {
   });
 });
 
-function lineExtent(d: string): { x0: number; x1: number } {
+function fillExtent(d: string): { x0: number; x1: number } {
   const xs = [...d.matchAll(/[ML]([\d.]+),/g)].map((m) => Number(m[1]));
   return { x0: Math.min(...xs), x1: Math.max(...xs) };
 }
