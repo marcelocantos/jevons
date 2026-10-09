@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -226,8 +228,10 @@ func ParseAttestations(text string) []CitedAttestation {
 	return out
 }
 
-// Store holds gate records on disk. Concurrent workers share it; every write
-// is write-and-rename so a reader never sees a half-written record.
+// Store holds gate records on disk. Concurrent workers share it. Save never
+// overwrites an existing id (🎯T1033): a colliding run re-derives. The bytes
+// of one record appear atomically via link-from-temp so a reader never sees a
+// half-written file.
 type Store struct {
 	Root string
 }
@@ -282,7 +286,13 @@ func (s *Store) voidedLogPath(id string) string {
 	return filepath.Join(s.Root, VoidedDir, id+".log")
 }
 
-// Save writes rec atomically. The caller has already written the log.
+// ErrIDCollision is returned by Save when rec.ID already names a record.
+// Run re-derives rather than treating this as a machinery failure (🎯T1033).
+var ErrIDCollision = errors.New("gate id already names a record")
+
+// Save writes rec exclusively. If rec.ID already names a record, it returns
+// ErrIDCollision rather than replacing it (🎯T1033). A colliding attestation
+// would otherwise resolve to the wrong run.
 func (s *Store) Save(rec *Record) error {
 	if s == nil || rec == nil || rec.ID == "" {
 		return fmt.Errorf("gate save: no store or record id")
@@ -291,7 +301,11 @@ func (s *Store) Save(rec *Record) error {
 	if err != nil {
 		return fmt.Errorf("gate save %s: %w", rec.ID, err)
 	}
-	return writeAtomic(s.recordPath(rec.ID), append(blob, '\n'), 0o644)
+	err = writeExclusive(s.recordPath(rec.ID), append(blob, '\n'), 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%w: %s", ErrIDCollision, rec.ID)
+	}
+	return err
 }
 
 // Load returns the record for id, or ok=false when no such run was recorded.
@@ -477,6 +491,37 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("gate write %s: %w", path, err)
 	}
 	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("gate write %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeExclusive publishes data at path only if that name is not already
+// taken. os.Link is the whole mechanism: the name appears only if it does
+// not already exist, and it appears already carrying the complete file.
+// Rename overwrites; that is the 🎯T1033 defect this refuses.
+func writeExclusive(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".gate-*")
+	if err != nil {
+		return fmt.Errorf("gate write %s: %w", path, err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("gate write %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("gate write %s: %w", path, err)
+	}
+	if err := os.Chmod(name, mode); err != nil {
+		return fmt.Errorf("gate write %s: %w", path, err)
+	}
+	if err := os.Link(name, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fs.ErrExist
+		}
 		return fmt.Errorf("gate write %s: %w", path, err)
 	}
 	return nil
