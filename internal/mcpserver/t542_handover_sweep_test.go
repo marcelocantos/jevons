@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +131,46 @@ func TestT542SweepHandoversMissingAfterClearIsNotListed(t *testing.T) {
 	}
 }
 
+// Residual of T542: a live migrate with a real transcript still seeds.
+// Empty and missing arms reap/omit; this one must not.
+func TestT542SweepHandoversLiveTranscriptStillSeeds(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(dir + "/agents.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t542-live", SessionID: "s1", Provider: claudia.ProviderCodex,
+		Purpose: claudia.PurposeWork, Parent: "jevons-po",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	led := &t542Ledger{pending: []handover.Pending{{
+		Agent: "jv-t542-live", From: "codex", To: "claude",
+		TranscriptPath: "/real.jsonl",
+		Kind:           handover.KindMigrate,
+		CreatedAt:      time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+	}}}
+	up := &upward{}
+	s := &Server{registry: reg, migrator: led}
+	s.SetOverseerDeliver(up.deliver)
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
+		return &recordingSender{}, true, nil
+	})
+	s.SweepHandovers()
+	if len(led.seeded) != 1 || led.seeded[0] != "jv-t542-live" {
+		t.Fatalf("seeded = %v; live usable transcript must retry", led.seeded)
+	}
+	if len(led.cleared) != 0 {
+		t.Fatalf("cleared = %v; live usable must not reap", led.cleared)
+	}
+	for _, line := range up.all() {
+		if strings.Contains(line, "UNDELIVERED HANDOVER") {
+			t.Fatalf("live usable was surfaced: %q", line)
+		}
+	}
+}
+
 func TestSweepDefaultGrokDoesNotProhibitClaudeMigration(t *testing.T) {
 	reg, err := claudia.NewRegistry(t.TempDir() + "/agents.json")
 	if err != nil {
@@ -160,5 +201,58 @@ func TestSweepDefaultGrokDoesNotProhibitClaudeMigration(t *testing.T) {
 	}
 	if len(acts) != 1 || acts[0].Name != "jv-t542-pin" || acts[0].To != "claude" {
 		t.Fatalf("want migration to eligible Claude, got %+v", acts)
+	}
+}
+
+// A standing owner no-Claude pin (ExcludeProviders) is not overwritten by
+// plan-usage migrate even when Claude is the only greener dest than the
+// exhausted current provider.
+func TestT542SweepPlanPolicyDoesNotOverwriteOwnerNoClaudePin(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t542-owner-pin", SessionID: "s1", Provider: claudia.ProviderCodex,
+		Purpose: claudia.PurposeWork, Parent: "jevons-po",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plans, err := claudia.OpenSeatPolicyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plans.Put("jv-t542-owner-pin", claudia.SeatPolicy{
+		ExcludeProviders: []claudia.Provider{claudia.ProviderClaude},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	led := &t542Ledger{}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetSeatPlan(plans)
+	s.SetMigrator(led)
+	s.SetPlanUsageSource(func() planusage.Snapshot {
+		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+			t39015Weekly("codex", 0, 100, now),
+			t39015Weekly("claude", 80, 20, now),
+			t39015Weekly("grok", 55, 45, now),
+		}}
+	})
+
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].Name != "jv-t542-owner-pin" {
+		t.Fatalf("want one action for the pinned seat, got %+v", acts)
+	}
+	if acts[0].To == "claude" {
+		t.Fatalf("owner no-Claude pin overwritten: %+v", acts[0])
+	}
+	if acts[0].To != "grok" {
+		t.Fatalf("want migrate to grok (Claude excluded), got %+v", acts[0])
+	}
+	if led.prepared != 1 {
+		t.Fatalf("prepared=%d; pin must still migrate to the allowed dest", led.prepared)
 	}
 }

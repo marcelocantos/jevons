@@ -87,3 +87,16 @@ func TestT542ClassifyHandoverReapsColdEmptyTranscript(t *testing.T) {
 		}
 	}
 }
+
+func TestT542ClassifyHandoverLiveUsableRetries(t *testing.T) {
+	p := handover.Pending{
+		Agent: "jv-t542-live", From: "codex", To: "claude",
+		TranscriptPath: "/real.jsonl",
+		Kind:           handover.KindMigrate,
+		CreatedAt:      time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+	}
+	got, reason := handover.ClassifyHandover(p, time.Now(), true, true)
+	if got != handover.HandoverRetry {
+		t.Fatalf("live usable = %s (%s); want retry — residual: real transcript still seeds", got, reason)
+	}
+}
