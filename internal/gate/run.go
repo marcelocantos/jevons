@@ -169,15 +169,36 @@ func Run(args *RunArgs) (*Record, error) {
 	)
 
 	if args.Store != nil {
-		rec.OutputPath = args.Store.LogPath(rec.ID)
-		if err := os.WriteFile(rec.OutputPath, out, 0o644); err != nil {
-			return rec, fmt.Errorf("gate run %s: write log: %w", rec.ID, err)
-		}
-		if err := args.Store.Save(rec); err != nil {
+		if err := persistRun(args.Store, rec, out); err != nil {
 			return rec, err
 		}
 	}
 	return rec, nil
+}
+
+// persistRun claims a unique id then writes the log. The JSON record is
+// claimed first (exclusive) so a colliding id cannot overwrite another
+// run's log on the way to a retry (🎯T1033).
+func persistRun(store *Store, rec *Record, out []byte) error {
+	proposed := rec.ID
+	for n := 0; n < maxIDAttempts; n++ {
+		if n > 0 {
+			rec.ID = deriveID(rec.Command, rec.Started, n)
+		}
+		rec.OutputPath = store.LogPath(rec.ID)
+		err := store.Save(rec)
+		if errors.Is(err, ErrIDCollision) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(rec.OutputPath, out, 0o644); err != nil {
+			return fmt.Errorf("gate run %s: write log: %w", rec.ID, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("gate run: no free id after %d collisions on %s", maxIDAttempts, proposed)
 }
 
 // teeWriter forwards to the live stream and to the capture buffer under one
@@ -239,11 +260,44 @@ func sanitizeName(s string) string {
 	return name
 }
 
-// newID is a short handle for the run, unique enough to tie a pasted
-// attestation to a stored record.
+// idWidth is the hex length newID proposes. 32 bits is short enough to
+// paste; uniqueness against the shared store is settled at save time.
+const idWidth = 8
+
+// collideWidth is how much of the hash a colliding run takes. Lengthening
+// plus extra salt drops the birthday probability far below the 8-hex space.
+const collideWidth = 12
+
+// maxIDAttempts bounds the search for a free id. The bound exists so a
+// store that reports every name as taken fails loudly instead of spinning.
+const maxIDAttempts = 64
+
+// newID proposes the base handle for a run. It is NOT a uniqueness
+// guarantee: 8 hex chars from sha256(argv|unixnano|pid) collide in a
+// store of a few thousand records. Uniqueness is settled by persistRun,
+// which re-derives when Save reports the id already names a record
+// (🎯T1033). A non-colliding run mints exactly what this function minted
+// before, so every id already on disk still resolves.
 func newID(argv []string, at time.Time) string {
+	return deriveID(argv, at, 0)
+}
+
+// deriveID is the nth proposal in an id family. n=0 is the historical
+// 8-hex construction. n>0 mixes extra salt and lengthens the handle so
+// even an identical seed (same argv, same nano, same pid) gets a distinct
+// citable id.
+func deriveID(argv []string, at time.Time, n int) string {
 	seed := fmt.Sprintf("%s|%d|%d", strings.Join(argv, " "), at.UnixNano(), os.Getpid())
-	return digest([]byte(seed))[:8]
+	width := idWidth
+	if n > 0 {
+		seed = fmt.Sprintf("%s|n=%d", seed, n)
+		width = collideWidth
+	}
+	h := digest([]byte(seed))
+	if width > len(h) {
+		width = len(h)
+	}
+	return h[:width]
 }
 
 // exitSignaled reports whether err is a wait status from a signal rather than
