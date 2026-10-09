@@ -21,6 +21,7 @@ import {
 } from '../conversation/clip';
 import { shouldRequestPage } from '../conversation/page';
 import { displayRows, type DisplayKind, type StepItem } from '../conversation/display';
+import { inspectDisplayRows } from '../conversation/inspectTail';
 import { parseAssistantMarkdown } from '../conversation/markdown';
 import { preloadMermaid, renderMermaidIn } from '../conversation/mermaidPaint';
 import { paintUserHTML, userBubbleClass, type TurnOrigin } from '../conversation/paint';
@@ -77,7 +78,11 @@ export function AgentTranscript(props: {
     props.onFollowChange?.(next);
   };
   const clipPersist = useRef(new Map<string, ClipUIState>());
-  const rows = useMemo(() => displayRows(props.frames, { inspect: density === 'compact' }), [props.frames, density]);
+  // 🎯T609: inspect paints a named tail, not every turn.
+  const rows = useMemo(
+    () => (density === 'compact' ? inspectDisplayRows(props.frames) : displayRows(props.frames)),
+    [props.frames, density],
+  );
   const count = rows.length;
   const latestMsg = useMemo(() => lastMessageRowIndex(rows.map((r) => r.kind)), [rows]);
   const estimate = density === 'compact' ? 48 : 72;

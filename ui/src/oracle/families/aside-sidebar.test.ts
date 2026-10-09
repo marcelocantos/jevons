@@ -161,7 +161,7 @@ describeOracle(family('aside-sidebar'), () => {
     expect(userTurnOrigin(userTurn(inject), inject, true)).toBe('agent');
     expect(userTurnOrigin(userTurn(inject), inject, false), 'main: owner echo is also wrapped (T537.1.2)').toBe('owner');
     expect(userTurnOrigin(userTurn('**owner typed stars**'), '**owner typed stars**', true)).toBe('owner');
-    expect(transcriptSrc).toMatch(/displayRows\(props\.frames, \{ inspect: density === 'compact' \}\)/);
+    expect(transcriptSrc).toMatch(/inspectDisplayRows\(props\.frames\)/);
     expect(userTurnOrigin({ type: 'user', turn_origin: 'agent', message: { role: 'user', content: 'x' } }, 'x')).toBe('agent');
     const rows = displayRows([userTurn(inject), userTurn('**owner typed stars**')], { inspect: true });
     expect(rows.map((r) => [r.kind, r.origin])).toEqual([['user', 'agent'], ['user', 'owner']]);
