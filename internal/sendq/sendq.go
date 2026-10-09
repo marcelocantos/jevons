@@ -580,6 +580,39 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 	return f.Entries, nil
 }
 
+// DischargePending removes an accepted pending copy only after the caller has
+// independently confirmed delivery of the same payload to the receiver. An
+// in-progress or uncertain attempt is never removed: its outcome must be
+// reconciled against receiver evidence instead of guessed from another send.
+func (s *Store) DischargePending(agent string, matches func(string) bool) (int, error) {
+	if s == nil {
+		return 0, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return 0, err
+	}
+	kept := f.Entries[:0]
+	removed := 0
+	for _, e := range f.Entries {
+		if e.State == Pending && matches(e.Text) {
+			removed++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	f.Entries = kept
+	if err := s.save(f); err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
 // Depth is the number of messages waiting for an agent. An unreadable queue
 // reports zero AND an error; callers that only want the number (a status
 // line) may ignore the error, but none may read zero as "nothing waiting"

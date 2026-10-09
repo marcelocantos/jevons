@@ -334,6 +334,19 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 			}
 			if parentReportOfferStatus(res.Status) {
 				s.noteParentReportOffered(name, offeredReportID)
+				// A previous busy offer may still be pending in the daemon queue.
+				// Discharge it only when this send actually reached the receiver;
+				// queued is an offer, not a receipt.
+				if res.Status != "queued" && res.Status != "interrupted_queued" {
+					if removed, dischargeErr := s.sendQueue().DischargePending(name, func(body string) bool {
+						agent, id, ok := findAgentResponded(body)
+						return ok && agent == prep.Agent && id == offeredReportID
+					}); dischargeErr != nil {
+						slog.Error("cannot discharge delivered parent report from sendq", "parent", name, "report_id", offeredReportID, "err", dischargeErr)
+					} else if removed > 0 {
+						s.observeQueue(name)
+					}
+				}
 				// 🎯T747: also by content, so an identical body under a new id is not re-offered.
 				s.noteParentReportOffered(name, offeredContentKey)
 			}

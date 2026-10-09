@@ -255,3 +255,27 @@ func TestT747DifferentBodyStillDelivered(t *testing.T) {
 		t.Fatalf("sent+queued=%d want 2 (sent=%d): %v", got, len(parent.sent), parent.sent)
 	}
 }
+
+// T766.5.1: if a pending copy exists when the same report is independently
+// received, the stale queue entry must not generate a second user message.
+func TestT766ReportDeliveredDischargesPendingCopy(t *testing.T) {
+	s, parent, _, _ := t731Server(t)
+	text := "[Agent " + t731Worker + " responded] report_id=receipt-1\n" + t731Report
+	if _, err := s.enqueueAgentSend(t731Parent, text); err != nil {
+		t.Fatal(err)
+	}
+	if n := observedPendingSends(s, t731Parent); n != 1 {
+		t.Fatalf("before receipt depth=%d", n)
+	}
+	res, err := s.deliverByName(t731Parent, text, OriginAgent, false)
+	if err != nil || res.Status != "sent" {
+		t.Fatalf("receipt: %+v %v", res, err)
+	}
+	if n := observedPendingSends(s, t731Parent); n != 0 {
+		t.Fatalf("delivered backlog depth=%d, want 0", n)
+	}
+	s.drainAgentSendQueue(t731Parent)
+	if len(parent.sent) != 1 {
+		t.Fatalf("receiver saw %d copies, want 1: %v", len(parent.sent), parent.sent)
+	}
+}
