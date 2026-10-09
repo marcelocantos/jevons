@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T309.3: ONE deliver-by-name path for every agent in the fleet layer.
@@ -338,8 +339,8 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 				// Discharge it only when this send actually reached the receiver;
 				// queued is an offer, not a receipt.
 				if res.ReceiverReceipt {
-					if removed, dischargeErr := s.sendQueue().DischargePending(name, func(body string) bool {
-						agent, id, ok := findAgentResponded(body)
+					if removed, dischargeErr := s.sendQueue().DischargePending(name, func(entry sendq.Entry) bool {
+						agent, id, ok := findAgentResponded(entry.Text)
 						return ok && agent == prep.Agent && id == offeredReportID
 					}); dischargeErr != nil {
 						slog.Error("cannot discharge delivered parent report from sendq", "parent", name, "report_id", offeredReportID, "err", dischargeErr)

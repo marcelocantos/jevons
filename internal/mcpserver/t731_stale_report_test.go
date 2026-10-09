@@ -350,3 +350,39 @@ func TestT766ReceiverQueueOperationDischargesReport(t *testing.T) {
 		t.Fatalf("receiver got %d copies", len(parent.sent))
 	}
 }
+
+// A digest may quote the delivered report but still contain other unreceived
+// messages. Discharging by a substring/ID inside it would discard their payloads.
+func TestT766ReceiptDoesNotDiscardMixedDigest(t *testing.T) {
+	s, _, _, _ := t731Server(t)
+	text := "[Agent " + t731Worker + " responded] report_id=mixed-digest\n" + t731Report
+	q := s.sendQueue()
+	if _, _, err := q.Append(t731Parent, text, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < sendq.DigestThreshold+1; i++ {
+		if _, _, err := q.Append(t731Parent, "SUPERVISOR independent payload", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest, ok, err := q.ClaimDigest(t731Parent)
+	if err != nil || !ok || digest.Members == "" {
+		t.Fatalf("digest: %+v %v", digest, err)
+	}
+	if err := q.Resolve(t731Parent, digest, sendq.DefinitelyNotSent, "receiver was offline"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.deliverByName(t731Parent, text, OriginAgent, false)
+	if err != nil || res.Status != "sent" {
+		t.Fatalf("receipt: %+v %v", res, err)
+	}
+	entries, err := q.Snapshot(t731Parent)
+	if err != nil || len(entries) != sendq.DigestThreshold {
+		t.Fatalf("unrelated digest members lost after one member delivered: %+v %v", entries, err)
+	}
+	for _, e := range entries {
+		if e.State != sendq.Pending || e.Text != "SUPERVISOR independent payload" {
+			t.Fatalf("delivered report replayable or other member lost: %+v", e)
+		}
+	}
+}

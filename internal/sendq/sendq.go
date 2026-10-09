@@ -580,11 +580,13 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 	return f.Entries, nil
 }
 
-// DischargePending removes an accepted pending copy only after the caller has
-// independently confirmed delivery of the same payload to the receiver. An
-// in-progress or uncertain attempt is never removed: its outcome must be
-// reconciled against receiver evidence instead of guessed from another send.
-func (s *Store) DischargePending(agent string, matches func(string) bool) (int, error) {
+// DischargePending removes copies positively identified in receiver records.
+// Only Pending entries are touched: an Attempting/Uncertain delivery may have
+// reached the receiver and must be reconciled, not silently forgotten. Pending
+// digests are unfolded from their archived originals before matching, so a
+// receipt for one member cannot discard unrelated accepted messages or replay
+// that member inside the digest on the next drain.
+func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, error) {
 	if s == nil {
 		return 0, fmt.Errorf("sendq: no store")
 	}
@@ -594,10 +596,34 @@ func (s *Store) DischargePending(agent string, matches func(string) bool) (int, 
 	if err != nil {
 		return 0, err
 	}
-	kept := f.Entries[:0]
+	kept := make([]Entry, 0, len(f.Entries))
 	removed := 0
 	for _, e := range f.Entries {
-		if e.State == Pending && matches(e.Text) {
+		if e.State != Pending {
+			kept = append(kept, e)
+			continue
+		}
+		if e.Members != "" {
+			members, ok := s.archivedMembers(e.ID)
+			if !ok {
+				return 0, fmt.Errorf("sendq: cannot discharge pending digest %s without its archived members", e.ID)
+			}
+			survivors := make([]Entry, 0, len(members))
+			for _, m := range members {
+				if matches(m) {
+					removed++
+				} else {
+					survivors = append(survivors, m)
+				}
+			}
+			if len(survivors) == len(members) {
+				kept = append(kept, e)
+			} else {
+				kept = append(kept, survivors...)
+			}
+			continue
+		}
+		if matches(e) {
 			removed++
 			continue
 		}
