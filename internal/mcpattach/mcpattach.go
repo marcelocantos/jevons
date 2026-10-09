@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/mcpup"
 )
 
 // Args names this daemon's HTTP MCP endpoint and, optionally, isolate
@@ -34,9 +35,11 @@ type Args struct {
 	// the fixture paths (missing is empty). Seats still get
 	// SessionServers, including Codex HTTP jevonsmcp.
 	Isolate bool
-	// Proxied is the T520 loopback list from mcpup.Mount.Advertised.
-	// SessionServers rewrites matching HTTP URLs so seats dial
-	// jevonsd, not the remote.
+	// Proxied is the grant list from mcpup.Mount.Advertised.
+	// SessionServers rewrites matching HTTP URLs. Remote OAuth keeps
+	// the T520 jevonsd /upstream/ loopback; a local loopback MCP is
+	// granted its direct URL (🎯T1039) so a nested leftover cannot
+	// be persisted onto AgentDef.MCPServers.
 	Proxied []claudia.MCPServer
 }
 
@@ -66,8 +69,8 @@ func HTTPURL(host string, port int) string {
 
 // SessionServers is the list Jevons passes on AgentDef.MCPServers.
 // Every backend except Grok ACP uses Claude's LoadMCP inventory as the
-// standard set (🎯T871), plus this daemon's jevonsmcp, with T520
-// loopbacks applied from Proxied. Grok ACP still gets only the live
+// standard set (🎯T871), plus this daemon's jevonsmcp, with T520/T1039
+// grants applied from Proxied. Grok ACP still gets only the live
 // HTTP jevonsmcp (🎯T525): a Claude-shaped full inventory made
 // session/new return Invalid params.
 func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
@@ -162,6 +165,12 @@ func applyProxied(list []claudia.MCPServer, proxied []claudia.MCPServer) []claud
 	for i, s := range out {
 		url, ok := byName[s.Name]
 		if !ok {
+			continue
+		}
+		// 🎯T1039: a direct loopback grant is not rewritten to a nested
+		// /upstream/ leftover. Remote OAuth (non-loopback) still takes
+		// the T520 proxy URL.
+		if mcpup.GrantDirect(s.URL) && mcpup.IsNestedProxyURL(url) {
 			continue
 		}
 		out[i].URL = url
