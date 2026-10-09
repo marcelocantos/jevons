@@ -580,23 +580,11 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 	obs := make([]poproactive.LeafObs, 0, len(leaves))
 	for _, leaf := range leaves {
 		byID[leaf.ID] = leaf
-		obs = append(obs, poproactive.LeafObs{
-			ID:              leaf.ID,
-			Tags:            leaf.Tags,
-			Name:            leaf.Name,
-			Context:         leaf.Context,
-			Cost:            leaf.Cost,
-			SetAsideDeps:    leaf.SetAsideDeps,
-			ActiveChildren:  leaf.ActiveChildren,
-			ParkedAncestors: leaf.ParkedAncestors,
-			OwnedBy:         leaf.OwnedBy,
-			OwnedByReason:   leaf.OwnedByReason,
-			ForceEngage:     poproactive.IsForceEngageTag(leaf.Tags),
-			ReapedPending:   s.reapedTargetPending(leaf.ID, args.Workdir, poproactive.IsForceEngageTag(leaf.Tags)),
-			// 🎯T389: this sweep's ledger only — another repo's worker on the
-			// same id must not make this leaf look consumed.
-			AlreadyEngaged: len(workAgentsBoundOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0,
-		})
+		// 🎯T389: this sweep's ledger only — another repo's worker on the
+		// same id must not make this leaf look consumed.
+		o := frontierLeafObs(leaf, len(workAgentsBoundOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0)
+		o.ReapedPending = s.reapedTargetPending(leaf.ID, args.Workdir, o.ForceEngage)
+		obs = append(obs, o)
 	}
 
 	spawnHalted := ""
