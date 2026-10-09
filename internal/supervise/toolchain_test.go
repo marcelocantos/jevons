@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -205,6 +206,61 @@ func writeHelper(t *testing.T, repo, name string) {
 	}
 }
 
+// restartHelperExempt are on-demand builds the restart script may run
+// that RestartHelpers is allowed not to name. buildsnap is only required
+// when there is no bin/jevonsd to fall back on, and RestartBlocker already
+// accounts for it separately. buildident's build failure is caught by
+// `|| return 0` — a missing `go` degrades that one check rather than
+// blocking the restart, which is why it is documented above RestartHelpers
+// as excluded on purpose.
+var restartHelperExempt = map[string]bool{"buildsnap": true, "buildident": true}
+
+// restartBuildLineRE finds on-demand `go build -o "$X" ./cmd/y` lines in
+// the restart script. The helper name is the cmd directory. `$[^"]+`
+// (not `\w+`) so `$ROOT/bin/foo` still counts if the script ever writes
+// the dest that way.
+var restartBuildLineRE = regexp.MustCompile(`go build -o "\$[^"]+" \./cmd/(\w+)`)
+
+// hardRequiredCmdBuilds returns every ./cmd/<name> the script `go build`s
+// without a `return 0` escape. Exempt helpers are still returned so a
+// liveness check can see them; callers that compare against RestartHelpers
+// drop them via unnamedHardRequiredBuilds.
+func hardRequiredCmdBuilds(script string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(script, "\n") {
+		m := restartBuildLineRE.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		if strings.Contains(line, "return 0") {
+			continue
+		}
+		name := m[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+func unnamedHardRequiredBuilds(script string, named []string, exempt map[string]bool) []string {
+	inList := map[string]bool{}
+	for _, h := range named {
+		inList[h] = true
+	}
+	var unnamed []string
+	for _, helper := range hardRequiredCmdBuilds(script) {
+		if exempt[helper] || inList[helper] {
+			continue
+		}
+		unnamed = append(unnamed, helper)
+	}
+	return unnamed
+}
+
 // 🎯T606: the restart script builds several helpers on demand, and only
 // RestartHelpers being a stale list is silent — a helper the script starts
 // hard-failing on (die/exit, not the buildident "|| return 0" skip) has to
@@ -212,6 +268,11 @@ func writeHelper(t *testing.T, repo, name string) {
 // the script gets there. This test reads the shipped script itself, so a
 // new hard-required `go build -o "$X" ./cmd/y` line the source list has
 // not been told about fails it, instead of only a manual audit finding it.
+//
+// Liveness is load-bearing: an earlier form of this oracle looped over
+// regex matches and did nothing when the pattern matched zero lines, so a
+// script-style change would have gone silent. The scanner must observe the
+// helpers we already know the script hard-requires.
 func TestRestartHelpersNamesEveryHardRequiredBuild(t *testing.T) {
 	root, err := findRepoRoot()
 	if err != nil {
@@ -221,35 +282,42 @@ func TestRestartHelpersNamesEveryHardRequiredBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not read restart-jevonsd.sh: %v", err)
 	}
+	script := string(src)
 
-	// buildsnap is conditionally required (only when there is no bin/jevonsd
-	// to fall back on) and RestartBlocker already accounts for it separately
-	// from the unconditional RestartHelpers list — not a gap this test
-	// checks. buildident is documented above RestartHelpers as excluded on
-	// purpose because its build failure is caught by `|| return 0`.
-	exempt := map[string]bool{"buildsnap": true, "buildident": true}
-
-	buildLineRE := regexp.MustCompile(`go build -o "\$\w+" \./cmd/(\w+)\)([^\n]*)`)
-	named := map[string]bool{}
-	for _, h := range supervise.RestartHelpers {
-		named[h] = true
+	found := hardRequiredCmdBuilds(script)
+	for _, want := range []string{"detach", "runlock", "claudiapin"} {
+		if !slices.Contains(found, want) {
+			t.Errorf("oracle did not observe bin/%s as a hard-required build in scripts/restart-jevonsd.sh — the scanner is dead, or the script dropped a helper RestartHelpers still names", want)
+		}
 	}
 
-	for _, m := range buildLineRE.FindAllStringSubmatch(string(src), -1) {
-		helper, tail := m[1], m[2]
-		if exempt[helper] {
-			continue
-		}
-		if strings.Contains(tail, "return 0") {
-			// This build is allowed to fail silently — not a hard
-			// dependency, so RestartHelpers does not need to name it.
-			continue
-		}
-		if !named[helper] {
-			t.Errorf("scripts/restart-jevonsd.sh hard-requires bin/%s (no `|| return 0` "+
-				"escape) but supervise.RestartHelpers does not name it — "+
-				"add it or document why it is exempt", helper)
-		}
+	for _, helper := range unnamedHardRequiredBuilds(script, supervise.RestartHelpers, restartHelperExempt) {
+		t.Errorf("scripts/restart-jevonsd.sh hard-requires bin/%s (no `|| return 0` "+
+			"escape) but supervise.RestartHelpers does not name it — "+
+			"add it or document why it is exempt", helper)
+	}
+}
+
+func TestRestartHelpersIncludesClaudiapin(t *testing.T) {
+	if !slices.Contains(supervise.RestartHelpers, "claudiapin") {
+		t.Fatal("supervise.RestartHelpers does not name claudiapin — a cold machine with no go is not told, and the restart dies later with 'refusing a silent claudia pin'")
+	}
+}
+
+func TestRestartHelpersDriftOracleFailsOnUnnamedHardBuild(t *testing.T) {
+	script := `
+(cd "$ROOT" && go build -o "$DETACH" ./cmd/detach) || {
+  echo "cannot build detach"; exit 2
+}
+(cd "$ROOT" && go build -o "$NEWHELPER" ./cmd/newhelper) || {
+  echo "cannot build newhelper"; exit 2
+}
+(cd "$ROOT" && go build -o "$BUILDIDENT" ./cmd/buildident) >/dev/null 2>&1 || return 0
+(cd "$ROOT" && go build -o "$BUILDSNAP" ./cmd/buildsnap) || die "cannot build buildsnap"
+`
+	got := unnamedHardRequiredBuilds(script, []string{"detach"}, restartHelperExempt)
+	if len(got) != 1 || got[0] != "newhelper" {
+		t.Fatalf("unnamed = %v, want [newhelper] (buildident is skippable, buildsnap is exempt, detach is named)", got)
 	}
 }
 
