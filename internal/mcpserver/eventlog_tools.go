@@ -86,6 +86,9 @@ func (s *Server) handleLogsTail(_ context.Context, req mcp.CallToolRequest) (*mc
 	if n, ok := args["limit"].(float64); ok && n > 0 {
 		limit = int(n)
 	}
+	if limit > eventlog.MaxPageEvents {
+		limit = eventlog.MaxPageEvents
+	}
 	comp, _ := args["component"].(string)
 	dec, _ := args["decision"].(string)
 	src, _ := args["source"].(string)

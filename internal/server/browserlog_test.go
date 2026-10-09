@@ -369,3 +369,87 @@ func TestHandleBrowserLogDefaultComponent(t *testing.T) {
 		t.Fatalf("default component=%v want browser", got["component"])
 	}
 }
+
+// 🎯T411 persist path: browser hydrate_page still lands in events.jsonl
+// (clause 4 — do not drop evidence), but the default GET /api/logs window
+// is source=server so those debug rows cannot hide a delivery.
+func TestT411BrowserHydratePersistDoesNotHideServerDecisions(t *testing.T) {
+	dir := t.TempDir()
+	s := New("test", dir)
+	j, err := eventlog.Open(eventlog.DefaultPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	s.SetEventLog(j)
+	s.LogEvent("route", "send", map[string]any{"msg": "route send jevons-po delivered"})
+
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	hydrate, _ := json.Marshal(map[string]any{
+		"level": "debug",
+		"msg":   "hydrate page",
+		"fields": map[string]any{
+			"component": "history",
+			"decision":  "hydrate_page",
+		},
+	})
+	const nHydrate = 40
+	for i := 0; i < nHydrate; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/log", bytes.NewReader(hydrate))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://localhost")
+		req.Host = "localhost"
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("POST /api/log status %d", rr.Code)
+		}
+	}
+
+	get := func(path string) (int, []eventlog.Event) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Origin", "http://localhost")
+		req.Host = "localhost"
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s status %d body=%s", path, rr.Code, rr.Body.String())
+		}
+		var payload struct {
+			Events []eventlog.Event `json:"events"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return len(payload.Events), payload.Events
+	}
+
+	n, events := get("/api/logs?limit=100")
+	if n == 0 {
+		t.Fatal("default /api/logs empty after hydrate persist — server decisions hidden")
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Source != "server" {
+			t.Fatalf("default /api/logs leaked a browser row: %+v", ev)
+		}
+		if strings.Contains(ev.Msg, "jevons-po") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("default /api/logs missing jevons-po delivery: %+v", events)
+	}
+
+	n, events = get("/api/logs?source=browser&limit=100")
+	if n != nHydrate {
+		t.Fatalf("source=browser count=%d want %d — persist must keep hydrate rows", n, nHydrate)
+	}
+	for _, ev := range events {
+		if ev.Source != "browser" || ev.Decision != "hydrate_page" {
+			t.Fatalf("browser row=%+v", ev)
+		}
+	}
+}
