@@ -160,6 +160,52 @@ func Page(path string, before *int64, limit int, query Query) (PageResult, error
 	return result, nil
 }
 
+// Collect is the production jevons_logs_tail read: newest matching rows,
+// walking Page until Limit or the start of the file. HTTP GET /api/logs
+// stays one Page so the client can pass next_cursor; MCP has no cursor,
+// so a default call must not return count=0 just because the newest 4 MiB
+// is a browser hydrate flood (🎯T411).
+func Collect(path string, opt TailOptions) ([]Event, error) {
+	limit := opt.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > MaxPageEvents {
+		limit = MaxPageEvents
+	}
+	query := Query{
+		Component: strings.TrimSpace(opt.Component),
+		Decision:  strings.TrimSpace(opt.Decision),
+		Source:    strings.TrimSpace(opt.Source),
+		Contains:  strings.TrimSpace(opt.Contains),
+	}
+	var (
+		out    []Event
+		before *int64
+	)
+	for len(out) < limit {
+		page, err := Page(path, before, limit-len(out), query)
+		if err != nil {
+			if len(out) == 0 {
+				return nil, err
+			}
+			return out, err
+		}
+		out = append(out, page.Events...)
+		if page.NextCursor == nil {
+			break
+		}
+		if before != nil && *page.NextCursor >= *before {
+			break
+		}
+		before = page.NextCursor
+	}
+	if out == nil {
+		out = []Event{}
+	}
+	return out, nil
+}
+
 type CursorEvent struct {
 	Cursor int64
 	Event  Event

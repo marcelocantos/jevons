@@ -747,20 +747,11 @@ func main() {
 	// ð¯T120: product log introspection (durable events.jsonl).
 	mcpSrv.SetEventLogTailer(func(opt eventlog.TailOptions) ([]eventlog.Event, string, error) {
 		path := srv.EventLogPath()
-		limit := opt.Limit
-		if limit <= 0 {
-			limit = 100
-		}
-		if limit > eventlog.MaxPageEvents {
-			limit = eventlog.MaxPageEvents
-		}
-		page, err := eventlog.Page(path, nil, limit, eventlog.Query{
-			Component: opt.Component,
-			Decision:  opt.Decision,
-			Source:    opt.Source,
-			Contains:  opt.Contains,
-		})
-		return page.Events, path, err
+		// Collect walks Page until Limit so a hydrate flood filling the
+		// newest 4 MiB cannot return count=0 (🎯T411). HTTP /api/logs stays
+		// one Page — it exposes next_cursor; MCP does not.
+		evs, err := eventlog.Collect(path, opt)
+		return evs, path, err
 	})
 	// ð¯T128.4: fleet MCP tools dual-write lifecycle events (source=server)
 	// into the same journal so GET /api/logs / jevons_logs_tail see them.

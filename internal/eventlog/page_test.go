@@ -128,3 +128,76 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return data
 }
+
+// 🎯T411: Collect walks Page so a default source=server tail still finds
+// older server decisions when the newest 4 MiB is a browser hydrate flood.
+// One-shot Page is the HTTP paging primitive; MCP jevons_logs_tail has no
+// cursor, so Collect is what it must call.
+func TestCollectFindsServerBehindHydrateFlood(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	server, err := json.Marshal(Event{
+		TS: "2026-09-27T10:00:00Z", Source: "server", Level: "info",
+		Component: "route", Decision: "send", Msg: "route send jevons-po delivered",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser, err := json.Marshal(Event{
+		TS: "2026-09-27T10:01:00Z", Source: "browser", Level: "debug",
+		Component: "history", Decision: "hydrate_page", Msg: strings.Repeat("hydrate", 30),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append(append([]byte{}, server...), '\n')
+	for len(data) < MaxPageScanBytes+1<<20 {
+		data = append(data, browser...)
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	one, err := Page(path, nil, 100, Query{Source: "server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one.Events) != 0 {
+		t.Fatalf("precondition: one-shot Page already found server rows (%d) — flood not large enough", len(one.Events))
+	}
+	got, err := Collect(path, TailOptions{Limit: 100, Source: "server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !strings.Contains(got[0].Msg, "jevons-po") {
+		t.Fatalf("Collect source=server = %+v, want the older jevons-po row", got)
+	}
+	unfiltered, err := Collect(path, TailOptions{Limit: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unfiltered) != 40 {
+		t.Fatalf("unfiltered count=%d want 40", len(unfiltered))
+	}
+	for _, ev := range unfiltered {
+		if ev.Source != "browser" {
+			t.Fatalf("unfiltered leaked a server row — fixture does not reproduce the incident: %+v", ev)
+		}
+	}
+	browserRows, err := Collect(path, TailOptions{Limit: 2000, Source: "browser"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(browserRows) == 0 {
+		t.Fatal("source=browser dropped hydrate rows — over-broad drop of browser telemetry")
+	}
+}
+
+func TestCollectMissingFileIsEmpty(t *testing.T) {
+	got, err := Collect(filepath.Join(t.TempDir(), "nope.jsonl"), TailOptions{Limit: 10, Source: "server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("missing file: %+v", got)
+	}
+}
