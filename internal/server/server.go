@@ -590,14 +590,7 @@ func (s *Server) BroadcastBinary(data []byte) {
 		return
 	}
 
-	s.mu.RLock()
-	remotes := make([]remoteConn, 0, len(s.remotes))
-	for _, rc := range s.remotes {
-		remotes = append(remotes, rc)
-	}
-	s.mu.RUnlock()
-
-	for _, rc := range remotes {
+	for _, rc := range s.snapshotRemotes() {
 		writeCtx, cancel := context.WithTimeout(rc.ctx, 5*time.Second)
 		if err := rc.writer.WriteBinary(writeCtx, data); err != nil {
 			slog.Debug("binary broadcast write failed", "err", err)
@@ -855,24 +848,13 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Register this connection.
-	s.mu.Lock()
-	s.remoteSeq++
-	remoteID := s.remoteSeq
-	s.remotes[remoteID] = remoteConn{writer: wsWriter{conn: conn}, ctx: ctx}
-	clients := len(s.remotes)
-	s.mu.Unlock()
+	// Register this connection. 🎯T630 / 🎯T604.1: the remotes map is only
+	// touched through registerRemote / unregisterRemote / snapshotRemotes.
+	remoteID, clients := s.registerRemote(remoteConn{writer: wsWriter{conn: conn}, ctx: ctx})
 
-	// 🎯T604.1: the disconnect count is sampled in the same critical
-	// section as the delete, then logged after the lock is released.
-	// Other remote handlers write s.remotes concurrently, so it is never
-	// read outside s.mu.
 	logDisconnect := false
 	defer func() {
-		s.mu.Lock()
-		delete(s.remotes, remoteID)
-		clients := len(s.remotes)
-		s.mu.Unlock()
+		clients := s.unregisterRemote(remoteID)
 		if logDisconnect {
 			slog.Info("remote disconnected", "clients", clients)
 		}
@@ -946,6 +928,35 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// registerRemote inserts a remote client under s.mu and returns its id
+// and the resulting client count. 🎯T630: registration, removal and
+// broadcast snapshot the shared remotes map only through these helpers.
+func (s *Server) registerRemote(rc remoteConn) (id, clients int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.remoteSeq++
+	id = s.remoteSeq
+	s.remotes[id] = rc
+	return id, len(s.remotes)
+}
+
+func (s *Server) unregisterRemote(id int) (clients int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.remotes, id)
+	return len(s.remotes)
+}
+
+func (s *Server) snapshotRemotes() []remoteConn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]remoteConn, 0, len(s.remotes))
+	for _, rc := range s.remotes {
+		out = append(out, rc)
+	}
+	return out
+}
+
 // Broadcast sends a JSON message to all connected remote clients.
 func (s *Server) Broadcast(v any) {
 	data, err := json.Marshal(v)
@@ -954,14 +965,7 @@ func (s *Server) Broadcast(v any) {
 		return
 	}
 
-	s.mu.RLock()
-	remotes := make([]remoteConn, 0, len(s.remotes))
-	for _, rc := range s.remotes {
-		remotes = append(remotes, rc)
-	}
-	s.mu.RUnlock()
-
-	for _, rc := range remotes {
+	for _, rc := range s.snapshotRemotes() {
 		writeCtx, cancel := context.WithTimeout(rc.ctx, 5*time.Second)
 		if err := rc.writer.WriteText(writeCtx, data); err != nil {
 			slog.Debug("broadcast write failed", "err", err)
