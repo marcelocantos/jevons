@@ -1751,6 +1751,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 #prov-menu .prov-model.prov-current { opacity: 0.7; cursor: default; }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 🎯T1037: seat-name target substring is a hotspot; wrapper is display:contents so #agents layout is unchanged. */
+.agent-tree-hotspots { display: contents; }
+.agent-name .target-hotspot { cursor: pointer; font-size: inherit; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
 /* 🎯T118: progress/status secondary shares path slot without mono path chrome. */
 .agent-node .agent-dir.agent-progress,

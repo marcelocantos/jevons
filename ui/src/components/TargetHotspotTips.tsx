@@ -32,12 +32,24 @@ export function TargetHotspotTips(props: {
       const el = e.currentTarget;
       if (el instanceof HTMLElement) setActive(el);
     };
+    const onKey = (e: Event) => {
+      if (!(e instanceof KeyboardEvent)) return;
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      onEnter(e);
+    };
     for (const s of spots) {
       s.classList.add('has-instant-tip');
       s.addEventListener('pointerenter', onEnter);
+      s.addEventListener('click', onEnter);
+      s.addEventListener('keydown', onKey);
     }
     return () => {
-      for (const s of spots) s.removeEventListener('pointerenter', onEnter);
+      for (const s of spots) {
+        s.removeEventListener('pointerenter', onEnter);
+        s.removeEventListener('click', onEnter);
+        s.removeEventListener('keydown', onKey);
+      }
     };
   });
 

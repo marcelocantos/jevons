@@ -30,6 +30,34 @@ export function formatDisplayTargetID(raw: string | null | undefined): string {
   return id ? '🎯' + id : '';
 }
 
+/** 🎯T1037 — embedded target id in a fleet seat name (repo prefix + tN[.N]*). */
+export type SeatNameTargetParts = {
+  prefix: string;
+  matched: string;
+  suffix: string;
+  id: string;
+};
+
+const SEAT_NAME_TARGET_RE = /(^|-)(t\d+(?:\.\d+)*)(?=-|$)/i;
+
+export function splitSeatNameTarget(name: string | null | undefined): SeatNameTargetParts | null {
+  const s = String(name ?? '');
+  if (!s) return null;
+  const m = SEAT_NAME_TARGET_RE.exec(s);
+  if (!m) return null;
+  const delim = m[1];
+  const matched = m[2];
+  const rawStart = m.index + delim.length;
+  const id = normalizeTargetID(matched);
+  if (!id) return null;
+  return {
+    prefix: s.slice(0, rawStart),
+    matched,
+    suffix: s.slice(rawStart + matched.length),
+    id,
+  };
+}
+
 function escapeAttr(s: string): string {
   return String(s)
     .replace(/&/g, '&amp;')
