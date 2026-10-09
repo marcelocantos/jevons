@@ -722,10 +722,11 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 		rt.mu.Unlock()
 	}
 
-	// --- Frontier stall (🎯T346) ---
+	// --- Frontier stall (🎯T346 / 🎯T431) ---
 	// Use ClassifyLeaf / LeafReady count, not raw graph frontier depth.
 	// Design-gated / deferred / parked / needs-owner / set_aside-parent /
-	// high-infra hubs must not fire stall:frontier file+PO thrash.
+	// high-infra hubs / owner-assigned (owned_by) leaves must not fire
+	// stall:frontier file+PO thrash.
 	workdir := args.Workdir
 	if workdir == "" {
 		// Best-effort: common state is process cwd or empty.
@@ -737,18 +738,9 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 		if leaves, err := loadFrontierLeaves(workdir); err == nil {
 			obs := make([]poproactive.LeafObs, 0, len(leaves))
 			for _, leaf := range leaves {
-				obs = append(obs, poproactive.LeafObs{
-					ID:              leaf.ID,
-					Tags:            leaf.Tags,
-					Name:            leaf.Name,
-					Context:         leaf.Context,
-					Cost:            leaf.Cost,
-					SetAsideDeps:    leaf.SetAsideDeps,
-					ActiveChildren:  leaf.ActiveChildren,
-					ParkedAncestors: leaf.ParkedAncestors,
-					ForceEngage:     poproactive.IsForceEngageTag(leaf.Tags),
-					AlreadyEngaged:  len(workAgentsBoundOnTarget(s.registry, leaf.ID, workdir, "")) > 0,
-				})
+				// 🎯T431: OwnedBy must travel with the leaf or an owner-assigned
+				// target inflates sentinel depth as unconsumed ready work.
+				obs = append(obs, frontierLeafObs(leaf, len(workAgentsBoundOnTarget(s.registry, leaf.ID, workdir, "")) > 0))
 			}
 			readyIDs := poproactive.Classify(obs).ReadyIDs
 			engaged := 0
