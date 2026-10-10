@@ -130,3 +130,35 @@ func TestT1046UnsupportedExplicitSparkSendDoesNotMaterialize(t *testing.T) {
 		t.Fatal("available Spark turn did not materialize")
 	}
 }
+
+func TestT1046ExplicitSparkStartAndSubmittedTurnCanRetryWithoutResume(t *testing.T) {
+	s := t1046Server(t)
+	workdir := t.TempDir()
+	launches := 0
+	s.launchAgentFn = func(_ context.Context, name string) (*claudia.Agent, error) {
+		launches++
+		cfg := startConfigFromDef(s.registry.Def(name))
+		if launches == 2 && (cfg.Model != "gpt-6-luna" || cfg.RequireResume) {
+			t.Errorf("retry config=%+v want economy without RequireResume", cfg)
+		}
+		return nil, nil // process-start success is not a model/turn oracle
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "explicit-then-omit", "workdir": workdir, "provider": "codex", "model": cost.ModelCodexSpark, "task_type": "ops_classify", "parent": "jevons-po", "purpose": "work"}
+	res, err := s.handleAgentStart(t.Context(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("explicit launch result=%v err=%v", res, err)
+	}
+	s.markAgentTurnBegan("explicit-then-omit")
+	if s.registry.Def("explicit-then-omit").Materialized {
+		t.Fatal("submitted turn falsely materialized unavailable model")
+	}
+	delete(req.Params.Arguments.(map[string]any), "model")
+	res, err = s.handleAgentStart(t.Context(), req)
+	if err != nil || res.IsError || launches != 2 {
+		t.Fatalf("retry result=%v err=%v launches=%d", res, err, launches)
+	}
+	if d := s.registry.Def("explicit-then-omit"); d.Model != "gpt-6-luna" || d.Materialized {
+		t.Fatalf("retry row=%+v", d)
+	}
+}
