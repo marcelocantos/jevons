@@ -300,7 +300,9 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	s.deliverOverseerEventAdmitted(ev)
 }
 
-func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
+func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable bool) {
+	// Current-event durability must never inherit a prior held-prefix write.
+	// The aggregate is only for crediting text in those earlier held lines.
 	if a := s.seats.Load(); a != nil {
 		a.FromTurnEvent(s.overseerSeatName(), ev.IsTerminalStop(), time.Now())
 	}
@@ -335,8 +337,8 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 		if text, _ := userTurnText(ev); text != "" {
 			if err := briefaddr.Check(s.overseerAgentName(), text); err != nil {
 				slog.Warn("chat: dropping wrong-seat brief from overseer wire (🎯T513)", "err", err)
-				s.handleAdmissionSafeAgentEvent(ev, durable)
-				return durable
+				s.handleAdmissionSafeAgentEvent(ev, currentDurable)
+				return currentDurable
 			}
 		}
 	}
@@ -366,7 +368,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 				// Flush any held prefix fragments now that we know visible.
 				for _, held := range s.overseerStreamHold {
 					s.mu.Unlock()
-					durable = s.broadcastAdmittedChat(held) || durable
+					s.broadcastAdmittedChat(held)
 					s.mu.Lock()
 				}
 				s.overseerStreamHold = nil
@@ -385,19 +387,19 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 			}
 			if ev.IsTerminalStop() {
 				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
-					durable = s.broadcastAdmittedChat(line) || durable
+					currentDurable = s.broadcastAdmittedChat(line)
 				}
 				s.clearOverseerStreamID()
 				// 🎯T919: a silent turn still ends. Returning before the
 				// phase reduce left whatever the turn last showed (a
 				// tool, a pane preview) published until the next turn.
-				s.applyOverseerEventPhase(s.admissionSafeEvent(ev, durable))
-				if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, durable)) {
+				s.applyOverseerEventPhase(s.admissionSafeEvent(ev, false))
+				if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, false)) {
 					s.NotifyAgentsChanged()
 				}
 			}
-			s.handleAdmissionSafeAgentEvent(ev, durable)
-			return durable
+			s.handleAdmissionSafeAgentEvent(ev, false)
+			return false
 		}
 
 		if class == silentresponse.Pending && ev.Text != "" && !ev.IsTerminalStop() {
@@ -410,8 +412,8 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 				s.overseerStreamHold = append(s.overseerStreamHold, line)
 				s.mu.Unlock()
 			}
-			s.handleAdmissionSafeAgentEvent(ev, durable)
-			return durable
+			s.handleAdmissionSafeAgentEvent(ev, currentDurable)
+			return currentDurable
 		}
 
 		// Terminal while still Pending with empty/non-silent acc: flush hold
@@ -424,11 +426,11 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 			acc := s.overseerStreamAcc
 			s.mu.Unlock()
 			for _, h := range held {
-				durable = s.broadcastAdmittedChat(h) || durable
+				s.broadcastAdmittedChat(h)
 			}
 			// 🎯T378: held fragments proved visible on seal — the owner can
 			// read them, so this turn answered.
-			if len(held) > 0 && (durable || !s.overseerAdmissionEnabled()) {
+			if len(held) > 0 && !s.overseerAdmissionEnabled() {
 				s.noteOwnerVisibleText(acc)
 			}
 		}
@@ -441,12 +443,12 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 		// If this full-text event is silent (T238 single-fragment path) and
 		// we did not already return above, chatWireLine drops body; terminal
 		// empty end_turn still ok.
-		durable = s.broadcastAdmittedChat(line) || durable
+		currentDurable = s.broadcastAdmittedChat(line)
 		// 🎯T378: reaching here with assistant prose means the stream was not
 		// silent — every silent path returned above — so this is text the
 		// owner actually sees, which is the only thing that answers a
 		// question. A seal alone never gets to make that claim.
-		if ev.Type == "assistant" && (durable || !s.overseerAdmissionEnabled()) {
+		if ev.Type == "assistant" && (currentDurable || !s.overseerAdmissionEnabled()) {
 			s.noteOwnerVisibleText(ev.Text)
 		}
 	} else {
@@ -458,7 +460,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 	if ev.IsTerminalStop() {
 		s.clearOverseerStreamID()
 	}
-	if s.overseerAdmissionEnabled() && durable && ev.Type == "assistant" && ev.Text != "" {
+	if s.overseerAdmissionEnabled() && currentDurable && ev.Type == "assistant" && ev.Text != "" {
 		source := assistantTextSource(ev)
 		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
@@ -471,16 +473,16 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 	// 🎯T919: and before HandleAgentEvent, whose terminal-stop settle drains
 	// the next queued batch and stamps it accepted; the finished turn's idle
 	// landing after that stamp would paint the new turn as idle.
-	s.applyOverseerEventPhase(s.admissionSafeEvent(ev, durable))
-	s.handleAdmissionSafeAgentEvent(ev, durable)
+	s.applyOverseerEventPhase(s.admissionSafeEvent(ev, currentDurable))
+	s.handleAdmissionSafeAgentEvent(ev, currentDurable)
 	// The fleet row reads AgentProgressHub, which workers fill from the
 	// MCP event hook. The overseer stream never went through that hook,
 	// so GET /api/agents kept phase=idle through a live Grok turn while
 	// the status bar said thinking.
-	if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, durable)) {
+	if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, currentDurable)) {
 		s.NotifyAgentsChanged()
 	}
-	return durable
+	return currentDurable
 }
 
 // overseerWorkingLevel reports whether an owner-visible overseer turn is
@@ -2023,6 +2025,9 @@ func (s *Server) broadcastAdmittedChat(line string) bool {
 		return s.BroadcastChat(line)
 	}
 	durable := s.persistChatLineWithPolicy(line, true)
+	if s.admissionJournalHook != nil {
+		s.admissionJournalHook(line, durable)
+	}
 	if durable || isEphemeralChatStatusLine(line) {
 		s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
 	} else {

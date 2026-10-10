@@ -106,7 +106,8 @@ type Server struct {
 	waiting   bool   // true while awaiting a response from Jevon
 
 	// ownerAdmission is opt-in until Claudia supplies trusted request correlation.
-	ownerAdmission *overseerAdmission
+	ownerAdmission       *overseerAdmission
+	admissionJournalHook func(line string, durable bool) // test-only; nil in production
 
 	// overseerStreamID labels every assistant/progress fragment of the open
 	// overseer response (🎯T223). Minted on first fragment; cleared on

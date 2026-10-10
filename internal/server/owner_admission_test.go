@@ -618,3 +618,83 @@ func TestT1054UndurableToolTitleDoesNotLeakThroughPhaseOrSeat(t *testing.T) {
 		t.Fatalf("phase model leaked tool title: %+v", phase)
 	}
 }
+
+func TestT1054PriorPrefixDurabilityCannotAuthorizeFailedCurrentFragment(t *testing.T) {
+	s, log := admissionFixture(t)
+	cap := s.ownerAdmission.authority
+	if err := s.bindOwnerAdmission(cap, "turn-prefix", "request-prefix"); err != nil {
+		t.Fatal(err)
+	}
+	remote := &admissionRemoteRecorder{}
+	s.mu.Lock()
+	s.remotes[1] = remoteConn{writer: remote, ctx: context.Background()}
+	s.mu.Unlock()
+	sess := &muxSession{send: make(chan []byte, 32), transcripts: map[string]*muxWatch{"jevons": {subscribed: true}}}
+	s.mux.add(sess)
+	defer s.mux.remove(sess)
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-prefix", Text: "["})
+	// The next fragment proves the stream visible. DeliverOverseerEvent first
+	// flushes the held "[" (successful journal write), then writes the CURRENT
+	// fragment. Close the journal exactly between these writes.
+	writes := 0
+	s.admissionJournalHook = func(_ string, durable bool) {
+		writes++
+		if writes == 1 {
+			if !durable {
+				t.Error("prefix did not persist")
+			}
+			_ = log.Close()
+		}
+	}
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-prefix", Text: "private safety disclosure"})
+	if err := s.admitOwnerCandidate(cap, "turn-prefix", "request-prefix", AdmissionAllowed); err != nil {
+		t.Fatal(err)
+	}
+	if writes < 2 {
+		t.Fatalf("did not exercise two writes: %d", writes)
+	}
+	for _, line := range remote.lines {
+		if strings.Contains(string(line), "private safety disclosure") {
+			t.Fatalf("current undurable text leaked remote: %s", line)
+		}
+	}
+	for len(sess.send) > 0 {
+		if line := <-sess.send; strings.Contains(string(line), "private safety disclosure") {
+			t.Fatalf("current undurable text leaked mux: %s", line)
+		}
+	}
+	s.ownerAdmission.mu.Lock()
+	pending := s.ownerAdmission.requests["request-prefix"]
+	s.ownerAdmission.mu.Unlock()
+	if !pending {
+		t.Fatal("current undurable fragment marked owner answered")
+	}
+}
+
+func TestT1054SilentTerminalBodyCannotRideBodylessDurability(t *testing.T) {
+	s, log := admissionFixture(t)
+	defer log.Close()
+	cap := s.ownerAdmission.authority
+	if err := s.bindOwnerAdmission(cap, "turn-silent-body", "request-silent-body"); err != nil {
+		t.Fatal(err)
+	}
+	remote := &admissionRemoteRecorder{}
+	s.mu.Lock()
+	s.remotes[1] = remoteConn{writer: remote, ctx: context.Background()}
+	s.mu.Unlock()
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-silent-body", Text: "[silent] private routine", StopReason: "end_turn"})
+	if err := s.admitOwnerCandidate(cap, "turn-silent-body", "", AdmissionSilent); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range remote.lines {
+		if strings.Contains(string(line), "private routine") {
+			t.Fatalf("silent body leaked remote: %s", line)
+		}
+	}
+	s.ownerAdmission.mu.Lock()
+	pending := s.ownerAdmission.requests["request-silent-body"]
+	s.ownerAdmission.mu.Unlock()
+	if !pending {
+		t.Fatal("silent body marked owner answered")
+	}
+}
