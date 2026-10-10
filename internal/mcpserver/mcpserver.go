@@ -191,6 +191,9 @@ type Server struct {
 	// write can succeed before the sidecar rejects an overlapping prompt.
 	// Guarded by mu; each named lock is held only across that seat's send.
 	agentSendLocks map[string]*sync.Mutex
+	// agentStitchLocks hold one seat through Def/guard/Ensure/Register.
+	// Different names can mint concurrently; the same name cannot race a guard.
+	agentStitchLocks map[string]*sync.Mutex
 	// unconfirmedSends remembers a delivered_unconfirmed verdict per seat so
 	// stop / kill can refuse to act on an undecided delivery (🎯T664).
 	// Guarded by mu.

@@ -841,6 +841,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if s == nil || s.registry == nil {
 		return nil, false, "", fmt.Errorf("no agent registry")
 	}
+	defer s.lockAgentStitch(name)() // guard + Ensure + Register are one seat transaction
 	s.mu.Lock()
 	role := strings.TrimSpace(s.pendingSpawnRole)
 	s.mu.Unlock()
@@ -856,6 +857,12 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
 	if err != nil {
 		return nil, existed, "", err
+	}
+	// A pre-existing row may have appeared while Ensure was obtaining the
+	// registry lock (e.g. an external registry writer). Guard the actual row
+	// returned by Ensure, not only the earlier Def snapshot.
+	if err := s.diagnoseUnsupportedStoredPin(def); err != nil {
+		return nil, true, "", err
 	}
 	// Refresh copy after Ensure (Register may have stored a different pointer).
 	if d := s.registry.Def(name); d != nil {
@@ -1922,4 +1929,22 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 	}
 	life["prompt_delivered"] = true
 	return startBriefResult{life: life, def: def, delivered: true}
+}
+
+// lockAgentStitch serializes competing starts for one registry name across
+// both manual and frontier start paths. The lock is never held for Launch or
+// prompt delivery; in particular it cannot serialize an unrelated name.
+func (s *Server) lockAgentStitch(name string) func() {
+	s.mu.Lock()
+	if s.agentStitchLocks == nil {
+		s.agentStitchLocks = make(map[string]*sync.Mutex)
+	}
+	lock := s.agentStitchLocks[name]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.agentStitchLocks[name] = lock
+	}
+	s.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
