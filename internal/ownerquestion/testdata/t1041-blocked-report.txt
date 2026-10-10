@@ -1,0 +1,18 @@
+```jevons
+jevons: kind finish-report
+jevons: target T1041
+jevons: status blocked
+jevons: blocker Pixel Fold 66211FDDJ000ZX is disconnected; folded/unfolded hardware and owner verdict remain outstanding
+jevons: oracle sha=72d1b16368c74eb4dfc9a1407023835ff6db8221 gate-id=28015515
+jevons: verdict GREEN
+jevons: silent-ledger ranked
+jevons: silent-decision confidence=0.7 choice=integrate-on-checked-out-shared-branch why=integrator-contract-preserves-nonoverlapping-staged-state-and-brief-authorized-T1041-exception
+```
+
+**Independent review and integration:** I inspected the six-file candidate diff, checked the worker’s gate records as own-repo clean runs, and found no overlapping paths in the shared clone’s staged or unstaged changes. The documented integrator fast-forwarded both T1041 commits onto the shared clone’s checked-out branch, `steer-modes-stop-guards-seat-stops`, at `72d1b163`. The shared clone’s porcelain-status hash was unchanged before and after integration; unrelated dirty state was preserved. No held branch was integrated. I verified the cited SHA is reachable from both the shared clone and my review worktree.
+
+**Independent clean gates:** `make ui-check-bundle` — `GATE make-ui-check-bundle exit=0 GREEN id=28015515 ... tree=clean@72d1b16368c7`; packaged 390/599/600/800 viewport and drawer probe — `GATE node exit=0 GREEN id=c2c44af3 ... tree=clean@72d1b16368c7`. The worker’s 677-test UI gate was also verified as clean and own-repo (`9f789729`), though it measures the first candidate commit.
+
+The development daemon restart reported serving `72d1b163` on `:13705`; I then hard-reloaded that surface independently at 390 and 800 px. Screenshots: `artifacts/t1041-development-390.png`, `artifacts/t1041-development-390-drawer.png`, and `artifacts/t1041-development-800.png`. **Visual verdict:** at 390 px, transcript text fills the chat pane above the composer, the closed sidebar is hidden and inert, and opening Agents shows the drawer; at 800 px, transcript and sidebar occupy the split view. Latest is hidden at both widths, with no horizontal overflow. **Yes**, these hard-reloaded views look like a normal chat transcript rather than a mostly empty canvas. The packaged probe itself tests layout and drawer behavior, not live transcript content; the hard-reload observation supplies that separate evidence.
+
+T1041 remains **in progress**, not achieved: the local device listing did not include the Pixel Fold, so the physical folded/unfolded criterion and owner verdict are still unverified. No release or push was performed.

@@ -40,6 +40,7 @@ type Question struct {
 	Text        string    `json:"text"`
 	Asker       string    `json:"asker"`
 	AnswerRoute string    `json:"answer_route"`
+	Link        string    `json:"link,omitempty"`
 	State       Lifecycle `json:"state"`
 }
 
