@@ -25,8 +25,7 @@ import (
 
 func main() {
 	repo := flag.String("repo", ".", "the shared clone whose checked-out branch receives the landings")
-	attempts := flag.Int("attempts", worktree.DefaultIntegrateAttempts,
-		"how many times to recompute when the shared branch moves under a landing")
+
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: integrate [-repo DIR] [-attempts N] AGENT...\n")
 		flag.PrintDefaults()
@@ -42,25 +41,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	for _, agent := range flag.Args() {
-		res, err := worktree.Integrate(&worktree.IntegrateArgs{
-			BaseWorkdir: base,
-			AgentName:   agent,
-			MaxAttempts: *attempts,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "integrate: %s: %v\n", agent, err)
-			os.Exit(1)
-		}
-		switch {
-		case len(res.Landed) == 0:
-			fmt.Printf("%s: nothing to land; %s already has %s\n", agent, res.BaseBranch, res.WorkerBranch)
-		case res.Merge != "":
-			fmt.Printf("%s: landed %d commit(s) on %s by merge %s (%s..%s)\n",
-				agent, len(res.Landed), res.BaseBranch, res.Merge, res.From, res.To)
-		default:
-			fmt.Printf("%s: landed %d commit(s) on %s by fast-forward (%s..%s)\n",
-				agent, len(res.Landed), res.BaseBranch, res.From, res.To)
-		}
-	}
+	// No local file, CLI actor or --approve flag is an authority. The daemon
+	// redemption transport is not installed yet: refuse rather than silently
+	// treating a worker's own claim as PO approval.
+	_, err = worktree.IntegrateBatch(base, "", "", flag.Args(), nil)
+	fmt.Fprintf(os.Stderr, "integrate: %v\n", err)
+	os.Exit(1)
 }
