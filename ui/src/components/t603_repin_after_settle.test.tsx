@@ -135,7 +135,7 @@ it('leaves the owner alone when they have scrolled away (T603)', () => {
 // later edit cannot quietly remove them and leave the observer fighting
 // the owner on every measurement.
 it('the settle observer is guarded by follow and paging (T603)', () => {
-  const effect = src.slice(src.indexOf('🎯T603'), src.indexOf('🎯T603') + 1600);
+  const effect = src.slice(src.indexOf('🎯T603'), src.indexOf('ro.observe(canvas)')); 
   expect(effect).toContain('new ResizeObserver');
   expect(effect).toContain('!followRef.current || pagingRef.current');
   expect(effect).toContain('canvasRef.current');
