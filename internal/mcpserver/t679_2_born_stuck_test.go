@@ -121,6 +121,8 @@ func (e *t679_2Env) accept() {
 
 func (e *t679_2Env) list() string {
 	e.t.Helper()
+	// The periodic health pass owns notice delivery; agent_list is read-only.
+	sweepObservedBirths(e.s)
 	res, err := observedAgentList(e.s, context.Background(), mcp.CallToolRequest{})
 	if err != nil {
 		e.t.Fatal(err)
