@@ -23,31 +23,43 @@ func reviewID(id ownerquestionview.Identity) string {
 }
 
 type reviewItem struct {
-	ID          string                     `json:"id"`
-	URL         string                     `json:"url"`
-	Identity    ownerquestionview.Identity `json:"identity"`
-	Question    string                     `json:"question"`
-	Asker       string                     `json:"asker"`
-	AnswerRoute string                     `json:"answer_route"`
-	State       ownerquestionview.State    `json:"state"`
-	Readiness   string                     `json:"readiness"`
-	Resolution  string                     `json:"resolution,omitempty"`
+	ID             string                     `json:"id"`
+	URL            string                     `json:"url"`
+	Identity       ownerquestionview.Identity `json:"identity"`
+	Question       string                     `json:"question"`
+	Asker          string                     `json:"asker"`
+	AnswerRoute    string                     `json:"answer_route"`
+	State          ownerquestionview.State    `json:"state"`
+	Readiness      string                     `json:"readiness"`
+	Prerequisite   string                     `json:"prerequisite,omitempty"`
+	Action         string                     `json:"action,omitempty"`
+	EvidenceStatus string                     `json:"evidence_status,omitempty"`
+	Resolution     string                     `json:"resolution,omitempty"`
 }
 
 func reviewFromQuestion(q ownerquestionview.Question) reviewItem {
 	id := reviewID(q.Identity)
-	// The typed owner-gate event is produced only after code is landed and a
-	// gate was recorded. Other typed owner questions may still depend on a
-	// device or another prerequisite; until the producer explicitly proves
-	// readiness, never invite the owner to press Approve on those.
+	// Readiness is a producer-owned typed fact, never a classifier over the
+	// question ID or prose. Older records without a Review stay non-actionable.
 	readiness := "prerequisite_blocked"
-	if q.State == ownerquestionview.Open && q.Identity.ID == "owner-gate" {
+	if q.Review != nil && q.Review.Readiness == "actionable" {
 		readiness = "actionable"
 	}
 	if q.State != ownerquestionview.Open {
 		readiness = "closed"
 	}
-	return reviewItem{ID: id, URL: "/review/" + id, Identity: q.Identity, Question: q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute, State: q.State, Readiness: readiness, Resolution: q.Resolution}
+	item := reviewItem{ID: id, URL: "/review/" + id, Identity: q.Identity, Question: q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute, State: q.State, Readiness: readiness, Resolution: q.Resolution}
+	if q.Review != nil {
+		// Producer Question() embeds reported artifact paths. Present only the
+		// typed action; the artifact has no verified download URL yet.
+		item.Question = q.Review.Action
+		item.Prerequisite = q.Review.Prerequisite
+		item.Action = q.Review.Action
+		// T1042 records reported local artifact references, not verified
+		// downloadable URLs. Never present them as inspected evidence.
+		item.EvidenceStatus = "reported-unverified"
+	}
+	return item
 }
 
 func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {

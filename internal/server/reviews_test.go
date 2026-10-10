@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcelocantos/jevons/internal/ownerquestion"
 	"github.com/marcelocantos/jevons/internal/ownerquestionview"
 )
 
@@ -18,6 +19,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	}
 	a := mk(t.TempDir(), "v1", "owner-gate")
 	b := mk(t.TempDir(), "v1", "owner-gate")
+	a.Review = &ownerquestion.ReviewEvent{Readiness: ownerquestion.PrerequisiteBlocked, Prerequisite: "Reconnect device", Action: "Review Fold", Evidence: "artifacts/local.png"}
 	for _, q := range []ownerquestionview.Question{a, b} {
 		if err := store.Record(q); err != nil {
 			t.Fatal(err)
@@ -46,7 +48,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("want two repos, got %+v", list)
 	}
-	if list[0].Readiness != "actionable" {
+	if list[0].Readiness != "prerequisite_blocked" {
 		t.Fatal(list[0])
 	}
 	w = get("/api/reviews/" + reviewID(a.Identity))
@@ -58,6 +60,28 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if exact.Identity != a.Identity || exact.URL != "/review/"+reviewID(a.Identity) {
+		t.Fatal(exact)
+	}
+	if exact.Readiness != "prerequisite_blocked" || exact.Prerequisite != "Reconnect device" || exact.EvidenceStatus != "reported-unverified" {
+		t.Fatal(exact)
+	}
+	if strings.Contains(w.Body.String(), "artifacts/local.png") {
+		t.Fatal("unverified local artifact path leaked")
+	}
+	// A typed producer transition, not an ID/prose guess, enables action.
+	a.Review.Readiness = ownerquestion.Actionable
+	// Recording a new version does not mutate a prior version: exercise the
+	// ready producer event in a distinct family instead.
+	ready := mk(a.Identity.Repo, "v1", "ready-review")
+	ready.Review = &ownerquestion.ReviewEvent{Readiness: ownerquestion.Actionable, Action: "Review evidence"}
+	if err := store.Record(ready); err != nil {
+		t.Fatal(err)
+	}
+	w = get("/api/reviews/" + reviewID(ready.Identity))
+	if err := json.Unmarshal(w.Body.Bytes(), &exact); err != nil {
+		t.Fatal(err)
+	}
+	if exact.Readiness != "actionable" {
 		t.Fatal(exact)
 	}
 	v2 := mk(a.Identity.Repo, "v2", "owner-gate")
@@ -75,7 +99,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 {
+	if len(list) != 3 {
 		t.Fatalf("closed item appeared in open list: %+v", list)
 	}
 	blocked := mk(a.Identity.Repo, "v1", "device-approval")
@@ -100,7 +124,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 4 {
+	if len(rows) != 5 {
 		t.Fatal(rows)
 	}
 }
