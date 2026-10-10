@@ -294,6 +294,13 @@ func emptyEndTurnWire(stopReason, streamID string) string {
 // body fragments are neither journaled nor broadcast; only an empty
 // end_turn is emitted on terminal so the UI clears working.
 func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
+	if s.holdOverseerAdmission(ev) {
+		return
+	}
+	s.deliverOverseerEventAdmitted(ev)
+}
+
+func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 	if a := s.seats.Load(); a != nil {
 		a.FromTurnEvent(s.overseerSeatName(), ev.IsTerminalStop(), time.Now())
 	}
@@ -329,7 +336,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 			if err := briefaddr.Check(s.overseerAgentName(), text); err != nil {
 				slog.Warn("chat: dropping wrong-seat brief from overseer wire (🎯T513)", "err", err)
 				s.HandleAgentEvent(ev)
-				return
+				return durable
 			}
 		}
 	}
@@ -359,7 +366,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 				// Flush any held prefix fragments now that we know visible.
 				for _, held := range s.overseerStreamHold {
 					s.mu.Unlock()
-					s.BroadcastChat(held)
+					durable = s.BroadcastChat(held) || durable
 					s.mu.Lock()
 				}
 				s.overseerStreamHold = nil
@@ -376,7 +383,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 			}
 			if ev.IsTerminalStop() {
 				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
-					s.BroadcastChat(line)
+					durable = s.BroadcastChat(line) || durable
 				}
 				s.clearOverseerStreamID()
 				// 🎯T919: a silent turn still ends. Returning before the
@@ -388,7 +395,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 				}
 			}
 			s.HandleAgentEvent(ev)
-			return
+			return durable
 		}
 
 		if class == silentresponse.Pending && ev.Text != "" && !ev.IsTerminalStop() {
@@ -402,7 +409,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 				s.mu.Unlock()
 			}
 			s.HandleAgentEvent(ev)
-			return
+			return durable
 		}
 
 		// Terminal while still Pending with empty/non-silent acc: flush hold
@@ -415,11 +422,11 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 			acc := s.overseerStreamAcc
 			s.mu.Unlock()
 			for _, h := range held {
-				s.BroadcastChat(h)
+				durable = s.BroadcastChat(h) || durable
 			}
 			// 🎯T378: held fragments proved visible on seal — the owner can
 			// read them, so this turn answered.
-			if len(held) > 0 {
+			if len(held) > 0 && durable {
 				s.noteOwnerVisibleText(acc)
 			}
 		}
@@ -432,12 +439,12 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		// If this full-text event is silent (T238 single-fragment path) and
 		// we did not already return above, chatWireLine drops body; terminal
 		// empty end_turn still ok.
-		s.BroadcastChat(line)
+		durable = s.BroadcastChat(line) || durable
 		// 🎯T378: reaching here with assistant prose means the stream was not
 		// silent — every silent path returned above — so this is text the
 		// owner actually sees, which is the only thing that answers a
 		// question. A seal alone never gets to make that claim.
-		if ev.Type == "assistant" {
+		if ev.Type == "assistant" && durable {
 			s.noteOwnerVisibleText(ev.Text)
 		}
 	} else {
@@ -461,6 +468,7 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 	if s.ObserveAgentProgress(s.overseerAgentName(), ev) {
 		s.NotifyAgentsChanged()
 	}
+	return durable
 }
 
 // overseerWorkingLevel reports whether an owner-visible overseer turn is
@@ -1905,14 +1913,14 @@ func sendHistory(conn *websocket.Conn, ctx context.Context, path string) {
 // stream clients render is what a reconnect replays. An append failure
 // is loud — losing durability silently is the failure mode this exists
 // to kill — but does not block the live broadcast.
-func (s *Server) persistChatLine(line string) {
+func (s *Server) persistChatLine(line string) bool {
 	if s == nil || strings.TrimSpace(line) == "" {
-		return
+		return false
 	}
 	// 🎯T555.5 / T355: type=status is recovery/level chrome, not a turn.
 	// Journaling it replays “overseer is back” as assistant prose.
 	if isEphemeralChatStatusLine(line) {
-		return
+		return false
 	}
 	name := s.overseerAgentName()
 	// 🎯T548.2: a configured SQLite store is canonical even when empty
@@ -1939,10 +1947,12 @@ func (s *Server) persistChatLine(line string) {
 		// actually recorded — a turn whose append failed is the defect,
 		// never a reset.
 		s.observeChatTurnGap(line, durable)
-		return
+		return durable
 	}
-	s.observeChatTurnGap(line, s.persistChatJSONL(line))
+	durable := s.persistChatJSONL(line)
+	s.observeChatTurnGap(line, durable)
 	s.muxFanTranscript(name, line)
+	return durable
 }
 
 // isEphemeralChatStatusLine reports type=status recovery/level chrome
@@ -1981,9 +1991,17 @@ func (s *Server) persistChatJSONL(line string) bool {
 	return true
 }
 
-func (s *Server) BroadcastChat(line string) {
-	s.persistChatLine(line)
-	s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
+func (s *Server) BroadcastChat(line string) bool {
+	durable := s.persistChatLine(line)
+	s.mu.RLock()
+	admissionActive := s.ownerAdmission != nil
+	s.mu.RUnlock()
+	if !admissionActive || durable || isEphemeralChatStatusLine(line) {
+		s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
+	} else {
+		s.admissionDegraded("journal write failed", "")
+	}
+	return durable
 }
 
 // broadcastChatLive fans a line out to connected clients WITHOUT

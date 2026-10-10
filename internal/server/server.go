@@ -105,6 +105,9 @@ type Server struct {
 	turnBuf   string // accumulates Jevon text for current turn
 	waiting   bool   // true while awaiting a response from Jevon
 
+	// ownerAdmission is opt-in until Claudia supplies trusted request correlation.
+	ownerAdmission *overseerAdmission
+
 	// overseerStreamID labels every assistant/progress fragment of the open
 	// overseer response (🎯T223). Minted on first fragment; cleared on
 	// terminal stop so journal + client join by id across interleave.
