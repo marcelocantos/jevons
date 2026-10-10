@@ -11,10 +11,10 @@ const review: Review = {
   id: 'opaque-v2', url: '/api/reviews/opaque-v2', repository: 'jevons', target: 'T1044', target_lookup: 'verified',
   target_title: 'Owner review in chat', ask_id: 'owner-question', version: 'v2', question: 'Is this acceptable?',
   state: 'open', readiness: 'actionable', evidence: {
-    commit: { status: 'verified', url: '/api/reviews/opaque-v2/commit', sha: 'abc' },
-    gate: { status: 'reported_only', url: '/not-a-link' },
-    diff: { status: 'missing' },
-    screenshots: [{ status: 'verified', url: 'javascript:alert(1)' }, { status: 'inaccessible' }],
+    commit: { status: 'verified', reference: 'a'.repeat(40) },
+    gate: { status: 'verified', url: '/api/reviews/opaque-v2/gate', reference: 'abc12345', verdict: 'GREEN' },
+    diff: { status: 'verified', url: '/api/reviews/opaque-v2/diff' },
+    screenshots: [{ status: 'reported_only', reference: 'capture.png' }, { status: 'verified', url: 'javascript:alert(1)' }],
     report: { status: 'verified', url: '/api/reviews/opaque-v2/report', reference: 'agent/report-handle' },
   },
 };
@@ -41,15 +41,17 @@ describe('versioned review and ordinary chat handoff', () => {
     const onAnswer = vi.fn();
     wrap(<ReviewDetail id="opaque-v2" onBack={() => {}} onAnswer={onAnswer} />);
     expect(await screen.findByText('Is this acceptable?')).toBeTruthy();
-    expect(screen.getByText(/gate: reported only/)).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'gate' })).toBeNull();
-    expect(screen.getByRole('link', { name: /commit/ }).getAttribute('href')).toBe('/api/reviews/opaque-v2/commit');
+    expect(screen.getByText(/screenshots 1: reported only/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: /gate/ }).getAttribute('href')).toBe('/api/reviews/opaque-v2/gate');
+    expect(screen.queryByRole('link', { name: /screenshots/ })).toBeNull();
+    expect(screen.getByRole('link', { name: /diff/ }).getAttribute('href')).toBe('/api/reviews/opaque-v2/diff');
     fireEvent.click(screen.getByRole('button', { name: 'Answer in chat' }));
     expect(onAnswer).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher).toHaveBeenCalledWith('/api/reviews/opaque-v2');
     expect(useDrafts.getState().drafts.jevons).toContain('Review opaque-v2');
     expect(useDrafts.getState().drafts.jevons).toContain('Question version: v2');
+    expect(useDrafts.getState().drafts.jevons).toContain('Review link: /reviews/opaque-v2');
     expect(useDrafts.getState().drafts.jevons).toContain('My answer: ');
     expect(useDrafts.getState().drafts.jevons).not.toContain('/not-a-link');
   });
