@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/notice"
 	"github.com/marcelocantos/jevons/internal/ownerquestion"
 	"github.com/marcelocantos/jevons/internal/ownerquestions"
@@ -88,12 +89,22 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 	s.recordTerminalNotice(dir, agentName, text, now)
 	// Only typed, validated owner-decision blocks enter the standing outbox;
 	// generic "blocked" prose never pages the owner.
-	if q, ok, qerr := ownerquestion.FromBlockedReport(text); qerr != nil {
+	q, ok, qerr := ownerquestion.FromBlockedReport(text)
+	var reviewEvent *ownerquestion.ReviewEvent
+	if !ok && qerr == nil {
+		var review ownerquestion.ReviewEvent
+		review, ok, qerr = ownerquestion.FromActionableReview(text, s.workerWD, agentName)
+		if ok {
+			q = review.Question()
+			reviewEvent = &review
+		}
+	}
+	if qerr != nil {
 		slog.Warn("owner question intake rejected", "agent", agentName, "err", qerr)
 	} else if ok {
 		shouldNotify := true
 		if s.ownerQuestionsDir != "" {
-			if err := s.recordOwnerQuestion(q); err != nil {
+			if err := s.recordOwnerQuestionWithReview(q, reviewEvent); err != nil {
 				slog.Error("owner question view intake failed", "agent", agentName, "err", err)
 				shouldNotify = false
 			} else {
@@ -106,10 +117,16 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 		}
 		if shouldNotify {
 			key := q.Identity.Repo + "#" + q.Identity.Target + "#" + q.Identity.ID
-			if _, err := ownerquestions.New(dir).Observe(ownerquestions.Question{Key: key, Text: q.Text}, now); err != nil {
+			if _, err := ownerquestions.New(dir).Observe(ownerquestions.Question{Key: key, Text: q.Text, Link: q.Link}, now); err != nil {
 				slog.Error("owner question spool failed (retry retained)", "agent", agentName, "key", key, "err", err)
 			}
 		}
+	}
+	// A valid later finish-report from the same reporter that no longer
+	// requests this review moots its exact open version. Other seats cannot
+	// silently erase the reviewer's ask; invalid envelopes do not close it.
+	if !ok && qerr == nil {
+		s.mootSupersededReview(agentName, text)
 	}
 	// 🎯T938: the seat's newest word supersedes any blocker clear.
 	s.forgetSeatBlockerClear(agentName)
@@ -264,4 +281,39 @@ func (s *Server) handleInboxList(_ context.Context, req mcp.CallToolRequest) (*m
 			n.Time.Format(time.RFC3339), n.Agent, n.Kind, n.Outcome, n.Target, n.SHA, n.GateID, n.Verdict, n.HasOracle, n.HasRisk, n.Summary)
 	}
 	return mcp.NewToolResultText(b.String()), nil
+}
+
+// mootSupersededReview closes only review asks of this reporter and target.
+// A device-only subsequent blocker does not declare that the owner already
+// accepted anything; it simply replaces the superseded review request.
+func (s *Server) mootSupersededReview(agentName, text string) {
+	if s.ownerQuestionsDir == "" {
+		return
+	}
+	m, err := envelope.Parse(text)
+	if err != nil || m == nil || m.Kind != envelope.KindFinishReport || m.Target == "" {
+		return
+	}
+	repo, err := ownerquestion.SharedRepo(s.workerWD)
+	if err != nil {
+		slog.Error("review lifecycle repo lookup failed", "err", err)
+		return
+	}
+	rows, err := ownerquestionview.New(s.ownerQuestionsDir).List(true)
+	if err != nil {
+		slog.Error("review lifecycle read failed", "err", err)
+		return
+	}
+	for _, r := range rows {
+		if r.Identity.Repo != repo || r.Identity.Target != m.Target || r.Identity.ID != "hardware-visual-review" || r.Asker != agentName {
+			continue
+		}
+		if err := ownerquestionview.New(s.ownerQuestionsDir).Resolve(r.Identity, ownerquestionview.Moot, "superseded by reporter finish-report without review ask"); err != nil {
+			slog.Error("review lifecycle close failed", "err", err)
+			continue
+		}
+		if err := ownerquestions.New(s.ownerQuestionsDir).Resolve(r.Identity.Repo + "#" + r.Identity.Target + "#" + r.Identity.ID); err != nil {
+			slog.Error("review notification close failed", "err", err)
+		}
+	}
 }
