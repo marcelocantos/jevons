@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/ownerquestion"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,13 +36,14 @@ type Identity struct {
 	Version string `json:"version"`
 }
 type Question struct {
-	Identity    Identity  `json:"identity"`
-	Text        string    `json:"text"`
-	Asker       string    `json:"asker"`
-	AnswerRoute string    `json:"answer_route"`
-	State       State     `json:"state"`
-	Resolution  string    `json:"resolution,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Identity    Identity                   `json:"identity"`
+	Text        string                     `json:"text"`
+	Asker       string                     `json:"asker"`
+	AnswerRoute string                     `json:"answer_route"`
+	Review      *ownerquestion.ReviewEvent `json:"review,omitempty"`
+	State       State                      `json:"state"`
+	Resolution  string                     `json:"resolution,omitempty"`
+	UpdatedAt   time.Time                  `json:"updated_at"`
 }
 
 // Store uses a lock separate from the atomically replaced JSON file so
@@ -173,6 +175,9 @@ func (s *Store) Record(q Question) error {
 		for i := range rows {
 			if rows[i].Identity.family() == q.Identity.family() && rows[i].State == Open {
 				rows[i].State = Superseded
+				if rows[i].Review != nil {
+					rows[i].Review.Lifecycle = ownerquestion.Superseded
+				}
 				rows[i].Resolution = "revised question version"
 				rows[i].UpdatedAt = q.UpdatedAt
 			}
@@ -197,6 +202,9 @@ func (s *Store) Resolve(id Identity, state State, note string) error {
 					return nil, fmt.Errorf("question already %s", rows[i].State)
 				}
 				rows[i].State = state
+				if rows[i].Review != nil {
+					rows[i].Review.Lifecycle = ownerquestion.Lifecycle(state)
+				}
 				rows[i].Resolution = note
 				rows[i].UpdatedAt = time.Now().UTC()
 				return rows, nil
