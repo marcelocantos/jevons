@@ -2049,3 +2049,21 @@ body.rhs-resizing-row { cursor: row-resize; }
   background: var(--surface-raised); color: var(--text); cursor: pointer;
 }
 #cockpit-settings select { margin-bottom: 8px; }
+
+/* 🎯T1041: width-based phone/folded layout. Keep the RHS mounted so a
+   selected agent, transcript and composer survive closing the drawer. */
+#agents-toggle, #agents-close, #agents-backdrop { display: none; }
+@media (max-width: 599px) {
+  html, body, #root { height: 100dvh; }
+  #status { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); min-width: 0; }
+  #agents-toggle { display: block; flex: 0 0 auto; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); font: inherit; text-transform: none; }
+  #main { min-width: 0; min-height: 0; }
+  #chat-pane { width: 100%; }
+  #messages { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  #agents-backdrop { display: block; position: fixed; inset: 0; z-index: 40; border: 0; background: rgba(0,0,0,.55); }
+  #activity-pane { position: fixed; z-index: 41; right: 0; top: 0; bottom: 0; width: min(88vw, 420px) !important; max-width: 100vw; height: 100dvh; overflow-y: auto; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); box-shadow: -8px 0 32px rgba(0,0,0,.3); }
+  #activity-pane:not([data-drawer-open="true"]) { visibility: hidden; pointer-events: none; }
+  #activity-pane[data-drawer-open="true"] { visibility: visible; }
+  #agents-close { display: block; align-self: flex-end; margin: 8px 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); }
+  #rhs-width-handle { display: none; }
+}

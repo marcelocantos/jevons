@@ -36,6 +36,11 @@ describe('planComposerTabCycle', () => {
     expect(isSidebarComposerFocusable(document)).toBe(false);
     document.getElementById('agent-inspect')!.classList.add('active');
     expect(isSidebarComposerFocusable(document)).toBe(true);
+    document.getElementById('agent-inspect')!.setAttribute('inert', '');
+    expect(isSidebarComposerFocusable(document)).toBe(false);
+    expect(planComposerTabCycle({ key: 'Tab' }, { active: 'main', sidebarVisible: isSidebarComposerFocusable(document) }).target).toBe('main');
+    document.getElementById('agent-inspect')!.removeAttribute('inert');
+    expect(isSidebarComposerFocusable(document)).toBe(true);
     document.body.innerHTML = '';
   });
 });

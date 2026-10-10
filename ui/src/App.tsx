@@ -108,6 +108,39 @@ function Cockpit() {
   const [graphNonce, setGraphNonce] = useState(0);
   const [asideOpen, setAsideOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Width, not user agent: a folded phone and a narrow browser need the same
+  // navigation, whereas an unfolded foldable/tablet keeps the split view.
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 599px)').matches);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const agentsButton = useRef<HTMLButtonElement>(null);
+  const activityRef = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const closeAgents = useCallback(() => {
+    setAgentsOpen(false);
+    agentsButton.current?.focus();
+  }, []);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 599px)');
+    const onChange = () => {
+      setNarrow(media.matches);
+      setAgentsOpen(false);
+      if (activityRef.current?.contains(document.activeElement)) {
+        if (media.matches) agentsButton.current?.focus();
+        else focusMainComposer();
+      }
+    };
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+  useEffect(() => {
+    if (!narrow || !agentsOpen) return;
+    closeButton.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); closeAgents(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [narrow, agentsOpen, closeAgents]);
   const settingsButton = useRef<HTMLButtonElement>(null);
   const openGraph = useCallback(() => {
     setGraphOpen(true);
@@ -285,6 +318,9 @@ function Cockpit() {
     <FrontierRowsContext.Provider value={frontierRows}>
     <TargetAskContext.Provider value={askHost}>
       <div id="status">
+        <button ref={agentsButton} id="agents-toggle" type="button" aria-label="Agents"
+          aria-controls="activity-pane" aria-expanded={narrow && agentsOpen}
+          onClick={() => agentsOpen ? closeAgents() : setAgentsOpen(true)}>Agents</button>
         <span className={connected ? 'dot on' : 'dot off'} id="dot" />
         <span id="voice-status">
           <span className="voice-dot" />
@@ -321,7 +357,9 @@ function Cockpit() {
       <div id="idle-storm-banner" role="status" aria-live="polite" />
       <div id="main" ref={mainRef}>
         <AgentInteraction mux={mux} name="jevons" title="Root" density="comfortable" connected={connected} onMeta={onJevonsMeta} />
-        <div id="activity-pane" style={{ width: layoutStyles.sidebarWidthPx, flexShrink: 0 }}>
+        {narrow && agentsOpen && <button id="agents-backdrop" type="button" aria-label="Close Agents" onClick={closeAgents} />}
+        <div id="activity-pane" ref={activityRef} data-drawer-open={narrow && agentsOpen}
+          inert={narrow && !agentsOpen} style={{ width: layoutStyles.sidebarWidthPx, flexShrink: 0 }}>
           <div
             id="rhs-width-handle"
             role="separator"
@@ -334,6 +372,7 @@ function Cockpit() {
               document.body.classList.add('rhs-resizing', 'rhs-resizing-col');
             }}
           />
+          <button ref={closeButton} type="button" id="agents-close" aria-label="Close Agents" onClick={closeAgents}>Close</button>
           <div id="cost-ticker" title="Token burn rate — click for detail" />
           <div id="activity-header" className="agents-header">
             <span className="ah-label">Agents</span>

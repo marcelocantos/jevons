@@ -40,6 +40,7 @@ export function isSidebarComposerFocusable(
   const side = root.querySelector('textarea[data-composer="sidebar"]');
   if (!(side instanceof HTMLTextAreaElement)) return false;
   if (side.disabled || side.hidden) return false;
+  if (side.closest('[inert], [aria-hidden="true"]')) return false;
   const pane = side.closest('#agent-inspect, .rhs-tab-pane');
   if (!pane || (pane instanceof HTMLElement && pane.hidden)) return false;
   if (!pane.classList.contains('active')) return false;
