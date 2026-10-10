@@ -314,7 +314,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 	// which is what clears the hard-block. Without it only an owner chat send
 	// cleared it, so a block entered on this wire outlived the provider's
 	// recovery while the overseer kept answering its POs (2026-09-28, 🎯T885).
-	if ev.Type == "assistant" && ev.Text != "" {
+	if !s.overseerAdmissionEnabled() && ev.Type == "assistant" && ev.Text != "" {
 		source := assistantTextSource(ev)
 		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
@@ -391,8 +391,8 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 				// 🎯T919: a silent turn still ends. Returning before the
 				// phase reduce left whatever the turn last showed (a
 				// tool, a pane preview) published until the next turn.
-				s.applyOverseerEventPhase(ev)
-				if s.ObserveAgentProgress(s.overseerAgentName(), ev) {
+				s.applyOverseerEventPhase(s.admissionSafeEvent(ev, durable))
+				if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, durable)) {
 					s.NotifyAgentsChanged()
 				}
 			}
@@ -458,18 +458,26 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 	if ev.IsTerminalStop() {
 		s.clearOverseerStreamID()
 	}
+	if s.overseerAdmissionEnabled() && durable && ev.Type == "assistant" && ev.Text != "" {
+		source := assistantTextSource(ev)
+		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
+			s.observeProviderFailure(class, ev.Text)
+		} else if source == agenterr.SourceAuthored {
+			s.observeProviderOK()
+		}
+	}
 	// 🎯T555.1: interleave the phase reduce on the same stream, same clock,
 	// after the bubble frame it describes so the message stays line-first.
 	// 🎯T919: and before HandleAgentEvent, whose terminal-stop settle drains
 	// the next queued batch and stamps it accepted; the finished turn's idle
 	// landing after that stamp would paint the new turn as idle.
-	s.applyOverseerEventPhase(ev)
+	s.applyOverseerEventPhase(s.admissionSafeEvent(ev, durable))
 	s.handleAdmissionSafeAgentEvent(ev, durable)
 	// The fleet row reads AgentProgressHub, which workers fill from the
 	// MCP event hook. The overseer stream never went through that hook,
 	// so GET /api/agents kept phase=idle through a live Grok turn while
 	// the status bar said thinking.
-	if s.ObserveAgentProgress(s.overseerAgentName(), ev) {
+	if s.ObserveAgentProgress(s.overseerAgentName(), s.admissionSafeEvent(ev, durable)) {
 		s.NotifyAgentsChanged()
 	}
 	return durable
@@ -2027,15 +2035,21 @@ func (s *Server) broadcastAdmittedChat(line string) bool {
 // independent of /ws/chat and /ws/mux. In the admission path only a durable
 // admitted publication may forward authored text; terminal settlement remains
 // body-less on journal failure. Legacy nil-admission behavior is untouched.
-func (s *Server) handleAdmissionSafeAgentEvent(ev claudia.Event, durable bool) {
+func (s *Server) admissionSafeEvent(ev claudia.Event, durable bool) claudia.Event {
 	if s.overseerAdmissionEnabled() && !durable {
 		// Text and Raw may carry model-authored preview/tool fragments even
 		// when Type is progress. Preserve Type/StopReason/ProgressType for
 		// phase settlement, but never forward unjournaled candidate bytes.
 		ev.Text = ""
 		ev.Raw = nil
+		ev.ToolTitle = ""
+		ev.ToolCallID = ""
 	}
-	s.HandleAgentEvent(ev)
+	return ev
+}
+
+func (s *Server) handleAdmissionSafeAgentEvent(ev claudia.Event, durable bool) {
+	s.HandleAgentEvent(s.admissionSafeEvent(ev, durable))
 }
 
 func (s *Server) overseerAdmissionEnabled() bool {

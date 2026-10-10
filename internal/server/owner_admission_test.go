@@ -588,3 +588,33 @@ func TestT1054AllowedPreviewFollowsDurableAdmissionOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestT1054UndurableToolTitleDoesNotLeakThroughPhaseOrSeat(t *testing.T) {
+	s, log := admissionFixture(t)
+	cap := s.ownerAdmission.authority
+	if err := s.bindOwnerAdmission(cap, "turn-step", "request-step"); err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan string, 32)
+	s.mu.Lock()
+	s.chatListeners = append(s.chatListeners, ch)
+	s.mu.Unlock()
+	s.beginOverseerPhase(nil)
+	s.DeliverOverseerEvent(claudia.Event{Type: "progress", ProgressType: claudia.ProgressToolUse, TurnID: "turn-step", ToolTitle: "private-title", ToolCallID: "secret-call", Text: `{"private":"args"}`})
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.admitOwnerCandidate(cap, "turn-step", "request-step", AdmissionAllowed); err != nil {
+		t.Fatal(err)
+	}
+	for len(ch) > 0 {
+		line := <-ch
+		if strings.Contains(line, "private-title") || strings.Contains(line, "secret-call") || strings.Contains(line, "private") {
+			t.Fatalf("phase/chat leaked tool metadata: %s", line)
+		}
+	}
+	phase := s.OverseerPhase()
+	if strings.Contains(phase.Step, "private-title") {
+		t.Fatalf("phase model leaked tool title: %+v", phase)
+	}
+}
