@@ -297,8 +297,11 @@ func TestT1050DirectEventHoldCancelsQueuedPermission(t *testing.T) {
 // passing supersession oracle. No text classifier is allowed to turn these
 // human messages into typed operations without a migrated producer contract.
 func TestT1050UntypedIncidentStillUnsafe(t *testing.T) {
+	worker := &fakeSender{alive: true}
+	s, _ := chainServer(t, map[string]*fakeSender{"worker": worker})
+	s.registry = newLineageRegistry(t, map[string]string{"jevons-po": "jevons", "worker": "jevons-po"})
 	p := &pushFakeParticipants{names: map[string]bool{"worker": true}}
-	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
+	s.butler = newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)
 	s.noteTurnInFlight("worker")
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"target": "worker", "event": "owner-authorization", "text": "You may send your report now"}
@@ -306,12 +309,17 @@ func TestT1050UntypedIncidentStillUnsafe(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("busy permission: %v %s", err, toolText(result))
 	}
-	// A plain direct send bypasses sendq; this models the real second door.
-	if _, err := p.Deliver("worker", "Hold: do not send that report"); err != nil {
-		t.Fatal(err)
+	// The turn ends, then a plain direct jevons_agent_send hold arrives before
+	// the queue's next drain. Both API entry points are exercised, not modeled
+	// by manually editing the queue or passing text through a fake classifier.
+	s.noteTurnEnded("worker")
+	req.Params.Arguments = map[string]any{"name": "worker", "actor": "jevons-po", "text": "Hold: do not send that report"}
+	hold, err := s.handleAgentSend(context.Background(), req)
+	if err != nil || hold.IsError {
+		t.Fatalf("direct hold: %v %s", err, toolText(hold))
 	}
-	if p.last != "Hold: do not send that report" {
-		t.Fatal("hold failed to arrive")
+	if len(worker.sent) != 1 || !strings.Contains(worker.sent[0], "Hold: do not send that report") {
+		t.Fatalf("direct hold not delivered: %+v", worker.sent)
 	}
 	entry, ok, err := s.sendQueue().ClaimFront("worker")
 	if err != nil || !ok || !strings.Contains(entry.Text, "You may send your report now") {
@@ -338,5 +346,31 @@ func TestT1050RepeatedTypedHoldCancelsNewPermission(t *testing.T) {
 		if len(entries) != 0 {
 			t.Fatalf("hold %d left stale permission: %+v", i, entries)
 		}
+	}
+}
+
+func TestT1050TypedBusyEventAndDirectAgentHold(t *testing.T) {
+	worker := &fakeSender{alive: true}
+	s, _ := chainServer(t, map[string]*fakeSender{"worker": worker})
+	s.registry = newLineageRegistry(t, map[string]string{"jevons-po": "jevons", "worker": "jevons-po"})
+	s.butler = newPushButler(t, t.TempDir(), &pushFakeFleet{}, &pushFakeParticipants{names: map[string]bool{"worker": true}})
+	s.noteTurnInFlight("worker")
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"target": "worker", "event": "owner-authorization", "text": "permission", "directive_family": "report/T1050", "directive_kind": "authorization"}
+	result, err := s.handleEventPush(context.Background(), req)
+	if err != nil || result.IsError {
+		t.Fatalf("auth: %v %s", err, toolText(result))
+	}
+	s.noteTurnEnded("worker")
+	req.Params.Arguments = map[string]any{"name": "worker", "actor": "jevons-po", "text": "hold", "directive_family": "report/T1050", "directive_kind": "hold"}
+	hold, err := s.handleAgentSend(context.Background(), req)
+	if err != nil || hold.IsError {
+		t.Fatalf("hold: %v %s", err, toolText(hold))
+	}
+	if len(worker.sent) != 1 || !strings.Contains(worker.sent[0], "hold") {
+		t.Fatalf("hold not delivered: %+v", worker.sent)
+	}
+	if _, ok, err := s.sendQueue().ClaimFront("worker"); ok || err != nil {
+		t.Fatalf("old auth offered after hold: %v %v", ok, err)
 	}
 }
