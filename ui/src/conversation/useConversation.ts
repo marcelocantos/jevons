@@ -48,6 +48,8 @@ export type { ConversationMeta } from './reduce';
  * moment the turn is interrupted unless the agent takes it first. Cleared
  * when the agent goes idle, which is when anything still queued is taken.
  */
+export type OlderPageState = { before: string; loading: boolean; error: string | null };
+
 export type EscalationNotice = { text: string; deadline: number; message: string };
 
 /** Escalation deadline from a send's status body, in ms; 0 = none. */
@@ -66,6 +68,12 @@ export function useConversation(mux: MuxClient | null, name: string) {
   stateRef.current = state;
 
   const frozenRef = useRef(false);
+  const pageRef = useRef<OlderPageState | null>(null);
+  const [olderPage, setOlderPage] = useState<OlderPageState | null>(null);
+  const updateOlderPage = (next: OlderPageState | null) => {
+    pageRef.current = next;
+    setOlderPage(next);
+  };
   const pendingSendRef = useRef<PendingSend | null>(null);
   // 🎯T903: the last send, kept past its echo. A steered message usually
   // paints in the transcript before the daemon's status arrives, and the
@@ -76,6 +84,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
   useEffect(() => {
     if (!mux || !name) return;
     frozenRef.current = false;
+    updateOlderPage(null);
     pendingSendRef.current = null;
     lastSendRef.current = null;
     dispatch({ v: 1, ch: transcriptChannel(name), t: 'reset' });
@@ -84,6 +93,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
     let hydrating = true;
     const unsub = mux.subscribe(ch, (env: MuxEnvelope) => {
       if (env.t === 'reset') {
+        updateOlderPage(null);
         buffer = [];
         hydrating = true;
         dispatch(env);
@@ -124,6 +134,22 @@ export function useConversation(mux: MuxClient | null, name: string) {
         }
         // env.t === 'error': fall through so the send_error diagnostic frame
         // still paints; the draft is deliberately left untouched.
+      }
+      // Only explicitly tagged page errors belong to history chrome. A
+      // generic send error stays a transcript diagnostic (🎯T545.3).
+      const body = rec(env.body);
+      const pendingPage = pageRef.current;
+      if (env.t === 'error' && body.op === 'page') {
+        if (pendingPage?.loading && body.before === pendingPage.before) {
+          updateOlderPage({ ...pendingPage, loading: false, error: 'Could not load earlier history.' });
+        }
+        return;
+      }
+      if (env.t === 'page' && pendingPage?.loading) {
+        // A delayed response for an earlier cursor must not overwrite the
+        // newer window's metadata or falsely complete its request.
+        if (body.before !== pendingPage.before) return;
+        updateOlderPage(null);
       }
       if (env.t === 'meta') {
         hydrating = false;
@@ -171,6 +197,7 @@ export function useConversation(mux: MuxClient | null, name: string) {
   }, [name]);
 
   const rejoinLive = () => {
+    updateOlderPage(null);
     frozenRef.current = false;
     mux?.windowTranscript(name, { lo: -30, hi: 0 });
   };
@@ -207,15 +234,22 @@ export function useConversation(mux: MuxClient | null, name: string) {
       lastSendRef.current = pendingSendRef.current;
     },
     page: (end: number, limit: number) => mux?.pageTranscript(name, end, limit),
+    olderPage,
     pageOlder: (limit = 50) => {
+      if (!mux?.isOpen() || pageRef.current?.loading) return;
       const first = rec(stateRef.current.frames[0]);
-      if (typeof first.id === 'string' && first.id) {
-        mux?.pageTranscript(name, { before: first.id, limit });
-        return;
-      }
-      if (typeof first.index === 'number') {
-        mux?.pageTranscript(name, { before: `e:${first.index}`, limit });
-      }
+      const before = typeof first.id === 'string' && first.id
+        ? first.id
+        : typeof first.index === 'number' ? `e:${first.index}` : '';
+      if (!before) return;
+      updateOlderPage({ before, loading: true, error: null });
+      mux?.pageTranscript(name, { before, limit });
+    },
+    retryOlder: () => {
+      const failed = pageRef.current;
+      if (!mux?.isOpen() || !failed || failed.loading || !failed.error) return;
+      updateOlderPage({ ...failed, loading: true, error: null });
+      mux?.pageTranscript(name, { before: failed.before, limit: 50 });
     },
     leaveLive: () => {
       if (frozenRef.current) return;

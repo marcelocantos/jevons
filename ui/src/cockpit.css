@@ -693,6 +693,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    Top sentinel is optional residual while pages remain — not a data throttle.
    Overlay is out of flow so it does not perturb scroll-position math. */
 .history-sentinel { height: 1px; margin: 0; pointer-events: none; }
+.history-page-status { position: sticky; top: 0; z-index: 2; box-sizing: border-box; height: 27px; margin-bottom: -27px; padding: 5px 8px; background: var(--surface-raised); color: var(--text-muted); font-size: 12px; }
+.history-page-status button { margin-left: 8px; color: var(--text); cursor: pointer; }
 .history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }

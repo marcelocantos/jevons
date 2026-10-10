@@ -5,7 +5,7 @@ import { now as clockNow } from '../clock';
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
 import { useInnerHTML } from '../conversation/innerHTML';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { ConversationMeta } from '../conversation/useConversation';
+import type { ConversationMeta, OlderPageState } from '../conversation/useConversation';
 import { chromeModel } from '../frontier/targetAsk';
 import { conversationWorkdir, useTargetAskHost } from '../frontier/targetAskContext';
 import {
@@ -49,8 +49,11 @@ export function AgentTranscript(props: {
   frames: unknown[];
   meta: ConversationMeta | null;
   ready?: boolean;
+  following?: boolean;
   followEpoch?: number;
   onPageOlder?: () => void;
+  olderPage?: OlderPageState | null;
+  onRetryOlder?: () => void;
   onLeaveLive?: () => void;
   onFollowChange?: (following: boolean) => void;
   recalledId?: string;
@@ -323,6 +326,9 @@ export function AgentTranscript(props: {
     const el = parentRef.current;
     if (!el || !props.onPageOlder) return;
     const requestOlder = () => {
+      // A failed page waits for explicit Retry; a pending retry cannot be
+      // duplicated by scroll events caused by adding the status strip.
+      if (props.olderPage?.loading || props.olderPage?.error) return;
       // A programmatic scroll caused by anchoring a tiny page is not a new
       // request, even if its total height shift leaves us within 48px.
       if (pageAnchor.current?.applied) return;
@@ -388,7 +394,14 @@ export function AgentTranscript(props: {
       el.removeEventListener('jevons-leave-track', leave);
       el.removeEventListener('jevons-page-older', onPageKey);
     };
-  }, [props.meta?.older, props.meta?.start, props.meta?.truncated, props.onPageOlder, props.onLeaveLive, count]);
+  }, [props.meta?.older, props.meta?.start, props.meta?.truncated, props.onPageOlder, props.onLeaveLive, props.olderPage?.loading, props.olderPage?.error, count]);
+
+  useEffect(() => {
+    if (props.olderPage?.error) {
+      pagingRef.current = false;
+      clearPageAnchor();
+    }
+  }, [props.olderPage?.error]);
 
   const scroller = parentRef.current;
   const scrollTop = scroller?.scrollTop ?? 0;
@@ -420,6 +433,15 @@ export function AgentTranscript(props: {
   }, [rows, totalSize]);
   return (
     <div id={bodyId} ref={parentRef}>
+      {props.olderPage?.error ? (
+        <div className="history-page-status" role="alert">
+          Could not load earlier history. <button type="button" onClick={props.onRetryOlder}>Retry</button>
+        </div>
+      ) : props.olderPage?.loading ? (
+        <div className="history-page-status" role="status">Loading earlier history…</div>
+      ) : props.meta?.older === 0 && !props.meta?.truncated && (props.following ?? props.meta?.following) === false && props.frames.length > 0 ? (
+        <div className="history-page-status" role="status">Start of history</div>
+      ) : null}
       {density === 'comfortable' ? <div className="history-sentinel" /> : null}
       <div
         ref={canvasRef}

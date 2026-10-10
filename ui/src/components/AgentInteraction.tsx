@@ -116,7 +116,10 @@ export function AgentInteraction(props: {
         frames={conv.frames}
         meta={conv.meta}
         ready={conv.ready}
+        following={following}
         onPageOlder={() => conv.pageOlder(50)}
+        olderPage={conv.olderPage}
+        onRetryOlder={conv.retryOlder}
         onLeaveLive={conv.leaveLive}
         followEpoch={followEpoch}
         onFollowChange={setFollowing}

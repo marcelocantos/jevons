@@ -6,6 +6,7 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -144,17 +145,17 @@ func (s *Server) statedbRange(name string, lo, hi int) []muxwin.Event {
 	return rowsToMuxEvents(rows)
 }
 
-func (s *Server) statedbBefore(name string, before, limit int) []muxwin.Event {
+func (s *Server) statedbBefore(name string, before, limit int) ([]muxwin.Event, error) {
 	db := s.stateStore()
 	if db == nil {
-		return nil
+		return nil, fmt.Errorf("statedb: unavailable")
 	}
 	rows, err := db.BeforeProse(name, before, limit)
 	if err != nil {
 		slog.Error("statedb: before failed", "agent", name, "err", err)
-		return nil
+		return nil, err
 	}
-	return rowsToMuxEvents(rows)
+	return rowsToMuxEvents(rows), nil
 }
 
 // ImportTranscripts folds JSONL journals into statedb once per agent

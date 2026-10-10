@@ -133,6 +133,11 @@ export class MuxClient {
     return this.loadedBuild;
   }
 
+  /** Page requests must not become an invisible offline queue. */
+  isOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
   connect(): void {
     if (this.closed) return;
     // A backoff timer is pending: sends queue in `pending` and ride the next attempt.
