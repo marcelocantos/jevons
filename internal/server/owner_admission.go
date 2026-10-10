@@ -27,6 +27,7 @@ import (
 // An unknown claim never releases authored body: the fail-open behavior is a
 // visible, daemon-authored degradation indicator and retained investigation.
 const admissionMaxBytes = 64 << 10
+const admissionMaxAuditBytes = 16 << 20
 const admissionHoldLimit = 5 * time.Second
 
 type AdmissionDecision string
@@ -459,6 +460,9 @@ func (s *Server) auditOwnerAdmission(a *overseerAdmission, c *admissionCandidate
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Getuid()) || st.Mode&0777 != 0600 {
 		return errors.New("audit file ownership/type/mode changed")
+	}
+	if st.Size+int64(len(row)+1) > admissionMaxAuditBytes {
+		return errors.New("audit file capacity reached; investigation required")
 	}
 	if _, err = fmt.Fprintln(f, string(row)); err != nil {
 		return fmt.Errorf("audit write: %w", err)
