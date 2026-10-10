@@ -52,6 +52,7 @@ import { planTargetAskFocus } from './frontier/targetAsk';
 import { TargetAskContext, type TargetAskHost } from './frontier/targetAskContext';
 import { useCockpitKeys } from './keys/useCockpitKeys';
 import { focusMainComposer } from './keys/composerFocus';
+import { ReviewDetail, ReviewsList, useReviews } from './reviews/Reviews';
 import { ImageLightbox } from './components/ImageLightbox';
 import { CockpitSettings } from './components/CockpitSettings';
 
@@ -73,7 +74,7 @@ function parseSearch(raw: Record<string, unknown>): Search {
   const agent =
     typeof raw.agent === 'string' ? raw.agent.trim() : '';
   const tab: SidebarTab =
-    raw.tab === 'transcript' || raw.tab === 'coach' ? raw.tab : 'frontier';
+    raw.tab === 'transcript' || raw.tab === 'coach' || raw.tab === 'reviews' ? raw.tab : 'frontier';
   return { agent, tab };
 }
 
@@ -88,8 +89,25 @@ const indexRoute = createRoute({
   component: Cockpit,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute]);
-const router = createRouter({ routeTree });
+const reviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reviews/$reviewId',
+  component: ReviewPage,
+});
+
+function ReviewPage() {
+  const { reviewId } = reviewRoute.useParams();
+  const navigate = useNavigate();
+  return <ReviewDetail id={reviewId} onBack={() => void navigate({ to: '/', search: { agent: '', tab: 'reviews' } })}
+    onAnswer={() => {
+      void navigate({ to: '/', search: { agent: '', tab: 'reviews' } }).then(() => {
+        focusMainComposer();
+      });
+    }} />;
+}
+
+const routeTree = rootRoute.addChildren([indexRoute, reviewRoute]);
+export const router = createRouter({ routeTree });
 
 declare module '@tanstack/react-router' {
   interface Register {
@@ -228,6 +246,8 @@ function Cockpit() {
   const agents = agentsQ.data && agentsQ.data.length
     ? agentsQ.data
     : [{ name: 'jevons' }, { name: 'jevons-po' }];
+  const reviewsQ = useReviews();
+  const openReview = (id: string) => void navigate({ to: '/reviews/$reviewId', params: { reviewId: id } });
   const frontierCwd = agents.find((a) => a.name === agent)?.workdir?.trim() || '';
   const frontierQ = useSeatFrontier(frontierCwd);
   const frontierNote = !frontierCwd || frontierQ.data
@@ -416,6 +436,7 @@ function Cockpit() {
             />
             <SidebarPanel
               tab={tab}
+              reviewCount={reviewsQ.data?.length}
               readyCount={!frontierCwd || frontierQ.data ? frontierRows.length : undefined}
               readyNote={frontierNote}
               onTab={(next) => {
@@ -424,6 +445,7 @@ function Cockpit() {
               }}
               onGraph={openGraph}
               onRefresh={() => void queryClient.invalidateQueries({ queryKey: ['frontier'] })}
+              reviews={<ReviewsList onOpen={openReview} />}
               transcript={
                 agent === 'jevons' ? (
                   <div

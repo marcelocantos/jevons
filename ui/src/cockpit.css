@@ -2067,3 +2067,12 @@ body.rhs-resizing-row { cursor: row-resize; }
   #agents-close { display: block; align-self: flex-end; margin: 8px 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); }
   #rhs-width-handle { display: none; }
 }
+
+/* Versioned owner reviews are read-only; answering always returns to root chat. */
+#reviews-pane { overflow: auto; padding: .65rem; }
+.reviews-list { display: grid; gap: .5rem; }
+.review-row { display: grid; gap: .3rem; width: 100%; padding: .7rem; text-align: left; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: .5rem; cursor: pointer; }
+.review-row span, .review-row small { color: var(--muted); }
+.review-detail { height: 100%; box-sizing: border-box; overflow: auto; padding: clamp(1rem, 4vw, 3rem); background: var(--bg); color: var(--text); }
+.review-detail article { max-width: 52rem; margin: 1rem auto; overflow-wrap: anywhere; line-height: 1.6; }
+.review-detail button { cursor: pointer; }

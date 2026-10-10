@@ -4,12 +4,13 @@
 import type { ReactNode } from 'react';
 import { CoachList } from './CoachList';
 
-export type SidebarTab = 'frontier' | 'transcript' | 'coach';
+export type SidebarTab = 'frontier' | 'transcript' | 'coach' | 'reviews';
 
 const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'frontier', label: 'Frontier' },
   { id: 'transcript', label: 'Transcript' },
   { id: 'coach', label: 'Coach' },
+  { id: 'reviews', label: 'Reviews' },
 ];
 
 export function SidebarPanel(props: {
@@ -21,6 +22,8 @@ export function SidebarPanel(props: {
   /** Shown instead of a count while there is no frontier answer to count. */
   readyNote?: string;
   transcript?: ReactNode;
+  reviews?: ReactNode;
+  reviewCount?: number;
   children: ReactNode;
 }) {
   return (
@@ -37,7 +40,7 @@ export function SidebarPanel(props: {
             aria-selected={props.tab === t.id}
             onClick={() => props.onTab(t.id)}
           >
-            {t.label}
+            {t.label}{t.id === 'reviews' && typeof props.reviewCount === 'number' ? ` (${props.reviewCount})` : ''}
           </button>
         ))}
         <span className="rhs-tab-meta" id="rhs-tab-meta">
@@ -66,6 +69,7 @@ export function SidebarPanel(props: {
       >
         <CoachList active={props.tab === 'coach'} />
       </div>
+      <div id="reviews-pane" className={'rhs-tab-pane' + (props.tab === 'reviews' ? ' active' : '')} role="tabpanel">{props.reviews}</div>
       {props.transcript}
     </div>
   );
