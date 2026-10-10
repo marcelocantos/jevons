@@ -15,7 +15,7 @@ func TestT1047HandoffDoesNotPreserveStaleCLI(t *testing.T) {
 		{"dead grok", Handle{Alive: true, Provider: "grok", ConnectURL: "ws://127.0.0.1:1", PID: 45}, false, false, false},
 		{"live claude", Handle{Alive: true, Provider: "claude", TmuxWindowID: "@113"}, false, true, true},
 		{"stale claude", Handle{Alive: true, Provider: "claude", TmuxWindowID: "@113"}, false, false, false},
-		{"stale flag", Handle{Alive: false, Provider: "claude", TmuxWindowID: "@113"}, false, true, false},
+		{"stale flag with live window", Handle{Alive: false, Provider: "claude", TmuxWindowID: "@113"}, false, true, true},
 		{"not tmux", Handle{Alive: true, Provider: "codex", TmuxWindowID: "codex-app-server"}, false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

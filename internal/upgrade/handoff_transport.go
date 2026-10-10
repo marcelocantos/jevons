@@ -33,7 +33,7 @@ func HandoffTransportAlive(h Handle) bool {
 }
 
 func handoffTransportAlive(h Handle, pidAlive func(int) bool, windowAlive func(string) bool) bool {
-	if !h.Alive || ShouldStopOnUpgrade(h, true) {
+	if ShouldStopOnUpgrade(h, true) {
 		return false
 	}
 	if h.ConnectURL != "" && h.PID > 0 {
