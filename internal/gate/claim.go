@@ -6,6 +6,7 @@ package gate
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -242,7 +243,10 @@ var redDisclosureLimitRe = regexp.MustCompile(`(?i)\b(prevents? claiming|cannot 
 // greenClaimMarkers: a control's own justification says "green" about the
 // after-gate, and that must not cancel the role.
 var passLaunderingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
-	`\bcalling it (a )?pass`,
+	`\bcalling it (a )?(pass|green)\b`,
+	`\bthis (gate|run|suite|package) (is green|pass(es|ed))\b`,
+	`\bcounts as a pass\b`,
+	`\b(the )?(tests|suite|gate|run) pass(es|ed)?\b`,
 	`\bunrelated flake\b`,
 	`\bevery oracle pass`,
 	`\bthe suite is green here`,
@@ -422,7 +426,19 @@ func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string
 			if role == RoleNegativeObservation || role == RoleDisclosure {
 				// Explicit observations are citation-local. Neighbouring output
 				// belongs to its own claim, even when separated by no blank.
-				framingLines[i] = true
+				// A shaped failure on the citation line cannot be attributed
+				// safely to this observation rather than a passing neighbour.
+				// Keep it in the scan; the honest reporter can put the
+				// negative output on a separate, labelled line.
+				anomalies := ScanOutput(lines[i])
+				if role == RoleNegativeObservation {
+					// The termination marker itself is the observation,
+					// not an independent failing test on a green run.
+					anomalies = slices.DeleteFunc(anomalies, func(a Anomaly) bool { return a.Marker == "signal: killed" })
+				}
+				if len(anomalies) == 0 {
+					framingLines[i] = true
+				}
 			} else {
 				for j := start; j <= end; j++ {
 					framingLines[j] = true

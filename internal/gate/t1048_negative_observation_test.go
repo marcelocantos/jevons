@@ -23,7 +23,7 @@ func t1048Review() string {
 
 func TestT1048IndependentReviewObservationAndDisclosure(t *testing.T) {
 	if flags := FlagFalseGreen(t1048Review(), nil); len(flags) != 0 {
-		t.Fatalf("honest review flagged: %v", kinds(flags))
+		t.Fatalf("honest review flagged: %+v", flags)
 	}
 }
 
@@ -47,5 +47,31 @@ func TestT1048FramingMutationsRemainFlagged(t *testing.T) {
 				t.Fatalf("flags=%v, want %s", kinds(flags), tc.want)
 			}
 		})
+	}
+}
+
+// A disclaimer about one package must not turn an explicit pass claim for the
+// cited RED into a disclosure. The T603 wording includes "package is green"
+// under negation, so rejecting every green token would break the real report.
+func TestT1048DisclosureCannotLaunderExplicitPass(t *testing.T) {
+	base := t1048Review()
+	for _, tc := range []struct{ name, addition string }{
+		{"calling-it-green", " I am calling it green."},
+		{"this-run-passed", " This run passed."},
+		{"counts-as-pass", " This RED counts as a pass."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := strings.Replace(base, "It does prevent claiming", tc.addition+" It does prevent claiming", 1)
+			if flags := FlagFalseGreen(report, nil); !hasKind(flags, FlagAttestationNotGreen) {
+				t.Fatalf("RED falsely exempted: %v", kinds(flags))
+			}
+		})
+	}
+}
+
+func TestT1048SameLineFailureNotHiddenByDisclosure(t *testing.T) {
+	report := strings.Replace(t1048Review(), "**RED disclosure:**", "**RED disclosure:** `--- FAIL: TestGreenPath (0.00s)`", 1)
+	if flags := FlagFalseGreen(report, nil); !hasKind(flags, FlagOutputContradicts) {
+		t.Fatalf("same-line failure laundered: %v", kinds(flags))
 	}
 }
