@@ -37,3 +37,23 @@ func TestDecorateSeatStopsNamesAnUnrecordedStop(t *testing.T) {
 		t.Fatalf("running seat reason = %q", rows[2].StopReason)
 	}
 }
+
+// A reason string is not an actor oracle: plan policy stops have a separate
+// trusted Actor field with no "by X:" syntax in Reason (🎯T1059).
+func TestDecorateSeatStopsPreservesTrustedActor(t *testing.T) {
+	s := &Server{}
+	when := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	s.SetSeatStopDetailsReader(func(name string) (string, string, time.Time, bool) {
+		if name == "plan-worker" {
+			return "plan policy parked: no eligible destination", "product:plan_policy", when, true
+		}
+		return "", "", time.Time{}, false
+	})
+	rows := s.decorateSeatStops([]agentInfo{{Name: "plan-worker", Running: false}, {Name: "unknown", Running: false}})
+	if rows[0].StopReason != "plan policy parked: no eligible destination" || rows[0].StopActor != "product:plan_policy" || rows[0].StoppedAt != when.Format(time.RFC3339) {
+		t.Fatalf("plan policy row = %+v", rows[0])
+	}
+	if rows[1].StopActor != "" || rows[1].StoppedAt != "" {
+		t.Fatalf("invented attribution: %+v", rows[1])
+	}
+}

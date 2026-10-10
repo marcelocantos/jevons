@@ -25,6 +25,8 @@ export type AgentRow = {
   ledger?: string;
   /** 🎯T662: why a not-running seat last stopped, from the daemon's seat-stop ledger. */
   stop_reason?: string;
+  /** Trusted seat-stop ledger Actor or fleet-intent By, not inferred from reason text. */
+  stop_actor?: string;
   /** 🎯T970: being brought up; it has not stopped, so it shows no stop reason. */
   starting?: boolean;
   /** Set when the transcript ends on Cursor's plan wall. Shown on a running seat. */
@@ -270,7 +272,6 @@ function StopDetails({ node }: { node: AgentNode }) {
   }, [open, node.stop_reason, node.stopped_at]);
   if (!showSeatStopReason(node)) return null;
   const reason = node.stop_reason || '';
-  const actorMatch = /^(.+?) by ([^:]+): (.+)$/.exec(reason);
   return (
     <span className="agent-stop-wrap" ref={wrapper}>
       <button
@@ -301,8 +302,8 @@ function StopDetails({ node }: { node: AgentNode }) {
             <button type="button" onClick={() => { setOpen(false); button.current?.focus(); }}>Close</button>
           </div>
           <div className="agent-stop-popup-body">
-            <div>Reason: {actorMatch ? actorMatch[3] : reason}</div>
-            {actorMatch ? <div>Actor: {actorMatch[2]} ({actorMatch[1]})</div> : null}
+            <div>Reason: {reason}</div>
+            {node.stop_actor ? <div>Actor: {node.stop_actor}</div> : null}
             {node.stopped_at ? <div>Since: {node.stopped_at}</div> : null}
           </div>
         </div>

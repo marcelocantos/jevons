@@ -231,15 +231,23 @@ const PlannedNotBack = "did not come back after a planned broker restart"
 // back — the row's rehydrate health then says what holds it. Every other
 // stop shows its recorded reason, as SeatStopReason does.
 func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok bool) {
+	reason, _, at, ok = s.SeatStopDetailsShown(name)
+	return
+}
+
+// SeatStopDetailsShown preserves the trusted Actor alongside the stop reason.
+// An intent park takes precedence over a stale stop record; its By is the
+// authoritative actor, even when the reason has no "by X:" syntax.
+func (s *Server) SeatStopDetailsShown(name string) (reason, actor string, at time.Time, ok bool) {
 	if s == nil {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
 	// 🎯T983: a seat deliberately stood down is not expected back, whatever
 	// its last stop record says, or whether a fresh daemon has one at all.
 	// A planned restart's record replaced the park's own, so the row said
 	// the seat had failed to come back; with no record it said "unknown".
 	if ir, ok := s.fleetIntent().Agents[name]; ok && fleetintent.StoodDown(ir.State) {
-		return intentStopLine(ir), ir.At, true
+		return intentStopLine(ir), ir.By, ir.At, true
 	}
 	rec, ok := s.seatStops().Last(name)
 	if !ok {
@@ -247,17 +255,17 @@ func (s *Server) SeatStopShown(name string) (reason string, at time.Time, ok boo
 		// runs after it. The handle already knows the broker said it was
 		// restarting on purpose, so the row is quiet rather than 'unknown'.
 		if cause, dead := stoppedSeatCause(s, name); dead && fleet.BrokerPlanned(cause) {
-			return "", time.Now(), true
+			return "", "", time.Now(), true
 		}
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
 	if rec.Planned {
 		if time.Since(rec.At) < seatstop.PlannedGrace {
-			return "", rec.At, true
+			return "", "", rec.At, true
 		}
-		return PlannedNotBack, rec.At, true
+		return PlannedNotBack, "", rec.At, true
 	}
-	return rec.Reason, rec.At, true
+	return rec.Reason, rec.Actor, rec.At, true
 }
 
 // intentStopLine is a fleet row's reason for a seat whose intent keeps it

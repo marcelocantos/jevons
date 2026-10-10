@@ -1043,6 +1043,7 @@ type agentInfo struct {
 	// when three or more seats stopped within a minute with no daemon
 	// restart; carried on every row so the RHS can show it once.
 	StopReason string `json:"stop_reason,omitempty"`
+	StopActor  string `json:"stop_actor,omitempty"`
 	StoppedAt  string `json:"stopped_at,omitempty"`
 	// Starting marks a not-running seat that something is bringing up: a
 	// jevons_agent_start that has not returned, or a launch in flight
@@ -1171,6 +1172,14 @@ func (s *Server) SetSeatStopReader(fn func(name string) (reason string, at time.
 	s.seatStopReader = fn
 }
 
+// SetSeatStopDetailsReader wires trusted stop actor metadata with the reason
+// in one read. It supersedes the older reason-only reader when installed.
+func (s *Server) SetSeatStopDetailsReader(fn func(name string) (reason, actor string, at time.Time, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seatStopDetailsReader = fn
+}
+
 // SetMassStopReader installs the 🎯T662 mass-stop line source
 // (mcpserver.MassStopLine in production).
 func (s *Server) SetMassStopReader(fn func() string) {
@@ -1199,6 +1208,7 @@ func (s *Server) SetWedgedReader(fn func(name string) (string, bool)) {
 func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 	s.mu.RLock()
 	stopReader := s.seatStopReader
+	stopDetailsReader := s.seatStopDetailsReader
 	startingReader := s.seatStartingReader
 	massReader := s.massStopReader
 	wedgedReader := s.wedgedReader
@@ -1214,10 +1224,21 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 			// has not exited; saying so is what the panel showed on
 			// 2026-09-30 for four workers queued behind other launches.
 			agents[i].Starting = true
-		} else if stopReader != nil && !agents[i].Running {
-			if reason, at, ok := stopReader(agents[i].Name); ok {
+		} else if (stopDetailsReader != nil || stopReader != nil) && !agents[i].Running {
+			var reason, actor string
+			var at time.Time
+			var ok bool
+			if stopDetailsReader != nil {
+				reason, actor, at, ok = stopDetailsReader(agents[i].Name)
+			} else {
+				reason, at, ok = stopReader(agents[i].Name)
+			}
+			if ok {
 				agents[i].StopReason = reason
-				agents[i].StoppedAt = at.UTC().Format(time.RFC3339)
+				agents[i].StopActor = actor
+				if !at.IsZero() {
+					agents[i].StoppedAt = at.UTC().Format(time.RFC3339)
+				}
 			} else {
 				// A restart drops the in-memory ledger, and a seat that was
 				// already stopped at boot is never swept. Silence on that

@@ -8,6 +8,7 @@ import { AgentTree } from './AgentTree';
 const parked = {
   name: 'jv-t1059-parked', parent: 'jevons-po', running: false,
   stop_reason: 'jevons_agent_stop by marcelo: parked pending owner decision',
+  stop_actor: 'marcelo',
   stopped_at: '2026-09-30T12:10:00Z',
 };
 
@@ -36,8 +37,8 @@ describe('parked seat disclosure (🎯T1059)', () => {
     fireEvent.click(icon);
     expect(onSelect).not.toHaveBeenCalled();
     expect(icon.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByRole('dialog').textContent).toContain('Reason: parked pending owner decision');
-    expect(screen.getByRole('dialog').textContent).toContain('Actor: marcelo (jevons_agent_stop)');
+    expect(screen.getByRole('dialog').textContent).toContain('Reason: jevons_agent_stop by marcelo: parked pending owner decision');
+    expect(screen.getByRole('dialog').textContent).toContain('Actor: marcelo');
     expect(screen.getByRole('dialog').textContent).toContain('Since: 2026-09-30T12:10:00Z');
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -65,7 +66,7 @@ describe('parked seat disclosure (🎯T1059)', () => {
       expect(Number.parseFloat(popup.style.top)).toBe(96);
       expect(Number.parseFloat(popup.style.left)).toBe(8);
       expect(Number.parseFloat(popup.style.top) + 420).toBeLessThanOrEqual(560);
-      expect(popup.textContent).toContain('Reason: parked pending owner decision');
+      expect(popup.textContent).toContain('Reason: jevons_agent_stop by marcelo: parked pending owner decision');
       expect(popup.querySelector('.agent-stop-popup-head button')?.textContent).toBe('Close');
       expect(popup.querySelector('.agent-stop-popup-body')).toBeTruthy();
     } finally {
@@ -82,6 +83,19 @@ describe('parked seat disclosure (🎯T1059)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop details for jv-failed' }));
     expect(screen.getByRole('dialog').textContent).toContain('Reason: start failed: launch timed out');
     expect(screen.getByRole('dialog').textContent).toContain('Since: 2026-10-01T08:00:00Z');
+  });
+
+
+  it('shows the trusted plan-policy actor even when the reason has no by-X syntax', () => {
+    render(<AgentTree agents={[{
+      name: 'jv-plan', running: false, stop_reason: 'plan policy parked: no eligible destination',
+      stop_actor: 'product:plan_policy', stopped_at: '2026-10-01T09:00:00Z',
+    }]} selected="" onSelect={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop details for jv-plan' }));
+    const text = screen.getByRole('dialog').textContent || '';
+    expect(text).toContain('Reason: plan policy parked: no eligible destination');
+    expect(text).toContain('Actor: product:plan_policy');
+    expect(text).toContain('Since: 2026-10-01T09:00:00Z');
   });
 
 });

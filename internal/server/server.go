@@ -362,7 +362,8 @@ type Server struct {
 	ownerInterruptSeam    func() (settled bool, err error)
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
-	seatStopReader func(name string) (reason string, at time.Time, ok bool)
+	seatStopReader        func(name string) (reason string, at time.Time, ok bool)
+	seatStopDetailsReader func(name string) (reason, actor string, at time.Time, ok bool)
 	// seatStartingReader reports a seat being brought up (🎯T970).
 	seatStartingReader func(name string) bool
 	// seatWaitClear withdraws a frontier target's wait for a seat (🎯T980).

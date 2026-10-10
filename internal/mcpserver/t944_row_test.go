@@ -111,3 +111,21 @@ func TestT983ParkedSeatWithNoStopRecordNamesThePark(t *testing.T) {
 		t.Fatalf("row = %q (ok=%v), want %q", reason, ok, want)
 	}
 }
+
+// The displayed park comes from durable intent rather than the latest stop;
+// its By must be the actor surfaced to the popup (🎯T1059).
+func TestT1059SeatStopDetailsShownUsesIntentActor(t *testing.T) {
+	s := &Server{}
+	st, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(st)
+	if err := s.SetAgentIntent("plan-worker", fleetintent.Parked, "product:plan_policy", "no eligible destination"); err != nil {
+		t.Fatal(err)
+	}
+	reason, actor, at, ok := s.SeatStopDetailsShown("plan-worker")
+	if !ok || reason != "parked by owner/overseer (product:plan_policy): no eligible destination" || actor != "product:plan_policy" || at.IsZero() {
+		t.Fatalf("shown reason=%q actor=%q at=%v ok=%v", reason, actor, at, ok)
+	}
+}

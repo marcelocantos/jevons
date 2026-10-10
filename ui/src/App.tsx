@@ -188,6 +188,7 @@ function Cockpit() {
           target_id?: string;
           ledger?: string;
           stop_reason?: string;
+          stop_actor?: string;
           starting?: boolean;
           stopped_at?: string;
           mass_stop?: string;
@@ -209,6 +210,7 @@ function Cockpit() {
           target_id: a.target_id,
           ledger: a.ledger,
           stop_reason: a.stop_reason,
+          stop_actor: a.stop_actor,
           starting: a.starting,
           stopped_at: a.stopped_at,
           mass_stop: a.mass_stop,
