@@ -19,7 +19,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	}
 	a := mk(t.TempDir(), "v1", "owner-gate")
 	b := mk(t.TempDir(), "v1", "owner-gate")
-	a.Review = &ownerquestion.ReviewEvent{Readiness: ownerquestion.PrerequisiteBlocked, Prerequisite: "Reconnect device", Action: "Review Fold", Evidence: "artifacts/local.png"}
+	a.Review = &ownerquestion.ReviewEvent{Identity: ownerquestion.Identity{Repo: a.Identity.Repo, Target: a.Identity.Target, ID: a.Identity.ID, Version: a.Identity.Version}, Readiness: ownerquestion.PrerequisiteBlocked, Prerequisite: "Reconnect device", Action: "Review Fold", Evidence: "artifacts/local.png"}
 	for _, q := range []ownerquestionview.Question{a, b} {
 		if err := store.Record(q); err != nil {
 			t.Fatal(err)
@@ -59,7 +59,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &exact); err != nil {
 		t.Fatal(err)
 	}
-	if exact.Repository != a.Identity.Repo[strings.LastIndex(a.Identity.Repo, "/")+1:] || exact.Target != a.Identity.Target || exact.AskID != a.Identity.ID || exact.Version != a.Identity.Version || exact.URL != "/review/"+reviewID(a.Identity) {
+	if exact.Repository != a.Identity.Repo[strings.LastIndex(a.Identity.Repo, "/")+1:] || exact.Target != a.Identity.Target || exact.AskID != a.Identity.ID || exact.Version != a.Identity.Version || exact.URL != "/api/reviews/"+reviewID(a.Identity) {
 		t.Fatal(exact)
 	}
 	if exact.Readiness != "prerequisite_blocked" || exact.Prerequisite != "Reconnect device" || exact.EvidenceStatus != "reported-unverified" {
@@ -71,12 +71,38 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if strings.Contains(w.Body.String(), "artifacts/local.png") {
 		t.Fatal("unverified local artifact path leaked")
 	}
+	// A malformed embedded review cannot borrow readiness from a different
+	// question, even if it was persisted next to this identity.
+	mismatch := mk(a.Identity.Repo, "v1", "mismatched-review")
+	mismatch.Review = &ownerquestion.ReviewEvent{Identity: ownerquestion.Identity{Repo: b.Identity.Repo, Target: "T1", ID: "mismatched-review", Version: "v1"}, Readiness: ownerquestion.Actionable, Action: "Approve"}
+	if err := store.Record(mismatch); err != nil {
+		t.Fatal(err)
+	}
+	w = get("/api/reviews/" + reviewID(mismatch.Identity))
+	exact = reviewItem{}
+	if err := json.Unmarshal(w.Body.Bytes(), &exact); err != nil {
+		t.Fatal(err)
+	}
+	if exact.Readiness != "prerequisite_blocked" || exact.Action != "" {
+		t.Fatal(exact)
+	}
+	// Untrusted prose cannot leak the canonical root through the read API.
+	private := mk(a.Identity.Repo, "v1", "private-path")
+	private.Text = "Review " + a.Identity.Repo
+	private.AnswerRoute = "send to " + a.Identity.Repo
+	if err := store.Record(private); err != nil {
+		t.Fatal(err)
+	}
+	w = get("/api/reviews/" + reviewID(private.Identity))
+	if strings.Contains(w.Body.String(), a.Identity.Repo) {
+		t.Fatal("canonical path leaked", w.Body.String())
+	}
 	// A typed producer transition, not an ID/prose guess, enables action.
 	a.Review.Readiness = ownerquestion.Actionable
 	// Recording a new version does not mutate a prior version: exercise the
 	// ready producer event in a distinct family instead.
 	ready := mk(a.Identity.Repo, "v1", "ready-review")
-	ready.Review = &ownerquestion.ReviewEvent{Readiness: ownerquestion.Actionable, Action: "Review evidence"}
+	ready.Review = &ownerquestion.ReviewEvent{Identity: ownerquestion.Identity{Repo: ready.Identity.Repo, Target: ready.Identity.Target, ID: ready.Identity.ID, Version: ready.Identity.Version}, Readiness: ownerquestion.Actionable, Action: "Review evidence"}
 	if err := store.Record(ready); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +128,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 3 {
+	if len(list) != 5 {
 		t.Fatalf("closed item appeared in open list: %+v", list)
 	}
 	blocked := mk(a.Identity.Repo, "v1", "device-approval")
@@ -127,7 +153,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 5 {
+	if len(rows) != 7 {
 		t.Fatal(rows)
 	}
 }

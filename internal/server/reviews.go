@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcelocantos/jevons/internal/ownerquestion"
 	"github.com/marcelocantos/jevons/internal/ownerquestionview"
 )
 
@@ -41,24 +42,38 @@ type reviewItem struct {
 	Resolution     string                  `json:"resolution,omitempty"`
 }
 
+// A review is trustworthy only when its embedded identity names the exact
+// durable question. A mismatched or legacy record must not solicit a verdict.
+func matchingReview(q ownerquestionview.Question) bool {
+	if q.Review == nil {
+		return false
+	}
+	return q.Review.Identity == (ownerquestion.Identity{Repo: q.Identity.Repo, Target: q.Identity.Target, ID: q.Identity.ID, Version: q.Identity.Version})
+}
+
 func reviewFromQuestion(q ownerquestionview.Question) reviewItem {
+	// Owner-question prose is not a trusted URL or path field. In particular,
+	// keep the canonical repository root internal even if it was quoted in a
+	// question or resolution. The repository display label is separate.
+	redact := func(text string) string { return strings.ReplaceAll(text, q.Identity.Repo, "[repository]") }
+	trustedReview := matchingReview(q)
 	id := reviewID(q.Identity)
 	// Readiness is a producer-owned typed fact, never a classifier over the
 	// question ID or prose. Older records without a Review stay non-actionable.
 	readiness := "prerequisite_blocked"
-	if q.Review != nil && q.Review.Readiness == "actionable" {
+	if trustedReview && q.Review.Readiness == ownerquestion.Actionable {
 		readiness = "actionable"
 	}
 	if q.State != ownerquestionview.Open {
 		readiness = "closed"
 	}
-	item := reviewItem{ID: id, URL: "/review/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute, State: q.State, Readiness: readiness, Resolution: q.Resolution}
-	if q.Review != nil {
+	item := reviewItem{ID: id, URL: "/api/reviews/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: redact(q.Text), Asker: redact(q.Asker), AnswerRoute: redact(q.AnswerRoute), State: q.State, Readiness: readiness, Resolution: redact(q.Resolution)}
+	if trustedReview {
 		// Producer Question() embeds reported artifact paths. Present only the
 		// typed action; the artifact has no verified download URL yet.
-		item.Question = q.Review.Action
-		item.Prerequisite = q.Review.Prerequisite
-		item.Action = q.Review.Action
+		item.Question = redact(q.Review.Action)
+		item.Prerequisite = redact(q.Review.Prerequisite)
+		item.Action = redact(q.Review.Action)
 		// T1042 records reported local artifact references, not verified
 		// downloadable URLs. Never present them as inspected evidence.
 		item.EvidenceStatus = "reported-unverified"
