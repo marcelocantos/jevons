@@ -271,7 +271,9 @@ type Server struct {
 
 	// frontierCwd is the primary workdir for bullseye ledger discovery (🎯T131).
 	// Path resolution always goes through bullseye CLI — never hard-coded yaml.
-	frontierCwd string
+	frontierCwd          string
+	targetRepos          map[string]targetRepo
+	ambiguousTargetRepos map[string]bool
 	// frontierWatchCancel / frontierWatchPath: fsnotify on resolved ledger (🎯T131).
 	frontierWatchCancel context.CancelFunc
 	frontierWatchPath   string

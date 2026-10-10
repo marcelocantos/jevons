@@ -769,12 +769,15 @@ func (s *Server) handleFrontier(w http.ResponseWriter, r *http.Request) {
 
 // TargetResponse is GET /api/frontier/target JSON (🎯T647).
 type TargetResponse struct {
-	Available bool         `json:"available"`
-	Found     bool         `json:"found"`
-	Ledger    string       `json:"ledger,omitempty"`
-	Cwd       string       `json:"cwd,omitempty"`
-	Target    *FrontierRow `json:"target,omitempty"`
-	Error     string       `json:"error,omitempty"`
+	Repo         string       `json:"repo,omitempty"`
+	RepoIdentity string       `json:"repo_identity,omitempty"`
+	LedgerKey    string       `json:"ledger_key,omitempty"`
+	Available    bool         `json:"available"`
+	Found        bool         `json:"found"`
+	Ledger       string       `json:"ledger,omitempty"`
+	Cwd          string       `json:"cwd,omitempty"`
+	Target       *FrontierRow `json:"target,omitempty"`
+	Error        string       `json:"error,omitempty"`
 }
 
 func loadFrontierTarget(cwd, id string) (TargetResponse, int) {
@@ -827,8 +830,36 @@ func loadFrontierTarget(cwd, id string) (TargetResponse, int) {
 
 // handleFrontierTarget serves GET /api/frontier/target?id= — any ledger row (🎯T647).
 func (s *Server) handleFrontierTarget(w http.ResponseWriter, r *http.Request) {
-	cwd := s.frontierCwdOr(r.URL.Query().Get("cwd"))
-	resp, code := loadFrontierTarget(cwd, r.URL.Query().Get("id"))
+	q := r.URL.Query()
+	repoSlug, id, valid := parseScopedTarget(q.Get("repo"), q.Get("id"))
+	var resp TargetResponse
+	code := http.StatusOK
+	if !valid {
+		resp.Error, code = "invalid target id", http.StatusBadRequest
+	} else if repoSlug != "" {
+		var repo targetRepo
+		var reason string
+		repo, code, reason = s.scopedTargetRepo(repoSlug)
+		resp.Repo = repoSlug
+		if code != http.StatusOK {
+			resp.Error = reason
+		} else {
+			// The qualified route deliberately ignores cwd: it is not a repo resolver.
+			resp.Cwd, resp.Ledger, resp.LedgerKey, resp.RepoIdentity = repo.cwd, repo.ledger, repo.key, repo.identity
+			row, found, err := computeTargetFromLedger(repo.ledger, id)
+			switch {
+			case err != nil:
+				resp.Error, code = fmt.Sprintf("read ledger: %v", err), http.StatusOK
+			case !found:
+				resp.Available, resp.Error, code = true, "target not in ledger", http.StatusNotFound
+			default:
+				resp.Available, resp.Found, resp.Target = true, true, &row
+			}
+		}
+	} else {
+		cwd := s.frontierCwdOr(q.Get("cwd"))
+		resp, code = loadFrontierTarget(cwd, id)
+	}
 	if resp.Available && resp.Ledger != "" {
 		s.ensureFrontierWatch(resp.Ledger)
 	}
@@ -838,11 +869,9 @@ func (s *Server) handleFrontierTarget(w http.ResponseWriter, r *http.Request) {
 }
 
 // GraphDiagramBlock is one Mermaid diagram in a multi-component pack (🎯T190).
-// Each connected component (or the shared orphans block) is its own diagram;
-// the panel packs blocks in a wrap grid instead of one mega LR strip.
 type GraphDiagramBlock struct {
 	ID        string `json:"id"`
-	Kind      string `json:"kind"` // "component" | "orphans"
+	Kind      string `json:"kind"`
 	Title     string `json:"title,omitempty"`
 	Mermaid   string `json:"mermaid"`
 	NodeCount int    `json:"node_count"`

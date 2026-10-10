@@ -276,6 +276,9 @@ func main() {
 	// ð¯T131: primary project workdir for bullseye frontier discovery (CLI open).
 	if absWD, err := filepath.Abs(cfg.WorkDir); err == nil {
 		srv.SetFrontierCwd(absWD)
+		if err := srv.SetTargetRepoRoots(filepath.Dir(absWD)); err != nil {
+			slog.Warn("target repo index unavailable", "error", err)
+		}
 	} else {
 		srv.SetFrontierCwd(cfg.WorkDir)
 	}
