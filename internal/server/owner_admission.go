@@ -33,8 +33,10 @@ const admissionHoldLimit = 5 * time.Second
 type AdmissionDecision string
 
 const (
+	AdmissionPending AdmissionDecision = "pending"
 	AdmissionAllowed AdmissionDecision = "allowed"
 	AdmissionSilent  AdmissionDecision = "silent"
+	AdmissionUnknown AdmissionDecision = "unknown"
 )
 
 type admissionCandidate struct {
@@ -127,11 +129,14 @@ func (s *Server) bindOwnerAdmission(cap *admissionAuthority, turnID, requestID s
 	if a.candidate != nil {
 		return errors.New("admission: candidate already open")
 	}
+	if _, exists := a.incidents[requestID]; exists {
+		return errors.New("admission: request/incident identity collision")
+	}
 	if pending, exists := a.requests[requestID]; exists && !pending {
 		return errors.New("admission: answered request ID cannot be reused")
 	}
 	a.requests[requestID] = true
-	c := &admissionCandidate{turnID: turnID, requestID: requestID, deadline: time.Now().Add(admissionHoldLimit)}
+	c := &admissionCandidate{turnID: turnID, requestID: requestID, deadline: time.Now().Add(admissionHoldLimit), decision: AdmissionPending}
 	a.candidate = c
 	c.timer = time.AfterFunc(admissionHoldLimit, func() { s.expireOwnerAdmission(c, "timeout") })
 	return nil
@@ -207,6 +212,9 @@ func (s *Server) registerOwnerIncident(cap *admissionAuthority, turnID, id strin
 	if _, exists := a.incidents[id]; exists {
 		return errors.New("admission: incident ID reused")
 	}
+	if _, exists := a.requests[id]; exists {
+		return errors.New("admission: incident/request identity collision")
+	}
 	a.incidents[id] = admissionIncident{turnID: turnID, open: true}
 	return nil
 }
@@ -229,31 +237,41 @@ func (s *Server) holdOverseerAdmission(ev claudia.Event) bool {
 	if c == nil {
 		a.mu.Unlock()
 		if ev.Type == "assistant" || ev.Type == "progress" {
-			if err := s.auditOwnerAdmission(a, &admissionCandidate{turnID: ev.TurnID}, ev, "unbound turn"); err != nil {
-				s.admissionDegraded("AUDIT LOSS: unbound event", ev.TurnID)
+			reason := "unbound turn"
+			if err := s.auditOwnerAdmission(a, &admissionCandidate{turnID: ev.TurnID}, ev, reason); err != nil {
+				reason = "AUDIT LOSS: unbound event"
 			}
-			s.admissionDegraded("unbound turn", ev.TurnID)
+			s.admissionDegraded(reason, ev.TurnID)
 			return true
 		}
 		return false
 	}
 	if ev.TurnID == "" || ev.TurnID != c.turnID {
 		a.mu.Unlock()
-		s.auditOwnerAdmission(a, c, ev, "missing or mismatched event identity")
-		s.expireOwnerAdmissionLocked(c, "missing or mismatched event identity")
+		reason := "missing or mismatched event identity"
+		if err := s.auditOwnerAdmission(a, c, ev, reason); err != nil {
+			reason = "AUDIT LOSS: " + reason
+		}
+		s.expireOwnerAdmissionLocked(c, reason)
 		return true
 	}
 	if time.Now().After(c.deadline) {
 		a.mu.Unlock()
-		s.auditOwnerAdmission(a, c, ev, "timeout")
-		s.expireOwnerAdmissionLocked(c, "timeout")
+		reason := "timeout"
+		if err := s.auditOwnerAdmission(a, c, ev, reason); err != nil {
+			reason = "AUDIT LOSS: " + reason
+		}
+		s.expireOwnerAdmissionLocked(c, reason)
 		return true
 	}
 	size := len(ev.Text) + len(ev.Raw)
 	if c.bytes+size > admissionMaxBytes {
 		a.mu.Unlock()
-		s.auditOwnerAdmission(a, c, ev, "buffer limit")
-		s.expireOwnerAdmissionLocked(c, "buffer limit")
+		reason := "buffer limit"
+		if err := s.auditOwnerAdmission(a, c, ev, reason); err != nil {
+			reason = "AUDIT LOSS: " + reason
+		}
+		s.expireOwnerAdmissionLocked(c, reason)
 		return true
 	}
 	// Audit must be fsynced before holding or publishing a candidate. If the
@@ -268,7 +286,7 @@ func (s *Server) holdOverseerAdmission(ev claudia.Event) bool {
 	c.held = append(c.held, ev)
 	// Even after one allowed fragment, continue holding until seal; an authored
 	// candidate cannot grant itself authority for a later tool continuation.
-	if c.decision == "" {
+	if c.decision == AdmissionPending {
 		a.mu.Unlock()
 		return true
 	}
@@ -311,7 +329,7 @@ func (s *Server) releaseAdmissionEvents(c *admissionCandidate, events []claudia.
 		if ev.Type == "assistant" && ev.StopReason == "tool_use" {
 			a.mu.Lock()
 			if a.candidate == c {
-				c.decision = ""
+				c.decision = AdmissionPending
 				c.evidenceID = ""
 				c.deadline = time.Now().Add(admissionHoldLimit)
 				c.timer.Stop()
@@ -356,6 +374,7 @@ func (s *Server) expireOwnerAdmissionLocked(c *admissionCandidate, reason string
 		return
 	}
 	a.candidate = nil
+	c.decision = AdmissionUnknown
 	c.timer.Stop()
 	held := c.held
 	c.held = nil
