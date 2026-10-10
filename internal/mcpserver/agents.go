@@ -899,7 +899,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	})
 	// The catalog check precedes persistence AND launch. It also repairs an
 	// unmaterialized failed row that retained an obsolete Spark pin.
-	mp = s.availableMintModel(mp, model, pick.Provider)
+	mp = s.availableMintModel(mp, model, pick.Provider, def.Materialized)
 	if cite := mp.Cite(); cite != "" {
 		if routeNote != "" {
 			routeNote += ", " + cite
@@ -977,9 +977,10 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 // availableMintModel checks automatic Codex pins against the currently linked
 // Claudia session catalog. Prefer its economy tier when Spark is absent;
 // never substitute an invented model slug. A stale stored Spark from a failed
-// launch follows the same recovery path. Explicit pins are not overridden.
-func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider string) cost.MintModelPick {
-	if strings.TrimSpace(explicit) != "" || cli.PlanProvider(claudia.Provider(provider)) != claudia.ProviderCodex ||
+// launch follows the same recovery path. Explicit pins and materialized
+// conversations are not overridden: they must retain their resume binding.
+func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider string, materialized bool) cost.MintModelPick {
+	if strings.TrimSpace(explicit) != "" || materialized || cli.PlanProvider(claudia.Provider(provider)) != claudia.ProviderCodex ||
 		p.Model != cost.ModelCodexSpark {
 		return p
 	}

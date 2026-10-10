@@ -93,3 +93,32 @@ func TestT1046FailedLaunchRowRetriesWithSupportedModel(t *testing.T) {
 		t.Fatalf("retry row=%+v want same session and supported model", def)
 	}
 }
+
+// A launched conversation is not a failed row: its model is part of the
+// resume binding, even if the catalog later drops that slug.
+func TestT1046MaterializedResumeKeepsStoredModel(t *testing.T) {
+	s := t1046Server(t)
+	d, _, _, err := s.stitchAgentStart("existing", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Materialized = true
+	if err := s.registry.Register(*d); err != nil {
+		t.Fatal(err)
+	}
+	got, existed, _, err := s.stitchAgentStart("existing", d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || !existed || got.Model != cost.ModelCodexSpark {
+		t.Fatalf("materialized resume model=%q existed=%v err=%v", got.Model, existed, err)
+	}
+}
+
+func TestT1046MissingEconomyUsesProviderDefault(t *testing.T) {
+	s := t1046Server(t)
+	s.modelCatalog = func() []claudia.CatalogModel {
+		return []claudia.CatalogModel{{Provider: claudia.ProviderCodex, Model: "frontier-only", Access: claudia.ModelAccessPlan, Quality: claudia.ModelQualityFrontier, Session: true}}
+	}
+	def, _, note, err := s.stitchAgentStart("no-economy", t.TempDir(), "", "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || def.Model != "" || !strings.Contains(note, "provider default") {
+		t.Fatalf("no economy model=%q note=%q err=%v", def.Model, note, err)
+	}
+}
