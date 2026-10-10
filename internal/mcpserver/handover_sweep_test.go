@@ -5,6 +5,9 @@ package mcpserver
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +30,7 @@ type sweepLedger struct {
 	cold      bool
 	reg       *claudia.Registry
 	launchErr error
+	thinPath  string
 }
 
 func (l *sweepLedger) PrepareMigration(name string, to claudia.Provider, _ bool) (handover.Pending, error) {
@@ -34,21 +38,37 @@ func (l *sweepLedger) PrepareMigration(name string, to claudia.Provider, _ bool)
 	p := handover.Pending{Agent: name, From: "grok", To: string(to)}
 	if !l.cold {
 		p.TranscriptPath = "/thin.jsonl"
+		if l.thinPath != "" {
+			p.TranscriptPath = l.thinPath
+		}
 	}
 	l.pending = append(l.pending, p)
 	return p, nil
 }
 func (l *sweepLedger) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
 	l.completed++
-	l.compacts++
-	if l.reg != nil {
-		sid := "compact-sess"
-		temp := "jv-compact-" + sid[:8]
-		_ = l.reg.Register(claudia.AgentDef{
-			Name: temp, SessionID: sid, Provider: claudia.Provider(p.To),
-			Purpose: claudia.PurposeAside, Parent: "jevons-po",
-		})
+	// Exercise the actual thin-brief classifier, not an assumed compact:
+	// each invocation would mint a DISTINCT disposable seat.
+	if l.thinPath == "" {
+		return p, nil
 	}
+	brief := handover.GatherBrief(p, handover.GatherHooks{
+		Compact: func(handover.Pending) (string, string, error) {
+			l.compacts++
+			sid := fmt.Sprintf("compact-%08d", l.compacts)
+			if l.reg != nil {
+				if err := l.reg.Register(claudia.AgentDef{
+					Name: "jv-compact-" + sid, SessionID: sid,
+					Provider: claudia.Provider(p.To),
+					Purpose:  claudia.PurposeAside, Parent: "jevons-po",
+				}); err != nil {
+					return "", "", err
+				}
+			}
+			return sid, "one short predecessor brief", nil
+		},
+	})
+	p.Brief, p.BriefSource, p.CompactSessionID = brief.Text, string(brief.Source), brief.CompactSessionID
 	return p, nil
 }
 func (l *sweepLedger) Launch(t *thread.Thread) error {
@@ -75,7 +95,14 @@ func TestT543PlanSweepCompletesPendingHandoverOnlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-	led := &sweepLedger{launchErr: errors.New("depth ceiling"), reg: reg}
+	thin := filepath.Join(t.TempDir(), "thin.jsonl")
+	if err := os.WriteFile(thin, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !handover.DistillTooThin(handover.Distill(thin)) {
+		t.Fatal("fixture must require a throwaway compact")
+	}
+	led := &sweepLedger{launchErr: errors.New("depth ceiling"), reg: reg, thinPath: thin}
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
 	s.SetMigrator(led)
@@ -100,6 +127,10 @@ func TestT543PlanSweepCompletesPendingHandoverOnlyOnce(t *testing.T) {
 	}
 	if len(compact) != 1 {
 		t.Fatalf("compact seats in registry = %v; want exactly one mint", compact)
+	}
+	def := reg.Def(compact[0])
+	if def.Purpose != claudia.PurposeAside || def.TargetID != "" || def.AutoStart {
+		t.Fatalf("throwaway compact must not be work/target/autostart: %+v", *def)
 	}
 	for _, a := range s.SweepPlanPolicy() {
 		actions = append(actions, a.Name)
