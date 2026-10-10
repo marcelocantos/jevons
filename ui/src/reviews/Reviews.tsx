@@ -60,6 +60,7 @@ export function evidenceSummary(review: Review) {
   if (!review.evidence) return 'Evidence missing or unverified. Reported artifacts are not verified download links.';
   return Object.entries(review.evidence).map(([kind, item]) => {
     const candidates = Array.isArray(item) ? item : [item];
+    if (!candidates.length) return `${kind}: missing`;
     return candidates.map((candidate, index) => {
       const value = candidate && typeof candidate === 'object' ? candidate as Record<string, unknown> : {};
       const status = typeof value.status === 'string' ? value.status : 'unverified';
@@ -74,6 +75,7 @@ export function reviewDraft(review: Review) {
   const links = verifiedEvidenceLinks(review);
   return [
     `Review ${review.id} · ${reviewLabel(review)}`,
+    `Review link: /reviews/${encodeURIComponent(review.id)}`,
     `Question version: ${review.version || 'unknown'}`,
     `Question: ${review.question || 'Not available'}`,
     `Readiness: ${reviewReadiness(review)}`,
