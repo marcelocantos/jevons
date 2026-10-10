@@ -90,3 +90,21 @@ func TestT1048StoredT603Report(t *testing.T) {
 		t.Fatalf("stored honest review flagged: %v", flags)
 	}
 }
+
+// Frozen bytes of the prohibited 05:15:37Z development report. The live
+// route produced attestation_not_green on the unrelated RED despite the
+// explicit disclaimer. This offline oracle prevents that false banner without
+// sending further specimens through the owner-facing daemon.
+func TestT1048IncidentSpecimenOffline(t *testing.T) {
+	body, err := os.ReadFile("testdata/t1048_incident_specimen.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags := FlagFalseGreen(string(body), nil); len(flags) != 0 {
+		t.Fatalf("honest incident specimen flagged: %v", flags)
+	}
+	claimed := strings.Replace(string(body), "cannot support claiming its suite green", "can support claiming its suite green", 1)
+	if flags := FlagFalseGreen(claimed, nil); !hasKind(flags, FlagAttestationNotGreen) {
+		t.Fatalf("RED claimed green must flag: %v", flags)
+	}
+}

@@ -236,7 +236,7 @@ var negativeObservationRe = regexp.MustCompile(`(?i)\b(SIGKILL record|negative o
 var negativeObservationLimitRe = regexp.MustCompile(`(?i)\b(not (an? )?(absent or )?passing record|not (a )?(pass|fail|test result)|decided nothing|not evidence (of|for) (a )?(pass|fail))\b`)
 var failingProofRe = regexp.MustCompile(`(?i)\b(proves? (a |the )?(failing|failed|red) (test|assertion|suite)|oracles? fail on their own assertions|falsif\w*)\b`)
 var redDisclosureRe = regexp.MustCompile(`(?i)\bRED disclosure\b`)
-var redDisclosureLimitRe = regexp.MustCompile(`(?i)\b(prevents? claiming|cannot claim|not claiming|does not claim|do not claim)\b[^\n]{0,100}\b(package|suite|run)\b[^\n]{0,60}\bgreen\b`)
+var redDisclosureLimitRe = regexp.MustCompile(`(?i)\b(prevents? claiming|cannot claim|not claiming|does not claim|do not claim|cannot support claiming|does not support claiming)\b[^\n]{0,100}\b(package|suite|run)\b[^\n]{0,60}\bgreen\b`)
 
 // passLaunderingRe matches a window that claims THIS citation as a pass,
 // even when control framing or a -before name is present. Narrower than
