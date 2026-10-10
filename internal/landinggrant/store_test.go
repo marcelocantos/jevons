@@ -123,3 +123,45 @@ func TestT1051GrantUnavailableAuthorityFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestT1051MintRejectsSelfAssertedPOEventAndStaleEpoch(t *testing.T) {
+	e := &epoch{}
+	s, g := fixture(t, e)
+	s.VerifyPOEvent = nil
+	if err := s.Issue(g); err == nil {
+		t.Fatal("minted without current PO process witness")
+	}
+	s.VerifyPOEvent = func(string, worktree.BatchReview) error { return errors.New("event came from worker") }
+	if err := s.Issue(g); err == nil {
+		t.Fatal("forged event minted grant")
+	}
+	s.VerifyPOEvent = func(string, worktree.BatchReview) error { return nil }
+	e.Hold()
+	if err := s.Issue(g); err == nil {
+		t.Fatal("stale approval minted through hold")
+	}
+}
+
+func TestT1051ConcurrentRedemptionSingleSpend(t *testing.T) {
+	e := &epoch{}
+	s, g := fixture(t, e)
+	if err := s.Issue(g); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	successes := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.RedeemAndLand(g.ID, g.Review, func() error { successes <- struct{}{}; return nil }); err == nil {
+				return
+			}
+		}()
+	}
+	wg.Wait()
+	close(successes)
+	if len(successes) != 1 {
+		t.Fatalf("landed %d times", len(successes))
+	}
+}
