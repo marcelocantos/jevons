@@ -95,6 +95,13 @@ func TestScopedTargetAmbiguousSlugAndSymlinkIdentity(t *testing.T) {
 	if rr.Code != 409 {
 		t.Fatalf("ambiguous: %d %s", rr.Code, rr.Body.String())
 	}
+	fq := filepath.Base(base) + "/a/same"
+	rr = httptest.NewRecorder()
+	s.handleFrontierTarget(rr, httptest.NewRequest("GET", "/api/frontier/target?repo="+fq+"&id=T1", nil))
+	if rr.Code != 200 {
+		t.Fatalf("fully qualified identity: %d %s", rr.Code, rr.Body.String())
+	}
+
 	// A symlink to an already-indexed checkout does not invent another ledger.
 	link := filepath.Join(base, "alias")
 	if err := os.Symlink(roots[0], link); err != nil {
