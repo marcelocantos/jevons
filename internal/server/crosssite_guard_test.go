@@ -101,9 +101,17 @@ const (
 	foreignOrigin = "https://evil.example"
 )
 
+// guardRefused identifies the guard's own response, rather than treating every
+// 403 as CSRF. Some handlers deliberately fail closed with 403 after the
+// guard has allowed a same-origin or header-less request through.
+func guardRefused(rr *httptest.ResponseRecorder) bool {
+	return rr.Code == http.StatusForbidden && strings.TrimSpace(rr.Body.String()) == `{"error":"cross-site request rejected"}`
+}
+
 // TestEveryMutatingRouteRejectsCrossSite is the structural claim: no
 // state-changing route on the daemon accepts a foreign-origin request, and
-// none of them rejects a same-origin one.
+// none of them rejects a same-origin one *at the guard*. A handler may
+// independently return 403 (notably the unauthenticated review answer).
 func TestEveryMutatingRouteRejectsCrossSite(t *testing.T) {
 	h := dailyHandler(t)
 	routes := mutatingRoutesFromSource(t)
@@ -119,8 +127,8 @@ func TestEveryMutatingRouteRejectsCrossSite(t *testing.T) {
 		req.Header.Set("Origin", foreignOrigin)
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
-		if rr.Code != http.StatusForbidden {
-			t.Errorf("%s %s: cross-site Origin status = %d, want 403", method, path, rr.Code)
+		if !guardRefused(rr) {
+			t.Errorf("%s %s: cross-site Origin response = %d %q, want guard refusal", method, path, rr.Code, rr.Body.String())
 		}
 
 		// Foreign Referer with no Origin must be refused too.
@@ -130,12 +138,12 @@ func TestEveryMutatingRouteRejectsCrossSite(t *testing.T) {
 		req.Header.Set("Referer", foreignOrigin+"/page")
 		rr = httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
-		if rr.Code != http.StatusForbidden {
-			t.Errorf("%s %s: cross-site Referer status = %d, want 403", method, path, rr.Code)
+		if !guardRefused(rr) {
+			t.Errorf("%s %s: cross-site Referer response = %d %q, want guard refusal", method, path, rr.Code, rr.Body.String())
 		}
 
 		// Same-origin must not be refused by the guard. The handler is free
-		// to fail the request on its merits — only 403 means the guard bit.
+		// to fail the request on its merits, including with a different 403.
 		req = httptest.NewRequest(method, path, strings.NewReader(`{}`))
 		req.Host = daemonHost
 		req.Header.Set("Content-Type", "application/json")
@@ -143,7 +151,7 @@ func TestEveryMutatingRouteRejectsCrossSite(t *testing.T) {
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		rr = httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
-		if rr.Code == http.StatusForbidden {
+		if guardRefused(rr) {
 			t.Errorf("%s %s: same-origin request was rejected as cross-site", method, path)
 		}
 
@@ -153,9 +161,46 @@ func TestEveryMutatingRouteRejectsCrossSite(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		rr = httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
-		if rr.Code == http.StatusForbidden {
+		if guardRefused(rr) {
 			t.Errorf("%s %s: header-less client was rejected as cross-site", method, path)
 		}
+	}
+}
+
+// TestReviewAnswerCSRFGuardAndHandlerDenial distinguishes the two independent
+// 403s: a foreign page is rejected by the guard before the handler, while a
+// same-origin browser and a header-less client reach the handler but cannot
+// answer a review without an owner-authenticated principal.
+func TestReviewAnswerCSRFGuardAndHandlerDenial(t *testing.T) {
+	h := dailyHandler(t)
+	for _, tc := range []struct {
+		name, origin, referer string
+		guard                 bool
+	}{
+		{name: "foreign Origin", origin: foreignOrigin, guard: true},
+		{name: "foreign Referer", referer: foreignOrigin + "/page", guard: true},
+		{name: "same origin", origin: "http://" + daemonHost},
+		{name: "header-less client"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/reviews/probe/answer", strings.NewReader(`{"action":"approve"}`))
+			req.Host = daemonHost
+			req.Header.Set("Content-Type", "application/json")
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != http.StatusForbidden || guardRefused(rr) != tc.guard {
+				t.Fatalf("status=%d body=%q; want 403 with guard refusal=%t", rr.Code, rr.Body.String(), tc.guard)
+			}
+			if !tc.guard && !strings.Contains(rr.Body.String(), "owner-authenticated review answers are not configured") {
+				t.Fatalf("handler fail-closed response missing: %q", rr.Body.String())
+			}
+		})
 	}
 }
 
