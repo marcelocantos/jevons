@@ -190,11 +190,11 @@ func (c *BudgetConfig) CurrencyNote() string {
 // accounting=subscription in budget.json (🎯T137).
 func DefaultBudgetConfig() *BudgetConfig {
 	return &BudgetConfig{
-		Accounting:           AccountingListPrice,
-		Global:               Limits{WarnUSDPerHour: 10, ThrottleUSDPerHour: 20, PauseUSDPerHour: 40, KillUSDPerHour: 60},
-		Fleet:                Limits{WarnUSDPerHour: 5, ThrottleUSDPerHour: 10, PauseUSDPerHour: 20, KillUSDPerHour: 40},
-		Worker:               Limits{WarnUSDPerHour: 2, ThrottleUSDPerHour: 5, PauseUSDPerHour: 10, KillUSDPerHour: 20},
-		MaxSessions: 20,
+		Accounting:  AccountingListPrice,
+		Global:      Limits{WarnUSDPerHour: 10, ThrottleUSDPerHour: 20, PauseUSDPerHour: 40, KillUSDPerHour: 60},
+		Fleet:       Limits{WarnUSDPerHour: 5, ThrottleUSDPerHour: 10, PauseUSDPerHour: 20, KillUSDPerHour: 40},
+		Worker:      Limits{WarnUSDPerHour: 2, ThrottleUSDPerHour: 5, PauseUSDPerHour: 10, KillUSDPerHour: 20},
+		MaxSessions: 100,
 		// Daily figures track GLOBAL machine spend (incl. the owner's own
 		// sessions), so the defaults sit well above a heavy owner's
 		// baseline (~$300/day observed) yet far below the 2026-07-06

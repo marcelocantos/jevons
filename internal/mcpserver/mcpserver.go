@@ -691,14 +691,26 @@ func (s *Server) effectivePortfolio() *cost.Portfolio {
 	return base
 }
 
-// harnessLoadCounts tallies registered agents by claudia provider id
-// (session soft-cap input for portfolio routing — never USD).
+// harnessLoadCounts counts process-alive seats by provider for routing and
+// admission, not registered definitions or cost-window sessions. Unknown process
+// state consumes a slot conservatively until the seat authority observes death.
 func (s *Server) harnessLoadCounts() cost.LoadCounts {
-	load := cost.LoadCounts{}
 	if s == nil || s.registry == nil {
-		return load
+		return cost.LoadCounts{}
 	}
-	for _, d := range s.registry.List() {
+	return activeProcessLoad(s.registry.List(), func(name string) seatstate.Tri {
+		return seatstate.ReadRegistry(s.registry, name).Alive
+	})
+}
+
+// activeProcessLoad is pure so parked, live and uncertain seats can be tested
+// without launching provider processes. Zero-turn alive processes count.
+func activeProcessLoad(defs []claudia.AgentDef, alive func(string) seatstate.Tri) cost.LoadCounts {
+	load := cost.LoadCounts{}
+	for _, d := range defs {
+		if alive(d.Name) == seatstate.No {
+			continue
+		}
 		p := strings.ToLower(strings.TrimSpace(string(d.Provider)))
 		if p == "" {
 			p = string(cli.DefaultProvider)

@@ -41,8 +41,8 @@ func TestCapacitySnapshotCarriesBudgetLoadAndClampState(t *testing.T) {
 		ProviderSoftCaps: func() map[string]int { return map[string]int{"grok": 12} },
 	})
 
-	if snap.ActiveSessions != 7 || snap.MaxSessions != 20 {
-		t.Errorf("load = %d/%d sessions, want 7/20", snap.ActiveSessions, snap.MaxSessions)
+	if snap.ActiveSessions != 4 || snap.CostWindowSessions != 7 || snap.MaxSessions != 20 {
+		t.Errorf("load = %d/%d seats, want 4/20", snap.ActiveSessions, snap.MaxSessions)
 	}
 	if snap.SpentTodayUSD != 120 || snap.ProjectedTodayUSD != 480 || snap.DailyBudgetUSD != 500 {
 		t.Errorf("USD fields not carried: %+v", snap)
