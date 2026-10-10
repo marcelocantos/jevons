@@ -77,6 +77,10 @@ func (s *Server) escalationLadder(class string) (escalate.Ladder, bool) {
 // seat cannot run one: the caller continues on the ordinary path, which
 // submits to an idle seat and holds a message for a busy one.
 func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSender) (agentSendResult, bool, error) {
+	return s.escalateIfBusyWithRequestID(name, text, class, asker, proc, "")
+}
+
+func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, proc agentSender, requestID string) (agentSendResult, bool, error) {
 	ladder, ok := s.escalationLadder(class)
 	if !ok {
 		return agentSendResult{}, false, nil
@@ -84,6 +88,21 @@ func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSende
 	es, ok := proc.(escalatingSender)
 	if !ok {
 		return agentSendResult{}, false, nil
+	}
+	// The pinned Claudia API cannot carry a request ID on the escalation
+	// ladder. Refuse the ladder and use the ordinary typed mode/queue path
+	// rather than silently stripping the ID. The optional T184 method is
+	// selected only when present, without pinning Claudia in this slice.
+	var typed interface {
+		SendEscalatingWithRequestID(string, escalate.Ladder, string) (claudia.DeliveryOutcome, error)
+	}
+	if requestID != "" {
+		typed, ok = proc.(interface {
+			SendEscalatingWithRequestID(string, escalate.Ladder, string) (claudia.DeliveryOutcome, error)
+		})
+		if !ok {
+			return agentSendResult{}, false, nil
+		}
 	}
 	unlock := s.lockAgentSend(name)
 	defer unlock()
@@ -110,7 +129,13 @@ func (s *Server) escalateIfBusy(name, text, class, asker string, proc agentSende
 	if relay {
 		s.midTurn().expect(name, asker, text)
 	}
-	out, err := es.SendEscalating(text, ladder)
+	var out claudia.DeliveryOutcome
+	var err error
+	if requestID != "" {
+		out, err = typed.SendEscalatingWithRequestID(text, ladder, requestID)
+	} else {
+		out, err = es.SendEscalating(text, ladder)
+	}
 	if err != nil {
 		if relay {
 			s.midTurn().forget(name, text)

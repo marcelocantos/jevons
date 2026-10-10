@@ -166,6 +166,15 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 }
 
 func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrigin, mode delivery.Mode, confirm sendConfirmation) (res agentSendResult, err error) {
+	return s.deliverByNameWithModeRequestID(actor, name, text, origin, mode, confirm, "")
+}
+
+// requestID comes only from the trusted host intake hook. The fleet path
+// carries it as metadata, never derives it from origin or message text.
+func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin SendOrigin, mode delivery.Mode, confirm sendConfirmation, requestID string) (res agentSendResult, err error) {
+	if requestID != "" && origin != OriginOwner {
+		return agentSendResult{}, fmt.Errorf("request ID is reserved for admitted owner messages")
+	}
 	name = strings.TrimSpace(name)
 	actor = strings.TrimSpace(actor)
 	defer func() { s.observeBirthAcceptance(name, res, err) }()
@@ -309,6 +318,9 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 	}
 
 	if overseerArm {
+		if requestID != "" {
+			return agentSendResult{}, fmt.Errorf("request ID to overseer needs typed owner-chat queue; not delivered")
+		}
 		return s.deliverToOverseer(name, text, origin)
 	}
 
@@ -371,7 +383,7 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 					Message: fmt.Sprintf("idle nudge for reaped agent %q dropped, not queued (🎯T821)", name),
 				}, nil
 			}
-			return s.holdSendForReaped(name, text, rec), nil
+			return s.holdSendForReapedWithRequestID(name, text, rec, requestID), nil
 		}
 	}
 
@@ -419,11 +431,11 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 	// its turn to end. An explicit mode (steer, interrupt, queue) is the
 	// caller's own choice and is left alone.
 	if mode == delivery.ModeSubmit {
-		if res, handled, err := s.escalateIfBusy(name, text, s.escalationClass(actor, origin, rel), actor, proc); handled {
+		if res, handled, err := s.escalateIfBusyWithRequestID(name, text, s.escalationClass(actor, origin, rel), actor, proc, requestID); handled {
 			return res, err
 		}
 	}
-	return deliverToSenderMode(s, name, text, mode, proc, rehydrated, confirm)
+	return deliverToSenderModeWithRequestID(s, name, text, requestID, mode, proc, rehydrated, confirm)
 }
 
 // relayReportBody returns the sender's report for 🎯T392.7 classification and
