@@ -71,6 +71,22 @@ func TestT1054BusyQueueRestartDrainsSameRequestID(t *testing.T) {
 	}
 }
 
+func TestT1054PublicAdmissionResultPreservesHostIDWhenQueued(t *testing.T) {
+	s, _, _ := t418Daemon(t, t.TempDir())
+	sender := &requestIDSender{}
+	observeSenderFixture(s, "a", sender)
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
+	s.noteTurnInFlight("a")
+	res, err := s.DeliverAgentMessageModeWithRequestID("a", "owner question", OriginOwner, delivery.ModeSubmit, "host-issued-question")
+	if err != nil || res.Status != "queued" || res.RequestID != "host-issued-question" {
+		t.Fatalf("admission: %+v %v", res, err)
+	}
+	entries, err := s.sendQueue().Snapshot("a")
+	if err != nil || len(entries) != 1 || entries[0].RequestID != res.RequestID || entries[0].ID == res.RequestID {
+		t.Fatalf("queued identity: %+v %v", entries, err)
+	}
+}
+
 func TestT1054PinnedClaudiaNeverDropsIDIntoLegacySend(t *testing.T) {
 	s, _, _ := t418Daemon(t, t.TempDir())
 	legacy := &queueAttemptSender{send: func(string) error { t.Fatal("legacy Send called"); return nil }}
