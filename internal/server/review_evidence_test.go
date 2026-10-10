@@ -48,9 +48,17 @@ func TestReviewEvidenceVersionScopeAndHonestMissing(t *testing.T) {
 	t.Cleanup(func() { runBullseyeCLI = old })
 	t.Setenv(gate.StoreDirEnv, t.TempDir())
 	store, _ := gate.OpenStore("")
-	own := &gate.Record{ID: "abcdef12", Tree: &gate.TreeProvenance{Repo: repo, Commit: sha}, Verdict: gate.VerdictGreen, StatusKnown: true}
+	own := &gate.Record{ID: "abcdef12", Tree: &gate.TreeProvenance{Repo: repo, Commit: sha, Clean: true}, Verdict: gate.VerdictGreen, StatusKnown: true}
 	if e := store.Save(own); e != nil {
 		t.Fatal(e)
+	}
+	wrongCommit := &gate.Record{ID: "aaaabbbb", Tree: &gate.TreeProvenance{Repo: repo, Commit: strings.Repeat("b", 40), Clean: true}, Verdict: gate.VerdictGreen, StatusKnown: true}
+	dirty := &gate.Record{ID: "ccccdddd", Tree: &gate.TreeProvenance{Repo: repo, Commit: sha, Clean: false}, Verdict: gate.VerdictGreen, StatusKnown: true}
+	red := &gate.Record{ID: "eeeeffff", Tree: &gate.TreeProvenance{Repo: repo, Commit: sha, Clean: true}, Verdict: gate.VerdictRed, StatusKnown: true, ExitStatus: 1}
+	for _, r := range []*gate.Record{wrongCommit, dirty, red} {
+		if e := store.Save(r); e != nil {
+			t.Fatal(e)
+		}
 	}
 	foreign := &gate.Record{ID: "fedcba98", Tree: &gate.TreeProvenance{Repo: t.TempDir(), Commit: sha}, Verdict: gate.VerdictGreen, StatusKnown: true}
 	if e := store.Save(foreign); e != nil {
@@ -90,25 +98,52 @@ func TestReviewEvidenceVersionScopeAndHonestMissing(t *testing.T) {
 		return x, w.Body.String()
 	}
 	a, raw := read("/api/reviews/" + reviewID(v1.Identity))
-	if a.SchemaVersion != 2 || a.TargetLookup != "verified" || a.TargetTitle != "Review target title" || a.State != ownerquestionview.Superseded || a.Readiness != "closed" || a.Evidence.Commit.Status != "verified" || a.Evidence.Gate.Status != "verified" || a.Evidence.Diff.URL == "" || a.Evidence.Report.URL == "" || len(a.Evidence.Screenshots) != 1 || a.Evidence.Screenshots[0].URL != "" {
+	if a.SchemaVersion != 2 || a.TargetLookup != "verified" || a.TargetTitle != "Review target title" || a.State != ownerquestionview.Superseded || a.Readiness != "closed" || a.Evidence.Commit.Status != "verified" || a.Evidence.Gate.Status != "verified" || a.Evidence.Diff.Status != "reported_only" || a.Evidence.Diff.URL != "" || a.Evidence.Report.Status != "reported_only" || a.Evidence.Report.URL != "" || len(a.Evidence.Screenshots) != 1 || a.Evidence.Screenshots[0].URL != "" {
 		t.Fatal(a)
 	}
 	if strings.Contains(raw, repo) {
 		t.Fatal("absolute repo disclosed", raw)
 	}
 	b, _ := read("/api/reviews/" + reviewID(v2.Identity))
-	if b.Evidence.Commit.Status != "inaccessible" || b.Evidence.Gate.Status != "inaccessible" || b.Evidence.Diff.URL != "" || b.Evidence.Screenshots[0].URL != "" {
+	if b.Evidence.Commit.Status != "reported_only" || b.Evidence.Gate.Status != "inaccessible" || b.Evidence.Diff.URL != "" || b.Evidence.Screenshots[0].URL != "" {
 		t.Fatal(b)
 	}
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("GET", a.Evidence.Diff.URL, nil))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "hello") {
-		t.Fatal(w.Code, w.Body.String())
+	for _, suffix := range []string{"/diff", "/report", "/gate"} {
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest("GET", a.URL+suffix, nil))
+		if w.Code != 404 {
+			t.Fatalf("raw evidence endpoint %s unexpectedly exposed: %d", suffix, w.Code)
+		}
 	}
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest("GET", a.Evidence.Report.URL, nil))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "T766.3") {
-		t.Fatal(w.Code, w.Body.String())
+
+	// A second SHA or gate in one claim is ambiguous; no arbitrary "first" pair.
+	for _, tc := range []struct{ label, evidence, gateStatus string }{
+		{"wrong-commit", "commit " + sha + " gate-id=aaaabbbb", "inaccessible"},
+		{"dirty", "commit " + sha + " gate-id=ccccdddd", "inaccessible"},
+		{"red", "commit " + sha + " gate-id=eeeeffff", "inaccessible"},
+		{"ambiguous-sha", "commit " + sha + " commit " + strings.Repeat("c", 40) + " gate-id=abcdef12", "reported_only"},
+	} {
+		q := mk("v3-"+tc.label, tc.evidence)
+		result := s.reviewDetail(q)
+		if result.Evidence.Commit.Status == "verified" || result.Evidence.Gate.Status == "verified" || result.Evidence.Diff.URL != "" || result.Evidence.Gate.URL != "" {
+			t.Fatalf("%s false verification: %+v", tc.label, result.Evidence)
+		}
+	}
+	// A stored report body or git diff may contain secrets; these routes are
+	// absent, even when the item has an otherwise verified commit and gate.
+	for _, text := range []string{`file="/tmp/private"`, `--config=/tmp/secret`, `https://example.test/?token=/tmp/secret`, `token=/tmp/secret`, `/opt/unknown/secret`} {
+		got := redactReviewPaths("Review "+text, repo)
+		if strings.Contains(got, "/tmp/") || strings.Contains(got, "/opt/") || strings.Contains(got, "secret") || strings.Contains(got, "private") {
+			t.Fatalf("path leak %q => %q", text, got)
+		}
+	}
+	// No local filesystem, arbitrary report, or unverified citation may be
+	// converted to a public URL through a revised or malicious record.
+	corrupt := mk("v4", "commit "+sha+" gate-id=abcdef12")
+	corrupt.Review.Identity.Version = "v-other"
+	if item := s.reviewDetail(corrupt); item.Evidence.Commit.Status == "verified" {
+		t.Fatal("mismatched review verified")
 	}
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/reviews/../../etc/passwd/diff", nil))
