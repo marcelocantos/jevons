@@ -294,13 +294,18 @@ func (s *Server) mootSupersededReview(agentName, text string) {
 	if err != nil || m == nil || m.Kind != envelope.KindFinishReport || m.Target == "" {
 		return
 	}
+	repo, err := ownerquestion.SharedRepo(s.workerWD)
+	if err != nil {
+		slog.Error("review lifecycle repo lookup failed", "err", err)
+		return
+	}
 	rows, err := ownerquestionview.New(s.ownerQuestionsDir).List(true)
 	if err != nil {
 		slog.Error("review lifecycle read failed", "err", err)
 		return
 	}
 	for _, r := range rows {
-		if r.Identity.Target != m.Target || r.Identity.ID != "hardware-visual-review" || r.Asker != agentName {
+		if r.Identity.Repo != repo || r.Identity.Target != m.Target || r.Identity.ID != "hardware-visual-review" || r.Asker != agentName {
 			continue
 		}
 		if err := ownerquestionview.New(s.ownerQuestionsDir).Resolve(r.Identity, ownerquestionview.Moot, "superseded by reporter finish-report without review ask"); err != nil {

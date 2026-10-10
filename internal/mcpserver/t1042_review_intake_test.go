@@ -105,14 +105,29 @@ func TestT1042SupersedingReportMootsOnlySameReporterReview(t *testing.T) {
 	if len(open) != 1 {
 		t.Fatalf("other reporter erased ask: %+v", open)
 	}
+	// Same target/reporter from a different repository must survive this
+	// report: cross-repo owner questions share the durable state directory.
+	foreign := ownerquestionview.Identity{Repo: t.TempDir(), Target: "T1041", ID: "hardware-visual-review", Version: "foreign-v1"}
+	if err := ownerquestionview.New(state).Record(ownerquestionview.Question{Identity: foreign, Text: "foreign owner review", Asker: "reviewer", AnswerRoute: "reply"}); err != nil {
+		t.Fatal(err)
+	}
 	s.storeAgentReport("reviewer", successor)
 	open, _ = ownerquestionview.New(state).List(true)
-	if len(open) != 0 {
-		t.Fatalf("superseded review still open: %+v", open)
+	if len(open) != 1 || open[0].Identity != foreign {
+		t.Fatalf("same-repo review should close; foreign review must remain: %+v", open)
 	}
 	all, _ := ownerquestionview.New(state).List(false)
-	if len(all) != 1 || all[0].State != ownerquestionview.Moot || all[0].Review.Lifecycle != "moot" {
+	if len(all) != 2 {
 		t.Fatalf("history %+v", all)
+	}
+	for _, row := range all {
+		if row.Identity == foreign {
+			if row.State != ownerquestionview.Open {
+				t.Fatalf("foreign review closed: %+v", row)
+			}
+		} else if row.State != ownerquestionview.Moot || row.Review == nil || row.Review.Lifecycle != "moot" {
+			t.Fatalf("history %+v", all)
+		}
 	}
 	entries, _, _ := ownerquestions.New(state).Snapshot()
 	if len(entries) != 0 {
