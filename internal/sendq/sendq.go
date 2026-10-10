@@ -60,6 +60,10 @@ type Entry struct {
 	// fleet-health notice and the file on disk can be talked about as one
 	// thing rather than by quoting the payload back.
 	ID string `json:"id"`
+	// RequestID is the immutable host-issued identity of an admitted owner question.
+	// Unlike ID (queue acceptance) and AttemptID (delivery try), it survives
+	// retries, daemon restarts and digest archival without being reminted.
+	RequestID string `json:"request_id,omitempty"`
 	// Text is the payload exactly as accepted. Never truncated: this is the
 	// message, not a record of it.
 	Text string `json:"text"`
@@ -321,6 +325,12 @@ func NewID() string {
 // Append adds a message to the back of an agent's queue and returns the
 // entry as written together with the resulting depth.
 func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
+	return s.AppendWithRequestID(agent, text, "", at)
+}
+
+// AppendWithRequestID holds an admitted question with the ID issued at host
+// intake. Empty means a legacy/non-owner message; the queue never mints one.
+func (s *Store) AppendWithRequestID(agent, text, requestID string, at time.Time) (Entry, int, error) {
 	if s == nil {
 		return Entry{}, 0, fmt.Errorf("sendq: no store")
 	}
@@ -330,7 +340,7 @@ func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
 	if err != nil {
 		return Entry{}, 0, err
 	}
-	e := Entry{ID: NewID(), Text: text, EnqueuedAt: at.UTC()}
+	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
 	f.Entries = append(f.Entries, e)
 	if err := s.save(f); err != nil {
 		return Entry{}, 0, err
@@ -343,6 +353,13 @@ func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
 // never touched: they may already be in the receiver's hands. The returned
 // count is how many held entries the new one replaced.
 func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
+	return s.AppendSupersedingWithRequestID(agent, text, "", at, supersedes)
+}
+
+// AppendSupersedingWithRequestID retains the incoming question identity and
+// never silently replaces another admitted question (even if the predicate
+// would otherwise match it).
+func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
 	if s == nil {
 		return Entry{}, 0, 0, fmt.Errorf("sendq: no store")
 	}
@@ -355,13 +372,13 @@ func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes f
 	kept := make([]Entry, 0, len(f.Entries)+1)
 	replaced := 0
 	for _, old := range f.Entries {
-		if old.State == Pending && supersedes != nil && supersedes(old) {
+		if old.State == Pending && old.RequestID == "" && supersedes != nil && supersedes(old) {
 			replaced++
 			continue
 		}
 		kept = append(kept, old)
 	}
-	e := Entry{ID: NewID(), Text: text, EnqueuedAt: at.UTC()}
+	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
 	f.Entries = append(kept, e)
 	if err := s.save(f); err != nil {
 		return Entry{}, 0, 0, err
