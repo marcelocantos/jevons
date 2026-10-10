@@ -78,9 +78,10 @@ it('ambiguous foreign scope remains unresolved; it cannot fall back to same-id l
 
 it('foreign ledger HTML is sanitized at the hovercard boundary while local rich HTML stays', async () => {
   const { TargetHoverCard } = await import('../components/TargetHoverCard');
-  const payload = '<img src=x onerror="window.pwned=1"><strong data-t1056="rich">safe</strong>';
+  const payload = '<img src=x onerror="window.pwned=1"><svg onload="window.pwned=2"></svg>[click](javascript:alert(1))<strong data-t1056="rich">safe</strong>'; 
   const foreign = render(<TargetHoverCard markdown={payload} foreign />);
-  expect(foreign.container.querySelector('[onerror]')).toBeNull();
+  expect(foreign.container.querySelector('[onerror], [onload]')).toBeNull();
+  expect(foreign.container.querySelector('a[href^="javascript:"]')).toBeNull();
   expect(foreign.container.querySelector('strong[data-t1056]')?.textContent).toBe('safe');
   const local = render(<TargetHoverCard markdown={payload} />);
   expect(local.container.querySelector('[onerror]')).not.toBeNull(); // existing local-ledger rich HTML contract
