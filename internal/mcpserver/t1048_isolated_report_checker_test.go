@@ -1,0 +1,68 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+package mcpserver
+
+import (
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/marcelocantos/jevons/internal/gate"
+)
+
+// The live notify path calls FalseGreenFlagsForReport. Exercise that exact
+// checker with a private gate store rather than publishing deliberate false
+// claims from a real fleet seat into the overseer's notification stream.
+func TestT1048IsolatedReportChecker(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("JEVONS_GATE_DIR", root)
+	store, err := gate.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(name, script string) *gate.Record {
+		t.Helper()
+		rec, err := gate.Run(&gate.RunArgs{
+			Command: []string{"sh", "-c", script}, Name: name, Dir: t.TempDir(),
+			Store: store, Stdout: io.Discard, Stderr: io.Discard,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	green := run("positive", "exit 0")
+	killed := run("host-kill", "kill -9 $$")
+	red := run("unrelated-red", "exit 1")
+	if green.Verdict != gate.VerdictGreen || killed.Verdict != gate.VerdictKilled || red.Verdict != gate.VerdictRed {
+		t.Fatalf("bad control records: green=%s killed=%s red=%s", green.Verdict, killed.Verdict, red.Verdict)
+	}
+	prefix := "```jevons\njevons: kind status-ping\njevons: status in-progress\n```\n\n"
+	honest := prefix + "Positive GREEN: `" + green.Attestation() + "`.\n\n" +
+		"SIGKILL record: `" + killed.Attestation() + "`. Host termination observation, not a passing record or test result.\n\n" +
+		"RED disclosure: `" + red.Attestation() + "`. Cannot claim the unrelated suite green.\n"
+	if flags := FalseGreenFlagsForReport(honest, ""); len(flags) != 0 {
+		t.Fatalf("honest controls falsely flagged: %v", flags)
+	}
+	cases := []struct {
+		name, report string
+		kind         gate.FlagKind
+	}{
+		{"killed-claimed-pass", strings.Replace(honest, "not a passing record or test result", "it is green", 1), gate.FlagAttestationKilled},
+		{"killed-claimed-failure", strings.Replace(honest, "not a passing record or test result", "proves a failing test assertion", 1), gate.FlagAttestationKilled},
+		{"red-claimed-pass", strings.Replace(honest, "Cannot claim the unrelated suite green", "This run passed; cannot claim the unrelated suite green", 1), gate.FlagAttestationNotGreen},
+		{"neighbour-fail", strings.Replace(honest, "Positive GREEN:", "    --- FAIL: TestReal (0.00s)\nPositive GREEN:", 1), gate.FlagOutputContradicts},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := FalseGreenFlagsForReport(tc.report, "")
+			for _, f := range flags {
+				if f.Kind == tc.kind {
+					return
+				}
+			}
+			t.Fatalf("wanted %s, got %v", tc.kind, flags)
+		})
+	}
+}
