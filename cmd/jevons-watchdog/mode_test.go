@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -109,5 +110,57 @@ func TestPassiveOutageStillAlarmsOutOfBand(t *testing.T) {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("notice lacks %q: %s", want, b)
 		}
+	}
+}
+
+// Sample the real mode selection seam (launchctl print) twice rather than
+// feeding a cached startup result into restartForMode. This is macOS-only;
+// AgentLoaded intentionally reports unloaded without launchctl elsewhere.
+func TestRestartResamplesLaunchdAfterUnloading(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchctl ownership is macOS-only")
+	}
+	repo := t.TempDir()
+	bin := filepath.Join(repo, "shims")
+	if err := os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(repo, "loaded")
+	if err := os.WriteFile(marker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	shim := "#!/bin/sh\nif test -f '" + marker + "'; then exit 0; fi\necho 'Could not find service' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "launchctl"), []byte(shim), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := filepath.Join(repo, "scripts", "restart-jevonsd.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	invoked := filepath.Join(repo, "invoked")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho restarted >'"+invoked+"'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer server.Close()
+	port, err := strconv.Atoi(strings.TrimPrefix(server.URL, "http://127.0.0.1:"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail, legacy := restart(repo, port); legacy || !strings.Contains(detail, "KeepAlive is loaded") {
+		t.Fatalf("loaded: detail=%q legacy=%v", detail, legacy)
+	}
+	if _, err := os.Stat(invoked); !os.IsNotExist(err) {
+		t.Fatalf("script ran while loaded: %v", err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if detail, legacy := restart(repo, port); !legacy || detail != "" {
+		t.Fatalf("unloaded: detail=%q legacy=%v", detail, legacy)
+	}
+	if _, err := os.Stat(invoked); err != nil {
+		t.Fatalf("script did not run after unloading: %v", err)
 	}
 }
