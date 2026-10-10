@@ -101,3 +101,23 @@ func TestT1043ParkPersistsBeyondLivenessTTL(t *testing.T) {
 		t.Fatalf("parked/no handle must be excluded while alive or uncertain working seats count: %v", got)
 	}
 }
+
+// Conflicting reports must fail closed: a broker/local positive observation
+// outweighs a stale aggregate No, including with non-working intent.
+func TestT1043PositiveProcessEvidenceOverridesStoppedAggregate(t *testing.T) {
+	for _, field := range []string{"broker", "local"} {
+		t.Run(field, func(t *testing.T) {
+			st := seatstate.State{Alive: seatstate.No}
+			if field == "broker" {
+				st.BrokerAlive = seatstate.Yes
+			} else {
+				st.LocalAlive = seatstate.Yes
+			}
+			got := activeProcessLoad([]claudia.AgentDef{{Name: "seat", Provider: claudia.ProviderGrok}},
+				func(string) seatstate.State { return st }, func(string) bool { return true })
+			if got["grok"] != 1 {
+				t.Fatalf("positive %s report lost slot: %v", field, got)
+			}
+		})
+	}
+}
