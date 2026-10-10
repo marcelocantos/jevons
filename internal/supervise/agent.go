@@ -354,9 +354,13 @@ func SaveAgentState(dir string, st AgentState) error {
 	return writeJSON(agentStatePath(dir), st)
 }
 
-// WatchAgentLoop is the daemon's half of the mutual supervision: it
-// checks that the watchdog is loaded and probing, reinstates it when it
-// is not, and tells the owner once per gap.
+// WatchAgentLoop is the daemon's half of the mutual supervision in both
+// KeepAlive and legacy mode: it
+// checks that the off-process watchdog is loaded and probing, reinstates it when it
+// is not, and tells the owner once per gap. The watchdog observes outages
+// under KeepAlive without starting a second process; if KeepAlive unloads,
+// its next invocation falls back to the legacy restart path. Do not decide
+// whether to run this loop at daemon startup from a one-time launchd sample.
 //
 // The first check waits a full staleness window rather than running at
 // startup. A daemon start is very often the tail of a restart that just
@@ -366,12 +370,6 @@ func SaveAgentState(dir string, st AgentState) error {
 // being read. The window is bounded and short; the gap this exists to
 // catch lasted five days.
 func WatchAgentLoop(ctx context.Context, p AgentPaths, cfg AgentConfig, every time.Duration, notify Notifier) {
-	// 🎯T553.3: launchd KeepAlive owns jevonsd. Reinstalling the
-	// probe-that-calls-restart-jevonsd would undo the peel.
-	if SkipWatchdogSupervise() {
-		slog.Info("supervise: KeepAlive owns jevonsd; not reinstating the watchdog", "label", DaemonLabel)
-		return
-	}
 	if every <= 0 {
 		every = time.Minute
 	}
