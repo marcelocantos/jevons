@@ -34,13 +34,8 @@ export function reviewReadiness(review: Review) {
   return 'Review event missing or unverified — readiness unknown';
 }
 
-// T1044 backend's current "verified" claim has not passed security review:
-// report/diff may leak paths or secrets, and SHA/gate may be unrelated.
-// Keep evidence strictly non-clickable until the API is remediated and audited.
-export function verifiedEvidenceLinks(_review: Review): { kind: string; url: string }[] {
-  return [];
-}
-
+// The metadata-only API has no evidence URLs. Even a verified commit/gate
+// pair does not imply that raw diff, report, or screenshot content is served.
 export function evidenceSummary(review: Review) {
   if (!review.evidence) return 'Evidence missing or unverified. Reported artifacts are not verified download links.';
   return Object.entries(review.evidence).map(([kind, item]) => {
@@ -49,8 +44,11 @@ export function evidenceSummary(review: Review) {
     return candidates.map((candidate, index) => {
       const value = candidate && typeof candidate === 'object' ? candidate as Record<string, unknown> : {};
       const status = typeof value.status === 'string' ? value.status : 'unverified';
-      const label = status === 'verified' ? 'server reports verified; independent verification pending' : status.replaceAll('_', ' ');
-      return `${kind}${candidates.length > 1 ? ` ${index + 1}` : ''}: ${label}`;
+      const label = status.replaceAll('_', ' ');
+      const paired = (kind === 'commit' || kind === 'gate') && status === 'verified';
+      const reference = paired && typeof value.reference === 'string' ? ` (${value.reference})` : '';
+      const verdict = kind === 'gate' && paired && typeof value.verdict === 'string' ? ` · ${value.verdict}` : '';
+      return `${kind}${candidates.length > 1 ? ` ${index + 1}` : ''}: ${label}${reference}${verdict}`;
     }).join(' · ');
   }).join(' · ') || 'Evidence missing or unverified';
 }
@@ -63,7 +61,7 @@ export function reviewDraft(review: Review) {
     `Question: ${review.question || 'Not available'}`,
     `Readiness: ${reviewReadiness(review)}`,
     `Evidence: ${evidenceSummary(review)}`,
-    'Evidence links unavailable pending backend security review.',
+    'Evidence is metadata only; no diff, report or screenshot download is available.',
     '',
     'My answer: ',
   ].join('\n');
@@ -102,7 +100,7 @@ export function ReviewDetail({ id, onBack, onAnswer }: { id: string; onBack: () 
       <p><strong>Readiness:</strong> {reviewReadiness(review)}</p>
       <p><strong>Target:</strong> {review.target_lookup === 'verified' ? review.target_status || 'status unavailable' : review.target_lookup || 'title/status unverified'}</p>
       <h2>Evidence</h2>
-      <p>Evidence links unavailable pending backend security review. No raw diff or report is exposed here.</p>
+      <p>Evidence is metadata only; no diff, report or screenshot download is available.</p>
       <p>{evidenceSummary(review)}</p>
       {review.resolution ? <p>Resolution: {review.resolution}</p> : null}
       <button type="button" onClick={() => { prefillReviewAnswer(review); onAnswer(); }}>Answer in chat</button>

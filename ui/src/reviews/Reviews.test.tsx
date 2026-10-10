@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ReviewDetail, ReviewsList, reviewDraft, reviewReadiness, verifiedEvidenceLinks, type Review } from './Reviews';
+import { ReviewDetail, ReviewsList, reviewDraft, reviewReadiness, type Review } from './Reviews';
 import { useDrafts } from '../store/drafts';
 
 const review: Review = {
@@ -12,10 +12,10 @@ const review: Review = {
   target_title: 'Owner review in chat', ask_id: 'owner-question', version: 'v2', question: 'Is this acceptable?',
   state: 'open', readiness: 'actionable', evidence: {
     commit: { status: 'verified', reference: 'a'.repeat(40) },
-    gate: { status: 'verified', url: '/api/reviews/opaque-v2/gate', reference: 'abc12345', verdict: 'GREEN' },
-    diff: { status: 'verified', url: '/api/reviews/opaque-v2/diff' },
-    screenshots: [{ status: 'reported_only', reference: 'capture.png' }, { status: 'verified', url: 'javascript:alert(1)' }],
-    report: { status: 'verified', url: '/api/reviews/opaque-v2/report', reference: 'agent/report-handle' },
+    gate: { status: 'verified', reference: 'abc12345', verdict: 'GREEN' },
+    diff: { status: 'reported_only' },
+    screenshots: [{ status: 'reported_only', reference: 'capture.png' }],
+    report: { status: 'reported_only', reference: 'agent/report-handle' },
   },
 };
 
@@ -41,10 +41,10 @@ describe('versioned review and ordinary chat handoff', () => {
     const onAnswer = vi.fn();
     wrap(<ReviewDetail id="opaque-v2" onBack={() => {}} onAnswer={onAnswer} />);
     expect(await screen.findByText('Is this acceptable?')).toBeTruthy();
-    expect(screen.getByText(/screenshots 1: reported only/)).toBeTruthy();
-    expect(screen.getByText(/gate: server reports verified; independent verification pending/)).toBeTruthy();
+    expect(screen.getByText(/screenshots: reported only/)).toBeTruthy();
+    expect(screen.getByText(/gate: verified \(abc12345\) · GREEN/)).toBeTruthy();
     expect(screen.queryByRole('link')).toBeNull();
-    expect(screen.getByText(/Evidence links unavailable pending backend security review/)).toBeTruthy();
+    expect(screen.getByText(/Evidence is metadata only; no diff, report or screenshot download is available/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Answer in chat' }));
     expect(onAnswer).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -60,7 +60,7 @@ describe('versioned review and ordinary chat handoff', () => {
   it('does not infer a prerequisite or invent links for a legacy item', () => {
     const legacy = { ...review, readiness: 'unspecified', prerequisite: '', evidence: undefined, target_lookup: 'missing' };
     expect(reviewReadiness(legacy)).toMatch(/event missing/);
-    expect(verifiedEvidenceLinks(legacy)).toEqual([]);
+    expect(reviewDraft(legacy)).toContain('Evidence missing or unverified');
     expect(reviewDraft(legacy)).not.toContain('Owner review in chat');
   });
 
