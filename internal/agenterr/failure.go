@@ -216,9 +216,7 @@ func OwnerCopy(class Class, raw string) string {
 				truncate(LastFrame(raw), 400)
 		}
 	case ClassRetryExhausted:
-		return fmt.Sprintf(
-			"Provider retry budget exhausted (retry_exhausted). The CLI's own retry loop (default budget %d) gave up on a transient step-level failure — this is not an ambiguous unknown failure, and the turn ended without finishing. ",
-			DefaultRetryBudget) + detailSuffix(raw)
+		return "Provider retry budget exhausted (retry_exhausted). The provider/harness retry loop gave up; the turn ended without finishing. Retry budgets are provider-specific, not configured by Jevons. Start a new turn when the underlying failure is resolved. " + detailSuffix(raw)
 	case ClassContextOverflow:
 		return contextOverflowCopy(raw)
 	case ClassUnknown:
