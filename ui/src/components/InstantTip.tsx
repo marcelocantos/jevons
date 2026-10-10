@@ -50,8 +50,14 @@ export function InstantTip(props: {
   onDismiss?: () => void;
 }) {
   const [open, setOpen] = useState(!!props.defaultOpen);
+  const openRef = useRef(open);
+  openRef.current = open;
   const closeRef = useRef(() => setOpen(false));
   closeRef.current = () => {
+    // Touch hardware may dispatch both pointerdown and touchstart before
+    // React flushes the first update. A dismissal is one transition.
+    if (!openRef.current) return;
+    openRef.current = false;
     setOpen(false);
     props.onDismiss?.();
   };

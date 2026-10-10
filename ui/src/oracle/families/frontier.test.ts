@@ -3,7 +3,7 @@
 
 import { createElement, useRef } from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { FrontierTable } from '../../components/FrontierTable';
 import { ClippedBubble } from '../../components/AgentTranscript';
 import { SPEAKER_GT, SPEAKER_LT, chromeModel, extractTargetIDs, looksLikeTargetAsk, planTargetAskFocus } from '../../frontier/targetAsk';
 import { TargetAskContext } from '../../frontier/targetAskContext';
-import { HIDE_GRACE_MS, nativeTitleForbidden } from '../../components/InstantTip';
+import { HIDE_GRACE_MS, InstantTip, nativeTitleForbidden } from '../../components/InstantTip';
 import { MermaidVizPanel } from '../../components/MermaidVizPanel';
 import { TargetHotspotTips } from '../../components/TargetHotspotTips';
 import { paintUserHTML } from '../../conversation/paint';
@@ -451,6 +451,22 @@ describeOracle(family('frontier'), () => {
     expect(shownTips(container)).toHaveLength(0);
     fireEvent.click(spot);
     expect(shownTips(container)).toHaveLength(1);
+  });
+
+  itOracle('T1058', 'a pointerdown plus touchstart dismisses once without swallowing the outside click', () => {
+    const onDismiss = vi.fn();
+    const outsideClick = vi.fn();
+    const { container } = render(createElement('div', null,
+      createElement(InstantTip, { defaultOpen: true, content: 'Card', onDismiss }, 'Host'),
+      createElement('button', { onClick: outsideClick }, 'Outside'),
+    ));
+    const outside = container.querySelector('button')!;
+    fireEvent.pointerDown(outside);
+    fireEvent.touchStart(outside);
+    fireEvent.click(outside);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(outsideClick).toHaveBeenCalledTimes(1);
+    expect(shownTips(container)).toHaveLength(0);
   });
 
   itOracle('T1058', 'inside card and active hotlink stay open; switching hotlinks and desktop hover work', () => {
