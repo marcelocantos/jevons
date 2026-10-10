@@ -912,6 +912,16 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 		}
 		return false
 	}
+	// A pinned/rolled-back Claudia without T184 cannot deliver a tagged
+	// question. This is a definite non-send, not an uncertain provider attempt:
+	// avoid opening the receipt window (which would wait and then misclassify
+	// unrelated activity), retain the same ID for a later compatible drain.
+	if entry.RequestID != "" && !supportsRequestID(proc) {
+		if resolve(sendq.DefinitelyNotSent, errRequestIDUnavailable.Error()) {
+			s.noteSendqDeliveryFailure(name, entry, errRequestIDUnavailable.Error())
+		}
+		return false
+	}
 	// 🎯T731: the queued copy may have been accepted while the author was
 	// still registered. Stamp it at flush, which is when the parent actually
 	// reads it. Do not suppress here — this drain is the first delivery.
