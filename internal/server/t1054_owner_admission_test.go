@@ -5,9 +5,10 @@ package server
 
 import (
 	"encoding/json"
+	"testing"
+
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/ownercomms"
-	"testing"
 )
 
 // A classified NONE must produce no assistant body on the actual broadcast
@@ -23,7 +24,12 @@ func TestT1054RoutineNoneDoesNotPaintAcknowledgment(t *testing.T) {
 		s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: body})
 		s.DeliverOverseerEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	}
-	send(ownercomms.Response(ownercomms.Classify(ownercomms.Evidence{}), "No action needed; worker completed."))
+	none := ownercomms.Response(ownercomms.Classify(ownercomms.Evidence{}), "No action needed; worker completed.")
+	// ACP can split the marker across deltas; not even the first incomplete
+	// fragment may paint an acknowledgment.
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: none[:3]})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: none[3:]})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	send(ownercomms.Response(ownercomms.Classify(ownercomms.Evidence{DirectOwnerQuestion: true}), "The requested answer."))
 	close(ch)
 	var bodies []string
