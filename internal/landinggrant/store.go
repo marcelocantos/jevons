@@ -52,6 +52,7 @@ type ProvenanceVerifier func(poEvent string, review worktree.BatchReview) error
 
 type Store struct {
 	VerifyPOEvent  ProvenanceVerifier
+	SnapshotEpoch  func(repo, target string) (epoch uint64, held bool, err error)
 	Dir            string
 	Epoch          EpochAuthority
 	Actor, Command string
