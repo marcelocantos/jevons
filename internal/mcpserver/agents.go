@@ -974,6 +974,22 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	return def, existed, routeNote, nil
 }
 
+// codexCatalogHasModel checks the same session catalog used by automatic
+// model selection. A launch success alone is not model-readiness evidence.
+func (s *Server) codexCatalogHasModel(model string) bool {
+	catalog := claudia.ModelCatalog()
+	if s.modelCatalog != nil {
+		catalog = s.modelCatalog()
+	}
+	for _, row := range catalog {
+		if cli.PlanProvider(row.Provider) == claudia.ProviderCodex && row.Session &&
+			row.Access == claudia.ModelAccessPlan && row.Model == model {
+			return true
+		}
+	}
+	return false
+}
+
 // availableMintModel checks automatic Codex pins against the currently linked
 // Claudia session catalog. Prefer its economy tier when Spark is absent;
 // never substitute an invented model slug. A stale stored Spark from a failed
