@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
@@ -217,6 +217,7 @@ function Secondary(props: { node: AgentNode; parentWorkdir?: string }) {
 function StopDetails({ node }: { node: AgentNode }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const popup = useRef<HTMLDivElement>(null);
   const wrapper = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const popupId = useId();
@@ -239,6 +240,34 @@ function StopDetails({ node }: { node: AgentNode }) {
       document.removeEventListener('keydown', escape);
     };
   }, [open]);
+  // Measure the actual popup after layout, not a guessed height: long reasons
+  // must remain inside even a 320×568 viewport. Reposition when the viewport
+  // changes or the fleet list scrolls while the disclosure is open.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const position = () => {
+      if (!button.current || !popup.current) return;
+      const trigger = button.current.getBoundingClientRect();
+      const box = popup.current.getBoundingClientRect();
+      const margin = 8;
+      const height = Math.min(box.height, window.innerHeight - 2 * margin);
+      const below = window.innerHeight - margin - trigger.bottom;
+      const above = trigger.top - margin;
+      const preferred = below >= height || below >= above ? trigger.bottom + 4 : trigger.top - height - 4;
+      setAnchor({
+        top: Math.max(margin, Math.min(preferred, window.innerHeight - margin - height)),
+        left: Math.max(margin, Math.min(trigger.left, window.innerWidth - margin - box.width)),
+      });
+    };
+    position();
+    window.addEventListener('resize', position);
+    // Capture scroll events on the nested fleet scroller too.
+    window.addEventListener('scroll', position, true);
+    return () => {
+      window.removeEventListener('resize', position);
+      window.removeEventListener('scroll', position, true);
+    };
+  }, [open, node.stop_reason, node.stopped_at]);
   if (!showSeatStopReason(node)) return null;
   const reason = node.stop_reason || '';
   const actorMatch = /^(.+?) by ([^:]+): (.+)$/.exec(reason);
@@ -253,23 +282,18 @@ function StopDetails({ node }: { node: AgentNode }) {
         aria-controls={open ? popupId : undefined}
         onClick={(e) => {
           e.stopPropagation();
-          if (!open) {
-            const rect = e.currentTarget.getBoundingClientRect();
-            setAnchor({
-              top: rect.bottom + 180 > window.innerHeight ? Math.max(8, rect.top - 180) : rect.bottom + 4,
-              left: Math.max(8, Math.min(rect.left, window.innerWidth - 328)),
-            });
-          }
+          setAnchor(null);
           setOpen(!open);
         }}
       >⛔</button>
       {open ? (
         <div
           id={popupId}
+          ref={popup}
           className="agent-stop-popup"
           role="dialog"
           aria-label={'Stop details for ' + node.name}
-          style={anchor ? { top: anchor.top, left: anchor.left } : undefined}
+          style={anchor ? { top: anchor.top, left: anchor.left } : { top: 0, left: 0, visibility: 'hidden' }}
           onClick={(e) => e.stopPropagation()}
         >
           <strong>{node.name}</strong>

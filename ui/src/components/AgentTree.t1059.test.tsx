@@ -21,7 +21,7 @@ function setup() {
 }
 
 describe('parked seat disclosure (🎯T1059)', () => {
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
   it('has one icon immediately after the seat name, with no inline duplicate', () => {
     const { row } = setup();
     expect(row.querySelector('.agent-name')?.nextElementSibling?.classList.contains('agent-stop-wrap')).toBe(true);
@@ -48,4 +48,37 @@ describe('parked seat disclosure (🎯T1059)', () => {
     fireEvent.click(row);
     expect(onSelect).toHaveBeenCalledWith(parked.name);
   });
+
+  it('measures a long popup in a narrow viewport instead of using a guessed height', () => {
+    vi.stubGlobal('innerWidth', 320);
+    vi.stubGlobal('innerHeight', 568);
+    const nativeRect = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this.classList.contains('agent-stop-icon')) return { top: 520, bottom: 544, left: 285, right: 309, width: 24, height: 24 } as DOMRect;
+      if (this.classList.contains('agent-stop-popup')) return { top: 0, bottom: 420, left: 0, right: 304, width: 304, height: 420 } as DOMRect;
+      return nativeRect.call(this);
+    });
+    try {
+      setup();
+      fireEvent.click(screen.getByRole('button', { name: 'Stop details for ' + parked.name }));
+      const popup = screen.getByRole('dialog');
+      expect(Number.parseFloat(popup.style.top)).toBe(96);
+      expect(Number.parseFloat(popup.style.left)).toBe(8);
+      expect(Number.parseFloat(popup.style.top) + 420).toBeLessThanOrEqual(560);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps a non-parked stopped reason accessible in the same disclosure', () => {
+    render(<AgentTree agents={[{
+      name: 'jv-failed', running: false, stop_reason: 'start failed: launch timed out',
+      stopped_at: '2026-10-01T08:00:00Z',
+    }]} selected="" onSelect={() => {}} />);
+    expect(screen.queryByText('start failed: launch timed out')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop details for jv-failed' }));
+    expect(screen.getByRole('dialog').textContent).toContain('Reason: start failed: launch timed out');
+    expect(screen.getByRole('dialog').textContent).toContain('Since: 2026-10-01T08:00:00Z');
+  });
+
 });
