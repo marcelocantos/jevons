@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/ownerquestionview"
@@ -23,18 +24,21 @@ func reviewID(id ownerquestionview.Identity) string {
 }
 
 type reviewItem struct {
-	ID             string                     `json:"id"`
-	URL            string                     `json:"url"`
-	Identity       ownerquestionview.Identity `json:"identity"`
-	Question       string                     `json:"question"`
-	Asker          string                     `json:"asker"`
-	AnswerRoute    string                     `json:"answer_route"`
-	State          ownerquestionview.State    `json:"state"`
-	Readiness      string                     `json:"readiness"`
-	Prerequisite   string                     `json:"prerequisite,omitempty"`
-	Action         string                     `json:"action,omitempty"`
-	EvidenceStatus string                     `json:"evidence_status,omitempty"`
-	Resolution     string                     `json:"resolution,omitempty"`
+	ID             string                  `json:"id"`
+	URL            string                  `json:"url"`
+	Repository     string                  `json:"repository"`
+	Target         string                  `json:"target"`
+	AskID          string                  `json:"ask_id"`
+	Version        string                  `json:"version"`
+	Question       string                  `json:"question"`
+	Asker          string                  `json:"asker"`
+	AnswerRoute    string                  `json:"answer_route"`
+	State          ownerquestionview.State `json:"state"`
+	Readiness      string                  `json:"readiness"`
+	Prerequisite   string                  `json:"prerequisite,omitempty"`
+	Action         string                  `json:"action,omitempty"`
+	EvidenceStatus string                  `json:"evidence_status,omitempty"`
+	Resolution     string                  `json:"resolution,omitempty"`
 }
 
 func reviewFromQuestion(q ownerquestionview.Question) reviewItem {
@@ -48,7 +52,7 @@ func reviewFromQuestion(q ownerquestionview.Question) reviewItem {
 	if q.State != ownerquestionview.Open {
 		readiness = "closed"
 	}
-	item := reviewItem{ID: id, URL: "/review/" + id, Identity: q.Identity, Question: q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute, State: q.State, Readiness: readiness, Resolution: q.Resolution}
+	item := reviewItem{ID: id, URL: "/review/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute, State: q.State, Readiness: readiness, Resolution: q.Resolution}
 	if q.Review != nil {
 		// Producer Question() embeds reported artifact paths. Present only the
 		// typed action; the artifact has no verified download URL yet.
