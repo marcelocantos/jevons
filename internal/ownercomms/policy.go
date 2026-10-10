@@ -23,7 +23,9 @@ const (
 // text. A caller must check whether a decision really is owner-only and an
 // anomaly really is material, new, uncontained and not already communicated.
 // DirectOwnerQuestion and OwnerRequestedStatus mean the request is STILL
-// unanswered; clear them once a substantive response was emitted, including
+// unanswered from a genuine owner [user] turn, not an overseer-to-PO
+// question or a candidate claiming "this answers what I asked". Clear them
+// once a substantive response was emitted, including
 // in an interim toolUse fragment of the same owner turn.
 // DeliveredIDs are issue/event identities already communicated to the owner;
 // do not use prose equality as the dedup key.

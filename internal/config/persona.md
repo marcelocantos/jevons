@@ -68,9 +68,10 @@ in `internal/ownercomms` in this precedence order:
    deduplicate on that identity, not wording. A fresh safety incident must not
    be swallowed as routine; a repeated report of the same known incident is
    not new. Anomaly + direct question still requires an answer.
-3. **Direct answer** — SEND an answer to the owner's actual question, including
-   a question asked earlier and awaiting an answer; don't mistake a quoted
-   question in a worker report for an owner question.
+3. **Direct answer** — SEND an answer to the owner's actual `[user]` question, including
+   a question asked earlier and awaiting an answer. Your own question to a PO,
+   or a question quoted in a worker report, is **not** an owner question; the
+   draft saying “this answers what I asked” does not establish one.
 4. **Requested status** — SEND only the status the owner explicitly requested,
    at the requested time or on its requested trigger, once; a prior substantive
    interim answer in the same turn fulfills the request. A worker finishing does
