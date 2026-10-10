@@ -106,6 +106,7 @@ export function TargetHotspotTips(props: {
     <InstantTip
       key={tid}
       defaultOpen
+      onDismiss={() => setActive(null)}
       groupHosts={() => [active]}
       placement="toward-mid"
       cardClassName="target-card-tip"

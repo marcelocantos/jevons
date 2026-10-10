@@ -3,7 +3,7 @@
 
 import { createElement, useRef } from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { FrontierTable } from '../../components/FrontierTable';
 import { ClippedBubble } from '../../components/AgentTranscript';
 import { SPEAKER_GT, SPEAKER_LT, chromeModel, extractTargetIDs, looksLikeTargetAsk, planTargetAskFocus } from '../../frontier/targetAsk';
 import { TargetAskContext } from '../../frontier/targetAskContext';
-import { HIDE_GRACE_MS, nativeTitleForbidden } from '../../components/InstantTip';
+import { HIDE_GRACE_MS, InstantTip, nativeTitleForbidden } from '../../components/InstantTip';
 import { MermaidVizPanel } from '../../components/MermaidVizPanel';
 import { TargetHotspotTips } from '../../components/TargetHotspotTips';
 import { paintUserHTML } from '../../conversation/paint';
@@ -431,6 +431,76 @@ describeOracle(family('frontier'), () => {
       'utf8',
     );
     expect(tipSrc).toMatch(/placement="toward-mid"/);
+  });
+
+  itOracle('T1058', 'tap outside dismisses without consuming the tap; same hotlink reopens', () => {
+    const { container } = render(createElement(HotspotProbe, { text: 'see 🎯T184 please', rows: [sample] }));
+    const spot = container.querySelector('.target-hotspot')!;
+    const outside = container.querySelector('.msg-body')!;
+    let clicks = 0;
+    fireEvent.click(spot);
+    outside.addEventListener('click', () => clicks++);
+    expect(shownTips(container)).toHaveLength(1);
+    fireEvent.pointerDown(outside);
+    fireEvent.click(outside);
+    expect(shownTips(container)).toHaveLength(0);
+    expect(clicks).toBe(1);
+    fireEvent.click(spot);
+    expect(shownTips(container)).toHaveLength(1);
+    fireEvent.touchStart(outside);
+    expect(shownTips(container)).toHaveLength(0);
+    fireEvent.click(spot);
+    expect(shownTips(container)).toHaveLength(1);
+  });
+
+  itOracle('T1058', 'a pointerdown plus touchstart dismisses once without swallowing the outside click', () => {
+    const onDismiss = vi.fn();
+    const outsideClick = vi.fn();
+    const { container } = render(createElement('div', null,
+      createElement(InstantTip, { defaultOpen: true, content: 'Card', onDismiss }, 'Host'),
+      createElement('button', { onClick: outsideClick }, 'Outside'),
+    ));
+    const outside = container.querySelector('button')!;
+    fireEvent.pointerDown(outside);
+    fireEvent.touchStart(outside);
+    fireEvent.click(outside);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(outsideClick).toHaveBeenCalledTimes(1);
+    expect(shownTips(container)).toHaveLength(0);
+  });
+
+  itOracle('T1058', 'inside card and active hotlink stay open; switching hotlinks and desktop hover work', () => {
+    const other = { ...sample, id: 'T181', name: 'Other' };
+    const { container } = render(createElement(HotspotProbe, { text: '🎯T184 and 🎯T181', rows: [sample, other] }));
+    const spots = container.querySelectorAll('.target-hotspot');
+    fireEvent.pointerEnter(spots[0]);
+    expect(shownTips(container)[0]?.textContent).toContain('T184');
+    const card = shownTips(container)[0];
+    fireEvent.pointerDown(card);
+    fireEvent.touchStart(card);
+    fireEvent.pointerDown(spots[0]);
+    expect(shownTips(container)).toHaveLength(1);
+    fireEvent.pointerDown(spots[1]);
+    fireEvent.click(spots[1]);
+    expect(shownTips(container)).toHaveLength(1);
+    expect(shownTips(container)[0]?.textContent).toContain('T181');
+    fireEvent.pointerMove(document, { clientX: -100, clientY: -100 });
+    expect(shownTips(container)).toHaveLength(0);
+    fireEvent.pointerEnter(spots[1]);
+    expect(shownTips(container)[0]?.textContent).toContain('T181');
+  });
+
+  itOracle('T1058', 'frontier InstantTip also dismisses on outside touch and retains desktop hover', () => {
+    const { container } = render(createElement(FrontierTable, { rows: [sample] }));
+    const host = container.querySelector('.ft-id [data-instant-tip-host]')!;
+    fireEvent.pointerEnter(host);
+    const card = shownTips(container)[0];
+    fireEvent.pointerDown(card);
+    expect(shownTips(container)).toHaveLength(1);
+    fireEvent.touchStart(document.body);
+    expect(shownTips(container)).toHaveLength(0);
+    fireEvent.pointerEnter(host);
+    expect(shownTips(container)).toHaveLength(1);
   });
 
   itOracle('T189', 'Escape closes the Frontier Graph panel', () => {
