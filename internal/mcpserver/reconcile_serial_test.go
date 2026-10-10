@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/marcelocantos/claudia"
 )
@@ -28,24 +27,22 @@ func TestReconcileConcurrentRequestsJoinOnePass(t *testing.T) {
 	cockpitDone := make(chan struct{})
 	go func() { s.Reconcile(); close(cockpitDone) }()
 	<-entered
+	joined := make(chan struct{})
+	s.reconcileJoinHook = func() { close(joined) }
 	sentinelDone := make(chan struct{})
 	go func() { s.Reconcile(); close(sentinelDone) }()
+	<-joined // The second request has observed the in-flight pass.
 	select {
 	case <-sentinelDone:
 		t.Fatal("sentinel returned before the cockpit pass completed")
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 	if got := passes.Load(); got != 1 {
 		t.Fatalf("overlapping passes: %d", got)
 	}
 	close(release)
-	for _, done := range []<-chan struct{}{cockpitDone, sentinelDone} {
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatal("joined pass did not finish")
-		}
-	}
+	<-cockpitDone
+	<-sentinelDone
 	if got := passes.Load(); got != 1 {
 		t.Fatalf("duplicate pass: %d", got)
 	}

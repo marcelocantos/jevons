@@ -77,6 +77,7 @@ type Server struct {
 	reconcileRunning chan struct{}
 	// reconcilePassHook replaces the pass only in hermetic concurrency tests.
 	reconcilePassHook func()
+	reconcileJoinHook func()
 	missionStarts     *missionbound.Store
 	registry          *claudia.Registry
 	// modelCatalog overrides the launchable catalog in hermetic mint tests.

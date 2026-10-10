@@ -43,6 +43,9 @@ func (s *Server) Reconcile() {
 	s.reconcileMu.Lock()
 	if running := s.reconcileRunning; running != nil {
 		s.reconcileMu.Unlock()
+		if s.reconcileJoinHook != nil {
+			s.reconcileJoinHook()
+		}
 		<-running
 		return
 	}
