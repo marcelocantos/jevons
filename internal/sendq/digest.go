@@ -262,6 +262,13 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	if _, _, blocked := claimable(f.Entries, s.active[agent]); blocked {
 		return Entry{}, false, nil
 	}
+	// Typed directives cannot be folded into a digest: a later hold must be
+	// able to remove the precise pending authorization under the queue lock.
+	for _, e := range f.Entries {
+		if e.State == Pending && e.Directive != nil {
+			return Entry{}, false, nil
+		}
+	}
 	var members []Entry
 	first := -1
 	for i, e := range f.Entries {

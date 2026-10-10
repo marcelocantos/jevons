@@ -108,6 +108,8 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
 			mcp.WithString("mode", mcp.Description("🎯T657 delivery mode: submit (default; queue for after the turn when busy) | steer (fold the text into the in-flight turn; plain submit when idle; queued honestly as queue_until_idle when the seat cannot steer) | interrupt (cancel the in-flight turn, then send — stuck recovery without kill) | queue (hold for the next turn boundary; submits when idle). The result names the mechanism that ran.")),
 			mcp.WithBoolean("interrupt", mcp.Description("Deprecated alias for mode=interrupt (🎯T657). Refused when it contradicts an explicit mode.")),
+			mcp.WithString("directive_family", mcp.Description("Explicit operation scope for supersession; requires directive_kind")),
+			mcp.WithString("directive_kind", mcp.Description("authorization or hold; later hold cancels pending authorization for same recipient/family")),
 			mcp.WithBoolean("force_rebrief", mcp.Description("🎯T597: a full re-brief (spawn-brief envelope, or >1KB opening-brief prose) to a seat with recent activity (stored report / workdir touch) is refused, because re-briefing a working seat can discard uncommitted work. A spawn-brief with phase implement after that seat's latest scout-report for the same target is the 🎯T536.3 handoff and is delivered without this flag (🎯T721). Pass true only when you are sure the seat needs its brief again.")),
 		),
 		s.handleAgentSend,
@@ -1162,6 +1164,10 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	interrupt, _ := args["interrupt"].(bool)
 	modeArg, _ := args["mode"].(string)
 	forceRebrief, _ := args["force_rebrief"].(bool)
+	directive, derr := parseSendDirective(args)
+	if derr != nil {
+		return mcp.NewToolResultError(derr.Error()), nil
+	}
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
@@ -1237,6 +1243,25 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 
 	// 🎯T111.1 / 🎯T321: rehydrate + send under the caller's lineage, or
 	// queue/interrupt when prompt in flight.
+	// Typed directives are accepted only after lineage authorization. A hold
+	// removes older pending authorization under the same lock as drain claims.
+	if directive != nil {
+		if _, err := AuthorizeDeliver(s.registry, actor, name, OriginAgent, s.isOverseerAgent); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if mode != delivery.ModeSubmit && mode != delivery.ModeQueue {
+			return mcp.NewToolResultError("typed directives require submit or queue mode"), nil
+		}
+		if directive.Kind != "hold" {
+			return mcp.NewToolResultError("typed authorizations must use jevons_event_push; agent_send does not preserve directive identity on its busy fallback"), nil
+		}
+		if err := CheckBriefAddressing(name, text); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if _, _, _, err := s.sendQueue().ApplyDirective(name, text, *directive, false, time.Now()); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+	}
 	result, err := s.sendToAgentMode(actor, name, text, mode)
 	if err != nil {
 		// 🎯T283: deliverToSender already formats send failures; this also
