@@ -191,7 +191,7 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 	// process attached while its launch is in flight is that launch's own,
 	// and by the time the goroutine runs the launch may have ended.
 	launching := s.launching[name] > 0
-	token := proc.SubscribeEvents(s.agentEventSink(name))
+	token := proc.SubscribeEvents(s.agentEventSinkForProc(name, proc))
 	s.wiredSinks[name] = wiredSink{proc: proc, token: token}
 	// 🎯T744: the sink sees only future events, so a turn that ended before
 	// this attach (boot resume is serial; the wire pass runs after it) is

@@ -22,6 +22,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/landinggrant"
 
 	"github.com/marcelocantos/jevons/internal/audit"
 	"github.com/marcelocantos/jevons/internal/butler"
@@ -72,6 +73,7 @@ type TranscriptOps struct {
 
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
+	landingGrants *landinggrant.Store
 	missionStarts *missionbound.Store
 	registry      *claudia.Registry
 	// modelCatalog overrides the launchable catalog in hermetic mint tests.

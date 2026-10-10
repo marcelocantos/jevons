@@ -1590,6 +1590,10 @@ func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
 // notified when it responds" promise silently failed for every worker
 // (🎯T61). Keying on IsTerminalStop is what actually delivers the reply.
 func (s *Server) agentEventSink(name string) func(claudia.Event) {
+	return s.agentEventSinkForProc(name, nil)
+}
+
+func (s *Server) agentEventSinkForProc(name string, proc *claudia.Agent) func(claudia.Event) {
 	var mu sync.Mutex
 	var responseText strings.Builder
 	var toolCalls int
@@ -1627,6 +1631,9 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 		}
 		if ev.IsTerminalStop() {
 			text := responseText.String()
+			if err := s.observePOApproval(name, proc, ev, text); err != nil {
+				s.notify(name, "PO integration approval refused: "+err.Error())
+			}
 			n := toolCalls
 			responseText.Reset()
 			toolCalls = 0
