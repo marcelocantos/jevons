@@ -5,11 +5,14 @@ package mcpserver
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
@@ -119,5 +122,53 @@ func TestT1043PositiveProcessEvidenceOverridesStoppedAggregate(t *testing.T) {
 				t.Fatalf("positive %s report lost slot: %v", field, got)
 			}
 		})
+	}
+}
+
+// The registry and durable intent store live entirely under t.TempDir, never
+// ~/.jevons. This exercises the actual daemon census adapter after the
+// liveness authority has aged all 130 stopped observations past its TTL.
+func TestT1043IsolatedPersistedParkedCensusAfterTTL(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intents, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	authority := seatstate.New(seatstate.Args{Now: func() time.Time { return now }})
+	authority.BindRegistry(reg)
+	for i := 0; i < 130; i++ {
+		name := fmt.Sprintf("parked-%d", i)
+		if err := reg.Register(claudia.AgentDef{Name: name, SessionID: fmt.Sprintf("session-%d", i), Provider: claudia.ProviderClaude}); err != nil {
+			t.Fatal(err)
+		}
+		if err := intents.SetAgent(name, fleetintent.Parked, "fixture", "stopped", now); err != nil {
+			t.Fatal(err)
+		}
+		authority.Observe(seatstate.Observation{Name: name, Alive: seatstate.No, Source: "fixture.stop", At: now, QueueDepth: seatstate.QueueUnknown})
+	}
+	if err := reg.Register(claudia.AgentDef{Name: "working", SessionID: "working-session", Provider: claudia.ProviderClaude}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(3 * time.Minute) // beyond seatstate.DefaultStale
+	reloaded, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{registry: reg, intent: reloaded}
+	load := map[string]int(server.harnessLoadCounts())
+	if len(reg.List()) != 131 || load[string(claudia.ProviderClaude)] != 1 {
+		t.Fatalf("registered=%d active load=%v, want 131/1 after TTL", len(reg.List()), load)
+	}
+	snap := CapacitySnapshot(CapacitySnapshotArgs{Budget: func() *cost.BudgetConfig { return &cost.BudgetConfig{MaxSessions: 100} }, ProviderLoad: func() map[string]int { return load }})
+	if snap.ActiveSessions != 1 || snap.MaxSessions != 100 {
+		t.Fatalf("isolated census: %+v", snap)
+	}
+	if d := capacity.AdmitSpawnDest(capacity.SpawnWorker, string(claudia.ProviderClaude), snap, capacity.DefaultPolicy()); !d.Admitted() {
+		t.Fatalf("isolated fixture refused at 131 registered, 1 active: %+v", d)
 	}
 }
