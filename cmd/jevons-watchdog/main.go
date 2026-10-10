@@ -243,7 +243,7 @@ func notify(d supervise.Decision, port int, detail string) {
 		body = fmt.Sprintf("Serving again after %s.", d.Downtime.Round(time.Second))
 	case d.Escalated:
 		subject = fmt.Sprintf("jevons daemon still down on :%d", port)
-		body = fmt.Sprintf("Restarts are not taking. %s", d.Reason)
+		body = fmt.Sprintf("Recovery has not restored service. %s", d.Reason)
 	}
 	if detail != "" {
 		body += " " + detail
