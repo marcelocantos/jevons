@@ -204,3 +204,27 @@ func TestRemintRegistryExceptKeepsSurvivingCLITransport(t *testing.T) {
 		t.Fatalf("cold seat not sidecar: %+v", d)
 	}
 }
+
+// A syntactically reattachable handoff can still point at a dead PID. Boot
+// protects that row before adoption, then remints it once adoption has failed.
+func TestT1047StaleHandoffRemintsAfterReattach(t *testing.T) {
+	reg, err := New(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{Name: "dead-cli", Provider: claudia.ProviderClaude, SessionID: "old", Materialized: true}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := RemintRegistryExcept(reg, t.TempDir(), map[string]bool{"dead-cli": true}); err != nil || n != 0 {
+		t.Fatalf("before adoption: n=%d err=%v", n, err)
+	}
+	if got := reg.Def("dead-cli").Provider; got != claudia.ProviderClaude {
+		t.Fatalf("early relabel: %s", got)
+	}
+	if n, err := RemintRegistryExcept(reg, t.TempDir(), nil); err != nil || n != 1 {
+		t.Fatalf("after failed adoption: n=%d err=%v", n, err)
+	}
+	if d := reg.Def("dead-cli"); d.Provider != "anthropic" || d.Materialized {
+		t.Fatalf("stale transport left behind: %+v", d)
+	}
+}

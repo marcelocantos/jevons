@@ -946,14 +946,18 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.SandboxMode = ""
 		def.SandboxGitWrite = false
 	}
-	// Rewrite fresh mints (explicit or omitted) after model pin and Codex
-	// sandbox, so those still key on the plan id. Registry.Launch reads the
-	// persisted provider verbatim: startConfigFromDef is only a test helper.
-	// Retain an existing CLI seat on an implicit resume; never silently
-	// change its transport while its process may survive a restart.
-	if !existed || strings.TrimSpace(providerArg) != "" {
-		def.Provider = cli.SidecarLaunchProvider(def.Provider)
+	// A live handle is the transport authority: Claudia Launch returns that
+	// same handle without starting another process. Never relabel its persisted
+	// row to a sidecar while the legacy CLI still owns the seat. An explicit
+	// cross-plan request needs the migration path, not an in-place Register.
+	var liveProvider claudia.Provider
+	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
+		liveProvider = proc.Provider()
 	}
+	if err := alignStartTransport(def, existed, providerArg, liveProvider); err != nil {
+		return nil, existed, routeNote, err
+	}
+
 	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs
 	// are already achieved in the ledger (clear durable Goal).
 	if strings.TrimSpace(def.Goal) != "" {
@@ -1017,6 +1021,21 @@ func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider str
 func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sessionID string, requireResume bool) {
 	cfg := startConfigFromDef(def)
 	return cfg.Provider, cfg.SessionID, cfg.RequireResume
+}
+
+// alignStartTransport aligns the persisted row with the transport Claudia
+// Launch will actually return. A cold start instead binds fresh and explicit
+// provider requests to the subscription sidecar.
+func alignStartTransport(def *claudia.AgentDef, existed bool, providerArg string, live claudia.Provider) error {
+	if live != "" {
+		if cli.PlanProvider(live) != cli.PlanProvider(def.Provider) {
+			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; migrate or stop it first", def.Name, live, def.Provider)
+		}
+		def.Provider = live
+	} else if !existed || strings.TrimSpace(providerArg) != "" {
+		def.Provider = cli.SidecarLaunchProvider(def.Provider)
+	}
+	return nil
 }
 
 func startConfigFromDef(def *claudia.AgentDef) claudia.Config {

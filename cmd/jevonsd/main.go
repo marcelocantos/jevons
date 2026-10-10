@@ -1463,6 +1463,15 @@ func main() {
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
 			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl),
 			upgrade.DefaultReattachConcurrency))
+		// The handoff only promised an adoptable endpoint, not a live
+		// process. Once every permitted seat has had its adoption attempt,
+		// remint cold legacy rows; RemintRegistryExcept checks the actual
+		// running handle before it rewrites any transport identity.
+		if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
+			slog.Warn("sidecar remint after fleet reattach failed", "err", err)
+		} else if n > 0 {
+			slog.Info("sidecar remint", "seats", n, "when", "after-fleet-reattach")
+		}
 		// Workers started here never passed through handleAgentStart, so
 		// wire their completion-notify now (🎯T61); the standing sweep
 		// (🎯T426) would also catch them, later.

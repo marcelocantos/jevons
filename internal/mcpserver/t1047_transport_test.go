@@ -57,3 +57,31 @@ func TestT1047FreshSubscriptionTransportParity(t *testing.T) {
 		}
 	}
 }
+
+func TestT1047ExistingLiveCLIIsNotSilentlyRelabelled(t *testing.T) {
+	for _, tc := range []struct {
+		name, requested string
+		live, want      claudia.Provider
+		refused         bool
+	}{
+		{"claude-explicit", "claude", claudia.ProviderClaude, claudia.ProviderClaude, false},
+		{"codex-explicit", "codex", claudia.ProviderCodex, claudia.ProviderCodex, false},
+		{"claude-implicit", "", claudia.ProviderClaude, claudia.ProviderClaude, false},
+		{"cross-plan", "codex", claudia.ProviderClaude, claudia.ProviderCodex, true},
+		{"cold-explicit", "claude", "", "anthropic", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			def := &claudia.AgentDef{Name: tc.name, Provider: claudia.ProviderClaude}
+			if tc.name == "codex-explicit" || tc.name == "cross-plan" {
+				def.Provider = claudia.ProviderCodex
+			}
+			err := alignStartTransport(def, true, tc.requested, tc.live)
+			if (err != nil) != tc.refused {
+				t.Fatalf("align error=%v want refusal=%v", err, tc.refused)
+			}
+			if !tc.refused && def.Provider != tc.want {
+				t.Fatalf("persisted provider=%q want actual launch=%q", def.Provider, tc.want)
+			}
+		})
+	}
+}
