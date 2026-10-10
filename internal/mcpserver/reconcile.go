@@ -37,6 +37,28 @@ func (s *Server) Reconcile() {
 	if s == nil || s.registry == nil {
 		return
 	}
+	// A concurrent request joins the pass already doing the repair rather than
+	// replaying its nudges and recoveries. Do not hold the mutex across the
+	// pass: its actuators may use other Server locks and can take time.
+	s.reconcileMu.Lock()
+	if running := s.reconcileRunning; running != nil {
+		s.reconcileMu.Unlock()
+		<-running
+		return
+	}
+	running := make(chan struct{})
+	s.reconcileRunning = running
+	s.reconcileMu.Unlock()
+	defer func() {
+		s.reconcileMu.Lock()
+		s.reconcileRunning = nil
+		close(running)
+		s.reconcileMu.Unlock()
+	}()
+	if s.reconcilePassHook != nil {
+		s.reconcilePassHook()
+		return
+	}
 	overseer := s.overseerName()
 	reconcileFirst.Do(func() { slog.Info("reconcile: first fleet pass", "overseer", overseer) })
 

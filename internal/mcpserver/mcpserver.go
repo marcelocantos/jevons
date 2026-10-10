@@ -72,8 +72,13 @@ type TranscriptOps struct {
 
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
-	missionStarts *missionbound.Store
-	registry      *claudia.Registry
+	// reconcileMu excludes overlapping cockpit and sentinel fleet passes.
+	reconcileMu      sync.Mutex
+	reconcileRunning chan struct{}
+	// reconcilePassHook replaces the pass only in hermetic concurrency tests.
+	reconcilePassHook func()
+	missionStarts     *missionbound.Store
+	registry          *claudia.Registry
 	// modelCatalog overrides the launchable catalog in hermetic mint tests.
 	// Nil uses Claudia’s current catalog, not an old hard-coded model list.
 	modelCatalog func() []claudia.CatalogModel

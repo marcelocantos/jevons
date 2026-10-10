@@ -373,7 +373,7 @@ func (s *Server) runSentinelCycle(args SentinelLoopArgs) (staffops.CycleResult, 
 			overseer = s.overseerName()
 		}
 		act.Repaired = true
-		act.AuditNote = "control-plane repair: fleet recover + idle nudge + dead-handle health"
+		act.AuditNote = "control-plane repair: joined serialized fleet pass (recover + idle nudge + dead-handle health)"
 		s.logLifecycle(compSentinel, "repair", "ok", map[string]any{
 			"symptoms": res.RepairSymptoms,
 			"primary":  string(res.Primary),
@@ -562,13 +562,18 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	// --- Fleet agents ---
 	if s.registry != nil {
 		s.observeRegistryLiveness()
-		reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent)
-		recovered := map[string]bool{}
+		// Sampling must not recover a seat before classification. Only the
+		// serialized fleet pass owns that actuator.
 		dead := map[string]DeadAgentReport{}
-		for _, r := range reps {
-			dead[r.Name] = r
-			if r.Recovered {
-				recovered[r.Name] = true
+		observer := claudiaSweep{reg: s.registry}
+		for _, d := range s.registry.List() {
+			if d.Name == "" || d.Name == overseer {
+				continue
+			}
+			hasProc, alive := observer.ProcState(d.Name)
+			if detect, _, _, _ := deadRecoveryPlan(hasProc, alive, d.AutoStart,
+				intent.Allow(d.Name, fleetintent.ControlRevive).Allow, d.Purpose); detect {
+				dead[d.Name] = DeadAgentReport{Name: d.Name, Cause: observer.ExitCause(d.Name)}
 			}
 		}
 
@@ -610,7 +615,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 			}
 			if r, ok := dead[d.Name]; ok {
 				ao.DeadHandle = true
-				ao.HarnessActed = r.Recovered
+				ao.HarnessActed = false
 				sym := "dead:" + d.Name
 				rt.mu.Lock()
 				fs, seen := rt.firstSeen[sym]
@@ -618,7 +623,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 					rt.firstSeen[sym] = now
 					fs = now
 				}
-				ao.GraceElapsed = now.Sub(fs) >= grace || r.Recovered
+				ao.GraceElapsed = now.Sub(fs) >= grace
 				rt.mu.Unlock()
 				if r.Error != "" {
 					ao.Detail = r.Error
