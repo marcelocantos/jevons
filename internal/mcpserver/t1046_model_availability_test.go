@@ -125,3 +125,69 @@ func TestT1046MissingEconomyUsesProviderDefault(t *testing.T) {
 		t.Fatalf("no economy model=%q note=%q err=%v", def.Model, note, err)
 	}
 }
+
+// A successful Start and submitted prompt do not prove an explicitly pinned
+// model exists in the OMP catalog. This is the specimen behind the observed
+// Materialized=true phantom: RequireResume must not be earned by that send.
+func TestT1046UnsupportedExplicitSparkSendDoesNotMaterialize(t *testing.T) {
+	s := t1046Server(t)
+	def, _, _, err := s.stitchAgentStart("explicit-spark", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Model != cost.ModelCodexSpark {
+		t.Fatalf("explicit pin lost: %q", def.Model)
+	}
+	if def.Materialized {
+		t.Fatal("before send materialized")
+	}
+	s.markAgentTurnBegan(def.Name)
+	got := s.registry.Def(def.Name)
+	if got.Materialized || startConfigFromDef(got).RequireResume {
+		t.Fatalf("unsupported model earned resume: %+v", got)
+	}
+	if !s.agentHasTurnBegan(def.Name) {
+		t.Fatal("process-local submitted turn not recorded")
+	}
+	// A catalog that really contains Spark retains the ordinary materialization
+	// contract. This also prevents over-broad suppression of Codex sessions.
+	s.modelCatalog = func() []claudia.CatalogModel {
+		return append(claudia.ModelCatalog(), claudia.CatalogModel{Provider: claudia.ProviderCodex, Model: cost.ModelCodexSpark, Access: claudia.ModelAccessPlan, Quality: claudia.ModelQualityEconomy, Session: true})
+	}
+	s.markAgentTurnBegan(def.Name)
+	if !s.registry.Def(def.Name).Materialized {
+		t.Fatal("available Spark turn did not materialize")
+	}
+}
+
+func TestT1046ExplicitSparkStartAndSubmittedTurnCanRetryWithoutResume(t *testing.T) {
+	s := t1046Server(t)
+	workdir := t.TempDir()
+	launches := 0
+	s.launchAgentFn = func(_ context.Context, name string) (*claudia.Agent, error) {
+		launches++
+		cfg := startConfigFromDef(s.registry.Def(name))
+		if launches == 2 && (cfg.Model != "gpt-6-luna" || cfg.RequireResume) {
+			t.Errorf("retry config=%+v want economy without RequireResume", cfg)
+		}
+		return nil, nil // process-start success is not a model/turn oracle
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "explicit-then-omit", "workdir": workdir, "provider": "codex", "model": cost.ModelCodexSpark, "task_type": "ops_classify", "parent": "jevons-po", "purpose": "work"}
+	res, err := s.handleAgentStart(t.Context(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("explicit launch result=%v err=%v", res, err)
+	}
+	s.markAgentTurnBegan("explicit-then-omit")
+	if s.registry.Def("explicit-then-omit").Materialized {
+		t.Fatal("submitted turn falsely materialized unavailable model")
+	}
+	delete(req.Params.Arguments.(map[string]any), "model")
+	res, err = s.handleAgentStart(t.Context(), req)
+	if err != nil || res.IsError || launches != 2 {
+		t.Fatalf("retry result=%v err=%v launches=%d", res, err, launches)
+	}
+	if d := s.registry.Def("explicit-then-omit"); d.Model != "gpt-6-luna" || d.Materialized {
+		t.Fatalf("retry row=%+v", d)
+	}
+}
