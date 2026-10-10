@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/gate"
 )
 
@@ -42,9 +43,29 @@ func TestT1048IsolatedReportChecker(t *testing.T) {
 	honest := prefix + "Positive GREEN: `" + green.Attestation() + "`.\n\n" +
 		"SIGKILL record: `" + killed.Attestation() + "`. Host termination observation, not a passing record or test result.\n\n" +
 		"RED disclosure: `" + red.Attestation() + "`. Cannot claim the unrelated suite green.\n"
+	probe := func(t *testing.T, report string, want gate.FlagKind) {
+		t.Helper()
+		s, po, inbox, _ := t690Server(t) // hermetic fake sender + private report store; no network/push sink
+		sink := s.agentEventSink(t690Worker)
+		sink(claudia.Event{Type: "assistant", Text: report, StopReason: "end_turn"})
+		if len(inbox.texts) != 1 || len(po.sent) != 1 {
+			t.Fatalf("missing actual report routes: overseer=%d parent=%d", len(inbox.texts), len(po.sent))
+		}
+		// Status-ping chatter can dedupe the overseer copy globally across subtests;
+		// the daemon parent-report route is not chatter-deduped.
+		banner := string(want)
+		if want == "" {
+			if strings.Contains(po.sent[0], gate.BannerHeading) {
+				t.Fatalf("honest control bannered: %q", inbox.texts[0])
+			}
+		} else if !strings.Contains(po.sent[0], banner) {
+			t.Fatalf("want %s in actual parent route: overseer=%q parent=%q", want, inbox.texts[0], po.sent[0])
+		}
+	}
 	if flags := FalseGreenFlagsForReport(honest, ""); len(flags) != 0 {
 		t.Fatalf("honest controls falsely flagged: %v", flags)
 	}
+	probe(t, honest, "")
 	cases := []struct {
 		name, report string
 		kind         gate.FlagKind
@@ -59,6 +80,7 @@ func TestT1048IsolatedReportChecker(t *testing.T) {
 			flags := FalseGreenFlagsForReport(tc.report, "")
 			for _, f := range flags {
 				if f.Kind == tc.kind {
+					probe(t, tc.report, tc.kind)
 					return
 				}
 			}
