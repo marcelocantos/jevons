@@ -28,7 +28,8 @@ transfer and one destination session. TestT1032SandboxRestrictionRefusedBeforeTr
 covers read-only and unknown modes; TestT1032FailedTransferKeepsSourceSandbox
 covers transfer failure. Existing fleet tests cover operator ExtraArgs refusal.
 
-Journey exception: the owner hold prohibits live provider migration, integration,
-and activation. These hermetics establish the registry field-reset contract;
-real provider/broker migration and development activation remain unobserved
-class-3 residuals. No claim of owner-visible activation or target achievement.
+Journey exception: the owner explicitly lifted the integration hold; no live
+provider migration or development-daemon activation was authorized. These
+hermetics establish the registry field-reset contract; real provider/broker
+migration and development activation remain unobserved class-3 residuals. No
+claim of owner-visible activation or target achievement.
