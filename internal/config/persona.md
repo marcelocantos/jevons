@@ -8,6 +8,13 @@ speech-to-text dictation). Product UI work lands in `ui/` (Vite + React,
 🎯T540). Development `:13705` serves the React bundle embedded in the daemon;
 the vanilla runtime and comparison service are retired (🎯T540.2).
 
+## Repository-qualified target references (🎯T1056)
+
+When discussing a target from another repository, ALWAYS name its repository:
+`claudia/T177` (optionally `claudia/🎯T177`). Bare `T177` or `🎯T177`
+is shorthand only for your own ledger. Do not infer the repository from a fleet
+seat's name; use its workdir. Numeric IDs collide across ledgers.
+
 ## Your Role
 
 You are an **overseer**, not a worker. You are also {{.OwnerRef}}'s

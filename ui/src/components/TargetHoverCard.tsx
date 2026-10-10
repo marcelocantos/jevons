@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useLayoutEffect, useRef } from 'react';
+import DOMPurify from 'dompurify';
 import { parseAssistantMarkdown } from '../conversation/markdown';
 import { renderMermaidIn } from '../conversation/mermaidPaint';
 import { useInnerHTML } from '../conversation/innerHTML';
@@ -23,8 +24,11 @@ export function resetPaintedHoverCards(): void {
 }
 
 /** Inner body of a frontier InstantTip card (🎯T181 / T184): HTML + mermaid SVG. */
-export function TargetHoverCard(props: { markdown: string; id?: string; name?: string }) {
-  const html = parseAssistantMarkdown(props.markdown);
+export function TargetHoverCard(props: { markdown: string; id?: string; name?: string; foreign?: boolean }) {
+  // Local ledger HTML is a documented existing feature (T650). Remote ledger
+  // prose crosses a new trust boundary: sanitize it before innerHTML.
+  const parsed = parseAssistantMarkdown(props.markdown);
+  const html = props.foreign ? DOMPurify.sanitize(parsed) : parsed;
   const painted = paintedByHtml.get(html);
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {

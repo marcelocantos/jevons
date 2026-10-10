@@ -6,7 +6,7 @@ import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
 import { migrateBody, migrateUrl, ModelMenu, type MigrateProvider } from './ModelMenu';
-import { splitSeatNameTarget } from '../frontier/targetHotspot';
+import { repoFromWorkdir, splitSeatNameTarget } from '../frontier/targetHotspot';
 import { TargetHotspotTips } from './TargetHotspotTips';
 
 export type AgentRow = {
@@ -184,8 +184,9 @@ function githubDir(workdir?: string) {
   );
 }
 
-function AgentName({ name }: { name: string }) {
+function AgentName({ name, workdir }: { name: string; workdir?: string }) {
   const parts = splitSeatNameTarget(name);
+  const repo = repoFromWorkdir(workdir);
   if (!parts) return <span className="agent-name">{name}</span>;
   return (
     <span className="agent-name">
@@ -193,6 +194,7 @@ function AgentName({ name }: { name: string }) {
       <span
         className="target-hotspot target-hotspot-finger"
         data-target-id={parts.id}
+        data-target-repo={repo}
         role="button"
         tabIndex={0}
       >
@@ -245,7 +247,7 @@ function Row(props: {
           <span className={'agent-dot ' + dot} />
         )}
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
-        <AgentName name={props.node.name} />
+        <AgentName name={props.node.name} workdir={props.node.workdir} />
         <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
         {showSeatStopReason(props.node) ? (
           <span className="agent-stop-reason" title={props.node.stop_reason}>

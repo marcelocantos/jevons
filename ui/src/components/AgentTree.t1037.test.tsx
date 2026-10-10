@@ -108,3 +108,14 @@ describe('AgentTree seat-name hotlink (🎯T1037)', () => {
     }
   });
 });
+
+it('seat target scope follows workdir rather than seat name prefix (T1056)', () => {
+  const { container } = render(
+    <FrontierRowsContext.Provider value={[{ id: 'T177', name: 'Jevons collision', status: 'identified' }]}>
+      <AgentTree agents={[{ name: 'jv-t177-worker', workdir: '/work/github.com/marcelocantos/claudia' }]} selected="" onSelect={() => {}} />
+    </FrontierRowsContext.Provider>,
+  );
+  const spot = container.querySelector('.target-hotspot');
+  expect(spot?.getAttribute('data-target-repo')).toBe('github.com/marcelocantos/claudia');
+  expect(spot?.getAttribute('data-target-id')).toBe('T177');
+});

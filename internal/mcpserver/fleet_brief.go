@@ -47,6 +47,11 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   without actor, it was recorded "by jevons", and jevons-po re-paused the
   fleet and parked five workers confessing to an act nobody took.
 
+## Target notation across repositories (🎯T1056)
+- In your own repository ledger, bare '🎯T177' is shorthand for the local target.
+- A target in any other repository MUST carry its repository name: 'claudia/🎯T177'. Never cite a foreign target as bare '🎯T177', even when the number is unique today. A bare number is local, not a global identifier.
+- Seat names are not evidence of a target's repository. Use the seat's workdir to identify its repository.
+
 ## Environments: development vs released (🎯T572)
 - **development** = always-on jevonsd from this machine's development source tree (:13705 / ~/.jevons). Not a scheduled build and not a separately named cockpit.
 - **released** = Homebrew / shipped.

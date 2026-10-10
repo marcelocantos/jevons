@@ -22,7 +22,7 @@ export function TargetHotspotTips(props: {
   const rows = useFrontierRows();
   const cacheRef = useRef<HoverCardCache>({});
   const [active, setActive] = useState<HTMLElement | null>(null);
-  const [fetched, setFetched] = useState<FrontierRow | null | undefined>(undefined);
+  const [lookup, setLookup] = useState<{ key: string; row: FrontierRow | null | 'ambiguous' } | null>(null);
 
   useLayoutEffect(() => {
     const root = props.containerRef.current;
@@ -56,60 +56,67 @@ export function TargetHotspotTips(props: {
   useLayoutEffect(() => {
     if (!active || active.isConnected) return;
     const id = normalizeTargetID(active.getAttribute('data-target-id') || '');
+    const repo = active.getAttribute('data-target-repo') || '';
     const root = props.containerRef.current;
     const next = id
-      ? root?.querySelector<HTMLElement>('.target-hotspot[data-target-id="' + CSS.escape(id) + '"]')
+      ? root?.querySelector<HTMLElement>('.target-hotspot[data-target-id="' + CSS.escape(id) + '"]' + (repo ? '[data-target-repo="' + CSS.escape(repo) + '"]' : ':not([data-target-repo])'))
       : null;
     setActive(next && next.isConnected ? next : null);
   });
 
   const tid = normalizeTargetID(active?.getAttribute('data-target-id') || '');
-  const found = findRowByTargetID(rows, tid) as FrontierRow | null;
+  const repo = active?.getAttribute('data-target-repo') || '';
+  const found = repo ? null : findRowByTargetID(rows, tid) as FrontierRow | null;
+  const lookupKey = repo + '/' + tid;
+  const fetched = lookup?.key === lookupKey ? lookup.row : undefined;
 
   useEffect(() => {
     if (!tid || found) {
-      setFetched(undefined);
+      setLookup(null);
       return;
     }
     let cancelled = false;
-    setFetched(undefined);
-    void fetchFrontierTarget(tid)
+    setLookup(null);
+    void fetchFrontierTarget(tid, undefined, repo || undefined)
       .then((row) => {
-        if (!cancelled) setFetched(row);
+        if (!cancelled) setLookup({ key: lookupKey, row });
       })
-      .catch(() => {
-        if (!cancelled) setFetched(null);
+      .catch((error: unknown) => {
+        if (!cancelled) setLookup({ key: lookupKey, row: repo && String(error).includes('409') ? 'ambiguous' : null });
       });
     return () => {
       cancelled = true;
     };
-  }, [tid, found]);
+  }, [tid, repo, found, lookupKey]);
 
   if (!active || !tid) return null;
   let md = '';
   let cardId = tid;
   let cardName = '';
   if (found) {
-    md = hoverCardMarkdown(cacheRef.current, found);
+    md = hoverCardMarkdown(cacheRef.current, found, repo);
     cardId = found.id;
     cardName = found.name;
+  } else if (fetched === 'ambiguous') {
+    md = '**' + repo + '/🎯' + tid + '**\n\nAmbiguous repository alias; use a fully qualified repository name.';
   } else if (fetched) {
-    md = hoverCardMarkdown(cacheRef.current, fetched);
+    md = hoverCardMarkdown(cacheRef.current, fetched, repo);
     cardId = fetched.id;
     cardName = fetched.name;
   } else if (fetched === null) {
-    md = formatMissingTargetMarkdown(tid);
+    md = formatMissingTargetMarkdown(tid, repo);
   } else {
-    md = '**🎯' + tid + '**';
+    md = '**' + (repo ? repo + '/' : '') + '🎯' + tid + '**';
   }
+  if (repo && fetched !== null && fetched !== 'ambiguous') md = '**Repository:** ' + repo + '\n\n' + md;
   return (
     <InstantTip
-      key={tid}
+      key={repo + '/' + tid}
       defaultOpen
       groupHosts={() => [active]}
       placement="toward-mid"
       cardClassName="target-card-tip"
-      content={<TargetHoverCard markdown={md} id={cardId} name={cardName} />}
+      content={<TargetHoverCard markdown={md} id={cardId} name={cardName} foreign={!!repo} />}
     />
   );
 }

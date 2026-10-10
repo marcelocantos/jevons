@@ -10,6 +10,7 @@ import { createSession, type StreamSession } from './streamingMarkdown';
 /** Live unsealed assistant: incremental smd, not marked-every-token. */
 export function StreamingMarkdownBody(props: {
   text: string;
+  repo?: string;
   bodyRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const sessionRef = useRef<StreamSession | null>(null);
@@ -26,7 +27,7 @@ export function StreamingMarkdownBody(props: {
     if (!sessionRef.current) sessionRef.current = createSession(el);
     const session = sessionRef.current;
     if (!session) {
-      el.innerHTML = parseAssistantMarkdown(props.text);
+      el.innerHTML = parseAssistantMarkdown(props.text, props.repo);
       return;
     }
     session.writeFull(props.text, ensureFenceNewlines);

@@ -39,7 +39,7 @@ export function userBubbleClass(origin: TurnOrigin): string {
  * User-role body paint. Keys on provenance, never on what the body looks like
  * (🎯T381). Same markdown-shaped source must stay literal when the owner typed it.
  */
-export function paintUserHTML(text: string, origin: TurnOrigin): string {
-  if (origin === 'agent') return parseAssistantMarkdown(text);
-  return linkifyTargetText(renderUserTextWithImages(text));
+export function paintUserHTML(text: string, origin: TurnOrigin, repo?: string): string {
+  if (origin === 'agent') return parseAssistantMarkdown(text, repo);
+  return linkifyTargetText(renderUserTextWithImages(text), repo);
 }

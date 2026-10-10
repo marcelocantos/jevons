@@ -19,8 +19,8 @@ export function ensureFenceNewlines(text: string | null | undefined): string {
  * ends (`  \\n`) are GFM hard breaks — that is how the golden wraps, not a
  * marked `breaks: true` fork.
  */
-export function parseAssistantMarkdown(text: string): string {
+export function parseAssistantMarkdown(text: string, repo?: string): string {
   const raw = ensureFenceNewlines(text);
   const html = marked.parse(raw == null ? '' : raw, { async: false }) as string;
-  return linkifyTargetIDsInHTML(html);
+  return linkifyTargetIDsInHTML(html, repo);
 }

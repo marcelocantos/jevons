@@ -218,38 +218,47 @@ export function rowHasLedgerBody(row?: Partial<FrontierRow> | null): boolean {
   return false;
 }
 
-export function formatMissingTargetMarkdown(id: string): string {
+export function formatMissingTargetMarkdown(id: string, repo?: string): string {
   const tid = String(id || '').trim();
   if (!tid) return '';
-  return '**🎯' + tid + '**\n\nNot in this ledger.';
+  return repo ? '**' + repo + '/🎯' + tid + '**\n\nNot found in ' + repo + ' ledger (unresolved foreign target).' : '**🎯' + tid + '**\n\nNot in this ledger.';
 }
 
 const targetRowCache = new Map<string, FrontierRow | null>();
+const canonicalRepo = new Map<string, string>();
 
 export function clearFrontierTargetCache(): void {
   targetRowCache.clear();
+  canonicalRepo.clear();
 }
 
 export async function fetchFrontierTarget(
   id: string,
   signal?: AbortSignal,
+  repo?: string,
 ): Promise<FrontierRow | null> {
   const tid = normalizeTargetID(id);
   if (!tid) return null;
-  if (targetRowCache.has(tid)) return targetRowCache.get(tid) ?? null;
-  const r = await fetch(FRONTIER_TARGET_API_PATH + '?id=' + encodeURIComponent(tid), { signal });
+  const key = repo ? (canonicalRepo.get(repo) || repo) + '/' + tid : tid;
+  if (targetRowCache.has(key)) return targetRowCache.get(key) ?? null;
+  const query = new URLSearchParams({ id: tid });
+  if (repo) query.set('repo', repo);
+  const r = await fetch(FRONTIER_TARGET_API_PATH + '?' + query.toString(), { signal });
   if (r.status === 404) {
-    targetRowCache.set(tid, null);
+    targetRowCache.set(key, null);
     return null;
   }
   if (!r.ok) throw new Error(String(r.status));
-  const data = (await r.json()) as { found?: boolean; target?: unknown };
+  const data = (await r.json()) as { found?: boolean; target?: unknown; repo_identity?: string };
   if (!data || data.found === false || data.target == null) {
-    targetRowCache.set(tid, null);
+    targetRowCache.set(key, null);
     return null;
   }
   const row = toFrontierRow(data.target);
-  targetRowCache.set(tid, row);
+  const identity = repo && typeof data.repo_identity === 'string' && data.repo_identity.startsWith('github.com/')
+    ? data.repo_identity : undefined;
+  if (repo && identity) canonicalRepo.set(repo, identity);
+  targetRowCache.set(identity ? identity + '/' + tid : key, row);
   return row;
 }
 
@@ -416,8 +425,8 @@ export function expireCardCache(cache: HoverCardCache, rows: Array<Partial<Front
   return { expired, kept };
 }
 
-export function hoverCardMarkdown(cache: HoverCardCache, row: FrontierRow): string {
-  const id = normalizeTargetID(row.id);
+export function hoverCardMarkdown(cache: HoverCardCache, row: FrontierRow, repo?: string): string {
+  const id = (repo ? repo + '/' : '') + normalizeTargetID(row.id);
   const hit = cache[id];
   if (shouldReuseHoverCard(hit, row)) return hit.markdown;
   const markdown = formatTargetCardMarkdown(row);

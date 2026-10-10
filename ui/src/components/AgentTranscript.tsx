@@ -24,6 +24,7 @@ import { displayRows, type DisplayKind, type StepItem } from '../conversation/di
 import { parseAssistantMarkdown } from '../conversation/markdown';
 import { preloadMermaid, renderMermaidIn } from '../conversation/mermaidPaint';
 import { paintUserHTML, userBubbleClass, type TurnOrigin } from '../conversation/paint';
+import { repoFromWorkdir } from '../frontier/targetHotspot';
 import { TargetHotspotTips } from './TargetHotspotTips';
 import { StreamingMarkdownBody } from '../conversation/StreamingMarkdownBody';
 import { relTime } from '../relTime';
@@ -487,6 +488,7 @@ export function ClippedBubble(props: {
   // 🎯T266: speaker/context tab on a sealed Jevons target-ask (T306: never on
   // an owner bubble; streaming bubbles wait for the seal, as vanilla does).
   const askHost = useTargetAskHost();
+  const targetRepo = repoFromWorkdir(conversationWorkdir(askHost, props.conversationName));
   const chromeSealed = props.kind === 'assistant' && props.sealed === true;
   const chrome = useMemo(
     () =>
@@ -570,12 +572,12 @@ export function ClippedBubble(props: {
     >
       {props.kind === 'assistant' ? (
         props.sealed ? (
-          <MarkdownBody text={props.text} bodyRef={bodyRef} />
+          <MarkdownBody text={props.text} bodyRef={bodyRef} repo={targetRepo} />
         ) : (
-          <StreamingMarkdownBody text={props.text} bodyRef={bodyRef} />
+          <StreamingMarkdownBody text={props.text} bodyRef={bodyRef} repo={targetRepo} />
         )
       ) : (
-        <UserBody text={props.text} origin={props.origin || 'owner'} bodyRef={bodyRef} />
+        <UserBody text={props.text} origin={props.origin || 'owner'} bodyRef={bodyRef} repo={targetRepo} />
       )}
       {hasChrome && chrome ? (
         <div
@@ -648,8 +650,8 @@ export function ClippedBubble(props: {
   );
 }
 
-function MarkdownBody(props: { text: string; bodyRef: React.RefObject<HTMLDivElement | null> }) {
-  const html = parseAssistantMarkdown(props.text);
+function MarkdownBody(props: { text: string; bodyRef: React.RefObject<HTMLDivElement | null>; repo?: string }) {
+  const html = parseAssistantMarkdown(props.text, props.repo);
   const inner = useInnerHTML(html);
   useEffect(() => {
     const el = props.bodyRef.current;
@@ -669,8 +671,9 @@ function UserBody(props: {
   text: string;
   origin: TurnOrigin;
   bodyRef: React.RefObject<HTMLDivElement | null>;
+  repo?: string;
 }) {
-  const html = paintUserHTML(props.text, props.origin);
+  const html = paintUserHTML(props.text, props.origin, props.repo);
   const inner = useInnerHTML(html);
   return (
     <>
