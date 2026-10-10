@@ -10,7 +10,6 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/cost"
 	"strings"
 )
 
@@ -79,13 +78,13 @@ func (s *Server) markAgentTurnBegan(name string) {
 	// case and is not a failure of this path.
 	if reg != nil {
 		// An accepted send is not evidence that the OMP model exists or has
-		// answered. In particular an explicit Spark pin can pass Launch and
-		// receive a send while the installed catalog has no Spark at all. Do
+		// answered. In particular an explicit unavailable pin can pass Launch and
+		// receive a send while the installed catalog lacks that model. Do
 		// not turn that into a durable RequireResume obligation for a void
 		// Codex conversation. Preserve the process-local turn-began mark above;
 		// a later provider reply can carry its own durable evidence.
 		if d := reg.Def(name); d != nil && cli.PlanProvider(d.Provider) == claudia.ProviderCodex &&
-			d.Model == cost.ModelCodexSpark && !s.codexCatalogHasModel(d.Model) {
+			strings.TrimSpace(d.Model) != "" && !s.codexCatalogHasModel(d.Model) {
 			return
 		}
 		if err := reg.MarkMaterialized(name); err != nil {

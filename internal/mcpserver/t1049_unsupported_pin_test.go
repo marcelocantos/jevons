@@ -87,3 +87,53 @@ func TestT1049SidecarHistoryCannotBeTreatedAsEmpty(t *testing.T) {
 		t.Fatalf("diagnosis=%v", err)
 	}
 }
+
+func TestT1049NonSparkUnavailableCodexPinIsFailClosed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", home)
+	t.Setenv(spool.DirEnv, filepath.Join(home, "spool"))
+	s := t1046Server(t)
+	d := claudia.AgentDef{Name: "retired-model", Provider: "openai-codex", Model: "gpt-retired-codex", SessionID: "retired-thread", WorkDir: t.TempDir()}
+	if err := s.registry.Register(d); err != nil {
+		t.Fatal(err)
+	}
+	got, existed, _, err := s.stitchAgentStart(d.Name, d.WorkDir, "", "", "mechanical", "jevons-po", "work", "", "")
+	if err == nil || !existed || got != nil || !strings.Contains(err.Error(), "gpt-retired-codex") || !strings.Contains(err.Error(), "Recovery:") {
+		t.Fatalf("non-Spark retry: got=%+v existed=%v err=%v", got, existed, err)
+	}
+	after := s.registry.Def(d.Name)
+	if after.Model != d.Model || after.SessionID != d.SessionID {
+		t.Fatalf("row rotated: %+v", after)
+	}
+	s.markAgentTurnBegan(d.Name)
+	if s.registry.Def(d.Name).Materialized {
+		t.Fatal("unsupported non-Spark turn must not earn resume")
+	}
+}
+
+func TestT1049AlternateHistorySourceIsNotProofOfEmptiness(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", home)
+	t.Setenv(spool.DirEnv, filepath.Join(home, "missing-default-spool"))
+	// An independently configured sidecar store (or a native non-exclusive
+	// CODEX_HOME) can hold history the default evidence reader cannot locate.
+	alternate := filepath.Join(home, "alternate-sidecar-store", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(alternate), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alternate, []byte(`{"role":"assistant","content":"history"}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := t1046Server(t)
+	d := claudia.AgentDef{Name: "alternate", Provider: "openai-codex", Model: "gpt-retired-codex", SessionID: "alternate-thread", WorkDir: t.TempDir()}
+	if err := s.registry.Register(d); err != nil {
+		t.Fatal(err)
+	}
+	diagnostic := s.diagnoseUnsupportedStoredPin(s.registry.Def(d.Name))
+	if diagnostic == nil || !strings.Contains(diagnostic.Error(), "absence is not complete evidence") {
+		t.Fatalf("alternate history falsely certified empty: %v", diagnostic)
+	}
+	if got, _, _, err := s.stitchAgentStart(d.Name, d.WorkDir, "", "", "mechanical", "jevons-po", "work", "", ""); err == nil || got != nil {
+		t.Fatalf("alternate history permitted fallback: %+v, %v", got, err)
+	}
+}

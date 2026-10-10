@@ -13,7 +13,6 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -42,40 +41,7 @@ func unsupportedPinEvidence(d *claudia.AgentDef) string {
 		if !strings.Contains(path, d.SessionID) {
 			return nil
 		}
-		f, err := os.Open(path)
-		if err != nil {
-			findings = append(findings, fmt.Sprintf("native rollout unreadable at %s: %v", path, err))
-			return nil
-		}
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 4096), 16*1024*1024)
-		rows, prompts, replies := 0, 0, 0
-		for sc.Scan() {
-			rows++
-			var row struct {
-				Type    string `json:"type"`
-				Payload struct {
-					Type string `json:"type"`
-					Role string `json:"role"`
-				} `json:"payload"`
-			}
-			if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
-				findings = append(findings, fmt.Sprintf("native rollout partial/unreadable at %s row %d: %v", path, rows, err))
-				return nil
-			}
-			if row.Type == "event_msg" && row.Payload.Type == "user_message" || row.Type == "response_item" && row.Payload.Role == "user" {
-				prompts++
-			}
-			if row.Type == "response_item" && row.Payload.Role == "assistant" {
-				replies++
-			}
-		}
-		if err := sc.Err(); err != nil {
-			findings = append(findings, fmt.Sprintf("native rollout unreadable at %s: %v", path, err))
-			return nil
-		}
-		findings = append(findings, fmt.Sprintf("native rollout %s: %d records, %d submitted user messages, %d assistant messages", path, rows, prompts, replies))
+		findings = append(findings, inspectNativeRollout(path))
 		return nil
 	})
 	if err != nil {
@@ -93,13 +59,50 @@ func unsupportedPinEvidence(d *claudia.AgentDef) string {
 	return strings.Join(findings, "; ")
 }
 
+// inspectNativeRollout closes each file before the directory walker proceeds.
+// A large session can contain many rollout files; deferring their closes in
+// the walker would hold one descriptor per file until the scan finishes.
+func inspectNativeRollout(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Sprintf("native rollout unreadable at %s: %v", path, err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 4096), 16*1024*1024)
+	rows, prompts, replies := 0, 0, 0
+	for sc.Scan() {
+		rows++
+		var row struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type string `json:"type"`
+				Role string `json:"role"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
+			return fmt.Sprintf("native rollout partial/unreadable at %s row %d: %v", path, rows, err)
+		}
+		if row.Type == "event_msg" && row.Payload.Type == "user_message" || row.Type == "response_item" && row.Payload.Role == "user" {
+			prompts++
+		}
+		if row.Type == "response_item" && row.Payload.Role == "assistant" {
+			replies++
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Sprintf("native rollout unreadable at %s: %v", path, err)
+	}
+	return fmt.Sprintf("native rollout %s: %d records, %d submitted user messages, %d assistant messages", path, rows, prompts, replies)
+}
+
 // diagnoseUnsupportedStoredPin is called BEFORE EnsureAgentWithParent and
 // Register. A persisted row is a session, even if Materialized is false:
 // that bit cannot attest that no prompts were submitted. Until Claudia can
 // atomically prove empty provider + sidecar history and no in-flight turn,
 // refuse automatic rotation and leave the row and its session ID untouched.
 func (s *Server) diagnoseUnsupportedStoredPin(d *claudia.AgentDef) error {
-	if d == nil || cli.PlanProvider(d.Provider) != claudia.ProviderCodex || d.Model != cost.ModelCodexSpark || s.codexCatalogHasModel(d.Model) {
+	if d == nil || cli.PlanProvider(d.Provider) != claudia.ProviderCodex || strings.TrimSpace(d.Model) == "" || s.codexCatalogHasModel(d.Model) {
 		return nil
 	}
 	live := ""
