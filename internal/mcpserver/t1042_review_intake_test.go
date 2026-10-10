@@ -81,3 +81,41 @@ func mustReadT1042(t *testing.T, path string) []byte {
 	}
 	return b
 }
+
+func TestT1042SupersedingReportMootsOnlySameReporterReview(t *testing.T) {
+	raw, err := os.ReadFile("../ownerquestion/testdata/t1041-blocked-report.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	repo := t.TempDir()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "blurter"), []byte("#!/bin/sh\necho spooled\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	s := New(repo, nil, nil)
+	s.SetAgentReportDir(state)
+	s.SetOwnerQuestionsDir(state)
+	s.storeAgentReport("reviewer", string(raw))
+	// A different reporter does not erase this review, even on the same target.
+	successor := strings.ReplaceAll(string(raw), "disconnected; folded/unfolded hardware and owner verdict remain outstanding", "connected; physical check in progress")
+	s.storeAgentReport("other-reviewer", successor)
+	open, _ := ownerquestionview.New(state).List(true)
+	if len(open) != 1 {
+		t.Fatalf("other reporter erased ask: %+v", open)
+	}
+	s.storeAgentReport("reviewer", successor)
+	open, _ = ownerquestionview.New(state).List(true)
+	if len(open) != 0 {
+		t.Fatalf("superseded review still open: %+v", open)
+	}
+	all, _ := ownerquestionview.New(state).List(false)
+	if len(all) != 1 || all[0].State != ownerquestionview.Moot || all[0].Review.Lifecycle != "moot" {
+		t.Fatalf("history %+v", all)
+	}
+	entries, _, _ := ownerquestions.New(state).Snapshot()
+	if len(entries) != 0 {
+		t.Fatalf("outbox %+v", entries)
+	}
+}
