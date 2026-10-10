@@ -146,7 +146,7 @@ func TestExplicitProviderStillWinsOmitProviderMint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderClaude {
+	if def.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("explicit claude lost: %q", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: explicit") {
@@ -169,7 +169,7 @@ func TestResumeKeepsStoredProviderOverPlanFeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !existed || def.Provider != claudia.ProviderClaude {
+	if !existed || def.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("resume moved the seat: existed=%v provider=%q note=%q", existed, def.Provider, note)
 	}
 }

@@ -46,6 +46,9 @@ func TestAgentStartRehydratesLostSessionBeforeLaunch(t *testing.T) {
 	// the row Materialized the instant the process spawns, so a worker
 	// whose first turn never submitted has Materialized=true and no
 	// transcript on disk.
+	// This historical CLI fixture predates fresh-mint sidecar normalisation.
+	// Its missing JSONL is a CLI loss; sidecar seats use spool evidence.
+	def.Provider = claudia.ProviderClaude
 	def.Materialized = true
 	if err := reg.Register(*def); err != nil {
 		t.Fatal(err)
@@ -75,8 +78,8 @@ func TestAgentStartRehydratesLostSessionBeforeLaunch(t *testing.T) {
 	if sessionID == lostID || sessionID != lost.NewSession {
 		t.Fatalf("session not rotated: %s (lost %s, reported %s)", sessionID, lostID, lost.NewSession)
 	}
-	if provider != claudia.Provider("anthropic") {
-		t.Fatalf("provider lost in rehydrate: %q", provider)
+	if provider != claudia.ProviderClaude {
+		t.Fatalf("legacy CLI provider lost in rehydrate: %q", provider)
 	}
 	after := reg.Def(name)
 	if after.Parent != "jevons-po" || after.Purpose != claudia.PurposeWork ||

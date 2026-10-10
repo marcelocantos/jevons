@@ -123,7 +123,7 @@ func TestStitchExplicitModelStillWinsOnFastCheap(t *testing.T) {
 		t.Fatalf("explicit model lost: %q", def.Model)
 	}
 	exp := t32521Mint(t, s, "jv-codex-explicit", "", "codex", "mechanical", claudia.PurposeWork, "")
-	if exp.Provider != claudia.ProviderCodex {
+	if exp.Provider != claudia.Provider("openai-codex") {
 		t.Fatalf("explicit provider lost: %q", exp.Provider)
 	}
 	if exp.Model != "gpt-6-luna" {
@@ -166,7 +166,7 @@ func TestStitchDoesNotPinSparkOnRedCodexWeekly(t *testing.T) {
 		t.Fatal(err)
 	}
 	exp := s.registry.Def("jv-no-spark-explicit")
-	if exp.Provider != claudia.ProviderCodex {
+	if exp.Provider != claudia.Provider("openai-codex") {
 		t.Fatalf("explicit provider lost: %q", exp.Provider)
 	}
 	if exp.Model == cost.ModelCodexSpark {

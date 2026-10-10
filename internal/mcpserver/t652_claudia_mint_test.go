@@ -53,7 +53,7 @@ func TestT652HotExplicitGrokDoesNotStick(t *testing.T) {
 	if def.Provider == claudia.ProviderGrok {
 		t.Fatalf("hot explicit grok stuck: provider=%q note=%q", def.Provider, note)
 	}
-	if def.Provider != claudia.ProviderClaude {
+	if def.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("want claude (the only published, eligible dest left), got %q note=%q", def.Provider, note)
 	}
 	if strings.Contains(note, "provider_knob: explicit") {
@@ -78,7 +78,7 @@ func TestT652OwnerAskedKeepsHotGrok(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderGrok {
+	if def.Provider != claudia.Provider("xai-oauth") {
 		t.Fatalf("owner_asked lost explicit grok: %q note=%q", def.Provider, note)
 	}
 	if !strings.Contains(note, "provider_knob: explicit") {
@@ -141,7 +141,7 @@ func TestT652SessionLowExplicitGrokDoesNotStick(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Provider != claudia.ProviderClaude {
+	if def.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("session-low explicit grok stuck: provider=%q note=%q", def.Provider, note)
 	}
 	if strings.Contains(note, "provider_knob: explicit") {

@@ -673,6 +673,7 @@ func main() {
 		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
 		os.Exit(1)
 	}
+	preservedCLI := map[string]bool{}
 	if snap := upgradeSnap; snap != nil {
 		plan := upgrade.PlanReattach(snap)
 		// Merge connect endpoints into registry defs before StartAll so
@@ -684,11 +685,18 @@ func main() {
 			if h.ConnectURL == "" && h.TmuxWindowID == "" {
 				continue
 			}
+			// The upgrade handoff identifies the transport of a surviving
+			// legacy CLI process. Preserve it until that process ends; only
+			// a cold seat can be reminted onto a sidecar.
 			if def := registry.Def(h.Name); def != nil {
-				// Subscription seats Launch on the sidecar. Restoring a
-				// leftover grok serve endpoint would start the vendor CLI
-				// (🎯T866.5 / T866.6).
-				if h.ConnectURL != "" && !seatreg.SubscriptionPlan(def.Provider) {
+				if def.Provider == claudia.Provider(h.Provider) &&
+					def.Provider != cli.SidecarLaunchProvider(def.Provider) &&
+					!upgrade.ShouldStopOnUpgrade(h, true) {
+					preservedCLI[h.Name] = true
+				}
+				// Preserve the endpoint only for the legacy CLI we will
+				// reattach, never for a row already on the sidecar.
+				if h.ConnectURL != "" && (preservedCLI[h.Name] || !seatreg.SubscriptionPlan(def.Provider)) {
 					def.ConnectURL = h.ConnectURL
 					def.ConnectPID = h.PID
 					def.GrokConnect = true
@@ -708,10 +716,10 @@ func main() {
 			"residual", plan.Residual)
 	}
 
-	// Remint after the upgrade merge. Handoff restores grok ConnectURL;
-	// sidecar Launch must not adopt those leftover grok serve processes
-	// (🎯T866.5 / T866.6).
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
+	// Remint only cold seats after the upgrade merge. A reattachable
+	// legacy CLI retains its transport identity and endpoint; rewriting its
+	// persisted provider while the process survives would misroute Launch.
+	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
 		slog.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n)
@@ -1263,7 +1271,7 @@ func main() {
 	if ctx.Err() != nil {
 		return
 	}
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
+	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
 		slog.Warn("sidecar remint after reattach failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
