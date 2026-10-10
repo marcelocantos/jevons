@@ -35,33 +35,11 @@ func emptyReviewEvidence() reviewEvidence {
 	return reviewEvidence{Commit: reviewArtifact{Status: "missing"}, Gate: reviewArtifact{Status: "missing"}, Diff: reviewArtifact{Status: "missing"}, Report: reviewArtifact{Status: "missing"}, Screenshots: []reviewArtifact{}}
 }
 
-var reviewSHA = regexp.MustCompile(`\b[0-9a-fA-F]{40}\b`)
-var reviewGate = regexp.MustCompile(`\b(?:gate-id[=: ]+|GATE\s+[^\n]*?\bid=)([0-9a-f]{8})\b`)
-var reviewShot = regexp.MustCompile(`(?i)artifacts/[a-zA-Z0-9_./-]+\.(?:png|jpe?g)`)
-var reviewReport = regexp.MustCompile(`\breport[ -]handle[=: ]+([a-zA-Z0-9_.-]+)/([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}(?:-[0-9]+)?)\b`)
-
-// Distinct references in a producer's typed evidence must be unambiguous;
-// never pair the first arbitrary SHA and gate id from unrelated prose.
-func uniqueReference(matches []string) string {
-	if len(matches) == 0 {
-		return ""
-	}
-	first := strings.ToLower(matches[0])
-	for _, v := range matches[1:] {
-		if strings.ToLower(v) != first {
-			return ""
-		}
-	}
-	return first
-}
-func uniqueGate(text string) string {
-	matches := reviewGate.FindAllStringSubmatch(text, -1)
-	ids := make([]string, 0, len(matches))
-	for _, m := range matches {
-		ids = append(ids, m[1])
-	}
-	return uniqueReference(ids)
-}
+var reviewSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+var reviewGateID = regexp.MustCompile(`^[0-9a-f]{8}$`)
+var reviewShot = regexp.MustCompile(`(?i)^artifacts/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+\.(?:png|jpe?g)$`)
+var reviewAgent = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,100}$`)
+var reviewReportID = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}(?:-[0-9]+)?$`)
 
 func (s *Server) reviewDetail(q ownerquestionview.Question) reviewItem {
 	item := reviewFromQuestion(q)
@@ -91,9 +69,14 @@ func (s *Server) reviewDetail(q ownerquestionview.Question) reviewItem {
 	if !matchingReview(q) {
 		return item
 	}
-	text := q.Review.Evidence
-	sha := uniqueReference(reviewSHA.FindAllString(text, -1))
-	id := uniqueGate(text)
+	sha := strings.ToLower(q.Review.CommitSHA)
+	if !reviewSHA.MatchString(sha) {
+		sha = ""
+	}
+	id := q.Review.GateID
+	if !reviewGateID.MatchString(id) {
+		id = ""
+	}
 	if sha != "" {
 		item.Evidence.Commit = reviewArtifact{Status: "reported_only", Reference: sha}
 		item.Evidence.Diff.Status = "reported_only"
@@ -126,14 +109,17 @@ func (s *Server) reviewDetail(q ownerquestionview.Question) reviewItem {
 	}
 	// A diff's content cannot be certified safe to display from a reference
 	// alone. Keep the link absent even for a verified commit.
-	if m := reviewReport.FindStringSubmatch(text); len(m) > 2 {
-		item.Evidence.Report = reviewArtifact{Status: "reported_only", Reference: m[1] + "/" + m[2]}
-		if rec, e := agentreport.Load(s.stateDir, m[1], m[2]); e != nil || rec.ID != m[2] || rec.Agent != m[1] || !strings.Contains(rec.Text, "jevons: target "+q.Identity.Target+"\n") {
+	if reviewAgent.MatchString(q.Review.ReportAgent) && reviewReportID.MatchString(q.Review.ReportID) {
+		agent, id := q.Review.ReportAgent, q.Review.ReportID
+		item.Evidence.Report = reviewArtifact{Status: "reported_only", Reference: agent + "/" + id}
+		if rec, e := agentreport.Load(s.stateDir, agent, id); e != nil || rec.ID != id || rec.Agent != agent || !strings.Contains(rec.Text, "jevons: target "+q.Identity.Target+"\n") {
 			item.Evidence.Report.Status = "inaccessible"
 		}
 	}
-	for _, path := range reviewShot.FindAllString(text, -1) {
-		item.Evidence.Screenshots = append(item.Evidence.Screenshots, reviewArtifact{Status: "reported_only", Reference: filepath.Base(path)})
+	for _, path := range q.Review.ScreenshotRefs {
+		if reviewShot.MatchString(path) {
+			item.Evidence.Screenshots = append(item.Evidence.Screenshots, reviewArtifact{Status: "reported_only", Reference: filepath.Base(path)})
+		}
 	}
 	return item
 }

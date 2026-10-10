@@ -72,8 +72,16 @@ func TestReviewEvidenceVersionScopeAndHonestMissing(t *testing.T) {
 		id := ownerquestionview.Identity{Repo: repo, Target: "T766.3", ID: "scope", Version: version}
 		return ownerquestionview.Question{Identity: id, Text: "What is the verdict?", Asker: "po", AnswerRoute: "chat", Review: &ownerquestion.ReviewEvent{Identity: ownerquestion.Identity(id), Readiness: ownerquestion.Actionable, Action: "Decide", Evidence: evidence}}
 	}
-	v1 := mk("v1", "commit "+sha+"; GATE test exit=0 GREEN id=abcdef12; report handle=worker/"+rec.ID+"; artifacts/screens/one.png")
-	v2 := mk("v2", "commit "+strings.Repeat("a", 40)+"; GATE test exit=0 GREEN id=fedcba98; artifacts/../../etc/shadow.png")
+	v1 := mk("v1", "prose may mention arbitrary paths /tmp/private")
+	v1.Review.CommitSHA = sha
+	v1.Review.GateID = "abcdef12"
+	v1.Review.ReportAgent = "worker"
+	v1.Review.ReportID = rec.ID
+	v1.Review.ScreenshotRefs = []string{"artifacts/screens/one.png"}
+	v2 := mk("v2", "untrusted prose commit "+sha+" gate-id=abcdef12")
+	v2.Review.CommitSHA = strings.Repeat("a", 40)
+	v2.Review.GateID = "fedcba98"
+	v2.Review.ScreenshotRefs = []string{"artifacts/../../etc/shadow.png", "artifacts/screens/two.png"}
 	qs := ownerquestionview.New(state)
 	if e := qs.Record(v1); e != nil {
 		t.Fatal(e)
@@ -105,7 +113,7 @@ func TestReviewEvidenceVersionScopeAndHonestMissing(t *testing.T) {
 		t.Fatal("absolute repo disclosed", raw)
 	}
 	b, _ := read("/api/reviews/" + reviewID(v2.Identity))
-	if b.Evidence.Commit.Status != "reported_only" || b.Evidence.Gate.Status != "inaccessible" || b.Evidence.Diff.URL != "" || b.Evidence.Screenshots[0].URL != "" {
+	if b.Evidence.Commit.Status != "reported_only" || b.Evidence.Gate.Status != "inaccessible" || b.Evidence.Diff.URL != "" || len(b.Evidence.Screenshots) != 1 || b.Evidence.Screenshots[0].URL != "" {
 		t.Fatal(b)
 	}
 	w := httptest.NewRecorder()
@@ -125,6 +133,18 @@ func TestReviewEvidenceVersionScopeAndHonestMissing(t *testing.T) {
 		{"ambiguous-sha", "commit " + sha + " commit " + strings.Repeat("c", 40) + " gate-id=abcdef12", "reported_only"},
 	} {
 		q := mk("v3-"+tc.label, tc.evidence)
+		q.Review.CommitSHA = sha
+		switch tc.label {
+		case "wrong-commit":
+			q.Review.GateID = "aaaabbbb"
+		case "dirty":
+			q.Review.GateID = "ccccdddd"
+		case "red":
+			q.Review.GateID = "eeeeffff"
+		case "ambiguous-sha":
+			q.Review.CommitSHA = "untrusted-ambiguous"
+			q.Review.GateID = "abcdef12"
+		}
 		result := s.reviewDetail(q)
 		if result.Evidence.Commit.Status == "verified" || result.Evidence.Gate.Status == "verified" || result.Evidence.Diff.URL != "" || result.Evidence.Gate.URL != "" {
 			t.Fatalf("%s false verification: %+v", tc.label, result.Evidence)
@@ -141,6 +161,8 @@ func TestReviewEvidenceVersionScopeAndHonestMissing(t *testing.T) {
 	// No local filesystem, arbitrary report, or unverified citation may be
 	// converted to a public URL through a revised or malicious record.
 	corrupt := mk("v4", "commit "+sha+" gate-id=abcdef12")
+	corrupt.Review.CommitSHA = sha
+	corrupt.Review.GateID = "abcdef12"
 	corrupt.Review.Identity.Version = "v-other"
 	if item := s.reviewDetail(corrupt); item.Evidence.Commit.Status == "verified" {
 		t.Fatal("mismatched review verified")

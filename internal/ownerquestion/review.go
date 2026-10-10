@@ -28,15 +28,21 @@ const (
 // prerequisite is NOT an answer to the subsequent owner review question.
 // An open event is an actionable sequence, not a claim that review occurred.
 type ReviewEvent struct {
-	Identity     Identity  `json:"identity"`
-	Evidence     string    `json:"evidence"`
-	Prerequisite string    `json:"prerequisite"`
-	Action       string    `json:"action"`
-	AnswerRoute  string    `json:"answer_route"`
-	Asker        string    `json:"asker"`
-	Lifecycle    Lifecycle `json:"lifecycle"`
-	Readiness    Readiness `json:"readiness"`
-	Link         string    `json:"link,omitempty"`
+	Identity Identity `json:"identity"`
+	Evidence string   `json:"evidence"`
+	// Typed, bounded citations. Prose in Evidence is never upgraded to verification.
+	CommitSHA      string    `json:"commit_sha,omitempty"`
+	GateID         string    `json:"gate_id,omitempty"`
+	ReportAgent    string    `json:"report_agent,omitempty"`
+	ReportID       string    `json:"report_id,omitempty"`
+	ScreenshotRefs []string  `json:"screenshot_refs,omitempty"`
+	Prerequisite   string    `json:"prerequisite"`
+	Action         string    `json:"action"`
+	AnswerRoute    string    `json:"answer_route"`
+	Asker          string    `json:"asker"`
+	Lifecycle      Lifecycle `json:"lifecycle"`
+	Readiness      Readiness `json:"readiness"`
+	Link           string    `json:"link,omitempty"`
 }
 
 func (e ReviewEvent) Question() Question {
@@ -103,7 +109,7 @@ func FromActionableReview(text, workdir, asker string) (ReviewEvent, bool, error
 	// The content version is independent of incidental report prose, gate IDs,
 	// agent names and timestamps. Revised evidence creates a new version.
 	h := sha256.Sum256([]byte(evidence))
-	e := ReviewEvent{Identity: Identity{Repo: repo, Target: m.Target, ID: "hardware-visual-review", Version: hex.EncodeToString(h[:8])}, Evidence: evidence, Prerequisite: "Reconnect the Fold and capture folded/unfolded hardware screenshots", Action: "review both folded/unfolded screenshots and give an accept/reject visual verdict", AnswerRoute: "reply to jevons-po with target " + m.Target + " (accept/reject)", Asker: asker, Lifecycle: Open, Readiness: PrerequisiteBlocked, Link: "http://localhost:13705/"}
+	e := ReviewEvent{Identity: Identity{Repo: repo, Target: m.Target, ID: "hardware-visual-review", Version: hex.EncodeToString(h[:8])}, Evidence: evidence, CommitSHA: m.SHA, GateID: m.GateID, ScreenshotRefs: shots, Prerequisite: "Reconnect the Fold and capture folded/unfolded hardware screenshots", Action: "review both folded/unfolded screenshots and give an accept/reject visual verdict", AnswerRoute: "reply to jevons-po with target " + m.Target + " (accept/reject)", Asker: asker, Lifecycle: Open, Readiness: PrerequisiteBlocked, Link: "http://localhost:13705/"}
 	if !strings.Contains(payload, "`:13705`") {
 		e.Link = ""
 	}
