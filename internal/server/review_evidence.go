@@ -79,7 +79,7 @@ func (s *Server) reviewDetail(q ownerquestionview.Question) reviewItem {
 			item.TargetLookup = "inaccessible"
 		} else if found {
 			item.TargetLookup = "verified"
-			item.TargetTitle = row.Name
+			item.TargetTitle = redactReviewPaths(row.Name, repo)
 			item.TargetStatus = row.Status
 		}
 	}

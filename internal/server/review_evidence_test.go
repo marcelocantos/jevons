@@ -151,3 +151,48 @@ func TestReviewEvidenceVersionScopeAndHonestMissing(t *testing.T) {
 		t.Fatal("traversal served")
 	}
 }
+
+// A mutation between index and detail reads cannot turn a review identity
+// into a raw artifact fetch: evidence endpoints are deliberately absent.
+func TestReviewEvidenceConcurrentVersionChangeNeverServesRawArtifact(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+	repo, e := ownerquestion.CanonicalRepo(repo)
+	if e != nil {
+		t.Fatal(e)
+	}
+	store := ownerquestionview.New(dir)
+	mk := func(v string) ownerquestionview.Question {
+		return ownerquestionview.Question{Identity: ownerquestionview.Identity{Repo: repo, Target: "T766.3", ID: "decision", Version: v}, Text: "Decide", Asker: "po", AnswerRoute: "chat"}
+	}
+	first := mk("v1")
+	if e := store.Record(first); e != nil {
+		t.Fatal(e)
+	}
+	s := New("test", dir)
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	changed := make(chan error, 1)
+	go func() { changed <- store.Record(mk("v2")) }()
+	for i := 0; i < 20; i++ {
+		for _, suffix := range []string{"/diff", "/gate", "/report"} {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/reviews/"+reviewID(first.Identity)+suffix, nil))
+			if w.Code != 404 {
+				t.Fatalf("mutation served %s: %d", suffix, w.Code)
+			}
+		}
+	}
+	if e := <-changed; e != nil {
+		t.Fatal(e)
+	}
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/reviews/"+reviewID(first.Identity), nil))
+	var old reviewItem
+	if e := json.Unmarshal(w.Body.Bytes(), &old); e != nil {
+		t.Fatal(e)
+	}
+	if old.State != ownerquestionview.Superseded || old.Version != "v1" {
+		t.Fatal(old)
+	}
+}
