@@ -80,13 +80,13 @@ func (s *Server) registryParent(name string) string {
 // notifyParentReport delivers a terminal report to the registry parent on
 // the daemon path (🎯T690). It does not go through jevons_agent_send.
 // Failure is logged; the overseer notify still runs.
-func (s *Server) notifyParentReport(agentName, msg string) bool {
+func (s *Server) notifyParentReport(agentName, msg string) {
 	parent := s.registryParent(agentName)
 	if parent == "" {
-		return false
+		return
 	}
 	if s.isOverseerAgent(parent) {
-		return false
+		return
 	}
 	if rec, err := agentreport.Latest(s.agentReportStateDir(), agentName); err == nil {
 		msg = withAgentReportID(msg, rec.Handle(), s.deliveryNow())
@@ -98,12 +98,8 @@ func (s *Server) notifyParentReport(agentName, msg string) bool {
 		s.logLifecycle(compAgentLifecycle, "parent_report", "error", map[string]any{
 			"agent": agentName, "parent": parent, "err": err.Error(),
 		})
-		return false
+		return
 	}
-	// A successful API call can still be delivered_unconfirmed (or a replay
-	// suppression). Only a witnessed or durably queued parent copy permits
-	// suppressing the overseer copy.
-	confirmed := res.Status == "sent"
 	slog.Info("notifying parent",
 		"agent", agentName, "parent", parent, "status", res.Status,
 		"channel", ParentReportChannel)
@@ -111,5 +107,4 @@ func (s *Server) notifyParentReport(agentName, msg string) bool {
 		"agent": agentName, "parent": parent, "status": res.Status,
 		"channel": ParentReportChannel,
 	})
-	return confirmed
 }

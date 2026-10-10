@@ -1791,20 +1791,7 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 	// that cannot call jevons_agent_send still reports upward.
 	// 🎯T731: the parent copy carries report_id so a post-reap flush can be
 	// marked and de-duplicated without changing the overseer short-report wire.
-	parentDelivered := s.notifyParentReport(agentName, parentMsg)
-	// 🎯T1054: this is the last trusted, typed source/recipient boundary
-	// before the overseer's ACP user echo and assistant prose can paint in
-	// owner chat. Never suppress an unstored or undelivered report.
-	if parentDelivered && !handle.Empty() && len(FalseGreenFlagsForReport(text, reportWorkDir)) == 0 && routineWorkerCompletion(text) {
-		slog.Info("owner chat routine report admitted to parent only",
-			"agent", agentName, "parent", s.registryParent(agentName),
-			"report_id", handle.ReportID, "reason", "typed_green_finish_parent_delivered")
-		s.logLifecycle(compAgentLifecycle, "owner_admission", "suppressed_routine", map[string]any{
-			"agent": agentName, "parent": s.registryParent(agentName),
-			"report_id": handle.ReportID, "reason": "typed_green_finish_parent_delivered", "count": 1,
-		})
-		return
-	}
+	s.notifyParentReport(agentName, parentMsg)
 
 	overseer := s.overseerName()
 	res, err := s.deliverByName(overseer, msg, OriginAgent, false)
