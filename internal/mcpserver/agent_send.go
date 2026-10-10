@@ -82,10 +82,14 @@ func isPromptInFlight(err error) bool {
 // holding the message, and "queued (N pending) … held by the daemon" is then a
 // claim about a store that does not contain it.
 func (s *Server) enqueueAgentSend(name, text string) (int, error) {
+	return s.enqueueAgentSendWithRequestID(name, text, "")
+}
+
+func (s *Server) enqueueAgentSendWithRequestID(name, text, requestID string) (int, error) {
 	if IsIdleNudgeText(text) {
 		// 🎯T821: a held idle nudge is stale the moment the next one is
 		// composed; keep one pending nudge per seat, not a growing stack.
-		_, depth, replaced, err := s.sendQueue().AppendSuperseding(name, text, time.Now(),
+		_, depth, replaced, err := s.sendQueue().AppendSupersedingWithRequestID(name, text, requestID, time.Now(),
 			func(e sendq.Entry) bool { return IsIdleNudgeText(e.Text) })
 		if replaced > 0 {
 			slog.Info("idle nudge superseded held nudge",
@@ -93,7 +97,7 @@ func (s *Server) enqueueAgentSend(name, text string) (int, error) {
 		}
 		return depth, err
 	}
-	_, depth, err := s.sendQueue().Append(name, text, time.Now())
+	_, depth, err := s.sendQueue().AppendWithRequestID(name, text, requestID, time.Now())
 	return depth, err
 }
 
@@ -490,6 +494,10 @@ func (s *Server) lockAgentSend(name string) func() {
 //   - queue: hold for the next turn boundary when a turn is open; an idle seat
 //     has no boundary coming, so the text is submitted (mechanism submit).
 func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
+	return deliverToSenderModeWithRequestID(s, name, text, "", mode, proc, rehydrated, confirm)
+}
+
+func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
 	s.observeQueue(name)
 	// A sidecar socket write returns before the provider accepts or rejects
 	// the prompt. Serialize sends to one seat through the witness verdict so
@@ -498,6 +506,9 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	defer unlock()
 	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
+	}
+	if requestID != "" && !supportsRequestID(proc) {
+		return agentSendResult{}, fmt.Errorf("request_id %q cannot be accepted for %q: %w", requestID, name, errRequestIDUnavailable)
 	}
 	if mode == "" {
 		mode = delivery.ModeSubmit
@@ -510,6 +521,9 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	var seam sendModeFunc
 	if mode == delivery.ModeSteer {
 		seam = sendModeSeam(proc)
+		if requestID != "" {
+			seam = sendModeRequestSeam(proc, requestID)
+		}
 		if seam == nil {
 			logSendModeSeamMissing(name)
 		}
@@ -538,7 +552,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		// reporting a cheerful "queued" over a dark event stream is the exact
 		// silence that let six messages stack behind a compacted jevons-po.
 		darkStream := s.EnsureAgentEventsWired(name)
-		n, qerr := s.enqueueAgentSend(name, text)
+		n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
 		if qerr != nil {
 			return agentSendResult{}, undeliverableQueueError(name, qerr)
 		}
@@ -623,7 +637,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		if seam != nil {
 			return seam(text, mode)
 		}
-		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return a.Send(text) })
+		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, requestID) })
 	}
 
 	// Opened BEFORE the send so "the payload arrived" is measured against a
@@ -760,7 +774,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		// cutting a turn short, "it went into the composer and stayed there"
 		// is precisely the outcome the caller must not hear as success.
 		watch2 := s.watchAgentTurnFor(name, text)
-		if err2 := readoptDeliver(name, proc, func(a agentSender) error { return a.Send(text) }); err2 == nil {
+		if err2 := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, requestID) }); err2 == nil {
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
 			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil, mm)
@@ -800,7 +814,7 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 		}
 	}
 
-	n, qerr := s.enqueueAgentSend(name, text)
+	n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
 	if qerr != nil {
 		return agentSendResult{}, undeliverableQueueError(name, qerr)
 	}
@@ -910,7 +924,7 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
 	defer cancel()
 	generation := s.terminalGeneration(name)
-	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return a.Send(text) })
+	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, entry.RequestID) })
 	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
 	// Watch before treating the attempt as failed — broker-wrapped errors miss
 	// queueSendDefinitelyNotSent's exact-string match and would otherwise land
@@ -929,7 +943,7 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 		}
 		return false
 	}
-	if queueSendDefinitelyNotSent(sendErr) {
+	if errors.Is(sendErr, errRequestIDUnavailable) || queueSendDefinitelyNotSent(sendErr) {
 		if resolve(sendq.DefinitelyNotSent, sendErr.Error()) && !isPromptInFlight(sendErr) {
 			s.noteSendqDeliveryFailure(name, entry, sendErr.Error())
 		}

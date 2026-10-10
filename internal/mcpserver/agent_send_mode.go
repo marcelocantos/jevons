@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -44,7 +45,14 @@ func (s *Server) sendToAgentMode(actor, name, text string, mode delivery.Mode) (
 // DeliverAgentMessageMode is DeliverAgentMessageAs with the owner's mode
 // named; the HTTP send handler and the mux `send` case use it (🎯T657).
 func (s *Server) DeliverAgentMessageMode(name, text string, origin SendOrigin, mode delivery.Mode) (AgentDeliverResult, error) {
-	res, err := s.deliverByNameMode(ActorOwnerSurface, name, text, origin, mode, confirmHere)
+	return s.DeliverAgentMessageModeWithRequestID(name, text, origin, mode, "")
+}
+
+// DeliverAgentMessageModeWithRequestID is reserved for trusted host-admission
+// callers that have durably issued a logical owner request ID. MCP/HTTP client
+// arguments must never be forwarded here as an identity assertion.
+func (s *Server) DeliverAgentMessageModeWithRequestID(name, text string, origin SendOrigin, mode delivery.Mode, requestID string) (AgentDeliverResult, error) {
+	res, err := s.deliverByNameWithModeRequestID(ActorOwnerSurface, name, text, origin, mode, confirmHere, requestID)
 	if err != nil {
 		return AgentDeliverResult{}, err
 	}
@@ -129,6 +137,74 @@ func sendModeSeam(proc agentSender) sendModeFunc {
 		}
 		return out, err
 	}
+}
+
+// requestModeSender is the pin-independent test/adapter API. The production
+// Claudia method has a named DeliveryMode type, so the reflective branch is
+// used for it without bumping the pinned module here.
+type requestModeSender interface {
+	SendModeWithRequestIDString(text, mode, requestID string) (mechanism, phase string, err error)
+}
+
+func sendModeRequestSeam(proc agentSender, requestID string) sendModeFunc {
+	if ms, ok := proc.(requestModeSender); ok {
+		return func(text string, mode delivery.Mode) (sendModeOutcome, error) {
+			mech, phase, err := ms.SendModeWithRequestIDString(text, string(mode), requestID)
+			return sendModeOutcome{Mechanism: mech, PhaseBefore: phase}, err
+		}
+	}
+	v := reflect.ValueOf(proc)
+	if !v.IsValid() || (v.Kind() == reflect.Pointer && v.IsNil()) {
+		return nil
+	}
+	m := v.MethodByName("SendModeWithRequestID")
+	if !m.IsValid() {
+		return nil
+	}
+	t := m.Type()
+	errType := reflect.TypeOf((*error)(nil)).Elem()
+	if t.NumIn() != 3 || t.In(0).Kind() != reflect.String || t.In(1).Kind() != reflect.String || t.In(2).Kind() != reflect.String ||
+		t.NumOut() != 2 || t.Out(0).Kind() != reflect.Struct || !t.Out(1).Implements(errType) {
+		return nil
+	}
+	mechF, ok1 := t.Out(0).FieldByName("Mechanism")
+	phaseF, ok2 := t.Out(0).FieldByName("PhaseBefore")
+	if !ok1 || !ok2 || mechF.Type.Kind() != reflect.String || phaseF.Type.Kind() != reflect.String {
+		return nil
+	}
+	return func(text string, mode delivery.Mode) (sendModeOutcome, error) {
+		out := m.Call([]reflect.Value{reflect.ValueOf(text).Convert(t.In(0)), reflect.ValueOf(string(mode)).Convert(t.In(1)), reflect.ValueOf(requestID).Convert(t.In(2))})
+		result := sendModeOutcome{Mechanism: out[0].FieldByIndex(mechF.Index).String(), PhaseBefore: out[0].FieldByIndex(phaseF.Index).String()}
+		if !out[1].IsNil() {
+			return result, out[1].Interface().(error)
+		}
+		return result, nil
+	}
+}
+
+var errRequestIDUnavailable = errors.New("Claudia T184 SendWithRequestID unavailable (not sent)")
+
+func supportsRequestID(proc agentSender) bool {
+	if proc == nil {
+		return false
+	}
+	if _, ok := proc.(interface{ SendWithRequestID(string, string) error }); ok {
+		return true
+	}
+	return sendModeRequestSeam(proc, "probe") != nil
+}
+
+// sendWithRequestID never falls back to Send: losing a host ID is a refusal,
+// not a legacy delivery. The optional interface compiles against Claudia
+// v0.52 while the T184 pin is separately reviewed.
+func sendWithRequestID(proc agentSender, text, requestID string) error {
+	if requestID == "" {
+		return proc.Send(text)
+	}
+	if sender, ok := proc.(interface{ SendWithRequestID(string, string) error }); ok {
+		return sender.SendWithRequestID(text, requestID)
+	}
+	return fmt.Errorf("request_id %q cannot be delivered: %w", requestID, errRequestIDUnavailable)
 }
 
 var sendModeSeamMissingOnce sync.Once
