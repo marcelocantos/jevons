@@ -953,6 +953,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	var liveProvider claudia.Provider
 	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
 		liveProvider = proc.Provider()
+		if liveProvider == "" { // Claudia's empty live provider denotes Claude CLI.
+			liveProvider = claudia.ProviderClaude
+		}
 	}
 	if err := alignStartTransport(def, existed, providerArg, liveProvider); err != nil {
 		return nil, existed, routeNote, err

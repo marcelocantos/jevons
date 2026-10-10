@@ -691,7 +691,7 @@ func main() {
 			if def := registry.Def(h.Name); def != nil {
 				if def.Provider == claudia.Provider(h.Provider) &&
 					def.Provider != cli.SidecarLaunchProvider(def.Provider) &&
-					!upgrade.ShouldStopOnUpgrade(h, true) {
+					upgrade.HandoffTransportAlive(h) {
 					preservedCLI[h.Name] = true
 				}
 				// Preserve the endpoint only for the legacy CLI we will
