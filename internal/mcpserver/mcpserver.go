@@ -691,24 +691,32 @@ func (s *Server) effectivePortfolio() *cost.Portfolio {
 	return base
 }
 
-// harnessLoadCounts counts process-alive seats by provider for routing and
-// admission, not registered definitions or cost-window sessions. Unknown process
-// state consumes a slot conservatively until the seat authority observes death.
+// harnessLoadCounts counts process seats for routing and admission, not
+// registered definitions or cost-window sessions. A stopped, deliberately
+// parked seat has no process even after its last liveness observation expires.
 func (s *Server) harnessLoadCounts() cost.LoadCounts {
 	if s == nil || s.registry == nil {
 		return cost.LoadCounts{}
 	}
-	return activeProcessLoad(s.registry.List(), func(name string) seatstate.Tri {
-		return seatstate.ReadRegistry(s.registry, name).Alive
+	intent := s.fleetIntent()
+	return activeProcessLoad(s.registry.List(), func(name string) seatstate.State {
+		return seatstate.ReadRegistry(s.registry, name)
+	}, func(name string) bool {
+		return intent.AgentState(name) == fleetintent.Parked && s.registry.Get(name) == nil
 	})
 }
 
-// activeProcessLoad is pure so parked, live and uncertain seats can be tested
-// without launching provider processes. Zero-turn alive processes count.
-func activeProcessLoad(defs []claudia.AgentDef, alive func(string) seatstate.Tri) cost.LoadCounts {
+// activeProcessLoad is a process-free seam. Yes counts even before the first
+// turn; No excludes. Unknown normally reserves a slot (fail closed). The
+// exception is a durable park plus an absent local handle and no positive
+// broker observation: the explicit stop is evidence even after its transient
+// seatstate observation expires. A still-running parked process is counted.
+func activeProcessLoad(defs []claudia.AgentDef, state func(string) seatstate.State, parkedWithoutHandle func(string) bool) cost.LoadCounts {
 	load := cost.LoadCounts{}
 	for _, d := range defs {
-		if alive(d.Name) == seatstate.No {
+		st := state(d.Name)
+		if st.Alive == seatstate.No ||
+			(st.Alive != seatstate.Yes && st.BrokerAlive != seatstate.Yes && parkedWithoutHandle(d.Name)) {
 			continue
 		}
 		p := strings.ToLower(strings.TrimSpace(string(d.Provider)))

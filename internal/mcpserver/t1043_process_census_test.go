@@ -29,7 +29,7 @@ func TestT1043ParkedRowsDoNotConsumeAdmission(t *testing.T) {
 		states[n] = seatstate.Yes // includes processes that have not submitted a turn
 	}
 	load := func() map[string]int {
-		return map[string]int(activeProcessLoad(defs, func(n string) seatstate.Tri { return states[n] }))
+		return map[string]int(activeProcessLoad(defs, func(n string) seatstate.State { return seatstate.State{Alive: states[n]} }, func(string) bool { return false }))
 	}
 	snapshot := func() capacity.Snapshot {
 		return CapacitySnapshot(CapacitySnapshotArgs{
@@ -75,13 +75,29 @@ func TestT1043ParkedRowsDoNotConsumeAdmission(t *testing.T) {
 
 func TestT1043UnknownProcessFailsClosedButStoppedDoesNot(t *testing.T) {
 	defs := []claudia.AgentDef{{Name: "unknown", Provider: claudia.ProviderGrok}, {Name: "stopped", Provider: claudia.ProviderGrok}}
-	load := activeProcessLoad(defs, func(n string) seatstate.Tri {
+	load := activeProcessLoad(defs, func(n string) seatstate.State {
 		if n == "stopped" {
-			return seatstate.No
+			return seatstate.State{Alive: seatstate.No}
 		}
-		return seatstate.Unknown
-	})
+		return seatstate.State{Alive: seatstate.Unknown}
+	}, func(string) bool { return false })
 	if load["grok"] != 1 {
 		t.Fatalf("unknown must reserve a slot, stopped must not: %v", load)
+	}
+}
+
+// A durable park outlives the two-minute liveness TTL. Do not re-fill the
+// cap with 130 stopped definitions when their transient No turns Unknown.
+func TestT1043ParkPersistsBeyondLivenessTTL(t *testing.T) {
+	defs := []claudia.AgentDef{{Name: "parked"}, {Name: "still-alive-parked"}, {Name: "broker-alive-parked"}, {Name: "unobserved-working"}}
+	states := map[string]seatstate.State{
+		"parked":              {Alive: seatstate.Unknown},
+		"still-alive-parked":  {Alive: seatstate.Yes},
+		"broker-alive-parked": {Alive: seatstate.Unknown, BrokerAlive: seatstate.Yes},
+		"unobserved-working":  {Alive: seatstate.Unknown},
+	}
+	got := activeProcessLoad(defs, func(n string) seatstate.State { return states[n] }, func(n string) bool { return n != "unobserved-working" })
+	if got["grok"] != 3 {
+		t.Fatalf("parked/no handle must be excluded while alive or uncertain working seats count: %v", got)
 	}
 }
