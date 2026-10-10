@@ -171,21 +171,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	// 🎯T804: where a slow call spends its time, logged when it is slow.
 	tm := newPhaseTimer()
 	defer tm.logIfSlow("🎯T804 jevons_agent_list slow", agentListSlow)
-	// 🎯T85: proactive silent-death sweep; surface recovery to the caller
-	// (and overseer notify), not only logs.
-	reps := s.sweepDeadAccounted()
-	tm.mark("sweep_dead")
-	// 🎯T679.2: the same birth check the periodic health hook runs, so a
-	// list call is sufficient to mark and notify but is not required.
-	s.sweepBornStuck()
-	tm.mark("sweep_born_stuck")
-	s.sweepSeatMCPOnRequest() // 🎯T797, cache only on the request path (🎯T804)
-	tm.mark("sweep_seat_mcp")
-	s.notifyDeadAgents(reps)
-	// 🎯T459: reap fleet panes the registry does not know about before
-	// we report the count the host is deciding against.
-	s.SweepOrphanPanes()
-	tm.mark("sweep_orphan_panes")
+	// This is a read path. Dead handles are reported, not recovered here.
+	reps := s.observeDeadHandles(s.overseerName(), s.fleetIntent())
+	tm.mark("observe_dead")
 	defs := s.registry.List()
 	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {

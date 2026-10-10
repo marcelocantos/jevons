@@ -562,7 +562,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	// --- Fleet agents ---
 	if s.registry != nil {
 		s.observeRegistryLiveness()
-		reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent)
+		reps := s.observeDeadHandles(overseer, intent)
 		recovered := map[string]bool{}
 		dead := map[string]DeadAgentReport{}
 		for _, r := range reps {

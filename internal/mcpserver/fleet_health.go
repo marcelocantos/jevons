@@ -20,6 +20,8 @@ import (
 type DeadAgentReport struct {
 	Name      string
 	Recovered bool
+	// Observed means no recovery action was attempted on this read path.
+	Observed bool
 	// Removed is the 🎯T544 outcome: a dead work seat left the registry.
 	Removed bool
 	Error   string
@@ -155,6 +157,42 @@ func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overse
 	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent)
 }
 
+// observeDeadAgents reads the same dead-handle predicate as recovery without
+// executing its plan. Listing and sampling must never launch, stop, or remove
+// an unrelated seat; the explicit repair path owns those effects.
+func observeDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
+	if reg == nil {
+		return nil
+	}
+	var out []DeadAgentReport
+	for _, d := range reg.List() {
+		if d.Name == "" || d.Name == overseerName {
+			continue
+		}
+		hasProc, alive := reg.ProcState(d.Name)
+		dec := intent.Allow(d.Name, fleetintent.ControlRevive)
+		detect, _, _, _ := deadRecoveryPlan(hasProc, alive, d.AutoStart, dec.Allow, d.Purpose)
+		if !detect {
+			continue
+		}
+		rep := DeadAgentReport{Name: d.Name, Cause: reg.ExitCause(d.Name), Observed: true}
+		if !dec.Allow {
+			rep.Declined = dec.Reason
+		}
+		out = append(out, rep)
+	}
+	return out
+}
+
+// observeDeadHandles is the production read-only adapter for the observer.
+func (s *Server) observeDeadHandles(overseer string, intent fleetintent.Snapshot) []DeadAgentReport {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	s.observeRegistryLiveness()
+	return observeDeadAgents(claudiaSweep{reg: s.registry}, overseer, intent)
+}
+
 // sweepDeadAgents is the testable implementation (real path + hermetic fakes).
 func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
 	if reg == nil {
@@ -284,6 +322,8 @@ func FormatDeadAgentReport(reps []DeadAgentReport) string {
 			parts = append(parts, fmt.Sprintf("%s:fail(%s)", r.Name, r.Error))
 		} else if r.Removed {
 			parts = append(parts, fmt.Sprintf("%s:removed", r.Name))
+		} else if r.Observed {
+			parts = append(parts, fmt.Sprintf("%s:dead (not repaired)", r.Name))
 		} else {
 			parts = append(parts, fmt.Sprintf("%s:stopped", r.Name))
 		}

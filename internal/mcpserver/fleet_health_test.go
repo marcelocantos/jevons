@@ -288,3 +288,31 @@ func TestSweepThenPrependIsCallerVisible(t *testing.T) {
 		t.Fatal("side effect Remove required: row must leave the registry")
 	}
 }
+
+// 🎯T766.3: observation of an unrelated dead AutoStart seat and a dead work
+// seat must not invoke either branch of the recovery plan. The explicit
+// sweep still performs both, so this checks the distinction, not just the
+// absence of dead seats in a fixture.
+func TestObserveDeadAgentsDoesNotActuate(t *testing.T) {
+	f := &fakeSweepReg{
+		defs: []claudia.AgentDef{
+			{Name: "requested", Purpose: claudia.PurposeWork},
+			{Name: "unrelated-auto", AutoStart: true, Purpose: claudia.PurposeAside},
+			{Name: "unrelated-work", Purpose: claudia.PurposeWork},
+		},
+		hasProc: map[string]bool{"unrelated-auto": true, "unrelated-work": true},
+		alive:   map[string]bool{"unrelated-auto": false, "unrelated-work": false},
+	}
+	for i := 0; i < 3; i++ { // list, sentinel, staff sample repeat the read
+		reps := observeDeadAgents(f, "jevons", fleetintent.Snapshot{})
+		if len(reps) != 2 || reps[0].Name != "unrelated-auto" || reps[1].Name != "unrelated-work" {
+			t.Fatalf("observation %d: %+v", i, reps)
+		}
+		if reps[0].Recovered || reps[1].Removed || len(f.launches)+len(f.stops)+len(f.removes) != 0 {
+			t.Fatalf("observation acted: reports=%+v launches=%v stops=%v removes=%v", reps, f.launches, f.stops, f.removes)
+		}
+	}
+	if reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}); len(reps) != 2 || !reps[0].Recovered || !reps[1].Removed {
+		t.Fatalf("explicit sweep did not actuate: %+v", reps)
+	}
+}
