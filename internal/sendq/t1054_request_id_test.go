@@ -74,3 +74,22 @@ func TestT1054QuestionCannotBeDigestedOrSuperseded(t *testing.T) {
 		t.Fatalf("question was replaced: %+v err=%v", entries, err)
 	}
 }
+
+func TestT1054ConsolidationCannotEraseRequestID(t *testing.T) {
+	q := NewStore(t.TempDir())
+	now := time.Now()
+	if _, _, err := q.Append("po", "routine", now); err != nil {
+		t.Fatal(err)
+	}
+	original, _, err := q.AppendWithRequestID("po", "owner question", "host-question", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Consolidate("po", "", "new instruction", "operator", "reviewed", now); err == nil {
+		t.Fatal("consolidated away admitted question")
+	}
+	entries, err := q.Snapshot("po")
+	if err != nil || len(entries) != 2 || entries[1].ID != original.ID || entries[1].RequestID != "host-question" {
+		t.Fatalf("request identity lost: %+v %v", entries, err)
+	}
+}

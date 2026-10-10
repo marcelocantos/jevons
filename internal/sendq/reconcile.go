@@ -238,6 +238,12 @@ func (s *Store) Consolidate(agent, keepID, text, actor, evidence string, now tim
 		return Receipt{}, fmt.Errorf("sendq: %q holds %d message(s); consolidation needs at least two", agent, len(f.Entries))
 	}
 	for _, e := range f.Entries {
+		// An admitted owner question is not another revision of an
+		// instruction. Even an operator-authorized consolidation cannot
+		// replace its host identity with the surviving entry's identity.
+		if e.RequestID != "" {
+			return Receipt{}, fmt.Errorf("sendq: request_id %q on entry %s cannot be consolidated", e.RequestID, e.ID)
+		}
 		if e.State != Pending {
 			return Receipt{}, fmt.Errorf(
 				"sendq: entry %s has an unresolved %s attempt %s — reconcile it before consolidating; "+
