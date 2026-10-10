@@ -693,7 +693,7 @@ func (s *Server) effectivePortfolio() *cost.Portfolio {
 
 // harnessLoadCounts counts process seats for routing and admission, not
 // registered definitions or cost-window sessions. A stopped, deliberately
-// parked seat has no process even after its last liveness observation expires.
+// stopped seat has no process even after its last liveness observation expires.
 func (s *Server) harnessLoadCounts() cost.LoadCounts {
 	if s == nil || s.registry == nil {
 		return cost.LoadCounts{}
@@ -702,13 +702,13 @@ func (s *Server) harnessLoadCounts() cost.LoadCounts {
 	return activeProcessLoad(s.registry.List(), func(name string) seatstate.State {
 		return seatstate.ReadRegistry(s.registry, name)
 	}, func(name string) bool {
-		return intent.AgentState(name) == fleetintent.Parked && s.registry.Get(name) == nil
+		return intent.AgentState(name) != fleetintent.Working && s.registry.Get(name) == nil
 	})
 }
 
 // activeProcessLoad is a process-free seam. Yes counts even before the first
 // turn; No excludes. Unknown normally reserves a slot (fail closed). The
-// exception is a durable park plus an absent local handle and no positive
+// exception is durable non-working intent plus an absent local handle and no positive
 // broker observation: the explicit stop is evidence even after its transient
 // seatstate observation expires. A still-running parked process is counted.
 func activeProcessLoad(defs []claudia.AgentDef, state func(string) seatstate.State, parkedWithoutHandle func(string) bool) cost.LoadCounts {
