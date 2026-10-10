@@ -31,8 +31,9 @@ import (
 // does. The daemon is the natural counterweight: it is in a different
 // process tree, it is up whenever the watchdog is idle, and it already
 // reads this package's state to report outages. So each holds the other
-// up — the watchdog restarts a daemon that stops serving, the daemon
-// reinstates a watchdog that stops probing — and neither is alone in
+// up — the watchdog detects outages and restarts a daemon only when
+// KeepAlive is unloaded; the daemon reinstates a watchdog that stops
+// probing — and neither is alone in
 // being trusted to be there.
 //
 // The policy below is pure for the same reason Decide is: the decision
@@ -355,9 +356,9 @@ func SaveAgentState(dir string, st AgentState) error {
 }
 
 // WatchAgentLoop is the daemon's half of the mutual supervision in both
-// KeepAlive and legacy mode: it
-// checks that the off-process watchdog is loaded and probing, reinstates it when it
-// is not, and tells the owner once per gap. The watchdog observes outages
+// KeepAlive and legacy mode: it checks that the off-process watchdog is
+// loaded and probing, reinstates it when it is not, and tells the owner
+// once per gap. The watchdog observes outages
 // under KeepAlive without starting a second process; if KeepAlive unloads,
 // its next invocation falls back to the legacy restart path. Do not decide
 // whether to run this loop at daemon startup from a one-time launchd sample.

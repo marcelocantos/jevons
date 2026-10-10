@@ -99,8 +99,15 @@ type State struct {
 	// DownSince is when the port was first seen unserved. Zero means
 	// the last observation was healthy.
 	DownSince time.Time `json:"down_since,omitzero"`
-	// Attempts counts restarts invoked for the current outage.
+	// Attempts counts recovery decisions for pacing and escalation.
 	Attempts int `json:"attempts,omitempty"`
+	// PassiveChecks counts recovery decisions that did not invoke the legacy
+	// restart script (KeepAlive loaded, or launchd ownership unknown).
+	PassiveChecks int `json:"passive_checks,omitempty"`
+	// LegacyRestarts counts selections of the legacy restart path when an
+	// outage crossed modes (including a missing script). Attempts alone counts
+	// policy decisions for pacing.
+	LegacyRestarts int `json:"legacy_restarts,omitempty"`
 	// LastAttempt paces them.
 	LastAttempt time.Time `json:"last_attempt,omitzero"`
 	// Notified records that the owner has been told about this outage,
