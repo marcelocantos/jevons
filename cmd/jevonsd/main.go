@@ -273,14 +273,10 @@ func main() {
 	srv.SetOverseerName(cfg.OverseerName)
 	// ð¯T200: declarative domain portfolios from config (no GM agent).
 	srv.SetPortfolios(cfg.Portfolios)
-	// ð¯T131: primary project workdir for bullseye frontier discovery (CLI open).
-	if absWD, err := filepath.Abs(cfg.WorkDir); err == nil {
-		srv.SetFrontierCwd(absWD)
-		if err := srv.SetTargetRepoRoots(filepath.Dir(absWD)); err != nil {
-			slog.Warn("target repo index unavailable", "error", err)
-		}
-	} else {
-		srv.SetFrontierCwd(cfg.WorkDir)
+	// 🎯T131/T1056: local frontier plus a bounded qualified target index
+	// derived from the configured workspace, never from browser cwd.
+	if err := configureTargetRepoIndex(srv, cfg); err != nil {
+		slog.Warn("target repo index unavailable (qualified lookups fail closed)", "error", err)
 	}
 
 	// Durable conversation log (ð¯T30.1): every chat line is fsynced here
@@ -2301,4 +2297,37 @@ func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetin
 		}
 		return true
 	}
+}
+
+// configureTargetRepoIndex wires the daemon's configured workspace to the
+// browser-facing qualified target route. ReposRoot names the trusted host;
+// WorkDir selects its owning org. A workdir outside that tree cannot widen
+// lookup to its arbitrary parent.
+func configureTargetRepoIndex(srv *server.Server, cfg config.Config) error {
+	workdir, err := filepath.Abs(cfg.WorkDir)
+	if err != nil {
+		return err
+	}
+	srv.SetFrontierCwd(workdir)
+	workdir, err = filepath.EvalSymlinks(workdir)
+	if err != nil {
+		return err
+	}
+	reposRoot, err := filepath.Abs(cfg.ReposRoot)
+	if err != nil {
+		return err
+	}
+	reposRoot, err = filepath.EvalSymlinks(reposRoot)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(reposRoot, workdir)
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < 2 || parts[0] == ".." || parts[0] == "." || parts[0] == "" {
+		return fmt.Errorf("workdir outside configured repos_root")
+	}
+	return srv.SetTargetRepoRoots(filepath.Join(reposRoot, parts[0]))
 }

@@ -116,3 +116,26 @@ func TestScopedTargetAmbiguousSlugAndSymlinkIdentity(t *testing.T) {
 		t.Fatalf("alias: %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestScopedTargetRepoSymlinkEscapeRejected(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Mkdir(filepath.Join(outside, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "bullseye.yaml"), []byte("targets:\n  T177:\n    name: Escaped\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "claudia")); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", t.TempDir())
+	if err := s.SetTargetRepoRoots(root); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	s.handleFrontierTarget(rr, httptest.NewRequest("GET", "/api/frontier/target?repo=claudia&id=T177", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("symlink escape admitted: %d %s", rr.Code, rr.Body.String())
+	}
+}

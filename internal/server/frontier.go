@@ -869,9 +869,11 @@ func (s *Server) handleFrontierTarget(w http.ResponseWriter, r *http.Request) {
 }
 
 // GraphDiagramBlock is one Mermaid diagram in a multi-component pack (🎯T190).
+// Each connected component (or the shared orphans block) is its own diagram;
+// the panel packs blocks in a wrap grid instead of one mega LR strip.
 type GraphDiagramBlock struct {
 	ID        string `json:"id"`
-	Kind      string `json:"kind"`
+	Kind      string `json:"kind"` // "component" | "orphans"
 	Title     string `json:"title,omitempty"`
 	Mermaid   string `json:"mermaid"`
 	NodeCount int    `json:"node_count"`

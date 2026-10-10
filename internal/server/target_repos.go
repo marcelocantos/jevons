@@ -59,6 +59,12 @@ func (s *Server) SetTargetRepoRoots(roots ...string) error {
 			if err != nil {
 				continue
 			}
+			// A checkout alias may resolve symlinks, but cannot escape the
+			// trusted root that was fixed at daemon startup.
+			rel, err := filepath.Rel(realRoot, cwd)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == "." {
+				continue
+			}
 			st, err := os.Stat(cwd)
 			if err != nil || !st.IsDir() {
 				continue
@@ -66,7 +72,13 @@ func (s *Server) SetTargetRepoRoots(roots ...string) error {
 			if _, err := os.Stat(filepath.Join(cwd, ".git")); err != nil {
 				continue
 			}
-			ledger, notInit, err := discoverLedgerPath(cwd)
+			// In-repo ledgers need no subprocess at daemon startup. Bullseye
+			// discovery remains the fallback for external-shadow ledgers.
+			ledger := filepath.Join(cwd, "bullseye.yaml")
+			var notInit bool
+			if st, statErr := os.Stat(ledger); statErr != nil || st.IsDir() {
+				ledger, notInit, err = discoverLedgerPath(cwd)
+			}
 			if err != nil || notInit || ledger == "" {
 				continue
 			}
