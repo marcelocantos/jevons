@@ -694,9 +694,8 @@ func main() {
 					!upgrade.ShouldStopOnUpgrade(h, true) {
 					preservedCLI[h.Name] = true
 				}
-				// Subscription seats Launch on the sidecar. Restoring a
-				// leftover grok serve endpoint would start the vendor CLI
-				// (🎯T866.5 / T866.6).
+				// Preserve the endpoint only for the legacy CLI we will
+				// reattach, never for a row already on the sidecar.
 				if h.ConnectURL != "" && (preservedCLI[h.Name] || !seatreg.SubscriptionPlan(def.Provider)) {
 					def.ConnectURL = h.ConnectURL
 					def.ConnectPID = h.PID
@@ -717,9 +716,9 @@ func main() {
 			"residual", plan.Residual)
 	}
 
-	// Remint after the upgrade merge. Handoff restores grok ConnectURL;
-	// sidecar Launch must not adopt those leftover grok serve processes
-	// (🎯T866.5 / T866.6).
+	// Remint only cold seats after the upgrade merge. A reattachable
+	// legacy CLI retains its transport identity and endpoint; rewriting its
+	// persisted provider while the process survives would misroute Launch.
 	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
 		slog.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
