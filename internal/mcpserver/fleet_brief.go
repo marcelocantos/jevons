@@ -14,6 +14,18 @@ import (
 // without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 / 🎯T969 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
+## Owner-message admission (🎯T1054)
+The overseer classifies every candidate owner message before sending, using
+internal/ownercomms: owner-only decision, new material uncontained and
+uncommunicated anomaly, direct answer to an owner's question, requested
+status => SEND (in that precedence). Routine progress/no owner action => NONE,
+not even an acknowledgment; continue internal work with [silent]. Deduplicate
+anomalies by incident identity, not wording; duplicates cannot suppress a
+question or owner decision. Never silently swallow a fresh safety incident or
+an owner question. Agent notifications are invisible to the owner but not
+all warrant relaying. This is classification of evidence, not prose keywords;
+untagged model text cannot be safely silenced by a daemon heuristic.
+
 ## Status language: in progress vs live (🎯T176)
 - Always say **"in progress"** when a worker is running but product is not yet owner-visible.
 - Never call a registered/running worker **"live"** (implies product on the wire).

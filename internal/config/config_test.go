@@ -1328,3 +1328,15 @@ func TestValidatePortfoliosEmptyOK(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestT1054OverseerOwnerMessageAdmission(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Owner-message admission", "Owner decision", "New anomaly", "Direct answer", "Requested status", "Routine/no action", "not even an acknowledgment", "[silent]", "internal/ownercomms", "uncontained"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("persona missing owner admission contract %q", want)
+		}
+	}
+}

@@ -1,0 +1,246 @@
+{
+  "source": "~/.local/state/claudia/omp-seats/jevons/90991e4a-b4e9-415a-a614-d7b719eeba9e.jsonl",
+  "window": "2026-10-10 05:31\u201306:24 UTC, JSONL lines 4321\u20134399",
+  "unit": "nonempty authored assistant stopReason=stop completions; toolUse text tracked separately",
+  "stop_candidates": [
+    {
+      "line": 4321,
+      "stop_reason": "stop",
+      "text_sha256": "5e51b4aef33cf5cae78f6c85a246f3cec1dad1ffe4ff23727bfa4029b29387df",
+      "category": "routine"
+    },
+    {
+      "line": 4323,
+      "stop_reason": "stop",
+      "text_sha256": "06e926326050648860243c3f3d4c7e7cd9886d5382f605f1bbe70247078b9c20",
+      "category": "routine"
+    },
+    {
+      "line": 4325,
+      "stop_reason": "stop",
+      "text_sha256": "f30364f60c6eb1b5f61a90256753d2e3922a902bc4911d33a915db9a87a97069",
+      "category": "routine"
+    },
+    {
+      "line": 4327,
+      "stop_reason": "stop",
+      "text_sha256": "7ea3d817baa8585e1421ff3804fe9449df8bfa0872d80d22758f613204051ea6",
+      "category": "routine"
+    },
+    {
+      "line": 4329,
+      "stop_reason": "stop",
+      "text_sha256": "21c9209e8d9b1a651647e49eff2716c874efbce19f30cfd5350f21d4b59074ec",
+      "category": "routine"
+    },
+    {
+      "line": 4331,
+      "stop_reason": "stop",
+      "text_sha256": "da307daaeccdeae256de5f822143ebd51519f1d7432793e40a438756ef214a96",
+      "category": "routine"
+    },
+    {
+      "line": 4333,
+      "stop_reason": "stop",
+      "text_sha256": "c5f6445fbcc4eaee352422a29f4a2ebc61848e62d43fd521dd11c9604a7a62c3",
+      "category": "routine"
+    },
+    {
+      "line": 4335,
+      "stop_reason": "stop",
+      "text_sha256": "d343a813c09024fb2fbaf28f39931f2c19c49284b090b4922d55fdebbf8603d6",
+      "category": "routine"
+    },
+    {
+      "line": 4337,
+      "stop_reason": "stop",
+      "text_sha256": "f9336bcb37289c3c6a1fdcb767f0961f689daa5a0641d683f5b24f9c3b83a55d",
+      "category": "routine"
+    },
+    {
+      "line": 4341,
+      "stop_reason": "stop",
+      "text_sha256": "71c1b1d58090e486d67326d7f450327017caa8f8d52c3f9b2087cd24e425b661",
+      "category": "routine"
+    },
+    {
+      "line": 4343,
+      "stop_reason": "stop",
+      "text_sha256": "a89aa878aa74f866b572b8439f2c2ec49495ce94c146644552b64cec60523633",
+      "category": "routine"
+    },
+    {
+      "line": 4345,
+      "stop_reason": "stop",
+      "text_sha256": "14598ce66d0e476990cb7ce1f717e0d71656b1ce684d2512f8bc3b851c732db2",
+      "category": "routine"
+    },
+    {
+      "line": 4347,
+      "stop_reason": "stop",
+      "text_sha256": "a294a8a51ec50bfeea0ece67ec1066bef9e23a5f483379d1ab16010512f649e7",
+      "category": "routine"
+    },
+    {
+      "line": 4349,
+      "stop_reason": "stop",
+      "text_sha256": "fe0c82a27fd910e5d26ccb3eb68426f651e03ace423a1bba56e94cb174a6b0ec",
+      "category": "owner_decision"
+    },
+    {
+      "line": 4351,
+      "stop_reason": "stop",
+      "text_sha256": "cffc69143f2b98cfdb6451f1199e21735ba85ab896a82efdca54546754e59c84",
+      "category": "routine"
+    },
+    {
+      "line": 4353,
+      "stop_reason": "stop",
+      "text_sha256": "caaf72b7b2ec493e6278094ce9546bacc6353ceb870a0b75b874eaede796918d",
+      "category": "routine"
+    },
+    {
+      "line": 4355,
+      "stop_reason": "stop",
+      "text_sha256": "97a0eeb7e5e4f552b1399ef556153a70d7d0bb916e52548c5a91f4d2e86504f0",
+      "category": "routine"
+    },
+    {
+      "line": 4357,
+      "stop_reason": "stop",
+      "text_sha256": "c058d394e1f34634a7945c54e1573b1dd2f341e1750d600ffffb63d58a3055d7",
+      "category": "routine"
+    },
+    {
+      "line": 4359,
+      "stop_reason": "stop",
+      "text_sha256": "4b9c7aa031a8e5df9c1947b366a866b761b47634f5401c5f1c643cc10a0068fd",
+      "category": "routine"
+    },
+    {
+      "line": 4361,
+      "stop_reason": "stop",
+      "text_sha256": "96dc76f29c1231d27beddd223a1b5ba3b50a89add239a81369d3819639af62ff",
+      "category": "routine"
+    },
+    {
+      "line": 4363,
+      "stop_reason": "stop",
+      "text_sha256": "6e4704b287a78c6a620675a94aa0dfa644bdbd5e19ee836afd58915c72b271db",
+      "category": "routine"
+    },
+    {
+      "line": 4365,
+      "stop_reason": "stop",
+      "text_sha256": "57675d645a5dc496565a5125ad3d6ea3276ffbf1c09f95989a6cac0fae8ff3c4",
+      "category": "routine"
+    },
+    {
+      "line": 4367,
+      "stop_reason": "stop",
+      "text_sha256": "4850f3ce7051a9a8d6659d0457587c825268973a66f6544ce74866692b5b65b4",
+      "category": "routine"
+    },
+    {
+      "line": 4369,
+      "stop_reason": "stop",
+      "text_sha256": "c1c8c7b05e0d172b6169b1de0de4e041486d5013a0570c1ac7d7aeac0b1e7803",
+      "category": "routine"
+    },
+    {
+      "line": 4371,
+      "stop_reason": "stop",
+      "text_sha256": "4c26ce694c99d5a5496d2aedb84af42194279672491e278cb9a0c3c10e071854",
+      "category": "routine"
+    },
+    {
+      "line": 4373,
+      "stop_reason": "stop",
+      "text_sha256": "f7d1f3d02e7aa2f2714a9a889ed78136d833bd0bd9664b67ebb2a64f3bdd57f7",
+      "category": "routine"
+    },
+    {
+      "line": 4375,
+      "stop_reason": "stop",
+      "text_sha256": "4c26ce694c99d5a5496d2aedb84af42194279672491e278cb9a0c3c10e071854",
+      "category": "routine"
+    },
+    {
+      "line": 4379,
+      "stop_reason": "stop",
+      "text_sha256": "84f6044b81e8b5f75da2d8fcf041406348cc552bc848d99479be61ec26f1d9c2",
+      "category": "routine"
+    },
+    {
+      "line": 4381,
+      "stop_reason": "stop",
+      "text_sha256": "e440f192e47f842c80e1518b13794fd5794a24c74126af7cd3c037377f86dce4",
+      "category": "routine"
+    },
+    {
+      "line": 4383,
+      "stop_reason": "stop",
+      "text_sha256": "139dde0e5899c801a98983eaecf565bd2db24bf71280c32e924343a5af2a3641",
+      "category": "routine"
+    },
+    {
+      "line": 4385,
+      "stop_reason": "stop",
+      "text_sha256": "02497d97affaceea0cf73b0fdd91c8311df007b61215ab038dfaffb70cbf5e18",
+      "category": "routine"
+    },
+    {
+      "line": 4387,
+      "stop_reason": "stop",
+      "text_sha256": "497dc23c99aa482c09d9c52bfe575854610d9e1c1e821290bd4ae9df9dd703f7",
+      "category": "routine"
+    },
+    {
+      "line": 4389,
+      "stop_reason": "stop",
+      "text_sha256": "b405ff28227d808716492b6709d3e823fe47d588236a5f40f59888d96805b918",
+      "category": "routine"
+    },
+    {
+      "line": 4391,
+      "stop_reason": "stop",
+      "text_sha256": "673c10ebd0794f594eb335c056dda0b98c49f4ad824f65ec659814ad24688124",
+      "category": "routine"
+    },
+    {
+      "line": 4393,
+      "stop_reason": "stop",
+      "text_sha256": "8ed193ebd5752f04bfcd1a89b8d72e99fe9724d977c784e15be48863be74dc28",
+      "category": "routine"
+    },
+    {
+      "line": 4399,
+      "stop_reason": "stop",
+      "text_sha256": "42ac3aa4c4a649e9322c1e374af5e7d65f9ee02a4346ca36bb1bc9b5b55239c0",
+      "category": "routine"
+    }
+  ],
+  "interim_fragments": [
+    {
+      "line": 4339,
+      "stop_reason": "toolUse",
+      "text_sha256": "445f747f70d93d49ecdf5ca2fd8f0b6da7c92e9cea7cadf7f00ac006648b46bf"
+    },
+    {
+      "line": 4377,
+      "stop_reason": "toolUse",
+      "text_sha256": "d89eace4ad8ebc73bf1e4d429531b04e80f90381af544dcce6df7049e707ec6e"
+    },
+    {
+      "line": 4395,
+      "stop_reason": "toolUse",
+      "text_sha256": "c1676492fbb458d226c6d2c6138df9cb74e01dd7fabafacef7cb5ce22dadf78b"
+    },
+    {
+      "line": 4397,
+      "stop_reason": "toolUse",
+      "text_sha256": "fa4753405b21e44d611104fe0907a8ae990ebea6cb1354eb5ea299eb17ebdc57"
+    }
+  ],
+  "label_state": "provisional author tie-break; pending two blind reviewers under frozen policy"
+}

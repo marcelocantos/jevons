@@ -276,3 +276,15 @@ func TestFleetStandingBriefParentReportDaemonDelivered(t *testing.T) {
 		}
 	}
 }
+
+func TestT1054FleetBriefCarriesOwnerAdmission(t *testing.T) {
+	out, injected := EnsureFleetBrief(map[string]bool{}, "worker", "implement")
+	if !injected {
+		t.Fatal("fleet brief not injected")
+	}
+	for _, want := range []string{"Owner-message admission", "owner-only decision", "new material uncontained", "direct answer", "requested", "NONE", "not even an acknowledgment", "[silent]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("fleet brief missing %q", want)
+		}
+	}
+}
