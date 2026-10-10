@@ -46,10 +46,15 @@ export function InstantTip(props: {
   yieldSelectors?: readonly string[];
   /** Mount already open (delegated T326 attach). */
   defaultOpen?: boolean;
+  /** Notifies delegated hosts so a dismissed card can reopen on the same host. */
+  onDismiss?: () => void;
 }) {
   const [open, setOpen] = useState(!!props.defaultOpen);
   const closeRef = useRef(() => setOpen(false));
-  closeRef.current = () => setOpen(false);
+  closeRef.current = () => {
+    setOpen(false);
+    props.onDismiss?.();
+  };
   const reactId = useId();
   const hostAttr = props.id || reactId;
 
@@ -221,11 +226,25 @@ export function InstantTip(props: {
       const lastParts = lastPartsRef.current;
       if (!hitRectIsDegenerate(parts.card)) lastPartsRef.current = parts;
       lastXYRef.current = { x, y };
-      if (shouldDismissPointerSample({ x, y, lastXY, parts, lastParts, yieldRects: yieldRects() })) setOpen(false);
+      if (shouldDismissPointerSample({ x, y, lastXY, parts, lastParts, yieldRects: yieldRects() })) closeRef.current();
     };
     const onMove = (e: PointerEvent) => sample(e.clientX, e.clientY);
+    // A finger tap need not produce pointermove. Dismiss before the outside
+    // target's click, without cancelling or swallowing that click. The card and
+    // active trigger remain interactive; other triggers may open on that click.
+    const onDown = (e: PointerEvent | TouchEvent) => {
+      const path = e.composedPath();
+      const inside = [cardRef.current, ...collectOpenHosts()].some((el) => el && path.includes(el));
+      if (!inside) closeRef.current();
+    };
     document.addEventListener('pointermove', onMove);
-    return () => document.removeEventListener('pointermove', onMove);
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('touchstart', onDown, true);
+    return () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('touchstart', onDown, true);
+    };
   }, [open]);
 
   const card = (
