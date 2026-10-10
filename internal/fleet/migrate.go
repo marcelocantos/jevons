@@ -5,6 +5,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -151,6 +152,22 @@ func (f *Claudia) PrepareMigrationPinned(name string, to claudia.Provider, model
 	retained := f.bestEffortRetainedTranscript(name, src)
 	args := claudia.MigrateArgs{Provider: target, Model: model, Force: force, Reason: "explicit"}
 	moved, err := f.reg.Migrate(context.Background(), name, args, retained)
+	// T1032: Claudia's stopped move copies provider-native fields into
+	// the persisted destination before launch. Reconcile only that destination:
+	// clearing the source first would weaken its policy on a failed move.
+	// A capability failure with a durable seed can retry Claudia's existing
+	// destination without another transfer or session rotation.
+	if dest := f.reg.Def(name); dest != nil && dest.Provider == target && len(StaleProviderCaps(*dest)) > 0 {
+		var capErr *claudia.CapabilityError
+		retry := errors.As(err, &capErr) && dest.MigrationSeed != ""
+		if repairErr := ReconcileProviderCaps(f.reg, name); repairErr != nil {
+			err = fmt.Errorf("reconcile migration destination: %w", repairErr)
+		} else if retry {
+			transfer := moved.Transfer
+			moved, err = f.reg.Migrate(context.Background(), name, args, retained)
+			moved.Transfer = transfer
+		}
+	}
 	if endLaunch != nil {
 		endLaunch()
 	}

@@ -130,7 +130,7 @@ func TestPrepareMigrationRefusesCapabilityDrop(t *testing.T) {
 	const name = "jevons-po"
 	if err := reg.Register(claudia.AgentDef{
 		Name: name, WorkDir: dir, SessionID: "t763-codex-sid", Provider: claudia.ProviderCodex,
-		SandboxMode: "workspace-write", SandboxWritableRoots: []string{dir},
+		SandboxMode: "read-only", SandboxWritableRoots: []string{dir},
 		SandboxNetworkAccess: true, Purpose: claudia.PurposeWork,
 	}); err != nil {
 		t.Fatal(err)
