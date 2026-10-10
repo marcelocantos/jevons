@@ -595,7 +595,7 @@ func TestSplitOrphanComponents(t *testing.T) {
 func TestPackActiveGraphDiagramsOrder(t *testing.T) {
 	// Larger edge-count component first; orphans last.
 	connected := [][]string{
-		{"A", "B"},          // 1 edge
+		{"A", "B"},           // 1 edge
 		{"D", "E", "F", "G"}, // 3 edges
 	}
 	orphans := []string{"Z", "Y"}
@@ -990,4 +990,45 @@ func TestLoadFrontierLiveJevonsRepo(t *testing.T) {
 		t.Fatal("expected some frontier rows from live ledger")
 	}
 	t.Logf("live frontier: ledger=%s n=%d", resp.Ledger, len(resp.Targets))
+}
+
+func TestCrossRepoTargetDoesNotResolveCollidingLocalID(t *testing.T) {
+	prev := runBullseyeCLI
+	t.Cleanup(func() { runBullseyeCLI = prev })
+	root := t.TempDir()
+	for repo, name := range map[string]string{"jevons": "Wrong local", "claudia": "Claudia purge coordination"} {
+		dir := filepath.Join(root, repo)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "bullseye.yaml"), []byte("targets:\n  T177:\n    name: "+name+"\n    status: identified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runBullseyeCLI = func(args ...string) (string, error) {
+		return "File: " + filepath.Join(args[2], "bullseye.yaml") + "\n", nil
+	}
+	s := New("test", t.TempDir())
+	s.SetFrontierCwd(filepath.Join(root, "jevons"))
+	for path, want := range map[string]string{
+		"/api/frontier/target?id=T177":              "Wrong local",
+		"/api/frontier/target?id=T177&repo=claudia": "Claudia purge coordination",
+	} {
+		rr := httptest.NewRecorder()
+		s.handleFrontierTarget(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		var resp TargetResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if rr.Code != 200 || resp.Target == nil || resp.Target.Name != want {
+			t.Fatalf("%s: %d %+v", path, rr.Code, resp)
+		}
+	}
+	for _, repo := range []string{"..", "../private", "claudia%2F.."} {
+		rr := httptest.NewRecorder()
+		s.handleFrontierTarget(rr, httptest.NewRequest(http.MethodGet, "/api/frontier/target?id=T177&repo="+repo, nil))
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("repo=%s status=%d", repo, rr.Code)
+		}
+	}
 }

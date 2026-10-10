@@ -233,23 +233,25 @@ export function clearFrontierTargetCache(): void {
 export async function fetchFrontierTarget(
   id: string,
   signal?: AbortSignal,
+  repo = '',
 ): Promise<FrontierRow | null> {
   const tid = normalizeTargetID(id);
   if (!tid) return null;
-  if (targetRowCache.has(tid)) return targetRowCache.get(tid) ?? null;
-  const r = await fetch(FRONTIER_TARGET_API_PATH + '?id=' + encodeURIComponent(tid), { signal });
+  const key = repo + '/' + tid;
+  if (targetRowCache.has(key)) return targetRowCache.get(key) ?? null;
+  const r = await fetch(FRONTIER_TARGET_API_PATH + '?id=' + encodeURIComponent(tid) + (repo ? '&repo=' + encodeURIComponent(repo) : ''), { signal });
   if (r.status === 404) {
-    targetRowCache.set(tid, null);
+    targetRowCache.set(key, null);
     return null;
   }
   if (!r.ok) throw new Error(String(r.status));
   const data = (await r.json()) as { found?: boolean; target?: unknown };
   if (!data || data.found === false || data.target == null) {
-    targetRowCache.set(tid, null);
+    targetRowCache.set(key, null);
     return null;
   }
   const row = toFrontierRow(data.target);
-  targetRowCache.set(tid, row);
+  targetRowCache.set(key, row);
   return row;
 }
 

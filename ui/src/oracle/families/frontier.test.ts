@@ -415,6 +415,13 @@ describeOracle(family('frontier'), () => {
     }
   });
 
+  it('qualifies cross-repo target hotspots without losing bare local IDs', () => {
+    const html = linkifyTargetIDsInHTML('<p>claudia/T177 and 🎯T177</p>');
+    expect(html).toContain('data-target-repo="claudia"');
+    expect(html).toContain('data-target-repo=""');
+    expect(html).toContain('claudia/🎯T177');
+  });
+
   itOracle('T326', 'chat 🎯Tn hotspots use the same InstantTip frontier-card chrome', () => {
     expect(linkifyTargetIDsInHTML('<p>see 🎯T184</p>')).toMatch(/target-hotspot/);
     expect(linkifyTargetIDsInHTML('<code>T184</code>')).not.toMatch(/target-hotspot/);

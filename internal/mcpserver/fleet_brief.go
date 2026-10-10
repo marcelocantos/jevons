@@ -14,6 +14,13 @@ import (
 // without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 / 🎯T969 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
+## Cross-repository target references (🎯T1056)
+- When naming a bullseye target outside the current repository, write
+  repo/Tn (e.g. claudia/T177), including in reports and chat. Bare Tn
+  means the current repository only; numbers overlap across repositories.
+  Use the checkout's repository basename as repo. Do not guess a target's
+  repository from a worker name or from its numeric ID.
+
 ## Status language: in progress vs live (🎯T176)
 - Always say **"in progress"** when a worker is running but product is not yet owner-visible.
 - Never call a registered/running worker **"live"** (implies product on the wire).

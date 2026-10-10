@@ -825,9 +825,30 @@ func loadFrontierTarget(cwd, id string) (TargetResponse, int) {
 	return resp, http.StatusOK
 }
 
+func validFrontierRepo(repo string) bool {
+	if repo == "" || repo == "." || repo == ".." {
+		return false
+	}
+	for _, c := range repo {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // handleFrontierTarget serves GET /api/frontier/target?id= — any ledger row (🎯T647).
 func (s *Server) handleFrontierTarget(w http.ResponseWriter, r *http.Request) {
 	cwd := s.frontierCwdOr(r.URL.Query().Get("cwd"))
+	if repo := r.URL.Query().Get("repo"); repo != "" {
+		// A repo qualifier addresses a sibling checkout of the configured
+		// frontier repo, never a client-supplied filesystem path.
+		if !validFrontierRepo(repo) {
+			http.Error(w, "invalid repo qualifier", http.StatusBadRequest)
+			return
+		}
+		cwd = filepath.Join(filepath.Dir(s.frontierCwdOr("")), repo)
+	}
 	resp, code := loadFrontierTarget(cwd, r.URL.Query().Get("id"))
 	if resp.Available && resp.Ledger != "" {
 		s.ensureFrontierWatch(resp.Ledger)

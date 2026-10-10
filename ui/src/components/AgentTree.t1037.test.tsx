@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FrontierRowsContext } from '../frontier/rows';
@@ -75,6 +76,32 @@ describe('AgentTree seat-name hotlink (🎯T1037)', () => {
     const spot = container.querySelector('.target-hotspot')!;
     fireEvent.keyDown(spot, { key: 'Enter' });
     expect(container.querySelector('.instant-tip-show')).toBeTruthy();
+  });
+
+  it('resolves qualified claudia/T177 rather than a colliding local T177', async () => {
+    const prev = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requests.push(String(input));
+      return new Response(JSON.stringify({ found: true, target: {
+        id: 'T177', name: 'Claudia purge coordination', status: 'converging',
+        context: 'Cross-repo owner-visible evidence',
+      } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      // The text hotspot uses the same TargetHotspotTips as seat names.
+      const { TargetHotspotTips } = await import('./TargetHotspotTips');
+      const { linkifyTargetIDsInHTML } = await import('../frontier/targetHotspot');
+      function Bubble() {
+        const ref = React.useRef<HTMLDivElement>(null);
+        return <div><div ref={ref} dangerouslySetInnerHTML={{ __html: linkifyTargetIDsInHTML('claudia/T177') }} /><TargetHotspotTips containerRef={ref} /></div>;
+      }
+      const { container } = render(<FrontierRowsContext.Provider value={[{ id: 'T177', name: 'Wrong jevons target' }]}><Bubble /></FrontierRowsContext.Provider>);
+      fireEvent.pointerEnter(container.querySelector('.target-hotspot')!);
+      await waitFor(() => expect(container.querySelector('.instant-tip-show')?.textContent).toContain('Claudia purge coordination'));
+      expect(container.querySelector('.instant-tip-show')?.textContent).not.toContain('Wrong jevons target');
+      expect(requests).toEqual(['/api/frontier/target?id=T177&repo=claudia']);
+    } finally { globalThis.fetch = prev; }
   });
 
   it('off-frontier ids resolve through fetchFrontierTarget', async () => {

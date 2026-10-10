@@ -22,7 +22,7 @@ export function TargetHotspotTips(props: {
   const rows = useFrontierRows();
   const cacheRef = useRef<HoverCardCache>({});
   const [active, setActive] = useState<HTMLElement | null>(null);
-  const [fetched, setFetched] = useState<FrontierRow | null | undefined>(undefined);
+  const [fetched, setFetched] = useState<{ key: string; row: FrontierRow | null } | undefined>(undefined);
 
   useLayoutEffect(() => {
     const root = props.containerRef.current;
@@ -56,15 +56,19 @@ export function TargetHotspotTips(props: {
   useLayoutEffect(() => {
     if (!active || active.isConnected) return;
     const id = normalizeTargetID(active.getAttribute('data-target-id') || '');
+    const repo = active.getAttribute('data-target-repo') || '';
     const root = props.containerRef.current;
     const next = id
-      ? root?.querySelector<HTMLElement>('.target-hotspot[data-target-id="' + CSS.escape(id) + '"]')
+      ? root?.querySelector<HTMLElement>('.target-hotspot[data-target-id="' + CSS.escape(id) + '"][data-target-repo="' + CSS.escape(repo) + '"]')
       : null;
     setActive(next && next.isConnected ? next : null);
   });
 
   const tid = normalizeTargetID(active?.getAttribute('data-target-id') || '');
-  const found = findRowByTargetID(rows, tid) as FrontierRow | null;
+  const repo = active?.getAttribute('data-target-repo') || '';
+  // The frontier context is the current repository only; never use its T177
+  // as the answer to an explicitly qualified claudia/T177.
+  const found = repo ? null : findRowByTargetID(rows, tid) as FrontierRow | null;
 
   useEffect(() => {
     if (!tid || found) {
@@ -73,19 +77,20 @@ export function TargetHotspotTips(props: {
     }
     let cancelled = false;
     setFetched(undefined);
-    void fetchFrontierTarget(tid)
+    void fetchFrontierTarget(tid, undefined, repo)
       .then((row) => {
-        if (!cancelled) setFetched(row);
+        if (!cancelled) setFetched({ key: repo + '/' + tid, row });
       })
       .catch(() => {
-        if (!cancelled) setFetched(null);
+        if (!cancelled) setFetched({ key: repo + '/' + tid, row: null });
       });
     return () => {
       cancelled = true;
     };
-  }, [tid, found]);
+  }, [tid, repo, found]);
 
   if (!active || !tid) return null;
+  const resolved = fetched?.key === repo + '/' + tid ? fetched.row : undefined;
   let md = '';
   let cardId = tid;
   let cardName = '';
@@ -93,18 +98,19 @@ export function TargetHotspotTips(props: {
     md = hoverCardMarkdown(cacheRef.current, found);
     cardId = found.id;
     cardName = found.name;
-  } else if (fetched) {
-    md = hoverCardMarkdown(cacheRef.current, fetched);
-    cardId = fetched.id;
-    cardName = fetched.name;
-  } else if (fetched === null) {
-    md = formatMissingTargetMarkdown(tid);
+  } else if (resolved) {
+    md = hoverCardMarkdown(cacheRef.current, resolved);
+    cardId = resolved.id;
+    cardName = resolved.name;
+  } else if (resolved === null) {
+    md = formatMissingTargetMarkdown(repo ? repo + '/' + tid : tid);
   } else {
-    md = '**🎯' + tid + '**';
+    md = '**' + (repo ? repo + '/' : '') + '🎯' + tid + '**';
   }
+  if (repo) md = '**Repo: ' + repo + '**\n\n' + md;
   return (
     <InstantTip
-      key={tid}
+      key={repo + '/' + tid}
       defaultOpen
       onDismiss={() => setActive(null)}
       groupHosts={() => [active]}

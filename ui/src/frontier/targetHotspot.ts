@@ -5,7 +5,7 @@
 
 import type { FrontierRow } from './table';
 
-const TARGET_TOKEN_RE = /(?:🎯\s*)?(T\d+(?:\.\d+)*)\b/g;
+const TARGET_TOKEN_RE = /(?:([a-z][a-z0-9_-]*)\/)?(?:🎯\s*)?(T\d+(?:\.\d+)*)\b/gi;
 
 const SKIP_TAGS: Record<string, boolean> = {
   CODE: true,
@@ -70,10 +70,11 @@ function escapeText(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function hotspotSpan(tid: string, label: string): string {
+export function hotspotSpan(tid: string, label: string, repo = ''): string {
   return (
     '<span class="target-hotspot target-hotspot-finger" data-target-id="' +
     escapeAttr(tid) +
+    '" data-target-repo="' + escapeAttr(repo) +
     '" role="button" tabindex="0">' +
     escapeText(label) +
     '</span>'
@@ -84,10 +85,10 @@ export function linkifyTargetText(text: string): string {
   const s = String(text ?? '');
   if (!s) return s;
   TARGET_TOKEN_RE.lastIndex = 0;
-  return s.replace(TARGET_TOKEN_RE, (full, id: string) => {
+  return s.replace(TARGET_TOKEN_RE, (full, repo: string | undefined, id: string) => {
     const tid = normalizeTargetID(id);
     if (!tid) return full;
-    return hotspotSpan(tid, formatDisplayTargetID(tid));
+    return hotspotSpan(tid, (repo ? repo + '/' : '') + formatDisplayTargetID(tid), repo || '');
   });
 }
 
@@ -95,7 +96,7 @@ export function linkifyTargetText(text: string): string {
 export function linkifyTargetIDsInHTML(html: string | null | undefined): string {
   if (html == null || html === '') return html == null ? '' : '';
   const s = String(html);
-  if (!/(?:🎯\s*)?T\d/.test(s)) return s;
+  if (!/(?:🎯\s*)?T\d/i.test(s)) return s;
 
   let out = '';
   let i = 0;
