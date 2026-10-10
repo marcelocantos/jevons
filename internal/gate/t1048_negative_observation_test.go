@@ -4,6 +4,7 @@
 package gate
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,7 @@ func TestT1048FramingMutationsRemainFlagged(t *testing.T) {
 		want         FlagKind
 	}{
 		{"killed-claimed-pass", strings.Replace(base, "it is not an absent or passing record", "I'm calling it passed", 1), FlagAttestationKilled},
+		{"killed-called-green-with-disclaimer", strings.Replace(base, "it is not an absent or passing record", "it is not an absent or passing record, but it is green", 1), FlagAttestationKilled},
 		{"killed-claimed-failing-test", strings.Replace(base, "it is not an absent or passing record", "it proves a failing test assertion", 1), FlagAttestationKilled},
 		{"red-claimed-pass", strings.Replace(base, "It does prevent claiming the entire `internal/gate` package is green", "I'm calling it passed", 1), FlagAttestationNotGreen},
 		{"real-failure-next-to-green", strings.Replace(base, "The command was `go test ./internal/mcpserver -count=1`.", "The command was `go test ./internal/mcpserver -count=1`.\n    --- FAIL: TestActual (0.00s)", 1), FlagOutputContradicts},
@@ -73,5 +75,18 @@ func TestT1048SameLineFailureNotHiddenByDisclosure(t *testing.T) {
 	report := strings.Replace(t1048Review(), "**RED disclosure:**", "**RED disclosure:** `--- FAIL: TestGreenPath (0.00s)`", 1)
 	if flags := FlagFalseGreen(report, nil); !hasKind(flags, FlagOutputContradicts) {
 		t.Fatalf("same-line failure laundered: %v", kinds(flags))
+	}
+}
+
+// Frozen verbatim from stored report 20261010T044824Z-3792be42, read via
+// jevons_agent_report_read. The smaller fixture above isolates the classifier;
+// this pins the actual report so surrounding prose cannot change its outcome.
+func TestT1048StoredT603Report(t *testing.T) {
+	body, err := os.ReadFile("testdata/t1048_t603_stored_report.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags := FlagFalseGreen(string(body), nil); len(flags) != 0 {
+		t.Fatalf("stored honest review flagged: %v", flags)
 	}
 }
