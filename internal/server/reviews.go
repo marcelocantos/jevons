@@ -25,6 +25,11 @@ func reviewID(id ownerquestionview.Identity) string {
 }
 
 type reviewItem struct {
+	SchemaVersion  int                     `json:"schema_version"`
+	TargetTitle    string                  `json:"target_title,omitempty"`
+	TargetStatus   string                  `json:"target_status,omitempty"`
+	TargetLookup   string                  `json:"target_lookup"`
+	Evidence       reviewEvidence          `json:"evidence"`
 	ID             string                  `json:"id"`
 	URL            string                  `json:"url"`
 	Repository     string                  `json:"repository"`
@@ -55,19 +60,22 @@ func reviewFromQuestion(q ownerquestionview.Question) reviewItem {
 	// Owner-question prose is not a trusted URL or path field. In particular,
 	// keep the canonical repository root internal even if it was quoted in a
 	// question or resolution. The repository display label is separate.
-	redact := func(text string) string { return strings.ReplaceAll(text, q.Identity.Repo, "[repository]") }
+	redact := func(text string) string { return redactReviewPaths(text, q.Identity.Repo) }
 	trustedReview := matchingReview(q)
 	id := reviewID(q.Identity)
 	// Readiness is a producer-owned typed fact, never a classifier over the
 	// question ID or prose. Older records without a Review stay non-actionable.
-	readiness := "prerequisite_blocked"
+	readiness := "unspecified"
+	if trustedReview {
+		readiness = string(q.Review.Readiness)
+	}
 	if trustedReview && q.Review.Readiness == ownerquestion.Actionable {
 		readiness = "actionable"
 	}
 	if q.State != ownerquestionview.Open {
 		readiness = "closed"
 	}
-	item := reviewItem{ID: id, URL: "/api/reviews/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: redact(q.Text), Asker: redact(q.Asker), AnswerRoute: redact(q.AnswerRoute), State: q.State, Readiness: readiness, Resolution: redact(q.Resolution)}
+	item := reviewItem{SchemaVersion: 2, TargetLookup: "missing", Evidence: emptyReviewEvidence(), ID: id, URL: "/api/reviews/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: redact(q.Text), Asker: redact(q.Asker), AnswerRoute: redact(q.AnswerRoute), State: q.State, Readiness: readiness, Resolution: redact(q.Resolution)}
 	if q.Review != nil && !trustedReview {
 		// The prose may contain reported artifact paths. A corrupt nested
 		// review is not safe to render as an ordinary owner question.
@@ -98,7 +106,7 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	if id := r.PathValue("id"); id != "" {
 		for _, q := range rows {
 			if reviewID(q.Identity) == id {
-				_ = json.NewEncoder(w).Encode(reviewFromQuestion(q))
+				_ = json.NewEncoder(w).Encode(s.reviewDetail(q))
 				return
 			}
 		}
@@ -108,7 +116,7 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	out := make([]reviewItem, 0, len(rows))
 	for _, q := range rows {
 		if q.State == ownerquestionview.Open || strings.EqualFold(r.URL.Query().Get("include_closed"), "true") {
-			out = append(out, reviewFromQuestion(q))
+			out = append(out, s.reviewDetail(q))
 		}
 	}
 	_ = json.NewEncoder(w).Encode(out)

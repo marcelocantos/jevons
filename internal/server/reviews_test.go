@@ -84,7 +84,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &exact); err != nil {
 		t.Fatal(err)
 	}
-	if exact.Readiness != "prerequisite_blocked" || exact.Action != "" || strings.Contains(w.Body.String(), "artifacts/unverified.png") {
+	if exact.Readiness != "unspecified" || exact.Action != "" || strings.Contains(w.Body.String(), "artifacts/unverified.png") {
 		t.Fatal(exact)
 	}
 	// Untrusted prose cannot leak the canonical root through the read API.
@@ -140,7 +140,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &exact); err != nil {
 		t.Fatal(err)
 	}
-	if exact.Readiness != "prerequisite_blocked" {
+	if exact.Readiness != "unspecified" {
 		t.Fatal(exact)
 	}
 	for _, id := range []string{reviewID(v2.Identity), reviewID(a.Identity), reviewID(blocked.Identity), "unknown"} {
