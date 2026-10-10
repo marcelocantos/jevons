@@ -119,8 +119,8 @@ func TestT1054MissingIDFailsOpenWithDaemonIndicatorAndRestrictedAudit(t *testing
 	if err := json.Unmarshal([]byte(strings.Split(strings.TrimSpace(string(b)), "\n")[0]), &row); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.bindOwnerAdmission(s.ownerAdmission.authority, "turn-4", "request-3"); err == nil {
-		t.Fatal("pending request reused as if answered")
+	if err := s.bindOwnerAdmission(s.ownerAdmission.authority, "turn-4", "request-3"); err != nil {
+		t.Fatalf("pending owner request must survive reissue: %v", err)
 	}
 }
 func TestT1054BoundedTimeoutAndPreviewNeverJournaled(t *testing.T) {
@@ -350,7 +350,14 @@ func TestT1054LegacyJournalFailureStillBroadcastsVisibleAnswer(t *testing.T) {
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "legacy answer", StopReason: "end_turn"})
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "legacy answer"})
+	s.ownerMu.Lock()
+	accounted := s.ownerHealthLocked().turnVisible
+	s.ownerMu.Unlock()
+	if !accounted {
+		t.Fatal("nil-admission live answer no longer counts in owner-question ledger")
+	}
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", StopReason: "end_turn"})
 	visible := false
 	for len(ch) > 0 {
 		if strings.Contains(<-ch, "legacy answer") {

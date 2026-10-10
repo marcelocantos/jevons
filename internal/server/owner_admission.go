@@ -126,8 +126,8 @@ func (s *Server) bindOwnerAdmission(cap *admissionAuthority, turnID, requestID s
 	if a.candidate != nil {
 		return errors.New("admission: candidate already open")
 	}
-	if _, exists := a.requests[requestID]; exists {
-		return errors.New("admission: request ID reused")
+	if pending, exists := a.requests[requestID]; exists && !pending {
+		return errors.New("admission: answered request ID cannot be reused")
 	}
 	a.requests[requestID] = true
 	c := &admissionCandidate{turnID: turnID, requestID: requestID, deadline: time.Now().Add(admissionHoldLimit)}
