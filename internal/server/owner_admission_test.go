@@ -523,3 +523,68 @@ func TestT1054RestartExposesCurrentLossRecoveryGapNotFalseDurability(t *testing.
 	auditAndChat(t, reloaded, reopened, "candidate content may be lost", false)
 	auditAndChat(t, reloaded, reopened, "unsafe if lost", false)
 }
+
+func TestT1054ProgressPreviewJournalFailureNeverLeaksToAnyFanout(t *testing.T) {
+	s, log := admissionFixture(t)
+	cap := s.ownerAdmission.authority
+	if err := s.bindOwnerAdmission(cap, "turn-preview", "request-preview"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &muxSession{send: make(chan []byte, 16), transcripts: map[string]*muxWatch{"jevons": {subscribed: true}}}
+	s.mux.add(sess)
+	defer s.mux.remove(sess)
+	remote := &admissionRemoteRecorder{}
+	s.mu.Lock()
+	s.remotes[1] = remoteConn{writer: remote, ctx: context.Background()}
+	s.mu.Unlock()
+	ev := claudia.Event{Type: "progress", ProgressType: claudia.ProgressTUIPreview, TurnID: "turn-preview", Text: "private candidate preview", Raw: []byte(`{"content":"private raw preview"}`)}
+	s.DeliverOverseerEvent(ev)
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.admitOwnerCandidate(cap, "turn-preview", "request-preview", AdmissionAllowed); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range remote.lines {
+		if strings.Contains(string(line), "private") {
+			t.Fatalf("remote preview leak: %s", line)
+		}
+	}
+	for len(sess.send) > 0 {
+		if line := <-sess.send; strings.Contains(string(line), "private") {
+			t.Fatalf("mux preview leak: %s", line)
+		}
+	}
+	for _, item := range s.mux.eventsFor("jevons") {
+		if strings.Contains(string(item.Body), "private") {
+			t.Fatalf("mux cache preview leak: %+v", item)
+		}
+	}
+}
+
+func TestT1054AllowedPreviewFollowsDurableAdmissionOnly(t *testing.T) {
+	s, log := admissionFixture(t)
+	defer log.Close()
+	cap := s.ownerAdmission.authority
+	remote := &admissionRemoteRecorder{}
+	s.mu.Lock()
+	s.remotes[1] = remoteConn{writer: remote, ctx: context.Background()}
+	s.mu.Unlock()
+	if err := s.bindOwnerAdmission(cap, "turn-allowed-preview", "request-allowed-preview"); err != nil {
+		t.Fatal(err)
+	}
+	ev := claudia.Event{Type: "progress", ProgressType: claudia.ProgressTUIPreview, TurnID: "turn-allowed-preview", Text: "admitted preview"}
+	s.DeliverOverseerEvent(ev)
+	auditAndChat(t, s, log, "admitted preview", false)
+	if err := s.admitOwnerCandidate(cap, "turn-allowed-preview", "request-allowed-preview", AdmissionAllowed); err != nil {
+		t.Fatal(err)
+	}
+	// A TUI preview is phase-only even when the candidate is allowed; it
+	// never becomes a durable owner answer or a text bubble.
+	auditAndChat(t, s, log, "admitted preview", false)
+	for _, line := range remote.lines {
+		if strings.Contains(string(line), "admitted preview") {
+			t.Fatalf("phase-only preview reached remote as prose: %s", line)
+		}
+	}
+}

@@ -2028,7 +2028,10 @@ func (s *Server) broadcastAdmittedChat(line string) bool {
 // admitted publication may forward authored text; terminal settlement remains
 // body-less on journal failure. Legacy nil-admission behavior is untouched.
 func (s *Server) handleAdmissionSafeAgentEvent(ev claudia.Event, durable bool) {
-	if s.overseerAdmissionEnabled() && ev.Type == "assistant" && !durable {
+	if s.overseerAdmissionEnabled() && !durable {
+		// Text and Raw may carry model-authored preview/tool fragments even
+		// when Type is progress. Preserve Type/StopReason/ProgressType for
+		// phase settlement, but never forward unjournaled candidate bytes.
 		ev.Text = ""
 		ev.Raw = nil
 	}
