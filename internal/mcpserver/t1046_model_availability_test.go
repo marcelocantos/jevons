@@ -88,13 +88,14 @@ func TestT1046FailedLaunchRowRetriesWithSupportedModel(t *testing.T) {
 	session := s.registry.Def("retry").SessionID
 	s.modelCatalog = nil
 	result, err = s.handleAgentStart(t.Context(), req)
-	if err != nil || result.IsError || attempts != 2 {
-		t.Fatalf("retry: result=%v err=%v attempts=%d", result, err, attempts)
+	if err != nil || !result.IsError || attempts != 1 {
+		t.Fatalf("unsafe retry must refuse: result=%v err=%v attempts=%d", result, err, attempts)
 	}
 	def := s.registry.Def("retry")
-	if def.Model != "gpt-6-luna" || def.SessionID != session {
-		t.Fatalf("retry row=%+v want same session and supported model", def)
+	if def.Model != cost.ModelCodexSpark || def.SessionID != session {
+		t.Fatalf("retry changed session binding: %+v", def)
 	}
+
 }
 
 // A launched conversation is not a failed row: its model is part of the
@@ -110,8 +111,8 @@ func TestT1046MaterializedResumeKeepsStoredModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, existed, _, err := s.stitchAgentStart("existing", d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
-	if err != nil || !existed || got.Model != cost.ModelCodexSpark {
-		t.Fatalf("materialized resume model=%q existed=%v err=%v", got.Model, existed, err)
+	if err == nil || !existed || got != nil || s.registry.Def("existing").Model != cost.ModelCodexSpark {
+		t.Fatalf("unsupported materialized resume must refuse without changing pin: got=%+v existed=%v err=%v", got, existed, err)
 	}
 }
 
@@ -184,10 +185,11 @@ func TestT1046ExplicitSparkStartAndSubmittedTurnCanRetryWithoutResume(t *testing
 	}
 	delete(req.Params.Arguments.(map[string]any), "model")
 	res, err = s.handleAgentStart(t.Context(), req)
-	if err != nil || res.IsError || launches != 2 {
-		t.Fatalf("retry result=%v err=%v launches=%d", res, err, launches)
+	if err != nil || !res.IsError || launches != 1 {
+		t.Fatalf("submitted turn must block automatic retry: result=%v err=%v launches=%d", res, err, launches)
 	}
-	if d := s.registry.Def("explicit-then-omit"); d.Model != "gpt-6-luna" || d.Materialized {
-		t.Fatalf("retry row=%+v", d)
+	if d := s.registry.Def("explicit-then-omit"); d.Model != cost.ModelCodexSpark || d.Materialized {
+		t.Fatalf("retry row changed: %+v", d)
 	}
+
 }

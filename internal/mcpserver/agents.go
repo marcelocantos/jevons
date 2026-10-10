@@ -848,6 +848,11 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		role = roles.DefaultForPurpose(purpose, name)
 	}
 	existed := s.registry.Def(name) != nil
+	if existed {
+		if err := s.diagnoseUnsupportedStoredPin(s.registry.Def(name)); err != nil {
+			return nil, true, "", err
+		}
+	}
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
 	if err != nil {
 		return nil, existed, "", err
