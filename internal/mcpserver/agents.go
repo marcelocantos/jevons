@@ -875,7 +875,24 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
 	}
+	// Launch returns an already-alive process without changing its transport.
+	// Keep the persisted identity identical to that process even when an
+	// explicit plan pin is supplied on a same-name start. Switching a live
+	// process to another plan must be stopped first, not relabelled.
+	liveTransport := claudia.Provider("")
+	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
+		liveTransport = proc.Provider()
+		if liveTransport == "" { // Claudia's empty live provider denotes Claude CLI.
+			liveTransport = claudia.ProviderClaude
+		}
+		if cli.PlanProvider(liveTransport) != cli.PlanProvider(claudia.Provider(pick.Provider)) {
+			return nil, existed, pick.Cite(), fmt.Errorf("live agent %q runs provider %q; stop it before switching to %q", name, liveTransport, pick.Provider)
+		}
+	}
 	def.Provider = claudia.Provider(pick.Provider)
+	if liveTransport != "" {
+		def.Provider = liveTransport
+	}
 	routeNote := pick.Cite()
 
 	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.
@@ -947,7 +964,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// persisted provider verbatim: startConfigFromDef is only a test helper.
 	// Retain an existing CLI seat on an implicit resume; never silently
 	// change its transport while its process may survive a restart.
-	if !existed || strings.TrimSpace(providerArg) != "" {
+	if liveTransport == "" && (!existed || strings.TrimSpace(providerArg) != "") {
 		def.Provider = cli.SidecarLaunchProvider(def.Provider)
 	}
 	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs
