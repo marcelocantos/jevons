@@ -6,6 +6,7 @@ package gate
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -109,6 +110,12 @@ const (
 	// checker fired four times on one correct report, and the rebased red
 	// that proved causality was what it called a failed pass.
 	RoleControl CitationRole = "control"
+	// RoleNegativeObservation records a host termination as a termination only,
+	// never as a passing or failing test result (🎯T1048).
+	RoleNegativeObservation CitationRole = "negative_observation"
+	// RoleDisclosure names an unrelated RED and expressly declines to claim
+	// that the affected package passed (🎯T1048).
+	RoleDisclosure CitationRole = "non_passing_disclosure"
 )
 
 // Flag is one contradiction found in a finish report.
@@ -221,12 +228,25 @@ var controlFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
 	`\bon the parent\b`,
 }, "|"))
 
+// These are deliberately conjunctive, local descriptions, not a report-wide
+// waiver. A bare KILLED or RED citation, or a gate merely named "disclosure",
+// does not acquire a role. The explicit disclaimer is essential: the report
+// must say what the observation does *not* prove.
+var negativeObservationRe = regexp.MustCompile(`(?i)\b(SIGKILL record|negative observation|host termination observation)\b`)
+var negativeObservationLimitRe = regexp.MustCompile(`(?i)\b(not (an? )?(absent or )?passing record|not (a )?(pass|fail|test result)|decided nothing|not evidence (of|for) (a )?(pass|fail))\b`)
+var failingProofRe = regexp.MustCompile(`(?i)\b(proves? (a |the )?(failing|failed|red) (test|assertion|suite)|oracles? fail on their own assertions|falsif\w*)\b`)
+var redDisclosureRe = regexp.MustCompile(`(?i)\bRED disclosure\b`)
+var redDisclosureLimitRe = regexp.MustCompile(`(?i)\b(prevents? claiming|cannot claim|not claiming|does not claim|do not claim)\b[^\n]{0,100}\b(package|suite|run)\b[^\n]{0,60}\bgreen\b`)
+
 // passLaunderingRe matches a window that claims THIS citation as a pass,
 // even when control framing or a -before name is present. Narrower than
 // greenClaimMarkers: a control's own justification says "green" about the
 // after-gate, and that must not cancel the role.
 var passLaunderingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
-	`\bcalling it (a )?pass`,
+	`\bcalling it (a )?(pass|green)\b`,
+	`\bthis (gate|run|suite|package) (is green|pass(es|ed))\b`,
+	`\bcounts as a pass\b`,
+	`\b(the )?(tests|suite|gate|run) pass(es|ed)?\b`,
 	`\bunrelated flake\b`,
 	`\bevery oracle pass`,
 	`\bthe suite is green here`,
@@ -250,6 +270,15 @@ func ClassifyCitation(window string, c CitedAttestation) CitationRole {
 	framing := framingWithoutAttestations(window)
 	if passLaunderingRe.MatchString(framing) {
 		return RoleClaimedPass
+	}
+	if c.Verdict.IsKilled() && negativeObservationRe.MatchString(framing) &&
+		negativeObservationLimitRe.MatchString(framing) && !failingProofRe.MatchString(framing) &&
+		!hasGreenClaim(framing) {
+		return RoleNegativeObservation
+	}
+	if !c.Verdict.IsKilled() && redDisclosureRe.MatchString(framing) &&
+		redDisclosureLimitRe.MatchString(framing) && !failingProofRe.MatchString(framing) {
+		return RoleDisclosure
 	}
 	// Control prose is classified before greenClaimMarkers: a control's
 	// job is to sit next to a green, and "sole cause of the green" is
@@ -301,7 +330,7 @@ func isControlName(name string) bool {
 // draw a FALSE-GREEN banner: the red is doing a job other than "my work passed".
 func isHonestNonPass(role CitationRole) bool {
 	switch role {
-	case RoleFalsification, RoleInherited, RoleDefectCaught, RoleControl:
+	case RoleFalsification, RoleInherited, RoleDefectCaught, RoleControl, RoleNegativeObservation, RoleDisclosure:
 		return true
 	default:
 		return false
@@ -370,13 +399,12 @@ func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string
 			if c.Verdict.IsGreen() && c.StatusIsZero() {
 				continue
 			}
-			// 🎯T461: a host-killed run decided nothing. It is not a failing
-			// suite either, so honest-red framing must not exempt it — that
-			// exemption is exactly the clause a lazy fix skips.
-			if c.Verdict.IsKilled() {
+			role := ClassifyCitation(window, c)
+			// A killed run is never a falsification control or a failure.
+			// Only a locally bounded negative observation can exempt it.
+			if c.Verdict.IsKilled() && role != RoleNegativeObservation {
 				continue
 			}
-			role := ClassifyCitation(window, c)
 			// 🎯T722: a -before name or a declared gate-role slot upgrades
 			// the default claimed_pass, not a window that already claims
 			// this citation as a pass. Name-alone with no GREEN in the
@@ -395,8 +423,26 @@ func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string
 				continue
 			}
 			exempt[c.Raw] = true
-			for j := start; j <= end; j++ {
-				framingLines[j] = true
+			if role == RoleNegativeObservation || role == RoleDisclosure {
+				// Explicit observations are citation-local. Neighbouring output
+				// belongs to its own claim, even when separated by no blank.
+				// A shaped failure on the citation line cannot be attributed
+				// safely to this observation rather than a passing neighbour.
+				// Keep it in the scan; the honest reporter can put the
+				// negative output on a separate, labelled line.
+				anomalies := ScanOutput(lines[i])
+				if role == RoleNegativeObservation {
+					// The termination marker itself is the observation,
+					// not an independent failing test on a green run.
+					anomalies = slices.DeleteFunc(anomalies, func(a Anomaly) bool { return a.Marker == "signal: killed" })
+				}
+				if len(anomalies) == 0 {
+					framingLines[i] = true
+				}
+			} else {
+				for j := start; j <= end; j++ {
+					framingLines[j] = true
+				}
 			}
 		}
 	}
@@ -449,8 +495,11 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	// available, and it is checkable rather than inferred.
 	for _, c := range cited {
 		if c.Verdict.IsKilled() {
-			// 🎯T461: refused in both directions — as a pass AND as failing
-			// evidence. No honest-red exemption reaches here (see honestRedRoles).
+			// 🎯T461: a host kill proves neither pass nor failing assertion.
+			// 🎯T1048: it may be cited only as the termination observed.
+			if exempt[c.Raw] {
+				continue
+			}
 			flags = append(flags, Flag{
 				Kind: FlagAttestationKilled,
 				Detail: fmt.Sprintf(
