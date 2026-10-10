@@ -96,3 +96,37 @@ func TestT1046FailedLaunchRowRetriesWithSupportedModel(t *testing.T) {
 		t.Fatalf("retry row=%+v want same session and supported model", def)
 	}
 }
+
+// A successful Start and submitted prompt do not prove an explicitly pinned
+// model exists in the OMP catalog. This is the specimen behind the observed
+// Materialized=true phantom: RequireResume must not be earned by that send.
+func TestT1046UnsupportedExplicitSparkSendDoesNotMaterialize(t *testing.T) {
+	s := t1046Server(t)
+	def, _, _, err := s.stitchAgentStart("explicit-spark", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Model != cost.ModelCodexSpark {
+		t.Fatalf("explicit pin lost: %q", def.Model)
+	}
+	if def.Materialized {
+		t.Fatal("before send materialized")
+	}
+	s.markAgentTurnBegan(def.Name)
+	got := s.registry.Def(def.Name)
+	if got.Materialized || startConfigFromDef(got).RequireResume {
+		t.Fatalf("unsupported model earned resume: %+v", got)
+	}
+	if !s.agentHasTurnBegan(def.Name) {
+		t.Fatal("process-local submitted turn not recorded")
+	}
+	// A catalog that really contains Spark retains the ordinary materialization
+	// contract. This also prevents over-broad suppression of Codex sessions.
+	s.modelCatalog = func() []claudia.CatalogModel {
+		return append(claudia.ModelCatalog(), claudia.CatalogModel{Provider: claudia.ProviderCodex, Model: cost.ModelCodexSpark, Access: claudia.ModelAccessPlan, Quality: claudia.ModelQualityEconomy, Session: true})
+	}
+	s.markAgentTurnBegan(def.Name)
+	if !s.registry.Def(def.Name).Materialized {
+		t.Fatal("available Spark turn did not materialize")
+	}
+}
