@@ -2073,9 +2073,12 @@ body.rhs-resizing-row { cursor: row-resize; }
   color: inherit; cursor: pointer; font-size: 14px; line-height: 1.3; }
 .agent-node .agent-stop-icon:focus-visible { outline: 2px solid var(--accent); border-radius: 4px; }
 .agent-stop-popup { position: fixed; z-index: 80; width: min(320px, calc(100vw - 16px));
-  max-height: min(420px, calc(100dvh - 16px)); overflow: auto; box-sizing: border-box;
+  max-height: min(420px, calc(100dvh - 16px)); overflow: hidden; box-sizing: border-box;
+  display: flex; flex-direction: column;
   border: 1px solid var(--border); border-radius: 8px; padding: 10px;
   background: var(--bg); color: var(--text); box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
   font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.agent-stop-popup strong { display: block; margin-bottom: 5px; }
-.agent-stop-popup button { margin-top: 8px; cursor: pointer; }
+.agent-stop-popup-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; flex: none; }
+.agent-stop-popup-head strong { min-width: 0; overflow-wrap: anywhere; }
+.agent-stop-popup-head button { flex: none; cursor: pointer; }
+.agent-stop-popup-body { min-height: 0; overflow: auto; overflow-wrap: anywhere; }

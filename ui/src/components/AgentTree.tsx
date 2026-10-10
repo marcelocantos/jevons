@@ -296,11 +296,15 @@ function StopDetails({ node }: { node: AgentNode }) {
           style={anchor ? { top: anchor.top, left: anchor.left } : { top: 0, left: 0, visibility: 'hidden' }}
           onClick={(e) => e.stopPropagation()}
         >
-          <strong>{node.name}</strong>
-          <div>Reason: {actorMatch ? actorMatch[3] : reason}</div>
-          {actorMatch ? <div>Actor: {actorMatch[2]} ({actorMatch[1]})</div> : null}
-          {node.stopped_at ? <div>Since: {node.stopped_at}</div> : null}
-          <button type="button" onClick={() => { setOpen(false); button.current?.focus(); }}>Close</button>
+          <div className="agent-stop-popup-head">
+            <strong>{node.name}</strong>
+            <button type="button" onClick={() => { setOpen(false); button.current?.focus(); }}>Close</button>
+          </div>
+          <div className="agent-stop-popup-body">
+            <div>Reason: {actorMatch ? actorMatch[3] : reason}</div>
+            {actorMatch ? <div>Actor: {actorMatch[2]} ({actorMatch[1]})</div> : null}
+            {node.stopped_at ? <div>Since: {node.stopped_at}</div> : null}
+          </div>
         </div>
       ) : null}
     </span>

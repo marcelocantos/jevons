@@ -65,6 +65,9 @@ describe('parked seat disclosure (🎯T1059)', () => {
       expect(Number.parseFloat(popup.style.top)).toBe(96);
       expect(Number.parseFloat(popup.style.left)).toBe(8);
       expect(Number.parseFloat(popup.style.top) + 420).toBeLessThanOrEqual(560);
+      expect(popup.textContent).toContain('Reason: parked pending owner decision');
+      expect(popup.querySelector('.agent-stop-popup-head button')?.textContent).toBe('Close');
+      expect(popup.querySelector('.agent-stop-popup-body')).toBeTruthy();
     } finally {
       vi.unstubAllGlobals();
     }
