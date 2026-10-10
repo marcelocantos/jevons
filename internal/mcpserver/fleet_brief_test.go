@@ -228,6 +228,25 @@ func TestFleetStandingBriefLifecycleNarration(t *testing.T) {
 	}
 }
 
+// 🎯T1053: the injected brief distinguishes routine report handling from
+// owner-facing exceptions; silence must not hide blockers or false greens.
+func TestFleetStandingBriefOverseerReportNoise(t *testing.T) {
+	out, injected := EnsureFleetBrief(map[string]bool{}, "jevons", "review the worker report")
+	if !injected {
+		t.Fatal("expected standing brief on first delivery")
+	}
+	for _, want := range []string{
+		"🎯T1053", "do NOT narrate", "every routine worker report",
+		"independently gate", "genuine decision", "anomaly", "direct",
+		"owner-requested status", "blockers", "false greens", "safety incidents",
+		"gate, route follow-up", "review the worker report",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("injected brief missing report-noise doctrine %q", want)
+		}
+	}
+}
+
 // 🎯T536.3: standing brief carries fog-of-war scout doctrine.
 func TestFleetStandingBriefFogOfWarScout(t *testing.T) {
 	for _, want := range []string{

@@ -512,6 +512,24 @@ func TestDefaultPersonaLifecycleNarration(t *testing.T) {
 	}
 }
 
+// 🎯T1053: the overseer's own persona must agree with the injected brief.
+func TestDefaultPersonaOverseerReportNoise(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"🎯T1053", "do **not** narrate", "every routine report",
+		"genuine owner decision", "anomaly", "direct question",
+		"owner-requested status", "Blockers", "false greens", "safety incidents",
+		"gate, route", "without an owner-facing running commentary",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing report-noise doctrine %q", want)
+		}
+	}
+}
+
 // 🎯T652: omit-provider mint — Claudia decides dest; no habitual grok pin.
 func TestDefaultPersonaT652OmitProvider(t *testing.T) {
 	p, err := Default().Persona()
