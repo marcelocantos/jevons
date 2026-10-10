@@ -74,7 +74,10 @@ func TestT1046FailedLaunchRowRetriesWithSupportedModel(t *testing.T) {
 		if attempts == 2 && cfg.Model != "gpt-6-luna" {
 			t.Errorf("retry launch model=%q", cfg.Model)
 		}
-		return nil, errors.New("sidecar model unavailable")
+		if attempts == 1 {
+			return nil, errors.New("sidecar model unavailable")
+		}
+		return nil, nil // hermetic successful launch on the corrected config
 	}
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": "retry", "workdir": workdir, "provider": "codex", "task_type": "mechanical", "parent": "jevons-po", "purpose": "work"}
@@ -85,7 +88,7 @@ func TestT1046FailedLaunchRowRetriesWithSupportedModel(t *testing.T) {
 	session := s.registry.Def("retry").SessionID
 	s.modelCatalog = nil
 	result, err = s.handleAgentStart(t.Context(), req)
-	if err != nil || !result.IsError || attempts != 2 {
+	if err != nil || result.IsError || attempts != 2 {
 		t.Fatalf("retry: result=%v err=%v attempts=%d", result, err, attempts)
 	}
 	def := s.registry.Def("retry")
