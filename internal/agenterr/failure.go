@@ -116,6 +116,12 @@ func ClassifyText(msg string) Class {
 		return ClassContextOverflow
 	}
 
+	// An account/model compatibility refusal is specific to one seat, not
+	// an auth wall covering the fleet.
+	if IsUnsupportedModel(s) {
+		return ClassUnsupportedModel
+	}
+
 	// Auth first — "unauthorized" before generic "error". Account/key walls
 	// that Classify would otherwise miss (revoked, suspended) also land here
 	// so 🎯T406 HardBlock sees ClassAuth rather than ClassNone.
@@ -195,6 +201,8 @@ func OwnerCopy(class Class, raw string) string {
 	case ClassAuth:
 		return "Provider authentication failed (auth). Check Grok/Claude/Codex sign-in or API keys — this will not recover by waiting. " +
 			detailSuffix(raw)
+	case ClassUnsupportedModel:
+		return "Pinned model unsupported on this Codex ChatGPT account (unsupported_model). This seat is blocked until the owner or parent explicitly clears its intent; no automatic model rotation. " + detailSuffix(raw)
 	case ClassClientBug:
 		return "Local client/session error (client_bug). Fix config, session, or wire state; not a cloud outage. " +
 			detailSuffix(raw)

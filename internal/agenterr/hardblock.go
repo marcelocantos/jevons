@@ -24,7 +24,7 @@ import "strings"
 // which is what keeps an over-broad "any error" mutant from passing the
 // 🎯T406 oracle.
 func HardBlock(class Class, raw string) bool {
-	if !class.IsFailure() {
+	if !class.IsFailure() || class == ClassUnsupportedModel {
 		return false
 	}
 	low := strings.ToLower(strings.TrimSpace(raw))

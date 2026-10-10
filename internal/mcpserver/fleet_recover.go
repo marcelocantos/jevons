@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -85,6 +86,7 @@ type FleetRecoverObs struct {
 	Purpose        string
 	ProcessRunning bool
 	DeliberateStop bool
+	Intent         fleetintent.State
 	HasOpenMission bool
 	DesignGated    bool
 	LooksFinished  bool
@@ -148,6 +150,9 @@ func ClassifyFleetRecover(o FleetRecoverObs) (FleetRecoverAction, string) {
 	}
 	if purpose == claudia.PurposeOverseer || purpose == claudia.PurposeAside {
 		return FleetRecoverSkip, "not_work_purpose"
+	}
+	if o.Intent != fleetintent.Working && o.Intent != fleetintent.Unknown {
+		return FleetRecoverSkip, fleetintent.AgentReason(o.Intent)
 	}
 	if o.SessionReminted {
 		return FleetRecoverSkip, "bounce_remint"
@@ -282,6 +287,7 @@ type FleetRecoverInterrupt func(name string) error
 // FleetRecoverSweepArgs configures one fleet evaluation.
 type FleetRecoverSweepArgs struct {
 	Reg          *claudia.Registry
+	Intent       fleetintent.Snapshot
 	Activity     *IdleActivityTracker
 	Ledger       *IdleNudgeLedger // reuse nudge ledger for backoff/max
 	Push         FleetRecoverPusher
@@ -438,6 +444,7 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		Purpose:           purpose,
 		ProcessRunning:    running,
 		DeliberateStop:    deliberateStop,
+		Intent:            args.Intent.AgentState(d.Name),
 		HasOpenMission:    hasMission,
 		DesignGated:       designGated,
 		LooksFinished:     looksFinished,

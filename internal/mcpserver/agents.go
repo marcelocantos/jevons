@@ -1595,6 +1595,13 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 	var toolCalls int
 
 	return func(ev claudia.Event) {
+		// Native Codex turn/failed arrives as a system IsError event, not
+		// an assistant terminal stop. Inspect it before the idle path; text
+		// accumulated from assistant prose is not provider evidence.
+		if ev.IsError && ev.Text != "" {
+			class := agenterr.ClassifyText(ev.Text)
+			s.logProviderFailure("agent_event", name, class, ev.Text)
+		}
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
 		// 🎯T902: a mid-turn answer to a steered question goes to its asker now.

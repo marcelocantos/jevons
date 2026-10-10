@@ -1463,6 +1463,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
+		Intent:             s.fleetIntent(),
 		Reg:                s.registry,
 		Activity:           activity,
 		Ledger:             ledger,

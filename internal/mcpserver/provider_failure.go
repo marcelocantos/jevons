@@ -37,6 +37,7 @@ func (s *Server) logProviderFailure(surface, target string, class agenterr.Class
 		"raw", truncate(strings.TrimSpace(raw), 400),
 	)
 	s.ObserveProviderFailure(class, raw)
+	s.observeUnsupportedModel(target, class, raw)
 }
 
 // toolFailure converts an error from a direct/deliver path into an MCP error
