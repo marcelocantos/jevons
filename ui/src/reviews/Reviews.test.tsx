@@ -42,9 +42,9 @@ describe('versioned review and ordinary chat handoff', () => {
     wrap(<ReviewDetail id="opaque-v2" onBack={() => {}} onAnswer={onAnswer} />);
     expect(await screen.findByText('Is this acceptable?')).toBeTruthy();
     expect(screen.getByText(/screenshots 1: reported only/)).toBeTruthy();
-    expect(screen.getByRole('link', { name: /gate/ }).getAttribute('href')).toBe('/api/reviews/opaque-v2/gate');
-    expect(screen.queryByRole('link', { name: /screenshots/ })).toBeNull();
-    expect(screen.getByRole('link', { name: /diff/ }).getAttribute('href')).toBe('/api/reviews/opaque-v2/diff');
+    expect(screen.getByText(/gate: server reports verified; independent verification pending/)).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByText(/Evidence links unavailable pending backend security review/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Answer in chat' }));
     expect(onAnswer).toHaveBeenCalledOnce();
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -53,7 +53,8 @@ describe('versioned review and ordinary chat handoff', () => {
     expect(useDrafts.getState().drafts.jevons).toContain('Question version: v2');
     expect(useDrafts.getState().drafts.jevons).toContain('Review link: /reviews/opaque-v2');
     expect(useDrafts.getState().drafts.jevons).toContain('My answer: ');
-    expect(useDrafts.getState().drafts.jevons).not.toContain('/not-a-link');
+    expect(useDrafts.getState().drafts.jevons).not.toContain('/api/reviews/opaque-v2/gate');
+    expect(useDrafts.getState().drafts.jevons).not.toContain('/api/reviews/opaque-v2/report');
   });
 
   it('does not infer a prerequisite or invent links for a legacy item', () => {

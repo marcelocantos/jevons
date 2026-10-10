@@ -34,26 +34,11 @@ export function reviewReadiness(review: Review) {
   return 'Review event missing or unverified — readiness unknown';
 }
 
-// Only a producer-verified manifest may turn reported artifacts into links.
-// Untrusted paths and URL schemes never become navigable from this UI.
-export function verifiedEvidenceLinks(review: Review) {
-  const entries = review.evidence || {};
-  const links: { kind: string; url: string }[] = [];
-  for (const [kind, item] of Object.entries(entries)) {
-    const candidates = Array.isArray(item) ? item : [item];
-    for (const candidate of candidates) {
-      if (!candidate || typeof candidate !== 'object') continue;
-      const value = candidate as Record<string, unknown>;
-      if (value.status !== 'verified' || typeof value.url !== 'string') continue;
-      try {
-        const url = new URL(value.url, window.location.origin);
-        if (url.origin === window.location.origin && !value.url.startsWith('//')) {
-          links.push({ kind, url: value.url });
-        }
-      } catch { /* malformed source reference is not a link */ }
-    }
-  }
-  return links;
+// T1044 backend's current "verified" claim has not passed security review:
+// report/diff may leak paths or secrets, and SHA/gate may be unrelated.
+// Keep evidence strictly non-clickable until the API is remediated and audited.
+export function verifiedEvidenceLinks(_review: Review): { kind: string; url: string }[] {
+  return [];
 }
 
 export function evidenceSummary(review: Review) {
@@ -64,22 +49,21 @@ export function evidenceSummary(review: Review) {
     return candidates.map((candidate, index) => {
       const value = candidate && typeof candidate === 'object' ? candidate as Record<string, unknown> : {};
       const status = typeof value.status === 'string' ? value.status : 'unverified';
-      const reference = status === 'verified' && typeof value.reference === 'string' ? ` · ${value.reference}` : '';
-      const verdict = status === 'verified' && typeof value.verdict === 'string' ? ` · ${value.verdict}` : '';
-      return `${kind}${candidates.length > 1 ? ` ${index + 1}` : ''}: ${status.replaceAll('_', ' ')}${reference}${verdict}`;
+      const label = status === 'verified' ? 'server reports verified; independent verification pending' : status.replaceAll('_', ' ');
+      return `${kind}${candidates.length > 1 ? ` ${index + 1}` : ''}: ${label}`;
     }).join(' · ');
   }).join(' · ') || 'Evidence missing or unverified';
 }
 
 export function reviewDraft(review: Review) {
-  const links = verifiedEvidenceLinks(review);
   return [
     `Review ${review.id} · ${reviewLabel(review)}`,
     `Review link: /reviews/${encodeURIComponent(review.id)}`,
     `Question version: ${review.version || 'unknown'}`,
     `Question: ${review.question || 'Not available'}`,
     `Readiness: ${reviewReadiness(review)}`,
-    links.length ? `Verified evidence: ${links.map((l) => `${l.kind}: ${l.url}`).join('; ')}` : `Evidence: ${evidenceSummary(review)}`,
+    `Evidence: ${evidenceSummary(review)}`,
+    'Evidence links unavailable pending backend security review.',
     '',
     'My answer: ',
   ].join('\n');
@@ -107,7 +91,6 @@ export function ReviewsList({ onOpen }: { onOpen: (id: string) => void }) {
 export function ReviewDetail({ id, onBack, onAnswer }: { id: string; onBack: () => void; onAnswer: () => void }) {
   const query = useQuery({ queryKey: ['review', id], queryFn: () => readReviews<Review>(`/api/reviews/${encodeURIComponent(id)}`), retry: false });
   const review = query.data;
-  const links = review ? verifiedEvidenceLinks(review) : [];
   return <main className="review-detail">
     <button onClick={onBack}>← Reviews</button>
     {query.isPending ? <p role="status">Loading review…</p> : null}
@@ -119,8 +102,7 @@ export function ReviewDetail({ id, onBack, onAnswer }: { id: string; onBack: () 
       <p><strong>Readiness:</strong> {reviewReadiness(review)}</p>
       <p><strong>Target:</strong> {review.target_lookup === 'verified' ? review.target_status || 'status unavailable' : review.target_lookup || 'title/status unverified'}</p>
       <h2>Evidence</h2>
-      {links.length ? <ul>{links.map((link, i) => <li key={`${link.kind}-${i}`}><a href={link.url} target="_blank" rel="noopener noreferrer">{link.kind}</a> (verified)</li>)}</ul>
-        : <p>No verified fetchable evidence links.</p>}
+      <p>Evidence links unavailable pending backend security review. No raw diff or report is exposed here.</p>
       <p>{evidenceSummary(review)}</p>
       {review.resolution ? <p>Resolution: {review.resolution}</p> : null}
       <button type="button" onClick={() => { prefillReviewAnswer(review); onAnswer(); }}>Answer in chat</button>
