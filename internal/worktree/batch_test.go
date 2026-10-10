@@ -108,3 +108,23 @@ func TestT1051BatchNoAuthorityOrChangedBase(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// This is a NEGATIVE SECURITY ORACLE, not acceptance: with a shared .git
+// directory writable by the worker's OS identity, a worker bypasses every
+// guarded CLI and grant check by updating the ref directly. T1051 cannot be
+// achieved until runtime OS write confinement makes this test's direct write
+// fail (and the privileged landing service still succeeds).
+func TestT1051DirectGitWriteBypassesWorkflowGateWithoutOSConfinement(t *testing.T) {
+	base := sharedClone(t)
+	_, tip := workerCommit(t, base, "one", "a.txt", "one\n")
+	before := git(t, base, "rev-parse", "master")
+	// The fail-closed IntegrateBatch API itself refuses this worker.
+	if _, err := worktree.IntegrateBatch(base, "T1051", "forged", []string{"one"}, nil); !errors.Is(err, worktree.ErrNoAuthority) {
+		t.Fatal(err)
+	}
+	// The same user's direct Git access nevertheless moves the shared ref.
+	git(t, base, "update-ref", "refs/heads/master", tip, before)
+	if got := git(t, base, "rev-parse", "master"); got != tip {
+		t.Fatalf("negative oracle: direct ref write unexpectedly denied, got %s", got)
+	}
+}
