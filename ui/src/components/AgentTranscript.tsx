@@ -403,6 +403,12 @@ export function AgentTranscript(props: {
     }
   }, [props.olderPage?.error]);
 
+  const retryOlder = () => {
+    pagingRef.current = false;
+    clearPageAnchor();
+    props.onRetryOlder?.();
+  };
+
   const scroller = parentRef.current;
   const scrollTop = scroller?.scrollTop ?? 0;
   const clientHeight = scroller?.clientHeight ?? 0;
@@ -435,7 +441,7 @@ export function AgentTranscript(props: {
     <div id={bodyId} ref={parentRef}>
       {props.olderPage?.error ? (
         <div className="history-page-status" role="alert">
-          Could not load earlier history. <button type="button" onClick={props.onRetryOlder}>Retry</button>
+          Could not load earlier history. <button type="button" onClick={retryOlder}>Retry</button>
         </div>
       ) : props.olderPage?.loading ? (
         <div className="history-page-status" role="status">Loading earlier history…</div>

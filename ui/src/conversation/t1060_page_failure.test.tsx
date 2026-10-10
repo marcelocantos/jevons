@@ -34,7 +34,7 @@ it('a tagged page storage failure shows retry for the exact cursor without mutat
   act(() => receive(env('error', { op: 'page', before: 'e:90', error: 'Could not load earlier history' })));
   expect(view.result.current.olderPage).toEqual({ before: 'e:90', loading: false, error: 'Could not load earlier history.' });
   expect(view.result.current.frames).toHaveLength(1); // not a send_error bubble
-  act(() => view.result.current.retryOlder());
+  act(() => { view.result.current.retryOlder(); view.result.current.retryOlder(); });
   expect(sent).toEqual([{ before: 'e:90', limit: 50 }, { before: 'e:90', limit: 50 }]);
   act(() => receive(env('page', { before: 'e:90', lines: [], start: 1, older: 0, total: 150, truncated: false })));
   expect(view.result.current.olderPage).toBeNull();
