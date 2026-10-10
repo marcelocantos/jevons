@@ -247,6 +247,8 @@ var passLaunderingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
 	`\bthis (gate|run|suite|package) (is green|pass(es|ed))\b`,
 	`\bcounts as a pass\b`,
 	`\b(the )?(tests|suite|gate|run) pass(es|ed)?\b`,
+	`\b(it|this (gate|run)|killed (gate|run|record)) (is|was) (green|a pass|passing)\b`,
+	`\bit (passed|passes)\b`,
 	`\bunrelated flake\b`,
 	`\bevery oracle pass`,
 	`\bthe suite is green here`,
@@ -273,7 +275,7 @@ func ClassifyCitation(window string, c CitedAttestation) CitationRole {
 	}
 	if c.Verdict.IsKilled() && negativeObservationRe.MatchString(framing) &&
 		negativeObservationLimitRe.MatchString(framing) && !failingProofRe.MatchString(framing) &&
-		!hasGreenClaim(framing) {
+		!passLaunderingRe.MatchString(framing) {
 		return RoleNegativeObservation
 	}
 	if !c.Verdict.IsKilled() && redDisclosureRe.MatchString(framing) &&

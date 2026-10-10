@@ -1,0 +1,16 @@
+```jevons
+jevons: kind finish-report
+jevons: target T603
+jevons: status in-progress
+jevons: oracle sha=ba45233b1a251a5b6a99f8151b607e235f6551ff gate-id=7b524b4c
+jevons: silent-ledger none
+```
+
+**Independent review complete; no achievement recorded.** The integrated code SHA `ba45233b` and measured HEAD `22656c6e` both passed `git merge-base --is-ancestor … HEAD`. I made no code changes; this worktree remains clean.
+
+- **Full owner-path package:** `GATE go-test exit=0 GREEN id=7b524b4c out=15c10dffad88 dur=1m26.8s tree=clean@22656c6e9ccd`. `jevons_gate_show` confirms the actual command was `go test ./internal/mcpserver -count=1` and its scope is this repository.
+- **SIGKILL record:** `GATE sh-kill--9 exit=unknown KILLED id=b82a63a6 out=e3b0c44298fc dur=0s tree=clean@22656c6e9ccd`. `gate_show` confirms own-repo provenance and `process terminated by signal: killed`; it is not an absent or passing record.
+- **Serialization:** At 04:43:06 UTC, `gate queue` showed PID 30390 holding the heavy lease while my PID 41624 waited with an open descriptor. At 04:43:21 another holder, PID 34660, preceded it; by 04:43:48 PID 41624 was the recorded holder, with acquisition age 27 seconds. The full-package run then completed with the GREEN ID above. A 04:43:17 `/api/agents` snapshot counted **12 other running seats**; that is a running-seat census, not a claim that all 12 were executing heavy tests.
+- **Focused regression:** `GATE go-test-TestT603TestT461 exit=0 GREEN id=728e86f7 out=6678adba10bf dur=41.1s tree=clean@22656c6e9ccd`. `gate_show` confirms `go test ./internal/gate -run 'TestT603|TestT461' -count=1 -timeout=90s`, own scope.
+
+**RED disclosure:** The additional *full* `internal/gate` run was `GATE go-test exit=1 RED id=02c22a0d out=959129a1ad94 dur=59.6s tree=clean@22656c6e9ccd`. Its exact failure was `TestCheckAttestationAcceptance1/gate_on_a_commit_lacking_the_fix`: `t765_check_attestation_cli_test.go:126: exit 0, want 4; T9: verified`. This is a T765 achievement-attestation test, not a T603 lease or kill test; it does **not** negate the observed T603 behavior or focused GREEN. It does prevent claiming the entire `internal/gate` package is green. T603’s behavioral acceptance is observed, but I leave the achievement decision to the independent gate with that RED visible.
