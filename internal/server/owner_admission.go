@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 )
 
@@ -44,13 +46,25 @@ type admissionCandidate struct {
 	timer             *time.Timer
 }
 
+type admissionAuthority struct{ nonce string } // unexported capability, never derived from provider strings
+type admissionIncident struct {
+	turnID string
+	open   bool
+}
+
 type overseerAdmission struct {
-	mu        sync.Mutex
-	candidate *admissionCandidate
-	auditDir  string
+	mu            sync.Mutex
+	auditMu       sync.Mutex
+	authority     *admissionAuthority
+	publishMu     sync.Mutex // serializes admission, events, expiry and release in receipt order
+	candidate     *admissionCandidate
+	auditDir      string
+	auditDev      uint64
+	auditIno      uint64
+	beforePublish func(claudia.Event) // test-only ordering barrier; nil in production
 	// Set by the trusted owner intake; never by provider output.
 	requests  map[string]bool
-	incidents map[string]bool
+	incidents map[string]admissionIncident
 }
 
 // EnableOverseerAdmission configures the isolated seam. Not called in the
@@ -60,25 +74,41 @@ func (s *Server) EnableOverseerAdmission(auditDir string) error {
 	if auditDir == "" {
 		return errors.New("admission: restricted audit directory required")
 	}
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(auditDir)); err == nil {
+		auditDir = filepath.Join(parent, filepath.Base(auditDir))
+	}
+	if err := validateAdmissionAuditDir(s, auditDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(auditDir, 0700); err != nil {
 		return err
 	}
-	if err := os.Chmod(auditDir, 0700); err != nil {
+	dirfd, err := unix.Open(auditDir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
 		return err
+	}
+	var ds unix.Stat_t
+	err = unix.Fstat(dirfd, &ds)
+	unix.Close(dirfd)
+	if err != nil {
+		return err
+	}
+	if ds.Uid != uint32(os.Getuid()) || ds.Mode&0777 != 0700 {
+		return errors.New("admission audit directory must be private and owned by daemon")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ownerAdmission != nil {
 		return errors.New("admission already enabled")
 	}
-	s.ownerAdmission = &overseerAdmission{auditDir: auditDir, requests: map[string]bool{}, incidents: map[string]bool{}}
+	s.ownerAdmission = &overseerAdmission{auditDir: auditDir, auditDev: uint64(ds.Dev), auditIno: ds.Ino, authority: &admissionAuthority{nonce: uuid.NewString()}, requests: map[string]bool{}, incidents: map[string]admissionIncident{}}
 	return nil
 }
 
-// BindOwnerAdmission is invoked only after authenticated owner intake and
+// bindOwnerAdmission is invoked only after authenticated owner intake and
 // transport correlation. The request ID is host-minted, not Event.TurnID.
 // Rebinding a still-open candidate is refused, including across tool use.
-func (s *Server) BindOwnerAdmission(turnID, requestID string) error {
+func (s *Server) bindOwnerAdmission(cap *admissionAuthority, turnID, requestID string) error {
 	if turnID == "" || requestID == "" {
 		return errors.New("admission: missing trusted identity")
 	}
@@ -87,6 +117,9 @@ func (s *Server) BindOwnerAdmission(turnID, requestID string) error {
 	s.mu.RUnlock()
 	if a == nil {
 		return errors.New("admission: not enabled")
+	}
+	if cap == nil || cap != a.authority {
+		return errors.New("admission: untrusted caller")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -103,17 +136,22 @@ func (s *Server) BindOwnerAdmission(turnID, requestID string) error {
 	return nil
 }
 
-// AdmitOwnerCandidate takes a HOST decision. An owner answer must refer to
+// admitOwnerCandidate takes a HOST decision. An owner answer must refer to
 // the still-open request. An incident is independently registered by trusted
 // host intake and cannot be invented by a model claim. Routine/silent has no
 // body authority. After a tool_use stop the next candidate needs a new claim.
-func (s *Server) AdmitOwnerCandidate(turnID, evidenceID string, decision AdmissionDecision) error {
+func (s *Server) admitOwnerCandidate(cap *admissionAuthority, turnID, evidenceID string, decision AdmissionDecision) error {
 	s.mu.RLock()
 	a := s.ownerAdmission
 	s.mu.RUnlock()
 	if a == nil {
 		return errors.New("admission: not enabled")
 	}
+	if cap == nil || cap != a.authority {
+		return errors.New("admission: untrusted caller")
+	}
+	a.publishMu.Lock()
+	defer a.publishMu.Unlock()
 	a.mu.Lock()
 	c := a.candidate
 	if c == nil || c.turnID != turnID {
@@ -122,14 +160,15 @@ func (s *Server) AdmitOwnerCandidate(turnID, evidenceID string, decision Admissi
 	}
 	if time.Now().After(c.deadline) {
 		a.mu.Unlock()
-		s.expireOwnerAdmission(c, "late claim")
+		s.expireOwnerAdmissionLocked(c, "late claim")
 		return errors.New("admission: expired")
 	}
 	if decision != AdmissionAllowed && decision != AdmissionSilent {
 		a.mu.Unlock()
 		return errors.New("admission: invalid decision")
 	}
-	if decision == AdmissionAllowed && !(evidenceID == c.requestID && a.requests[evidenceID]) && !a.incidents[evidenceID] {
+	incident := a.incidents[evidenceID]
+	if decision == AdmissionAllowed && !(evidenceID == c.requestID && a.requests[evidenceID]) && !(incident.open && incident.turnID == c.turnID) {
 		a.mu.Unlock()
 		return errors.New("admission: no trusted open evidence")
 	}
@@ -147,11 +186,11 @@ func (s *Server) AdmitOwnerCandidate(turnID, evidenceID string, decision Admissi
 	return nil
 }
 
-// RegisterOwnerIncident is for trusted host incident intake, not authored
+// registerOwnerIncident is for trusted host incident intake, not authored
 // prose. Materiality and containment must be independently adjudicated.
-func (s *Server) RegisterOwnerIncident(id string) error {
-	if id == "" {
-		return errors.New("admission: empty incident ID")
+func (s *Server) registerOwnerIncident(cap *admissionAuthority, turnID, id string) error {
+	if id == "" || turnID == "" {
+		return errors.New("admission: empty incident or turn ID")
 	}
 	s.mu.RLock()
 	a := s.ownerAdmission
@@ -159,12 +198,15 @@ func (s *Server) RegisterOwnerIncident(id string) error {
 	if a == nil {
 		return errors.New("admission: not enabled")
 	}
+	if cap == nil || cap != a.authority {
+		return errors.New("admission: untrusted caller")
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.incidents[id] {
+	if _, exists := a.incidents[id]; exists {
 		return errors.New("admission: incident ID reused")
 	}
-	a.incidents[id] = true
+	a.incidents[id] = admissionIncident{turnID: turnID, open: true}
 	return nil
 }
 
@@ -179,12 +221,16 @@ func (s *Server) holdOverseerAdmission(ev claudia.Event) bool {
 	if a == nil {
 		return false
 	}
+	a.publishMu.Lock()
+	defer a.publishMu.Unlock()
 	a.mu.Lock()
 	c := a.candidate
 	if c == nil {
 		a.mu.Unlock()
 		if ev.Type == "assistant" || ev.Type == "progress" {
-			s.auditOwnerAdmission(a, &admissionCandidate{turnID: ev.TurnID}, ev, "unbound turn")
+			if err := s.auditOwnerAdmission(a, &admissionCandidate{turnID: ev.TurnID}, ev, "unbound turn"); err != nil {
+				s.admissionDegraded("AUDIT LOSS: unbound event", ev.TurnID)
+			}
 			s.admissionDegraded("unbound turn", ev.TurnID)
 			return true
 		}
@@ -193,27 +239,32 @@ func (s *Server) holdOverseerAdmission(ev claudia.Event) bool {
 	if ev.TurnID == "" || ev.TurnID != c.turnID {
 		a.mu.Unlock()
 		s.auditOwnerAdmission(a, c, ev, "missing or mismatched event identity")
-		s.expireOwnerAdmission(c, "missing or mismatched event identity")
+		s.expireOwnerAdmissionLocked(c, "missing or mismatched event identity")
 		return true
 	}
 	if time.Now().After(c.deadline) {
 		a.mu.Unlock()
 		s.auditOwnerAdmission(a, c, ev, "timeout")
-		s.expireOwnerAdmission(c, "timeout")
+		s.expireOwnerAdmissionLocked(c, "timeout")
 		return true
 	}
 	size := len(ev.Text) + len(ev.Raw)
 	if c.bytes+size > admissionMaxBytes {
 		a.mu.Unlock()
 		s.auditOwnerAdmission(a, c, ev, "buffer limit")
-		s.expireOwnerAdmission(c, "buffer limit")
+		s.expireOwnerAdmissionLocked(c, "buffer limit")
+		return true
+	}
+	// Audit must be fsynced before holding or publishing a candidate. If the
+	// restricted store fails, no authored body is released; a trusted visible
+	// loss marker names the preservation failure rather than pretending safety.
+	if err := s.auditOwnerAdmission(a, c, ev, "held"); err != nil {
+		a.mu.Unlock()
+		s.expireOwnerAdmissionLocked(c, "AUDIT LOSS: restricted audit persistence failed")
 		return true
 	}
 	c.bytes += size
 	c.held = append(c.held, ev)
-	// Write a restricted, non-replayable copy on receipt: a daemon restart
-	// before the timer fires must not destroy an unadjudicated anomaly.
-	s.auditOwnerAdmission(a, c, ev, "held")
 	// Even after one allowed fragment, continue holding until seal; an authored
 	// candidate cannot grant itself authority for a later tool continuation.
 	if c.decision == "" {
@@ -233,6 +284,9 @@ func (s *Server) releaseAdmissionEvents(c *admissionCandidate, events []claudia.
 	a := s.ownerAdmission
 	s.mu.RUnlock()
 	for _, ev := range events {
+		if a.beforePublish != nil {
+			a.beforePublish(ev)
+		}
 		if c.decision == AdmissionSilent {
 			s.auditOwnerAdmission(a, c, ev, "silent")
 			if ev.IsTerminalStop() {
@@ -245,7 +299,9 @@ func (s *Server) releaseAdmissionEvents(c *admissionCandidate, events []claudia.
 				if c.evidenceID == c.requestID {
 					a.requests[c.requestID] = false
 				} else if c.evidenceID != "" {
-					a.incidents[c.evidenceID] = false
+					incident := a.incidents[c.evidenceID]
+					incident.open = false
+					a.incidents[c.evidenceID] = incident
 				}
 				a.mu.Unlock()
 			}
@@ -280,6 +336,19 @@ func (s *Server) expireOwnerAdmission(c *admissionCandidate, reason string) {
 	if a == nil {
 		return
 	}
+	a.publishMu.Lock()
+	defer a.publishMu.Unlock()
+	s.expireOwnerAdmissionLocked(c, reason)
+}
+
+// expireOwnerAdmissionLocked is called with publishMu held.
+func (s *Server) expireOwnerAdmissionLocked(c *admissionCandidate, reason string) {
+	s.mu.RLock()
+	a := s.ownerAdmission
+	s.mu.RUnlock()
+	if a == nil {
+		return
+	}
 	a.mu.Lock()
 	if a.candidate != c {
 		a.mu.Unlock()
@@ -302,35 +371,107 @@ func (s *Server) expireOwnerAdmission(c *admissionCandidate, reason string) {
 
 func (s *Server) admissionDegraded(reason, turnID string) {
 	slog.Error("owner admission degraded", "reason", reason, "turn_id", turnID)
-	b, _ := json.Marshal(map[string]string{"type": "status", "text": "Owner response delayed: admission evidence unavailable; investigating."})
+	b, _ := json.Marshal(map[string]string{"type": "status", "text": admissionStatusText(reason)})
 	s.broadcastChatLive(string(b)) // status is daemon-authored, never replayed as assistant prose
 }
 
-func (s *Server) auditOwnerAdmission(a *overseerAdmission, c *admissionCandidate, ev claudia.Event, reason string) {
-	if a == nil {
-		return
-	}
-	// Event excludes provider Raw/Text in JSON; include both explicitly in the
-	// restricted store rather than in the owner chat journal or public logs.
-	row, _ := json.Marshal(map[string]any{"time": time.Now().UTC(), "turn_id": c.turnID, "request_id": c.requestID, "reason": reason, "text": ev.Text, "raw": json.RawMessage(ev.Raw)})
-	path := filepath.Join(a.auditDir, "owner-admission.jsonl")
-	if st, err := os.Lstat(path); err == nil && (st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular()) {
-		slog.Error("admission audit unsafe file type")
-		return
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+// validateAdmissionAuditDir rejects paths that would be replayed as owner
+// chat, and refuses symlinked or foreign-owned directory components. This is
+// called before creation; auditOwnerAdmission revalidates via openat on every
+// write to close final-component symlink substitution.
+func validateAdmissionAuditDir(s *Server, dir string) error {
+	abs, err := filepath.Abs(dir)
 	if err != nil {
-		slog.Error("admission audit open failed", "err", err)
-		return
+		return err
 	}
+	s.mu.RLock()
+	clog := s.chatLog
+	s.mu.RUnlock()
+	if clog != nil {
+		journal, err := filepath.Abs(clog.Path())
+		if err != nil {
+			return err
+		}
+		if realParent, e := filepath.EvalSymlinks(filepath.Dir(journal)); e == nil {
+			journal = filepath.Join(realParent, filepath.Base(journal))
+		}
+		rel, err := filepath.Rel(abs, journal)
+		if err != nil {
+			return err
+		}
+		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
+			return errors.New("admission audit directory contains owner chat journal")
+		}
+		if abs == filepath.Dir(journal) {
+			return errors.New("admission audit directory shares owner chat directory")
+		}
+	}
+	// Existing path components must never be symlinks. New components are
+	// created with restrictive permissions; check ownership after creation.
+	for p := abs; ; p = filepath.Dir(p) {
+		st, e := os.Lstat(p)
+		if e == nil && st.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("admission audit symlink component: %s", p)
+		}
+		if e != nil && !os.IsNotExist(e) {
+			return e
+		}
+		if p == filepath.Dir(p) {
+			break
+		}
+	}
+	return nil
+}
+
+func (s *Server) auditOwnerAdmission(a *overseerAdmission, c *admissionCandidate, ev claudia.Event, reason string) error {
+	if a == nil {
+		return errors.New("audit not configured")
+	}
+	a.auditMu.Lock()
+	defer a.auditMu.Unlock()
+	row, err := json.Marshal(map[string]any{"time": time.Now().UTC(), "turn_id": c.turnID, "request_id": c.requestID, "reason": reason, "text": ev.Text, "raw": json.RawMessage(ev.Raw)})
+	if err != nil {
+		return fmt.Errorf("audit marshal: %w", err)
+	}
+	// O_NOFOLLOW on the directory and on the relative file prevents a race
+	// replacing either leaf with a symlink between inspection and append.
+	dirfd, err := unix.Open(a.auditDir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("audit directory open: %w", err)
+	}
+	defer unix.Close(dirfd)
+	var ds unix.Stat_t
+	if err := unix.Fstat(dirfd, &ds); err != nil {
+		return err
+	}
+	if ds.Uid != uint32(os.Getuid()) || ds.Mode&0777 != 0700 || uint64(ds.Dev) != a.auditDev || ds.Ino != a.auditIno {
+		return errors.New("audit directory ownership/mode changed")
+	}
+	fd, err := unix.Openat(dirfd, "owner-admission.jsonl", unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	if err != nil {
+		return fmt.Errorf("audit file open: %w", err)
+	}
+	f := os.NewFile(uintptr(fd), "owner-admission.jsonl")
 	defer f.Close()
-	if st, err := f.Stat(); err == nil && st.Mode().Perm() != 0600 {
-		_ = f.Chmod(0600)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Getuid()) || st.Mode&0777 != 0600 {
+		return errors.New("audit file ownership/type/mode changed")
 	}
 	if _, err = fmt.Fprintln(f, string(row)); err != nil {
-		slog.Error("admission audit write failed", "err", err)
+		return fmt.Errorf("audit write: %w", err)
 	}
 	if err = f.Sync(); err != nil {
-		slog.Error("admission audit sync failed", "err", err)
+		return fmt.Errorf("audit sync: %w", err)
 	}
+	return nil
+}
+
+func admissionStatusText(reason string) string {
+	if strings.Contains(reason, "AUDIT LOSS") {
+		return "Owner response delayed: restricted audit unavailable; candidate content may be lost. Investigating."
+	}
+	return "Owner response delayed: admission evidence unavailable; investigating."
 }

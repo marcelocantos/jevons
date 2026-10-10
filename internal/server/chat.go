@@ -366,7 +366,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 				// Flush any held prefix fragments now that we know visible.
 				for _, held := range s.overseerStreamHold {
 					s.mu.Unlock()
-					durable = s.BroadcastChat(held) || durable
+					durable = s.broadcastAdmittedChat(held) || durable
 					s.mu.Lock()
 				}
 				s.overseerStreamHold = nil
@@ -383,7 +383,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 			}
 			if ev.IsTerminalStop() {
 				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
-					durable = s.BroadcastChat(line) || durable
+					durable = s.broadcastAdmittedChat(line) || durable
 				}
 				s.clearOverseerStreamID()
 				// 🎯T919: a silent turn still ends. Returning before the
@@ -422,11 +422,11 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 			acc := s.overseerStreamAcc
 			s.mu.Unlock()
 			for _, h := range held {
-				durable = s.BroadcastChat(h) || durable
+				durable = s.broadcastAdmittedChat(h) || durable
 			}
 			// 🎯T378: held fragments proved visible on seal — the owner can
 			// read them, so this turn answered.
-			if len(held) > 0 && durable {
+			if len(held) > 0 && (durable || !s.overseerAdmissionEnabled()) {
 				s.noteOwnerVisibleText(acc)
 			}
 		}
@@ -439,12 +439,12 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 		// If this full-text event is silent (T238 single-fragment path) and
 		// we did not already return above, chatWireLine drops body; terminal
 		// empty end_turn still ok.
-		durable = s.BroadcastChat(line) || durable
+		durable = s.broadcastAdmittedChat(line) || durable
 		// 🎯T378: reaching here with assistant prose means the stream was not
 		// silent — every silent path returned above — so this is text the
 		// owner actually sees, which is the only thing that answers a
 		// question. A seal alone never gets to make that claim.
-		if ev.Type == "assistant" && durable {
+		if ev.Type == "assistant" && (durable || !s.overseerAdmissionEnabled()) {
 			s.noteOwnerVisibleText(ev.Text)
 		}
 	} else {
@@ -1993,15 +1993,30 @@ func (s *Server) persistChatJSONL(line string) bool {
 
 func (s *Server) BroadcastChat(line string) bool {
 	durable := s.persistChatLine(line)
-	s.mu.RLock()
-	admissionActive := s.ownerAdmission != nil
-	s.mu.RUnlock()
-	if !admissionActive || durable || isEphemeralChatStatusLine(line) {
+	s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
+	return durable
+}
+
+// Only admission-controlled assistant output requires a durable journal write
+// before WS publication. Unrelated owner echoes, send_error and notices keep
+// their prior broadcast semantics, including on a journal failure.
+func (s *Server) broadcastAdmittedChat(line string) bool {
+	if !s.overseerAdmissionEnabled() {
+		return s.BroadcastChat(line)
+	}
+	durable := s.persistChatLine(line)
+	if durable || isEphemeralChatStatusLine(line) {
 		s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
 	} else {
 		s.admissionDegraded("journal write failed", "")
 	}
 	return durable
+}
+
+func (s *Server) overseerAdmissionEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ownerAdmission != nil
 }
 
 // broadcastChatLive fans a line out to connected clients WITHOUT
