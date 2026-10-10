@@ -94,3 +94,22 @@ it('sealed markdown honors fully qualified foreign targets and excludes existing
   expect(html).toContain('data-target-repo="github.com/marcelocantos/claudia"');
   expect(html).toContain('<a href="https://example.org">claudia/T177</a>');
 });
+
+it('a missing qualified target caches only its own 404, not a colliding local row', async () => {
+  const fetcher = vi.fn(async (url: string) => String(url).includes('repo=claudia')
+    ? new Response(JSON.stringify({ available: true, found: false }), { status: 404 })
+    : new Response(JSON.stringify({ found: true, target: { id: 'T177', name: 'Jevons table widths' } })));
+  vi.stubGlobal('fetch', fetcher);
+  expect(await fetchFrontierTarget('T177', undefined, 'claudia')).toBeNull();
+  expect((await fetchFrontierTarget('T177'))?.name).toBe('Jevons table widths');
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it('same id in different repos cannot reuse a cached card', () => {
+  const cache = {};
+  const claudia: FrontierRow = { id: 'T177', name: 'Purge legacy CLI transport' };
+  const jevons: FrontierRow = { id: 'T177', name: 'Frontier table widths' };
+  expect(hoverCardMarkdown(cache, claudia, 'claudia')).toContain('Purge legacy CLI transport');
+  expect(hoverCardMarkdown(cache, jevons)).toContain('Frontier table widths');
+  expect(hoverCardMarkdown(cache, claudia, 'claudia')).not.toContain('Frontier table widths');
+});
