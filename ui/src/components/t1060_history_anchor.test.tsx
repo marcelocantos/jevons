@@ -98,3 +98,90 @@ it('does not cascade after a tiny prepend until a new PageUp gesture (T1060)', (
   fireEvent(el, new Event('jevons-page-older')); // explicit PageUp gesture
   expect(onPageOlder).toHaveBeenCalledTimes(2);
 });
+
+// A later ordinary tail append or an expand is not a prepend measurement.
+it('does not claim unrelated growth after a new live row or owner gesture (T1060)', () => {
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+  const old = [userTurn('loaded 0'), userTurn('loaded 1')];
+  const props = (frames: unknown[], start: number) => createElement(AgentTranscript, {
+    name: 'jevons', frames, meta: { start, older: start, total: 200, following: false }, ready: true, onPageOlder: () => {},
+  });
+  const view = render(props(old, 100));
+  const el = view.container.querySelector('#messages') as HTMLElement;
+  const canvas = view.container.querySelector('#messages-canvas') as HTMLElement;
+  let height = 1000;
+  Object.defineProperty(el, 'scrollHeight', { get: () => height, configurable: true });
+  Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true });
+  el.scrollTop = 0;
+  fireEvent.scroll(el);
+  height = 1200;
+  view.rerender(props([userTurn('older'), ...old], 99));
+  expect(el.scrollTop).toBe(200);
+  // Live append while history is open: the old anchor must be released.
+  height = 1300;
+  view.rerender(props([userTurn('older'), ...old, userTurn('new live tail')], 99));
+  act(() => FakeResizeObserver.fire(canvas));
+  expect(el.scrollTop).toBe(200);
+
+  // A second history page starts a fresh anchor; the next gesture releases
+  // it before an unrelated expand.
+  el.scrollTop = 0;
+  fireEvent.scroll(el);
+  height = 1550;
+  view.rerender(props([userTurn('even older'), userTurn('older'), ...old, userTurn('new live tail')], 98));
+  expect(el.scrollTop).toBe(250);
+  fireEvent.wheel(el, { deltaY: 50 });
+  height = 1750;
+  act(() => FakeResizeObserver.fire(canvas));
+  expect(el.scrollTop).toBe(250);
+});
+
+it('an empty page releases pending anchor on next explicit PageUp (T1060)', () => {
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+  const onPageOlder = vi.fn();
+  const old = [userTurn('loaded')];
+  const props = (start: number) => createElement(AgentTranscript, {
+    name: 'jevons', frames: old, meta: { start, older: start, total: 200, following: false }, ready: true, onPageOlder,
+  });
+  const view = render(props(100));
+  const el = view.container.querySelector('#messages') as HTMLElement;
+  Object.defineProperty(el, 'scrollHeight', { value: 1000, configurable: true });
+  Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true });
+  el.scrollTop = 0;
+  fireEvent.scroll(el);
+  expect(onPageOlder).toHaveBeenCalledTimes(1);
+  view.rerender(props(99)); // empty page: cursor advances, no new rows
+  fireEvent(el, new Event('jevons-page-older'));
+  expect(onPageOlder).toHaveBeenCalledTimes(2);
+});
+
+it('settled history stops shifting when an unrelated row expands without a gesture (T1060)', () => {
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+  const old = [userTurn('loaded 0'), userTurn('loaded 1')];
+  const props = (frames: unknown[], start: number) => createElement(AgentTranscript, {
+    name: 'jevons', frames, meta: { start, older: start, total: 200, following: false }, ready: true, onPageOlder: () => {},
+  });
+  const view = render(props(old, 100));
+  const el = view.container.querySelector('#messages') as HTMLElement;
+  const canvas = view.container.querySelector('#messages-canvas') as HTMLElement;
+  let height = 1000;
+  Object.defineProperty(el, 'scrollHeight', { get: () => height, configurable: true });
+  Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true });
+  vi.useFakeTimers();
+  try {
+    el.scrollTop = 0;
+    fireEvent.scroll(el);
+    height = 1200;
+    view.rerender(props([userTurn('older'), ...old], 99));
+    expect(el.scrollTop).toBe(200);
+    height = 1250;
+    act(() => FakeResizeObserver.fire(canvas)); // late measurement belongs to page
+    expect(el.scrollTop).toBe(250);
+    act(() => vi.advanceTimersByTime(201)); // canvas has settled
+    height = 1350;
+    act(() => FakeResizeObserver.fire(canvas)); // unrelated bubble expand
+    expect(el.scrollTop).toBe(250);
+  } finally {
+    vi.useRealTimers();
+  }
+});

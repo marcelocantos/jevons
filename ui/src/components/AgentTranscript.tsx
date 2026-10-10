@@ -69,7 +69,27 @@ export function AgentTranscript(props: {
   const hydrateSettled = useRef(false);
   const lastTotalRef = useRef(0);
   const lastCountRef = useRef(0);
-  const pageAnchor = useRef<{ height: number; start: number | undefined; count: number; applied: boolean } | null>(null);
+  const pageAnchor = useRef<{
+    height: number;
+    start: number | undefined;
+    count: number;
+    applied: boolean;
+    release?: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const clearPageAnchor = () => {
+    if (pageAnchor.current?.release) clearTimeout(pageAnchor.current.release);
+    pageAnchor.current = null;
+  };
+  const scheduleAnchorRelease = () => {
+    const anchor = pageAnchor.current;
+    if (!anchor) return;
+    if (anchor.release) clearTimeout(anchor.release);
+    // Virtual rows measure on the next frame and can settle over several
+    // frames. Stop claiming later unrelated growth once the canvas is quiet.
+    anchor.release = setTimeout(() => {
+      if (pageAnchor.current === anchor) pageAnchor.current = null;
+    }, 200);
+  };
   const [overscan, setOverscan] = useState(HYDRATE_OVERSCAN_MAX);
   const setFollow = (next: boolean) => {
     if (followRef.current === next) return;
@@ -101,7 +121,7 @@ export function AgentTranscript(props: {
     followRef.current = true;
     pinningRef.current = false;
     pagingRef.current = false;
-    pageAnchor.current = null;
+    clearPageAnchor();
     wasReadyRef.current = false;
     hydrateSettled.current = false;
     lastHeightRef.current = 0;
@@ -115,7 +135,7 @@ export function AgentTranscript(props: {
     if (props.followEpoch == null) return;
     followRef.current = true;
     pinningRef.current = true;
-    pageAnchor.current = null;
+    clearPageAnchor();
     props.onFollowChange?.(true);
     const el = parentRef.current;
     if (el) el.scrollTop = pinWriteScrollTop(el.scrollHeight);
@@ -188,9 +208,17 @@ export function AgentTranscript(props: {
   useLayoutEffect(() => {
     const anchor = pageAnchor.current;
     const el = parentRef.current;
-    if (!anchor || !el || anchor.applied) return;
+    if (!anchor || !el) return;
+    if (anchor.applied) {
+      // A new live row is not part of the fetched history page. It must
+      // never be mistaken for a late measurement of the prepend.
+      if (count !== anchor.count) clearPageAnchor();
+      return;
+    }
     if (props.meta?.start == null || anchor.start == null || props.meta.start >= anchor.start || count <= anchor.count) return;
     anchor.applied = true;
+    anchor.count = count;
+    scheduleAnchorRelease();
     const delta = el.scrollHeight - anchor.height;
     if (delta > 0) {
       pinningRef.current = true;
@@ -231,6 +259,7 @@ export function AgentTranscript(props: {
           pinningRef.current = false;
           anchor.height = el.scrollHeight;
         }
+        scheduleAnchorRelease();
         return;
       }
       if (!followRef.current || pagingRef.current) return;
@@ -309,6 +338,7 @@ export function AgentTranscript(props: {
         })
       ) {
         pagingRef.current = true;
+        clearPageAnchor();
         pageAnchor.current = {
           height: el.scrollHeight,
           start: props.meta?.start,
@@ -335,7 +365,7 @@ export function AgentTranscript(props: {
     el.addEventListener('scroll', onScroll);
     // Once the owner starts another gesture, late row measurements belong to
     // that new viewport, not the previous page's anchor.
-    const onGesture = () => { if (pageAnchor.current?.applied) pageAnchor.current = null; };
+    const onGesture = () => { if (pageAnchor.current && (pageAnchor.current.applied || !pagingRef.current)) clearPageAnchor(); };
     el.addEventListener('wheel', onGesture);
     el.addEventListener('pointerdown', onGesture);
     el.addEventListener('touchstart', onGesture);
