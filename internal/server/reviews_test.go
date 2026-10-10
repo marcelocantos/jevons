@@ -74,6 +74,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	// A malformed embedded review cannot borrow readiness from a different
 	// question, even if it was persisted next to this identity.
 	mismatch := mk(a.Identity.Repo, "v1", "mismatched-review")
+	mismatch.Text = "reported artifact artifacts/unverified.png"
 	mismatch.Review = &ownerquestion.ReviewEvent{Identity: ownerquestion.Identity{Repo: b.Identity.Repo, Target: "T1", ID: "mismatched-review", Version: "v1"}, Readiness: ownerquestion.Actionable, Action: "Approve"}
 	if err := store.Record(mismatch); err != nil {
 		t.Fatal(err)
@@ -83,7 +84,7 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &exact); err != nil {
 		t.Fatal(err)
 	}
-	if exact.Readiness != "prerequisite_blocked" || exact.Action != "" {
+	if exact.Readiness != "prerequisite_blocked" || exact.Action != "" || strings.Contains(w.Body.String(), "artifacts/unverified.png") {
 		t.Fatal(exact)
 	}
 	// Untrusted prose cannot leak the canonical root through the read API.

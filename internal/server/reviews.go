@@ -68,6 +68,12 @@ func reviewFromQuestion(q ownerquestionview.Question) reviewItem {
 		readiness = "closed"
 	}
 	item := reviewItem{ID: id, URL: "/api/reviews/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: redact(q.Text), Asker: redact(q.Asker), AnswerRoute: redact(q.AnswerRoute), State: q.State, Readiness: readiness, Resolution: redact(q.Resolution)}
+	if q.Review != nil && !trustedReview {
+		// The prose may contain reported artifact paths. A corrupt nested
+		// review is not safe to render as an ordinary owner question.
+		item.Question = "Review record unavailable"
+		item.AnswerRoute = ""
+	}
 	if trustedReview {
 		// Producer Question() embeds reported artifact paths. Present only the
 		// typed action; the artifact has no verified download URL yet.
