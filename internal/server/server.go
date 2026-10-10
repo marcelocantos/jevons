@@ -625,6 +625,9 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/desktop/head", s.handleDesktopHead) // 🎯T27.7 tray head model
 	mux.HandleFunc("/ws/sqlpipe", s.handleSqlpipe)               // 🎯T10 pure transport residual
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("GET /api/reviews", s.reviews)                         // 🎯T1044 durable typed review index
+	mux.HandleFunc("GET /api/reviews/{id}", s.reviews)                    // stable deep-link lookup
+	mux.HandleFunc("POST /api/reviews/{id}/answer", s.answerReview)       // fail closed until owner auth exists
 	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
 	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend)     // 🎯T182: product agent_send proxy
 	mux.HandleFunc("POST /api/agents/{name}/auth/recover", s.handleAgentAuthRecover)
