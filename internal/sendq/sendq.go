@@ -77,6 +77,7 @@ type Entry struct {
 	// message of a consolidation — so the next reader of this file learns
 	// who decided and why without a git archaeology expedition.
 	Reconciled *Reconciliation `json:"reconciled,omitempty"`
+	Directive  *Directive      `json:"directive,omitempty"`
 	// Members are the comma-joined ids of the original entries folded into this digest
 	// (🎯T774). The originals live in the digest archive, readable by id.
 	Members string `json:"members,omitempty"`
@@ -169,7 +170,8 @@ type Store struct {
 	// owner for an attempting entry left by the preceding daemon.
 	active map[string]string
 	// memArchive is the digest archive of a memory-backed store (🎯T774).
-	memArchive map[string]archiveFile
+	memArchive       map[string]archiveFile
+	memSupersessions map[string]Supersession
 }
 
 // NewStore roots a store at dir (conventionally <state_dir>/sendq). An empty
@@ -241,6 +243,11 @@ func (s *Store) load(agent string) (out file, err error) {
 		return file{}, fmt.Errorf("sendq: parse queue for %q (%s): %w", agent, path, err)
 	}
 	for _, e := range f.Entries {
+		if e.Directive != nil {
+			if err := e.Directive.Validate(); err != nil {
+				return file{}, err
+			}
+		}
 		if e.State != Pending && e.State != Attempting && e.State != Uncertain {
 			return file{}, fmt.Errorf("sendq: unknown delivery state %q for %q", e.State, agent)
 		}
