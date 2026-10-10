@@ -335,7 +335,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 		if text, _ := userTurnText(ev); text != "" {
 			if err := briefaddr.Check(s.overseerAgentName(), text); err != nil {
 				slog.Warn("chat: dropping wrong-seat brief from overseer wire (🎯T513)", "err", err)
-				s.HandleAgentEvent(ev)
+				s.handleAdmissionSafeAgentEvent(ev, durable)
 				return durable
 			}
 		}
@@ -379,7 +379,9 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 		if silent {
 			// 🎯T481: record the body; do not broadcast it.
 			if ev.Text != "" {
-				s.persistChatLine(losslessLine(ev))
+				if !s.overseerAdmissionEnabled() {
+					s.persistChatLine(losslessLine(ev))
+				}
 			}
 			if ev.IsTerminalStop() {
 				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
@@ -394,7 +396,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 					s.NotifyAgentsChanged()
 				}
 			}
-			s.HandleAgentEvent(ev)
+			s.handleAdmissionSafeAgentEvent(ev, durable)
 			return durable
 		}
 
@@ -408,7 +410,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 				s.overseerStreamHold = append(s.overseerStreamHold, line)
 				s.mu.Unlock()
 			}
-			s.HandleAgentEvent(ev)
+			s.handleAdmissionSafeAgentEvent(ev, durable)
 			return durable
 		}
 
@@ -449,7 +451,9 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 		}
 	} else {
 		// 🎯T481: mapping failed — still persist the raw event.
-		s.persistChatLine(losslessLine(ev))
+		if !s.overseerAdmissionEnabled() {
+			s.persistChatLine(losslessLine(ev))
+		}
 	}
 	if ev.IsTerminalStop() {
 		s.clearOverseerStreamID()
@@ -460,7 +464,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (durable bool) {
 	// the next queued batch and stamps it accepted; the finished turn's idle
 	// landing after that stamp would paint the new turn as idle.
 	s.applyOverseerEventPhase(ev)
-	s.HandleAgentEvent(ev)
+	s.handleAdmissionSafeAgentEvent(ev, durable)
 	// The fleet row reads AgentProgressHub, which workers fill from the
 	// MCP event hook. The overseer stream never went through that hook,
 	// so GET /api/agents kept phase=idle through a live Grok turn while
@@ -1914,6 +1918,10 @@ func sendHistory(conn *websocket.Conn, ctx context.Context, path string) {
 // is loud — losing durability silently is the failure mode this exists
 // to kill — but does not block the live broadcast.
 func (s *Server) persistChatLine(line string) bool {
+	return s.persistChatLineWithPolicy(line, false)
+}
+
+func (s *Server) persistChatLineWithPolicy(line string, requireDurable bool) bool {
 	if s == nil || strings.TrimSpace(line) == "" {
 		return false
 	}
@@ -1951,7 +1959,9 @@ func (s *Server) persistChatLine(line string) bool {
 	}
 	durable := s.persistChatJSONL(line)
 	s.observeChatTurnGap(line, durable)
-	s.muxFanTranscript(name, line)
+	if durable || !requireDurable {
+		s.muxFanTranscript(name, line)
+	}
 	return durable
 }
 
@@ -2004,13 +2014,25 @@ func (s *Server) broadcastAdmittedChat(line string) bool {
 	if !s.overseerAdmissionEnabled() {
 		return s.BroadcastChat(line)
 	}
-	durable := s.persistChatLine(line)
+	durable := s.persistChatLineWithPolicy(line, true)
 	if durable || isEphemeralChatStatusLine(line) {
 		s.broadcastChatLive(stampConversationName(line, s.overseerAgentName()))
 	} else {
 		s.admissionDegraded("journal write failed", "")
 	}
 	return durable
+}
+
+// Text can escape to the remote voice/websocket path through HandleAgentEvent,
+// independent of /ws/chat and /ws/mux. In the admission path only a durable
+// admitted publication may forward authored text; terminal settlement remains
+// body-less on journal failure. Legacy nil-admission behavior is untouched.
+func (s *Server) handleAdmissionSafeAgentEvent(ev claudia.Event, durable bool) {
+	if s.overseerAdmissionEnabled() && ev.Type == "assistant" && !durable {
+		ev.Text = ""
+		ev.Raw = nil
+	}
+	s.HandleAgentEvent(ev)
 }
 
 func (s *Server) overseerAdmissionEnabled() bool {

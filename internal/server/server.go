@@ -559,7 +559,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		// between the owner's prompt and its seal clears overseerOwnerTurn
 		// (🎯T291), and treating that as silence would re-inject a question
 		// the owner already had answered.
-		if wasOwnerTurn || strings.TrimSpace(turnText) != "" {
+		if strings.TrimSpace(turnText) != "" || (wasOwnerTurn && !s.overseerAdmissionEnabled()) {
 			s.NoteOwnerReplySealed()
 		}
 		// 🎯T378: close this turn in the no-op ledger. A seal satisfies

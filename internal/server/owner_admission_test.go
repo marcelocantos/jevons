@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ func admissionFixture(t *testing.T) (*Server, *chatlog.Log) {
 		t.Fatal(err)
 	}
 	s.chatLog = log
-	if err := s.EnableOverseerAdmission(filepath.Join(dir, "restricted")); err != nil {
+	if err := s.enableOverseerAdmissionForTest(filepath.Join(dir, "restricted")); err != nil {
 		t.Fatal(err)
 	}
 	return s, log
@@ -304,24 +305,24 @@ func TestT1054CapabilityAndAuditPathRefusal(t *testing.T) {
 	}
 	defer log.Close()
 	s.chatLog = log
-	if err := s.EnableOverseerAdmission(dir); err == nil {
+	if err := s.enableOverseerAdmissionForTest(dir); err == nil {
 		t.Fatal("audit shares chat journal directory")
 	}
 	link := filepath.Join(dir, "restricted-link")
 	if err := os.Symlink(dir, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnableOverseerAdmission(link); err == nil {
+	if err := s.enableOverseerAdmissionForTest(link); err == nil {
 		t.Fatal("symlink audit accepted")
 	}
 	public := filepath.Join(dir, "public")
 	if err := os.Mkdir(public, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnableOverseerAdmission(public); err == nil {
+	if err := s.enableOverseerAdmissionForTest(public); err == nil {
 		t.Fatal("world-readable audit directory accepted")
 	}
-	if err := s.EnableOverseerAdmission(filepath.Join(dir, "private")); err != nil {
+	if err := s.enableOverseerAdmissionForTest(filepath.Join(dir, "private")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.bindOwnerAdmission(nil, "turn", "request"); err == nil {
@@ -435,4 +436,90 @@ func TestT1054AuditCapacityAndDirectoryReplacementFailClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+type admissionRemoteRecorder struct{ lines [][]byte }
+
+func (r *admissionRemoteRecorder) WriteText(_ context.Context, b []byte) error {
+	r.lines = append(r.lines, append([]byte(nil), b...))
+	return nil
+}
+func (*admissionRemoteRecorder) WriteBinary(context.Context, []byte) error { return nil }
+func (*admissionRemoteRecorder) Close() error                              { return nil }
+
+func TestT1054JournalFailureCannotLeakViaMuxOrRemote(t *testing.T) {
+	s, log := admissionFixture(t)
+	cap := s.ownerAdmission.authority
+	if err := s.bindOwnerAdmission(cap, "turn-all", "request-all"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &muxSession{send: make(chan []byte, 32), transcripts: map[string]*muxWatch{"jevons": {subscribed: true}}}
+	s.mux.add(sess)
+	defer s.mux.remove(sess)
+	remote := &admissionRemoteRecorder{}
+	s.mu.Lock()
+	s.remotes[1] = remoteConn{writer: remote, ctx: context.Background()}
+	s.mu.Unlock()
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-all", Text: "secret novel safety", StopReason: "end_turn"})
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.admitOwnerCandidate(cap, "turn-all", "request-all", AdmissionAllowed); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range remote.lines {
+		if strings.Contains(string(line), "secret novel safety") {
+			t.Fatalf("remote body leak: %s", line)
+		}
+	}
+	for len(sess.send) > 0 {
+		if line := <-sess.send; strings.Contains(string(line), "secret novel safety") {
+			t.Fatalf("mux WS body leak: %s", line)
+		}
+	}
+	for _, ev := range s.mux.eventsFor("jevons") {
+		if strings.Contains(string(ev.Body), "secret novel safety") {
+			t.Fatalf("mux cache body leak: %+v", ev)
+		}
+	}
+	s.ownerAdmission.mu.Lock()
+	pending := s.ownerAdmission.requests["request-all"]
+	s.ownerAdmission.mu.Unlock()
+	if !pending {
+		t.Fatal("undurable body answered request")
+	}
+}
+
+func TestT1054RestartExposesCurrentLossRecoveryGapNotFalseDurability(t *testing.T) {
+	dir := t.TempDir()
+	s := New("test", dir)
+	log, err := chatlog.Open(filepath.Join(dir, "owner.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.chatLog = log
+	if err := s.enableOverseerAdmissionForTest(filepath.Join(dir, "restricted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.bindOwnerAdmission(s.ownerAdmission.authority, "turn-loss-restart", "request-loss-restart"); err != nil {
+		t.Fatal(err)
+	}
+	s.ownerAdmission.auditDir = filepath.Join(dir, "missing")
+	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-loss-restart", Text: "unsafe if lost"})
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The indicator is deliberately ephemeral and the obligation is currently
+	// memory-only. Assert the gap, rather than calling this a recoverable gate.
+	reloaded := New("test", dir)
+	if reloaded.ownerAdmission != nil {
+		t.Fatal("test seam unexpectedly auto-activated on restart")
+	}
+	reopened, err := chatlog.Open(filepath.Join(dir, "owner.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	auditAndChat(t, reloaded, reopened, "candidate content may be lost", false)
+	auditAndChat(t, reloaded, reopened, "unsafe if lost", false)
 }

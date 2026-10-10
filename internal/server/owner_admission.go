@@ -70,10 +70,13 @@ type overseerAdmission struct {
 	incidents map[string]admissionIncident
 }
 
-// EnableOverseerAdmission configures the isolated seam. Not called in the
-// production bootstrap until the transport supplies host request correlation.
-// auditDir must be outside the chat journal/history directory and private.
-func (s *Server) EnableOverseerAdmission(auditDir string) error {
+// enableOverseerAdmissionForTest configures ONLY the isolated hermetic seam.
+// NO PRODUCTION ACTIVATION: authenticated owner intake/transport correlation
+// and durable request/loss-marker recovery do not exist here yet. In particular
+// this capped audit retains bodies, but the degraded indicator is ephemeral and
+// outstanding obligations are memory-only: restart cannot recover either.
+// Keep this unexported and unwired until those separate gates land.
+func (s *Server) enableOverseerAdmissionForTest(auditDir string) error {
 	if auditDir == "" {
 		return errors.New("admission: restricted audit directory required")
 	}
