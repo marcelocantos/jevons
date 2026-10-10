@@ -77,6 +77,11 @@ func newRig(t *testing.T) *rig {
 	t405Build(t, root, filepath.Join(root, "bin", "detach"), "./cmd/detach")
 	t405Build(t, root, filepath.Join(root, "bin", "runlock"), "./cmd/runlock")
 	r.writeBlurterShim()
+	// This rig supervises a scratch daemon, not the development KeepAlive
+	// job. launchctl is global to the user's GUI domain even with a scratch
+	// HOME; make the watchdog's ownership observation hermetic so a loaded
+	// development job cannot suppress the legacy fallback on this port.
+	r.writeLaunchctlShim()
 	// With SKIP_MAKE=1 the script still refuses to bounce a root with no
 	// ui/dist (🎯T540.2). The daemon here is a stub that never serves it,
 	// so a placeholder satisfies the check in a clean checkout — where
@@ -109,6 +114,14 @@ func (r *rig) writeBlurterShim() {
 	}
 	shim := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >>%q\n", r.blurterLog)
 	if err := os.WriteFile(filepath.Join(bin, "blurter"), []byte(shim), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+func (r *rig) writeLaunchctlShim() {
+	path := filepath.Join(r.dir, "bin", "launchctl")
+	shim := "#!/bin/sh\necho 'Could not find service' >&2\nexit 1\n"
+	if err := os.WriteFile(path, []byte(shim), 0o755); err != nil {
 		r.t.Fatal(err)
 	}
 }
