@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
@@ -213,6 +213,76 @@ function Secondary(props: { node: AgentNode; parentWorkdir?: string }) {
   return <span className={'agent-dir agent-' + sec.kind}>{sec.text}</span>;
 }
 
+/** A stop is a compact marker, not a second line of text in every fleet row. */
+function StopDetails({ node }: { node: AgentNode }) {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
+  const wrapper = useRef<HTMLSpanElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const popupId = useId();
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: PointerEvent) => {
+      if (!wrapper.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setOpen(false);
+        button.current?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+  if (!showSeatStopReason(node)) return null;
+  const reason = node.stop_reason || '';
+  const actorMatch = /^(.+?) by ([^:]+): (.+)$/.exec(reason);
+  return (
+    <span className="agent-stop-wrap" ref={wrapper}>
+      <button
+        ref={button}
+        type="button"
+        className="agent-stop-icon"
+        aria-label={'Stop details for ' + node.name}
+        aria-expanded={open}
+        aria-controls={open ? popupId : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!open) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setAnchor({
+              top: rect.bottom + 180 > window.innerHeight ? Math.max(8, rect.top - 180) : rect.bottom + 4,
+              left: Math.max(8, Math.min(rect.left, window.innerWidth - 328)),
+            });
+          }
+          setOpen(!open);
+        }}
+      >⛔</button>
+      {open ? (
+        <div
+          id={popupId}
+          className="agent-stop-popup"
+          role="dialog"
+          aria-label={'Stop details for ' + node.name}
+          style={anchor ? { top: anchor.top, left: anchor.left } : undefined}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <strong>{node.name}</strong>
+          <div>Reason: {actorMatch ? actorMatch[3] : reason}</div>
+          {actorMatch ? <div>Actor: {actorMatch[2]} ({actorMatch[1]})</div> : null}
+          {node.stopped_at ? <div>Since: {node.stopped_at}</div> : null}
+          <button type="button" onClick={() => { setOpen(false); button.current?.focus(); }}>Close</button>
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
 function Row(props: {
   node: AgentNode;
   depth: number;
@@ -246,12 +316,8 @@ function Row(props: {
         )}
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
         <AgentName name={props.node.name} />
+        <StopDetails node={props.node} />
         <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
-        {showSeatStopReason(props.node) ? (
-          <span className="agent-stop-reason" title={props.node.stop_reason}>
-            {'⛔ ' + props.node.stop_reason}
-          </span>
-        ) : null}
         {props.node.plan_wall ? (
           <span className="agent-plan-wall" title={props.node.plan_wall}>
             {props.node.plan_wall}
