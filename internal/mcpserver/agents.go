@@ -942,10 +942,12 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.SandboxMode = ""
 		def.SandboxGitWrite = false
 	}
-	// Rewrite the stored fleet id after model pin and Codex sandbox so
-	// those still key on claude/codex, then Launch talks to the sidecar
-	// as anthropic/openai-codex (🎯T866.5).
-	if !existed && strings.TrimSpace(providerArg) == "" && strings.TrimSpace(pick.Provider) != "" {
+	// Rewrite fresh mints (explicit or omitted) after model pin and Codex
+	// sandbox, so those still key on the plan id. Registry.Launch reads the
+	// persisted provider verbatim: startConfigFromDef is only a test helper.
+	// Retain an existing CLI seat on an implicit resume; never silently
+	// change its transport while its process may survive a restart.
+	if !existed || strings.TrimSpace(providerArg) != "" {
 		def.Provider = cli.SidecarLaunchProvider(def.Provider)
 	}
 	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs

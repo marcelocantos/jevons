@@ -40,11 +40,11 @@ func TestJevonsdUsesSeatreg(t *testing.T) {
 	if strings.Contains(src, "claudia.NewRegistry(") {
 		t.Fatal("jevonsd still constructs claudia.NewRegistry directly")
 	}
-	if !strings.Contains(src, "seatreg.RemintRegistry(") {
+	if !strings.Contains(src, "seatreg.RemintRegistryExcept(") {
 		t.Fatal("jevonsd must remint the fleet onto the sidecar")
 	}
 	merge := strings.LastIndex(src, "def.GrokConnect = true")
-	remint := strings.LastIndex(src, "seatreg.RemintRegistry(")
+	remint := strings.LastIndex(src, "seatreg.RemintRegistryExcept(")
 	if merge < 0 || remint < merge {
 		t.Fatal("sidecar remint must run after upgrade handoff restores grok connect")
 	}

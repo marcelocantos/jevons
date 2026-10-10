@@ -176,3 +176,31 @@ func TestT8666LiveFleetIsSidecarProviders(t *testing.T) {
 		t.Fatalf("live fleet had %d subscription seats; T866.6 is the fleet, not one smoke seat", n)
 	}
 }
+
+func TestRemintRegistryExceptKeepsSurvivingCLITransport(t *testing.T) {
+	reg, err := New(filepath.Join(t.TempDir(), FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []claudia.AgentDef{
+		{Name: "survivor", Provider: claudia.ProviderClaude, SessionID: "legacy", Materialized: true},
+		{Name: "cold", Provider: claudia.ProviderClaude, SessionID: "cold", Materialized: true},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := RemintRegistryExcept(reg, t.TempDir(), map[string]bool{"survivor": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("reminted %d, want cold seat only", n)
+	}
+	if d := reg.Def("survivor"); d.Provider != claudia.ProviderClaude || !d.Materialized || d.SessionID != "legacy" {
+		t.Fatalf("surviving CLI changed: %+v", d)
+	}
+	if d := reg.Def("cold"); d.Provider != "anthropic" || d.Materialized {
+		t.Fatalf("cold seat not sidecar: %+v", d)
+	}
+}
