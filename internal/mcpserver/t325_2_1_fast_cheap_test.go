@@ -80,8 +80,8 @@ func TestStitchFastCheapPinsSparkWhenDestIsCodex(t *testing.T) {
 	if def.Provider != claudia.Provider("openai-codex") {
 		t.Fatalf("omit mint dest=%q want openai-codex (grok ahead); model=%q", def.Provider, def.Model)
 	}
-	if def.Model != cost.ModelCodexSpark {
-		t.Fatalf("codex dest model=%q want %s", def.Model, cost.ModelCodexSpark)
+	if def.Model != "gpt-6-luna" {
+		t.Fatalf("codex dest model=%q want catalog economy gpt-6-luna", def.Model)
 	}
 }
 
@@ -126,8 +126,8 @@ func TestStitchExplicitModelStillWinsOnFastCheap(t *testing.T) {
 	if exp.Provider != claudia.ProviderCodex {
 		t.Fatalf("explicit provider lost: %q", exp.Provider)
 	}
-	if exp.Model != cost.ModelCodexSpark {
-		t.Fatalf("explicit codex mechanical model=%q want spark", exp.Model)
+	if exp.Model != "gpt-6-luna" {
+		t.Fatalf("explicit codex mechanical model=%q want catalog economy", exp.Model)
 	}
 }
 

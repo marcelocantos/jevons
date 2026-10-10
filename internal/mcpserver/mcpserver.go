@@ -74,6 +74,9 @@ type TranscriptOps struct {
 type Server struct {
 	missionStarts *missionbound.Store
 	registry      *claudia.Registry
+	// modelCatalog overrides the launchable catalog in hermetic mint tests.
+	// Nil uses Claudia’s current catalog, not an old hard-coded model list.
+	modelCatalog func() []claudia.CatalogModel
 	// seatPlans holds placement and migration fields the published
 	// AgentDef does not carry. Nil reads as empty state.
 	seatPlans  *claudia.SeatPolicyStore

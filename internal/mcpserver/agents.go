@@ -879,8 +879,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	routeNote := pick.Cite()
 
 	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.
-	// Explicit model= wins (T476). Fast-cheap task types auto-pin Spark /
-	// grok-build for the picked provider. Empty pin on other mints gets
+	// Explicit model= wins (T476). Fast-cheap task types prefer Spark /
+	// grok-build for the picked provider, subject to catalog availability.
+	// Empty pin on other mints gets
 	// the provider default so cold Grok agents expose a condensable id.
 	storedModel := ""
 	if def != nil {
@@ -896,6 +897,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		CodexEligible: s.providerDestEligible(cost.HarnessCodex),
 		Portfolio:     s.effectivePortfolio(),
 	})
+	// The catalog check precedes persistence AND launch. It also repairs an
+	// unmaterialized failed row that retained an obsolete Spark pin.
+	mp = s.availableMintModel(mp, model, pick.Provider)
 	if cite := mp.Cite(); cite != "" {
 		if routeNote != "" {
 			routeNote += ", " + cite
@@ -905,7 +909,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	}
 	if pin := strings.TrimSpace(mp.Model); pin != "" {
 		def.Model = pin
-	} else if !existed || strings.TrimSpace(def.Model) == "" {
+	} else if !existed || strings.TrimSpace(def.Model) == "" || (mp.Knob == cost.KnobEscalated && storedModel == cost.ModelCodexSpark) {
 		def.Model = cli.BindSessionModel("", def.Provider)
 	}
 	// Set parent only when minting or when legacy entry has empty parent.
@@ -968,6 +972,40 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def = d
 	}
 	return def, existed, routeNote, nil
+}
+
+// availableMintModel checks automatic Codex pins against the currently linked
+// Claudia session catalog. Prefer its economy tier when Spark is absent;
+// never substitute an invented model slug. A stale stored Spark from a failed
+// launch follows the same recovery path. Explicit pins are not overridden.
+func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider string) cost.MintModelPick {
+	if strings.TrimSpace(explicit) != "" || cli.PlanProvider(claudia.Provider(provider)) != claudia.ProviderCodex ||
+		p.Model != cost.ModelCodexSpark {
+		return p
+	}
+	catalog := claudia.ModelCatalog()
+	if s.modelCatalog != nil {
+		catalog = s.modelCatalog()
+	}
+	fallback := ""
+	for _, row := range catalog {
+		if cli.PlanProvider(row.Provider) != claudia.ProviderCodex || !row.Session || row.Access != claudia.ModelAccessPlan {
+			continue
+		}
+		if row.Model == p.Model {
+			return p
+		}
+		if row.Quality == claudia.ModelQualityEconomy && fallback == "" {
+			fallback = row.Model
+		}
+	}
+	p.Model = fallback // empty means provider default when no supported economy pin exists
+	p.Knob = cost.KnobEscalated
+	p.Reason = "Spark absent from Claudia session catalog; using supported economy model"
+	if fallback == "" {
+		p.Reason = "Spark absent from Claudia session catalog; using provider default"
+	}
+	return p
 }
 
 // launchConfigFromDef is the Config handoff registry.Launch would pass into
