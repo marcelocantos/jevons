@@ -1,0 +1,10 @@
+```jevons
+jevons: kind status-ping
+jevons: status in-progress
+```
+
+**SYNTHETIC TEST 1/2 — report-checker specimen only. Not product status; no action requested.**
+
+- Positive run: `GATE go-test exit=0 GREEN id=c11be90f out=e4a9d4a3157f dur=17.8s tree=clean@f6d5bdc78b14`.
+- **SIGKILL record:** `GATE sh-kill--9 exit=unknown KILLED id=b82a63a6 out=e3b0c44298fc dur=0s tree=clean@22656c6e9ccd`. This is a host termination observation, not a passing record or test result.
+- **RED disclosure:** `GATE go-test exit=1 RED id=02c22a0d out=959129a1ad94 dur=59.6s tree=clean@22656c6e9ccd`. This unrelated earlier run cannot support claiming its suite green.

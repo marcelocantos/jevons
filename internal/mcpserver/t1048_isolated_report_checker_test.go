@@ -42,7 +42,7 @@ func TestT1048IsolatedReportChecker(t *testing.T) {
 	prefix := "```jevons\njevons: kind status-ping\njevons: status in-progress\n```\n\n"
 	honest := prefix + "Positive GREEN: `" + green.Attestation() + "`.\n\n" +
 		"SIGKILL record: `" + killed.Attestation() + "`. Host termination observation, not a passing record or test result.\n\n" +
-		"RED disclosure: `" + red.Attestation() + "`. Cannot claim the unrelated suite green.\n"
+		"RED disclosure: `" + red.Attestation() + "`. This unrelated earlier run cannot support claiming its suite green.\n"
 	probe := func(t *testing.T, report string, want gate.FlagKind) {
 		t.Helper()
 		s, po, inbox, _ := t690Server(t) // hermetic fake sender + private report store; no network/push sink
@@ -72,7 +72,7 @@ func TestT1048IsolatedReportChecker(t *testing.T) {
 	}{
 		{"killed-claimed-pass", strings.Replace(honest, "not a passing record or test result", "it is green", 1), gate.FlagAttestationKilled},
 		{"killed-claimed-failure", strings.Replace(honest, "not a passing record or test result", "proves a failing test assertion", 1), gate.FlagAttestationKilled},
-		{"red-claimed-pass", strings.Replace(honest, "Cannot claim the unrelated suite green", "This run passed; cannot claim the unrelated suite green", 1), gate.FlagAttestationNotGreen},
+		{"red-claimed-pass", strings.Replace(honest, "cannot support claiming its suite green", "can support claiming its suite green", 1), gate.FlagAttestationNotGreen},
 		{"neighbour-fail", strings.Replace(honest, "Positive GREEN:", "    --- FAIL: TestReal (0.00s)\nPositive GREEN:", 1), gate.FlagOutputContradicts},
 	}
 	for _, tc := range cases {
