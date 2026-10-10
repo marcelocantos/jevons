@@ -178,12 +178,16 @@ func (s *Server) handleOwnerQuestions(_ context.Context, req mcp.CallToolRequest
 // recordOwnerQuestion stores typed intake without a second notification. The
 // notification producer in storeAgentReport owns Observe and dedup.
 func (s *Server) recordOwnerQuestion(q ownerquestion.Question) error {
+	return s.recordOwnerQuestionWithReview(q, nil)
+}
+
+func (s *Server) recordOwnerQuestionWithReview(q ownerquestion.Question, review *ownerquestion.ReviewEvent) error {
 	st, err := s.ownerQuestionStore()
 	if err != nil {
 		return err
 	}
 	id := ownerquestionview.Identity{Repo: q.Identity.Repo, Target: q.Identity.Target, ID: q.Identity.ID, Version: q.Identity.Version}
-	return st.Record(ownerquestionview.Question{Identity: id, Text: q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute})
+	return st.Record(ownerquestionview.Question{Identity: id, Text: q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute, Review: review})
 }
 
 // resolveGateQuestion closes each recorded version of the gate. A later gate
