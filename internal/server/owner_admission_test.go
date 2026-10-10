@@ -388,3 +388,51 @@ func TestT1054ActiveAdmissionDoesNotGloballyGateOwnerEcho(t *testing.T) {
 		t.Fatal("active admission gated unrelated owner notice")
 	}
 }
+
+func TestT1054AuditCapacityAndDirectoryReplacementFailClosed(t *testing.T) {
+	for _, kind := range []string{"capacity", "replacement"} {
+		t.Run(kind, func(t *testing.T) {
+			s, log := admissionFixture(t)
+			defer log.Close()
+			cap := s.ownerAdmission.authority
+			if err := s.bindOwnerAdmission(cap, "turn-guard", "request-guard"); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "capacity":
+				path := filepath.Join(s.ownerAdmission.auditDir, "owner-admission.jsonl")
+				f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Truncate(admissionMaxAuditBytes); err != nil {
+					t.Fatal(err)
+				}
+				f.Close()
+			case "replacement":
+				original := s.ownerAdmission.auditDir
+				if err := os.Rename(original, original+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(original, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ch := make(chan string, 10)
+			s.mu.Lock()
+			s.chatListeners = append(s.chatListeners, ch)
+			s.mu.Unlock()
+			s.DeliverOverseerEvent(claudia.Event{Type: "assistant", TurnID: "turn-guard", Text: "unsafe disclosure"})
+			auditAndChat(t, s, log, "unsafe disclosure", false)
+			found := false
+			for len(ch) > 0 {
+				if strings.Contains(<-ch, "candidate content may be lost") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("audit rejection did not surface loss marker")
+			}
+		})
+	}
+}
