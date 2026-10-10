@@ -23,7 +23,7 @@ type Executor interface {
 // ExecArgs configures one confined run.
 type ExecArgs struct {
 	Manifest *Manifest
-	// ManifestPath, when set, is used instead of writing a temp file.
+	// ManifestPath, when set, supplies the policy to validate and snapshot.
 	ManifestPath string
 	Argv         []string
 	WorkDir      string
@@ -111,28 +111,30 @@ func (e *CLIExecutor) Exec(ctx context.Context, args *ExecArgs) (*ExecResult, er
 	}
 
 	manPath := strings.TrimSpace(args.ManifestPath)
-	var cleanup func()
-	if manPath == "" {
-		if args.Manifest == nil {
-			return nil, fmt.Errorf("writconf: manifest required")
+	manifest := args.Manifest
+	if manPath != "" {
+		data, err := os.ReadFile(manPath)
+		if err != nil {
+			return nil, fmt.Errorf("writconf: read manifest: %w", err)
 		}
-		data, err := MarshalJSONDocument(args.Manifest)
+		manifest, err = Parse(data)
 		if err != nil {
 			return nil, err
 		}
-		dir, err := os.MkdirTemp("", "jevons-writ-*")
-		if err != nil {
-			return nil, err
-		}
-		manPath = filepath.Join(dir, "manifest.json")
-		if err := os.WriteFile(manPath, data, 0o600); err != nil {
-			_ = os.RemoveAll(dir)
-			return nil, err
-		}
-		cleanup = func() { _ = os.RemoveAll(dir) }
 	}
-	if cleanup != nil {
-		defer cleanup()
+	// Run the validated snapshot so a later file change cannot replace policy.
+	data, err := MarshalJSONDocument(manifest)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "jevons-writ-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	manPath = filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manPath, data, 0o600); err != nil {
+		return nil, err
 	}
 
 	timeout := args.Timeout
@@ -152,7 +154,7 @@ func (e *CLIExecutor) Exec(ctx context.Context, args *ExecArgs) (*ExecResult, er
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	res := &ExecResult{
 		Stdout:       stdout.String(),
 		Stderr:       stderr.String(),

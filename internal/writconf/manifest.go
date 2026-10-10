@@ -11,8 +11,10 @@
 package writconf
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 )
@@ -61,7 +63,7 @@ func (t *FSTarget) UnmarshalJSON(data []byte) error {
 	}
 	type alias FSTarget
 	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
+	if err := decodeManifestJSON(data, &a); err != nil {
 		return err
 	}
 	*t = FSTarget(a)
@@ -188,6 +190,21 @@ func Validate(m *Manifest) error {
 			return fmt.Errorf("writconf: net[%d] needs host or fetch", i)
 		}
 	}
+	if m.FS != nil {
+		for mode, targets := range map[string][]FSTarget{"read": m.FS.Read, "edit": m.FS.Edit} {
+			for i, target := range targets {
+				if strings.TrimSpace(target.Glob) == "" {
+					return fmt.Errorf("writconf: fs.%s[%d] needs glob", mode, i)
+				}
+				if _, err := filepath.Match(target.Glob, ""); err != nil {
+					return fmt.Errorf("writconf: fs.%s[%d] invalid glob: %w", mode, i, err)
+				}
+				if target.MaxFiles != nil && *target.MaxFiles < 0 {
+					return fmt.Errorf("writconf: fs.%s[%d] negative max_files", mode, i)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -199,10 +216,10 @@ func MarshalJSONDocument(m *Manifest) ([]byte, error) {
 	return json.MarshalIndent(m, "", "  ")
 }
 
-// Parse unmarshals a JSON manifest (best-effort; still Validate).
+// Parse rejects unknown fields and malformed grants before a policy can load.
 func Parse(data []byte) (*Manifest, error) {
 	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := decodeManifestJSON(data, &m); err != nil {
 		return nil, fmt.Errorf("writconf: parse: %w", err)
 	}
 	if err := Validate(&m); err != nil {
@@ -226,4 +243,21 @@ func dedupeStrings(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// Custom field decoders must use the same strictness as the outer document.
+func decodeManifestJSON(data []byte, dst any) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if err := d.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := d.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("multiple JSON values")
+	}
+	return nil
 }
