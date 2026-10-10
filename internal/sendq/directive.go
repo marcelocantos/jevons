@@ -33,6 +33,9 @@ type Supersession struct {
 	At      time.Time `json:"at"`
 	HoldID  string    `json:"hold_id"`
 	Removed []Entry   `json:"removed"`
+	// State is prepared until the queue save succeeds. A prepared archive is
+	// evidence of an interrupted transaction, NOT evidence of supersession.
+	State string `json:"state"`
 }
 
 // ApplyDirective serializes a directive against ClaimFront and ClaimDigest.
@@ -68,7 +71,7 @@ func (s *Store) ApplyDirective(agent, text string, d Directive, queued bool, at 
 		kept = append(kept, old)
 	}
 	if len(removed) > 0 {
-		if err := s.archiveSupersession(Supersession{Agent: agent, At: at.UTC(), HoldID: e.ID, Removed: removed}); err != nil {
+		if err := s.archiveSupersession(Supersession{Agent: agent, At: at.UTC(), HoldID: e.ID, Removed: removed, State: "prepared"}); err != nil {
 			return Entry{}, 0, nil, err
 		}
 	}
@@ -78,7 +81,12 @@ func (s *Store) ApplyDirective(agent, text string, d Directive, queued bool, at 
 	f.Entries = kept
 	if queued || len(removed) > 0 {
 		if err := s.save(f); err != nil {
-			return Entry{}, 0, nil, err
+			return Entry{}, 0, nil, err // archive remains prepared, never a claimed disposition
+		}
+	}
+	if len(removed) > 0 {
+		if err := s.archiveSupersession(Supersession{Agent: agent, At: at.UTC(), HoldID: e.ID, Removed: removed, State: "committed"}); err != nil {
+			return Entry{}, 0, nil, fmt.Errorf("sendq: queue updated but supersession audit %s remains prepared: %w (do not blindly retry)", e.ID, err)
 		}
 	}
 	return e, len(f.Entries), removed, nil
@@ -119,6 +127,9 @@ func (s *Store) ReadSupersession(holdID string) (Supersession, error) {
 		if !ok {
 			return Supersession{}, os.ErrNotExist
 		}
+		if a.State != "committed" {
+			return a, fmt.Errorf("sendq: supersession %s is prepared, not committed", holdID)
+		}
 		return a, nil
 	}
 	if holdID == "" || strings.ContainsAny(holdID, `/\\`) {
@@ -130,5 +141,8 @@ func (s *Store) ReadSupersession(holdID string) (Supersession, error) {
 	}
 	var a Supersession
 	err = json.Unmarshal(b, &a)
+	if err == nil && a.State != "committed" {
+		err = fmt.Errorf("sendq: supersession %s is prepared, not committed", holdID)
+	}
 	return a, err
 }

@@ -291,3 +291,52 @@ func TestT1050DirectEventHoldCancelsQueuedPermission(t *testing.T) {
 		t.Fatalf("stale auth still queued: %+v", entries)
 	}
 }
+
+// Exact incident shape: an untyped busy owner authorization, followed by an
+// untyped direct owner hold, remains unsafe. This is a policy blocker, not a
+// passing supersession oracle. No text classifier is allowed to turn these
+// human messages into typed operations without a migrated producer contract.
+func TestT1050UntypedIncidentStillUnsafe(t *testing.T) {
+	p := &pushFakeParticipants{names: map[string]bool{"worker": true}}
+	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
+	s.noteTurnInFlight("worker")
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"target": "worker", "event": "owner-authorization", "text": "You may send your report now"}
+	result, err := s.handleEventPush(context.Background(), req)
+	if err != nil || result.IsError {
+		t.Fatalf("busy permission: %v %s", err, toolText(result))
+	}
+	// A plain direct send bypasses sendq; this models the real second door.
+	if _, err := p.Deliver("worker", "Hold: do not send that report"); err != nil {
+		t.Fatal(err)
+	}
+	if p.last != "Hold: do not send that report" {
+		t.Fatal("hold failed to arrive")
+	}
+	entry, ok, err := s.sendQueue().ClaimFront("worker")
+	if err != nil || !ok || !strings.Contains(entry.Text, "You may send your report now") {
+		t.Fatalf("untyped old permission should still be claimable: %+v %v %v", entry, ok, err)
+	}
+}
+
+func TestT1050RepeatedTypedHoldCancelsNewPermission(t *testing.T) {
+	p := &pushFakeParticipants{names: map[string]bool{"jevons": true}}
+	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
+	auth := sendq.Directive{Family: "review", Kind: "authorization"}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"target": "jevons", "event": "owner-hold", "text": "hold review", "directive_family": "review", "directive_kind": "hold"}
+	for i := 0; i < 2; i++ {
+		_, _, _, err := s.sendQueue().ApplyDirective("jevons", "permission", auth, true, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.handleEventPush(context.Background(), req)
+		if err != nil || res.IsError {
+			t.Fatalf("hold %d: %v %s", i, err, toolText(res))
+		}
+		entries, _ := s.sendQueue().Snapshot("jevons")
+		if len(entries) != 0 {
+			t.Fatalf("hold %d left stale permission: %+v", i, entries)
+		}
+	}
+}

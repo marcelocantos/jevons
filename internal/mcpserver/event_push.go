@@ -62,15 +62,6 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	if derr != nil {
 		return mcp.NewToolResultError(derr.Error()), nil
 	}
-	// A direct hold must cancel older pending authorizations before delivery.
-	// No prose classifier: callers must opt into a typed family and kind.
-	if directive != nil && directive.Kind == "hold" && s.flightState(target) != FlightInFlight {
-		_, _, removed, err := s.sendQueue().ApplyDirective(target, wire, *directive, false, time.Now())
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		life["superseded"] = len(removed)
-	}
 
 	// 🎯T428. This tool is the one notification door that does NOT pass through
 	// deliverToOverseer — butler.PushEvent reaches the agent process directly —
@@ -79,7 +70,11 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	// still counts as one batch. Non-overseer targets are unaffected: this
 	// target is about the channel the whole fleet reports into.
 	var ticket notifyReplayTicket
-	if s.isOverseerAgent(target) {
+	// A typed directive is a new operation even when its wire bytes repeat:
+	// a hold may need to cancel an authorization accepted since the last hold,
+	// and an authorization after a hold is newly valid. The generic replay
+	// guard has no family/order identity and must not suppress either one.
+	if directive == nil && s.isOverseerAgent(target) {
 		if held, reason := s.batchAlreadyHeld(target, wire); held {
 			life["suppressed_replay"] = reason
 			s.logLifecycle(compEventPush, "push", "ok", life)
@@ -94,6 +89,16 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 			return mcp.NewToolResultText(
 				describeReplaySuppression(target, dec, s.notifyReplays().Now())), nil
 		}
+	}
+
+	// A direct hold must cancel older pending authorizations before delivery.
+	// No prose classifier: callers must opt into a typed family and kind.
+	if directive != nil && directive.Kind == "hold" && s.flightState(target) != FlightInFlight {
+		_, _, removed, err := s.sendQueue().ApplyDirective(target, wire, *directive, false, time.Now())
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		life["superseded"] = len(removed)
 	}
 
 	// 🎯T620: a turn already known in flight is the same busy class as

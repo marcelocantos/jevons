@@ -2,6 +2,9 @@ package sendq
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -104,5 +107,33 @@ func TestDirectiveDigestDoesNotEraseIdentity(t *testing.T) {
 	_, ok, err := s.ClaimDigest("w")
 	if err != nil || ok {
 		t.Fatalf("digest swallowed typed auth: %v %v", ok, err)
+	}
+}
+
+func TestDirectiveFailedQueueSaveDoesNotAssertSupersession(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	auth := Directive{Family: "incident", Kind: "authorization"}
+	hold := Directive{Family: "incident", Kind: "hold"}
+	s.ApplyDirective("worker", "old permission", auth, true, time.Now())
+	// Force save to fail only after the prepared archive was persisted.
+	if err := os.Mkdir(filepath.Join(dir, "worker.json.tmp"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := s.ApplyDirective("worker", "hold", hold, true, time.Now())
+	if err == nil {
+		t.Fatal("write failure accepted hold")
+	}
+	entries, _ := NewStore(dir).Snapshot("worker")
+	if len(entries) != 1 || entries[0].Text != "old permission" {
+		t.Fatalf("failed transaction changed queue: %+v", entries)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "supersessions", "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("expected prepared audit, got %v", files)
+	}
+	id := strings.TrimSuffix(filepath.Base(files[0]), ".json")
+	if a, err := NewStore(dir).ReadSupersession(id); err == nil || a.State != "prepared" {
+		t.Fatalf("false committed disposition: %+v %v", a, err)
 	}
 }
