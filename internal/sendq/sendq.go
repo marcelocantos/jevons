@@ -322,6 +322,37 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// DuplicateRequestIDError means this host identity already has an unresolved
+// queue entry. The caller must inspect/reconcile that entry, not interpret a
+// second enqueue as a new delivery. Conflict also records a payload mismatch;
+// question scope is owned by the host ledger, not represented by this queue.
+type DuplicateRequestIDError struct {
+	RequestID string
+	Existing  Entry
+	Conflict  bool
+}
+
+func (e *DuplicateRequestIDError) Error() string {
+	if e.Conflict {
+		return fmt.Sprintf("sendq: request_id %q conflicts with entry %s (different text)", e.RequestID, e.Existing.ID)
+	}
+	return fmt.Sprintf("sendq: request_id %q already held by entry %s (state %s)", e.RequestID, e.Existing.ID, e.Existing.State)
+}
+
+// duplicateRequestID is called while Store.mu is held after load, before any
+// supersession or append. Empty IDs are legacy traffic and never deduplicated.
+func duplicateRequestID(entries []Entry, text, requestID string) error {
+	if requestID == "" {
+		return nil
+	}
+	for _, e := range entries {
+		if e.RequestID == requestID {
+			return &DuplicateRequestIDError{RequestID: requestID, Existing: e, Conflict: e.Text != text}
+		}
+	}
+	return nil
+}
+
 // Append adds a message to the back of an agent's queue and returns the
 // entry as written together with the resulting depth.
 func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
@@ -338,6 +369,9 @@ func (s *Store) AppendWithRequestID(agent, text, requestID string, at time.Time)
 	defer s.mu.Unlock()
 	f, err := s.load(agent)
 	if err != nil {
+		return Entry{}, 0, err
+	}
+	if err := duplicateRequestID(f.Entries, text, requestID); err != nil {
 		return Entry{}, 0, err
 	}
 	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
@@ -367,6 +401,9 @@ func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at
 	defer s.mu.Unlock()
 	f, err := s.load(agent)
 	if err != nil {
+		return Entry{}, 0, 0, err
+	}
+	if err := duplicateRequestID(f.Entries, text, requestID); err != nil {
 		return Entry{}, 0, 0, err
 	}
 	kept := make([]Entry, 0, len(f.Entries)+1)
