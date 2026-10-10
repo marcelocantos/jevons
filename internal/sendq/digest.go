@@ -114,6 +114,9 @@ func ids(cs []classified) string {
 	parts := make([]string, len(cs))
 	for i, c := range cs {
 		parts[i] = c.e.ID
+		if c.e.RequestID != "" {
+			parts[i] += " (request_id=" + c.e.RequestID + ")"
+		}
 		if rid := reportID(c.e.Text); rid != "" && c.kind == kindReport {
 			parts[i] += " (report_id=" + rid + ")"
 		}
@@ -262,10 +265,12 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	if _, _, blocked := claimable(f.Entries, s.active[agent]); blocked {
 		return Entry{}, false, nil
 	}
-	// Typed directives cannot be folded into a digest: a later hold must be
+	// Typed directives and admitted owner questions cannot be folded into a digest:
+	// a digest has one delivery attempt and cannot carry one question identity
+	// for several distinct requests. A later hold must be
 	// able to remove the precise pending authorization under the queue lock.
 	for _, e := range f.Entries {
-		if e.State == Pending && e.Directive != nil {
+		if e.State == Pending && (e.Directive != nil || e.RequestID != "") {
 			return Entry{}, false, nil
 		}
 	}
