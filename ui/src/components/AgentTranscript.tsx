@@ -69,7 +69,7 @@ export function AgentTranscript(props: {
   const hydrateSettled = useRef(false);
   const lastTotalRef = useRef(0);
   const lastCountRef = useRef(0);
-  const pageStartRef = useRef(props.meta?.start);
+  const pageAnchor = useRef<{ height: number; start: number | undefined; count: number; applied: boolean } | null>(null);
   const [overscan, setOverscan] = useState(HYDRATE_OVERSCAN_MAX);
   const setFollow = (next: boolean) => {
     if (followRef.current === next) return;
@@ -101,6 +101,7 @@ export function AgentTranscript(props: {
     followRef.current = true;
     pinningRef.current = false;
     pagingRef.current = false;
+    pageAnchor.current = null;
     wasReadyRef.current = false;
     hydrateSettled.current = false;
     lastHeightRef.current = 0;
@@ -114,6 +115,7 @@ export function AgentTranscript(props: {
     if (props.followEpoch == null) return;
     followRef.current = true;
     pinningRef.current = true;
+    pageAnchor.current = null;
     props.onFollowChange?.(true);
     const el = parentRef.current;
     if (el) el.scrollTop = pinWriteScrollTop(el.scrollHeight);
@@ -176,6 +178,28 @@ export function AgentTranscript(props: {
     };
   }, [props.ready, count, totalSize, props.name, virtualizer]);
 
+  // Preserve the old viewport when a history page is prepended. With
+  // overflow-anchor:none, the browser leaves scrollTop=0 after the canvas
+  // grows: on touch hardware another upward swipe at the boundary emits no
+  // scroll event, so the owner sees an inert pane despite having loaded rows.
+  // The first layout pass uses the estimated extent; the observer below
+  // follows subsequent virtual-row measurements rather than stopping at the
+  // first paint. Never anchor a non-prepend metadata or live-tail update.
+  useLayoutEffect(() => {
+    const anchor = pageAnchor.current;
+    const el = parentRef.current;
+    if (!anchor || !el || anchor.applied) return;
+    if (props.meta?.start == null || anchor.start == null || props.meta.start >= anchor.start || count <= anchor.count) return;
+    anchor.applied = true;
+    const delta = el.scrollHeight - anchor.height;
+    if (delta > 0) {
+      pinningRef.current = true;
+      el.scrollTop += delta;
+      pinningRef.current = false;
+    }
+    anchor.height = el.scrollHeight;
+  }, [count, totalSize, props.meta?.start]);
+
   // 🎯T603: the pin above runs when totalSize changes, but a row that
   // re-measures AFTER it lands leaves a residual gap that nothing closes —
   // no further growth arrives, so no further pin runs, and the transcript
@@ -198,6 +222,17 @@ export function AgentTranscript(props: {
     const canvas = canvasRef.current;
     if (!el || !canvas || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
+      const anchor = pageAnchor.current;
+      if (anchor?.applied) {
+        const delta = el.scrollHeight - anchor.height;
+        if (delta !== 0) {
+          pinningRef.current = true;
+          el.scrollTop += delta;
+          pinningRef.current = false;
+          anchor.height = el.scrollHeight;
+        }
+        return;
+      }
       if (!followRef.current || pagingRef.current) return;
       const gap = distanceFromEnd(el.scrollTop, el.scrollHeight, el.clientHeight);
       if (gap <= 0) return;
@@ -252,7 +287,6 @@ export function AgentTranscript(props: {
   }, [props.ready, count, totalSize, overscan, estimate, virtualizer]);
 
   useEffect(() => {
-    pageStartRef.current = props.meta?.start;
     pagingRef.current = false;
   }, [props.meta?.start, props.meta?.older, props.meta?.total, props.meta?.n, count]);
 
@@ -260,6 +294,9 @@ export function AgentTranscript(props: {
     const el = parentRef.current;
     if (!el || !props.onPageOlder) return;
     const requestOlder = () => {
+      // A programmatic scroll caused by anchoring a tiny page is not a new
+      // request, even if its total height shift leaves us within 48px.
+      if (pageAnchor.current?.applied) return;
       if (
         shouldRequestPage({
           scrollTop: el.scrollTop,
@@ -272,6 +309,12 @@ export function AgentTranscript(props: {
         })
       ) {
         pagingRef.current = true;
+        pageAnchor.current = {
+          height: el.scrollHeight,
+          start: props.meta?.start,
+          count,
+          applied: false,
+        };
         props.onPageOlder?.();
       }
     };
@@ -290,6 +333,13 @@ export function AgentTranscript(props: {
       requestOlder();
     };
     el.addEventListener('scroll', onScroll);
+    // Once the owner starts another gesture, late row measurements belong to
+    // that new viewport, not the previous page's anchor.
+    const onGesture = () => { if (pageAnchor.current?.applied) pageAnchor.current = null; };
+    el.addEventListener('wheel', onGesture);
+    el.addEventListener('pointerdown', onGesture);
+    el.addEventListener('touchstart', onGesture);
+    el.addEventListener('keydown', onGesture);
     const leave = () => {
       followRef.current = false;
       // PageUp must not freeze the mux window. leaveLive re-subscribes
@@ -297,13 +347,18 @@ export function AgentTranscript(props: {
       // so one PageDown cannot return to the live end (🎯T494.1.3).
     };
     el.addEventListener('jevons-leave-track', leave);
-    el.addEventListener('jevons-page-older', requestOlder);
+    const onPageKey = () => { onGesture(); requestOlder(); };
+    el.addEventListener('jevons-page-older', onPageKey);
     return () => {
       el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', onGesture);
+      el.removeEventListener('pointerdown', onGesture);
+      el.removeEventListener('touchstart', onGesture);
+      el.removeEventListener('keydown', onGesture);
       el.removeEventListener('jevons-leave-track', leave);
-      el.removeEventListener('jevons-page-older', requestOlder);
+      el.removeEventListener('jevons-page-older', onPageKey);
     };
-  }, [props.meta?.older, props.meta?.start, props.meta?.truncated, props.onPageOlder, props.onLeaveLive]);
+  }, [props.meta?.older, props.meta?.start, props.meta?.truncated, props.onPageOlder, props.onLeaveLive, count]);
 
   const scroller = parentRef.current;
   const scrollTop = scroller?.scrollTop ?? 0;
