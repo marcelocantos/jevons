@@ -5,7 +5,7 @@
 
 import type { FrontierRow } from './table';
 
-const TARGET_TOKEN_RE = /(?:([a-z][a-z0-9_-]*)\/)?(?:🎯\s*)?(T\d+(?:\.\d+)*)\b/gi;
+const TARGET_TOKEN_RE = /(?:([a-z][a-z0-9_-]*)\/)?(?:🎯\s*)?([Tt]\d+(?:\.\d+)*)\b/g;
 
 const SKIP_TAGS: Record<string, boolean> = {
   CODE: true,

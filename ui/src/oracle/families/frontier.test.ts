@@ -420,6 +420,7 @@ describeOracle(family('frontier'), () => {
     expect(html).toContain('data-target-repo="claudia"');
     expect(html).toContain('data-target-repo=""');
     expect(html).toContain('claudia/🎯T177');
+    expect(linkifyTargetIDsInHTML('<p>T185/T186</p>')).not.toContain('data-target-repo="T185"');
   });
 
   itOracle('T326', 'chat 🎯Tn hotspots use the same InstantTip frontier-card chrome', () => {
