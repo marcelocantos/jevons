@@ -49,14 +49,17 @@ func (s *Server) DeliverAgentMessageMode(name, text string, origin SendOrigin, m
 }
 
 // DeliverAgentMessageModeWithRequestID is reserved for trusted host-admission
-// callers that have durably issued a logical owner request ID. MCP/HTTP client
-// arguments must never be forwarded here as an identity assertion.
+// callers that have durably issued a logical owner request ID. It delivers
+// immediately or enqueues through the same call, returning that unchanged ID
+// on successful admission. MCP/HTTP client arguments must never be forwarded
+// here as an identity assertion; OriginOwner is not authentication.
 func (s *Server) DeliverAgentMessageModeWithRequestID(name, text string, origin SendOrigin, mode delivery.Mode, requestID string) (AgentDeliverResult, error) {
 	res, err := s.deliverByNameWithModeRequestID(ActorOwnerSurface, name, text, origin, mode, confirmHere, requestID)
 	if err != nil {
 		return AgentDeliverResult{}, err
 	}
 	return AgentDeliverResult{
+		RequestID:        requestID,
 		Status:           res.Status,
 		Message:          res.Message,
 		Queued:           res.Queued,

@@ -126,9 +126,13 @@ func (s *Server) pendingAgentSends(name string) int {
 // Status matches MCP jevons_agent_send: sent | queued | interrupted_sent |
 // interrupted_queued | rehydrated_sent.
 type AgentDeliverResult struct {
-	Status  string
-	Message string
-	Queued  int
+	// RequestID is the host-issued logical owner question ID, unchanged by
+	// queueing or delivery. Empty for legacy/agent-origin sends. It is not
+	// a queue entry ID or transport attempt ID.
+	RequestID string
+	Status    string
+	Message   string
+	Queued    int
 	// Mode and Mechanism: the owner's intent and what ran (🎯T657).
 	Mode      string
 	Mechanism string
