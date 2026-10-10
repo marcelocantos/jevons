@@ -59,11 +59,14 @@ func TestReviewIndexIdentityLifecycleAndFailClosedAnswer(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &exact); err != nil {
 		t.Fatal(err)
 	}
-	if exact.Identity != a.Identity || exact.URL != "/review/"+reviewID(a.Identity) {
+	if exact.Repository != a.Identity.Repo[strings.LastIndex(a.Identity.Repo, "/")+1:] || exact.Target != a.Identity.Target || exact.AskID != a.Identity.ID || exact.Version != a.Identity.Version || exact.URL != "/review/"+reviewID(a.Identity) {
 		t.Fatal(exact)
 	}
 	if exact.Readiness != "prerequisite_blocked" || exact.Prerequisite != "Reconnect device" || exact.EvidenceStatus != "reported-unverified" {
 		t.Fatal(exact)
+	}
+	if strings.Contains(w.Body.String(), a.Identity.Repo) {
+		t.Fatal("absolute repository path leaked")
 	}
 	if strings.Contains(w.Body.String(), "artifacts/local.png") {
 		t.Fatal("unverified local artifact path leaked")
