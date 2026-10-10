@@ -1,6 +1,6 @@
 # 🎯T1043 isolated LIVE fixture: safety boundary (not yet a LIVE oracle)
 
-The persisted-census oracle in `internal/mcpserver/t1043_process_census_test.go` creates 130 parked rows and verifies admission after liveness expiry. It does not launch a process. `cmd/jevonsd/t1043_live_fixture_test.go` preflights isolated paths and refuses to boot even with its opt-in flag. Neither test meets the target's LIVE criterion.
+The persisted-census oracle in `internal/mcpserver/t1043_process_census_test.go` creates 130 parked rows and verifies admission after liveness expiry. It does not launch a process. `cmd/jevonsd/t1043_live_fixture_test.go` preflights isolated paths and refuses to boot even with its opt-in flag (the opt-in fails RED rather than returning a misleading green from a skipped LIVE oracle). Neither test meets the target's LIVE criterion.
 
 A proposed next slice must use **one throwaway daemon** for the entire assertion: persist 130 parked definitions and durable parked intents before boot; observe its own census/admission through the production `jevons_agent_start` path; capture the fixture provider process PID and prove that PID is alive while the daemon reports the seat running; confirm parked rows still exist and do not contribute to the cap. A synthetic registry `Launch` plus an unrelated child PID is not sufficient. The test must not claim an LLM completed a turn: a fake provider handshake proves only a process mint.
 

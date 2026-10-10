@@ -91,9 +91,9 @@ func TestT1043LiveFixturePreflight(t *testing.T) {
 	})
 }
 
-// Even with this opt-in, do not boot: a valid path/port preflight alone does
+// Even with this opt-in, do not boot or return a false-green SKIP: a valid path/port preflight alone does
 // not confine startup's global side effects or prove fake-provider compatibility.
-// The subsequent implementation must replace this Skip with a process-group
+// The subsequent implementation must replace this refusal with a process-group
 // and detached-sidecar reaper, fake broker handshake, isolated HOME/XDG,
 // disabled ambient loops and a same-daemon API admission+PID observation.
 func TestT1043IsolatedLiveAdmission(t *testing.T) {
@@ -104,5 +104,5 @@ func TestT1043IsolatedLiveAdmission(t *testing.T) {
 	if err := f.validate(); err != nil {
 		t.Fatal(err)
 	}
-	t.Skip("unsafe to boot: overseer/ambient side effects and fake Claudia provider handshake not yet isolated; no LIVE claim")
+	t.Fatal("LIVE probe blocked: overseer/ambient side effects and fake Claudia provider handshake not yet isolated; no LIVE claim")
 }
