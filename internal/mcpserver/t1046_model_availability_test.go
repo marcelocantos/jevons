@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -101,17 +102,29 @@ func TestT1046FailedLaunchRowRetriesWithSupportedModel(t *testing.T) {
 // resume binding, even if the catalog later drops that slug.
 func TestT1046MaterializedResumeKeepsStoredModel(t *testing.T) {
 	s := t1046Server(t)
+	t.Setenv("CLAUDIA_OMP_SOCKET", filepath.Join(t.TempDir(), "omp.sock"))
 	d, _, _, err := s.stitchAgentStart("existing", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.Materialized = true
+	// A real engine store is a history witness even if no spool was emitted.
+	store := filepath.Join(filepath.Dir(os.Getenv("CLAUDIA_OMP_SOCKET")), "omp-seats", d.Name)
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, d.SessionID+".jsonl"), []byte(`{"type":"claudia_seat"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.registry.Register(*d); err != nil {
 		t.Fatal(err)
 	}
 	got, existed, _, err := s.stitchAgentStart("existing", d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
-	if err != nil || !existed || got.Model != cost.ModelCodexSpark {
-		t.Fatalf("materialized resume model=%q existed=%v err=%v", got.Model, existed, err)
+	if err == nil || !existed || got != nil || !strings.Contains(err.Error(), "conversation store exists") {
+		t.Fatalf("materialized resume got=%+v existed=%v err=%v", got, existed, err)
+	}
+	if d2 := s.registry.Def(d.Name); !d2.Materialized || d2.Model != cost.ModelCodexSpark {
+		t.Fatalf("history row changed: %+v", d2)
 	}
 }
 
@@ -189,5 +202,55 @@ func TestT1046ExplicitSparkStartAndSubmittedTurnCanRetryWithoutResume(t *testing
 	}
 	if d := s.registry.Def("explicit-then-omit"); d.Model != "gpt-6-luna" || d.Materialized {
 		t.Fatalf("retry row=%+v", d)
+	}
+}
+
+// An accepted send without engine entries is not a confirmed model reply.
+// A same-name retry may remove the phantom flag and pick a catalog model.
+func TestT1049PhantomMaterializedRetry(t *testing.T) {
+	s := t1046Server(t)
+	t.Setenv("CLAUDIA_OMP_SOCKET", filepath.Join(t.TempDir(), "omp.sock"))
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	d, _, _, err := s.stitchAgentStart("phantom", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Materialized = true
+	if err := s.registry.Register(*d); err != nil {
+		t.Fatal(err)
+	}
+	// Sidecar accepted a send, but wrote no model reply or engine entries.
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-10-10.log"), []byte(`{"ts":"2026-10-10T04:42:10Z","seat":"phantom","type":"accepted"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, existed, _, err := s.stitchAgentStart(d.Name, d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || !existed || got.Materialized || got.Model != "gpt-6-luna" || got.SessionID != d.SessionID {
+		t.Fatalf("safe retry got=%+v existed=%v err=%v", got, existed, err)
+	}
+}
+
+func TestT1049SpoolConversationRefusesRecovery(t *testing.T) {
+	s := t1046Server(t)
+	t.Setenv("CLAUDIA_OMP_SOCKET", filepath.Join(t.TempDir(), "omp.sock"))
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	d, _, _, err := s.stitchAgentStart("real", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Materialized = true
+	if err := s.registry.Register(*d); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-10-10.log"), []byte(`{"seat":"real","type":"text","text":"model replied"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _, err := s.stitchAgentStart(d.Name, d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err == nil || got != nil || !strings.Contains(err.Error(), "conversation evidence") {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if row := s.registry.Def(d.Name); !row.Materialized || row.Model != cost.ModelCodexSpark {
+		t.Fatalf("history row changed: %+v", row)
 	}
 }

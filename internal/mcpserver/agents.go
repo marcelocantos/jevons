@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/claudia/omp"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/agentreport"
@@ -31,6 +33,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatstop"
+	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/worktree"
@@ -859,6 +862,20 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def = d
 	}
 
+	// A pre-T1046 accepted send could mark an unsupported OMP pin as
+	// Materialized before any model reply. Diagnose before PickMintModel or
+	// Register can treat that flag as a valid resume binding.
+	if existed && def.Materialized && spool.SidecarProvider(string(def.Provider)) && cli.PlanProvider(def.Provider) == claudia.ProviderCodex &&
+		strings.TrimSpace(def.Model) != "" && !s.codexCatalogHasModel(def.Model) {
+		if reason := s.unsupportedMaterializedModel(def); reason != "" {
+			return nil, true, "", fmt.Errorf("seat %q: unsupported OMP model %q: %s", name, def.Model, reason)
+		}
+		if strings.TrimSpace(model) != "" {
+			return nil, true, "", fmt.Errorf("seat %q: unsupported OMP model %q: omit model= for safe same-name retry", name, def.Model)
+		}
+		def.Materialized = false // no durable conversation; retry is a mint
+	}
+
 	// 🎯T148 + 🎯T476 + 🎯T652 provider selection:
 	//   1. eligible providerArg, or owner_asked → explicit
 	//   2. resume with stored provider → keep
@@ -983,6 +1000,54 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def = d
 	}
 	return def, existed, routeNote, nil
+}
+
+// unsupportedMaterializedModel returns empty only when the row has no live
+// process, no engine store for its exact seat/session, and no assistant output
+// in the dated spool. An accepted prompt is transport acknowledgement, not a
+// model conversation. An unreadable store/spool is unknown, never absence.
+// This is read-only; only stitchAgentStart changes a proved-phantom row.
+func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
+	if proc := s.registry.Get(def.Name); proc != nil && proc.Alive() {
+		return "process still running; stop the seat and inspect its conversation before retry"
+	}
+	if def.SessionID == "" {
+		return "session identity missing; inspect history and recover manually"
+	}
+	sock, err := omp.SocketPath()
+	if err != nil {
+		return "cannot locate OMP store: " + err.Error() + "; inspect history and recover manually"
+	}
+	// The sidecar's SeatStore path uses safeName; ambiguous/unsafe names
+	// cannot be used as proof of absence through a normalized path.
+	for _, v := range []string{def.Name, def.SessionID} {
+		if strings.Trim(v, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != "" {
+			return "unsafe store identity; inspect history and recover manually"
+		}
+	}
+	seatDir := filepath.Join(filepath.Dir(sock), "omp-seats", def.Name)
+	entries, dirErr := os.ReadDir(seatDir)
+	if dirErr != nil && !os.IsNotExist(dirErr) {
+		return "cannot inspect conversation store directory: " + dirErr.Error() + "; recover manually"
+	}
+	if len(entries) != 0 {
+		return "conversation store exists under " + seatDir + "; preserve history and recover model via migration"
+	}
+	recs, err := spool.ReadSeat(spool.Dir(), def.Name)
+	if err != nil {
+		return "cannot inspect spool: " + err.Error() + "; recover manually"
+	}
+	for _, rec := range recs {
+		switch rec.Type {
+		case "text", "turn_end", "tool_call", "tool_result":
+			return "conversation evidence in dated spool; preserve history and recover model via migration"
+		case "accepted":
+			if rec.TS.IsZero() || time.Since(rec.TS) < 2*time.Minute {
+				return "accepted send may still be in flight; wait for a model reply or inspect history before retry"
+			}
+		}
+	}
+	return ""
 }
 
 // codexCatalogHasModel checks the same session catalog used by automatic
