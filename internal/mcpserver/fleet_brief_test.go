@@ -284,3 +284,21 @@ func TestFleetStandingBriefParentReportDaemonDelivered(t *testing.T) {
 		}
 	}
 }
+
+// 🎯T1053: the injected standing brief reaches workers and the overseer with
+// the quiet-report rule, without depending on the legacy bare-ID oracle.
+func TestFleetBriefRoutineReportQuiet(t *testing.T) {
+	out, injected := EnsureFleetBrief(map[string]bool{}, "jevons", "continue")
+	if !injected {
+		t.Fatal("expected standing brief injection")
+	}
+	for _, want := range []string{
+		"Routine worker reports are not owner-facing appraisals", "🎯T1053",
+		"silent acknowledgment", "genuine owner decision point", "anomaly/problem",
+		"direct question", "status explicitly requested", "verification/routing",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("injected brief missing %q", want)
+		}
+	}
+}
