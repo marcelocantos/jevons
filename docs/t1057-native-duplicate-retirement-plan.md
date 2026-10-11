@@ -1,0 +1,21 @@
+# T1057 — native iOS duplicate retirement plan (not executed)
+
+Prepared 2026-10-11. This is separate from diagnosing the hardware keyboard in the active Flutter app. **Do not uninstall either app during that diagnosis.** Schedule the device removal with the owner in a controlled window, after verifying no native-only data is needed.
+
+## Identity and recent-use evidence
+
+| App on Pippa (iPad Air 5, UDID `00008103-000D39301A6A201E`) | Source/build identity | Observed device state |
+| --- | --- | --- |
+| **Keep:** Flutter `Jevons`, bundle `com.canticode.jevonsMobile`, `mobile/ios/Runner.xcodeproj`, signed `mobile/build/ios/iphoneos/Runner.app` from `mobile/Makefile` `ios` | `mobile/ios/Runner.xcodeproj/project.pbxproj` `PRODUCT_BUNDLE_IDENTIFIER`; shell `mobile/lib/main.dart` / `WebViewWidget` loads the cockpit URL | Installed version 0.1.0 (build 0.1.0); app container WebKit cache and Metal files modified 2026-10-10 19:42–19:44. This is the active-this-week host. |
+| **Retire:** native Swift `Jevon`, bundle `com.marcelocantos.jevon`, `ios/project.yml` → `ios/Jevon.xcodeproj`, entry `ios/Jevon/JevonsApp.swift`, `ios/Jevon/Views/WebUIView.swift` | `ios/project.yml` `PRODUCT_BUNDLE_IDENTIFIER`; root `make ios` runs `xcodegen generate` for this older project, **not** Flutter's `mobile/Makefile ios` | Installed version 0.1.0 (build 1); native container's latest saved app state 2026-04-03, HTTP cache 2026-03-30, other cache 2026-04-27. No October app-container writes observed. |
+
+Observation methods: `xcrun devicectl device info apps --device 00008103-000D39301A6A201E` and `xcrun devicectl device info files --device 00008103-000D39301A6A201E --domain-type appDataContainer --domain-identifier <bundle>`. Container modification time is **positive evidence of recent Flutter use**, not a perfect audit log or proof the native app never opened.
+
+## Controlled removal sequence (future owner-approved window)
+
+1. Confirm the active Flutter app and URL still open on Pippa, and the owner's recent work lives there. Ensure no data from native `Jevon` is wanted: its sandbox has `Documents/jevon-sync.db` (+ WAL/SHM), `Library/Preferences/com.marcelocantos.jevon.plist`, and a saved scene; `ios/Jevon/Models/PigeonAccount.swift` also uses Keychain service `com.marcelocantos.jevons.pairing`. Native-only Pigeon pairing, sync history, and any unsynced local state **do not automatically migrate** to Flutter's distinct sandbox. Decide with the owner whether to export/retain these before removal. Never copy a live database without accounting for WAL/SHM.
+2. At the approved window, re-check the exact installed bundle IDs. Stop/close only the native app if running. Uninstall **only** `com.marcelocantos.jevon` using `xcrun devicectl device uninstall app --device 00008103-000D39301A6A201E com.marcelocantos.jevon`. This command is recorded here for the operator; it has **not** been run.
+3. Verify the native bundle is absent and `com.canticode.jevonsMobile` is still installed, then open Flutter and check cockpit connection, draft and image attachments, hardware Return/newline, plain arrows, Shift/Cmd arrows, and Alt+Up/Down on the attached keyboard. If a native-only capability remains needed (Pigeon relay/voice/Lua), don't delete its source until its disposition has been agreed.
+4. Separately inventory and retire native source/build wiring (`ios/Jevon/`, `ios/project.yml`, `ios/Jevon.xcodeproj`, root `make ios`, references and docs), with a dedicated review and build/test gate. `mobile/ios/` and `mobile/Makefile ios` **must stay**. Do not mechanically delete all `ios/` references or the Flutter app's iOS scaffold.
+
+Uninstall removes the native app and normally its app sandbox, including on-device database/preferences/cache; treat this as destructive. Keychain item lifetime on uninstall is platform-dependent and should not be represented as guaranteed cleanup. The two bundle IDs isolate their app containers: uninstalling the native ID should not remove Flutter's app or its `shared_preferences` cockpit URL, but verify the active app after removal. A reinstall of the same native bundle is possible only with a compatible signed build; it is **not** a guaranteed recovery of deleted sandbox contents. No uninstall or source retirement is authorized by this plan alone.
