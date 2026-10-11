@@ -36,6 +36,9 @@ func TestFleetStandingBriefHasNoBareTargetIDs(t *testing.T) {
 	if HasBareTargetID("see 🎯T305 next") {
 		t.Fatal("detector must not flag 🎯T305")
 	}
+	if HasBareTargetID("see claudia/🎯T177 next") {
+		t.Fatal("detector must not flag a prefixed cross-repository target id")
+	}
 	// Worker names use lowercase t — not bare target ids.
 	if HasBareTargetID("jv-t27.2-config") {
 		t.Fatal("lowercase worker names must not count as bare T-ids")
