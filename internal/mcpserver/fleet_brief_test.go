@@ -118,6 +118,14 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"proven API",
 		"development or released",
 		"🎯T572",
+		// 🎯T1053 routine reports are silent unless owner attention is needed
+		"Routine worker reports are not owner-facing appraisals",
+		"🎯T1053",
+		"silent acknowledgment",
+		"genuine owner decision point",
+		"anomaly/problem",
+		"direct question",
+		"status explicitly requested",
 		// 🎯T692 fleet state narration
 		"Fleet state narration matches the live registry",
 		"🎯T692",

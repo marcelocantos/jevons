@@ -486,6 +486,23 @@ func TestDefaultPersonaStatusLanguageInProgressVsLive(t *testing.T) {
 	}
 }
 
+// 🎯T1053: routine worker reports should not generate owner-facing appraisals.
+func TestDefaultPersonaRoutineReportQuiet(t *testing.T) {
+	p, err := Default().Persona()
+	if err != nil {
+		t.Fatalf("Persona: %v", err)
+	}
+	for _, want := range []string{
+		"Routine worker reports are not owner-facing appraisals", "T1053",
+		"silent acknowledgment", "genuine owner decision point", "anomaly",
+		"direct question", "explicitly asked for", "Continue verification and routing",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("default persona missing T1053 marker %q", want)
+		}
+	}
+}
+
 // 🎯T692: fleet state narration matches the live registry.
 func TestDefaultPersonaLifecycleNarration(t *testing.T) {
 	p, err := Default().Persona()

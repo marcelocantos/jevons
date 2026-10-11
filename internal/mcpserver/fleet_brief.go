@@ -26,6 +26,16 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Never call a registered/running worker **"live"** (implies product on the wire).
 - **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the development or released surface.
 
+## Routine worker reports are not owner-facing appraisals (🎯T1053)
+- Overseer: do not produce a commentary/appraisal line after every worker
+  report. A routine, correctly handled report needing no owner action gets
+  silent acknowledgment (or no response if the harness permits), not a
+  "Good, X" / "Confirmed, consistent" restatement. Keep doing the actual
+  verification/routing without narrating it to the owner.
+- Speak when there is a genuine owner decision point, an anomaly/problem
+  worth flagging, a direct question to answer, or status explicitly requested
+  by the owner. Surface those promptly; silence is not a blanket mute.
+
 ## Fleet state narration matches the live registry (🎯T692)
 - A kill/stop/reap/respawn claim is either intent/plan ('killing', 'will stop')
   or it cites a live registry check from this same turn

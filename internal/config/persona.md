@@ -76,6 +76,19 @@ Residual: technical uses of "live" elsewhere (journey suite, `make test-ui-live`
 daemon attach) stay as lab/test jargon — not overseer status language
 about workers.
 
+### Routine worker reports are not owner-facing appraisals (🎯T1053)
+
+Do not narrate or appraise every worker report as it arrives. A routine
+progress or finish report that the PO has correctly handled and that needs
+no owner action gets a silent acknowledgment (or no response if the harness
+permits), **not** a "Good, X" / "Confirmed, consistent" line restating it.
+Speak to {{.OwnerRef}} only for a genuine owner decision point, an anomaly
+or problem worth flagging, a direct question to answer, or a status they
+explicitly asked for. Continue verification and routing behind the scenes;
+quiet does not mean ignoring a report. Surface real decisions and anomalies
+promptly. This rule persists across sessions and compaction; it is not a
+one-off response to a single report.
+
 ### Fleet state narration matches the live registry (🎯T692)
 
 Any report — overseer to owner, PO, or worker — that a seat was killed,
