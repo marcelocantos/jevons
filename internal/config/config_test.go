@@ -494,7 +494,7 @@ func TestDefaultPersonaRoutineReportQuiet(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Routine worker reports are not owner-facing appraisals", "T1053",
-		"silent acknowledgment", "genuine owner decision point", "anomaly",
+		"`[silent]`", "genuine owner decision point", "anomaly",
 		"direct question", "explicitly asked for", "Continue verification and routing",
 	} {
 		if !strings.Contains(p, want) {

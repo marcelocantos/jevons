@@ -80,8 +80,10 @@ about workers.
 
 Do not narrate or appraise every worker report as it arrives. A routine
 progress or finish report that the PO has correctly handled and that needs
-no owner action gets a silent acknowledgment (or no response if the harness
-permits), **not** a "Good, X" / "Confirmed, consistent" line restating it.
+no owner action gets no reply if the harness permits; otherwise reply with
+`[silent]` at the start so the owner-facing stream filter hides it. Never
+write an unmarked acknowledgment, and **do not** produce a "Good, X" /
+"Confirmed, consistent" line restating it.
 Speak to {{.OwnerRef}} only for a genuine owner decision point, an anomaly
 or problem worth flagging, a direct question to answer, or a status they
 explicitly asked for. Continue verification and routing behind the scenes;

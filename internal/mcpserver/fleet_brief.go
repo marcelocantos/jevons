@@ -29,9 +29,10 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 ## Routine worker reports are not owner-facing appraisals (🎯T1053)
 - Overseer: do not produce a commentary/appraisal line after every worker
   report. A routine, correctly handled report needing no owner action gets
-  silent acknowledgment (or no response if the harness permits), not a
-  "Good, X" / "Confirmed, consistent" restatement. Keep doing the actual
-  verification/routing without narrating it to the owner.
+  no response if the harness permits; otherwise start the reply with
+  `[silent]` so the owner-facing stream filter hides it. Never send an
+  unmarked "Good, X" / "Confirmed, consistent" restatement. Keep doing
+  the actual verification/routing without narrating it to the owner.
 - Speak when there is a genuine owner decision point, an anomaly/problem
   worth flagging, a direct question to answer, or status explicitly requested
   by the owner. Surface those promptly; silence is not a blanket mute.

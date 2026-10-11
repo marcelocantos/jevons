@@ -121,7 +121,7 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		// 🎯T1053 routine reports are silent unless owner attention is needed
 		"Routine worker reports are not owner-facing appraisals",
 		"🎯T1053",
-		"silent acknowledgment",
+		"`[silent]`",
 		"genuine owner decision point",
 		"anomaly/problem",
 		"direct question",
@@ -294,7 +294,7 @@ func TestFleetBriefRoutineReportQuiet(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Routine worker reports are not owner-facing appraisals", "🎯T1053",
-		"silent acknowledgment", "genuine owner decision point", "anomaly/problem",
+		"`[silent]`", "genuine owner decision point", "anomaly/problem",
 		"direct question", "status explicitly requested", "verification/routing",
 	} {
 		if !strings.Contains(out, want) {
