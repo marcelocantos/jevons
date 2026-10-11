@@ -120,7 +120,7 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 		}
 		if shouldNotify {
 			key := q.Identity.Repo + "#" + q.Identity.Target + "#" + q.Identity.ID
-			if _, err := ownerquestions.New(dir).Observe(ownerquestions.Question{Key: key, Text: q.Text, Link: q.Link}, now); err != nil {
+			if _, err := ownerquestions.New(dir).Observe(ownerquestions.Question{Key: key, Text: q.NoticeBody(), Link: q.Link}, now); err != nil {
 				slog.Error("owner question spool failed (retry retained)", "agent", agentName, "key", key, "err", err)
 			}
 		}

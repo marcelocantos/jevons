@@ -848,6 +848,44 @@ seat (`blocked_on_owner`), T165 does not reap it, and the parent's inbox
 notice carries the blocker. The hold ends when the owner or an ancestor
 messages the seat, or when the seat stores a newer report.
 
+**A question to the owner is an object, not prose (🎯T404).** When the
+block is an owner decision, say so with `block-class owner-decision` and
+the question slots. **Every question carries a default**: state what you
+will do if nobody answers, so silence degrades into a decision rather than
+a stall, and the owner answers to change an outcome, not to unblock one.
+Closed-form questions list their `question-option`s so a yes/no costs a
+word, not a paragraph:
+
+```jevons
+jevons: kind finish-report
+jevons: target T404
+jevons: status blocked
+jevons: blocker owner-decision-on-answer-surface
+jevons: block-class owner-decision
+jevons: question-repo /abs/path/to/repo
+jevons: question-id answer-surface
+jevons: question-version 1
+jevons: question "Cockpit panel or Slack thread for owner answers?"
+jevons: question-option cockpit
+jevons: question-option slack
+jevons: question-default "proceeding with cockpit unless you say otherwise"
+jevons: question-asker jv-t404-auto
+jevons: answer-route jv-t404-auto
+jevons: silent-ledger none
+```
+
+The daemon records the question in the durable cross-repo index
+(`jevons_owner_questions`, `GET /api/reviews`), pages the owner once with
+the options and the default, and lists every open question with its
+`silence_outcome` — a question with no default is listed as **STALLS**, so
+the gap is visible rather than discovered by scrolling. The owner's answer
+goes in as `jevons_owner_questions op=answer`, and **the daemon routes it
+to the asking seat** (asker first, then answer-route) — nobody relays it
+by hand, and the result names where it went or that the asker is gone. A
+question that stops mattering is retired with `op=resolve state=moot`,
+which tells the asker to proceed on its default. Then proceed on the
+answer, not the default.
+
 A green oracle with a **missing** silent-ledger (and no explicit `none`)
 is flagged, not treated as complete. Quality of the decisions is judgment;
 this rule is that the artifact exists and the independent gate can read it

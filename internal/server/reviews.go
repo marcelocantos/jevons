@@ -25,26 +25,30 @@ func reviewID(id ownerquestionview.Identity) string {
 }
 
 type reviewItem struct {
-	SchemaVersion  int                     `json:"schema_version"`
-	TargetTitle    string                  `json:"target_title,omitempty"`
-	TargetStatus   string                  `json:"target_status,omitempty"`
-	TargetLookup   string                  `json:"target_lookup"`
-	Evidence       reviewEvidence          `json:"evidence"`
-	ID             string                  `json:"id"`
-	URL            string                  `json:"url"`
-	Repository     string                  `json:"repository"`
-	Target         string                  `json:"target"`
-	AskID          string                  `json:"ask_id"`
-	Version        string                  `json:"version"`
-	Question       string                  `json:"question"`
-	Asker          string                  `json:"asker"`
-	AnswerRoute    string                  `json:"answer_route"`
-	State          ownerquestionview.State `json:"state"`
-	Readiness      string                  `json:"readiness"`
-	Prerequisite   string                  `json:"prerequisite,omitempty"`
-	Action         string                  `json:"action,omitempty"`
-	EvidenceStatus string                  `json:"evidence_status,omitempty"`
-	Resolution     string                  `json:"resolution,omitempty"`
+	SchemaVersion int            `json:"schema_version"`
+	TargetTitle   string         `json:"target_title,omitempty"`
+	TargetStatus  string         `json:"target_status,omitempty"`
+	TargetLookup  string         `json:"target_lookup"`
+	Evidence      reviewEvidence `json:"evidence"`
+	ID            string         `json:"id"`
+	URL           string         `json:"url"`
+	Repository    string         `json:"repository"`
+	Target        string         `json:"target"`
+	AskID         string         `json:"ask_id"`
+	Version       string         `json:"version"`
+	Question      string         `json:"question"`
+	Asker         string         `json:"asker"`
+	AnswerRoute   string         `json:"answer_route"`
+	// DefaultOnSilence and Options are the 🎯T404 question contract: what the
+	// asker does if never answered, and the closed-form choices if any.
+	DefaultOnSilence string                  `json:"default_on_silence"`
+	Options          []string                `json:"options,omitempty"`
+	State            ownerquestionview.State `json:"state"`
+	Readiness        string                  `json:"readiness"`
+	Prerequisite     string                  `json:"prerequisite,omitempty"`
+	Action           string                  `json:"action,omitempty"`
+	EvidenceStatus   string                  `json:"evidence_status,omitempty"`
+	Resolution       string                  `json:"resolution,omitempty"`
 }
 
 // A review is trustworthy only when its embedded identity names the exact
@@ -75,7 +79,10 @@ func reviewFromQuestion(q ownerquestionview.Question) reviewItem {
 	if q.State != ownerquestionview.Open {
 		readiness = "closed"
 	}
-	item := reviewItem{SchemaVersion: 2, TargetLookup: "missing", Evidence: emptyReviewEvidence(), ID: id, URL: "/api/reviews/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: redact(q.Text), Asker: redact(q.Asker), AnswerRoute: redact(q.AnswerRoute), State: q.State, Readiness: readiness, Resolution: redact(q.Resolution)}
+	item := reviewItem{SchemaVersion: 2, TargetLookup: "missing", Evidence: emptyReviewEvidence(), ID: id, URL: "/api/reviews/" + id, Repository: filepath.Base(q.Identity.Repo), Target: q.Identity.Target, AskID: q.Identity.ID, Version: q.Identity.Version, Question: redact(q.Text), Asker: redact(q.Asker), AnswerRoute: redact(q.AnswerRoute), DefaultOnSilence: redact(q.SilenceOutcome()), State: q.State, Readiness: readiness, Resolution: redact(q.Resolution)}
+	for _, o := range q.Options {
+		item.Options = append(item.Options, redact(o))
+	}
 	if q.Review != nil && !trustedReview {
 		// The prose may contain reported artifact paths. A corrupt nested
 		// review is not safe to render as an ordinary owner question.

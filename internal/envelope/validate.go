@@ -38,9 +38,12 @@ func Validate(m *Message) error {
 			if m.Status != ProgressBlocked || strings.TrimSpace(m.QuestionRepo) == "" || strings.TrimSpace(m.QuestionID) == "" || strings.TrimSpace(m.QuestionVersion) == "" || strings.TrimSpace(m.Question) == "" || strings.TrimSpace(m.QuestionAsker) == "" || strings.TrimSpace(m.AnswerRoute) == "" {
 				return fmt.Errorf("owner-decision block requires blocked status, question-repo, question-id, question-version, question, question-asker and answer-route")
 			}
-		} else if m.QuestionRepo != "" || m.QuestionID != "" || m.QuestionVersion != "" || m.Question != "" || m.QuestionAsker != "" || m.AnswerRoute != "" {
+		} else if m.QuestionRepo != "" || m.QuestionID != "" || m.QuestionVersion != "" || m.Question != "" || m.QuestionAsker != "" || m.AnswerRoute != "" || m.QuestionDefault != "" || len(m.QuestionOptions) > 0 {
 			return fmt.Errorf("owner question slots require block-class owner-decision")
 		}
+		// 🎯T404: question-default is carried, surfaced and flagged when
+		// absent, but not refused here — a refused envelope drops the
+		// question from the durable view, which is the 🎯T378 failure.
 		// 🎯T536.1: silent-decision ledger is present or explicitly empty.
 		if err := validateSilentLedger(m); err != nil {
 			return err

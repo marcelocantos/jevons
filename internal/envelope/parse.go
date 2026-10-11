@@ -41,6 +41,12 @@ type Message struct {
 	Question        string
 	QuestionAsker   string
 	AnswerRoute     string
+	// QuestionDefault states what the asker does if the owner never answers
+	// (🎯T404): a question carries its own default so silence degrades into
+	// a decision rather than a stall. QuestionOptions lists closed-form
+	// choices (repeatable slot question-option) so a yes/no costs a word.
+	QuestionDefault string
+	QuestionOptions []string
 	Name            string // target-file-request title, optional elsewhere
 	// Phase is the mission phase (scout|implement) — 🎯T536.3.
 	Phase Phase
@@ -138,6 +144,8 @@ func (m *Message) SlotsFingerprint() string {
 		"question=" + m.Question,
 		"question-asker=" + m.QuestionAsker,
 		"answer-route=" + m.AnswerRoute,
+		"question-default=" + m.QuestionDefault,
+		"question-options=" + strings.Join(m.QuestionOptions, "\x00"),
 		"name=" + m.Name,
 		"phase=" + string(m.Phase),
 		ledgerFingerprint(m),
@@ -364,6 +372,12 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 		msg.QuestionAsker = unquoteSlot(value)
 	case "answer-route":
 		msg.AnswerRoute = unquoteSlot(value)
+	case "question-default", "default-on-silence":
+		msg.QuestionDefault = unquoteSlot(value)
+	case "question-option":
+		if opt := strings.TrimSpace(unquoteSlot(value)); opt != "" {
+			msg.QuestionOptions = append(msg.QuestionOptions, opt)
+		}
 	case "name":
 		msg.Name = strings.TrimSpace(value)
 	case "phase", "mission-phase", "mission_phase":
@@ -496,6 +510,10 @@ func Format(m *Message) string {
 	writeSlot(&b, "question", quoteIfNeeded(m.Question))
 	writeSlot(&b, "question-asker", m.QuestionAsker)
 	writeSlot(&b, "answer-route", quoteIfNeeded(m.AnswerRoute))
+	for _, opt := range m.QuestionOptions {
+		writeSlot(&b, "question-option", quoteIfNeeded(opt))
+	}
+	writeSlot(&b, "question-default", quoteIfNeeded(m.QuestionDefault))
 	writeSlot(&b, "name", m.Name)
 	writeSlot(&b, "phase", string(m.Phase))
 	switch m.SilentLedger {

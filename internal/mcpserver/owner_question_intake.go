@@ -53,7 +53,7 @@ func (s *Server) recordedGateQuestion(cwd, target, question, by string, result *
 	if s.ownerQuestionsDir != "" {
 		if err := ownerquestionview.New(s.ownerQuestionsDir).Record(ownerquestionview.Question{
 			Identity: ownerquestionview.Identity{Repo: q.Identity.Repo, Target: q.Identity.Target, ID: q.Identity.ID, Version: q.Identity.Version},
-			Text:     q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute,
+			Text:     q.Text, Asker: q.Asker, AnswerRoute: q.AnswerRoute, Default: q.Default, Options: q.Options,
 		}); err != nil {
 			result.Content = append(result.Content, mcp.TextContent{Type: "text", Text: "question view intake FAILED: " + err.Error()})
 		}

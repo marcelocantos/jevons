@@ -42,6 +42,40 @@ type Question struct {
 	AnswerRoute string    `json:"answer_route"`
 	Link        string    `json:"link,omitempty"`
 	State       Lifecycle `json:"state"`
+	// Default is what the asker does if the owner never answers (🎯T404).
+	// A question that states one never stalls work: the owner answers to
+	// change an outcome, not to unblock one. Options are the closed-form
+	// choices, so answering a yes/no costs a word rather than a paragraph.
+	Default string   `json:"default,omitempty"`
+	Options []string `json:"options,omitempty"`
+}
+
+// NoSilenceDefault is the silence outcome shown for a question whose asker
+// stated no default: the owner must know that this one does stall.
+const NoSilenceDefault = "STALLS — asker stated no default; silence blocks this seat (🎯T404)"
+
+// SilenceOutcome says what happens if the owner never answers.
+func (q Question) SilenceOutcome() string {
+	if d := strings.TrimSpace(q.Default); d != "" {
+		return "proceeds on default: " + d
+	}
+	return NoSilenceDefault
+}
+
+// NoticeBody is the question as it is paged to the owner: the text, then
+// the closed-form options and the default-on-silence when the asker stated
+// them. A question without either pages exactly as it did before 🎯T404, so
+// an already-spooled question is not re-notified by a deploy.
+func (q Question) NoticeBody() string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(q.Text))
+	if len(q.Options) > 0 {
+		b.WriteString("\nOptions: " + strings.Join(q.Options, " | "))
+	}
+	if d := strings.TrimSpace(q.Default); d != "" {
+		b.WriteString("\nIf unanswered: " + d)
+	}
+	return b.String()
 }
 
 // CanonicalRepo resolves a caller directory to its git root where possible,
@@ -92,7 +126,9 @@ func FromOwnerGate(cwd, target, text, asker string) (Question, error) {
 		return Question{}, err
 	}
 	hash := sha256.Sum256([]byte(strings.TrimSpace(text)))
-	q := Question{Identity: Identity{Repo: repo, Target: target, ID: "owner-gate", Version: hex.EncodeToString(hash[:8])}, Text: strings.TrimSpace(text), Asker: asker, AnswerRoute: "jevons_owner_gate op=answer", State: Open}
+	// A gate is closed-form by construction (🎯T449); it carries no default
+	// because the landed code waits for the verdict rather than proceeding.
+	q := Question{Identity: Identity{Repo: repo, Target: target, ID: "owner-gate", Version: hex.EncodeToString(hash[:8])}, Text: strings.TrimSpace(text), Asker: asker, AnswerRoute: "jevons_owner_gate op=answer", State: Open, Options: []string{"accept", "reject"}}
 	return q, q.Validate()
 }
 
@@ -111,7 +147,7 @@ func FromBlockedReport(text string) (Question, bool, error) {
 	if err != nil {
 		return Question{}, false, err
 	}
-	q := Question{Identity: Identity{Repo: repo, Target: m.Target, ID: m.QuestionID, Version: m.QuestionVersion}, Text: m.Question, Asker: m.QuestionAsker, AnswerRoute: m.AnswerRoute, State: Open}
+	q := Question{Identity: Identity{Repo: repo, Target: m.Target, ID: m.QuestionID, Version: m.QuestionVersion}, Text: m.Question, Asker: m.QuestionAsker, AnswerRoute: m.AnswerRoute, State: Open, Default: strings.TrimSpace(m.QuestionDefault), Options: append([]string(nil), m.QuestionOptions...)}
 	if err := q.Validate(); err != nil {
 		return Question{}, false, err
 	}

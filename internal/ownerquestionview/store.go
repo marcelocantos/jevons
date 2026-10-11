@@ -41,9 +41,18 @@ type Question struct {
 	Asker       string                     `json:"asker"`
 	AnswerRoute string                     `json:"answer_route"`
 	Review      *ownerquestion.ReviewEvent `json:"review,omitempty"`
-	State       State                      `json:"state"`
-	Resolution  string                     `json:"resolution,omitempty"`
-	UpdatedAt   time.Time                  `json:"updated_at"`
+	// Default and Options travel with the question (🎯T404): what the asker
+	// does on silence, and the closed-form choices when there are any.
+	Default    string    `json:"default,omitempty"`
+	Options    []string  `json:"options,omitempty"`
+	State      State     `json:"state"`
+	Resolution string    `json:"resolution,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// SilenceOutcome says what happens if the owner never answers this question.
+func (q Question) SilenceOutcome() string {
+	return ownerquestion.Question{Default: q.Default}.SilenceOutcome()
 }
 
 // Store uses a lock separate from the atomically replaced JSON file so
@@ -212,6 +221,21 @@ func (s *Store) Resolve(id Identity, state State, note string) error {
 		}
 		return nil, fmt.Errorf("unknown owner question %s/%s/%s@%s", id.Repo, id.Target, id.ID, id.Version)
 	})
+}
+
+// Find returns the exact question version, so an answer can be routed to
+// the seat that asked it rather than to whoever is relaying it.
+func (s *Store) Find(id Identity) (Question, error) {
+	rows, err := s.List(false)
+	if err != nil {
+		return Question{}, err
+	}
+	for _, q := range rows {
+		if q.Identity.key() == id.key() {
+			return q, nil
+		}
+	}
+	return Question{}, fmt.Errorf("unknown owner question %s/%s/%s@%s", id.Repo, id.Target, id.ID, id.Version)
 }
 
 // OpenVersion checks the durable lifecycle of an exact question version.
