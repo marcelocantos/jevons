@@ -207,7 +207,25 @@ class _CockpitShellState extends State<CockpitShell> {
         body: SafeArea(
           child: Stack(
             children: [
-              WebViewWidget(controller: _web),
+              // Flutter's WidgetsApp binds unmodified arrows to
+              // DirectionalFocusIntent on iOS. Around a UiKitView this can
+              // eat the hardware key before WKWebView's focused textarea
+              // sees it. Stop Flutter shortcut propagation but tell the
+              // platform embedding the key was NOT handled. Modifier arrows
+              // and Alt+Up/Down remain native/web composer chords.
+              Shortcuts(
+                shortcuts: const {
+                  SingleActivator(LogicalKeyboardKey.arrowLeft):
+                      DoNothingAndStopPropagationIntent(),
+                  SingleActivator(LogicalKeyboardKey.arrowRight):
+                      DoNothingAndStopPropagationIntent(),
+                  SingleActivator(LogicalKeyboardKey.arrowUp):
+                      DoNothingAndStopPropagationIntent(),
+                  SingleActivator(LogicalKeyboardKey.arrowDown):
+                      DoNothingAndStopPropagationIntent(),
+                },
+                child: WebViewWidget(controller: _web),
+              ),
               if (_loading) const LinearProgressIndicator(),
               if (_loadError != null)
                 Center(
