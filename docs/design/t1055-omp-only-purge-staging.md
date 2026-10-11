@@ -1,10 +1,12 @@
 # T1055 — OMP-only seat transport staging (not activated)
 
-The owner permits clobbering old CLI conversation history. This removes the
-transcript-transfer prerequisite, **not** the transport-compatibility or
-security prerequisites. This document records the isolated Jevons slice;
-none of these steps authorize restarting the development daemon, terminating
-existing seats, or merging the isolated branch before Claudia T177 is ready.
+The owner permits clobbering old CLI conversation history and explicitly
+accepts loss of attach/terminal bytes/native rewind. Legacy CLI must be
+removed from **both** Session and one-shot Task paths. This removes the
+transcript-transfer and UI-equivalence prerequisites, **not** the
+transport-compatibility or security prerequisites. This document records the
+isolated Jevons slice; none of these steps authorize restarting the development daemon, terminating
+existing seats, or merging the isolated branch before claudia/T177 is ready.
 
 ## Provider contract
 
@@ -49,6 +51,48 @@ misleading half-purge while live CLI handles and upgrade adoption remain.
    spawn/direct/stop/resume for every used plan provider with broker transport
    inspection and a zero-CLI-process census. Only the owner/PO controls
    existing seats and daemon activation.
+
+## One-shot Task inventory and disposition
+
+`internal/mcpserver/jwork.go` is Jevons' one-shot path. It chooses a plan
+provider with `cli.SelectAgentProvider`, then calls `claudia.NewTask` and
+`Task.Run`, where Claudia v0.52 still dispatches provider-specific CLI
+backends. A new OMP Task verb/dispatch and event/usage/error contract must
+exist before rewriting this caller. `jwork` must canonicalize plan ids onto
+OMP runtime ids before task creation and reject unsupported providers rather
+than falling through to a vendor CLI. Preserve its `doit.GateSpawn`, worker
+tracking, progress/usage accumulation and failure classification. Bedrock is
+an API Task backend, not a legacy CLI or fleet Session; retain it only if
+Claudia explicitly continues to support the non-CLI Task path. Ollama needs
+an equally explicit non-CLI disposition. Tests must exercise new Task dispatch
+with a fake broker and assert no CLI subprocess starts on fresh tasks or
+unsupported providers. The Session selector in this isolated commit cannot
+be reused blindly for Tasks: it intentionally refuses Bedrock.
+
+The owner instructed Claudia-po to drop 14 stale Claude and two stale Grok
+grants without remint; Jevons does not edit grants or terminate windows.
+These numbers are an instruction/snapshot, not a new census. Claudia-po owns
+that operation and its evidence. No development daemon restart here.
+
+## Legacy-specific reader disposition
+
+- `internal/server/chat.go` native Claude JSONL rewind: delete the native
+  branch and retain journal-first rotate+recap on OMP; owner accepts loss of
+  native rewind. `internal/server/claude_model.go` JSONL resolver and
+  `internal/discovery` Claude path readers: remove only once model and history
+  are sourced from OMP/session events or declared nonessential.
+- `internal/mcpserver/turn_evidence.go` must treat every OMP provider as an
+  event-stream backend, not wait on a phantom Claude JSONL. Keep OMP event
+  and spool-backed evidence; remove vendor-only transcript assumptions.
+- `internal/fleet/claude_trust.go` preaccepts Claude Code's CLI trust modal;
+  remove if OMP has no such modal, without widening workdir trust policy.
+  `internal/mcpserver/codex_receipt.go` and sandbox/receipt tests may encode
+  app-server behavior; replace only with an OMP receipt oracle, preserving
+  the uncertainty/delivery invariant. Grok MCP reconnect CLI commands and
+  Cursor ACP guards are candidates for deletion when OMP replaces them.
+- Generic chatlog, transcript pagination, billing/plan analytics, queue
+  records and spool-backed replay are not vendor CLI transport and survive.
+  Historical incident docs can remain explicitly historical.
 
 ## Known unresolved parity
 
