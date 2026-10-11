@@ -17,7 +17,7 @@ import {
   type UploadedImage,
 } from '../composer/images';
 import { applyComposerHomeEnd } from '../keys/composerCaret';
-import { classifyEnterAction, FORCE_SEND_MODE, isFlutterMobileShell, isTouchPrimaryDevice } from '../keys/composerEnter';
+import { classifyEnterAction, FORCE_SEND_MODE, isTouchscreenDevice } from '../keys/composerEnter';
 import { isEffectivelyEmpty } from '../composer/wispr';
 import type { DeliveryMode } from '../composer/deliveryMode';
 import type { QueueItem } from '../composer/sendQueue';
@@ -444,7 +444,7 @@ function NamedUserRequest(props: UserRequestProps) {
           onChange={(e) => recalled ? setRecalledText(e.target.value) : setDraft(props.name, e.target.value)}
           autoFocus={!compact && !props.hold}
           rows={1}
-          title={props.hold || `${isTouchPrimaryDevice() || isFlutterMobileShell() ? 'Enter newline · Send button sends' : 'Enter send'} · ⌘Enter steer · ⌘⇧Enter interrupt · ⌥Enter force-send the draft (or the next queued item) · Alt+↑/↓ pick a queued item`}
+          title={props.hold || `${isTouchscreenDevice() ? 'Enter newline · Send button sends' : 'Enter send'} · ⌘Enter steer · ⌘⇧Enter interrupt · ⌥Enter force-send the draft (or the next queued item) · Alt+↑/↓ pick a queued item`}
           disabled={rewinding || props.disabled === true}
           onPaste={onPaste}
           onKeyDown={(e) => {
@@ -478,8 +478,7 @@ function NamedUserRequest(props: UserRequestProps) {
               composerEmpty: !hasRealDraft,
               queueLen: props.queue?.items.length ?? 0,
               code: e.code,
-              touchPrimary: isTouchPrimaryDevice(),
-              mobileShell: isFlutterMobileShell(),
+              touchscreen: isTouchscreenDevice(),
             });
             if (action == null || action === 'newline') return;
             e.preventDefault();

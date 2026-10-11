@@ -7,7 +7,7 @@ import { createEvent, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, vi } from 'vitest';
 import { decideSend } from '../../composer/sendQueue';
 import { UserRequest } from '../../components/UserRequest';
-import { classifyEnterAction, isTouchPrimaryDevice } from '../../keys/composerEnter';
+import { classifyEnterAction, isTouchscreenDevice } from '../../keys/composerEnter';
 import { applyComposerHomeEnd, selectionAfterHomeEnd } from '../../keys/composerCaret';
 import { shouldFocusComposer } from '../../keys/composerFocus';
 import { isSidebarComposerFocusable, planComposerTabCycle } from '../../keys/composerTab';
@@ -92,32 +92,31 @@ describeOracle(family('composer-keys'), () => {
     expect(classifyEnterAction('Enter', { shiftKey: true })).toBe('newline');
   });
 
-  itOracle('T1018', 'touch-primary device: plain Enter inserts a newline; every chord and desktop Enter are unchanged', () => {
-    const coarse = { matchMedia: (q: string) => ({ matches: q === '(pointer: coarse)' }) } as unknown as Pick<Window, 'matchMedia'>;
-    const fine = { matchMedia: (q: string) => ({ matches: false }) } as unknown as Pick<Window, 'matchMedia'>;
-    expect(isTouchPrimaryDevice(coarse)).toBe(true);
-    expect(isTouchPrimaryDevice(fine)).toBe(false);
+  itOracle('T1018', 'touchscreen device: plain Enter inserts a newline; every chord and desktop Enter are unchanged', () => {
+    expect(isTouchscreenDevice({ maxTouchPoints: 5 })).toBe(true);
+    expect(isTouchscreenDevice({ maxTouchPoints: 0 })).toBe(false);
+    expect(isTouchscreenDevice({ maxTouchPoints: undefined } as unknown as Navigator)).toBe(false);
 
-    // Touch-primary + plain Enter -> newline (the T1018 fix).
-    expect(classifyEnterAction('Enter', {}, { composerEmpty: false, touchPrimary: true })).toBe('newline');
-    // Touch-primary + empty composer + plain Enter -> newline too (not noop):
+    // Touchscreen + plain Enter -> newline (the T1018 fix).
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: false, touchscreen: true })).toBe('newline');
+    // Touchscreen + empty composer + plain Enter -> newline too (not noop):
     // there is nothing to send either way, and the device still has no Shift key.
-    expect(classifyEnterAction('Enter', {}, { composerEmpty: true, touchPrimary: true })).toBe('newline');
-    // Touch-primary + Cmd+Enter -> steer, unchanged.
-    expect(classifyEnterAction('Enter', { metaKey: true }, { composerEmpty: false, touchPrimary: true })).toBe('steer');
-    // Touch-primary + Cmd+Shift+Enter -> interrupt, unchanged.
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: true, touchscreen: true })).toBe('newline');
+    // Touchscreen + Cmd+Enter -> steer, unchanged.
+    expect(classifyEnterAction('Enter', { metaKey: true }, { composerEmpty: false, touchscreen: true })).toBe('steer');
+    // Touchscreen + Cmd+Shift+Enter -> interrupt, unchanged.
     expect(
-      classifyEnterAction('Enter', { metaKey: true, shiftKey: true }, { composerEmpty: false, touchPrimary: true }),
+      classifyEnterAction('Enter', { metaKey: true, shiftKey: true }, { composerEmpty: false, touchscreen: true }),
     ).toBe('interrupt');
-    // Touch-primary + Shift+Enter -> newline, same as desktop (redundant but unchanged).
-    expect(classifyEnterAction('Enter', { shiftKey: true }, { touchPrimary: true })).toBe('newline');
-    // Touch-primary + Alt+Enter on a non-empty composer -> force_send, unchanged.
+    // Touchscreen + Shift+Enter -> newline, same as desktop (redundant but unchanged).
+    expect(classifyEnterAction('Enter', { shiftKey: true }, { touchscreen: true })).toBe('newline');
+    // Touchscreen + Alt+Enter on a non-empty composer -> force_send, unchanged.
     expect(
-      classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false, touchPrimary: true }),
+      classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false, touchscreen: true }),
     ).toBe('force_send');
 
     // Desktop (pointer: fine) + plain Enter -> send, regression guard (T113/T657).
-    expect(classifyEnterAction('Enter', {}, { composerEmpty: false, touchPrimary: false })).toBe('send');
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: false, touchscreen: false })).toBe('send');
     expect(classifyEnterAction('Enter', {}, { composerEmpty: false })).toBe('send');
   });
 
