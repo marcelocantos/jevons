@@ -13108,14 +13108,19 @@ targets:
     achieved: 2026-08-21
   T493.1:
     name: After visual cockpit work the agent answers in prose whether the screenshot looks like a normal transcript
-    status: identified
+    status: achieved
     value: 7.0
     cost: 2.0
+    actual_cost: 2.0
+    attestation: 'Landed d464c87d (feat: visual cockpit finish is a prose look, not a green metric), e063f77f (drop sibling T511 hunks), 2b669ced (T750: docratchet keeps the vocabulary scan). Doctrine in AGENTS.md, agents-guide.md, internal/cli/help_agent.md, internal/config/persona.md and the fleet standing brief (internal/mcpserver/fleet_brief.go): four-part prose look (ink on screen, empty pane, Latest showing, yes/no to "normal chat transcript after a hard reload?"); green metric / caption is not the verdict; automatic no on leftover bubble, Latest on hard reload, more empty canvas than bubbles; prose no + green journey = false green, fix the oracle same turn. Pure classifiers ClassifyVisualVerdict / HasVisualProseVerdict / LooksLikeMissingVisualVerdict / LooksLikeYesAgainstAutomaticNo / LooksLikeFalseGreenVisualJourney in internal/mcpserver/visual_verdict.go. Oracles, clean checkout of 66a5cb8d: GATE go-test-Visual exit=0 GREEN id=4b422c14 (internal/mcpserver TestClassifyVisualVerdict + helpers); GATE go-test-TestVisualCockpitProseVerdictDoctrineMarkers exit=0 GREEN id=e899044c (scripts/docratchet doctrine ratchet across persona, agents-guide, AGENTS.md, help_agent.md, fleet brief). Residual as filed: instructional doctrine plus pure classifier; no daemon achieve block on the notify path (no product caller of the classifiers), and the pixel judgment itself stays with the agent and the overseer.'
     acceptance:
     - 'After any change that can affect what the owner sees in #messages (pin, virtualize, replay, fold, slot mint, spacing), the agent takes a viewport screenshot and writes a short visual verdict before claiming done or achieving: what ink is on screen, how much of the pane is empty, whether Latest is showing, and the sentence yes or no to "does this look like a normal chat transcript after a hard reload?"'
     - A metric that is already green cannot be that verdict. visibleInScroller ≥ 1, modelRows = N, and a screenshot-tool caption are not answers to the sensible question. One leftover bubble in a tall pane, Latest on a hard reload, or more empty canvas than bubbles is an automatic no.
     - If the prose says no and a journey is green, the journey is a false green — fix the oracle in the same turn, do not treat daily as a special universe the test cannot see.
-    context: 'Owner 2026-08-17 retrospective: one look at the hard-reload pane was immediately obviously broken (Latest + desert + one leftover turn). The agent had Playwright, DOM census, and even screenshots, and still certified visibleInScroller=1 as T494 achieved. The missing step is not another gate in the checklist — it is looking at the pixels as a human and asking whether the picture is sensible. T493 already bans captions as evidence; this is the human sanity pass that sits on top.'
+    context: |-
+      Owner 2026-08-17 retrospective: one look at the hard-reload pane was immediately obviously broken (Latest + desert + one leftover turn). The agent had Playwright, DOM census, and even screenshots, and still certified visibleInScroller=1 as T494 achieved. The missing step is not another gate in the checklist — it is looking at the pixels as a human and asking whether the picture is sensible. T493 already bans captions as evidence; this is the human sanity pass that sits on top.
+
+      Achieved 2026-10-11: Landed d464c87d (feat: visual cockpit finish is a prose look, not a green metric), e063f77f (drop sibling T511 hunks), 2b669ced (T750: docratchet keeps the vocabulary scan). Doctrine in AGENTS.md, agents-guide.md, internal/cli/help_agent.md, internal/config/persona.md and the fleet standing brief (internal/mcpserver/fleet_brief.go): four-part prose look (ink on screen, empty pane, Latest showing, yes/no to "normal chat transcript after a hard reload?"); green metric / caption is not the verdict; automatic no on leftover bubble, Latest on hard reload, more empty canvas than bubbles; prose no + green journey = false green, fix the oracle same turn. Pure classifiers ClassifyVisualVerdict / HasVisualProseVerdict / LooksLikeMissingVisualVerdict / LooksLikeYesAgainstAutomaticNo / LooksLikeFalseGreenVisualJourney in internal/mcpserver/visual_verdict.go. Oracles, clean checkout of 66a5cb8d: GATE go-test-Visual exit=0 GREEN id=4b422c14 (internal/mcpserver TestClassifyVisualVerdict + helpers); GATE go-test-TestVisualCockpitProseVerdictDoctrineMarkers exit=0 GREEN id=e899044c (scripts/docratchet doctrine ratchet across persona, agents-guide, AGENTS.md, help_agent.md, fleet brief). Residual as filed: instructional doctrine plus pure classifier; no daemon achieve block on the notify path (no product caller of the classifiers), and the pixel judgment itself stays with the agent and the overseer.
     tags:
     - process
     - web
@@ -13124,6 +13129,7 @@ targets:
     - ux
     origin: owner
     discovered: 2026-08-17
+    achieved: 2026-10-11
   T494:
     name: 'Daily cockpit connect shows the replay tail in the #messages viewport — not an empty pane over a tall canvas'
     status: achieved
