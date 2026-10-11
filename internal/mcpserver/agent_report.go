@@ -99,6 +99,9 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 			reviewEvent = &review
 		}
 	}
+	if !ok && qerr == nil {
+		q, ok, qerr = ownerquestion.FromExplicitBlocker(text, s.workerWD, agentName)
+	}
 	if qerr != nil {
 		slog.Warn("owner question intake rejected", "agent", agentName, "err", qerr)
 	} else if ok {
@@ -305,7 +308,7 @@ func (s *Server) mootSupersededReview(agentName, text string) {
 		return
 	}
 	for _, r := range rows {
-		if r.Identity.Repo != repo || r.Identity.Target != m.Target || r.Identity.ID != "hardware-visual-review" || r.Asker != agentName {
+		if r.Identity.Repo != repo || r.Identity.Target != m.Target || (r.Identity.ID != "hardware-visual-review" && r.Identity.ID != "explicit-owner-blocker") || r.Asker != agentName {
 			continue
 		}
 		if err := ownerquestionview.New(s.ownerQuestionsDir).Resolve(r.Identity, ownerquestionview.Moot, "superseded by reporter finish-report without review ask"); err != nil {

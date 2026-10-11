@@ -134,3 +134,38 @@ func TestT1042SupersedingReportMootsOnlySameReporterReview(t *testing.T) {
 		t.Fatalf("outbox %+v", entries)
 	}
 }
+
+func TestT1042UntypedExplicitOwnerBlockerLifecycle(t *testing.T) {
+	state, repo, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	marker := filepath.Join(bin, "calls")
+	if err := os.WriteFile(filepath.Join(bin, "blurter"), []byte("#!/bin/sh\necho \"$*\" >> '"+marker+"'\necho /spool/accepted\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	s := New(repo, nil, nil)
+	s.SetAgentReportDir(state)
+	s.SetOwnerQuestionsDir(state)
+	report := func(blocker string) string {
+		return "```jevons\njevons: kind finish-report\njevons: target T77\njevons: status blocked\njevons: blocker " + blocker + "\njevons: oracle sha=abcdef0123456789\njevons: silent-ledger none\n```\n"
+	}
+	first := report("owner decision requested: choose A or B for the landing page")
+	s.storeAgentReport("worker", first)
+	s.storeAgentReport("worker", first)
+	if b := mustReadT1042(t, marker); strings.Count(string(b), "--subject") != 1 || !strings.Contains(string(b), "choose A or B") {
+		t.Fatalf("first spool %q", b)
+	}
+	s.storeAgentReport("worker", report("owner decision requested: choose A or C for the landing page"))
+	if b := mustReadT1042(t, marker); strings.Count(string(b), "--subject") != 2 {
+		t.Fatalf("revision spool %q", b)
+	}
+	open, err := ownerquestionview.New(state).List(true)
+	if err != nil || len(open) != 1 || !strings.Contains(open[0].Text, "choose A or C") {
+		t.Fatalf("open %+v %v", open, err)
+	}
+	s.storeAgentReport("worker", report("device offline; waiting on external repair"))
+	open, _ = ownerquestionview.New(state).List(true)
+	entries, _, _ := ownerquestions.New(state).Snapshot()
+	if len(open) != 0 || len(entries) != 0 {
+		t.Fatalf("moot open=%+v outbox=%+v", open, entries)
+	}
+}
