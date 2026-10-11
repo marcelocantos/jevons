@@ -30,7 +30,7 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 - Overseer: do not produce a commentary/appraisal line after every worker
   report. A routine, correctly handled report needing no owner action gets
   no response if the harness permits; otherwise start the reply with
-  `[silent]` so the owner-facing stream filter hides it. Never send an
+  [silent] so the owner-facing stream filter hides it. Never send an
   unmarked "Good, X" / "Confirmed, consistent" restatement. Keep doing
   the actual verification/routing without narrating it to the owner.
 - Speak when there is a genuine owner decision point, an anomaly/problem
