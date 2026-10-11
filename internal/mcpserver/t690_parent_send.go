@@ -79,14 +79,15 @@ func (s *Server) registryParent(name string) string {
 
 // notifyParentReport delivers a terminal report to the registry parent on
 // the daemon path (🎯T690). It does not go through jevons_agent_send.
-// Failure is logged; the overseer notify still runs.
-func (s *Server) notifyParentReport(agentName, msg string) {
+// Failure is logged; the overseer notify still runs. The result only licenses
+// suppression of a metadata-only duplicate after the parent accepted delivery.
+func (s *Server) notifyParentReport(agentName, msg string) bool {
 	parent := s.registryParent(agentName)
 	if parent == "" {
-		return
+		return false
 	}
 	if s.isOverseerAgent(parent) {
-		return
+		return false
 	}
 	if rec, err := agentreport.Latest(s.agentReportStateDir(), agentName); err == nil {
 		msg = withAgentReportID(msg, rec.Handle(), s.deliveryNow())
@@ -98,7 +99,7 @@ func (s *Server) notifyParentReport(agentName, msg string) {
 		s.logLifecycle(compAgentLifecycle, "parent_report", "error", map[string]any{
 			"agent": agentName, "parent": parent, "err": err.Error(),
 		})
-		return
+		return false
 	}
 	slog.Info("notifying parent",
 		"agent", agentName, "parent", parent, "status", res.Status,
@@ -107,4 +108,5 @@ func (s *Server) notifyParentReport(agentName, msg string) {
 		"agent": agentName, "parent": parent, "status": res.Status,
 		"channel": ParentReportChannel,
 	})
+	return res.Status != StatusSuppressedDuplicateReport
 }

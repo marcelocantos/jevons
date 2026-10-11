@@ -1839,7 +1839,8 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 			reportWorkDir = def.WorkDir
 		}
 	}
-	if flags := FalseGreenFlagsForReport(text, reportWorkDir); len(flags) > 0 {
+	flags := FalseGreenFlagsForReport(text, reportWorkDir)
+	if len(flags) > 0 {
 		kinds := falseGreenKinds(flags)
 		slog.Warn("T386 false-green flags on agent report",
 			"agent", agentName, "flags", kinds)
@@ -1856,7 +1857,14 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 	// that cannot call jevons_agent_send still reports upward.
 	// 🎯T731: the parent copy carries report_id so a post-reap flush can be
 	// marked and de-duplicated without changing the overseer short-report wire.
-	s.notifyParentReport(agentName, parentMsg)
+	parentDelivered := s.notifyParentReport(agentName, parentMsg)
+	if parentDelivered && s.routineMetadataReport(agentName, text) && len(flags) == 0 {
+		slog.Info("routine metadata report suppressed from overseer", "agent", agentName)
+		s.logLifecycle(compAgentLifecycle, "notify", "suppressed_routine_metadata", map[string]any{
+			"agent": agentName,
+		})
+		return
+	}
 
 	overseer := s.overseerName()
 	res, err := s.deliverByName(overseer, msg, OriginAgent, false)
