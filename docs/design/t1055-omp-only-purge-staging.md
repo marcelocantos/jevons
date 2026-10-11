@@ -1,9 +1,9 @@
 # T1055 — OMP-only seat transport staging (not activated)
 
 The owner permits clobbering old CLI conversation history and explicitly
-accepts loss of attach/terminal bytes/native rewind. **Task-mode CLI deletion
-is now on HOLD pending direct owner confirmation**, because jwork is actively
-used; earlier messages about tolerating Task loss are suspended. This removes the
+accepts loss of attach/terminal bytes/native rewind. **Task-mode CLI deletion is unblocked**: owner/overseer explicitly accepts
+temporary loss of jwork and claudia.NewTask while claudia/T190 builds an OMP
+Task replacement. This removes the
 transcript-transfer and UI-equivalence prerequisites, **not** the
 transport-compatibility or security prerequisites. This document records the
 isolated Jevons slice; none of these steps authorize restarting the development daemon, terminating
@@ -55,18 +55,19 @@ misleading half-purge while live CLI handles and upgrade adoption remain.
 
 ## One-shot Task inventory and disposition
 
-STOP/HOLD: No Task CLI deletion, Jevons Task integration, or development
-daemon restart until the owner answers the overseer. The earlier Task purge
-instruction is not authorization to interrupt jwork. Read-only mapping and
-independent seat-transport planning may continue.
+The owner/overseer authorized deleting legacy Task CLI before OMP Task parity.
+Until claudia/T190 lands, `jwork` must fail with a named, explicit temporary
+unavailability error **without spawning a CLI process**. This is an accepted
+capability loss, not a claim that Task parity exists. No development daemon
+restart or shared integration is authorized by this sequencing decision.
 
 `internal/mcpserver/jwork.go` is Jevons' one-shot path. It chooses a plan
 provider with `cli.SelectAgentProvider`, then calls `claudia.NewTask` and
 `Task.Run`, where Claudia v0.52 still dispatches provider-specific CLI
-backends. If the owner confirms replacement, a new OMP Task verb/dispatch and
-event/usage/error contract must exist before rewriting this caller. `jwork` must canonicalize plan ids onto
-OMP runtime ids before task creation and reject unsupported providers rather
-than falling through to a vendor CLI. Preserve its `doit.GateSpawn`, worker
+backends. The future claudia/T190 replacement must supply an OMP Task verb/dispatch
+and event/usage/error contract. Only then may `jwork` canonicalize plan ids
+onto OMP runtime ids and resume task creation; unsupported providers must
+fail rather than falling through to a vendor CLI. Preserve its `doit.GateSpawn`, worker
 tracking, progress/usage accumulation and failure classification. Bedrock is
 an API Task backend, not a legacy CLI or fleet Session; retain it only if
 Claudia explicitly continues to support the non-CLI Task path. Ollama needs
