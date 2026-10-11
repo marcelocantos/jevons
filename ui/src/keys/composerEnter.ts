@@ -5,11 +5,13 @@
  * Enter-chord policy (T113 / T132 / T235 / T241 / T644 / T657 / T1018).
  * Extracted so oracles can assert without mounting UserRequest.
  *
- *   plain Enter     → send (enqueue while busy is decideSend; never interrupt);
+ *   plain Enter     → send on desktop (enqueue while busy is decideSend; never interrupt);
  *                     noop on an empty composer so a busy turn keeps focus.
  *                     🎯T1018: on a touch-primary device (no easy Shift key),
  *                     plain Enter is 'newline' instead — the Send button
  *                     remains the way to send on those devices.
+ *                     🎯T1057: in the Flutter mobile shell, hardware Return is
+ *                     also newline even if a trackpad makes the primary pointer fine.
  *   Cmd+Enter       → steer (fold the draft into the running turn; plain send when idle)
  *   Cmd+Shift+Enter → interrupt (cancel in-flight; then send if the draft is non-empty)
  *   Ctrl+Enter      → not hooked (Firefox steals it for the context menu)
@@ -52,6 +54,18 @@ export function isTouchPrimaryDevice(media?: Pick<Window, 'matchMedia'>): boolea
   return src.matchMedia('(pointer: coarse)').matches;
 }
 
+/**
+ * The Flutter app registers this channel before loading the cockpit URL.
+ * Unlike pointer media queries, it still identifies the mobile shell when
+ * an attached keyboard/trackpad makes the primary pointer fine. Do not
+ * infer this from the user agent or change desktop/Safari keyboard policy.
+ */
+export function isFlutterMobileShell(host?: { JevonsImagePicker?: unknown }): boolean {
+  const src = host ?? (typeof window !== 'undefined' ? (window as Window & { JevonsImagePicker?: unknown }) : undefined);
+  return typeof src?.JevonsImagePicker === 'object' &&
+    typeof (src.JevonsImagePicker as { postMessage?: unknown })?.postMessage === 'function';
+}
+
 export function isEnterKey(key: string | null | undefined, opts?: { code?: string }): boolean {
   if (key === 'Enter') return true;
   const code = opts && opts.code != null ? String(opts.code) : '';
@@ -61,7 +75,7 @@ export function isEnterKey(key: string | null | undefined, opts?: { code?: strin
 export function classifyEnterAction(
   key: string,
   mods: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean; code?: string },
-  opts?: { composerEmpty?: boolean; code?: string; queueLen?: number; touchPrimary?: boolean },
+  opts?: { composerEmpty?: boolean; code?: string; queueLen?: number; touchPrimary?: boolean; mobileShell?: boolean },
 ): EnterAction | null {
   const m = mods || {};
   const o = opts || {};
@@ -78,7 +92,7 @@ export function classifyEnterAction(
     return 'noop';
   }
   // 🎯T1018: naked plain Enter only. Every chord above is unconditional on device.
-  if (o.touchPrimary) return 'newline';
+  if (o.touchPrimary || o.mobileShell) return 'newline';
   if (o.composerEmpty) return 'noop';
   return 'send';
 }
