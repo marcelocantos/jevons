@@ -1,8 +1,9 @@
 # T1055 — OMP-only seat transport staging (not activated)
 
 The owner permits clobbering old CLI conversation history and explicitly
-accepts loss of attach/terminal bytes/native rewind. Legacy CLI must be
-removed from **both** Session and one-shot Task paths. This removes the
+accepts loss of attach/terminal bytes/native rewind. **Task-mode CLI deletion
+is now on HOLD pending direct owner confirmation**, because jwork is actively
+used; earlier messages about tolerating Task loss are suspended. This removes the
 transcript-transfer and UI-equivalence prerequisites, **not** the
 transport-compatibility or security prerequisites. This document records the
 isolated Jevons slice; none of these steps authorize restarting the development daemon, terminating
@@ -54,11 +55,16 @@ misleading half-purge while live CLI handles and upgrade adoption remain.
 
 ## One-shot Task inventory and disposition
 
+STOP/HOLD: No Task CLI deletion, Jevons Task integration, or development
+daemon restart until the owner answers the overseer. The earlier Task purge
+instruction is not authorization to interrupt jwork. Read-only mapping and
+independent seat-transport planning may continue.
+
 `internal/mcpserver/jwork.go` is Jevons' one-shot path. It chooses a plan
 provider with `cli.SelectAgentProvider`, then calls `claudia.NewTask` and
 `Task.Run`, where Claudia v0.52 still dispatches provider-specific CLI
-backends. A new OMP Task verb/dispatch and event/usage/error contract must
-exist before rewriting this caller. `jwork` must canonicalize plan ids onto
+backends. If the owner confirms replacement, a new OMP Task verb/dispatch and
+event/usage/error contract must exist before rewriting this caller. `jwork` must canonicalize plan ids onto
 OMP runtime ids before task creation and reject unsupported providers rather
 than falling through to a vendor CLI. Preserve its `doit.GateSpawn`, worker
 tracking, progress/usage accumulation and failure classification. Bedrock is
@@ -70,7 +76,7 @@ unsupported providers. The Session selector in this isolated commit cannot
 be reused blindly for Tasks: it intentionally refuses Bedrock.
 
 The owner instructed Claudia-po to drop 14 stale Claude and two stale Grok
-grants without remint; Jevons does not edit grants or terminate windows.
+grants without remint in the coordinated seat purge; Jevons does not edit grants or terminate windows.
 These numbers are an instruction/snapshot, not a new census. Claudia-po owns
 that operation and its evidence. No development daemon restart here.
 
