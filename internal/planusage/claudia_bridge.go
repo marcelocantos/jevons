@@ -112,20 +112,12 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		}
 	}
 	cth := claudiaThresholdsPtr(th)
-	// Overspend exclusion is a readings-only veto (ahead/hot/exhausted).
-	// A dest-band owner override is exactly the case where the readings
-	// are overruled — claudia.Resolve's OwnerOverride pin would never
-	// get a chance to run if jevons' own ExcludeProviders already
-	// dropped the row first (ExcludeProviders is checked ahead of any
-	// pin inside Resolve, by design: it is the caller's hard veto, e.g.
-	// a session cap or an unsteerable harness). So this veto does not
-	// apply to a provider the owner has pinned into a dest band.
-	for p := range overspendProviders(usage, now, cth) {
-		if ov, ok := ownerOverride[p]; ok && claudia.IsDestBand(ov.Band) {
-			continue
-		}
-		excluded[p] = true
-	}
+	// The ahead/hot/exhausted veto is Claudia's own (Background below),
+	// not an entry in ExcludeProviders: ExcludeProviders is the caller's
+	// hard veto (a session cap, an unsteerable harness) and Resolve
+	// checks it ahead of any owner pin, whereas Background is applied
+	// after the 🎯T1013.1 dest-band pin, so a provider the owner has
+	// pinned into a dest band still gets its chance (🎯T1008).
 	var exclusions []claudia.Provider
 	for _, row := range claudia.ModelCatalog() {
 		if excluded[row.Provider] {
@@ -149,7 +141,7 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 	})
 	pick, err := claudia.Resolve(ctx, claudia.ModelPredicates{
 		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
-		PreferPlan: true, RequireUsage: true,
+		PreferPlan: true, RequireUsage: true, Background: true,
 		PreferProvider: prefer, ExcludeProviders: exclusions,
 		Usage: usage, Now: now, Thresholds: cth,
 		OwnerOverride: ownerOverride,
@@ -284,23 +276,6 @@ func backendToPlanUsage(be Backend) claudia.PlanUsage {
 		out[0].Reason = "stale plan reading"
 	}
 	return out[0]
-}
-
-// overspendProviders names plans whose weekly band is ahead, hot, or
-// exhausted. The pinned Resolve skips hot and exhausted on its own;
-// ahead is the Background predicate that landed after v0.42.0.
-func overspendProviders(usage []claudia.PlanUsage, now time.Time, th *claudia.PlanThresholds) map[claudia.Provider]bool {
-	out := map[claudia.Provider]bool{}
-	for _, u := range usage {
-		if u.Status != "" && u.Status != claudia.PlanUsageAvailable {
-			continue
-		}
-		switch claudia.ClassifyPlan(u, now, th).Weekly {
-		case claudia.PlanBandAhead, claudia.PlanBandHot, claudia.PlanBandExhausted:
-			out[cli.PlanProvider(u.Provider)] = true
-		}
-	}
-	return out
 }
 
 func claudiaThresholdsPtr(th Thresholds) *claudia.PlanThresholds {

@@ -24,6 +24,16 @@ import (
 // cross-reference).
 var claimsClaudiaLacksAPI = regexp.MustCompile(`(?i)claudia[^.]{0,80}does not export|published (claudia )?(module|pin)[^.]{0,40}does not export`)
 
+// claimsClaudiaLacksMember matches the other wording of the same claim,
+// about a member rather than a top-level symbol: "the pinned module's
+// Resolve has no Background predicate", "published pin has no Role". The
+// capture is the member the comment says is missing; it is checked
+// against the pin's exported top-level identifiers AND the exported
+// fields of its exported structs. Both specimens were stale at the
+// v0.52.0 pin (ModelPredicates.Background, AgentDef.Role) while the
+// first ratchet looked only at "does not export" (🎯T1008).
+var claimsClaudiaLacksMember = regexp.MustCompile(`(?i:pinned|published)[^.]{0,60}\bhas no ([A-Z]\w*)\b`)
+
 // TestT1008StandInCommentsMatchThePinnedClaudiaExports is the load-bearing
 // 🎯T1008 ratchet: for every exported Go declaration whose doc comment
 // claims "claudia ... does not export" itself, the declared symbol's own
@@ -32,7 +42,7 @@ var claimsClaudiaLacksAPI = regexp.MustCompile(`(?i)claudia[^.]{0,80}does not ex
 // catches up — rather than silently rotting — fails this test.
 func TestT1008StandInCommentsMatchThePinnedClaudiaExports(t *testing.T) {
 	root := repoRoot(t)
-	exported := pinnedClaudiaExports(t, root)
+	exported, fields := pinnedClaudiaExports(t, root)
 
 	fset := token.NewFileSet()
 	var stale []string
@@ -69,13 +79,17 @@ func TestT1008StandInCommentsMatchThePinnedClaudiaExports(t *testing.T) {
 			if doc == nil || name == "" {
 				continue
 			}
-			if !claimsClaudiaLacksAPI.MatchString(doc.Text()) {
-				continue
-			}
-			if exported[name] {
-				rel, _ := filepath.Rel(root, path)
+			rel, _ := filepath.Rel(root, path)
+			if claimsClaudiaLacksAPI.MatchString(doc.Text()) && exported[name] {
 				stale = append(stale, rel+": "+name+" is claimed as a claudia stand-in, "+
 					"but the pinned claudia module now exports "+name)
+			}
+			for _, m := range claimsClaudiaLacksMember.FindAllStringSubmatch(doc.Text(), -1) {
+				member := m[1]
+				if exported[member] || fields[member] {
+					stale = append(stale, rel+": "+name+"'s comment says the pinned claudia "+
+						"module has no "+member+", but the pin now has it")
+				}
 			}
 		}
 		return nil
@@ -116,8 +130,9 @@ func declDoc(decl ast.Decl) (*ast.CommentGroup, string) {
 // pinnedClaudiaExports resolves the pinned claudia module (GOWORK=off, so
 // a development sibling checkout under ../go.work cannot hide a stale
 // pin — 🎯T448) and returns the set of exported top-level identifiers
-// (func, type, const, var) across its non-test .go files.
-func pinnedClaudiaExports(t *testing.T, root string) map[string]bool {
+// (func, type, const, var) across its non-test .go files, and the set of
+// exported field names of its exported struct types.
+func pinnedClaudiaExports(t *testing.T, root string) (exported, fields map[string]bool) {
 	t.Helper()
 	cmd := exec.Command("go", "list", "-f", "{{.Dir}}", "github.com/marcelocantos/claudia")
 	cmd.Dir = root
@@ -131,7 +146,8 @@ func pinnedClaudiaExports(t *testing.T, root string) map[string]bool {
 		t.Fatal("empty claudia module dir")
 	}
 
-	exported := map[string]bool{}
+	exported = map[string]bool{}
+	fields = map[string]bool{}
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -162,8 +178,18 @@ func pinnedClaudiaExports(t *testing.T, root string) map[string]bool {
 				for _, spec := range d.Specs {
 					switch s := spec.(type) {
 					case *ast.TypeSpec:
-						if s.Name.IsExported() {
-							exported[s.Name.Name] = true
+						if !s.Name.IsExported() {
+							continue
+						}
+						exported[s.Name.Name] = true
+						if st, ok := s.Type.(*ast.StructType); ok && st.Fields != nil {
+							for _, f := range st.Fields.List {
+								for _, n := range f.Names {
+									if n.IsExported() {
+										fields[n.Name] = true
+									}
+								}
+							}
 						}
 					case *ast.ValueSpec:
 						for _, n := range s.Names {
@@ -176,5 +202,5 @@ func pinnedClaudiaExports(t *testing.T, root string) map[string]bool {
 			}
 		}
 	}
-	return exported
+	return exported, fields
 }

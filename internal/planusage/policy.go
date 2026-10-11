@@ -308,15 +308,18 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 }
 
 // seatDecision is one placement verdict: stay / defer / park / migrate,
-// the same split the sweep already tests. Claudia's pinned module (since
-// v0.45.0) does export claudia.ResolveSeatPlacement, a remint-shaped
-// decision over an existing seat's current provider; this local split
-// predates that export and is shaped differently (it is reached from
-// PlanDecisions' own held-override / exclusion bookkeeping above, not a
-// single ResolveSeatPlacement call). Migrating this seat-placement path
-// onto claudia.ResolveSeatPlacement is tracked separately (🎯T1013) —
-// this file only wires claudia.Resolve's new OwnerOverride input through
-// its own Resolve call below (🎯T1013.1 is the mint-side slice).
+// the same split the sweep already tests. It is the last 🎯T1008
+// stand-in in this package: claudia.ResolveSeatPlacement (pin v0.52.0)
+// makes the same decision over an existing seat, but its
+// SeatPlacementArgs has no input for AgentRef.RecoverPlanPark (a
+// plan-policy-parked seat being reconsidered: the source stays a
+// candidate and a non-vacating source is not a stay) or AgentRef.AllowNone
+// (an explicit park with no destination), both of which the sweep relies
+// on. The Claudia API this waits for is claudia/T193; once
+// SeatPlacementArgs carries those two inputs this split collapses to one
+// ResolveSeatPlacement call. Everything else here is already Claudia's:
+// the vacate test, the allowed/excluded/prefer inputs, and the
+// ahead/hot/exhausted veto (ModelPredicates.Background).
 type seatDecision struct {
 	Action SeatAction
 	From   claudia.Provider
@@ -328,8 +331,8 @@ type seatDecision struct {
 // resolveSeatPlacement leaves a seat that is not vacating, defers when
 // the feed names no other provider, parks an explicit allow-none (or a
 // resolve with no eligible dest), and otherwise migrates through
-// claudia.Resolve. Ahead / hot / exhausted dests are excluded here
-// because the pinned module's Resolve has no Background predicate.
+// claudia.Resolve with Background set, which is Claudia's own
+// ahead / hot / exhausted veto on destinations.
 func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, th Thresholds, extraExclude []claudia.Provider) seatDecision {
 	current := cli.PlanProvider(claudia.Provider(a.Provider))
 	byProv := map[claudia.Provider]claudia.PlanUsage{}
@@ -381,9 +384,6 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 			}
 		}
 	}
-	for p := range overspendProviders(normalized, now, cth) {
-		excluded[p] = true
-	}
 	var exclusions []claudia.Provider
 	for _, row := range claudia.ModelCatalog() {
 		if excluded[row.Provider] {
@@ -393,7 +393,7 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 	prefer := cli.PlanProvider(a.PreferProvider)
 	pick, err := claudia.Resolve(context.Background(), claudia.ModelPredicates{
 		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
-		PreferPlan: true, RequireUsage: true,
+		PreferPlan: true, RequireUsage: true, Background: true,
 		PreferProvider: prefer, ExcludeProviders: exclusions,
 		Usage: normalized, Now: now, Thresholds: cth,
 	})
