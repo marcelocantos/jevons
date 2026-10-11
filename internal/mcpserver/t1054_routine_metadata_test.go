@@ -34,12 +34,15 @@ func TestT1054OnlyParentDeliveredMetadataStaysOutOfOwnerChat(t *testing.T) {
 	if stored, err := agentreport.Latest(s.agentReportStateDir(), "worker"); err != nil || stored.Text != report {
 		t.Fatalf("stored=%+v err=%v", stored, err)
 	}
-	// A metadata-only scout also goes to the parent, not owner.
+	// A fresh scout report independently goes to its parent, not owner.
+	po2 := &fakeSender{alive: true}
+	s2, inbox2 := chainServer(t, map[string]*fakeSender{"jevons-po": po2})
+	s2.registry = t1054Registry(t, "jevons-po")
+	s2.SetAgentReportDir(t.TempDir())
 	scout := envelope.Format(&envelope.Message{Kind: envelope.KindScoutReport, Target: "T1054", Phase: envelope.PhaseScout, SilentLedger: envelope.SilentLedgerEmpty})
-	s.notify("worker", scout)
-	// Duplicate report-id suppression on the parent path cannot license owner suppression.
-	if len(po.sent) != 1 || len(inbox.texts) != 1 {
-		t.Fatalf("scout parent=%v owner=%v", po.sent, inbox.texts)
+	s2.notify("worker", scout)
+	if len(po2.sent) != 1 || len(inbox2.texts) != 0 {
+		t.Fatalf("scout parent=%v owner=%v", po2.sent, inbox2.texts)
 	}
 }
 
@@ -95,4 +98,49 @@ func t1054Registry(t *testing.T, parent string) *claudia.Registry {
 		t.Fatal(err)
 	}
 	return reg
+}
+
+// Precision corpus: these are twenty distinct candidate worker reports, not
+// twenty paraphrases of "GREEN". A novel safety incident need not contain a
+// known keyword: *any* non-metadata content reaches the owner. The expected
+// suppression here assumes the parent accepted its separate copy.
+func TestT1054TwentySamplePrecisionCorpus(t *testing.T) {
+	base := t1054Finish()
+	scout := envelope.Format(&envelope.Message{Kind: envelope.KindScoutReport, Target: "T1054", Phase: envelope.PhaseScout, SilentLedger: envelope.SilentLedgerEmpty})
+	cases := []struct {
+		name, text string
+		routine    bool
+	}{
+		{"pure finish metadata", base, true},
+		{"pure scout metadata", scout, true},
+		{"green with novel incident", base + "\nThe titanium heat sink vanished at 02:17.", false},
+		{"green with cryptic prose", base + "\nX9 was not where expected.", false},
+		{"owner decision", base + "\nChoose rollback or repair.", false},
+		{"direct question", base + "\nShould we proceed?", false},
+		{"status requested", base + "\nOwner requested a status: integration pending.", false},
+		{"unknown safety phrase", base + "\nPurple rain in the transfer corridor.", false},
+		{"scout fog note", strings.Replace(scout, "silent-ledger none", "silent-ledger none\njevons: fog-known unexpected pressure", 1), false},
+		{"scout prose", scout + "\nNo known risks, but investigate next.", false},
+		{"ranked decision", strings.Replace(base, "silent-ledger none", "silent-ledger ranked\njevons: silent-decision confidence=0.3 choice=rollback why=unclear", 1), false},
+		{"blocked", strings.Replace(base, "status landed", "status blocked\njevons: blocker owner-approval", 1), false},
+		{"suspect", strings.Replace(base, "verdict GREEN", "verdict SUSPECT", 1), false},
+		{"red", strings.Replace(base, "verdict GREEN", "verdict RED", 1), false},
+		{"unknown key", strings.Replace(base, "silent-ledger none", "silent-ledger none\njevons: incident maybe", 1), false},
+		{"duplicate overwritten question", strings.Replace(base, "jevons: target T1054", "jevons: question Incident\njevons: question\njevons: target T1054", 1), false},
+		{"duplicate overwritten kind", strings.Replace(base, "jevons: kind finish-report", "jevons: kind escalation\njevons: kind finish-report", 1), false},
+		{"free text inside fence", strings.Replace(base, "jevons: target T1054", "Something strange\njevons: target T1054", 1), false},
+		{"untrusted prefix", "[Agent worker responded]\n" + base, false},
+		{"untyped green", "GREEN. All done; no details.", false},
+	}
+	if len(cases) != 20 {
+		t.Fatalf("precision corpus has %d entries", len(cases))
+	}
+	s := &Server{registry: t1054Registry(t, "jevons-po")}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := s.routineMetadataReport("worker", tc.text); got != tc.routine {
+				t.Fatalf("routine=%v want %v: %q", got, tc.routine, tc.text)
+			}
+		})
+	}
 }

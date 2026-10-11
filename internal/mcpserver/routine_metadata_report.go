@@ -35,7 +35,8 @@ func (s *Server) routineMetadataReport(agentName, text string) bool {
 		return false
 	}
 	m, err := envelope.Parse(text)
-	if err != nil || m == nil || strings.TrimSpace(m.Payload) != "" || len(m.Extra) != 0 ||
+	if err != nil || m == nil || strings.TrimSpace(text) != strings.TrimSpace(envelope.Format(m)) ||
+		strings.TrimSpace(m.Payload) != "" || len(m.Extra) != 0 ||
 		!routineTarget.MatchString(m.Target) || m.SilentLedger != envelope.SilentLedgerEmpty ||
 		len(m.Decisions) != 0 || len(m.FogKnown)+len(m.FogUnknown)+len(m.FogBlindspot) != 0 ||
 		len(m.GateRoles) != 0 || m.Blocker != "" || m.BlockClass != "" ||
