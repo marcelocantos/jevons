@@ -275,34 +275,66 @@ func TestHardCeilingHaltsAndClears(t *testing.T) {
 }
 
 func TestDeadMansSwitch(t *testing.T) {
-	cfg := DefaultBudgetConfig() // DeadManIdle 6h
+	cfg := DefaultBudgetConfig()
 	h := newHarness(cfg)
-
-	// Burning but attended: no dead-man.
-	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
-	if h.acts.fleetStops != 0 {
-		t.Fatal("dead-man fired while attended")
+	var delivered []string
+	h.e.ownerNotice = func(subject, kind, text string) bool {
+		delivered = append(delivered, subject+"/"+kind+": "+text)
+		return true
 	}
-	// 7h of silence while burning → fleet stops, once.
+	// Foreign (global-only) burn does not restrict jevons.
+	h.now = h.now.Add(7 * time.Hour)
+	h.e.Act(&Snapshot{GlobalUSDPerHour: 1})
+	if err := h.e.AllowSpawn(); err != nil {
+		t.Fatalf("foreign burn clamped fleet: %v", err)
+	}
+	if len(delivered) != 0 {
+		t.Fatalf("foreign burn notified: %v", delivered)
+	}
+
+	// Real first-tier trigger: no process stops; only new workers refused.
+	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
+	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
+	if h.acts.fleetStops != 0 || h.acts.killSwitch != 0 {
+		t.Fatalf("first tier stopped workers: %+v", h.acts)
+	}
+	if err := h.e.AllowSpawn(); err == nil {
+		t.Fatal("first tier admitted new work")
+	}
+	if err := h.e.AllowResume("in-flight", true); err != nil {
+		t.Fatalf("first tier blocked worker recovery: %v", err)
+	}
+	if len(delivered) != 1 || !strings.Contains(delivered[0], "cost-safety/dead-man-narrow") {
+		t.Fatalf("owner notice not delivered once via owner channel: %v", delivered)
+	}
+	// Second, longer silence retains a hard resumable backstop; never kill.
+	h.now = h.now.Add(18 * time.Hour)
+	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
+	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
+	if h.acts.fleetStops != 1 || h.acts.killSwitch != 0 {
+		t.Fatalf("hard backstop: %+v", h.acts)
+	}
+	if err := h.e.AllowResume("in-flight", true); err == nil {
+		t.Fatal("hard backstop admitted unattended resume")
+	}
+	if len(delivered) != 2 || !strings.Contains(delivered[1], "cost-safety/dead-man-hard") {
+		t.Fatalf("hard owner notice missing: %v", delivered)
+	}
+	// Contact releases dead-man admission and re-arms both tiers.
+	h.e.Heartbeat()
+	if err := h.e.AllowSpawn(); err != nil {
+		t.Fatalf("contact did not restore admission: %v", err)
+	}
 	h.now = h.now.Add(7 * time.Hour)
 	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
-	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
-	if h.acts.fleetStops != 1 {
-		t.Fatalf("dead-man fired %d times, want exactly 1", h.acts.fleetStops)
+	if len(delivered) != 3 {
+		t.Fatalf("first tier did not re-arm: %v", delivered)
 	}
-	// Owner returns → re-armed; more silence → fires again.
 	h.e.Heartbeat()
-	h.now = h.now.Add(8 * time.Hour)
-	h.e.Act(&Snapshot{FleetUSDPerHour: 1})
-	if h.acts.fleetStops != 2 {
-		t.Fatalf("dead-man did not re-arm after heartbeat: %d", h.acts.fleetStops)
-	}
-	// Silence but NOT burning: nothing to stop, no fire.
-	h.e.Heartbeat()
-	h.now = h.now.Add(9 * time.Hour)
+	h.now = h.now.Add(25 * time.Hour)
 	h.e.Act(&Snapshot{})
-	if h.acts.fleetStops != 2 {
-		t.Fatal("dead-man fired on an idle fleet")
+	if h.acts.fleetStops != 1 {
+		t.Fatal("idle fleet stopped")
 	}
 }
 

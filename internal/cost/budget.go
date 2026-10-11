@@ -125,9 +125,12 @@ type BudgetConfig struct {
 	// it rehydrates on next owner contact.)
 	ProtectedWorkers []string `json:"protected_workers"`
 
-	// DeadManIdle: if no owner heartbeat for this long while the fleet
-	// is burning, the fleet is stopped resumably.
+	// DeadManIdle narrows new worker admission after unattended fleet burn.
+	// Running workers remain free to finish. Zero disables the first tier.
 	DeadManIdle Duration `json:"dead_man_idle"`
+	// DeadManHardIdle stops the fleet resumably after longer silence. Zero
+	// disables the hard backstop; set greater than DeadManIdle.
+	DeadManHardIdle Duration `json:"dead_man_hard_idle"`
 	// ResumeMaxAttempts caps automatic relaunches per worker between
 	// owner contacts (the auto-resume amplifier guard).
 	ResumeMaxAttempts int `json:"resume_max_attempts"`
@@ -203,6 +206,7 @@ func DefaultBudgetConfig() *BudgetConfig {
 		HardCeilingUSDPerDay: 1500,
 		ProtectedWorkers:     []string{"jevons"},
 		DeadManIdle:          Duration(6 * time.Hour),
+		DeadManHardIdle:      Duration(24 * time.Hour),
 		ResumeMaxAttempts:    3,
 		Window:               Duration(5 * time.Minute),
 		MinEventsForKill:     30,
