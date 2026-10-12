@@ -35,6 +35,42 @@ import (
 // then attempt the drain. It asserts no model turn occurs (the recording
 // sender never sees the text) and that the message survives, held for a
 // retry once intent clears, rather than being lost or silently re-ordered.
+//
+// LOG-PROVENANCE BOUNDARY (honest residual, not closed by this test or the
+// fix it drives): this suite exercises the race ENTIRELY within jevons's own
+// internal/sendq rows — the entry sits in sendq.Pending/Attempting state,
+// visible to Snapshot()/Backlogs(), until drainAgentSendQueueOnce (now gated
+// by ControlDeliverSubmit) or the immediate trySend() path (now gated the
+// same way, see TestT1066ImmediateIdleSubmitHeldByIntent) hands it to
+// agentSender.Send(). That Send() call crosses into
+// github.com/marcelocantos/claudia's Agent.Send — a tmux-attached or
+// broker-RPC process boundary this repository does not own. Once Send()
+// returns success, the text is inside Claude Code's own composer / the
+// broker's own turn machinery, and NOTHING in jevons can retract it:
+// Interrupt() cuts an already-STARTED turn, it does not un-queue a prompt
+// the provider's own CLI has accepted but not yet begun.
+//
+// This matters for reading the real 2026-10-11 07:30-07:46 incident
+// evidence, which this worktree does not have access to re-examine: if the
+// observed admission timestamp in those logs was a sendq.Append (jevons-side,
+// pending in OUR queue) that is the shape this fix closes, proven by the
+// red-before/green-after delta on both tests in this file. If instead the
+// logs show the payload had already crossed an agentSender.Send() call
+// (i.e. was accepted by Claudia/the broker) BEFORE blocked_owner landed, no
+// code change on this side of that boundary can retract it — that is a hard
+// external limit, not a bug this commit can close, and the only available
+// mitigation is a policy one: have blocked_owner's setter also call
+// Interrupt() on every seat observed in-flight at the moment the intent
+// lands, which cuts the turn the provider already started rather than
+// preventing one that was never ours to prevent. That mitigation is NOT
+// implemented here (it changes SetFleetIntent's side effects, is a larger
+// and riskier slice, and was not in this pass's scope) — named as the
+// specific next step if the incident log turns out to show that shape.
+//
+// Un-audited in this worktree: which shape the actual incident logs show.
+// I have not been handed the raw 07:25-07:46 log lines for jv-t1020-auto /
+// jv-t1008-auto to classify them against sendq.Append vs agentSender.Send,
+// and do not claim to have done so.
 func TestT1066QueuedPayloadNotDeliveredAfterBlockedOwnerLands(t *testing.T) {
 	const name = "jv-t1020-auto"
 	const payload = "idle-nudge: continue the mission"
@@ -132,5 +168,59 @@ func TestT1066QueuedPayloadNotDeliveredWhenAgentBlockedOwner(t *testing.T) {
 	entries, err := s.sendQueue().Snapshot(name)
 	if err != nil || len(entries) != 1 || entries[0].State != sendq.Pending {
 		t.Fatalf("held entry must stay Pending for retry: %+v %v", entries, err)
+	}
+}
+
+// TestT1066ImmediateIdleSubmitHeldByIntent is the twin race on the
+// SYNCHRONOUS path: a seat that is alive and IDLE right now (no queue
+// involved at all) must not receive a direct submit while fleet/agent
+// intent says it should not run. This is the gap ControlDeliverStart
+// cannot close — ensureAgentProcess only guards launching a STOPPED
+// process — and deliverToSenderModeWithRequestID's trySend() is the one
+// place left before the text reaches the process.
+//
+// Held the same way a busy seat is: into the daemon's own sendq, so lifting
+// the intent drains the very same message rather than losing it.
+func TestT1066ImmediateIdleSubmitHeldByIntent(t *testing.T) {
+	const name = "jv-t1020-auto"
+	const payload = "idle-nudge: continue the mission"
+
+	dir := t.TempDir()
+	s, _, _ := t418Daemon(t, dir)
+
+	store, err := fleetintent.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(store)
+	if err := s.SetFleetIntent(fleetintent.BlockedOwner, "owner", "stabilization pause"); err != nil {
+		t.Fatal(err)
+	}
+
+	proc := &fakeSender{alive: true}
+	res, err := deliverObservedToSender(s, name, payload, false, proc, false)
+	if err != nil {
+		t.Fatalf("held send must not error: %v", err)
+	}
+	if res.Status != "queued" {
+		t.Fatalf("status=%q; want queued (held, not delivered)", res.Status)
+	}
+	if got := proc.sent; len(got) != 0 {
+		t.Fatalf("model turn began on an idle seat under blocked_owner intent: sent=%v", got)
+	}
+
+	entries, err := s.sendQueue().Snapshot(name)
+	if err != nil || len(entries) != 1 || entries[0].Text != payload || entries[0].State != sendq.Pending {
+		t.Fatalf("payload not held for retry: %+v %v", entries, err)
+	}
+
+	// Lift the intent and drain: the same held message reaches the process.
+	if err := s.SetFleetIntent(fleetintent.Working, "owner", "stabilization complete"); err != nil {
+		t.Fatal(err)
+	}
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return proc, false, nil })
+	s.drainAgentSendQueue(name)
+	if got := proc.sent; len(got) != 1 || got[0] != payload {
+		t.Fatalf("held message did not drain once intent cleared: sent=%v", got)
 	}
 }

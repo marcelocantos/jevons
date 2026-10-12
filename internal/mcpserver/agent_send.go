@@ -533,6 +533,34 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		}
 	}
 
+	// 🎯T1066: the immediate-submit twin of the drain gate. A seat idle RIGHT
+	// NOW is offered straight to trySend() below with no queue in between —
+	// ensureAgentProcess's ControlDeliverStart never ran for it (that gate
+	// only guards launching a STOPPED process), so this is the only place
+	// left before the text becomes a model turn. Held the same way a busy
+	// seat is: into the daemon's own sendq, which the drain path (holding
+	// the matching ControlDeliverSubmit check) retries once intent clears.
+	// Narrower than the busy arm below on purpose — interrupt and steer are
+	// a deliberate owner/caller override and are not re-queued here; only an
+	// ordinary submit is held.
+	if !interrupt && seam == nil {
+		if dec := s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit); !dec.Allow {
+			n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
+			if qerr != nil {
+				return agentSendResult{}, undeliverableQueueError(name, qerr)
+			}
+			mm.Mechanism = delivery.MechanismClientQueue
+			msg := fmt.Sprintf(
+				"agent %q is running and idle, but fleet intent says it should not receive a turn: %s (%s) — "+
+					"message held by the daemon (%d pending), NOT delivered; it drains once the intent is lifted "+
+					"(jevons_fleet_intent state=working) — 🎯T1066.",
+				name, fleetintent.Describe(dec.Blocking), dec.Reason, n)
+			res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: n, Mode: mode, Mechanism: mm.Mechanism}
+			logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightIdle, TurnEvidence{})
+			return res, nil
+		}
+	}
+
 	// A turn known to be running is not offered to the provider CLI at all.
 	// Handing it over would work — the CLI queues it — but into a store the
 	// daemon can neither see nor replay: it merges silently with later sends
