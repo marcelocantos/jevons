@@ -11687,9 +11687,10 @@ targets:
     achieved: 2026-07-18
   T430:
     name: Concurrent fleet workers can each drive a real browser — the live-render oracle is not a single-holder resource that one worker locks the rest out of
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
+    attestation: 'SHA b5fb19d7a9f857f38329dc954a4cf6843621d934 (ancestor of HEAD): Playwright isolation is the fleet default via mcpattach.SessionServers → ensurePlaywrightIsolated (drop shared --user-data-dir, ensure --isolated); ServersEqual includes Args so restamp rewrites drift. Fleet standing brief 🎯T430 section: concurrent live-render + refused browser = DID NOT RUN (no hermetic substitution). Pure helpers LiveRenderOracleDidNotRun / LooksLikeSilentBrowserOracleFallback. Oracle GATE t430-mcpattach-clean GREEN; t430-brief-oracle-clean GREEN (go test ./internal/mcpattach|mcpserver -run T430). Live inventory already had --isolated on all 215 seats + ~/.claude.json; product property no longer depends on that convention. Local master only (🎯T104). Residual: instructional silent-fallback classifier (not a hard finish block); full dual live Firefox windows not re-run this seat (hermetic two-probe rewrite is the clause-5 oracle).'
     acceptance:
     - 1) TWO WORKERS CAN RUN A LIVE COCKPIT PROBE AT THE SAME TIME. Concurrent fleet agents in the shared clone can each open a real browser against the daily cockpit without one refusing the other. Today the second gets `Browser is already in use for /Users/marcelo/.config/playwright-mcp/profile, use --isolated to run multiple instances of the same browser` and its oracle simply does not run.
     - 2) THE FIX IS PER-WORKER ISOLATION BY DEFAULT, NOT A CONVENTION. A correctness property that depends on every worker remembering to pass `--isolated` is not a property — the same objection 🎯T405 clause 2 makes about `setsid`. Isolation (per-agent profile directory, or `--isolated`) is the default the fleet gets, so forgetting it cannot produce a blocked oracle.
@@ -11704,8 +11705,11 @@ targets:
       SAME FAMILY AS 🎯T376 AND 🎯T377. Those two established that many workers share one working tree and one git index, and that shared mutable state under concurrency needs a guard rather than a convention: T376 refuses a clobbering write and names the lines that would be lost, T377 refuses a sweeping commit and names the paths. This is the third shared resource in that family — one browser profile — and it fails in the opposite direction: not silent corruption but loud exclusion, where the cost is an oracle that does not run and may be silently substituted. Worth checking whether other single-holder resources are lurking on the same reasoning (the daily daemon's port, the tmux server, ~/.jevons state).
 
       Not spawned in the filing cycle: five workers are already live in this clone and the 🎯T376/🎯T377 collision surface is already contended. Staff it when the internal/mcpserver queue drains.
+
+      Achieved 2026-10-12: SHA b5fb19d7a9f857f38329dc954a4cf6843621d934 (ancestor of HEAD): Playwright isolation is the fleet default via mcpattach.SessionServers → ensurePlaywrightIsolated (drop shared --user-data-dir, ensure --isolated); ServersEqual includes Args so restamp rewrites drift. Fleet standing brief 🎯T430 section: concurrent live-render + refused browser = DID NOT RUN (no hermetic substitution). Pure helpers LiveRenderOracleDidNotRun / LooksLikeSilentBrowserOracleFallback. Oracle GATE t430-mcpattach-clean GREEN; t430-brief-oracle-clean GREEN (go test ./internal/mcpattach|mcpserver -run T430). Live inventory already had --isolated on all 215 seats + ~/.claude.json; product property no longer depends on that convention. Local master only (🎯T104). Residual: instructional silent-fallback classifier (not a hard finish block); full dual live Firefox windows not re-run this seat (hermetic two-probe rewrite is the clause-5 oracle).
     origin: manual
     discovered: 2026-08-10
+    achieved: 2026-10-12
   T431:
     name: An owner-assigned target is not auto-spawned onto by frontier-consume
     status: identified
