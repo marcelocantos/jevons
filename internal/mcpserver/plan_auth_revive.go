@@ -47,7 +47,7 @@ func (s *Server) ReattachRunningSeats() []string {
 		return nil
 	}
 	now := time.Now()
-	res := fleet.ReattachRunningSeats(s.registry, s.fleetIntent(), now, s.lostToBroker)
+	res := fleet.ReattachRunningSeats(s.registry, s.fleetIntent(), now, s.relaunchableLostSeat)
 	for _, name := range res.Back {
 		// Running again: the broker stop no longer describes it, and must
 		// not license a later relaunch of a seat stopped on purpose.
@@ -55,4 +55,17 @@ func (s *Server) ReattachRunningSeats() []string {
 	}
 	s.noteBrokerLostOutcome(res, now)
 	return res.Back
+}
+
+// relaunchableLostSeat reports whether the reattach loop may relaunch a seat
+// it could not adopt. Only a seat lost to a broker restart qualifies, and
+// under the frontier pause an auto-spawned worker never does (🎯T1067): it
+// is adopted if its process still runs, never started again. Relaunching
+// the -auto seats a restart had lost is the launch storm the PO answered on
+// 2026-10-12 by stopping the daemon with SIGSTOP.
+func (s *Server) relaunchableLostSeat(name string) bool {
+	if s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(name) {
+		return false
+	}
+	return s.lostToBroker(name)
 }

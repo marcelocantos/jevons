@@ -1460,9 +1460,13 @@ func main() {
 	go func() {
 		defer fleetStarted.Store(true)
 		started := time.Now()
+		pausedAuto := func(name string) bool {
+			return cfg.FrontierConsume.Disabled && mcpserver.IsAutoSpawnedWorkerName(name)
+		}
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
-			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl),
+			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, pausedAuto),
 			upgrade.DefaultReattachConcurrency))
+		adoptPausedAutoSeats(registry, pausedAuto)
 		// The handoff only promised an adoptable endpoint, not a live
 		// process. Once every permitted seat has had its adoption attempt,
 		// remint cold legacy rows; RemintRegistryExcept checks the actual
@@ -2287,9 +2291,19 @@ func resolveRSIMintCwd(cfg config.Config) string {
 // before this, every daemon boot started parked seats again. A seat blocked
 // on the owner is still reattached, so the answer has somewhere to land, and
 // a fleet-wide provider block is transient.
-func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision) func(string) bool {
+//
+// Under the frontier pause (frontier_consume.disabled) an auto-spawned worker
+// is not started either (🎯T1067): adoptPausedAutoSeats adopts it if its
+// process still runs, and nothing launches a new one. On 2026-10-12 a
+// restart under the pause launched 57 Claude processes for -auto seats, and
+// the PO stopped the daemon with SIGSTOP to halt them.
+func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision, pausedAuto func(string) bool) func(string) bool {
 	return func(name string) bool {
 		if overseer(name) {
+			return false
+		}
+		if pausedAuto != nil && pausedAuto(name) {
+			slog.Info("restart reattach skipped — frontier pause holds auto-spawned workers", "agent", name)
 			return false
 		}
 		if d := allow(name, fleetintent.ControlRevive); fleetintent.StoodDown(d.Agent) {
@@ -2297,5 +2311,29 @@ func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetin
 			return false
 		}
 		return true
+	}
+}
+
+// adoptPausedAutoSeats re-adopts the auto-spawned workers the frontier pause
+// kept out of the restart reattach, when their process is still running, so
+// a live seat stays observed. It never launches one (🎯T1067).
+func adoptPausedAutoSeats(reg *claudia.Registry, pausedAuto func(string) bool) {
+	if reg == nil {
+		return
+	}
+	adopted, down := 0, 0
+	for _, d := range reg.List() {
+		if !d.AutoStart || !pausedAuto(d.Name) {
+			continue
+		}
+		if _, err := reg.Adopt(d.Name); err != nil {
+			down++
+			continue
+		}
+		seatstate.ObserveRegistrySeat(reg, d.Name)
+		adopted++
+	}
+	if adopted+down > 0 {
+		slog.Info("frontier pause: auto-spawned workers adopted, none launched (🎯T1067)", "adopted", adopted, "left_down", down)
 	}
 }
