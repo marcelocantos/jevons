@@ -641,6 +641,65 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 	return f.Entries, nil
 }
 
+// DischargePending removes copies positively identified in receiver records
+// (🎯T766.5.1). Only Pending entries are touched: an Attempting/Uncertain
+// delivery may have reached the receiver and must be reconciled, not silently
+// forgotten. Pending digests are unfolded from their archived originals before
+// matching, so a receipt for one member cannot discard unrelated accepted
+// messages or replay that member inside the digest on the next drain.
+func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, error) {
+	if s == nil {
+		return 0, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return 0, err
+	}
+	kept := make([]Entry, 0, len(f.Entries))
+	removed := 0
+	for _, e := range f.Entries {
+		if e.State != Pending {
+			kept = append(kept, e)
+			continue
+		}
+		if e.Members != "" {
+			members, ok := s.archivedMembers(e.ID)
+			if !ok {
+				return 0, fmt.Errorf("sendq: cannot discharge pending digest %s without its archived members", e.ID)
+			}
+			survivors := make([]Entry, 0, len(members))
+			for _, m := range members {
+				if matches(m) {
+					removed++
+				} else {
+					survivors = append(survivors, m)
+				}
+			}
+			if len(survivors) == len(members) {
+				kept = append(kept, e)
+			} else {
+				kept = append(kept, survivors...)
+			}
+			continue
+		}
+		if matches(e) {
+			removed++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	f.Entries = kept
+	if err := s.save(f); err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
 // Depth is the number of messages waiting for an agent. An unreadable queue
 // reports zero AND an error; callers that only want the number (a status
 // line) may ignore the error, but none may read zero as "nothing waiting"
