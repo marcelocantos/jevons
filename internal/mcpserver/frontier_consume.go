@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -136,17 +137,29 @@ func FrontierWorkerName(targetID string) string {
 	return "jv-" + id + "-auto"
 }
 
+// autoSpawnedWorkerNamePattern is the EXACT shape FrontierWorkerName mints:
+// "jv-t<digits>(.<digits>)*-auto" — e.g. jv-t1066-auto, jv-t254.1-auto. A
+// bare HasSuffix(name, "-auto") also matches a human-chosen name that
+// happens to end in "-auto" for unrelated reasons (e.g. a deliberately
+// named worker "jv-release-candidate-auto"), which this pattern does not:
+// PO review, 2026-10-12, caught that a looser check would wrongly suppress
+// or dead-handle-freeze such a worker under frontier_consume.disabled.
+var autoSpawnedWorkerNamePattern = regexp.MustCompile(`^jv-t[0-9]+(\.[0-9]+)*-auto$`)
+
 // IsAutoSpawnedWorkerName reports whether name was minted by
-// FrontierWorkerName — the "jv-<id>-auto" convention frontier-consume uses
-// for every leaf it spawns itself, as opposed to a named worker or PO a
-// human/PO hand-picked (🎯T1066). This is the one structural signal that
-// distinguishes the two: claudia.AgentDef.AutoStart is true for both (it
-// governs process-crash restart, not spawn provenance), so AutoStart alone
-// cannot gate a frontier_consume.disabled pause without also catching named
-// workers and POs — which 🎯T1066's wiring must not do (preserve named
-// workers/POs; never block ordinary owner-directed communication).
+// FrontierWorkerName — the exact "jv-t<digits>(.<digits>)*-auto" convention
+// frontier-consume uses for every leaf it spawns itself, as opposed to a
+// named worker or PO a human/PO hand-picked (🎯T1066). This is the one
+// structural signal that distinguishes the two: claudia.AgentDef.AutoStart
+// is true for both (it governs process-crash restart, not spawn
+// provenance), so AutoStart alone cannot gate a frontier_consume.disabled
+// pause without also catching named workers and POs — which 🎯T1066's
+// wiring must not do (preserve named workers/POs; never block ordinary
+// owner-directed communication). Matching the exact pattern, not merely
+// the suffix, means a deliberately named worker whose name happens to end
+// in "-auto" is never caught by this gate.
 func IsAutoSpawnedWorkerName(name string) bool {
-	return strings.HasSuffix(strings.TrimSpace(name), "-auto")
+	return autoSpawnedWorkerNamePattern.MatchString(strings.TrimSpace(name))
 }
 
 // FormatFrontierSpawnBrief builds the opening mission brief for an

@@ -268,6 +268,45 @@ func TestFrontierWorkerNameLiteralDots(t *testing.T) {
 	}
 }
 
+// 🎯T1066 — PO review, 2026-10-12: IsAutoSpawnedWorkerName must match the
+// EXACT FrontierWorkerName shape, not merely a "-auto" suffix. A bare
+// HasSuffix check would wrongly catch a deliberately named worker whose
+// name happens to end in "-auto" for unrelated reasons, suppressing its
+// idle nudges / freezing its dead-handle relaunch under
+// frontier_consume.disabled — a worker the config pause was never meant to
+// touch.
+func TestIsAutoSpawnedWorkerNameExactPattern(t *testing.T) {
+	positive := []string{
+		"jv-t1066-auto",    // flat target
+		"jv-t254.1-auto",   // hierarchical, one level (🎯T197 literal dots)
+		"jv-t254.1.2-auto", // hierarchical, two levels
+		FrontierWorkerName("🎯T1020"),
+		FrontierWorkerName("T254.1"),
+	}
+	for _, name := range positive {
+		if !IsAutoSpawnedWorkerName(name) {
+			t.Errorf("IsAutoSpawnedWorkerName(%q) = false, want true (FrontierWorkerName shape)", name)
+		}
+	}
+	negative := []string{
+		// Deliberately named workers that happen to end in "-auto" for
+		// reasons unrelated to frontier-consume spawning them.
+		"jv-release-candidate-auto",
+		"jv-t1066-queued-review-auto",
+		"jv-t-auto",      // no digits at all
+		"jv-tauto-auto",  // "t" immediately followed by non-digit
+		"jevons-po",      // no suffix at all
+		"jv-t1066-autox", // suffix near-miss
+		"jv-t1066.auto",  // missing the dash before auto
+		"",
+	}
+	for _, name := range negative {
+		if IsAutoSpawnedWorkerName(name) {
+			t.Errorf("IsAutoSpawnedWorkerName(%q) = true, want false (not the FrontierWorkerName shape)", name)
+		}
+	}
+}
+
 func TestFormatFrontierSpawnBriefCarriesMission(t *testing.T) {
 	brief := FormatFrontierSpawnBrief(targetfile.FrontierLeaf{
 		ID:         "T500",

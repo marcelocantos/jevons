@@ -50,27 +50,38 @@ import (
 // Interrupt() cuts an already-STARTED turn, it does not un-queue a prompt
 // the provider's own CLI has accepted but not yet begun.
 //
-// This matters for reading the real 2026-10-11 07:30-07:46 incident
-// evidence, which this worktree does not have access to re-examine: if the
-// observed admission timestamp in those logs was a sendq.Append (jevons-side,
-// pending in OUR queue) that is the shape this fix closes, proven by the
-// red-before/green-after delta on both tests in this file. If instead the
-// logs show the payload had already crossed an agentSender.Send() call
-// (i.e. was accepted by Claudia/the broker) BEFORE blocked_owner landed, no
-// code change on this side of that boundary can retract it — that is a hard
-// external limit, not a bug this commit can close, and the only available
-// mitigation is a policy one: have blocked_owner's setter also call
-// Interrupt() on every seat observed in-flight at the moment the intent
-// lands, which cuts the turn the provider already started rather than
-// preventing one that was never ours to prevent. That mitigation is NOT
-// implemented here (it changes SetFleetIntent's side effects, is a larger
-// and riskier slice, and was not in this pass's scope) — named as the
-// specific next step if the incident log turns out to show that shape.
+// UPDATE (🎯T1066, later pass, commit 5c1d2a85): the raw log evidence WAS
+// found and read — ~/.jevons/fleet/intent.json and ~/.jevons/logs/events.jsonl
+// both carry the PO's own 2026-10-11T07:19:27Z/07:21:24Z contemporaneous stop
+// records. They PROVE the INITIAL wake at 07:13Z: idle-nudge revived a
+// pre-existing auto seat despite config frontier_consume.disabled already
+// being set — a config-pause-bypass, not the fleetintent/sendq race this
+// file's two tests exercise. That root cause is closed by a SEPARATE commit
+// (5c1d2a85, IsAutoSpawnedWorkerName / ClassifyIdleNudge / the impatience
+// ladder / dead-handle relaunch), not by anything in this file.
 //
-// Un-audited in this worktree: which shape the actual incident logs show.
-// I have not been handed the raw 07:25-07:46 log lines for jv-t1020-auto /
-// jv-t1008-auto to classify them against sendq.Append vs agentSender.Send,
-// and do not claim to have done so.
+// What that evidence does NOT prove, and what this comment must not be read
+// as claiming (PO review, 2026-10-12): WHY the seats' turns ran all the way
+// to completion in the 07:30-07:46 window before the PO could force-stop
+// them. The 07:13Z config-bypass explains the WAKE; it does not by itself
+// explain the full ~15-30 minute DURATION before intervention — that could
+// be an ordinarily long turn, a queued-then-drained message under this
+// file's race (unlikely but not ruled out, since fleetintent blocked_owner
+// was not set until the PO reacted), or something in the broker/tmux layer
+// entirely outside jevons's visibility. I have NOT classified the
+// 07:30-07:46 window against sendq.Append vs agentSender.Send, or against
+// any other provenance, and do not claim either commit (this file's or
+// 5c1d2a85's) explains that window. Treat the wake-cause finding and the
+// delayed-turn-duration question as two separate open items, not one
+// explained by the other.
+//
+// The broker-Send() boundary described above remains exactly as unproven/
+// unclosed as before for THAT window: if a future pass finds the delayed
+// turns were payloads already past agentSender.Send() before any block
+// landed, nothing on this side of that boundary could have retracted them,
+// and the named mitigation (Interrupt() at the moment blocked_owner lands)
+// remains the only lever — still not implemented, still out of this pass's
+// scope.
 func TestT1066QueuedPayloadNotDeliveredAfterBlockedOwnerLands(t *testing.T) {
 	const name = "jv-t1020-auto"
 	const payload = "idle-nudge: continue the mission"
