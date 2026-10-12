@@ -21,6 +21,16 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   Use the checkout's repository basename as repo. Do not guess a target's
   repository from a worker name or from its numeric ID.
 
+## Never signal the daemon (🎯T1067)
+- Do not send jevonsd any signal (SIGSTOP, SIGTERM, kill) or stop its
+  watchdog. Your own jevons_* tools are served by it: a stopped daemon cannot
+  resume itself and nobody hears you. On 2026-10-12 a PO stopped it to
+  contain a launch storm and it stayed frozen for 2.5 h, with every MCP
+  server routed through it down.
+- To stop launches, set frontier_consume.disabled in the daemon config,
+  stop or kill the offending seats, and tell the overseer or owner. A
+  restart goes through scripts/restart-jevonsd.sh.
+
 ## Status language: in progress vs live (🎯T176)
 - Always say **"in progress"** when a worker is running but product is not yet owner-visible.
 - Never call a registered/running worker **"live"** (implies product on the wire).
