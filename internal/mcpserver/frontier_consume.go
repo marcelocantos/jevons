@@ -136,6 +136,19 @@ func FrontierWorkerName(targetID string) string {
 	return "jv-" + id + "-auto"
 }
 
+// IsAutoSpawnedWorkerName reports whether name was minted by
+// FrontierWorkerName — the "jv-<id>-auto" convention frontier-consume uses
+// for every leaf it spawns itself, as opposed to a named worker or PO a
+// human/PO hand-picked (🎯T1066). This is the one structural signal that
+// distinguishes the two: claudia.AgentDef.AutoStart is true for both (it
+// governs process-crash restart, not spawn provenance), so AutoStart alone
+// cannot gate a frontier_consume.disabled pause without also catching named
+// workers and POs — which 🎯T1066's wiring must not do (preserve named
+// workers/POs; never block ordinary owner-directed communication).
+func IsAutoSpawnedWorkerName(name string) bool {
+	return strings.HasSuffix(strings.TrimSpace(name), "-auto")
+}
+
 // FormatFrontierSpawnBrief builds the opening mission brief for an
 // auto-spawned worker. The standing fleet brief is injected once by the
 // deliverStartPrompt → EnsureFleetBrief path, so this carries mission only.

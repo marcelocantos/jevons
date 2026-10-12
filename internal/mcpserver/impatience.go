@@ -390,7 +390,17 @@ func (s *Server) observeForImpatience(
 	} else if proc := s.registry.Get(d.Name); proc != nil {
 		running = (s.seatState(d.Name).Alive == seatstate.Yes)
 	}
-	deliberateStop := !running && !d.AutoStart
+	// 🎯T1066: frontier_consume.disabled must stop the ladder from firing a
+	// repressure/continue at a frontier-consume-spawned seat, exactly the
+	// shape that woke jv-t1020-auto/jv-t1008-auto on 2026-10-11 despite the
+	// config pause already being set — reusing DeliberateStop's existing
+	// "scope the agent out of this gap" semantics rather than inventing a
+	// parallel suppression path. Scoped to auto-spawned seats by name
+	// (IsAutoSpawnedWorkerName), never a named worker or PO, and never the
+	// owner's own jevons_agent_send (this is the ladder's own fire decision,
+	// not the generic send chokepoint).
+	autoSeatPaused := s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(d.Name)
+	deliberateStop := (!running && !d.AutoStart) || autoSeatPaused
 
 	phase := ""
 	refusalHold := false

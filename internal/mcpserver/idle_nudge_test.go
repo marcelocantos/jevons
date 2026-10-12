@@ -48,6 +48,19 @@ func TestClassifyIdleNudgeSkips(t *testing.T) {
 			o.NudgeCount = 1
 			o.SinceLastNudge = time.Minute
 		}, IdleNudgeSkip, "backoff"},
+		// 🎯T1066: frontier_consume.disabled must stop a nudge to an
+		// auto-spawned seat (the 2026-10-11 07:13Z shape) but never a named
+		// worker/PO — both conditions are required.
+		{"auto_spawn_paused_on_auto_seat", func(o *IdleNudgeObs) {
+			o.Name = "jv-t1020-auto"
+			o.AutoSpawnPaused = true
+			o.IsAutoSeat = true
+		}, IdleNudgeSkip, "frontier_consume_disabled"},
+		{"auto_spawn_paused_does_not_touch_named_worker", func(o *IdleNudgeObs) {
+			o.Name = "jv-t1066-queued-review"
+			o.AutoSpawnPaused = true
+			o.IsAutoSeat = false
+		}, IdleNudgeNudge, "idle_stuck"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -646,5 +659,54 @@ func TestSweepIdleNudgesPostRestartSkipsPOAndAside(t *testing.T) {
 	}
 	if po := by["jevons-po"]; po.Action == IdleNudgeNudge || po.Delivered {
 		t.Fatalf("PO must not short-resume: %+v", po)
+	}
+}
+
+// 🎯T1066: the faithful shape of the 2026-10-11 07:13Z wake — an
+// auto-spawned seat (jv-*-auto) idle past threshold must NOT be nudged
+// while config frontier_consume.disabled is set, but a named worker in the
+// identical state must still get its ordinary idle nudge. Both agents are
+// swept in the same call so a regression that gates by AutoStart (true for
+// both, per the real registry) rather than by name would fail this.
+func TestSweepIdleNudgesHonoursAutoSpawnPausedForAutoSeatsOnly(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"jv-t1020-auto", "jv-t1066-queued-review"} {
+		if err := reg.Register(claudia.AgentDef{
+			Name: name, WorkDir: dir, SessionID: "s-" + name,
+			Purpose: claudia.PurposeWork, Materialized: true, Provider: "grok",
+			AutoStart: true, TargetID: "T1020",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Unix(3000, 0)
+	activity := NewIdleActivityTracker()
+	activity.by = map[string]IdleActivity{
+		"jv-t1020-auto":          {Phase: "idle", Updated: now.Add(-10 * time.Minute)},
+		"jv-t1066-queued-review": {Phase: "idle", Updated: now.Add(-10 * time.Minute)},
+	}
+	var pushed []string
+	reps := SweepIdleNudges(IdleNudgeSweepArgs{
+		Reg: reg, Activity: activity, Now: now, OverseerName: "jevons",
+		SessionPhase:    func(claudia.AgentDef) turnev.Phase { return turnev.PhaseIdle },
+		ProcessRunning:  func(name string) bool { return true },
+		AutoSpawnPaused: true,
+		Push: func(target, event, text string) error {
+			pushed = append(pushed, target)
+			return nil
+		},
+	})
+	if len(pushed) != 1 || pushed[0] != "jv-t1066-queued-review" {
+		t.Fatalf("pushed=%v; want exactly the named worker, not the auto seat", pushed)
+	}
+	for _, r := range reps {
+		if r.Name == "jv-t1020-auto" && r.Reason != "frontier_consume_disabled" {
+			t.Fatalf("jv-t1020-auto report = %+v; want reason=frontier_consume_disabled", r)
+		}
 	}
 }
