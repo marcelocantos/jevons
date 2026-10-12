@@ -639,6 +639,11 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
+	// 🎯T1067: SIGUSR1 writes goroutine and heap profiles to
+	// <state_dir>/dumps and keeps running.
+	if dumpSignal != nil {
+		startDumpOnSignal(cfg.StateDir, dumpSignal)
+	}
 
 	// ð¯T40: default Grok connect-mode so agents use detached `grok agent
 	// serve` + WebSocket and survive coordinator-only upgrades. Override
