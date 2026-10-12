@@ -1923,6 +1923,14 @@ body.rhs-resizing-row { cursor: row-resize; }
    stroke keeps it circular under a viewBox scaled unequally on the two
    axes — a <circle> would come out an ellipse. Subtle on purpose: half
    again the line, enough to find, not enough to shout. */
+/* 🎯T1069: the mark wears its own sample's served band, like the line's
+   end, not the cell's: with an owner override the cell carries the forced
+   band (🎯T948) while the samples stay measured. */
+.plan-tip-table td.plan-burn .plan-burn-now.plan-burn-ok { color: var(--green); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-ahead { color: var(--amber); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-hot { color: var(--red); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-locked { color: var(--plan-locked); }
 .plan-tip-table td.plan-burn .plan-burn-now {
   fill: none;
   stroke: currentColor;

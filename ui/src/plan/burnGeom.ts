@@ -191,6 +191,28 @@ export function currentMark(w: PlanWindow): string | null {
   return `M${round(last.x)},${round(last.y)} L${round(last.x)},${round(last.y)}`;
 }
 
+/**
+ * The colour class for the current-value mark: the served band of the same
+ * newest sample the mark sits on, the band the line ends in. Null when the
+ * samples carry no band, and the mark keeps the cell's colour.
+ *
+ * 🎯T1069: the window's own band is the owner override when one is set
+ * (🎯T948), while each sample keeps its measured band. Painted from the
+ * window, the dot showed the override's red at the end of a green line.
+ * The override has its own mark (🎯T979); the dot is the reading.
+ */
+export function currentMarkClass(w: PlanWindow): string | null {
+  const samples = historyPoints(w);
+  const points = burnPoints(w);
+  if (!points.length || points.length !== samples.length) return null;
+  const c = paceClassForBand(samples[samples.length - 1].band);
+  if (c === null) return null;
+  return c || BURN_MARK_OK_CLASS;
+}
+
+/** The mark class for an ok reading, which has no pace class of its own. */
+export const BURN_MARK_OK_CLASS = 'plan-burn-ok';
+
 function round(n: number): string {
   return (Math.round(n * 10) / 10).toString();
 }

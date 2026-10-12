@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useId, useLayoutEffect, useRef, useState } from 'react';
-import { burnPaths, burnStops, currentMark, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
+import { burnPaths, burnStops, currentMark, currentMarkClass, BURN_HEIGHT, BURN_WIDTH } from './burnGeom';
 import type { PlanWindow } from './tickerGroups';
 
 /**
@@ -10,8 +10,8 @@ import type { PlanWindow } from './tickerGroups';
  * always paints, and the current reading always carries a mark (🎯T687). 🎯T667: when the daemon stamps a band on each sample, the
  * line shifts colour along the period through a horizontal wash; without
  * bands the chart keeps its single inherited pace colour. The wash stops
- * at the line. The mark is the cell's current colour, so a band change
- * under the dot cannot paint it as two halves.
+ * at the line. The mark is one solid colour, the newest sample's band, so
+ * a band change under the dot cannot paint it as two halves (🎯T1069).
  */
 export function BurnChart(props: { window: PlanWindow }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -37,6 +37,8 @@ export function BurnChart(props: { window: PlanWindow }) {
   // front of the line and outside the plot's clip, whole even when the
   // value lands on an edge.
   const mark = currentMark(props.window);
+  // 🎯T1069: the mark wears the newest sample's band, as the line's end does.
+  const markClass = currentMarkClass(props.window);
   const stops = spec ? burnStops(props.window, width) : [];
   const gradId = 'plan-burn-grad-' + useId().replace(/[^A-Za-z0-9_-]/g, '');
   const paint = stops.length ? `url(#${gradId})` : undefined;
@@ -65,7 +67,7 @@ export function BurnChart(props: { window: PlanWindow }) {
         height={BURN_HEIGHT}
       />
       {spec ? <path className="plan-burn-line" d={spec.line} style={paint ? { stroke: paint } : undefined} /> : null}
-      {mark ? <path className="plan-burn-now" d={mark} /> : null}
+      {mark ? <path className={('plan-burn-now ' + (markClass ?? '')).trim()} d={mark} /> : null}
     </svg>
   );
 }
