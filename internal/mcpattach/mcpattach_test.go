@@ -249,9 +249,9 @@ func TestT871DropsComputerUseFromClaudeMap(t *testing.T) {
 	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
 	doc := map[string]any{
 		"mcpServers": map[string]any{
-			"mnemo":         map[string]any{"type": "http", "url": "http://127.0.0.1:7700/mcp"},
-			"computer-use":  map[string]any{"command": "./SkyComputerUseClient", "args": []string{"mcp"}},
-			"computer_use":  map[string]any{"command": "./SkyComputerUseClient"},
+			"mnemo":        map[string]any{"type": "http", "url": "http://127.0.0.1:7700/mcp"},
+			"computer-use": map[string]any{"command": "./SkyComputerUseClient", "args": []string{"mcp"}},
+			"computer_use": map[string]any{"command": "./SkyComputerUseClient"},
 		},
 	}
 	raw, err := json.Marshal(doc)
@@ -275,4 +275,152 @@ func TestT871DropsComputerUseFromClaudeMap(t *testing.T) {
 	if _, ok := byName["computer_use"]; ok {
 		t.Fatalf("computer_use leaked from Claude map: %+v", list)
 	}
+}
+
+// 🎯T430: SessionServers rewrites a shared Playwright profile into an
+// isolated default so two concurrent workers cannot lock each other out.
+func TestT430SessionServersIsolatesPlaywrightByDefault(t *testing.T) {
+	a := fixtureArgs(t, "jevonsmcp", "http://127.0.0.1:13705/mcp")
+	doc := map[string]any{
+		"mcpServers": map[string]any{
+			"playwright": map[string]any{
+				"type":    "stdio",
+				"command": "npx",
+				// Pre-fix single-holder shape from the 2026-08-10 incident:
+				// shared --user-data-dir, no --isolated.
+				"args": []string{
+					"@playwright/mcp@latest",
+					"--user-data-dir",
+					"/Users/marcelo/.config/playwright-mcp/profile",
+				},
+			},
+			"mnemo": map[string]any{"type": "http", "url": "http://127.0.0.1:7700/mcp"},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	list := SessionServers(a, claudia.ProviderClaude, "")
+	var pw *claudia.MCPServer
+	var mnemoURL string
+	for i := range list {
+		switch list[i].Name {
+		case "playwright":
+			pw = &list[i]
+		case "mnemo":
+			mnemoURL = list[i].URL
+		}
+	}
+	if pw == nil {
+		t.Fatalf("playwright missing from SessionServers: %+v", list)
+	}
+	if mnemoURL != "http://127.0.0.1:7700/mcp" {
+		t.Fatalf("non-playwright server mutated: mnemo=%q", mnemoURL)
+	}
+	joined := strings.Join(pw.Args, "\x00")
+	if !strings.Contains(joined, "--isolated") {
+		t.Fatalf("playwright args missing --isolated: %v", pw.Args)
+	}
+	for _, a := range pw.Args {
+		if a == "--user-data-dir" || strings.HasPrefix(a, "--user-data-dir=") {
+			t.Fatalf("shared --user-data-dir survived isolation rewrite: %v", pw.Args)
+		}
+		if strings.Contains(a, "playwright-mcp/profile") {
+			t.Fatalf("shared profile path survived isolation rewrite: %v", pw.Args)
+		}
+	}
+}
+
+func TestT430PlaywrightIsolatedArgsIdempotentAndDropsEqualsForm(t *testing.T) {
+	already := []string{"@playwright/mcp@latest", "--sandbox", "--isolated"}
+	got := playwrightIsolatedArgs(already)
+	if strings.Join(got, " ") != strings.Join(already, " ") {
+		t.Fatalf("idempotent rewrite changed args: got %v want %v", got, already)
+	}
+
+	equals := []string{"@playwright/mcp@latest", "--user-data-dir=/tmp/shared-profile"}
+	got = playwrightIsolatedArgs(equals)
+	for _, a := range got {
+		if strings.Contains(a, "user-data-dir") || strings.Contains(a, "shared-profile") {
+			t.Fatalf("equals-form user-data-dir survived: %v", got)
+		}
+	}
+	if !containsString(got, "--isolated") {
+		t.Fatalf("missing --isolated after equals-form drop: %v", got)
+	}
+}
+
+func TestT430EnsurePlaywrightIsolatedTwoProbesBothObtainBrowser(t *testing.T) {
+	// Hermetic stand-in for "two concurrent probes obtain a browser":
+	// two worker-shaped MCP lists carrying the pre-fix shared profile
+	// are rewritten independently and both report isolated=true with no
+	// shared path left. Red against ensurePlaywrightIsolated being a
+	// no-op (the single-profile arrangement).
+	shared := []claudia.MCPServer{{
+		Name:    "playwright",
+		Type:    "stdio",
+		Command: "npx",
+		Args: []string{
+			"@playwright/mcp@latest",
+			"--user-data-dir",
+			"/Users/marcelo/.config/playwright-mcp/profile",
+		},
+	}}
+	type verdict struct {
+		isolated bool
+		shared   bool
+		args     []string
+	}
+	probe := func(list []claudia.MCPServer) verdict {
+		out := ensurePlaywrightIsolated(list)
+		if len(out) != 1 {
+			t.Fatalf("want 1 server, got %+v", out)
+		}
+		v := verdict{args: out[0].Args}
+		for _, a := range out[0].Args {
+			if a == "--isolated" {
+				v.isolated = true
+			}
+			if a == "--user-data-dir" || strings.HasPrefix(a, "--user-data-dir=") || strings.Contains(a, "playwright-mcp/profile") {
+				v.shared = true
+			}
+		}
+		return v
+	}
+	a := probe(shared)
+	b := probe(shared)
+	if !a.isolated || !b.isolated {
+		t.Fatalf("both probes must obtain isolated browser; a=%+v b=%+v", a, b)
+	}
+	if a.shared || b.shared {
+		t.Fatalf("neither probe may keep the shared profile; a=%+v b=%+v", a, b)
+	}
+}
+
+func TestT430ServersEqualSeesArgsDrift(t *testing.T) {
+	shared := []claudia.MCPServer{{
+		Name: "playwright", Type: "stdio", Command: "npx",
+		Args: []string{"@playwright/mcp@latest", "--user-data-dir", "/tmp/p"},
+	}}
+	isolated := ensurePlaywrightIsolated(shared)
+	if ServersEqual(shared, isolated) {
+		t.Fatal("ServersEqual must see Args drift so restamp rewrites a shared-profile seat")
+	}
+	if !ServersEqual(isolated, ensurePlaywrightIsolated(isolated)) {
+		t.Fatal("idempotent isolation must compare equal")
+	}
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

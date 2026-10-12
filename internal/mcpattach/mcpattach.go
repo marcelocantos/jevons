@@ -86,7 +86,8 @@ func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia
 			Name: name, Type: "http", URL: a.URL,
 		})
 	}
-	return applyProxied(dropComputerUseMCP(inv.ForProvider(claudia.ProviderClaude)), a.Proxied)
+	list := applyProxied(dropComputerUseMCP(inv.ForProvider(claudia.ProviderClaude)), a.Proxied)
+	return ensurePlaywrightIsolated(list)
 }
 
 // dropComputerUseMCP removes computer-use, the one Claude/Codex MCP
@@ -181,6 +182,68 @@ func applyProxied(list []claudia.MCPServer, proxied []claudia.MCPServer) []claud
 	return out
 }
 
+// ensurePlaywrightIsolated makes Playwright MCP isolation the fleet default
+// (🎯T430). A shared --user-data-dir profile is a single-holder resource:
+// the second concurrent worker is refused with "Browser is already in use
+// … use --isolated". Relying on every owner map to remember --isolated is
+// the convention 🎯T405 clause 2 rejects. This rewrite is the product
+// property: missing isolation cannot mint a seat that locks siblings out.
+//
+// Policy: drop every --user-data-dir <path> pair (the shared-profile form
+// that collides), then ensure --isolated is present. Non-playwright
+// servers are untouched. Idempotent when already isolated.
+func ensurePlaywrightIsolated(list []claudia.MCPServer) []claudia.MCPServer {
+	if len(list) == 0 {
+		return list
+	}
+	out := append([]claudia.MCPServer(nil), list...)
+	for i, s := range out {
+		if !isPlaywrightMCP(s) {
+			continue
+		}
+		out[i].Args = playwrightIsolatedArgs(s.Args)
+	}
+	return out
+}
+
+func isPlaywrightMCP(s claudia.MCPServer) bool {
+	name := strings.ToLower(strings.TrimSpace(s.Name))
+	if name == "playwright" || strings.HasPrefix(name, "playwright-") {
+		return true
+	}
+	// Nameless / misnamed entries that still launch the Playwright MCP
+	// package must not keep a shared profile either.
+	blob := strings.ToLower(strings.TrimSpace(s.Command) + " " + strings.Join(s.Args, " "))
+	return strings.Contains(blob, "@playwright/mcp") || strings.Contains(blob, "playwright-mcp")
+}
+
+func playwrightIsolatedArgs(args []string) []string {
+	out := make([]string, 0, len(args)+1)
+	hasIsolated := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--isolated" || a == "-isolated":
+			if !hasIsolated {
+				out = append(out, "--isolated")
+				hasIsolated = true
+			}
+		case a == "--user-data-dir" || strings.HasPrefix(a, "--user-data-dir="):
+			// Drop the flag and its path argument when separate.
+			if a == "--user-data-dir" && i+1 < len(args) {
+				i++
+			}
+			// integrated --user-data-dir=path form: just skip
+		default:
+			out = append(out, a)
+		}
+	}
+	if !hasIsolated {
+		out = append(out, "--isolated")
+	}
+	return out
+}
+
 // ServersEqual reports whether two MCP lists match on name, URL, and type.
 func ServersEqual(a, b []claudia.MCPServer) bool {
 	if len(a) != len(b) {
@@ -188,6 +251,24 @@ func ServersEqual(a, b []claudia.MCPServer) bool {
 	}
 	for i := range a {
 		if a[i].Name != b[i].Name || a[i].URL != b[i].URL || a[i].Type != b[i].Type {
+			return false
+		}
+		if a[i].Command != b[i].Command {
+			return false
+		}
+		if !stringSlicesEqual(a[i].Args, b[i].Args) {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

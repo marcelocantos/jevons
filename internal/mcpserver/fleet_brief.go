@@ -429,6 +429,19 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
 - Residual: mid-mission messages that are not a terminal report still
   use jevons_agent_send; this slice is the upward-report path.
 
+
+## Concurrent live-render browser (🎯T430)
+- Playwright MCP isolation is the fleet default. Seats receive --isolated
+  (or an equivalent per-agent profile) from mint/restamp — do not depend on
+  remembering a flag, and do not point every worker at one shared
+  --user-data-dir profile. A shared profile makes the second concurrent
+  cockpit probe fail with "Browser is already in use … use --isolated".
+- Two workers may run a real browser live-render / cockpit probe at the
+  same time. If a browser cannot be obtained, say so explicitly: the
+  live-render oracle DID NOT RUN. Do not substitute a hermetic suite,
+  synthetic key, or model caption and cite that as live-path evidence
+  (🎯T194 / 🎯T386 / 🎯T493.1). A refused browser is a reportable non-result.
+
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer
   (or accepted-risk / class-3 residual). Bare done without either is refused.
