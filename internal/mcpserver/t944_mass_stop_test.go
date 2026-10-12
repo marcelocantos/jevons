@@ -26,7 +26,7 @@ func TestT944PlannedBrokerRestartRaisesNoAlarm(t *testing.T) {
 			causes:    map[string]string{"a": cause, "b": cause, "c": cause},
 			launchErr: errBrokerDown,
 		}
-		s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}))
+		s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}, false))
 		a, ok := s.massStop()
 		if !ok {
 			return ""

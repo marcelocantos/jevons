@@ -146,17 +146,24 @@ func (c claudiaSweep) RemoveDeadSeat(name string) error {
 //     through account (nil is tolerated — the removal still happens)
 //   - Others: Stop to clear the dead handle so status becomes "stopped"
 //
+// autoSpawnPaused is config frontier_consume.disabled (🎯T407 / 🎯T1066): an
+// AutoStart durable agent's dead handle is never re-Launched while it is
+// true, whatever fleet intent says. frontier_consume.disabled is a distinct
+// owner signal from fleet-wide blocked_owner intent — the owner escalation
+// behind 🎯T1066 set the config flag, not the intent, and this sweep's
+// AutoStart re-Launch read the unrelated intent snapshot as permission.
+//
 // overseerName is never recovered here (owner chat overseer has its own path).
 // Returns every detected dead name; Recovered true when Launch succeeded.
-func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
+func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, autoSpawnPaused bool) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
-	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent)
+	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent, autoSpawnPaused)
 }
 
 // sweepDeadAgents is the testable implementation (real path + hermetic fakes).
-func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot) []DeadAgentReport {
+func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot, autoSpawnPaused bool) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
@@ -167,16 +174,27 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 		}
 		hasProc, alive := reg.ProcState(d.Name)
 		dec := intent.Allow(d.Name, fleetintent.ControlRevive)
-		detect, tryRecover, clearHandle, remove := deadRecoveryPlan(hasProc, alive, d.AutoStart, dec.Allow, d.Purpose)
+		allow := dec.Allow
+		declineReason := dec.Reason
+		declineBlocking := dec.Blocking
+		// 🎯T1066: config frontier_consume.disabled gates the AutoStart
+		// re-Launch exactly like a declined intent, independent of whatever
+		// fleet-wide/agent intent said — the two signals are both standing
+		// "do not run" instructions and either alone must hold.
+		if allow && d.AutoStart && autoSpawnPaused {
+			allow = false
+			declineReason = "frontier_consume_disabled"
+		}
+		detect, tryRecover, clearHandle, remove := deadRecoveryPlan(hasProc, alive, d.AutoStart, allow, d.Purpose)
 		if !detect {
 			continue
 		}
 		// Read before any Stop or Launch replaces the dead handle.
 		rep := DeadAgentReport{Name: d.Name, Cause: reg.ExitCause(d.Name)}
-		if !dec.Allow {
-			rep.Declined = dec.Reason
+		if !allow {
+			rep.Declined = declineReason
 			slog.Info("fleet health: dead handle left alone — intent says do not run",
-				"name", d.Name, "intent", string(dec.Blocking), "reason", dec.Reason)
+				"name", d.Name, "intent", string(declineBlocking), "reason", declineReason)
 			out = append(out, rep)
 			continue
 		}

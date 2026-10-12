@@ -221,6 +221,21 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 		return nil, false, fmt.Errorf("agent %q is not running and intent says it should not be: %s (%s) — lift the intent to resume",
 			name, fleetintent.Describe(dec.Blocking), dec.Reason)
 	}
+	// 🎯T1066: config frontier_consume.disabled is a second, independent
+	// "do not run" signal from fleet-wide blocked_owner intent — the owner
+	// escalation behind this target set the config flag during a
+	// stabilization pause without recording a fleet-wide intent, and the
+	// idle-nudge / impatience-ladder delivery path (both funnel every send
+	// to a not-running agent through this function) rehydrated the dead
+	// process anyway. Checked here, at the actual dispatch call rather than
+	// at the caller's earlier classification, so a brief accepted before
+	// the pause took effect still refuses to start a model turn once it is
+	// in force (the already-queued-delivery case). Explicit jevons_agent_start
+	// does not route through this function and is unaffected.
+	if s.AutoSpawnPaused() {
+		return nil, false, fmt.Errorf("agent %q is not running and auto-spawn is paused (config frontier_consume.disabled) — "+
+			"start it explicitly with jevons_agent_start, or clear frontier_consume.disabled, to resume (🎯T1066)", name)
+	}
 
 	// 🎯T409: lost-session recovery belongs on this path. It is what a
 	// parent report and the impatience ladder call, and they retry on a
