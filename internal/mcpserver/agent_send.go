@@ -916,6 +916,24 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 		}
 		return false
 	}
+	// 🎯T1066: the seat is alive, but intent may have flipped to
+	// blocked_owner/parked/blocked_provider since this entry was accepted —
+	// admission time is not drain time, and a live seat skips every other
+	// not-running gate. Read intent AT THE HAND-OFF, not at accept time: this
+	// is the one check that catches a payload queued while Working and drained
+	// after the fleet (or this agent) was stood down. DefinitelyNotSent puts
+	// the entry back to Pending so the next sweep retries once intent clears —
+	// never a terminal failure, never a dropped message.
+	if dec := s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit); !dec.Allow {
+		detail := fmt.Sprintf("held at drain: %s (%s) — intent says do not deliver (🎯T1066)",
+			fleetintent.Describe(dec.Blocking), dec.Reason)
+		if resolve(sendq.DefinitelyNotSent, detail) {
+			slog.Info("agent send queue: drain held by fleet intent",
+				"component", "agent_send", "name", name, "entry_id", entry.ID,
+				"blocking", string(dec.Blocking), "reason", dec.Reason)
+		}
+		return false
+	}
 	// A pinned/rolled-back Claudia without T184 cannot deliver a tagged
 	// question. This is a definite non-send, not an uncertain provider attempt:
 	// avoid opening the receipt window (which would wait and then misclassify

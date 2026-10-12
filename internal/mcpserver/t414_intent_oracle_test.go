@@ -213,6 +213,39 @@ func t414Controls() []t414Control {
 				return err == nil || !strings.Contains(err.Error(), "intent says it should not be")
 			},
 		},
+		{
+			// 🎯T1066: the gate ControlDeliverStart cannot cover — a seat
+			// that is already alive, with a payload already admitted into
+			// the daemon's own sendq, and the drain is the only remaining
+			// point where intent can still be read before the text becomes
+			// a model turn. Fully hermetic (a fake sender stands in for the
+			// process), so both directions are driven for real.
+			label:   "deliver submit (hand a queued message to an already-running seat, 🎯T1066)",
+			control: fleetintent.ControlDeliverSubmit,
+			acts: func(t *testing.T, fleet, agent fleetintent.State) bool {
+				s, sender, _ := t418Daemon(t, t.TempDir())
+				store, err := fleetintent.Open(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.SetFleetIntentStore(store)
+				if fleetintent.Valid(fleet) {
+					if err := store.SetFleet(fleet, "jevons", "oracle fixture", t414Now()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if fleetintent.Valid(agent) {
+					if err := store.SetAgent(t414Agent, agent, "jevons", "oracle fixture", t414Now()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, _, err := s.sendQueue().Append(t414Agent, "oracle payload", t414Now()); err != nil {
+					t.Fatal(err)
+				}
+				s.drainAgentSendQueue(t414Agent)
+				return len(sender.delivered()) == 1
+			},
+		},
 	}
 }
 
