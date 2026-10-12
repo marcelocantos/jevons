@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/modelladder"
 )
 
@@ -316,6 +317,17 @@ type FleetRecoverSweepArgs struct {
 	// says fallback_model, and the report says why nothing happened,
 	// rather than silently degrading to another useless re-brief.
 	SwitchModel func(name, model string) error
+	// Intent reads fleet/agent intent for name (🎯T1066 PO review,
+	// 2026-10-12). Unstick's args.Interrupt() call reaches the process
+	// DIRECTLY — it is not routed through deliverByName, so neither T1066
+	// drain gate nor the immediate-submit gate (ControlDeliverSubmit) ever
+	// sees it, and an outage-driven unstick could cut a blocked_owner/
+	// parked seat's live turn with no intent check at all. Nil means no
+	// intent store was wired (the pre-T1066 behaviour, and every existing
+	// hermetic test that does not set this field); a non-nil reader
+	// declining ControlDeliverSubmit skips BOTH the interrupt and the push
+	// for this agent this sweep, reported as FleetRecoverSkip.
+	Intent func(name string) fleetintent.Decision
 }
 
 // SweepFleetRecover classifies every registered work agent and unsticks /
@@ -479,6 +491,17 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	}
 	if action != FleetRecoverUnstick && action != FleetRecoverRebrief {
 		return rep
+	}
+	// 🎯T1066: read intent BEFORE either side effect below — the interrupt
+	// call that follows reaches the process directly, with no later
+	// chokepoint to catch it. Declining here skips the interrupt too, not
+	// just the push.
+	if args.Intent != nil {
+		if dec := args.Intent(d.Name); !dec.Allow {
+			rep.Action = FleetRecoverSkip
+			rep.Reason = dec.Reason
+			return rep
+		}
 	}
 	if args.Push == nil {
 		rep.Error = "no_pusher"

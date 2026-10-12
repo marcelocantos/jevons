@@ -1463,11 +1463,17 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
-		Reg:                s.registry,
-		Activity:           activity,
-		Ledger:             ledger,
-		Push:               push,
-		Interrupt:          interruptFn,
+		Reg:       s.registry,
+		Activity:  activity,
+		Ledger:    ledger,
+		Push:      push,
+		Interrupt: interruptFn,
+		// 🎯T1066: Unstick's Interrupt call reaches the process directly,
+		// bypassing deliverByName and both its gates — read intent here,
+		// the one place left before that call.
+		Intent: func(name string) fleetintent.Decision {
+			return s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit)
+		},
 		Now:                time.Now(),
 		OverseerName:       overseer,
 		StuckTimeout:       DefaultFleetStuckTimeout,
