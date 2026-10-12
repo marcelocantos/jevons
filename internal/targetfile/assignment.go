@@ -6,8 +6,6 @@ package targetfile
 import (
 	"os"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Owner assignment (🎯T451).
@@ -26,8 +24,7 @@ import (
 // open-mission classification reads both.
 
 // assignmentDoc is a narrow view of the ledger: status plus owner assignment.
-// Deliberately separate from ledgerDoc in dedupe.go — that struct is on the
-// kickoff path and several workers share this tree.
+// The status and owner lookups share one cached parse of it (ledgercache.go).
 type assignmentDoc struct {
 	Targets map[string]assignmentTarget `yaml:"targets"`
 }
@@ -54,11 +51,11 @@ func LookupTargetOwner(data []byte, id string) (owner string, ok bool) {
 	if id == "" {
 		return "", false
 	}
-	var doc assignmentDoc
-	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Targets == nil {
+	targets, ok := parsedTargets(data)
+	if !ok {
 		return "", false
 	}
-	t, found := doc.Targets[id]
+	t, found := targets[id]
 	if !found || t.OwnedBy == nil {
 		return "", false
 	}
