@@ -1069,6 +1069,9 @@ func main() {
 	// state-dir file. Armed only by an explicit test env and never on :13705.
 	if os.Getenv("JEVONS_TEST_FAULTS") == "1" && *port != 13705 {
 		srv.EnableBrokerFaultSeam(cfg.StateDir)
+		// 🎯T828: J8b forces a just-messaged worker into delivered_unconfirmed
+		// so the plain stop always hits the T664 refusal arm.
+		mcpSrv.EnableT664FaultSeam(cfg.StateDir)
 	}
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on

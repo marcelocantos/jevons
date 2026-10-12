@@ -195,6 +195,10 @@ type Server struct {
 	// stop / kill can refuse to act on an undecided delivery (🎯T664).
 	// Guarded by mu.
 	unconfirmedSends map[string]unconfirmedSend
+	// t664FaultDir roots the 🎯T828 journey seam (force undecided delivery /
+	// disable the stop guard). Empty until EnableT664FaultSeam; production
+	// never sets it.
+	t664FaultDir string
 	// oversizedSessions caches the per-session census of records over the
 	// broker line limit, keyed by session path (🎯T661). Guarded by mu.
 	oversizedSessions map[string]oversizedEntry
