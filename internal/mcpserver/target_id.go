@@ -46,8 +46,13 @@ func NormalizeTargetID(raw string) string {
 // Used only for inject-path oracles (🎯T326) — not for chat UI parsing.
 var bareTargetIDRe = regexp.MustCompile(`(?m)(?:^|[^🎯])\bT\d+(?:\.\d+)*\b`)
 
+// qualifiedTargetIDRe matches a cross-repo reference that carries its 🎯:
+// the recommended 🎯repo/Tn, or the accepted repo/🎯Tn (🎯T1056).
+var qualifiedTargetIDRe = regexp.MustCompile(`🎯[a-z][a-z0-9_-]*/T\d+(?:\.\d+)*\b|\b[a-z][a-z0-9_-]*/🎯T\d+(?:\.\d+)*\b`)
+
 // HasBareTargetID reports whether s contains a target id without 🎯.
-// Worker names (jv-t27.2-config) use lowercase t and do not match.
+// Worker names (jv-t27.2-config) use lowercase t and do not match. A
+// qualified 🎯repo/Tn or repo/🎯Tn is not bare.
 func HasBareTargetID(s string) bool {
-	return bareTargetIDRe.MatchString(s)
+	return bareTargetIDRe.MatchString(qualifiedTargetIDRe.ReplaceAllString(s, ""))
 }

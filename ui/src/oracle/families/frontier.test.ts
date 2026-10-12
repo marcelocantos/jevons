@@ -419,7 +419,15 @@ describeOracle(family('frontier'), () => {
     const html = linkifyTargetIDsInHTML('<p>claudia/T177 and 🎯T177</p>');
     expect(html).toContain('data-target-repo="claudia"');
     expect(html).toContain('data-target-repo=""');
-    expect(html).toContain('claudia/🎯T177');
+    expect(html).toContain('🎯claudia/T177');
+    // 🎯T1056: the recommended 🎯repo/Tn and the accepted repo/🎯Tn both
+    // qualify the target, and the 🎯 is not left behind as stray text.
+    for (const form of ['🎯claudia/T177', 'claudia/🎯T177']) {
+      const out = linkifyTargetIDsInHTML('<p>see ' + form + ' now</p>');
+      expect(out).toContain('data-target-repo="claudia"');
+      expect(out).toContain('>🎯claudia/T177<');
+      expect(out).not.toMatch(/see 🎯</);
+    }
     expect(linkifyTargetIDsInHTML('<p>T185/T186</p>')).not.toContain('data-target-repo="T185"');
   });
 

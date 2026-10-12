@@ -40,6 +40,16 @@ func TestFleetStandingBriefHasNoBareTargetIDs(t *testing.T) {
 	if HasBareTargetID("jv-t27.2-config") {
 		t.Fatal("lowercase worker names must not count as bare T-ids")
 	}
+	// 🎯T1056: 🎯repo/Tn is the recommended cross-repo form, repo/🎯Tn is
+	// accepted; neither is bare. A repo/Tn with no 🎯 still is.
+	for _, ok := range []string{"see 🎯claudia/T177 next", "see claudia/🎯T177 next", "🎯claudia/T177.2"} {
+		if HasBareTargetID(ok) {
+			t.Fatalf("%q flagged as a bare T-id", ok)
+		}
+	}
+	if !HasBareTargetID("see claudia/T177 next") {
+		t.Fatal("claudia/T177 without 🎯 must count as bare")
+	}
 	if HasBareTargetID(FleetStandingBrief) {
 		t.Fatalf("FleetStandingBrief still has bare T-ids (🎯T326):\n%s", FleetStandingBrief)
 	}

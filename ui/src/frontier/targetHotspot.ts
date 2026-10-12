@@ -5,7 +5,9 @@
 
 import type { FrontierRow } from './table';
 
-const TARGET_TOKEN_RE = /(?:([a-z][a-z0-9_-]*)\/)?(?:🎯\s*)?([Tt]\d+(?:\.\d+)*)\b/g;
+// 🎯T1056: a cross-repo reference is written 🎯repo/Tn; repo/🎯Tn is accepted
+// too. Either way the 🎯 belongs to the token, not to the text before it.
+const TARGET_TOKEN_RE = /(?:🎯\s*)?(?:([a-z][a-z0-9_-]*)\/)?(?:🎯\s*)?([Tt]\d+(?:\.\d+)*)\b/g;
 
 const SKIP_TAGS: Record<string, boolean> = {
   CODE: true,
@@ -88,7 +90,7 @@ export function linkifyTargetText(text: string): string {
   return s.replace(TARGET_TOKEN_RE, (full, repo: string | undefined, id: string) => {
     const tid = normalizeTargetID(id);
     if (!tid) return full;
-    return hotspotSpan(tid, (repo ? repo + '/' : '') + formatDisplayTargetID(tid), repo || '');
+    return hotspotSpan(tid, repo ? '🎯' + repo + '/' + tid : formatDisplayTargetID(tid), repo);
   });
 }
 

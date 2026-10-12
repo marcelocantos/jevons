@@ -16,7 +16,7 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
 
 ## Cross-repository target references (🎯T1056)
 - When naming a bullseye target outside the current repository, write
-  repo/🎯Tn (e.g. claudia/🎯T177), including in reports and chat. A bare 🎯Tn
+  🎯repo/Tn (e.g. 🎯claudia/T177), including in reports and chat. A bare 🎯Tn
   means the current repository only; numbers overlap across repositories.
   Use the checkout's repository basename as repo. Do not guess a target's
   repository from a worker name or from its numeric ID.
