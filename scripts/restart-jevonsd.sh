@@ -11,7 +11,7 @@
 # Steps:
 #   0. re-exec into our own session (🎯T405 SELF-DETACH below)
 #   1. make / rebuild bin/jevonsd with its embedded React bundle
-#   2. decide whether a restart is needed at all (🎯T218 thrash policy below)
+#   2. decide whether a restart is needed at all (🎯T218 below)
 #   3. brew services stop jevons (so Cellar KeepAlive cannot reclaim :13705)
 #   4. SIGHUP listeners on the development port — 🎯T40 upgrade exit, so agent
 #      turns in flight are NOT cancelled by the bounce (🎯T392.5)
@@ -19,37 +19,27 @@
 #   6. wait until HTTP /health is ok and /api/frontier is not 404
 #   7. exit 0 only when the new process is serving
 #
-# 🎯T218 THRASH POLICY — why this script often does nothing, on purpose.
+# 🎯T218 — why this script often does nothing, on purpose.
 #
 # Many fleet workers land daemon-path changes concurrently and each calls
-# this script. Naively that SIGTERMs :13705 every minute and leaves owner
-# chat unusable. Observed 2026-08-05: five restarts in four minutes, every
-# one of them rebuilding nothing ("make: `bin/jevonsd' is up to date") —
-# a healthy daemon killed and replaced by the byte-identical binary.
-#
-# Three rules bound that, without ever letting a real change go stale
-# (🎯T194 says a daemon change is not achieved until it actually serves):
+# this script. Two rules keep that from bouncing a healthy daemon for
+# nothing, without ever letting a real change go stale (🎯T194 says a
+# daemon change is not achieved until it actually serves):
 #
 #   ALREADY-ACTIVATED — if the freshly built binary hashes equal to the one
 #     the running daemon was started from, and that daemon is healthy, there
-#     is nothing to activate. Exit 0 without touching the port. This is a
-#     true no-op, not a deferral: the development surface already serves this exact
-#     build, so the caller's activation claim is honest.
+#     is nothing to activate. Exit 0 without touching the port.
 #
-#   ONE-AT-A-TIME — a lock dir serialises restarts. Concurrent callers wait
-#     for the holder instead of racing to kill the same port, then re-run the
+#   ONE-AT-A-TIME — a lock serialises restarts. Concurrent callers wait for
+#     the holder instead of racing to kill the same port, then re-run the
 #     ALREADY-ACTIVATED check. N workers landing the same build coalesce into
 #     a single bounce.
 #
-#   WAIT, DON'T SKIP — when the binary genuinely differs but the last restart
-#     was under MIN_INTERVAL_SEC ago, sleep out the remainder and then restart.
-#     Never silently skip a real change: a skip would report success while a
-#     stale binary kept serving, which is exactly the 🎯T194 failure mode.
-#
-# So: identical build → free no-op; new build → always activated, at most
-# one bounce per MIN_INTERVAL_SEC. --force overrides all three, but only with
-# the owner's token (🎯T815 OWNER-ONLY FORCE below); without it --force is an
-# ordinary request.
+# A changed build is activated at once. There is no rate limit (owner,
+# 2026-10-12): the broker owns every seat, so a bounce re-adopts the fleet
+# rather than restarting it, and holding a landed fix back cost more than
+# the bounces it saved. The 🎯T815 activation gate and owner-only --force
+# were removed with it.
 #
 # SELF-DETACH (🎯T405) — being invoked wrongly cannot cause an outage.
 #
@@ -102,9 +92,7 @@
 #   JEVONS_RESTART_STOP_WAIT_SEC  grace for the 🎯T392.5 upgrade exit to
 #                               release the port before SIGKILL, default 20
 #   JEVONS_RESTART_SKIP_MAKE=1  skip rebuild (use existing bin/jevonsd)
-#   JEVONS_RESTART_MIN_INTERVAL_SEC  thrash window, default 180 (🎯T218)
 #   JEVONS_RESTART_LOCK_WAIT_SEC     wait for an in-flight restart, default 240
-#   JEVONS_RESTART_STAMP    epoch of last successful restart
 #   JEVONS_RESTART_ACTIVE   "<pid> <sha256>" of the daemon we started
 #   JEVONS_RESTART_BIN      daemon binary to start (default: $REPO/bin/jevonsd)
 #   JEVONS_RESTART_NO_DETACH=1  skip the 🎯T405 self-detach re-exec
@@ -126,21 +114,6 @@ WAIT_SEC="${JEVONS_RESTART_WAIT_SEC:-90}"
 # 🎯T392.5: how long to let the upgrade exit (SIGHUP) release the port
 # before escalating to SIGKILL. See kill_port_listeners.
 STOP_WAIT_SEC="${JEVONS_RESTART_STOP_WAIT_SEC:-20}"
-# 🎯T218: min seconds between successful restarts (debounce thrash from
-# concurrent workers each bouncing the development daemon after every land).
-#
-# 🎯T815: the same knob is the ACTIVATION GATE interval (see below). Default
-# 600s; the owner tunes it with the env var or by writing a number of seconds
-# into ~/.jevons/restart-jevonsd.interval (env wins). 0 disables the gate.
-INTERVAL_FILE="${JEVONS_RESTART_INTERVAL_FILE:-$HOME/.jevons/restart-jevonsd.interval}"
-if [[ -n "${JEVONS_RESTART_MIN_INTERVAL_SEC:-}" ]]; then
-  MIN_INTERVAL_SEC="$JEVONS_RESTART_MIN_INTERVAL_SEC"
-elif [[ -r "$INTERVAL_FILE" && "$(tr -d '[:space:]' <"$INTERVAL_FILE")" =~ ^[0-9]+$ ]]; then
-  MIN_INTERVAL_SEC="$(tr -d '[:space:]' <"$INTERVAL_FILE")"
-else
-  MIN_INTERVAL_SEC=600
-fi
-STAMP_FILE="${JEVONS_RESTART_STAMP:-$HOME/.jevons/restart-jevonsd.last}"
 # 🎯T218: identity of the daemon this script last started ("<pid> <sha256>"),
 # so a caller whose build is already serving can no-op instead of bouncing.
 ACTIVE_FILE="${JEVONS_RESTART_ACTIVE:-$HOME/.jevons/restart-jevonsd.active}"
@@ -185,165 +158,18 @@ DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-jevonsd.log}"
 # lock: introspection that blocks behind a live restart, or that appends
 # to the restart log, is a trap for anyone debugging one.
 WANTS_WORK=1
-GATE_MODE=request
-WANT_FORCE=0
 for _arg in ${@+"$@"}; do
   case "$_arg" in
     -h|--help|--dry-run) WANTS_WORK=0 ;;
-    --served) WANTS_WORK=0; GATE_MODE=served ;;
-    --deferred-runner) WANTS_WORK=0; GATE_MODE=runner ;;
-    --force) WANT_FORCE=1 ;;
   esac
 done
 
-# 🎯T815 ACTIVATION GATE — one bounce per interval carries every commit.
-#
-# Six bounces in an hour on 2026-09-22 (04:12 … 05:11), each one worker's
-# activation, each costing the fleet a restart. 🎯T218 bounded the rate by
-# making a caller SLEEP out the interval — which holds a worker seat past the
-# 30 s tool deadline, and still lets every sleeper bounce in turn. The gate
-# lives here, in the script, so a worker who simply runs it is covered:
-#
-#   a request that arrives inside the interval does NOT bounce and does NOT
-#   wait. It appends one line to $REQ_FILE, makes sure one detached deferred
-#   runner exists, prints when the next bounce is due, and returns.
-#
-#   the runner (one at a time, guarded by $PENDING_LOCK) sleeps to the end of
-#   the interval and runs this script with JEVONS_RESTART_GATE_RELEASE=1: the
-#   ordinary path, building committed HEAD *at that moment*, so the one bounce
-#   carries every commit landed since the last one. Every successful run
-#   appends "served <epoch> <sha> coalesced=<n> bounce=<0|1>" to $SERVED_FILE:
-#   the SHA is the HEAD the bounce was built from, n the requests it absorbed.
-#
-#   a requester asks `--served <its commit>` and gets the first served line
-#   whose SHA has its commit as an ancestor (git merge-base --is-ancestor), or
-#   exit 3 while its bounce is still pending.
-#
-# Bypasses, each deliberate: the daemon is not healthy (the watchdog's
-# recovery restart must never be deferred, and never waits); no stamp yet
-# (cold start); the interval has elapsed; interval 0; and --force WITH THE
-# OWNER'S TOKEN.
-#
-# OWNER-ONLY FORCE (🎯T815, owner decision 2026-09-22): --force is honoured
-# only while $OWNER_FORCE_FILE exists as a regular file, mode 0600, owned by
-# the calling uid and younger than $OWNER_FORCE_TTL_SEC (default 600). The
-# owner creates it by hand (`install -m 0600 /dev/null <file>`); a honoured
-# --force consumes it, so one token buys one bypass. A --force without a valid
-# token is NOT an error and NOT a bounce: it degrades to an ordinary request
-# (deferred inside the interval, exactly like any other) and says why. Workers
-# ask through jevons-po instead. Residual, stated plainly: the token is a file
-# under the owner's uid, and workers run under that uid — this closes the
-# accidental and habitual bypass in code, it does not stop an agent that
-# deliberately forges the token. Nothing here can authenticate a caller.
-REQ_FILE="${JEVONS_RESTART_REQUESTS:-$HOME/.jevons/restart-jevonsd.requests}"
+# 🎯T553: every successful run appends "served <epoch> <sha> bounce=<0|1>"
+# to $SERVED_FILE, naming the committed HEAD it built and whether it
+# bounced. internal/t553oracle reads it to tie what :$PORT serves to a commit.
 SERVED_FILE="${JEVONS_RESTART_SERVED:-$HOME/.jevons/restart-jevonsd.served}"
-PENDING_LOCK="${JEVONS_RESTART_PENDING_LOCK:-$HOME/.jevons/restart-jevonsd.pending.lock}"
 
-OWNER_FORCE_FILE="${JEVONS_RESTART_OWNER_FORCE:-$HOME/.jevons/restart-jevonsd.owner-force}"
-OWNER_FORCE_TTL_SEC="${JEVONS_RESTART_OWNER_FORCE_TTL_SEC:-600}"
-
-SELF="$ROOT/scripts/$(basename "$0")"
-
-owner_force_valid() {
-  # 0 when the token file is the owner's: regular file, not a symlink, mode
-  # 0600, this uid, younger than the TTL. Prints the reason on failure.
-  local f="$OWNER_FORCE_FILE" mode uid mtime now
-  [[ -e "$f" || -L "$f" ]] || { echo "no token at $f"; return 1; }
-  [[ -f "$f" && ! -L "$f" ]] || { echo "$f is not a regular file"; return 1; }
-  if stat -f '%Lp %u %m' "$f" >/dev/null 2>&1; then
-    read -r mode uid mtime < <(stat -f '%Lp %u %m' "$f")
-  else
-    read -r mode uid mtime < <(stat -c '%a %u %Y' "$f")
-  fi
-  [[ "$mode" == "600" ]] || { echo "$f has mode $mode, want 600"; return 1; }
-  [[ "$uid" == "$(id -u)" ]] || { echo "$f is owned by uid $uid, not $(id -u)"; return 1; }
-  now="$(date +%s)"
-  [[ "$mtime" =~ ^[0-9]+$ && $((now - mtime)) -le "$OWNER_FORCE_TTL_SEC" ]] || { echo "$f is older than ${OWNER_FORCE_TTL_SEC}s"; return 1; }
-}
-
-# Validated in every stage (each re-exec re-reads the token), consumed only by
-# the stage that acts on it (argument parsing below), so no env flag carries
-# the owner's word between stages where a worker could forge it.
-if [[ "$WANT_FORCE" == "1" && "$WANTS_WORK" == "1" ]]; then
-  if _why="$(owner_force_valid)"; then
-    GATE_MODE=force
-  elif [[ "${JEVONS_RESTART_DETACHED:-0}" != "1" ]]; then
-    printf '%s 🎯T815 --force is OWNER-ONLY and was not honoured (%s): treating this as an ordinary activation request, deferred inside the interval like any other. Workers: ask jevons-po to request the activation.\n' \
-      "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$_why" >&2
-  fi
-fi
-
-gate_head() { git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
-
-gate_due_epoch() {
-  # Epoch at which the next bounce may run: last stamp + interval, or empty
-  # when the gate does not apply (no valid stamp).
-  local last
-  last="$(cat "$STAMP_FILE" 2>/dev/null || true)"
-  [[ "$last" =~ ^[0-9]+$ ]] || return 0
-  printf '%s' $((last + MIN_INTERVAL_SEC))
-}
-
-if [[ "$GATE_MODE" == "served" ]]; then
-  # --served <sha>: which bounce carried this commit?
-  want=""
-  prev=""
-  for _arg in ${@+"$@"}; do
-    [[ "$prev" == "--served" ]] && want="$_arg"
-    prev="$_arg"
-  done
-  [[ -n "$want" ]] || { echo "usage: $0 --served <commit>" >&2; exit 2; }
-  want="$(git -C "$ROOT" rev-parse --verify --quiet "${want}^{commit}" 2>/dev/null || printf '%s' "$want")"
-  if [[ -r "$SERVED_FILE" ]]; then
-    while read -r _kind _epoch _sha _rest; do
-      [[ "$_kind" == "served" && -n "$_sha" && "$_sha" != "unknown" ]] || continue
-      if [[ "$_sha" == "$want" ]] || git -C "$ROOT" merge-base --is-ancestor "$want" "$_sha" 2>/dev/null; then
-        echo "served $_epoch $_sha $_rest"
-        exit 0
-      fi
-    done <"$SERVED_FILE"
-  fi
-  echo "pending: no bounce has carried $want yet (requests: $(wc -l <"$REQ_FILE" 2>/dev/null | tr -d ' ' || echo 0))"
-  exit 3
-fi
-
-if [[ "$GATE_MODE" == "runner" ]]; then
-  # The deferred runner. Holds $PENDING_LOCK for its whole life, so a second
-  # runner is refused; re-checks the request file under the lock before it
-  # exits, so a request that lands as it leaves gets a successor.
-  while [[ -s "$REQ_FILE" ]]; do
-    due="$(gate_due_epoch)"
-    now="$(date +%s)"
-    if [[ -n "$due" && "$due" -gt "$now" ]]; then
-      sleep $((due - now))
-    fi
-    JEVONS_RESTART_GATE_RELEASE=1 "$SELF" || {
-      echo "$(date '+%Y-%m-%dT%H:%M:%S%z') 🎯T815 deferred bounce failed; requests stay pending" >&2
-      exit 1
-    }
-  done
-  exit 0
-fi
-
-if [[ "$GATE_MODE" == "request" && "$WANTS_WORK" == "1" && "${JEVONS_RESTART_GATE_RELEASE:-0}" != "1" \
-      && "$MIN_INTERVAL_SEC" -gt 0 && -x "$ROOT/bin/detach" && -x "$ROOT/bin/runlock" ]]; then
-  gdue="$(gate_due_epoch)"
-  gnow="$(date +%s)"
-  ghealth="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
-  if [[ -n "$gdue" && "$gdue" -gt "$gnow" && "$ghealth" == "200" ]]; then
-    mkdir -p "$(dirname "$REQ_FILE")"
-    printf 'req %s %s %s\n' "$gnow" "$(gate_head)" "${JEVONS_AGENT_NAME:-${USER:-unknown}}" >>"$REQ_FILE"
-    gpending="$(wc -l <"$REQ_FILE" | tr -d ' ')"
-    # One detached runner; extras lose the lock race and exit.
-    ( unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED JEVONS_RESTART_NO_DETACH JEVONS_RESTART_NO_LOCK JEVONS_RESTART_FAULT
-      "$ROOT/bin/detach" -quiet -log "${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-jevonsd.log}" -- \
-        "$ROOT/bin/runlock" -quiet -timeout 5s "$PENDING_LOCK" "$SELF" --deferred-runner \
-        </dev/null >/dev/null 2>&1 & )
-    printf '%s 🎯T815 activation deferred: %s request(s) pending; the next bounce runs in %ss (interval %ss) and carries every commit landed by then. Not serving your commit yet: `%s --served <commit>` names the bounce that did.\n' \
-      "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$gpending" "$((gdue - gnow))" "$MIN_INTERVAL_SEC" "$0"
-    exit 0
-  fi
-fi
+served_head() { git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
 
 if [[ "$WANTS_WORK" == "1" && "${JEVONS_RESTART_DETACHED:-0}" != "1" && "${JEVONS_RESTART_NO_DETACH:-0}" != "1" ]]; then
   if [[ ! -x "$DETACH" ]]; then
@@ -373,7 +199,6 @@ fi
 BIN="${JEVONS_RESTART_BIN:-$ROOT/bin/jevonsd}"
 DRY_RUN=0
 SKIP_MAKE="${JEVONS_RESTART_SKIP_MAKE:-0}"
-FORCE=0
 
 usage() {
   cat <<'EOF'
@@ -382,30 +207,14 @@ Usage: restart-jevonsd.sh [options]
 Rebuild bin/jevonsd, stop brew KeepAlive if needed, free the development port,
 start repo bin/jevonsd detached, wait until /health and /api/frontier serve.
 
-🎯T218 thrash policy: if the rebuilt binary is already the one the running
-daemon is serving, this exits 0 without touching the port (already
-activated). Concurrent callers serialise on a lock and coalesce. A binary
-that genuinely changed always gets activated — if the last restart was
-inside the min-interval, the script waits out the remainder rather than
-skipping, so a real change never reports success while a stale binary serves.
-
-🎯T815 activation gate: a request inside the interval (default 600s, env
-JEVONS_RESTART_MIN_INTERVAL_SEC or ~/.jevons/restart-jevonsd.interval) does not
-bounce and does not wait. It is recorded, the next bounce time is printed, and
-one detached runner performs a single bounce that carries every commit landed
-by then. `--served <commit>` names the bounce that carried a commit (exit 3
-while pending). Nothing is deferred while the daemon is down.
+🎯T218: if the rebuilt binary is already the one the running daemon is
+serving, this exits 0 without touching the port (already activated).
+Concurrent callers serialise on a lock and coalesce. A changed binary is
+activated at once; there is no rate limit.
 
 Options:
   -h, --help     Show this help and exit 0
-  --served SHA   Print the served-ledger line whose HEAD contains SHA
   --dry-run      Print planned steps; do not stop/start/kill
-  --force        OWNER-ONLY (🎯T815). With the owner's token file
-                 (~/.jevons/restart-jevonsd.owner-force: regular file, mode
-                 0600, this uid, younger than 600s; consumed on use) it
-                 bypasses the thrash policy and the gate. Without the token
-                 it is refused as a bypass: the request is deferred like any
-                 other and the output says so. Workers ask jevons-po.
 
 Env:
   JEVONS_RESTART_PORT              Listen port (default 13705)
@@ -415,12 +224,8 @@ Env:
   JEVONS_RESTART_STOP_WAIT_SEC     Grace for the upgrade exit to free the port
                                    before SIGKILL (default 20; 🎯T392.5)
   JEVONS_RESTART_SKIP_MAKE         If 1, skip make rebuild
-  JEVONS_RESTART_MIN_INTERVAL_SEC  Thrash window (default 180; 🎯T218)
   JEVONS_RESTART_LOCK_WAIT_SEC     Wait for in-flight restart (default 240; 🎯T218)
-  JEVONS_RESTART_STAMP             Stamp file for last success (default ~/.jevons/restart-jevonsd.last)
   JEVONS_RESTART_ACTIVE            Running-daemon identity (default ~/.jevons/restart-jevonsd.active)
-  JEVONS_RESTART_OWNER_FORCE       Owner token file for --force (default ~/.jevons/restart-jevonsd.owner-force)
-  JEVONS_RESTART_OWNER_FORCE_TTL_SEC  Token lifetime (default 600)
   JEVONS_RESTART_LOCK              Lock dir (default ~/.jevons/restart-jevonsd.lock)
   JEVONS_RESTART_BIN               Daemon binary (default $REPO/bin/jevonsd)
   JEVONS_RESTART_NO_DETACH         If 1, skip the 🎯T405 self-detach re-exec
@@ -459,16 +264,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
-      shift
-      ;;
-    --force)
-      # 🎯T815: only the owner's token makes this real (see OWNER-ONLY FORCE);
-      # Each stage re-validates; only this one consumes the token.
-      if _why="$(owner_force_valid)"; then
-        FORCE=1
-        rm -f "$OWNER_FORCE_FILE" # single use
-        printf '%s 🎯T815 owner --force honoured (token consumed)\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
-      fi
       shift
       ;;
     *)
@@ -547,31 +342,6 @@ source_identity() {
   fi
   "$BUILDIDENT" -root "$ROOT" -id 2>/dev/null | head -n1
 }
-
-await_min_interval() {
-  # A real binary change inside the thrash window waits out the remainder
-  # instead of skipping: skipping would report success while the old binary
-  # kept serving (🎯T194). Bounded by MIN_INTERVAL_SEC by construction.
-  [[ "$FORCE" -eq 0 ]] || return 0
-  # 🎯T815: the watchdog's recovery restart carries no --force any more; a
-  # daemon that is not serving has nothing to debounce, so it never waits.
-  [[ "$(http_code "http://127.0.0.1:${PORT}/health")" == "200" ]] || return 0
-  # 🎯T815: the deferred runner has already waited out the interval.
-  [[ "${JEVONS_RESTART_GATE_RELEASE:-0}" != "1" ]] || return 0
-  [[ -f "$STAMP_FILE" ]] || return 0
-  local last now elapsed remain
-  last="$(cat "$STAMP_FILE" 2>/dev/null || true)"
-  [[ "$last" =~ ^[0-9]+$ ]] || return 0
-  now="$(date +%s)"
-  elapsed=$((now - last))
-  [[ "$elapsed" -ge 0 ]] || return 0
-  if [[ "$elapsed" -lt "$MIN_INTERVAL_SEC" ]]; then
-    remain=$((MIN_INTERVAL_SEC - elapsed))
-    log "🎯T218 thrash window: last restart ${elapsed}s ago (min ${MIN_INTERVAL_SEC}s); waiting ${remain}s before activating the new binary"
-    sleep "$remain"
-  fi
-}
-
 
 http_code() {
   # Prints 000 on total failure (curl missing network, refused, etc.).
@@ -862,30 +632,21 @@ wait_until_serving() {
 }
 
 record_served() {
-  # 🎯T815: append one ledger line naming the HEAD this run served and how
-  # many pending requests it absorbed. The request file is renamed away
-  # first, so a request that lands afterwards is counted by the next bounce
-  # (and the runner loop, which re-checks the file, schedules it).
-  local n=0 taken="$REQ_FILE.taken.$$"
-  if [[ -f "$REQ_FILE" ]] && mv "$REQ_FILE" "$taken" 2>/dev/null; then
-    n="$(wc -l <"$taken" | tr -d ' ')"
-    rm -f "$taken"
-  fi
+  # 🎯T553: one ledger line naming the HEAD this run served.
   mkdir -p "$(dirname "$SERVED_FILE")" 2>/dev/null || true
-  printf 'served %s %s coalesced=%s bounce=%s\n' "$(date +%s)" "$SERVED_HEAD" "$n" "$1" >>"$SERVED_FILE" 2>/dev/null || true
-  log "🎯T815 served head=${SERVED_HEAD:0:12} requests-absorbed=$n bounce=$1"
+  printf 'served %s %s bounce=%s\n' "$(date +%s)" "$SERVED_HEAD" "$1" >>"$SERVED_FILE" 2>/dev/null || true
+  log "served head=${SERVED_HEAD:0:12} bounce=$1"
 }
 
 # --- main --------------------------------------------------------------------
 
-log "🎯T191 restart-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_run=$DRY_RUN force=$FORCE"
+log "🎯T191 restart-jevonsd: root=$ROOT port=$PORT workdir=$WORKDIR dry_run=$DRY_RUN"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T254.2 build bin/jevonsd from committed HEAD in $SNAP_DIR (never the shared tree) unless SKIP_MAKE=$SKIP_MAKE"
   log "[dry-run] would: 🎯T218 no-op if the running daemon already serves this build (already activated)"
   log "[dry-run] would: 🎯T405 re-exec through $DETACH into its own session so the caller's death cannot cancel the bounce"
   log "[dry-run] would: 🎯T392.5 hold $LOCK_FILE via runlock so concurrent restarts serialise"
-  log "[dry-run] would: 🎯T218 wait out the ${MIN_INTERVAL_SEC}s thrash window rather than skip a changed binary"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
   log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
@@ -894,10 +655,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-# 🎯T815: the HEAD this run serves, read before the build. A commit landing
-# mid-build can only make this an under-claim (safe for the requester's
-# merge-base check), never an over-claim.
-SERVED_HEAD="$(gate_head)"
+# 🎯T553: the HEAD this run serves, read before the build. A commit landing
+# mid-build can only make this an under-claim, never an over-claim.
+SERVED_HEAD="$(served_head)"
 
 if [[ "$SKIP_MAKE" != "1" ]]; then
   # 🎯T254.2: build committed HEAD in a throwaway worktree, never the shared
@@ -987,7 +747,6 @@ fi
 already_activated() {
   # True when the daemon holding :$PORT runs WANT_SHA, was built from the
   # same sources, and answers /health.
-  [[ "$FORCE" -eq 0 ]] || return 1
   [[ -n "$WANT_SHA" ]] || return 1
   local have have_ident
   have="$(running_sha)"
@@ -1026,10 +785,7 @@ if already_activated; then
   exit 0
 fi
 
-# The binary genuinely differs from what serves. It must be activated
-# (🎯T194) — rate-limit by waiting, never by skipping.
-await_min_interval
-
+# The binary genuinely differs from what serves: activate it (🎯T194).
 stop_brew_jevons
 if ! upgrade_with_supervisor; then
 kill_port_listeners
@@ -1050,8 +806,5 @@ wait_until_serving
 record_active_identity
 
 log "OK: development jevonsd serving on :$PORT (workdir=$WORKDIR)"
-# 🎯T218: stamp successful restart to open the next thrash window.
-mkdir -p "$(dirname "$STAMP_FILE")" 2>/dev/null || true
-date +%s >"$STAMP_FILE" 2>/dev/null || true
 record_served 1
 exit 0

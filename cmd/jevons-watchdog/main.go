@@ -141,9 +141,8 @@ func probe(port int) bool {
 // restart invokes the restart script and returns a human-readable
 // detail when it did not work, empty when it did.
 //
-// No --force (🎯T815: it is owner-only). The thrash policy (🎯T218) and the
-// activation gate defer only while a healthy daemon is serving; the script
-// treats a dead port as its own bypass, so a recovery restart never waits.
+// The script never delays a restart, and a dead port is never "already
+// activated", so a recovery restart always runs at once (🎯T218).
 //
 // SKIP_MAKE when a binary already exists, also on purpose. Restoring
 // service beats freshness: if the daemon died because HEAD does not

@@ -60,7 +60,7 @@ func TestT1036FailureHelper(t *testing.T) {
 	}
 	e := newThrashEnv(t)
 	e.build("a")
-	out, err := e.run(0)
+	out, err := e.run()
 	if err != nil || e.listenerPID() == 0 {
 		t.Fatalf("fixture could not start daemon: %v\n%s", err, out)
 	}

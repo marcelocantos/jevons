@@ -129,10 +129,8 @@ func (r *rig) env(extra ...string) []string {
 		"JEVONS_RESTART_LOG=" + filepath.Join(r.dir, "daemon.log"),
 		"JEVONS_RESTART_DETACH_LOG=" + r.restartLog(),
 		"JEVONS_RESTART_LOCK=" + filepath.Join(r.dir, "restart.lock"),
-		"JEVONS_RESTART_STAMP=" + filepath.Join(r.dir, "restart.last"),
 		"JEVONS_RESTART_ACTIVE=" + filepath.Join(r.dir, "restart.active"),
 		"JEVONS_RESTART_WAIT_SEC=30",
-		"JEVONS_RESTART_MIN_INTERVAL_SEC=0",
 	}
 	return append(e, extra...)
 }
@@ -163,27 +161,21 @@ func (r *rig) waitServing(want bool, within time.Duration) bool {
 	return r.serving() == want
 }
 
-// ownerForce plants the 🎯T815 owner token so the next --force is honoured:
-// these oracles re-bounce a healthy daemon on purpose, which is the owner's
-// bypass. (The watchdog itself passes no --force: a dead port never waits.)
-func (r *rig) ownerForce() {
+// forgetActive deletes the script's record of the daemon it started, so it
+// cannot prove what is serving and bounces (its safe default). These oracles
+// re-bounce a healthy daemon on purpose; with an identical binary the
+// already-activated check would otherwise make the restart a no-op.
+func (r *rig) forgetActive() {
 	r.t.Helper()
-	p := filepath.Join(r.home, ".jevons", "restart-jevonsd.owner-force")
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		r.t.Fatal(err)
-	}
-	if err := os.WriteFile(p, nil, 0o600); err != nil {
-		r.t.Fatal(err)
-	}
-	if err := os.Chmod(p, 0o600); err != nil {
+	if err := os.Remove(filepath.Join(r.dir, "restart.active")); err != nil && !os.IsNotExist(err) {
 		r.t.Fatal(err)
 	}
 }
 
-// restart runs the script the way the owner does (--force), and waits for it.
+// restart runs the script and waits for it, forcing a real bounce.
 func (r *rig) restart(extraEnv ...string) error {
-	r.ownerForce()
-	cmd := exec.Command(r.script, "--force")
+	r.forgetActive()
+	cmd := exec.Command(r.script)
 	cmd.Dir = r.root
 	cmd.Env = r.env(extraEnv...)
 	out, err := cmd.CombinedOutput()
@@ -377,8 +369,8 @@ func t405ForegroundKill(t *testing.T, detached bool) {
 		t.Fatalf("something is already listening on scratch port %d", r.port)
 	}
 
-	r.ownerForce()
-	cmd := exec.Command(r.script, "--force")
+	r.forgetActive()
+	cmd := exec.Command(r.script)
 	cmd.Dir = r.root
 	if detached {
 		cmd.Env = r.env()
