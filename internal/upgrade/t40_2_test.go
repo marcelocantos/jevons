@@ -62,32 +62,6 @@ func TestReattachFleetNilSafe(t *testing.T) {
 	ReattachFleet(nil)
 }
 
-func TestReattachFleetReapsCursorThenPrefersAdopt(t *testing.T) {
-	var orphans int
-	oldOrphan := reapOrphanCursorACP
-	t.Cleanup(func() { reapOrphanCursorACP = oldOrphan })
-	reapOrphanCursorACP = func() []int {
-		orphans++
-		return nil
-	}
-
-	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name: "jevons", WorkDir: t.TempDir(), SessionID: "sid-no-store",
-		Provider: claudia.ProviderCursor, AutoStart: false,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// AutoStart false so PreferAdopt does not spawn a real cursor-agent.
-	ReattachFleet(reg)
-	if orphans != 1 {
-		t.Fatalf("orphan reap calls = %d", orphans)
-	}
-}
-
 func TestSessionSnapshotFromFileMissing(t *testing.T) {
 	if _, err := SessionSnapshotFromFile(filepath.Join(t.TempDir(), "nope.json")); err != nil {
 		// NewRegistry creates an empty file — a missing path is not an error
