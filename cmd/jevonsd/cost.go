@@ -142,9 +142,10 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		Actions: &fleetActions{
 			registry: registry,
 			killswitch: &cost.BrokerKillSwitch{
-				List:    brokerSeatsForKill,
-				Stop:    claudia.StopBrokerSeat,
-				Protect: append([]string{}, cfg.ProtectedWorkers...),
+				List:       brokerSeatNames,
+				Registered: func(name string) bool { return registry.Def(name) != nil },
+				Stop:       claudia.StopBrokerSeat,
+				Protect:    append([]string{}, cfg.ProtectedWorkers...),
 			},
 			// 🎯T139 / T334: never stop or kill the overseer on budget clamp.
 			protect:  append([]string{}, cfg.ProtectedWorkers...),
@@ -163,15 +164,15 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config}
 }
 
-// brokerSeatsForKill adapts claudia.BrokerSeats for the kill-switch.
-func brokerSeatsForKill(ctx context.Context) ([]cost.BrokerSeat, error) {
+// brokerSeatNames lists the names of every seat the claudia broker holds.
+func brokerSeatNames(ctx context.Context) ([]string, error) {
 	seats, err := claudia.BrokerSeats(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]cost.BrokerSeat, 0, len(seats))
+	out := make([]string, 0, len(seats))
 	for _, s := range seats {
-		out = append(out, cost.BrokerSeat{Name: s.Name, Owned: s.Owned})
+		out = append(out, s.Name)
 	}
 	return out, nil
 }
