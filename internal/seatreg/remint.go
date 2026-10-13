@@ -109,11 +109,6 @@ func ParkNonFleetAutoStart(grants, fleet *claudia.Registry) (int, error) {
 	return n, nil
 }
 
-// SubscriptionPlan is a fleet id whose Launch talks to the sidecar.
-func SubscriptionPlan(p claudia.Provider) bool {
-	return subscriptionPlan(p)
-}
-
 func subscriptionPlan(p claudia.Provider) bool {
 	switch p {
 	case claudia.ProviderClaude, claudia.ProviderCodex,

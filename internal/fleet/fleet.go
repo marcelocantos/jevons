@@ -42,12 +42,9 @@ const (
 // direct blocked until its caller timed out (intermittent journey J10
 // hangs, the composer still holding the prompt minutes later).
 //
-// That belonged in claudia, which owns the pane, and now lives there:
-// tmuxagent.MatchReady rejects the splash by its ghost placeholder, so
-// ready means the composer accepts and submits input (🎯T284). Waiting on
-// top of a trustworthy signal only taxes every agent start. If a launch
-// race resurfaces, fix the signal in claudia — do not reintroduce a sleep
-// here.
+// Seats now run on the omp agent core with no terminal to mount, and
+// readiness is claudia's to report. If a launch race resurfaces, fix the
+// signal in claudia — do not reintroduce a sleep here.
 
 // Claudia adapts a claudia.Registry to the butler.Fleet interface and
 // to butler.Participants (agent-only deliver).

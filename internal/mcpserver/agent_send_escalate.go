@@ -110,8 +110,8 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 		return agentSendResult{}, false, nil
 	}
 	// 🎯T931: the ladder holds only rungs this seat can run. A steer-first
-	// ladder cannot start on a seat with no steer mechanism (Claude Code in
-	// tmux), so the ordinary path holds the message for the turn boundary.
+	// ladder cannot start on a seat with no steer mechanism, so the ordinary
+	// path holds the message for the turn boundary.
 	if caps, ok := escalate.CapsOf(proc); ok {
 		fitted := escalate.Fit(ladder, caps)
 		if len(fitted) == 0 {

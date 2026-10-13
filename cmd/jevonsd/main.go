@@ -633,13 +633,6 @@ func main() {
 		startDumpOnSignal(cfg.StateDir, dumpSignal)
 	}
 
-	// ð¯T40: default Grok connect-mode so agents use detached `grok agent
-	// serve` + WebSocket and survive coordinator-only upgrades. Override
-	// with CLAUDIA_GROK_CONNECT=0 to force parent-owned stdio.
-	if v := os.Getenv("CLAUDIA_GROK_CONNECT"); v == "" {
-		_ = os.Setenv("CLAUDIA_GROK_CONNECT", "1")
-	}
-
 	// Agent registry â manages persistent Grok ACP sessions.
 	registryPath := seatreg.Path(cfg.StateDir)
 	{
