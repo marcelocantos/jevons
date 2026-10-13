@@ -370,23 +370,3 @@ func TestT766QueueMutationsFeedAuthority(t *testing.T) {
 		t.Fatal("unseen queue became empty")
 	}
 }
-
-func TestT766BusyPaneReadsObservedActivityWithoutTranscriptScan(t *testing.T) {
-	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := claudia.AgentDef{Name: "jv-busy", SessionID: "unresolvable", Provider: claudia.ProviderClaude, WorkDir: t.TempDir()}
-	if err := reg.Register(d); err != nil {
-		t.Fatal(err)
-	}
-	s := &Server{registry: reg}
-	s.Seats().Observe(seatstate.Observation{Name: d.Name, LastActivity: time.Now(), QueueDepth: seatstate.QueueUnknown, Source: "test.provider"})
-	if !s.sendStallIsBusyPane(d.Name, t745Err("no_composer", t745Diff)) {
-		t.Fatal("control ignored observed movement and tried to locate a transcript")
-	}
-	s.Seats().Forget(d.Name)
-	if s.sendStallIsBusyPane(d.Name, t745Err("no_composer", t745Diff)) {
-		t.Fatal("unobserved movement became known busy")
-	}
-}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
-	"github.com/marcelocantos/jevons/internal/claudetrust"
 )
 
 // Kinds of wait a frontier target can be in. The cockpit paints both as the
@@ -94,18 +92,9 @@ func (s *Server) putSeatWait(target string, w SeatWait) {
 // frontier tooltip quotes. The journal keeps the whole thing.
 const seatFailureCauseMax = 240
 
-// seatTrustConfigPath is the 🎯T709 config a Claude seat reads its
-// workdir-trust answer from. A seam so a test can point it at a fixture
-// instead of the owner's real ~/.claude.json.
-var seatTrustConfigPath = claudetrust.ConfigPath
-
 // describeSeatFailure renders why a seat for a target is gone, for the
 // owner looking at the frontier row: which seat, under which parent, the
-// removal reason and detail, the classified cause when the daemon has one,
-// and — for a Claude seat whose workdir Claude Code has never been told to
-// trust — the one diagnosis the daemon can make on its own. That modal is
-// a human keypress no tmux pane can supply; it is what held both
-// jv-t989-mobile-webview seats on 2026-10-02, and nothing told the owner.
+// removal reason and detail, and the classified cause when the daemon has one.
 func describeSeatFailure(def *claudia.AgentDef, name, removalReason, removalDetail string, cause error) string {
 	var b strings.Builder
 	parent := ""
@@ -123,16 +112,6 @@ func describeSeatFailure(def *claudia.AgentDef, name, removalReason, removalDeta
 			text = text[:seatFailureCauseMax] + "…"
 		}
 		fmt.Fprintf(&b, "; cause (%s): %s", agenterr.ClassifyText(cause.Error()), text)
-	}
-	if def != nil && def.Provider == claudia.ProviderClaude && strings.TrimSpace(def.WorkDir) != "" {
-		if path := seatTrustConfigPath(); path != "" {
-			doc, err := os.ReadFile(path)
-			if err == nil && !claudetrust.Accepted(doc, def.WorkDir) {
-				fmt.Fprintf(&b, "; Claude Code has not trusted workdir %s (no hasTrustDialogAccepted in %s) — "+
-					"a seat there opens on the trust dialog, which no automated process can answer; "+
-					"accept it once by hand or record the answer in that file", def.WorkDir, path)
-			}
-		}
 	}
 	return b.String()
 }
