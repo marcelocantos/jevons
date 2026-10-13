@@ -108,8 +108,9 @@ type Snapshot struct {
 
 // MonitorArgs parameterises NewMonitor. Store and Config are required.
 // IsOrphan classifies a burning session as ownerless (cockpit gone) —
-// the production classifier lives in the wiring layer where tmux/ps
-// access belongs; nil means no orphan detection. Now is injected for
+// nil means no orphan detection, which is what production wires since the
+// tmux fleet session set it read is gone; lost broker seats are reached by
+// the kill-switch instead. Now is injected for
 // deterministic tests.
 type MonitorArgs struct {
 	Store    *Store
