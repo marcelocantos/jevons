@@ -13,7 +13,7 @@ import (
 )
 
 // Actions is the mechanism seam through which the enforcer touches the
-// world. Production wires these to the claudia fleet and the tmux
+// world. Production wires these to the claudia fleet and the broker
 // kill-switch; tests and the drill supply their own.
 type Actions interface {
 	// PauseWorker stops a worker's process resumably (thread persists).
@@ -22,8 +22,8 @@ type Actions interface {
 	KillWorker(id string) error
 	// StopFleet stops every jevons-owned worker resumably (hard dead-man backstop).
 	StopFleet() error
-	// KillSwitch is the global stop: it must reach launchd-detached
-	// fleet processes, not just registry-tracked ones.
+	// KillSwitch is the global stop: it must reach broker seats the
+	// registry has lost, not just registry-tracked ones.
 	KillSwitch() error
 }
 

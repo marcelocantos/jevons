@@ -6,10 +6,8 @@ package main
 import (
 	"context"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/marcelocantos/claudia"
 
@@ -105,30 +103,15 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		return ""
 	}
 
-	sock := cost.ClaudiaSocketPath()
-
 	collector := cost.NewCollector(&cost.CollectorArgs{
 		Store:        store,
 		ProjectsRoot: jc.SessionsDir,
 		Attribute:    attribute,
 	})
 
-	// Orphan = a burning session that lives INSIDE the jevons fleet tmux
-	// server but is not owned by the registry (a lost worker whose
-	// cockpit is gone — the incident's signature). A merely unattributed
-	// burner NOT in the fleet is the owner's own terminal: foreign spend,
-	// reported via the global vs fleet split, never flagged as an orphan.
-	isOrphan := func(r cost.BurnRow) bool {
-		if r.Worker != "" {
-			return false
-		}
-		return fleetSessionSet(sock)[r.SessionID]
-	}
-
 	monitor := cost.NewMonitor(&cost.MonitorArgs{
 		Store:           store,
 		Config:          config,
-		IsOrphan:        isOrphan,
 		CollectorHealth: collector.Health,
 	})
 
@@ -157,8 +140,12 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		Snapshot: monitor.Snapshot,
 		Config:   config,
 		Actions: &fleetActions{
-			registry:   registry,
-			killswitch: &cost.TmuxKillSwitch{Socket: sock},
+			registry: registry,
+			killswitch: &cost.BrokerKillSwitch{
+				List:    brokerSeatsForKill,
+				Stop:    claudia.StopBrokerSeat,
+				Protect: append([]string{}, cfg.ProtectedWorkers...),
+			},
 			// 🎯T139 / T334: never stop or kill the overseer on budget clamp.
 			protect:  append([]string{}, cfg.ProtectedWorkers...),
 			removals: srv.RemovalAccount(),
@@ -170,35 +157,30 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 
 	go collector.Run(ctx, cost.DefaultScanInterval, cost.DefaultPollInterval)
 	go enforcer.Run(ctx, 0)
-	slog.Info("cost clamp-down started", "budget", budgetPath, "fleet_socket", sock,
+	slog.Info("cost clamp-down started", "budget", budgetPath,
 		"cost_safety", "T334", "protected", cfg.ProtectedWorkers)
 
 	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config}
 }
 
-// fleetSessionSet returns the set of Grok session ids currently hosted
-// as windows in the fleet tmux server. Best-effort: if the server is
-// down or the option is absent, it returns empty, so orphan detection
-// degrades to a safe no-op rather than mis-flagging foreign sessions.
-func fleetSessionSet(sock string) map[string]bool {
-	out, err := exec.Command("tmux", "-S", sock, "list-windows", "-a", "-F", "#{@claudia-session-id}").Output()
-	set := map[string]bool{}
+// brokerSeatsForKill adapts claudia.BrokerSeats for the kill-switch.
+func brokerSeatsForKill(ctx context.Context) ([]cost.BrokerSeat, error) {
+	seats, err := claudia.BrokerSeats(ctx)
 	if err != nil {
-		return set
+		return nil, err
 	}
-	for _, line := range strings.Fields(string(out)) {
-		if discovery.IsUUID(line) {
-			set[line] = true
-		}
+	out := make([]cost.BrokerSeat, 0, len(seats))
+	for _, s := range seats {
+		out = append(out, cost.BrokerSeat{Name: s.Name, Owned: s.Owned})
 	}
-	return set
+	return out, nil
 }
 
 // fleetActions maps enforcement decisions onto the claudia registry and
-// the tmux kill-switch.
+// the broker kill-switch.
 type fleetActions struct {
 	registry   *claudia.Registry
-	killswitch *cost.TmuxKillSwitch
+	killswitch *cost.BrokerKillSwitch
 	// protect: agent names never stopped by fleet pause / PauseWorker (🎯T139).
 	// KillWorker still may remove non-overseer workers; protect blocks Stop.
 	protect []string
@@ -258,7 +240,7 @@ func (a *fleetActions) StopFleet() error {
 }
 
 func (a *fleetActions) KillSwitch() error {
-	// Reap the launchd-detached fleet server first (reaches orphans the
+	// Stop the broker seats no connection owns first (orphans the
 	// registry has lost), then stop what the registry still tracks —
 	// still skipping protected overseer (🎯T139).
 	err := a.killswitch.Kill()
