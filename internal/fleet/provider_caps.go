@@ -212,7 +212,7 @@ func ExplainLaunchCapError(def *claudia.AgentDef, err error) error {
 	for _, f := range providerCapFields {
 		if f.capability == capErr.Capability && f.requested(def) {
 			return fmt.Errorf("agent %q: stored def carries %s (%s), which the %s provider refuses — "+
-				"a provider-native setting kept across a provider switch; re-mint or migrate the seat to revive: %w",
+				"a provider-native setting kept across a provider switch; re-mint the seat, or switch it to a provider that honours the setting, to revive: %w",
 				def.Name, capErr.Capability, f.show(def), providerLabel(def.Provider), err)
 		}
 	}

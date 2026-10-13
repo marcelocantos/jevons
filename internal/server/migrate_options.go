@@ -17,7 +17,7 @@ import (
 // Fleet-tree provider menu + "!" band marks (🎯T285.2).
 //
 // GET /api/migrate/options is the single fetch behind both halves of the
-// owner's manual migrate UI: the per-provider weekly band (computed HERE,
+// owner's model-switch menu: the per-provider weekly band (computed HERE,
 // by the same planusage.WeeklyBandOf the sweep uses — the client never
 // re-derives it) and the model ids the menu offers per provider, best
 // first. The menu's choice goes to POST /api/agents/switch-model.

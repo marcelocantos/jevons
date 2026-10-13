@@ -655,8 +655,8 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("POST /api/plan-usage/auth/recover/{provider}", s.handlePlanDestinationAuthRecover)
 	mux.HandleFunc("GET /api/plan-usage/auth", s.handlePlanAuthStatus)
 	mux.HandleFunc("POST /api/plan-usage/sweep", s.handlePlanUsageSweep)
-	// 🎯T285.2: fleet-tree icon menu — per-provider bands + models, and the
-	// thin HTTP wrapper over the fleet migrate path (non-overseer seats).
+	// 🎯T285.2: fleet-tree icon menu — per-provider bands + models. The
+	// menu's choice goes to POST /api/agents/switch-model below.
 	mux.HandleFunc("GET /api/migrate/options", s.handleMigrateOptions)
 	mux.HandleFunc("POST /api/agents/switch-model", s.handleSwitchModel) // claudia 🎯T195
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)

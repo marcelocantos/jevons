@@ -968,7 +968,8 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// A live handle is the transport authority: Claudia Launch returns that
 	// same handle without starting another process. Never relabel its persisted
 	// row to a sidecar while the legacy CLI still owns the seat. An explicit
-	// cross-plan request needs the migration path, not an in-place Register.
+	// cross-plan request is a model switch (jevons_agent_switch_model), not an
+	// in-place Register.
 	var liveProvider claudia.Provider
 	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
 		liveProvider = proc.Provider()
@@ -1031,7 +1032,7 @@ func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
 		return "cannot inspect conversation store directory: " + dirErr.Error() + "; recover manually"
 	}
 	if len(entries) != 0 {
-		return "conversation store exists under " + seatDir + "; preserve history and recover model via migration"
+		return "conversation store exists under " + seatDir + "; preserve history and recover the model with jevons_agent_switch_model"
 	}
 	recs, err := spool.ReadSeat(spool.Dir(), def.Name)
 	if err != nil {
@@ -1040,7 +1041,7 @@ func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
 	for _, rec := range recs {
 		switch rec.Type {
 		case "text", "turn_end", "tool_call", "tool_result":
-			return "conversation evidence in dated spool; preserve history and recover model via migration"
+			return "conversation evidence in dated spool; preserve history and recover the model with jevons_agent_switch_model"
 		case "accepted":
 			if rec.TS.IsZero() || time.Since(rec.TS) < 2*time.Minute {
 				return "accepted send may still be in flight; wait for a model reply or inspect history before retry"
@@ -1115,7 +1116,7 @@ func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sess
 func alignStartTransport(def *claudia.AgentDef, existed bool, providerArg string, live claudia.Provider) error {
 	if live != "" {
 		if cli.PlanProvider(live) != cli.PlanProvider(def.Provider) {
-			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; migrate or stop it first", def.Name, live, def.Provider)
+			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; use jevons_agent_switch_model, or stop it first", def.Name, live, def.Provider)
 		}
 		def.Provider = live
 	} else if !existed || strings.TrimSpace(providerArg) != "" {

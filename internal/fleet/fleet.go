@@ -66,11 +66,9 @@ type Claudia struct {
 	// a seat stops being alive. Nil in tests.
 	seats *seatstate.Authority
 
-	// logf is the durable event sink for migration decisions (🎯 audit:
-	// migrate.go previously recorded its richest decisions — handover
-	// dispatch, interrupt-before-forced-migrate, "registry missed a
-	// provider switch", session remap — only via slog, which is not
-	// captured in the eventlog or jevons_logs_tail. Nil is safe: a
+	// logf is the durable event sink for fleet decisions such as model
+	// switches (🎯 audit: these once went only to slog, which is not
+	// captured in the eventlog or jevons_logs_tail). Nil is safe: a
 	// fleet.Claudia built without SetEventLogger just stays slog-only,
 	// same as before this field existed.
 	logf fleetlog.Logger
@@ -137,7 +135,7 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 // SetRemovalAccount installs the accounted-removal chokepoint (🎯T435). The
 // daemon builds one Account for the process and gives every removal path the
 // same one, so a row leaving here is explained on the surfaces read elsewhere.
-// SetEventLogger wires the durable event sink migration decisions log to,
+// SetEventLogger wires the durable event sink fleet decisions log to,
 // alongside their existing slog output. Nil keeps the package slog-only.
 func (f *Claudia) SetEventLogger(log fleetlog.Logger) {
 	f.mu.Lock()
@@ -145,8 +143,8 @@ func (f *Claudia) SetEventLogger(log fleetlog.Logger) {
 	f.logf = log
 }
 
-// logEvent is the nil-safe dual-write helper migrate.go uses alongside its
-// slog calls, so a migration decision reaches the durable eventlog without
+// logEvent is the nil-safe dual-write helper fleet decisions use alongside
+// their slog calls, so a decision reaches the durable eventlog without
 // requiring the reader to also have the right terminal scrollback.
 func (f *Claudia) logEvent(component, decision string, fields map[string]any) {
 	if f == nil {
