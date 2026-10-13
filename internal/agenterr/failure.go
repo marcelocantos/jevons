@@ -19,7 +19,6 @@ import (
 //   - auth: 401 / 403 / API key / unauthorized
 //   - client_bug: local config, wire, session, bad request
 //   - startup_stall: ready timeout over startup notices only, no composer (🎯T565)
-//   - workspace_trust: ready timeout on Claude Code's trust modal (🎯T709)
 //   - retry_exhausted: the CLI's own retry budget ran out on a transient
 //     step-level failure (🎯T862.12) — not the same as the transient
 //     backend_unavailable/rate_limit cause that first triggered the retry
@@ -83,13 +82,6 @@ func ClassifyText(msg string) Class {
 	// Busy is not a provider failure.
 	if isBusyMessage(low) {
 		return ClassNone
-	}
-
-	// 🎯T709: a launch whose pane is Claude Code's workspace-trust modal.
-	// Ahead of the stall check because claudia reports it as no_composer,
-	// and a stall says "retried" — which is the wrong answer here.
-	if IsWorkspaceTrust(s) {
-		return ClassWorkspaceTrust
 	}
 
 	// 🎯T565: a launch that timed out on startup output alone, before any
@@ -198,8 +190,6 @@ func OwnerCopy(class Class, raw string) string {
 	case ClassClientBug:
 		return "Local client/session error (client_bug). Fix config, session, or wire state; not a cloud outage. " +
 			detailSuffix(raw)
-	case ClassWorkspaceTrust:
-		return workspaceTrustCopy(raw)
 	case ClassStartupStall:
 		switch namedReadyReason(raw) {
 		case "rc_connecting":

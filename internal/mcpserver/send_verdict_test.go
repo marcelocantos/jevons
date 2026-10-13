@@ -79,14 +79,10 @@ func (a *chipSender) Send(text string) error {
 
 func (a *chipSender) Interrupt() error { return a.interrupt }
 
-// pasteChipErr is claudia's own text, verbatim in shape (internal/tmuxagent/
-// send.go:422) including the frame tail — and the tail matters. On every live
-// instance it read `Press up to edit queued messages`, which is the CLI saying
-// it ACCEPTED the message. The submit loop was staring at a successful delivery
-// and calling it a stuck composer.
+// pasteChipErr is a transport error that fails to observe the receiver: the
+// reply wait ran out after the payload was handed over.
 func pasteChipErr() error {
-	return fmt.Errorf("turn not submitted: composer state=paste_chip after 8 Enter presses; last frame tail:\n" +
-		"  Press up to edit queued messages\n  paste again to expand\n❯ ")
+	return fmt.Errorf("deliver turn to agent %q: %w", "w", context.DeadlineExceeded)
 }
 
 // chipFixture is sendFixture with an erroring sender. The instrument is the
@@ -138,7 +134,7 @@ func TestPasteChipErrorOverADrainedPayloadIsNotReportedNotSubmitted(t *testing.T
 	// The transport's account is not suppressed — it is reported BESIDE the
 	// observation. A reader who cannot see both cannot tell which one they are
 	// being told, and this disagreement is the ordinary case now.
-	for _, want := range []string{"paste_chip", "contradicted by"} {
+	for _, want := range []string{"context deadline exceeded", "contradicted by"} {
 		if !strings.Contains(res.Message, want) {
 			t.Errorf("the operator is not shown both accounts: missing %q in %q", want, res.Message)
 		}
@@ -257,13 +253,6 @@ func TestClassifySendErrorSeparatesNonObservationFromDisproof(t *testing.T) {
 		want SendClaim
 	}{
 		{"nil", nil, ClaimNotSent},
-		{"paste chip", pasteChipErr(), ClaimSubmitUnverified},
-		{"composer empty after paste",
-			errors.New("turn not submitted: composer empty after paste (brief never reached pane)"),
-			ClaimSubmitUnverified},
-		{"paste never appeared",
-			errors.New("turn not submitted: paste never appeared in pane within 8s; composer state=empty; last frame tail:\n❯ "),
-			ClaimSubmitUnverified},
 		{"reply deadline", context.DeadlineExceeded, ClaimReplyUnverified},
 		{"wrapped reply deadline",
 			fmt.Errorf("deliver turn to agent %q: %w", "jevons-po", context.DeadlineExceeded),
@@ -287,21 +276,8 @@ func TestClassifySendErrorSeparatesNonObservationFromDisproof(t *testing.T) {
 	if !ClaimNotSent.DisprovesDelivery() {
 		t.Error("a handover that never happened must disprove delivery")
 	}
-	if ClaimSubmitUnverified.DisprovesDelivery() || ClaimReplyUnverified.DisprovesDelivery() {
+	if ClaimReplyUnverified.DisprovesDelivery() {
 		t.Error("a failure to observe was treated as evidence")
-	}
-}
-
-// A frame tail can quote anything at all — including the word timeout, off
-// whatever the agent had on screen. The submit markers are therefore checked
-// first, and this pins that ordering: misclassifying a stuck composer as a
-// reply timeout would send it down a path that reads the wrong instrument.
-func TestFrameTailQuotingATimeoutIsStillASubmitClaim(t *testing.T) {
-	t.Parallel()
-	err := errors.New("turn not submitted: composer state=paste_chip after 8 Enter presses; last frame tail:\n" +
-		"  ⎿  Error: context deadline exceeded while waiting for the operation timed out\n❯ ")
-	if got := ClassifySendError(err); got != ClaimSubmitUnverified {
-		t.Fatalf("claim=%s want %s — the frame tail was read as the daemon's own failure", got, ClaimSubmitUnverified)
 	}
 }
 
