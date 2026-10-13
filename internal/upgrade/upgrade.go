@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package upgrade is coordinator-side scaffolding for 🎯T40: restart
-// jevonsd without registry.StopAll(), persist agent handles for
-// reattach (session_id + optional Grok connect-mode serve URL/PID).
+// jevonsd without registry.StopAll(), persist agent handles (name +
+// session_id) for reattach.
 //
-// Conversation durability (session/load + agents.json) already survives
-// a normal restart. Process durability uses claudia Grok connect-mode
-// (detached `grok agent serve` + WebSocket) so agents outlive the
-// coordinator when StopAll is skipped on upgrade exit.
+// Process durability is the claudia broker's: every seat runs on the omp
+// agent core under it, outlives the coordinator, and is reclaimed by name.
 package upgrade
 
 import (

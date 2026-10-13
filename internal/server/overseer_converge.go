@@ -298,11 +298,8 @@ func (s *Server) ObserveCockpit() cockpitObs {
 	if proc != nil && (seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
 		o.ProcAlive = true
 		o.PromptInFlight = s.seatInFlight(name, proc)
-		// 🎯T601: ask the pane, not only the event stream — but only
-		// where the answer IS the pane. For a tmux Claude session
-		// PromptInFlight is now read from the frame (claudia
-		// claudeAgentOps), so a long tool call or plain thinking still
-		// reports work with no ACP event in minutes.
+		// 🎯T601: PromptInFlight is evidence of work only where the
+		// provider itself reports it.
 		//
 		// Not for ACP providers. There PromptInFlight means "the client
 		// says a prompt is outstanding", which is exactly the condition a
