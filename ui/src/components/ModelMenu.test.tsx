@@ -3,7 +3,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { migrateBody, migrateUrl, ModelMenu } from './ModelMenu';
+import { ModelMenu, SWITCH_MODEL_URL, switchModelBody } from './ModelMenu';
 
 describe('ModelMenu', () => {
   it('offers an eligible model and refuses an ineligible provider', () => {
@@ -74,17 +74,12 @@ describe('ModelMenu', () => {
     expect(view.getByText(/included API usage exhausted/)).toBeTruthy();
   });
 
-  it('sends the overseer to its own migrate route', () => {
-    expect(migrateUrl('overseer')).toBe('/api/overseer/migrate');
-    expect(migrateUrl('work')).toBe('/api/agents/migrate');
-    expect(migrateBody('jevons', 'overseer', 'grok', 'grok-4.6')).toEqual({
+  it('switches every seat, the overseer included, through one route', () => {
+    expect(SWITCH_MODEL_URL).toBe('/api/agents/switch-model');
+    expect(switchModelBody('jevons', 'grok', 'grok-4.6')).toEqual({
+      name: 'jevons',
       provider: 'grok',
       model: 'grok-4.6',
-    });
-    expect(migrateBody('jevons-po', 'work', 'cursor', 'claude-opus-5')).toEqual({
-      name: 'jevons-po',
-      provider: 'cursor',
-      model: 'claude-opus-5',
     });
   });
 });

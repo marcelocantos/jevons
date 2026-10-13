@@ -10,8 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/handover"
 )
 
 func TestBounceReloadKeepsSessionIDs(t *testing.T) {
@@ -57,12 +55,6 @@ func TestBounceReloadKeepsSessionIDs(t *testing.T) {
 	}
 	if names := SessionDriftNames(before, minted); len(names) != len(before) {
 		t.Fatalf("SessionDriftNames = %v, want every reminted row", names)
-	}
-
-	// Bounce is not a migrate: no handover record is created for these rows.
-	store := handover.NewStore(filepath.Join(dir, "handover"))
-	if _, ok, err := store.Get("jevons"); err != nil || ok {
-		t.Fatalf("bounce left a handover for jevons: ok=%v err=%v", ok, err)
 	}
 }
 

@@ -406,12 +406,23 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   not a remint trigger — remint only a stuck/dead seat or on owner ask.
 - A context blow is not a provider problem. Claude seat that must be reminted
   with Claude weekly NOT exhausted/blocked → jevons_agent_kill(name) then
-  jevons_agent_start(name=<same>, provider="claude") with a thin continue
-  brief. Do not jevons_agent_migrate to cursor/codex just because migrate
-  needs a different provider; the tool refuses that move.
-- Cross-provider migrate only when Claude is exhausted/blocked
-  (jevons_plan_usage) or the owner asks (owner_asked=true). The 🎯T417
-  unworkable notice says which applies.
+  jevons_agent_start(name=<same>, provider="claude") with a short continue
+  brief.
+- Cross-provider jevons_agent_switch_model only when Claude is
+  exhausted/blocked (jevons_plan_usage) or the owner asks (owner_asked=true);
+  the tool refuses it otherwise. The 🎯T417 unworkable notice says which
+  applies. A same-provider model switch is always allowed.
+
+## Switching provider or model is in place (claudia 🎯T195)
+- jevons_agent_switch_model(name, provider?, model?, force?, owner_asked?)
+  keeps the seat's name, session and whole conversation. Nothing is
+  summarised, no successor seat is started, no handover is delivered.
+- A running seat switches between turns (a turn in flight refuses unless
+  force=true); a stopped seat resumes on the new model at its next start.
+  A conversation too large for the new model is compacted first by the
+  model that wrote it, or the switch is refused.
+- The overseer cannot be switched through the tool; the owner switches it
+  from the fleet tree.
 
 ## Plan dest ranks published band first (🎯T693)
 - Destination selection ranks on the **published band** first: **under** outranks **ok**, because under means paid allowance is at risk of expiring unspent. **hot** and **ahead** are never destinations.

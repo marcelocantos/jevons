@@ -66,7 +66,7 @@ func TestCoreProfileListsFleetControlAndNotAmbientKnobs(t *testing.T) {
 // 2026-09-22: 55 tools, 57,943 bytes of schema.
 func liveSurface() []mcp.Tool {
 	return toolsNamed(
-		"jevons_active_work", "jevons_agent_kill", "jevons_agent_list", "jevons_agent_migrate",
+		"jevons_active_work", "jevons_agent_kill", "jevons_agent_list", "jevons_agent_switch_model",
 		"jevons_agent_report_read", "jevons_agent_send", "jevons_agent_start", "jevons_agent_stop",
 		"jevons_audit_configure", "jevons_audit_cycle", "jevons_audit_report",
 		"jevons_audit_residue", "jevons_audit_status", "jevons_capacity_status", "jevons_cost",
@@ -94,7 +94,7 @@ func TestCoreProfileOfTheLiveSurfaceFitsFortyTools(t *testing.T) {
 		t.Fatalf("core profile lists %d of %d tools; want at most 40 of 55", len(core), len(all))
 	}
 	for _, want := range []string{"jevons_agent_list", "jevons_agent_start", "jevons_agent_send",
-		"jevons_agent_stop", "jevons_agent_report_read", "jevons_agent_migrate", "jevons_target_file",
+		"jevons_agent_stop", "jevons_agent_report_read", "jevons_agent_switch_model", "jevons_target_file",
 		"jevons_gate_show", "jevons_sendq_reconcile", "jevons_spawn_order", "jevons_fleet_intent",
 		"jevons_capacity_status", "jevons_plan_usage", "jevons_owner_gate"} {
 		if !core[want] {

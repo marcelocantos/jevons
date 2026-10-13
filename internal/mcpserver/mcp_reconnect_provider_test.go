@@ -12,8 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/handover"
-	"github.com/marcelocantos/jevons/internal/thread"
 )
 
 // TestMCPReconnectUnsupportedByProvider: `grok mcp disable/enable` is a
@@ -68,10 +66,10 @@ func TestReconnectRefusesForClaudeOverseer(t *testing.T) {
 	}
 }
 
-// TestAgentMigrateRefusesTheOverseer: the overseer's chat attachment lives
-// in the HTTP server, not the registry, so rotating it here would leave the
-// owner talking to nothing (🎯T285 residual).
-func TestAgentMigrateRefusesTheOverseer(t *testing.T) {
+// TestAgentSwitchRefusesTheOverseer: the overseer is the session answering
+// the tool call, so a switch from here would refuse or interrupt the very
+// turn asking; the owner switches it from the fleet tree.
+func TestAgentSwitchRefusesTheOverseer(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -84,32 +82,21 @@ func TestAgentMigrateRefusesTheOverseer(t *testing.T) {
 	}
 	// Assign the fields directly: SetRegistry also registers tools on the
 	// MCP server, which this bare fixture does not have.
-	s := &Server{registry: reg, migrator: refusingMigrator{t: t}}
+	sw := &fakeSwitcher{}
+	s := &Server{registry: reg, switcher: sw}
 
-	res, err := s.handleAgentMigrate(context.Background(), mcp.CallToolRequest{
+	res, err := s.handleAgentSwitchModel(context.Background(), mcp.CallToolRequest{
 		Params: mcp.CallToolParams{Arguments: map[string]any{
-			"name": "jevons", "provider": "claude",
+			"name": "jevons", "provider": "claude", "owner_asked": true,
 		}},
 	})
 	if err != nil {
-		t.Fatalf("handleAgentMigrate: %v", err)
+		t.Fatalf("handleAgentSwitchModel: %v", err)
 	}
 	if !res.IsError {
-		t.Fatal("migrating the overseer was accepted")
+		t.Fatal("switching the overseer from the tool was accepted")
+	}
+	if switches, _ := sw.calls(); len(switches) != 0 {
+		t.Fatalf("the overseer was switched: %v", switches)
 	}
 }
-
-// refusingMigrator fails the test if migration is attempted at all.
-type refusingMigrator struct{ t *testing.T }
-
-func (m refusingMigrator) PrepareMigration(string, claudia.Provider, bool) (handover.Pending, error) {
-	m.t.Fatal("PrepareMigration called for the overseer")
-	return handover.Pending{}, nil
-}
-func (m refusingMigrator) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
-	return p, nil
-}
-func (m refusingMigrator) SeedSuccessor(string) (handover.Pending, bool, error) {
-	return handover.Pending{}, false, nil
-}
-func (m refusingMigrator) Launch(*thread.Thread) error { return nil }

@@ -542,18 +542,16 @@ the replacement daemon's log segment. Cleanup must remove the fixture from
 both the thread list and registry.
 
 A dedicated aside avoids an existing suite-ordering trap: J13 intentionally
-migrates the overseer to another provider. This probe actively exercises only
+switches the overseer to another provider. This probe actively exercises only
 the selected aside, while retaining registry comparisons for existing seats.
 It tests normal SIGINT drain/restart, not SIGHUP adoption or crash recovery.
 Abnormal exit, forced kill, or an upgrade-mode shutdown cannot pass as a normal
-drain. Existing handover records from older migrations may advance or be reaped;
-that change is explicitly reported as outside this fresh-seat probe. New
-handover records fail. File absence alone is not a receipt proving that no seed
-was delivered.
+drain. Since claudia 🎯T195 there are no handover records to check: a provider
+switch keeps the seat's session and conversation and delivers no seed.
 
 Whole-journey adversarial subprocess peers exercise the actual stop/start and
 direct calls, including stale/missing replies, lost context, provider and late
-session changes, new handovers and failed shutdowns. These test the oracle and
+session changes and failed shutdowns. These test the oracle and
 are not product journeys. Real selected-provider checks and clean-source
 verification remain pending. This slice does not establish React rendering,
 rewind, every fleet seat's recovery, or overall migration completion.
@@ -689,7 +687,7 @@ retirement of T493.1/T540.7.
 
 T627 remains open. Text-only echo matching cannot correlate delayed/interleaved
 provider echoes; admission is not receiver confirmation or a durable delivery
-obligation. Fleet `Deliver`/handover and legacy remote/voice entry points are
+obligation. Fleet `Deliver` and legacy remote/voice entry points are
 outside this slice. Full correlated outcomes, recovery policy, phase projection
 and provider-aware rewind still require implementation and product evidence.
 

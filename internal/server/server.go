@@ -75,16 +75,9 @@ type Server struct {
 	// buildID names the running binary (🎯T993). The mux hello, /health and
 	// the served index.html all carry it so a cockpit can tell a new build
 	// from a plain restart. "" means unknown; clients never reload on it.
-	buildID      string
-	stateDir     string // jevons state root (config-driven, 🎯T44/T49)
-	overseerName string // registry name of the CEO agent (config-driven, 🎯T44)
-	// overseerMigrator performs the registry half of a provider switch
-	// (🎯T285); this server owns the attach + seed halves. Nil = the
-	// capability is unavailable rather than half-wired.
-	overseerMigrator OverseerMigrator
-	// handoverSeeding is the single-flight guard for delivering a pending
-	// handover (🎯T285); guarded by mu.
-	handoverSeeding          bool
+	buildID                  string
+	stateDir                 string                                          // jevons state root (config-driven, 🎯T44/T49)
+	overseerName             string                                          // registry name of the CEO agent (config-driven, 🎯T44)
 	overseerDownSince        time.Time                                       // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
 	ownerQuestionDigestCheck time.Time                                       // last standing owner-question digest check (T1028.3)
 	overseerPaged            bool                                            // owner already paged for this outage (🎯T775); guarded by mu
@@ -203,9 +196,9 @@ type Server struct {
 	// Wired from main to mcpserver.ObserveProviderFailure / ObserveProviderOK.
 	onProviderFailure func(class agenterr.Class, raw string)
 	onProviderOK      func()
-	// fleetMigrator backs POST /api/agents/migrate — the owner's manual
+	// modelSwitcher backs POST /api/agents/switch-model — the owner's
 	// per-seat provider/model switch from the fleet tree (🎯T285.2).
-	fleetMigrator FleetMigrator
+	modelSwitcher ModelSwitcher
 
 	// tokenLimiter rate-limits POST /api/realtime/token (T38 / Fable F4).
 	tokenLimiter *tokenRateLimiter
@@ -631,9 +624,8 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/reviews", s.reviews) // 🎯T1044 durable typed review index
 	mux.HandleFunc("GET /api/reviews/{id}", s.reviews)
-	mux.HandleFunc("POST /api/reviews/{id}/answer", s.answerReview)       // fail closed until owner auth exists
-	mux.HandleFunc("POST /api/overseer/migrate", s.handleOverseerMigrate) // 🎯T285
-	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend)     // 🎯T182: product agent_send proxy
+	mux.HandleFunc("POST /api/reviews/{id}/answer", s.answerReview)   // fail closed until owner auth exists
+	mux.HandleFunc("POST /api/agents/{name}/send", s.handleAgentSend) // 🎯T182: product agent_send proxy
 	mux.HandleFunc("POST /api/agents/{name}/auth/recover", s.handleAgentAuthRecover)
 	// 🎯T198: stop workers engaged on a frontier target (TargetID equality).
 	mux.HandleFunc("POST /api/agents/engagement/stop", s.handleEngagementStop)
@@ -666,7 +658,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	// 🎯T285.2: fleet-tree icon menu — per-provider bands + models, and the
 	// thin HTTP wrapper over the fleet migrate path (non-overseer seats).
 	mux.HandleFunc("GET /api/migrate/options", s.handleMigrateOptions)
-	mux.HandleFunc("POST /api/agents/migrate", s.handleAgentMigrateHTTP)
+	mux.HandleFunc("POST /api/agents/switch-model", s.handleSwitchModel) // claudia 🎯T195
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("GET /api/logs/stream", s.handleLogsStream)

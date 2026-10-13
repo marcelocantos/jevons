@@ -415,15 +415,32 @@ when a seat is genuinely stuck or dead, or the owner asks.
 
 A context blow is not a provider problem. When a Claude seat (PO or worker)
 must be reminted and Claude's weekly window is not exhausted or
-blocked, remint it **in place**: `jevons_agent_kill(name)` (descendants are
+blocked, remint it on Claude: `jevons_agent_kill(name)` (descendants are
 preserved, 🎯T560) then `jevons_agent_start(name=<same>, provider="claude")`
-with a **thin continue brief** (target id, current commit, next step — not
-the old transcript). Do **not** `jevons_agent_migrate` to cursor/codex merely
-because migrate refuses same-provider moves. Cross-provider migrate is for
+with a **short continue brief** (target id, current commit, next step — not
+the old transcript). A cross-provider `jevons_agent_switch_model` is for
 Claude exhausted/blocked (`jevons_plan_usage`) or an explicit owner ask
-(`owner_asked=true`). The 🎯T417 unworkable notice carries the daemon's
-decision (`planusage.ContextRemintPlan`); the migrate tool refuses the move
+(`owner_asked=true`); a same-provider model switch is always allowed. The
+🎯T417 unworkable notice carries the daemon's decision
+(`planusage.ContextRemintPlan`); the switch tool refuses a cross-provider move
 otherwise.
+
+### Switching a seat's provider or model (claudia 🎯T195)
+
+`jevons_agent_switch_model(name, provider?, model?, force?, owner_asked?)`
+moves a seat to another provider or model **in place**. It keeps its name,
+session and whole conversation: nothing is summarised, no successor seat is
+started, and no handover is delivered. Empty `provider` keeps the seat's own;
+empty `model` takes the destination plan's standard model. A running seat
+switches between turns (a turn in flight refuses unless `force=true`
+interrupts it); a stopped seat resumes on the new model at its next start. A
+conversation too large for the new model is compacted first by the model that
+wrote it, and the switch is refused if it still does not fit. Every fleet seat
+may change provider; a native CLI seat changes model only within its provider.
+You cannot switch yourself through the tool — you are answering the call. The
+owner switches the overseer from the fleet tree, and owner chat stays attached.
+Plan policy (🎯T390.1.5), the 🎯T585 model ladder and fleet model pins
+(🎯T285.2 / 🎯T617) all use this same in-place switch.
 
 ### Forbidden as the default for implementation work
 

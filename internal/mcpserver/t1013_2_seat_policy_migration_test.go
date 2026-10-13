@@ -72,9 +72,6 @@ func TestT1013_2SeatPolicyStoreImportsLegacyJevonsFile(t *testing.T) {
 	if !full.HostMayInterrupt || !full.HostNeverPark {
 		t.Fatalf("host consent flags lost: %+v", full)
 	}
-	if full.MigrationSeed == "" || full.MigrationFromSession == "" || !full.MigrationPendingStart {
-		t.Fatalf("migration bookmark lost: %+v", full)
-	}
 
 	allowNone := store.Get("jv-legacy-allow-none")
 	providers, restricted := allowNone.Allowed()

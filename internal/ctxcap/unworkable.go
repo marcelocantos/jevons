@@ -15,7 +15,7 @@ import (
 //
 // It names context size, ceiling, and compaction cadence — the three
 // numbers a supervisor needs to decide whether to raise the ceiling,
-// migrate, park, or accept the stall — and it says the agent is
+// switch model, park, or accept the stall — and it says the agent is
 // unworkable rather than implying another remint is coming.
 func FormatUnworkableNotice(d Decision, minInterval time.Duration, sinceLast time.Duration) string {
 	agent := strings.TrimSpace(d.Agent)
@@ -41,7 +41,7 @@ func FormatUnworkableNotice(d Decision, minInterval time.Duration, sinceLast tim
 	if r := strings.TrimSpace(d.Reason); r != "" {
 		fmt.Fprintf(&b, "Governor reason: %s\n", r)
 	}
-	b.WriteString("\nAct: raise the ceiling, migrate/remint with a thinner handover, ")
+	b.WriteString("\nAct: raise the ceiling, switch the seat to a model with a larger window, ")
 	b.WriteString("park the agent, or accept that this seat cannot progress until ")
 	b.WriteString("context shrinks. Do not expect another automatic remint to fix it.\n")
 	return b.String()

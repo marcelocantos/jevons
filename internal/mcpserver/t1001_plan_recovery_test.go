@@ -12,37 +12,43 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/thread"
 )
 
-type recoveryMigrator struct {
-	sweepLedger
-	registry *claudia.Registry
-	mode     string
+// recoverySwitcher switches the seat's row to the destination plan as the
+// fleet would, and counts what the sweep asked of it.
+type recoverySwitcher struct {
+	registry  *claudia.Registry
+	prepared  int
+	launched  []string
+	launchErr error
 }
 
-func (m *recoveryMigrator) PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error) {
+func (m *recoverySwitcher) SwitchModel(name string, to claudia.Provider, model string, force bool) (claudia.SeatSwitch, error) {
 	m.prepared++
 	if force {
-		return handover.Pending{}, errors.New("unexpected interruption")
+		return claudia.SeatSwitch{}, errors.New("unexpected interruption")
 	}
 	def := *m.registry.Def(name)
-	def.Provider = to
+	from := def.Provider
+	def.Provider, def.Model = to, model
 	if err := m.registry.Register(def); err != nil {
-		return handover.Pending{}, err
+		return claudia.SeatSwitch{}, err
 	}
-	p := handover.Pending{Agent: name, To: string(to)}
-	switch m.mode {
-	case "claudia":
-		p.Remap, p.Delivered = handover.RemapClaudiaMigrate, true
-	case "legacy":
-		p.TranscriptPath = "/fixture.jsonl"
-	}
-	return p, nil
+	// A policy-parked seat is not running: its next start resumes there.
+	return claudia.SeatSwitch{Changed: true, From: from, To: to, Model: model}, nil
 }
 
-func recoveryFixture(t *testing.T) (*Server, *recoveryMigrator, *planusage.Snapshot) {
+func (m *recoverySwitcher) Launch(t *thread.Thread) error {
+	if m.launchErr != nil {
+		return m.launchErr
+	}
+	m.launched = append(m.launched, t.ID)
+	return nil
+}
+
+func recoveryFixture(t *testing.T) (*Server, *recoverySwitcher, *planusage.Snapshot) {
 	t.Helper()
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
@@ -59,8 +65,8 @@ func recoveryFixture(t *testing.T) (*Server, *recoveryMigrator, *planusage.Snaps
 		t.Fatal(err)
 	}
 	s.SetFleetIntentStore(store)
-	m := &recoveryMigrator{registry: reg, mode: "claudia"}
-	s.SetMigrator(m)
+	m := &recoverySwitcher{registry: reg}
+	s.SetModelSwitcher(m)
 	snap := &planusage.Snapshot{At: time.Now()}
 	s.SetPlanUsageSource(func() planusage.Snapshot { return *snap })
 	return s, m, snap
@@ -69,15 +75,14 @@ func recoveryFixture(t *testing.T) (*Server, *recoveryMigrator, *planusage.Snaps
 // Journey exception: this regression is deterministic placement and durable
 // intent across two sweeps. Injected readings cover empty/tied usage and exact
 // transitions without changing real subscription usage or parking real seats.
-// Provider transfer/launch wires are unchanged; these tests exercise the real
+// The switch and launch are faked; these tests exercise the real
 // Claudia Resolve, registry and intent store through SweepPlanPolicy.
 func TestT1001PolicyParkRecoversOnNextDecisiveSweep(t *testing.T) {
 	for _, initial := range []string{"empty", "tied"} {
 		for _, destination := range []string{"other", "cooled-source", "missing-source", "same-provider"} {
-			for _, mode := range []string{"claudia", "cold", "legacy"} {
-				t.Run(initial+"/"+destination+"/"+mode, func(t *testing.T) {
+			{
+				t.Run(initial+"/"+destination, func(t *testing.T) {
 					s, m, snap := recoveryFixture(t)
-					m.mode = mode
 					if initial == "empty" {
 						// A persisted park from an earlier unresolved placement.
 						s.MarkAgentParked("worker", planPolicyActor, "resolve: token-tied models; set PreferProvider")
@@ -123,7 +128,7 @@ func TestT1001PolicyParkRecoversOnNextDecisiveSweep(t *testing.T) {
 					if len(acts) != 1 || acts[0].To != want || acts[0].Failure != "" {
 						t.Fatalf("next sweep did not resolve %s: %+v", want, acts)
 					}
-					if acts[0].Execution != "migrated" && acts[0].Execution != "resumed" {
+					if acts[0].Execution != "switched" && acts[0].Execution != "resumed" {
 						t.Fatalf("recovery not executed: %+v", acts)
 					}
 					if rec := s.fleetIntent().Agents["worker"]; rec.State != fleetintent.Working {
@@ -133,7 +138,7 @@ func TestT1001PolicyParkRecoversOnNextDecisiveSweep(t *testing.T) {
 						t.Fatalf("provider %s, want %s", got, want)
 					}
 					if destination == "same-provider" && (m.prepared != 0 || len(m.launched) != 1) {
-						t.Fatalf("same-provider resume migrated: %+v", m)
+						t.Fatalf("same-provider resume switched: %+v", m)
 					}
 					if got := s.SweepPlanPolicy(); len(got) != 0 {
 						t.Fatalf("recovery repeated: %+v", got)
@@ -144,17 +149,17 @@ func TestT1001PolicyParkRecoversOnNextDecisiveSweep(t *testing.T) {
 	}
 }
 
-func TestT1001HotClaudeMigratesWithoutPin(t *testing.T) {
+func TestT1001HotClaudeSwitchesWithoutPin(t *testing.T) {
 	s, m, snap := recoveryFixture(t)
 	snap.Backends = []planusage.Backend{t39015Weekly("claude", 6, 94, snap.At), t39015Weekly("codex", 54, 46, snap.At)}
 	acts := s.SweepPlanPolicy()
-	if len(acts) != 1 || acts[0].To != "codex" || acts[0].Execution != "migrated" || m.prepared != 1 {
+	if len(acts) != 1 || acts[0].To != "codex" || acts[0].Execution != "switched" || m.prepared != 1 {
 		t.Fatalf("decisive destination required a pin: %+v", acts)
 	}
 }
 
 func TestT1001PreservesDeliberateHolds(t *testing.T) {
-	for _, held := range []string{"owner", "overseer", "fleet", "owner-cold-reason", "pending-owner", "pending-fleet"} {
+	for _, held := range []string{"owner", "overseer", "fleet", "owner-cold-reason"} {
 		t.Run(held, func(t *testing.T) {
 			s, m, snap := recoveryFixture(t)
 			snap.Backends = []planusage.Backend{t39015Weekly("claude", 6, 94, snap.At), t39015Weekly("codex", 80, 20, snap.At)}
@@ -169,16 +174,6 @@ func TestT1001PreservesDeliberateHolds(t *testing.T) {
 					by = "jevons"
 				}
 				s.MarkAgentParked("worker", by, "prepare returned COLD (owner copied diagnostic)")
-			}
-			if strings.HasPrefix(held, "pending") {
-				plans, err := claudia.OpenSeatPolicyStore("")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := plans.Put("worker", claudia.SeatPolicy{MigrationSeed: "handover", MigrationFrom: claudia.ProviderGrok}); err != nil {
-					t.Fatal(err)
-				}
-				s.SetSeatPlan(plans)
 			}
 			before := s.fleetIntent().Agents["worker"]
 			acts := s.SweepPlanPolicy()
@@ -249,42 +244,9 @@ func TestT1001RecoveryHonorsProviderConstraints(t *testing.T) {
 				if acts[0].Execution != "parked" || s.fleetIntent().AgentState("worker") != fleetintent.Parked {
 					t.Fatalf("allow-none lifted: %+v", acts)
 				}
-			} else if acts[0].To != "grok" || acts[0].Execution != "migrated" {
+			} else if acts[0].To != "grok" || acts[0].Execution != "switched" {
 				t.Fatalf("constraint ignored: %+v", acts)
 			}
 		})
-	}
-}
-
-func TestT1001PendingMigrationClearsPolicyParkAfterRetry(t *testing.T) {
-	s, _, _ := recoveryFixture(t)
-	def := *s.registry.Def("worker")
-	def.Provider = claudia.ProviderCodex
-	if err := s.registry.Register(def); err != nil {
-		t.Fatal(err)
-	}
-	plans, err := claudia.OpenSeatPolicyStore("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := plans.Put("worker", claudia.SeatPolicy{MigrationFrom: claudia.ProviderClaude, MigrationSeed: "pending handover"}); err != nil {
-		t.Fatal(err)
-	}
-	s.SetSeatPlan(plans)
-	s.MarkAgentParked("worker", planPolicyActor, "no eligible destination")
-	m := &pendingClaudiaMigrator{registry: s.registry, plans: plans, fail: true}
-	s.SetMigrator(m)
-	if acts := s.SweepPlanPolicy(); len(acts) != 1 || acts[0].Execution != "pending" {
-		t.Fatalf("failed retry lost: %+v", acts)
-	}
-	if s.fleetIntent().AgentState("worker") != fleetintent.Parked {
-		t.Fatal("failed retry lifted park")
-	}
-	m.fail = false
-	if acts := s.SweepPlanPolicy(); len(acts) != 1 || acts[0].Execution != "migrated" {
-		t.Fatalf("retry failed: %+v", acts)
-	}
-	if s.fleetIntent().AgentState("worker") != fleetintent.Working {
-		t.Fatal("delivered handover still parked")
 	}
 }

@@ -25,7 +25,7 @@ import (
 // 🎯T1013.4 — the should-leave half of this decision (ShouldVacate, plus
 // the owner-ask escape) is computed by claudia.ShouldRemintMigrate, not
 // locally: this file only renders ShouldRemintMigrate's boolean into the
-// RemintMode/RemintPlan shape jevons_agent_migrate and the 🎯T417
+// RemintMode/RemintPlan shape jevons_agent_switch_model and the 🎯T417
 // unworkable notice consume, plus the human-facing reason text. The
 // scout's original plan to fold this into claudia.ResolveSeatPlacement's
 // full stay/defer/park/migrate placement was rejected after a prototype
@@ -40,7 +40,7 @@ const (
 	// RemintSameProvider — kill+start the same name on the same provider
 	// with a thin continue brief.
 	RemintSameProvider RemintMode = "kill+start"
-	// RemintMigrate — rotate onto another provider (jevons_agent_migrate).
+	// RemintMigrate — switch to another provider (jevons_agent_switch_model).
 	RemintMigrate RemintMode = "migrate"
 )
 
@@ -110,9 +110,9 @@ func (p RemintPlan) Advice(agent string) string {
 	}
 	switch p.Mode {
 	case RemintMigrate:
-		return fmt.Sprintf("Remint (🎯T561): %s — cross-provider jevons_agent_migrate is allowed for %s.", p.Reason, agent)
+		return fmt.Sprintf("Remint (🎯T561): %s — a cross-provider jevons_agent_switch_model is allowed for %s.", p.Reason, agent)
 	default:
-		return fmt.Sprintf("Remint (🎯T561): %s. Use jevons_agent_kill(%s) then jevons_agent_start(name=%s, provider=%q) with a thin continue brief — do NOT jevons_agent_migrate to another provider just because migrate needs one.",
+		return fmt.Sprintf("Remint (🎯T561): %s. Use jevons_agent_kill(%s) then jevons_agent_start(name=%s, provider=%q) with a thin continue brief — do NOT jevons_agent_switch_model to another provider for a context blow.",
 			p.Reason, agent, agent, p.Provider)
 	}
 }

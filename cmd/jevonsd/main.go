@@ -37,7 +37,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -838,19 +837,10 @@ func main() {
 	// (agent-only names) so Deliver/PushEvent share one id space.
 	// ð¯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
-	fleetAdapter.SetSeatPlan(seatPlans)
 	fleetAdapter.SetSeats(seats)
 	fleetAdapter.SetRemovalAccount(removals)
-	fleetAdapter.SetEventLogger(srv.LogEvent) // 🎯 migrate.go decisions -> durable eventlog
+	fleetAdapter.SetEventLogger(srv.LogEvent) // fleet decisions -> durable eventlog
 	fleetAdapter.SetDefaultProvider(defaultProvider)
-	// ð¯T285: provider migration needs the session roots to find a
-	// predecessor's transcript, and a durable store to hold that pointer
-	// across the rotation that overwrites the old session id.
-	fleetAdapter.SetSessionRoots(sessionRoots)
-	fleetAdapter.SetRetainedHistory(srv.AgentMigrationHistory)
-	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
-	rotationStore := handover.NewRotationStore(filepath.Join(cfg.StateDir, "rotations"))
-	fleetAdapter.SetRotationStore(rotationStore)
 	// 🎯T392.1: burn is limited by when the host runs a turn. Remint is
 	// withdrawn (🎯T392.1.1); this gate delays, pauses, or refuses the
 	// next send/deliver and leaves session_id unchanged.
@@ -957,11 +947,11 @@ func main() {
 	// events.jsonl, and a later diagnosis then invents which model the
 	// seat was on. The hook is the journal; fleet does not write it.
 	fleetAdapter.SetModelSwitchHook(mcpSrv.NoteModelSwitch)
-	mcpSrv.SetMigrator(fleetAdapter)
-	srv.SetOverseerMigrator(fleetAdapter)
-	// 🎯T285.2: the fleet-tree icon menu's thin HTTP wrapper for
-	// non-overseer seats (POST /api/agents/migrate).
-	srv.SetFleetMigrator(fleetAdapter)
+	// claudia 🎯T195: a seat changes provider or model in place, keeping
+	// its conversation — from jevons_agent_switch_model, plan policy, and
+	// the fleet-tree menu (POST /api/agents/switch-model).
+	mcpSrv.SetModelSwitcher(fleetAdapter)
+	srv.SetModelSwitcher(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
 		Seats:        seats, // 🎯T766.2: thread state comes from the one authority
@@ -1006,7 +996,7 @@ func main() {
 	// loop exists to *reduce* spend, so deferring it when budget is tight
 	// is exactly backwards. Remint is withdrawn (🎯T40.2); above-ceiling
 	// seats are reported unworkable once per spell, not recompacted.
-	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv, rotationStore,
+	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv,
 		mcpSrv.ReportContextUnworkable)
 
 	// 🎯T440: reap verification worktrees whose owner is gone, from outside
@@ -1296,12 +1286,6 @@ func main() {
 		// status; feed the Grok voice bridge). It is re-run after a rewind
 		// swaps the process, so all overseer references stay current.
 		srv.AttachOverseer(jevonProc)
-
-		// A daemon that died between rotating the overseer's row and seeding
-		// its successor leaves the handover on disk; the process is alive at
-		// boot, so converge sees nothing wrong and this is the only retry
-		// (ð¯T285). No-op when nothing is pending.
-		srv.ResumePendingHandover()
 
 		// Wire MCP worker-completion + agent-reply notifications into Jevon.
 		// Route through the server so a rewind swap is transparent.

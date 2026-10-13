@@ -139,8 +139,8 @@ type Server struct {
 	startMu sync.Mutex
 	// startFlights dedupes in-flight jevons_agent_start launches by name (🎯T792).
 	startFlights startFlights
-	// migrateOutcomes retains finished jevons_agent_migrate results (🎯T790).
-	migrateOutcomes migrateOutcomes
+	// switchOutcomes retains finished jevons_agent_switch_model results (🎯T790).
+	switchOutcomes switchOutcomes
 	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
 	launchAgentFn func(ctx context.Context, name string) (*claudia.Agent, error)
 	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a
@@ -354,10 +354,10 @@ type Server struct {
 	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
 	eventJournal *eventlog.Journal
 
-	// migrator moves an existing agent between backends, carrying a
-	// handover to the successor (🎯T285). Nil = jevons_agent_migrate
-	// unregistered rather than half-working.
-	migrator Migrator
+	// switcher moves an existing agent to another provider or model in
+	// place (claudia 🎯T195). Nil = jevons_agent_switch_model unregistered
+	// rather than half-working.
+	switcher ModelSwitcher
 	// Latest host execution result for each Claudia placement verdict. Read
 	// alongside a fresh decision so a failed launch cannot look like a move.
 	// planSweepMu serialises SweepPlanPolicy: the periodic tick and an
@@ -926,7 +926,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerJobTools() // 🎯T600 handles for work that takes time
 	s.registerJwork()
 	s.registerMCPReconnect()
-	s.registerAgentMigrate()
+	s.registerAgentSwitchModel()
 	s.registerStaffOpsTools()
 	s.registerSentinelTools()
 	s.registerWritSecurityTools()  // 🎯T335 security auditor + writ confinement

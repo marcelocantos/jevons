@@ -32,7 +32,8 @@ have to turn a feature on.
    Each owner send runs a **full** search on the latest text, then removes
    handles already shown in this context window. The sidecar is that
    remainder. Query reuse across keystrokes is not this rule; this rule is
-   set-subtraction on successive result sets. Compact, remint, handover, and
+   set-subtraction on successive result sets. Compact (including one a model
+   switch forces), remint, and
    rewind reset the shown set because those drop the window.
 5. **As-you-type is a different increment.** The draft text grows; the
    result for that draft is always the **full** current match set. Reusing a
@@ -138,7 +139,8 @@ the overseer never fetched. Fetch is optional follow-through, not the
 suppression trigger.
 
 Reset `shown` when the window is no longer that window: provider compact,
-remint / handover seed, rewind. “Ever shown this session” is the wrong set
+remint, rewind. An in-place model switch (claudia 🎯T195) keeps the window
+unless it has to compact first. “Ever shown this session” is the wrong set
 — it would hide a hit the model can no longer see.
 
 Parked 🎯T403.6 (diff against what the agent last saw) is a cousin of the

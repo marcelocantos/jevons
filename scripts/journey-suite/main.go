@@ -291,10 +291,10 @@ persona_notes: |
 	s.run("J9-thread-spawn-direct", s.jThreadSpawnDirectRemove)
 	s.run("J10-worker-shell-tool", s.jWorkerShellTool)
 	s.run("J11-worker-transcript", s.jWorkerTranscriptVisible)
-	s.run("J12-provider-migration", s.jProviderMigration)
-	s.run("J13-overseer-migration", s.jOverseerMigration)
-	s.run("J16-stopped-provider-migration", s.jStoppedProviderMigration)
-	s.run("J34-hot-provider-migration", s.jHotProviderMigration)
+	s.run("J12-provider-switch", s.jProviderSwitch)
+	s.run("J13-overseer-switch", s.jOverseerSwitch)
+	s.run("J16-stopped-provider-switch", s.jStoppedProviderSwitch)
+	s.run("J34-hot-provider-switch", s.jHotProviderSwitch)
 	s.run("J37-busy-escalation", s.jBusyEscalation)
 	s.run("J38-midturn-answer", s.jMidTurnAnswer)
 	s.run("J14-bounce-resume", s.jBounceResume)
@@ -320,7 +320,7 @@ persona_notes: |
 	// purpose, and the overseer then works the alarm. Any journey after it
 	// shared the isolate with that work (J19's history window filled with
 	// it in the 2026-10-05 gate).
-	s.run("J18-t418-handover-mute", s.jT418HandoverMute)
+	s.run("J18-t418-mute", s.jT418Mute)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
 	stop()

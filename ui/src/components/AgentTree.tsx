@@ -5,7 +5,7 @@ import { useRef, useState } from 'react';
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
-import { migrateBody, migrateUrl, ModelMenu, type MigrateProvider } from './ModelMenu';
+import { ModelMenu, SWITCH_MODEL_URL, switchModelBody, type ProviderOption } from './ModelMenu';
 import { splitSeatNameTarget } from '../frontier/targetHotspot';
 import { TargetHotspotTips } from './TargetHotspotTips';
 
@@ -81,7 +81,7 @@ function ModelBadge({ node }: { node: AgentNode }) {
   const p = modelPrefix(node);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
-  const [options, setOptions] = useState<MigrateProvider[] | null>(null);
+  const [options, setOptions] = useState<ProviderOption[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   if (!p.company) return null;
@@ -120,10 +120,10 @@ function ModelBadge({ node }: { node: AgentNode }) {
     setBusy(true);
     setError('');
     try {
-      const r = await fetch(migrateUrl(node.purpose), {
+      const r = await fetch(SWITCH_MODEL_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(migrateBody(node.name, node.purpose, provider, model)),
+        body: JSON.stringify(switchModelBody(node.name, provider, model)),
       });
       if (!r.ok) {
         const text = await r.text();

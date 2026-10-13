@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -13,50 +14,29 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/eventlog"
-	"github.com/marcelocantos/jevons/internal/fleet"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
-	"github.com/marcelocantos/jevons/internal/thread"
 )
 
-// fakeFleetMigrator records what POST /api/agents/migrate asked of the
-// fleet half (🎯T285.2).
-type fakeFleetMigrator struct {
+// fakeSwitcher records what POST /api/agents/switch-model asked of the
+// fleet (claudia 🎯T195).
+type fakeSwitcher struct {
 	mu       sync.Mutex
-	prepared []string // "name→provider"
-	launched []string // "name(model)"
-	pinned   []string // "name=model"
+	switches []string // "name→provider/model force"
+	err      error
 }
 
-func (m *fakeFleetMigrator) PrepareMigration(name string, to claudia.Provider, force bool) (handover.Pending, error) {
+func (m *fakeSwitcher) SwitchModel(name string, to claudia.Provider, model string, force bool) (claudia.SeatSwitch, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.prepared = append(m.prepared, name+"→"+string(to))
-	return handover.Pending{Agent: name, From: "grok", To: string(to),
-		TranscriptPath: "/tmp/t.jsonl"}, nil
-}
-
-func (m *fakeFleetMigrator) CompleteThinBrief(p handover.Pending) (handover.Pending, error) {
-	return p, nil
-}
-
-func (m *fakeFleetMigrator) SeedSuccessor(name string) (handover.Pending, bool, error) {
-	return handover.Pending{Agent: name, BriefSource: "distill"}, true, nil
-}
-
-func (m *fakeFleetMigrator) Launch(t *thread.Thread) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.launched = append(m.launched, t.ID+"("+t.Model+")")
-	return nil
-}
-
-func (m *fakeFleetMigrator) PinModel(name, model string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.pinned = append(m.pinned, name+"="+model)
-	return nil
+	rec := name + "→" + string(to) + "/" + model
+	if force {
+		rec += " force"
+	}
+	m.switches = append(m.switches, rec)
+	if m.err != nil {
+		return claudia.SeatSwitch{}, m.err
+	}
+	return claudia.SeatSwitch{Live: true, Changed: true, From: "xai-oauth", To: to, Model: model}, nil
 }
 
 func t285Snapshot() planusage.Snapshot {
@@ -201,121 +181,44 @@ func TestCursorAPIExhaustedBlocksModelPick(t *testing.T) {
 	}
 }
 
-// TestT285_2AgentMigrateRoutes: the thin HTTP wrapper refuses the overseer
-// (that seat re-attaches chat through /api/overseer/migrate), pins on a
-// same-provider model choice, and migrates cross-provider with the chosen
-// model riding the successor's launch as its pin.
-func TestT285_2AgentMigrateRoutes(t *testing.T) {
+// TestSwitchModelRoute: one route switches every seat in place, the
+// overseer included (an empty name), passing provider, model and force
+// through; a refusal comes back as a conflict.
+func TestSwitchModelRoute(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.SetOverseerName("jevons")
-	reg, err := claudia.NewRegistry(t.TempDir() + "/agents.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, def := range []claudia.AgentDef{
-		{Name: "jevons", Provider: "grok", Purpose: claudia.PurposeOverseer, WorkDir: t.TempDir(), SessionID: "s-jevons"},
-		{Name: "jv-worker", Provider: "grok", Purpose: claudia.PurposeWork, WorkDir: t.TempDir(), SessionID: "s-worker"},
-	} {
-		if err := reg.Register(def); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s.SetRegistry(reg)
-	mig := &fakeFleetMigrator{}
-	s.SetFleetMigrator(mig)
-
+	sw := &fakeSwitcher{}
+	s.SetModelSwitcher(sw)
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest("POST", "/api/agents/migrate", strings.NewReader(body))
-		s.handleAgentMigrateHTTP(rec, req)
+		s.handleSwitchModel(rec, httptest.NewRequest("POST", "/api/agents/switch-model", strings.NewReader(body)))
 		return rec
 	}
 
-	// Overseer refused → the other route.
-	rec := post(`{"name":"jevons","provider":"claude"}`)
-	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "overseer/migrate") {
-		t.Fatalf("overseer: code=%d body=%s", rec.Code, rec.Body.String())
+	rec := post(`{"name":"jv-worker","provider":"claude","model":"claude-opus-5"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"live":true`) {
+		t.Fatalf("worker switch: code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(mig.prepared) != 0 {
-		t.Fatalf("overseer reached the fleet migrator: %v", mig.prepared)
+	// The overseer switches in place too: no relaunch, so chat stays attached.
+	rec = post(`{"provider":"claude"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"name":"jevons"`) {
+		t.Fatalf("overseer switch: code=%d body=%s", rec.Code, rec.Body.String())
 	}
-
-	// Same provider + model → pin, no rotation.
-	rec = post(`{"name":"jv-worker","provider":"grok","model":"grok-4"}`)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kind":"pin"`) {
-		t.Fatalf("pin: code=%d body=%s", rec.Code, rec.Body.String())
+	// A model alone is a switch on the seat's own provider.
+	rec = post(`{"name":"jv-worker","model":"grok-4","force":true}`)
+	if rec.Code != 200 {
+		t.Fatalf("model-only switch: code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(mig.pinned) != 1 || mig.pinned[0] != "jv-worker=grok-4" {
-		t.Fatalf("pinned = %v", mig.pinned)
-	}
-	if len(mig.prepared) != 0 {
-		t.Fatalf("pin rotated: %v", mig.prepared)
+	want := []string{"jv-worker→claude/claude-opus-5", "jevons→claude/", "jv-worker→/grok-4 force"}
+	if strings.Join(sw.switches, "|") != strings.Join(want, "|") {
+		t.Fatalf("switches = %v, want %v", sw.switches, want)
 	}
 
-	// Cross-provider + model → migrate; the model rides the launch pin.
-	rec = post(`{"name":"jv-worker","provider":"claude","model":"claude-opus-5"}`)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kind":"migrate"`) {
-		t.Fatalf("migrate: code=%d body=%s", rec.Code, rec.Body.String())
+	if rec = post(`{"name":"jv-worker"}`); rec.Code != 400 {
+		t.Fatalf("nothing to switch to: code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(mig.prepared) != 1 || mig.prepared[0] != "jv-worker→claude" {
-		t.Fatalf("prepared = %v", mig.prepared)
-	}
-	if len(mig.launched) != 1 || mig.launched[0] != "jv-worker(claude-opus-5)" {
-		t.Fatalf("launched = %v", mig.launched)
-	}
-
-	// Same provider, no model → nothing to do.
-	rec = post(`{"name":"jv-worker","provider":"grok"}`)
-	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "already on") {
-		t.Fatalf("same-provider no-model: code=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-// TestT285_2OverseerMigrateModelPin: the overseer menu choice carries a
-// model; the rotate records it on the rotated row before relaunch, so the
-// successor comes up on the chosen model rather than the provider default.
-func TestT285_2OverseerMigrateModelPin(t *testing.T) {
-	s := New("test", t.TempDir())
-	s.SetOverseerName("jevons")
-	reg, err := claudia.NewRegistry(t.TempDir() + "/agents.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name: "jevons", Provider: "grok", Purpose: claudia.PurposeOverseer,
-		WorkDir: t.TempDir(), SessionID: "s-jevons",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	s.SetRegistry(reg)
-	s.SetOverseerMigrator(&fakeOverseerMigrator{})
-	path := t.TempDir() + "/events.jsonl"
-	j, err := eventlog.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = j.Close() })
-	s.SetEventLog(j)
-
-	// The relaunch of a fake def fails in a unit test (no real provider);
-	// the pin must already be on the row by then — that ordering is the
-	// point of the test. The pin is also a model_switch in the journal,
-	// written when the row changes, which is before the relaunch.
-	_, _ = s.MigrateOverseerModel(claudia.ProviderClaude, "claude-opus-5", true)
-	def := reg.Def("jevons")
-	if def == nil || def.Model != "claude-opus-5" {
-		t.Fatalf("overseer model pin not recorded: %+v", def)
-	}
-	evs, err := eventlog.Tail(path, eventlog.TailOptions{Component: "agent_lifecycle", Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(evs) != 1 || evs[0].Decision != "model_switch" {
-		t.Fatalf("events=%+v", evs)
-	}
-	if evs[0].Fields["name"] != "jevons" || evs[0].Fields["to"] != "claude-opus-5" ||
-		evs[0].Fields["model"] != "claude-opus-5" || evs[0].Fields["how"] != fleet.ModelSwitchHowOverseerPin ||
-		evs[0].Fields["outcome"] != "ok" {
-		t.Fatalf("fields=%v", evs[0].Fields)
+	sw.err = errors.New("switch jv-worker: a turn is in flight; wait for it, or force to interrupt it")
+	if rec = post(`{"name":"jv-worker","provider":"claude"}`); rec.Code != 409 || !strings.Contains(rec.Body.String(), "turn is in flight") {
+		t.Fatalf("refusal: code=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

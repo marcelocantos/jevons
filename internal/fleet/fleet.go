@@ -10,7 +10,6 @@ package fleet
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +22,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
@@ -78,28 +75,14 @@ type Claudia struct {
 	// same as before this field existed.
 	logf fleetlog.Logger
 
-	// Provider migration (🎯T285): session roots resolve a predecessor's
-	// transcript, and handovers persists the pointer across the rotation
-	// that destroys it. Both optional — without them Launch behaves as
-	// before and migration is unavailable rather than silently cold.
-	roots     discovery.Roots
-	handovers *handover.Store
-	// seatPlans holds migration and placement fields the published
-	// AgentDef does not carry.
-	seatPlans *claudia.SeatPolicyStore
-	rotations *handover.RotationStore
-	// retainedHistory reads the host's durable agent journal when a stopped
-	// predecessor has no provider transcript (notably direct Codex seats).
-	// It supplies inert history; Claudia still owns transfer and handover.
-	retainedHistory func(name string) (string, error)
-
 	// onModelSwitch records a model change that actually landed. Nil drops
 	// the note; the switch still happens. Same-model, same-provider calls
 	// are not delivered — a no-op must not look like a switch in the journal.
 	onModelSwitch func(*ModelSwitch)
 
-	// liveSetModel replaces Agent.SetModel in tests. Nil uses the live agent.
-	liveSetModel func(name, model string) error
+	// switchModel replaces Registry.SwitchModel in tests. Nil uses the
+	// registry.
+	switchModel func(name string, to claudia.Provider, model string, force bool) (claudia.SeatSwitch, error)
 
 	// onLaunch brackets a launch this adapter performs (🎯T426). It is called
 	// BEFORE the process comes up and returns the function to call once it
@@ -404,22 +387,6 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	// Ensure a registry def. Resume when SessionID is known; otherwise
 	// mint a placeholder id and let the provider replace it on session/new.
 	if f.reg.Def(t.ID) == nil {
-		// 🎯T474: a bare thread.Thread{ID:name} Launch after a concurrent
-		// reap deleted the rotated row must recover identity from the
-		// pending handover — not invent purpose=aside / fresh uuid.
-		if recovered, ok := f.mintFromPendingHandover(t.ID); ok {
-			if err := f.reg.Register(recovered); err != nil {
-				return fmt.Errorf("register recovered agent %q: %w", t.ID, err)
-			}
-			if t.SessionID == "" {
-				t.SessionID = recovered.SessionID
-			}
-			slog.Info("agent mint recovered from pending handover",
-				"name", t.ID, "purpose", recovered.Purpose,
-				"workdir", recovered.WorkDir, "parent", recovered.Parent,
-				"target_id", recovered.TargetID, "session", recovered.SessionID)
-			return nil
-		}
 		sid := t.SessionID
 		if sid == "" {
 			sid = uuid.New().String()

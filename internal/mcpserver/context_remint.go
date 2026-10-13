@@ -11,8 +11,8 @@ import (
 
 // 🎯T561: the daemon's own answer to "how do I remint this blown seat?".
 // Wired into the 🎯T417 unworkable notice (advice line) and into
-// jevons_agent_migrate (refuses a cross-provider move off a provider that
-// still has weekly remaining unless the owner asked).
+// jevons_agent_switch_model (refuses a cross-provider switch off a provider
+// that still has weekly remaining unless the owner asked).
 
 // contextRemintPlan decides the remint mode for agent from its registry
 // provider and the live plan-usage snapshot. ok is false when the agent
@@ -37,11 +37,11 @@ func (s *Server) contextRemintPlan(agent string, ownerAsked bool) (planusage.Rem
 	return planusage.ContextRemintPlan(args), true
 }
 
-// refuseContextRemintMigrate returns the refusal text when moving name to
+// refuseContextRemintSwitch returns the refusal text when moving name to
 // target would leave a provider that still has weekly remaining without
-// the owner asking (🎯T561). Empty means the migrate may proceed. A
-// same-provider target is left to PrepareMigration's own refusal.
-func (s *Server) refuseContextRemintMigrate(name, target string, ownerAsked bool) string {
+// the owner asking (🎯T561). Empty means the switch may proceed; a
+// same-provider target always may.
+func (s *Server) refuseContextRemintSwitch(name, target string, ownerAsked bool) string {
 	plan, ok := s.contextRemintPlan(name, ownerAsked)
 	if !ok || plan.Mode != planusage.RemintSameProvider {
 		return ""

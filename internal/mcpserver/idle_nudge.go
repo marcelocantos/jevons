@@ -1526,17 +1526,13 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 			return s.flightState(name) == FlightInFlight
 		},
 		// 🎯T585: an exhausted model is moved down its ladder rather than
-		// re-briefed forever. Asserted rather than added to Migrator so
-		// existing implementors (and test fakes) stay valid; a migrator
-		// that cannot pin reports that instead of silently doing nothing.
+		// re-briefed forever, in place on the seat's own provider.
 		SwitchModel: func(name, model string) error {
-			pinner, ok := s.migrator.(interface {
-				PinModel(name, model string) error
-			})
-			if !ok || pinner == nil {
-				return fmt.Errorf("switch %q to %s: migrator cannot pin models", name, model)
+			if s.switcher == nil {
+				return fmt.Errorf("switch %q to %s: model switching is not wired", name, model)
 			}
-			return pinner.PinModel(name, model)
+			_, err := s.switcher.SwitchModel(name, "", model, false)
+			return err
 		},
 		BriefPresent: func(name string) bool {
 			s.mu.Lock()
@@ -1748,9 +1744,8 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	)
 
 	// 🎯T418: do this BEFORE the blocking restart-notify sends. A live
-	// overseer turn held SweepHandovers past the isolate journey window.
+	// overseer turn held the sweep past the isolate journey window.
 	s.SweepSendBacklogs()
-	s.SweepHandovers()
 	s.reportFleetMuteIfNeeded()
 
 	for _, target := range targets {

@@ -14,7 +14,6 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -153,89 +152,6 @@ func TestStitchOmitProviderRefusesWhenDestEmpty(t *testing.T) {
 	}
 }
 
-func TestColdSwitchStaysAndLaunches(t *testing.T) {
-	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name: "claudia-po", SessionID: "s-po", Provider: claudia.ProviderClaude,
-		Purpose: claudia.PurposeWork, Parent: "jevons",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	s := New(t.TempDir(), nil, nil)
-	s.SetRegistry(reg)
-	store, err := fleetintent.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.SetFleetIntentStore(store)
-	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-	s.SetPlanUsageSource(func() planusage.Snapshot {
-		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
-			t39015Weekly("claude", 10, 90, now),
-			t39015Weekly("cursor", 80, 20, now),
-		}}
-	})
-	led := &sweepLedger{cold: true}
-	s.SetMigrator(led)
-	s.SweepPlanPolicy()
-	if len(led.launched) != 1 || led.launched[0] != "claudia-po" {
-		t.Fatalf("launched=%v; cold switch must launch", led.launched)
-	}
-	if rec := store.Snapshot().Agents["claudia-po"]; rec.State == fleetintent.Parked {
-		t.Fatalf("cold switch parked the seat: %+v", rec)
-	}
-}
-
-func TestColdSwitchParkLiftsWhenProviderIsCool(t *testing.T) {
-	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name: "claudia-po", SessionID: "s-po", Provider: claudia.ProviderCursor,
-		Purpose: claudia.PurposeWork, Parent: "jevons",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name: "jv-deliberate", SessionID: "s-d", Provider: claudia.ProviderCursor,
-		Purpose: claudia.PurposeWork, Parent: "jevons-po",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	s := New(t.TempDir(), nil, nil)
-	s.SetRegistry(reg)
-	store, err := fleetintent.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.SetFleetIntentStore(store)
-	s.MarkAgentParked("claudia-po", planPolicyActor, "weekly hot or exhausted: prepare returned COLD (no predecessor transcript)")
-	s.MarkAgentParked("jv-deliberate", "jevons", "owner asked this seat to stop")
-	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-	s.SetPlanUsageSource(func() planusage.Snapshot {
-		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
-			t39015Weekly("claude", 10, 90, now),
-			t39015Weekly("cursor", 80, 20, now),
-		}}
-	})
-	led := &sweepLedger{}
-	s.SetMigrator(led)
-	s.SweepPlanPolicy()
-	if len(led.launched) != 1 || led.launched[0] != "claudia-po" {
-		t.Fatalf("launched=%v; want only the cold-switch park lifted", led.launched)
-	}
-	if rec := store.Snapshot().Agents["claudia-po"]; rec.State != fleetintent.Working {
-		t.Fatalf("claudia-po intent=%q", rec.State)
-	}
-	if rec := store.Snapshot().Agents["jv-deliberate"]; rec.State != fleetintent.Parked {
-		t.Fatalf("deliberate park lifted: %+v", rec)
-	}
-}
-
 func TestSweepDefersWhenDestinationFeedIsIncomplete(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
@@ -283,7 +199,7 @@ func TestSweepDefersWhenDestinationFeedIsIncomplete(t *testing.T) {
 	}
 }
 
-func TestSweepDoesNotParkWhenMigratorIsUnavailable(t *testing.T) {
+func TestSweepDoesNotParkWhenSwitcherIsUnavailable(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -310,22 +226,22 @@ func TestSweepDoesNotParkWhenMigratorIsUnavailable(t *testing.T) {
 	})
 	acts := s.SweepPlanPolicy()
 	if len(acts) != 1 || acts[0].To != "cursor" {
-		t.Fatalf("fixture must request a migration: %+v", acts)
+		t.Fatalf("fixture must request a move: %+v", acts)
 	}
-	if acts[0].Execution != "deferred" || acts[0].Failure != "migrator not configured" {
-		t.Fatalf("unavailable migration must be reported, not implied complete: %+v", acts[0])
+	if acts[0].Execution != "deferred" || acts[0].Failure != "model switcher not configured" {
+		t.Fatalf("an unavailable switch must be reported, not implied complete: %+v", acts[0])
 	}
 	decisions := s.PlanPolicyDecisions()
 	if len(decisions) != 1 || decisions[0].Execution != "deferred" ||
-		decisions[0].Failure != "migrator not configured" {
+		decisions[0].Failure != "model switcher not configured" {
 		t.Fatalf("read-only decision lost the host failure: %+v", decisions)
 	}
 	if got := store.Snapshot().Agents["claudia-po"].State; got == fleetintent.Parked {
-		t.Fatalf("missing migrator parked a seat with a valid destination: %q", got)
+		t.Fatalf("a missing switcher parked a seat with a valid destination: %q", got)
 	}
 }
 
-func TestSweepReportsFailedColdLaunchAsPending(t *testing.T) {
+func TestSweepReportsFailedLaunchAfterSwitchAsPending(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -345,21 +261,23 @@ func TestSweepReportsFailedColdLaunchAsPending(t *testing.T) {
 			t39015Weekly("cursor", 80, 20, now),
 		}}
 	})
-	led := &sweepLedger{cold: true, launchErr: errors.New("destination unavailable")}
-	s.SetMigrator(led)
+	s.SetModelSwitcher(&fakeSwitcher{reg: reg, launchErr: errors.New("destination unavailable")})
 	acts := s.SweepPlanPolicy()
 	if len(acts) != 1 || acts[0].Execution != "pending" ||
 		acts[0].Failure != "destination unavailable" {
-		t.Fatalf("failed launch must be visible as pending, not migrated: %+v", acts)
+		t.Fatalf("failed launch must be visible as pending, not switched: %+v", acts)
 	}
-	decisions := s.PlanPolicyDecisions()
-	if len(decisions) != 1 || decisions[0].Execution != "pending" ||
-		decisions[0].Failure != "destination unavailable" {
-		t.Fatalf("read-only decision lost the pending launch failure: %+v", decisions)
+	// The switch itself landed: the seat's row is on its destination, so the
+	// next read of the plan sees nothing to move.
+	if def := reg.Def("claudia-po"); def.Provider != "cursor" || def.SessionID != "source" {
+		t.Fatalf("def = %+v, want cursor on session source", def)
+	}
+	if decisions := s.PlanPolicyDecisions(); len(decisions) != 1 || decisions[0].Action == planusage.SeatMigrate {
+		t.Fatalf("a landed switch was decided again: %+v", decisions)
 	}
 }
 
-func TestT850SweepMovesHotPOAndKeepsItsHandover(t *testing.T) {
+func TestT850SweepMovesHotPO(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -383,15 +301,14 @@ func TestT850SweepMovesHotPOAndKeepsItsHandover(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	led := &sweepLedger{pending: []handover.Pending{
-		{Agent: "jevons-po", TranscriptPath: "/po.jsonl"},
-		{Agent: "jv-t517-worker", TranscriptPath: "/w.jsonl"},
-	}}
-	s.migrator = led
+	s.SetModelSwitcher(&fakeSwitcher{reg: reg, live: true})
 	acts := s.SweepPlanPolicy()
 	got := map[string]string{}
 	for _, a := range acts {
 		got[a.Name] = a.To
+		if a.Execution != "switched" {
+			t.Fatalf("%s was not switched: %+v", a.Name, a)
+		}
 	}
 	if got["jevons-po"] != "codex" || got["jv-t517-worker"] != "codex" || len(acts) != 2 {
 		t.Fatalf("hot PO and worker move to codex: %+v", acts)
@@ -399,18 +316,11 @@ func TestT850SweepMovesHotPOAndKeepsItsHandover(t *testing.T) {
 	if _, present := got["jevons"]; present {
 		t.Fatalf("overseer on grok must stay out: %+v", acts)
 	}
-	for _, name := range led.cleared {
-		if name == "jevons-po" {
-			t.Fatalf("hot PO handover must stay, cleared=%v", led.cleared)
-		}
-	}
 }
 
-// A second sweep while the registry still names the hot provider does
-// not call PrepareMigration again: the handover written by the first
-// sweep is the guard. Once the PO's provider is the dest, MigrateOff is
-// false, so the sweep emits no action and does not reap the handover.
-func TestT850SecondSweepDoesNotPrepareAgainWhileProviderIsHot(t *testing.T) {
+// A switch rewrites the row at once, so the next sweep reads the seat on
+// its destination and does not move it again.
+func TestT850SecondSweepDoesNotSwitchAgain(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -434,36 +344,16 @@ func TestT850SecondSweepDoesNotPrepareAgainWhileProviderIsHot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	led := &sweepLedger{}
-	s.migrator = led
+	sw := &fakeSwitcher{reg: reg, live: true}
+	s.SetModelSwitcher(sw)
 	s.SweepPlanPolicy()
-	s.SweepPlanPolicy()
-	if led.prepared != 2 {
-		t.Fatalf("prepared=%d; want one prepare each for PO and worker, not a second pass", led.prepared)
-	}
-	def := reg.Def("jevons-po")
-	if def == nil {
-		t.Fatal("missing jevons-po")
-	}
-	def.Provider = claudia.ProviderCodex
-	if err := reg.Register(*def); err != nil {
-		t.Fatal(err)
-	}
 	acts := s.SweepPlanPolicy()
+	if switches, _ := sw.calls(); len(switches) != 2 {
+		t.Fatalf("switches = %v; want one each for PO and worker, not a second pass", switches)
+	}
 	for _, a := range acts {
-		if a.Name == "jevons-po" {
-			t.Fatalf("arrived PO must not be acted on: %+v", acts)
-		}
-		if a.To == "claude" {
-			t.Fatalf("must not send anyone back onto claude: %+v", acts)
-		}
-	}
-	if led.prepared != 2 {
-		t.Fatalf("prepared=%d after arrival; the third sweep must not prepare again", led.prepared)
-	}
-	for _, name := range led.cleared {
-		if name == "jevons-po" {
-			t.Fatalf("arrived PO handover must not be reaped for being a PO, cleared=%v", led.cleared)
+		if a.To == "claude" || a.Execution == "switched" {
+			t.Fatalf("second sweep acted on an arrived seat: %+v", acts)
 		}
 	}
 }

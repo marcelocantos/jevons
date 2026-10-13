@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /** One provider row from GET /api/migrate/options (🎯T285.2). */
-export type MigrateProvider = {
+export type ProviderOption = {
   provider: string;
   band?: string;
   reason?: string;
@@ -12,17 +12,13 @@ export type MigrateProvider = {
   model_pick?: boolean;
 };
 
-export function migrateUrl(purpose: string | undefined): string {
-  return purpose === 'overseer' ? '/api/overseer/migrate' : '/api/agents/migrate';
-}
+/**
+ * Every seat, the overseer included, switches provider or model in place
+ * through one route (claudia 🎯T195): it keeps its session and conversation.
+ */
+export const SWITCH_MODEL_URL = '/api/agents/switch-model';
 
-export function migrateBody(
-  name: string,
-  purpose: string | undefined,
-  provider: string,
-  model: string,
-): Record<string, string> {
-  if (purpose === 'overseer') return { provider, model };
+export function switchModelBody(name: string, provider: string, model: string): Record<string, string> {
   return { name, provider, model };
 }
 
@@ -31,7 +27,7 @@ export function migrateBody(
  * reason and cannot be chosen. An empty model list is the provider default.
  */
 export function ModelMenu(props: {
-  options: MigrateProvider[];
+  options: ProviderOption[];
   /** Viewport position. The fleet list scrolls, so an in-flow menu is clipped. */
   anchor?: { top: number; left: number };
   /** The seat's provider. A model pick there is a pin, not a move onto that provider. */

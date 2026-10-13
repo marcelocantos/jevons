@@ -15,7 +15,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/ctxcap"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
@@ -40,9 +39,9 @@ type UnworkableReporter func(agent, parent, text string)
 // runs until ctx is cancelled.
 func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery.Roots,
 	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server,
-	rotations *handover.RotationStore, report UnworkableReporter) {
+	report UnworkableReporter) {
 	pol := ctxcap.Policy{
-		Ceiling:  cfg.ContextCeilingTokens,
+		Ceiling: cfg.ContextCeilingTokens,
 		// 🎯T564: enforcement is opt-in; the product default observes only.
 		Disabled: !cfg.ContextCeilingEnforced(),
 	}
@@ -62,7 +61,7 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				contextCeilingPass(cfg, pol, obs, reg, fleetAdapter, srv, lastCompaction, rotations, report, &reported)
+				contextCeilingPass(cfg, pol, obs, reg, fleetAdapter, srv, lastCompaction, report, &reported)
 			}
 		}
 	}()
@@ -71,7 +70,7 @@ func startContextCeiling(ctx context.Context, cfg config.Config, roots discovery
 // contextCeilingPass evaluates the fleet once. It does not mint or seed.
 func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observer,
 	reg *claudia.Registry, fleetAdapter *fleet.Claudia, srv *server.Server,
-	lastCompaction map[string]time.Time, rotations *handover.RotationStore,
+	lastCompaction map[string]time.Time,
 	report UnworkableReporter, reported *sync.Map) {
 	if reg == nil {
 		return
@@ -91,12 +90,9 @@ func contextCeilingPass(cfg config.Config, pol ctxcap.Policy, obs ctxcap.Observe
 		}
 		o := obs.Observe(ref)
 		o.Now = time.Now()
-		o.SeedOnly = obs.SeedOnly(ref)
 		if last, ok := lastCompaction[def.Name]; ok {
 			o.SinceLastCompaction = o.Now.Sub(last)
 		}
-		since, ok := rotations.Observe(def.Name, o.Now)
-		o = ctxcap.ApplyPersistedRotation(o, since, ok)
 		d := pol.Evaluate(o)
 		act := ctxcap.ActionFor(d)
 		if act != ctxcap.ActionUnworkable {

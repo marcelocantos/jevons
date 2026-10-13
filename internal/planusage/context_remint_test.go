@@ -31,7 +31,7 @@ func TestT561ContextRemintStaysOnClaudeWhenWeeklyRemains(t *testing.T) {
 		t.Fatalf("weekly ok → same-provider kill+start, got %+v", p)
 	}
 	adv := p.Advice("jevons-po")
-	for _, want := range []string{"jevons_agent_kill(jevons-po)", `provider="claude"`, "do NOT jevons_agent_migrate"} {
+	for _, want := range []string{"jevons_agent_kill(jevons-po)", `provider="claude"`, "do NOT jevons_agent_switch_model"} {
 		if !strings.Contains(adv, want) {
 			t.Fatalf("advice lacks %q: %s", want, adv)
 		}

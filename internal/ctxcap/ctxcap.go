@@ -84,22 +84,9 @@ type Observation struct {
 	// Exempt marks agents the ceiling must not rotate. The owner's own
 	// chat continuity is not a spend lever.
 	Exempt bool
-	// SinceLastCompaction is how long ago this agent was last rotated by
-	// the ceiling. Zero means never, or unknown. Prefer SinceLastRotation
-	// (🎯T392.1.1); this field is kept so existing callers still compile
-	// and is consulted when HasLastRotation is false.
+	// SinceLastCompaction is how long ago this agent was last compacted.
+	// Zero means never, or unknown — not "just now".
 	SinceLastCompaction time.Duration
-	// SinceLastRotation is how long ago this agent was last rotated
-	// (migrate, compact, or upgrade remint). Distinct from compaction
-	// because a migrate is a rotation and must start the hold clock.
-	SinceLastRotation time.Duration
-	// HasLastRotation is true when a durable last-rotation record was
-	// read. Zero duration with this false is "unknown", not "just now",
-	// and unknown plus SeedOnly holds rather than compact-now.
-	HasLastRotation bool
-	// SeedOnly is true when the successor's only user turns are rotation
-	// seeds. That session has not grown through the ceiling.
-	SeedOnly bool
 	// Now is the observation time, used only to interpret the above.
 	Now time.Time
 }
@@ -171,11 +158,6 @@ func (p Policy) Evaluate(obs Observation) Decision {
 	case obs.Exempt:
 		d.Verdict = VerdictOK
 		d.Reason = "exempt from the ceiling"
-	case obs.Context > ceiling && obs.SeedOnly:
-		d.Verdict = VerdictHold
-		d.Reason = fmt.Sprintf(
-			"context %d exceeds ceiling %d but the session's only turns are the rotation seed — not grown through the ceiling",
-			obs.Context, ceiling)
 	case obs.Context > ceiling && rotationAge(obs) >= 0 && rotationAge(obs) < p.EffectiveMinInterval():
 		// Over the ceiling, but rotated too recently. Compacting again
 		// would be a treadmill. Hold, and say so loudly enough that a
@@ -184,7 +166,7 @@ func (p Policy) Evaluate(obs Observation) Decision {
 		age := rotationAge(obs)
 		d.Verdict = VerdictHold
 		d.Reason = fmt.Sprintf(
-			"context %d exceeds ceiling %d but last rotation was %s ago (min %s) — holding rather than thrashing",
+			"context %d exceeds ceiling %d but last compaction was %s ago (min %s) — holding rather than thrashing",
 			obs.Context, ceiling, age.Round(time.Second), p.EffectiveMinInterval())
 	case obs.Context > ceiling:
 		d.Verdict = VerdictCompact
@@ -206,13 +188,9 @@ func (p Policy) EvaluateAll(obs []Observation) []Decision {
 	return out
 }
 
-// rotationAge is the hold-clock reading. A durable last-rotation wins;
-// SinceLastCompaction is the legacy in-memory fallback. Negative means
-// unknown — and unknown is not "just now".
+// rotationAge is the hold-clock reading. Negative means unknown — and
+// unknown is not "just now".
 func rotationAge(obs Observation) time.Duration {
-	if obs.HasLastRotation {
-		return obs.SinceLastRotation
-	}
 	if obs.SinceLastCompaction > 0 {
 		return obs.SinceLastCompaction
 	}
@@ -227,20 +205,6 @@ func RotationAgeForNotice(obs Observation) time.Duration {
 		return 0
 	}
 	return age
-}
-
-// ApplyPersistedRotation stamps a durable last-rotation onto an
-// observation so a wiped in-memory map still holds (🎯T392.1.1).
-func ApplyPersistedRotation(obs Observation, since time.Duration, ok bool) Observation {
-	if !ok {
-		return obs
-	}
-	obs.HasLastRotation = true
-	obs.SinceLastRotation = since
-	if obs.SinceLastCompaction == 0 {
-		obs.SinceLastCompaction = since
-	}
-	return obs
 }
 
 // Compactions counts the decisions that would rotate an agent.

@@ -54,6 +54,12 @@ fleet recovery, born-stuck notices, pane reaping, migration, broker/intent
 repair, and owner cockpit recovery now consume the authority. Their scheduling
 and action arbitration are T766.3, not a claim made by this fold.
 
+Since claudia 🎯T195 the migration actuator is an in-place model switch
+(`jevons_agent_switch_model`, `POST /api/agents/switch-model`): the seat keeps
+its session and conversation. The context-transfer migration, its handover
+records and the handover sweep were removed. Where this census says
+"migration" or "migrate", read "switch".
+
 ### Oracle coverage and journey exception
 
 Hermetic tests cover per-field staleness, out-of-order and old-session reports,
@@ -150,7 +156,7 @@ Twenty-four production files own a ticker. The ones that act on seats:
 | `reapIdleThreads` (butler) | 2m | **stops processes** | delete; duplicate of the idle path with the opposite action |
 | `StartFrontierConsumeLoop` | 10m | spawn, park | keep as the only spawner; read desired state from the ledger |
 | `startWorktreeReap` | 10m | delete worktrees | keep — disjoint concern |
-| `startPlanUsage` → `SweepPlanPolicy` | config | migrate, park | fold the migrate/park decision into the reconciler |
+| `startPlanUsage` → `SweepPlanPolicy` | config | switch model in place (was migrate), park | fold the switch/park decision into the reconciler |
 | `cost` collector and enforcer | 3s/15s | kill worker, global stop | keep; it is a budget authority, not a seat observer |
 | `provider.LivenessMonitor` | config | mark provider down | keep — provider scope |
 | `supervise` agent and report | 60s/15s | reinstate launchd, notify | keep — different process tree on purpose |
