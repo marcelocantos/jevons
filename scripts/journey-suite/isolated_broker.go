@@ -275,6 +275,7 @@ func (b *isolatedBroker) close() error {
 	if err := omp.StopSidecar(filepath.Join(b.root, "omp.sock")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		stopped = errors.Join(stopped, err)
 	}
+	killPrivateClaudiaTmux(b.root)
 	stopped = errors.Join(stopped, b.log.Close(), os.RemoveAll(b.root))
 	return stopped
 }

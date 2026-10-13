@@ -154,6 +154,7 @@ func main() {
 	}
 	if !*keep {
 		defer os.RemoveAll(stateDir)
+		defer killPrivateClaudiaTmux(stateDir)
 	} else {
 		fmt.Println("KEEP state:", stateDir)
 	}
