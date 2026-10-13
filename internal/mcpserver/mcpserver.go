@@ -146,11 +146,6 @@ type Server struct {
 	// short value so a hung Launch cannot sit for the product timeout.
 	launchDeadline time.Duration
 
-	// startStallGrace / startStallRetries override the 🎯T729 retry of an
-	// opening brief whose CLI was still starting. Pointers so a test can
-	// pin zero (retry immediately, or not at all) distinctly from unset.
-	startStallGrace   *time.Duration
-	startStallRetries *int
 	// toolDeadline overrides tools/call bounds (🎯T254.5.1). Tests set a
 	// short value so a hung handler cannot sit for the product timeout.
 	toolDeadline time.Duration
@@ -523,7 +518,6 @@ type Server struct {
 	// remaining budget and concurrent load (🎯T359). Nil until
 	// SetCapacityGovernor — ambient loops then run ungated, as before.
 	capacityGov *capacity.Governor
-
 
 	// drainRestartAt tracks 🎯T530 restart-to-drain schedules after a parent
 	// kill so fleet-health / live probes can apply RemintGraceWindow.

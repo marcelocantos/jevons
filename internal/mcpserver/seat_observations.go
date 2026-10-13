@@ -175,4 +175,3 @@ func (s *Server) observeBrokerSeats(broker map[string]claudia.BrokerSeat) map[st
 	}
 	return out
 }
-

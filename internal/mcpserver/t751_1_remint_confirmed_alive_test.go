@@ -37,7 +37,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -97,10 +96,6 @@ func TestT751_1_BornStuckReplacementForPOIsReportedNotRecovered(t *testing.T) {
 				Detail: "no transcript was ever created (the CLI never drew a composer)"}
 		}
 	})
-	grace := time.Duration(0)
-	s.startStallGrace = &grace
-	retries := 0 // 🎯T729's same-provider grace retry exhausted immediately
-	s.startStallRetries = &retries
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
