@@ -35,7 +35,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/targetfile"
-	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
@@ -760,9 +759,6 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	msg += briefNote
 	if isolationNote != "" {
 		msg += " [" + isolationNote + "]"
-	}
-	if cite := upgrade.ClaudeSingleClientCite(def.SessionID); cite != "" {
-		msg += " [" + cite + "]" // 🎯T796
 	}
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
 	// list. Any entry pointing at a port nothing serves will sit in "still

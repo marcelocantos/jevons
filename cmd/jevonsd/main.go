@@ -160,17 +160,6 @@ func main() {
 		slog.Info("cleared enclosing agent session env so spawned agents start clean",
 			"vars", cleared)
 	}
-	// ð¯T282: and reconcile the claudia tmux server, which hands each new
-	// agent window the environment of whatever started the server â
-	// possibly a test run from days ago, since the anchor session keeps it
-	// alive across daemon restarts.
-	if changed, err := cli.NormalizeAgentTmuxEnv(); err != nil {
-		slog.Warn("could not reconcile claudia tmux server env; agents may inherit stale vars",
-			"err", err)
-	} else if len(changed) > 0 {
-		slog.Info("reconciled claudia tmux server env with the daemon's",
-			"vars", changed, "socket", cli.AgentTmuxSocket())
-	}
 
 	// Structured config (ð¯T44): built-in defaults â config.yaml â flags.
 	cfgPath := *configPath
@@ -662,68 +651,32 @@ func main() {
 		registry = r
 		seats.ObserveRegistry(registry)
 		go seats.FollowRegistry(ctx, registry)
-		// 🎯T541.1: in-process Cursor Launch waits for leftover store.db
-		// writers to exit, then fail-loud (ErrCursorResumeDenied) rather
-		// than stacking a second ACP client. Daemon-held grants reclaim
-		// by name and do not use this Start.
-		upgrade.InstallCursorLaunchGuard(registry)
 	}
 
-	// Prior upgrade handoff: session_ids + optional connect-mode endpoints.
-	// Process reattach when handles carry ConnectURL+PID (agents.json also
-	// persists those fields from the last Launch).
+	// Prior upgrade handoff: session ids only. The claudia broker keeps every
+	// omp seat alive across this restart and the boot reclaims it by name.
 	upgradeSnap, err := upgrade.LoadSnapshot(upgrade.SnapshotPath(cfg.StateDir))
 	if err != nil {
 		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
 		os.Exit(1)
 	}
-	preservedCLI := map[string]bool{}
 	if snap := upgradeSnap; snap != nil {
-		plan := upgrade.PlanReattach(snap)
-		// Merge connect endpoints into registry defs before StartAll so
-		// Launch/Adopt reattaches to still-running serve processes.
 		for _, h := range snap.Agents {
-			if h.Name == "" {
+			if h.Name == "" || h.SessionID == "" {
 				continue
 			}
-			if h.ConnectURL == "" && h.TmuxWindowID == "" {
-				continue
-			}
-			// The upgrade handoff identifies the transport of a surviving
-			// legacy CLI process. Preserve it until that process ends; only
-			// a cold seat can be reminted onto a sidecar.
-			if def := registry.Def(h.Name); def != nil {
-				if def.Provider == claudia.Provider(h.Provider) &&
-					def.Provider != cli.SidecarLaunchProvider(def.Provider) &&
-					upgrade.HandoffTransportAlive(h) {
-					preservedCLI[h.Name] = true
-				}
-				// Preserve the endpoint only for the legacy CLI we will
-				// reattach, never for a row already on the sidecar.
-				if h.ConnectURL != "" && (preservedCLI[h.Name] || !seatreg.SubscriptionPlan(def.Provider)) {
-					def.ConnectURL = h.ConnectURL
-					def.ConnectPID = h.PID
-					def.GrokConnect = true
-				}
-				if h.SessionID != "" {
-					def.SessionID = h.SessionID
-				}
+			if def := registry.Def(h.Name); def != nil && def.SessionID != h.SessionID {
+				def.SessionID = h.SessionID
 				if err := registry.Register(*def); err != nil {
-					slog.Warn("upgrade handoff: could not merge connect endpoint", "agent", h.Name, "err", err)
+					slog.Warn("upgrade handoff: could not merge session id", "agent", h.Name, "err", err)
 				}
 			}
 		}
 		slog.Info("upgrade handoff present",
-			"sessions", len(plan.SessionIDs),
-			"process_reattach", plan.ProcessReattachPossible,
-			"written_at", snap.WrittenAt,
-			"residual", plan.Residual)
+			"sessions", len(upgrade.SessionIDs(snap)), "written_at", snap.WrittenAt)
 	}
 
-	// Remint only cold seats after the upgrade merge. A reattachable
-	// legacy CLI retains its transport identity and endpoint; rewriting its
-	// persisted provider while the process survives would misroute Launch.
-	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
+	if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
 		slog.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n)
@@ -1188,12 +1141,6 @@ func main() {
 			}
 			return
 		}
-		// Cursor ACP stdio cannot be adopted. Stop those seats here so
-		// SIGHUP does not leave orphans that the successor then stacks
-		// (🎯T541.1). Grok connect-mode / Claude tmux stay for reattach.
-		if n := upgrade.StopNonAdoptable(registry); n > 0 {
-			slog.Info("upgrade exit: stopped non-adoptable agents", "n", n)
-		}
 		handles := upgrade.FromRegistry(registry)
 		snap := upgrade.BuildSnapshot(handles, os.Getpid())
 		path := upgrade.SnapshotPath(cfg.StateDir)
@@ -1201,7 +1148,7 @@ func main() {
 			slog.Error("upgrade handles save failed", "path", path, "err", err)
 		} else {
 			slog.Info("upgrade exit: skipped StopAll; wrote agent handles",
-				"path", path, "agents", len(handles), "residual", snap.Residual)
+				"path", path, "agents", len(handles))
 		}
 	}()
 
@@ -1240,14 +1187,6 @@ func main() {
 		}
 	}
 	isOverseerSeat := func(name string) bool { return name == cfg.OverseerName }
-	// 🎯T796.1: the one-client guard signals nothing when it cannot rule out a
-	// broker, so a seat it refuses stays down until the owner hears why.
-	upgrade.LaunchRefusedNotifier = func(agent string, err error) {
-		srv.NotifyOwnerNote(agent, "seat_launch_refused",
-			"Seat "+agent+" was not started: "+err.Error()+
-				". Nothing was stopped. Check the claudia broker (its socket exists but "+
-				"the seat's grant is held or the broker is not answering), then restart the seat.")
-	}
 	// 🎯T796: the broker detaches a seat's owner without telling it (claudia
 	// T124/T125), after which every delivery is refused not_owner. A refusal
 	// re-adopts the seat by name on one connection, bounded; a spent budget
@@ -1267,7 +1206,7 @@ func main() {
 	if ctx.Err() != nil {
 		return
 	}
-	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
+	if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
 		slog.Warn("sidecar remint after reattach failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
