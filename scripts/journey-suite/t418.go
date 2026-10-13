@@ -284,6 +284,7 @@ func (s *suite) jT418Mute() error {
 
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": name, "workdir": work, "description": "T418 mute fixture worker",
+		"provider": string(cli.PlanProvider(s.provider)),
 	})
 	if out := asOutage("spawn", err); out != nil {
 		return out

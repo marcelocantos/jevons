@@ -29,10 +29,11 @@ import (
 // asks for it on the destination. Nothing but that conversation records the
 // fact, so a correct answer means the destination model read it.
 
-// switchJourneyDestination is the other plan a journey moves to.
+// switchJourneyDestination is the other plan a journey moves to. Codex
+// and Claude carry the moves, so the journeys do not spend Cursor.
 func switchJourneyDestination(from claudia.Provider) claudia.Provider {
 	if cli.PlanProvider(from) == claudia.ProviderCodex {
-		return claudia.ProviderCursor
+		return claudia.ProviderClaude
 	}
 	return claudia.ProviderCodex
 }
@@ -89,6 +90,9 @@ func (s *suite) providerSwitchWithBroker() error {
 	to := switchJourneyDestination(s.provider)
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey switch worker",
+		// The source is the isolate's provider: the switch is under test
+		// here, not placement.
+		"provider": string(cli.PlanProvider(s.provider)),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
@@ -167,6 +171,7 @@ func (s *suite) stoppedProviderSwitchWithBroker() error {
 	to := switchJourneyDestination(s.provider)
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey stopped switch worker",
+		"provider": string(cli.PlanProvider(s.provider)),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}

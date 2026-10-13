@@ -21,8 +21,10 @@ import (
 
 // A live seat on a hot provider must follow Claudia's placement verdict once,
 // switching in place (claudia 🎯T195): same session, same conversation, and
-// it stays on the chosen destination after the daemon restarts. The destination is the isolate's own subscription
-// provider (Grok or Codex), which stays healthy so the overseer does not move.
+// it stays on the chosen destination after the daemon restarts. The worker
+// starts on Claude, which the fixture makes hot. The destination is the
+// isolate's own subscription provider (Grok or Codex), which stays healthy
+// so the overseer does not move.
 // Run it on whichever of the two has real allowance left: the fixture only
 // shapes Claudia's placement, and the switched seat's turns spend the
 // destination plan for real.
@@ -46,11 +48,11 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 	const codeword = "COPPERFINCH83"
 	if _, err := s.mcpText("jevons_agent_start", map[string]any{
 		"name": id, "workdir": work, "actor": "jevons", "parent": "jevons", "purpose": "work",
-		"provider": "cursor", "model": "composer-2.5", "owner_asked": true,
+		"provider": "claude", "model": "claude-sonnet-5", "owner_asked": true,
 		"prompt": "Your continuing task is to remember the mission codeword " + codeword +
 			" for a later question. Reply with exactly ACK " + codeword + " and remain available; do not declare the task complete.",
 	}); err != nil {
-		return fmt.Errorf("spawn Cursor worker: %w", err)
+		return fmt.Errorf("spawn Claude worker: %w", err)
 	}
 	if _, err := s.waitReplyContaining(id, 0, codeword, 90*time.Second); err != nil {
 		return fmt.Errorf("worker did not acknowledge codeword: %w", err)
@@ -68,14 +70,14 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 		return err
 	}
 	source := before[id]
-	if cli.PlanProvider(source.Provider) != claudia.ProviderCursor || source.SessionID == "" {
-		return fmt.Errorf("worker did not start on Cursor: %+v", source)
+	if cli.PlanProvider(source.Provider) != claudia.ProviderClaude || source.SessionID == "" {
+		return fmt.Errorf("worker did not start on Claude: %+v", source)
 	}
 
 	// The isolate already reads this file on each placement check. Only
-	// Cursor becomes hot; the isolate provider remains an eligible destination for this
+	// Claude becomes hot; the isolate provider remains an eligible destination for this
 	// worker and the healthy overseer does not need to move.
-	hot := planFixtureSnapshot("cursor", 0, 100)
+	hot := planFixtureSnapshot("claude", 0, 100)
 	green := planFixtureSnapshot(string(dest), defaultPlanRemaining, defaultPlanUsed)
 	hot.Backends = append(hot.Backends, green.Backends...)
 	raw, err := json.Marshal(hot)
