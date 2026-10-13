@@ -37,7 +37,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/missionbound"
-	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/reapverify"
 	"github.com/marcelocantos/jevons/internal/research"
@@ -525,10 +524,6 @@ type Server struct {
 	// SetCapacityGovernor — ambient loops then run ungated, as before.
 	capacityGov *capacity.Governor
 
-	// paneList / paneKill are the 🎯T459 census I/O seams. Nil uses tmux
-	// against the claudia fleet socket. Tests inject a fixture fleet.
-	paneList func() ([]panecensus.Pane, error)
-	paneKill func(id string) error
 
 	// drainRestartAt tracks 🎯T530 restart-to-drain schedules after a parent
 	// kill so fleet-health / live probes can apply RemintGraceWindow.

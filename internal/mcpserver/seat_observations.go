@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/panecensus"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/spool"
@@ -177,26 +176,3 @@ func (s *Server) observeBrokerSeats(broker map[string]claudia.BrokerSeat) map[st
 	return out
 }
 
-func (s *Server) observePanePresence(panes []panecensus.Pane) {
-	if s == nil {
-		return
-	}
-	now := time.Now()
-	for _, p := range panes {
-		name := strings.TrimSpace(p.Name())
-		if name == "" {
-			continue
-		}
-		flight := seatstate.Unknown
-		if f, known := p.ObservedFlight(); known {
-			flight = seatstate.TriOf(f == panecensus.FlightInFlight)
-		} else if panecensus.InferFlight(p.Title) == panecensus.FlightInFlight {
-			flight = seatstate.Yes
-		}
-		s.Seats().Observe(seatstate.Observation{
-			Name: name, Alive: seatstate.Yes, InFlight: flight,
-			QueueDepth: seatstate.QueueUnknown,
-			Source:     "pane.census", At: now,
-		})
-	}
-}

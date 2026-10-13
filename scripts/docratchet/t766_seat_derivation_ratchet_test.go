@@ -73,7 +73,7 @@ func seatDerivationSites(root string) ([]string, error) {
 				for _, result := range fn.Type.Results.List {
 					raw := false
 					if id, ok := result.Type.(*ast.Ident); ok {
-						raw = (filepath.Dir(rel) == "internal/turnev" && id.Name == "Phase") || (filepath.Dir(rel) == "internal/panecensus" && fn.Recv == nil && id.Name == "Flight") || (seatObservationFiles[rel] && (id.Name == "birthDiagnosis" || id.Name == "SessionEvidence" || (filepath.Dir(rel) == "internal/seatactivity" && id.Name == "Reading") || (id.Name == "string" && fn.Name.Name != "AgentTranscriptPath")))
+						raw = (filepath.Dir(rel) == "internal/turnev" && id.Name == "Phase") || (seatObservationFiles[rel] && (id.Name == "birthDiagnosis" || id.Name == "SessionEvidence" || (filepath.Dir(rel) == "internal/seatactivity" && id.Name == "Reading") || (id.Name == "string" && fn.Name.Name != "AgentTranscriptPath")))
 					}
 					if sel, ok := result.Type.(*ast.SelectorExpr); ok {
 						if id, ok := sel.X.(*ast.Ident); ok {

@@ -185,19 +185,12 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	s.sweepSeatMCPOnRequest() // 🎯T797, cache only on the request path (🎯T804)
 	tm.mark("sweep_seat_mcp")
 	s.notifyDeadAgents(reps)
-	// 🎯T459: reap fleet panes the registry does not know about before
-	// we report the count the host is deciding against.
-	s.SweepOrphanPanes()
-	tm.mark("sweep_orphan_panes")
 	defs := s.registry.List()
 	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {
 		body := "No agents registered."
 		if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
 			body += "\n" + reaped
-		}
-		if extra := s.FormatHostCostLines(0); extra != "" {
-			body += "\n" + extra
 		}
 		return mcp.NewToolResultText(fleetlog.PrependNotices(
 			s.withMassStop(PrependFleetHealth(body, reps)), notices)), nil
@@ -269,10 +262,6 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
 		b.WriteString("\n")
 		b.WriteString(reaped)
-	}
-	if extra := s.FormatHostCostLines(len(defs)); extra != "" {
-		b.WriteString("\n")
-		b.WriteString(extra)
 	}
 	if line := s.FormatNoticeSavings(); line != "" {
 		b.WriteString("\n")
