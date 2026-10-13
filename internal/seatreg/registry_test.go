@@ -43,9 +43,9 @@ func TestJevonsdUsesSeatreg(t *testing.T) {
 	if !strings.Contains(src, "seatreg.RemintRegistryExcept(") {
 		t.Fatal("jevonsd must remint the fleet onto the sidecar")
 	}
-	merge := strings.LastIndex(src, "def.GrokConnect = true")
-	remint := strings.LastIndex(src, "seatreg.RemintRegistryExcept(")
-	if merge < 0 || remint < merge {
-		t.Fatal("sidecar remint must run after upgrade handoff restores grok connect")
+	// Every seat runs on the omp agent core; the upgrade handoff carries
+	// identity only and must not resurrect CLI connect-mode.
+	if strings.Contains(src, "GrokConnect = true") {
+		t.Fatal("jevonsd restores legacy grok connect-mode; seats are omp-only")
 	}
 }
