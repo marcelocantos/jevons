@@ -25,7 +25,7 @@ import (
 // isolate outage, naming its error and the isolate's own last ERROR lines;
 // every later journey that runs while the isolate is still down is OUT, and
 // its line points at that first cause. A journey that brings the isolate
-// back (J20 and J29 restart it) ends the outage, so a genuine failure after
+// back (J20 restarts it) ends the outage, so a genuine failure after
 // a recovery is still FAIL — and a journey that fails with a live isolate is
 // FAIL exactly as before.
 

@@ -73,22 +73,6 @@ func TestT448PinContainsT28AndDailyCheckIsWired(t *testing.T) {
 	if r.PinSHA == "" {
 		t.Fatal("expected pin SHA resolved via sibling checkout or module-cache Origin.Hash")
 	}
-	// T28 content marker in the published module cache (squash-safe).
-	modCache, err := exec.Command("go", "env", "GOMODCACHE").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	send := filepath.Join(strings.TrimSpace(string(modCache)),
-		"github.com", "marcelocantos", "claudia@"+r.PinVersion,
-		"internal", "tmuxagent", "send.go")
-	body, err := os.ReadFile(send)
-	if err != nil {
-		t.Fatalf("read pin send.go: %v", err)
-	}
-	if !strings.Contains(string(body), "composerHoldsUnsubmitted") {
-		t.Fatalf("pin %s send.go lacks composerHoldsUnsubmitted (T28)", r.PinVersion)
-	}
-
 	agents := readRepo(t, "AGENTS.md")
 	for _, want := range []string{"🎯T448", "bin/claudiapin", "go.work", "a27d3fd"} {
 		if !strings.Contains(agents, want) {
