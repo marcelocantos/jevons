@@ -189,29 +189,16 @@ func countTranscriptRole(payload map[string]any, role string) int {
 
 func backendCLIReady(provider string) error {
 	switch provider {
-	case string(claudia.ProviderClaude):
-		if _, err := exec.LookPath("claude"); err != nil {
-			return fmt.Errorf("claude not on PATH")
+	case string(claudia.ProviderClaude), string(claudia.ProviderGrok), string(claudia.ProviderCodex), string(claudia.ProviderCursor):
+		// Every provider runs on the omp agent core inside claudia's Bun
+		// sidecar; no provider CLI (or tmux) is involved.
+		if _, err := exec.LookPath("bun"); err != nil {
+			return fmt.Errorf("bun not on PATH (claudia's omp sidecar needs it)")
 		}
-		if _, err := exec.LookPath("tmux"); err != nil {
-			return fmt.Errorf("tmux required for Claude Session")
-		}
-	case string(claudia.ProviderGrok):
-		if _, err := exec.LookPath("grok"); err != nil {
-			return fmt.Errorf("grok not on PATH")
-		}
-	case string(claudia.ProviderCodex):
-		if _, err := exec.LookPath("codex"); err == nil {
-			return nil
-		}
-		if _, err := os.Stat("/Applications/ChatGPT.app/Contents/Resources/codex"); err == nil {
-			return nil
-		}
-		return fmt.Errorf("codex not on PATH or ChatGPT.app bundle")
+		return nil
 	default:
 		return fmt.Errorf("unknown provider %q", provider)
 	}
-	return nil
 }
 
 // startJoinTimeout bounds how long a detached start (🎯T792) may take to

@@ -309,7 +309,6 @@ persona_notes: |
 	s.run("J28-ticker-chrome", s.jTickerChrome)
 	s.run("J20-plan-dest", s.j20PlanDest)
 	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
-	s.run("J29-tmux-anchor-spawn", s.j29TmuxAnchorSpawn)
 	s.run("J30-packaged-react-owner-turn", s.jPackagedReactOwnerTurn)
 	s.run("J31-packaged-react-owner-boundary", s.jPackagedReactOwnerBoundary)
 	s.run("J32-packaged-react-send-cutin", s.jPackagedReactSendCutIn)

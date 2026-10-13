@@ -121,7 +121,7 @@ func TestT839LiveIsolateFailureStaysFail(t *testing.T) {
 	}
 }
 
-// TestT839RecoveryEndsOutage: J20 and J29 restart the isolate. One that brings
+// TestT839RecoveryEndsOutage: J20 restarts the isolate. One that brings
 // it back ends the outage, so its own genuine failure is FAIL again and the
 // next death is a second, separately named outage.
 func TestT839RecoveryEndsOutage(t *testing.T) {
@@ -129,17 +129,17 @@ func TestT839RecoveryEndsOutage(t *testing.T) {
 	s.run("J17-t418-queue-bounce", func() error { *alive = false; return errors.New("restart failed") })
 	s.run("J20-plan-dest", func() error { *alive = true; return errors.New("plan destination wrong") })
 	s.run("J21-goal-continue-all-backends", func() error { return nil })
-	s.run("J29-tmux-anchor-spawn", func() error { *alive = false; return nil })
+	s.run("J28-ticker-chrome", func() error { *alive = false; return nil })
 	s.run("J30-packaged-react-owner-turn", refused("j19 probe isolate GET /"))
 
 	if s.failures != 1 || s.outages != 3 {
-		t.Fatalf("failures=%d outages=%d, want 1 (J20) / 3 (J17, J29, J30)\n%s", s.failures, s.outages, out)
+		t.Fatalf("failures=%d outages=%d, want 1 (J20) / 3 (J17, J28, J30)\n%s", s.failures, s.outages, out)
 	}
-	if len(s.isolateOutages) != 2 || s.isolateOutages[1].journey != "J29-tmux-anchor-spawn" {
-		t.Fatalf("outages = %+v, want J17 then J29", s.isolateOutages)
+	if len(s.isolateOutages) != 2 || s.isolateOutages[1].journey != "J28-ticker-chrome" {
+		t.Fatalf("outages = %+v, want J17 then J28", s.isolateOutages)
 	}
 	if !strings.Contains(s.isolateOutages[1].cause, "passed but left the isolate down") {
-		t.Errorf("J29 cause = %q", s.isolateOutages[1].cause)
+		t.Errorf("J28 cause = %q", s.isolateOutages[1].cause)
 	}
 	if !strings.Contains(out.String(), "FAIL J20-plan-dest") ||
 		!strings.Contains(out.String(), "isolate back after J20-plan-dest") {
