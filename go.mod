@@ -6,12 +6,13 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.52.0
+	github.com/marcelocantos/claudia v0.53.0
 	github.com/marcelocantos/doit v0.9.0
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.47.0
 	golang.org/x/image v0.44.0
 	golang.org/x/net v0.56.0
+	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0
 	golang.org/x/tools v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -52,7 +53,6 @@ require (
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
