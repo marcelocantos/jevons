@@ -1914,29 +1914,6 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 	// 🎯T305 Failure A: optional start prompt must reach the pane and
 	// begin a turn, or start fails loudly (no silent outcome=ok).
 	deliverErr := s.deliverStartPrompt(name, prompt)
-	fallbackProvider := ""
-	stalledProvider := string(def.Provider)
-	if deliverErr != nil && !existed && startBriefNeverReached(deliverErr) {
-		// 🎯T890: a fresh mint that splash-stalled gets one retry on a
-		// provider that is currently starting seats before the leaf is
-		// reported lost to a CLI that never drew a composer. Distinct
-		// from 🎯T729's same-provider grace retry, already exhausted by
-		// the time deliverStartPrompt returned this error.
-		if fp, ferr := s.attemptStallFallbackMint(ctx, name, workdir, model, taskTypeArg, parent, purpose, targetID, prompt, stalledProvider); fp != "" {
-			fallbackProvider = fp
-			if ferr == nil {
-				deliverErr = nil
-				if d := s.registry.Def(name); d != nil {
-					def = d
-				}
-				life["stall_fallback_provider"] = fp
-				life["stall_fallback_from"] = stalledProvider
-			} else {
-				deliverErr = fmt.Errorf("%w (fallback provider %s after startup_stall on %s also failed: %v)",
-					deliverErr, fp, stalledProvider, ferr)
-			}
-		}
-	}
 	if err := deliverErr; err != nil {
 		released, kept := s.startBriefFailureTeardown(name, existed, err)
 		if kept {
@@ -1968,21 +1945,8 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 				// caller LLM dropping it is how a mint died twice with nobody
 				// told. The seat's parent hears about the lost mint by name,
 				// with the error verbatim, on the durable send path.
-				// 🎯T890: when a fallback provider was tried, name BOTH —
-				// the stalled provider and the one tried next — so the
-				// parent does not blindly re-order the same stalling
-				// provider.
-				notifyText := err.Error()
-				if fallbackProvider != "" {
-					notifyText = fmt.Sprintf("stalled on %s; also tried fallback provider %s: %s",
-						stalledProvider, fallbackProvider, err.Error())
-				}
-				s.notifySpawnFailure(def.Parent, def.TargetID, name, notifyText)
+				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
 			}
-			// 🎯T729: the eventlog says which of the two this was. The
-			// specimen's three lines were readable only as a contradiction
-			// because the removal reason and the start error disagreed and
-			// neither carried the class.
 			life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
