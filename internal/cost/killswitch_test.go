@@ -10,19 +10,17 @@ import (
 	"testing"
 )
 
-// The kill-switch reaches seats the registry lost (unowned on the broker),
-// leaves owned seats to StopFleet, and never touches a protected name.
+// The kill-switch reaches seats the registry lost, leaves registered seats
+// to StopFleet, and never touches a protected name.
 func TestBrokerKillSwitchStopsUnownedUnprotectedSeats(t *testing.T) {
 	var stopped []string
 	k := &BrokerKillSwitch{
-		List: func(context.Context) ([]BrokerSeat, error) {
-			return []BrokerSeat{
-				{Name: "lost-worker"}, {Name: "owned-worker", Owned: true},
-				{Name: "jevons"}, {Name: "other-lost"},
-			}, nil
+		List: func(context.Context) ([]string, error) {
+			return []string{"lost-worker", "registered-worker", "jevons", "other-lost"}, nil
 		},
-		Stop:    func(_ context.Context, n string) error { stopped = append(stopped, n); return nil },
-		Protect: []string{"jevons"},
+		Registered: func(n string) bool { return n == "registered-worker" },
+		Stop:       func(_ context.Context, n string) error { stopped = append(stopped, n); return nil },
+		Protect:    []string{"jevons"},
 	}
 	if err := k.Kill(); err != nil {
 		t.Fatal(err)
@@ -35,13 +33,14 @@ func TestBrokerKillSwitchStopsUnownedUnprotectedSeats(t *testing.T) {
 
 func TestBrokerKillSwitchReportsListAndStopFailures(t *testing.T) {
 	k := &BrokerKillSwitch{
-		List: func(context.Context) ([]BrokerSeat, error) { return nil, errors.New("no broker") },
-		Stop: func(context.Context, string) error { return nil },
+		List:       func(context.Context) ([]string, error) { return nil, errors.New("no broker") },
+		Registered: func(string) bool { return false },
+		Stop:       func(context.Context, string) error { return nil },
 	}
 	if err := k.Kill(); err == nil {
 		t.Fatal("list failure swallowed")
 	}
-	k.List = func(context.Context) ([]BrokerSeat, error) { return []BrokerSeat{{Name: "a"}}, nil }
+	k.List = func(context.Context) ([]string, error) { return []string{"a"}, nil }
 	k.Stop = func(context.Context, string) error { return errors.New("refused") }
 	if err := k.Kill(); err == nil {
 		t.Fatal("stop failure swallowed")

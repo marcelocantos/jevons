@@ -10,25 +10,21 @@ import (
 	"time"
 )
 
-// BrokerSeat is one seat the claudia broker holds, as the kill-switch sees it.
-type BrokerSeat struct {
-	Name  string
-	Owned bool
-}
-
 // BrokerKillSwitch is the global stop for the claudia worker fleet. Every
 // seat runs on the omp agent core under the claudia broker, which outlives
 // jevonsd and resumes seats on its own restart — so a seat the registry has
-// lost (no connection owns it) keeps burning unless the broker is told to
-// stop it. Seats a connection owns are stopped through the registry by the
-// caller ([Actions.StopFleet]); this reaches the rest.
+// lost keeps burning unless the broker is told to stop it. Registered seats
+// are stopped through the registry by the caller ([Actions.StopFleet]); this
+// reaches the rest.
 //
 // Scope is deliberate: it stops only broker seats, never arbitrary
 // processes, so the owner's own interactive sessions are untouched.
 type BrokerKillSwitch struct {
-	// List returns every seat the broker holds (claudia.BrokerSeats).
-	List func(context.Context) ([]BrokerSeat, error)
-	// Stop stops one unowned seat and drops its grant (claudia.StopBrokerSeat).
+	// List returns the name of every seat the broker holds.
+	List func(context.Context) ([]string, error)
+	// Registered reports a name the registry tracks; StopFleet owns those.
+	Registered func(string) bool
+	// Stop stops one seat and drops its grant (claudia.StopBrokerSeat).
 	Stop func(context.Context, string) error
 	// Protect names seats never stopped (the overseer, 🎯T139).
 	Protect []string
@@ -36,10 +32,9 @@ type BrokerKillSwitch struct {
 	Timeout time.Duration
 }
 
-// Kill stops every unowned, unprotected broker seat. No broker is success:
-// there is nothing for the switch to reach.
+// Kill stops every unregistered, unprotected broker seat.
 func (k *BrokerKillSwitch) Kill() error {
-	if k == nil || k.List == nil || k.Stop == nil {
+	if k == nil || k.List == nil || k.Stop == nil || k.Registered == nil {
 		return fmt.Errorf("killswitch: broker seams not wired")
 	}
 	timeout := k.Timeout
@@ -57,12 +52,12 @@ func (k *BrokerKillSwitch) Kill() error {
 		protect[p] = true
 	}
 	var errs []error
-	for _, s := range seats {
-		if s.Owned || protect[s.Name] {
+	for _, name := range seats {
+		if protect[name] || k.Registered(name) {
 			continue
 		}
-		if err := k.Stop(ctx, s.Name); err != nil {
-			errs = append(errs, fmt.Errorf("stop %s: %w", s.Name, err))
+		if err := k.Stop(ctx, name); err != nil {
+			errs = append(errs, fmt.Errorf("stop %s: %w", name, err))
 		}
 	}
 	if len(errs) > 0 {
