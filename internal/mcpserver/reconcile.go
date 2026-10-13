@@ -42,7 +42,6 @@ func (s *Server) Reconcile() {
 
 	s.observeRegistryLiveness()
 	s.TrackSeatLoad()
-	s.SweepOrphanPanes()
 
 	s.SweepSendBacklogs()
 	s.reportFleetMuteIfNeeded()
