@@ -933,10 +933,8 @@ func main() {
 	if capsHot != nil {
 		applySoftCaps(capsHot.Get())
 	}
-	// ð¯T285: jevons_agent_migrate moves an agent between backends and
-	// hands the successor its predecessor's transcript.
-	// 🎯T426: every launch this adapter performs — context-ceiling compaction,
-	// provider migration, thread launch, deliver-rehydrate — attaches the MCP
+	// 🎯T426: every launch this adapter performs — thread launch,
+	// deliver-rehydrate, a stopped seat resuming after a switch — attaches the MCP
 	// event sink to the process it just brought up. Without it a rotated agent
 	// keeps its name and its registry row while its turn ends, send-queue
 	// drain, upward reports and 🎯T165 auto-deregistration all go dark. The

@@ -450,9 +450,9 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	// the MINT branch, where "no purpose" really does mean a new side chat;
 	// applied to an EXISTING row it is a guess written to durable state.
 	//
-	// jevons_agent_migrate relaunches a rotated agent through a bare
-	// thread.Thread{ID: name}, so that guess landed on every row minted
-	// before Purpose existed — rewriting a product owner to aside (🎯T301).
+	// A relaunch through a bare thread.Thread{ID: name} (the old migration
+	// path did this) carried that guess onto every row minted before
+	// Purpose existed — rewriting a product owner to aside (🎯T301).
 	// Observed 2026-08-08: bullseye-po was the only PO in the grok→claude
 	// batch whose row had no explicit purpose, and the only one that turned
 	// into a 💡 in the fleet tree. Left empty, /api/agents reads it as work,
