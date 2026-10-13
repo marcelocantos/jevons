@@ -15,12 +15,12 @@ import (
 //
 // When a seat blows the context ceiling, the cheapest recovery is a fresh
 // session on the same provider with a thin continue brief: kill+start the
-// same name, provider unchanged. jevons_agent_migrate refuses same-provider
-// moves ("that is a resume, not a migrate"), and on 2026-08-29 that refusal
-// pushed a Claude remint onto cursor merely because migrate wanted a
-// different provider — while Claude's weekly window still had plenty left.
-// Cross-provider migrate is the answer only when the seat's own provider is
-// exhausted or blocked (MigrateOff) or the owner asks for it.
+// same name, provider unchanged. On 2026-08-29 the old migrate tool, which
+// refused same-provider moves, pushed a Claude remint onto cursor merely
+// because it wanted a different provider — while Claude's weekly window
+// still had plenty left. A cross-provider switch is the answer only when the
+// seat's own provider is exhausted or blocked (MigrateOff) or the owner asks
+// for it.
 //
 // 🎯T1013.4 — the should-leave half of this decision (ShouldVacate, plus
 // the owner-ask escape) is computed by claudia.ShouldRemintMigrate, not
