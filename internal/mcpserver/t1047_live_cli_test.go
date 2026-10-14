@@ -7,6 +7,9 @@ import (
 	"github.com/marcelocantos/claudia"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 func TestT1047ExistingExplicitClaudeKeepsLiveCLITransport(t *testing.T) {
@@ -32,6 +35,10 @@ func TestT1047ExistingExplicitClaudeKeepsLiveCLITransport(t *testing.T) {
 	}
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
+	// 🎯T766: stitchAgentStart reads liveness from the seat authority. The
+	// stub handle carries no session id, so feed the report a real seat's
+	// handle would produce.
+	s.Seats().FromClaudia(seatstate.SeatReport{Name: name, SessionID: "legacy-sid", Provider: string(claudia.ProviderClaude), Alive: true, Known: true}, time.Now())
 	def, existed, _, err := s.stitchAgentStart(name, wd, "", "claude", "", "jevons-po", claudia.PurposeWork, "", "")
 	if err != nil {
 		t.Fatal(err)
