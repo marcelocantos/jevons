@@ -669,7 +669,7 @@ func main() {
 			"sessions", len(upgrade.SessionIDs(snap)), "written_at", snap.WrittenAt)
 	}
 
-	if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
+	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
 		slog.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n)
@@ -1199,7 +1199,7 @@ func main() {
 	if ctx.Err() != nil {
 		return
 	}
-	if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
+	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
 		slog.Warn("sidecar remint after reattach failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
@@ -1391,9 +1391,9 @@ func main() {
 		adoptPausedAutoSeats(registry, pausedAuto)
 		// The handoff only promised an adoptable endpoint, not a live
 		// process. Once every permitted seat has had its adoption attempt,
-		// remint cold legacy rows; RemintRegistryExcept checks the actual
+		// remint cold legacy rows; RemintRegistry checks the actual
 		// running handle before it rewrites any transport identity.
-		if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
+		if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
 			slog.Warn("sidecar remint after fleet reattach failed", "err", err)
 		} else if n > 0 {
 			slog.Info("sidecar remint", "seats", n, "when", "after-fleet-reattach")

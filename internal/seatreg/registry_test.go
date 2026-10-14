@@ -40,7 +40,7 @@ func TestJevonsdUsesSeatreg(t *testing.T) {
 	if strings.Contains(src, "claudia.NewRegistry(") {
 		t.Fatal("jevonsd still constructs claudia.NewRegistry directly")
 	}
-	if !strings.Contains(src, "seatreg.RemintRegistryExcept(") {
+	if !strings.Contains(src, "seatreg.RemintRegistry(") {
 		t.Fatal("jevonsd must remint the fleet onto the sidecar")
 	}
 	// Every seat runs on the omp agent core; the upgrade handoff carries
