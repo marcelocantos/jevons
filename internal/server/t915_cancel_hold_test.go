@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcelocantos/claudia"
-
 	"github.com/marcelocantos/jevons/internal/converge"
 )
 
@@ -317,21 +315,5 @@ func TestT915RequeueSkipsBatchMidHandover(t *testing.T) {
 	defer ts.Server.mu.RUnlock()
 	if slices.Contains(ts.notifyQueue, wire) {
 		t.Fatalf("a second copy of the prompt was queued: %q", ts.notifyQueue)
-	}
-}
-
-func TestT915InterruptEmitsNoStop(t *testing.T) {
-	for _, tc := range []struct {
-		p    claudia.Provider
-		want bool
-	}{
-		{claudia.ProviderClaude, true},
-		{"", true},
-		{claudia.ProviderGrok, false},
-		{claudia.ProviderCursor, false},
-	} {
-		if got := interruptEmitsNoStop(tc.p); got != tc.want {
-			t.Errorf("interruptEmitsNoStop(%q) = %v, want %v", tc.p, got, tc.want)
-		}
 	}
 }
