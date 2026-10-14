@@ -286,7 +286,7 @@ func LaunchReconciled(reg *claudia.Registry, name string) (*claudia.Agent, error
 		noteRehydrate(name, err)
 		return nil, err
 	}
-	agent, err := LaunchRecording(reg, name)
+	agent, err := reg.Launch(name)
 	err = ExplainLaunchCapError(reg.Def(name), err)
 	noteRehydrate(name, err)
 	return agent, err

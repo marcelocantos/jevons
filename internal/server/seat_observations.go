@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
@@ -43,11 +42,6 @@ func observeSeatModel(a *seatstate.Authority, d claudia.AgentDef, progress *Agen
 	}
 	if model == "" {
 		model = models.Model(d.Provider, d.WorkDir, d.SessionID)
-	}
-	if model == "" && d.Provider == claudia.ProviderCursor && d.ConnectPID > 0 {
-		if m, pid, ok := fleet.CursorStartedModel(d.SessionID); ok && pid == d.ConnectPID {
-			model = m
-		}
 	}
 	if model == "" || !modelFitsProvider(string(d.Provider), model) {
 		return
