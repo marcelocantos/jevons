@@ -25,34 +25,34 @@ const AuditComponent = "cost_clamp"
 
 // Named trip classes — hermetic policy oracles key off these strings.
 const (
-	TripNone             = "none"
-	TripGlobalRate       = "global-rate"
-	TripFleetRate        = "fleet-rate"
-	TripWorkerRate       = "worker-rate"
-	TripSessionCount     = "session-count"
-	TripSpawnStorm       = "spawn-storm"
-	TripOrphanSessions   = "orphan-sessions"
-	TripProjectedSpend   = "projected-overspend"
-	TripHardCeiling      = "hard-ceiling"
-	TripCollectorStale   = "collector-stale"
-	TripDeadMan          = "dead-man"
-	TripSpawnHalt        = "spawn-halt"
-	TripSpawnResume      = "spawn-resume"
-	TripInformational    = "informational"
+	TripNone              = "none"
+	TripGlobalRate        = "global-rate"
+	TripFleetRate         = "fleet-rate"
+	TripWorkerRate        = "worker-rate"
+	TripSessionCount      = "session-count"
+	TripSpawnStorm        = "spawn-storm"
+	TripOrphanSessions    = "orphan-sessions" // historical journal entries only
+	TripProjectedSpend    = "projected-overspend"
+	TripHardCeiling       = "hard-ceiling"
+	TripCollectorStale    = "collector-stale"
+	TripDeadMan           = "dead-man"
+	TripSpawnHalt         = "spawn-halt"
+	TripSpawnResume       = "spawn-resume"
+	TripInformational     = "informational"
 	TripProtectedOverseer = "protected-overseer"
 )
 
 // Clamp action labels for audit trail and policy tests.
 const (
-	ActionNone            = "none"
-	ActionWarn            = "warn"
-	ActionThrottle        = "throttle"
-	ActionPause           = "pause"
-	ActionKill            = "kill"
-	ActionSpawnHalt       = "spawn_halt"
-	ActionInformational   = "informational"
-	ActionProtectedPause  = "protected_pause" // kill/pause of overseer → never kill
-	ActionProtectedSkip   = "protected_skip"  // no process kill of protected worker
+	ActionNone           = "none"
+	ActionWarn           = "warn"
+	ActionThrottle       = "throttle"
+	ActionPause          = "pause"
+	ActionKill           = "kill"
+	ActionSpawnHalt      = "spawn_halt"
+	ActionInformational  = "informational"
+	ActionProtectedPause = "protected_pause" // kill/pause of overseer → never kill
+	ActionProtectedSkip  = "protected_skip"  // no process kill of protected worker
 )
 
 // AlertSpawnStorm is the concurrent-session storm signal (postmortem: 47
@@ -116,8 +116,6 @@ func TripClassForKind(kind string) string {
 		return TripSessionCount
 	case AlertSpawnStorm:
 		return TripSpawnStorm
-	case AlertOrphanSessions:
-		return TripOrphanSessions
 	case AlertProjection:
 		return TripProjectedSpend
 	case AlertHardCeiling:
@@ -154,7 +152,7 @@ func ResolveTrip(a Alert, protected map[string]bool) Trip {
 
 	// Soft / hygiene signals: warn path only (enforcer notifyOnce).
 	switch a.Kind {
-	case AlertSessionCount, AlertOrphanSessions, AlertProjection, AlertCollectorStale:
+	case AlertSessionCount, AlertProjection, AlertCollectorStale:
 		t.Action = ActionWarn
 		if a.Level == LevelNone {
 			t.Action = ActionNone

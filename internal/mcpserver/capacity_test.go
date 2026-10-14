@@ -22,7 +22,6 @@ func TestCapacitySnapshotCarriesBudgetLoadAndClampState(t *testing.T) {
 		Alerts: []cost.Alert{
 			{Kind: cost.AlertProjection, Level: cost.LevelWarn},
 			{Kind: cost.AlertFleetRate, Level: cost.LevelThrottle},
-			{Kind: cost.AlertOrphanSessions, Level: cost.LevelWarn},
 		},
 	}
 	budget := &cost.BudgetConfig{

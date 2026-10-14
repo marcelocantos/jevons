@@ -166,10 +166,10 @@ func TestLoadPortfolioOverrideMissingVsPresent(t *testing.T) {
 
 func TestPickMintProviderPlanDestWhenDefaultIneligible(t *testing.T) {
 	pick := PickMintProvider(MintProviderArgs{
-		ConfigProvider:        HarnessGrok,
-		PlanFeedOK:            true,
-		PlanDest:              HarnessClaude,
-		PlanDestOK:            true,
+		ConfigProvider: HarnessGrok,
+		PlanFeedOK:     true,
+		PlanDest:       HarnessClaude,
+		PlanDestOK:     true,
 	})
 	if pick.Provider != HarnessClaude || pick.Knob != KnobPlanDest {
 		t.Fatalf("want plan_dest claude, got %+v", pick)
@@ -181,9 +181,9 @@ func TestPickMintProviderPlanDestWhenDefaultIneligible(t *testing.T) {
 
 func TestPickMintProviderPlanDestEmptyRefuses(t *testing.T) {
 	pick := PickMintProvider(MintProviderArgs{
-		ConfigProvider:        HarnessGrok,
-		PlanFeedOK:            true,
-		PlanDestOK:            false,
+		ConfigProvider: HarnessGrok,
+		PlanFeedOK:     true,
+		PlanDestOK:     false,
 	})
 	if pick.Provider != "" || pick.Knob != KnobPlanDest {
 		t.Fatalf("want empty dest refuse, got %+v", pick)
