@@ -17,7 +17,7 @@ journey during which it died is `OUT … ISOLATE OUTAGE`, naming that journey's
 error and the isolate log's last `level=ERROR` records; every later journey
 that runs while it is still down is `OUT … no isolate since <journey>`, never
 FAIL, and the summary prints the outage once. A journey that restarts the
-isolate (J20, J29) ends the outage, and a journey that fails while the isolate
+isolate (J20) ends the outage, and a journey that fails while the isolate
 answers is FAIL as before.
 
 **Agent interaction:** each journey drives a real isolate (`jevonsd` + Grok ACP

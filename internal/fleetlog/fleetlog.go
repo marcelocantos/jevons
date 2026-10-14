@@ -63,11 +63,9 @@ const (
 	// ReasonUnbriefedSeat retires a seat whose opening brief never landed
 	// (🎯T433) — the seat would otherwise consume the leaf while dead.
 	ReasonUnbriefedSeat = "unbriefed_seat"
-	// ReasonStartupStall releases a seat whose CLI never finished starting,
-	// so its opening brief never had a ready pane to land in (🎯T729). It is
-	// deliberately NOT ReasonUnbriefedSeat: that reason asserts the brief was
-	// delivered to a working agent and ignored, and a reader who cannot tell
-	// the two apart cannot tell a broken worker from a broken launch.
+	// ReasonStartupStall is historical vocabulary: TUI-hosted seats whose CLI
+	// never drew a composer were released under it (🎯T729). Nothing emits it
+	// since seats moved to the omp agent core; it stays so old journals read.
 	ReasonStartupStall = "startup_stall"
 	// ReasonThreadRemove is a thread/agent dropped by name on request.
 	ReasonThreadRemove = "thread_remove"

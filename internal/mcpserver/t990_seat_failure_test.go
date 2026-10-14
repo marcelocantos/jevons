@@ -44,16 +44,7 @@ func TestT990UnbriefedSeatRetirementSurfacesTheCause(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A Claude Code config that has never been asked about this workdir.
-	trust := filepath.Join(dir, "claude.json")
-	if err := os.WriteFile(trust, []byte(`{"projects":{}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	prev := seatTrustConfigPath
-	seatTrustConfigPath = func() string { return trust }
-	defer func() { seatTrustConfigPath = prev }()
-
-	cause := errors.New("turn not submitted: composer state=paste_chip after 8 Enter presses")
+	cause := errors.New("seat never began its brief turn")
 	if !s.releaseUnbriefedSeat("jv-t989-mobile-webview", false, cause) {
 		t.Fatal("a seat this daemon minted was not retired")
 	}
@@ -71,8 +62,7 @@ func TestT990UnbriefedSeatRetirementSurfacesTheCause(t *testing.T) {
 	for _, want := range []string{
 		"unbriefed_seat",
 		"yourworld2-po",
-		"paste_chip",
-		"has not trusted workdir " + workdir,
+		"never began its brief turn",
 	} {
 		if !strings.Contains(wait.Reason, want) {
 			t.Errorf("wait reason missing %q:\n%s", want, wait.Reason)
@@ -95,28 +85,5 @@ func TestT990UnbriefedSeatRetirementSurfacesTheCause(t *testing.T) {
 	s.ClearSeatWait("T989")
 	if _, ok := s.SeatWaits()["T989"]; ok {
 		t.Fatal("a re-seated target is still waiting")
-	}
-}
-
-// A trusted workdir does not get the trust diagnosis: the daemon says only
-// what it knows.
-func TestT990TrustedWorkdirCarriesNoTrustDiagnosis(t *testing.T) {
-	dir := t.TempDir()
-	trust := filepath.Join(dir, "claude.json")
-	doc := `{"projects":{"` + dir + `":{"hasTrustDialogAccepted":true}}}`
-	if err := os.WriteFile(trust, []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	prev := seatTrustConfigPath
-	seatTrustConfigPath = func() string { return trust }
-	defer func() { seatTrustConfigPath = prev }()
-
-	def := &claudia.AgentDef{Name: "w", WorkDir: dir, Parent: "jevons-po", Provider: claudia.ProviderClaude}
-	got := describeSeatFailure(def, "w", "startup_stall", "released a seat whose CLI stalled", nil)
-	if strings.Contains(got, "has not trusted") {
-		t.Fatalf("trust diagnosis on a trusted workdir:\n%s", got)
-	}
-	if !strings.Contains(got, "seat w (parent jevons-po) retired: startup_stall") {
-		t.Fatalf("description = %q", got)
 	}
 }

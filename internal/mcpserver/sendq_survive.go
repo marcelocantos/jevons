@@ -12,8 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/fleet"
 )
 
 // 🎯T530 — Killing or reminting a parent must not abandon held sendq on
@@ -293,7 +291,7 @@ func (s *Server) launchForDrain(name string) (*claudia.Agent, error) {
 	if s == nil || s.registry == nil {
 		return nil, fmt.Errorf("agent registry not available")
 	}
-	return fleet.LaunchRecording(s.registry, name)
+	return s.registry.Launch(name)
 }
 
 // ProbeReapedHeldOlderThanGrace is the 🎯T530 live-probe surface: names whose

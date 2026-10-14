@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package upgrade is coordinator-side scaffolding for 🎯T40: restart
-// jevonsd without registry.StopAll(), persist agent handles for
-// reattach (session_id + optional Grok connect-mode serve URL/PID).
+// jevonsd without registry.StopAll(), persist agent handles (name +
+// session_id) for reattach.
 //
-// Conversation durability (session/load + agents.json) already survives
-// a normal restart. Process durability uses claudia Grok connect-mode
-// (detached `grok agent serve` + WebSocket) so agents outlive the
-// coordinator when StopAll is skipped on upgrade exit.
+// Process durability is the claudia broker's: every seat runs on the omp
+// agent core under it, outlives the coordinator, and is reclaimed by name.
 package upgrade
 
 import (
@@ -33,9 +31,7 @@ type Mode int
 const (
 	// ModeNormal stops agents on exit (historical behaviour).
 	ModeNormal Mode = iota
-	// ModeUpgrade leaves adoptable agent processes alone (Grok
-	// connect-mode, Claude tmux) and records handles. Cursor ACP
-	// stdio children are stopped separately (🎯T541.1).
+	// ModeUpgrade leaves seats running and records handles.
 	ModeUpgrade
 )
 
@@ -73,20 +69,13 @@ func truthy(v string) bool {
 }
 
 // Handle is one live agent at upgrade exit. SessionID is the durable
-// conversation key. ConnectURL + PID enable process reattach when Grok
-// connect-mode was used (claudia detached serve).
+// conversation key; the broker reclaims the seat itself by name.
 type Handle struct {
-	Name       string `json:"name"`
-	SessionID  string `json:"session_id"`
-	WorkDir    string `json:"workdir,omitempty"`
-	Provider   string `json:"provider,omitempty"`
-	Alive      bool   `json:"alive"`
-	PID        int    `json:"pid,omitempty"`
-	ConnectURL string `json:"connect_url,omitempty"`
-	// TmuxWindowID is the Claude session window left running on upgrade
-	// exit (e.g. "@3"). Empty when the agent was never tmux-backed or
-	// had already exited.
-	TmuxWindowID string `json:"tmux_window_id,omitempty"`
+	Name      string `json:"name"`
+	SessionID string `json:"session_id"`
+	WorkDir   string `json:"workdir,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Alive     bool   `json:"alive"`
 }
 
 // Snapshot is the on-disk upgrade handoff for the next coordinator.
@@ -95,15 +84,9 @@ type Snapshot struct {
 	WrittenAt string `json:"written_at"`
 	// CoordinatorPID is the exiting jevonsd PID (audit only).
 	CoordinatorPID int `json:"coordinator_pid"`
-	// Residual documents why process reattach is incomplete (empty when ready).
-	Residual string `json:"residual,omitempty"`
 	// Agents are live (or registered) handles at exit.
 	Agents []Handle `json:"agents"`
 }
-
-// ResidualConnectMode is the standing gap when no connect-mode endpoints
-// were externalized (stdio-only Grok or agents never launched durable).
-const ResidualConnectMode = "no process-reattach handles in handoff: Claude needs a live tmux window id, Grok needs CLAUDIA_GROK_CONNECT (detached serve + WebSocket); conversation reattach by session_id still works"
 
 // SnapshotPath returns StateDir/upgrade-handles.json.
 func SnapshotPath(stateDir string) string {
@@ -111,19 +94,10 @@ func SnapshotPath(stateDir string) string {
 }
 
 // BuildSnapshot assembles a handoff from registry-shaped inputs.
-// Residual is empty when at least one agent has connect-mode URL+PID.
 func BuildSnapshot(agents []Handle, coordinatorPID int) Snapshot {
-	residual := ResidualConnectMode
-	for _, a := range agents {
-		if processReattachable(a) {
-			residual = ""
-			break
-		}
-	}
 	return Snapshot{
 		WrittenAt:      time.Now().UTC().Format(time.RFC3339),
 		CoordinatorPID: coordinatorPID,
-		Residual:       residual,
 		Agents:         agents,
 	}
 }

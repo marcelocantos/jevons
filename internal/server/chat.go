@@ -591,13 +591,12 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 // claim the ACP session (🎯T291). No-op when notifySender is stubbed (tests
 // drive busy via the seam, or ownerInterruptSeam) or the process is missing.
 //
-// It reports whether the chew was settled here. A Claude seat is a TUI that
-// simply stops on Esc — no terminal event ever arrives (🎯T282) — so waiting
-// the stop out left the owner's message queued behind a turn that had
-// already ended: J3 sat 2m30s that way (🎯T915). For such a seat the server
-// ends the chew itself and the caller drains; a seat that does emit a stop
-// (Grok ACP, OMP) is left to it, since a second prompt before its stop can
-// be refused asynchronously (🎯T623).
+// It reports whether the chew was settled here. A live seat is never settled
+// here: every provider runs on the omp agent core, whose sidecar answers an
+// abort with turn_end "aborted", and a second prompt sent before that stop can
+// be refused asynchronously (🎯T623). Only the test seam may settle directly.
+// (The Claude TUI that stopped on Esc with no terminal event, 🎯T282/T915,
+// is gone.)
 func (s *Server) interruptOverseerForOwner() bool {
 	settles := false
 	if seam := s.ownerInterruptSeam; seam != nil {
@@ -630,7 +629,6 @@ func (s *Server) interruptOverseerForOwner() bool {
 			)
 			return false
 		}
-		settles = interruptEmitsNoStop(claudia.Provider(s.seatState(s.overseerSeatName()).Provider))
 	}
 	settled := settles && s.settleFleetChew()
 	slog.Info("notify_queue",
@@ -640,13 +638,6 @@ func (s *Server) interruptOverseerForOwner() bool {
 		"settled", settled,
 	)
 	return settled
-}
-
-// interruptEmitsNoStop reports whether an interrupted turn on provider ends
-// without a terminal event reaching the server: Claude's tmux Session (empty
-// means Claude). Grok ACP reports its own turn end.
-func interruptEmitsNoStop(p claudia.Provider) bool {
-	return p == claudia.ProviderClaude || p == ""
 }
 
 // settleFleetChew ends an interrupted fleet-note turn on the server. It
@@ -1127,7 +1118,7 @@ type feedRelaunch struct {
 var feedRelaunching sync.Map // feedRelaunch -> struct{}
 
 // feedLaunch is the relaunch itself; tests replace it.
-var feedLaunch = fleet.LaunchRecording
+var feedLaunch = func(reg *claudia.Registry, name string) (*claudia.Agent, error) { return reg.Launch(name) }
 
 // relaunchDeadSeat relaunches a dead AutoStart seat in the background and
 // reports the outcome as the inline relaunch did. A seat whose lifecycle

@@ -315,7 +315,7 @@ func (s *Server) reportSendOutcome(name, payload string, outcome SendOutcome, fl
 				"evidence", ev.Detail,
 			)
 			msg += fmt.Sprintf(
-				" (the send transport reported %q — a claim about its own pane capture, "+
+				" (the send transport reported %q — a claim about its own observation, "+
 					"contradicted by %s)", claim, evidenceDetail(ev))
 		}
 		msg += describeMode(mm)
@@ -740,12 +740,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	// transport failure — the honest answer is to hold the text.
 	steerRefused := mode == delivery.ModeSteer && isSteerUnsupported(err)
 
-	// 🎯T745: a no_composer stall on a seat whose transcript just moved is a
-	// pane busy rendering, not a CLI that never started. Hold the text as for
-	// any busy turn instead of failing the send (which re-pressures on a loop).
-	busyPane := !isPromptInFlight(err) && s.sendStallIsBusyPane(name, err)
-
-	if !isPromptInFlight(err) && !steerRefused && !busyPane {
+	if !isPromptInFlight(err) && !steerRefused {
 		// 🎯T429: ask the error the narrow question first — does it DISPROVE
 		// delivery? A transport that could not verify a submission has not
 		// observed the receiver at all, and returning its claim as a failure is
@@ -857,9 +852,6 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	}
 	mm.Mechanism = delivery.MechanismClientQueue
 	why := "prompt already in flight"
-	if busyPane {
-		why = "pane is busy rendering (no idle composer, transcript moved recently — not a startup stall, 🎯T745)"
-	}
 	if mode == delivery.ModeSteer {
 		mm.Mechanism = delivery.MechanismQueueUntilIdle
 		why = "steer asked for but this seat cannot fold text into its open turn"

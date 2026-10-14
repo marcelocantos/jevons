@@ -43,10 +43,6 @@ func t922Start(t *testing.T, verdict TurnEvidence) (*Server, *claudia.Registry, 
 	s.SetTurnWitness(func(string, string) turnWatch {
 		return func() TurnEvidence { <-release; return verdict }
 	})
-	grace := time.Duration(0)
-	s.startStallGrace = &grace
-	retries := 0
-	s.startStallRetries = &retries
 
 	prev := startAnswerBudget
 	startAnswerBudget = 50 * time.Millisecond

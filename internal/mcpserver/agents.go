@@ -35,7 +35,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/targetfile"
-	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/worktree"
 )
 
@@ -185,19 +184,12 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	s.sweepSeatMCPOnRequest() // 🎯T797, cache only on the request path (🎯T804)
 	tm.mark("sweep_seat_mcp")
 	s.notifyDeadAgents(reps)
-	// 🎯T459: reap fleet panes the registry does not know about before
-	// we report the count the host is deciding against.
-	s.SweepOrphanPanes()
-	tm.mark("sweep_orphan_panes")
 	defs := s.registry.List()
 	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {
 		body := "No agents registered."
 		if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
 			body += "\n" + reaped
-		}
-		if extra := s.FormatHostCostLines(0); extra != "" {
-			body += "\n" + extra
 		}
 		return mcp.NewToolResultText(fleetlog.PrependNotices(
 			s.withMassStop(PrependFleetHealth(body, reps)), notices)), nil
@@ -269,10 +261,6 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
 		b.WriteString("\n")
 		b.WriteString(reaped)
-	}
-	if extra := s.FormatHostCostLines(len(defs)); extra != "" {
-		b.WriteString("\n")
-		b.WriteString(extra)
 	}
 	if line := s.FormatNoticeSavings(); line != "" {
 		b.WriteString("\n")
@@ -772,9 +760,6 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	if isolationNote != "" {
 		msg += " [" + isolationNote + "]"
 	}
-	if cite := upgrade.ClaudeSingleClientCite(def.SessionID); cite != "" {
-		msg += " [" + cite + "]" // 🎯T796
-	}
 	// 🎯T379: the agent has just inherited the provider's user-scoped MCP
 	// list. Any entry pointing at a port nothing serves will sit in "still
 	// connecting" forever, silently costing this agent those tools — so say
@@ -970,10 +955,13 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// row to a sidecar while the legacy CLI still owns the seat. An explicit
 	// cross-plan request is a model switch (jevons_agent_switch_model), not an
 	// in-place Register.
+	// 🎯T766: liveness and provider come from the seat authority, fed at
+	// this lifecycle boundary, never from raw handle reads.
 	var liveProvider claudia.Provider
-	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
-		liveProvider = proc.Provider()
-		if liveProvider == "" { // Claudia's empty live provider denotes Claude CLI.
+	seatstate.ObserveRegistrySeat(s.registry, name)
+	if st := s.seatState(name); st.LocalAlive == seatstate.Yes {
+		liveProvider = claudia.Provider(st.Provider)
+		if liveProvider == "" {
 			liveProvider = claudia.ProviderClaude
 		}
 	}
@@ -1009,7 +997,10 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 // model conversation. An unreadable store/spool is unknown, never absence.
 // This is read-only; only stitchAgentStart changes a proved-phantom row.
 func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
-	if proc := s.registry.Get(def.Name); proc != nil && proc.Alive() {
+	// 🎯T766: liveness comes from the seat authority (fed here). A held
+	// handle the authority has not proved dead counts as running.
+	seatstate.ObserveRegistrySeat(s.registry, def.Name)
+	if s.registry.Get(def.Name) != nil && s.seatState(def.Name).LocalAlive != seatstate.No {
 		return "process still running; stop the seat and inspect its conversation before retry"
 	}
 	if def.SessionID == "" {
@@ -1929,29 +1920,6 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 	// 🎯T305 Failure A: optional start prompt must reach the pane and
 	// begin a turn, or start fails loudly (no silent outcome=ok).
 	deliverErr := s.deliverStartPrompt(name, prompt)
-	fallbackProvider := ""
-	stalledProvider := string(def.Provider)
-	if deliverErr != nil && !existed && startBriefNeverReached(deliverErr) {
-		// 🎯T890: a fresh mint that splash-stalled gets one retry on a
-		// provider that is currently starting seats before the leaf is
-		// reported lost to a CLI that never drew a composer. Distinct
-		// from 🎯T729's same-provider grace retry, already exhausted by
-		// the time deliverStartPrompt returned this error.
-		if fp, ferr := s.attemptStallFallbackMint(ctx, name, workdir, model, taskTypeArg, parent, purpose, targetID, prompt, stalledProvider); fp != "" {
-			fallbackProvider = fp
-			if ferr == nil {
-				deliverErr = nil
-				if d := s.registry.Def(name); d != nil {
-					def = d
-				}
-				life["stall_fallback_provider"] = fp
-				life["stall_fallback_from"] = stalledProvider
-			} else {
-				deliverErr = fmt.Errorf("%w (fallback provider %s after startup_stall on %s also failed: %v)",
-					deliverErr, fp, stalledProvider, ferr)
-			}
-		}
-	}
 	if err := deliverErr; err != nil {
 		released, kept := s.startBriefFailureTeardown(name, existed, err)
 		if kept {
@@ -1983,21 +1951,8 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 				// caller LLM dropping it is how a mint died twice with nobody
 				// told. The seat's parent hears about the lost mint by name,
 				// with the error verbatim, on the durable send path.
-				// 🎯T890: when a fallback provider was tried, name BOTH —
-				// the stalled provider and the one tried next — so the
-				// parent does not blindly re-order the same stalling
-				// provider.
-				notifyText := err.Error()
-				if fallbackProvider != "" {
-					notifyText = fmt.Sprintf("stalled on %s; also tried fallback provider %s: %s",
-						stalledProvider, fallbackProvider, err.Error())
-				}
-				s.notifySpawnFailure(def.Parent, def.TargetID, name, notifyText)
+				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
 			}
-			// 🎯T729: the eventlog says which of the two this was. The
-			// specimen's three lines were readable only as a contradiction
-			// because the removal reason and the start error disagreed and
-			// neither carried the class.
 			life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)

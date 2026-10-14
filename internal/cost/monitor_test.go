@@ -31,20 +31,16 @@ func seedStore(t *testing.T, now time.Time) *Store {
 			RequestID: fmt.Sprintf("r-%d", n),
 		})
 	}
-	add("sess-po", "po", 0.50)   // po: $0.50 in a 5m window = $6/hr
-	add("sess-doc", "doc", 0.10) // doc: $1.20/hr
-	add("sess-ghost", "", 2.00)  // orphan (IsOrphan true) — jevons's lost worker
-	add("sess-ghost", "", 1.00)  // same orphan session, second event
-	add("sess-owner", "", 5.00)  // foreign — the owner's own session
+	add("sess-po", "po", 0.50)       // po: $0.50 in a 5m window = $6/hr
+	add("sess-doc", "doc", 0.10)     // doc: $1.20/hr
+	add("sess-ghost", "ghost", 2.00) // ghost: a hot attributed worker
+	add("sess-ghost", "ghost", 1.00) // same session, second event
+	add("sess-owner", "", 5.00)      // foreign — the owner's own session
 	if _, err := s.InsertEvents(events); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return s
 }
-
-// onlyGhostOrphan classifies the ghost session as an orphan and the
-// owner session as foreign.
-func onlyGhostOrphan(r BurnRow) bool { return r.SessionID == "sess-ghost" }
 
 func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
@@ -56,10 +52,9 @@ func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	cfg.MinEventsForKill = 0 // exercise raw rate levels here
 
 	m := NewMonitor(&MonitorArgs{
-		Store:    s,
-		Config:   func() *BudgetConfig { return cfg },
-		IsOrphan: onlyGhostOrphan,
-		Now:      func() time.Time { return now },
+		Store:  s,
+		Config: func() *BudgetConfig { return cfg },
+		Now:    func() time.Time { return now },
 	})
 
 	snap, err := m.Snapshot()
@@ -71,10 +66,10 @@ func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	if math.Abs(snap.GlobalUSDPerHour-103.2) > 1e-9 {
 		t.Fatalf("global rate = %v, want 103.2", snap.GlobalUSDPerHour)
 	}
-	// Fleet = attributed ($0.60) + orphan ($3.00), NOT the foreign owner
-	// session ($5.00) → $3.60 → $43.20/hr.
+	// Fleet = attributed ($3.60), NOT the foreign owner session ($5.00)
+	// → $43.20/hr.
 	if math.Abs(snap.FleetUSDPerHour-43.2) > 1e-9 {
-		t.Fatalf("fleet rate = %v, want 43.2 (attributed+orphan, excl. foreign)", snap.FleetUSDPerHour)
+		t.Fatalf("fleet rate = %v, want 43.2 (attributed, excl. foreign)", snap.FleetUSDPerHour)
 	}
 	if math.Abs(snap.WorkerUSDPerHour["po"]-6.0) > 1e-9 {
 		t.Fatalf("po rate = %v, want 6.0", snap.WorkerUSDPerHour["po"])
@@ -112,10 +107,6 @@ func TestMonitorSnapshotRatesAndSignals(t *testing.T) {
 	// Spawn storm needs ≥ 2× MaxSessions (6); seed has 4 — no storm yet.
 	if _, ok := got[AlertSpawnStorm+"/"]; ok {
 		t.Fatal("spawn-storm should not trip at 4 sessions with MaxSessions=3")
-	}
-	// The orphan (not the foreign owner session) is flagged.
-	if a, ok := got[AlertOrphanSessions+"/"]; !ok || len(a.Sessions) != 1 || a.Sessions[0] != "sess-ghost" {
-		t.Fatalf("orphan signal = %+v, want sess-ghost only", got[AlertOrphanSessions+"/"])
 	}
 	// Projected overspend trips against the daily budget.
 	if _, ok := got[AlertProjection+"/"]; !ok {
@@ -433,10 +424,9 @@ func TestSubscriptionAccountingHonesty(t *testing.T) {
 	cfg.MinEventsForKill = 0
 
 	m := NewMonitor(&MonitorArgs{
-		Store:    s,
-		Config:   func() *BudgetConfig { return cfg },
-		IsOrphan: onlyGhostOrphan,
-		Now:      func() time.Time { return now },
+		Store:  s,
+		Config: func() *BudgetConfig { return cfg },
+		Now:    func() time.Time { return now },
 	})
 	snap, err := m.Snapshot()
 	if err != nil {

@@ -5,16 +5,12 @@ package upgrade
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
@@ -44,10 +40,10 @@ const DefaultReattachConcurrency = 4
 
 // ReattachSeatsContext is [ReattachFleetContext] for the AutoStart seats
 // include accepts (nil accepts all), started concurrently, at most limit at a
-// time. Each seat is reaped, hushed and adopted on its own, so one slow seat
-// delays only itself. The boot calls it for the overseer alone, attaches the
-// chat and starts the cockpit converge loop, then calls it for the rest
-// (🎯T778). Names whose session_id changed are returned.
+// time, so one slow seat delays only itself. The boot calls it for the
+// overseer alone, attaches the chat and starts the cockpit converge loop,
+// then calls it for the rest (🎯T778). Names whose session_id changed are
+// returned.
 func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include func(string) bool, limit int) []string {
 	if reg == nil {
 		return nil
@@ -55,29 +51,10 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 	if limit < 1 {
 		limit = 1
 	}
-	accepts := func(name string) bool { return include == nil || include(name) }
 	before := SessionSnapshot(reg)
-	releasePhantomCursorSessions(reg)
-	// Cursor ACP stdio cannot be adopted in-process. Without a claudia
-	// daemon, reap leftover writers (and ppid=1 orphans) and wait for
-	// them to exit before PreferAdopt Launch — a second session/load
-	// on a still-held store.db is 🎯T541.1. Seats that will not die
-	// lose AutoStart (fail loud). With a daemon, the leftover is the
-	// live seat and Launch reclaims it by name.
-	reapCursor := !brokerMayOwnSeats()
-	if reapCursor {
-		for _, d := range reg.List() {
-			if d.Provider == claudia.ProviderCursor && accepts(d.Name) {
-				reapOrphanCursorACP()
-				break
-			}
-		}
-	} else {
-		slog.Info("claudia daemon present; fleet seats are reclaimed, not reaped")
-	}
 	var names []string
 	for _, d := range reg.List() {
-		if accepts(d.Name) {
+		if include == nil || include(d.Name) {
 			names = append(names, d.Name)
 		}
 	}
@@ -91,110 +68,28 @@ func ReattachSeatsContext(ctx context.Context, reg *claudia.Registry, include fu
 		wg.Add(1)
 		go func(name string) {
 			defer func() { <-sem; wg.Done() }()
-			only := func(n string) bool { return n == name }
-			if reapCursor {
-				reapCursorLeftoversIn(reg, only)
-				hushUnreapedCursorSeatsIn(reg, only)
-			}
-			if ctx.Err() != nil {
-				return
-			}
 			def := reg.Def(name)
-			if def == nil || !def.AutoStart {
+			if def == nil || !def.AutoStart || ctx.Err() != nil {
 				return
 			}
-			_, err := adoptOrLaunchRetryingHeld(ctx, reg, name)
-			if err == nil {
-				// A reattach is a lifecycle boundary, as readopt's is: record
-				// the seat now. The seat authority's own feed runs once a
-				// second, and the boot wiring pass right after this reads it;
-				// read unknown, the seat stayed unwired until the 30s sweep and
-				// its turns went unrecorded (journey J34, 2026-10-05).
-				seatstate.ObserveRegistrySeat(reg, name)
-			}
-			if err != nil {
+			if _, err := reg.AdoptOrLaunchContext(ctx, name); err != nil {
 				slog.Error("auto-start failed", "agent", name, "err", err)
-				if errors.Is(err, ErrClaudeHeldByBroker) {
-					if notify := LaunchRefusedNotifier; notify != nil {
-						notify(name, err)
-					}
-				}
 				return
 			}
-			ReapClaudeStraysAfterGrant(reg, name)
+			// A reattach is a lifecycle boundary, as readopt's is: record
+			// the seat now, or it stays unwired until the 30s sweep and its
+			// turns go unrecorded (journey J34, 2026-10-05).
+			seatstate.ObserveRegistrySeat(reg, name)
 		}(name)
 	}
 	wg.Wait()
 	return SessionDriftNames(before, SessionSnapshot(reg))
 }
 
-// reapOrphanCursorACP is a seam so hermetics never signal live leftovers.
-var reapOrphanCursorACP = claudia.ReapOrphanCursorACP
-
 // brokerAvailable is a seam over claudia.BrokerAvailable: when the claudia
 // daemon runs, it owns every seat's process and its survival across a
 // jevonsd restart; jevonsd only reconnects by name.
 var brokerAvailable = claudia.BrokerAvailable
-
-// ReapCursorFleetLeftovers kills leftover writers on every registered
-// Cursor session store (persisted ConnectPID + anyone holding store.db).
-func ReapCursorFleetLeftovers(reg *claudia.Registry) {
-	reapCursorLeftoversIn(reg, nil)
-}
-
-func reapCursorLeftoversIn(reg *claudia.Registry, include func(string) bool) {
-	if reg == nil {
-		return
-	}
-	for _, d := range reg.List() {
-		if d.Provider != claudia.ProviderCursor || (include != nil && !include(d.Name)) {
-			continue
-		}
-		claudia.ReapCursorACPLeftovers(d.SessionID, d.ConnectPID)
-	}
-}
-
-// StopNonAdoptable stops Cursor (and other stdio-owned) seats on upgrade
-// exit. Grok connect-mode and Claude tmux stay running for reattach.
-func StopNonAdoptable(reg *claudia.Registry) int {
-	if reg == nil {
-		return 0
-	}
-	if brokerMayOwnSeats() {
-		// Every seat is adoptable when the daemon parents it: the next
-		// jevonsd grants by name and gets the running process back.
-		return 0
-	}
-	n := 0
-	for _, d := range reg.List() {
-		h := Handle{
-			Name:         d.Name,
-			SessionID:    d.SessionID,
-			Provider:     string(d.Provider),
-			ConnectURL:   d.ConnectURL,
-			PID:          d.ConnectPID,
-			TmuxWindowID: "",
-		}
-		proc := reg.Get(d.Name)
-		if proc != nil {
-			if p := proc.PID(); p > 0 {
-				h.PID = p
-			}
-			if u := proc.ConnectURL(); u != "" {
-				h.ConnectURL = u
-			}
-			if w := adoptiveTmuxWindowID(proc.WindowID()); w != "" {
-				h.TmuxWindowID = w
-			}
-		}
-		if !ShouldStopOnUpgrade(h, proc != nil) {
-			continue
-		}
-		reg.Stop(d.Name)
-		n++
-	}
-	return n
-}
 
 // SessionSnapshot is name → session_id for every registered row.
 func SessionSnapshot(reg *claudia.Registry) map[string]string {
@@ -247,111 +142,4 @@ func SessionDriftNames(before, after map[string]string) []string {
 		}
 	}
 	return out
-}
-
-// LaunchRefusedNotifier, when set, is told once per seat when the bounded
-// refuse-and-retry is exhausted (🎯T796.1): the seat did not start because a
-// client already holds its session and the broker could not be ruled out. The
-// refusal signals nothing, so the only way the owner learns of it is this
-// notice. The daemon wires it to the owner notice channel.
-var LaunchRefusedNotifier func(agent string, err error)
-
-// heldRetryDelay and heldRetries bound how long a seat waits for the broker's
-// grant to come free: the previous daemon's connection is still closing when
-// a restart's adopt is refused with grant_held (🎯T796).
-var (
-	heldRetryDelay = 2 * time.Second
-	heldRetries    = 10
-)
-
-// adoptOrLaunchRetryingHeld adopts a seat, and when the launch fallback is
-// refused because the broker's own client already holds the session, waits and
-// adopts again instead of stacking a second client.
-func adoptOrLaunchRetryingHeld(ctx context.Context, reg *claudia.Registry, name string) (*claudia.Agent, error) {
-	// Direct Cursor ACP cannot resume its stored id, so a brokerless restart
-	// starts fresh. A broker-held seat is still running under the stored id:
-	// reminting before its grant is reclaimed would destroy migration identity.
-	prevSession := ""
-	if d := reg.Def(name); d != nil {
-		prevSession = d.SessionID
-	}
-	if !brokerMayOwnSeats() {
-		if err := fleet.RestartCursorFresh(reg, name); err != nil {
-			slog.Warn("cursor restart fresh session failed", "agent", name, "err", err)
-		}
-	}
-	freshSession := ""
-	if d := reg.Def(name); d != nil {
-		freshSession = d.SessionID
-	}
-	// Read the CLI default while the seat is down. AdoptOrLaunch is the
-	// boot start, and it does not go through LaunchRecording. Without
-	// this, an unpinned Cursor seat comes back as a bare "Cursor" badge.
-	look := fleet.LookCursorStart(reg, name)
-	for attempt := 0; ; attempt++ {
-		a, err := reg.AdoptOrLaunchContext(ctx, name)
-		if err == nil && freshSession != prevSession && freshSession != "" {
-			// Adopt of the broker's existing grant reports the session
-			// that grant was started on. startHeld then writes that id
-			// back over the fresh one RestartCursorFresh just persisted,
-			// and the next launch RequireResumes a session Cursor will
-			// not load. Put the fresh id back and launch that.
-			if d := reg.Def(name); d != nil && d.SessionID == prevSession {
-				slog.Warn("adopt restored the cursor session a restart had abandoned",
-					"agent", name, "abandoned", prevSession, "fresh", freshSession)
-				reg.Stop(name)
-				next := *d
-				next.SessionID = freshSession
-				next.Materialized = false
-				next.ConnectURL = ""
-				next.ConnectPID = 0
-				if rerr := reg.Register(next); rerr != nil {
-					return nil, rerr
-				}
-				return fleet.LaunchRecovering(reg, name)
-			}
-		}
-		if err == nil || !errors.Is(err, ErrClaudeHeldByBroker) || attempt >= heldRetries {
-			// AdoptOrLaunch latches a Cursor session/load refusal and
-			// every later boot repeats it. A leftover still holding the
-			// store is 🎯T541.1 and must not remint. "refusing to mint"
-			// with nobody on the store is a dead session id.
-			if err != nil && resumeDeniedRemint(reg.Def(name), err) {
-				slog.Warn("auto-start reminting after provider resume refusal", "agent", name, "err", err)
-				return fleet.LaunchRecovering(reg, name)
-			}
-			if err == nil {
-				pid := 0
-				if a != nil {
-					pid = a.PID()
-				}
-				look.RecordAgent(reg, name, pid)
-			}
-			return a, err
-		}
-		slog.Warn("grant held by another connection; waiting to adopt", "agent", name, "attempt", attempt+1)
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(heldRetryDelay):
-		}
-	}
-}
-
-// resumeDeniedRemint is the boot-path half of fleet.LaunchRecovering.
-// AdoptOrLaunch latches the refusal, so the next bounce would otherwise
-// repeat the same session/load forever. A store a leftover still holds
-// is 🎯T541.1: that error wraps the same sentinel and must not rotate.
-func resumeDeniedRemint(def *claudia.AgentDef, err error) bool {
-	if err == nil || def == nil || strings.Contains(err.Error(), "still holds store") {
-		return false
-	}
-	switch def.Provider {
-	case claudia.ProviderCursor:
-		return claudia.IsCursorResumeDenied(err)
-	case claudia.ProviderGrok:
-		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")
-	default:
-		return false
-	}
 }

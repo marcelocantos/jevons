@@ -17,9 +17,8 @@ import (
 )
 
 // Launcher starts a launch-mode provider process. This is the generic,
-// non-Claude supervisor 🎯T27.3 requires: claudia's AgentDef path is
-// hardwired to a Claude-family CLI (tmux PTY, --resume, LookPath of the
-// agent binary) and cannot host an arbitrary argv, so launch mode gets
+// non-Claude supervisor 🎯T27.3 requires: claudia's AgentDef path hosts
+// omp-agent-core seats and cannot host an arbitrary argv, so launch mode gets
 // its own plain os/exec supervisor rather than an extension of claudia.
 //
 // The interface exists so tests can substitute a fake process without

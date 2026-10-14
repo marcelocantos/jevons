@@ -20,7 +20,7 @@
 //
 // Layer 3 (budget/enforcer/killswitch): budgets with warn → throttle →
 // pause → kill escalation, a hard ceiling that stops spawning, a global
-// kill-switch that reaches launchd-detached tmux fleets, a dead-man's
+// kill-switch that reaches broker seats the registry lost, a dead-man's
 // switch, and an auto-resume guard.
 //
 // Standing cost-safety auditor (🎯T334): trip-class policy (auditor.go)

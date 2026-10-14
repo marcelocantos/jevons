@@ -9,6 +9,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -23,20 +24,13 @@ func RemintSubscription(def *claudia.AgentDef, spoolDir string) bool {
 	}
 	before := *def
 	def.Provider = cli.SidecarLaunchProvider(def.Provider)
-	def.GrokConnect = false
-	def.ConnectURL = ""
-	def.ConnectPID = 0
 	if spoolDir == "" {
 		spoolDir = spool.Dir()
 	}
 	if !spool.SeatHasHistory(spoolDir, def.Name) {
 		def.Materialized = false
 	}
-	return def.Provider != before.Provider ||
-		def.Materialized != before.Materialized ||
-		def.GrokConnect != before.GrokConnect ||
-		def.ConnectURL != before.ConnectURL ||
-		def.ConnectPID != before.ConnectPID
+	return def.Provider != before.Provider || def.Materialized != before.Materialized
 }
 
 // GrantsFile is the broker daemon registry basename under the claudia
@@ -49,25 +43,19 @@ func GrantsPath(stateDir string) string {
 	return filepath.Join(stateDir, GrantsFile)
 }
 
-// RemintRegistry rewrites every subscription-plan row onto the sidecar.
-// That is the fleet, not one smoke seat (🎯T866.6).
+// RemintRegistry rewrites every cold subscription-plan row onto the sidecar.
+// That is the fleet, not one smoke seat (🎯T866.6). A live seat keeps the
+// transport its handle already describes.
 func RemintRegistry(reg *claudia.Registry, spoolDir string) (int, error) {
-	return RemintRegistryExcept(reg, spoolDir, nil)
-}
-
-// RemintRegistryExcept leaves upgrade-handoff seats on their original CLI
-// transport. A surviving process cannot be relabelled as a sidecar writer:
-// its current handle and the persisted def must describe the same transport.
-func RemintRegistryExcept(reg *claudia.Registry, spoolDir string, preserve map[string]bool) (int, error) {
 	if reg == nil {
 		return 0, nil
 	}
 	n := 0
 	for _, row := range reg.List() {
-		if preserve[row.Name] {
-			continue
-		}
-		if proc := reg.Get(row.Name); proc != nil && proc.Alive() && proc.Provider() == row.Provider {
+		// 🎯T766: a live seat already on this provider keeps its row. The
+		// answer comes from the seat authority (fed here), not handle reads.
+		seatstate.ObserveRegistrySeat(reg, row.Name)
+		if st := seatstate.ReadRegistry(reg, row.Name); st.LocalAlive == seatstate.Yes && st.Provider == string(row.Provider) {
 			continue
 		}
 		def := row
@@ -107,11 +95,6 @@ func ParkNonFleetAutoStart(grants, fleet *claudia.Registry) (int, error) {
 		n++
 	}
 	return n, nil
-}
-
-// SubscriptionPlan is a fleet id whose Launch talks to the sidecar.
-func SubscriptionPlan(p claudia.Provider) bool {
-	return subscriptionPlan(p)
 }
 
 func subscriptionPlan(p claudia.Provider) bool {

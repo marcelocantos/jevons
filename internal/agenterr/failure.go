@@ -18,8 +18,6 @@ import (
 //   - rate_limit: 429 / quota / throttle
 //   - auth: 401 / 403 / API key / unauthorized
 //   - client_bug: local config, wire, session, bad request
-//   - startup_stall: ready timeout over startup notices only, no composer (🎯T565)
-//   - workspace_trust: ready timeout on Claude Code's trust modal (🎯T709)
 //   - retry_exhausted: the CLI's own retry budget ran out on a transient
 //     step-level failure (🎯T862.12) — not the same as the transient
 //     backend_unavailable/rate_limit cause that first triggered the retry
@@ -85,20 +83,6 @@ func ClassifyText(msg string) Class {
 		return ClassNone
 	}
 
-	// 🎯T709: a launch whose pane is Claude Code's workspace-trust modal.
-	// Ahead of the stall check because claudia reports it as no_composer,
-	// and a stall says "retried" — which is the wrong answer here.
-	if IsWorkspaceTrust(s) {
-		return ClassWorkspaceTrust
-	}
-
-	// 🎯T565: a launch that timed out on startup output alone, before any
-	// composer. Checked ahead of the marker lists because the frame quotes
-	// "Permission deny rule", which authMarkers would read as a 403.
-	if IsStartupStall(s) {
-		return ClassStartupStall
-	}
-
 	// 🎯T862.12: the retry budget itself ran out. Checked ahead of the
 	// backend/timeout markers because the underlying transient cause
 	// ("timed out", "500") is often quoted alongside the exhaustion
@@ -162,7 +146,7 @@ func ClassifyMessage(msg string) Class {
 // ClassUnknown is re-pressure-worthy residual (T236).
 func TransientBackend(c Class) bool {
 	switch c {
-	case ClassBackendUnavailable, ClassRateLimit, ClassUnknown, ClassStartupStall:
+	case ClassBackendUnavailable, ClassRateLimit, ClassUnknown:
 		return true
 	case ClassRetryExhausted:
 		// Not transient in the poll-and-hope sense: the CLI already spent
@@ -198,23 +182,6 @@ func OwnerCopy(class Class, raw string) string {
 	case ClassClientBug:
 		return "Local client/session error (client_bug). Fix config, session, or wire state; not a cloud outage. " +
 			detailSuffix(raw)
-	case ClassWorkspaceTrust:
-		return workspaceTrustCopy(raw)
-	case ClassStartupStall:
-		switch namedReadyReason(raw) {
-		case "rc_connecting":
-			return "Agent CLI stalled on remote-control handshake (startup_stall / rc_connecting): /rc connecting is transient — not a cloud outage, not a wire bug; the seat is retried. Last frame: " +
-				truncate(LastFrame(raw), 400)
-		case "splash":
-			return "Agent CLI stalled on startup (startup_stall / splash): the composer ghost placeholder was still drawn within the ready timeout — not a cloud outage; the seat is retried. Last frame: " +
-				truncate(LastFrame(raw), 400)
-		case "no_composer":
-			return "Agent CLI stalled on startup (startup_stall / no_composer): no idle input box within the ready timeout — not a cloud outage; the seat is retried. Last frame: " +
-				truncate(LastFrame(raw), 400)
-		default:
-			return "Agent CLI stalled on startup (startup_stall): it printed its settings notices but never drew the composer within the ready timeout — not a cloud outage, not a wire bug; the seat is retried. Last frame: " +
-				truncate(LastFrame(raw), 400)
-		}
 	case ClassRetryExhausted:
 		return "Provider retry budget exhausted (retry_exhausted). The provider/harness retry loop gave up; the turn ended without finishing. Retry budgets are provider-specific, not configured by Jevons. Start a new turn when the underlying failure is resolved. " + detailSuffix(raw)
 	case ClassContextOverflow:

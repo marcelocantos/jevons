@@ -14,55 +14,50 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// 🎯T778: four Cursor seats each spent minutes in adopt/lsof before the
-// converge loop started, because seats were started one after another.
-// Each seat's slow step must now overlap with the others', and a filter
+// 🎯T778: seats started one after another made one slow adopt delay the
+// whole fleet. Each seat's start must overlap with the others', and a filter
 // must confine the pass to the named seats (the overseer starts alone).
 func TestT778SeatsReattachConcurrentlyAndFilterConfinesPass(t *testing.T) {
-	prevAvail, prevReap, prevWait := brokerAvailable, reapOrphanCursorACP, waitCursorStoreClear
-	t.Cleanup(func() { brokerAvailable, reapOrphanCursorACP, waitCursorStoreClear = prevAvail, prevReap, prevWait })
-	brokerAvailable = func() bool { return false }
-	reapOrphanCursorACP = func() []int { return nil }
 	const perSeat = 300 * time.Millisecond
 	var mu sync.Mutex
-	probed := map[string]bool{}
-	waitCursorStoreClear = func(sid string, _ int) bool {
-		time.Sleep(perSeat)
-		mu.Lock()
-		probed[sid] = true
-		mu.Unlock()
-		return true
-	}
-
+	started := map[string]bool{}
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	reg.SetDirect(true)
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(_ context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			time.Sleep(perSeat)
+			mu.Lock()
+			started[cfg.SessionID] = true
+			mu.Unlock()
+			return nil, fmt.Errorf("stub: no real seat")
+		},
+	})
 	const seats = 4
 	for i := 0; i < seats; i++ {
-		// AutoStart false: the slow step runs, but no real cursor-agent starts.
 		if err := reg.Register(claudia.AgentDef{
 			Name: fmt.Sprintf("seat%d", i), WorkDir: t.TempDir(), SessionID: fmt.Sprintf("sid%d", i),
-			Provider: claudia.ProviderCursor,
+			Provider: claudia.ProviderClaude, AutoStart: true,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// Filter: only seat0 is touched.
 	ReattachSeatsContext(context.Background(), reg, func(n string) bool { return n == "seat0" }, 1)
 	mu.Lock()
-	if len(probed) != 1 || !probed["sid0"] {
-		t.Fatalf("filtered pass probed %v, want only sid0", probed)
+	if len(started) != 1 {
+		t.Fatalf("filtered pass started %v, want only seat0", started)
 	}
-	probed = map[string]bool{}
+	started = map[string]bool{}
 	mu.Unlock()
 
 	start := time.Now()
 	ReattachSeatsContext(context.Background(), reg, nil, seats)
 	elapsed := time.Since(start)
-	if len(probed) != seats {
-		t.Fatalf("probed %d seats, want %d", len(probed), seats)
+	if len(started) != seats {
+		t.Fatalf("started %d seats, want %d", len(started), seats)
 	}
 	// Serial would take seats*perSeat (1.2s); concurrent ≈ perSeat.
 	if elapsed > 2*perSeat {

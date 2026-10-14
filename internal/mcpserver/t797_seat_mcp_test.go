@@ -63,8 +63,11 @@ func t797Setup(t *testing.T, transcript string) *t679_2Env {
 
 // warmList is agent_list after the background sweep has run, as in the
 // product: the request path reads only the cache that sweep keeps (🎯T804).
+// Reconcile feeds liveness before sweeping; so does this, or the sweep can
+// race the asynchronous feed and skip a seat it has not yet seen alive.
 func (e *t679_2Env) warmList() string {
 	e.t.Helper()
+	e.s.observeRegistryLiveness()
 	e.s.sweepSeatMCP()
 	return e.list()
 }

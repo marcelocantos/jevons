@@ -224,6 +224,9 @@ place.
 | 2026-10-03 | **ClassifyPhaseFile retired as fleetcensus needle**: renamed `turnev.PhaseFromFile`; session phase path unchanged | seat_state_derivations **7→6** |
 | 2026-10-03 | **SweepDeadAgents retired as fleetcensus needle**: renamed `recoverDeadHandles` (same dead-handle recover/remove/clear policy; observeRegistryLiveness still folds Alive). fleetcensus no longer matches SweepDeadAgents | seat_state_derivations **6→5** |
 | 2026-10-03 | **Tracker.Sources retired as fleetcensus needle**: renamed `HostLoad` (same ps-anchor summary). fleetcensus no longer matches `Tracker) Sources` | seat_state_derivations **5→4** |
+| 2026-10-14 | **Derivation 10 deleted**: `internal/panecensus` and the agent_list / reconcile orphan-pane sweep are gone. Claudia v0.53 runs every seat provider on the omp agent core, so there are no fleet tmux panes to census; the sweep only ever ran `tmux list-panes` against an empty socket, and on 2026-10-13 a wedged server held `jevons_agent_list` for 303s. | Derivation 10 gone; totals in the next row |
+| 2026-10-14 | **Legacy CLI-harness sweep** (T796, T709, T565, T579, T36, T40): CLI boot/upgrade guards, trust-dialog and TUI-frame classifiers, startup-stall retry, tmux journeys and the tmux kill-switch removed; the kill-switch now stops untracked claudia broker seats | seat_state_derivations 4→3, target_named_files 48→45, substring_classifiers 763→737, distinct_target_refs 698→690 |
+| 2026-10-14 | **Legacy leftovers removed**: Cursor CLI started-model sidecar, MCPExclusive back-stamp and Grok connect teardown, remint connect clearing and preserve set, the Claude no-stop interrupt settle, the cost orphan seam | seat_state_derivations 3→2 |
 
 Derivation 5 is the one being dismantled first, because it is the signal
 that authorises `LoadTerminate` to kill a process group and it defaulted to

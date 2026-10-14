@@ -66,9 +66,6 @@ func TestSnapshotRoundTripPreservesSessionIDs(t *testing.T) {
 		{Name: "jevons", SessionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", WorkDir: "/tmp/o", Alive: true},
 		{Name: "worker", SessionID: "11111111-2222-3333-4444-555555555555", Alive: false},
 	}, 4242)
-	if snap.Residual == "" {
-		t.Fatal("snapshot must document residual")
-	}
 	if err := SaveSnapshot(path, snap); err != nil {
 		t.Fatal(err)
 	}

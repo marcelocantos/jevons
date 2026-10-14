@@ -47,7 +47,6 @@ const (
 	AlertFleetRate      = "fleet-rate"
 	AlertWorkerRate     = "worker-rate"
 	AlertSessionCount   = "session-count"
-	AlertOrphanSessions = "orphan-sessions"
 	AlertProjection     = "projected-overspend"
 	AlertHardCeiling    = "hard-ceiling"
 	AlertCollectorStale = "collector-stale"
@@ -107,14 +106,11 @@ type Snapshot struct {
 }
 
 // MonitorArgs parameterises NewMonitor. Store and Config are required.
-// IsOrphan classifies a burning session as ownerless (cockpit gone) —
-// the production classifier lives in the wiring layer where tmux/ps
-// access belongs; nil means no orphan detection. Now is injected for
-// deterministic tests.
+// Lost broker seats are reached by the kill-switch, not an orphan signal.
+// Now is injected for deterministic tests.
 type MonitorArgs struct {
-	Store    *Store
-	Config   func() *BudgetConfig
-	IsOrphan func(BurnRow) bool
+	Store  *Store
+	Config func() *BudgetConfig
 	// CollectorLastPoll reports the collector's last completed poll, so
 	// a broken collector becomes an alarm rather than silent blindness.
 	// nil disables the staleness check (pure-store tests).
@@ -129,7 +125,6 @@ type MonitorArgs struct {
 type Monitor struct {
 	store             *Store
 	config            func() *BudgetConfig
-	isOrphan          func(BurnRow) bool
 	collectorLastPoll func() time.Time
 	collectorHealth   func() CollectorHealth
 	now               func() time.Time
@@ -142,13 +137,10 @@ type Monitor struct {
 
 // NewMonitor constructs a Monitor.
 func NewMonitor(args *MonitorArgs) *Monitor {
-	m := &Monitor{store: args.Store, config: args.Config, isOrphan: args.IsOrphan,
+	m := &Monitor{store: args.Store, config: args.Config,
 		collectorLastPoll: args.CollectorLastPoll, collectorHealth: args.CollectorHealth, now: args.Now}
 	if m.collectorHealth != nil {
 		m.collectorLastPoll = func() time.Time { return m.collectorHealth().LastPoll }
-	}
-	if m.isOrphan == nil {
-		m.isOrphan = func(BurnRow) bool { return false }
 	}
 	if m.now == nil {
 		m.now = time.Now
@@ -181,26 +173,21 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 	var globalEvents, fleetEvents int
 	workerCost := map[string]float64{}
 	workerEvents := map[string]int{}
-	var orphans []string
 	for _, r := range rows {
 		globalCost += r.CostUSD
 		globalEvents += r.Events
-		orphan := m.isOrphan(r)
-		// The "fleet" clamp scope is what jevons OWNS: attributed workers
-		// plus orphans (lost workers still inside the fleet). Foreign
+		// The "fleet" clamp scope is what jevons OWNS: attributed workers.
+		// Foreign
 		// spend (the owner's own sessions) lands in global only, which is
 		// informational — jevons can neither kill nor should nuke its
 		// fleet over it.
-		if r.Worker != "" || orphan {
+		if r.Worker != "" {
 			fleetCost += r.CostUSD
 			fleetEvents += r.Events
 		}
 		if r.Worker != "" {
 			workerCost[r.Worker] += r.CostUSD
 			workerEvents[r.Worker] += r.Events
-		}
-		if orphan {
-			orphans = append(orphans, r.SessionID)
 		}
 	}
 	snap.GlobalUSDPerHour = globalCost / hours
@@ -223,7 +210,7 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 	remaining := midnight.Add(24 * time.Hour).Sub(now).Hours()
 	snap.ProjectedTodayUSD = snap.SpentTodayUSD + snap.GlobalUSDPerHour*remaining
 
-	snap.Alerts = m.evaluate(cfg, snap, orphans, globalEvents, fleetEvents, workerEvents)
+	snap.Alerts = m.evaluate(cfg, snap, globalEvents, fleetEvents, workerEvents)
 
 	// The watchdog's own watchdog: a stale collector means everything
 	// above may be an undercount, and that must be loud.
@@ -289,7 +276,7 @@ func (m *Monitor) collectorStale(now time.Time) (Alert, bool) {
 // signals are capped at LevelWarn and labeled as non-bill estimates so
 // the enforcer never pause/kills on fake SuperGrok dollars. Session-
 // count and orphan signals stay available (resource hygiene, not $).
-func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string, globalEvents, fleetEvents int, workerEvents map[string]int) []Alert {
+func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, globalEvents, fleetEvents int, workerEvents map[string]int) []Alert {
 	var alerts []Alert
 	sub := cfg.IsSubscription()
 
@@ -347,10 +334,6 @@ func (m *Monitor) evaluate(cfg *BudgetConfig, snap *Snapshot, orphans []string, 
 				Detail: fmt.Sprintf("spawn storm: %d billable sessions (storm bound %d = %dx max_sessions)",
 					len(snap.Sessions), stormBound, SpawnStormFactor)})
 		}
-	}
-	if len(orphans) > 0 {
-		alerts = append(alerts, Alert{Kind: AlertOrphanSessions, Level: LevelWarn, Sessions: orphans,
-			Detail: fmt.Sprintf("%d burning session(s) with no owner attached", len(orphans))})
 	}
 	if cfg.DailyBudgetUSD > 0 && snap.ProjectedTodayUSD > cfg.DailyBudgetUSD {
 		detail := fmt.Sprintf("projected %.2f %s today (budget %.2f)", snap.ProjectedTodayUSD, usdLabel, cfg.DailyBudgetUSD)
