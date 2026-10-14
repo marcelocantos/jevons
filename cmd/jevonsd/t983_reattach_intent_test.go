@@ -24,6 +24,7 @@ func TestT983RestartReattachSkipsParkedSeats(t *testing.T) {
 	include := fleetReattachInclude(
 		func(name string) bool { return name == "jevons" },
 		func(name string, c fleetintent.Control) fleetintent.Decision { return snap.Allow(name, c) },
+		nil,
 	)
 	for name, want := range map[string]bool{
 		"jevons":  false, // the overseer reattaches first, on its own

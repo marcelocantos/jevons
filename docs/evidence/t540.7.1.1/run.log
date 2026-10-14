@@ -1,0 +1,3 @@
+FIRST {"rows":165,"ia":63,"iu":64,"ib":67,"ok":true}
+RELOAD {"rows":161,"ia":59,"iu":60,"ib":63,"ok":true}
+PASS: main view order assistant, user, assistant on 127.0.0.1:13705 first load and after hard reload

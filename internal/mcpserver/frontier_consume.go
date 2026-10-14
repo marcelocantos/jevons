@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -134,6 +135,31 @@ func FrontierWorkerName(targetID string) string {
 		return ""
 	}
 	return "jv-" + id + "-auto"
+}
+
+// autoSpawnedWorkerNamePattern is the EXACT shape FrontierWorkerName mints:
+// "jv-t<digits>(.<digits>)*-auto" — e.g. jv-t1066-auto, jv-t254.1-auto. A
+// bare HasSuffix(name, "-auto") also matches a human-chosen name that
+// happens to end in "-auto" for unrelated reasons (e.g. a deliberately
+// named worker "jv-release-candidate-auto"), which this pattern does not:
+// PO review, 2026-10-12, caught that a looser check would wrongly suppress
+// or dead-handle-freeze such a worker under frontier_consume.disabled.
+var autoSpawnedWorkerNamePattern = regexp.MustCompile(`^jv-t[0-9]+(\.[0-9]+)*-auto$`)
+
+// IsAutoSpawnedWorkerName reports whether name was minted by
+// FrontierWorkerName — the exact "jv-t<digits>(.<digits>)*-auto" convention
+// frontier-consume uses for every leaf it spawns itself, as opposed to a
+// named worker or PO a human/PO hand-picked (🎯T1066). This is the one
+// structural signal that distinguishes the two: claudia.AgentDef.AutoStart
+// is true for both (it governs process-crash restart, not spawn
+// provenance), so AutoStart alone cannot gate a frontier_consume.disabled
+// pause without also catching named workers and POs — which 🎯T1066's
+// wiring must not do (preserve named workers/POs; never block ordinary
+// owner-directed communication). Matching the exact pattern, not merely
+// the suffix, means a deliberately named worker whose name happens to end
+// in "-auto" is never caught by this gate.
+func IsAutoSpawnedWorkerName(name string) bool {
+	return autoSpawnedWorkerNamePattern.MatchString(strings.TrimSpace(name))
 }
 
 // FormatFrontierSpawnBrief builds the opening mission brief for an
@@ -580,23 +606,11 @@ func (s *Server) frontierConsumeSweep(args FrontierConsumeLoopArgs, ledger *Fron
 	obs := make([]poproactive.LeafObs, 0, len(leaves))
 	for _, leaf := range leaves {
 		byID[leaf.ID] = leaf
-		obs = append(obs, poproactive.LeafObs{
-			ID:              leaf.ID,
-			Tags:            leaf.Tags,
-			Name:            leaf.Name,
-			Context:         leaf.Context,
-			Cost:            leaf.Cost,
-			SetAsideDeps:    leaf.SetAsideDeps,
-			ActiveChildren:  leaf.ActiveChildren,
-			ParkedAncestors: leaf.ParkedAncestors,
-			OwnedBy:         leaf.OwnedBy,
-			OwnedByReason:   leaf.OwnedByReason,
-			ForceEngage:     poproactive.IsForceEngageTag(leaf.Tags),
-			ReapedPending:   s.reapedTargetPending(leaf.ID, args.Workdir, poproactive.IsForceEngageTag(leaf.Tags)),
-			// 🎯T389: this sweep's ledger only — another repo's worker on the
-			// same id must not make this leaf look consumed.
-			AlreadyEngaged: len(workAgentsBoundOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0,
-		})
+		// 🎯T389: this sweep's ledger only — another repo's worker on the
+		// same id must not make this leaf look consumed.
+		o := frontierLeafObs(leaf, len(workAgentsBoundOnTarget(s.registry, leaf.ID, args.Workdir, "")) > 0)
+		o.ReapedPending = s.reapedTargetPending(leaf.ID, args.Workdir, o.ForceEngage)
+		obs = append(obs, o)
 	}
 
 	spawnHalted := ""

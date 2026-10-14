@@ -6,9 +6,11 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"github.com/marcelocantos/jevons/internal/sendq"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -238,5 +240,54 @@ func TestT620EventPushQueuedDrainsOnTurnComplete(t *testing.T) {
 	}
 	if n := observedPendingSends(s, "jevons-po"); n != 0 {
 		t.Fatalf("pending after drain=%d", n)
+	}
+}
+
+// T1050: an explicitly scoped permission held during a turn is never offered
+// after a newer direct hold, even if the hold used a different send path.
+func TestT1050QueuedEventAuthorizationDirectHold(t *testing.T) {
+	p := &pushFakeParticipants{names: map[string]bool{"worker": true}}
+	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
+	s.noteTurnInFlight("worker")
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"target": "worker", "event": "owner-authorization", "text": "permission to report", "directive_family": "T1050", "directive_kind": "authorization"}
+	res, err := s.handleEventPush(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("auth: %v %s", err, toolText(res))
+	}
+	entries, _ := s.sendQueue().Snapshot("worker")
+	if len(entries) != 1 || entries[0].Directive == nil {
+		t.Fatalf("typed auth not queued: %+v", entries)
+	}
+	// The direct sender is a different channel; the queue contract is shared.
+	_, depth, removed, err := s.sendQueue().ApplyDirective("worker", "owner hold", sendq.Directive{Family: "T1050", Kind: "hold"}, false, time.Now())
+	if err != nil || depth != 0 || len(removed) != 1 {
+		t.Fatalf("direct hold: depth=%d removed=%+v err=%v", depth, removed, err)
+	}
+	if _, ok, err := s.sendQueue().ClaimFront("worker"); ok || err != nil {
+		t.Fatalf("stale auth claimable: %v %v", ok, err)
+	}
+}
+
+func TestT1050DirectEventHoldCancelsQueuedPermission(t *testing.T) {
+	p := &pushFakeParticipants{names: map[string]bool{"worker": true}}
+	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
+	auth := sendq.Directive{Family: "report/T1050", Kind: "authorization"}
+	_, _, _, err := s.sendQueue().ApplyDirective("worker", "[event: owner] permission", auth, true, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"target": "worker", "event": "owner-hold", "text": "do not report", "directive_family": "report/T1050", "directive_kind": "hold"}
+	res, err := s.handleEventPush(context.Background(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("hold: %v %s", err, toolText(res))
+	}
+	if !strings.Contains(p.last, "do not report") {
+		t.Fatalf("hold not delivered: %q", p.last)
+	}
+	entries, _ := s.sendQueue().Snapshot("worker")
+	if len(entries) != 0 {
+		t.Fatalf("stale auth still queued: %+v", entries)
 	}
 }

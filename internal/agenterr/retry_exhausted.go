@@ -20,27 +20,18 @@ import "strings"
 // ate an almost-finished turn and nobody could tell, from the class alone,
 // that "it retried and still lost" is what happened.
 //
-// DefaultRetryBudget documents the number so "a budget of one" is a
-// checkable fact, not tribal knowledge: most agent CLIs in this fleet
-// (Claude Code, Codex, Grok Build) retry a failed turn-step exactly once
-// before surfacing the failure to the operator. That default is not
-// configured by jevons — it lives in the harness — but the OUTCOME is
-// observable from the wire text, and is classified so 🎯T236 recovery and
-// the owner-visible copy both say "retried once, still failed" instead of
-// treating it as an opaque unknown.
+// Retry policy belongs to the selected provider/harness, not this
+// classifier. Jevons does not configure a common step retry budget.
+// Preserve any reported attempt count in owner copy; never infer one
+// from the exhaustion class. See docs/retry-policy.md.
 const ClassRetryExhausted Class = "retry_exhausted"
-
-// DefaultRetryBudget is the number of retry attempts most agent CLIs make
-// before giving up on a transient step-level failure and surfacing it to
-// the operator, absent an explicit override. Documented here (🎯T862.12)
-// so "a budget of one" is a named, checkable constant rather than an
-// unnoticed cause of near-complete turn loss.
-const DefaultRetryBudget = 1
 
 // retryExhaustedMarkers are the wire/owner-copy phrasings that mean "the
 // retry budget itself ran out", as distinct from the transient failure
 // that triggered a retry in the first place.
 var retryExhaustedMarkers = []string{
+	"retry_exhausted",
+	"retries exceeded",
 	"max retries exceeded",
 	"maximum retries exceeded",
 	"retries exhausted",

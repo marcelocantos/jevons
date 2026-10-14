@@ -25,11 +25,10 @@ import (
 // is deterministic, so the seat can never come back, and /api/agents
 // shows an ordinary `stopped` row (jevons-po, 2026-09-21 07:45).
 //
-// claudia's own live Migrate strips the same fields from the process
-// config (migrateDestConfig) but its recordMigrate leaves them on the def.
-// The rule here is the def-side mirror of that strip, with one limit: a
-// setting is dropped only when dropping it cannot widen what the seat may
-// do beyond what the fleet grants a seat minted fresh on the new provider.
+// A switch keeps the def's other fields, so the def must drop what the new
+// provider refuses, with one limit: a setting is dropped only when dropping
+// it cannot widen what the seat may do beyond what the fleet grants a seat
+// minted fresh on the new provider.
 // A setting that is a restriction the new provider cannot enforce is
 // refused instead, loudly, and the seat keeps its old def. Every drop is
 // logged and served on /api/agents (dropped_caps), never silent.
@@ -148,28 +147,32 @@ func providerSwitchRefusal(def claudia.AgentDef, target claudia.Provider) error 
 	return err
 }
 
-// switchProvider moves def onto target and drops whatever target cannot
-// honour, recording the drop so it is never silent. It refuses, leaving
-// def untouched, when a drop would widen the seat.
-func switchProvider(def *claudia.AgentDef, target claudia.Provider, why string) error {
+// reconcileAfterSwitch drops, on the registered def, whatever the provider
+// it just switched to refuses, and records the switch that made it stale,
+// so the drop is never silent. A restriction was refused before the switch
+// ([providerSwitchRefusal]); one here is reported, not dropped.
+func reconcileAfterSwitch(reg *claudia.Registry, name string, from claudia.Provider) error {
+	def := reg.Def(name)
+	if def == nil {
+		return nil
+	}
 	next := *def
-	from := next.Provider
-	next.Provider = target
 	dropped, err := dropStaleProviderCaps(&next)
-	if err != nil {
+	if err != nil || len(dropped) == 0 {
 		return err
 	}
-	*def = next
-	if len(dropped) > 0 {
-		noteCapDrop(def.Name, fmt.Sprintf("%s→%s (%s): dropped %s",
-			providerLabel(from), providerLabel(target), why, strings.Join(dropped, "; ")))
+	if err := reg.Register(next); err != nil {
+		return fmt.Errorf("agent %q: drop %s the %s provider refuses: %w",
+			name, strings.Join(dropped, "; "), providerLabel(next.Provider), err)
 	}
+	noteCapDrop(name, fmt.Sprintf("%s→%s (switch): dropped %s",
+		providerLabel(from), providerLabel(next.Provider), strings.Join(dropped, "; ")))
 	return nil
 }
 
 // ReconcileProviderCaps repairs a registered def that already contradicts
-// its provider — minted before this guard, or switched by a path that does
-// not go through switchProvider (claudia's recordMigrate). It re-registers
+// its provider — minted before this guard, or switched before switches
+// dropped what the destination refuses. It re-registers
 // the scrubbed def and records the drop. Rehydrate calls it before Launch,
 // so such a seat is revivable rather than refused identically on every
 // retry — unless the stale setting is a restriction, which is refused here
@@ -209,7 +212,7 @@ func ExplainLaunchCapError(def *claudia.AgentDef, err error) error {
 	for _, f := range providerCapFields {
 		if f.capability == capErr.Capability && f.requested(def) {
 			return fmt.Errorf("agent %q: stored def carries %s (%s), which the %s provider refuses — "+
-				"a provider-native setting kept across a provider switch; re-mint or migrate the seat to revive: %w",
+				"a provider-native setting kept across a provider switch; re-mint the seat, or switch it to a provider that honours the setting, to revive: %w",
 				def.Name, capErr.Capability, f.show(def), providerLabel(def.Provider), err)
 		}
 	}

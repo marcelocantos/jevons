@@ -94,7 +94,7 @@ describe('send queue wiring (T657 / T113)', () => {
     fireEvent.change(first.getByRole('textbox'), { target: { value: 'with a picture' } });
     fireEvent.keyDown(first.getByRole('textbox'), { key: 'Enter' });
     await waitFor(() => expect(first.container.querySelectorAll('#send-queue .sq-thumb')).toHaveLength(1));
-    expect(first.container.querySelectorAll('.img-chip')).toHaveLength(0);
+    expect(first.container.querySelectorAll('.img-chip:not([data-upload])')).toHaveLength(0);
     expect(sends()).toEqual([]);
     first.unmount();
 
@@ -107,7 +107,7 @@ describe('send queue wiring (T657 / T113)', () => {
 
     // Edit puts the image back as a chip and the text back in the box.
     fireEvent.click(strip.querySelector('.sq-edit')!);
-    await waitFor(() => expect(second.container.querySelectorAll('.img-chip')).toHaveLength(1));
+    await waitFor(() => expect(second.container.querySelectorAll('.img-chip:not([data-upload])')).toHaveLength(1));
     expect((second.getByRole('textbox') as HTMLTextAreaElement).value).toBe('with a picture');
 
     // Queue it again, then idle: delivery carries the marker.

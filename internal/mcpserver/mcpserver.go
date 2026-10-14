@@ -74,6 +74,9 @@ type TranscriptOps struct {
 type Server struct {
 	missionStarts *missionbound.Store
 	registry      *claudia.Registry
+	// modelCatalog overrides the launchable catalog in hermetic mint tests.
+	// Nil uses Claudia’s current catalog, not an old hard-coded model list.
+	modelCatalog func() []claudia.CatalogModel
 	// seatPlans holds placement and migration fields the published
 	// AgentDef does not carry. Nil reads as empty state.
 	seatPlans  *claudia.SeatPolicyStore
@@ -136,8 +139,8 @@ type Server struct {
 	startMu sync.Mutex
 	// startFlights dedupes in-flight jevons_agent_start launches by name (🎯T792).
 	startFlights startFlights
-	// migrateOutcomes retains finished jevons_agent_migrate results (🎯T790).
-	migrateOutcomes migrateOutcomes
+	// switchOutcomes retains finished jevons_agent_switch_model results (🎯T790).
+	switchOutcomes switchOutcomes
 	// launchAgentFn overrides registry.Launch (hermetic 🎯T541).
 	launchAgentFn func(ctx context.Context, name string) (*claudia.Agent, error)
 	// launchDeadline overrides defaultLaunchDeadline (🎯T541.2). Tests set a
@@ -192,6 +195,10 @@ type Server struct {
 	// stop / kill can refuse to act on an undecided delivery (🎯T664).
 	// Guarded by mu.
 	unconfirmedSends map[string]unconfirmedSend
+	// t664FaultDir roots the 🎯T828 journey seam (force undecided delivery /
+	// disable the stop guard). Empty until EnableT664FaultSeam; production
+	// never sets it.
+	t664FaultDir string
 	// oversizedSessions caches the per-session census of records over the
 	// broker line limit, keyed by session path (🎯T661). Guarded by mu.
 	oversizedSessions map[string]oversizedEntry
@@ -333,6 +340,10 @@ type Server struct {
 	seatAliveFn func(string) bool
 	// birthStore is the durable accepted-prompt + notice-key ledger (🎯T679.2).
 	birthStore *birthLedger
+	// mintRounds tracks, per parent, seats released unbriefed since that
+	// parent's last confirmed brief — closed by a quiet-period debounce into
+	// one parent notice when every seat in the round was lost (🎯T956).
+	mintRounds *mintRoundTracker
 
 	// eventLogTail tails durable product logs (🎯T120). Nil = tool unregistered.
 	eventLogTail EventLogTailFunc
@@ -343,10 +354,10 @@ type Server struct {
 	// (🎯T128.1 / T128.4). Same file as GET /api/logs when SetEventJournal is wired.
 	eventJournal *eventlog.Journal
 
-	// migrator moves an existing agent between backends, carrying a
-	// handover to the successor (🎯T285). Nil = jevons_agent_migrate
-	// unregistered rather than half-working.
-	migrator Migrator
+	// switcher moves an existing agent to another provider or model in
+	// place (claudia 🎯T195). Nil = jevons_agent_switch_model unregistered
+	// rather than half-working.
+	switcher ModelSwitcher
 	// Latest host execution result for each Claudia placement verdict. Read
 	// alongside a fresh decision so a failed launch cannot look like a move.
 	// planSweepMu serialises SweepPlanPolicy: the periodic tick and an
@@ -483,7 +494,8 @@ type Server struct {
 
 	// ideaStateDir roots the durable idea ledger (state_dir/ideas.json, 🎯T325.3).
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
-	ideaStateDir string
+	ideaStateDir      string
+	ownerQuestionsDir string
 
 	// agentReportDir roots the durable agent-report store (🎯T388) so a
 	// terminal report outlives the agent that wrote it. Empty until
@@ -686,14 +698,34 @@ func (s *Server) effectivePortfolio() *cost.Portfolio {
 	return base
 }
 
-// harnessLoadCounts tallies registered agents by claudia provider id
-// (session soft-cap input for portfolio routing — never USD).
+// harnessLoadCounts counts process seats for routing and admission, not
+// registered definitions or cost-window sessions. A deliberately
+// stopped seat has no process even after its last liveness observation expires.
 func (s *Server) harnessLoadCounts() cost.LoadCounts {
-	load := cost.LoadCounts{}
 	if s == nil || s.registry == nil {
-		return load
+		return cost.LoadCounts{}
 	}
-	for _, d := range s.registry.List() {
+	intent := s.fleetIntent()
+	return activeProcessLoad(s.registry.List(), func(name string) seatstate.State {
+		return seatstate.ReadRegistry(s.registry, name)
+	}, func(name string) bool {
+		return intent.AgentState(name) != fleetintent.Working && s.registry.Get(name) == nil
+	})
+}
+
+// activeProcessLoad is a process-free seam. Yes counts even before the first
+// turn; No excludes. Unknown normally reserves a slot (fail closed). The
+// exception is durable non-working intent plus an absent local handle and no positive
+// broker or local observation: the explicit stop is evidence even after its transient
+// seatstate observation expires. A still-running parked process is counted.
+func activeProcessLoad(defs []claudia.AgentDef, state func(string) seatstate.State, parkedWithoutHandle func(string) bool) cost.LoadCounts {
+	load := cost.LoadCounts{}
+	for _, d := range defs {
+		st := state(d.Name)
+		if st.Alive != seatstate.Yes && st.BrokerAlive != seatstate.Yes && st.LocalAlive != seatstate.Yes &&
+			(st.Alive == seatstate.No || parkedWithoutHandle(d.Name)) {
+			continue
+		}
 		p := strings.ToLower(strings.TrimSpace(string(d.Provider)))
 		if p == "" {
 			p = string(cli.DefaultProvider)
@@ -894,7 +926,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerJobTools() // 🎯T600 handles for work that takes time
 	s.registerJwork()
 	s.registerMCPReconnect()
-	s.registerAgentMigrate()
+	s.registerAgentSwitchModel()
 	s.registerStaffOpsTools()
 	s.registerSentinelTools()
 	s.registerWritSecurityTools()  // 🎯T335 security auditor + writ confinement

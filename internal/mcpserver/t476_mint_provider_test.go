@@ -105,7 +105,7 @@ func TestStitchOmitProviderFollowsConfigNotLeftoverFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exp.Provider != claudia.ProviderClaude {
+	if exp.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("explicit provider lost: %q", exp.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: explicit") {

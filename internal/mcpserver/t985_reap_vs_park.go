@@ -124,12 +124,15 @@ var blockedOnExternalPhrases = []string{
 // Order is load-bearing:
 //  1. A typed status-blocked finish-report is park (🎯T938 — waiting on
 //     someone else, may resume). Nothing in the prose outranks that.
-//  2. A typed finish-report, or a genuine finish shape, is reap (🎯T165).
-//  3. A decisive nothing-left phrase is reap, even beside external-block
+//  2. An active wait on an alive external process (🎯T1024 — a queued
+//     gate, a monitored background run) is park, unless a decisive
+//     nothing-left phrase says the seat is finished regardless.
+//  3. A typed finish-report, or a genuine finish shape, is reap (🎯T165).
+//  4. A decisive nothing-left phrase is reap, even beside external-block
 //     words (the remainder is someone else's).
-//  4. External-block prose is park.
-//  5. A completion phrase (already/fully achieved, superseded) is reap.
-//  6. Otherwise keep.
+//  5. External-block prose is park.
+//  6. A completion phrase (already/fully achieved, superseded) is reap.
+//  7. Otherwise keep.
 //
 // Quoted, cited, negated and fenced text is masked before the phrase scan
 // (🎯T750): "the PO said 'nothing left' but I disagree" is not a claim.
@@ -137,13 +140,21 @@ func ClassifyWorkerIdleDisposition(text string) WorkerIdleAction {
 	if strings.TrimSpace(text) == "" {
 		return IdleActionKeep
 	}
-	if _, blocked := envelope.BlockedOn(text); blocked {
+	if action := reportOpenStatus(text); action != "" {
+		return action
+	}
+	lower := claimScanText(strings.ToLower(text))
+	// 🎯T1024: a seat narrating an active wait on an alive external process
+	// (a queued gate on the shared lease, a monitored background run) is
+	// blocked on something external that may resume — park, not reap —
+	// whatever completion word a sub-step earned. A decisive nothing-left
+	// phrase still outranks it, as it outranks every external-block shape.
+	if declaresUnresolvedExternalWait(text) && !containsAny(lower, nothingLeftPhrases) {
 		return IdleActionPark
 	}
 	if LooksLikeFinishedWorkReport(text) {
 		return IdleActionReap
 	}
-	lower := claimScanText(strings.ToLower(text))
 	if containsAny(lower, nothingLeftPhrases) {
 		return IdleActionReap
 	}
@@ -176,7 +187,7 @@ func LooksLikeOwnWorkCompleteReport(report string) bool {
 	if strings.TrimSpace(report) == "" {
 		return false
 	}
-	if _, blocked := envelope.BlockedOn(report); blocked {
+	if reportOpenStatus(report) != "" {
 		return false
 	}
 	if m, err := envelope.Parse(report); m != nil && err == nil && m.Kind != envelope.KindFinishReport {

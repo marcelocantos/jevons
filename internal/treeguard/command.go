@@ -34,16 +34,17 @@ import (
 // Write forms, named so a refusal can tell the worker which construct was
 // recognized rather than quoting the whole command back at it.
 const (
-	FormRedirect    = "shell redirection"
-	FormInPlace     = "in-place editor (-i)"
-	FormTee         = "tee"
-	FormGitRestore  = "git checkout/restore"
-	FormCopyDest    = "copy/move destination"
-	FormTruncate    = "truncate"
-	FormPatch       = "patch"
-	FormRemove      = "removal"
-	FormDD          = "dd of="
-	FormScriptWrite = "interpreter write"
+	FormRedirect      = "shell redirection"
+	FormInPlace       = "in-place editor (-i)"
+	FormTee           = "tee"
+	FormGitRestore    = "git checkout/restore"
+	FormGitDiscardAll = "git reset/clean (whole-tree discard)"
+	FormCopyDest      = "copy/move destination"
+	FormTruncate      = "truncate"
+	FormPatch         = "patch"
+	FormRemove        = "removal"
+	FormDD            = "dd of="
+	FormScriptWrite   = "interpreter write"
 )
 
 // CommandWrite is one path a shell command appears to mutate, with the form
@@ -241,6 +242,16 @@ func DetectBranchCheckout(command string) (ref string, ok, definite bool) {
 // scanGit handles the one git subcommand family that rewrites working-tree
 // content. `git add` is deliberately absent: the shared INDEX is 🎯T377's
 // problem, and refusing staging here would duplicate that guard badly.
+//
+// `reset --hard/--merge/--keep` and a path-less `clean -f` are a distinct
+// shape from `checkout -- <path>` / `restore <path>`: they do not name the
+// file they discard, so no positional pathspec names "the whole tree,
+// whatever is dirty in it" (🎯T1011 — the 2026-10-06 incident was exactly a
+// `git reset --hard` with no pathspec that cleared bullseye.yaml's
+// uncommitted rows along with everything else). Those are reported as a
+// single sentinel write (FormGitDiscardAll, path "*"); the caller resolves
+// what is actually at risk via `git diff` against the real working tree,
+// since this recognizer is pure and has no filesystem access.
 func scanGit(args []string, out *[]CommandWrite) {
 	var sub string
 	var rest []string
@@ -255,11 +266,53 @@ func scanGit(args []string, out *[]CommandWrite) {
 		rest = append(rest, a)
 	}
 	switch sub {
-	case "checkout", "restore", "clean", "stash":
+	case "reset":
+		if hasAnyFlag(rest, "--hard", "--merge", "--keep") {
+			add(out, "*", FormGitDiscardAll)
+			return
+		}
+		// A mixed/soft reset only moves HEAD/index; it does not touch
+		// working-tree content, so nothing here is at risk of discard.
+	case "clean":
+		if hasForceFlag(rest) && len(positional(rest)) == 0 {
+			add(out, "*", FormGitDiscardAll)
+			return
+		}
+		for _, a := range positional(rest) {
+			add(out, a, FormGitRestore)
+		}
+	case "checkout", "restore", "stash":
 		for _, a := range positional(rest) {
 			add(out, a, FormGitRestore)
 		}
 	}
+}
+
+// hasAnyFlag reports whether args contains any of the named long flags,
+// exact-match only. `reset`'s dangerous flags (--hard/--merge/--keep) are
+// always spelled out long, never bundled.
+func hasAnyFlag(args []string, flags ...string) bool {
+	for _, a := range args {
+		if slices.Contains(flags, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasForceFlag reports whether args requests `git clean -f`/`--force`,
+// including bundled short forms (`-fd`, `-dfx`, …) the way `sed -i` bundling
+// is already handled for in-place editors above.
+func hasForceFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--force" {
+			return true
+		}
+		if len(a) > 1 && a[0] == '-' && a[1] != '-' && strings.ContainsRune(a[1:], 'f') {
+			return true
+		}
+	}
+	return false
 }
 
 func add(out *[]CommandWrite, path, form string) {

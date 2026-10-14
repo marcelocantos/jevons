@@ -1,0 +1,256 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+package mcpserver
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/mark3labs/mcp-go/mcp"
+)
+
+func t1046Server(t *testing.T) *Server {
+	t.Helper()
+	s := New(t.TempDir(), nil, nil)
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetRegistry(reg)
+	return s
+}
+
+func TestT1046LaunchConfigUsesCatalogEconomyWhenSparkAbsent(t *testing.T) {
+	s := t1046Server(t)
+	def, existed, note, err := s.stitchAgentStart("ops", t.TempDir(), "", "codex", "ops_classify", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || existed {
+		t.Fatalf("stitch: existed=%v err=%v", existed, err)
+	}
+	if def.Model != "gpt-6-luna" || startConfigFromDef(def).Model != "gpt-6-luna" || !strings.Contains(note, "Spark absent") {
+		t.Fatalf("registered/launch model=%q/%q note=%q", def.Model, startConfigFromDef(def).Model, note)
+	}
+	if s.registry.Def("ops").Model != "gpt-6-luna" {
+		t.Fatal("registry stored obsolete pin")
+	}
+}
+
+func TestT1046SparkPresentAndExplicitPinPrecedence(t *testing.T) {
+	s := t1046Server(t)
+	s.modelCatalog = func() []claudia.CatalogModel {
+		return append(claudia.ModelCatalog(), claudia.CatalogModel{Provider: claudia.ProviderCodex, Model: cost.ModelCodexSpark, Access: claudia.ModelAccessPlan, Quality: claudia.ModelQualityEconomy, Session: true})
+	}
+	def, _, _, err := s.stitchAgentStart("spark", t.TempDir(), "", "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || def.Model != cost.ModelCodexSpark {
+		t.Fatalf("present Spark model=%q err=%v", def.Model, err)
+	}
+	s.modelCatalog = nil // absent again: caller's explicit pin wins, even if catalog changes
+	def, _, _, err = s.stitchAgentStart("explicit", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || def.Model != cost.ModelCodexSpark {
+		t.Fatalf("explicit pin model=%q err=%v", def.Model, err)
+	}
+}
+
+func TestT1046FailedLaunchRowRetriesWithSupportedModel(t *testing.T) {
+	s := t1046Server(t)
+	workdir := t.TempDir()
+	// Simulate an older installation's persisted row: the sidecar rejects
+	// Spark; the failed Launch keeps the row for a same-name retry.
+	s.modelCatalog = func() []claudia.CatalogModel {
+		return append(claudia.ModelCatalog(), claudia.CatalogModel{Provider: claudia.ProviderCodex, Model: cost.ModelCodexSpark, Access: claudia.ModelAccessPlan, Quality: claudia.ModelQualityEconomy, Session: true})
+	}
+	attempts := 0
+	s.launchAgentFn = func(_ context.Context, name string) (*claudia.Agent, error) {
+		attempts++
+		cfg := startConfigFromDef(s.registry.Def(name))
+		if attempts == 1 && cfg.Model != cost.ModelCodexSpark {
+			t.Errorf("first launch model=%q", cfg.Model)
+		}
+		if attempts == 2 && cfg.Model != "gpt-6-luna" {
+			t.Errorf("retry launch model=%q", cfg.Model)
+		}
+		if attempts == 1 {
+			return nil, errors.New("sidecar model unavailable")
+		}
+		return nil, nil // hermetic successful launch on the corrected config
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "retry", "workdir": workdir, "provider": "codex", "task_type": "mechanical", "parent": "jevons-po", "purpose": "work"}
+	result, err := s.handleAgentStart(t.Context(), req)
+	if err != nil || !result.IsError || s.registry.Def("retry").Model != cost.ModelCodexSpark {
+		t.Fatalf("initial launch: result=%v err=%v row=%+v", result, err, s.registry.Def("retry"))
+	}
+	session := s.registry.Def("retry").SessionID
+	s.modelCatalog = nil
+	result, err = s.handleAgentStart(t.Context(), req)
+	if err != nil || result.IsError || attempts != 2 {
+		t.Fatalf("retry: result=%v err=%v attempts=%d", result, err, attempts)
+	}
+	def := s.registry.Def("retry")
+	if def.Model != "gpt-6-luna" || def.SessionID != session {
+		t.Fatalf("retry row=%+v want same session and supported model", def)
+	}
+}
+
+// A launched conversation is not a failed row: its model is part of the
+// resume binding, even if the catalog later drops that slug.
+func TestT1046MaterializedResumeKeepsStoredModel(t *testing.T) {
+	s := t1046Server(t)
+	t.Setenv("CLAUDIA_OMP_SOCKET", filepath.Join(t.TempDir(), "omp.sock"))
+	d, _, _, err := s.stitchAgentStart("existing", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Materialized = true
+	// A real engine store is a history witness even if no spool was emitted.
+	store := filepath.Join(filepath.Dir(os.Getenv("CLAUDIA_OMP_SOCKET")), "omp-seats", d.Name)
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, d.SessionID+".jsonl"), []byte(`{"type":"claudia_seat"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.registry.Register(*d); err != nil {
+		t.Fatal(err)
+	}
+	got, existed, _, err := s.stitchAgentStart("existing", d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err == nil || !existed || got != nil || !strings.Contains(err.Error(), "conversation store exists") {
+		t.Fatalf("materialized resume got=%+v existed=%v err=%v", got, existed, err)
+	}
+	if d2 := s.registry.Def(d.Name); !d2.Materialized || d2.Model != cost.ModelCodexSpark {
+		t.Fatalf("history row changed: %+v", d2)
+	}
+}
+
+func TestT1046MissingEconomyUsesProviderDefault(t *testing.T) {
+	s := t1046Server(t)
+	s.modelCatalog = func() []claudia.CatalogModel {
+		return []claudia.CatalogModel{{Provider: claudia.ProviderCodex, Model: "frontier-only", Access: claudia.ModelAccessPlan, Quality: claudia.ModelQualityFrontier, Session: true}}
+	}
+	def, _, note, err := s.stitchAgentStart("no-economy", t.TempDir(), "", "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || def.Model != "" || !strings.Contains(note, "provider default") {
+		t.Fatalf("no economy model=%q note=%q err=%v", def.Model, note, err)
+	}
+}
+
+// A successful Start and submitted prompt do not prove an explicitly pinned
+// model exists in the OMP catalog. This is the specimen behind the observed
+// Materialized=true phantom: RequireResume must not be earned by that send.
+func TestT1046UnsupportedExplicitSparkSendDoesNotMaterialize(t *testing.T) {
+	s := t1046Server(t)
+	def, _, _, err := s.stitchAgentStart("explicit-spark", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Model != cost.ModelCodexSpark {
+		t.Fatalf("explicit pin lost: %q", def.Model)
+	}
+	if def.Materialized {
+		t.Fatal("before send materialized")
+	}
+	s.markAgentTurnBegan(def.Name)
+	got := s.registry.Def(def.Name)
+	if got.Materialized || startConfigFromDef(got).RequireResume {
+		t.Fatalf("unsupported model earned resume: %+v", got)
+	}
+	if !s.agentHasTurnBegan(def.Name) {
+		t.Fatal("process-local submitted turn not recorded")
+	}
+	// A catalog that really contains Spark retains the ordinary materialization
+	// contract. This also prevents over-broad suppression of Codex sessions.
+	s.modelCatalog = func() []claudia.CatalogModel {
+		return append(claudia.ModelCatalog(), claudia.CatalogModel{Provider: claudia.ProviderCodex, Model: cost.ModelCodexSpark, Access: claudia.ModelAccessPlan, Quality: claudia.ModelQualityEconomy, Session: true})
+	}
+	s.markAgentTurnBegan(def.Name)
+	if !s.registry.Def(def.Name).Materialized {
+		t.Fatal("available Spark turn did not materialize")
+	}
+}
+
+func TestT1046ExplicitSparkStartAndSubmittedTurnCanRetryWithoutResume(t *testing.T) {
+	s := t1046Server(t)
+	workdir := t.TempDir()
+	launches := 0
+	s.launchAgentFn = func(_ context.Context, name string) (*claudia.Agent, error) {
+		launches++
+		cfg := startConfigFromDef(s.registry.Def(name))
+		if launches == 2 && (cfg.Model != "gpt-6-luna" || cfg.RequireResume) {
+			t.Errorf("retry config=%+v want economy without RequireResume", cfg)
+		}
+		return nil, nil // process-start success is not a model/turn oracle
+	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"name": "explicit-then-omit", "workdir": workdir, "provider": "codex", "model": cost.ModelCodexSpark, "task_type": "ops_classify", "parent": "jevons-po", "purpose": "work"}
+	res, err := s.handleAgentStart(t.Context(), req)
+	if err != nil || res.IsError {
+		t.Fatalf("explicit launch result=%v err=%v", res, err)
+	}
+	s.markAgentTurnBegan("explicit-then-omit")
+	if s.registry.Def("explicit-then-omit").Materialized {
+		t.Fatal("submitted turn falsely materialized unavailable model")
+	}
+	delete(req.Params.Arguments.(map[string]any), "model")
+	res, err = s.handleAgentStart(t.Context(), req)
+	if err != nil || res.IsError || launches != 2 {
+		t.Fatalf("retry result=%v err=%v launches=%d", res, err, launches)
+	}
+	if d := s.registry.Def("explicit-then-omit"); d.Model != "gpt-6-luna" || d.Materialized {
+		t.Fatalf("retry row=%+v", d)
+	}
+}
+
+// An accepted send without engine entries is not a confirmed model reply.
+// A same-name retry may remove the phantom flag and pick a catalog model.
+func TestT1049PhantomMaterializedRetry(t *testing.T) {
+	s := t1046Server(t)
+	t.Setenv("CLAUDIA_OMP_SOCKET", filepath.Join(t.TempDir(), "omp.sock"))
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	d, _, _, err := s.stitchAgentStart("phantom", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Materialized = true
+	if err := s.registry.Register(*d); err != nil {
+		t.Fatal(err)
+	}
+	// Sidecar accepted a send, but wrote no model reply or engine entries.
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-10-10.log"), []byte(`{"ts":"2026-10-10T04:42:10Z","seat":"phantom","type":"accepted"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, existed, _, err := s.stitchAgentStart(d.Name, d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil || !existed || got.Materialized || got.Model != "gpt-6-luna" || got.SessionID != d.SessionID {
+		t.Fatalf("safe retry got=%+v existed=%v err=%v", got, existed, err)
+	}
+}
+
+func TestT1049SpoolConversationRefusesRecovery(t *testing.T) {
+	s := t1046Server(t)
+	t.Setenv("CLAUDIA_OMP_SOCKET", filepath.Join(t.TempDir(), "omp.sock"))
+	dir := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", dir)
+	d, _, _, err := s.stitchAgentStart("real", t.TempDir(), cost.ModelCodexSpark, "codex", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Materialized = true
+	if err := s.registry.Register(*d); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-10-10.log"), []byte(`{"seat":"real","type":"text","text":"model replied"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _, err := s.stitchAgentStart(d.Name, d.WorkDir, "", "", "mechanical", "jevons-po", claudia.PurposeWork, "", "")
+	if err == nil || got != nil || !strings.Contains(err.Error(), "conversation evidence") {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if row := s.registry.Def(d.Name); !row.Materialized || row.Model != cost.ModelCodexSpark {
+		t.Fatalf("history row changed: %+v", row)
+	}
+}

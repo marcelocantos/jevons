@@ -118,6 +118,14 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 		"proven API",
 		"development or released",
 		"🎯T572",
+		// 🎯T1053 routine reports are silent unless owner attention is needed
+		"Routine worker reports are not owner-facing appraisals",
+		"🎯T1053",
+		"[silent]",
+		"genuine owner decision point",
+		"anomaly/problem",
+		"direct question",
+		"status explicitly requested",
 		// 🎯T692 fleet state narration
 		"Fleet state narration matches the live registry",
 		"🎯T692",
@@ -273,6 +281,24 @@ func TestFleetStandingBriefParentReportDaemonDelivered(t *testing.T) {
 	} {
 		if !strings.Contains(FleetStandingBrief, want) {
 			t.Errorf("FleetStandingBrief missing T690 marker %q", want)
+		}
+	}
+}
+
+// 🎯T1053: the injected standing brief reaches workers and the overseer with
+// the quiet-report rule, without depending on the legacy bare-ID oracle.
+func TestFleetBriefRoutineReportQuiet(t *testing.T) {
+	out, injected := EnsureFleetBrief(map[string]bool{}, "jevons", "continue")
+	if !injected {
+		t.Fatal("expected standing brief injection")
+	}
+	for _, want := range []string{
+		"Routine worker reports are not owner-facing appraisals", "🎯T1053",
+		"[silent]", "genuine owner decision point", "anomaly/problem",
+		"direct question", "status explicitly requested", "verification/routing",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("injected brief missing %q", want)
 		}
 	}
 }

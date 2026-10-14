@@ -131,6 +131,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .composer-images .img-chip { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .composer-images .img-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .composer-images .img-chip button { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border: 0; border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; line-height: 18px; cursor: pointer; padding: 0; }
+/* 🎯T1025: an upload is a chip from the paste onward; a stalled one fails in view. */
+.composer-images .img-chip-uploading { border-style: dashed; background: var(--bg); }
+.composer-images .img-chip-failed { border-color: var(--red); background: var(--bg); }
+.composer-images .img-chip-uploading img, .composer-images .img-chip-failed img { opacity: 0.35; }
+.composer-images .img-chip-state { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; line-height: 14px; text-align: center; color: #fff; background: rgba(0,0,0,0.55); pointer-events: none; }
+.composer-images .img-chip-failed .img-chip-state { background: var(--red); }
 .msg .chat-img {
   display: block; margin: 6px 0; border-radius: 8px; cursor: zoom-in;
   /* 🎯T976: a compact thumb in the image's own shape, never enlarged. A fixed
@@ -261,7 +267,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .composer-recall { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-basis: 100%; order: -2; font-size: 12px; color: var(--text-dim); }
 .composer-recall > span { flex-basis: 100%; }
 .composer-recall button { border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; background: var(--bg); color: var(--text); cursor: pointer; }
-.composer-recall-error { flex-basis: 100%; order: -1; font-size: 12px; color: var(--red); }
+.composer-recall-error, .composer-upload-notice { flex-basis: 100%; order: -1; font-size: 12px; color: var(--red); }
 /* 🎯T106: assistant talk bubble — same geometry family as user, border only (no fill). */
 .msg.jevons { align-self: flex-start; background: transparent; color: var(--text); border: 1px solid var(--border); white-space: normal; word-wrap: break-word; }
 
@@ -687,6 +693,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
    Top sentinel is optional residual while pages remain — not a data throttle.
    Overlay is out of flow so it does not perturb scroll-position math. */
 .history-sentinel { height: 1px; margin: 0; pointer-events: none; }
+.history-page-status { position: sticky; top: 0; z-index: 2; box-sizing: border-box; height: 27px; margin-bottom: -27px; padding: 5px 8px; background: var(--surface-raised); color: var(--text-muted); font-size: 12px; }
+.history-page-status button { margin-left: 8px; color: var(--text); cursor: pointer; }
 .history-loading { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 3px 12px; font-size: 11px; color: var(--text-dim); z-index: 5; pointer-events: none; }
@@ -804,6 +812,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #send { min-height: var(--control-h); padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
+/* 🎯T1020: mobile/touch has no paste/drag-drop, so a visible attach
+   button + hidden file input is the only path to the camera/photo
+   picker. Sized and styled like #voice-btn's icon-button convention. */
+.composer-attach { min-height: var(--control-h); padding: 11px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; }
+.composer-attach:hover { border-color: var(--accent); color: var(--accent); }
+.composer-attach:disabled { opacity: 0.3; cursor: not-allowed; }
 #voice-btn { padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; position: relative; }
 #voice-btn:hover { border-color: var(--accent); color: var(--accent); }
 #voice-btn.active { background: var(--red); color: #fff; border-color: var(--red); box-shadow: 0 0 12px rgba(248,113,113,0.5); animation: pulse 1.5s ease-in-out infinite; }
@@ -926,8 +940,10 @@ body.rhs-resizing-row { cursor: row-resize; }
    (red at the start → orange → green → blue → purple on the home stretch),
    not the bar's spend-vs-time pace. Bar fill still paints pace:
    orange when spend outstrips time, red when it outstrips by a lot.
-   Weekly only (🎯T390.1.1): blue = on track to leave ≥15% unused,
-   purple = ≥15% already unrecoverable even at 1.5×. */
+   Weekly only (🎯T390.1.1): blue fill = on track to leave ≥15% unused,
+   purple fill = ≥15% already unrecoverable even at 1.5×. The bar's
+   BORDER is neutral for every band except exhausted (red) and open
+   (green) — see 🎯T1019. */
 #plan-ticker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text-dim); cursor: help; white-space: nowrap; overflow: hidden; min-width: 0; flex-shrink: 1; padding-top: 2px; }
 #plan-ticker .plan-group { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 #plan-ticker .plan-icon { display: inline-flex; align-items: center; justify-content: center; align-self: center; color: var(--text-muted); }
@@ -942,8 +958,8 @@ body.rhs-resizing-row { cursor: row-resize; }
    "locked" is purple, not a green that says "forced to ok" whatever was
    forced. 🎯T982: an outright block (exhausted, hot, ahead, unpublished:
    the plan takes no seat) is a prohibition sign — a ring with a diagonal,
-   the ⊘ family — in the neutral text colour on no dot at all. No colour
-   here may read as "fine" when the plan is barred. */
+   the ⊘ family — in red on no dot at all. No colour here may read as
+   "fine" when the plan is barred. */
 #plan-ticker .plan-override {
   align-self: center;
   display: inline-flex;
@@ -960,9 +976,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 #plan-ticker .plan-override-band[data-band="under"] { background: var(--plan-under); color: #fff; }
 #plan-ticker .plan-override-band[data-band="locked"] { background: var(--plan-locked); color: #fff; }
 #plan-ticker .plan-override-block {
-  /* The sign's ink is the theme's text colour, so it reads on the dark red
-     ground and the light one alike without borrowing any band's colour. */
-  color: var(--text);
+  /* Owner 2026-10-12: the block sign is red, the colour of a plan that takes
+     no seat, so it is noticed at a glance. */
+  color: var(--red);
 }
 #plan-ticker .plan-override-ban { display: block; width: 100%; height: 100%; }
 .plan-override-card { max-width: 320px; white-space: normal; }
@@ -985,20 +1001,27 @@ body.rhs-resizing-row { cursor: row-resize; }
    and both read as a second verdict rather than a ruler mark. */
 #plan-ticker .plan-tri { position: absolute; bottom: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 4px solid var(--text-muted); transform: translateX(-50%); pointer-events: none; }
 #plan-ticker .plan-win-label { font-size: 9px; line-height: 1; color: var(--text-muted); padding-bottom: 5px; }
+/* 🎯T967.1: a provider's extra-usage spend, shown only while it is
+   actually being spent, past the subscription allowance. Always bold
+   red — a theme token legible in both themes (--red is not overridden
+   in [data-theme="light"], see the comment near its definition) — and
+   deliberately NOT derived from the pace/band classes above, so a
+   🎯T948 override that paints the bar green never touches this. */
+#plan-ticker .plan-spend { font-size: 9px; line-height: 1; font-weight: 700; color: var(--red); padding-left: 4px; white-space: nowrap; }
+.plan-spend-notice { margin-top: 6px; font-weight: 700; color: var(--red); }
 #plan-ticker .plan-win.plan-ahead .plan-bar-fill { background: var(--amber); }
 #plan-ticker .plan-win.plan-hot .plan-bar-fill,
 #plan-ticker .plan-win.plan-crit .plan-bar-fill { background: var(--red); }
 #plan-ticker .plan-win.plan-under .plan-bar-fill { background: var(--plan-under); }
 #plan-ticker .plan-win.plan-locked .plan-bar-fill { background: var(--plan-locked); }
-/* 🎯T390.1.1: unused leftover (0% fill) still reads blue/purple — same
-   trick exhausted uses: the inset stroke is the signal when there is no
-   usage ink. */
-#plan-ticker .plan-win.plan-under .plan-bar {
-  box-shadow: inset 0 0 0 1px var(--plan-under);
-}
-#plan-ticker .plan-win.plan-locked .plan-bar {
-  box-shadow: inset 0 0 0 1px var(--plan-locked);
-}
+/* 🎯T1019: under/locked keep their own fill colour (above) but the
+   BORDER is neutral — same as ahead/hot, which never got a coloured
+   stroke here. The T390.1.1 coloured inset-stroke rules below were a
+   leftover-fill signal that predated, and was never reconciled with,
+   the later rule that only exhausted (red) and open (green) get a
+   coloured border. Do not re-add a coloured stroke for under/locked:
+   the override dot (🎯T979 .plan-override-band) is the forced-band
+   signal, independent of the bar's own border. */
 #plan-ticker .plan-win.plan-low .plan-bar-fill { background: var(--amber); }
 /* 🎯T390.1.3: rock bottom (published 0% or 429) — bright red bar chrome,
    weekly and session, every provider. Fill is already empty so the
@@ -1008,7 +1031,7 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 /* Nothing spent yet (used under 1%). Same trick as exhausted: the fill
    is empty, so the inset stroke is the signal. Green says the window is
-   free to use. Under and locked keep their own strokes. */
+   free to use. */
 #plan-ticker .plan-win.plan-open .plan-bar {
   box-shadow: inset 0 0 0 1px var(--green);
 }
@@ -1106,11 +1129,11 @@ body.rhs-resizing-row { cursor: row-resize; }
   flex-shrink: 0;
   border: none;
   background: var(--surface-raised);
-  font-size: 14px;
+  color: var(--text);
   padding: 2px 6px;
   border-radius: 5px;
   cursor: pointer;
-  line-height: 1.2;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 #theme-toggle:hover { filter: brightness(1.15); }
 /* 🎯T138: stable degraded cockpit banner (overseer down / budget pause) */
@@ -1730,6 +1753,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 }
 #prov-menu .prov-model.prov-current { opacity: 0.7; cursor: default; }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 🎯T1037: seat-name target substring is a hotspot; wrapper is display:contents so #agents layout is unchanged. */
+.agent-tree-hotspots { display: contents; }
+.agent-name .target-hotspot { cursor: pointer; font-size: inherit; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; flex-shrink: 0; }
 /* 🎯T118: progress/status secondary shares path slot without mono path chrome. */
 .agent-node .agent-dir.agent-progress,
@@ -1897,6 +1923,14 @@ body.rhs-resizing-row { cursor: row-resize; }
    stroke keeps it circular under a viewBox scaled unequally on the two
    axes — a <circle> would come out an ellipse. Subtle on purpose: half
    again the line, enough to find, not enough to shout. */
+/* 🎯T1069: the mark wears its own sample's served band, like the line's
+   end, not the cell's: with an owner override the cell carries the forced
+   band (🎯T948) while the samples stay measured. */
+.plan-tip-table td.plan-burn .plan-burn-now.plan-burn-ok { color: var(--green); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-ahead { color: var(--amber); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-hot { color: var(--red); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-under { color: var(--plan-under); }
+.plan-tip-table td.plan-burn .plan-burn-now.plan-locked { color: var(--plan-locked); }
 .plan-tip-table td.plan-burn .plan-burn-now {
   fill: none;
   stroke: currentColor;
@@ -2002,8 +2036,9 @@ body.rhs-resizing-row { cursor: row-resize; }
 #settings-button {
   flex-shrink: 0; border: 1px solid var(--border); border-radius: 5px;
   background: var(--surface-raised); color: var(--text); padding: 2px 6px;
-  font-size: 14px; cursor: pointer; line-height: 1.2; min-width: 26px;
+  cursor: pointer; min-width: 26px; display: inline-flex; align-items: center; justify-content: center;
 }
+.header-icon { width: 18px; height: 18px; display: block; flex: none; }
 #settings-button:hover { border-color: var(--accent); }
 #cockpit-settings {
   position: fixed; margin: auto; width: min(420px, calc(100vw - 32px));
@@ -2024,3 +2059,21 @@ body.rhs-resizing-row { cursor: row-resize; }
   background: var(--surface-raised); color: var(--text); cursor: pointer;
 }
 #cockpit-settings select { margin-bottom: 8px; }
+
+/* 🎯T1041: width-based phone/folded layout. Keep the RHS mounted so a
+   selected agent, transcript and composer survive closing the drawer. */
+#agents-toggle, #agents-close, #agents-backdrop { display: none; }
+@media (max-width: 599px) {
+  html, body, #root { height: 100dvh; }
+  #status { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); min-width: 0; }
+  #agents-toggle { display: block; flex: 0 0 auto; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); font: inherit; text-transform: none; }
+  #main { min-width: 0; min-height: 0; }
+  #chat-pane { width: 100%; }
+  #messages { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  #agents-backdrop { display: block; position: fixed; inset: 0; z-index: 40; border: 0; background: rgba(0,0,0,.55); }
+  #activity-pane { position: fixed; z-index: 41; right: 0; top: 0; bottom: 0; width: min(88vw, 420px) !important; max-width: 100vw; height: 100dvh; overflow-y: auto; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); box-shadow: -8px 0 32px rgba(0,0,0,.3); }
+  #activity-pane:not([data-drawer-open="true"]) { visibility: hidden; pointer-events: none; }
+  #activity-pane[data-drawer-open="true"] { visibility: visible; }
+  #agents-close { display: block; align-self: flex-end; margin: 8px 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); }
+  #rhs-width-handle { display: none; }
+}

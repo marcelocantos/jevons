@@ -118,10 +118,10 @@ would lose:
   not reproduced production incidents. Test the actual paths before claiming
   failure or resolution. Preserve the accepted synchronous `thread_direct`
   operation and legitimate role policy.
-- Migration receipts need honest receiver evidence. A stored handover draft
-  or an invocation of Claudia `Agent.Migrate` does not establish what reached
-  the successor. Verify actual continuity, including 🎯T622 integration,
-  without presuming the existing seed is wrong.
+- Model-switch receipts need honest receiver evidence. An invocation of
+  Claudia's in-place switch (claudia 🎯T195) does not by itself establish
+  that the seat continued its conversation on the new model. Verify actual
+  continuity on the switched seat.
 - 🎯T540.7.1 protects owner-turn boundaries on the canonical indexed live/replay
   path. A reused-stream raw reducer fixture is compatibility evidence; it does
   not by itself establish a current indexed-product defect or prescribe a fix.

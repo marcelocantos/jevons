@@ -183,6 +183,15 @@ type IdleNudgeObs struct {
 	TurnInFlight bool
 	// HasStoredTerminal: daemon stored finish-report or scout-report (🎯T761).
 	HasStoredTerminal bool
+	// AutoSpawnPaused is config frontier_consume.disabled, and IsAutoSeat is
+	// whether this name is one frontier-consume minted itself
+	// (IsAutoSpawnedWorkerName) — both required before this classifier
+	// declines (🎯T1066): the config pause must stop frontier_consume's OWN
+	// seats, never a named worker or PO a human/PO explicitly started, and
+	// must never suppress an owner-directed message (this classifier only
+	// gates the AUTOMATIC nudge sweep, not jevons_agent_send).
+	AutoSpawnPaused bool
+	IsAutoSeat      bool
 	// BlockedOnOwner names what the seat waits on when its latest stored
 	// finish-report declares status blocked and nothing has cleared it
 	// (🎯T938). Empty = not blocked.
@@ -208,6 +217,14 @@ func ClassifyIdleNudge(o IdleNudgeObs) (IdleNudgeAction, string) {
 	// no way to ask whether the agent was supposed to be working at all.
 	if d := fleetintent.Allows(o.FleetIntent, o.Intent, fleetintent.ControlNudge); !d.Allow {
 		return IdleNudgeSkip, d.Reason
+	}
+	// 🎯T1066: the 2026-10-11 07:13Z incident — frontier_consume.disabled was
+	// already set, but idle-nudge woke a pre-existing auto seat anyway,
+	// because this classifier had never read that config flag at all (only
+	// fleetintent, above, which nobody had stamped yet at wake time). Scoped
+	// to auto-spawned seats only — never a named worker or PO.
+	if o.AutoSpawnPaused && o.IsAutoSeat {
+		return IdleNudgeSkip, "frontier_consume_disabled"
 	}
 	if o.HasStoredTerminal {
 		return IdleNudgeSkip, "stored_terminal_report"
@@ -841,6 +858,10 @@ type IdleNudgeSweepArgs struct {
 	// SessionReminted is optional: name → this boot reminted session_id
 	// (🎯T545.1). Nil = no remints.
 	SessionReminted func(name string) bool
+	// AutoSpawnPaused is config frontier_consume.disabled (🎯T1066). False
+	// (the zero value, every existing caller/test) preserves prior
+	// behaviour exactly.
+	AutoSpawnPaused bool
 }
 
 // SweepIdleNudges classifies every registered agent and delivers nudges.
@@ -1039,6 +1060,8 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 		TurnInFlight:      args.TurnInFlight != nil && args.TurnInFlight(d.Name),
 		HasStoredTerminal: hasStoredTerminal,
 		BlockedOnOwner:    blockedOn,
+		AutoSpawnPaused:   args.AutoSpawnPaused,
+		IsAutoSeat:        IsAutoSpawnedWorkerName(d.Name),
 	}
 	action, reason := ClassifyIdleNudge(obs)
 	if args.PostRestart && action == IdleNudgeNudge && !EligibleOpenMissionResume(d, running, deliberateStop, designGated, looksFinished, args.Intent) {
@@ -1350,14 +1373,15 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 
 	defs := s.registry.List()
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:          s.registry,
-		SessionPhase: deps.SessionPhase,
-		Activity:     activity,
-		Ledger:       ledger,
-		Push:         push,
-		Now:          now,
-		PostRestart:  false,
-		OverseerName: overseer,
+		Reg:             s.registry,
+		SessionPhase:    deps.SessionPhase,
+		Activity:        activity,
+		Ledger:          ledger,
+		Push:            push,
+		Now:             now,
+		PostRestart:     false,
+		OverseerName:    overseer,
+		AutoSpawnPaused: s.AutoSpawnPaused(),
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
 		HostLoadCritical: s.hostLoadCritical,
 		SessionReminted:  s.bounceReminted,
@@ -1463,11 +1487,28 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
-		Reg:                s.registry,
-		Activity:           activity,
-		Ledger:             ledger,
-		Push:               push,
-		Interrupt:          interruptFn,
+		Reg:       s.registry,
+		Activity:  activity,
+		Ledger:    ledger,
+		Push:      push,
+		Interrupt: interruptFn,
+		// 🎯T1066: Unstick's Interrupt call reaches the process directly,
+		// bypassing deliverByName and both its gates — read intent here,
+		// the one place left before that call. Also honours
+		// frontier_consume.disabled for auto-spawned seats, the config-level
+		// pause the 2026-10-11 incident actually tripped on (never a named
+		// worker/PO, and this hook only gates the automatic recover sweep).
+		Intent: func(name string) fleetintent.Decision {
+			if s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(name) {
+				return fleetintent.Decision{
+					Control:  fleetintent.ControlDeliverSubmit,
+					Allow:    false,
+					Blocking: fleetintent.Parked,
+					Reason:   "frontier_consume_disabled",
+				}
+			}
+			return s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit)
+		},
 		Now:                time.Now(),
 		OverseerName:       overseer,
 		StuckTimeout:       DefaultFleetStuckTimeout,
@@ -1485,17 +1526,13 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 			return s.flightState(name) == FlightInFlight
 		},
 		// 🎯T585: an exhausted model is moved down its ladder rather than
-		// re-briefed forever. Asserted rather than added to Migrator so
-		// existing implementors (and test fakes) stay valid; a migrator
-		// that cannot pin reports that instead of silently doing nothing.
+		// re-briefed forever, in place on the seat's own provider.
 		SwitchModel: func(name, model string) error {
-			pinner, ok := s.migrator.(interface {
-				PinModel(name, model string) error
-			})
-			if !ok || pinner == nil {
-				return fmt.Errorf("switch %q to %s: migrator cannot pin models", name, model)
+			if s.switcher == nil {
+				return fmt.Errorf("switch %q to %s: model switching is not wired", name, model)
 			}
-			return pinner.PinModel(name, model)
+			_, err := s.switcher.SwitchModel(name, "", model, false)
+			return err
 		},
 		BriefPresent: func(name string) bool {
 			s.mu.Lock()
@@ -1707,9 +1744,8 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 	)
 
 	// 🎯T418: do this BEFORE the blocking restart-notify sends. A live
-	// overseer turn held SweepHandovers past the isolate journey window.
+	// overseer turn held the sweep past the isolate journey window.
 	s.SweepSendBacklogs()
-	s.SweepHandovers()
 	s.reportFleetMuteIfNeeded()
 
 	for _, target := range targets {
@@ -1943,14 +1979,15 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 		eligible = func(d claudia.AgentDef) bool { return only(d.Name) }
 	}
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
-		Reg:          s.registry,
-		Activity:     activity,
-		Ledger:       ledger,
-		Push:         push,
-		Now:          time.Now(),
-		PostRestart:  true,
-		OverseerName: overseer,
-		Eligible:     eligible,
+		Reg:             s.registry,
+		Activity:        activity,
+		Ledger:          ledger,
+		Push:            push,
+		Now:             time.Now(),
+		PostRestart:     true,
+		OverseerName:    overseer,
+		Eligible:        eligible,
+		AutoSpawnPaused: s.AutoSpawnPaused(),
 		// 🎯T708: a seat quiet behind a melted host is starved, not stalled.
 		HostLoadCritical: s.hostLoadCritical,
 		SessionReminted:  s.bounceReminted,

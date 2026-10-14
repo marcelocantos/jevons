@@ -52,11 +52,24 @@ func GrantsPath(stateDir string) string {
 // RemintRegistry rewrites every subscription-plan row onto the sidecar.
 // That is the fleet, not one smoke seat (🎯T866.6).
 func RemintRegistry(reg *claudia.Registry, spoolDir string) (int, error) {
+	return RemintRegistryExcept(reg, spoolDir, nil)
+}
+
+// RemintRegistryExcept leaves upgrade-handoff seats on their original CLI
+// transport. A surviving process cannot be relabelled as a sidecar writer:
+// its current handle and the persisted def must describe the same transport.
+func RemintRegistryExcept(reg *claudia.Registry, spoolDir string, preserve map[string]bool) (int, error) {
 	if reg == nil {
 		return 0, nil
 	}
 	n := 0
 	for _, row := range reg.List() {
+		if preserve[row.Name] {
+			continue
+		}
+		if proc := reg.Get(row.Name); proc != nil && proc.Alive() && proc.Provider() == row.Provider {
+			continue
+		}
 		def := row
 		if !RemintSubscription(&def, spoolDir) {
 			continue

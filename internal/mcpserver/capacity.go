@@ -191,7 +191,7 @@ func CapacitySnapshot(args CapacitySnapshotArgs) capacity.Snapshot {
 			snap.Billable = cs.Billable
 			snap.SpentTodayUSD = cs.SpentTodayUSD
 			snap.ProjectedTodayUSD = cs.ProjectedTodayUSD
-			snap.ActiveSessions = len(cs.Sessions)
+			snap.CostWindowSessions = len(cs.Sessions)
 			snap.HighestAlert = highestAlertLevel(cs.Alerts)
 		}
 	}
@@ -219,19 +219,13 @@ func CapacitySnapshot(args CapacitySnapshotArgs) capacity.Snapshot {
 	if args.HostLoad != nil {
 		applyHostLoad(&snap, args.HostLoad())
 	}
-	// The session census comes from the cost subsystem's billable session
-	// list, which under subscription accounting is empty — so a fleet of
-	// fourteen live seats reported zero, and every refusal the governor
-	// printed said "0 live sessions of 20" (🎯T708). Live provider load is
-	// the census the daemon actually has: it is the same number the RHS
-	// panel counts, summed across providers. It is a fallback, not an
-	// override — a billable session list, when there is one, is the more
-	// precise reading.
-	if snap.ActiveSessions == 0 {
-		if live := sumLoad(snap.ProviderLoad); live > 0 {
-			snap.ActiveSessions = live
-		}
+	// Admission uses the process census even under list-price accounting. Cost
+	// window sessions are retained separately for diagnostics/alerts: a stopped
+	// session still burns in that window but occupies no process slot.
+	if args.ProviderLoad != nil {
+		snap.ActiveSessions = sumLoad(snap.ProviderLoad)
 	}
+
 	return snap
 }
 

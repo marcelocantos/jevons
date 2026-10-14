@@ -47,7 +47,7 @@ func TestStitchAgentStartBindsGrokDefaultModel(t *testing.T) {
 	if existed {
 		t.Fatal("mint reported existed")
 	}
-	if def.Provider != claudia.ProviderGrok {
+	if def.Provider != claudia.Provider("xai-oauth") {
 		t.Fatalf("provider=%s want grok", def.Provider)
 	}
 	if def.Model != cli.DefaultGrokModel {
@@ -105,7 +105,7 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	}
 
 	// Fail closed: Provider must be claude, never clobbered to Grok.
-	if def.Provider != claudia.ProviderClaude {
+	if def.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("Provider = %q, want claude (clobbered to Grok?)", def.Provider)
 	}
 	if def.SessionID == "" {
@@ -148,7 +148,7 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	if after.SessionID != mintedSID {
 		t.Fatalf("session handoff lost: %q → %q", mintedSID, after.SessionID)
 	}
-	if after.Provider != claudia.ProviderClaude {
+	if after.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("Provider clobbered after Materialized write: %q", after.Provider)
 	}
 
@@ -163,7 +163,7 @@ func TestClaudeSessionStitchAgentStartSurface(t *testing.T) {
 	if !existed {
 		t.Fatal("resume reported existed=false")
 	}
-	if resumed.Provider != claudia.ProviderClaude {
+	if resumed.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("resume clobbered Provider to %q (want claude)", resumed.Provider)
 	}
 	if resumed.SessionID != mintedSID {

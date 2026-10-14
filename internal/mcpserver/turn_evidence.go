@@ -223,15 +223,49 @@ func ConfirmTurnBegan(status string, sendErr error, ev TurnEvidence) error {
 // defaultTurnConfirmWindow bounds how long a spawn waits for the agent to
 // show a sign of life before declaring the turn unbegun.
 //
-// This is not a race-tuning knob, and lengthening it fixes nothing. Healthy
-// first evidence is prompt: a Claude-shaped agent's own submitted message is
-// appended to its transcript as the turn starts, and a Grok ACP agent streams
-// within a second or two. The failure this must catch is not a slow start but
-// a total absence — nine minutes to the first byte, and only then because a
-// human intervened. The window sits an order of magnitude above healthy
-// latency and two below the failure, and a healthy spawn never waits it out:
+// This is not a race-tuning knob, and lengthening it blindly fixes nothing —
+// see maxTurnConfirmWindow below for the distinction this target draws.
+// Healthy first evidence is prompt: a Claude-shaped agent's own submitted
+// message is appended to its transcript as the turn starts, and a Grok ACP
+// agent streams within a second or two. The failure this alone must catch is
+// not a slow start but a total absence — nine minutes to the first byte, and
+// only then because a human intervened. The window sits an order of
+// magnitude above healthy latency, and a healthy spawn never waits it out:
 // the watch returns the instant the first evidence lands.
 const defaultTurnConfirmWindow = 45 * time.Second
+
+// maxTurnConfirmWindow is the upper bound a confirm may extend to while the
+// seat's own process still reports alive (🎯T956).
+//
+// 🎯T387/T416 drew the line at "the agent did nothing" vs "the agent is
+// doing something"; this target draws a second line inside the first: a
+// live process that has not yet produced evidence is not the same failure
+// as a dead one, and defaultTurnConfirmWindow alone cannot tell them apart
+// — it fires at the same instant either way. 2026-09-30 14:17-14:29: eight
+// of nine claude-CLI sonnet mints in one round were released unbriefed at
+// exactly 45s with "no transcript was ever created … within 45s", while
+// the one survivor (same CLI build 2.1.285, same worktree layout) got its
+// first byte fourteen seconds later than the others were already dead —
+// the 45s window was racing a cold MCP handshake / first-turn setup, not
+// catching a wedged process.
+//
+// The fix is NOT "wait longer" (clause-10-forbidden widening of a fixed
+// clock that burns the budget on every mint, healthy or not) — it is "wait
+// longer only for a seat that is still visibly trying", bounded so a
+// genuinely wedged process still gets torn down rather than nursed
+// forever. defaultTurnConfirmWindow unchanged for callers with no
+// liveness signal (the alive argument to observeTurnForCancelableFiltered
+// is optional, variadic, and this extension never fires without it); the
+// window check below therefore keeps behaving exactly as it did for every
+// existing hermetic test that does not pass one.
+//
+// Five minutes is chosen the same way 45s was: an order of magnitude above
+// the observed failure (nine minutes was the OLD fully-dead case needing
+// human intervention and is explicitly out of scope — a process not yet
+// producing evidence after five minutes of its own reported liveness is
+// wedged, not slow) and comfortably above the 70s cold-start fixture this
+// target's own hermetic test exercises.
+const maxTurnConfirmWindow = 5 * time.Minute
 
 // turnEvidencePoll is how often the transcript is re-stat'd while waiting.
 // Session events do not wait on it; they wake the watch directly.
@@ -429,6 +463,16 @@ func observeTurnForCancelable(obs turnObserver, payload string, window time.Dura
 // the live-stream (path=="") branch; durable-transcript backends never call
 // it.
 func observeTurnForCancelableFiltered(obs turnObserver, payload string, window time.Duration, filter func(claudia.Event) bool, alive ...func() seatstate.Tri) (turnWatch, func()) {
+	return observeTurnForCancelableFilteredBounded(obs, payload, window, maxTurnConfirmWindow, filter, alive...)
+}
+
+// observeTurnForCancelableFilteredBounded is observeTurnForCancelableFiltered
+// with the 🎯T956 extension's hard upper bound named explicitly, so the
+// hermetic suite can prove the extension-then-condemn shape in test time
+// instead of waiting out the real 5-minute bound. Production code never
+// calls this directly; it always goes through the fixed-constant wrapper
+// above, which is what docratchet's TestT956MaxWindowConstantIsWired locks.
+func observeTurnForCancelableFilteredBounded(obs turnObserver, payload string, window, maxWindow time.Duration, filter func(claudia.Event) bool, alive ...func() seatstate.Tri) (turnWatch, func()) {
 	if obs == nil {
 		return func() TurnEvidence {
 			return TurnEvidence{Detail: "no live agent process to observe"}
@@ -480,7 +524,13 @@ func observeTurnForCancelableFiltered(obs turnObserver, payload string, window t
 	}
 	return func() TurnEvidence {
 		defer cancel()
-		deadline := time.Now().Add(window)
+		start := time.Now()
+		deadline := start.Add(window)
+		// hardDeadline is the 🎯T956 upper bound: the deadline above may be
+		// extended toward it, never past it, and only while the process
+		// itself still reports alive (checked just above, every iteration).
+		hardDeadline := start.Add(maxWindow)
+		extended := false
 		grew := false
 		for {
 			if path != "" {
@@ -504,7 +554,9 @@ func observeTurnForCancelableFiltered(obs turnObserver, payload string, window t
 			if len(alive) > 0 && alive[0]() == seatstate.No {
 				return measured(TurnEvidence{
 					TranscriptAbsent: turnev.Missing(path),
-					Detail:           "the agent process exited before it did anything",
+					Detail: fmt.Sprintf(
+						"the agent process exited before it did anything (after %s, process state=dead)",
+						time.Since(start).Round(time.Millisecond)),
 				})
 			}
 			if time.Now().After(deadline) {
@@ -517,9 +569,42 @@ func observeTurnForCancelableFiltered(obs turnObserver, payload string, window t
 				if ev, ok := fateEvidence(path, baseline, hadTranscript, needle); ok {
 					return measured(ev)
 				}
+				// 🎯T956 — a live-but-silent process is not yet a failure.
+				// alive()==No already returned above this turn, so reaching
+				// here with a liveness instrument means alive()==Yes or
+				// Unknown; extend the deadline to hardDeadline exactly once
+				// and keep watching rather than condemning a CLI that is
+				// still inside its cold-start handshake. Reached without an
+				// alive instrument (alive is empty) or past hardDeadline,
+				// this still condemns — defaultTurnConfirmWindow unchanged
+				// for every caller that does not pass one, and even a
+				// reporting-alive process does not wait forever.
+				if len(alive) > 0 && !extended && time.Now().Before(hardDeadline) {
+					deadline = hardDeadline
+					extended = true
+					continue
+				}
+				state := "unknown"
+				if len(alive) > 0 {
+					switch alive[0]() {
+					case seatstate.Yes:
+						state = "alive"
+					case seatstate.No:
+						state = "dead"
+					}
+				}
+				detail := describePayloadAbsent(path, hadTranscript, baseline, grew, needle != "", window)
+				elapsed := time.Since(start).Round(time.Millisecond)
+				if extended {
+					detail = fmt.Sprintf(
+						"%s (extended to %s while the process reported alive; elapsed=%s, process state=%s)",
+						detail, maxWindow, elapsed, state)
+				} else {
+					detail = fmt.Sprintf("%s (elapsed=%s, process state=%s)", detail, elapsed, state)
+				}
 				return measured(TurnEvidence{
 					TranscriptAbsent: turnev.Missing(path),
-					Detail:           describePayloadAbsent(path, hadTranscript, baseline, grew, needle != "", window),
+					Detail:           detail,
 				})
 			}
 			if seen != nil {
@@ -641,6 +726,15 @@ func (s *Server) releaseSeatAfterFailedBrief(name string, existed bool, rel seat
 	if def != nil && strings.TrimSpace(def.TargetID) != "" {
 		s.noteSeatFailure(def.TargetID, name, def.Parent,
 			describeSeatFailure(def, name, rel.RemovalReason, rel.RemovalDetail, rel.Cause))
+	}
+	// 🎯T956: this seat's loss counts toward its parent's open mint round.
+	// If every seat the parent minted in this round is lost the same way,
+	// the round-close debounce reports it in one message rather than the
+	// parent reading N separate stop reasons — or worse, narrating silence
+	// as five confirmed-live seats fourteen seconds before three of them
+	// were stopped (the 2026-09-30 specimen this target is about).
+	if def != nil {
+		s.noteMintFailed(def.Parent, name, rel.StopReason)
 	}
 	return true
 }

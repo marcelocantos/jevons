@@ -37,7 +37,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -639,6 +638,11 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
+	// 🎯T1067: SIGUSR1 writes goroutine and heap profiles to
+	// <state_dir>/dumps and keeps running.
+	if dumpSignal != nil {
+		startDumpOnSignal(cfg.StateDir, dumpSignal)
+	}
 
 	// ð¯T40: default Grok connect-mode so agents use detached `grok agent
 	// serve` + WebSocket and survive coordinator-only upgrades. Override
@@ -673,6 +677,7 @@ func main() {
 		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
 		os.Exit(1)
 	}
+	preservedCLI := map[string]bool{}
 	if snap := upgradeSnap; snap != nil {
 		plan := upgrade.PlanReattach(snap)
 		// Merge connect endpoints into registry defs before StartAll so
@@ -684,11 +689,18 @@ func main() {
 			if h.ConnectURL == "" && h.TmuxWindowID == "" {
 				continue
 			}
+			// The upgrade handoff identifies the transport of a surviving
+			// legacy CLI process. Preserve it until that process ends; only
+			// a cold seat can be reminted onto a sidecar.
 			if def := registry.Def(h.Name); def != nil {
-				// Subscription seats Launch on the sidecar. Restoring a
-				// leftover grok serve endpoint would start the vendor CLI
-				// (🎯T866.5 / T866.6).
-				if h.ConnectURL != "" && !seatreg.SubscriptionPlan(def.Provider) {
+				if def.Provider == claudia.Provider(h.Provider) &&
+					def.Provider != cli.SidecarLaunchProvider(def.Provider) &&
+					upgrade.HandoffTransportAlive(h) {
+					preservedCLI[h.Name] = true
+				}
+				// Preserve the endpoint only for the legacy CLI we will
+				// reattach, never for a row already on the sidecar.
+				if h.ConnectURL != "" && (preservedCLI[h.Name] || !seatreg.SubscriptionPlan(def.Provider)) {
 					def.ConnectURL = h.ConnectURL
 					def.ConnectPID = h.PID
 					def.GrokConnect = true
@@ -708,10 +720,10 @@ func main() {
 			"residual", plan.Residual)
 	}
 
-	// Remint after the upgrade merge. Handoff restores grok ConnectURL;
-	// sidecar Launch must not adopt those leftover grok serve processes
-	// (🎯T866.5 / T866.6).
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
+	// Remint only cold seats after the upgrade merge. A reattachable
+	// legacy CLI retains its transport identity and endpoint; rewriting its
+	// persisted provider while the process survives would misroute Launch.
+	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
 		slog.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n)
@@ -825,19 +837,10 @@ func main() {
 	// (agent-only names) so Deliver/PushEvent share one id space.
 	// ð¯T148: pluggable default provider for new threads/agents.
 	fleetAdapter := fleet.NewClaudia(registry)
-	fleetAdapter.SetSeatPlan(seatPlans)
 	fleetAdapter.SetSeats(seats)
 	fleetAdapter.SetRemovalAccount(removals)
-	fleetAdapter.SetEventLogger(srv.LogEvent) // 🎯 migrate.go decisions -> durable eventlog
+	fleetAdapter.SetEventLogger(srv.LogEvent) // fleet decisions -> durable eventlog
 	fleetAdapter.SetDefaultProvider(defaultProvider)
-	// ð¯T285: provider migration needs the session roots to find a
-	// predecessor's transcript, and a durable store to hold that pointer
-	// across the rotation that overwrites the old session id.
-	fleetAdapter.SetSessionRoots(sessionRoots)
-	fleetAdapter.SetRetainedHistory(srv.AgentMigrationHistory)
-	fleetAdapter.SetHandoverStore(handover.NewStore(filepath.Join(cfg.StateDir, "handover")))
-	rotationStore := handover.NewRotationStore(filepath.Join(cfg.StateDir, "rotations"))
-	fleetAdapter.SetRotationStore(rotationStore)
 	// 🎯T392.1: burn is limited by when the host runs a turn. Remint is
 	// withdrawn (🎯T392.1.1); this gate delays, pauses, or refuses the
 	// next send/deliver and leaves session_id unchanged.
@@ -845,6 +848,7 @@ func main() {
 	mcpSrv.SetDefaultProvider(string(defaultProvider))
 	// ð¯T325.3: durable idea intake ledger (state_dir/ideas.json).
 	mcpSrv.SetIdeaStateDir(cfg.StateDir)
+	mcpSrv.SetOwnerQuestionsDir(cfg.StateDir)
 	// ð¯T388: durable agent-report store (state_dir/agent-reports/) so a
 	// terminal report survives the ð¯T165/T195 reap of the agent that wrote it,
 	// and an over-bound delivery can name a call that returns the whole text.
@@ -929,10 +933,8 @@ func main() {
 	if capsHot != nil {
 		applySoftCaps(capsHot.Get())
 	}
-	// ð¯T285: jevons_agent_migrate moves an agent between backends and
-	// hands the successor its predecessor's transcript.
-	// 🎯T426: every launch this adapter performs — context-ceiling compaction,
-	// provider migration, thread launch, deliver-rehydrate — attaches the MCP
+	// 🎯T426: every launch this adapter performs — thread launch,
+	// deliver-rehydrate, a stopped seat resuming after a switch — attaches the MCP
 	// event sink to the process it just brought up. Without it a rotated agent
 	// keeps its name and its registry row while its turn ends, send-queue
 	// drain, upward reports and 🎯T165 auto-deregistration all go dark. The
@@ -943,11 +945,11 @@ func main() {
 	// events.jsonl, and a later diagnosis then invents which model the
 	// seat was on. The hook is the journal; fleet does not write it.
 	fleetAdapter.SetModelSwitchHook(mcpSrv.NoteModelSwitch)
-	mcpSrv.SetMigrator(fleetAdapter)
-	srv.SetOverseerMigrator(fleetAdapter)
-	// 🎯T285.2: the fleet-tree icon menu's thin HTTP wrapper for
-	// non-overseer seats (POST /api/agents/migrate).
-	srv.SetFleetMigrator(fleetAdapter)
+	// claudia 🎯T195: a seat changes provider or model in place, keeping
+	// its conversation — from jevons_agent_switch_model, plan policy, and
+	// the fleet-tree menu (POST /api/agents/switch-model).
+	mcpSrv.SetModelSwitcher(fleetAdapter)
+	srv.SetModelSwitcher(fleetAdapter)
 	srv.SetDefaultProvider(defaultProvider)
 	btlrCfg := butler.Config{
 		Seats:        seats, // 🎯T766.2: thread state comes from the one authority
@@ -992,7 +994,7 @@ func main() {
 	// loop exists to *reduce* spend, so deferring it when budget is tight
 	// is exactly backwards. Remint is withdrawn (🎯T40.2); above-ceiling
 	// seats are reported unworkable once per spell, not recompacted.
-	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv, rotationStore,
+	startContextCeiling(ctx, cfg, sessionRoots, registry, fleetAdapter, srv,
 		mcpSrv.ReportContextUnworkable)
 
 	// 🎯T440: reap verification worktrees whose owner is gone, from outside
@@ -1055,6 +1057,9 @@ func main() {
 	// state-dir file. Armed only by an explicit test env and never on :13705.
 	if os.Getenv("JEVONS_TEST_FAULTS") == "1" && *port != 13705 {
 		srv.EnableBrokerFaultSeam(cfg.StateDir)
+		// 🎯T828: J8b forces a just-messaged worker into delivered_unconfirmed
+		// so the plain stop always hits the T664 refusal arm.
+		mcpSrv.EnableT664FaultSeam(cfg.StateDir)
 	}
 	// ð¯T275: HTTP POST /api/agents/{name}/send uses the same deliver path as
 	// MCP jevons_agent_send â queue when busy (not 409 dead-end). Drain on
@@ -1262,7 +1267,7 @@ func main() {
 	if ctx.Err() != nil {
 		return
 	}
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
+	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
 		slog.Warn("sidecar remint after reattach failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
@@ -1279,12 +1284,6 @@ func main() {
 		// status; feed the Grok voice bridge). It is re-run after a rewind
 		// swaps the process, so all overseer references stay current.
 		srv.AttachOverseer(jevonProc)
-
-		// A daemon that died between rotating the overseer's row and seeding
-		// its successor leaves the handover on disk; the process is alive at
-		// boot, so converge sees nothing wrong and this is the only retry
-		// (ð¯T285). No-op when nothing is pending.
-		srv.ResumePendingHandover()
 
 		// Wire MCP worker-completion + agent-reply notifications into Jevon.
 		// Route through the server so a rewind swap is transparent.
@@ -1451,9 +1450,22 @@ func main() {
 	go func() {
 		defer fleetStarted.Store(true)
 		started := time.Now()
+		pausedAuto := func(name string) bool {
+			return cfg.FrontierConsume.Disabled && mcpserver.IsAutoSpawnedWorkerName(name)
+		}
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
-			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl),
+			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, pausedAuto),
 			upgrade.DefaultReattachConcurrency))
+		adoptPausedAutoSeats(registry, pausedAuto)
+		// The handoff only promised an adoptable endpoint, not a live
+		// process. Once every permitted seat has had its adoption attempt,
+		// remint cold legacy rows; RemintRegistryExcept checks the actual
+		// running handle before it rewrites any transport identity.
+		if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
+			slog.Warn("sidecar remint after fleet reattach failed", "err", err)
+		} else if n > 0 {
+			slog.Info("sidecar remint", "seats", n, "when", "after-fleet-reattach")
+		}
 		// Workers started here never passed through handleAgentStart, so
 		// wire their completion-notify now (🎯T61); the standing sweep
 		// (🎯T426) would also catch them, later.
@@ -2269,9 +2281,19 @@ func resolveRSIMintCwd(cfg config.Config) string {
 // before this, every daemon boot started parked seats again. A seat blocked
 // on the owner is still reattached, so the answer has somewhere to land, and
 // a fleet-wide provider block is transient.
-func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision) func(string) bool {
+//
+// Under the frontier pause (frontier_consume.disabled) an auto-spawned worker
+// is not started either (🎯T1067): adoptPausedAutoSeats adopts it if its
+// process still runs, and nothing launches a new one. On 2026-10-12 a
+// restart under the pause launched 57 Claude processes for -auto seats, and
+// the PO stopped the daemon with SIGSTOP to halt them.
+func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision, pausedAuto func(string) bool) func(string) bool {
 	return func(name string) bool {
 		if overseer(name) {
+			return false
+		}
+		if pausedAuto != nil && pausedAuto(name) {
+			slog.Info("restart reattach skipped — frontier pause holds auto-spawned workers", "agent", name)
 			return false
 		}
 		if d := allow(name, fleetintent.ControlRevive); fleetintent.StoodDown(d.Agent) {
@@ -2279,5 +2301,29 @@ func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetin
 			return false
 		}
 		return true
+	}
+}
+
+// adoptPausedAutoSeats re-adopts the auto-spawned workers the frontier pause
+// kept out of the restart reattach, when their process is still running, so
+// a live seat stays observed. It never launches one (🎯T1067).
+func adoptPausedAutoSeats(reg *claudia.Registry, pausedAuto func(string) bool) {
+	if reg == nil {
+		return
+	}
+	adopted, down := 0, 0
+	for _, d := range reg.List() {
+		if !d.AutoStart || !pausedAuto(d.Name) {
+			continue
+		}
+		if _, err := reg.Adopt(d.Name); err != nil {
+			down++
+			continue
+		}
+		seatstate.ObserveRegistrySeat(reg, d.Name)
+		adopted++
+	}
+	if adopted+down > 0 {
+		slog.Info("frontier pause: auto-spawned workers adopted, none launched (🎯T1067)", "adopted", adopted, "left_down", down)
 	}
 }

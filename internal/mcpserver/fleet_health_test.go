@@ -111,7 +111,7 @@ func TestSweepDeadAgentsWorkSeatRemoved(t *testing.T) {
 		hasProc: map[string]bool{"jv-t544-worker": true},
 		alive:   map[string]bool{"jv-t544-worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, false)
 	if len(reps) != 1 || reps[0].Name != "jv-t544-worker" || !reps[0].Removed || reps[0].Recovered {
 		t.Fatalf("reps=%+v want removed", reps)
 	}
@@ -140,7 +140,7 @@ func TestSweepDeadAgentsWorkSeatRemoveFailClearsHandle(t *testing.T) {
 		alive:     map[string]bool{"worker": false},
 		removeErr: errors.New("registry locked"),
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, false)
 	if len(reps) != 1 || reps[0].Removed || !strings.Contains(reps[0].Error, "registry locked") {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -160,7 +160,7 @@ func TestSweepDeadAgentsAutoStartRelaunch(t *testing.T) {
 		hasProc: map[string]bool{"durable": true, "jevons": true},
 		alive:   map[string]bool{"durable": false, "jevons": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, false)
 	if len(reps) != 1 || reps[0].Name != "durable" {
 		t.Fatalf("reps=%+v want only durable", reps)
 	}
@@ -186,7 +186,7 @@ func TestSweepDeadAgentsEphemeralClearsHandle(t *testing.T) {
 		hasProc: map[string]bool{"worker": true},
 		alive:   map[string]bool{"worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, false)
 	if len(reps) != 1 || reps[0].Name != "worker" || reps[0].Recovered {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -208,7 +208,7 @@ func TestSweepDeadAgentsLaunchFailThenStop(t *testing.T) {
 		alive:     map[string]bool{"durable": false},
 		launchErr: errors.New("spawn refused"),
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, false)
 	if len(reps) != 1 || reps[0].Recovered || !strings.Contains(reps[0].Error, "spawn refused") {
 		t.Fatalf("reps=%+v", reps)
 	}
@@ -232,7 +232,7 @@ func TestSweepDeadAgentsEmptyOnHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Never launched → Get nil → not a dead-handle detection.
-	reps := recoverDeadHandles(reg, nil, "jevons", fleetintent.Snapshot{})
+	reps := recoverDeadHandles(reg, nil, "jevons", fleetintent.Snapshot{}, false)
 	if len(reps) != 0 {
 		t.Fatalf("want no dead agents, got %+v", reps)
 	}
@@ -277,7 +277,7 @@ func TestSweepThenPrependIsCallerVisible(t *testing.T) {
 		hasProc: map[string]bool{"worker": true},
 		alive:   map[string]bool{"worker": false},
 	}
-	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{})
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, false)
 	out := PrependFleetHealth("worker stopped\n", reps)
 	// 🎯T544: a dead work seat (purpose unset reads as work) is removed,
 	// not stopped, and the caller sees that outcome by name.
@@ -286,5 +286,45 @@ func TestSweepThenPrependIsCallerVisible(t *testing.T) {
 	}
 	if len(f.defs) != 0 {
 		t.Fatal("side effect Remove required: row must leave the registry")
+	}
+}
+
+// 🎯T1066: reviewing jv-t1066-idle-admission/4e5b06bb for this slice — a dead
+// AutoStart handle must not be relaunched while frontier_consume.disabled is
+// set, but ONLY for a frontier-consume-spawned seat (name suffix "-auto").
+// AutoStart is true for named workers and POs too (the real registry has no
+// other distinguishing field), so gating on AutoStart alone would also hold
+// hostage the crash recovery of a named worker/PO — this test drives both in
+// the same sweep so that mistake fails loudly.
+func TestSweepDeadAgentsHonoursAutoSpawnPausedForAutoSeatsOnly(t *testing.T) {
+	f := &fakeSweepReg{
+		defs: []claudia.AgentDef{
+			{Name: "jv-t1020-auto", Purpose: claudia.PurposeWork, AutoStart: true},
+			{Name: "jevons-po", Purpose: claudia.PurposeWork, AutoStart: true},
+		},
+		hasProc: map[string]bool{"jv-t1020-auto": true, "jevons-po": true},
+		alive:   map[string]bool{"jv-t1020-auto": false, "jevons-po": false},
+	}
+	reps := sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, true /* autoSpawnPaused */)
+
+	byName := map[string]DeadAgentReport{}
+	for _, r := range reps {
+		byName[r.Name] = r
+	}
+	if r := byName["jv-t1020-auto"]; r.Recovered || r.Declined != "frontier_consume_disabled" {
+		t.Fatalf("auto seat report=%+v want declined=frontier_consume_disabled, not recovered", r)
+	}
+	if r := byName["jevons-po"]; !r.Recovered {
+		t.Fatalf("named PO report=%+v want recovered — config pause must not hold a named PO's crash recovery hostage", r)
+	}
+	launched := map[string]bool{}
+	for _, n := range f.launches {
+		launched[n] = true
+	}
+	if launched["jv-t1020-auto"] {
+		t.Fatalf("launches=%v must not include the paused auto seat", f.launches)
+	}
+	if !launched["jevons-po"] {
+		t.Fatalf("launches=%v must still include the named PO", f.launches)
 	}
 }

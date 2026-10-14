@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T309.3: ONE deliver-by-name path for every agent in the fleet layer.
@@ -166,6 +167,15 @@ func (s *Server) deliverByNameWith(actor, name, text string, origin SendOrigin, 
 }
 
 func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrigin, mode delivery.Mode, confirm sendConfirmation) (res agentSendResult, err error) {
+	return s.deliverByNameWithModeRequestID(actor, name, text, origin, mode, confirm, "")
+}
+
+// requestID comes only from the trusted host intake hook. The fleet path
+// carries it as metadata, never derives it from origin or message text.
+func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin SendOrigin, mode delivery.Mode, confirm sendConfirmation, requestID string) (res agentSendResult, err error) {
+	if requestID != "" && origin != OriginOwner {
+		return agentSendResult{}, fmt.Errorf("request ID is reserved for admitted owner messages")
+	}
 	name = strings.TrimSpace(name)
 	actor = strings.TrimSpace(actor)
 	defer func() { s.observeBirthAcceptance(name, res, err) }()
@@ -309,6 +319,9 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 	}
 
 	if overseerArm {
+		if requestID != "" {
+			return agentSendResult{}, fmt.Errorf("request ID to overseer needs typed owner-chat queue; not delivered")
+		}
 		return s.deliverToOverseer(name, text, origin)
 	}
 
@@ -334,6 +347,19 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 			}
 			if parentReportOfferStatus(res.Status) {
 				s.noteParentReportOffered(name, offeredReportID)
+				// A previous busy offer may still be pending in the daemon queue.
+				// Discharge it only when this send actually reached the receiver;
+				// queued is an offer, not a receipt (🎯T766.5.1).
+				if res.ReceiverReceipt {
+					if removed, dischargeErr := s.sendQueue().DischargePending(name, func(entry sendq.Entry) bool {
+						agent, id, ok := findAgentResponded(entry.Text)
+						return ok && agent == prep.Agent && id == offeredReportID
+					}); dischargeErr != nil {
+						slog.Error("cannot discharge delivered parent report from sendq", "parent", name, "report_id", offeredReportID, "err", dischargeErr)
+					} else if removed > 0 {
+						s.observeQueue(name)
+					}
+				}
 				// 🎯T747: also by content, so an identical body under a new id is not re-offered.
 				s.noteParentReportOffered(name, offeredContentKey)
 			}
@@ -371,7 +397,7 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 					Message: fmt.Sprintf("idle nudge for reaped agent %q dropped, not queued (🎯T821)", name),
 				}, nil
 			}
-			return s.holdSendForReaped(name, text, rec), nil
+			return s.holdSendForReapedWithRequestID(name, text, rec, requestID), nil
 		}
 	}
 
@@ -419,11 +445,11 @@ func (s *Server) deliverByNameWithMode(actor, name, text string, origin SendOrig
 	// its turn to end. An explicit mode (steer, interrupt, queue) is the
 	// caller's own choice and is left alone.
 	if mode == delivery.ModeSubmit {
-		if res, handled, err := s.escalateIfBusy(name, text, s.escalationClass(actor, origin, rel), actor, proc); handled {
+		if res, handled, err := s.escalateIfBusyWithRequestID(name, text, s.escalationClass(actor, origin, rel), actor, proc, requestID); handled {
 			return res, err
 		}
 	}
-	return deliverToSenderMode(s, name, text, mode, proc, rehydrated, confirm)
+	return deliverToSenderModeWithRequestID(s, name, text, requestID, mode, proc, rehydrated, confirm)
 }
 
 // relayReportBody returns the sender's report for 🎯T392.7 classification and

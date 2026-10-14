@@ -111,7 +111,7 @@ func envelopeGateFlags(id string, lookup func(string) (*gate.Record, bool)) []ga
 // describe. workDir == "" (a def the fixture never gave one, or a probe that
 // found no git repo) skips the check and this degrades to FalseGreenFlags.
 func FalseGreenFlagsForWorker(report, workDir string) []gate.Flag {
-	flags := FalseGreenFlags(report)
+	flags := FalseGreenFlagsForReport(report, workDir)
 	if strings.TrimSpace(workDir) == "" {
 		return flags
 	}
@@ -126,6 +126,32 @@ func FalseGreenFlagsForWorker(report, workDir string) []gate.Flag {
 			workDir, tree.DirtyFiles),
 		Evidence: strings.Join(tree.DirtySample, ", "),
 	})
+}
+
+// FalseGreenFlagsForReport is FalseGreenFlags plus the one check that needs
+// to know whose report this is: every cited gate id is resolved and its
+// measured commit asked of the author's own repository (🎯T1027). A gate
+// that ran on a commit this repo has never held is another repo's run,
+// whatever its verdict, and is flagged foreign_repo_gate. It runs on the
+// notify path as well as the reap path — the banner the supervisor reads is
+// where the 2026-10-07 misattribution happened. workDir == "" or a workDir
+// outside any git work tree skips it: there is no repo to scope to.
+func FalseGreenFlagsForReport(report, workDir string) []gate.Flag {
+	return append(FalseGreenFlags(report), ForeignGateFlags(report, workDir)...)
+}
+
+// ForeignGateFlags is the 🎯T1027 arm alone: cited gates whose record
+// measured a commit the repository at workDir does not contain.
+func ForeignGateFlags(report, workDir string) []gate.Flag {
+	store := gateStore()
+	if store == nil {
+		return nil
+	}
+	known, ok := gate.CommitKnownIn(workDir)
+	if !ok {
+		return nil
+	}
+	return gate.FlagForeignGates(report, store.Lookup, known)
 }
 
 // FalseGreenBanner is the note prepended to a flagged report on its way to

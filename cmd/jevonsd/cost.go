@@ -163,8 +163,9 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 			protect:  append([]string{}, cfg.ProtectedWorkers...),
 			removals: srv.RemovalAccount(),
 		},
-		Notify:     notify,
-		AuditTrail: auditTrail,
+		Notify:      notify,
+		OwnerNotice: srv.NotifyOwnerNote,
+		AuditTrail:  auditTrail,
 	})
 
 	go collector.Run(ctx, cost.DefaultScanInterval, cost.DefaultPollInterval)

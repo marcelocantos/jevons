@@ -60,6 +60,10 @@ type Entry struct {
 	// fleet-health notice and the file on disk can be talked about as one
 	// thing rather than by quoting the payload back.
 	ID string `json:"id"`
+	// RequestID is the immutable host-issued identity of an admitted owner question.
+	// Unlike ID (queue acceptance) and AttemptID (delivery try), it survives
+	// retries, daemon restarts and digest archival without being reminted.
+	RequestID string `json:"request_id,omitempty"`
 	// Text is the payload exactly as accepted. Never truncated: this is the
 	// message, not a record of it.
 	Text string `json:"text"`
@@ -77,6 +81,7 @@ type Entry struct {
 	// message of a consolidation — so the next reader of this file learns
 	// who decided and why without a git archaeology expedition.
 	Reconciled *Reconciliation `json:"reconciled,omitempty"`
+	Directive  *Directive      `json:"directive,omitempty"`
 	// Members are the comma-joined ids of the original entries folded into this digest
 	// (🎯T774). The originals live in the digest archive, readable by id.
 	Members string `json:"members,omitempty"`
@@ -169,7 +174,8 @@ type Store struct {
 	// owner for an attempting entry left by the preceding daemon.
 	active map[string]string
 	// memArchive is the digest archive of a memory-backed store (🎯T774).
-	memArchive map[string]archiveFile
+	memArchive       map[string]archiveFile
+	memSupersessions map[string]Supersession
 }
 
 // NewStore roots a store at dir (conventionally <state_dir>/sendq). An empty
@@ -241,6 +247,11 @@ func (s *Store) load(agent string) (out file, err error) {
 		return file{}, fmt.Errorf("sendq: parse queue for %q (%s): %w", agent, path, err)
 	}
 	for _, e := range f.Entries {
+		if e.Directive != nil {
+			if err := e.Directive.Validate(); err != nil {
+				return file{}, err
+			}
+		}
 		if e.State != Pending && e.State != Attempting && e.State != Uncertain {
 			return file{}, fmt.Errorf("sendq: unknown delivery state %q for %q", e.State, agent)
 		}
@@ -311,9 +322,46 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// DuplicateRequestIDError means this host identity already has an unresolved
+// queue entry. The caller must inspect/reconcile that entry, not interpret a
+// second enqueue as a new delivery. Conflict also records a payload mismatch;
+// question scope is owned by the host ledger, not represented by this queue.
+type DuplicateRequestIDError struct {
+	RequestID string
+	Existing  Entry
+	Conflict  bool
+}
+
+func (e *DuplicateRequestIDError) Error() string {
+	if e.Conflict {
+		return fmt.Sprintf("sendq: request_id %q conflicts with entry %s (different text)", e.RequestID, e.Existing.ID)
+	}
+	return fmt.Sprintf("sendq: request_id %q already held by entry %s (state %s)", e.RequestID, e.Existing.ID, e.Existing.State)
+}
+
+// duplicateRequestID is called while Store.mu is held after load, before any
+// supersession or append. Empty IDs are legacy traffic and never deduplicated.
+func duplicateRequestID(entries []Entry, text, requestID string) error {
+	if requestID == "" {
+		return nil
+	}
+	for _, e := range entries {
+		if e.RequestID == requestID {
+			return &DuplicateRequestIDError{RequestID: requestID, Existing: e, Conflict: e.Text != text}
+		}
+	}
+	return nil
+}
+
 // Append adds a message to the back of an agent's queue and returns the
 // entry as written together with the resulting depth.
 func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
+	return s.AppendWithRequestID(agent, text, "", at)
+}
+
+// AppendWithRequestID holds an admitted question with the ID issued at host
+// intake. Empty means a legacy/non-owner message; the queue never mints one.
+func (s *Store) AppendWithRequestID(agent, text, requestID string, at time.Time) (Entry, int, error) {
 	if s == nil {
 		return Entry{}, 0, fmt.Errorf("sendq: no store")
 	}
@@ -323,7 +371,10 @@ func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
 	if err != nil {
 		return Entry{}, 0, err
 	}
-	e := Entry{ID: NewID(), Text: text, EnqueuedAt: at.UTC()}
+	if err := duplicateRequestID(f.Entries, text, requestID); err != nil {
+		return Entry{}, 0, err
+	}
+	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
 	f.Entries = append(f.Entries, e)
 	if err := s.save(f); err != nil {
 		return Entry{}, 0, err
@@ -336,6 +387,13 @@ func (s *Store) Append(agent, text string, at time.Time) (Entry, int, error) {
 // never touched: they may already be in the receiver's hands. The returned
 // count is how many held entries the new one replaced.
 func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
+	return s.AppendSupersedingWithRequestID(agent, text, "", at, supersedes)
+}
+
+// AppendSupersedingWithRequestID retains the incoming question identity and
+// never silently replaces another admitted question (even if the predicate
+// would otherwise match it).
+func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
 	if s == nil {
 		return Entry{}, 0, 0, fmt.Errorf("sendq: no store")
 	}
@@ -345,16 +403,19 @@ func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes f
 	if err != nil {
 		return Entry{}, 0, 0, err
 	}
+	if err := duplicateRequestID(f.Entries, text, requestID); err != nil {
+		return Entry{}, 0, 0, err
+	}
 	kept := make([]Entry, 0, len(f.Entries)+1)
 	replaced := 0
 	for _, old := range f.Entries {
-		if old.State == Pending && supersedes != nil && supersedes(old) {
+		if old.State == Pending && old.RequestID == "" && supersedes != nil && supersedes(old) {
 			replaced++
 			continue
 		}
 		kept = append(kept, old)
 	}
-	e := Entry{ID: NewID(), Text: text, EnqueuedAt: at.UTC()}
+	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
 	f.Entries = append(kept, e)
 	if err := s.save(f); err != nil {
 		return Entry{}, 0, 0, err
@@ -578,6 +639,65 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 		return nil, err
 	}
 	return f.Entries, nil
+}
+
+// DischargePending removes copies positively identified in receiver records
+// (🎯T766.5.1). Only Pending entries are touched: an Attempting/Uncertain
+// delivery may have reached the receiver and must be reconciled, not silently
+// forgotten. Pending digests are unfolded from their archived originals before
+// matching, so a receipt for one member cannot discard unrelated accepted
+// messages or replay that member inside the digest on the next drain.
+func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, error) {
+	if s == nil {
+		return 0, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return 0, err
+	}
+	kept := make([]Entry, 0, len(f.Entries))
+	removed := 0
+	for _, e := range f.Entries {
+		if e.State != Pending {
+			kept = append(kept, e)
+			continue
+		}
+		if e.Members != "" {
+			members, ok := s.archivedMembers(e.ID)
+			if !ok {
+				return 0, fmt.Errorf("sendq: cannot discharge pending digest %s without its archived members", e.ID)
+			}
+			survivors := make([]Entry, 0, len(members))
+			for _, m := range members {
+				if matches(m) {
+					removed++
+				} else {
+					survivors = append(survivors, m)
+				}
+			}
+			if len(survivors) == len(members) {
+				kept = append(kept, e)
+			} else {
+				kept = append(kept, survivors...)
+			}
+			continue
+		}
+		if matches(e) {
+			removed++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	f.Entries = kept
+	if err := s.save(f); err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 // Depth is the number of messages waiting for an agent. An unreadable queue

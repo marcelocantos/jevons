@@ -10,7 +10,6 @@ package fleet
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +22,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/attrib"
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
@@ -69,70 +66,21 @@ type Claudia struct {
 	// a seat stops being alive. Nil in tests.
 	seats *seatstate.Authority
 
-	// logf is the durable event sink for migration decisions (🎯 audit:
-	// migrate.go previously recorded its richest decisions — handover
-	// dispatch, interrupt-before-forced-migrate, "registry missed a
-	// provider switch", session remap — only via slog, which is not
-	// captured in the eventlog or jevons_logs_tail. Nil is safe: a
+	// logf is the durable event sink for fleet decisions such as model
+	// switches (🎯 audit: these once went only to slog, which is not
+	// captured in the eventlog or jevons_logs_tail). Nil is safe: a
 	// fleet.Claudia built without SetEventLogger just stays slog-only,
 	// same as before this field existed.
 	logf fleetlog.Logger
-
-	// Provider migration (🎯T285): session roots resolve a predecessor's
-	// transcript, and handovers persists the pointer across the rotation
-	// that destroys it. Both optional — without them Launch behaves as
-	// before and migration is unavailable rather than silently cold.
-	roots     discovery.Roots
-	handovers *handover.Store
-	// seatPlans holds migration and placement fields the published
-	// AgentDef does not carry.
-	seatPlans *claudia.SeatPolicyStore
-	rotations *handover.RotationStore
-	// retainedHistory reads the host's durable agent journal when a stopped
-	// predecessor has no provider transcript (notably direct Codex seats).
-	// It supplies inert history; Claudia still owns transfer and handover.
-	retainedHistory func(name string) (string, error)
-
-	// seedDeliver overrides how a handover seed reaches its successor
-	// (🎯T416). Nil is the product path, Deliver. Test seam: the handover
-	// dispatcher's fail-closed arm is one of clause 9's two exercised
-	// instruments, and asserting on it must not need a live tmux agent.
-	seedDeliver func(name, seed string) (string, error)
-
-	// seedTranscript resolves the successor's transcript, which is what
-	// decides whether a seed arrived (🎯T416). Nil reads the live claudia
-	// process. Test seam for the same reason as seedDeliver: the predicate
-	// this arm now uses is a file on the RECEIVER's disk, and a fixture must
-	// be able to write that file without launching a provider.
-	seedTranscript func(name string) string
-
-	// selfBrief / compactBrief are T285.1 gather hooks. Nil is the
-	// product path (try the live outgoing session; throwaway compact
-	// on the new provider). Tests inject dead/live/thin fixtures.
-	selfBrief    func(p handover.Pending) (string, error)
-	compactBrief func(p handover.Pending) (sessionID, text string, err error)
-	// migrationTransfer replaces the one-shot Claudia summary in fixtures.
-	// Nil is the real on-demand transfer task.
-	migrationTransfer func(MigrationTransferArgs) (MigrationTransferResult, error)
-
-	// liveMigrate is the 🎯T622 seam for claudia Agent.Migrate. Nil is the
-	// product path (reg.Get(name).Migrate). Tests inject a recorder so the
-	// primitive is asserted without a live provider process.
-	liveMigrate func(args *MigrateRequest) error
-	// stoppedMigrate replaces Registry.MigrateStopped in hermetic fixtures.
-	// Nil runs Claudia's persisted transfer-and-launch operation.
-	stoppedMigrate func(name string, args claudia.MigrateArgs, history string) (StoppedMigration, error)
-	// liveSession is the 🎯T790 seam for reading the live agent's session id
-	// and model after a remap. Nil reads the registry's live agent.
-	liveSession func(name string) (sessionID, model string)
 
 	// onModelSwitch records a model change that actually landed. Nil drops
 	// the note; the switch still happens. Same-model, same-provider calls
 	// are not delivered — a no-op must not look like a switch in the journal.
 	onModelSwitch func(*ModelSwitch)
 
-	// liveSetModel replaces Agent.SetModel in tests. Nil uses the live agent.
-	liveSetModel func(name, model string) error
+	// switchModel replaces Registry.SwitchModel in tests. Nil uses the
+	// registry.
+	switchModel func(name string, to claudia.Provider, model string, force bool) (claudia.SeatSwitch, error)
 
 	// onLaunch brackets a launch this adapter performs (🎯T426). It is called
 	// BEFORE the process comes up and returns the function to call once it
@@ -187,7 +135,7 @@ func NewClaudia(reg *claudia.Registry) *Claudia {
 // SetRemovalAccount installs the accounted-removal chokepoint (🎯T435). The
 // daemon builds one Account for the process and gives every removal path the
 // same one, so a row leaving here is explained on the surfaces read elsewhere.
-// SetEventLogger wires the durable event sink migration decisions log to,
+// SetEventLogger wires the durable event sink fleet decisions log to,
 // alongside their existing slog output. Nil keeps the package slog-only.
 func (f *Claudia) SetEventLogger(log fleetlog.Logger) {
 	f.mu.Lock()
@@ -195,8 +143,8 @@ func (f *Claudia) SetEventLogger(log fleetlog.Logger) {
 	f.logf = log
 }
 
-// logEvent is the nil-safe dual-write helper migrate.go uses alongside its
-// slog calls, so a migration decision reaches the durable eventlog without
+// logEvent is the nil-safe dual-write helper fleet decisions use alongside
+// their slog calls, so a decision reaches the durable eventlog without
 // requiring the reader to also have the right terminal scrollback.
 func (f *Claudia) logEvent(component, decision string, fields map[string]any) {
 	if f == nil {
@@ -437,22 +385,6 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	// Ensure a registry def. Resume when SessionID is known; otherwise
 	// mint a placeholder id and let the provider replace it on session/new.
 	if f.reg.Def(t.ID) == nil {
-		// 🎯T474: a bare thread.Thread{ID:name} Launch after a concurrent
-		// reap deleted the rotated row must recover identity from the
-		// pending handover — not invent purpose=aside / fresh uuid.
-		if recovered, ok := f.mintFromPendingHandover(t.ID); ok {
-			if err := f.reg.Register(recovered); err != nil {
-				return fmt.Errorf("register recovered agent %q: %w", t.ID, err)
-			}
-			if t.SessionID == "" {
-				t.SessionID = recovered.SessionID
-			}
-			slog.Info("agent mint recovered from pending handover",
-				"name", t.ID, "purpose", recovered.Purpose,
-				"workdir", recovered.WorkDir, "parent", recovered.Parent,
-				"target_id", recovered.TargetID, "session", recovered.SessionID)
-			return nil
-		}
 		sid := t.SessionID
 		if sid == "" {
 			sid = uuid.New().String()
@@ -516,9 +448,9 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 	// the MINT branch, where "no purpose" really does mean a new side chat;
 	// applied to an EXISTING row it is a guess written to durable state.
 	//
-	// jevons_agent_migrate relaunches a rotated agent through a bare
-	// thread.Thread{ID: name}, so that guess landed on every row minted
-	// before Purpose existed — rewriting a product owner to aside (🎯T301).
+	// A relaunch through a bare thread.Thread{ID: name} (the old migration
+	// path did this) carried that guess onto every row minted before
+	// Purpose existed — rewriting a product owner to aside (🎯T301).
 	// Observed 2026-08-08: bullseye-po was the only PO in the grok→claude
 	// batch whose row had no explicit purpose, and the only one that turned
 	// into a 💡 in the fleet tree. Left empty, /api/agents reads it as work,

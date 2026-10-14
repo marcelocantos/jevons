@@ -79,7 +79,9 @@ func (s *Server) resolveRoleDef(role string) (roles.Def, error) {
 }
 
 // roleDisplay is the agent_list role= column (🎯T536.2).
-// Role is recorded in agent_roles.json — not AgentDef (published pin has no Role).
+// Role is read from agent_roles.json, the record jevons keeps alongside
+// AgentDef.Role (recordAgentRole), with the purpose/name derivation as
+// the fallback.
 func (s *Server) roleDisplay(d claudia.AgentDef) string {
 	return s.agentRole(d.Name, d.Purpose)
 }

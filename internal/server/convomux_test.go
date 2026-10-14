@@ -1005,7 +1005,10 @@ func TestImportJSONLOnceThenPersist(t *testing.T) {
 	if last := evs[len(evs)-1]; !strings.Contains(string(last.Body), "three") || last.Index != 3 {
 		t.Fatalf("persist row=%+v", last)
 	}
-	older := s.statedbBefore("jevons", 3, 50)
+	older, pageErr := s.statedbBefore("jevons", 3, 50)
+	if pageErr != nil {
+		t.Fatal(pageErr)
+	}
 	if len(older) != 2 || older[0].Index != 1 || older[1].Index != 2 {
 		t.Fatalf("page by index=%+v", older)
 	}

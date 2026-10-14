@@ -56,7 +56,7 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	if seat != nil {
 		proc = seat
 	} else if p := s.CurrentProcess(); p != nil {
-		proc = escalate.Handle{Agent: p}
+		proc = p
 	}
 	// Only a turn the seat itself reports running is steered; the chat
 	// layer's flag alone could send a fresh prompt past the notify queue.

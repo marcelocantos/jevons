@@ -20,7 +20,7 @@ type Actions interface {
 	PauseWorker(id string) error
 	// KillWorker stops and deregisters a worker.
 	KillWorker(id string) error
-	// StopFleet stops every jevons-owned worker resumably (dead-man).
+	// StopFleet stops every jevons-owned worker resumably (hard dead-man backstop).
 	StopFleet() error
 	// KillSwitch is the global stop: it must reach launchd-detached
 	// fleet processes, not just registry-tracked ones.
@@ -34,12 +34,14 @@ type Actions interface {
 // eventlog (🎯T334 standing cost-safety); nil skips structured audit.
 // Now is injected for deterministic tests.
 type EnforcerArgs struct {
-	Snapshot   func() (*Snapshot, error)
-	Config     func() *BudgetConfig
-	Actions    Actions
-	Notify     func(level Level, msg string)
-	AuditTrail func(ClampDecision)
-	Now        func() time.Time
+	Snapshot func() (*Snapshot, error)
+	Config   func() *BudgetConfig
+	Actions  Actions
+	Notify   func(level Level, msg string)
+	// OwnerNotice bypasses the overseer turn and writes to the owner journal.
+	OwnerNotice func(subject, kind, text string) bool
+	AuditTrail  func(ClampDecision)
+	Now         func() time.Time
 }
 
 // Enforcer turns monitor alerts into clamp-down actions with
@@ -47,12 +49,13 @@ type EnforcerArgs struct {
 // hard ceiling, runs the dead-man's switch, and gates auto-resumes.
 // Standing cost-safety (🎯T334) dual-writes clamp decisions via AuditTrail.
 type Enforcer struct {
-	snapshot   func() (*Snapshot, error)
-	config     func() *BudgetConfig
-	actions    Actions
-	notify     func(Level, string)
-	auditTrail func(ClampDecision)
-	now        func() time.Time
+	snapshot    func() (*Snapshot, error)
+	config      func() *BudgetConfig
+	actions     Actions
+	notify      func(Level, string)
+	ownerNotice func(string, string, string) bool
+	auditTrail  func(ClampDecision)
+	now         func() time.Time
 
 	mu sync.Mutex
 	// lastLevel tracks the acted-on level per target ("" = fleet/global)
@@ -67,12 +70,14 @@ type Enforcer struct {
 	resumeAttempts map[string]int
 	// killStreak counts consecutive kill-level ticks per target, so an
 	// irreversible action fires only on a sustained breach, not a spike.
-	killStreak     map[string]int
-	lastHeartbeat  time.Time
-	deadManFired   bool
-	spawnHalted    bool
-	lastGlobalInfo Level // last-notified informational global level
-	lastSnap       *Snapshot
+	killStreak       map[string]int
+	lastHeartbeat    time.Time
+	deadManFired     bool
+	deadManHardFired bool
+	deadManNarrowed  bool
+	spawnHalted      bool
+	lastGlobalInfo   Level // last-notified informational global level
+	lastSnap         *Snapshot
 }
 
 // ThrottleCooldown is how long a throttled worker stays paused before
@@ -94,6 +99,7 @@ func NewEnforcer(args *EnforcerArgs) *Enforcer {
 		config:         args.Config,
 		actions:        args.Actions,
 		notify:         args.Notify,
+		ownerNotice:    args.OwnerNotice,
 		auditTrail:     args.AuditTrail,
 		now:            args.Now,
 		lastLevel:      map[string]Level{},
@@ -122,6 +128,8 @@ func (e *Enforcer) Heartbeat() {
 	defer e.mu.Unlock()
 	e.lastHeartbeat = e.now()
 	e.deadManFired = false
+	e.deadManHardFired = false
+	e.deadManNarrowed = false
 	e.resumeAttempts = map[string]int{}
 }
 
@@ -131,6 +139,9 @@ func (e *Enforcer) Heartbeat() {
 func (e *Enforcer) AllowSpawn() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.deadManNarrowed {
+		return fmt.Errorf("spawning paused: owner contact lapsed while fleet was burning; in-flight work may finish")
+	}
 	if e.spawnHalted {
 		return fmt.Errorf("spawning halted by budget clamp-down (hard ceiling or global kill) — raise the ceiling in budget.json or wait for the window to clear")
 	}
@@ -145,6 +156,9 @@ func (e *Enforcer) AllowSpawn() error {
 func (e *Enforcer) AllowResume(id string, auto bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.deadManHardFired {
+		return fmt.Errorf("resume %q blocked: hard dead-man backstop until owner contact", id)
+	}
 	if e.spawnHalted {
 		return fmt.Errorf("resume %q blocked: budget clamp-down in force", id)
 	}
@@ -365,15 +379,31 @@ func (e *Enforcer) Act(snap *Snapshot) {
 		e.recordAudit(LevelWarn, "spawn_resume", ActionNone, "", msg, "ok")
 	}
 
-	// Dead-man's switch: a burning fleet with no owner contact for the
-	// configured idle stops resumably rather than running forever.
-	if cfg.DeadManIdle > 0 && !e.deadManFired &&
-		e.now().Sub(e.lastHeartbeat) > cfg.DeadManIdle.Std() &&
-		(snap.FleetUSDPerHour > 0 || snap.GlobalUSDPerHour > 0) {
+	// Tier one narrows admission without interrupting running work. Only
+	// jevons-attributed fleet burn qualifies: a foreign owner session must not
+	// clamp our fleet. A later hard threshold retains the resumable stop.
+	idle := e.now().Sub(e.lastHeartbeat)
+	burning := snap.FleetUSDPerHour > 0
+	if cfg.DeadManIdle > 0 && idle > cfg.DeadManIdle.Std() && burning && !e.deadManFired {
 		e.deadManFired = true
-		e.act(LevelPause, "@fleet", fmt.Sprintf("dead-man's switch: no owner contact for %s while burning — stopping fleet resumably", cfg.DeadManIdle.Std()),
-			func() error { return e.actions.StopFleet() })
+		e.deadManNarrowed = true
+		msg := fmt.Sprintf("dead-man: no owner contact for %s while fleet burning; new worker/frontier admission paused, running workers may finish and report", idle.Round(time.Minute))
+		e.notify(LevelWarn, msg)
+		e.recordAudit(LevelWarn, "admission_narrow", ActionSpawnHalt, "@fleet", msg, "ok")
+		if e.ownerNotice != nil && !e.ownerNotice("cost-safety", "dead-man-narrow", msg) {
+			e.recordAudit(LevelWarn, "owner_notice", ActionWarn, "@fleet", msg, "error")
+		}
 	}
+	if cfg.DeadManHardIdle > 0 && idle > cfg.DeadManHardIdle.Std() && burning && !e.deadManHardFired {
+		e.deadManHardFired = true
+		e.deadManNarrowed = true
+		msg := fmt.Sprintf("dead-man hard backstop: no owner contact for %s while fleet burning — stopping fleet resumably until owner contact", idle.Round(time.Minute))
+		e.act(LevelPause, "@fleet", msg, func() error { return e.actions.StopFleet() })
+		if e.ownerNotice != nil && !e.ownerNotice("cost-safety", "dead-man-hard", msg) {
+			e.recordAudit(LevelPause, "owner_notice", ActionWarn, "@fleet", msg, "error")
+		}
+	}
+
 }
 
 // escalateScope applies fleet/global-scope escalation with the same

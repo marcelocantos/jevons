@@ -116,7 +116,7 @@ func TestModelSwitchLifecycleLog(t *testing.T) {
 		FromProvider: "cursor",
 		From:         "claude-fable-5",
 		To:           "composer-2.5",
-		How:          fleet.ModelSwitchHowSetModel,
+		How:          fleet.ModelSwitchHow,
 	})
 
 	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "model_switch")
@@ -125,7 +125,7 @@ func TestModelSwitchLifecycleLog(t *testing.T) {
 	}
 	if got["outcome"] != "ok" || got["name"] != "jevons-po" || got["from"] != "claude-fable-5" ||
 		got["to"] != "composer-2.5" || got["model"] != "composer-2.5" || got["provider"] != "cursor" ||
-		got["how"] != fleet.ModelSwitchHowSetModel {
+		got["how"] != fleet.ModelSwitchHow {
 		t.Fatalf("slog attrs=%v", got)
 	}
 

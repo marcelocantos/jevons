@@ -84,6 +84,20 @@ func SeatHasHistory(dir, seat string) bool {
 
 // ReadSeat returns records for seat, older dates first.
 func ReadSeat(dir, seat string) ([]Record, error) {
+	return ReadSeatSince(dir, seat, time.Time{})
+}
+
+// ReadSeatSince is [ReadSeat] limited to day files written at or after
+// since; a zero since reads them all. A file last modified before since
+// holds nothing newer, so a caller that wants a recent window does not pay
+// for the whole history (🎯T1067: the spool is gigabytes, and a restart
+// that recovered every attaching seat's missed turns decoded all of it once
+// per seat, growing the daemon about 1 GB a minute).
+//
+// A line is decoded only if it names the seat. Every line carries a whole
+// event, a turn_end its seat's full agent state, so decoding the shared
+// files to keep one seat's records was most of the cost.
+func ReadSeatSince(dir, seat string, since time.Time) ([]Record, error) {
 	if dir == "" || seat == "" {
 		return nil, nil
 	}
@@ -94,21 +108,36 @@ func ReadSeat(dir, seat string) ([]Record, error) {
 		}
 		return nil, err
 	}
+	encoded, err := json.Marshal(seat)
+	if err != nil {
+		return nil, err
+	}
+	key := append([]byte(`"seat":`), encoded...)
 	var out []Record
 	for _, name := range names {
-		f, err := os.Open(filepath.Join(dir, name))
+		path := filepath.Join(dir, name)
+		if !since.IsZero() {
+			if st, err := os.Stat(path); err == nil && st.ModTime().Before(since) {
+				continue
+			}
+		}
+		f, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
 		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if line == "" {
+			raw := sc.Bytes()
+			if !bytes.Contains(raw, key) {
+				continue
+			}
+			line := bytes.TrimSpace(raw)
+			if len(line) == 0 {
 				continue
 			}
 			var rec Record
-			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			if err := json.Unmarshal(line, &rec); err != nil {
 				continue
 			}
 			if rec.Seat != seat {

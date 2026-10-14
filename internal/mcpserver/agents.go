@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/claudia/omp"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/agentreport"
@@ -31,6 +33,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatstop"
+	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/worktree"
@@ -80,7 +83,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.addTool(
 		mcp.NewTool("jevons_agent_start",
-			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Omit provider unless the owner named one (🎯T652) — Claudia Resolve picks the session harness (prefer plan, prefer Claude) and skips weekly-hot / exhausted / session-low dests; do not write provider=grok as habit. An explicit provider= that is mint-ineligible is treated as omit unless owner_asked. Resume keeps the stored provider. A leftover llm-portfolio.json or the compiled T325.2 seed must not silently override the dest (🎯T476). The start result cites which knob selected the provider. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
+			mcp.WithDescription("Start a persistent fleet agent in a repo/directory (claudia backend). Creates and registers it if new. Records fleet lineage (parent) so only ancestors can later kill descendants. Purpose defaults to work (implementation agent); use purpose=aside for side-chat participants (🎯T114). Omit provider unless the owner named one (🎯T652) — Claudia Resolve is the sole arbiter of the session harness (band-ranked: locked, then under, then ok; no Claude-first bias — 🎯T1013.6) and skips weekly-hot / exhausted / session-low dests; do not write provider=grok as habit. An explicit provider= that is mint-ineligible is treated as omit unless owner_asked. Resume keeps the stored provider. A leftover llm-portfolio.json or the compiled T325.2 seed must not silently override the dest (🎯T476). The start result cites which knob selected the provider. Optional target_id binds the agent to a bullseye frontier target for RHS engagement overlay (🎯T198) — never rely on name parsing. 🎯T222: refuses a second work agent when target_id is already engaged or the ledger status is set_aside/achieved (force_engage=true overrides)."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (free-form; hierarchical target ids keep literal dots — e.g. 'jv-t27.2-config', not digit-squash 'jv-t272-config'; 🎯T197)")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (absolute or ~-relative repo path)")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'grok-4'; empty = provider default)")),
@@ -108,6 +111,8 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("actor", mcp.Required(), mcp.Description("Your agent name (who is sending). Overseer uses the overseer name (usually 'jevons'). Required so lineage denial is enforceable per-caller (🎯T321).")),
 			mcp.WithString("mode", mcp.Description("🎯T657 delivery mode: submit (default; queue for after the turn when busy) | steer (fold the text into the in-flight turn; plain submit when idle; queued honestly as queue_until_idle when the seat cannot steer) | interrupt (cancel the in-flight turn, then send — stuck recovery without kill) | queue (hold for the next turn boundary; submits when idle). The result names the mechanism that ran.")),
 			mcp.WithBoolean("interrupt", mcp.Description("Deprecated alias for mode=interrupt (🎯T657). Refused when it contradicts an explicit mode.")),
+			mcp.WithString("directive_family", mcp.Description("Explicit operation scope for supersession; requires directive_kind")),
+			mcp.WithString("directive_kind", mcp.Description("authorization or hold; later hold cancels pending authorization for same recipient/family")),
 			mcp.WithBoolean("force_rebrief", mcp.Description("🎯T597: a full re-brief (spawn-brief envelope, or >1KB opening-brief prose) to a seat with recent activity (stored report / workdir touch) is refused, because re-briefing a working seat can discard uncommitted work. A spawn-brief with phase implement after that seat's latest scout-report for the same target is the 🎯T536.3 handoff and is delivered without this flag (🎯T721). Pass true only when you are sure the seat needs its brief again.")),
 		),
 		s.handleAgentSend,
@@ -857,6 +862,20 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def = d
 	}
 
+	// A pre-T1046 accepted send could mark an unsupported OMP pin as
+	// Materialized before any model reply. Diagnose before PickMintModel or
+	// Register can treat that flag as a valid resume binding.
+	if existed && def.Materialized && spool.SidecarProvider(string(def.Provider)) && cli.PlanProvider(def.Provider) == claudia.ProviderCodex &&
+		strings.TrimSpace(def.Model) != "" && !s.codexCatalogHasModel(def.Model) {
+		if reason := s.unsupportedMaterializedModel(def); reason != "" {
+			return nil, true, "", fmt.Errorf("seat %q: unsupported OMP model %q: %s", name, def.Model, reason)
+		}
+		if strings.TrimSpace(model) != "" {
+			return nil, true, "", fmt.Errorf("seat %q: unsupported OMP model %q: omit model= for safe same-name retry", name, def.Model)
+		}
+		def.Materialized = false // no durable conversation; retry is a mint
+	}
+
 	// 🎯T148 + 🎯T476 + 🎯T652 provider selection:
 	//   1. eligible providerArg, or owner_asked → explicit
 	//   2. resume with stored provider → keep
@@ -879,8 +898,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	routeNote := pick.Cite()
 
 	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.
-	// Explicit model= wins (T476). Fast-cheap task types auto-pin Spark /
-	// grok-build for the picked provider. Empty pin on other mints gets
+	// Explicit model= wins (T476). Fast-cheap task types prefer Spark /
+	// grok-build for the picked provider, subject to catalog availability.
+	// Empty pin on other mints gets
 	// the provider default so cold Grok agents expose a condensable id.
 	storedModel := ""
 	if def != nil {
@@ -896,6 +916,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		CodexEligible: s.providerDestEligible(cost.HarnessCodex),
 		Portfolio:     s.effectivePortfolio(),
 	})
+	// The catalog check precedes persistence AND launch. It also repairs an
+	// unmaterialized failed row that retained an obsolete Spark pin.
+	mp = s.availableMintModel(mp, model, pick.Provider, def.Materialized)
 	if cite := mp.Cite(); cite != "" {
 		if routeNote != "" {
 			routeNote += ", " + cite
@@ -905,7 +928,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	}
 	if pin := strings.TrimSpace(mp.Model); pin != "" {
 		def.Model = pin
-	} else if !existed || strings.TrimSpace(def.Model) == "" {
+	} else if !existed || strings.TrimSpace(def.Model) == "" || (mp.Knob == cost.KnobEscalated && storedModel == cost.ModelCodexSpark) {
 		def.Model = cli.BindSessionModel("", def.Provider)
 	}
 	// Set parent only when minting or when legacy entry has empty parent.
@@ -942,12 +965,22 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.SandboxMode = ""
 		def.SandboxGitWrite = false
 	}
-	// Rewrite the stored fleet id after model pin and Codex sandbox so
-	// those still key on claude/codex, then Launch talks to the sidecar
-	// as anthropic/openai-codex (🎯T866.5).
-	if !existed && strings.TrimSpace(providerArg) == "" && strings.TrimSpace(pick.Provider) != "" {
-		def.Provider = cli.SidecarLaunchProvider(def.Provider)
+	// A live handle is the transport authority: Claudia Launch returns that
+	// same handle without starting another process. Never relabel its persisted
+	// row to a sidecar while the legacy CLI still owns the seat. An explicit
+	// cross-plan request is a model switch (jevons_agent_switch_model), not an
+	// in-place Register.
+	var liveProvider claudia.Provider
+	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
+		liveProvider = proc.Provider()
+		if liveProvider == "" { // Claudia's empty live provider denotes Claude CLI.
+			liveProvider = claudia.ProviderClaude
+		}
 	}
+	if err := alignStartTransport(def, existed, providerArg, liveProvider); err != nil {
+		return nil, existed, routeNote, err
+	}
+
 	// 🎯T528: remint must not reopen Continue when the Goal's TargetIDs
 	// are already achieved in the ledger (clear durable Goal).
 	if strings.TrimSpace(def.Goal) != "" {
@@ -970,6 +1003,105 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	return def, existed, routeNote, nil
 }
 
+// unsupportedMaterializedModel returns empty only when the row has no live
+// process, no engine store for its exact seat/session, and no assistant output
+// in the dated spool. An accepted prompt is transport acknowledgement, not a
+// model conversation. An unreadable store/spool is unknown, never absence.
+// This is read-only; only stitchAgentStart changes a proved-phantom row.
+func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
+	if proc := s.registry.Get(def.Name); proc != nil && proc.Alive() {
+		return "process still running; stop the seat and inspect its conversation before retry"
+	}
+	if def.SessionID == "" {
+		return "session identity missing; inspect history and recover manually"
+	}
+	sock, err := omp.SocketPath()
+	if err != nil {
+		return "cannot locate OMP store: " + err.Error() + "; inspect history and recover manually"
+	}
+	// The sidecar's SeatStore path uses safeName; ambiguous/unsafe names
+	// cannot be used as proof of absence through a normalized path.
+	for _, v := range []string{def.Name, def.SessionID} {
+		if strings.Trim(v, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != "" {
+			return "unsafe store identity; inspect history and recover manually"
+		}
+	}
+	seatDir := filepath.Join(filepath.Dir(sock), "omp-seats", def.Name)
+	entries, dirErr := os.ReadDir(seatDir)
+	if dirErr != nil && !os.IsNotExist(dirErr) {
+		return "cannot inspect conversation store directory: " + dirErr.Error() + "; recover manually"
+	}
+	if len(entries) != 0 {
+		return "conversation store exists under " + seatDir + "; preserve history and recover the model with jevons_agent_switch_model"
+	}
+	recs, err := spool.ReadSeat(spool.Dir(), def.Name)
+	if err != nil {
+		return "cannot inspect spool: " + err.Error() + "; recover manually"
+	}
+	for _, rec := range recs {
+		switch rec.Type {
+		case "text", "turn_end", "tool_call", "tool_result":
+			return "conversation evidence in dated spool; preserve history and recover the model with jevons_agent_switch_model"
+		case "accepted":
+			if rec.TS.IsZero() || time.Since(rec.TS) < 2*time.Minute {
+				return "accepted send may still be in flight; wait for a model reply or inspect history before retry"
+			}
+		}
+	}
+	return ""
+}
+
+// codexCatalogHasModel checks the same session catalog used by automatic
+// model selection. A launch success alone is not model-readiness evidence.
+func (s *Server) codexCatalogHasModel(model string) bool {
+	catalog := claudia.ModelCatalog()
+	if s.modelCatalog != nil {
+		catalog = s.modelCatalog()
+	}
+	for _, row := range catalog {
+		if cli.PlanProvider(row.Provider) == claudia.ProviderCodex && row.Session &&
+			row.Access == claudia.ModelAccessPlan && row.Model == model {
+			return true
+		}
+	}
+	return false
+}
+
+// availableMintModel checks automatic Codex pins against the currently linked
+// Claudia session catalog. Prefer its economy tier when Spark is absent;
+// never substitute an invented model slug. A stale stored Spark from a failed
+// launch follows the same recovery path. Explicit pins and materialized
+// conversations are not overridden: they must retain their resume binding.
+func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider string, materialized bool) cost.MintModelPick {
+	if strings.TrimSpace(explicit) != "" || materialized || cli.PlanProvider(claudia.Provider(provider)) != claudia.ProviderCodex ||
+		p.Model != cost.ModelCodexSpark {
+		return p
+	}
+	catalog := claudia.ModelCatalog()
+	if s.modelCatalog != nil {
+		catalog = s.modelCatalog()
+	}
+	fallback := ""
+	for _, row := range catalog {
+		if cli.PlanProvider(row.Provider) != claudia.ProviderCodex || !row.Session || row.Access != claudia.ModelAccessPlan {
+			continue
+		}
+		if row.Model == p.Model {
+			return p
+		}
+		if row.Quality == claudia.ModelQualityEconomy && fallback == "" {
+			fallback = row.Model
+		}
+	}
+	p.Model = fallback // empty means provider default when no supported economy pin exists
+	p.Knob = cost.KnobEscalated
+	p.Reason = "Spark absent from Claudia session catalog; using supported economy model"
+	if fallback == "" {
+		p.Reason = "Spark absent from Claudia session catalog; using provider default"
+	}
+	return p
+}
+
 // launchConfigFromDef is the Config handoff registry.Launch would pass into
 // claudia Start (Provider, SessionID, RequireResume←Materialized, Goal).
 // Hermetic tests assert this stitch without spawning a process (🎯T215 / 🎯T510).
@@ -978,12 +1110,27 @@ func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sess
 	return cfg.Provider, cfg.SessionID, cfg.RequireResume
 }
 
+// alignStartTransport aligns the persisted row with the transport Claudia
+// Launch will actually return. A cold start instead binds fresh and explicit
+// provider requests to the subscription sidecar.
+func alignStartTransport(def *claudia.AgentDef, existed bool, providerArg string, live claudia.Provider) error {
+	if live != "" {
+		if cli.PlanProvider(live) != cli.PlanProvider(def.Provider) {
+			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; use jevons_agent_switch_model, or stop it first", def.Name, live, def.Provider)
+		}
+		def.Provider = live
+	} else if !existed || strings.TrimSpace(providerArg) != "" {
+		def.Provider = cli.SidecarLaunchProvider(def.Provider)
+	}
+	return nil
+}
+
 func startConfigFromDef(def *claudia.AgentDef) claudia.Config {
 	if def == nil {
 		return claudia.Config{}
 	}
 	return claudia.Config{
-		Provider:      cli.SidecarLaunchProvider(def.Provider),
+		Provider:      def.Provider,
 		SessionID:     def.SessionID,
 		RequireResume: def.Materialized,
 		Model:         def.Model,
@@ -1083,6 +1230,10 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 	interrupt, _ := args["interrupt"].(bool)
 	modeArg, _ := args["mode"].(string)
 	forceRebrief, _ := args["force_rebrief"].(bool)
+	directive, derr := parseSendDirective(args)
+	if derr != nil {
+		return mcp.NewToolResultError(derr.Error()), nil
+	}
 
 	if name == "" || text == "" {
 		return mcp.NewToolResultError("name and text are required"), nil
@@ -1158,6 +1309,25 @@ func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*m
 
 	// 🎯T111.1 / 🎯T321: rehydrate + send under the caller's lineage, or
 	// queue/interrupt when prompt in flight.
+	// Typed directives are accepted only after lineage authorization. A hold
+	// removes older pending authorization under the same lock as drain claims.
+	if directive != nil {
+		if _, err := AuthorizeDeliver(s.registry, actor, name, OriginAgent, s.isOverseerAgent); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if mode != delivery.ModeSubmit && mode != delivery.ModeQueue {
+			return mcp.NewToolResultError("typed directives require submit or queue mode"), nil
+		}
+		if directive.Kind != "hold" {
+			return mcp.NewToolResultError("typed authorizations must use jevons_event_push; agent_send does not preserve directive identity on its busy fallback"), nil
+		}
+		if err := CheckBriefAddressing(name, text); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if _, _, _, err := s.sendQueue().ApplyDirective(name, text, *directive, false, time.Now()); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+	}
 	result, err := s.sendToAgentMode(actor, name, text, mode)
 	if err != nil {
 		// 🎯T283: deliverToSender already formats send failures; this also
@@ -1659,14 +1829,25 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 	// here, in front of the report, before the overseer can accept it and
 	// before a target retires on it. The banner rides outside the elision so
 	// a long report cannot push the warning off the end.
-	if flags := FalseGreenFlags(text); len(flags) > 0 {
+	//
+	// 🎯T1027: the check also knows whose report this is. Cited gate ids are
+	// resolved against the author's own repository (foreign_repo_gate), and
+	// the banner names the author, so a banner delivered into a supervisor
+	// turn alongside another agent's report cannot be read as that one's.
+	var reportWorkDir string
+	if s.registry != nil {
+		if def := s.registry.Def(agentName); def != nil {
+			reportWorkDir = def.WorkDir
+		}
+	}
+	if flags := FalseGreenFlagsForReport(text, reportWorkDir); len(flags) > 0 {
 		kinds := falseGreenKinds(flags)
 		slog.Warn("T386 false-green flags on agent report",
 			"agent", agentName, "flags", kinds)
 		s.logLifecycle(compAgentLifecycle, "false_green", "flagged", map[string]any{
 			"agent": agentName, "flags": kinds,
 		})
-		banner := gate.Banner(flags) + "\n\n"
+		banner := gate.BannerFor(agentName, flags) + "\n\n"
 		msg = banner + msg
 		parentMsg = banner + parentMsg
 	}

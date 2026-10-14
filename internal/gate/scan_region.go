@@ -55,6 +55,9 @@ var structuredFlagKinds = []FlagKind{
 	// (internal/mcpserver) from a git worktree probe, never a hazard
 	// substring scan here (🎯T946).
 	FlagUncitedClaimDirtyWorktree,
+	// FlagForeignRepoGate resolves cited ids against the store and asks the
+	// citing repository's git whether it holds the measured commit (🎯T1027).
+	FlagForeignRepoGate,
 	// 🎯T765 ledger-achieve flags. They never scan a finish report: CheckAchieve
 	// runs on a ledger attestation, which is a claim rather than narrative.
 	// Precedes-fix and tree-unknown read the record and git; uncited fires on

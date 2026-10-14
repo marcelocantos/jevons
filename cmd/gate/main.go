@@ -471,6 +471,11 @@ func cmdCheck(storeDir string, args []string) int {
 	// flags; offline / non-git callers keep the textual false-green set alone.
 	if root := gitRootNear(checkPath(args)); root != "" {
 		flags = append(flags, gate.FlagUnreachableSHAs(body, shaevidence.CheckInRepo(root, "HEAD"))...)
+		// 🎯T1027: a cited gate must have measured a commit of this repo —
+		// the store is one namespace for every repo on the machine.
+		if known, ok := gate.CommitKnownIn(root); ok {
+			flags = append(flags, gate.FlagForeignGates(body, store.Lookup, known)...)
+		}
 	}
 	if len(flags) == 0 {
 		fmt.Println("no false-green flags")

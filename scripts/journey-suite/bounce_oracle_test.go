@@ -80,15 +80,6 @@ func runBounceOraclePeer() error {
 		if mode != "missing replacement launch" {
 			fmt.Printf("msg=\"agent started\" name=%s provider=%s\n", state.ID, provider)
 		}
-		if mode == "new handover" {
-			dir := filepath.Join(*stateDir, "handover")
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return err
-			}
-			if err := os.WriteFile(filepath.Join(dir, state.ID+".json"), []byte(`{"seed":"unexpected"}`), 0o600); err != nil {
-				return err
-			}
-		}
 	}
 	var mu sync.Mutex
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -352,7 +343,7 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 	identities := map[string]bool{}
 	for _, mode := range []string{"valid", "valid again", "commentary around secret", "no post reply", "unrelated reply", "lost retained fact",
 		"stale pre-restart reply", "truncated reply", "wrong provider", "missing replacement launch",
-		"late session rotation", "late provider rotation", "session rotation then outage", "unreadable registry", "new handover", "registry survives cleanup",
+		"late session rotation", "late provider rotation", "session rotation then outage", "unreadable registry", "registry survives cleanup",
 		"bad exit", "upgrade stop", "forced stop"} {
 		t.Run(mode, func(t *testing.T) {
 			state := t.TempDir()
@@ -392,8 +383,6 @@ func TestT625BounceJourneyRejectsFalseGreens(t *testing.T) {
 					wantFailure = "changed existing session/provider"
 				case "unreadable registry":
 					wantFailure = "snapshot after bounce"
-				case "new handover":
-					wantFailure = "new T285 handover"
 				case "registry survives cleanup":
 					wantFailure = "remains in agent registry"
 				case "bad exit":

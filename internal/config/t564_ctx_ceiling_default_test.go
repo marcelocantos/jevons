@@ -20,7 +20,6 @@ func TestT564DefaultConfigDoesNotEnforceContextCeiling(t *testing.T) {
 	pol := ctxcap.Policy{Ceiling: cfg.ContextCeilingTokens, Disabled: !cfg.ContextCeilingEnforced()}
 	for _, obs := range []ctxcap.Observation{
 		{Agent: "jv-big", HasContext: true, Context: 150_000},
-		{Agent: "jv-seed", HasContext: true, Context: 150_000, SeedOnly: true},
 	} {
 		d := pol.Evaluate(obs)
 		if d.Verdict != ctxcap.VerdictOK || ctxcap.Unworkable(d) || ctxcap.ActionFor(d) == ctxcap.ActionUnworkable {

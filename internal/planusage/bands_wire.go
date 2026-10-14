@@ -5,7 +5,10 @@ package planusage
 
 import (
 	"math"
+	"strings"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // WithBands returns a copy of snap with every window's Band filled in at now.
@@ -43,6 +46,15 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 
 	for i := range out.Backends {
 		be := &out.Backends[i]
+		if be.Available() {
+			if strings.EqualFold(be.Provider, "claude") {
+				be.Spend = spendIfActive(be.rawSpend, be.Windows)
+			} else {
+				be.Spend = nil
+			}
+		} else {
+			be.Spend = nil
+		}
 		if len(be.Windows) == 0 {
 			continue
 		}
@@ -109,4 +121,54 @@ func historyWithBands(w Window, th Thresholds) []HistoryPoint {
 		out[i] = p
 	}
 	return out
+}
+
+// spendIfActive gates Claude's provider-published extra-usage reading. At a
+// full plan window a missing or changed block is unknown, not zero spend:
+// show an explicit unavailable reason without inventing a dollar figure.
+func spendIfActive(raw *claudia.PlanSpend, windows []Window) *BackendSpend {
+	if !anyPlanWindowFull(windows) {
+		return nil
+	}
+	if raw == nil {
+		return &BackendSpend{UnavailableReason: "spend block missing from Claude usage reading"}
+	}
+	if !raw.Enabled && !raw.LimitReached {
+		return nil
+	}
+	used := audMajorUnits(raw.Used)
+	limit := audMajorUnits(raw.Limit)
+	if used == nil || limit == nil {
+		return &BackendSpend{UnavailableReason: "Claude spend money missing or currency not AUD", LimitReached: raw.LimitReached}
+	}
+	return &BackendSpend{UsedAUD: *used, LimitAUD: *limit, LimitReached: raw.LimitReached}
+}
+
+// anyPlanWindowFull reports whether the plan's own window (session or
+// weekly, never a per-model window) is at 100% used right now.
+func anyPlanWindowFull(windows []Window) bool {
+	for _, w := range windows {
+		if strings.EqualFold(w.Name, WindowModelWeekly) || strings.TrimSpace(w.Model) != "" {
+			continue
+		}
+		if !strings.EqualFold(w.Name, WindowSession) && !strings.EqualFold(w.Name, WindowWeekly) {
+			continue
+		}
+		if w.UsedPercent != nil && *w.UsedPercent >= 100 {
+			return true
+		}
+	}
+	return false
+}
+
+// audMajorUnits converts a provider money block to AUD major units
+// (dollars), when the provider's own currency is already AUD. Nil when the
+// block is absent or in a currency this package has no documented rate
+// for — never a guessed conversion (🎯T967 currency rule).
+func audMajorUnits(m *claudia.PlanMoney) *float64 {
+	if m == nil || !strings.EqualFold(strings.TrimSpace(m.Currency), "AUD") {
+		return nil
+	}
+	v := float64(m.AmountMinor) / math.Pow(10, float64(m.Exponent))
+	return &v
 }

@@ -50,7 +50,7 @@ func TestT944AnnouncedRestartReplacesARecentUnplannedStop(t *testing.T) {
 		causes:    map[string]string{"a": claudia.ExitCauseBrokerRestarted},
 		launchErr: errBrokerDown,
 	}
-	s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}))
+	s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}, false))
 	last, ok := s.seatStops().Last("a")
 	if !ok || !last.Planned {
 		t.Fatalf("last record %+v, want the announced planned restart", last)
@@ -61,7 +61,7 @@ func TestT944AnnouncedRestartReplacesARecentUnplannedStop(t *testing.T) {
 
 	// A second announced stop within the window does not churn the record.
 	at := last.At
-	s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}))
+	s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}, false))
 	if again, _ := s.seatStops().Last("a"); !again.At.Equal(at) {
 		t.Fatal("a repeated planned stop re-recorded within the dedupe window")
 	}

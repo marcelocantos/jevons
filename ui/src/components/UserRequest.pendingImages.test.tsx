@@ -36,17 +36,17 @@ describe.each(['comfortable', 'compact'] as const)('%s pending images', (density
   it('keeps a pasted image across an agent switch', async () => {
     const { getByRole, container, rerender } = render(<UserRequest name="alpha" density={density} onSend={vi.fn()} />);
     paste(getByRole('textbox'));
-    await waitFor(() => expect(container.querySelectorAll('.img-chip').length).toBe(1));
+    await waitFor(() => expect(container.querySelectorAll('.img-chip:not([data-upload])').length).toBe(1));
     rerender(<UserRequest name="beta" density={density} onSend={vi.fn()} />);
-    expect(container.querySelectorAll('.img-chip').length).toBe(0);
+    expect(container.querySelectorAll('.img-chip:not([data-upload])').length).toBe(0);
     rerender(<UserRequest name="alpha" density={density} onSend={vi.fn()} />);
-    expect(container.querySelectorAll('.img-chip').length).toBe(1);
+    expect(container.querySelectorAll('.img-chip:not([data-upload])').length).toBe(1);
   });
 
   it('restores the chip after a reload (fresh mount over the persisted store)', async () => {
     const first = render(<UserRequest name="alpha" density={density} onSend={vi.fn()} />);
     paste(first.getByRole('textbox'));
-    await waitFor(() => expect(first.container.querySelectorAll('.img-chip').length).toBe(1));
+    await waitFor(() => expect(first.container.querySelectorAll('.img-chip:not([data-upload])').length).toBe(1));
     first.unmount();
     // A reload rebuilds the store from localStorage alone.
     const persisted = JSON.parse(localStorage.getItem('jevons-pending-images') || '{}');
@@ -57,7 +57,7 @@ describe.each(['comfortable', 'compact'] as const)('%s pending images', (density
     localStorage.setItem('jevons-pending-images', stored);
     await usePendingImages.persist.rehydrate();
     const second = render(<UserRequest name="alpha" density={density} onSend={vi.fn()} />);
-    const img = second.container.querySelector('.img-chip img') as HTMLImageElement;
+    const img = second.container.querySelector('.img-chip:not([data-upload]) img') as HTMLImageElement;
     expect(img.getAttribute('src')).toBe(UPLOADED.thumbUrl);
   });
 

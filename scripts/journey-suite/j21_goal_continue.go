@@ -130,10 +130,13 @@ func (s *suite) goalContinueOneBackend(provider string) error {
 		// host's own continuation prompt is not one, so the second turn
 		// shows as assistant output after the first turn's terminal reply
 		// (it may still be working: the continuation can be long). The
-		// phase can go idle and working again between two polls. Claude is
-		// excluded: one Claude turn can repeat its terminal message across
-		// content blocks, and its transcript carries the prompt anyway.
-		if provider != "claude" && repliesAfterFirstTerminal(payload) > 0 {
+		// phase can go idle and working again between two polls, and a
+		// continuation the model answers by closing the Goal ends the seat
+		// within seconds, so this reply is the signal that survives. Claude
+		// seats are sidecar seats now, one terminal event per turn; the old
+		// exclusion for the Claude CLI repeating its terminal message across
+		// content blocks no longer applies.
+		if repliesAfterFirstTerminal(payload) > 0 {
 			return nil
 		}
 		// Codex (and any backend whose session is not a Claude JSONL)

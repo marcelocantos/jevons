@@ -20,6 +20,13 @@ const (
 	// Prefix is the mux path under which proxied HTTP MCP servers are
 	// mounted. Public URL = PublicBase + Prefix + "/" + name.
 	Prefix = "/upstream"
+
+	// HopHeader marks a request the proxy sends upstream. A request that
+	// arrives carrying it has already been through a jevons upstream proxy,
+	// so it is refused rather than forwarded again (🎯T1035): a route that
+	// leads back to a proxy costs one refused hop, not a recursion that
+	// opens a connection per level until the host's ephemeral ports run out.
+	HopHeader = "X-Jevons-Upstream-Hop"
 )
 
 // MountArgs configures [Mount].
@@ -52,11 +59,17 @@ type MountArgs struct {
 type Host struct {
 	Proxy *claudia.MCPProxy
 	Store *Store
+	// resolved is the real upstream URL for each mounted server after
+	// Resolve (owner grant, not a nested leftover). Advertised rewrites
+	// loopback grants onto this list (🎯T1039).
+	resolved []claudia.MCPServer
 }
 
 // Mount builds a Claudia MCPProxy for HTTP owner-map servers, reseeds
 // stored tokens, and registers Prefix on mux. Advertised() is the
-// loopback list SessionServers stamps onto AgentDef.MCPServers (🎯T520).
+// grant list SessionServers stamps onto AgentDef.MCPServers: T520
+// loopback proxy URLs for remote OAuth, the owner's direct URL for
+// local loopback MCP (🎯T1039).
 func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 	if mux == nil || args == nil {
 		return nil, fmt.Errorf("mcpup: mux and args required")
@@ -73,11 +86,21 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 		}
 		httpServers = resolved
 	}
+	httpServers = dropSelfRoutes(httpServers, publicBase+Prefix)
+	client := &http.Client{}
+	if args.Client != nil {
+		*client = *args.Client
+	}
+	next := client.Transport
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	client.Transport = hopTransport{next: next}
 	proxyArgs := &claudia.MCPProxyArgs{
 		Prefix:     Prefix,
 		PublicBase: publicBase,
 		Servers:    httpServers,
-		Client:     args.Client,
+		Client:     client,
 		OpenURL:    args.OpenURL,
 		Probe:      args.Probe,
 		Authorize:  args.Authorize,
@@ -95,7 +118,7 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Host{Proxy: proxy, Store: args.Store}
+	h := &Host{Proxy: proxy, Store: args.Store, resolved: httpServers}
 	if args.Store != nil {
 		for _, s := range httpServers {
 			if tok := args.Store.Get(s.Name); tok != nil {
@@ -109,19 +132,44 @@ func Mount(mux *http.ServeMux, args *MountArgs) (*Host, error) {
 	if args.OnToolsCall != nil {
 		handler = toolsCallObserver(proxy, Prefix, args.OnToolsCall)
 	}
-	mux.Handle(Prefix+"/", handler)
-	for _, adv := range proxy.Advertised() {
-		slog.Info("HTTP MCP proxied via loopback", "name", adv.Name, "url", adv.URL)
+	mux.Handle(Prefix+"/", refuseHops(handler))
+	for _, adv := range h.Advertised() {
+		slog.Info("HTTP MCP granted on AgentDef.MCPServers", "name", adv.Name, "url", adv.URL)
 	}
 	return h, nil
 }
 
-// Advertised is the loopback name+URL list seats should carry (🎯T520).
+// Advertised is the name+URL list seats should carry. Remote OAuth
+// servers keep the T520 jevonsd /upstream/ loopback; a resolved
+// loopback MCP is granted its direct URL so Claudia does not persist a
+// nested leftover (🎯T1039).
 func (h *Host) Advertised() []claudia.MCPServer {
 	if h == nil || h.Proxy == nil {
 		return nil
 	}
-	return h.Proxy.Advertised()
+	adv := h.Proxy.Advertised()
+	if len(h.resolved) == 0 {
+		return adv
+	}
+	realByName := make(map[string]string, len(h.resolved))
+	for _, s := range h.resolved {
+		if s.Name == "" || strings.TrimSpace(s.URL) == "" {
+			continue
+		}
+		realByName[s.Name] = s.URL
+	}
+	out := append([]claudia.MCPServer(nil), adv...)
+	for i, s := range out {
+		real := realByName[s.Name]
+		if !GrantDirect(real) {
+			continue
+		}
+		out[i].URL = real
+		if out[i].Type == "" {
+			out[i].Type = "http"
+		}
+	}
+	return out
 }
 
 func toolsCallObserver(next http.Handler, prefix string, observe func(name string, args map[string]any)) http.Handler {
@@ -137,6 +185,43 @@ func toolsCallObserver(next http.Handler, prefix string, observe func(name strin
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hopTransport stamps HopHeader on every request the proxy sends.
+type hopTransport struct{ next http.RoundTripper }
+
+func (t hopTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set(HopHeader, "1")
+	return t.next.RoundTrip(req)
+}
+
+// refuseHops answers 508 Loop Detected to a request that already passed
+// through a jevons upstream proxy, instead of forwarding it again.
+func refuseHops(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(HopHeader) != "" {
+			slog.Warn("mcp upstream proxy loop refused: request already came through a jevons upstream proxy (🎯T1035)",
+				"path", r.URL.Path)
+			http.Error(w, "mcp upstream proxy loop: this server's upstream leads back to a jevons upstream proxy", http.StatusLoopDetected)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// dropSelfRoutes removes servers whose URL leads back to this proxy, which
+// no registry or inventory can make a real upstream (🎯T1035).
+func dropSelfRoutes(servers []claudia.MCPServer, prefix string) []claudia.MCPServer {
+	var out []claudia.MCPServer
+	for _, s := range servers {
+		if routesToPrefix(s.URL, prefix) {
+			slog.Warn("mcp upstream not proxied: its URL is this proxy (🎯T1035)", "name", s.Name, "url", s.URL)
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func parseToolsCall(body []byte) (name string, args map[string]any) {

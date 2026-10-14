@@ -1245,11 +1245,11 @@ func (s *Server) writeMuxPageBefore(ctx context.Context, conn muxConn, sess *mux
 	}
 	page, err := muxwin.BeforeUnsent(events, before, limit, have)
 	if err != nil {
-		s.muxWrite(ctx, conn, ch, "error", map[string]any{"error": err.Error()})
+		s.muxWrite(ctx, conn, ch, "error", map[string]any{"op": "page", "before": before, "error": "Could not load earlier history"})
 		return
 	}
 	out := muxwin.Slice(events, muxwin.Need(page, len(events), have))
-	s.writeMuxPageEnvelope(ctx, conn, sess, name, page, out, len(events), s.muxTruncated(name))
+	s.writeMuxPageEnvelope(ctx, conn, sess, name, before, page, out, len(events), s.muxTruncated(name))
 }
 
 func (s *Server) writeMuxPageBeforeDB(ctx context.Context, conn muxConn, sess *muxSession, name, before string, limit int) {
@@ -1263,10 +1263,14 @@ func (s *Server) writeMuxPageBeforeDB(ctx context.Context, conn muxConn, sess *m
 		idx = muxwinIndexOfID(events, before)
 	}
 	if idx < 1 {
-		s.muxWrite(ctx, conn, transcriptChannel(name), "error", map[string]any{"error": "muxwin: unknown before id " + before})
+		s.muxWrite(ctx, conn, transcriptChannel(name), "error", map[string]any{"op": "page", "before": before, "error": "Could not load earlier history"})
 		return
 	}
-	out := s.statedbBefore(name, idx, limit)
+	out, err := s.statedbBefore(name, idx, limit)
+	if err != nil {
+		s.muxWrite(ctx, conn, transcriptChannel(name), "error", map[string]any{"op": "page", "before": before, "error": "Could not load earlier history"})
+		return
+	}
 	lo := 1
 	if len(out) > 0 {
 		lo = out[0].Index
@@ -1274,7 +1278,7 @@ func (s *Server) writeMuxPageBeforeDB(ctx context.Context, conn muxConn, sess *m
 		lo = idx
 	}
 	page := muxwin.Resolved{Lo: lo, Hi: idx, Following: false}
-	s.writeMuxPageEnvelope(ctx, conn, sess, name, page, out, n, lo > 1)
+	s.writeMuxPageEnvelope(ctx, conn, sess, name, before, page, out, n, lo > 1)
 }
 
 func muxBeforeIndex(id string) int {
@@ -1301,7 +1305,7 @@ func muxwinIndexOfID(events []muxwin.Event, id string) int {
 	return 0
 }
 
-func (s *Server) writeMuxPageEnvelope(ctx context.Context, conn muxConn, sess *muxSession, name string, page muxwin.Resolved, out []muxwin.Event, n int, truncated bool) {
+func (s *Server) writeMuxPageEnvelope(ctx context.Context, conn muxConn, sess *muxSession, name, before string, page muxwin.Resolved, out []muxwin.Event, n int, truncated bool) {
 	ch := transcriptChannel(name)
 	var watch *muxWatch
 	if sess != nil {
@@ -1329,7 +1333,7 @@ func (s *Server) writeMuxPageEnvelope(ctx context.Context, conn muxConn, sess *m
 	}
 	following := watch != nil && watch.sub.Following
 	body := map[string]any{
-		"start": page.Lo, "older": older, "total": n,
+		"before": before, "start": page.Lo, "older": older, "total": n,
 		"lo": page.Lo, "hi": page.Hi, "n": n, "following": following,
 		"lines": lines,
 	}

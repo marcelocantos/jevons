@@ -39,11 +39,12 @@ import (
 
 // codexHomeDir mirrors claudia's exclusiveCodexHomeDir (claudia
 // mcp_exclusive.go): the durable CODEX_HOME claudia gives each codex thread.
-// Duplicated because claudia does not export it and the published pin in
-// go.mod predates any export (🎯T448). If claudia moves the directory this
-// finds nothing and entries stay Uncertain, which is the safe failure. The
-// seam that removes this copy is 🎯T767: claudia answering delivery
-// questions itself, typed, instead of jevons reading its layout.
+// Duplicated because claudia does not export it (still unexported at the
+// v0.52.0 pin, 🎯T1008). If claudia moves the directory this finds nothing
+// and entries stay Uncertain, which is the safe failure. The Claudia API
+// this waits for is claudia/T194: an exported ExclusiveCodexHomeDir, or
+// claudia answering codex delivery-receipt questions itself, typed,
+// instead of jevons reading its layout.
 func codexHomeDir(sessionID string) string {
 	sid := strings.TrimSpace(sessionID)
 	if sid == "" {

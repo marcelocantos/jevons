@@ -14,8 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // IsOpenStatus reports whether a bullseye status is still an open leaf.
@@ -44,25 +42,17 @@ func IsSetAsideStatus(status string) bool {
 
 // --- Ledger load (status lookup for kickoff) ---
 
-type ledgerDoc struct {
-	Targets map[string]ledgerTarget `yaml:"targets"`
-}
-
-type ledgerTarget struct {
-	Status string `yaml:"status"`
-}
-
 // LookupTargetStatus returns the status of id in a ledger YAML document.
 func LookupTargetStatus(data []byte, id string) (status string, ok bool) {
 	id = strings.TrimSpace(strings.TrimPrefix(id, "🎯"))
 	if id == "" {
 		return "", false
 	}
-	var doc ledgerDoc
-	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Targets == nil {
+	targets, ok := parsedTargets(data)
+	if !ok {
 		return "", false
 	}
-	t, found := doc.Targets[id]
+	t, found := targets[id]
 	if !found {
 		return "", false
 	}

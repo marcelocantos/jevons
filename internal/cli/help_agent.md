@@ -320,16 +320,6 @@ backlog unsubmitted; **queue record present** ⇒ delivered (queued, or already 
 the turn); **file present, no payload and no queue record** ⇒ either a mid-turn
 read (🎯T417) or genuinely lost.
 
-The handover dispatcher (`fleet.SeedSuccessor`) is a fourth caller of this path,
-and it now uses the same turn-begin evidence as the other three. It used to fail
-*closed* on a different predicate — whether the **reply completed** inside ten
-minutes — which looks right on a born-stuck agent (a turn that never begins
-never completes) and is wrong on a slow one: it condemned a seed at 09:07:04Z
-that landed at 09:07:10Z. Its fail-closed line,
-`handover hand-off failed; it stays pending for the next launch`, is still the
-one to read, and now says which transcript finding produced it. Its recovery —
-a seed parked until a launch that may never come — is 🎯T418.
-
 **Do not default to** Grok `spawn_subagent` (or worktree subagents that
 die with the parent). Those children are not first-class fleet entries,
 vanish on parent interrupt, and break multi-agent observability.
@@ -848,6 +838,44 @@ seat (`blocked_on_owner`), T165 does not reap it, and the parent's inbox
 notice carries the blocker. The hold ends when the owner or an ancestor
 messages the seat, or when the seat stores a newer report.
 
+**A question to the owner is an object, not prose (🎯T404).** When the
+block is an owner decision, say so with `block-class owner-decision` and
+the question slots. **Every question carries a default**: state what you
+will do if nobody answers, so silence degrades into a decision rather than
+a stall, and the owner answers to change an outcome, not to unblock one.
+Closed-form questions list their `question-option`s so a yes/no costs a
+word, not a paragraph:
+
+```jevons
+jevons: kind finish-report
+jevons: target T404
+jevons: status blocked
+jevons: blocker owner-decision-on-answer-surface
+jevons: block-class owner-decision
+jevons: question-repo /abs/path/to/repo
+jevons: question-id answer-surface
+jevons: question-version 1
+jevons: question "Cockpit panel or Slack thread for owner answers?"
+jevons: question-option cockpit
+jevons: question-option slack
+jevons: question-default "proceeding with cockpit unless you say otherwise"
+jevons: question-asker jv-t404-auto
+jevons: answer-route jv-t404-auto
+jevons: silent-ledger none
+```
+
+The daemon records the question in the durable cross-repo index
+(`jevons_owner_questions`, `GET /api/reviews`), pages the owner once with
+the options and the default, and lists every open question with its
+`silence_outcome` — a question with no default is listed as **STALLS**, so
+the gap is visible rather than discovered by scrolling. The owner's answer
+goes in as `jevons_owner_questions op=answer`, and **the daemon routes it
+to the asking seat** (asker first, then answer-route) — nobody relays it
+by hand, and the result names where it went or that the asker is gone. A
+question that stops mattering is retired with `op=resolve state=moot`,
+which tells the asker to proceed on its default. Then proceed on the
+answer, not the default.
+
 A green oracle with a **missing** silent-ledger (and no explicit `none`)
 is flagged, not treated as complete. Quality of the decisions is judgment;
 this rule is that the artifact exists and the independent gate can read it
@@ -1011,7 +1039,19 @@ String-matching rules (`pipeline_masked`, `shell_array_trap`,
 names the hazard (🎯T742). A report quoting the hazard from its own cited
 run is still flagged. Do not weaken dirty_tree_gate.
 
-**Residual:** the banner marks a report, it does not block delivery.
+**The store is one namespace for every repo on this machine (🎯T1027).**
+A cited gate whose record measured a commit your own repository does not
+hold is flagged `foreign_repo_gate`, whatever its verdict — another repo's
+run is not evidence for work here. Before you cite an id you did not just
+watch `bin/gate` print, ask: `jevons_gate_show id=<id> workdir=<your
+workdir>` answers `scope: own | FOREIGN | unknown`. The FALSE-GREEN banner
+names the report it judged (`Report from <agent>.`), so a banner delivered
+beside another agent's report cannot be read as that one's — the
+2026-10-07 incident was that misreading by a supervisor, not a worker's
+citation.
+
+**Residual:** the banner marks a report, it does not block delivery; a
+record with no tree provenance is unknown, never foreign.
 
 ## Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194)
 
@@ -1149,13 +1189,41 @@ size alone is not a remint trigger. Enforcement is opt-in via
 When a Claude seat must be reminted (stuck, dead, owner ask) and Claude
 weekly remaining is non-exhausted, remint via kill+start: `jevons_agent_kill(name)` (workers
 preserved, 🎯T560) then `jevons_agent_start(name=<same>, provider="claude")`
-with a thin continue brief. Do not `jevons_agent_migrate` to cursor/codex
-merely because migrate needs a different provider. Cross-provider migrate is
+with a short continue brief. A cross-provider `jevons_agent_switch_model` is
 allowed only when Claude is exhausted/blocked (`MigrateOff`: weekly
 hot/exhausted or session 429/0%) or the owner asks (`owner_asked=true`); the
-tool refuses it otherwise and names the kill+start recipe. The 🎯T417
-unworkable notice carries the same advice. Pure helper:
-`planusage.ContextRemintPlan` (unknown plan feed = stay, not migrate).
+tool refuses it otherwise and names the kill+start recipe. A same-provider
+switch (another Claude model) is always allowed. The 🎯T417 unworkable notice
+carries the same advice. Pure helper: `planusage.ContextRemintPlan` (unknown
+plan feed = stay on the provider).
+
+### Switching a seat's provider or model (claudia 🎯T195)
+
+`jevons_agent_switch_model(name, provider?, model?, force?, owner_asked?)`
+moves a seat to another provider or model **in place**. The seat keeps its
+name, session and whole conversation: nothing is summarised, no successor
+seat is started, and no handover is delivered. Empty `provider` keeps the
+seat's own; empty `model` takes the destination plan's standard model.
+
+- A **running** seat switches between turns. A turn in flight refuses the
+  switch unless `force=true` interrupts it.
+- A **stopped** seat has its registry definition rewritten on the same
+  session, so its next start resumes the conversation on the new model.
+- A conversation too large for the new model's window is compacted first by
+  the model that wrote it. The switch is refused if it still does not fit.
+- Every fleet seat is a sidecar seat (anthropic, openai-codex, xai-oauth,
+  cursor) and may change provider. A native CLI seat changes model only
+  within its own provider.
+- The overseer cannot be switched through the tool, because it is the
+  session answering the call. The owner switches it from the fleet tree;
+  owner chat stays attached to it.
+
+The fleet-tree menu reads `GET /api/migrate/options` and posts
+`POST /api/agents/switch-model` with `{name, provider, model, force}`; an
+empty `name` is the overseer. Plan policy (🎯T390.1.5) moves seats off
+weekly-hot or exhausted plans with the same in-place switch, the 🎯T585 model
+ladder switches the model on the seat's own provider, and a fleet model pin
+(🎯T285.2 / 🎯T617) is a same-provider switch.
 
 ### Running the whole fleet on Claude (🎯T282)
 

@@ -7,7 +7,7 @@ import { createEvent, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, vi } from 'vitest';
 import { decideSend } from '../../composer/sendQueue';
 import { UserRequest } from '../../components/UserRequest';
-import { classifyEnterAction } from '../../keys/composerEnter';
+import { classifyEnterAction, isTouchPrimaryDevice } from '../../keys/composerEnter';
 import { applyComposerHomeEnd, selectionAfterHomeEnd } from '../../keys/composerCaret';
 import { shouldFocusComposer } from '../../keys/composerFocus';
 import { isSidebarComposerFocusable, planComposerTabCycle } from '../../keys/composerTab';
@@ -90,6 +90,35 @@ describeOracle(family('composer-keys'), () => {
     expect(classifyEnterAction('Enter', { ctrlKey: true })).toBeNull();
     expect(classifyEnterAction('Enter', { altKey: true }, { composerEmpty: true, queueLen: 0 })).toBe('noop');
     expect(classifyEnterAction('Enter', { shiftKey: true })).toBe('newline');
+  });
+
+  itOracle('T1018', 'touch-primary device: plain Enter inserts a newline; every chord and desktop Enter are unchanged', () => {
+    const coarse = { matchMedia: (q: string) => ({ matches: q === '(pointer: coarse)' }) } as unknown as Pick<Window, 'matchMedia'>;
+    const fine = { matchMedia: (q: string) => ({ matches: false }) } as unknown as Pick<Window, 'matchMedia'>;
+    expect(isTouchPrimaryDevice(coarse)).toBe(true);
+    expect(isTouchPrimaryDevice(fine)).toBe(false);
+
+    // Touch-primary + plain Enter -> newline (the T1018 fix).
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: false, touchPrimary: true })).toBe('newline');
+    // Touch-primary + empty composer + plain Enter -> newline too (not noop):
+    // there is nothing to send either way, and the device still has no Shift key.
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: true, touchPrimary: true })).toBe('newline');
+    // Touch-primary + Cmd+Enter -> steer, unchanged.
+    expect(classifyEnterAction('Enter', { metaKey: true }, { composerEmpty: false, touchPrimary: true })).toBe('steer');
+    // Touch-primary + Cmd+Shift+Enter -> interrupt, unchanged.
+    expect(
+      classifyEnterAction('Enter', { metaKey: true, shiftKey: true }, { composerEmpty: false, touchPrimary: true }),
+    ).toBe('interrupt');
+    // Touch-primary + Shift+Enter -> newline, same as desktop (redundant but unchanged).
+    expect(classifyEnterAction('Enter', { shiftKey: true }, { touchPrimary: true })).toBe('newline');
+    // Touch-primary + Alt+Enter on a non-empty composer -> force_send, unchanged.
+    expect(
+      classifyEnterAction('Enter', { altKey: true }, { composerEmpty: false, touchPrimary: true }),
+    ).toBe('force_send');
+
+    // Desktop (pointer: fine) + plain Enter -> send, regression guard (T113/T657).
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: false, touchPrimary: false })).toBe('send');
+    expect(classifyEnterAction('Enter', {}, { composerEmpty: false })).toBe('send');
   });
 
   itOracle('T657', 'Enter→submit, Cmd+Enter→steer, Cmd+Shift+Enter→interrupt, Shift+Enter→newline; empty plain Enter is a noop', () => {

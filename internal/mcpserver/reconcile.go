@@ -45,7 +45,6 @@ func (s *Server) Reconcile() {
 	s.SweepOrphanPanes()
 
 	s.SweepSendBacklogs()
-	s.SweepHandovers()
 	s.reportFleetMuteIfNeeded()
 
 	if reps := s.sweepDeadAccountedWith(overseer, s.fleetIntent()); len(reps) > 0 {

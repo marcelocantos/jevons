@@ -99,7 +99,11 @@ func FormatReapedListSection(snap fleetintent.Snapshot) string {
 // holdSendForReaped enqueues text for a reaped name and returns the
 // reaped_held outcome. Call only when LookupReapedRecord succeeded.
 func (s *Server) holdSendForReaped(name, text string, rec fleetintent.Record) agentSendResult {
-	depth, qerr := s.enqueueAgentSend(name, text)
+	return s.holdSendForReapedWithRequestID(name, text, rec, "")
+}
+
+func (s *Server) holdSendForReapedWithRequestID(name, text string, rec fleetintent.Record, requestID string) agentSendResult {
+	depth, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
 	reportID := s.ReapedReportRef(name)
 	msg := FormatReapedSend(name, rec, reportID, depth, qerr)
 	attrs := []any{

@@ -307,6 +307,25 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Pure helpers: `ClassifyWorkerIdleDisposition`, `ClassifyStopDisposition`,
   `LooksLikeOwnWorkCompleteReport`. Hermetic: `TestT985*` in
   `internal/mcpserver`.
+- **An active wait is not a finish (🎯T1024):** a worker narrating an
+  active wait on an alive external process it does not control — "my gate
+  run is alive and still queued", "queued fifth on the shared heavy lease",
+  "the monitor armed last turn is still watching" — is mid-wait, whatever
+  completion word a sub-step earned ("the landing is done and verified",
+  "50365 finished (another worker's gate)"). On 2026-10-07 two arrai seats
+  were reaped `finished_work` on exactly those sentences: completion word +
+  oracle evidence is the 🎯T445 finish shape, and the 🎯T972 pending-gate
+  veto only hears 🎯T565's wait verbs ("waiting on", "still running"), not
+  monitoring vocabulary. `FindActiveExternalWait` recognises a sentence
+  that states a continuing wait, names the thing waited on (gate, lease,
+  lock, queue, monitor, background process), and does not also say it
+  resolved (GREEN, exit=, passed, failed, came back, past tense). The
+  🎯T972 scan keeps the seat as `outstanding_scope_active_wait` and tells
+  the parent, quoting the sentence; 🎯T985 parks rather than reaps; the
+  sentinel's `finished_awaiting_gate` reads outstanding scope too. A finish
+  that recounts a wait it saw through still reaps. Specimens are the real
+  stored reports, byte for byte: `internal/mcpserver/testdata/t1024_*`;
+  hermetic `TestT1024*`.
 - **Greenfield oracle elicitation (🎯T31.2):** for new software (no
   external reference), co-develop an **oracle-coverage map** alongside
   design — **pinned** / **fuzzy** / load-bearing **when X expect Y**
@@ -440,9 +459,18 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `empty_status`, `output_contradicts`) each declare a scannable region
   (quoted command/output, or output shape) and do not fire on prose that
   names the hazard (🎯T742). A report quoting the hazard from its own cited
-  run is still flagged. Do not weaken dirty_tree_gate. Ratcheted by
-  `scripts/docratchet`. Residual: the banner marks a report, it does not
-  block delivery.
+  run is still flagged. Do not weaken dirty_tree_gate. **The store is one
+  namespace for every repo on this machine (🎯T1027):** a cited gate whose
+  record measured a commit the citing agent's own repository does not hold
+  is flagged `foreign_repo_gate` on the notify and reap paths, whatever its
+  verdict — another repo's run is not evidence for work here. Ask before you
+  cite: `jevons_gate_show id=<id> workdir=<your workdir>` answers `scope:
+  own | FOREIGN | unknown`. The banner names the report it judged, so a
+  banner delivered beside another agent's report cannot be read as that
+  one's (the 2026-10-07 incident was that misreading, not a worker's
+  citation). Ratcheted by `scripts/docratchet`. Residual: the banner marks a
+  report, it does not block delivery; a record with no tree provenance is
+  unknown, never foreign.
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /
@@ -599,7 +627,7 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Bash-channel answer when tools are gone: `out_of_scope` vs `down`
   vs `unknown`.   Residual: Codex exclusive writes `CODEX_HOME` from
   `MCPServers` (app-server has no thread/start MCP field).
-  Published pin is claudia v0.30.0 (Agent.Migrate; hermetic Session MCP; no EnsureMCP).
+  Published pin is claudia v0.30.0 (hermetic Session MCP; no EnsureMCP).
 - **Claudia pin seam (🎯T448):** `go.mod` pins the last *published*
   claudia release. Local-master claudia (🎯T104) is consumed via
   `../go.work` and buildsnap's snapshot sibling inject — not a committed

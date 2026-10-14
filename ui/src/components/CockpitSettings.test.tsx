@@ -38,7 +38,8 @@ test('cockpit status bar exposes the dialog with an explicit button', async () =
   const { dirname, join } = await import('node:path');
   const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../App.tsx'), 'utf8');
   expect(app).toMatch(/id="settings-button"[^>]*aria-label="Open settings"/);
-  expect(app).toMatch(/>\s*⚙\s*</);
+  // The gear is an SVG icon component (4a5558db), not a text glyph.
+  expect(app).toMatch(/aria-label="Open settings"[\s\S]*?<SettingsIcon \/>\s*<\/button>/);
   expect(app).toContain('onClick={() => setSettingsOpen(true)}');
   expect(app).toContain('<CockpitSettings open={settingsOpen}');
 });

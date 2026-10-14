@@ -101,11 +101,12 @@ describe('the override mark on the plan box', () => {
     expect(x2 - x1).toBeCloseTo(y2 - y1);
     expect((x1 + x2) / 2).toBeCloseTo(cx);
     expect((y1 + y2) / 2).toBeCloseTo(cy);
-    // The ink is the theme's text colour; no dot behind it, no band colour on it.
+    // The ink is red (owner, 2026-10-12); no dot behind it, and no colour
+    // that could read as "fine".
     const rule = ruleFor('.plan-override-block');
-    expect(rule).toContain('color: var(--text)');
+    expect(rule).toContain('color: var(--red)');
     expect(rule).not.toMatch(/background/);
-    expect(rule).not.toMatch(/--green|--plan-under|--plan-locked|--amber|--red/);
+    expect(rule).not.toMatch(/--green|--plan-under|--plan-locked|--amber/);
     // The base rule carries no colour of its own: an unmatched shape paints nothing green.
     expect(ruleFor('.plan-override')).not.toMatch(/background/);
   });

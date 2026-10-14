@@ -27,8 +27,7 @@ func TestT708CensusCountsLiveSeatsWhenCostSessionsAreEmpty(t *testing.T) {
 	}
 }
 
-// The control: a billable session list is the more precise reading and is
-// not overwritten by the fallback.
+// Cost-window sessions remain visible but cannot bind process admission.
 func TestT708CensusPrefersBillableSessions(t *testing.T) {
 	snap := CapacitySnapshot(CapacitySnapshotArgs{
 		Cost: func() (*cost.Snapshot, error) {
@@ -40,8 +39,8 @@ func TestT708CensusPrefersBillableSessions(t *testing.T) {
 		},
 		ProviderLoad: func() map[string]int { return map[string]int{"claude": 12} },
 	})
-	if snap.ActiveSessions != 3 {
-		t.Fatalf("active sessions = %d, want the 3 billable sessions", snap.ActiveSessions)
+	if snap.ActiveSessions != 12 || snap.CostWindowSessions != 3 {
+		t.Fatalf("process seats = %d, cost sessions = %d, want 12 and 3", snap.ActiveSessions, snap.CostWindowSessions)
 	}
 }
 

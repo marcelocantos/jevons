@@ -61,7 +61,7 @@ func TestT839CascadeIsOneOutage(t *testing.T) {
 		*alive = false
 		return errors.New("restart: overseer not running yet: [{jevons stopped}]")
 	})
-	later := []string{"J18-t418-handover-mute", "J19-root-history-paint", "J22-send-once",
+	later := []string{"J18-t418-mute", "J19-root-history-paint", "J22-send-once",
 		"J23-fold-md", "J24-composer", "J25-fleet-sidebar", "J26-aside", "J27-frontier",
 		"J28-ticker-chrome", "J21-goal-continue-all-backends", "J30-packaged-react-owner-turn",
 		"J31-packaged-react-owner-boundary", "J32-packaged-react-send-cutin", "J33-undelivered-resend"}

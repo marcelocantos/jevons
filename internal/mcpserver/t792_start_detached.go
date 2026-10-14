@@ -59,7 +59,7 @@ func argString(req mcp.CallToolRequest, key string) string {
 	return v
 }
 
-// detachFlight is the 🎯T792 mechanism, shared with 🎯T790 (migrate): run h on
+// detachFlight is the 🎯T792 mechanism, shared with 🎯T790 (model switch): run h on
 // a context detached from the request, join a same-key call to the in-flight
 // one, and answer a caller whose deadline passes with pending(key).
 func (s *Server) detachFlight(key func(mcp.CallToolRequest) string, pending func(string) string, h toolHandler) toolHandler {

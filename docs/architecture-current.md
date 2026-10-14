@@ -122,17 +122,24 @@ origin; the payload names that origin in `source`:
   Fleet inspect prefers the reconstructed session; the journal is the
   fallback when that read is empty.
 
-Provider migration (`jevons_agent_migrate` / HTTP) is a Claudia
-per-agent operation. A live seat uses `Agent.Migrate`; a stopped seat
-uses `Registry.MigrateStopped`. Both run one disposable context-transfer
-agent on the destination provider, then start or remap the work session
-with a bounded handover. Claudia persists the destination and pending
-handover together, retries an interrupted delivery on that same session,
-and reconciles a broker move before repeating the transfer. Jevons supplies
-placement and interruption policy, normalized predecessor history for a
-stopped seat, and owner-facing status. It does not create a second
-provider-switch handover record. The old Jevons handover store remains
-readable only to recover records left by earlier versions (🎯T691).
+A provider or model change is an in-place switch, a Claudia per-agent
+operation (`Registry.SwitchModel`, claudia 🎯T195) reached through
+`fleet.Claudia.SwitchModel`. The seat keeps its name, session and whole
+conversation; nothing is summarised and no successor seat is started. A
+running seat switches between turns, and a turn in flight refuses unless
+`force` interrupts it. A stopped seat has its registry definition rewritten
+on the same session, so its next start resumes on the new model. A
+conversation too large for the new model's window is compacted first by the
+model that wrote it, and the switch is refused if it still does not fit.
+Sidecar seats (anthropic, openai-codex, xai-oauth, cursor — every fleet
+seat) may change provider; native CLI seats change model within their
+provider. Surfaces: MCP `jevons_agent_switch_model` (not for the overseer,
+which is answering the call) and `POST /api/agents/switch-model`
+(`{name, provider, model, force}`; empty `name` is the overseer, whose owner
+chat stays attached). Plan policy (🎯T390.1.5), the 🎯T585 model ladder and
+fleet model pins (🎯T285.2 / 🎯T617) use the same switch. Jevons supplies
+placement policy (🎯T561 refuses a cross-provider switch off a provider
+with weekly remaining unless the owner asked) and owner-facing status.
 
 **React mux (🎯T537.1 / T537.1.3).** The product cockpit talks `/ws/mux`.
 Each `transcript:{name}` channel is one windowed CQRS stream: the client

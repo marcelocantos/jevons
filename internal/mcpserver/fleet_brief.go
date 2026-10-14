@@ -14,10 +14,38 @@ import (
 // without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 / 🎯T969 under fan-out).
 const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
 
+## Cross-repository target references (🎯T1056)
+- When naming a bullseye target outside the current repository, write
+  🎯repo/Tn (e.g. 🎯claudia/T177), including in reports and chat. A bare 🎯Tn
+  means the current repository only; numbers overlap across repositories.
+  Use the checkout's repository basename as repo. Do not guess a target's
+  repository from a worker name or from its numeric ID.
+
+## Never signal the daemon (🎯T1067)
+- Do not send jevonsd any signal (SIGSTOP, SIGTERM, kill) or stop its
+  watchdog. Your own jevons_* tools are served by it: a stopped daemon cannot
+  resume itself and nobody hears you. On 2026-10-12 a PO stopped it to
+  contain a launch storm and it stayed frozen for 2.5 h, with every MCP
+  server routed through it down.
+- To stop launches, set frontier_consume.disabled in the daemon config,
+  stop or kill the offending seats, and tell the overseer or owner. A
+  restart goes through scripts/restart-jevonsd.sh.
+
 ## Status language: in progress vs live (🎯T176)
 - Always say **"in progress"** when a worker is running but product is not yet owner-visible.
 - Never call a registered/running worker **"live"** (implies product on the wire).
 - **"Live" / "landed" / "shipped"** only with product evidence: commit SHA + hard-reloadable UI, or proven API on the development or released surface.
+
+## Routine worker reports are not owner-facing appraisals (🎯T1053)
+- Overseer: do not produce a commentary/appraisal line after every worker
+  report. A routine, correctly handled report needing no owner action gets
+  no response if the harness permits; otherwise start the reply with
+  [silent] so the owner-facing stream filter hides it. Never send an
+  unmarked "Good, X" / "Confirmed, consistent" restatement. Keep doing
+  the actual verification/routing without narrating it to the owner.
+- Speak when there is a genuine owner decision point, an anomaly/problem
+  worth flagging, a direct question to answer, or status explicitly requested
+  by the owner. Surface those promptly; silence is not a blanket mute.
 
 ## Fleet state narration matches the live registry (🎯T692)
 - A kill/stop/reap/respawn claim is either intent/plan ('killing', 'will stop')
@@ -120,6 +148,13 @@ const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whol
   quoted command/output, or output shape — and do not fire on prose that
   names the hazard (🎯T742). A report quoting the hazard from its own cited
   run is still flagged. Do not weaken dirty_tree_gate.
+- The store is one namespace for every repo on this machine (🎯T1027). A
+  cited gate whose record measured a commit YOUR repository does not hold is
+  flagged foreign_repo_gate, whatever its verdict — another repo's run is not
+  evidence for your work. Before citing an id you did not just watch bin/gate
+  print, ask jevons_gate_show id=<id> workdir=<your workdir>; it answers
+  scope: own | FOREIGN | unknown. The banner names the report it judged
+  ("Report from <agent>."): read the name, not the position.
 
 ## Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194)
 - Daemon/API product (HTTP API, compiled server, non-static) is **not
@@ -371,12 +406,23 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   not a remint trigger — remint only a stuck/dead seat or on owner ask.
 - A context blow is not a provider problem. Claude seat that must be reminted
   with Claude weekly NOT exhausted/blocked → jevons_agent_kill(name) then
-  jevons_agent_start(name=<same>, provider="claude") with a thin continue
-  brief. Do not jevons_agent_migrate to cursor/codex just because migrate
-  needs a different provider; the tool refuses that move.
-- Cross-provider migrate only when Claude is exhausted/blocked
-  (jevons_plan_usage) or the owner asks (owner_asked=true). The 🎯T417
-  unworkable notice says which applies.
+  jevons_agent_start(name=<same>, provider="claude") with a short continue
+  brief.
+- Cross-provider jevons_agent_switch_model only when Claude is
+  exhausted/blocked (jevons_plan_usage) or the owner asks (owner_asked=true);
+  the tool refuses it otherwise. The 🎯T417 unworkable notice says which
+  applies. A same-provider model switch is always allowed.
+
+## Switching provider or model is in place (claudia 🎯T195)
+- jevons_agent_switch_model(name, provider?, model?, force?, owner_asked?)
+  keeps the seat's name, session and whole conversation. Nothing is
+  summarised, no successor seat is started, no handover is delivered.
+- A running seat switches between turns (a turn in flight refuses unless
+  force=true); a stopped seat resumes on the new model at its next start.
+  A conversation too large for the new model is compacted first by the
+  model that wrote it, or the switch is refused.
+- The overseer cannot be switched through the tool; the owner switches it
+  from the fleet tree.
 
 ## Plan dest ranks published band first (🎯T693)
 - Destination selection ranks on the **published band** first: **under** outranks **ok**, because under means paid allowance is at risk of expiring unspent. **hot** and **ahead** are never destinations.
@@ -393,6 +439,19 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   already has the report.
 - Residual: mid-mission messages that are not a terminal report still
   use jevons_agent_send; this slice is the upward-report path.
+
+
+## Concurrent live-render browser (🎯T430)
+- Playwright MCP isolation is the fleet default. Seats receive --isolated
+  (or an equivalent per-agent profile) from mint/restamp — do not depend on
+  remembering a flag, and do not point every worker at one shared
+  --user-data-dir profile. A shared profile makes the second concurrent
+  cockpit probe fail with "Browser is already in use … use --isolated".
+- Two workers may run a real browser live-render / cockpit probe at the
+  same time. If a browser cannot be obtained, say so explicitly: the
+  live-render oracle DID NOT RUN. Do not substitute a hermetic suite,
+  synthetic key, or model caption and cite that as live-path evidence
+  (🎯T194 / 🎯T386 / 🎯T493.1). A refused browser is a reportable non-result.
 
 ## Report
 - When finished: report commit SHA(s) + test evidence to the overseer

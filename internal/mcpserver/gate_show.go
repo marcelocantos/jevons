@@ -23,6 +23,7 @@ func (s *Server) registerGateShowTool() {
 		mcp.NewTool("jevons_gate_show",
 			mcp.WithDescription("Resolve a cited GATE id to the recorded command, exit status, verdict and tree state (🎯T697). Supervisors use this instead of bin/gate show or reading ~/.jevons/gates. An unknown id returns a distinguishable not-found, never a pass."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Gate record id from a GATE … id=<id> attestation line")),
+			mcp.WithString("workdir", mcp.Description("Optional: the citing agent's own workdir. When given, the result says whether the record's measured commit is a commit of that repository (scope: own | FOREIGN | unknown) — a gate from another repo is not evidence for work here (🎯T1027).")),
 		),
 		s.handleGateShow,
 	)
@@ -46,5 +47,16 @@ func (s *Server) handleGateShow(_ context.Context, req mcp.CallToolRequest) (*mc
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultText(rec.Summary() + "\n" + string(blob)), nil
+	text := rec.Summary()
+	// 🎯T1027: a caller that names its own repo gets the scope question
+	// answered here, before it cites — the same check the daemon runs on the
+	// finish report, so a worker can catch a foreign id itself.
+	if workDir := strings.TrimSpace(str(req.GetArguments()["workdir"])); workDir != "" {
+		scope := gate.ScopeOf(rec, workDir)
+		text += "\n  " + scope.Describe()
+		if sb, err := json.Marshal(scope); err == nil {
+			blob = append(append(blob, '\n'), []byte(`{"scope": `+string(sb)+`}`)...)
+		}
+	}
+	return mcp.NewToolResultText(text + "\n" + string(blob)), nil
 }

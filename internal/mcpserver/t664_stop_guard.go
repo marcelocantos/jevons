@@ -98,6 +98,11 @@ func (s *Server) stopGuardFor(name string) (bool, string) {
 	if s == nil {
 		return false, ""
 	}
+	// 🎯T828: isolate fault seam — force undecided delivery, or skip the
+	// guard entirely so a control journey fails the refusal assertion.
+	if s.applyT664Faults(name) {
+		return false, ""
+	}
 	now := time.Now()
 	var pending *unconfirmedSend
 	if u, ok := s.pendingUnconfirmedSend(name, now); ok {

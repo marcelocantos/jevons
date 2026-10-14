@@ -82,7 +82,7 @@ func (s *suite) busyEscalationWithBroker() error {
 	if urgent.Status != "steered" || urgent.InterruptAfterMS != j35InterruptAfter.Milliseconds() {
 		return fmt.Errorf("the owner's message to a busy worker was not escalated: %+v", urgent)
 	}
-	if _, err := s.waitHotMigrationReply(id, len(base), "URGENTACK", j35InterruptAfter+60*time.Second); err != nil {
+	if _, err := s.waitReplyContaining(id, len(base), "URGENTACK", j35InterruptAfter+60*time.Second); err != nil {
 		return fmt.Errorf("the worker did not answer the owner within the ladder: %w", err)
 	}
 	took := time.Since(sent)
@@ -91,7 +91,7 @@ func (s *suite) busyEscalationWithBroker() error {
 	}
 	// The low-urgency message waited for the turn boundary and is taken
 	// after it, not dropped.
-	if _, err := s.waitHotMigrationReply(id, len(base), "LOWACK", 120*time.Second); err != nil {
+	if _, err := s.waitReplyContaining(id, len(base), "LOWACK", 120*time.Second); err != nil {
 		return fmt.Errorf("the held low-urgency message never reached the worker: %w", err)
 	}
 	fmt.Printf("J37: owner message answered %s after a send to a worker busy in sleep 150 (ladder: steer, interrupt after %s)\n",

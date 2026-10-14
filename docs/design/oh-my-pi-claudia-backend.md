@@ -6,6 +6,14 @@ could not save it. One broken arrow in the launch path is restored.
 The Claudia pin named in the original ("v0.34.0") is the pin as of
 that day; `go.mod` in this checkout is `v0.42.0`.
 
+> **Superseded in part by claudia 🎯T195:** seats switch provider or model
+> in place, keeping their session and whole conversation. `Agent.Migrate`,
+> `MigrateArgs`, `SetModel`, the inert distilled seed and the Jevons
+> handover brief described below were removed. A sidecar seat changes
+> provider through the same switch; nothing is summarised and no successor
+> or seed is started. Read "Migrate" in the paths below as the in-place
+> switch (`Registry.SwitchModel`, reached from `jevons_agent_switch_model`).
+
 Decisions below are the ones already made (2026-09-23). Gaps are
 marked as open questions. Claudia's own source is not in the jevons
 checkout; the seam is what this repo calls

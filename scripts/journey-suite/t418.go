@@ -14,7 +14,6 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
@@ -268,15 +267,14 @@ func queueJourneyNoResult(path string) error {
 	return fmt.Errorf("queued result already exists before restart")
 }
 
-// jT418HandoverMute plants a stale pending handover and a queued send,
-// then stops every registered agent so nobody can press Enter, and
-// asserts the daemon reports MUTE.
-func (s *suite) jT418HandoverMute() error {
+// jT418Mute queues a send, then stops every registered agent so nobody
+// can press Enter, and asserts the daemon reports MUTE.
+func (s *suite) jT418Mute() error {
 	if err := portguard.RefuseDevelopment(s.port); err != nil {
 		return err
 	}
 	name := fmt.Sprintf("jv-t418h-%d", time.Now().Unix()%100000)
-	work := filepath.Join(s.stateDir, "t418-handover")
+	work := filepath.Join(s.stateDir, "t418-mute")
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
@@ -286,58 +284,13 @@ func (s *suite) jT418HandoverMute() error {
 
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": name, "workdir": work, "description": "T418 mute fixture worker",
+		"provider": string(cli.PlanProvider(s.provider)),
 	})
 	if out := asOutage("spawn", err); out != nil {
 		return out
 	}
 	if err != nil {
 		return fmt.Errorf("start: %w (%s)", err, trim(spawnOut, 80))
-	}
-
-	store := handover.NewStore(filepath.Join(s.stateDir, "handover"))
-	if err := store.Put(handover.Pending{
-		Agent:          name,
-		From:           "claude",
-		To:             "grok",
-		TranscriptPath: filepath.Join(work, "pred.jsonl"),
-		CreatedAt:      time.Now().UTC().Add(-20 * time.Minute).Format(time.RFC3339),
-	}); err != nil {
-		return fmt.Errorf("plant pending: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(work, "pred.jsonl"), []byte("{}\n"), 0o644); err != nil {
-		return err
-	}
-	if st, err := os.Stat(s.handoverPath(name)); err != nil {
-		return fmt.Errorf("handover record missing after Put: %w", err)
-	} else {
-		fmt.Println("T418 planted handover", s.handoverPath(name), "bytes", st.Size())
-	}
-
-	// 🎯T850: nothing is reaped for being parented to the overseer. The
-	// aside above and a second seat parented to it each have a stale
-	// handover, and the sweep must classify, retry, or surface both.
-	// Each arm matches its own seat so one line cannot satisfy both.
-	name2 := strings.Replace(name, "t418h", "t418w", 1) // not a prefix-extension of name: line matching stays per seat
-	work2 := filepath.Join(s.stateDir, "t418-handover-w")
-	if err := os.MkdirAll(work2, 0o755); err != nil {
-		return err
-	}
-	defer func() {
-		_, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": name2})
-	}()
-	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
-		"id": name2, "workdir": work2, "parent": name, "description": "T418 non-control-plane handover seat",
-	}); err != nil {
-		return fmt.Errorf("spawn non-control-plane seat: %w", err)
-	}
-	if err := store.Put(handover.Pending{
-		Agent:          name2,
-		From:           "claude",
-		To:             "grok",
-		TranscriptPath: filepath.Join(work, "pred.jsonl"),
-		CreatedAt:      time.Now().UTC().Add(-20 * time.Minute).Format(time.RFC3339),
-	}); err != nil {
-		return fmt.Errorf("plant pending (non-control-plane): %w", err)
 	}
 
 	go func() {
@@ -414,70 +367,5 @@ func (s *suite) jT418HandoverMute() error {
 	if !sawMute {
 		return fmt.Errorf("no MUTE report after stopping every registered agent with queued work")
 	}
-
-	// Drive SweepHandovers: bounce so NotifyDaemonRestarted retries or
-	// surfaces the planted stale pending. The Put above is unused unless
-	// we assert a NEW handover line after this bounce.
-	preHandoverLogs, _ := os.ReadFile(s.logPath)
-	preHandoverEvents, _ := os.ReadFile(s.eventsPath())
-	if err := s.bounceDrain(); err != nil {
-		return fmt.Errorf("handover bounce: %w", err)
-	}
-	if ents, err := os.ReadDir(filepath.Join(s.stateDir, "handover")); err != nil {
-		fmt.Println("T418 handover dir after bounce:", err)
-	} else {
-		fmt.Println("T418 handover dir after bounce:", len(ents), "entries")
-		for _, e := range ents {
-			fmt.Println("  ", e.Name())
-		}
-	}
-	wait = time.Now().Add(45 * time.Second)
-	var line1, line2 string
-	for time.Now().Before(wait) {
-		lg, _ := os.ReadFile(s.logPath)
-		ev, _ := os.ReadFile(s.eventsPath())
-		delta := newTail(preHandoverLogs, lg) + "\n" + newTail(preHandoverEvents, ev)
-		line1 = handoverLineFor(delta, name, t418ClassifyNeedles...)
-		line2 = handoverLineFor(delta, name2, t418ClassifyNeedles...)
-		if line1 != "" && line2 != "" {
-			fmt.Println("T418 aside handover handled:", trim(line1, 200))
-			fmt.Println("T418 second seat handled:", trim(line2, 200))
-			return nil
-		}
-		time.Sleep(2 * time.Second)
-	}
-	switch {
-	case line1 == "" && line2 == "":
-		return fmt.Errorf("neither planted handover was touched after bounce (SweepHandovers never fired)")
-	case line1 == "":
-		return fmt.Errorf("aside %s was neither classified, retried nor surfaced after bounce", name)
-	default:
-		return fmt.Errorf("second seat %s was neither classified, retried nor surfaced after bounce", name2)
-	}
-}
-
-// t418ClassifyNeedles are the sweep outcomes for a planted handover.
-// A T517 reap is not among them: that short-circuit is withdrawn (🎯T850).
-var t418ClassifyNeedles = []string{
-	"UNDELIVERED HANDOVER",
-	"pending handover surfaced",
-	"handover retry",
-	"handover classify",
-}
-
-// handoverLineFor returns the first line of blob that names agent and holds
-// one of needles, or "". Matching the agent keeps one seat's outcome from
-// satisfying the other's arm.
-func handoverLineFor(blob, agent string, needles ...string) string {
-	for _, ln := range strings.Split(blob, "\n") {
-		if !strings.Contains(ln, agent) {
-			continue
-		}
-		for _, n := range needles {
-			if strings.Contains(ln, n) {
-				return ln
-			}
-		}
-	}
-	return ""
+	return nil
 }

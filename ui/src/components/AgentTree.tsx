@@ -1,11 +1,13 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { CompanyMark } from '../plan/companyMark';
 import { modelPrefix } from '../plan/modelPrefix';
 import { agentDotState, fleetSecondary, isAsidePurpose } from '../fleet/rowModel';
-import { migrateBody, migrateUrl, ModelMenu, type MigrateProvider } from './ModelMenu';
+import { ModelMenu, SWITCH_MODEL_URL, switchModelBody, type ProviderOption } from './ModelMenu';
+import { splitSeatNameTarget } from '../frontier/targetHotspot';
+import { TargetHotspotTips } from './TargetHotspotTips';
 
 export type AgentRow = {
   name: string;
@@ -79,7 +81,7 @@ function ModelBadge({ node }: { node: AgentNode }) {
   const p = modelPrefix(node);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
-  const [options, setOptions] = useState<MigrateProvider[] | null>(null);
+  const [options, setOptions] = useState<ProviderOption[] | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   if (!p.company) return null;
@@ -118,10 +120,10 @@ function ModelBadge({ node }: { node: AgentNode }) {
     setBusy(true);
     setError('');
     try {
-      const r = await fetch(migrateUrl(node.purpose), {
+      const r = await fetch(SWITCH_MODEL_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(migrateBody(node.name, node.purpose, provider, model)),
+        body: JSON.stringify(switchModelBody(node.name, provider, model)),
       });
       if (!r.ok) {
         const text = await r.text();
@@ -182,6 +184,25 @@ function githubDir(workdir?: string) {
   );
 }
 
+function AgentName({ name }: { name: string }) {
+  const parts = splitSeatNameTarget(name);
+  if (!parts) return <span className="agent-name">{name}</span>;
+  return (
+    <span className="agent-name">
+      {parts.prefix}
+      <span
+        className="target-hotspot target-hotspot-finger"
+        data-target-id={parts.id}
+        role="button"
+        tabIndex={0}
+      >
+        {parts.matched}
+      </span>
+      {parts.suffix}
+    </span>
+  );
+}
+
 function Secondary(props: { node: AgentNode; parentWorkdir?: string }) {
   const sec = fleetSecondary(props.node, {
     parentWorkdir: props.parentWorkdir,
@@ -224,7 +245,7 @@ function Row(props: {
           <span className={'agent-dot ' + dot} />
         )}
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
-        <span className="agent-name">{props.node.name}</span>
+        <AgentName name={props.node.name} />
         <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
         {showSeatStopReason(props.node) ? (
           <span className="agent-stop-reason" title={props.node.stop_reason}>
@@ -286,6 +307,7 @@ export function AgentTree(props: {
 }) {
   const roots = buildAgentForest(props.agents);
   const mass = massStopLine(props.agents);
+  const rootRef = useRef<HTMLDivElement>(null);
   return (
     <>
       {mass ? (
@@ -293,16 +315,19 @@ export function AgentTree(props: {
           {mass}
         </div>
       ) : null}
-      {roots.map((n) => (
-        <Row
-          key={n.name}
-          node={n}
-          depth={0}
-          selected={props.selected}
-          onSelect={props.onSelect}
-          onDismiss={props.onDismiss}
-        />
-      ))}
+      <div className="agent-tree-hotspots" ref={rootRef}>
+        {roots.map((n) => (
+          <Row
+            key={n.name}
+            node={n}
+            depth={0}
+            selected={props.selected}
+            onSelect={props.onSelect}
+            onDismiss={props.onDismiss}
+          />
+        ))}
+      </div>
+      <TargetHotspotTips containerRef={rootRef} />
     </>
   );
 }

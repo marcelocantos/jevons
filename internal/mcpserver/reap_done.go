@@ -5,15 +5,15 @@ package mcpserver
 
 import (
 	"fmt"
-	"github.com/marcelocantos/jevons/internal/seatstop"
 	"log/slog"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/seatstop"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
-	"github.com/marcelocantos/jevons/internal/handover"
 	"github.com/marcelocantos/jevons/internal/reapverify"
 )
 
@@ -47,7 +47,7 @@ func LooksLikeFinishedWorkReport(report string) bool {
 	// 🎯T938: a finish-report declaring status blocked is a seat waiting on
 	// someone else, not finished work. Reaping it would strand the mission
 	// the moment the blocker clears.
-	if _, blocked := envelope.BlockedOn(report); blocked {
+	if reportOpenStatus(report) != "" {
 		return false
 	}
 	if m, err := envelope.Parse(report); m != nil && err == nil {
@@ -127,11 +127,19 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
 	}
-	if _, blocked := envelope.BlockedOn(report); blocked {
+	// A declared blocked goal is an external wait, even when the envelope
+	// still says in-progress. Preserve T784's outstanding-scope reason for
+	// ordinary in-progress reports; its parent notice depends on that reason.
+	if reportOpenStatus(report) == IdleActionPark {
 		return false, IdleSkipBlockedOnOwner
 	}
 	if scope := midWorkReportScope(report); scope != nil {
 		return false, outstandingScopeReapReason([]OutstandingScope{*scope})
+	}
+	// A partially invalid envelope may still carry a parsed status slot;
+	// never turn that field into a finished-work inference.
+	if reportOpenStatus(report) == IdleActionKeep {
+		return false, "in_progress_report"
 	}
 	// 🎯T395 before the generic no-claim case: a report that asks for a decision
 	// is the opposite of a completion claim, and the lifecycle log should say so
@@ -235,17 +243,6 @@ func reapDoneRemoval(reason string) fleetlog.Removal {
 // done — 🎯T195), leave the fleet (🎯T165).
 func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	if s == nil || s.registry == nil || name == "" {
-		return
-	}
-	// 🎯T474: reap_done must not Remove a name mid rotate→launch→seed.
-	// An undelivered handover holds the seat; removing it lets the next
-	// bare-thread Launch invent purpose=aside and discard the prepared
-	// successor session (the jv-t444-phase-remint ghost).
-	if s.rotationBlocksReap(name) {
-		fields := reapDecisionFields(name, "rotation_pending", report)
-		s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
-		slog.Info("T474 deferred finished-work reap while rotation pending",
-			"agent", name)
 		return
 	}
 	if report == "" {
@@ -441,23 +438,4 @@ func reapDecisionFields(name, reason, report string) map[string]any {
 		fields["report_offset"] = offset
 	}
 	return fields
-}
-
-// rotationBlocksReap is true when an undelivered handover for name is on
-// disk (🎯T474). The migrator may be unwired in hermetic tests — then
-// nothing blocks.
-func (s *Server) rotationBlocksReap(name string) bool {
-	if s == nil || name == "" {
-		return false
-	}
-	led, ok := s.migrator.(handoverLedger)
-	if !ok || led == nil {
-		return false
-	}
-	pending, err := led.PendingHandovers()
-	if err != nil && len(pending) == 0 {
-		return false
-	}
-	_, blocked := handover.FindBlockingRotation(pending, name)
-	return blocked
 }

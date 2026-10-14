@@ -335,8 +335,8 @@ func j19AssistantBody(tok string, i int) string {
 
 type j19SeedMix struct {
 	User, Assistant, AgentNote, System, ToolUse, Progress, Status int
-	NotesBetweenTurns, ToolsBetweenTurns, ProgressBetweenTurns   int
-	AssistantToolBlocks                                            int
+	NotesBetweenTurns, ToolsBetweenTurns, ProgressBetweenTurns    int
+	AssistantToolBlocks                                           int
 }
 
 func classifyJ19Seed(body []byte) j19SeedMix {

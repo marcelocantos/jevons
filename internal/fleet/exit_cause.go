@@ -3,22 +3,28 @@
 
 package fleet
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/marcelocantos/claudia"
+)
 
 // brokerCausePrefix begins every exit cause Claudia gives a broker-backed
 // handle: its connection lost, or the broker reporting the seat gone.
 const brokerCausePrefix = "claudia broker"
 
-// Exit causes the published claudia module does not export. These are the
-// spellings BrokerCaused and BrokerPlanned already match.
+// Exit causes, now published by claudia (🎯T1008) as
+// claudia.ExitCauseBrokerLost / claudia.ExitCauseBrokerRestarted.
+// Aliased here so existing callers keep one import path.
 const (
-	ExitCauseBrokerLost      = "claudia broker connection closed"
-	ExitCauseBrokerRestarted = "claudia broker stopped on purpose (planned restart)"
+	ExitCauseBrokerLost      = claudia.ExitCauseBrokerLost
+	ExitCauseBrokerRestarted = claudia.ExitCauseBrokerRestarted
 )
 
-// ExitCause is why a dead handle died, when its harness knew (🎯T925). It
-// reads a Claudia that exposes the cause and is empty on one that does not,
-// so jevons still builds against the published Claudia pin.
+// ExitCause is why a dead handle died, when its harness knew (🎯T925).
+// The published claudia.Agent now exports ExitCause() directly
+// (🎯T1008); this reads it through an interface so jevons still builds
+// against any Claudia that happens not to expose it on a given handle.
 func ExitCause(proc any) string {
 	c, ok := proc.(interface{ ExitCause() string })
 	if !ok || c == nil {

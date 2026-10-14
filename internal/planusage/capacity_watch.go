@@ -44,6 +44,17 @@ func (w *CapacityWatch) Observe(s Snapshot, now time.Time, th Thresholds) []Back
 		if be.Provider == "" || be.Status != StatusAvailable {
 			continue
 		}
+		// 🎯T842: a stale reading is unknown, not a verdict — composing with
+		// the doctrine already applied to a failed read (🎯T677: unreadable
+		// is unknown, never exhausted). A stale backend neither arms the
+		// watch (it must not be announced as the plan going bad) nor
+		// disarms it (it must not be misread as "restored" and wake a
+		// fleet that stood work down for capacity on a live-looking but
+		// outdated snapshot). Skip it entirely: the next readable verdict,
+		// whenever it lands, decides.
+		if be.Stale {
+			continue
+		}
 		inadmissible := MintIneligible(be, now, th)
 		if w.observed[be.Provider] && w.blocked[be.Provider] && !inadmissible {
 			restored = append(restored, be)

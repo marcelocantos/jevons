@@ -6,6 +6,7 @@ package gate
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -63,6 +64,12 @@ const (
 	// evidence carries uncommitted tracked changes or new untracked source
 	// files (🎯T946). Nothing was landed for the marker words to describe.
 	FlagUncitedClaimDirtyWorktree FlagKind = "uncited_claim_dirty_worktree"
+	// FlagForeignRepoGate: the report cites a gate whose record measured a
+	// commit the citing agent's own repository does not contain (🎯T1027).
+	// The gate may well be a real pass; it is evidence for someone else's
+	// work. The store is one namespace for every repo on the machine, and
+	// this is the only flag that asks whose run a cited id was.
+	FlagForeignRepoGate FlagKind = "foreign_repo_gate"
 )
 
 // CitationRole is what a finish report is doing with a gate it cites.
@@ -103,6 +110,12 @@ const (
 	// checker fired four times on one correct report, and the rebased red
 	// that proved causality was what it called a failed pass.
 	RoleControl CitationRole = "control"
+	// RoleNegativeObservation records a host termination as a termination only,
+	// never as a passing or failing test result (🎯T1048).
+	RoleNegativeObservation CitationRole = "negative_observation"
+	// RoleDisclosure names an unrelated RED and expressly declines to claim
+	// that the affected package passed (🎯T1048).
+	RoleDisclosure CitationRole = "non_passing_disclosure"
 )
 
 // Flag is one contradiction found in a finish report.
@@ -215,12 +228,27 @@ var controlFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
 	`\bon the parent\b`,
 }, "|"))
 
+// These are deliberately conjunctive, local descriptions, not a report-wide
+// waiver. A bare KILLED or RED citation, or a gate merely named "disclosure",
+// does not acquire a role. The explicit disclaimer is essential: the report
+// must say what the observation does *not* prove.
+var negativeObservationRe = regexp.MustCompile(`(?i)\b(SIGKILL record|negative observation|host termination observation)\b`)
+var negativeObservationLimitRe = regexp.MustCompile(`(?i)\b(not (an? )?(absent or )?passing record|not (a )?(pass|fail|test result)|decided nothing|not evidence (of|for) (a )?(pass|fail))\b`)
+var failingProofRe = regexp.MustCompile(`(?i)\b(proves? (a |the )?(failing|failed|red) (test|assertion|suite)|oracles? fail on their own assertions|falsif\w*)\b`)
+var redDisclosureRe = regexp.MustCompile(`(?i)\bRED disclosure\b`)
+var redDisclosureLimitRe = regexp.MustCompile(`(?i)\b(prevents? claiming|cannot claim|not claiming|does not claim|do not claim|cannot support claiming|does not support claiming)\b[^\n]{0,100}\b(package|suite|run)\b[^\n]{0,60}\bgreen\b`)
+
 // passLaunderingRe matches a window that claims THIS citation as a pass,
 // even when control framing or a -before name is present. Narrower than
 // greenClaimMarkers: a control's own justification says "green" about the
 // after-gate, and that must not cancel the role.
 var passLaunderingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
-	`\bcalling it (a )?pass`,
+	`\bcalling it (a )?(pass|green)\b`,
+	`\bthis (gate|run|suite|package) (is green|pass(es|ed))\b`,
+	`\bcounts as a pass\b`,
+	`\b(the )?(tests|suite|gate|run) pass(es|ed)?\b`,
+	`\b(it|this (gate|run)|killed (gate|run|record)) (is|was) (green|a pass|passing)\b`,
+	`\bit (passed|passes)\b`,
 	`\bunrelated flake\b`,
 	`\bevery oracle pass`,
 	`\bthe suite is green here`,
@@ -244,6 +272,15 @@ func ClassifyCitation(window string, c CitedAttestation) CitationRole {
 	framing := framingWithoutAttestations(window)
 	if passLaunderingRe.MatchString(framing) {
 		return RoleClaimedPass
+	}
+	if c.Verdict.IsKilled() && negativeObservationRe.MatchString(framing) &&
+		negativeObservationLimitRe.MatchString(framing) && !failingProofRe.MatchString(framing) &&
+		!passLaunderingRe.MatchString(framing) {
+		return RoleNegativeObservation
+	}
+	if !c.Verdict.IsKilled() && redDisclosureRe.MatchString(framing) &&
+		redDisclosureLimitRe.MatchString(framing) && !failingProofRe.MatchString(framing) {
+		return RoleDisclosure
 	}
 	// Control prose is classified before greenClaimMarkers: a control's
 	// job is to sit next to a green, and "sole cause of the green" is
@@ -295,7 +332,7 @@ func isControlName(name string) bool {
 // draw a FALSE-GREEN banner: the red is doing a job other than "my work passed".
 func isHonestNonPass(role CitationRole) bool {
 	switch role {
-	case RoleFalsification, RoleInherited, RoleDefectCaught, RoleControl:
+	case RoleFalsification, RoleInherited, RoleDefectCaught, RoleControl, RoleNegativeObservation, RoleDisclosure:
 		return true
 	default:
 		return false
@@ -364,13 +401,12 @@ func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string
 			if c.Verdict.IsGreen() && c.StatusIsZero() {
 				continue
 			}
-			// 🎯T461: a host-killed run decided nothing. It is not a failing
-			// suite either, so honest-red framing must not exempt it — that
-			// exemption is exactly the clause a lazy fix skips.
-			if c.Verdict.IsKilled() {
+			role := ClassifyCitation(window, c)
+			// A killed run is never a falsification control or a failure.
+			// Only a locally bounded negative observation can exempt it.
+			if c.Verdict.IsKilled() && role != RoleNegativeObservation {
 				continue
 			}
-			role := ClassifyCitation(window, c)
 			// 🎯T722: a -before name or a declared gate-role slot upgrades
 			// the default claimed_pass, not a window that already claims
 			// this citation as a pass. Name-alone with no GREEN in the
@@ -389,8 +425,26 @@ func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string
 				continue
 			}
 			exempt[c.Raw] = true
-			for j := start; j <= end; j++ {
-				framingLines[j] = true
+			if role == RoleNegativeObservation || role == RoleDisclosure {
+				// Explicit observations are citation-local. Neighbouring output
+				// belongs to its own claim, even when separated by no blank.
+				// A shaped failure on the citation line cannot be attributed
+				// safely to this observation rather than a passing neighbour.
+				// Keep it in the scan; the honest reporter can put the
+				// negative output on a separate, labelled line.
+				anomalies := ScanOutput(lines[i])
+				if role == RoleNegativeObservation {
+					// The termination marker itself is the observation,
+					// not an independent failing test on a green run.
+					anomalies = slices.DeleteFunc(anomalies, func(a Anomaly) bool { return a.Marker == "signal: killed" })
+				}
+				if len(anomalies) == 0 {
+					framingLines[i] = true
+				}
+			} else {
+				for j := start; j <= end; j++ {
+					framingLines[j] = true
+				}
 			}
 		}
 	}
@@ -443,8 +497,11 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	// available, and it is checkable rather than inferred.
 	for _, c := range cited {
 		if c.Verdict.IsKilled() {
-			// 🎯T461: refused in both directions — as a pass AND as failing
-			// evidence. No honest-red exemption reaches here (see honestRedRoles).
+			// 🎯T461: a host kill proves neither pass nor failing assertion.
+			// 🎯T1048: it may be cited only as the termination observed.
+			if exempt[c.Raw] {
+				continue
+			}
 			flags = append(flags, Flag{
 				Kind: FlagAttestationKilled,
 				Detail: fmt.Sprintf(
@@ -656,11 +713,26 @@ const BannerHeading = "⚠ FALSE-GREEN CHECK (🎯T386): this report's own evide
 // to the overseer. Empty when there is nothing to say — silence is the normal
 // case and must stay cheap to read past.
 func Banner(flags []Flag) string {
+	return BannerFor("", flags)
+}
+
+// BannerFor is Banner with the flagged report's author named on the heading
+// line. The notify path delivers several agents' reports into one supervisor
+// turn, and on 2026-10-07 an anonymous banner riding in front of one report
+// was read as belonging to the report before it — the overseer told jevons-po
+// that a jevons worker had cited an arrai gate it had never seen (🎯T1027).
+// A banner that says whose evidence it judged cannot be misattributed by
+// position. Empty agent keeps the plain heading, which BannerHeading readers
+// prefix-match.
+func BannerFor(agent string, flags []Flag) string {
 	if len(flags) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(BannerHeading)
+	if agent = strings.TrimSpace(agent); agent != "" {
+		fmt.Fprintf(&b, " Report from %s.", agent)
+	}
 	for _, f := range flags {
 		b.WriteString("\n  • ")
 		b.WriteString(f.String())

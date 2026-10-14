@@ -106,11 +106,13 @@ func (s *Server) recoverMissedTurnsFromSpool(name string, attachedAt time.Time) 
 	if s == nil || strings.TrimSpace(name) == "" || s.agentReportStateDir() == "" {
 		return 0
 	}
-	recs, err := spool.ReadSeat(spool.Dir(), name)
+	after := attachedAt.Add(-MissedTurnLookback)
+	// Only the lookback window can hold a missed turn; reading the seat's
+	// whole history for it is what grew the daemon on restart (🎯T1067).
+	recs, err := spool.ReadSeatSince(spool.Dir(), name, after)
 	if err != nil || len(recs) == 0 {
 		return 0
 	}
-	after := attachedAt.Add(-MissedTurnLookback)
 	if rec, err := agentreport.Latest(s.agentReportStateDir(), name); err == nil && rec.At.After(after) {
 		after = rec.At
 	}

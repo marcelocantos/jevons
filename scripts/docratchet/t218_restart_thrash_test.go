@@ -15,7 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/marcelocantos/jevons/internal/testreap"
 )
@@ -31,12 +30,12 @@ import (
 //
 // The three properties under test, in the order they matter:
 //
-//	no-op   identical build → the serving pid survives untouched
+//	no-op    identical build → the serving pid survives untouched
 //	coalesce concurrent callers → exactly one bounce, not N
-//	no-skip  changed build → always activated, even inside the window (🎯T194)
+//	activate changed build → activated at once, never skipped (🎯T194)
 //
-// The last one is why the policy waits instead of skipping: a skip would
-// report success while a stale binary kept serving.
+// There is no rate limit (owner, 2026-10-12): a skip would report success
+// while a stale binary kept serving, and a delay only held fixes back.
 
 // fakeDaemonSrc stands in for jevonsd: it takes the same flags and answers
 // the two endpoints the script probes. Built twice with different -ldflags
@@ -74,53 +73,15 @@ func main() {
 }
 `
 
-// 🎯T442 — the thrash window is injected, never inferred from real time.
-//
-// The window is a comparison between two clock readings: the epoch the script
-// stamped after its last successful restart, and `date +%s` when the next
-// caller asks. Read from the real clock, the gap is whatever the machine took
-// to get from one to the other — four no-op script runs and a `go build`, here
-// — so "inside a 6s window" was a statement about this laptop's load, and the
-// ratchet went red once at HEAD (gate cde5b3e4) with the restart log showing a
-// perfectly healthy bounce. A longer window would only lower the firing rate;
-// the reading has to stop being a race.
-//
-// So the harness owns the clock: a `date` shim first on the script's PATH
-// answers `+%s` from a file the test writes, and delegates every other format
-// (the log timestamps) to the real thing. Elapsed is then exactly what the
-// test set, however slow the machine is, and the assertions below can name the
-// arithmetic — "2s ago (min 6s); waiting 4s" — instead of hoping for a
-// substring. Remove the shim and those numbers become real-clock noise, so the
-// exact match is also what guards the injection.
-const (
-	fixedClockEpoch  = 1700000000 // frozen "now"; no real time enters the window
-	thrashWindowSec  = 6          // MIN_INTERVAL_SEC for the changed-build run
-	thrashElapsedSec = 2          // injected age of the last restart stamp
-	thrashRemainSec  = thrashWindowSec - thrashElapsedSec
-)
-
-// dateShim answers `date +%s` from clockFile and delegates everything else to
-// the real date. Written per-env so nothing outside this test sees it.
-const dateShim = `#!/bin/bash
-# 🎯T442 fixed-clock shim — see t218_restart_thrash_test.go.
-if [ "$#" -eq 1 ] && [ "$1" = "+%%s" ]; then
-  cat %q
-  exit 0
-fi
-exec %q "$@"
-`
-
 // thrashEnv is one hermetic universe: a copied script, a throwaway port, a
-// private HOME, its own stamp/lock/active files, and its own clock.
+// private HOME, and its own lock and active files.
 type thrashEnv struct {
-	t         *testing.T
-	root      string // fake repo root (script's ROOT, so BIN = root/bin/jevonsd)
-	home      string
-	port      int
-	script    string
-	srcDir    string
-	shimDir   string // 🎯T442: holds the `date` shim, first on the script's PATH
-	clockFile string // 🎯T442: the epoch that shim answers `date +%s` with
+	t      *testing.T
+	root   string // fake repo root (script's ROOT, so BIN = root/bin/jevonsd)
+	home   string
+	port   int
+	script string
+	srcDir string
 }
 
 func newThrashEnv(t *testing.T) *thrashEnv {
@@ -198,28 +159,10 @@ func newThrashEnv(t *testing.T) *thrashEnv {
 		t.Fatal(err)
 	}
 
-	// 🎯T442: the injected clock. realDate is resolved here, from the test's
-	// own PATH, because the shim's PATH deliberately does not contain itself.
-	realDate, err := exec.LookPath("date")
-	if err != nil {
-		t.Skipf("no date binary to delegate to: %v", err)
-	}
-	shimDir := filepath.Join(root, "clockshim")
-	if err := os.MkdirAll(shimDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	clockFile := filepath.Join(home, "clock.epoch")
-	shim := fmt.Sprintf(dateShim, clockFile, realDate)
-	if err := os.WriteFile(filepath.Join(shimDir, "date"), []byte(shim), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	e := &thrashEnv{
 		t: t, root: root, home: home, port: port,
 		script: script, srcDir: srcDir,
-		shimDir: shimDir, clockFile: clockFile,
 	}
-	e.setClock(fixedClockEpoch)
 	t.Cleanup(e.killDaemon)
 	return e
 }
@@ -242,18 +185,8 @@ func (e *thrashEnv) build(variant string) {
 	}
 }
 
-// setClock moves the injected clock. Every `date +%s` the script runs after
-// this — the stamp it writes, and the elapsed it computes next time — reads
-// this value, so the thrash window is arithmetic the test chose.
-func (e *thrashEnv) setClock(epoch int) {
-	e.t.Helper()
-	if err := os.WriteFile(e.clockFile, []byte(strconv.Itoa(epoch)+"\n"), 0o644); err != nil {
-		e.t.Fatal(err)
-	}
-}
-
 // run invokes the script and returns its combined output.
-func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
+func (e *thrashEnv) run(args ...string) (string, error) {
 	e.t.Helper()
 	cmd := exec.Command("/bin/bash", append([]string{e.script}, args...)...)
 	cmd.Dir = e.root
@@ -271,8 +204,7 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 	// duplicate key in the environ slice is OS-dependent, and "set to 0" would
 	// still lose if the leaked "1" came later.
 	cmd.Env = append(scrubRestartControlEnv(os.Environ()),
-		// 🎯T442: the shim dir goes first so `date +%s` is the injected clock.
-		"PATH="+e.shimDir+":/usr/bin:/bin:/usr/sbin:/sbin",
+		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
 		"HOME="+e.home,
 		"JEVONS_RESTART_PORT="+strconv.Itoa(e.port),
 		"JEVONS_RESTART_WORKDIR="+e.root,
@@ -280,9 +212,7 @@ func (e *thrashEnv) run(minInterval int, args ...string) (string, error) {
 		"JEVONS_RESTART_WAIT_SEC=30",
 		"JEVONS_RESTART_STOP_WAIT_SEC=5",
 		"JEVONS_RESTART_SKIP_MAKE=1",
-		"JEVONS_RESTART_MIN_INTERVAL_SEC="+strconv.Itoa(minInterval),
 		"JEVONS_RESTART_LOCK_WAIT_SEC=90",
-		"JEVONS_RESTART_STAMP="+filepath.Join(e.home, "restart.last"),
 		"JEVONS_RESTART_ACTIVE="+filepath.Join(e.home, "restart.active"),
 		"JEVONS_RESTART_LOCK="+filepath.Join(e.home, "restart.lock"),
 		// 🎯T405: one detach log per caller. The detached child writes to
@@ -385,54 +315,7 @@ func (e *thrashEnv) variantServed() string {
 // Matching on the env's own temp root is what makes the sweep total while
 // keeping the owner's real jevonsd, which lives outside it, unreachable.
 func (e *thrashEnv) killDaemon() {
-	for range 10 {
-		pids := e.spawnedPIDs()
-		if len(pids) == 0 {
-			return
-		}
-		for _, pid := range pids {
-			if p, err := os.FindProcess(pid); err == nil {
-				_ = p.Kill()
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	// Failing here is the point: a silent leak is what let this go unnoticed
-	// for four days, so the test that causes one must report it.
-	if left := e.spawnedPIDs(); len(left) > 0 {
-		e.t.Errorf("leaked %d process(es) from %s that outlived the test: %v", len(left), e.root, left)
-	}
-}
-
-// spawnedPIDs lists live processes whose executable lives under the env's
-// temp root, whatever they are currently doing — listening, starting up, or
-// wedged. Paths are compared with a separator suffix so a sibling TempDir
-// sharing a name prefix cannot match.
-func (e *thrashEnv) spawnedPIDs() []int {
-	out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
-	if err != nil {
-		return nil
-	}
-	prefix := e.root + string(os.PathSeparator)
-	self := os.Getpid()
-	var pids []int
-	for _, line := range strings.Split(string(out), "\n") {
-		// Split on the first space only: executable paths may contain spaces.
-		line = strings.TrimSpace(line)
-		sp := strings.IndexByte(line, ' ')
-		if sp < 0 {
-			continue
-		}
-		if !strings.HasPrefix(strings.TrimSpace(line[sp+1:]), prefix) {
-			continue
-		}
-		pid, err := strconv.Atoi(line[:sp])
-		if err != nil || pid == self {
-			continue
-		}
-		pids = append(pids, pid)
-	}
-	return pids
+	testreap.ReapUnder(e.t, e.root)
 }
 
 func freeTCPPort(t *testing.T) int {
@@ -460,7 +343,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 	e.build("a")
 
 	// --- cold start: nothing serving, so a restart must happen -------------
-	out, err := e.run(0)
+	out, err := e.run()
 	if err != nil {
 		t.Fatalf("cold start failed: %v\n%s", err, out)
 	}
@@ -478,7 +361,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 	// --- THE THRASH ORACLE: identical build must not touch the port -------
 	// This is the 2026-08-05 incident in miniature. Before the policy, this
 	// call killed `first` and started an identical replacement.
-	out, err = e.run(0)
+	out, err = e.run()
 	if err != nil {
 		t.Fatalf("no-op run failed: %v\n%s", err, out)
 	}
@@ -494,7 +377,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 
 	// Repeat: thrash is a *sustained* failure, so one no-op is not enough.
 	for i := range 3 {
-		if out, err = e.run(0); err != nil {
+		if out, err = e.run(); err != nil {
 			t.Fatalf("no-op run %d failed: %v\n%s", i, err, out)
 		}
 	}
@@ -502,37 +385,24 @@ func TestRestartThrashPolicy(t *testing.T) {
 		t.Errorf("serving pid changed %d → %d across repeated unchanged calls", first, got)
 	}
 
-	// --- changed build inside the window: wait, never skip (🎯T194) -------
+	// --- changed build: activated at once, never skipped (🎯T194) ---------
 	e.build("b")
-	// 🎯T442: put the caller inside the window by moving the clock, not by
-	// racing to arrive before it closes. The cold start stamped
-	// fixedClockEpoch; thrashElapsedSec later is inside a thrashWindowSec
-	// window on any machine, at any load, however long the builds above took.
-	e.setClock(fixedClockEpoch + thrashElapsedSec)
-	// 🎯T815: inside the window the caller is no longer held for the
-	// remainder; the request is deferred and the runner activates the new
-	// build when the window ends. The 🎯T194 property is unchanged — a
-	// changed build is always activated, never skipped — only who waits.
-	out, err = e.run(thrashWindowSec)
+	out, err = e.run()
 	if err != nil {
 		t.Fatalf("changed-build run failed: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "already activated") {
 		t.Fatalf("changed build was treated as already activated:\n%s", out)
 	}
-	if !strings.Contains(out, "activation deferred") {
-		t.Fatalf("changed build inside the window was neither activated nor deferred:\n%s", out)
-	}
-	deadline := time.Now().Add(90 * time.Second)
-	for e.variantServed() != "b" && time.Now().Before(deadline) {
-		time.Sleep(500 * time.Millisecond)
+	if !strings.Contains(out, "OK: development jevonsd serving") {
+		t.Fatalf("changed build was not activated:\n%s", out)
 	}
 	second := e.listenerPID()
 	if second == first || second == 0 {
 		t.Errorf("changed build did not replace the daemon (pid %d → %d)", first, second)
 	}
 	if got := e.variantServed(); got != "b" {
-		t.Fatalf("after the window, :%d still serves variant %q — this is the stale-binary failure 🎯T194 forbids", e.port, got)
+		t.Fatalf(":%d still serves variant %q — this is the stale-binary failure 🎯T194 forbids", e.port, got)
 	}
 
 	// --- concurrency: N callers, one bounce -------------------------------
@@ -545,7 +415,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			outs[i], errs[i] = e.run(0)
+			outs[i], errs[i] = e.run()
 		}(i)
 	}
 	wg.Wait()
@@ -570,15 +440,6 @@ func TestRestartThrashPolicy(t *testing.T) {
 		t.Errorf("%d of %d concurrent callers bounced; %d coalesced; want 1 bounce and %d coalesced:%s",
 			restarts, callers, noops, callers-1, b.String())
 	}
-	// 🎯T892: activation of a changed build inside/around the thrash window
-	// is deferred (🎯T815) — a concurrent caller's run() can return before
-	// the deferred activation lands, especially under fleet load. Poll the
-	// same way the single-caller "b" case above does instead of asserting
-	// on the instant wg.Wait() returns.
-	deadlineC := time.Now().Add(90 * time.Second)
-	for e.variantServed() != "c" && time.Now().Before(deadlineC) {
-		time.Sleep(500 * time.Millisecond)
-	}
 	if got := e.variantServed(); got != "c" {
 		t.Errorf("after the coalesced restart, :%d serves variant %q, want %q", e.port, got, "c")
 	}
@@ -597,7 +458,7 @@ func TestRestartThrashPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.build("d")
-	out, err = e.run(0)
+	out, err = e.run()
 	if err != nil {
 		t.Fatalf("run behind a dead holder's leftover lock file failed: %v\n%s", err, out)
 	}
@@ -625,15 +486,12 @@ func TestRestartThrashPolicyDocumented(t *testing.T) {
 		"🎯T218",
 		"ALREADY-ACTIVATED",
 		"ONE-AT-A-TIME",
-		"WAIT, DON'T SKIP",
 		"🎯T194",
-		// 🎯T815: the gate that replaced sleeping out the interval.
-		"ACTIVATION GATE",
 		// 🎯T442: the daemon must not inherit the re-exec flags, or every
 		// agent it spawns skips the lock and races the port.
 		"unset JEVONS_RESTART_DETACHED JEVONS_RESTART_LOCKED",
 		// 🎯T529: lock-path knobs must not leak into the daemon either —
-		// an inherited fleet LOCK path makes thrash-window arithmetic ambient.
+		// an inherited fleet LOCK path would share the fleet's lock file.
 		"unset JEVONS_RESTART_LOCK JEVONS_RESTART_LOCK_WAIT_SEC",
 	} {
 		if !strings.Contains(body, m) {

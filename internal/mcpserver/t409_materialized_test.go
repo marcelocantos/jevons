@@ -117,12 +117,3 @@ func TestT409TokenExhaustionScaleRecoversAll(t *testing.T) {
 		}
 	}
 }
-
-func TestT409RecoverIsNotPrepareCompaction(t *testing.T) {
-	// Compile-time / behavioural pin: lost-session recovery is RehydratedDef
-	// (cold rotate), and PrepareCompaction stays withdrawn (🎯T40.2).
-	f := &fleet.Claudia{}
-	if _, err := f.PrepareCompaction("anyone", true); err == nil {
-		t.Fatal("PrepareCompaction succeeded — must stay withdrawn for lost-session")
-	}
-}

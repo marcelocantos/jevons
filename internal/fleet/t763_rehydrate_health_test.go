@@ -13,47 +13,8 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// TestT763SwitchDropsAtSwitchTime pins the second acceptance clause: the
-// refused capability is dropped when the provider changes, not deferred to
-// the next rehydrate.
-func TestT763SwitchDropsAtSwitchTime(t *testing.T) {
-	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name: "w", WorkDir: t.TempDir(), SessionID: "t763-w", Provider: claudia.ProviderCodex,
-		SandboxMode: "workspace-write",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewClaudia(reg).rotate("w", claudia.ProviderClaude, true, "migrate"); err != nil {
-		t.Fatal(err)
-	}
-	def := reg.Def("w")
-	if def.Provider != claudia.ProviderClaude || def.SandboxMode != "" {
-		t.Fatalf("after switch, def=%+v; want claude with no sandbox", def)
-	}
-	if got := RehydrateHealth(*def); got != "resumable" {
-		t.Fatalf("RehydrateHealth=%q, want resumable", got)
-	}
-	if got := CapDrop("w"); !strings.Contains(got, "codex→claude") || !strings.Contains(got, `sandbox_policy mode="workspace-write"`) {
-		t.Fatalf("CapDrop=%q, want the switch and the dropped sandbox recorded", got)
-	}
-
-	// Codex keeps its sandbox: nothing it supports is dropped.
-	back := *def
-	back.SandboxMode = "danger-full-access"
-	if err := switchProvider(&back, claudia.ProviderCodex, "test"); err != nil {
-		t.Fatal(err)
-	}
-	if back.SandboxMode != "danger-full-access" {
-		t.Fatalf("switch to codex dropped a sandbox codex supports: %+v", back)
-	}
-}
-
 // TestT763StaleDefIsRepairedAndReported covers a def switched by a road that
-// does not drop (claudia's recordMigrate, or a pre-fix mint): /api/agents
+// did not drop (an older switch, or a pre-fix mint): /api/agents
 // calls it repairable, and the next rehydrate drops the setting and starts.
 func TestT763StaleDefIsRepairedAndReported(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
@@ -143,19 +104,19 @@ func TestT763SwitchNeverDropsARestriction(t *testing.T) {
 	var started []claudia.Config
 	reg.SetLaunchers(&claudia.RegistryLaunchers{Start: t763Start(&started)})
 	ro := claudia.AgentDef{Name: "ro-auditor", WorkDir: t.TempDir(), SessionID: "t763-ro",
-		Provider: claudia.ProviderCodex, SandboxMode: "read-only"}
+		Provider: "openai-codex", SandboxMode: "read-only"}
 	if err := reg.Register(ro); err != nil {
 		t.Fatal(err)
 	}
-	_, err = NewClaudia(reg).rotate("ro-auditor", claudia.ProviderClaude, true, "migrate")
+	_, err = NewClaudia(reg).SwitchModel("ro-auditor", claudia.ProviderClaude, "claude-opus-5", true)
 	if !errors.Is(err, ErrProviderSwitchWouldWeaken) || !strings.Contains(err.Error(), `"read-only"`) {
-		t.Fatalf("rotate err=%v, want a refusal naming the read-only sandbox", err)
+		t.Fatalf("switch err=%v, want a refusal naming the read-only sandbox", err)
 	}
-	if def := reg.Def("ro-auditor"); def.Provider != claudia.ProviderCodex || def.SandboxMode != "read-only" {
+	if def := reg.Def("ro-auditor"); def.Provider != "openai-codex" || def.SandboxMode != "read-only" {
 		t.Fatalf("refused switch still changed the seat: %+v", def)
 	}
 
-	// Already stale (claudia recordMigrate moved it): not scrubbed, broken.
+	// Already stale (switched before switches dropped): not scrubbed, broken.
 	stale := ro
 	stale.Name, stale.SessionID, stale.Provider = "ro-stale", "t763-ro-stale", claudia.ProviderClaude
 	if err := reg.Register(stale); err != nil {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // registerEventPushTools exposes 🎯T34 event-triggered push via MCP so
@@ -27,6 +28,8 @@ func (s *Server) registerEventPushTools() {
 			mcp.WithString("target", mcp.Required(), mcp.Description("Thread ID or fleet agent name to push into")),
 			mcp.WithString("event", mcp.Required(), mcp.Description("Event source/kind, e.g. ci, worker-finished, timer, dependency")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("What the agent should do next / what happened")),
+			mcp.WithString("directive_family", mcp.Description("Optional explicit operation scope for supersession; requires directive_kind")),
+			mcp.WithString("directive_kind", mcp.Description("authorization or hold; only a later hold cancels pending authorization in the same recipient/family")),
 		),
 		s.handleEventPush,
 	)
@@ -55,6 +58,19 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 		life["event"] = event
 	}
 	wire := butler.FormatEventPush(event, text)
+	directive, derr := parseSendDirective(args)
+	if derr != nil {
+		return mcp.NewToolResultError(derr.Error()), nil
+	}
+	// A direct hold must cancel older pending authorizations before delivery.
+	// No prose classifier: callers must opt into a typed family and kind.
+	if directive != nil && directive.Kind == "hold" && s.flightState(target) != FlightInFlight {
+		_, _, removed, err := s.sendQueue().ApplyDirective(target, wire, *directive, false, time.Now())
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		life["superseded"] = len(removed)
+	}
 
 	// 🎯T428. This tool is the one notification door that does NOT pass through
 	// deliverToOverseer — butler.PushEvent reaches the agent process directly —
@@ -86,7 +102,7 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	// `grok acp: prompt already in flight` with the payload nowhere.
 	if s.flightState(target) == FlightInFlight {
 		_ = s.EnsureAgentEventsWired(target)
-		return s.queueBusyEventPush(target, event, wire, life, ticket)
+		return s.queueBusyDirectiveEventPush(target, event, wire, life, ticket, directive)
 	}
 
 	// 🎯T429 clause 5 — TIMEOUT IS NOT ABSENCE. The observation is opened here,
@@ -101,7 +117,7 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	case isPromptInFlight(err):
 		// Flight state was stale or never written; the provider still said
 		// busy. Queue the same wire the idle path would have sent.
-		return s.queueBusyEventPush(target, event, wire, life, ticket)
+		return s.queueBusyDirectiveEventPush(target, event, wire, life, ticket, directive)
 	case timedOut, err != nil && !ClassifySendError(err).DisprovesDelivery():
 		// The push did not come back with an answer inside the window, or came
 		// back with an error that is a failure to OBSERVE rather than evidence
@@ -149,6 +165,23 @@ func (s *Server) handleEventPush(_ context.Context, req mcp.CallToolRequest) (*m
 	s.ObserveProviderOK()
 	s.logLifecycle(compEventPush, "push", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf("Pushed event %q to %q.\n\n%s", event, target, reply)), nil
+}
+
+// queueBusyDirectiveEventPush uses the same durable queue transaction for a
+// typed busy event, including the hold that replaces pending authorizations.
+func (s *Server) queueBusyDirectiveEventPush(target, event, wire string, life map[string]any, ticket notifyReplayTicket, directive *sendq.Directive) (*mcp.CallToolResult, error) {
+	if directive == nil {
+		return s.queueBusyEventPush(target, event, wire, life, ticket)
+	}
+	_, n, removed, err := s.sendQueue().ApplyDirective(target, wire, *directive, true, time.Now())
+	if err != nil {
+		ticket.Abandon()
+		return mcp.NewToolResultError(fmt.Sprintf("event push NOT QUEUED: %v", err)), nil
+	}
+	ticket.Settle(true)
+	life["status"], life["queued"], life["superseded"] = "queued", n, len(removed)
+	s.logLifecycle(compEventPush, "push", "ok", life)
+	return mcp.NewToolResultText(fmt.Sprintf("queued: %q event %q held (%d pending); superseded %d authorization(s)", target, event, n, len(removed))), nil
 }
 
 // queueBusyEventPush holds an event-push on sendq for the next turn boundary

@@ -76,7 +76,7 @@ func (s *suite) midTurnAnswerWithBroker() error {
 	if relayedAt.IsZero() {
 		return fmt.Errorf("no mid-turn answer was relayed to the overseer for %s", id)
 	}
-	if _, err := s.waitHotMigrationReply(id, len(base), "SLEPTTWICE", 150*time.Second); err != nil {
+	if _, err := s.waitReplyContaining(id, len(base), "SLEPTTWICE", 150*time.Second); err != nil {
 		return fmt.Errorf("the worker did not finish its turn: %w", err)
 	}
 	ahead := time.Since(relayedAt)

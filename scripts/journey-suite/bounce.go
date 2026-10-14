@@ -209,10 +209,6 @@ func (s *suite) agentsPath() string {
 	return filepath.Join(s.stateDir, "agents.json")
 }
 
-func (s *suite) handoverPath(name string) string {
-	return filepath.Join(s.stateDir, "handover", name+".json")
-}
-
 // The normal registry loader treats read failures as an empty registry. An
 // oracle must distinguish failed observation from an actual missing seat.
 func bounceRegistrySnapshot(path string) (map[string]claudia.AgentDef, error) {
@@ -304,19 +300,6 @@ func (s *suite) jBounceResume() error {
 	if err := queueJourneyProvider(preLogs, id, string(s.provider)); err != nil {
 		return fmt.Errorf("original aside: %w", err)
 	}
-	handovers := map[string]string{}
-	for name := range before {
-		body, err := os.ReadFile(s.handoverPath(name))
-		if err == nil {
-			if name == id {
-				return fmt.Errorf("fresh bounce fixture already has a handover")
-			}
-			handovers[name] = string(body)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("pre-bounce handover %s: %w", name, err)
-		}
-	}
-
 	if err := s.signalStop(8 * time.Second); err != nil {
 		return fmt.Errorf("normal drain failed: %w", err)
 	}
@@ -380,30 +363,6 @@ func (s *suite) jBounceResume() error {
 		return fmt.Errorf("replacement aside: %w", err)
 	}
 
-	for name := range before {
-		body, err := os.ReadFile(s.handoverPath(name))
-		previous, existed := handovers[name]
-		if existed {
-			// An older pending migration may legitimately advance or be reaped.
-			// Report that residue; this fixture requires no handover record for
-			// its fresh aside and no new records for the other seats. File
-			// absence alone does not prove that no seed was ever delivered.
-			if err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("post-bounce handover %s: %w", name, err)
-			}
-			if err != nil || string(body) != previous {
-				fmt.Printf("J14 pre-existing handover changed for %s; prior migration is outside this drain-only probe\n", name)
-			}
-			continue
-		}
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("post-bounce handover %s: %w", name, err)
-		}
-		return fmt.Errorf("bounce wrote a new T285 handover for %s", name)
-	}
 	if _, err := s.mcpText("jevons_thread_remove", map[string]any{"id": id}); err != nil {
 		return fmt.Errorf("remove bounce fixture: %w", err)
 	}

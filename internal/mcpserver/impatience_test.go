@@ -258,3 +258,65 @@ func TestIdlePressureSweepWithoutEngineKeepsT315Path(t *testing.T) {
 		t.Fatalf("T315 path pushes=%d want 1", pushes)
 	}
 }
+
+// 🎯T1066: the impatience ladder is the code path actually live in
+// production once SetImpatienceEngine is installed (idlePressureSweep's own
+// comment: SweepIdleNudges is the hermetic-test/pre-ladder path). The
+// 2026-10-11 incident's re-pressure/continue push on jv-t1020-auto would
+// have been driven through this ladder, not the plain sweep — so the
+// AutoSpawnPaused honouring has to hold here too, for an auto-spawned seat
+// only, never a named worker in the identical state.
+func TestImpatienceEngineHonoursAutoSpawnPausedForAutoSeatOnly(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(10_000, 0)
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []claudia.AgentDef{
+		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer,
+			Materialized: true, Provider: "grok", AutoStart: true},
+		{Name: "jv-t1020-auto", WorkDir: dir, SessionID: "s-a", Purpose: claudia.PurposeWork,
+			Parent: "jevons-po", Materialized: true, Provider: "grok", AutoStart: true, TargetID: "T1020"},
+	} {
+		if err := reg.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ledger, err := OpenIdleNudgeLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activity := NewIdleActivityTracker()
+	activity.by["jv-t1020-auto"] = IdleActivity{Phase: "idle", Updated: now}
+	s := &Server{registry: reg, idleActivity: activity, idleNudgeLedger: ledger}
+	activity.SetAuthority(s.Seats())
+	s.SetAutoSpawnPaused(true)
+
+	rep := &recordingRepressure{}
+	ov := &recordingOverseer{}
+	hum := &recordingHuman{}
+	eng := NewImpatienceEngine(ImpatienceEngineArgs{
+		Sinks: converge.Sinks{RePressure: rep, Overseer: ov, Human: hum},
+	})
+	s.SetImpatienceEngine(eng)
+	s.SetIdlePressureHooks(IdlePressureHooks{
+		MissionOpen: func(string) bool { return true },
+	})
+	running := func(name string) bool { return name == "jv-t1020-auto" }
+
+	s.idlePressureSweep(idlePressureDeps{Now: now, Running: running})
+	tRep := now.Add(converge.RepressureAfter + time.Minute)
+	s.idlePressureSweep(idlePressureDeps{Now: tRep, Running: running})
+
+	if len(rep.agents) != 0 {
+		t.Fatalf("frontier_consume.disabled must stop the ladder from re-pressuring an auto seat: %v", rep.agents)
+	}
+	eng.mu.Lock()
+	tracked := eng.ladder.Tracked("jv-t1020-auto")
+	eng.mu.Unlock()
+	if tracked {
+		t.Fatalf("auto seat under config pause must not be tracked by the ladder at all: tracked=%v", tracked)
+	}
+}

@@ -203,13 +203,25 @@ const (
 	// ControlNotifyIdle: the worker-idle notification to a parent, which
 	// instructs continue/re-brief/restart (🎯T413).
 	ControlNotifyIdle Control = "notify_idle"
+
+	// ControlDeliverSubmit: the final hand-off that actually begins a model
+	// turn on an ALREADY-RUNNING seat (🎯T1066). ControlDeliverStart only
+	// guards launching a stopped process; a broker-owned seat that is alive
+	// at admission time skips that gate entirely (ensureAgentProcess returns
+	// early for a live process), and a message accepted into the daemon's
+	// own sendq while intent was Working can still be drained into a live
+	// seat minutes later, after the intent flipped to blocked_owner/parked —
+	// the 2026-10-11 wake-wave shape. This control is read at the drain
+	// chokepoint, immediately before the payload is handed to the process,
+	// so a flip that lands between admission and drain is still honoured.
+	ControlDeliverSubmit Control = "deliver_submit"
 )
 
 // AllControls lists every control in declaration order (oracle enumeration).
 func AllControls() []Control {
 	return []Control{
 		ControlSpawn, ControlNudge, ControlRevive, ControlRepressure,
-		ControlRepair, ControlDeliverStart, ControlNotifyIdle,
+		ControlRepair, ControlDeliverStart, ControlNotifyIdle, ControlDeliverSubmit,
 	}
 }
 

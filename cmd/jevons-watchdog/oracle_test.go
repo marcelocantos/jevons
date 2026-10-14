@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/testreap"
+
 	"github.com/marcelocantos/jevons/internal/supervise"
 )
 
@@ -49,6 +51,8 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	root := t405RepoRoot(t)
+	// The restart detaches its daemon; t.Cleanup cannot run on -timeout or SIGKILL.
+	testreap.Arm(t)
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	if err := os.MkdirAll(filepath.Join(home, ".jevons"), 0o755); err != nil {
@@ -125,10 +129,8 @@ func (r *rig) env(extra ...string) []string {
 		"JEVONS_RESTART_LOG=" + filepath.Join(r.dir, "daemon.log"),
 		"JEVONS_RESTART_DETACH_LOG=" + r.restartLog(),
 		"JEVONS_RESTART_LOCK=" + filepath.Join(r.dir, "restart.lock"),
-		"JEVONS_RESTART_STAMP=" + filepath.Join(r.dir, "restart.last"),
 		"JEVONS_RESTART_ACTIVE=" + filepath.Join(r.dir, "restart.active"),
 		"JEVONS_RESTART_WAIT_SEC=30",
-		"JEVONS_RESTART_MIN_INTERVAL_SEC=0",
 	}
 	return append(e, extra...)
 }
@@ -159,27 +161,21 @@ func (r *rig) waitServing(want bool, within time.Duration) bool {
 	return r.serving() == want
 }
 
-// ownerForce plants the 🎯T815 owner token so the next --force is honoured:
-// these oracles re-bounce a healthy daemon on purpose, which is the owner's
-// bypass. (The watchdog itself passes no --force: a dead port never waits.)
-func (r *rig) ownerForce() {
+// forgetActive deletes the script's record of the daemon it started, so it
+// cannot prove what is serving and bounces (its safe default). These oracles
+// re-bounce a healthy daemon on purpose; with an identical binary the
+// already-activated check would otherwise make the restart a no-op.
+func (r *rig) forgetActive() {
 	r.t.Helper()
-	p := filepath.Join(r.home, ".jevons", "restart-jevonsd.owner-force")
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		r.t.Fatal(err)
-	}
-	if err := os.WriteFile(p, nil, 0o600); err != nil {
-		r.t.Fatal(err)
-	}
-	if err := os.Chmod(p, 0o600); err != nil {
+	if err := os.Remove(filepath.Join(r.dir, "restart.active")); err != nil && !os.IsNotExist(err) {
 		r.t.Fatal(err)
 	}
 }
 
-// restart runs the script the way the owner does (--force), and waits for it.
+// restart runs the script and waits for it, forcing a real bounce.
 func (r *rig) restart(extraEnv ...string) error {
-	r.ownerForce()
-	cmd := exec.Command(r.script, "--force")
+	r.forgetActive()
+	cmd := exec.Command(r.script)
 	cmd.Dir = r.root
 	cmd.Env = r.env(extraEnv...)
 	out, err := cmd.CombinedOutput()
@@ -215,39 +211,7 @@ func (r *rig) cycle(grace time.Duration) string {
 }
 
 func (r *rig) killDaemon() {
-	// The restart detaches its daemon (cmd/detach), so a successor that
-	// lost the port is invisible to lsof. Sweep by executable path under
-	// the scratch dir — the same leak t218/t434 used to leave behind.
-	prefix := r.dir + string(os.PathSeparator)
-	live := func() []string {
-		out, err := exec.Command("ps", "-Ao", "pid=,comm=").Output()
-		if err != nil {
-			return nil
-		}
-		var pids []string
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			sp := strings.IndexByte(line, ' ')
-			if sp < 0 || !strings.HasPrefix(strings.TrimSpace(line[sp+1:]), prefix) {
-				continue
-			}
-			pids = append(pids, line[:sp])
-		}
-		return pids
-	}
-	for range 10 {
-		pids := live()
-		if len(pids) == 0 {
-			return
-		}
-		for _, pid := range pids {
-			_ = exec.Command("kill", "-9", pid).Run()
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if left := live(); len(left) > 0 {
-		r.t.Errorf("leaked %d process(es) from %s that outlived the test: %v", len(left), r.dir, left)
-	}
+	testreap.ReapUnder(r.t, r.dir)
 }
 
 func (r *rig) blurts() []string {
@@ -405,8 +369,8 @@ func t405ForegroundKill(t *testing.T, detached bool) {
 		t.Fatalf("something is already listening on scratch port %d", r.port)
 	}
 
-	r.ownerForce()
-	cmd := exec.Command(r.script, "--force")
+	r.forgetActive()
+	cmd := exec.Command(r.script)
 	cmd.Dir = r.root
 	if detached {
 		cmd.Env = r.env()

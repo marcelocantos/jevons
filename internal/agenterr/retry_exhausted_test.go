@@ -15,6 +15,8 @@ import (
 func TestClassifyTextRetryExhausted(t *testing.T) {
 	t.Parallel()
 	cases := []string{
+		"retry_exhausted: connection timed out after 1 retry",
+		"retries exceeded: 503 Service Unavailable after 1 retry",
 		"max retries exceeded",
 		"Max retries exceeded while connecting",
 		"retries exhausted after timeout",
@@ -52,18 +54,19 @@ func TestRetryExhaustedNotTransient(t *testing.T) {
 
 func TestOwnerCopyRetryExhaustedNamesBudget(t *testing.T) {
 	t.Parallel()
-	got := agenterr.OwnerCopy(agenterr.ClassRetryExhausted, "max retries exceeded: dial tcp timeout")
+	got := agenterr.OwnerCopy(agenterr.ClassRetryExhausted, "max retries exceeded after 1 retry: dial tcp timeout")
 	if !strings.Contains(got, "retry_exhausted") {
 		t.Fatalf("owner copy missing class tag: %q", got)
 	}
-	if !strings.Contains(got, "1") {
-		t.Fatalf("owner copy should name the default retry budget: %q", got)
+	if !strings.Contains(got, "after 1 retry") || !strings.Contains(got, "provider-specific") {
+		t.Fatalf("owner copy should preserve the reported budget and explain its source: %q", got)
 	}
 }
 
-func TestDefaultRetryBudgetIsOne(t *testing.T) {
+func TestRetryBudgetIsNotInvented(t *testing.T) {
 	t.Parallel()
-	if agenterr.DefaultRetryBudget != 1 {
-		t.Fatalf("DefaultRetryBudget = %d, want 1 (🎯T862.12 documents the budget-of-one default)", agenterr.DefaultRetryBudget)
+	got := agenterr.OwnerCopy(agenterr.ClassRetryExhausted, "max retries exceeded")
+	if strings.Contains(got, "budget 1") || strings.Contains(got, "retried once") || !strings.Contains(got, "provider-specific") {
+		t.Fatalf("unknown provider budget must not be presented as one: %q", got)
 	}
 }

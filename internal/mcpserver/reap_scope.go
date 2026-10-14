@@ -59,6 +59,16 @@ func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktr
 			Kind:   "pending_gate",
 			Detail: "the report declares a blocking wait on a tracked background gate that has not resolved",
 		})
+	} else if span, ok := FindActiveExternalWait(report); ok {
+		// 🎯T1024: the same scope narrated in monitoring vocabulary ("alive
+		// and still queued", "monitor armed ... still watching") that the
+		// T565 verb list does not hear. Only when T565 was silent, so a
+		// report both recognise logs once, under the classifier that
+		// existed first.
+		out = append(out, OutstandingScope{
+			Kind:   activeWaitScopeKind,
+			Detail: "the report narrates an active wait on an alive external process it does not control: " + strings.TrimSpace(span),
+		})
 	}
 	if ownWorktree && tree != nil && !tree.Clean && tree.DirtyFiles > 0 {
 		sample := strings.Join(tree.DirtySample, ", ")

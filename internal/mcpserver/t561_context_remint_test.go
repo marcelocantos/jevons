@@ -17,9 +17,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
-// 🎯T561: jevons_agent_migrate off a Claude seat with weekly remaining is
-// refused with kill+start advice; exhausted Claude or owner_asked passes.
-func TestT561MigrateRefusesLeavingClaudeWithWeeklyRemaining(t *testing.T) {
+// 🎯T561: jevons_agent_switch_model off a Claude seat with weekly remaining
+// is refused with kill+start advice; exhausted Claude or owner_asked passes.
+func TestT561SwitchRefusesLeavingClaudeWithWeeklyRemaining(t *testing.T) {
 	reg := t561Registry(t, "jevons-po")
 	pct := func(v float64) *float64 { return &v }
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
@@ -37,27 +37,26 @@ func TestT561MigrateRefusesLeavingClaudeWithWeeklyRemaining(t *testing.T) {
 	call := func(s *Server, ownerAsked bool) *mcp.CallToolResult {
 		req := mcp.CallToolRequest{}
 		req.Params.Arguments = map[string]any{"name": "jevons-po", "provider": "cursor", "owner_asked": ownerAsked}
-		res, err := s.handleAgentMigrate(context.Background(), req)
+		res, err := s.handleAgentSwitchModel(context.Background(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return res
 	}
-	s := &Server{registry: reg, migrator: nil, planUsage: snap(60, 40)}
-	// migrator nil would refuse first; give the T561 gate precedence by
-	// checking its text directly.
-	if msg := s.refuseContextRemintMigrate("jevons-po", "cursor", false); !strings.Contains(msg, "jevons_agent_kill(jevons-po)") || !strings.Contains(msg, `provider="claude"`) {
+	s := &Server{registry: reg, switcher: nil, planUsage: snap(60, 40)}
+	// A nil switcher would refuse too; check the T561 gate's own text.
+	if msg := s.refuseContextRemintSwitch("jevons-po", "cursor", false); !strings.Contains(msg, "jevons_agent_kill(jevons-po)") || !strings.Contains(msg, `provider="claude"`) {
 		t.Fatalf("weekly remaining → refused with kill+start advice, got %q", msg)
 	}
-	if msg := s.refuseContextRemintMigrate("jevons-po", "cursor", true); msg != "" {
+	if msg := s.refuseContextRemintSwitch("jevons-po", "cursor", true); msg != "" {
 		t.Fatalf("owner_asked → allowed, got %q", msg)
 	}
 	s.planUsage = snap(0, 100)
-	if msg := s.refuseContextRemintMigrate("jevons-po", "cursor", false); msg != "" {
+	if msg := s.refuseContextRemintSwitch("jevons-po", "cursor", false); msg != "" {
 		t.Fatalf("claude exhausted → allowed, got %q", msg)
 	}
 	s.planUsage = nil
-	if msg := s.refuseContextRemintMigrate("jevons-po", "cursor", false); !strings.Contains(msg, "unknown is not exhausted") {
+	if msg := s.refuseContextRemintSwitch("jevons-po", "cursor", false); !strings.Contains(msg, "unknown is not exhausted") {
 		t.Fatalf("no plan feed → stay on claude, got %q", msg)
 	}
 	// Through the tool handler the refusal lands as a tool error.

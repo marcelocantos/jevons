@@ -165,6 +165,25 @@ type Backend struct {
 	// means the provider published no such balance. Reported as a raw
 	// number for now; no banding/thresholds (🎯 owner: raw number only).
 	CreditsBalance *float64 `json:"credits_balance,omitempty"`
+	// Spend is the extra/overage-usage reading (🎯T967.1), gated at
+	// serve time. At a full Claude plan window a missing/malformed spend
+	// block is explicitly unavailable, never silently interpreted as zero.
+	Spend *BackendSpend `json:"spend,omitempty"`
+	// rawSpend is the raw provider-published spend block this backend's
+	// reading carried, before WithBands decides whether to show it. Not
+	// served on the wire; Spend above is the served, already-gated form.
+	rawSpend *claudia.PlanSpend `json:"-"`
+}
+
+// BackendSpend is the served Claude extra-usage reading. A money figure is
+// present only while spending past the subscription allowance; if the
+// provider's spend block is missing or malformed at a full window, the
+// reason is shown instead of guessing. LimitReached is the provider flag.
+type BackendSpend struct {
+	UsedAUD           float64 `json:"used_aud"`
+	LimitAUD          float64 `json:"limit_aud"`
+	UnavailableReason string  `json:"unavailable_reason,omitempty"`
+	LimitReached      bool    `json:"limit_reached,omitempty"`
 }
 
 // Available reports whether this backend published anything usable.
@@ -280,6 +299,7 @@ func Convert(readings []claudia.PlanUsage, load map[string]int, now time.Time, s
 			bal := r.Credits.Balance
 			b.CreditsBalance = &bal
 		}
+		b.rawSpend = r.Spend
 		if b.Status == "" {
 			b.Status = StatusUnavailable
 		}

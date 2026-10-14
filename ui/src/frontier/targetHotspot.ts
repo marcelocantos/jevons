@@ -5,7 +5,9 @@
 
 import type { FrontierRow } from './table';
 
-const TARGET_TOKEN_RE = /(?:🎯\s*)?(T\d+(?:\.\d+)*)\b/g;
+// 🎯T1056: a cross-repo reference is written 🎯repo/Tn; repo/🎯Tn is accepted
+// too. Either way the 🎯 belongs to the token, not to the text before it.
+const TARGET_TOKEN_RE = /(?:🎯\s*)?(?:([a-z][a-z0-9_-]*)\/)?(?:🎯\s*)?([Tt]\d+(?:\.\d+)*)\b/g;
 
 const SKIP_TAGS: Record<string, boolean> = {
   CODE: true,
@@ -30,6 +32,34 @@ export function formatDisplayTargetID(raw: string | null | undefined): string {
   return id ? '🎯' + id : '';
 }
 
+/** 🎯T1037 — embedded target id in a fleet seat name (repo prefix + tN[.N]*). */
+export type SeatNameTargetParts = {
+  prefix: string;
+  matched: string;
+  suffix: string;
+  id: string;
+};
+
+const SEAT_NAME_TARGET_RE = /(^|-)(t\d+(?:\.\d+)*)(?=-|$)/i;
+
+export function splitSeatNameTarget(name: string | null | undefined): SeatNameTargetParts | null {
+  const s = String(name ?? '');
+  if (!s) return null;
+  const m = SEAT_NAME_TARGET_RE.exec(s);
+  if (!m) return null;
+  const delim = m[1];
+  const matched = m[2];
+  const rawStart = m.index + delim.length;
+  const id = normalizeTargetID(matched);
+  if (!id) return null;
+  return {
+    prefix: s.slice(0, rawStart),
+    matched,
+    suffix: s.slice(rawStart + matched.length),
+    id,
+  };
+}
+
 function escapeAttr(s: string): string {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -42,10 +72,11 @@ function escapeText(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function hotspotSpan(tid: string, label: string): string {
+export function hotspotSpan(tid: string, label: string, repo = ''): string {
   return (
     '<span class="target-hotspot target-hotspot-finger" data-target-id="' +
     escapeAttr(tid) +
+    '" data-target-repo="' + escapeAttr(repo) +
     '" role="button" tabindex="0">' +
     escapeText(label) +
     '</span>'
@@ -56,10 +87,10 @@ export function linkifyTargetText(text: string): string {
   const s = String(text ?? '');
   if (!s) return s;
   TARGET_TOKEN_RE.lastIndex = 0;
-  return s.replace(TARGET_TOKEN_RE, (full, id: string) => {
+  return s.replace(TARGET_TOKEN_RE, (full, repo: string | undefined, id: string) => {
     const tid = normalizeTargetID(id);
     if (!tid) return full;
-    return hotspotSpan(tid, formatDisplayTargetID(tid));
+    return hotspotSpan(tid, repo ? '🎯' + repo + '/' + tid : formatDisplayTargetID(tid), repo);
   });
 }
 
@@ -67,7 +98,7 @@ export function linkifyTargetText(text: string): string {
 export function linkifyTargetIDsInHTML(html: string | null | undefined): string {
   if (html == null || html === '') return html == null ? '' : '';
   const s = String(html);
-  if (!/(?:🎯\s*)?T\d/.test(s)) return s;
+  if (!/(?:🎯\s*)?T\d/i.test(s)) return s;
 
   let out = '';
   let i = 0;
