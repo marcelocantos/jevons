@@ -9,6 +9,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -67,7 +68,10 @@ func RemintRegistryExcept(reg *claudia.Registry, spoolDir string, preserve map[s
 		if preserve[row.Name] {
 			continue
 		}
-		if proc := reg.Get(row.Name); proc != nil && proc.Alive() && proc.Provider() == row.Provider {
+		// 🎯T766: a live seat already on this provider keeps its row. The
+		// answer comes from the seat authority (fed here), not handle reads.
+		seatstate.ObserveRegistrySeat(reg, row.Name)
+		if st := seatstate.ReadRegistry(reg, row.Name); st.LocalAlive == seatstate.Yes && st.Provider == string(row.Provider) {
 			continue
 		}
 		def := row

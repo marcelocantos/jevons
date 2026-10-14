@@ -955,10 +955,13 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// row to a sidecar while the legacy CLI still owns the seat. An explicit
 	// cross-plan request is a model switch (jevons_agent_switch_model), not an
 	// in-place Register.
+	// 🎯T766: liveness and provider come from the seat authority, fed at
+	// this lifecycle boundary, never from raw handle reads.
 	var liveProvider claudia.Provider
-	if proc := s.registry.Get(name); proc != nil && proc.Alive() {
-		liveProvider = proc.Provider()
-		if liveProvider == "" { // Claudia's empty live provider denotes Claude CLI.
+	seatstate.ObserveRegistrySeat(s.registry, name)
+	if st := s.seatState(name); st.LocalAlive == seatstate.Yes {
+		liveProvider = claudia.Provider(st.Provider)
+		if liveProvider == "" {
 			liveProvider = claudia.ProviderClaude
 		}
 	}
@@ -994,7 +997,10 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 // model conversation. An unreadable store/spool is unknown, never absence.
 // This is read-only; only stitchAgentStart changes a proved-phantom row.
 func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
-	if proc := s.registry.Get(def.Name); proc != nil && proc.Alive() {
+	// 🎯T766: liveness comes from the seat authority (fed here). A held
+	// handle the authority has not proved dead counts as running.
+	seatstate.ObserveRegistrySeat(s.registry, def.Name)
+	if s.registry.Get(def.Name) != nil && s.seatState(def.Name).LocalAlive != seatstate.No {
 		return "process still running; stop the seat and inspect its conversation before retry"
 	}
 	if def.SessionID == "" {
