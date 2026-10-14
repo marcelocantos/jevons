@@ -346,6 +346,9 @@ func (s *Server) sweepSeatMCPWith(scan bool) {
 	if s == nil || s.registry == nil {
 		return
 	}
+	// A background diagnosis needs its own liveness feed: agent_list no
+	// longer performs a fleet sweep to prime this observer.
+	s.observeRegistryLiveness()
 	now := s.birthClock()
 	for _, d := range s.registry.List() {
 		if strings.TrimSpace(d.Name) == "" || !s.seatAlive(d.Name) {

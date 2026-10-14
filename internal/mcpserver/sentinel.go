@@ -561,20 +561,12 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 
 	// --- Fleet agents ---
 	if s.registry != nil {
-		s.observeRegistryLiveness()
-		// Sampling must not recover a seat before classification. Only the
-		// serialized fleet pass owns that actuator.
+		// Observation only: the serialized pass owns dead-handle recovery.
+		// Use the same policy as the recovery sweep without Launch/Stop/Remove.
+		reps := s.observeDeadHandles(overseer, intent)
 		dead := map[string]DeadAgentReport{}
-		observer := claudiaSweep{reg: s.registry}
-		for _, d := range s.registry.List() {
-			if d.Name == "" || d.Name == overseer {
-				continue
-			}
-			hasProc, alive := observer.ProcState(d.Name)
-			if detect, _, _, _ := deadRecoveryPlan(hasProc, alive, d.AutoStart,
-				intent.Allow(d.Name, fleetintent.ControlRevive).Allow, d.Purpose); detect {
-				dead[d.Name] = DeadAgentReport{Name: d.Name, Cause: observer.ExitCause(d.Name)}
-			}
+		for _, r := range reps {
+			dead[r.Name] = r
 		}
 
 		running, stopped, idlePO := 0, 0, 0

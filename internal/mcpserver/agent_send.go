@@ -181,10 +181,6 @@ func (s *Server) sendToAgentAs(actor, name, text string, interrupt bool) (agentS
 // ensureAgentProcess returns a live process, rehydrating when registered
 // but stopped/dead.
 func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
-	if s.registry != nil {
-		s.notifyDeadAgents(s.sweepDeadAccounted())
-	}
-
 	proc := s.registry.Get(name)
 	if proc != nil && s.seatState(name).Alive == seatstate.Unknown {
 		return nil, false, fmt.Errorf("agent %q liveness is unknown; awaiting observation", name)

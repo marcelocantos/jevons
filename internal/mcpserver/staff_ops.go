@@ -144,8 +144,8 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 	// Fleet sample.
 	if s.registry != nil {
 		overseer := s.overseerName()
-		// Dead-handle recovery (T85 mechanical floor).
-		reps := s.sweepDeadAccountedWith(overseer, intent)
+		// Observation only; repair is an explicit action, not a sample effect.
+		reps := s.observeDeadHandles(overseer, intent)
 		for _, r := range reps {
 			sig := staffops.Signal{
 				Kind:         "dead_agent",
