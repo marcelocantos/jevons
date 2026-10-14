@@ -61,10 +61,11 @@ func SaveState(dir string, st State) error {
 type Outage struct {
 	// ID is the outage's start in RFC3339 nanoseconds, which is unique
 	// per outage without needing a random source.
-	ID          string    `json:"id"`
-	DownSince   time.Time `json:"down_since"`
-	RecoveredAt time.Time `json:"recovered_at"`
-	Attempts    int       `json:"attempts"`
+	ID            string    `json:"id"`
+	DownSince     time.Time `json:"down_since"`
+	RecoveredAt   time.Time `json:"recovered_at"`
+	Attempts      int       `json:"attempts"`
+	PassiveChecks int       `json:"passive_checks,omitempty"`
 	// Detail is free text for the owner, e.g. the last restart error.
 	Detail string `json:"detail,omitempty"`
 	// Reported is set once the owner has been told, so a daemon that
@@ -79,13 +80,25 @@ func (o Outage) Downtime() time.Duration { return o.RecoveredAt.Sub(o.DownSince)
 // explicit that no owner action was needed, because the point of the
 // notice is that the machinery, not the owner, noticed.
 func (o Outage) Text() string {
-	attempts := "1 restart"
-	if o.Attempts != 1 {
-		attempts = fmt.Sprintf("%d restarts", o.Attempts)
+	var msg string
+	if o.PassiveChecks > 0 {
+		// A watchdog check is not a restart. KeepAlive may have recovered
+		// the service, or ownership may have been temporarily unreadable;
+		// neither licenses a claim that the watchdog brought it back.
+		msg = fmt.Sprintf("daemon outage: the development jevonsd stopped serving at %s and was down for %s. Service resumed after %d passive watchdog check(s) and %d legacy restart attempt(s) — no owner action was needed.",
+			o.DownSince.Local().Format("15:04:05"), o.Downtime().Round(time.Second), o.PassiveChecks, o.Attempts)
+	} else if o.Attempts == 0 {
+		msg = fmt.Sprintf("daemon outage: the development jevonsd stopped serving at %s and was down for %s. Service resumed without a watchdog restart — no owner action was needed.",
+			o.DownSince.Local().Format("15:04:05"), o.Downtime().Round(time.Second))
+	} else {
+		attempts := "1 restart"
+		if o.Attempts != 1 {
+			attempts = fmt.Sprintf("%d restarts", o.Attempts)
+		}
+		msg = fmt.Sprintf(
+			"daemon outage: the development jevonsd stopped serving at %s and was down for %s. The watchdog brought it back after %s — no owner action was needed.",
+			o.DownSince.Local().Format("15:04:05"), o.Downtime().Round(time.Second), attempts)
 	}
-	msg := fmt.Sprintf(
-		"daemon outage: the development jevonsd stopped serving at %s and was down for %s. The watchdog brought it back after %s — no owner action was needed.",
-		o.DownSince.Local().Format("15:04:05"), o.Downtime().Round(time.Second), attempts)
 	if o.Detail != "" {
 		msg += " " + o.Detail
 	}

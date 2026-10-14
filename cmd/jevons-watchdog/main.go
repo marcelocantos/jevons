@@ -92,9 +92,14 @@ func run() int {
 
 	switch d.Action {
 	case supervise.ActionRestart:
-		detail := restart(*repo, *port)
+		detail, legacy := restart(*repo, *port)
+		if legacy {
+			next.LegacyRestarts++
+		} else {
+			next.PassiveChecks++
+		}
 		if detail != "" {
-			logf("restart reported: %s", detail)
+			logf("recovery reported: %s", detail)
 		}
 		notify(d, *port, detail)
 	case supervise.ActionRecovered:
@@ -103,6 +108,10 @@ func run() int {
 			DownSince:   st.DownSince,
 			RecoveredAt: now,
 			Attempts:    st.Attempts,
+		}
+		if st.PassiveChecks > 0 {
+			rec.PassiveChecks = st.PassiveChecks
+			rec.Attempts = st.LegacyRestarts
 		}
 		if st.Attempts == 0 {
 			rec.Detail = "It came back without the watchdog having to restart it."
@@ -150,19 +159,28 @@ func probe(port int) bool {
 // build, rebuilding from HEAD fails and the outage stands, whereas the
 // binary that was serving five minutes ago will serve now. A worker who
 // wants their newer build activated calls the restart script itself.
-func restart(repo string, port int) string {
-	// 🎯T553.3: KeepAlive on jevonsd is the standing supervisor. Calling
-	// the fat script here races launchd and recreates the bounce ceremony.
-	if supervise.DaemonOwnsProcess() {
-		logf("KeepAlive %s owns the daemon; not invoking restart-jevonsd", supervise.DaemonLabel)
-		if err := supervise.KickstartAgent(supervise.DaemonLabel); err != nil {
-			return fmt.Sprintf("KeepAlive kickstart failed: %v", err)
-		}
-		if !probe(port) {
-			return "KeepAlive kickstart ran but the port is still not serving."
-		}
-		return ""
+func restart(repo string, port int) (detail string, legacy bool) {
+	// Sample launchd on every outage attempt, not when the watchdog starts.
+	// KeepAlive already retries a dead process; kickstart -k would kill its
+	// current attempt every grace interval and prevent recovery. The watchdog
+	// remains off-process to record/escalate the outage even in this mode.
+	loaded, err := supervise.AgentLoaded(supervise.DaemonLabel)
+	return restartForMode(repo, port, loaded, err)
+}
+
+// restartForMode separates the launchd observation from the legacy recovery
+// path so the two authority modes can be tested without touching launchd.
+func restartForMode(repo string, port int, keepAlive bool, observationErr error) (detail string, legacy bool) {
+	if observationErr != nil {
+		return fmt.Sprintf("cannot determine whether KeepAlive owns the daemon; refusing a competing restart: %v", observationErr), false
 	}
+	if keepAlive {
+		return "KeepAlive is loaded; waiting for launchd to recover the daemon (no competing kickstart or restart script).", false
+	}
+	return restartLegacy(repo, port), true
+}
+
+func restartLegacy(repo string, port int) string {
 	script := filepath.Join(repo, "scripts", "restart-jevonsd.sh")
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Sprintf("no restart script at %s (%v)", script, err)
@@ -227,14 +245,14 @@ func notify(d supervise.Decision, port int, detail string) {
 		return
 	}
 	subject := fmt.Sprintf("jevons daemon down on :%d", port)
-	body := fmt.Sprintf("The development jevonsd stopped serving. The watchdog is restarting it. %s", d.Reason)
+	body := fmt.Sprintf("The development jevonsd stopped serving. The watchdog is checking recovery. %s", d.Reason)
 	switch {
 	case d.Notify == supervise.NotifyOK:
 		subject = fmt.Sprintf("jevons daemon back on :%d", port)
 		body = fmt.Sprintf("Serving again after %s.", d.Downtime.Round(time.Second))
 	case d.Escalated:
 		subject = fmt.Sprintf("jevons daemon still down on :%d", port)
-		body = fmt.Sprintf("Restarts are not taking. %s", d.Reason)
+		body = fmt.Sprintf("Recovery has not restored service. %s", d.Reason)
 	}
 	if detail != "" {
 		body += " " + detail

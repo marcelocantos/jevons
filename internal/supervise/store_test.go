@@ -220,3 +220,34 @@ func TestPlistRendersTheJobLaunchdNeeds(t *testing.T) {
 		t.Errorf("plist did not escape the path:\n%s", b)
 	}
 }
+
+// KeepAlive's passive outage check is not a restart, and an outage can
+// cross from loaded to unloaded while it is open. The owner journal must
+// not turn those observations into a false claim of watchdog recovery.
+func TestPassiveAndMixedOutageTextDoesNotInventRestarts(t *testing.T) {
+	dir := supervise.Dir(t.TempDir())
+	for _, tc := range []struct {
+		name              string
+		passive, restarts int
+		want, reject      string
+	}{
+		{"keepalive", 2, 0, "0 legacy restart attempt(s)", "watchdog brought it back"},
+		{"mixed", 1, 1, "1 legacy restart attempt(s)", "watchdog brought it back"},
+		{"unassisted", 0, 0, "without a watchdog restart", "watchdog brought it back"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := supervise.Outage{ID: tc.name, DownSince: time.Now().Add(-time.Minute), RecoveredAt: time.Now(), Attempts: tc.restarts, PassiveChecks: tc.passive}
+			if err := supervise.AppendOutage(dir, o); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := supervise.LoadOutages(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := loaded[len(loaded)-1].Text()
+			if !strings.Contains(got, tc.want) || strings.Contains(got, tc.reject) {
+				t.Fatalf("false owner recovery narrative: %q", got)
+			}
+		})
+	}
+}
