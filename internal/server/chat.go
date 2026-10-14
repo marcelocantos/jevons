@@ -1127,7 +1127,7 @@ type feedRelaunch struct {
 var feedRelaunching sync.Map // feedRelaunch -> struct{}
 
 // feedLaunch is the relaunch itself; tests replace it.
-var feedLaunch = fleet.LaunchRecording
+var feedLaunch = func(reg *claudia.Registry, name string) (*claudia.Agent, error) { return reg.Launch(name) }
 
 // relaunchDeadSeat relaunches a dead AutoStart seat in the background and
 // reports the outcome as the inline relaunch did. A seat whose lifecycle
