@@ -66,8 +66,11 @@ func installAgent(repo string, port int, state string) int {
 				os.Getenv("PATH"))
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "jevons-watchdog: warning: no %s on this PATH — "+
-			"the watchdog will restart the daemon but cannot tell you it happened\n", tool)
+		why := "the watchdog will restart the daemon but cannot tell you it happened"
+		if tool == "bun" {
+			why = "a restarted daemon cannot launch the omp sidecar, so no seat will start"
+		}
+		fmt.Fprintf(os.Stderr, "jevons-watchdog: warning: no %s on this PATH — %s\n", tool, why)
 	}
 
 	spec := supervise.AgentSpec{

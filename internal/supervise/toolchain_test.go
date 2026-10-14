@@ -34,6 +34,7 @@ func TestAgentPATHReachesTheToolsLaunchdCannotSee(t *testing.T) {
 	path, missing := supervise.AgentPATH(fakeLookPath(map[string]string{
 		"go":      "/opt/homebrew/bin/go",
 		"blurter": "/Users/someone/.local/bin/blurter",
+		"bun":     "/Users/someone/.bun/bin/bun",
 	}), supervise.RestartTools)
 
 	if len(missing) != 0 {
@@ -42,7 +43,7 @@ func TestAgentPATHReachesTheToolsLaunchdCannotSee(t *testing.T) {
 	if !strings.HasPrefix(path, supervise.LaunchdDefaultPATH) {
 		t.Errorf("agent PATH dropped launchd's own entries: %s", path)
 	}
-	for _, want := range []string{"/opt/homebrew/bin", "/Users/someone/.local/bin"} {
+	for _, want := range []string{"/opt/homebrew/bin", "/Users/someone/.local/bin", "/Users/someone/.bun/bin"} {
 		if !strings.Contains(path, want) {
 			t.Errorf("agent PATH %q does not reach %s", path, want)
 		}
@@ -54,6 +55,7 @@ func TestAgentPATHNamesWhatItCouldNotFind(t *testing.T) {
 	// blurter into a warning, so it has to be told which is which.
 	path, missing := supervise.AgentPATH(fakeLookPath(map[string]string{
 		"blurter": "/usr/local/bin/blurter",
+		"bun":     "/usr/local/bin/bun",
 	}), supervise.RestartTools)
 
 	if len(missing) != 1 || missing[0] != "go" {
@@ -70,6 +72,7 @@ func TestAgentPATHDoesNotRepeatADirectory(t *testing.T) {
 	path, _ := supervise.AgentPATH(fakeLookPath(map[string]string{
 		"go":      "/usr/bin/go",
 		"blurter": "/usr/bin/blurter",
+		"bun":     "/usr/bin/bun",
 	}), supervise.RestartTools)
 
 	if path != supervise.LaunchdDefaultPATH {

@@ -34,3 +34,38 @@ func TestT1067RestartReattachHoldsPausedAutoWorkers(t *testing.T) {
 		}
 	}
 }
+
+// The owner's fleet hold (fleet intent blocked_owner) must apply at boot: no
+// -auto seat is launched by the restart reattach, and the adopt-only path
+// covers it instead. Named workers, POs and an un-held fleet are unaffected.
+func TestT1067BootHonoursOwnerFleetHold(t *testing.T) {
+	overseer := func(name string) bool { return name == "jevons" }
+	auto := mcpserver.FrontierWorkerName("T703")
+	for _, fleet := range []fleetintent.State{fleetintent.BlockedOwner, fleetintent.Parked, fleetintent.BlockedProvider, fleetintent.Working, fleetintent.Unknown} {
+		allow := func(name string, c fleetintent.Control) fleetintent.Decision {
+			return fleetintent.Allows(fleet, fleetintent.Working, c)
+		}
+		held := fleetintent.Resolve(fleet) != fleetintent.Working
+		pausedAuto := func(name string) bool { return bootHoldsAuto(name, false, allow) }
+		include := fleetReattachInclude(overseer, allow, pausedAuto)
+		for name, want := range map[string]bool{
+			auto:              !held,
+			"jv-t1066-worker": true,
+			"jevons-po":       true,
+			"jevons":          false,
+		} {
+			if got := include(name); got != want {
+				t.Errorf("fleet=%q: include(%q) = %v, want %v", fleet, name, got, want)
+			}
+		}
+		if got := pausedAuto(auto); got != held {
+			t.Errorf("fleet=%q: bootHoldsAuto(auto) = %v, want %v (adopt-only path)", fleet, got, held)
+		}
+		if pausedAuto("jevons-po") {
+			t.Errorf("fleet=%q: a named PO was held at boot", fleet)
+		}
+	}
+	if !bootHoldsAuto(auto, true, nil) {
+		t.Error("frontier pause alone no longer holds -auto seats")
+	}
+}

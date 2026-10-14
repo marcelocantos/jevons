@@ -53,7 +53,9 @@ const LaunchdDefaultPATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 //
 //	go      the restart script builds its helpers on demand
 //	blurter the only way the owner hears anything while jevonsd is down
-var RestartTools = []string{"go", "blurter"}
+//	bun     runs the claudia omp sidecar every seat lives on; a restarted
+//	        daemon without it cannot launch a single seat (~/.bun/bin)
+var RestartTools = []string{"go", "blurter", "bun"}
 
 // LookPath is exec.LookPath's shape, taken as a parameter so the policy is
 // testable without depending on what the test machine has installed.
