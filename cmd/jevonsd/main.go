@@ -1383,7 +1383,7 @@ func main() {
 		defer fleetStarted.Store(true)
 		started := time.Now()
 		pausedAuto := func(name string) bool {
-			return cfg.FrontierConsume.Disabled && mcpserver.IsAutoSpawnedWorkerName(name)
+			return bootHoldsAuto(name, cfg.FrontierConsume.Disabled, mcpSrv.AllowFleetControl)
 		}
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
 			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, pausedAuto),
@@ -2225,7 +2225,7 @@ func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetin
 			return false
 		}
 		if pausedAuto != nil && pausedAuto(name) {
-			slog.Info("restart reattach skipped — frontier pause holds auto-spawned workers", "agent", name)
+			slog.Info("restart reattach skipped — frontier pause or fleet hold keeps auto-spawned workers down", "agent", name)
 			return false
 		}
 		if d := allow(name, fleetintent.ControlRevive); fleetintent.StoodDown(d.Agent) {
@@ -2234,6 +2234,23 @@ func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetin
 		}
 		return true
 	}
+}
+
+// bootHoldsAuto reports whether a restart must not launch name: an
+// auto-spawned worker while the frontier pause is on, or while the fleet's
+// intent is not Working (the owner's fleet hold, a provider wall). On
+// 2026-10-14 the owner held the fleet (blocked_owner) after 150+ -auto seats
+// ran away, and a restart under that hold would have relaunched every one
+// still marked working: boot consulted only per-agent intent. A held -auto
+// seat whose process still runs is adopted, never launched (🎯T1067).
+func bootHoldsAuto(name string, frontierPaused bool, allow func(string, fleetintent.Control) fleetintent.Decision) bool {
+	if !mcpserver.IsAutoSpawnedWorkerName(name) {
+		return false
+	}
+	if frontierPaused {
+		return true
+	}
+	return allow != nil && fleetintent.Resolve(allow(name, fleetintent.ControlRevive).Fleet) != fleetintent.Working
 }
 
 // adoptPausedAutoSeats re-adopts the auto-spawned workers the frontier pause
