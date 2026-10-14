@@ -197,4 +197,3 @@ func DescribeConfigPortfolioDisagreement(configProvider string, p *Portfolio, fr
 	return fmt.Sprintf("provider_knob: %s (%s would have picked %s via %s)",
 		KnobConfig, KnobPortfolioFile, loser, tt)
 }
-

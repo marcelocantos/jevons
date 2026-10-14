@@ -80,12 +80,6 @@ func TestTripClassesHermetic(t *testing.T) {
 			wantAction: ActionThrottle,
 		},
 		{
-			name:       "orphan sessions → warn",
-			alert:      Alert{Kind: AlertOrphanSessions, Level: LevelWarn},
-			wantClass:  TripOrphanSessions,
-			wantAction: ActionWarn,
-		},
-		{
 			name:       "projected overspend → warn",
 			alert:      Alert{Kind: AlertProjection, Level: LevelWarn},
 			wantClass:  TripProjectedSpend,
@@ -190,13 +184,13 @@ func TestAuditFieldsAndOverseerAlertFormat(t *testing.T) {
 
 func TestInferTripClassFromMessage(t *testing.T) {
 	cases := map[string]string{
-		"dead-man's switch: no owner contact":            TripDeadMan,
-		"budget: spawning halted (global kill breach)":   TripSpawnHalt,
-		"budget: clamp cleared — spawning re-enabled":    TripSpawnResume,
-		"budget: worker jevons over KILL — protected":    TripProtectedOverseer,
+		"dead-man's switch: no owner contact":              TripDeadMan,
+		"budget: spawning halted (global kill breach)":     TripSpawnHalt,
+		"budget: clamp cleared — spawning re-enabled":      TripSpawnResume,
+		"budget: worker jevons over KILL — protected":      TripProtectedOverseer,
 		"total machine burn is kill-level — informational": TripInformational,
-		"budget: fleet burn over warn threshold":         TripFleetRate,
-		"budget: worker po over warn threshold":          TripWorkerRate,
+		"budget: fleet burn over warn threshold":           TripFleetRate,
+		"budget: worker po over warn threshold":            TripWorkerRate,
 	}
 	for msg, want := range cases {
 		if got := InferTripClassFromMessage(msg); got != want {

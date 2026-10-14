@@ -247,7 +247,7 @@ func (e *Enforcer) Act(snap *Snapshot) {
 			} else {
 				hardCeiling = true
 			}
-		case AlertSessionCount, AlertOrphanSessions, AlertProjection, AlertCollectorStale, AlertSpawnStorm:
+		case AlertSessionCount, AlertProjection, AlertCollectorStale, AlertSpawnStorm:
 			// Spawn storm (🎯T334) is notify-level here; session hygiene does
 			// not alone fire kill-switch — fleet/worker rate ladders do.
 			infoSeen["!"+a.Kind] = true
