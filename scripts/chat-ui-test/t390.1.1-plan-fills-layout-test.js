@@ -3,7 +3,7 @@
 
 // 🎯T390.1.1: REAL render of the two weekly waste fills.
 //
-// classifyPace assigns plan-under / plan-locked; this fixture loads the
+// The served band maps to plan-under / plan-locked (🎯T1072); this fixture loads the
 // product cockpit.css and measures the painted fill colours. A class-name
 // grep stays green while --plan-under and --plan-locked fail to reach the
 // bar.

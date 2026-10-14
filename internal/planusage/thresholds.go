@@ -5,124 +5,48 @@ package planusage
 
 import "github.com/marcelocantos/claudia"
 
-// Thresholds are the daemon-owned transition points (🎯T390.1.6). The
-// ticker paints from this document plus the live snapshot. Mint and
-// migrate use the same numbers. They are not imported from JS.
+// Thresholds is the plan-band vertex document GET /api/plan-usage/thresholds
+// serves. It is a read-only view of Claudia's Spend Pressure Map (🎯T641),
+// not a second source: every band vertex is claudia.DefaultPlanThresholds,
+// and the band itself is claudia.ClassifyWindow / ClassifyPlan (🎯T1072).
+// Nothing in Jevons or the cockpit classifies a window from these numbers.
 type Thresholds struct {
-	AheadRatio         float64 `json:"ahead_ratio"`
-	HotRatio           float64 `json:"hot_ratio"`
-	UnderWastePercent  float64 `json:"under_waste_percent"`
-	LockedWastePercent float64 `json:"locked_waste_percent"`
-	// WarmupElapsedPercent is how much of a window must have passed
-	// before a burning-fast verdict is believable at all (🎯T595).
-	//
-	// It was inert from 🎯T390.1.6.2 until 🎯T595 — published, parsed, and
-	// read by nothing — on the theory that damping alone eased the early
-	// window. It does not. As elapsed approaches 0 the damped burn
-	// collapses to 1 + used/λ, which contains no rate at all: with λ=5,
-	// "hot" simply means used ≥ 2.5pp, whenever that happens. On
-	// 2026-08-31 claude's week was painted red at 94% remaining, 2.13%
-	// into the window, because 6% used damps to 1.544.
-	//
-	// EarlyAlarmUsedPercent is the escape hatch, so warmup cannot mute a
-	// genuine emergency: spend that much of a window before warmup and the
-	// verdict lands anyway.
-	WarmupElapsedPercent     float64 `json:"warmup_elapsed_percent"`
-	EarlyAlarmUsedPercent    float64 `json:"early_alarm_used_percent"`
-	LowRemainingPercent      float64 `json:"low_remaining_percent"`
-	CriticalRemainingPercent float64 `json:"critical_remaining_percent"`
+	// LowRemainingPercent is Claudia's session remaining-low vertex.
+	LowRemainingPercent float64 `json:"low_remaining_percent"`
 
-	// MintIndifferencePercent is the weekly remaining-% gap under which
-	// two green providers are an equally obvious omit-provider mint
-	// choice — only then does the config.yaml / JEVONS_PROVIDER
-	// preference break the tie (🎯T495).
+	// ShrinkPriorK is the strength of the prior pulling the current-rate
+	// estimate toward nominal, scaled by the time left (🎯T596).
+	ShrinkPriorK float64 `json:"shrink_prior_k"`
+	// PanicAmberLn / PanicRedLn are the ln(current/required) vertices for
+	// burning too fast; WasteUnderLn / WasteLockedLn for leaving allowance
+	// unspent. Waste is further out: running dry costs more.
+	PanicAmberLn  float64 `json:"panic_amber_ln"`
+	PanicRedLn    float64 `json:"panic_red_ln"`
+	WasteUnderLn  float64 `json:"waste_under_ln"`
+	WasteLockedLn float64 `json:"waste_locked_ln"`
+
+	// MintIndifferencePercent is not a band vertex. It is Jevons' mint
+	// policy: the weekly remaining-% gap under which two green providers
+	// are an equally obvious omit-provider mint choice, so the
+	// config.yaml / JEVONS_PROVIDER preference breaks the tie (🎯T495).
 	MintIndifferencePercent float64 `json:"mint_indifference_percent"`
-
-	// DampLambdaPercent is the additive damping λ applied to both terms
-	// of the burn ratio: burn = (used% + λ) / (elapsed% + λ)
-	// (🎯T390.1.6.1). Early in a window the raw ratio is a tiny-sample
-	// artefact — 9% used at 5.6% elapsed is burn 1.6 and painted a
-	// barely-started week red, which then drove migrate-off from a
-	// backend with 91% remaining. λ pulls small samples toward the
-	// neutral 1.0 while leaving mid-window readings on their side of
-	// the vertices: 9/5.6 damps to 1.32 (ahead), 80/50 damps to 1.55
-	// (still hot). λ must stay below 10, or 80/50 crosses under the
-	// 1.5 hot vertex. Waste arithmetic (under/locked) stays raw.
-	DampLambdaPercent float64 `json:"damp_lambda_percent"`
-
-	// AheadMarginPercent is the percentage-point margin a window must
-	// overspend by before any burning-fast verdict (ahead or hot) is
-	// reachable: used% - elapsed% must exceed it (🎯T591).
-	//
-	// Damping alone cannot do this. (used+λ)/(elapsed+λ) approaches 1
-	// from above and never crosses it, so with AheadRatio at exactly 1.0
-	// ANY overspend at all — including one made entirely of rounding —
-	// paints the window amber, however large λ is. On 2026-08-31 claude's
-	// week read used 1% against elapsed 0.38% and went amber seven
-	// minutes into a seven-day window: providers publish used as whole
-	// percentage points, so the numerator's quantum was larger than the
-	// denominator's value.
-	//
-	// A margin is the right shape because the noise is absolute, not
-	// proportional. 2pp keeps both vertices the damping comment cites:
-	// 9% at 5.6% elapsed overspends by 3.4pp and stays ahead, 80/50 by
-	// 30pp and stays hot.
-	AheadMarginPercent float64 `json:"ahead_margin_percent"`
-
-	// 🎯T596 pressure model. Colour answers how large a correction the
-	// window demands, not where the current rate would land.
-	//
-	// ShrinkPriorK is the strength of the prior that pulls the
-	// current-rate estimate toward nominal, scaled by the time left. A
-	// fan-out sprint in a window's first minutes is not a policy, and it
-	// is also trivially correctable; both facts argue for discounting it,
-	// and both stop applying as the deadline nears.
-	ShrinkPriorK float64 `json:"shrink_prior_k,omitempty"`
-	// PanicAmberLn / PanicRedLn are ln(current/required) vertices for
-	// burning too fast.
-	PanicAmberLn float64 `json:"panic_amber_ln,omitempty"`
-	PanicRedLn   float64 `json:"panic_red_ln,omitempty"`
-	// WasteUnderLn / WasteLockedLn are the same for the opposite failure,
-	// and are deliberately further out: running dry costs more than
-	// leaving allowance unspent, so waste gets more room before it speaks.
-	WasteUnderLn  float64 `json:"waste_under_ln,omitempty"`
-	WasteLockedLn float64 `json:"waste_locked_ln,omitempty"`
 }
 
-// 🎯T641 defaults, owner-tuned on the Spend Pressure Map (2026-09-12):
-// k=100, amber 0.49, red 1.00, under −0.60, locked −1.50. Same pressure
-// field as 🎯T596; vertices only. Week-start Codex/Grok stay green;
-// mid-week 70/50 stays ahead and 80/50 stays hot.
-const (
-	DefaultShrinkPriorK  = 100.0
-	DefaultPanicAmberLn  = 0.49
-	DefaultPanicRedLn    = 1.00
-	DefaultWasteUnderLn  = -0.60
-	DefaultWasteLockedLn = -1.50
-)
+// DefaultMintIndifferencePercent is the 🎯T495 mint tie-break gap.
+const DefaultMintIndifferencePercent = 10
 
-// DefaultThresholds matches the vertices the cockpit already used
-// (ahead 1.0, hot 1.5, waste 15, remaining-low 15 / 5, damp λ 5).
-// warmup_elapsed_percent is 5 and load-bearing again since 🎯T595.
+// DefaultThresholds is Claudia's plan-band vertices plus Jevons' mint
+// tie-break gap.
 func DefaultThresholds() Thresholds {
 	ct := claudia.DefaultPlanThresholds()
 	return Thresholds{
-		AheadRatio:               1.0,
-		HotRatio:                 1.5,
-		UnderWastePercent:        15,
-		LockedWastePercent:       15,
-		WarmupElapsedPercent:     ct.WarmupElapsedPercent,
-		EarlyAlarmUsedPercent:    ct.EarlyAlarmUsedPercent,
-		LowRemainingPercent:      ct.LowRemainingPercent,
-		CriticalRemainingPercent: ct.CriticalRemainingPercent,
-		MintIndifferencePercent:  10,
-		DampLambdaPercent:        ct.DampLambdaPercent,
-		AheadMarginPercent:       ct.AheadMarginPercent,
-		ShrinkPriorK:             ct.ShrinkPriorK,
-		PanicAmberLn:             ct.PanicAmberLn,
-		PanicRedLn:               ct.PanicRedLn,
-		WasteUnderLn:             ct.WasteUnderLn,
-		WasteLockedLn:            ct.WasteLockedLn,
+		LowRemainingPercent:     ct.LowRemainingPercent,
+		ShrinkPriorK:            ct.ShrinkPriorK,
+		PanicAmberLn:            ct.PanicAmberLn,
+		PanicRedLn:              ct.PanicRedLn,
+		WasteUnderLn:            ct.WasteUnderLn,
+		WasteLockedLn:           ct.WasteLockedLn,
+		MintIndifferencePercent: DefaultMintIndifferencePercent,
 	}
 }
 

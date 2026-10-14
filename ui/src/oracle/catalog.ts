@@ -74,7 +74,7 @@ export const CATALOG: readonly OracleFamily[] = [
   },
   {
     id: 'plan-ticker',
-    title: 'Plan ticker — damped burn, waste bands, exhausted box, marks',
+    title: 'Plan ticker — served band paint, exhausted box, marks',
     file: 'plan-ticker.test.ts',
     layer: 'hermetic',
     covers: covers('plan-ticker', ['T117', 'T175', 'T390', 'T390.1.1', 'T390.1.3', 'T390.1.6', 'T390.1.6.1', 'T390.1.6.2']),

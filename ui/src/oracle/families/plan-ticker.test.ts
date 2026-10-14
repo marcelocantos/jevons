@@ -8,22 +8,18 @@ import { expect, it } from 'vitest';
 import { PlanUsageBar } from '../../components/PlanUsageBar';
 import { nativeTitleForbidden } from '../../components/InstantTip';
 import {
-  classifyPace,
+  CLASS_AHEAD,
+  CLASS_HOT,
+  CLASS_LOCKED,
+  CLASS_UNDER,
+  formatWindow,
   leftoverHoverName,
-  overspendStops,
-  paceColor,
   PACE_AHEAD,
-  PACE_COLOR_AHEAD,
-  PACE_COLOR_HOT,
-  PACE_COLOR_OK,
-  PACE_COLOR_UNDER,
   PACE_HOT,
   PACE_LOCKED,
   PACE_OK,
   PACE_UNDER,
-  PACE_UNDER_WASTE,
 } from '../../plan/pace';
-import { parseCssColor } from '../../plan/hsv';
 import { tickerGroups, tickerTipBody } from '../../plan/tickerGroups';
 import { family } from '../catalog';
 import { describeOracle, itOracle } from '../harness';
@@ -37,46 +33,50 @@ function withQuery(node: ReactNode) {
 }
 
 describeOracle(family('plan-ticker'), () => {
-  itOracle('T390.1.2', 'paceColor HSV-lerps; midpoints are not named class colours', () => {
-    const { a, b, c } = overspendStops();
-    const midAB = paceColor((a + b) / 2);
-    const midBC = paceColor((b + c) / 2);
-    const midUnder = paceColor(0.5, { continuation: PACE_UNDER_WASTE / 2, locked: 0 });
-    const named = [PACE_COLOR_OK, PACE_COLOR_AHEAD, PACE_COLOR_HOT, PACE_COLOR_UNDER];
-    for (const sample of [midAB, midBC, midUnder]) {
-      const got = parseCssColor(sample);
-      for (const hex of named) {
-        const stop = parseCssColor(hex);
-        const dist = got && stop
-          ? Math.abs(got.r - stop.r) + Math.abs(got.g - stop.g) + Math.abs(got.b - stop.b)
-          : 999;
-        expect(dist).toBeGreaterThan(30);
-      }
-    }
-    expect(classifyPace(50, 50, 50)).toBe(PACE_OK);
+  // 🎯T1072: the cockpit classifies nothing. Each of these windows carries
+  // numbers the deleted local model would have painted differently; the
+  // served band is what paints. The verdicts themselves are pinned in Go
+  // (internal/planusage, Claudia's Spend Pressure Map).
+  const NOW = Date.parse('2026-09-12T12:00:00Z');
+  const weekly = (used: number, timeLeftPct: number, band: string) => ({
+    name: 'weekly',
+    used_percent: used,
+    remaining_percent: 100 - used,
+    resets_at: new Date(NOW + (timeLeftPct / 100) * 7 * 24 * 3600 * 1000).toISOString(),
+    limit_window_seconds: 7 * 24 * 3600,
+    band,
   });
 
-  itOracle('T390.1.1', 'weekly continuation leftover is blue, locked surplus is purple; session is exempt', () => {
-    expect(classifyPace(0, 100, 81, 'weekly')).toBe(PACE_UNDER);
-    expect(classifyPace(0, 100, 50, 'weekly')).toBe(PACE_LOCKED);
-    expect(classifyPace(0, 100, 97, 'weekly')).toBe(PACE_OK);
-    expect(classifyPace(0, 100, 50, 'session')).toBe(PACE_OK);
-    expect(classifyPace(64, 36, 9.5, 'monthly')).toBe(PACE_LOCKED);
-    expect(leftoverHoverName(PACE_UNDER)).toBe('continuation leftover');
-    expect(leftoverHoverName(PACE_LOCKED)).toBe('already-unrecoverable at 1.5×');
+  itOracle('T390.1.1', 'served leftover paints blue (under) and purple (locked), hover in the daemon\'s words', () => {
+    expect(formatWindow(weekly(0, 50, 'under'), NOW).className.split(' ')).toContain(CLASS_UNDER);
+    expect(formatWindow(weekly(0, 40, 'locked'), NOW).className.split(' ')).toContain(CLASS_LOCKED);
+    // Late-month Cursor, 2026-10-14: 8.3% left, 2.2% of the window to go.
+    const cursor = { ...weekly(91.66, 2.24, 'under'), name: 'monthly' };
+    expect(formatWindow(cursor, NOW).pace).toBe(PACE_UNDER);
+    expect(leftoverHoverName(PACE_UNDER)).toBe('under pace');
+    expect(leftoverHoverName(PACE_LOCKED)).toBe('surplus locked in');
   });
 
-  itOracle('T390.1.6.2', 'no elapsed cutoff — Codex 26% used at ~5% elapsed is hot', () => {
-    expect(classifyPace(26, 74, 95.1, 'weekly')).toBe(PACE_HOT);
+  itOracle('T390.1.6.2', 'no elapsed cutoff — Codex 26% used at ~5% elapsed paints the served hot', () => {
+    const painted = formatWindow(weekly(26, 95.1, 'hot'), NOW);
+    expect(painted.pace).toBe(PACE_HOT);
+    expect(painted.className.split(' ')).toContain(CLASS_HOT);
   });
 
-  itOracle('T390.1.6.1', 'week-start 9%/5.6% damps to ahead, not hot', () => {
-    const weekStart = classifyPace(9, 91, 94.4, 'weekly');
-    expect(weekStart === PACE_OK || weekStart === PACE_AHEAD).toBe(true);
+  itOracle('T390.1.6.1', 'week-start 9%/5.6% paints the served band, not a local ratio', () => {
+    expect(formatWindow(weekly(9, 94.4, 'ok'), NOW).pace).toBe(PACE_OK);
+    expect(formatWindow(weekly(9, 94.4, 'ahead'), NOW).className.split(' ')).toContain(CLASS_AHEAD);
+    expect(formatWindow(weekly(9, 94.4, 'ahead'), NOW).pace).toBe(PACE_AHEAD);
+  });
+
+  itOracle('T390.1.6', 'a window with no served band paints no pace colour', () => {
+    const painted = formatWindow({ ...weekly(80, 50, ''), band: undefined }, NOW);
+    expect(painted.pace).toBe('');
+    expect(painted.className).not.toMatch(/plan-(hot|ahead|under|locked)/);
   });
 
   itOracle('T390', 'on-pace mid-window is green; hover is InstantTip remaining/rollover, not title=', () => {
-    expect(classifyPace(50, 50, 50, 'weekly')).toBe(PACE_OK);
+    expect(formatWindow(weekly(50, 50, 'ok'), NOW).pace).toBe(PACE_OK);
     const groups = tickerGroups({
       windows: [
         { provider: 'claude', name: 'weekly', remaining_percent: 36, resets_at: '2026-08-27T00:00:00Z' },
@@ -179,5 +179,4 @@ describeOracle(family('plan-ticker'), () => {
     expect(tickerTipBody(groups)).not.toMatch(/0% remaining/);
   });
 
-  itOracle.skip('T390.1.6', 'ticker vertices come from the served thresholds document', 'served /api/plan-usage/thresholds — development surface');
 });

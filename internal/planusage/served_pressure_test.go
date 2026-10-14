@@ -32,7 +32,8 @@ func TestServedPressureIsTheNumberBehindTheBand(t *testing.T) {
 	}
 	// The control: the superseded ratio really does call this hot, which is
 	// what a fill computing it for itself painted.
-	if burn := dampedBurn(8, 3.1, th.DampLambdaPercent); burn <= th.HotRatio {
+	// That ratio was (used+λ)/(elapsed+λ) with λ=5 against hot at 1.5.
+	if burn := (8.0 + 5) / (3.1 + 5); burn <= 1.5 {
 		t.Fatalf("fixture no longer exercises the disagreement: damped burn %.2f", burn)
 	}
 	// Served pressure and served band are one rule, not two.

@@ -367,8 +367,8 @@ export function periodBoundaryXs(w: PlanWindow, timeZone?: string, weekStartsOn 
  * (paceClassForBand — the bar's own chain); cockpit.css colours it, so the
  * palette has one home.
  *
- * DO NOT replace that class with a locally computed colour, a pressure
- * blend, or fillColorForWindow. The server already decided the band. A
+ * DO NOT replace that class with a locally computed colour or a pressure
+ * blend. The server already decided the band (🎯T1072). A
  * second model paints the line a different colour from the bar, which is
  * the drift these comments exist to stop. The wash colours the line only.
  * The current-value mark is not a stop, so a band change under the dot

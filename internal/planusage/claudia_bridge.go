@@ -206,17 +206,12 @@ func windowToClaudia(w Window) claudia.PlanWindow {
 
 func thresholdsToClaudia(th Thresholds) claudia.PlanThresholds {
 	return claudia.PlanThresholds{
-		WarmupElapsedPercent:     th.WarmupElapsedPercent,
-		EarlyAlarmUsedPercent:    th.EarlyAlarmUsedPercent,
-		LowRemainingPercent:      th.LowRemainingPercent,
-		CriticalRemainingPercent: th.CriticalRemainingPercent,
-		DampLambdaPercent:        th.DampLambdaPercent,
-		AheadMarginPercent:       th.AheadMarginPercent,
-		ShrinkPriorK:             th.ShrinkPriorK,
-		PanicAmberLn:             th.PanicAmberLn,
-		PanicRedLn:               th.PanicRedLn,
-		WasteUnderLn:             th.WasteUnderLn,
-		WasteLockedLn:            th.WasteLockedLn,
+		LowRemainingPercent: th.LowRemainingPercent,
+		ShrinkPriorK:        th.ShrinkPriorK,
+		PanicAmberLn:        th.PanicAmberLn,
+		PanicRedLn:          th.PanicRedLn,
+		WasteUnderLn:        th.WasteUnderLn,
+		WasteLockedLn:       th.WasteLockedLn,
 	}
 }
 

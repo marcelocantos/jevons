@@ -49,8 +49,9 @@ func (s *suite) j20PlanDest() error {
 	if err := json.NewDecoder(resp.Body).Decode(&th); err != nil {
 		return err
 	}
-	if th.AheadRatio != 1.0 || th.HotRatio != 1.5 {
-		return fmt.Errorf("thresholds vertices %+v", th)
+	// 🎯T1072: the served vertices are Claudia's, not a copy.
+	if th != planusage.DefaultThresholds() {
+		return fmt.Errorf("thresholds vertices %+v, want Claudia's %+v", th, planusage.DefaultThresholds())
 	}
 
 	_, err = s.MCPToolCall("jevons_agent_start", map[string]any{

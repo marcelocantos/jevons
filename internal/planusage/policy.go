@@ -25,7 +25,7 @@ const (
 
 // WeeklyBand is the daemon policy class for one provider's weekly window.
 // Names match the ticker's discrete labels so paint and policy cohere;
-// they are computed here, not read from CSS or classifyPace.
+// they are Claudia's verdict (🎯T1072), never re-derived in the cockpit.
 type WeeklyBand string
 
 const (
@@ -129,7 +129,7 @@ const (
 )
 
 // SessionStatusOf classifies one backend's session window for mint/migrate
-// eligibility. Same snapshot numbers the ticker paints; no JS classifyPace.
+// eligibility. Same snapshot numbers the ticker paints; the cockpit classifies nothing.
 func SessionStatusOf(be Backend, th Thresholds) SessionStatus {
 	return SessionStatus(classifyPlan(be, time.Time{}, th).Session)
 }
@@ -401,16 +401,6 @@ func migrateOffReason(be Backend, now time.Time, th Thresholds) string {
 	}
 }
 
-// dampedBurn is used/elapsed with the additive damping λ on both terms
-// (🎯T390.1.6.1) — see Thresholds.DampLambdaPercent for why. The ticker's
-// classifyPace applies the same formula from the same served λ.
-func dampedBurn(used, elapsed, lambda float64) float64 {
-	if lambda < 0 {
-		lambda = 0
-	}
-	return (used + lambda) / (elapsed + lambda)
-}
-
 func usedPercent(w Window) *float64 {
 	if w.UsedPercent != nil {
 		return w.UsedPercent
@@ -447,22 +437,6 @@ func remainingTimePercent(w Window, now time.Time) (float64, bool) {
 		pct = 100
 	}
 	return pct, true
-}
-
-// burningFastReachable gates the ahead / hot verdicts (🎯T591, 🎯T595).
-//
-// Two independent ways to be over-confident about a window, so two guards:
-// the overspend must be real rather than a rounding step (T591), and
-// enough of the window must have passed for a rate to mean anything
-// (T595) — unless the absolute spend is already alarming on its own, which
-// keeps a genuine early blowout red.
-func burningFastReachable(used, elapsed float64, th Thresholds) bool {
-	if used-elapsed <= th.AheadMarginPercent {
-		return false
-	}
-	warmup := th.WarmupElapsedPercent
-	early := th.EarlyAlarmUsedPercent
-	return elapsed >= warmup || (early > 0 && used >= early)
 }
 
 // Pressure is the log of the correction this window demands: how far the
