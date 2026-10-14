@@ -5,7 +5,6 @@ package planusage
 
 import (
 	"context"
-	"math"
 	"strings"
 	"time"
 
@@ -97,81 +96,21 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 
 // BandOfWindow classifies a single window at now for the served ticker band.
 //
-// Overspend (ahead/hot/exhausted) is claudia.ClassifyWindow (🎯T691 / T596).
-// Waste (under/locked) is T390.1.1 arithmetic so late-window leftover paints
-// as locked surplus, not continuation-blue, and session bars never paint
-// underutilization. Dest/mint still read WeeklyBandOf.
+// The verdict is claudia.ClassifyWindow: the owner-tuned Spend Pressure Map
+// (🎯T641), ln(current/required) against the amber/red and under/locked
+// vertices, for overspend and leftover alike (🎯T1072). The only thing this
+// adds is that a session bar never paints leftover. Dest/mint read
+// WeeklyBandOf.
+//
+// 🎯T1072: this used to recompute leftover with fixed-15% arithmetic
+// (🎯T390.1.1) and demote any under/locked that fell short of it to ok.
+// A fixed share of the whole window is the wrong yardstick at the end of a
+// window: on 2026-10-14 Cursor had 8.3% of the month left with 2.2% of it to
+// go — pressure −1.38, under — and painted green. The pressure model
+// already weighs leftover against the time left to burn it.
 func BandOfWindow(w Window, now time.Time, th Thresholds) WeeklyBand {
 	band := WeeklyBand(claudia.ClassifyWindow(windowToClaudia(w), now, thresholdsToClaudia(th)))
-	return applyWeeklyWaste(band, w, now, th)
-}
-
-func wasteWindow(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case WindowWeekly, WindowMonthly, WindowModelWeekly:
-		return true
-	default:
-		return false
-	}
-}
-
-// applyWeeklyWaste is 🎯T390.1.1: session bars never paint underutilization;
-// weekly/monthly continuation leftover is under (blue) past warmup; locked
-// surplus remaining−1.5×time_left is locked (purple) and outranks blue.
-// Overspend bands from the pressure model are left alone.
-func applyWeeklyWaste(band WeeklyBand, w Window, now time.Time, th Thresholds) WeeklyBand {
-	switch band {
-	case BandHot, BandAhead, BandExhausted, BandUnpublished:
-		return band
-	}
-	name := strings.ToLower(strings.TrimSpace(w.Name))
-	if name == WindowSession {
-		if band == BandUnder || band == BandLocked {
-			return BandOK
-		}
-		return band
-	}
-	if !wasteWindow(w.Name) {
-		return band
-	}
-	used := usedPercent(w)
-	rtp, hasTime := remainingTimePercent(w, now)
-	if used == nil || !hasTime {
-		return band
-	}
-	rem := 100 - *used
-	if w.RemainingPercent != nil {
-		rem = *w.RemainingPercent
-	}
-	elapsed := 100 - rtp
-	hot := th.HotRatio
-	if hot <= 0 {
-		hot = 1.5
-	}
-	lockedThresh := th.LockedWastePercent
-	if lockedThresh <= 0 {
-		lockedThresh = 15
-	}
-	underThresh := th.UnderWastePercent
-	if underThresh <= 0 {
-		underThresh = 15
-	}
-	warmup := th.WarmupElapsedPercent
-	if warmup <= 0 {
-		warmup = 5
-	}
-	locked := math.Max(0, rem-hot*rtp)
-	if locked >= lockedThresh {
-		return BandLocked
-	}
-	continuation := 0.0
-	if elapsed > 0 {
-		continuation = math.Max(0, 100-(*used/elapsed)*100)
-	}
-	if elapsed >= warmup && continuation >= underThresh {
-		return BandUnder
-	}
-	if band == BandUnder || band == BandLocked {
+	if strings.EqualFold(strings.TrimSpace(w.Name), WindowSession) && (band == BandUnder || band == BandLocked) {
 		return BandOK
 	}
 	return band
