@@ -18,7 +18,6 @@ func TestRemintSubscriptionRewritesPlans(t *testing.T) {
 	claude := &claudia.AgentDef{
 		Name: "po", Provider: claudia.ProviderClaude,
 		Materialized: true, SessionID: "claude-sid",
-		GrokConnect: true, ConnectURL: "ws://old", ConnectPID: 9,
 	}
 	if !RemintSubscription(claude, dir) {
 		t.Fatal("claude remint reported no change")
@@ -26,7 +25,7 @@ func TestRemintSubscriptionRewritesPlans(t *testing.T) {
 	if claude.Provider != claudia.Provider("anthropic") {
 		t.Fatalf("claude = %+v", claude)
 	}
-	if claude.Materialized || claude.GrokConnect || claude.ConnectURL != "" || claude.ConnectPID != 0 {
+	if claude.Materialized {
 		t.Fatalf("claude still carries a vendor session: %+v", claude)
 	}
 	if claude.SessionID != "claude-sid" {
@@ -47,9 +46,9 @@ func TestRemintSubscriptionRewritesPlans(t *testing.T) {
 		t.Fatalf("grok session id dropped: %q", grok.SessionID)
 	}
 
-	cursor := &claudia.AgentDef{Name: "c", Provider: claudia.ProviderCursor, GrokConnect: true}
-	if !RemintSubscription(cursor, dir) || cursor.GrokConnect {
-		t.Fatalf("cursor = %+v", cursor)
+	cursor := &claudia.AgentDef{Name: "c", Provider: claudia.ProviderCursor}
+	if RemintSubscription(cursor, dir) || cursor.Provider != claudia.ProviderCursor {
+		t.Fatalf("cold cursor seat already on its sidecar id changed: %+v", cursor)
 	}
 
 	bedrock := &claudia.AgentDef{Name: "b", Provider: claudia.ProviderBedrock}
@@ -174,57 +173,5 @@ func TestT8666LiveFleetIsSidecarProviders(t *testing.T) {
 	}
 	if n < 2 {
 		t.Fatalf("live fleet had %d subscription seats; T866.6 is the fleet, not one smoke seat", n)
-	}
-}
-
-func TestRemintRegistryExceptKeepsSurvivingCLITransport(t *testing.T) {
-	reg, err := New(filepath.Join(t.TempDir(), FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, d := range []claudia.AgentDef{
-		{Name: "survivor", Provider: claudia.ProviderClaude, SessionID: "legacy", Materialized: true},
-		{Name: "cold", Provider: claudia.ProviderClaude, SessionID: "cold", Materialized: true},
-	} {
-		if err := reg.Register(d); err != nil {
-			t.Fatal(err)
-		}
-	}
-	n, err := RemintRegistryExcept(reg, t.TempDir(), map[string]bool{"survivor": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("reminted %d, want cold seat only", n)
-	}
-	if d := reg.Def("survivor"); d.Provider != claudia.ProviderClaude || !d.Materialized || d.SessionID != "legacy" {
-		t.Fatalf("surviving CLI changed: %+v", d)
-	}
-	if d := reg.Def("cold"); d.Provider != "anthropic" || d.Materialized {
-		t.Fatalf("cold seat not sidecar: %+v", d)
-	}
-}
-
-// A syntactically reattachable handoff can still point at a dead PID. Boot
-// protects that row before adoption, then remints it once adoption has failed.
-func TestT1047StaleHandoffRemintsAfterReattach(t *testing.T) {
-	reg, err := New(filepath.Join(t.TempDir(), FileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{Name: "dead-cli", Provider: claudia.ProviderClaude, SessionID: "old", Materialized: true}); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := RemintRegistryExcept(reg, t.TempDir(), map[string]bool{"dead-cli": true}); err != nil || n != 0 {
-		t.Fatalf("before adoption: n=%d err=%v", n, err)
-	}
-	if got := reg.Def("dead-cli").Provider; got != claudia.ProviderClaude {
-		t.Fatalf("early relabel: %s", got)
-	}
-	if n, err := RemintRegistryExcept(reg, t.TempDir(), nil); err != nil || n != 1 {
-		t.Fatalf("after failed adoption: n=%d err=%v", n, err)
-	}
-	if d := reg.Def("dead-cli"); d.Provider != "anthropic" || d.Materialized {
-		t.Fatalf("stale transport left behind: %+v", d)
 	}
 }
