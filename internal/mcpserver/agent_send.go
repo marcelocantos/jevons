@@ -234,7 +234,16 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 	// see a Cursor row, so the rotate-before-launch arm never engages.
 	// LaunchRecovering rotates once after that refusal and launches the
 	// fresh id; a store a leftover still holds is not rotated (🎯T541.1).
+	// 🎯T1066: a send to a stopped seat frontier-consume minted is not a
+	// licence to start it while the frontier is paused or once its target
+	// is achieved — the 2026-10-11 wake wave came in through sends exactly
+	// like this one. The message stays the caller's to hold or retry.
+	if hold := s.autoSeatHold(name); hold != "" {
+		s.noteRevive(name, "send", hold, nil)
+		return nil, false, fmt.Errorf("agent %q is not running and is held (%s, 🎯T1066) — lift the pause or start it explicitly with jevons_agent_start", name, hold)
+	}
 	p2, err := fleet.LaunchRecovering(s.registry, name)
+	s.noteRevive(name, "send", "", err)
 	if err != nil {
 		return nil, false, fmt.Errorf("agent %q is not running and rehydrate failed: %v", name, err)
 	}

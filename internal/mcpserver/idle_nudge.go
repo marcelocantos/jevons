@@ -1499,12 +1499,12 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 		// pause the 2026-10-11 incident actually tripped on (never a named
 		// worker/PO, and this hook only gates the automatic recover sweep).
 		Intent: func(name string) fleetintent.Decision {
-			if s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(name) {
+			if hold := s.autoSeatHold(name); hold != "" {
 				return fleetintent.Decision{
 					Control:  fleetintent.ControlDeliverSubmit,
 					Allow:    false,
 					Blocking: fleetintent.Parked,
-					Reason:   "frontier_consume_disabled",
+					Reason:   hold,
 				}
 			}
 			return s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit)

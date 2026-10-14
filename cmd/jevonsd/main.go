@@ -1382,8 +1382,10 @@ func main() {
 	go func() {
 		defer fleetStarted.Store(true)
 		started := time.Now()
+		// 🎯T1067 / 🎯T1066: an auto seat the frontier pause or an achieved
+		// target holds is adopted if it still runs, never started again.
 		pausedAuto := func(name string) bool {
-			return cfg.FrontierConsume.Disabled && mcpserver.IsAutoSpawnedWorkerName(name)
+			return mcpSrv.AutoSeatHold(name) != ""
 		}
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
 			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, pausedAuto),

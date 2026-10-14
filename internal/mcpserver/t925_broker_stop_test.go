@@ -31,7 +31,7 @@ func TestT925ABrokerStopIsRecordedAsTheBrokers(t *testing.T) {
 		causes:    map[string]string{"w-broker": fleet.ExitCauseBrokerLost},
 		launchErr: errBrokerDown,
 	}
-	reps := sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}, false)
+	reps := sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}, nil)
 	s.noteDeadSeats(reps)
 
 	reason, _, ok := s.SeatStopReason("w-broker")

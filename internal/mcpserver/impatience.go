@@ -399,7 +399,7 @@ func (s *Server) observeForImpatience(
 	// (IsAutoSpawnedWorkerName), never a named worker or PO, and never the
 	// owner's own jevons_agent_send (this is the ladder's own fire decision,
 	// not the generic send chokepoint).
-	autoSeatPaused := s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(d.Name)
+	autoSeatPaused := s.autoSeatHold(d.Name) != ""
 	deliberateStop := (!running && !d.AutoStart) || autoSeatPaused
 
 	phase := ""
