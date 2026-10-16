@@ -10,8 +10,33 @@ The resume prerequisite itself has clean focused evidence: source `e0f3651efab17
 
 Jevons `c9e6f54c23eb`, integrated locally as `0f5edee3a993` with identical tree `9ef591f8b16090c12982447ead24ca35c5ab616b`, removes all three startup calls that rewrote providers and cleared materialization based on missing event spool. Clean paired `GREEN 723c6a96` verifies actual registry load/save/reload preservation and selected startup checks. It uses frozen Claudia `72bfc6b`, read-only modfile SHA-256 `ab50a3008326dde03c7ff7f261fd99763c0590cabf21fb2e3a2a580a38adedc7` and sum `64616414979c4951426997782c4c3cc83a320b39f1147ecbb33a68247a15f2ab`, with workspace overlays disabled. The new persistence test did not reproduce the old daemon mutation by itself; deletion of those callers is separately reviewed. A complete live restart journey remains required.
 
-Remaining blockers include the full transport purge and its surviving invariant coverage, consumer-neutral defaults, the dependency-delivery decision, production receipt binding, admission/attribution, and final paired/live pilot evidence. Automatic approval review rejected the remaining broad CLI/ACP deletion twice and requested direct human authorization; its partial uncommitted edits remain isolated and unintegrated. No parked development fleet was activated.
+Remaining blockers include the full transport purge and its surviving invariant coverage, consumer-neutral defaults, the dependency-delivery decision, production receipt binding, admission/attribution, and final paired/live pilot evidence. The owner subsequently gave direct approval for legacy CLI/ACP removal and the hidden Grok CLI refresh launcher. The remaining Claudia purge is in progress in an isolated branch. No parked development fleet was activated.
 
+
+## Legacy transport withdrawal scope
+
+The owner explicitly approved removal of the remaining CLI/ACP launchers and
+the obsolete Jevons terminal/rewind paths on 2026-10-16. Jevons no longer
+rewrites cold-start provider identities to select a transport: Claudia owns
+aliases and the single sidecar route. Existing-seat cross-provider requests
+still require the switch API. Bare Codex keeps Claudia's default read-only
+policy when the host supplied no explicit sandbox policy.
+
+Rewind now refuses before modifying the journal, registry or native transcript,
+and the legacy WebSocket control receives a visible error. The old fallback
+cannot safely rotate a loaded sidecar seat: Stop only detaches its connection.
+OMP core has message-replacement primitives, but a durable rewind coordinating
+history, compaction and request receipts is a separate Claudia capability,
+not a replacement required by the approved withdrawal.
+
+Journey exception for this withdrawal: tests drive the actual refusal entry
+point against real journal/registry files and the WebSocket response, and
+assert that no provider launch occurs. A paid agent turn cannot strengthen
+the no-mutation/no-launch property. This does not certify working rewind,
+provider launch or the complete migration; the joint provider gates remain
+required. The legacy terminal endpoint has no React caller and is removed.
+
+Clean focused withdrawal gate `GREEN b69ad8a6` measured Jevons `7c4669fba06644067ff989935aef72129df5e126` against immutable Claudia `8d69ef8`, with read-only modfile `/tmp/jevons-neutral-config-pair.mod` (SHA-256 `f1b6c70aaf931583cf3c4ee53c7de96359ee026c94877d921ddcc7fa77a0cc8e`). It exercised the actual refusal and provider-selection call sites. Log SHA-256: `ad931b4298422bc7f24a003a27f83b8af768b2702bb11bf6ea24d5bb35eb26c0`. The separately reviewed neutral broker configuration is integrated as `ed1ef4f5`; source `1c0bb635` passed launch-configuration `8c474af6`, all-package build `85e5677a` and actual usage-producer integration `b72a1e59`. These component results do not supersede the full-gate failure above.
 
 ## Baseline preservation
 

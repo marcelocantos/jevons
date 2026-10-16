@@ -12,7 +12,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
-func TestT1047ExistingExplicitClaudeKeepsLiveCLITransport(t *testing.T) {
+func TestT1047ExistingExplicitClaudeKeepsLiveProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agents.json")
 	reg, err := claudia.NewRegistry(path)
 	if err != nil {
@@ -26,8 +26,8 @@ func TestT1047ExistingExplicitClaudeKeepsLiveCLITransport(t *testing.T) {
 		return claudia.NewStubAgent(nil), nil
 	}})
 	wd := t.TempDir()
-	name := "legacy-cli"
-	if err := reg.Register(claudia.AgentDef{Name: name, WorkDir: wd, SessionID: "legacy-sid", Provider: claudia.ProviderClaude}); err != nil {
+	name := "existing-seat"
+	if err := reg.Register(claudia.AgentDef{Name: name, WorkDir: wd, SessionID: "existing-sid", Provider: claudia.ProviderClaude}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := reg.Launch(name); err != nil {
@@ -38,7 +38,7 @@ func TestT1047ExistingExplicitClaudeKeepsLiveCLITransport(t *testing.T) {
 	// 🎯T766: stitchAgentStart reads liveness from the seat authority. The
 	// stub handle carries no session id, so feed the report a real seat's
 	// handle would produce.
-	s.Seats().FromClaudia(seatstate.SeatReport{Name: name, SessionID: "legacy-sid", Provider: string(claudia.ProviderClaude), Alive: true, Known: true}, time.Now())
+	s.Seats().FromClaudia(seatstate.SeatReport{Name: name, SessionID: "existing-sid", Provider: string(claudia.ProviderClaude), Alive: true, Known: true}, time.Now())
 	def, existed, _, err := s.stitchAgentStart(name, wd, "", "claude", "", "jevons-po", claudia.PurposeWork, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestT1047ExistingExplicitClaudeKeepsLiveCLITransport(t *testing.T) {
 		t.Fatal("existing seat reported fresh")
 	}
 	if def.Provider != claudia.ProviderClaude {
-		t.Fatalf("live CLI relabelled: %q", def.Provider)
+		t.Fatalf("live provider relabelled: %q", def.Provider)
 	}
 	disk, err := claudia.NewRegistry(path)
 	if err != nil {
@@ -63,7 +63,7 @@ func TestT1047ExistingExplicitClaudeKeepsLiveCLITransport(t *testing.T) {
 		t.Fatal(err)
 	} // Claudia returns the same live handle.
 	if _, _, _, err := s.stitchAgentStart(name, wd, "", "codex", "", "jevons-po", claudia.PurposeWork, "", ""); err == nil {
-		t.Fatal("cross-plan explicit pin silently relabelled a live CLI")
+		t.Fatal("cross-plan explicit pin silently relabelled a live seat")
 	}
 	if got := reg.Def(name).Provider; got != claudia.ProviderClaude {
 		t.Fatalf("rejected switch mutated row to %q", got)

@@ -950,9 +950,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.SandboxMode = ""
 		def.SandboxGitWrite = false
 	}
-	// A live handle is the transport authority: Claudia Launch returns that
-	// same handle without starting another process. Never relabel its persisted
-	// row to a sidecar while the legacy CLI still owns the seat. An explicit
+	// Claudia Launch returns an existing live handle. An explicit
 	// cross-plan request is a model switch (jevons_agent_switch_model), not an
 	// in-place Register.
 	// 🎯T766: liveness and provider come from the seat authority, fed at
@@ -965,7 +963,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 			liveProvider = claudia.ProviderClaude
 		}
 	}
-	if err := alignStartTransport(def, existed, providerArg, liveProvider); err != nil {
+	if err := preserveLiveProvider(def, liveProvider); err != nil {
 		return nil, existed, routeNote, err
 	}
 
@@ -1101,17 +1099,14 @@ func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sess
 	return cfg.Provider, cfg.SessionID, cfg.RequireResume
 }
 
-// alignStartTransport aligns the persisted row with the transport Claudia
-// Launch will actually return. A cold start instead binds fresh and explicit
-// provider requests to the subscription sidecar.
-func alignStartTransport(def *claudia.AgentDef, existed bool, providerArg string, live claudia.Provider) error {
+// preserveLiveProvider prevents start from relabelling an existing seat.
+// Claudia owns provider aliases and the sole sidecar transport on cold starts.
+func preserveLiveProvider(def *claudia.AgentDef, live claudia.Provider) error {
 	if live != "" {
 		if cli.PlanProvider(live) != cli.PlanProvider(def.Provider) {
 			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; use jevons_agent_switch_model, or stop it first", def.Name, live, def.Provider)
 		}
 		def.Provider = live
-	} else if !existed || strings.TrimSpace(providerArg) != "" {
-		def.Provider = cli.SidecarLaunchProvider(def.Provider)
 	}
 	return nil
 }

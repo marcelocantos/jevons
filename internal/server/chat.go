@@ -830,133 +830,14 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// rewindStrategy selects how product rewind rebinds the overseer session
-// after the durable chatlog is truncated (🎯T214 J5).
-//
-//   - rewindNativeJSONL: Claude Session — claudia.RewindSession truncates the
-//     provider JSONL; same SessionID is resumed (not a silent Grok-style rotate).
-//   - rewindRotateRecap: Grok ACP and other providers without in-place session
-//     truncate — journal-first rotate onto a fresh SessionID + chatlog recap.
-type rewindStrategy int
-
-const (
-	rewindRotateRecap rewindStrategy = iota
-	rewindNativeJSONL
-)
-
-// rewindStrategyForProvider is the hermetic policy oracle for 🎯T214 J5.
-// Only Claude Session (and empty, which claudia treats as Claude) uses
-// native JSONL rewind. Grok/Codex/Bedrock/unknown must not silently apply
-// Claude JSONL rules — rotate+recap is the honest product path.
-func rewindStrategyForProvider(p claudia.Provider) rewindStrategy {
-	switch p {
-	case claudia.ProviderClaude, "":
-		return rewindNativeJSONL
-	default:
-		return rewindRotateRecap
-	}
-}
-
-// RewindOverseer rolls the Jevons conversation back n user turns and
-// resumes the overseer. Always journal-first (🎯T52): truncate the durable
-// chatlog, stop the live process, then rebind the session:
-//
-//   - Claude (🎯T214): claudia.RewindSession on the same SessionID, then Launch
-//     with Materialized/RequireResume. No silent Grok rotate applied wrongly.
-//     Falls back to rotate+recap if native JSONL rewind fails (missing file,
-//     wrong turn count) — failure is logged, not mislabeled as Grok-only success.
-//   - Grok / others: rotate SessionID + seed recap (Grok ACP cannot truncate
-//     in place). Residual: chatlog turn count vs Claude JSONL turn boundaries
-//     may diverge when both are used; product n is chatlog turns.
+// RewindOverseer refuses the retired CLI rewind operation before any mutation.
+// Sidecar Stop detaches a connection; it does not unload or reset its session.
+// A rotate-and-recap replacement cannot safely reuse that still-loaded seat.
 func (s *Server) RewindOverseer(n int) error {
 	if n < 1 {
 		return fmt.Errorf("rewind: turns must be >= 1")
 	}
-	s.mu.RLock()
-	reg := s.registry
-	clog := s.chatLog
-	s.mu.RUnlock()
-	if reg == nil {
-		return fmt.Errorf("rewind: no registry")
-	}
-	if clog == nil {
-		return fmt.Errorf("rewind: no chat log")
-	}
-	def := reg.Def(s.overseerName)
-	if def == nil {
-		return fmt.Errorf("rewind: overseer not registered")
-	}
-
-	if err := clog.TruncateTurns(n); err != nil {
-		return fmt.Errorf("rewind: %w", err)
-	}
-
-	reg.Stop(s.overseerName)
-
-	seatstate.ObserveStopped(reg, s.overseerName)
-	// Stop clears ConnectURL/PID on the registry copy, but `def` was
-	// snapshotted before Stop. Re-registering that snapshot re-persisted
-	// the dead serve endpoint and forced Launch into reattach → connection
-	// reset (🎯T204). Always clear connect endpoint before re-register.
-	next := clearConnectEndpoint(*def)
-	strategy := rewindStrategyForProvider(def.Provider)
-	injectRecap := true
-
-	if strategy == rewindNativeJSONL {
-		if _, err := claudia.RewindSession(def.SessionID, def.WorkDir, n); err != nil {
-			slog.Warn("rewind: Claude native JSONL rewind failed; falling back to rotate+recap",
-				"provider", def.Provider, "session", def.SessionID, "err", err)
-			// Fall through to rotate path.
-			strategy = rewindRotateRecap
-		} else {
-			// Same session id, still materialized; resume the truncated JSONL.
-			next.Materialized = true
-			injectRecap = false
-			slog.Info("rewind: Claude native JSONL path",
-				"provider", def.Provider, "session", next.SessionID, "turns", n)
-		}
-	}
-
-	if strategy == rewindRotateRecap {
-		// Grok ACP (and fallback): cannot truncate the live session in place.
-		next.SessionID = uuid.NewString()
-		next.Materialized = false
-		slog.Info("rewind: rotate+recap path",
-			"provider", def.Provider, "new_session", next.SessionID, "turns", n)
-	}
-
-	if err := reg.Register(next); err != nil {
-		return fmt.Errorf("rewind: register session: %w", err)
-	}
-	agent, lerr := fleet.LaunchRecovering(reg, s.overseerName)
-	if lerr != nil {
-		// Leave stopped + clean def; cockpit converge (🎯T204) will retry.
-		s.SetOverseerDownReason("rewind relaunch failed: " + lerr.Error())
-		s.NotifyAgentsChanged()
-		return fmt.Errorf("rewind: relaunch failed: %w", lerr)
-	}
-	s.AttachOverseer(agent)
-	s.SetOverseerDownReason("")
-
-	if injectRecap {
-		if recap := clog.Recap(30, 6<<10); recap != "" {
-			go func() {
-				if err := s.SendToOverseer(
-					"[Conversation rewound by the owner. The record below is the surviving context — read it, then acknowledge in ONE short sentence.]\n\n" + recap); err != nil {
-					slog.Error("rewind recap send failed", "err", err)
-				}
-			}()
-		}
-	} else {
-		// Native path: model already has truncated transcript; short ack only.
-		go func() {
-			if err := s.SendToOverseer(
-				"[Conversation rewound by the owner — your session transcript was truncated in place. Acknowledge in ONE short sentence.]"); err != nil {
-				slog.Error("rewind ack send failed", "err", err)
-			}
-		}()
-	}
-	return nil
+	return fmt.Errorf("rewind is unavailable: legacy CLI rewind was removed; your conversation has not been changed")
 }
 
 // SetRegistry attaches the agent registry for the /api/agents endpoint.
@@ -1585,13 +1466,16 @@ func (s *Server) handleChatControlFrame(ctx context.Context, conn *websocket.Con
 		s.NoteOwnerComposerBlocked(ctl.ComposerBlocked, ctl.Reason)
 		return true
 	case "rewind":
-		// Roll conversation back N user turns; tell clients to trim.
-		slog.Info("chat: rewind", "turns", ctl.Turns)
+		// Refuse the withdrawn operation visibly, without telling clients
+		// to trim history or treating the control frame as an owner turn.
 		if err := s.RewindOverseer(ctl.Turns); err != nil {
-			slog.Error("chat: rewind failed", "err", err)
-			return true
+			payload, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := conn.Write(writeCtx, websocket.MessageText, payload); err != nil {
+				slog.Warn("chat: rewind refusal delivery failed", "err", err)
+			}
 		}
-		s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
 		return true
 	case "inspect_subscribe", "inspect_unsubscribe", "subscribe", "unsubscribe":
 		// 🎯T209: RHS agent inspect multiplex on /ws/chat.
