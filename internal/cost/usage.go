@@ -147,6 +147,9 @@ func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudia.UsageFact) (boo
 			identity.Counters = claudia.UsageCounters{}
 			identity.ContextTokens, identity.APIEquivalentCostUSD = nil, nil
 			identity.CostSource = ""
+			// Provider diagnostic IDs arrive with the response. Invocation
+			// and physical-attempt identities are fixed before dispatch.
+			identity.ProviderRequestID, identity.ProviderResponseID = "", ""
 		}
 		if !reflect.DeepEqual(oldIdentity, newIdentity) {
 			return false, fmt.Errorf("usage invocation identity conflicts: %s", f.CallID)
@@ -197,6 +200,13 @@ type StructuredUsage struct {
 	Calls, IncompleteCalls                                                         int64
 	UnknownInput, UnknownOutput, UnknownCacheCreate, UnknownCacheRead, UnknownCost int64
 	ObservationFailures                                                            int64
+	// Prefer observed inclusive input over the disjoint bucket sum, never
+	// both. Without either a total or every bucket, this is a lower bound.
+	KnownInputTotal, UnknownInputTotal int64
+}
+
+func (u StructuredUsage) KnownConsumptionTokens() int64 {
+	return u.KnownInputTotal + u.Known.Output
 }
 
 func (s *Store) StructuredUsage(ctx context.Context, from, to time.Time) (StructuredUsage, error) {
@@ -208,12 +218,17 @@ func (s *Store) StructuredUsage(ctx context.Context, from, to time.Time) (Struct
 		COALESCE(SUM(state = 'started' OR state = 'unknown'), 0),
 		COUNT(*) - COUNT(input_tokens), COUNT(*) - COUNT(output_tokens),
 		COUNT(*) - COUNT(cache_create_tokens), COUNT(*) - COUNT(cache_read_tokens),
-		COUNT(*) - COUNT(api_equivalent_cost_usd)
+		COUNT(*) - COUNT(api_equivalent_cost_usd),
+		COALESCE(SUM(COALESCE(json_extract(fact, '$.counters.total_input_tokens'),
+			COALESCE(input_tokens, 0) + COALESCE(cache_create_tokens, 0) + COALESCE(cache_read_tokens, 0))), 0),
+		COALESCE(SUM(json_extract(fact, '$.counters.total_input_tokens') IS NULL AND
+			(input_tokens IS NULL OR cache_create_tokens IS NULL OR cache_read_tokens IS NULL)), 0)
 		FROM usage_calls WHERE ts >= ? AND ts < ?`,
 		from.UTC().Format(usageTimeLayout), to.UTC().Format(usageTimeLayout)).Scan(
 		&out.Known.Input, &out.Known.Output, &out.Known.CacheCreate, &out.Known.CacheRead,
 		&out.APIEquivalentCostUSD, &out.Calls, &out.IncompleteCalls,
-		&out.UnknownInput, &out.UnknownOutput, &out.UnknownCacheCreate, &out.UnknownCacheRead, &out.UnknownCost)
+		&out.UnknownInput, &out.UnknownOutput, &out.UnknownCacheCreate, &out.UnknownCacheRead, &out.UnknownCost,
+		&out.KnownInputTotal, &out.UnknownInputTotal)
 	if err != nil {
 		return out, err
 	}

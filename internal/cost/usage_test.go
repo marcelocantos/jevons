@@ -364,3 +364,62 @@ func usageSpoolRecord(t *testing.T, fact claudia.UsageFact) spool.Record {
 	}
 	return spool.Record{RawTS: fact.StartedAt, Seat: fact.Seat, Type: "usage", UsageFact: body}
 }
+
+func TestPhysicalUsageRetainsTerminalIDsAndInclusiveInput(t *testing.T) {
+	zero, input, output, cache, total := int64(0), int64(21), int64(4), int64(7), int64(28)
+	for _, tc := range []struct {
+		name                                                   string
+		counters                                               claudia.UsageCounters
+		wantInput, wantConsumption, unknownTotal, unknownFresh int64
+	}{
+		{"inclusive only", claudia.UsageCounters{TotalInputTokens: &total, OutputTokens: &output}, 28, 32, 0, 1},
+		{"inclusive and buckets", claudia.UsageCounters{TotalInputTokens: &total, InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache, CacheCreationInputTokens: &zero}, 28, 32, 0, 0},
+		{"complete buckets", claudia.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache, CacheCreationInputTokens: &zero}, 28, 32, 0, 0},
+		{"partial buckets", claudia.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache}, 28, 32, 1, 0},
+		{"observed zero total", claudia.UsageCounters{TotalInputTokens: &zero, OutputTokens: &zero}, 0, 0, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := OpenStore(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			start, final := usagePair("physical-call", 1)
+			for _, f := range []*claudia.UsageFact{&start, &final} {
+				f.Coverage, f.CounterSource = "provider_attempt", "provider_reported"
+				f.InvocationID, f.ProviderAttemptID = "engine-call", f.CallID
+			}
+			final.ProviderRequestID, final.ProviderResponseID = "http-request", "response-id"
+			final.Counters = tc.counters
+			ctx := context.Background()
+			page := &claudia.UsagePage{Seat: start.Seat, SessionID: start.SessionID, Facts: []claudia.UsageFact{start, final}, Next: 2}
+			if err := s.IngestUsagePage(ctx, claudia.UsageQuery{Seat: start.Seat, SessionID: start.SessionID}, page); err != nil {
+				t.Fatal(err)
+			}
+			// A final delivered again over the spool is the same physical call.
+			if n, err := s.InsertEvents([]*Event{{UsageFact: &final}}); err != nil || n != 0 {
+				t.Fatalf("repeated final: %d %v", n, err)
+			}
+			got, err := s.StructuredUsage(ctx, testNow, testNow.Add(time.Hour))
+			if err != nil || got.Calls != 1 || got.KnownInputTotal != tc.wantInput || got.KnownConsumptionTokens() != tc.wantConsumption || got.UnknownInputTotal != tc.unknownTotal || got.UnknownInput != tc.unknownFresh {
+				t.Fatalf("inclusive input counted incorrectly: %+v %v", got, err)
+			}
+			var body string
+			if err := s.db.QueryRow(`SELECT fact FROM usage_calls`).Scan(&body); err != nil {
+				t.Fatal(err)
+			}
+			var stored claudia.UsageFact
+			if err := json.Unmarshal([]byte(body), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(stored, final) {
+				t.Fatal("physical identities or raw dimensions lost")
+			}
+			changed := final
+			changed.ProviderResponseID = "replacement"
+			if err := s.IngestUsageFact(ctx, final.Seat, final.SessionID, &changed); err == nil {
+				t.Fatal("changed final identity accepted")
+			}
+		})
+	}
+}
