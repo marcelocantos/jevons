@@ -75,6 +75,31 @@ inside Jevons cannot run while that process is absent; its dependency outage and
 uncertain effects need durable operation identity, bounded waiting and outcome
 reconciliation, not a synthetic failure followed by blind model/tool retries.
 
+The owner's next refinement is to separate tool execution from consumer uptime.
+The current surface already contains three distinct concerns:
+
+- Pure computations and durable-data utilities can run independently. Gate
+  record lookup (`internal/mcpserver/gate_show.go`) and bounded event-log reads
+  (`eventlog_tools.go`) wrap existing stores; Bullseye target filing already
+  delegates its core mutation to Bullseye (`target_file.go`). Preserve authority
+  in those existing owners rather than copying their state into Claudia.
+- Agent session operations belong to the independent Claudia service; its
+  sidecar and outbound external MCP requests must not depend on a Jevons
+  client's socket remaining connected.
+- Fleet operations remain Jevons-owned, but their transport can use durable
+  store-and-forward: retain a logical tool-operation ID and payload, deliver
+  when Jevons is available, record acceptance/outcome, and return that outcome
+  to the original waiting agent invocation. Reconnection is not another tool
+  invocation. A lost reply after an effect requires idempotency or authoritative
+  reconciliation; a transport retry alone cannot promise exactly-once effects.
+
+Delayed commands must recheck actor authority, target generation and current
+preconditions when executing. A stale stop must not hit a replacement worker;
+fresh-state queries must wait for a current answer or explicitly label an older
+snapshot. The transport owns delivery and results, while Jevons remains the sole
+fleet authority. These are design constraints for the existing receipt and
+restart work, not evidence that a durable tool transport has been implemented.
+
 Relevant source seams and limits:
 
 - `AgentSessionConfig.agent` accepts the instrumented core Agent, while the
