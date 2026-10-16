@@ -67,6 +67,21 @@ func (s *Server) handleCost(_ context.Context, _ mcp.CallToolRequest) (*mcp.Call
 			fmt.Fprintf(&b, "  %s%.2f  %s  %s  %s\n", unit, r.CostUSD, r.SessionID[:min(8, len(r.SessionID))], who, r.Model)
 		}
 	}
+	b.WriteString("\nCanonical provider observations (may overlap the estimates above; do not add them):\n")
+	for _, row := range []struct {
+		name  string
+		usage cost.StructuredUsage
+	}{{"window", snap.StructuredUsage}, {"today", snap.StructuredUsageToday}} {
+		u := row.usage
+		fmt.Fprintf(&b, "  %s: at least %d consumed tokens across %d observed calls; %d incomplete calls; unknown input total in %d, output in %d, cost in %d; %d observation failures\n",
+			row.name, u.KnownConsumptionTokens(), u.Calls, u.IncompleteCalls, u.UnknownInputTotal, u.UnknownOutput, u.UnknownCost, u.ObservationFailures)
+	}
+	b.WriteString("  These are measured lower bounds, not subscription quota or proof of complete coverage.\n")
+	if h := snap.Collector; h == nil || !h.HistoryEnabled {
+		b.WriteString("  Canonical history recovery is unavailable.\n")
+	} else if h.InventoryIncomplete || h.LastInventoryComplete.IsZero() || h.LastHistoryErr != "" {
+		fmt.Fprintf(&b, "  Canonical history coverage is incomplete or unverified; last recovery error: %s\n", h.LastHistoryErr)
+	}
 	if len(snap.Alerts) > 0 {
 		b.WriteString("\n⚠ RUNAWAY SIGNALS:\n")
 		for _, a := range snap.Alerts {
