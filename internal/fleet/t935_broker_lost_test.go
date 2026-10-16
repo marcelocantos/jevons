@@ -13,44 +13,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
-// The refusal the broker returned for jv-t928-mcp-attach on every relaunch
-// from 00:09:56 to 00:20:16 on 2026-09-30, verbatim.
-var t935SpoolRefusal = errors.New(`broker protocol: agent_failed: session fe8f1413-8636-466c-be11-d98e57124921: ` +
-	`existing conversation required but no spool records for seat "jv-t928-mcp-attach" under ` +
-	`/Users/marcelo/.jevons/spool — refusing to mint a replacement session`)
-
-// 🎯T935: a resume refused because the seat has no history anywhere is
-// reminted on a fresh session, whatever the provider. A resume refused on a
-// store that does exist still fails closed.
-func TestT935AbsentHistoryRemints(t *testing.T) {
-	sidecar := &claudia.AgentDef{Name: "jv-t928-mcp-attach", Provider: "anthropic", Materialized: true}
-	if !remintAfterResumeError(sidecar, t935SpoolRefusal) {
-		t.Fatal("the incident's no-spool refusal does not remint: the seat stays down forever")
-	}
-	claude := &claudia.AgentDef{Name: "w", Provider: claudia.ProviderClaude, Materialized: true}
-	jsonl := errors.New("session abc: existing conversation required but JSONL not found at /x/abc.jsonl — refusing to mint a replacement session")
-	if !remintAfterResumeError(claude, jsonl) {
-		t.Fatal("a missing Claude transcript reported by the broker does not remint")
-	}
-
-	for _, tc := range []struct {
-		def *claudia.AgentDef
-		err error
-	}{
-		{&claudia.AgentDef{Provider: claudia.ProviderGrok}, errors.New("acp session/load s1: boom — existing conversation; refusing to mint a replacement session")},
-		{&claudia.AgentDef{Provider: claudia.ProviderCodex}, errors.New("session s1: existing Codex thread required but thread/resume failed: eof — refusing to mint a replacement session")},
-		{&claudia.AgentDef{Provider: "anthropic"}, errors.New("omp: keychain was not read at startup")},
-		{sidecar, errors.New("broker protocol: grant_held (name=\"x\"): grant x is owned by another connection")},
-	} {
-		if remintAfterResumeError(tc.def, tc.err) {
-			t.Errorf("%s: %q reminted — a store that exists must fail closed", tc.def.Provider, tc.err)
-		}
-	}
-	if HistoryAbsent(nil) {
-		t.Fatal("nil error reads as absent history")
-	}
-}
-
 type t935Reg struct {
 	defs      []claudia.AgentDef
 	alive     map[string]bool

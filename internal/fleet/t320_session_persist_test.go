@@ -10,19 +10,10 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// 🎯T320 acceptance 3 — never-written seat is not a RequireResume dead-end.
-//
-// Pre-claudia-c7ba363, Launch set Materialized=true on bare Start. A seat
-// killed before the first completed turn had Materialized + no JSONL, so
-// SessionLost fired and every later start either hard-failed or rotated via
-// T313 rehydrate. After the claudia fix, bare Start leaves Materialized
-// false: SessionLost is false, T313 does not engage, and the next Launch
-// mints with RequireResume=false (covered hermetically in claudia:
-// TestHermeticLaunchDoesNotMaterializeWithoutJSONL).
-//
-// This file guards the jevons-side half of that contract: the registry
-// shape left by "started, no completed turn" must not look like genuine
-// session loss to the rehydrate arm.
+// 🎯T320: a never-written row does not establish session loss. Historical
+// Claude JSONL also cannot determine the state of canonical sidecar history.
+// Launch-time generation preservation is covered through LaunchRecovering
+// in rehydrate_generation_test.go.
 
 func TestT320NeverWrittenDoesNotEngageRehydrate(t *testing.T) {
 	home := t.TempDir()
@@ -69,49 +60,7 @@ func TestT320NeverWrittenDoesNotEngageRehydrate(t *testing.T) {
 	}
 }
 
-// Contrast: genuine Materialized + missing JSONL still engages T313 (residual net).
-func TestT320MaterializedMissingJSONLStillRehydrates(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	workDir := t.TempDir()
-	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	def := claudia.AgentDef{
-		Name:         "jv-t320-genuinely-lost",
-		WorkDir:      workDir,
-		SessionID:    "lost-with-materialized-aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-		Materialized: true,
-		Provider:     claudia.ProviderClaude,
-		Parent:       "jevons-po",
-		Purpose:      claudia.PurposeWork,
-		TargetID:     "T320",
-	}
-	if err := reg.Register(def); err != nil {
-		t.Fatal(err)
-	}
-	if !observedResumeLost(&def) {
-		t.Fatal("Materialized+missing JSONL must still be SessionLost (T313 residual)")
-	}
-	lost, ok, err := RehydrateLostSessionIn(reg, def.Name)
-	if err != nil {
-		t.Fatalf("rehydrate: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected T313 rehydrate for genuine loss")
-	}
-	if lost.OldSession != def.SessionID || lost.NewSession == def.SessionID {
-		t.Fatalf("rotation wrong: old=%s new=%s", lost.OldSession, lost.NewSession)
-	}
-	after := reg.Def(def.Name)
-	if after.Materialized || after.SessionID != lost.NewSession {
-		t.Fatalf("post-rehydrate row: mat=%v sid=%s", after.Materialized, after.SessionID)
-	}
-}
-
-// JSONL present (completed-turn evidence) is never SessionLost — plain resume.
+// An archived transcript also must not trigger replacement of a generation.
 func TestT320CompletedTurnJSONLNotLost(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

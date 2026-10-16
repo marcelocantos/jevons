@@ -17,27 +17,9 @@ import (
 )
 
 // Lost-session rehydrate (🎯T313).
-//
-// claudia fails closed on resume: once a registry row is Materialized,
-// Launch passes RequireResume, and a missing Claude JSONL is a hard
-// error rather than a silently minted replacement conversation. That
-// policy is right — quietly starting a blank agent under a name whose
-// history the caller believes is intact is the worse failure.
-//
-// It is also a dead end. Materialized is set the instant the process
-// spawns, not when a conversation exists, so an agent whose first turn
-// never submitted has Materialized=true and no JSONL — forever. Every
-// later launch refuses, and recovery was a manual kill → start →
-// re-brief, per worker, on every daemon restart.
-//
-// This is the third option: notice that the session is unresumable
-// BEFORE asking claudia to resume it, rotate the row onto a fresh
-// session id while preserving everything that identifies the agent
-// (name, parent lineage, purpose, provider, model, target binding),
-// and hand the caller an explicit account of what was lost so the
-// brief can be re-sent in the same step. The mint is deliberate and
-// reported, which is precisely what claudia's guard exists to prevent
-// happening by accident.
+// Explicit generation-scoped loss evidence may authorize a replacement.
+// Missing vendor files, spool projections and provider error prose cannot
+// establish that canonical Claudia history is absent.
 
 // LostSession records a registry row whose provider session could not
 // be resumed, and the fresh session it was rotated onto. It carries the
@@ -83,14 +65,9 @@ func dashIfEmpty(s string) string {
 	return s
 }
 
-// StatusDeadUnmaterialized is the fleet-wide status label for a seat whose
-// registry row claims a conversation that does not exist on disk (🎯T412):
-// the durable Materialized flag points at a session id with no transcript,
-// and no confirmed turn backs the claim. Such a seat is dead, not running —
-// agent_list, the RHS tree, and the sentinel snapshot all report it with
-// this label rather than nudging it forever. Defined here because both the
-// MCP layer and the web server derive it, and this package owns the
-// underlying predicate (SessionLost).
+// StatusDeadUnmaterialized is the fleet-wide label for an explicitly reported
+// lost conversation (🎯T412). Materialized state and historical vendor files
+// alone cannot establish that loss; Claudia owns canonical generation history.
 const StatusDeadUnmaterialized = "dead_unmaterialized"
 
 // RehydratedDef returns def rotated onto newSessionID: a fresh
@@ -159,10 +136,8 @@ func RehydrateLostSessionIn(reg *claudia.Registry, name string) (LostSession, bo
 	return lost, true, nil
 }
 
-// rotateOntoFreshSession is the T313 rotation: new session id, same
-// identity, Materialized cleared so the next Launch mints. Callers that
-// already have a definitive resume refusal (Cursor Invalid params) use
-// this even when SessionLost cannot see the provider store.
+// rotateOntoFreshSession replaces an explicitly lost generation while
+// preserving the agent identity and lineage. It never infers loss itself.
 func rotateOntoFreshSession(reg *claudia.Registry, def *claudia.AgentDef) (LostSession, error) {
 	lost := LostSession{
 		Name:       def.Name,
@@ -193,21 +168,9 @@ func rotateOntoFreshSession(reg *claudia.Registry, def *claudia.AgentDef) (LostS
 	return lost, nil
 }
 
-// LaunchRecovering is registry.Launch with lost-session recovery in
-// front of it (🎯T409).
-//
-// claudia fails closed when a row is Materialized and its transcript is
-// gone, which is correct — silently minting a replacement would discard
-// history without saying so. But every caller then has to know to
-// rehydrate first, and on 2026-08-10 three separate paths did not:
-// jevons_agent_start had it, ensureAgentProcess did not (the impatience
-// ladder retried the same error on a timer forever), and cockpit
-// converge did not (the overseer failed eight launches and gave up,
-// taking owner chat and the fleet's animus with it).
-//
-// Thirteen call sites reach registry.Launch. Recovery belongs here, once,
-// rather than in each of them — a guard that every caller must remember
-// is a guard that some caller will forget.
+// LaunchRecovering applies explicit loss recovery and reconciles provider
+// capabilities before launch. A refused canonical resume stays refused under
+// the same generation; legacy error text never authorizes another mint.
 func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error) {
 	defer seatstate.ObserveRegistrySeat(reg, name)
 	if reg == nil {
@@ -220,73 +183,5 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 	} else if ok {
 		slog.Info("launch rehydrated lost session", "name", name, "detail", lost.Describe())
 	}
-	agent, err := LaunchReconciled(reg, name)
-	if remintAfterResumeError(reg.Def(name), err) {
-		def := reg.Def(name)
-		rotated, rerr := rotateOntoFreshSession(reg, def)
-		if rerr != nil {
-			slog.Warn("resume-denied rehydrate failed", "name", name, "err", rerr)
-			return nil, err
-		}
-		slog.Warn("launch reminted after provider resume refusal",
-			"name", name, "detail", rotated.Describe())
-		return LaunchReconciled(reg, name)
-	}
-	return agent, err
-}
-
-// Resume refusals that report the conversation absent, not unresumable.
-// Claude has no transcript at all; a sidecar seat (anthropic, openai, …) has
-// no spool record under its name. Each is the 🎯T313 case: nothing exists to
-// discard, and every later launch refuses the same way.
-const (
-	absentClaudeJSONL  = "existing conversation required but JSONL not found at"
-	absentSidecarSpool = "existing conversation required but no spool records for seat"
-)
-
-// HistoryAbsent reports that err is a resume refusal because the seat has no
-// conversation history anywhere, so minting a fresh session loses nothing.
-//
-// A seat the broker took down while it was on a sidecar provider hit this
-// forever (🎯T935, 2026-09-30): jv-t928-mcp-attach had no spool records, the
-// broker-lost relaunch retried every 20s for twelve minutes, and the owner
-// killed and reminted it by hand — the same mint this makes. A refusal to
-// resume a store that does exist (Grok or Cursor session/load, Codex
-// thread/resume) is not this, and still fails closed.
-func HistoryAbsent(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, absentClaudeJSONL) || strings.Contains(msg, absentSidecarSpool)
-}
-
-// remintAfterResumeError is the 🎯T627.1 gate: a failed Launch may rotate
-// onto a fresh session when the history is absent (HistoryAbsent), and
-// otherwise only in two cases.
-//
-// Cursor session/load Invalid params, where stacking a second ACP writer
-// on the same store is 🎯T541.1.
-//
-// Grok "exclusive GROK_HOME unavailable": claudia will not mkdir on
-// resume, and the directory was never published. A cold provider switch
-// keeps the previous session id, so every later launch stats a path that
-// cannot exist and the cockpit stops after eight attempts. Grok's
-// session/load failure ("existing conversation; refusing to mint") shares
-// wording with [claudia.ErrCursorResumeDenied] and must still fail closed.
-func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
-	if err == nil || def == nil {
-		return false
-	}
-	if HistoryAbsent(err) {
-		return true
-	}
-	switch def.Provider {
-	case claudia.ProviderCursor:
-		return claudia.IsCursorResumeDenied(err)
-	case claudia.ProviderGrok:
-		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")
-	default:
-		return false
-	}
+	return LaunchReconciled(reg, name)
 }
