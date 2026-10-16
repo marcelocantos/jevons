@@ -685,6 +685,41 @@ func TestCollectorDoesNotCountDerivedSpoolView(t *testing.T) {
 	}
 }
 
+func TestCollectorPreservesExistingRelativeTailOffset(t *testing.T) {
+	spoolDir := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.Rel(cwd, spoolDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JEVONS_SPOOL_DIR", root)
+	path := filepath.Join(root, "events-2026-07-07.log")
+	line := []byte(`{"ts":"2026-07-07T12:00:00Z","seat":"worker","type":"turn_end","costUSD":0.42}` + "\n")
+	if err := os.WriteFile(path, line, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// The existing collector recorded offsets under the configured path,
+	// including its relative spelling. Discovery must not create a new key.
+	if err := s.SetTailOffset(path, int64(len(line))); err != nil {
+		t.Fatal(err)
+	}
+	c := NewCollector(&CollectorArgs{Store: s, ProjectsRoot: t.TempDir()})
+	if _, err := c.ScanOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := c.PollOnce(); err != nil || n != 0 {
+		t.Fatalf("replayed %d consumed records, err=%v", n, err)
+	}
+}
+
 func TestIsBillableTranscriptAcceptsDatedSpool(t *testing.T) {
 	if !isBillableTranscript("/tmp/events-2026-09-25.log") {
 		t.Fatal("dated spool must be billable")
