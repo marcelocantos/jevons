@@ -49,14 +49,19 @@ and tree navigation already have upstream owners. Claudia's handwritten
 `History`/`Maintenance` and competing session loop are therefore candidates for
 replacement rather than further expansion.
 
-The proposed boundary is OMP session execution, Claudia shared hosting/lifecycle
-and thin cross-process contracts, and Jevons fleet intent/communication. This is
-a design recommendation, not an implemented or verified SDK migration. No
+The owner accepted the framing **OMP as a service** and explicitly permits
+starting Jevons with fresh sessions. The boundary is OMP session execution,
+Claudia shared hosting/lifecycle and thin cross-process contracts, and Jevons
+fleet intent/communication. This is the revised target design, not an
+implemented or verified SDK migration. No
 finding establishes a fundamental requirement to retain bare-core orchestration.
-Keep adapter obligations narrow: exact generation admission and existing-history
-migration, durable request acknowledgment/reconnect, physical-attempt usage
+Keep adapter obligations narrow: exact identity for newly created sessions,
+durable request acknowledgment/reconnect, physical-attempt usage
 observation, explicit tool policy, and the existing trusted credential boundary.
 Those obligations do not justify maintaining another compaction/history engine.
+Old Jevons history import and compatibility with the custom SeatStore format
+are explicitly unnecessary. Use one new OMP-owned session store; leave parked
+stores untouched. Newly acknowledged work still needs restart durability.
 
 Relevant source seams and limits:
 
@@ -79,10 +84,19 @@ Relevant source seams and limits:
 Review sources: [SDK](https://github.com/can1357/oh-my-pi/blob/v18.2.11/packages/coding-agent/src/sdk.ts),
 [session constructor contract](https://github.com/can1357/oh-my-pi/blob/v18.2.11/packages/coding-agent/src/session/agent-session-types.ts),
 [session manager](https://github.com/can1357/oh-my-pi/blob/v18.2.11/packages/coding-agent/src/session/session-manager.ts).
-Before changing the runtime, prove restart/resume, same-session switching,
+Verify the new runtime with fresh sessions: restart/resume, same-session switching,
 rewind, duplicate-request recovery, policy enforcement and complete usage through
 one isolated SDK-backed seat. Existing legacy-removal commits remain useful;
 their focused greens are not evidence for this proposed replacement.
+
+The earlier native-transport purge is preserved as uncommitted source work in
+`/tmp/claudia-cleanup-seat-semantics`, not integrated. Its last root/daemon
+diagnostic is `RED 87920dea`; retired expectations and verification wiring
+remain unfinished. A combined test-removal batch was rejected by automatic
+approval review as exceeding approved scope and did not execute. Further
+bespoke-runtime test migration stopped when the owner chose the SDK service
+direction; useful transport deletions can be carried into that implementation
+without mistaking this checkpoint for a passing cleanup.
 
 ## Baseline preservation
 
