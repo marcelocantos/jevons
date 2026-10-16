@@ -62,7 +62,8 @@ type Collector struct {
 type CollectorHealth struct {
 	// Started bounds warm-up even if Run never gets scheduled.
 	Started time.Time `json:"started"`
-	// LastPoll / LastScan are when each pass last completed.
+	// LastPoll is the last fully successful accounting pass; LastScan is
+	// the last completed discovery pass. Errors remain separately visible.
 	LastPoll time.Time `json:"last_poll"`
 	LastScan time.Time `json:"last_scan"`
 	// PollStarted / ScanStarted are non-zero while a pass is in flight.
@@ -97,7 +98,7 @@ func (h CollectorHealth) Describe(now time.Time) string {
 	return strings.Join(parts, "; ")
 }
 
-// LastPoll reports when the collector last completed a poll pass. The
+// LastPoll reports when the collector last completed a successful poll pass. The
 // monitor alarms on staleness: a safety system whose failure mode is
 // silence would recreate the incident's invisibility inside the
 // monitoring itself.
@@ -253,6 +254,11 @@ func (c *Collector) PollOnce() (int, error) {
 				return fail(total, err)
 			}
 		}
+	}
+	if firstErr != nil {
+		// Healthy files were still ingested, but missing observations must
+		// not refresh the monitor's clock of successful accounting passes.
+		return fail(total, firstErr)
 	}
 	c.mu.Lock()
 	c.health.LastPoll = c.now()

@@ -423,3 +423,72 @@ func TestPhysicalUsageRetainsTerminalIDsAndInclusiveInput(t *testing.T) {
 		})
 	}
 }
+
+func TestMalformedUsageCannotKeepCollectorFalselyFresh(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("JEVONS_SPOOL_DIR", root)
+	now := testNow
+	s, err := OpenStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	c := NewCollector(&CollectorArgs{Store: s, ProjectsRoot: root, Now: func() time.Time { return now }})
+	if _, err := c.ScanOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PollOnce(); err != nil {
+		t.Fatal(err)
+	}
+	lastSuccess := c.LastPoll()
+	bad := filepath.Join(root, "events-2026-07-07.log")
+	if err := os.WriteFile(bad, []byte("{\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, final := usagePair("healthy", 1)
+	data, err := json.Marshal(usageSpoolRecord(t, final))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "events-2026-07-08.log"), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ScanOnce(); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(collectorStaleAfter + time.Second)
+	if n, err := c.PollOnce(); err == nil || n != 1 {
+		t.Fatalf("healthy file not ingested alongside failure: %d %v", n, err)
+	}
+	if c.LastPoll() != lastSuccess {
+		t.Fatal("failed observation refreshed the collector's success clock")
+	}
+	m := NewMonitor(&MonitorArgs{Store: s, Config: DefaultBudgetConfig, CollectorHealth: c.Health, Now: func() time.Time { return now }})
+	// The existing monitor confirms a stale collector on its second read.
+	if _, err := m.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := false
+	for _, alert := range snap.Alerts {
+		if alert.Kind == AlertCollectorStale {
+			visible = true
+		}
+	}
+	if !visible {
+		t.Fatalf("persistent malformed usage remained silently fresh: %+v", snap.Alerts)
+	}
+	// Repair permits the normal successful-pass clock to advance again.
+	if err := os.WriteFile(bad, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PollOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if c.LastPoll() != now || c.Health().LastPollErr != "" {
+		t.Fatal("repaired collector did not recover")
+	}
+}
