@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -125,43 +124,29 @@ func (s *Store) IngestUsageFact(ctx context.Context, seat, session string, fact 
 }
 
 func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudia.UsageFact) (bool, error) {
+	// Seeing a live final must not suppress replay of earlier calls from the
+	// same generation. Record identity with a zero contiguous cursor.
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO usage_cursors (seat, session_id, seq) VALUES (?, ?, 0)`, f.Seat, f.SessionID); err != nil {
+		return false, err
+	}
 	var raw string
 	err := tx.QueryRowContext(ctx, `SELECT fact FROM usage_calls WHERE seat = ? AND session_id = ? AND call_id = ?`, f.Seat, f.SessionID, f.CallID).Scan(&raw)
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
+	var previous *claudia.UsageFact
 	if err == nil {
 		var old claudia.UsageFact
 		if err := json.Unmarshal([]byte(raw), &old); err != nil {
 			return false, fmt.Errorf("stored usage fact is corrupt: %w", err)
 		}
-		if err := old.ValidateIdentity(f.Seat, f.SessionID); err != nil {
-			return false, err
-		}
-		if reflect.DeepEqual(old, *f) {
-			return false, nil
-		}
-		oldIdentity, newIdentity := old, *f
-		for _, identity := range []*claudia.UsageFact{&oldIdentity, &newIdentity} {
-			identity.Seq, identity.State, identity.FinishedAt = 0, "", ""
-			identity.Counters = claudia.UsageCounters{}
-			identity.ContextTokens, identity.APIEquivalentCostUSD = nil, nil
-			identity.CostSource = ""
-			// Provider diagnostic IDs arrive with the response. Invocation
-			// and physical-attempt identities are fixed before dispatch.
-			identity.ProviderRequestID, identity.ProviderResponseID = "", ""
-		}
-		if !reflect.DeepEqual(oldIdentity, newIdentity) {
-			return false, fmt.Errorf("usage invocation identity conflicts: %s", f.CallID)
-		}
-		// A live final can arrive before replay reaches its start. That old
-		// start must not replace final measurements with empty counters.
-		if f.State == "started" && old.State != "started" && f.Seq < old.Seq {
-			return false, nil
-		}
-		if old.State != "started" || f.State == "started" || f.Seq <= old.Seq {
-			return false, fmt.Errorf("usage invocation transition conflicts: %s", f.CallID)
-		}
+		previous = &old
+	}
+	// Claudia owns the transition/identity contract, including newly added
+	// provider measurements. The host owns only persistence and attribution.
+	apply, err := claudia.ValidateUsageTransition(previous, f)
+	if err != nil || !apply {
+		return false, err
 	}
 	body, err := json.Marshal(f)
 	if err != nil {

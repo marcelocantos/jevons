@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -33,6 +34,15 @@ type CollectorArgs struct {
 	Attribute    func(sessionID string) string
 	ActiveWindow time.Duration
 	Now          func() time.Time
+	// UsageSource enables bounded canonical history catch-up. Nil leaves
+	// it disabled; spool polling remains independent of this source.
+	UsageSource *UsageSource
+}
+
+// UsageSource is Claudia's provider-neutral history API, injected for tests.
+type UsageSource struct {
+	Discover func(context.Context, claudia.GenerationQuery) (*claudia.GenerationPage, error)
+	Query    func(context.Context, claudia.UsageQuery) (*claudia.UsagePage, error)
 }
 
 // Collector discovers active session transcripts under ProjectsRoot and
@@ -50,9 +60,13 @@ type Collector struct {
 	// a blocking walk to prove a slow scan never starves the poll loop.
 	scan func() ([]string, error)
 
-	mu     sync.Mutex
-	active []string // JSONL paths from the last scan
-	health CollectorHealth
+	mu              sync.Mutex
+	active          []string // JSONL paths from the last scan
+	health          CollectorHealth
+	usageSource     *UsageSource
+	replayMu        sync.Mutex
+	discoveryCursor string
+	nextDiscovery   time.Time
 }
 
 // CollectorHealth is the collector's own account of its two loops, so
@@ -73,6 +87,14 @@ type CollectorHealth struct {
 	// the last pass was clean).
 	LastPollErr string `json:"last_poll_err,omitempty"`
 	LastScanErr string `json:"last_scan_err,omitempty"`
+	// History traversal and replay are independent of recent spool polling.
+	// A terminal traversal is weakly consistent, never an atomic inventory.
+	HistoryEnabled        bool      `json:"history_enabled"`
+	HistoryStarted        time.Time `json:"history_started,omitempty"`
+	LastHistoryPass       time.Time `json:"last_history_pass,omitempty"`
+	LastHistoryErr        string    `json:"last_history_err,omitempty"`
+	LastInventoryComplete time.Time `json:"last_inventory_complete,omitempty"`
+	InventoryIncomplete   bool      `json:"inventory_incomplete"`
 }
 
 // Describe renders the health as one clause for an alert detail.
@@ -89,6 +111,17 @@ func (h CollectorHealth) Describe(now time.Time) string {
 	}
 	if h.LastScanErr != "" {
 		parts = append(parts, "last scan error: "+h.LastScanErr)
+	}
+	if h.HistoryEnabled {
+		if h.LastHistoryErr != "" {
+			parts = append(parts, "history catch-up error: "+h.LastHistoryErr)
+		}
+		if h.LastInventoryComplete.IsZero() || h.InventoryIncomplete {
+			parts = append(parts, "history inventory coverage is incomplete")
+		}
+		if !h.HistoryStarted.IsZero() {
+			parts = append(parts, fmt.Sprintf("history pass in flight for %s", now.Sub(h.HistoryStarted).Round(time.Second)))
+		}
 	}
 	if h.LastScan.IsZero() {
 		parts = append(parts, "no scan has completed")
@@ -130,6 +163,7 @@ func NewCollector(args *CollectorArgs) *Collector {
 		attribute:    args.Attribute,
 		activeWindow: args.ActiveWindow,
 		now:          args.Now,
+		usageSource:  args.UsageSource,
 	}
 	if c.attribute == nil {
 		c.attribute = func(string) string { return "" }
@@ -141,6 +175,8 @@ func NewCollector(args *CollectorArgs) *Collector {
 		c.now = time.Now
 	}
 	c.health.Started = c.now()
+	c.health.HistoryEnabled = c.usageSource != nil
+	c.health.InventoryIncomplete = c.usageSource != nil
 	c.scan = c.ScanOnce
 	return c
 }
@@ -281,6 +317,22 @@ func (c *Collector) Run(ctx context.Context, scanEvery, pollEvery time.Duration)
 	}
 	if pollEvery == 0 {
 		pollEvery = DefaultPollInterval
+	}
+	if c.usageSource != nil {
+		go func() {
+			for ctx.Err() == nil {
+				if err := c.CatchUpOnce(ctx); err != nil {
+					slog.Warn("cost collector: history", "err", err)
+				}
+				timer := time.NewTimer(pollEvery)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+		}()
 	}
 	go func() {
 		// One synchronous walk at a time on this goroutine, including the

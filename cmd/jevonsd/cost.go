@@ -107,6 +107,7 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		Store:        store,
 		ProjectsRoot: jc.SessionsDir,
 		Attribute:    attribute,
+		UsageSource:  &cost.UsageSource{Discover: claudia.DiscoverGenerations, Query: claudia.QueryUsage},
 	})
 
 	monitor := cost.NewMonitor(&cost.MonitorArgs{

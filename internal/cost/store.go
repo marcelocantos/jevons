@@ -70,6 +70,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create structured usage schema: %w", err)
 	}
+	if _, err := db.Exec(usageReplaySchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create usage replay schema: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 

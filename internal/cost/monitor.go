@@ -103,6 +103,9 @@ type Snapshot struct {
 
 	Sessions []BurnRow `json:"sessions"`
 	Alerts   []Alert   `json:"alerts,omitempty"`
+	// Kept separate from spend: a recent spool poll cannot certify history
+	// coverage, and unknown usage is not a zero-cost event.
+	Collector *CollectorHealth `json:"collector,omitempty"`
 }
 
 // MonitorArgs parameterises NewMonitor. Store and Config are required.
@@ -167,6 +170,10 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 		Accounting:   cfg.EffectiveAccounting(),
 		Billable:     cfg.EffectiveAccounting() == AccountingListPrice,
 		CurrencyNote: cfg.CurrencyNote(),
+	}
+	if m.collectorHealth != nil {
+		health := m.collectorHealth()
+		snap.Collector = &health
 	}
 
 	var globalCost, fleetCost float64
