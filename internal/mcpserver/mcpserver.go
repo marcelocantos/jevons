@@ -207,6 +207,8 @@ type Server struct {
 	// the AGENT did after a send, as opposed to what the send call returned.
 	// Nil — the product path — watches the live claudia process. Test seam.
 	observeTurnWitness turnWitness
+	// querySendReceipt is a test seam; nil uses Claudia's read-only API.
+	querySendReceipt func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook       func(name string, ev claudia.Event)
@@ -533,10 +535,7 @@ type Server struct {
 	// delivered (🎯T599): the pin names the blocking message for
 	// agent_list / fleet health, and the fail counts decide when repeated
 	// delivery failure of one entry becomes a pin. Guarded by mu.
-	sendqPin map[string]SendqPin
-	// heldScannedAt is the transcript size at which an agent's held attempts
-	// were last checked against it (reconcileHeldFromTranscript).
-	heldScannedAt map[string]int64
+	sendqPin      map[string]SendqPin
 	sendqPinFails map[string]sendqEntryFails
 }
 

@@ -919,7 +919,7 @@ func (s *Server) drainAgentSendQueue(name string) {
 }
 
 func (s *Server) drainAgentSendQueueOnce(name string) bool {
-	s.confirmCodexReceipts(name)
+	s.reconcileHeldReceipts(name)
 	q := s.sendQueue()
 	// 🎯T774: a pile of pending messages is one digest, not one turn apiece.
 	entry, claimed, err := q.ClaimDigest(name)

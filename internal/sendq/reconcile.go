@@ -166,7 +166,7 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 		return Receipt{}, fmt.Errorf("sendq: %q holds no entry %s (it may already have been reconciled or delivered)", agent, entryID)
 	}
 	e := f.Entries[idx]
-	if e.AttemptID != "" && attemptID != "" && attemptID != e.AttemptID {
+	if attemptID != "" && attemptID != e.AttemptID {
 		return Receipt{}, fmt.Errorf("sendq: entry %s now carries attempt %s, not %s — re-read the queue before reconciling",
 			e.ID, e.AttemptID, attemptID)
 	}

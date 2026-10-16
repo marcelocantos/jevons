@@ -801,22 +801,33 @@ func (s *Store) Backlogs() ([]Backlog, error) {
 	}
 	var out []Backlog
 	for _, name := range names {
-		entries, err := s.Snapshot(name)
+		b, err := s.Backlog(name)
 		if err != nil {
 			return out, err
 		}
-		if len(entries) == 0 {
+		if b.Depth == 0 {
 			continue
-		}
-		b := Backlog{Agent: name, Depth: len(entries), Oldest: entries[0].EnqueuedAt}
-		for _, e := range entries {
-			b.EntryIDs = append(b.EntryIDs, e.ID)
-			if e.State != Pending {
-				b.Uncertain++
-			}
 		}
 		out = append(out, b)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Oldest.Before(out[j].Oldest) })
 	return out, nil
+}
+
+// Backlog reports one agent's current cohort, including an empty queue. Recovery
+// uses it after receipt queries, which can race later arrivals and dispositions.
+func (s *Store) Backlog(agent string) (Backlog, error) {
+	entries, err := s.Snapshot(agent)
+	b := Backlog{Agent: agent, Depth: len(entries)}
+	if err != nil || len(entries) == 0 {
+		return b, err
+	}
+	b.Oldest = entries[0].EnqueuedAt
+	for _, e := range entries {
+		b.EntryIDs = append(b.EntryIDs, e.ID)
+		if e.State != Pending {
+			b.Uncertain++
+		}
+	}
+	return b, nil
 }
