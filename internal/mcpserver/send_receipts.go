@@ -30,7 +30,7 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 		return 0
 	}
 	s.mu.Lock()
-	query, journal := s.querySendReceipt, s.eventJournal
+	query := s.querySendReceipt
 	s.mu.Unlock()
 	if query == nil {
 		query = claudia.QueryReceipt
@@ -64,16 +64,7 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 		// after append can duplicate evidence, but cannot lose the failure or
 		// cancellation reason. This event records observation, not removal:
 		// the CAS below may still reject a stale or locally owned attempt.
-		err = journal.Append(eventlog.Event{
-			Component: "agent_send", Decision: "sendq_receipt_observed",
-			Msg: "Durable receipt proves transport acceptance; mission outcome is separate",
-			Fields: map[string]any{
-				"agent": name, "entry_id": e.ID, "attempt_id": e.AttemptID,
-				"owner_request_id": e.RequestID, "transport_request_id": e.TransportRequestID,
-				"session_id": e.SessionID, "receipt": r,
-				"transport_accepted": true, "text": e.Text, "enqueued_at": e.EnqueuedAt,
-			},
-		})
+		err = s.persistSendReceipt(name, e, r)
 		if err != nil {
 			slog.Warn("held receipt evidence could not be persisted; retaining obligation", "agent", name, "entry_id", e.ID, "error", err)
 			continue
@@ -91,4 +82,20 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 		}
 	}
 	return settled
+}
+
+func (s *Server) persistSendReceipt(name string, e sendq.Entry, r *claudia.RequestReceipt) error {
+	s.mu.Lock()
+	journal := s.eventJournal
+	s.mu.Unlock()
+	return journal.Append(eventlog.Event{
+		Component: "agent_send", Decision: "sendq_receipt_observed",
+		Msg: "Durable receipt proves transport acceptance; mission outcome is separate",
+		Fields: map[string]any{
+			"agent": name, "entry_id": e.ID, "attempt_id": e.AttemptID,
+			"owner_request_id": e.RequestID, "transport_request_id": e.TransportRequestID,
+			"session_id": e.SessionID, "receipt": r,
+			"transport_accepted": true, "text": e.Text, "wire_text": e.WirePayload(), "enqueued_at": e.EnqueuedAt,
+		},
+	})
 }

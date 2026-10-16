@@ -72,6 +72,12 @@ type Entry struct {
 	// Text is the payload exactly as accepted. Never truncated: this is the
 	// message, not a record of it.
 	Text string `json:"text"`
+	// WireText freezes any transport decoration at first receipt binding.
+	// Text remains the original admission used for duplicate detection.
+	// The presence flag distinguishes an explicitly empty wire payload from
+	// older bindings, whose wire payload is the original Text.
+	WireText    string `json:"wire_text,omitempty"`
+	WireTextSet bool   `json:"wire_text_set,omitempty"`
 	// EnqueuedAt is when the daemon accepted it. The age of the oldest entry
 	// is the number that says whether a queue is waiting or stalled.
 	EnqueuedAt time.Time `json:"enqueued_at"`
