@@ -251,7 +251,8 @@ type archiveFile struct {
 // archive keeps the originals), Unverified holds it Uncertain for
 // reconciliation, DefinitelyNotSent returns it to Pending — where a later
 // ClaimDigest unpacks it back into its members rather than nesting a digest
-// inside a digest.
+// inside a digest. A receipt-bound digest instead retains its exact identity
+// and payload and is retried through ClaimFront.
 func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	if s == nil {
 		return Entry{}, false, fmt.Errorf("sendq: no store")
@@ -265,12 +266,13 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	if _, _, blocked := claimable(f.Entries, s.active[agent]); blocked {
 		return Entry{}, false, nil
 	}
-	// Typed directives and admitted owner questions cannot be folded into a digest:
+	// Typed directives, owner questions, and previously bound receipt identities
+	// cannot be folded into a digest:
 	// a digest has one delivery attempt and cannot carry one question identity
 	// for several distinct requests. A later hold must be
 	// able to remove the precise pending authorization under the queue lock.
 	for _, e := range f.Entries {
-		if e.State == Pending && (e.Directive != nil || e.RequestID != "") {
+		if e.State == Pending && (e.Directive != nil || e.RequestID != "" || e.TransportRequestID != "") {
 			return Entry{}, false, nil
 		}
 	}

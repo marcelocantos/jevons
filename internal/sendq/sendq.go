@@ -64,6 +64,11 @@ type Entry struct {
 	// Unlike ID (queue acceptance) and AttemptID (delivery try), it survives
 	// retries, daemon restarts and digest archival without being reminted.
 	RequestID string `json:"request_id,omitempty"`
+	// TransportRequestID and SessionID are written together before an
+	// identified handoff. Empty means no durable receipt binding exists;
+	// legacy holds must never infer one from the current seat or Entry.ID.
+	TransportRequestID string `json:"transport_request_id,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
 	// Text is the payload exactly as accepted. Never truncated: this is the
 	// message, not a record of it.
 	Text string `json:"text"`
@@ -247,6 +252,9 @@ func (s *Store) load(agent string) (out file, err error) {
 		return file{}, fmt.Errorf("sendq: parse queue for %q (%s): %w", agent, path, err)
 	}
 	for _, e := range f.Entries {
+		if err := e.validateReceiptBinding(); err != nil {
+			return file{}, fmt.Errorf("sendq: invalid receipt binding for %q: %w", agent, err)
+		}
 		if e.Directive != nil {
 			if err := e.Directive.Validate(); err != nil {
 				return file{}, err
@@ -392,7 +400,8 @@ func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes f
 
 // AppendSupersedingWithRequestID retains the incoming question identity and
 // never silently replaces another admitted question (even if the predicate
-// would otherwise match it).
+// would otherwise match it). A previously receipt-bound entry also keeps its
+// identity when returned to Pending.
 func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
 	if s == nil {
 		return Entry{}, 0, 0, fmt.Errorf("sendq: no store")
@@ -409,7 +418,7 @@ func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at
 	kept := make([]Entry, 0, len(f.Entries)+1)
 	replaced := 0
 	for _, old := range f.Entries {
-		if old.State == Pending && old.RequestID == "" && supersedes != nil && supersedes(old) {
+		if old.State == Pending && old.RequestID == "" && old.TransportRequestID == "" && supersedes != nil && supersedes(old) {
 			replaced++
 			continue
 		}
@@ -647,6 +656,8 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 // forgotten. Pending digests are unfolded from their archived originals before
 // matching, so a receipt for one member cannot discard unrelated accepted
 // messages or replay that member inside the digest on the next drain.
+// Receipt-bound entries retain their exact identity; this legacy matcher must
+// neither settle them nor unfold a previously bound digest into new inputs.
 func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, error) {
 	if s == nil {
 		return 0, fmt.Errorf("sendq: no store")
@@ -660,7 +671,7 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 	kept := make([]Entry, 0, len(f.Entries))
 	removed := 0
 	for _, e := range f.Entries {
-		if e.State != Pending {
+		if e.State != Pending || e.TransportRequestID != "" {
 			kept = append(kept, e)
 			continue
 		}

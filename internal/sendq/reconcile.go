@@ -244,6 +244,9 @@ func (s *Store) Consolidate(agent, keepID, text, actor, evidence string, now tim
 		if e.RequestID != "" {
 			return Receipt{}, fmt.Errorf("sendq: request_id %q on entry %s cannot be consolidated", e.RequestID, e.ID)
 		}
+		if e.TransportRequestID != "" {
+			return Receipt{}, fmt.Errorf("sendq: receipt-bound entry %s cannot be consolidated", e.ID)
+		}
 		if e.State != Pending {
 			return Receipt{}, fmt.Errorf(
 				"sendq: entry %s has an unresolved %s attempt %s — reconcile it before consolidating; "+
