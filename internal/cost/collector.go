@@ -160,12 +160,9 @@ func (c *Collector) ScanOnce() ([]string, error) {
 		if strings.TrimSpace(root) == "" {
 			return nil
 		}
-		root, err := filepath.Abs(root)
-		if err != nil {
-			return err
-		}
 		viewRoot := ""
 		if spoolRoot != "" {
+			var err error
 			viewRoot, err = filepath.Abs(filepath.Join(spoolRoot, ".view"))
 			if err != nil {
 				return err
@@ -175,16 +172,22 @@ func (c *Collector) ScanOnce() ([]string, error) {
 			if err != nil {
 				return nil
 			}
+			identity, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
 			// .view is generated from the dated spool for transcript readers.
 			// Counting both doubles legacy costs that have no request ID.
-			if d.IsDir() && viewRoot != "" && (path == viewRoot || strings.HasPrefix(path, viewRoot+string(filepath.Separator))) {
+			if d.IsDir() && viewRoot != "" && (identity == viewRoot || strings.HasPrefix(identity, viewRoot+string(filepath.Separator))) {
 				return filepath.SkipDir
 			}
-			if d.IsDir() || !isBillableTranscript(path) || seen[path] {
+			if d.IsDir() || !isBillableTranscript(path) || seen[identity] {
 				return nil
 			}
 			if fi, err := d.Info(); err == nil && fi.ModTime().After(cutoff) {
-				seen[path] = true
+				seen[identity] = true
+				// Preserve the path spelling used by durable tail offsets.
+				// Normalizing that key would replay previously consumed rows.
 				files = append(files, path)
 			}
 			return nil
