@@ -45,18 +45,20 @@ func ResumeFromSpool(provider string, omp bool) bool {
 
 // Record is one sidecar line. Each names its seat.
 type Record struct {
-	TS       time.Time       `json:"-"`
-	RawTS    string          `json:"ts"`
-	Seat     string          `json:"seat"`
-	Type     string          `json:"type"`
-	Stop     string          `json:"stop,omitempty"`
-	Text     string          `json:"text,omitempty"`
-	CallID   string          `json:"call_id,omitempty"`
-	Name     string          `json:"name,omitempty"`
-	Provider string          `json:"provider,omitempty"`
-	Model    string          `json:"model,omitempty"`
-	CostUSD  *float64        `json:"costUSD,omitempty"`
-	Snapshot json.RawMessage `json:"snapshot,omitempty"`
+	TS        time.Time       `json:"-"`
+	RawTS     string          `json:"ts"`
+	Seat      string          `json:"seat"`
+	SessionID string          `json:"session_id,omitempty"`
+	Type      string          `json:"type"`
+	Stop      string          `json:"stop,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Provider  string          `json:"provider,omitempty"`
+	Model     string          `json:"model,omitempty"`
+	CostUSD   *float64        `json:"costUSD,omitempty"`
+	Snapshot  json.RawMessage `json:"snapshot,omitempty"`
+	UsageFact json.RawMessage `json:"usage_fact,omitempty"`
 }
 
 // Dir is ~/.jevons/spool, or JEVONS_SPOOL_DIR when set.
