@@ -209,6 +209,15 @@ fixtures. Reopened usage pages match the recorded facts, including unknown
 counters. This is not a full sidecar gate, not a live-provider run, and not a
 switch of the production seat off the bare-core engine.
 
+Claudia `cb2559b3fe38bc0ac71cc7da428895e93b459315`, tree
+`5cf456ad1d963b6d57be300655f89205e5c141a7`, snapshots the host's open turn when
+the SDK selects a native compaction candidate. A later threshold prompt with a
+different request and attempt id gets its own invocation, and the physical
+attempts inside one compaction share one. Unknown counters stay absent.
+Focused sidecar tests on that commit passed: the same 35 tests, now with two
+automatic turns for OpenAI and Codex. This still is not a full sidecar gate,
+not a live-provider run, and not a switch of the production seat.
+
 The restart scout also corrected an initial false positive: normal Jevons exit
 already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep
 broker-owned seats running even when the broker is temporarily unresponsive.
@@ -225,10 +234,11 @@ Relevant source seams and limits:
   failures can be latched rather than thrown by append. Receipt acceptance must
   wait for a successful durability barrier such as `flush()`.
 - `sideStreamFn` covers summary/side requests. The adapter now also requires
-  `nativeCompactionOptions`, so native compaction uses the host observer and
-  fetch instead of the SDK default. Usage totals alone are not evidence of
-  complete attempt accounting, and the production seat does not use this
-  adapter yet.
+  `nativeCompactionOptions`. `observedNativeCompaction` reads the active turn
+  at candidate selection and passes the host fetch, so native compaction does
+  not use the SDK default transport or a turn captured at session construction.
+  Usage totals alone are not evidence of complete attempt accounting, and the
+  production seat does not use this adapter yet.
 - Isolated settings and explicit tools/discovery are essential. Default MCP,
   memory, retries and internal subagents must not silently introduce another
   fleet policy or unbudgeted work source. Concurrent seats need isolated registry
