@@ -230,6 +230,10 @@ type CleanResult struct {
 }
 
 // RunClean checks Commit out into its own worktree and runs the gate there.
+// It sets GOWORK=off for the child: acceptance uses the committed module
+// graph, never an inherited workspace or an injected mutable sibling. This
+// does not police an explicit -modfile/GOFLAGS override or a command that
+// changes its own environment; those inputs still require separate provenance.
 //
 // The error return means the clean tree could not be established. It is
 // deliberately not survivable: there is no fallback to the shared tree,
@@ -269,19 +273,6 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 		return nil, fmt.Errorf("gate clean: check out %s: %w: %s", shortCommit(commit), err, out)
 	}
 
-	// 🎯T888: the detached worktree sits outside the shared clone's
-	// ../go.work, so an unpublished sibling module (claudia et al, pinned
-	// ahead of its published version) is invisible to it even though the
-	// shared tree resolves it fine. Same seam buildsnap already closed for
-	// 🎯T254.2 snapshots (internal/buildsnap/gowork.go): write a go.work in
-	// the worktree that replaces the sibling with the org-level checkout
-	// next to root, when one exists. Committed pins in go.mod stay clean
-	// (🎯T448); this file never enters the commit.
-	// Probe the checkout before injecting the sibling go.work: that file is
-	// untracked and would otherwise read as this worker's own uncommitted
-	// change, turning a clean checkout into a false "dirty" (🎯T888).
-	preProbed := ProbeTree(wt)
-	restoreGoWork := injectCleanSiblingGoWork(root, wt)
 	// 🎯T440: stamp the owner before running anything. A gate that dies on a
 	// timeout, a SIGKILL or a dropped session skips every cleanup path this
 	// function has, and the leaked directory still looks healthy to
@@ -298,19 +289,17 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 	}
 
 	rec, runErr := Run(&RunArgs{
-		Command:       args.Command,
-		Dir:           wt,
-		Name:          args.Name,
-		Stdout:        args.Stdout,
-		Stderr:        args.Stderr,
-		Store:         args.Store,
-		Explicit:      args.Explicit,
-		SharedTree:    shared,
-		PreProbedTree: preProbed,
-		Now:           args.Now,
+		Command:    args.Command,
+		Dir:        wt,
+		Name:       args.Name,
+		Stdout:     args.Stdout,
+		Stderr:     args.Stderr,
+		Store:      args.Store,
+		Explicit:   args.Explicit,
+		SharedTree: shared,
+		env:        append(os.Environ(), "GOWORK=off"),
+		Now:        args.Now,
 	})
-
-	restoreGoWork()
 
 	res := &CleanResult{Record: rec, Worktree: wt}
 	keep := args.Keep
@@ -320,97 +309,6 @@ func RunClean(args *CleanArgs) (*CleanResult, error) {
 		removeWorktree(root, wt, scratch)
 	}
 	return res, runErr
-}
-
-// cleanSiblingModules are the org repos a jevons build may need alongside the
-// published pin, mirroring the ../go.work used in the shared dev clone.
-var cleanSiblingModules = []string{"claudia", "vellum"}
-
-// injectCleanSiblingGoWork writes a go.work into the clean-checkout worktree
-// that replaces any unpublished sibling module with the org-level checkout
-// found next to root (root's parent directory — the shared clone layout).
-// A sibling that is not present, or a worktree that already has its own
-// go.work (an explicit workspace committed into that commit), is left alone.
-// Returns a restore func that removes the injected file; always safe to call.
-func injectCleanSiblingGoWork(root, wt string) func() {
-	noop := func() {}
-	path := filepath.Join(wt, "go.work")
-	if _, err := os.Stat(path); err == nil {
-		// Checkout already carries its own go.work — do not override it.
-		return noop
-	}
-	// 🎯T894: when -clean is run FROM one of the sibling repos itself (e.g.
-	// verifying a claudia commit from inside the claudia checkout), root IS
-	// that sibling. Injecting a replace of the workspace's own module with
-	// itself is refused by `go` ("workspace module ... is replaced at all
-	// versions in the go.work file") and no tests run at all. Detect the
-	// repo under test by its own module name and skip only that one entry;
-	// the other siblings still get injected normally.
-	selfModule := ownModuleName(root)
-	base := filepath.Dir(sharedCloneRoot(root))
-	var replaces strings.Builder
-	found := false
-	for _, mod := range cleanSiblingModules {
-		if mod == selfModule {
-			continue
-		}
-		sib := filepath.Join(base, mod)
-		if _, err := os.Stat(filepath.Join(sib, "go.mod")); err != nil {
-			continue
-		}
-		modPath, err := gitOut(sib, "rev-parse", "--show-toplevel")
-		if err != nil {
-			modPath = sib
-		}
-		_ = modPath
-		fmt.Fprintf(&replaces, "\nreplace github.com/marcelocantos/%s => %s\n", mod, sib)
-		found = true
-	}
-	if !found {
-		return noop
-	}
-	body := "go 1.26.1\n\nuse .\n" + replaces.String()
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, "gate clean: could not write sibling go.work:", err)
-		return noop
-	}
-	return func() {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintln(os.Stderr, "gate clean: could not remove sibling go.work:", err)
-		}
-	}
-}
-
-// sharedCloneRoot is the main working tree of root's repo. Run from a
-// worker's isolated tree (🎯T254.2), root sits under
-// ../.jevons-worktrees-<repo>/, where no sibling checkout lives; the siblings
-// are next to the shared clone the tree was made from. Falls back to root when
-// git cannot say, or when the repo's git dir is not a plain .git directory.
-func sharedCloneRoot(root string) string {
-	common, err := gitOut(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil || filepath.Base(common) != ".git" {
-		return root
-	}
-	return filepath.Dir(common)
-}
-
-// ownModuleName reads root/go.mod's module line and returns the last path
-// segment (e.g. "claudia" for github.com/marcelocantos/claudia), or "" if it
-// cannot be determined. Used to skip self-replacement (🎯T894).
-func ownModuleName(root string) string {
-	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			modPath := strings.TrimSpace(strings.TrimPrefix(line, "module"))
-			parts := strings.Split(modPath, "/")
-			return parts[len(parts)-1]
-		}
-	}
-	return ""
 }
 
 // removeWorktree takes the checkout back out. Failures are reported and not

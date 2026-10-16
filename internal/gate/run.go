@@ -36,12 +36,9 @@ type RunArgs struct {
 	// SharedTree is the clone whose uncommitted state this run deliberately
 	// did not measure. RunClean sets it; nothing else should (🎯T397).
 	SharedTree *SharedTreeState
-	// PreProbedTree, when set, is used as rec.Tree instead of re-probing Dir.
-	// RunClean sets this after checking out the commit but before injecting
-	// the throwaway sibling go.work (🎯T888): probing after injection would
-	// read that untracked file as the worker's own uncommitted change and
-	// report a clean checkout as dirty.
-	PreProbedTree *TreeProvenance
+	// env is the child environment. RunClean disables workspace overlays;
+	// nil keeps the ordinary Run path's inherited environment.
+	env []string
 	// Explicit says the caller asked for this run in the separated form
 	// (`gate -- cmd args`) rather than being handed an argv from somewhere
 	// looser. The CLI sets it because the allowlist leaves no other way to
@@ -91,9 +88,7 @@ func Run(args *RunArgs) (*Record, error) {
 	// output it left behind would read as uncommitted work of its own. A
 	// directory that is not a git work tree answers nil, which stays "unknown"
 	// and is never rounded up to clean (🎯T397).
-	if args.PreProbedTree != nil {
-		rec.Tree = args.PreProbedTree
-	} else if dir, ok := ResolveMeasuredDir(args.Command, args.Dir); ok {
+	if dir, ok := ResolveMeasuredDir(args.Command, args.Dir); ok {
 		rec.Tree = ProbeTree(dir)
 	}
 	if rec.Tree != nil {
@@ -107,6 +102,7 @@ func Run(args *RunArgs) (*Record, error) {
 
 	cmd := exec.Command(args.Command[0], args.Command[1:]...)
 	cmd.Dir = args.Dir
+	cmd.Env = args.env
 	cmd.Stdin = nil
 	cmd.Stdout = &teeWriter{mu: &mu, buf: &captured, out: stdout}
 	cmd.Stderr = &teeWriter{mu: &mu, buf: &captured, out: stderr}
