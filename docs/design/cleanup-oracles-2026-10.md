@@ -57,6 +57,12 @@ The subsequent committed `make gate` passed with `GREEN id=c160d997`, in 16m43.5
 
 This slice changes build verification, not agent execution behavior; provider-spending journeys are not its correctness oracle. The actual Go runner, Make recipes, Bun suite, filesystem locks and pre-push script are its production path. The rest of the cleanup still requires the live journeys in the table and final goal. No development fleet restart or release is authorized by these gate results.
 
+## Clean dependency isolation
+
+Jevons `97338fe1f41a4983ab4085b20fb2bd0349905072` removes the clean gate's implicit mutable-sibling workspace injection and the pre-probed-tree bypass that hid the injected input. `RunClean` now disables workspace overlays in its child with `GOWORK=off`; ordinary development gates and `buildsnap` retain their existing behavior. This also disables an explicitly committed `go.work`, as the command help states.
+
+The regression compiles real imports against contradictory committed and sibling implementations through `RunClean`. The unchanged implementation failed (`RED 84f6f4e6`, expected negative). The committed fix passed the focused race suite (`GREEN 94b00621`, 6.5s), including primary/linked worktrees, Claudia/Vellum siblings, inherited workspace and no-sibling controls. Independent review found no blocker. Explicit `-modfile`, `GOFLAGS`, or a command changing its own environment still require separate dependency provenance: this result closes implicit workspace contamination, not all-input hermeticity or the final paired gate.
+
 ## Intentional-hold slice and journey exception
 
 The first 🎯T952 slice suppresses model notifications for intentional parked/owner-blocked/provider-blocked backlogs before the periodic sweep's delivery and uncertain-attempt branches. The existing durable queue and fleet intent remain the authorities; no new backoff store is added. Reaped-seat routing and first recovery alerts remain available when fleet intent permits them. A fleet-wide park defers those too until lifted.
