@@ -912,14 +912,20 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 // drainAgentSendQueue delivers the next queued message after a terminal
 // stop. Called from the agent event sink (🎯T111.1).
 func (s *Server) drainAgentSendQueue(name string) {
-	for s.drainAgentSendQueueOnce(name) {
+	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	defer cancel()
+	s.drainAgentSendQueueWithReceiptContext(ctx, name)
+}
+
+func (s *Server) drainAgentSendQueueWithReceiptContext(ctx context.Context, name string) {
+	for s.drainAgentSendQueueOnce(ctx, name) {
 		// A terminal arrived before its message's witness completed. Its first
 		// drain saw the held attempt; run that wakeup again after resolution.
 	}
 }
 
-func (s *Server) drainAgentSendQueueOnce(name string) bool {
-	s.reconcileHeldReceipts(name)
+func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string) bool {
+	s.reconcileHeldReceipts(receiptCtx, name)
 	q := s.sendQueue()
 	// 🎯T774: a pile of pending messages is one digest, not one turn apiece.
 	entry, claimed, err := q.ClaimDigest(name)

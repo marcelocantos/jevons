@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,6 +233,90 @@ func TestHeldReceiptsEvidenceWriteFailureRetainsObligation(t *testing.T) {
 		if rows, err := s.sendQueue().Snapshot("a"); err != nil || len(rows) != 0 {
 			t.Fatalf("did not recover when journal restored: %+v %v", rows, err)
 		}
+	}
+}
+
+func TestHeldReceiptsUnreadableEvidenceRetainsObligation(t *testing.T) {
+	for _, torn := range []bool{true, false} {
+		label := "oversized-receipt"
+		if torn {
+			label = "torn-existing-journal"
+		}
+		t.Run(label, func(t *testing.T) {
+			dir := t.TempDir()
+			s, sender, up := t418Daemon(t, dir)
+			e := receiptHeldEntry(t, s.sendQueue(), "a", "", true)
+			parkReceiptFleet(t, s, dir)
+			path := eventlog.DefaultPath(dir)
+			var original []byte
+			if torn {
+				original = []byte(`{"decision":"previous-event","fields":`)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, original, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				j, err := eventlog.Open(path)
+				if err == nil || j != nil {
+					if j != nil {
+						_ = j.Close()
+					}
+					t.Fatalf("torn evidence accepted: journal=%v err=%v", j, err)
+				}
+				s.SetEventJournal(j)
+			} else {
+				receiptJournal(t, s, dir)
+			}
+			s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+				r := heldReceipt(q, claudia.ReceiptFailed)
+				if !torn {
+					// Exceeds the journal reader's existing 1 MiB line cap.
+					r.Reason = strings.Repeat("x", 1<<20)
+				}
+				return r, nil
+			}
+			s.SweepSendBacklogs()
+			s.drainAgentSendQueue("a")
+			rows, err := s.sendQueue().Snapshot("a")
+			if err != nil || len(rows) != 1 || rows[0].ID != e.ID || rows[0].AttemptID != e.AttemptID || rows[0].State != sendq.Uncertain || len(sender.delivered()) != 0 || len(up.all()) != 0 {
+				t.Fatalf("lost or dispatched obligation without readable evidence: %+v %v", rows, err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != string(original) {
+				t.Fatalf("failed evidence write changed original journal: len=%d err=%v", len(data), err)
+			}
+		})
+	}
+}
+
+func TestHeldReceiptsSweepSharesDeadlineAcrossSeatsAndDrains(t *testing.T) {
+	dir := t.TempDir()
+	s, sender, _ := t418Daemon(t, dir)
+	for _, name := range []string{"a", "b"} {
+		receiptHeldEntry(t, s.sendQueue(), name, "", true)
+		if _, _, err := s.sendQueue().Append(name, "new pending input", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var first time.Time
+	queries := map[string]int{}
+	s.querySendReceipt = func(ctx context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("receipt query is unbounded")
+		}
+		if first.IsZero() {
+			first = deadline
+		} else if !deadline.Equal(first) {
+			t.Fatalf("sweep renewed timeout for %s: %v != %v", q.Seat, deadline, first)
+		}
+		queries[q.Seat]++
+		return nil, context.DeadlineExceeded
+	}
+	s.SweepSendBacklogs()
+	if queries["a"] != 2 || queries["b"] != 2 || len(sender.delivered()) != 2 {
+		t.Fatalf("did not exercise sweep and flow-past drain for both seats: queries=%v delivered=%v", queries, sender.delivered())
 	}
 }
 

@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -167,11 +168,13 @@ func (s *Server) SweepSendBacklogs() {
 		return
 	}
 	now := s.sweepClock()
+	receiptCtx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	defer cancel()
 	for _, b := range backlogs {
 		// Receipt reads do not dispatch work or lift intent. Even a parked or
 		// reaped seat can resolve a handoff to its stored original generation.
 		if b.Uncertain > 0 {
-			s.reconcileHeldReceipts(b.Agent)
+			s.reconcileHeldReceipts(receiptCtx, b.Agent)
 			// The query can race arrivals, claims and operator dispositions.
 			// Refresh the cohort rather than subtracting from the old snapshot.
 			b, err = q.Backlog(b.Agent)
@@ -218,7 +221,7 @@ func (s *Server) SweepSendBacklogs() {
 				if _, live := s.liveSender(b.Agent); live {
 					slog.Info("🎯T766.5 backlog sweep: re-offering pending messages behind held entries",
 						"component", "agent_send", "agent", b.Agent, "queued", b.Depth, "held", b.Uncertain)
-					s.drainAgentSendQueue(b.Agent)
+					s.drainAgentSendQueueWithReceiptContext(receiptCtx, b.Agent)
 				}
 			}
 		case !s.agentIsRegistered(b.Agent):
@@ -248,7 +251,7 @@ func (s *Server) SweepSendBacklogs() {
 			slog.Info("🎯T418 backlog sweep: re-offering a held message",
 				"component", "agent_send", "agent", b.Agent, "queued", b.Depth,
 				"oldest_age", b.OldestAge(now).Round(time.Second).String())
-			s.drainAgentSendQueue(b.Agent)
+			s.drainAgentSendQueueWithReceiptContext(receiptCtx, b.Agent)
 		}
 	}
 }

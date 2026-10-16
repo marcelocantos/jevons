@@ -15,14 +15,14 @@ import (
 )
 
 // One unavailable receipt service must not cost a full RPC timeout for every
-// held entry. This bounds the entire read-only recovery pass for one seat.
+// held entry or seat. Sweep and drain each share one deadline across their pass.
 const heldReceiptQueryTimeout = 10 * time.Second
 
 // reconcileHeldReceipts settles transport handoffs, never mission acceptance.
 // No live registry or current seat generation participates in the lookup.
 // Unbound historical attempts remain held: their text and today's session
 // cannot establish which logical input the old transport actually received.
-func (s *Server) reconcileHeldReceipts(name string) int {
+func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 	q := s.sendQueue()
 	entries, err := q.Snapshot(name)
 	if err != nil {
@@ -35,8 +35,6 @@ func (s *Server) reconcileHeldReceipts(name string) int {
 	if query == nil {
 		query = claudia.QueryReceipt
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
-	defer cancel()
 	settled := 0
 	for _, e := range entries {
 		if e.State == sendq.Pending || e.TransportRequestID == "" || e.SessionID == "" {
