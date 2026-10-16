@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 var testNow = time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
@@ -626,6 +628,60 @@ func TestScanOnceIncludesDatedSpool(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("ScanOnce missed dated spool %s: %v", log, files)
+	}
+}
+
+// The transcript view is a rendering of the same spool records, not another
+// source of spend. Legacy cost records have no request ID to deduplicate it.
+func TestCollectorDoesNotCountDerivedSpoolView(t *testing.T) {
+	root := t.TempDir()
+	spoolDir := filepath.Join(root, "spool")
+	t.Setenv("JEVONS_SPOOL_DIR", spoolDir)
+	viewDir := filepath.Join(spoolDir, ".view")
+	if err := os.MkdirAll(viewDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	price := 0.42
+	record := spool.Record{RawTS: testNow.Format(time.RFC3339Nano), Seat: "worker", Type: "turn_end", CostUSD: &price}
+	if err := os.WriteFile(filepath.Join(spoolDir, "events-2026-07-07.log"), []byte(`{"ts":"2026-07-07T12:00:00Z","seat":"worker","type":"turn_end","costUSD":0.42}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(viewDir, "worker.jsonl"), spool.AsJSONL([]spool.Record{record}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativeSpool, err := filepath.Rel(cwd, spoolDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, projects, spool string }{
+		{"separate roots", t.TempDir(), spoolDir},
+		{"overlapping roots", root, spoolDir},
+		{"view root", viewDir, spoolDir},
+		{"relative spool root", root, relativeSpool},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("JEVONS_SPOOL_DIR", tc.spool)
+			s, err := OpenStore(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			c := NewCollector(&CollectorArgs{Store: s, ProjectsRoot: tc.projects})
+			if _, err := c.ScanOnce(); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := c.PollOnce(); err != nil || n != 1 {
+				t.Fatalf("inserted %d, err=%v; want one original record", n, err)
+			}
+			spent, err := s.SpentUSD(testNow.Add(-time.Hour), testNow.Add(time.Hour))
+			if err != nil || math.Abs(spent-price) > 1e-12 {
+				t.Fatalf("spent=%v, err=%v; want %v once", spent, err, price)
+			}
+		})
 	}
 }
 
