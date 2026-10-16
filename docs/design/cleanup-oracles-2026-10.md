@@ -113,6 +113,37 @@ be committed before acceptance, and incoming change notifications are hints to
 query pending work, not one-shot delivery events. No sqlpipe dependency or
 standalone MCP runtime has been added or certified by this source assessment.
 
+The SDK foundation is now implemented in isolated Claudia source
+`27d643e78a9f`, independently reviewed and integrated locally as
+`e4c9f440d09492150d1c2760e28c7153e660d1b4`; both name tree
+`c82af86031f3cd557963979bcd7e040a0652d1d5`. Clean full sidecar gate
+`GREEN 0e285f4a` ran 257 tests with a frozen dependency install. Log SHA-256:
+`34da065fe891338b26c1abc3e35f6dd20b82830ec6f6b8fdf499810eb970bd9a`.
+The new adapter constructs a real AgentSession with explicit isolated settings,
+broker-only in-memory auth and request-identity-preserving conversion. Its
+actual mock transport reads accepted/started facts from disk before replying;
+reopening the OMP journal restores the conversation and receipts. Separate
+fixtures reject corrupt/torn or foreign journals, latch write failures, preserve
+large custom facts, refuse appends after close, and append equal fact batches
+without full rewrites over both zero and four MiB of prior conversation.
+
+Three narrow dependency changes preserve service contracts: disable implicit
+file-mention reads for embedded sessions, disable ambient credential fallback
+for their private auth store, and persist custom application facts verbatim.
+Defaults for the SDK's ordinary callers remain intact, except custom metadata
+now retains its complete payload. The default production seat still runs the
+previous bare-core engine: this is foundation evidence, not a completed service
+migration or a live-provider proof. Credential refresh synchronization, measured
+main/auxiliary transports and receipt hooks still need production wiring.
+
+The restart scout also corrected an initial false positive: normal Jevons exit
+already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep
+broker-owned seats running even when the broker is temporarily unresponsive.
+Do not remove that guard or weaken the sidecar's failure of calls whose actual
+execution host disappears. The remaining proof is active-tool continuation and
+result replay across consumer disconnection, then the same check on the SDK
+production path and through a whole Jevons restart.
+
 Relevant source seams and limits:
 
 - `AgentSessionConfig.agent` accepts the instrumented core Agent, while the
