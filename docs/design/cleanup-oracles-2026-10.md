@@ -229,6 +229,19 @@ OMP session, provider-usage and SDK compaction, including an OpenAI and Codex
 refresh case. This still is not a full sidecar gate, not a live-provider run,
 and not a switch of the production seat.
 
+Claudia `68d18a5b58dbd0ed5d29fb7b410cabb2d3e22590`, tree
+`5e1d8d9881406e31f25d5b9c2e94397f7c99aedf`, accounts for the SDK tool-loop
+threshold site. The opening history stays under the pre-prompt threshold. A
+tool call keeps the provider turn open and reports 90,000 input tokens, so
+compaction runs before the next provider request. Native compaction is not the
+first dispatch. The continuation after it is a separate model request. A second
+open turn repeats that order with its own request and attempt ids; the native
+attempts inside one compaction still share one invocation. OpenAI and Codex
+cover success, local-summary fallback, and absent usage. Absent native counters
+stay empty. Focused sidecar tests on that commit passed: 43 tests across usage,
+OMP session, provider-usage and SDK compaction. This still is not a full sidecar
+gate, not a live-provider run, and not a switch of the production seat.
+
 The restart scout also corrected an initial false positive: normal Jevons exit
 already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep
 broker-owned seats running even when the broker is temporarily unresponsive.
@@ -249,8 +262,9 @@ Relevant source seams and limits:
   at candidate selection and passes the host fetch, so native compaction does
   not use the SDK default transport or a turn captured at session construction.
   Active-provider key reads refresh from the broker; a startup copy is not a
-  second credential. Usage totals alone are not evidence of complete attempt
-  accounting, and the production seat does not use this adapter yet.
+  second credential. Pre-prompt and tool-loop threshold compaction are both
+  accounted on this adapter. Usage totals alone are not evidence of complete
+  attempt accounting, and the production seat does not use this adapter yet.
 - Isolated settings and explicit tools/discovery are essential. Default MCP,
   memory, retries and internal subagents must not silently introduce another
   fleet policy or unbudgeted work source. Concurrent seats need isolated registry
