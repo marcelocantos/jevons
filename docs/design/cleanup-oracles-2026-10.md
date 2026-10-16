@@ -198,6 +198,17 @@ previous bare-core engine: this is foundation evidence, not a completed service
 migration or a live-provider proof. Credential refresh synchronization, measured
 main/auxiliary transports and receipt hooks still need production wiring.
 
+Claudia `b3b12cdccb3a69bceb6c008a815b269adc8e5c91`, tree
+`2922b277f951b21bcb302b83057436c3d5b11a77`, makes native compaction observation
+mandatory on that adapter and limits registry availability to the host's
+current model. A provider token no longer authorizes a bundled sibling at its
+catalog endpoint. Focused sidecar tests on that commit passed: 35 tests across
+usage, OMP session, provider-usage and the new SDK compaction file, including
+OpenAI and Codex success, absent-usage, local-summary and automatic-continuation
+fixtures. Reopened usage pages match the recorded facts, including unknown
+counters. This is not a full sidecar gate, not a live-provider run, and not a
+switch of the production seat off the bare-core engine.
+
 The restart scout also corrected an initial false positive: normal Jevons exit
 already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep
 broker-owned seats running even when the broker is temporarily unresponsive.
@@ -213,9 +224,11 @@ Relevant source seams and limits:
 - `SessionManager.appendCustomEntry` can hold non-context facts, but persistence
   failures can be latched rather than thrown by append. Receipt acceptance must
   wait for a successful durability barrier such as `flush()`.
-- `sideStreamFn` covers summary/side requests; native compaction callers still
-  require forwarding the physical-attempt observer. Usage totals alone are not
-  evidence of complete attempt accounting.
+- `sideStreamFn` covers summary/side requests. The adapter now also requires
+  `nativeCompactionOptions`, so native compaction uses the host observer and
+  fetch instead of the SDK default. Usage totals alone are not evidence of
+  complete attempt accounting, and the production seat does not use this
+  adapter yet.
 - Isolated settings and explicit tools/discovery are essential. Default MCP,
   memory, retries and internal subagents must not silently introduce another
   fleet policy or unbudgeted work source. Concurrent seats need isolated registry
