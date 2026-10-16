@@ -138,10 +138,7 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		return nil, err
 	}
 	socket := filepath.Join(root, "broker.sock")
-	ompSocket := filepath.Join(root, "omp.sock")
-	cmd := exec.Command(bin, "broker", "serve", "-state-dir", filepath.Join(root, "state"),
-		"-socket", socket, "-no-resume", "-restart-nudge", "-")
-	cmd.Env = isolatedBrokerEnv(os.Environ(), socket, ompSocket, sidecarScript, root, filepath.Join(s.stateDir, "spool"))
+	cmd := isolatedBrokerCommand(os.Environ(), bin, root, s.stateDir, sidecarScript)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -216,6 +213,17 @@ func (s *suite) stageIsolatedSidecar() (string, error) {
 	return script, nil
 }
 
+// isolatedBrokerCommand configures the separately launched broker, including
+// consumer settings that the Jevons client process cannot supply afterwards.
+func isolatedBrokerCommand(base []string, bin, root, stateDir, sidecarScript string) *exec.Cmd {
+	socket := filepath.Join(root, "broker.sock")
+	cmd := exec.Command(bin, "broker", "serve", "-state-dir", filepath.Join(root, "state"),
+		"-socket", socket, "-no-resume", "-restart-nudge", "-",
+		"-mcp-seed-dir", stateDir, "-mcp-consumer-prefix", "jevonsmcp")
+	cmd.Env = isolatedBrokerEnv(base, socket, filepath.Join(root, "omp.sock"), sidecarScript, root, filepath.Join(stateDir, "spool"))
+	return cmd
+}
+
 // isolatedBrokerEnv builds the environment for a journey's isolated Claudia
 // broker: base with any prior isolate/broker vars stripped, plus this run's
 // own socket, sidecar and state paths.
@@ -231,7 +239,7 @@ func (s *suite) stageIsolatedSidecar() (string, error) {
 func isolatedBrokerEnv(base []string, socket, ompSocket, sidecarScript, stateHome, spoolDir string) []string {
 	strip := []string{
 		"CLAUDIA_BROKER_SOCKET=", "CLAUDIA_NO_BROKER=", "CLAUDIA_OMP_SOCKET=",
-		"CLAUDIA_OMP_SERVER=", "JEVONS_SPOOL_DIR=", "XDG_STATE_HOME=", "CLAUDIA_OMP_NO_REFRESH=",
+		"CLAUDIA_OMP_SERVER=", "JEVONS_SPOOL_DIR=", "CLAUDIA_OMP_SPOOL_DIR=", "XDG_STATE_HOME=", "CLAUDIA_OMP_NO_REFRESH=",
 	}
 	env := make([]string, 0, len(base)+6)
 	for _, entry := range base {
@@ -248,7 +256,7 @@ func isolatedBrokerEnv(base []string, socket, ompSocket, sidecarScript, stateHom
 	}
 	return append(env, "CLAUDIA_BROKER_SOCKET="+socket, "CLAUDIA_NO_BROKER=0",
 		"CLAUDIA_OMP_SOCKET="+ompSocket, "CLAUDIA_OMP_SERVER="+sidecarScript, "XDG_STATE_HOME="+stateHome,
-		"JEVONS_SPOOL_DIR="+spoolDir, "CLAUDIA_OMP_NO_REFRESH=1")
+		"JEVONS_SPOOL_DIR="+spoolDir, "CLAUDIA_OMP_SPOOL_DIR="+spoolDir, "CLAUDIA_OMP_NO_REFRESH=1")
 }
 
 func (b *isolatedBroker) close() error {

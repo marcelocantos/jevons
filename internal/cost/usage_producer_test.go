@@ -72,7 +72,7 @@ func checkCanonicalUsageProducer(t *testing.T, claudiaRoot, bun string, want can
 	fixture.Dir = claudiaRoot
 	// Whitelist process setup only: no inherited credentials, proxy settings,
 	// provider switches, or home configuration can affect the fake transport.
-	fixture.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + root, "JEVONS_SPOOL_DIR=" + spoolRoot}
+	fixture.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + root, "JEVONS_SPOOL_DIR=" + spoolRoot, "CLAUDIA_OMP_SPOOL_DIR=" + spoolRoot}
 	if output, err := fixture.CombinedOutput(); err != nil {
 		t.Fatalf("actual usage producer: %v\n%s", err, output)
 	}
