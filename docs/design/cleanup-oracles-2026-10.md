@@ -2,6 +2,17 @@
 
 This is the evidence map for 🎯T1074, grounded in the [October audit](../audits/entropy-audit-2026-10-16.md). Bullseye owns acceptance and target state. A proposed check below is not evidence that it has run, and a passing component check does not certify the integrated daily-driver goal.
 
+## Current checkpoint: resume and transport retirement
+
+The integrated cleanup is **not ready for daemon activation**. Full clean Claudia gate `RED c8369e35` measured `72bfc6b967bb4cbeaeef65ae08a4054124d04c2d`, tree `b786db20faaa61ffb1338e4c9d9b648dd31e371f`. Its 255 sidecar tests and vet passed, but Go tests failed on retained CLI expectations and integration omissions; stability and mutation stages were not reached. Log SHA-256: `9a7429b5dd7085f9602d383aab6bb5214ad1c86fed87c2c0c1a7d32958569620`. Earlier full greens do not certify this tree.
+
+The resume prerequisite itself has clean focused evidence: source `e0f3651efab178a04d823b2b931751de758a4935`, `GREEN 78a2e17e`, root/daemon race tests and 35 sidecar tests. All eight provider/default forms use canonical generation identity. Required resume accepts reconstructable history or validated pending accepted input through the existing receipt journal, refusing missing, foreign, corrupt or bookkeeping-only stores. An explicit sidecar acknowledgment prevents an older sidecar from creating an empty generation and then passing a retry as adoption. These checks use real isolated sockets and stores with fake credentials; they do not establish live provider behavior.
+
+Jevons `c9e6f54c23eb`, integrated locally as `0f5edee3a993` with identical tree `9ef591f8b16090c12982447ead24ca35c5ab616b`, removes all three startup calls that rewrote providers and cleared materialization based on missing event spool. Clean paired `GREEN 723c6a96` verifies actual registry load/save/reload preservation and selected startup checks. It uses frozen Claudia `72bfc6b`, read-only modfile SHA-256 `ab50a3008326dde03c7ff7f261fd99763c0590cabf21fb2e3a2a580a38adedc7` and sum `64616414979c4951426997782c4c3cc83a320b39f1147ecbb33a68247a15f2ab`, with workspace overlays disabled. The new persistence test did not reproduce the old daemon mutation by itself; deletion of those callers is separately reviewed. A complete live restart journey remains required.
+
+Remaining blockers include the full transport purge and its surviving invariant coverage, consumer-neutral defaults, the dependency-delivery decision, production receipt binding, admission/attribution, and final paired/live pilot evidence. Automatic approval review rejected the remaining broad CLI/ACP deletion twice and requested direct human authorization; its partial uncommitted edits remain isolated and unintegrated. No parked development fleet was activated.
+
+
 ## Baseline preservation
 
 The initial committed Jevons baseline is `8617fb0f83973286e51be6d343046b164fe75384`; Claudia is `11144a5205a378cc6e78f062836f1e50b4677287`. The sibling `go.work` is not part of the accepted dependency contract. Checks use `GOWORK=off`.
