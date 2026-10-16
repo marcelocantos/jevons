@@ -69,6 +69,16 @@ func (a *Authority) FromClaudia(rep SeatReport, at time.Time) {
 		obs.Alive = TriOf(rep.Alive)
 		obs.LocalAlive = TriOf(rep.Alive)
 		obs.InFlight = TriOf(rep.PromptInFlight)
+		// 🎯T783: the broker's turn-in-flight answer is also phase truth when a
+		// turn is running. Leaving Phase alone here is how /api/agents kept
+		// phase=idle for five minutes while Migrate refused "turn in flight" —
+		// InFlight was Yes from this feed, Phase still Idle from a prior
+		// terminal event. Do not force idle from a quiet broker report: the
+		// event stream may be a tick ahead and is the only source of sub-second
+		// motion; elevating to working when the broker says so is enough.
+		if rep.PromptInFlight {
+			obs.Phase = turnev.PhaseWorking
+		}
 	}
 	a.Observe(obs)
 }
@@ -137,4 +147,31 @@ func (a *Authority) Blocked(name string) (reason string, blocked bool) {
 	default:
 		return "", false
 	}
+}
+
+// PhaseAgreesWithFlight reports whether published phase agrees with the
+// broker's InFlight answer (🎯T783). Unknown flight is never a disagreement:
+// a failure to observe cannot judge. The specimen is phase=idle (or unknown)
+// while InFlight=Yes — one of the two is wrong, and the broker is truth.
+// InFlight=No with Phase=working is not this target: the event stream may be
+// a tick ahead of a quiet broker poll.
+func PhaseAgreesWithFlight(phase turnev.Phase, inFlight Tri) bool {
+	if inFlight != Yes {
+		return true
+	}
+	return phase == turnev.PhaseWorking
+}
+
+// RowPhaseForFlight projects the broker's InFlight onto the phase a fleet
+// row must show (🎯T783). When the broker says a turn is running, idle and
+// unknown are overwritten; a blocked goal stays blocked (task content, not
+// seat turn state). When flight is unknown or no, the prior phase stands.
+func RowPhaseForFlight(phase turnev.Phase, inFlight Tri, blocked bool) turnev.Phase {
+	if blocked {
+		return phase
+	}
+	if inFlight == Yes {
+		return turnev.PhaseWorking
+	}
+	return phase
 }

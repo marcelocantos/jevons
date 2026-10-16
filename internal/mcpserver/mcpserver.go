@@ -39,6 +39,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/missionbound"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/reapverify"
+	"github.com/marcelocantos/jevons/internal/repowatch"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
@@ -173,6 +174,9 @@ type Server struct {
 	notifyReplay *notifyReplayLedger
 	// noticeCo coalesces materially unchanged fleet-health notices (🎯T810).
 	noticeCo *noticeCoalescer
+	// stallNotice is the per-hold exponential backoff for stalled-backlog
+	// overseer notices (🎯T952). Guarded by mu; nil until first use.
+	stallNotice map[string]StallNoticeState
 
 	// removals is the accounted-removal chokepoint (🎯T435), shared with the
 	// HTTP server so a reap decided on that side is legible on the fleet
@@ -257,6 +261,10 @@ type Server struct {
 	// whether it has been called wedged (🎯T927). Its own leaf lock, so the
 	// flight writers can feed it while holding mu.
 	wedges turnWedges
+
+	// inertSeats holds climbing-age + queued-prompt samples for 🎯T754
+	// inert detection (a seat that accepts sends while executing nothing).
+	inertSeats *inertState
 
 	// wiredSinks records which process object currently carries this
 	// daemon's event sink, per agent (🎯T426). Guarded by wireMu and NOT by
@@ -490,6 +498,10 @@ type Server struct {
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
 	ideaStateDir      string
 	ownerQuestionsDir string
+	// ownerQuestionSilence is how long an unanswered question with a
+	// default waits before the fleet proceeds on it (🎯T404.2). 0 =
+	// DefaultOwnerQuestionSilence; negative = disabled. Guarded by mu.
+	ownerQuestionSilence time.Duration
 
 	// agentReportDir roots the durable agent-report store (🎯T388) so a
 	// terminal report outlives the agent that wrote it. Empty until
@@ -508,6 +520,10 @@ type Server struct {
 	// refresh plus async feed triggers, writing durable versioned notes.
 	// Nil until SetResearchAgent.
 	research *research.Agent
+
+	// repowatch is the ambient PO GitHub watch cycle (🎯T1022.2).
+	// Nil until SetRepoWatchAgent.
+	repowatch *repowatch.Agent
 
 	// auditor is the periodic full-scan audit cycle (🎯T357): bounded passes
 	// over code, skills, and prompts on an advanced-tier model, folded into

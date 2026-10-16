@@ -32,6 +32,10 @@ const (
 )
 
 // Classify reads the report, not the agent's name.
+//
+// 🎯T766.4: is-this-report-done is envelope.ClassifyDone — the same answer
+// the finished-work reap path uses. Prose "done"+"gate green" heuristics
+// are not a second oracle_done path (that was 🎯T860's false completion).
 func Classify(report string) Route {
 	body, decided, route := envelopeRoute(report)
 	if decided {
@@ -45,7 +49,7 @@ func Classify(report string) Route {
 	if strings.HasPrefix(s, "[routed to overseer]") {
 		return RouteParent
 	}
-	if needsOwner(s) || blockedOn(s) || oracleDone(s) {
+	if needsOwner(s) || blockedOn(s) {
 		return RouteOverseer
 	}
 	return RouteParent
@@ -120,73 +124,28 @@ func blockedOn(s string) bool {
 	return strings.Contains(s, "blocked on") || strings.Contains(s, "blocked-on")
 }
 
-// disclaimed reports whether the body explicitly disclaims completion
-// (🎯T860): "not claiming done/complete" and "reporting status only" both
-// supply the raw substrings "done"/"complete" that the naive done-word scan
-// reads as a claim, so the negation must be checked before those words are
-// trusted.
-func disclaimed(s string) bool {
-	for _, p := range []string{
-		"not claiming done",
-		"not claiming complete",
-		"no assumed completion",
-		"reporting status only",
-	} {
-		if strings.Contains(s, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// externallyAttributedOracle reports whether the body's oracle-shaped
-// markers (GATE/GREEN, "oracle", SHA) are quoted as evidence belonging to a
-// named OTHER agent or a sibling's commit, rather than the reporter's own
-// (🎯T860). A reporter quoting someone else's green does not thereby earn
-// oracle_done for its own report.
-func externallyAttributedOracle(s string) bool {
-	for _, p := range []string{
-		"another agent",
-		"sibling agent",
-		"sibling's commit",
-		"'s commit",
-		"'s evidence",
-	} {
-		if strings.Contains(s, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func oracleDone(s string) bool {
-	if disclaimed(s) {
-		return false
-	}
-	done := strings.Contains(s, "done") || strings.Contains(s, "achieved") ||
-		strings.Contains(s, "complete") || strings.Contains(s, "finished")
-	if !done {
-		return false
-	}
-	if externallyAttributedOracle(s) {
-		return false
-	}
-	oracle := strings.Contains(s, "gate") && strings.Contains(s, "green")
-	oracle = oracle || strings.Contains(s, "oracle")
-	oracle = oracle || (strings.Contains(s, "sha") && (strings.Contains(s, "test") || strings.Contains(s, "green")))
-	return oracle
+// oracleDone is the 🎯T766.4 typed-done path. The argument is the full report
+// (not a lowercased body): envelope.IsDoneReport is the single answer shared
+// with the finished-work reap classifier. Prose done-word + GATE scans are
+// gone — a disclaimer or a sibling's quoted green cannot invent oracle_done
+// because English is no longer consulted (🎯T860 closed by elimination).
+func oracleDone(report string) bool {
+	return envelope.IsDoneReport(report)
 }
 
 func (r Route) String() string { return string(r) }
 
 // Reason is a stable token for logs and the PO record line.
+//
+// 🎯T766.4: oracle_done is envelope.DoneYes only — never a prose scan of
+// done-words plus a GATE citation (🎯T860 specimen).
 func Reason(report string) string {
 	body, decided, route := envelopeRoute(report)
 	if decided {
 		if route == RouteParent {
 			return "parent"
 		}
-		if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
+		if envelope.IsDoneReport(report) {
 			return "oracle_done"
 		}
 		return "needs_owner"
@@ -197,8 +156,6 @@ func Reason(report string) string {
 		return "needs_owner"
 	case blockedOn(s):
 		return "blocked_on"
-	case oracleDone(s):
-		return "oracle_done"
 	default:
 		return "parent"
 	}

@@ -1083,6 +1083,11 @@ type agentInfo struct {
 	// nothing has been heard from it and messages wait behind it (🎯T927).
 	// phase stays "working"; this says the work is not happening.
 	Wedged string `json:"wedged,omitempty"`
+	// Inert is set while a running seat holds queued prompts and its
+	// transcript_age only climbs across successive observations (🎯T754).
+	// Distinct from wedged: the send path still answers "queued", so the
+	// seat looks busy until this field says otherwise.
+	Inert string `json:"inert,omitempty"`
 	// SpawnOrders: one line per open spawn order given to this seat
 	// (🎯T762). An incomplete order names every seat it listed that was never
 	// minted and why (refused: the start error; not_attempted: no start was
@@ -1208,6 +1213,22 @@ func (s *Server) SetWedgedReader(fn func(name string) (string, bool)) {
 	s.wedgedReader = fn
 }
 
+// SetInertReader installs the 🎯T754 inert-seat lookup
+// (mcpserver.InertSeat in production).
+func (s *Server) SetInertReader(fn func(name string) (string, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inertReader = fn
+}
+
+// SetInertObserver installs the 🎯T754 sample pass run before each
+// /api/agents list (mcpserver.SweepInert in production).
+func (s *Server) SetInertObserver(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inertObserver = fn
+}
+
 // decorateSeatStops applies the 🎯T662 fields to the rows.
 func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 	s.mu.RLock()
@@ -1215,6 +1236,7 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 	startingReader := s.seatStartingReader
 	massReader := s.massStopReader
 	wedgedReader := s.wedgedReader
+	inertReader := s.inertReader
 	orderReader := s.spawnOrderReader
 	s.mu.RUnlock()
 	mass := ""
@@ -1243,6 +1265,16 @@ func (s *Server) decorateSeatStops(agents []agentInfo) []agentInfo {
 		if wedgedReader != nil && agents[i].Running {
 			if line, ok := wedgedReader(agents[i].Name); ok {
 				agents[i].Wedged = line
+			}
+		}
+		if inertReader != nil && agents[i].Running {
+			if line, ok := inertReader(agents[i].Name); ok {
+				agents[i].Inert = line
+				// Surface on status so a cold reader of /api/agents does not
+				// need a second field to decide inert-vs-working (🎯T754).
+				if agents[i].Status != "born-stuck" && agents[i].Status != "PINNED" {
+					agents[i].Status = "inert"
+				}
 			}
 		}
 		if orderReader != nil {
@@ -1444,6 +1476,19 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 				info.Progress = p.Summary
 			}
 		}
+		// 🎯T783: the broker's InFlight answer is the row's truth about whether
+		// a turn is running. AgentProgressHub baseline is idle for a live
+		// process with no ACP frame yet (🎯T211), so without this lift the
+		// cockpit and agent_list painted phase=idle/progress=idle while
+		// Migrate refused "turn in flight" for five minutes.
+		if st.InFlight == seatstate.Yes && info.Phase != "blocked" {
+			if info.Phase == "" || info.Phase == "idle" || info.Phase == "unknown" {
+				info.Phase = "working"
+			}
+			if info.Progress == "" || info.Progress == "idle" {
+				info.Progress = composeProgressSummary("working", info.Step)
+			}
+		}
 		info.Model = st.Model
 
 		agents = append(agents, info)
@@ -1484,7 +1529,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	reg := s.registry
 	models := s.fleetModels
+	obs := s.inertObserver
 	s.mu.RUnlock()
+	if obs != nil {
+		obs() // 🎯T754: sample climbing-age + queue before decorating rows
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if reg == nil {

@@ -1,0 +1,34 @@
+#!/bin/bash
+# Watches the supervision loop from a different process tree than the loop
+# itself — a supervisor whose absence has no alarm supervises nothing (🎯T405).
+# Complains once per gap when ticks stop landing.
+set -u
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:${HOME}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+STATE="${JEVONS_SUPERVISOR_STATE:-$HOME/.jevons/supervisor}"
+STALE_AFTER="${JEVONS_TICK_STALE_AFTER:-2700}" # 45 min ≈ three missed 15-min ticks
+NOTIFIED="$STATE/alarm-sent"
+
+hb=$(cat "$STATE/heartbeat" 2>/dev/null || echo 0)
+now=$(date +%s)
+age=$(( now - hb ))
+echo "=== alarm $(date -Iseconds) heartbeat_age=$(( age / 60 ))m"
+
+if [ "$hb" -eq 0 ] || [ "$age" -gt "$STALE_AFTER" ]; then
+  # Once per gap, not once per check.
+  if [ ! -f "$NOTIFIED" ] || [ "$(cat "$NOTIFIED" 2>/dev/null || echo 0)" -lt "$hb" ]; then
+    blurter send --app jevons-supervisor --severity problem \
+      --subject "Jevons supervision loop has stopped" \
+      --body "No successful tick for $(( age / 60 ))m (heartbeat $(date -r "$hb" -Iseconds 2>/dev/null || echo never)). The fleet may still be working; nobody is watching it. Log: ${JEVONS_TICK_LOG:-$HOME/.local/var/log/jevons-tick.log}" || echo "blurter failed: could not raise the stale-loop alarm"
+    echo "$now" >"$NOTIFIED"
+  fi
+else
+  # The loop watches this alarm; this alarm watches the loop (🎯T405).
+  if ! supervisorctl status jevons-tick 2>/dev/null | grep -q RUNNING; then
+    blurter send --app jevons-supervisor --severity problem \
+      --subject "Jevons supervision loop is not loaded" \
+      --body "Heartbeat is fresh but supervisord is not running jevons-tick, so ticks will stop shortly. Reinstate: supervisorctl start jevons-tick" >/dev/null 2>&1 || true
+  fi
+fi
+if [ -f "$NOTIFIED" ] && [ "$age" -le "$STALE_AFTER" ]; then
+  rm -f "$NOTIFIED"
+fi

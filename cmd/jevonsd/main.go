@@ -42,6 +42,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/portown"
 	"github.com/marcelocantos/jevons/internal/provider"
+	"github.com/marcelocantos/jevons/internal/repowatch"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/seatreg"
@@ -609,12 +610,23 @@ func main() {
 	// These two loops make each process responsible for the other, and
 	// they live in different process trees precisely so that whatever
 	// takes one down cannot take the other with it.
-	go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
-		StateDir: cfg.StateDir,
-		Home:     supervise.HomeDir(),
-		Repo:     supervise.RepoRoot(),
-		Port:     cfg.Port,
-	}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
+	//
+	// 🎯T974: only the development daemon does this. A journey isolate
+	// (throwaway state_dir, often under XDG_STATE_HOME) must not watch the
+	// real launchd watchdog: its own state has no heartbeat, so ~90–120s
+	// after boot it would log supervisor-gap and flip the overseer phase
+	// to "error", breaking waitBootSweepQuiet for long journeys (J3/T840).
+	if config.IsDevelopmentDaemon(cfg.Port, cfg.StateDir) {
+		go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
+			StateDir: cfg.StateDir,
+			Home:     supervise.HomeDir(),
+			Repo:     supervise.RepoRoot(),
+			Port:     cfg.Port,
+		}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
+	} else {
+		slog.Info("supervise: skip watchdog mutual-supervision; not the development daemon (🎯T974)",
+			"port", cfg.Port, "state_dir", cfg.StateDir)
+	}
 
 	// ð¯T27.9: start the liveness check loop once the daemon context exists.
 	if liveMon != nil {
@@ -921,6 +933,7 @@ func main() {
 		mcpSrv.SetBudgetGuards(guard.enforcer.AllowSpawn, guard.enforcer.AllowResume)
 		mcpSrv.SetCostMonitor(guard.monitor.Snapshot)
 		srv.SetCostSource(mcpSrv.CostJSON)
+	srv.SetFleetHealthSource(mcpSrv.FleetHealthJSON)
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}
 
@@ -954,6 +967,8 @@ func main() {
 	// ð¯T356 ambient research: periodic context refresh + async feed triggers,
 	// writing durable versioned notes and briefing the overseer.
 	startAmbientResearch(ctx, cfg, mcpSrv, capacityGate(capGov))
+	startAmbientRepoWatch(ctx, cfg, mcpSrv, capacityGate(capGov))
+
 
 	// ð¯T357 periodic full-scan audit: bounded advanced-model passes over
 	// code, skills, and prompts, folded into durable residue.
@@ -1023,6 +1038,8 @@ func main() {
 	srv.SetSeatStartingReader(mcpSrv.AgentStarting) // 🎯T970
 	srv.SetSeatWaitClear(mcpSrv.ClearSeatWait)      // 🎯T980
 	srv.SetWedgedReader(mcpSrv.WedgedSeat)          // 🎯T927
+	srv.SetInertReader(mcpSrv.InertSeat)            // 🎯T754
+	srv.SetInertObserver(mcpSrv.SweepInert)         // 🎯T754
 	srv.SetDeadSeatNoter(mcpSrv.NoteDeadSeat)
 	srv.SetPlanAuthFailure(mcpSrv.PlanAuthFailed, mcpSrv.ClearPlanAuthFailures) // 🎯T905
 	srv.SetMassStopReader(mcpSrv.MassStopLine)
@@ -2108,6 +2125,57 @@ func startPeriodicAudit(ctx context.Context, cfg config.Config, mcpSrv *mcpserve
 		"reports", "state_dir/audit/reports",
 	)
 	return auditor
+}
+
+
+// startAmbientRepoWatch wires the 🎯T1022.2 standing PO GitHub watch cycle:
+// polls `gh issue list` / `gh pr list` per PO workdir at a bounded cadence,
+// delivers typed repo-watch briefs to the owning PO, and exposes
+// jevons_repo_watch + GET /api/repowatch. Escalation is jevons_repo_escalate
+// (🎯T1022.3) over the ownerquestions/blurter outbox.
+//
+// Env:
+//
+//	JEVONS_REPOWATCH=0        — disable the schedule (MCP tools stay registered)
+//	JEVONS_REPOWATCH_INTERVAL — duration (default 30m); "0" disables the ticker
+func startAmbientRepoWatch(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server, gate capacity.Gate) *repowatch.Agent {
+	interval := time.Duration(0)
+	if v := strings.TrimSpace(os.Getenv("JEVONS_REPOWATCH_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_REPOWATCH_INTERVAL invalid; using config", "value", v)
+		}
+	}
+	agent, err := repowatch.New(repowatch.Args{
+		StateDir:  cfg.StateDir,
+		Capacity:  gate,
+		Runner:    repowatch.ExecRunner{},
+		Seats:     mcpSrv.RepoWatchSeatLister(),
+		Deliverer: mcpSrv.NewRepoWatchDeliverer(),
+		Interval:  interval,
+	})
+	if err != nil {
+		slog.Warn("ambient repowatch disabled", "err", err)
+		return nil
+	}
+	if _, err := os.Stat(repowatch.ConfigPath(cfg.StateDir)); os.IsNotExist(err) {
+		_ = repowatch.SaveConfig(cfg.StateDir, repowatch.DefaultConfig())
+	}
+	mcpSrv.SetRepoWatchAgent(agent)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_REPOWATCH"))) {
+	case "0", "false", "no", "off":
+		slog.Info("ambient repowatch schedule disabled by JEVONS_REPOWATCH (tools still registered)")
+		return agent
+	}
+	go agent.Run(ctx)
+	slog.Info("ambient repowatch ready",
+		"interval_default", repowatch.DefaultInterval.String(),
+		"config", "state_dir/repowatch/config.json",
+	)
+	return agent
 }
 
 // startAmbientRSIMint wires residual ð¯T92 direct bullseye mint (NOT product path).

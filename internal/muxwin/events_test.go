@@ -543,3 +543,47 @@ func prose(ev Event) string {
 		return ""
 	}
 }
+
+// 🎯T64.3: first assistant put carries the token delta; tools do not split the
+// bubble; later appends grow the same event and carry text for the client.
+func TestApplyLiveT643FirstPutThenToolsThenAppend(t *testing.T) {
+	next, folds := ApplyLiveAll(nil, tok("s1", "Checking.", ""))
+	if len(folds) != 1 || folds[0].Op != "put" || folds[0].Text != "Checking." {
+		t.Fatalf("first put folds=%+v want put text=Checking.", folds)
+	}
+	if prose(next[0]) != "Checking." || next[0].ID != "e:1" {
+		t.Fatalf("first bubble=%q id=%s", prose(next[0]), next[0].ID)
+	}
+
+	next, folds = ApplyLiveAll(next, toolAsst("Read"))
+	if len(folds) != 1 || folds[0].Op != "put" || folds[0].Event.Kind != KindSteps {
+		t.Fatalf("tool folds=%+v want KindSteps put", folds)
+	}
+	if len(next) != 2 || prose(next[0]) != "Checking." || next[0].ID != "e:1" {
+		t.Fatalf("tool must not split/mutate assistant: n=%d prose=%q id=%s", len(next), prose(next[0]), next[0].ID)
+	}
+
+	next, folds = ApplyLiveAll(next, tok("s1", " Yes.", ""))
+	if len(folds) != 1 || folds[0].Op != "append" || folds[0].Text != " Yes." {
+		t.Fatalf("append folds=%+v want append delta", folds)
+	}
+	if folds[0].Event.ID != "e:1" {
+		t.Fatalf("append must grow the same bubble id=%s", folds[0].Event.ID)
+	}
+	if prose(next[0]) != "Checking. Yes." {
+		t.Fatalf("joined=%q", prose(next[0]))
+	}
+	// One assistant + one steps row — never a second assistant bubble around tools.
+	asst, steps := 0, 0
+	for _, e := range next {
+		switch e.Kind {
+		case KindAssistant:
+			asst++
+		case KindSteps:
+			steps++
+		}
+	}
+	if asst != 1 || steps != 1 {
+		t.Fatalf("kinds asst=%d steps=%d types=%v", asst, steps, typesOf(next))
+	}
+}

@@ -1,0 +1,9 @@
+{"plugins": [],
+ "package": "t863-lean",
+ "options": {},
+ "name": "JevonsInvariant",
+ "isModule": false,
+ "importArts":
+ {"JevonsInvariant.FailClosed":
+  [["/Users/marcelo/work/github.com/marcelocantos/jevons/probes/t863-lean/.lake/build/lib/lean/JevonsInvariant/FailClosed.olean"]]},
+ "dynlibs": []}

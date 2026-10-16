@@ -38,21 +38,35 @@ func TestGateRoleRoundTrip(t *testing.T) {
 
 func TestParseGateRoleForms(t *testing.T) {
 	for _, tc := range []struct {
-		raw  string
-		id   string
-		ctrl bool
+		raw         string
+		id          string
+		role        string
+		expectsRed  bool
+		needsGreen  bool
 	}{
-		{"1ba897f8 control", "1ba897f8", true},
-		{"id=1ba897f8 role=control", "1ba897f8", true},
-		{"id=453cc1d9 before", "453cc1d9", true},
-		{"abc inherited", "abc", false},
+		{"1ba897f8 control", "1ba897f8", GateRoleControl, true, true},
+		{"id=1ba897f8 role=control", "1ba897f8", GateRoleControl, true, true},
+		{"id=453cc1d9 before", "453cc1d9", GateRoleControl, true, true},
+		{"abc mutation", "abc", GateRoleMutation, true, false},
+		{"id=f057d894 role=red-demo", "f057d894", GateRoleRedDemo, true, false},
+		{"aa0ad483 differential", "aa0ad483", GateRoleDifferential, true, true},
+		{"a2fb595c broken-leg", "a2fb595c", GateRoleDifferential, true, true},
+		{"x inherited", "x", GateRoleBlocker, true, false},
+		{"y falsification", "y", GateRoleFalsification, true, false},
+		{"z evidence-hermetic", "z", "evidence-hermetic", false, false},
 	} {
 		r, err := parseGateRole(tc.raw)
 		if err != nil {
 			t.Fatalf("parseGateRole(%q): %v", tc.raw, err)
 		}
-		if r.ID != tc.id || r.IsControl() != tc.ctrl {
-			t.Fatalf("parseGateRole(%q)=%+v, want id=%s control=%v", tc.raw, r, tc.id, tc.ctrl)
+		if r.ID != tc.id || r.Role != tc.role {
+			t.Fatalf("parseGateRole(%q)=%+v, want id=%s role=%s", tc.raw, r, tc.id, tc.role)
+		}
+		if r.ExpectsRed() != tc.expectsRed {
+			t.Fatalf("parseGateRole(%q).ExpectsRed=%v, want %v", tc.raw, r.ExpectsRed(), tc.expectsRed)
+		}
+		if r.NeedsCompanionGreen() != tc.needsGreen {
+			t.Fatalf("parseGateRole(%q).NeedsCompanionGreen=%v, want %v", tc.raw, r.NeedsCompanionGreen(), tc.needsGreen)
 		}
 	}
 }
@@ -79,6 +93,32 @@ func TestControlIDsReadsSlotsOutsideALine1Fence(t *testing.T) {
 	}
 	if m, _ := Parse(text); m != nil {
 		t.Fatal("fence is not at line 1; Parse must not treat this as an envelope")
+	}
+}
+
+func TestHonestNonPassRolesCollectsMutationAndRedDemo(t *testing.T) {
+	text := strings.Join([]string{
+		"```jevons",
+		"jevons: kind finish-report",
+		"jevons: target T759",
+		"jevons: gate-role f057d894 red-demo",
+		"jevons: gate-role a2fb595c mutation",
+		"jevons: gate-role deadbeef evidence-hermetic",
+		"jevons: silent-ledger none",
+		"```",
+	}, "\n")
+	roles := HonestNonPassRoles(text)
+	if roles["f057d894"].Role != GateRoleRedDemo {
+		t.Fatalf("red-demo missing: %v", roles)
+	}
+	if roles["a2fb595c"].Role != GateRoleMutation {
+		t.Fatalf("mutation missing: %v", roles)
+	}
+	if _, ok := roles["deadbeef"]; ok {
+		t.Fatalf("evidence-hermetic must not be an honest non-pass: %v", roles)
+	}
+	if ControlIDs(text)["f057d894"] {
+		t.Fatal("ControlIDs must stay control-only")
 	}
 }
 

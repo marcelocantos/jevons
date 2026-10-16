@@ -4,6 +4,7 @@
 package planusage
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -212,4 +213,41 @@ func itoa(i int) string {
 		i /= 10
 	}
 	return string(b)
+}
+
+// The Refresh path must store a body even when no remaining sample is
+// published — a 429 is exactly that shape, and dropping it would leave
+// the table empty on the day it is most needed (🎯T677).
+func TestT683RefreshStoresBodyWithoutSamples(t *testing.T) {
+	st := t683Store(t)
+	at := t683At(t, "2026-09-20T12:00:00Z")
+	body := `{"type":"error","error":{"type":"rate_limit_error"}}`
+	r := NewReader(ReaderArgs{
+		History: st,
+		Now:     func() time.Time { return at },
+		Fetch: func(context.Context) ([]claudia.PlanUsage, error) {
+			return []claudia.PlanUsage{{
+				Provider:   claudia.ProviderClaude,
+				Status:     claudia.PlanUsageUnavailable,
+				Reason:     "Claude usage HTTP 429",
+				FetchedAt:  at,
+				HTTPStatus: 429,
+				RawBody:    body,
+				// no windows → samplesFromReadings yields nothing
+			}}, nil
+		},
+	})
+	if err := r.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Responses("claude", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Refresh stored %d payloads, want 1 (body with no samples)", len(got))
+	}
+	if got[0].HTTPStatus != 429 || got[0].Body != body {
+		t.Fatalf("stored wrong payload: %+v", got[0])
+	}
 }

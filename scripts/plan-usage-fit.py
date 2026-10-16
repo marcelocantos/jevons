@@ -40,7 +40,57 @@ import sqlite3
 import sys
 
 import numpy as np
-from scipy.optimize import nnls
+
+try:
+    from scipy.optimize import nnls as _scipy_nnls
+except ImportError:  # pragma: no cover - host without scipy
+    _scipy_nnls = None
+
+
+def nnls(A, b):
+    """Non-negative least squares. Prefers scipy; pure-numpy fallback."""
+    if _scipy_nnls is not None:
+        return _scipy_nnls(A, b)
+    # Lawson-Hanson active-set NNLS (4 feature columns; tiny problem).
+    A = np.asarray(A, float)
+    b = np.asarray(b, float).reshape(-1)
+    m, n = A.shape
+    P, R = [], list(range(n))
+    x = np.zeros(n)
+    tol = 1e-12
+    for _ in range(10_000):
+        w = A.T @ (b - A @ x)
+        if not R or w[R].max() <= tol:
+            break
+        j = R[int(np.argmax(w[R]))]
+        R.remove(j)
+        P.append(j)
+        while True:
+            if not P:
+                break
+            z, *_ = np.linalg.lstsq(A[:, P], b, rcond=None)
+            if np.all(z >= -tol):
+                x = np.zeros(n)
+                for i, zi in zip(P, z):
+                    x[i] = max(float(zi), 0.0)
+                break
+            alpha = 1.0
+            for i, zi in zip(P, z):
+                if zi < 0 and x[i] > 0:
+                    a = x[i] / (x[i] - zi)
+                    if a < alpha:
+                        alpha = a
+            for i, zi in zip(list(P), z):
+                x[i] = x[i] + alpha * (zi - x[i])
+            newP = []
+            for i in P:
+                if x[i] <= tol:
+                    x[i] = 0.0
+                    R.append(i)
+                else:
+                    newP.append(i)
+            P = newP
+    return x, float(np.linalg.norm(b - A @ x))
 
 CLASSES = ["input", "output", "cache_read", "cache_write"]
 

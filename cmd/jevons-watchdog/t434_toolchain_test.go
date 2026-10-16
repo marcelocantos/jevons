@@ -49,12 +49,13 @@ import (
 // the same code that runs at 03:00 under launchd.
 func newColdRepo(t *testing.T, r *rig) string {
 	t.Helper()
+	// 🎯T780: TestTheInstalledAgentPATH* starts a detached throwaway jevonsd.
+	// t.Cleanup / ReapUnder only run when cleanups do; -timeout and SIGKILL
+	// skip them. Arm before TempDir so the watcher covers the whole root.
+	testreap.Arm(t)
 	root := t.TempDir()
-	// The restart this test provokes detaches its daemon, so the throwaway
-	// jevonsd outlives the cycle that started it and is reparented to init.
-	// Nothing here used to reap it: one was found alive on the owner's Mac
-	// two hours after the run, and the same omission in the 🎯T218 harness
-	// stranded seven. Registered after TempDir so it runs before the removal.
+	// ReapUnder remains the fast path on a normal exit; Arm covers the
+	// paths where no cleanup runs (same shape as 🎯T932 thrash fixtures).
 	t.Cleanup(func() { reapUnder(t, root) })
 	for _, dir := range []string{"scripts", "bin"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {

@@ -67,6 +67,10 @@ const (
 	// never drew a composer were released under it (🎯T729). Nothing emits it
 	// since seats moved to the omp agent core; it stays so old journals read.
 	ReasonStartupStall = "startup_stall"
+	// ReasonBornStuck is a seat whose accepted opening prompt never produced a
+	// transcript (🎯T679.2 / 🎯T786): the parent or the daemon frees the provider
+	// seat-cap slot so a bounce-stuck row cannot hold capacity forever.
+	ReasonBornStuck = "born_stuck"
 	// ReasonThreadRemove is a thread/agent dropped by name on request.
 	ReasonThreadRemove = "thread_remove"
 	// ReasonDeadSeat is the silent-death sweep dropping a work seat whose
@@ -91,7 +95,7 @@ func Reasons() []string {
 	out := []string{
 		ReasonAsideDismiss, ReasonBudgetKill, ReasonExpire, ReasonKill,
 		ReasonReapAchieve, ReasonReapDone, ReasonReapStop, ReasonRotationDrop,
-		ReasonStartupStall, ReasonStopEngagement, ReasonThreadRemove,
+		ReasonBornStuck, ReasonStartupStall, ReasonStopEngagement, ReasonThreadRemove,
 		ReasonUnbriefedSeat,
 	}
 	sort.Strings(out)

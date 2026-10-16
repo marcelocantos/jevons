@@ -63,10 +63,33 @@ func TestT360CleanCheckoutBuilds(t *testing.T) {
 
 	build := exec.Command("go", "build", "./...")
 	build.Dir = wt
+	// GOWORK=off: a pristine clone has no sibling inject; the pin is what
+	// T360 actually measures (🎯T448 / 🎯T608).
+	build.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("clean checkout of HEAD does not build (%v).\n"+
-			"A pristine clone must not need a `make` generator step first.\n%s", err, out)
+		msg := string(out)
+		hint := "A pristine clone must not need a `make` generator step first."
+		if looksLikeClaudiaPinGap(msg) {
+			hint = "🎯T608: this looks like a claudia pin gap — go.mod's published " +
+				"claudia release does not export a symbol jevons already calls. " +
+				"It is a declared release residual, not ordinary breakage: run " +
+				"`bin/claudiapin`, publish+bump the pin, or drop the reference. " +
+				"When the pin catches up, this ratchet goes green with no further edits."
+		}
+		t.Fatalf("clean checkout of HEAD does not build (%v).\n%s\n%s", err, hint, msg)
 	}
+}
+
+// looksLikeClaudiaPinGap reports build output that is the silent-red shape
+// 🎯T608 exists to name: undefined claudia selectors/fields under the pin.
+func looksLikeClaudiaPinGap(buildOut string) bool {
+	if !strings.Contains(buildOut, "github.com/marcelocantos/claudia") &&
+		!strings.Contains(buildOut, "claudia.") {
+		return false
+	}
+	return strings.Contains(buildOut, "undefined:") ||
+		strings.Contains(buildOut, "unknown field") ||
+		strings.Contains(buildOut, "has no field or method")
 }
 
 // TestT360NoGitignoredEmbedInputs is the fast general form of the same

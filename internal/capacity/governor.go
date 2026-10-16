@@ -196,6 +196,10 @@ type Status struct {
 	Classes    []ClassStatus `json:"classes"`
 	// Plan is what each background class would get if it asked right now.
 	Plan []Decision `json:"plan"`
+	// HeavySuite is the CPU budget heavy test suites resolve to right now
+	// (🎯T781). Same knob as Policy.HeavySuiteMaxProcs, expanded so a
+	// cockpit or worker can cite GOMAXPROCS / -p / nice without re-deriving.
+	HeavySuite HeavySuiteBudget `json:"heavy_suite"`
 }
 
 // Status computes the current admission picture without reserving anything.
@@ -224,6 +228,7 @@ func (g *Governor) Status() Status {
 			queue = append(queue, Request{Class: c, Name: "hypothetical", Degradable: true})
 		}
 	}
+	cores := snap.HostCores
 	return Status{
 		At:         now.UTC().Format(time.RFC3339),
 		Assessment: Assess(snap, pol),
@@ -231,6 +236,7 @@ func (g *Governor) Status() Status {
 		Policy:     pol,
 		Classes:    rows,
 		Plan:       Plan(queue, snap, pol),
+		HeavySuite: ResolveHeavySuiteBudget(pol, cores),
 	}
 }
 

@@ -253,6 +253,10 @@ type CockpitHooks struct {
 	// FleetHealth rehydrates/clears dead worker handles (recoverDeadHandles).
 	// Reconcile runs the one fleet pass (🎯T766.3) on the cockpit tick.
 	Reconcile func()
+	// OwnerQuestions runs the standing owner-question digest and the
+	// 🎯T404.2 silence retirement (questions with a default proceed after
+	// the configured window). Called from the digest tick.
+	OwnerQuestions func(now time.Time)
 }
 
 // SetCockpitHooks registers fleet health/nudge actuators for the converge loop.
@@ -658,6 +662,7 @@ func (s *Server) reconcileOwnerQuestionDigest(now time.Time) {
 	}
 	s.ownerQuestionDigestCheck = now
 	dir := s.stateDir
+	hooks := s.cockpitHooks
 	s.mu.Unlock()
 	if dir == "" {
 		return
@@ -665,5 +670,16 @@ func (s *Server) reconcileOwnerQuestionDigest(now time.Time) {
 	store := ownerquestions.New(dir)
 	if err := store.Remind(now); err != nil {
 		slog.Warn("owner questions: digest spool failed", "err", err)
+	}
+	// 🎯T404.2 silence retirement + any MCP-side owner-question work.
+	if hooks.OwnerQuestions != nil {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("cockpit: owner questions panic", "recover", r)
+				}
+			}()
+			hooks.OwnerQuestions(now)
+		}()
 	}
 }

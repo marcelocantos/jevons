@@ -31,6 +31,7 @@ type assignmentDoc struct {
 
 type assignmentTarget struct {
 	Status  string     `yaml:"status"`
+	Tags    []string   `yaml:"tags"`
 	OwnedBy *ownedBloc `yaml:"owned_by"`
 }
 
@@ -64,6 +65,43 @@ func LookupTargetOwner(data []byte, id string) (owner string, ok bool) {
 		return "", false
 	}
 	return owner, true
+}
+
+
+// LookupTargetTags returns the tags of id in a ledger YAML document.
+// ok is false when the target is absent; tags may be empty when present.
+func LookupTargetTags(data []byte, id string) (tags []string, ok bool) {
+	id = strings.TrimSpace(strings.TrimPrefix(id, "🎯"))
+	if id == "" {
+		return nil, false
+	}
+	targets, ok := parsedTargets(data)
+	if !ok {
+		return nil, false
+	}
+	t, found := targets[id]
+	if !found {
+		return nil, false
+	}
+	if len(t.Tags) == 0 {
+		return nil, true
+	}
+	out := make([]string, len(t.Tags))
+	copy(out, t.Tags)
+	return out, true
+}
+
+// LoadTargetTagsFromCwd looks up target tags in the nearest ledger.
+func LoadTargetTagsFromCwd(cwd, targetID string) (tags []string, ok bool) {
+	path, err := DiscoverLedgerPath(cwd)
+	if err != nil {
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	return LookupTargetTags(data, targetID)
 }
 
 // IsOwnerAssigned reports whether id is parked with a human in the ledger

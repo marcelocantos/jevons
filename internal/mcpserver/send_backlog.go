@@ -291,7 +291,12 @@ func (s *Server) SweepSendBacklogs() {
 			// the bounce had already consumed. jevons-po sat at 53 pending
 			// behind 4 held for as long as it stayed idle.
 			if b.Depth > b.Uncertain && s.flightState(b.Agent) != FlightInFlight {
-				if _, live := s.liveSender(b.Agent); live {
+				if _, live := s.liveSender(b.Agent); !live {
+					// 🎯T769: same post-bounce restore as the pending-only arm.
+					_, _, _ = s.ensureAgentProcess(b.Agent)
+					_, live = s.liveSender(b.Agent)
+				}
+				if live {
 					slog.Info("🎯T766.5 backlog sweep: re-offering pending messages behind held entries",
 						"component", "agent_send", "agent", b.Agent, "queued", b.Depth, "held", b.Uncertain)
 					s.drainAgentSendQueue(b.Agent)
@@ -318,8 +323,25 @@ func (s *Server) SweepSendBacklogs() {
 		default:
 			s.forgetReapedBacklogNotice(b.Agent)
 			if _, live := s.liveSender(b.Agent); !live {
-				s.reportStalledBacklog(b, now, "it has no live process to deliver to")
-				continue
+				// 🎯T769: a seat that had a process before a daemon bounce may
+				// come back registered with no handle. Boot reattach is supposed
+				// to restore it; when that misses (auth blip, slow fleet start,
+				// the 2026-09-21 jevons-po specimen), the backlog sweep is the
+				// only path that still knows the seat has work waiting. Starting it
+				// here is not a mid-drain resurrection: the drain itself still
+				// refuses a missing process. Intent and the auto-seat hold still
+				// gate the launch (ensureAgentProcess).
+				if _, _, err := s.ensureAgentProcess(b.Agent); err != nil {
+					s.reportStalledBacklog(b, now, "it has no live process to deliver to")
+					continue
+				}
+				if _, live = s.liveSender(b.Agent); !live {
+					s.reportStalledBacklog(b, now, "it has no live process to deliver to")
+					continue
+				}
+				slog.Info("🎯T769 backlog sweep: restored a seat so its held messages can drain",
+					"component", "agent_send", "agent", b.Agent, "queued", b.Depth,
+					"oldest_age", b.OldestAge(now).Round(time.Second).String())
 			}
 			slog.Info("🎯T418 backlog sweep: re-offering a held message",
 				"component", "agent_send", "agent", b.Agent, "queued", b.Depth,
@@ -470,6 +492,10 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 			"oldest_age", age.Round(time.Second).String(),
 			"reason", reason,
 			"intent", dec.Reason)
+		// 🎯T952: the WARN log stays every sweep; the overseer notice is gated.
+		if !s.admitStalledBacklogNotice(b, now, reason) {
+			return
+		}
 		s.notifyFleetHealth(heldBacklogKey(b), fmt.Sprintf(
 			"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s. "+
 				"Agent is stood down (%s; %s) — intentional stand-down; messages stay on disk until "+
@@ -486,6 +512,11 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 		"queued", b.Depth,
 		"oldest_age", age.Round(time.Second).String(),
 		"reason", why)
+	// 🎯T952: one overseer notice per stall, then exponential backoff (or a
+	// shape change). The sweep keeps naming the stall in the product log.
+	if !s.admitStalledBacklogNotice(b, now, why) {
+		return
+	}
 	s.notifyFleetHealth(heldBacklogKey(b), fmt.Sprintf(
 		"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s, because %s. "+
 			"They are on disk and will be delivered when it next takes a turn. If that agent should not still be busy, "+

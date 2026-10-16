@@ -101,6 +101,19 @@ func (s *Server) enqueueAgentSendWithRequestID(name, text, requestID string) (in
 		}
 		return depth, err
 	}
+	// 🎯T826: a worker's non-terminal progress report supersedes earlier
+	// pending progress from the same worker. Terminal / GATE / SHA / ask /
+	// refusal reports are never dropped.
+	if sendq.IsSupersedableProgressReport(text) {
+		_, depth, replaced, err := s.sendQueue().AppendSupersedingWithRequestID(name, text, requestID, time.Now(),
+			sendq.SameWorkerSupersedableProgress(text))
+		if replaced > 0 {
+			sender, _ := sendq.AgentReportSender(text)
+			slog.Info("worker progress superseded held status report",
+				"component", "agent_send", "name", name, "worker", sender, "replaced", replaced)
+		}
+		return depth, err
+	}
 	_, depth, err := s.sendQueue().AppendWithRequestID(name, text, requestID, time.Now())
 	return depth, err
 }
@@ -573,6 +586,34 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightIdle, TurnEvidence{})
 			return res, nil
 		}
+	}
+
+	// 🎯T785: a tool_call_id mid-flight is a turn that flightState can miss
+	// (stale after bounce, or a Claude seat whose progress events never
+	// flipped the ledger). Offering text to the provider would cancel the
+	// tool the way an owner Esc would — the 2026-09-21 jv-t762/jv-t763
+	// specimens. Queue like client_queue; interrupt=true still cuts (after
+	// deliverByName demotes fleet interrupts against a fresh tool).
+	if !interrupt && seam == nil && s.toolCallFresh(name) && s.flightState(name) != FlightInFlight {
+		id, since, _ := s.toolCallProgress(name)
+		n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
+		if qerr != nil {
+			return agentSendResult{}, undeliverableQueueError(name, qerr)
+		}
+		mm.Mechanism = delivery.MechanismClientQueue
+		if mode == delivery.ModeSteer {
+			mm.Mechanism = delivery.MechanismQueueUntilIdle
+		}
+		msg := fmt.Sprintf(
+			"busy: %q has tool %s in flight (since %s); message queued (%d pending) until the tool returns — "+
+				"held by the daemon so the running call is not cancelled (🎯T785). "+
+				"To cut the turn short instead: jevons_agent_send with mode=interrupt.",
+			name, id, since.Round(time.Second), n)
+		res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: n, Mode: mode, Mechanism: mm.Mechanism}
+		logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightUnknown, TurnEvidence{
+			Detail: fmt.Sprintf("tool_call_id=%s since=%s (🎯T785)", id, since),
+		})
+		return res, nil
 	}
 
 	// A turn known to be running is not offered to the provider CLI at all.

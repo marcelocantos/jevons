@@ -369,7 +369,7 @@ var dailyPathEvidenceMarkers = []string{
 
 // hermeticOnlyMarkers are evidence that does not activate the development surface.
 // Used only to document the T194 residual in tests — HasActivationEvidence
-// does not treat these as daily-path proof.
+// does not treat these as development-surface proof.
 var hermeticOnlyMarkers = []string{
 	"go test",
 	"make test",

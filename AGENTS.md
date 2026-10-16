@@ -428,6 +428,16 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   re-checks HEAD before `commit-tree`, and refuses when it moved — naming
   the paths that would be overwritten. Escape: `JEVONS_COMMIT_BASE=off`.
   Sibling of 🎯T376 / 🎯T377.
+- **Guard tests reach production call sites (🎯T419):** a green unit test of a
+  silent-failure guard alone is not proof it runs in production. At least one
+  test must drive it through its real caller under the gating predicate
+  (call-site reachability). Pinning instance: `MarkDelivered` was unit-tested
+  green and unreachable under a reply-completion predicate (retired with
+  handover). Living pin: `delivery.RecordPayload` via `recordDeliveryEvidence`
+  under `OutcomeBegun` (`TestT419DeliveryEvidenceReachedThroughBegunSend`).
+  Catalogue: `internal/guardreach`. Audit:
+  `docs/audits/guard-call-site-reachability-2026-10.md`.
+
 - **Run gates so the status survives (🎯T386 / 🎯T396):** a pipeline's exit
   status is the **last** command's, so `go test ./... | tail -20` reports
   tail's success — which is unconditional. That is how a suite that died on a

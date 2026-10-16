@@ -20,6 +20,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/turnev"
+	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
 
@@ -356,6 +357,10 @@ type IdleNudgeTextArgs struct {
 	Reason      string
 	PostRestart bool
 	Kind        IdleNudgeKind
+	// RoleBody is optional 🎯T511 role doctrine assembled between the
+	// universal standing brief and the mission nudge (same order as
+	// EnsureFleetBriefWithRole). Empty keeps the pre-role full_brief shape.
+	RoleBody string
 }
 
 // FormatIdleNudgeText builds the resume body (without [event:] wrapper;
@@ -394,29 +399,32 @@ func FormatIdleNudgeText(a IdleNudgeTextArgs) string {
 	}
 
 	// full_brief — first pass / never-briefed / empty-session / post-restart rehydrate
-	var b strings.Builder
-	b.WriteString(FleetStandingBrief)
+	var mission strings.Builder
 	if a.PostRestart {
-		b.WriteString("NUDGE (post-restart wake / rehydrate) — jevonsd recovered. ")
+		mission.WriteString("NUDGE (post-restart wake / rehydrate) — jevonsd recovered. ")
 	} else {
-		b.WriteString("NUDGE (first-pass / never-briefed) — you sat phase=idle with no verified mission brief. ")
+		mission.WriteString("NUDGE (first-pass / never-briefed) — you sat phase=idle with no verified mission brief. ")
 	}
-	b.WriteString("This message injects the standing fleet brief (or confirms it). Do not treat a one-word continue as your brief.\n\n")
-	fmt.Fprintf(&b, "Agent: %s\n", name)
+	mission.WriteString("This message injects the standing fleet brief (or confirms it). Do not treat a one-word continue as your brief.\n\n")
+	fmt.Fprintf(&mission, "Agent: %s\n", name)
 	if tid != "" {
-		fmt.Fprintf(&b, "Mission target: %s\n", tid)
+		fmt.Fprintf(&mission, "Mission target: %s\n", tid)
 	} else {
-		b.WriteString("Mission target: (none bound — resume open work for this agent name)\n")
+		mission.WriteString("Mission target: (none bound — resume open work for this agent name)\n")
 	}
 	if acc := strings.TrimSpace(a.Acceptance); acc != "" {
-		fmt.Fprintf(&b, "Acceptance:\n%s\n", acc)
+		fmt.Fprintf(&mission, "Acceptance:\n%s\n", acc)
 	}
-	b.WriteString("\nLocal master only (🎯T104). No PR unless owner opened Ship.\n")
+	mission.WriteString("\nLocal master only (🎯T104). No PR unless owner opened Ship.\n")
 	if a.Reason != "" {
-		fmt.Fprintf(&b, "Classifier: %s.\n", a.Reason)
+		fmt.Fprintf(&mission, "Classifier: %s.\n", a.Reason)
 	}
-	b.WriteString("Continue from any partial work; report commit SHA + oracle evidence when done (or accepted-risk). Do not stay silent idle.")
-	return b.String()
+	mission.WriteString("Continue from any partial work; report commit SHA + oracle evidence when done (or accepted-risk). Do not stay silent idle.")
+	// 🎯T511: assemble universal + role doctrine + mission (same order as spawn).
+	if rb := strings.TrimSpace(a.RoleBody); rb != "" {
+		return roles.Assemble(FleetStandingBrief, rb, mission.String())
+	}
+	return FleetStandingBrief + mission.String()
 }
 
 // IdleNudgeEventSource is the event kind for PushEvent / deliver.
@@ -827,6 +835,9 @@ type IdleNudgeSweepArgs struct {
 	TurnInFlight func(name string) bool
 	// MissionAcceptance optional: targetID → acceptance text for full brief.
 	MissionAcceptance func(targetID string) string
+	// RoleBody optional: agent name → 🎯T511 role doctrine body for full_brief
+	// assembly. Nil leaves the standing brief without role injection.
+	RoleBody func(name string) string
 	// HostLoadCritical is optional: reports whether the host's run queue is
 	// saturated. Nil reads as not critical — unknown and saturated are
 	// different statements, and a missing reading must not silence the
@@ -1087,6 +1098,10 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 	if args.MissionAcceptance != nil && targetID != "" {
 		acceptance = args.MissionAcceptance(targetID)
 	}
+	roleBody := ""
+	if args.RoleBody != nil {
+		roleBody = args.RoleBody(d.Name)
+	}
 	text := FormatIdleNudgeText(IdleNudgeTextArgs{
 		Name:        d.Name,
 		TargetID:    targetID,
@@ -1094,6 +1109,7 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 		Reason:      rep.Reason,
 		PostRestart: args.PostRestart,
 		Kind:        rep.Kind,
+		RoleBody:    roleBody,
 	})
 	event := IdleNudgeEventSource(args.PostRestart, rep.Kind)
 	if err := args.Push(d.Name, event, text); err != nil {
@@ -1398,6 +1414,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 			}
 			s.fleetBriefed[name] = true
 		},
+		RoleBody: s.roleBodyForAgent,
 		MissionOpen:        hooks.MissionOpen,
 		DesignGated:        hooks.DesignGated,
 		LastTerminalReport: hooks.LooksSatisfied,
@@ -1471,11 +1488,20 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	push := func(target string, interrupt bool, event, text string) error {
-		msg := formatIdleNudgeWire(event, text)
+		body := text
+		if interrupt {
+			body = withFleetInterruptNotice(text) // 🎯T785: label fleet cut
+		}
+		msg := formatIdleNudgeWire(event, body)
 		_, err := s.sendDaemonComposed(target, msg, interrupt)
 		return err
 	}
 	interruptFn := func(name string) error {
+		// 🎯T785: a fresh tool call is not stuck — never Esc it from recover.
+		if s.toolCallFresh(name) {
+			id, since, _ := s.toolCallProgress(name)
+			return fmt.Errorf("tool %s still fresh (since %s) — not interrupting (🎯T785)", id, since.Round(time.Second))
+		}
 		proc := s.registry.Get(name)
 		if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 			s.cancelMCPFlights(name)
@@ -1547,6 +1573,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 			}
 			s.fleetBriefed[name] = true
 		},
+		RoleBody: s.roleBodyForAgent,
 	})
 	delivered := 0
 	for _, r := range reps {
@@ -2004,6 +2031,7 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 			}
 			s.fleetBriefed[name] = true
 		},
+		RoleBody: s.roleBodyForAgent,
 		// 🎯T414: the restart reattach path is the first of the three
 		// resurrections of 2026-08-10 — the daemon came back, found workers
 		// with open missions and no process, and started them. Intent is the

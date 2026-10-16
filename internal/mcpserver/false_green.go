@@ -63,8 +63,13 @@ func FalseGreenFlags(report string) []gate.Flag {
 	}
 	var flags []gate.Flag
 	if m, err := envelope.Parse(report); m != nil {
-		if err == nil && m.GateID != "" && m.Verdict.IsPass() && !envelope.ControlIDs(report)[m.GateID] {
-			flags = append(flags, envelopeGateFlags(m.GateID, lookup)...)
+		if err == nil && m.GateID != "" && m.Verdict.IsPass() {
+			// 🎯T759: a gate-id whose declared role expects RED (mutation,
+			// red-demo, control, …) is not the report's acceptance pass —
+			// FlagFalseGreen handles the inverse-green check on the body.
+			if _, honest := envelope.HonestNonPassRoles(report)[m.GateID]; !honest {
+				flags = append(flags, envelopeGateFlags(m.GateID, lookup)...)
+			}
 		}
 	}
 	// Full report, not payload-only: 🎯T722 gate-role slots live in the

@@ -43,6 +43,18 @@ func typedFinishReport(report string) bool {
 	return m != nil && err == nil && m.Kind == envelope.KindFinishReport
 }
 
+// LooksLikeFinishedWorkReport is true when a terminal agent response claims
+// completion via a declared finish-report envelope (🎯T766.4).
+//
+// Prose heuristics are not a fallback: a report that declares nothing is
+// unknown, not finished. The single answer is envelope.ClassifyDone; this
+// function composes the T784 mid-work remaining-work veto on top of it so a
+// finish-report that still names open scope does not reap the seat.
+//
+// 🎯T195 bare-done hygiene is superseded for the reap path: imperfect "Done."
+// without an envelope no longer reaps. Workers claim done through the
+// finish-report kind (🎯T31 / 🎯T509). Reaping ≠ accepting the work — the
+// overseer still requires oracle or accepted-risk under 🎯T31.1.
 func LooksLikeFinishedWorkReport(report string) bool {
 	// 🎯T938: a finish-report declaring status blocked is a seat waiting on
 	// someone else, not finished work. Reaping it would strand the mission
@@ -50,33 +62,16 @@ func LooksLikeFinishedWorkReport(report string) bool {
 	if reportOpenStatus(report) != "" {
 		return false
 	}
-	if m, err := envelope.Parse(report); m != nil && err == nil {
-		switch m.Kind {
-		case envelope.KindFinishReport:
-			// T784: a slice's oracle does not make the mission terminal.
-			return midWorkReportScope(report) == nil
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest, envelope.KindScoutReport, envelope.KindEscalation:
-			// 🎯T536.3: scout-report is a fog handoff, not product-done.
-			return false
-		}
-	}
-	s := strings.ToLower(strings.TrimSpace(report))
-	if s == "" {
+	switch envelope.ClassifyDone(report) {
+	case envelope.DoneYes:
+		// T784: a slice's oracle does not make the mission terminal when the
+		// finish-report still names remaining work in its payload.
+		return midWorkReportScope(report) == nil
+	case envelope.DoneNo, envelope.DoneUnknown:
+		return false
+	default:
 		return false
 	}
-	// 🎯T723 / 🎯T716: a reap needs an affirmative claim. Empty and the
-	// harness ack are classified no-claim; they never become a finish
-	// even if a later finish-shape mutation matches their vocabulary.
-	if ClassifyReportAsk(report) == AskNoClaim {
-		return false
-	}
-	if !hasFinishShape(s) {
-		return false
-	}
-	if hasForwardLookingPlan(report) {
-		return false
-	}
-	return !ReportAwaitsOverseer(report)
 }
 
 // finishedWorkReapReason classifies why a finished-work report is reaping.

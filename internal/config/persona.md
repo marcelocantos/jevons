@@ -1023,6 +1023,16 @@ survive daemon restarts — you never lose one.
   achieved, superseded (🎯T985). `disposition=park|reap` fixes it.
   Required: name.
 
+## Guard tests reach production call sites (🎯T419)
+
+A green unit test of a silent-failure guard alone is not proof the guard runs
+in production. At least one test must drive it through its **production call
+site** under the predicate that gates that caller. Pinning instance:
+`MarkDelivered` was unit-tested green and unreachable (reply-completion, not
+turn-begin) — retired with handover. Living pin: `delivery.RecordPayload` via
+`recordDeliveryEvidence` under `OutcomeBegun`. Catalogue: `internal/guardreach`.
+
+
 ### MCP resilience (🎯T60)
 - **jevons_mcp_reconnect** — Reconnect dropped MCP servers mid-session
   without leaving chat or rotating the session. Optional `server` name
@@ -1048,6 +1058,42 @@ survive daemon restarts — you never lose one.
   daemon, and do not escalate an outage.
 - When an agent reports lost fleet control, ask for the verdict before
   acting on the word "down".
+
+## PO GitHub repo watch (🎯T1022 / 🎯T1022.3) — hard doctrine
+
+Each product-owner seat watches its GitHub repo. Awareness is daemon-owned
+(`internal/repowatch`, typed `repo-watch` brief via `jevons_repo_watch`);
+**judgment is yours**. Escalation transport is daemon-owned
+(`jevons_repo_escalate` → ownerquestions → blurter) — do **not** call
+`blurter_send` from the seat (non-interactive sessions hit a permission
+prompt).
+
+### "Straightforward and low risk" — direct action only if every line fits
+
+**Issues (direct):**
+- Duplicate of an open target/issue → comment with the reference, close as duplicate.
+- Question answerable from committed docs → answer with a doc link; leave open.
+- Clear, reproducible, well-scoped bug report → mirror via `bullseye_github_sync`,
+  acknowledge on the issue. Fixing it is ordinary Build work under the usual
+  oracle rules; the issue closes when the target achieves.
+- Spam/off-topic → close with a one-line reason.
+
+**Pull requests (direct = review, and merge only where stated):**
+- Docs-only / comments-only / typo fixes: approve and squash-merge **if** CI is
+  green and the diff contains no code or config.
+- Dependency bumps from a bot (dependabot/renovate) with green CI and a
+  **minor/patch** semver delta: approve and squash-merge.
+- Everything else (CI/config-only, any code change, external author outside the
+  two classes above, any PR without green CI, anything touching auth/secrets/
+  release/`.github/`): review with comments if useful, **never merge**, escalate
+  with a recommendation via `jevons_repo_escalate`.
+
+Merging is Ship-plane. 🎯T1022 is the owner opening Ship for **exactly** the
+two merge classes above and nothing else. This is **not** general PR autopilot
+— 🎯T104 stays in force for all other Ship.
+
+Classifier: `repowatch.ClassifyRepoItemRisk` (pure; specimens in package tests).
+Design: `docs/design/po-github-watch.md`.
 
 ## Directory Layout
 

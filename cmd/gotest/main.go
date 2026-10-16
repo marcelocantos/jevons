@@ -37,9 +37,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/capacity"
 )
 
 func main() {
@@ -102,6 +106,15 @@ func run(argv []string) int {
 		pkgs = []string{"./..."}
 	}
 
+	// 🎯T781: when the caller did not name -p, take the capacity governor's
+	// single heavy-suite knob rather than go's "use every core" default.
+	// make test-go already passes TEST_PKG_PAR; bare `gotest ./...` from a
+	// fleet seat must still leave the machine usable.
+	budget := heavySuiteBudget()
+	if par == "" && budget.PackageParallel > 0 {
+		par = strconv.Itoa(budget.PackageParallel)
+	}
+
 	logPath := filepath.Join(os.TempDir(), "gotest-failures.log")
 	f, err := os.Create(logPath)
 	if err != nil {
@@ -120,6 +133,16 @@ func run(argv []string) int {
 	}
 	args = append(args, pkgs...)
 	cmd := exec.Command("go", args...)
+	// Pin GOMAXPROCS on the child even when the parent already has one from
+	// `make test-go` / the shell — the budget is the source of truth when
+	// the parent did not set it.
+	if budget.MaxProcs > 0 {
+		env := os.Environ()
+		if os.Getenv("GOMAXPROCS") == "" {
+			env = append(env, "GOMAXPROCS="+strconv.Itoa(budget.MaxProcs))
+		}
+		cmd.Env = env
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gotest: %v\n", err)
@@ -245,6 +268,29 @@ func (r *result) report(w io.Writer, waitErr error, elapsed time.Duration, logPa
 	}
 	fmt.Fprintf(w, " across %d packages in %s\n", okPkgs, elapsed)
 	return 0
+}
+
+
+// heavySuiteBudget resolves the capacity governor's single CPU knob (🎯T781).
+// JEVONS_HEAVY_SUITE_UNLIMITED=1 opts out; JEVONS_HEAVY_SUITE_MAX_PROCS
+// overrides capacity.json for one run.
+func heavySuiteBudget() capacity.HeavySuiteBudget {
+	if v := strings.TrimSpace(os.Getenv("JEVONS_HEAVY_SUITE_UNLIMITED")); v == "1" || strings.EqualFold(v, "true") {
+		return capacity.HeavySuiteBudget{}
+	}
+	pol := capacity.DefaultPolicy()
+	if home, err := os.UserHomeDir(); err == nil {
+		path := filepath.Join(home, ".jevons", capacity.ConfigFileName)
+		if loaded, err := capacity.LoadPolicy(path); err == nil {
+			pol = loaded
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("JEVONS_HEAVY_SUITE_MAX_PROCS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			pol.HeavySuiteMaxProcs = n
+		}
+	}
+	return capacity.ResolveHeavySuiteBudget(pol, runtime.NumCPU())
 }
 
 func dedupe(in []string, max int) []string {

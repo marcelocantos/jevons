@@ -20,11 +20,17 @@ func TestT627LaunchPrefersContextualRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	if !strings.Contains(body, "LaunchContext(context.Context, string)") {
-		t.Fatal("launchAgent dropped LaunchContext — Registry.Launch would hold the global mutex again")
+	// 🎯T674: product launch goes through LaunchRecoveringReported, which
+	// itself uses LaunchContext under the hood (see fleet.LaunchReconciledContext).
+	if !strings.Contains(body, "LaunchRecoveringReported") {
+		t.Fatal("launchAgent dropped LaunchRecoveringReported — missing exclusive-home remint (🎯T674)")
 	}
-	if !strings.Contains(body, "s.registry.Launch(name)") {
-		t.Fatal("legacy Launch fallback disappeared; keep it for the published pin")
+	caps, err := os.ReadFile("../fleet/provider_caps.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(caps), "LaunchContext") {
+		t.Fatal("LaunchReconciledContext dropped LaunchContext — Registry.Launch would hold the global mutex again")
 	}
 }
 

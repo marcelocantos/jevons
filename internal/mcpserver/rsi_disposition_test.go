@@ -165,3 +165,110 @@ func TestTargetFileQualityBar(t *testing.T) {
 		t.Fatalf("want downrank note on bare name, got %q", text)
 	}
 }
+
+
+// 🎯T333.1 — metrics surface reports usefulness rates distinct from
+// file/park/ignore, and action=usefulness records a score.
+func TestHandleRSIDispositionUsefulness(t *testing.T) {
+	s, coach := dispositionTestServer(t)
+	now := time.Now().UTC()
+	if err := coach.Dispositions().RecordDelivered([]rsi.Judgment{
+		{Fingerprint: "fp-u", Name: "useful gap"},
+		{Fingerprint: "fp-p", Name: "performative gap"},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	for fp, id := range map[string]string{"fp-u": "T1", "fp-p": "T2"} {
+		if _, err := coach.Dispositions().SetDisposition(rsi.SetDispositionArgs{
+			Fingerprint: fp, Disposition: rsi.DispositionFile,
+			TargetID: id, TargetCwd: "/repo", Now: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Explicit usefulness scores.
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"action":      "usefulness",
+		"fingerprint": "fp-u",
+		"usefulness":  rsi.UsefulnessImplementedStayedUseful,
+		"note":        "load compressed after implement",
+	}
+	res, err := s.handleRSIDisposition(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := rsiToolText(res); !strings.Contains(text, "implemented_stayed_useful") {
+		t.Fatalf("usefulness response: %q", text)
+	}
+	req.Params.Arguments = map[string]any{
+		"action":      "usefulness",
+		"fingerprint": "fp-p",
+		"usefulness":  rsi.UsefulnessNoEffect,
+	}
+	res, err = s.handleRSIDisposition(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := rsiToolText(res); !strings.Contains(text, "no_effect") {
+		t.Fatalf("performative response: %q", text)
+	}
+
+	req.Params.Arguments = map[string]any{"action": "metrics"}
+	res, err = s.handleRSIDisposition(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := rsiToolText(res)
+	if !strings.Contains(text, "usefulness") {
+		t.Fatalf("metrics must surface usefulness rates: %q", text)
+	}
+	if !strings.Contains(text, "useful=1") || !strings.Contains(text, "no_effect=1") {
+		t.Fatalf("metrics must distinguish useful vs performative: %q", text)
+	}
+	// Disposition rates still present and independent.
+	if !strings.Contains(text, "filed=2") {
+		t.Fatalf("disposition rates still required: %q", text)
+	}
+
+	req.Params.Arguments = map[string]any{"action": "list"}
+	res, err = s.handleRSIDisposition(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := rsiToolText(res); !strings.Contains(text, "usefulness=no_effect") {
+		t.Fatalf("list must show usefulness: %q", text)
+	}
+}
+
+func TestHandleRSICoachStatusIncludesUsefulness(t *testing.T) {
+	s, coach := dispositionTestServer(t)
+	now := time.Now().UTC()
+	if err := coach.Dispositions().RecordDelivered([]rsi.Judgment{
+		{Fingerprint: "fp-s", Name: "scored"},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coach.Dispositions().SetDisposition(rsi.SetDispositionArgs{
+		Fingerprint: "fp-s", Disposition: rsi.DispositionFile,
+		TargetID: "T9", TargetCwd: "/r", Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coach.Dispositions().SetUsefulness(rsi.SetUsefulnessArgs{
+		Fingerprint: "fp-s", Usefulness: rsi.UsefulnessNoEffect, Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.handleRSICoachStatus(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := rsiToolText(res)
+	if !strings.Contains(text, "usefulness") || !strings.Contains(text, "T333.1") {
+		t.Fatalf("coach_status must report usefulness (T333.1): %q", text)
+	}
+	if !strings.Contains(text, "no_effect=1") {
+		t.Fatalf("coach_status must show performative count: %q", text)
+	}
+}

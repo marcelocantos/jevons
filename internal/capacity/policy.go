@@ -42,6 +42,13 @@ type Policy struct {
 	// back to DefaultMaxPerClass. 0 = unbounded for that class.
 	MaxPerClass map[Class]int `json:"max_per_class,omitempty"`
 
+	// HeavySuiteMaxProcs is the single CPU budget for heavy test suites
+	// started under gate / gotest (🎯T781). It is GOMAXPROCS for the suite;
+	// package parallelism and niceness are derived from it (see
+	// ResolveHeavySuiteBudget). 0 = default: min(8, max(1, cores/2)).
+	// Not a per-suite constant — one knob shared with this governor.
+	HeavySuiteMaxProcs int `json:"heavy_suite_max_procs,omitempty"`
+
 	// LoadPerCoreCritical is the 1-minute load average per core at which the
 	// host itself is out of capacity (🎯T463). 0 falls back to
 	// DefaultLoadPerCoreCritical. Configurable and per-core on purpose: the

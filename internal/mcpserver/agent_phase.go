@@ -8,6 +8,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/seatstate"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T444 — A PHASE NOBODY LOOKED AT IS NOT "NEVER BRIEFED".
@@ -122,6 +123,12 @@ func (s *Server) agentPhase(d claudia.AgentDef, _ bool) string {
 	}
 	if st.Status != "" && st.Status != AgentStatusRunning {
 		return st.Status
+	}
+	// 🎯T783: broker InFlight is the row's truth about whether a turn is
+	// running. agent_list used to print idle/unknown from a stale Phase while
+	// Migrate refused "turn in flight" on the same seat.
+	if st.InFlight == seatstate.Yes {
+		return turnev.PhaseWorking.String()
 	}
 	if st.Phase.Positive() {
 		return st.Phase.String()

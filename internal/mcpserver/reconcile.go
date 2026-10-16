@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // reconcileFirst logs the first pass once, so the running daemon can be
@@ -54,9 +55,14 @@ func (s *Server) Reconcile() {
 	s.SweepSeatLoad()
 	s.SweepPostReapCommits()
 	s.sweepBornStuck()
+	s.sweepInert()
 	s.sweepSeatMCP() // 🎯T797
 
 	s.runFleetRecoverSweep(false)
 	s.TriggerIdlePressureSweep()
 	s.FlushWakeBatches()
+	// 🎯T404.2: unanswered questions with a default proceed after the silence window.
+	if n := s.SweepOwnerQuestionSilence(time.Time{}); n > 0 {
+		slog.Info("reconcile: owner-question silence retire", "retired", n)
+	}
 }

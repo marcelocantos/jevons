@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Thin Lean oracle for 🎯T863 — check / build / list-sorries.
+# Not a Jevons product bridge: shells lake + greps sorry, prints structured lines.
+set -euo pipefail
+export PATH="${HOME}/.elan/bin:${PATH}"
+
+usage() {
+  cat <<'U'
+Usage: scripts/lean-oracle <check|build|list-sorries|status> [probe-dir]
+  check         lake build (typecheck)
+  build         lake build (full)
+  list-sorries  list remaining 'sorry' occurrences with file:line
+  status        build + list-sorries; exit 0 only if build ok AND zero sorry
+U
+}
+
+cmd="${1:-status}"
+root="${2:-probes/t863-lean}"
+if [[ ! -d "$root" ]]; then
+  echo "oracle:error path_missing dir=$root"
+  exit 2
+fi
+
+# Resolve to absolute before cd
+case "$root" in
+  /*) abs="$root" ;;
+  *) abs="$(pwd)/$root" ;;
+esac
+cd "$abs"
+
+list_sorries() {
+  # Portable: no mapfile. rg may be absent — fall back to grep -R.
+  local hits
+  if command -v rg >/dev/null 2>&1; then
+    hits=$(rg -n --glob '*.lean' '(^|[^A-Za-z_])sorry([^A-Za-z_]|$)' . 2>/dev/null || true)
+  else
+    hits=$(grep -R -n -E '(^|[^A-Za-z_])sorry([^A-Za-z_]|$)' --include='*.lean' . 2>/dev/null || true)
+  fi
+  if [[ -z "${hits}" ]]; then
+    echo "oracle:sorries count=0"
+    return 0
+  fi
+  local n
+  n=$(printf '%s\n' "$hits" | wc -l | tr -d ' ')
+  echo "oracle:sorries count=$n"
+  printf '%s\n' "$hits" | sed 's/^/oracle:sorry /'
+  return 1
+}
+
+do_build() {
+  local out ec
+  set +e
+  out=$(lake build 2>&1)
+  ec=$?
+  set -e
+  if [[ $ec -eq 0 ]]; then
+    echo "oracle:build ok"
+    printf '%s\n' "$out" | tail -5
+    return 0
+  fi
+  echo "oracle:build fail exit=$ec"
+  printf '%s\n' "$out" | tail -40
+  return $ec
+}
+
+case "$cmd" in
+  -h|--help|help) usage; exit 0 ;;
+  check|build)
+    do_build
+    ;;
+  list-sorries)
+    list_sorries
+    ;;
+  status)
+    build_ok=0
+    if do_build; then
+      build_ok=1
+    fi
+    sorry_ok=0
+    if list_sorries; then
+      sorry_ok=1
+    fi
+    if [[ $build_ok -eq 1 && $sorry_ok -eq 1 ]]; then
+      echo "oracle:status GREEN"
+      exit 0
+    fi
+    echo "oracle:status RED"
+    exit 1
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

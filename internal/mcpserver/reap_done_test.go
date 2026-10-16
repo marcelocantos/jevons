@@ -12,26 +12,50 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
+
+
+// t7664Finish builds a valid finish-report for reap hermetics (🎯T766.4:
+// bare prose "Done." no longer reaps — the finish-report kind is the claim).
+func t7664Finish(target, sha, payload string) string {
+	if target == "" {
+		target = "T766.4"
+	}
+	if sha == "" {
+		sha = "abcdef0123456"
+	}
+	return envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       target,
+		SHA:          sha,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      payload,
+	})
+}
 
 func TestLooksLikeFinishedWorkReport(t *testing.T) {
 	cases := []struct {
+		name string
 		in   string
 		want bool
 	}{
-		{"", false},
-		{"still reading the tree", false},
-		{"Done. Mission complete.", true}, // 🎯T195 bare done still reaps
-		{"go test ./... PASS", false},     // evidence without claim
-		{"SHA abcdef0123456 landed", false},
-		{"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS", true},
-		{"finished — make test green", true},
-		{"complete with accepted risk: owner smoke residual (class-3)", true},
-		{"All finished, ready for review. hermetic TestReapDone green", true},
+		{"empty", "", false},
+		{"prose mid-work", "still reading the tree", false},
+		{"bare done prose (T766.4: unknown, not finished)", "Done. Mission complete.", false},
+		{"evidence without envelope", "go test ./... PASS", false},
+		{"sha prose without envelope", "SHA abcdef0123456 landed", false},
+		{"done+sha prose without envelope", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS", false},
+		{"finish-report envelope", t7664Finish("T165", "abcdef0123456", "Done. Mission complete."), true},
+		{"finish-report with oracle payload", t7664Finish("T165", "abcdef0123456", "go test ./internal/mcpserver -run T165 PASS"), true},
+		{"accepted-risk envelope", envelope.Format(&envelope.Message{
+			Kind: envelope.KindFinishReport, Target: "T31.1", Risk: envelope.RiskClass3,
+			SilentLedger: envelope.SilentLedgerEmpty, Payload: "owner smoke residual",
+		}), true},
 	}
 	for _, tc := range cases {
 		if got := LooksLikeFinishedWorkReport(tc.in); got != tc.want {
-			t.Errorf("LooksLikeFinishedWorkReport(%q)=%v want %v", tc.in, got, tc.want)
+			t.Errorf("%s: LooksLikeFinishedWorkReport=%v want %v", tc.name, got, tc.want)
 		}
 	}
 }
@@ -85,7 +109,7 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 	}
 
 	// Done path: finished report with oracle evidence → stop+Remove.
-	report := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS"
+	report := t7664Finish("T165", "abcdef0123456", "go test ./internal/mcpserver -run T165 PASS")
 	reaped, err := ReapDoneWorkAgent(reg, nil, "jv-t165-reap-done", report, isO)
 	if err != nil {
 		t.Fatal(err)
@@ -132,17 +156,18 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 	}
 }
 
-// 🎯T195: imperfect (bare done) completion reports still reap work leaves.
-// Overseer may still refuse bare done for acceptance (T31.1); reaping is hygiene.
+// 🎯T195 / 🎯T766.4: a finish-report envelope (even with a bare payload claim)
+// reaps work leaves. Unenveloped "Done." no longer reaps — the envelope is the
+// claim. Overseer acceptance still requires oracle/risk under T31.1.
 func TestT195BareDoneReapsWorkAgent(t *testing.T) {
 	reg := regWithTree(t)
 	// "worker" from fixture is purpose-empty (defaults to work) and not durable.
-	reaped, err := ReapDoneWorkAgent(reg, nil, "worker", "Done. All finished.", func(string) bool { return false })
+	reaped, err := ReapDoneWorkAgent(reg, nil, "worker", t7664Finish("T195", "abcdef0123456", "Done. All finished."), func(string) bool { return false })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reaped {
-		t.Fatal("bare done must reap work implementer (T195)")
+		t.Fatal("finish-report envelope must reap work implementer (T195/T766.4)")
 	}
 	if reg.Def("worker") != nil {
 		t.Fatal("worker still registered after bare-done reap")
@@ -178,8 +203,8 @@ func TestT195ImperfectDoneReportHermetic(t *testing.T) {
 		t.Fatal("stop must not deregister (T165/T195 residual)")
 	}
 
-	// Imperfect done report (no oracle markers) → stop+Remove.
-	report := "Done. Mission complete. Target achieved."
+	// Finish-report with oracle field (payload may still say "Done.") → stop+Remove.
+	report := t7664Finish("T195", "abcdef0123456", "Done. Mission complete. Target achieved.")
 	reaped, err := ReapDoneWorkAgent(reg, nil, "jv-t195-reap-imperfect", report, isO)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +255,7 @@ func TestT165HasDescendantsDoesNotReap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	report := "Done. SHA abcdef0123456. go test ./... PASS"
+	report := t7664Finish("T165", "abcdef0123456", "go test ./... PASS")
 	reaped, err := ReapDoneWorkAgent(reg, nil, "boss-slice", report, func(n string) bool { return n == "jevons" })
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +297,7 @@ func TestT165MaybeReapOnTerminalSink(t *testing.T) {
 	sink := s.agentEventSink("leaf-w")
 	sink(claudia.Event{
 		Type:       "assistant",
-		Text:       "Done. SHA abcdef0123456. hermetic TestT165 PASS",
+		Text:       t7664Finish("T165", "abcdef0123456", "hermetic TestT165 PASS"),
 		StopReason: "end_turn",
 	})
 	if reg.Def("leaf-w") != nil {
@@ -281,7 +306,7 @@ func TestT165MaybeReapOnTerminalSink(t *testing.T) {
 	if len(notified) == 0 {
 		t.Fatal("overseer must receive done report before reap")
 	}
-	if !strings.Contains(notified[0], "Done. SHA") {
+	if !strings.Contains(notified[0], "finish-report") && !strings.Contains(notified[0], "abcdef0123456") {
 		t.Fatalf("notify payload: %q", notified[0])
 	}
 }

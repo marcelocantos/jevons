@@ -329,6 +329,29 @@ allows it; until then this convention plus jevons MCP tools is the
 enforced path. Brief every new agent with target IDs and ownership —
 never bare "go".
 
+### Guard tests reach production call sites (🎯T419)
+
+A green unit test of a guard alone is not proof the guard runs in production.
+For any guard whose failure is silent (double-seed prevention, delivery
+evidence, exclusive claim, queue resolve, treeguard ledger discard), at least
+one test must drive it through its **real caller under the predicate that gates
+that caller** — not by invoking the guarded function directly.
+
+**Pinning instance (2026-08-10):** `handover.Store.MarkDelivered` had
+`TestStoreMarkDeliveredPreventsDoubleSeeding` green and was never reached:
+`migrate.go` called it only when `Claudia.Deliver` returned nil, and Deliver
+waited on reply completion inside a 10-minute timeout, not turn-begin. A
+delivered seed stayed pending. That path is retired (in-place switch, claudia
+🎯T195). The living successor is `delivery.RecordPayload` via
+`recordDeliveryEvidence` under `OutcomeBegun` —
+`TestT419DeliveryEvidenceReachedThroughBegunSend`.
+
+Standing catalogue and check: `internal/guardreach`. Doctrine ratchet:
+`scripts/docratchet` TestT419. Audit residuals:
+`docs/audits/guard-call-site-reachability-2026-10.md` (report, do not silently
+fix). Related: 🎯T416 / 🎯T417 / 🎯T418.
+
+
 ### Same-repo fan-out: worktrees and one integrator (🎯T254.2)
 
 A work agent started in a repo that already holds another work agent (in
