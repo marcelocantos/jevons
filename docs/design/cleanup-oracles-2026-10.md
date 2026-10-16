@@ -100,18 +100,80 @@ snapshot. The transport owns delivery and results, while Jevons remains the sole
 fleet authority. These are design constraints for the existing receipt and
 restart work, not evidence that a durable tool transport has been implemented.
 
-The owner proposed sqlpipe between a standalone Jevons MCP service and the
-Jevons daemon. The inspected local sqlpipe revision `f48dbe4` describes a
-file-backed SQLite replication library with bidirectional, disjoint table
-ownership and reconnect convergence. It is a credible substrate for a durable
-mailbox: the MCP service owns request rows, Jevons owns execution/result rows,
-and sqlpipe synchronizes those facts after either side reconnects. Replication
-does not itself execute commands or make external effects exactly-once; the
-existing operation identity, idempotency/reconciliation, execution-time
-preconditions and bounded retention requirements still apply. A request must
-be committed before acceptance, and incoming change notifications are hints to
-query pending work, not one-shot delivery events. No sqlpipe dependency or
-standalone MCP runtime has been added or certified by this source assessment.
+## Adopted sqlpipe design: shared control plane and per-seat pairs
+
+The owner adopted this design on 2026-10-16. Sqlpipe synchronizes typed intents
+and facts, with receiver-side query subscriptions. This supersedes the earlier
+mailbox-only candidate framing. Frozen sqlpipe commit
+`f48dbe4ce6b5b0804b7487548ae6bc6239c6fe52` documents disjoint table ownership,
+file-backed SQLite, convergence and subscriptions; the shared checkout's
+uncommitted work is not the reference. Adoption is a target/design decision,
+not evidence that the integration has been implemented.
+
+### Shared control plane — 🎯T1074.9
+
+One database pair connects Jevons and Claudia. Each database contains the
+agreed schema, but each table has exactly one writer:
+
+| Tables | Authoritative writer | Reader |
+|---|---|---|
+| Desired seats/configuration, grants and explicit control intents | Jevons | Claudia |
+| Observed runtime status, operation outcomes and attributed usage facts | Claudia | Jevons |
+
+Seat creation is an inserted desired-seat row; configuration/state changes
+update that row. Claudia reconciles desired state against its independent OMP
+runtimes. Current status updates a stable row; usage and history required by
+the contract are append-only identified facts. Credentials are not replicated.
+Retained public API facades use the same reconciliation path.
+
+Desired state can supersede intermediate revisions. An action that must be
+individually observed, such as interrupting a particular turn, instead has its
+own operation ID, target generation and durable outcome. Replication is not
+authorization: execution checks effective grants and current preconditions.
+An outage does not reset spent allowance or imply fresh permission.
+
+### Per-seat communication — 🎯T1074.10
+
+Each durable seat has a database pair between its independently hosted Jevons
+MCP adapter and the Jevons daemon. The MCP side owns seat-originated tool
+intents; Jevons owns execution/status/results and the relevant exposed facts.
+For N seats this is N pairs (2N databases and N logical bidirectional links),
+plus the one shared control-plane pair. A shared MCP process may host the
+pairs; no process per pair is required. Their lifetime follows durable seat
+identity, surviving reconnects and in-place provider switches.
+
+A daemon-dependent call commits its intent before acknowledgment and keeps
+the original invocation waiting while Jevons is absent. Reconnection queries
+outstanding durable state, then subscriptions wake further reconciliation.
+A lost result does not require another model turn. Replication does not itself
+make external effects exactly-once: operation identity, idempotency or
+authoritative reconciliation, generation checks and explicit uncertainty are
+still necessary. Pure/offline utilities retain their existing execution/store
+owners; generic agent operations remain Claudia-owned.
+
+### Conversation projections and simplicity — 🎯T1074.7
+
+Conversation delivery uses a growing, identified message projection with
+explicit in-progress/completed/failed state. Receivers query and subscribe to
+the projection for initial load, incremental updates and reconnect catch-up.
+OMP remains the sole canonical session journal; service/projection databases
+do not become another history or compaction engine.
+
+Sqlpipe currently extracts SQLite changesets, which contain changed text
+values rather than appended suffixes. The actual producer/wire/receiver path
+must measure long-message amplification, batch updates at a declared
+responsive cadence and keep bounds explicit. More elaborate storage is not
+introduced before that measurement warrants it.
+
+Use small typed tables and sqlpipe's existing replication/subscription API.
+Do not build a generic message bus, parallel executor, second fleet registry,
+whole-fleet copy per seat or extra autonomous planner. Retention/backpressure
+must preserve unresolved obligations. Tests cover actual process reopen,
+consumer absence, dropped/duplicate delivery, stale generations and durable
+results through production callers. The bounded final pilot consumes both new
+targets and the updated receipt, usage, admission and conversation contracts.
+
+## SDK foundation evidence and remaining integration
 
 The SDK foundation is now implemented in isolated Claudia source
 `27d643e78a9f`, independently reviewed and integrated locally as
