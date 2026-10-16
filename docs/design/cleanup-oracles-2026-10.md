@@ -38,6 +38,52 @@ required. The legacy terminal endpoint has no React caller and is removed.
 
 Clean focused withdrawal gate `GREEN b69ad8a6` measured Jevons `7c4669fba06644067ff989935aef72129df5e126` against immutable Claudia `8d69ef8`, with read-only modfile `/tmp/jevons-neutral-config-pair.mod` (SHA-256 `f1b6c70aaf931583cf3c4ee53c7de96359ee026c94877d921ddcc7fa77a0cc8e`). It exercised the actual refusal and provider-selection call sites. Log SHA-256: `ad931b4298422bc7f24a003a27f83b8af768b2702bb11bf6ea24d5bb35eb26c0`. The separately reviewed neutral broker configuration is integrated as `ed1ef4f5`; source `1c0bb635` passed launch-configuration `8c474af6`, all-package build `85e5677a` and actual usage-producer integration `b72a1e59`. These component results do not supersede the full-gate failure above.
 
+## Runtime boundary reassessment: OMP coding-agent SDK
+
+Owner discussion on 2026-10-16 reopened the choice of bare `pi-agent-core`.
+Source inspection of `pi-coding-agent` at `v18.2.11` found a public embeddable
+`AgentSession` and `SessionManager`, not only a terminal application. The
+session constructor accepts an existing configured core Agent; the convenience
+factory builds its own. Session persistence, compaction, provider/model changes
+and tree navigation already have upstream owners. Claudia's handwritten
+`History`/`Maintenance` and competing session loop are therefore candidates for
+replacement rather than further expansion.
+
+The proposed boundary is OMP session execution, Claudia shared hosting/lifecycle
+and thin cross-process contracts, and Jevons fleet intent/communication. This is
+a design recommendation, not an implemented or verified SDK migration. No
+finding establishes a fundamental requirement to retain bare-core orchestration.
+Keep adapter obligations narrow: exact generation admission and existing-history
+migration, durable request acknowledgment/reconnect, physical-attempt usage
+observation, explicit tool policy, and the existing trusted credential boundary.
+Those obligations do not justify maintaining another compaction/history engine.
+
+Relevant source seams and limits:
+
+- `AgentSessionConfig.agent` accepts the instrumented core Agent, while the
+  session owns turn-end and tool hooks. Replace the old loop; do not stack it.
+- `SessionManager.appendCustomEntry` can hold non-context facts, but persistence
+  failures can be latched rather than thrown by append. Receipt acceptance must
+  wait for a successful durability barrier such as `flush()`.
+- `sideStreamFn` covers summary/side requests; native compaction callers still
+  require forwarding the physical-attempt observer. Usage totals alone are not
+  evidence of complete attempt accounting.
+- Isolated settings and explicit tools/discovery are essential. Default MCP,
+  memory, retries and internal subagents must not silently introduce another
+  fleet policy or unbudgeted work source. Concurrent seats need isolated registry
+  identity, supported by the SDK's explicit `agentRegistry` option.
+- OMP also contains credential-storage and auth-broker facilities. Credential
+  management is not inherently a reason for a second implementation; preserve
+  the owner's trusted macOS credential access while assessing reuse separately.
+
+Review sources: [SDK](https://github.com/can1357/oh-my-pi/blob/v18.2.11/packages/coding-agent/src/sdk.ts),
+[session constructor contract](https://github.com/can1357/oh-my-pi/blob/v18.2.11/packages/coding-agent/src/session/agent-session-types.ts),
+[session manager](https://github.com/can1357/oh-my-pi/blob/v18.2.11/packages/coding-agent/src/session/session-manager.ts).
+Before changing the runtime, prove restart/resume, same-session switching,
+rewind, duplicate-request recovery, policy enforcement and complete usage through
+one isolated SDK-backed seat. Existing legacy-removal commits remain useful;
+their focused greens are not evidence for this proposed replacement.
+
 ## Baseline preservation
 
 The initial committed Jevons baseline is `8617fb0f83973286e51be6d343046b164fe75384`; Claudia is `11144a5205a378cc6e78f062836f1e50b4677287`. The sibling `go.work` is not part of the accepted dependency contract. Checks use `GOWORK=off`.
