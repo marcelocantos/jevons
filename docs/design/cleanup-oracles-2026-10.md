@@ -63,6 +63,18 @@ Old Jevons history import and compatibility with the custom SeatStore format
 are explicitly unnecessary. Use one new OMP-owned session store; leave parked
 stores untouched. Newly acknowledged work still needs restart durability.
 
+The owner clarified that **persistence primarily means execution continuity**:
+agents, active local tools and independently hosted MCP calls keep running while
+Jevons reboots. Claudia must own those runtimes and connections independently of
+its clients; saving and reopening a transcript is not sufficient. The restart
+oracle must stop the consumer during an active invocation, observe completion
+while it is absent, then reconnect to the same execution and retrieve its result
+without a second invocation or effect. OMP's session journal is reused for disk
+durability, separately from this process-lifetime guarantee. A tool implemented
+inside Jevons cannot run while that process is absent; its dependency outage and
+uncertain effects need durable operation identity, bounded waiting and outcome
+reconciliation, not a synthetic failure followed by blind model/tool retries.
+
 Relevant source seams and limits:
 
 - `AgentSessionConfig.agent` accepts the instrumented core Agent, while the
