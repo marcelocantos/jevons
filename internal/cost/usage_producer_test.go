@@ -25,7 +25,7 @@ import (
 // JEVONS_USAGE_INTEGRATION_CLAUDIA=/path/to/claudia bin/gate -- go test
 // -mod=readonly -modfile=/tmp/paired.mod -race ./internal/cost
 // -run '^TestUsageProducerCanonicalHistoryCatchUp$' -count=1
-// The provider fixture executes the real seat/Responses parser with fake fetch;
+// The provider fixtures execute the real seat, maintenance, and provider parsers with fake fetch;
 // the actual sidecar only handles provider-free discovery and history queries.
 func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 	claudiaRoot := os.Getenv("JEVONS_USAGE_INTEGRATION_CLAUDIA")
@@ -40,6 +40,25 @@ func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 	if err != nil {
 		t.Fatal("enabled integration requires Bun: ", err)
 	}
+	for _, fixture := range []canonicalUsageFixture{
+		{name: "responses_retry", script: "sidecar/testdata/provider-usage-producer.ts", provider: "xai-oauth", input: 38, output: 5, fresh: 31, cache: 7, consumption: 43, invocations: 1, kinds: []string{"model", "model"}},
+		{name: "openai_compaction", script: "sidecar/testdata/native-usage-producer.ts", args: []string{"success", "openai"}, provider: "openai", input: 128, output: 11, fresh: 81, cache: 47, consumption: 139, invocations: 2, kinds: []string{"compaction", "model"}},
+		{name: "codex_compaction", script: "sidecar/testdata/native-usage-producer.ts", args: []string{"success", "codex"}, provider: "openai-codex", input: 128, output: 11, fresh: 81, cache: 47, consumption: 139, invocations: 2, kinds: []string{"compaction", "model"}},
+	} {
+		t.Run(fixture.name, func(t *testing.T) { checkCanonicalUsageProducer(t, claudiaRoot, bun, fixture) })
+	}
+}
+
+type canonicalUsageFixture struct {
+	name, script, provider                   string
+	args                                     []string
+	input, output, fresh, cache, consumption int64
+	invocations                              int
+	kinds                                    []string
+}
+
+func checkCanonicalUsageProducer(t *testing.T, claudiaRoot, bun string, want canonicalUsageFixture) {
+	t.Helper()
 	// macOS Unix-domain socket names must fit its short pathname limit.
 	root, err := os.MkdirTemp("/tmp", "jv-usage-")
 	if err != nil {
@@ -49,13 +68,13 @@ func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	spoolRoot := filepath.Join(root, "lost-spool")
-	fixture := exec.CommandContext(ctx, bun, "sidecar/testdata/provider-usage-producer.ts", root)
+	fixture := exec.CommandContext(ctx, bun, append([]string{want.script, root}, want.args...)...)
 	fixture.Dir = claudiaRoot
 	// Whitelist process setup only: no inherited credentials, proxy settings,
 	// provider switches, or home configuration can affect the fake transport.
 	fixture.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + root, "JEVONS_SPOOL_DIR=" + spoolRoot}
 	if output, err := fixture.CombinedOutput(); err != nil {
-		t.Fatalf("actual Responses producer: %v\n%s", err, output)
+		t.Fatalf("actual usage producer: %v\n%s", err, output)
 	}
 	// Lose every emitted event and spool mirror. Only canonical History may
 	// recover the usage; no producer output is passed to Jevons below.
@@ -125,9 +144,10 @@ func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 	assertUsage := func() {
 		t.Helper()
 		got, err := store.StructuredUsage(ctx, time.Unix(0, 0), time.Now().Add(time.Hour))
-		// Frozen raw Responses specimens: inclusive input 10+28, output 1+4,
-		// fresh input 10+21, cached input 0+7. Adding cache to 38 would be wrong.
-		if err != nil || got.Calls != 2 || got.KnownInputTotal != 38 || got.Known.Output != 5 || got.Known.Input != 31 || got.Known.CacheRead != 7 || got.KnownConsumptionTokens() != 43 {
+		// Frozen wire specimens: retries consume 38 inclusive input + 5 output;
+		// native compaction plus an ordinary turn consume 128 + 11. The
+		// separately exposed cache buckets must not be added to inclusive input.
+		if err != nil || got.Calls != 2 || got.KnownInputTotal != want.input || got.Known.Output != want.output || got.Known.Input != want.fresh || got.Known.CacheRead != want.cache || got.KnownConsumptionTokens() != want.consumption {
 			t.Fatalf("actual producer usage lost or double-counted: %+v, %v", got, err)
 		}
 		if got.IncompleteCalls != 0 || got.UnknownInputTotal != 0 || got.UnknownOutput != 0 || got.UnknownCost != 2 {
@@ -192,7 +212,8 @@ func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids := map[string]bool{}
-	var invocation string
+	invocations := map[string]bool{}
+	var kinds []string
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
@@ -205,15 +226,12 @@ func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantRefs := []claudia.UsageRequestRef{{RequestID: "logical-A", AttemptID: "attempt-A"}}
-		if fact.Coverage != "provider_attempt" || fact.CallID == "" || fact.CallID != fact.ProviderAttemptID || fact.InvocationID == "" || !reflect.DeepEqual(fact.Requests, wantRefs) {
+		if fact.Coverage != "provider_attempt" || fact.CallID == "" || fact.CallID != fact.ProviderAttemptID || fact.InvocationID == "" || fact.Seat != "seat" || fact.SessionID != "generation" || fact.TurnID != "turn-A" || fact.Provider != want.provider || fact.State != "completed" || !reflect.DeepEqual(fact.Requests, wantRefs) {
 			rows.Close()
 			t.Fatalf("producer attribution lost: %+v", fact)
 		}
-		if invocation != "" && fact.InvocationID != invocation {
-			rows.Close()
-			t.Fatal("hidden retry lost enclosing invocation")
-		}
-		invocation = fact.InvocationID
+		invocations[fact.InvocationID] = true
+		kinds = append(kinds, fact.Kind)
 		ids[fact.CallID] = true
 	}
 	if err := rows.Err(); err != nil {
@@ -221,8 +239,8 @@ func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows.Close()
-	if len(ids) != 2 {
-		t.Fatal("physical retry identities were merged")
+	if len(ids) != 2 || len(invocations) != want.invocations || !reflect.DeepEqual(kinds, want.kinds) {
+		t.Fatalf("physical attempts, invocation grouping, or compaction attribution changed: ids=%v invocations=%v kinds=%v", ids, invocations, kinds)
 	}
 
 	if err := store.Close(); err != nil {
