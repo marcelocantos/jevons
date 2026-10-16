@@ -252,15 +252,8 @@ func TestT527ParkedStalledBacklogHasNoInterruptPrescription(t *testing.T) {
 
 	s.SweepSendBacklogs()
 
-	text := strings.Join(up.all(), "\n")
-	if !containsLine(up.all(), "Stalled backlog") {
-		t.Fatalf("parked stalled backlog raised no notice; overseer saw %q", text)
-	}
-	if strings.Contains(text, "interrupt=true") {
-		t.Fatalf("parked backlog prescribed interrupt=true — fights T414 park; overseer saw %q", text)
-	}
-	if !strings.Contains(text, "intentional stand-down") && !strings.Contains(text, "stood down") {
-		t.Fatalf("parked backlog did not name the park; overseer saw %q", text)
+	if got := up.all(); len(got) != 0 {
+		t.Fatalf("parked backlog prompted a model despite requiring no action: %v", got)
 	}
 	if depth := observedPendingSends(s, agent); depth != 3 {
 		t.Fatalf("depth = %d; want 3 — park holds the queue, never drops it", depth)

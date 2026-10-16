@@ -118,21 +118,25 @@ func (s *Server) ReportRecoveredBacklog() {
 	if len(backlogs) == 0 {
 		return
 	}
-	now := time.Now()
+	now := s.sweepClock()
 	var lines []string
+	var keys []string
 	total := 0
 	for _, b := range backlogs {
-		total += b.Depth
-		lines = append(lines, b.Describe(now))
 		slog.Info("🎯T418 recovered a queued message the last daemon accepted",
 			"component", "agent_send",
 			"agent", b.Agent,
 			"queued", b.Depth,
 			"oldest_age", b.OldestAge(now).Round(time.Second).String())
-	}
-	keys := make([]string, 0, len(backlogs))
-	for _, b := range backlogs {
+		if s.backlogHeldByIntent(b.Agent) {
+			continue
+		}
+		total += b.Depth
+		lines = append(lines, b.Describe(now))
 		keys = append(keys, heldBacklogKey(b))
+	}
+	if len(lines) == 0 {
+		return
 	}
 	s.notifyFleetHealth(strings.Join(keys, ","), fmt.Sprintf(
 		"Recovered %d queued message(s) with outstanding delivery obligations: %s. "+
@@ -252,6 +256,13 @@ func (s *Server) SweepSendBacklogs() {
 	}
 	now := s.sweepClock()
 	for _, b := range backlogs {
+		// A deliberate hold is status, including an uncertain attempt. Keep
+		// its durable obligation readable; no receipt guess or model prompt
+		// can lift the intent. Reaped recovery/routing remains a separate case.
+		if s.backlogHeldByIntent(b.Agent) {
+			s.reportStalledBacklog(b, now, "held by fleet intent")
+			continue
+		}
 		switch {
 		case b.Uncertain > 0:
 			// An attempt nobody could confirm in the window may have been
@@ -442,15 +453,16 @@ func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
 	}
 }
 
-// reportStalledBacklog names a queue that has stopped moving. It fires once the
-// head has been waiting longer than StalledBacklogAfter and then at most once
-// per sweep, because an alarm that fires for the normal state of the world is
-// not loud (🎯T426): a queue thirty seconds behind a working agent is a queue
-// doing its job.
-//
-// 🎯T527: when fleet intent says the agent should not be running (parked,
-// blocked, reaped), the notice names that stand-down and does NOT prescribe
-// interrupt=true — interrupting a deliberate park fights 🎯T414.
+// backlogHeldByIntent distinguishes intentional no-action holds from reaped
+// seats whose pending obligations may still need routing or one recovery alert.
+func (s *Server) backlogHeldByIntent(name string) bool {
+	dec := s.AllowFleetControl(name, fleetintent.ControlDeliverStart)
+	return !dec.Allow && dec.Blocking != fleetintent.Reaped
+}
+
+// reportStalledBacklog names a queue waiting longer than StalledBacklogAfter.
+// 🎯T952: a deliberately stood-down seat is durable status, not a request
+// for the overseer to spend another turn confirming that no action is needed.
 func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string) {
 	age := b.OldestAge(now)
 	if age < StalledBacklogAfter {
@@ -470,13 +482,6 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 			"oldest_age", age.Round(time.Second).String(),
 			"reason", reason,
 			"intent", dec.Reason)
-		s.notifyFleetHealth(heldBacklogKey(b), fmt.Sprintf(
-			"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s. "+
-				"Agent is stood down (%s; %s) — intentional stand-down; messages stay on disk until "+
-				"the park is lifted (jevons_fleet_intent name=%q state=working). "+
-				"No recovery action: a deliberate park is not a stuck turn.",
-			b.Agent, b.Depth, age.Round(time.Second),
-			fleetintent.Describe(dec.Blocking), dec.Reason, b.Agent))
 		return
 	}
 
