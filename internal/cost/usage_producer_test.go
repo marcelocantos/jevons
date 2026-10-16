@@ -133,6 +133,27 @@ func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
 		if got.IncompleteCalls != 0 || got.UnknownInputTotal != 0 || got.UnknownOutput != 0 || got.UnknownCost != 2 {
 			t.Fatalf("availability changed: %+v", got)
 		}
+		// Freeze the report clock to the observed facts, not host scheduling.
+		// A fixture spanning local midnight legitimately has a smaller today.
+		var last string
+		if err := store.db.QueryRowContext(ctx, `SELECT MAX(ts) FROM usage_calls`).Scan(&last); err != nil {
+			t.Fatal(err)
+		}
+		asOf, err := time.Parse(usageTimeLayout, last)
+		if err != nil {
+			t.Fatal(err)
+		}
+		asOf = asOf.In(time.Local).Add(time.Second)
+		midnight := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, asOf.Location())
+		today, err := store.StructuredUsage(ctx, midnight, asOf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		monitor := NewMonitor(&MonitorArgs{Store: store, Config: DefaultBudgetConfig, Now: func() time.Time { return asOf }})
+		snap, err := monitor.Snapshot()
+		if err != nil || snap.StructuredUsage != got || snap.StructuredUsageToday != today {
+			t.Fatalf("cost API did not expose canonical provider facts: %+v, %v", snap, err)
+		}
 		if cursor, err := store.UsageCursor(ctx, "seat", "generation"); err != nil || cursor != 4 {
 			t.Fatalf("canonical cursor=%d err=%v", cursor, err)
 		}

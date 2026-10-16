@@ -31,6 +31,55 @@ func usagePair(call string, seq uint64) (claudia.UsageFact, claudia.UsageFact) {
 	return start, final
 }
 
+func TestMonitorStructuredUsageKeepsUnknownAndLegacySeparate(t *testing.T) {
+	s, err := OpenStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	start, final := usagePair("measured", 1)
+	unfinished, _ := usagePair("unfinished", 3)
+	if _, err := s.InsertEvents([]*Event{
+		{UsageFact: &start}, {UsageFact: &final}, {UsageFact: &unfinished},
+		{UsageFailure: &UsageFailure{Seat: "worker", At: testNow, Message: "observation lost"}},
+		// This legacy estimate may describe the very same provider call.
+		{Timestamp: testNow, SessionID: "generation", RequestID: "legacy", Model: "fixture", Usage: Usage{Input: 21, Output: 4}, CostUSD: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := testNow.Add(time.Minute)
+	m := NewMonitor(&MonitorArgs{Store: s, Config: DefaultBudgetConfig, Now: func() time.Time { return now }})
+	snap, err := m.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := snap.StructuredUsage
+	if u.Calls != 2 || u.IncompleteCalls != 1 || u.ObservationFailures != 1 || u.UnknownInputTotal != 2 || u.UnknownOutput != 1 || u.UnknownCost != 2 || u.KnownConsumptionTokens() != 25 {
+		t.Fatalf("monitor erased unknowns or counted overlapping legacy evidence: %+v", u)
+	}
+	if snap.StructuredUsageToday != u || snap.SpentTodayUSD != 2 || u.APIEquivalentCostUSD != 0 {
+		t.Fatalf("daily observation or legacy estimate changed: %+v", snap)
+	}
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Usage struct {
+			Calls       int64 `json:"calls"`
+			UnknownCost int64 `json:"unknown_cost_calls"`
+		} `json:"structured_usage"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil || wire.Usage.Calls != 2 || wire.Usage.UnknownCost != 2 {
+		t.Fatalf("cost API lost availability: %s, %v", raw, err)
+	}
+	now = now.Add(DefaultBudgetConfig().Window.Std())
+	snap, err = m.Snapshot()
+	if err != nil || snap.StructuredUsage.Calls != 0 || snap.StructuredUsageToday != u {
+		t.Fatalf("window aging changed daily observations: %+v, %v", snap, err)
+	}
+}
+
 func TestStructuredUsageReplayAfterLiveFinalAndRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "usage.db")

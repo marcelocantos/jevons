@@ -180,14 +180,20 @@ func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudia.UsageFact) (boo
 // Reasoning is a subset of output and context is a separate measurement;
 // neither is added to consumption. No subscription quota is inferred here.
 type StructuredUsage struct {
-	Known                                                                          Usage
-	APIEquivalentCostUSD                                                           float64
-	Calls, IncompleteCalls                                                         int64
-	UnknownInput, UnknownOutput, UnknownCacheCreate, UnknownCacheRead, UnknownCost int64
-	ObservationFailures                                                            int64
+	Known                Usage   `json:"known"`
+	APIEquivalentCostUSD float64 `json:"api_equivalent_cost_usd"`
+	Calls                int64   `json:"calls"`
+	IncompleteCalls      int64   `json:"incomplete_calls"`
+	UnknownInput         int64   `json:"unknown_input_calls"`
+	UnknownOutput        int64   `json:"unknown_output_calls"`
+	UnknownCacheCreate   int64   `json:"unknown_cache_create_calls"`
+	UnknownCacheRead     int64   `json:"unknown_cache_read_calls"`
+	UnknownCost          int64   `json:"unknown_cost_calls"`
+	ObservationFailures  int64   `json:"observation_failures"`
 	// Prefer observed inclusive input over the disjoint bucket sum, never
 	// both. Without either a total or every bucket, this is a lower bound.
-	KnownInputTotal, UnknownInputTotal int64
+	KnownInputTotal   int64 `json:"known_input_total"`
+	UnknownInputTotal int64 `json:"unknown_input_total_calls"`
 }
 
 func (u StructuredUsage) KnownConsumptionTokens() int64 {

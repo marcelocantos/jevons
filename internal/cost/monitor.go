@@ -4,6 +4,7 @@
 package cost
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -106,6 +107,10 @@ type Snapshot struct {
 	// Kept separate from spend: a recent spool poll cannot certify history
 	// coverage, and unknown usage is not a zero-cost event.
 	Collector *CollectorHealth `json:"collector,omitempty"`
+	// Canonical provider observations are separate from legacy transcript
+	// estimates above. They may overlap; never add these totals together.
+	StructuredUsage      StructuredUsage `json:"structured_usage"`
+	StructuredUsageToday StructuredUsage `json:"structured_usage_today"`
 }
 
 // MonitorArgs parameterises NewMonitor. Store and Config are required.
@@ -210,6 +215,14 @@ func (m *Monitor) Snapshot() (*Snapshot, error) {
 	// single-host system and the owner's day is the billing rhythm that
 	// matters here.
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	snap.StructuredUsage, err = m.store.StructuredUsage(context.Background(), from, now)
+	if err != nil {
+		return nil, fmt.Errorf("provider usage window: %w", err)
+	}
+	snap.StructuredUsageToday, err = m.store.StructuredUsage(context.Background(), midnight, now)
+	if err != nil {
+		return nil, fmt.Errorf("provider usage today: %w", err)
+	}
 	snap.SpentTodayUSD, err = m.store.SpentUSD(midnight, now)
 	if err != nil {
 		return nil, err
