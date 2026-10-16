@@ -7,31 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/seatstate"
-	"github.com/marcelocantos/jevons/internal/spool"
 )
-
-// RemintSubscription points a fleet seat at the Oh My Pi sidecar (🎯T866.6).
-// Claude/Codex/Grok ids become anthropic/openai-codex/xai-oauth. Cursor
-// stays cursor. Launch talks to the sidecar under those ids.
-// A seat with no dated-spool history is dematerialized so RequireResume
-// does not look for a vendor JSONL the sidecar will not write.
-func RemintSubscription(def *claudia.AgentDef, spoolDir string) bool {
-	if def == nil || !subscriptionPlan(def.Provider) {
-		return false
-	}
-	before := *def
-	def.Provider = cli.SidecarLaunchProvider(def.Provider)
-	if spoolDir == "" {
-		spoolDir = spool.Dir()
-	}
-	if !spool.SeatHasHistory(spoolDir, def.Name) {
-		def.Materialized = false
-	}
-	return def.Provider != before.Provider || def.Materialized != before.Materialized
-}
 
 // GrantsFile is the broker daemon registry basename under the claudia
 // state directory. The live fleet lives in ~/.jevons/agents.json;
@@ -41,33 +17,6 @@ const GrantsFile = "grants.json"
 // GrantsPath is grants.json under the broker state directory.
 func GrantsPath(stateDir string) string {
 	return filepath.Join(stateDir, GrantsFile)
-}
-
-// RemintRegistry rewrites every cold subscription-plan row onto the sidecar.
-// That is the fleet, not one smoke seat (🎯T866.6). A live seat keeps the
-// transport its handle already describes.
-func RemintRegistry(reg *claudia.Registry, spoolDir string) (int, error) {
-	if reg == nil {
-		return 0, nil
-	}
-	n := 0
-	for _, row := range reg.List() {
-		// 🎯T766: a live seat already on this provider keeps its row. The
-		// answer comes from the seat authority (fed here), not handle reads.
-		seatstate.ObserveRegistrySeat(reg, row.Name)
-		if st := seatstate.ReadRegistry(reg, row.Name); st.LocalAlive == seatstate.Yes && st.Provider == string(row.Provider) {
-			continue
-		}
-		def := row
-		if !RemintSubscription(&def, spoolDir) {
-			continue
-		}
-		if err := reg.Register(def); err != nil {
-			return n, err
-		}
-		n++
-	}
-	return n, nil
 }
 
 // ParkNonFleetAutoStart turns off AutoStart for grant rows that are not
@@ -95,16 +44,4 @@ func ParkNonFleetAutoStart(grants, fleet *claudia.Registry) (int, error) {
 		n++
 	}
 	return n, nil
-}
-
-func subscriptionPlan(p claudia.Provider) bool {
-	switch p {
-	case claudia.ProviderClaude, claudia.ProviderCodex,
-		claudia.ProviderGrok, claudia.ProviderCursor,
-		claudia.Provider("anthropic"), claudia.Provider("openai-codex"),
-		claudia.Provider("xai-oauth"):
-		return true
-	default:
-		return false
-	}
 }

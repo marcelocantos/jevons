@@ -669,12 +669,6 @@ func main() {
 			"sessions", len(upgrade.SessionIDs(snap)), "written_at", snap.WrittenAt)
 	}
 
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
-		slog.Warn("sidecar remint failed", "err", err)
-	} else if n > 0 {
-		slog.Info("sidecar remint", "seats", n)
-	}
-
 	// Placement and migration fields the published AgentDef does not carry.
 	// 🎯T1013.2: storage lives in Claudia now, keyed on agent name, shared
 	// by any client of that module -- not a jevons-private sidecar. The
@@ -1199,11 +1193,6 @@ func main() {
 	if ctx.Err() != nil {
 		return
 	}
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
-		slog.Warn("sidecar remint after reattach failed", "err", err)
-	} else if n > 0 {
-		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
-	}
 	if upgradeSnap != nil {
 		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
 			slog.Warn("could not consume upgrade handoff", "err", err)
@@ -1389,15 +1378,6 @@ func main() {
 			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, heldAuto),
 			upgrade.DefaultReattachConcurrency))
 		adoptPausedAutoSeats(registry, heldAuto)
-		// The handoff only promised an adoptable endpoint, not a live
-		// process. Once every permitted seat has had its adoption attempt,
-		// remint cold legacy rows; RemintRegistry checks the actual
-		// running handle before it rewrites any transport identity.
-		if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
-			slog.Warn("sidecar remint after fleet reattach failed", "err", err)
-		} else if n > 0 {
-			slog.Info("sidecar remint", "seats", n, "when", "after-fleet-reattach")
-		}
 		// Workers started here never passed through handleAgentStart, so
 		// wire their completion-notify now (🎯T61); the standing sweep
 		// (🎯T426) would also catch them, later.
