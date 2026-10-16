@@ -84,7 +84,7 @@ func (j *Journal) Close() error {
 // Append writes one event as a JSONL line and fsyncs.
 // Best-effort callers may ignore errors; load-bearing paths should not.
 func (j *Journal) Append(ev Event) error {
-	if j == nil || j.f == nil {
+	if j == nil {
 		return fmt.Errorf("eventlog: nil journal")
 	}
 	if ev.TS == "" {
@@ -102,6 +102,9 @@ func (j *Journal) Append(ev Event) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.f == nil {
+		return fmt.Errorf("eventlog: closed journal")
+	}
 	if _, err := j.f.Write(append(b, '\n')); err != nil {
 		return fmt.Errorf("eventlog: write: %w", err)
 	}
