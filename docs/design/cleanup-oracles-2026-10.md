@@ -218,6 +218,17 @@ Focused sidecar tests on that commit passed: the same 35 tests, now with two
 automatic turns for OpenAI and Codex. This still is not a full sidecar gate,
 not a live-provider run, and not a switch of the production seat.
 
+Claudia `aecb87290edbf2e770ca10dfea1429343fc3b708`, tree
+`6ccaabec31c20a5c2db32f65ee05247671fc59f7`, refreshes the active provider
+credential when the SDK registry or the agent loop reads a key. A broker token
+replaced after startup is the bearer token on the next native compaction and
+continuation request; the startup copy and a stale agent callback are not.
+Clearing the token removes the runtime key and the next prompt does not
+dispatch. Focused sidecar tests on that commit passed: 37 tests across usage,
+OMP session, provider-usage and SDK compaction, including an OpenAI and Codex
+refresh case. This still is not a full sidecar gate, not a live-provider run,
+and not a switch of the production seat.
+
 The restart scout also corrected an initial false positive: normal Jevons exit
 already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep
 broker-owned seats running even when the broker is temporarily unresponsive.
@@ -237,8 +248,9 @@ Relevant source seams and limits:
   `nativeCompactionOptions`. `observedNativeCompaction` reads the active turn
   at candidate selection and passes the host fetch, so native compaction does
   not use the SDK default transport or a turn captured at session construction.
-  Usage totals alone are not evidence of complete attempt accounting, and the
-  production seat does not use this adapter yet.
+  Active-provider key reads refresh from the broker; a startup copy is not a
+  second credential. Usage totals alone are not evidence of complete attempt
+  accounting, and the production seat does not use this adapter yet.
 - Isolated settings and explicit tools/discovery are essential. Default MCP,
   memory, retries and internal subagents must not silently introduce another
   fleet policy or unbudgeted work source. Concurrent seats need isolated registry
