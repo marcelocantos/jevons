@@ -100,6 +100,19 @@ snapshot. The transport owns delivery and results, while Jevons remains the sole
 fleet authority. These are design constraints for the existing receipt and
 restart work, not evidence that a durable tool transport has been implemented.
 
+The owner proposed sqlpipe between a standalone Jevons MCP service and the
+Jevons daemon. The inspected local sqlpipe revision `f48dbe4` describes a
+file-backed SQLite replication library with bidirectional, disjoint table
+ownership and reconnect convergence. It is a credible substrate for a durable
+mailbox: the MCP service owns request rows, Jevons owns execution/result rows,
+and sqlpipe synchronizes those facts after either side reconnects. Replication
+does not itself execute commands or make external effects exactly-once; the
+existing operation identity, idempotency/reconciliation, execution-time
+preconditions and bounded retention requirements still apply. A request must
+be committed before acceptance, and incoming change notifications are hints to
+query pending work, not one-shot delivery events. No sqlpipe dependency or
+standalone MCP runtime has been added or certified by this source assessment.
+
 Relevant source seams and limits:
 
 - `AgentSessionConfig.agent` accepts the instrumented core Agent, while the
