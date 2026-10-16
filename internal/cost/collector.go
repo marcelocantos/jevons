@@ -154,15 +154,37 @@ func (c *Collector) ScanOnce() ([]string, error) {
 	c.mu.Unlock()
 	cutoff := c.now().Add(-c.activeWindow)
 	var files []string
+	seen := make(map[string]bool)
+	spoolRoot := spool.Dir()
 	walk := func(root string) error {
 		if strings.TrimSpace(root) == "" {
 			return nil
 		}
+		root, err := filepath.Abs(root)
+		if err != nil {
+			return err
+		}
+		viewRoot := ""
+		if spoolRoot != "" {
+			viewRoot, err = filepath.Abs(filepath.Join(spoolRoot, ".view"))
+			if err != nil {
+				return err
+			}
+		}
 		return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !isBillableTranscript(path) {
+			if err != nil {
+				return nil
+			}
+			// .view is generated from the dated spool for transcript readers.
+			// Counting both doubles legacy costs that have no request ID.
+			if d.IsDir() && viewRoot != "" && (path == viewRoot || strings.HasPrefix(path, viewRoot+string(filepath.Separator))) {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || !isBillableTranscript(path) || seen[path] {
 				return nil
 			}
 			if fi, err := d.Info(); err == nil && fi.ModTime().After(cutoff) {
+				seen[path] = true
 				files = append(files, path)
 			}
 			return nil
@@ -170,7 +192,7 @@ func (c *Collector) ScanOnce() ([]string, error) {
 	}
 	err := walk(c.projectsRoot)
 	if err == nil {
-		if serr := walk(spool.Dir()); serr != nil {
+		if serr := walk(spoolRoot); serr != nil {
 			err = serr
 		}
 	}
