@@ -511,12 +511,17 @@ func (s *Store) PopFront(agent string) (Entry, bool, error) {
 // (observed 2026-09-21 on jevons-po after a restart). It is held the same
 // way: never offered again, and flowed past.
 func claimable(entries []Entry, active string) (i int, blocker Entry, blocked bool) {
-	for idx, e := range entries {
-		switch {
-		case e.State == Pending:
-			return idx, Entry{}, false
-		case e.State == Attempting && active != "" && e.AttemptID == active:
+	// Reconciliation can requeue an older hold ahead of an active send.
+	// Ownership serializes the entire seat, not just the prefix before the
+	// first Pending entry; check it before selecting the next obligation.
+	for _, e := range entries {
+		if e.State == Attempting && active != "" && e.AttemptID == active {
 			return -1, e, true
+		}
+	}
+	for idx, e := range entries {
+		if e.State == Pending {
+			return idx, Entry{}, false
 		}
 	}
 	return -1, Entry{}, false
