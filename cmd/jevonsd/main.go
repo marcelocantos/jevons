@@ -914,6 +914,7 @@ func main() {
 	if guard != nil {
 		mcpSrv.SetBudgetGuards(guard.enforcer.AllowSpawn, guard.enforcer.AllowResume)
 		mcpSrv.SetCostMonitor(guard.monitor.Snapshot)
+		mcpSrv.SetRequestMissionRecorder(guard.store.RecordRequestMission)
 		srv.SetCostSource(mcpSrv.CostJSON)
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}

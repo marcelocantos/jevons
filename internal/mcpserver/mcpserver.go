@@ -209,6 +209,10 @@ type Server struct {
 	observeTurnWitness turnWitness
 	// querySendReceipt is a test seam; nil uses Claudia's read-only API.
 	querySendReceipt func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)
+	// recordRequestMission freezes the seat's target for one transport
+	// request at receipt bind. Nil leaves mission unknown. The daemon wires
+	// cost.Store.RecordRequestMission.
+	recordRequestMission func(ctx context.Context, seat, requestID, mission string) error
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook       func(name string, ev claudia.Event)

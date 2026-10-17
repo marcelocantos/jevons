@@ -268,9 +268,19 @@ usage, receipt, session and compaction suites. The Jevons consumer on
 Codex producers up through the public history API without a second count
 (`TestUsageProducerCanonicalHistoryCatchUp`, three subtests), and
 `TestHeldReceipts` settled bound receipts without settling unbound legacy
-holds. Neither run is a clean full gate. Host mission attribution is still
-absent, production send paths still do not bind a receipt before handoff, and
-the production seat still does not use this adapter.
+holds. Neither run is a clean full gate. The same consumer then freezes the
+seat's TargetID onto the transport request in `usage_request_missions` at
+bind time, so a later register of a different target does not rewrite
+history. Drain, immediate submit, steer, and escalation bind that receipt
+before handoff when the seat has a registry generation and the process can
+carry a request id. An empty generation on a known definition is an error
+and does not send. A process without a request-id method stays on the
+historical Send path, and a blocked fleet intent stays unbound. The daemon
+installs the recorder only after the usage store opens.
+`TestRequestMissionFreezesFirstWriteAndDoesNotAlterUsageFacts`, `TestT1074*`,
+and `TestUsageProducerCanonicalHistoryCatchUp` passed on the paired module.
+Those runs are not a clean full gate. 🎯T1074.2 and 🎯T1074.3 stay
+unachieved. The production seat still does not use this adapter.
 
 The restart scout also corrected an initial false positive: normal Jevons exit
 already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep

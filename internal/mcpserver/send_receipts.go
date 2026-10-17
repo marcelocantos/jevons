@@ -5,14 +5,107 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
+
+// errHandoffQueued means the message was admitted behind earlier queue work
+// and must not be handed to the process on this call.
+var errHandoffQueued = errors.New("handoff admitted behind earlier queue work")
+
+// SetRequestMissionRecorder installs the host write that freezes a seat
+// target onto a transport request at receipt bind.
+func (s *Server) SetRequestMissionRecorder(fn func(ctx context.Context, seat, requestID, mission string) error) {
+	s.mu.Lock()
+	s.recordRequestMission = fn
+	s.mu.Unlock()
+}
+
+// receiptBind reports whether this handoff must be bound before send.
+// A process that cannot carry a host request id keeps the historical send:
+// binding would mint an id that transport would drop. A known generation
+// with an empty session cannot be bound and must not be sent.
+func (s *Server) receiptBind(name string, proc agentSender) (sessionID, mission string, bind bool, err error) {
+	if s == nil || s.registry == nil || !supportsRequestID(proc) {
+		return "", "", false, nil
+	}
+	d := s.registry.Def(name)
+	if d == nil {
+		return "", "", false, nil
+	}
+	sessionID = strings.TrimSpace(d.SessionID)
+	if sessionID == "" {
+		return "", "", false, fmt.Errorf("agent %q has no receiving generation", name)
+	}
+	return sessionID, strings.TrimSpace(d.TargetID), true, nil
+}
+
+func (s *Server) freezeRequestMission(seat, requestID, mission string) error {
+	s.mu.Lock()
+	record := s.recordRequestMission
+	s.mu.Unlock()
+	if record == nil {
+		return nil
+	}
+	return record(context.Background(), seat, requestID, mission)
+}
+
+// bindOwnedAttempt binds the current locally owned attempt and freezes its
+// mission before any transport write. The returned entry is what the send
+// and the later Resolve must use.
+func (s *Server) bindOwnedAttempt(name string, attempt sendq.Entry, wire, sessionID, mission string) (sendq.Entry, error) {
+	bound, err := s.sendQueue().BindReceiptPayload(name, attempt, sessionID, wire)
+	if err != nil {
+		return sendq.Entry{}, err
+	}
+	if err := s.freezeRequestMission(name, bound.TransportRequestID, mission); err != nil {
+		return sendq.Entry{}, err
+	}
+	return bound, nil
+}
+
+// claimAndBindHandoff admits text and binds it in one step for a send that
+// would otherwise skip the queue. On failure no Attempting entry remains.
+func (s *Server) claimAndBindHandoff(name, text, requestID string, urgent bool, sessionID, mission string) (sendq.Entry, error) {
+	var (
+		entry   sendq.Entry
+		claimed bool
+		err     error
+	)
+	if urgent {
+		entry, _, claimed, err = s.sendQueue().AppendAndClaimUrgent(name, text, requestID, time.Now())
+	} else {
+		entry, _, claimed, err = s.sendQueue().AppendAndClaimWithRequestID(name, text, requestID, time.Now())
+	}
+	if err != nil {
+		return sendq.Entry{}, err
+	}
+	if !claimed {
+		return sendq.Entry{}, errHandoffQueued
+	}
+	bound, err := s.bindOwnedAttempt(name, entry, text, sessionID, mission)
+	if err != nil {
+		_ = s.sendQueue().Resolve(name, entry, sendq.TerminalUndelivered, err.Error())
+		return sendq.Entry{}, err
+	}
+	return bound, nil
+}
+
+func (s *Server) settleHandoff(name string, handoff sendq.Entry, outcome sendq.AttemptOutcome, detail string) {
+	if handoff.ID == "" {
+		return
+	}
+	if err := s.sendQueue().Resolve(name, handoff, outcome, detail); err != nil {
+		slog.Error("agent send: receipt handoff could not be settled", "name", name, "entry_id", handoff.ID, "err", err)
+	}
+}
 
 // One unavailable receipt service must not cost a full RPC timeout for every
 // held entry or seat. Sweep and drain each share one deadline across their pass.

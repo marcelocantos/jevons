@@ -136,6 +136,12 @@ func checkCanonicalUsageProducer(t *testing.T, claudiaRoot, bun string, want can
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.RecordRequestMission(ctx, "seat", "logical-A", "T1074"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordRequestMission(ctx, "seat", "logical-A", "T9999"); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		if store != nil {
 			_ = store.Close()
@@ -241,6 +247,10 @@ func checkCanonicalUsageProducer(t *testing.T, claudiaRoot, bun string, want can
 	rows.Close()
 	if len(ids) != 2 || len(invocations) != want.invocations || !reflect.DeepEqual(kinds, want.kinds) {
 		t.Fatalf("physical attempts, invocation grouping, or compaction attribution changed: ids=%v invocations=%v kinds=%v", ids, invocations, kinds)
+	}
+	mission, ok, err := store.UsageMission(ctx, &claudia.UsageFact{Seat: "seat", Requests: []claudia.UsageRequestRef{{RequestID: "logical-A", AttemptID: "attempt-A"}}})
+	if err != nil || !ok || mission != "T1074" {
+		t.Fatalf("producer request was not attributed to the frozen mission: %q %v %v", mission, ok, err)
 	}
 
 	if err := store.Close(); err != nil {

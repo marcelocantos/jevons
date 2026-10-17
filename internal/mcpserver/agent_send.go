@@ -515,13 +515,36 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	return deliverToSenderModeWithRequestID(s, name, text, "", mode, proc, rehydrated, confirm)
 }
 
-func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
+func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (res agentSendResult, err error) {
 	s.observeQueue(name)
 	// A sidecar socket write returns before the provider accepts or rejects
 	// the prompt. Serialize sends to one seat through the witness verdict so
 	// simultaneous callers cannot both mistake that interval for idle.
 	unlock := s.lockAgentSend(name)
 	defer unlock()
+	var handoff sendq.Entry
+	releaseToPending := false
+	defer func() {
+		if handoff.ID == "" {
+			return
+		}
+		outcome := sendq.Confirmed
+		detail := res.Status
+		switch {
+		case releaseToPending:
+			outcome = sendq.DefinitelyNotSent
+			detail = "handoff refused before acceptance"
+			if err != nil {
+				detail = err.Error()
+			}
+		case err != nil:
+			// The caller received the failure. Dropping the attempt matches
+			// the historical immediate path, which did not keep a queue copy.
+			outcome = sendq.TerminalUndelivered
+			detail = err.Error()
+		}
+		s.settleHandoff(name, handoff, outcome, detail)
+	}()
 	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
 	}
@@ -679,11 +702,39 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 
 	// trySend is the one place text reaches the process. Through the seam it
 	// also reports what ran and the phase the process saw itself in.
+	// A capable seat binds the receipt, and freezes the mission, before that
+	// call. The id handed across is the transport id, which is sendq:<entry>
+	// when the admission had no owner request id.
 	trySend := func() (sendModeOutcome, error) {
-		if seam != nil {
-			return seam(text, mode)
+		wire, id := text, requestID
+		if handoff.ID == "" {
+			sessionID, mission, doBind, berr := s.receiptBind(name, proc)
+			if berr != nil {
+				return sendModeOutcome{}, berr
+			}
+			if doBind {
+				bound, berr := s.claimAndBindHandoff(name, text, requestID, false, sessionID, mission)
+				if berr != nil {
+					return sendModeOutcome{}, berr
+				}
+				handoff = bound
+				wire, id = bound.WirePayload(), bound.TransportRequestID
+			}
+		} else {
+			wire, id = handoff.WirePayload(), handoff.TransportRequestID
 		}
-		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, requestID) })
+		if seam != nil {
+			use := seam
+			if id != "" {
+				if req := sendModeRequestSeam(proc, id); req != nil {
+					use = req
+				} else if handoff.ID != "" {
+					return sendModeOutcome{}, errRequestIDUnavailable
+				}
+			}
+			return use(wire, mode)
+		}
+		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, wire, id) })
 	}
 
 	// Opened BEFORE the send so "the payload arrived" is measured against a
@@ -702,6 +753,22 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	}
 
 	out, err := trySend()
+	if errors.Is(err, errHandoffQueued) {
+		n := 1
+		if entries, serr := s.sendQueue().Snapshot(name); serr == nil && len(entries) > 0 {
+			n = len(entries)
+		}
+		mm.Mechanism = delivery.MechanismClientQueue
+		res = agentSendResult{
+			Status:    "queued",
+			Message:   fmt.Sprintf("busy: %q already has queued work; message queued (%d pending) for delivery in order.", name, n) + describeMode(mm),
+			Queued:    n,
+			Mode:      mode,
+			Mechanism: mm.Mechanism,
+		}
+		logAgentSendResult(name, res, rehydrated)
+		return res, nil
+	}
 	if err == nil {
 		// 🎯T711: a cut already named the mechanism (session_cancel+prompt),
 		// and the plain Send that follows it reports the generic "submit".
@@ -815,7 +882,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// cutting a turn short, "it went into the composer and stayed there"
 		// is precisely the outcome the caller must not hear as success.
 		watch2 := s.watchAgentTurnFor(name, text)
-		if err2 := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, requestID) }); err2 == nil {
+		if _, err2 := trySend(); err2 == nil {
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
 			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil, mm)
@@ -855,6 +922,35 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		}
 	}
 
+	if handoff.ID != "" {
+		releaseToPending = true
+		mm.Mechanism = delivery.MechanismClientQueue
+		why := "prompt already in flight"
+		if mode == delivery.ModeSteer {
+			mm.Mechanism = delivery.MechanismQueueUntilIdle
+			why = "steer asked for but this seat cannot fold text into its open turn"
+			if steerRefused {
+				why = "steer asked for but claudia reports this handle cannot steer"
+			}
+		}
+		n := 1
+		if entries, serr := s.sendQueue().Snapshot(name); serr == nil && len(entries) > 0 {
+			n = len(entries)
+		}
+		res = agentSendResult{
+			Status: "queued",
+			Message: fmt.Sprintf(
+				"busy: %s on %q; message queued (%d pending) for delivery when the current turn ends. "+
+					"Not a dead-end — no silent drop. To interrupt a stuck turn: jevons_agent_send with mode=interrupt "+
+					"(or stop+start to resume the same session without kill/remint).",
+				why, name, n) + describeMode(mm),
+			Queued:    n,
+			Mode:      mode,
+			Mechanism: mm.Mechanism,
+		}
+		logAgentSendResult(name, res, rehydrated)
+		return res, nil
+	}
 	n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
 	if qerr != nil {
 		return agentSendResult{}, undeliverableQueueError(name, qerr)
@@ -868,7 +964,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			why = "steer asked for but claudia reports this handle cannot steer"
 		}
 	}
-	res := agentSendResult{
+	res = agentSendResult{
 		Status: "queued",
 		Message: fmt.Sprintf(
 			"busy: %s on %q; message queued (%d pending) for delivery when the current turn ends. "+
@@ -989,14 +1085,34 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 	// reads it. Do not suppress here — this drain is the first delivery.
 	// A digest already carries its members' text; per-report stamping would
 	// misread the "[Agent X responded]" lines quoted inside it.
-	text := entry.Text
-	if entry.Members == "" {
+	text := entry.WirePayload()
+	if !entry.WireTextSet && entry.Members == "" {
 		text = s.prepareParentReport(name, entry.Text, true).Text
+	}
+	transportID := entry.RequestID
+	sessionID, mission, doBind, bindErr := s.receiptBind(name, proc)
+	if bindErr != nil {
+		if resolve(sendq.DefinitelyNotSent, bindErr.Error()) {
+			s.noteSendqDeliveryFailure(name, entry, bindErr.Error())
+		}
+		return false
+	}
+	if doBind {
+		bound, err := s.bindOwnedAttempt(name, entry, text, sessionID, mission)
+		if err != nil {
+			if resolve(sendq.DefinitelyNotSent, err.Error()) {
+				slog.Error("agent send queue: receipt bind failed before handoff", "name", name, "entry_id", entry.ID, "err", err)
+			}
+			return false
+		}
+		entry = bound
+		text = bound.WirePayload()
+		transportID = bound.TransportRequestID
 	}
 	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
 	defer cancel()
 	generation := s.terminalGeneration(name)
-	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, entry.RequestID) })
+	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, transportID) })
 	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
 	// Watch before treating the attempt as failed — broker-wrapped errors miss
 	// queueSendDefinitelyNotSent's exact-string match and would otherwise land

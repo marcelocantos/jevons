@@ -47,6 +47,12 @@ CREATE TABLE IF NOT EXISTS usage_failures (
 	PRIMARY KEY (seat, session_id, ts, message)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_failures_ts ON usage_failures(ts);
+CREATE TABLE IF NOT EXISTS usage_request_missions (
+	seat TEXT NOT NULL,
+	request_id TEXT NOT NULL,
+	mission TEXT NOT NULL CHECK (mission != ''),
+	PRIMARY KEY (seat, request_id)
+);
 `
 
 const usageTimeLayout = "2006-01-02T15:04:05.000000000Z"

@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T899: a product owner that gets its own hands dirty must stay reachable.
@@ -93,16 +95,11 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 	// ladder. Refuse the ladder and use the ordinary typed mode/queue path
 	// rather than silently stripping the ID. The optional T184 method is
 	// selected only when present, without pinning Claudia in this slice.
-	var typed interface {
+	typed, hasTyped := proc.(interface {
 		SendEscalatingWithRequestID(string, escalate.Ladder, string) (claudia.DeliveryOutcome, error)
-	}
-	if requestID != "" {
-		typed, ok = proc.(interface {
-			SendEscalatingWithRequestID(string, escalate.Ladder, string) (claudia.DeliveryOutcome, error)
-		})
-		if !ok {
-			return agentSendResult{}, false, nil
-		}
+	})
+	if requestID != "" && !hasTyped {
+		return agentSendResult{}, false, nil
 	}
 	unlock := s.lockAgentSend(name)
 	defer unlock()
@@ -129,10 +126,36 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 	if relay {
 		s.midTurn().expect(name, asker, text)
 	}
+	sendText, sendID := text, requestID
+	var handoff sendq.Entry
+	sessionID, mission, doBind, bindErr := s.receiptBind(name, proc)
+	if bindErr != nil {
+		if relay {
+			s.midTurn().forget(name, text)
+		}
+		return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, bindErr)
+	}
+	if doBind && hasTyped {
+		bound, berr := s.claimAndBindHandoff(name, text, requestID, true, sessionID, mission)
+		if berr != nil {
+			if relay {
+				s.midTurn().forget(name, text)
+			}
+			if strings.Contains(berr.Error(), "active handoff") {
+				return agentSendResult{}, false, nil
+			}
+			return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, berr)
+		}
+		handoff = bound
+		sendText, sendID = bound.WirePayload(), bound.TransportRequestID
+	}
 	var out claudia.DeliveryOutcome
 	var err error
-	if requestID != "" {
-		out, err = typed.SendEscalatingWithRequestID(text, ladder, requestID)
+	if sendID != "" && hasTyped {
+		out, err = typed.SendEscalatingWithRequestID(sendText, ladder, sendID)
+	} else if handoff.ID != "" {
+		s.settleHandoff(name, handoff, sendq.TerminalUndelivered, errRequestIDUnavailable.Error())
+		return agentSendResult{}, false, nil
 	} else {
 		out, err = es.SendEscalating(text, ladder)
 	}
@@ -141,13 +164,16 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 			s.midTurn().forget(name, text)
 		}
 		if escalate.NotStarted(err) {
+			s.settleHandoff(name, handoff, sendq.TerminalUndelivered, err.Error())
 			// Nothing reached the seat; the ordinary path holds or submits it.
 			slog.Info("🎯T899 escalation not available on this seat; ordinary delivery",
 				"component", "agent_send", "name", name, "class", class, "err", err.Error())
 			return agentSendResult{}, false, nil
 		}
+		s.settleHandoff(name, handoff, sendq.Unverified, err.Error())
 		return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, err)
 	}
+	s.settleHandoff(name, handoff, sendq.Confirmed, "escalated")
 	status, verb := "steered", "steered into its running turn"
 	if ladder[0].Mode == claudia.DeliverySubmit {
 		status, verb = "sent", "queued with the agent behind its running turn"
