@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
 func TestRequestMissionFreezesFirstWriteAndDoesNotAlterUsageFacts(t *testing.T) {
@@ -55,7 +55,7 @@ func TestRequestMissionFreezesFirstWriteAndDoesNotAlterUsageFacts(t *testing.T) 
 	if err := s.db.QueryRow(`SELECT fact FROM usage_calls`).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
-	var stored claudia.UsageFact
+	var stored claudiawire.UsageFact
 	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestRequestMissionFreezesFirstWriteAndDoesNotAlterUsageFacts(t *testing.T) 
 	}
 
 	unknown, _ := usagePair("other", 3)
-	unknown.Requests = []claudia.UsageRequestRef{{RequestID: "unbound", AttemptID: "attempt"}}
+	unknown.Requests = []claudiawire.UsageRequestRef{{RequestID: "unbound", AttemptID: "attempt"}}
 	unknown.CallID = "other"
 	if mission, ok, err := s.UsageMission(ctx, &unknown); err != nil || ok || mission != "" {
 		t.Fatalf("unbound request attributed: %q %v %v", mission, ok, err)
@@ -79,7 +79,7 @@ func TestRequestMissionFreezesFirstWriteAndDoesNotAlterUsageFacts(t *testing.T) 
 	// The started row is not ingested; only the shape of its references matters.
 	_ = start
 	split := final
-	split.Requests = []claudia.UsageRequestRef{
+	split.Requests = []claudiawire.UsageRequestRef{
 		{RequestID: "owner-request", AttemptID: "delivery-attempt"},
 		{RequestID: "other-request", AttemptID: "other-attempt"},
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
@@ -97,11 +98,11 @@ func TestT1054BusyQueueRestartDrainsSameRequestID(t *testing.T) {
 	}
 	setObservedSenderResolver(after, func(string) (agentSender, bool, error) { return sender, false, nil })
 	receiptJournal(t, after, dir)
-	after.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	after.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if q.Seat != "a" || q.SessionID != session || q.RequestID != "host-one" {
 			t.Fatalf("drain queried %+v", q)
 		}
-		return heldReceipt(q, claudia.ReceiptAccepted), nil
+		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
 	})
 	after.drainAgentSendQueue("a")
 	calls, legacy := sender.snapshot()

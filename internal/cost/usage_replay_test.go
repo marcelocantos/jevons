@@ -12,14 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
-func completeInventory(generations ...claudia.GenerationIdentity) *claudia.GenerationPage {
+func completeInventory(generations ...claudiawire.GenerationIdentity) *claudiawire.GenerationPage {
 	if generations == nil {
-		generations = []claudia.GenerationIdentity{}
+		generations = []claudiawire.GenerationIdentity{}
 	}
-	return &claudia.GenerationPage{Generations: generations, Issues: []claudia.GenerationIssue{}, Complete: true}
+	return &claudiawire.GenerationPage{Generations: generations, Issues: []claudiawire.GenerationIssue{}, Complete: true}
 }
 
 func TestHistoryCatchUpWithoutSpoolOrRegistrySurvivesRestart(t *testing.T) {
@@ -32,14 +32,14 @@ func TestHistoryCatchUpWithoutSpoolOrRegistrySurvivesRestart(t *testing.T) {
 	start, final := usagePair("lost-spool", 1)
 	queries := 0
 	source := &UsageSource{
-		Discover: func(context.Context, claudia.GenerationQuery) (*claudia.GenerationPage, error) {
-			return completeInventory(claudia.GenerationIdentity{Seat: start.Seat, SessionID: start.SessionID}), nil
+		Discover: func(context.Context, claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
+			return completeInventory(claudiawire.GenerationIdentity{Seat: start.Seat, SessionID: start.SessionID}), nil
 		},
-		Query: func(_ context.Context, q claudia.UsageQuery) (*claudia.UsagePage, error) {
+		Query: func(_ context.Context, q claudiawire.UsageQuery) (*claudiawire.UsagePage, error) {
 			queries++
-			page := &claudia.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudia.UsageFact{}, Next: q.After}
+			page := &claudiawire.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudiawire.UsageFact{}, Next: q.After}
 			if q.After == 0 {
-				page.Facts, page.Next = []claudia.UsageFact{start, final}, final.Seq
+				page.Facts, page.Next = []claudiawire.UsageFact{start, final}, final.Seq
 			}
 			return page, nil
 		},
@@ -57,7 +57,7 @@ func TestHistoryCatchUpWithoutSpoolOrRegistrySurvivesRestart(t *testing.T) {
 	}
 	defer s.Close()
 	// Discovery now fails: the durable generation still gets queried.
-	source.Discover = func(context.Context, claudia.GenerationQuery) (*claudia.GenerationPage, error) {
+	source.Discover = func(context.Context, claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
 		return nil, errors.New("inventory unavailable")
 	}
 	c = NewCollector(&CollectorArgs{Store: s, UsageSource: source})
@@ -91,22 +91,22 @@ func TestHistoryFailureRotatesDurablyAndRemainsVisibleUntilRepair(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var identities []claudia.GenerationIdentity
+	var identities []claudiawire.GenerationIdentity
 	for i := 0; i < usageReplayBatch+1; i++ {
-		identities = append(identities, claudia.GenerationIdentity{Seat: fmt.Sprintf("seat-%02d", i), SessionID: "generation"})
+		identities = append(identities, claudiawire.GenerationIdentity{Seat: fmt.Sprintf("seat-%02d", i), SessionID: "generation"})
 	}
 	broken := true
 	var seen []string
 	source := &UsageSource{
-		Discover: func(context.Context, claudia.GenerationQuery) (*claudia.GenerationPage, error) {
+		Discover: func(context.Context, claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
 			return completeInventory(identities...), nil
 		},
-		Query: func(_ context.Context, q claudia.UsageQuery) (*claudia.UsagePage, error) {
+		Query: func(_ context.Context, q claudiawire.UsageQuery) (*claudiawire.UsagePage, error) {
 			seen = append(seen, q.Seat)
 			if broken && q.Seat == identities[0].Seat {
 				return nil, errors.New("history unavailable")
 			}
-			return &claudia.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudia.UsageFact{}, Next: q.After}, nil
+			return &claudiawire.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudiawire.UsageFact{}, Next: q.After}, nil
 		},
 	}
 	c := NewCollector(&CollectorArgs{Store: s, UsageSource: source})
@@ -150,17 +150,17 @@ func TestHistoryCursorExpiryRestartsDiscoveryWithoutLosingUsageCursor(t *testing
 	start, final := usagePair("call", 1)
 	var cursors []string
 	source := &UsageSource{
-		Discover: func(_ context.Context, q claudia.GenerationQuery) (*claudia.GenerationPage, error) {
+		Discover: func(_ context.Context, q claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
 			cursors = append(cursors, q.Cursor)
 			if len(cursors) == 2 {
-				return nil, &claudia.GenerationDiscoveryError{Code: claudia.DiscoveryCursorExpired}
+				return nil, &claudiawire.GenerationDiscoveryError{Code: claudiawire.DiscoveryCursorExpired}
 			}
-			return &claudia.GenerationPage{Generations: []claudia.GenerationIdentity{{Seat: start.Seat, SessionID: start.SessionID}}, Issues: []claudia.GenerationIssue{}, More: true, Cursor: "next-page"}, nil
+			return &claudiawire.GenerationPage{Generations: []claudiawire.GenerationIdentity{{Seat: start.Seat, SessionID: start.SessionID}}, Issues: []claudiawire.GenerationIssue{}, More: true, Cursor: "next-page"}, nil
 		},
-		Query: func(_ context.Context, q claudia.UsageQuery) (*claudia.UsagePage, error) {
-			page := &claudia.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudia.UsageFact{}, Next: q.After}
+		Query: func(_ context.Context, q claudiawire.UsageQuery) (*claudiawire.UsagePage, error) {
+			page := &claudiawire.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudiawire.UsageFact{}, Next: q.After}
 			if q.After == 0 {
-				page.Facts, page.Next = []claudia.UsageFact{start, final}, 2
+				page.Facts, page.Next = []claudiawire.UsageFact{start, final}, 2
 			}
 			return page, nil
 		},
@@ -190,7 +190,7 @@ func TestSlowHistoryDoesNotBlockSpoolPollOrHoldDatabase(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := NewCollector(&CollectorArgs{Store: s, UsageSource: &UsageSource{
-		Discover: func(ctx context.Context, _ claudia.GenerationQuery) (*claudia.GenerationPage, error) {
+		Discover: func(ctx context.Context, _ claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
 			deadline, ok := ctx.Deadline()
 			if !ok || time.Until(deadline) > usageHistoryTimeout {
 				t.Error("unbounded discovery")
@@ -199,7 +199,9 @@ func TestSlowHistoryDoesNotBlockSpoolPollOrHoldDatabase(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
-		Query: func(context.Context, claudia.UsageQuery) (*claudia.UsagePage, error) { panic("unexpected query") },
+		Query: func(context.Context, claudiawire.UsageQuery) (*claudiawire.UsagePage, error) {
+			panic("unexpected query")
+		},
 	}})
 	done := make(chan error, 1)
 	go func() { done <- c.CatchUpOnce(ctx) }()
@@ -245,11 +247,11 @@ func TestBadHistoryPagesDoNotAdvanceReplayOrDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := NewCollector(&CollectorArgs{Store: s, UsageSource: &UsageSource{
-		Discover: func(context.Context, claudia.GenerationQuery) (*claudia.GenerationPage, error) {
-			return &claudia.GenerationPage{Cursor: "bad", More: false}, nil
+		Discover: func(context.Context, claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
+			return &claudiawire.GenerationPage{Cursor: "bad", More: false}, nil
 		},
-		Query: func(_ context.Context, q claudia.UsageQuery) (*claudia.UsagePage, error) {
-			return &claudia.UsagePage{Seat: "other", SessionID: q.SessionID, Next: 100}, nil
+		Query: func(_ context.Context, q claudiawire.UsageQuery) (*claudiawire.UsagePage, error) {
+			return &claudiawire.UsagePage{Seat: "other", SessionID: q.SessionID, Next: 100}, nil
 		},
 	}})
 	if err := c.CatchUpOnce(context.Background()); err == nil {
@@ -273,13 +275,15 @@ func TestCollectorRunReachesHistoryWhilePollingIndependently(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := NewCollector(&CollectorArgs{Store: s, UsageSource: &UsageSource{
-		Discover: func(ctx context.Context, _ claudia.GenerationQuery) (*claudia.GenerationPage, error) {
+		Discover: func(ctx context.Context, _ claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
 			close(entered)
 			<-ctx.Done()
 			close(historyExited)
 			return nil, ctx.Err()
 		},
-		Query: func(context.Context, claudia.UsageQuery) (*claudia.UsagePage, error) { panic("unexpected query") },
+		Query: func(context.Context, claudiawire.UsageQuery) (*claudiawire.UsagePage, error) {
+			panic("unexpected query")
+		},
 	}})
 	c.scan = func() ([]string, error) { return nil, nil }
 	done := make(chan struct{})
@@ -329,15 +333,15 @@ func TestCollectorBacksOffDiscoveryBusyWithoutStoppingReplay(t *testing.T) {
 	now := testNow
 	discoveries, queries := 0, 0
 	c := NewCollector(&CollectorArgs{Store: s, Now: func() time.Time { return now }, UsageSource: &UsageSource{
-		Discover: func(context.Context, claudia.GenerationQuery) (*claudia.GenerationPage, error) {
+		Discover: func(context.Context, claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error) {
 			discoveries++
-			return nil, &claudia.GenerationDiscoveryError{Code: claudia.DiscoveryBusy}
+			return nil, &claudiawire.GenerationDiscoveryError{Code: claudiawire.DiscoveryBusy}
 		},
-		Query: func(_ context.Context, q claudia.UsageQuery) (*claudia.UsagePage, error) {
+		Query: func(_ context.Context, q claudiawire.UsageQuery) (*claudiawire.UsagePage, error) {
 			queries++
-			page := &claudia.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudia.UsageFact{}, Next: q.After}
+			page := &claudiawire.UsagePage{Seat: q.Seat, SessionID: q.SessionID, Facts: []claudiawire.UsageFact{}, Next: q.After}
 			if q.After == 0 {
-				page.Facts, page.Next = []claudia.UsageFact{start, final}, 2
+				page.Facts, page.Next = []claudiawire.UsageFact{start, final}, 2
 			}
 			return page, nil
 		},

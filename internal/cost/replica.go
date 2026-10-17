@@ -1,6 +1,8 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build jevons_claudia_next
+
 package cost
 
 import (
@@ -11,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/controlplane"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 )
 
@@ -241,7 +243,7 @@ func validateReplicatedStatus(db *sqlpipe.Database) error {
 
 // ReplicatedReceipt reads one receipt from the replica after a catch-up.
 // The held-receipt sweep uses this instead of the usage socket.
-func (c *Collector) ReplicatedReceipt(ctx context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+func (c *Collector) ReplicatedReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 	if c == nil || c.replica == nil {
 		return nil, fmt.Errorf("replicated receipt: no replica")
 	}

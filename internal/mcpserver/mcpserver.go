@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/audit"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
@@ -217,7 +218,7 @@ type Server struct {
 	// Nil — the product path — watches the live claudia process. Test seam.
 	observeTurnWitness turnWitness
 	// querySendReceipt is a test seam; nil uses Claudia's read-only API.
-	querySendReceipt func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)
+	querySendReceipt func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)
 	// recordRequestMission freezes the seat's target for one transport
 	// request at receipt bind. Nil leaves mission unknown. The daemon wires
 	// cost.Store.RecordRequestMission.

@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
 // These additive tables belong to the existing accounting database. The
@@ -79,10 +79,10 @@ func (s *Store) UsageCursor(ctx context.Context, seat, session string) (uint64, 
 // IngestUsagePage commits facts and their replay cursor together. Failure
 // leaves both unchanged, so a later query retries the same page. The caller
 // supplies the requested identities, rather than trusting the response's own.
-func (s *Store) IngestUsagePage(ctx context.Context, query claudia.UsageQuery, page *claudia.UsagePage) error {
+func (s *Store) IngestUsagePage(ctx context.Context, query claudiawire.UsageQuery, page *claudiawire.UsagePage) error {
 	limit := query.Limit
 	if limit == 0 {
-		limit = claudia.UsagePageLimit
+		limit = claudiawire.UsagePageLimit
 	}
 	if err := page.Validate(query.Seat, query.SessionID, query.After, limit); err != nil {
 		return err
@@ -114,7 +114,7 @@ func (s *Store) IngestUsagePage(ctx context.Context, query claudia.UsageQuery, p
 
 // IngestUsageFact accepts a live or spooled observation, without advancing
 // the contiguous replay cursor. Repeated delivery contributes no new usage.
-func (s *Store) IngestUsageFact(ctx context.Context, seat, session string, fact *claudia.UsageFact) error {
+func (s *Store) IngestUsageFact(ctx context.Context, seat, session string, fact *claudiawire.UsageFact) error {
 	if err := fact.ValidateIdentity(seat, session); err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (s *Store) IngestUsageFact(ctx context.Context, seat, session string, fact 
 	return tx.Commit()
 }
 
-func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudia.UsageFact) (bool, error) {
+func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudiawire.UsageFact) (bool, error) {
 	// Seeing a live final must not suppress replay of earlier calls from the
 	// same generation. Record identity with a zero contiguous cursor.
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO usage_cursors (seat, session_id, seq) VALUES (?, ?, 0)`, f.Seat, f.SessionID); err != nil {
@@ -140,17 +140,18 @@ func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudia.UsageFact) (boo
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
-	var previous *claudia.UsageFact
+	var previous *claudiawire.UsageFact
 	if err == nil {
-		var old claudia.UsageFact
+		var old claudiawire.UsageFact
 		if err := json.Unmarshal([]byte(raw), &old); err != nil {
 			return false, fmt.Errorf("stored usage fact is corrupt: %w", err)
 		}
 		previous = &old
 	}
-	// Claudia owns the transition/identity contract, including newly added
-	// provider measurements. The host owns only persistence and attribution.
-	apply, err := claudia.ValidateUsageTransition(previous, f)
+	// The transition contract lives in claudiawire. jevons_claudia_next calls
+	// Claudia. The published pin uses the local copy of that contract.
+	// The host owns only persistence and attribution.
+	apply, err := claudiawire.ValidateUsageTransition(previous, f)
 	if err != nil || !apply {
 		return false, err
 	}

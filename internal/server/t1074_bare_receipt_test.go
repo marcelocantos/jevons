@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
@@ -53,10 +54,10 @@ func prepareBareSeat(t *testing.T, s *Server, name string, launch bool) {
 	}, time.Now())
 }
 
-func installBareReceipt(t *testing.T, s *Server, name string, state claudia.ReceiptState, reason string) *int {
+func installBareReceipt(t *testing.T, s *Server, name string, state claudiawire.ReceiptState, reason string) *int {
 	t.Helper()
 	calls := 0
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		calls++
 		if q.Seat != name || q.SessionID != t1074FallbackSession || !strings.HasPrefix(q.RequestID, "rq-") {
 			t.Errorf("bare receipt query = %+v", q)
@@ -87,7 +88,7 @@ func TestT1074BareRegistryUnknownReceiptDoesNotConfirm(t *testing.T) {
 	const name = "jv-t1074-bare-unknown"
 	s := &Server{}
 	prepareBareSeat(t, s, name, true)
-	calls := installBareReceipt(t, s, name, claudia.ReceiptUnknown, "401 unauthorized")
+	calls := installBareReceipt(t, s, name, claudiawire.ReceiptUnknown, "401 unauthorized")
 	out, err := s.sendToNamedAgentMode(name, "alpha", sendOriginOwner, delivery.ModeSubmit)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +103,7 @@ func TestT1074BareRegistryQueryErrorDoesNotConfirm(t *testing.T) {
 	s := &Server{}
 	prepareBareSeat(t, s, name, true)
 	calls := 0
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		calls++
 		if q.Seat != name || q.SessionID != t1074FallbackSession || !strings.HasPrefix(q.RequestID, "rq-") {
 			t.Errorf("query = %+v", q)
@@ -122,8 +123,8 @@ func TestT1074BareRegistryForeignReceiptDoesNotConfirm(t *testing.T) {
 	const name = "jv-t1074-bare-foreign"
 	s := &Server{}
 	prepareBareSeat(t, s, name, true)
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-		r := durableOwnerReceipt(q, claudia.ReceiptCompleted, "401 unauthorized")
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		r := durableOwnerReceipt(q, claudiawire.ReceiptCompleted, "401 unauthorized")
 		r.RequestID = "other-request"
 		return r, nil
 	})
@@ -140,7 +141,7 @@ func TestT1074BareRegistrySettlingReceiptConfirms(t *testing.T) {
 	const name = "jv-t1074-bare-settled"
 	s := &Server{}
 	prepareBareSeat(t, s, name, true)
-	calls := installBareReceipt(t, s, name, claudia.ReceiptCompleted, "401 unauthorized")
+	calls := installBareReceipt(t, s, name, claudiawire.ReceiptCompleted, "401 unauthorized")
 	out, err := s.sendToNamedAgentMode(name, "alpha", sendOriginOwner, delivery.ModeSubmit)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +196,7 @@ func TestT1074BareRegistryRehydratedSettlingReceiptConfirms(t *testing.T) {
 	const name = "jv-t1074-bare-rehydrate-settled"
 	s := &Server{}
 	prepareBareSeat(t, s, name, false)
-	calls := installBareReceipt(t, s, name, claudia.ReceiptCompleted, "exact recorded outcome")
+	calls := installBareReceipt(t, s, name, claudiawire.ReceiptCompleted, "exact recorded outcome")
 	out, err := s.sendToNamedAgentMode(name, "alpha", sendOriginOwner, delivery.ModeSubmit)
 	if err != nil {
 		t.Fatal(err)

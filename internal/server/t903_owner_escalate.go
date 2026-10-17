@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -152,7 +153,7 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 
 // SetSendReceiptQuery installs the production receipt read for owner
 // escalation. Nil does not dial Claudia.
-func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)) {
+func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)) {
 	s.mu.Lock()
 	s.querySendReceipt = fn
 	s.mu.Unlock()
@@ -160,7 +161,7 @@ func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudia.ReceiptQue
 
 // LookupSendReceipt reads one receipt through the installed query.
 // A nil query returns errSendReceiptQueryUnconfigured and does not dial.
-func (s *Server) LookupSendReceipt(ctx context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+func (s *Server) LookupSendReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 	if s == nil {
 		return nil, errSendReceiptQueryUnconfigured
 	}
@@ -198,7 +199,7 @@ func (s *Server) noteOwnerDeliveredFromReceipt(requestID string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
 	defer cancel()
-	r, err := s.LookupSendReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
+	r, err := s.LookupSendReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
 	if err != nil || r == nil {
 		if err != nil && !errors.Is(err, errSendReceiptQueryUnconfigured) {
 			slog.Debug("owner delivery receipt unavailable; delivery not confirmed", "seat", name, "request_id", requestID, "err", err)
@@ -241,7 +242,7 @@ func (s *Server) namedSendReceiptSettles(name, requestID string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
 	defer cancel()
-	r, err := s.LookupSendReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
+	r, err := s.LookupSendReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
 	if err != nil || r == nil {
 		return false
 	}
@@ -253,9 +254,9 @@ func (s *Server) namedSendReceiptSettles(name, requestID string) bool {
 
 // ownerReceiptStateSettles is the transport-acceptance fact. Failed and
 // cancelled execution still settle the obligation. Unknown does not.
-func ownerReceiptStateSettles(state claudia.ReceiptState) bool {
+func ownerReceiptStateSettles(state claudiawire.ReceiptState) bool {
 	switch state {
-	case claudia.ReceiptAccepted, claudia.ReceiptStarted, claudia.ReceiptCompleted, claudia.ReceiptCancelled, claudia.ReceiptFailed:
+	case claudiawire.ReceiptAccepted, claudiawire.ReceiptStarted, claudiawire.ReceiptCompleted, claudiawire.ReceiptCancelled, claudiawire.ReceiptFailed:
 		return true
 	default:
 		return false

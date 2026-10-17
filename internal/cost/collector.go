@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -45,8 +45,8 @@ type CollectorArgs struct {
 
 // UsageSource is Claudia's provider-neutral history API, injected for tests.
 type UsageSource struct {
-	Discover func(context.Context, claudia.GenerationQuery) (*claudia.GenerationPage, error)
-	Query    func(context.Context, claudia.UsageQuery) (*claudia.UsagePage, error)
+	Discover func(context.Context, claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error)
+	Query    func(context.Context, claudiawire.UsageQuery) (*claudiawire.UsagePage, error)
 }
 
 // Collector discovers active session transcripts under ProjectsRoot and

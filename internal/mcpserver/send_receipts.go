@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
@@ -130,7 +131,7 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 		if ctx.Err() != nil {
 			break
 		}
-		r, err := s.LookupHeldReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: e.SessionID, RequestID: e.TransportRequestID})
+		r, err := s.LookupHeldReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: e.SessionID, RequestID: e.TransportRequestID})
 		if err == nil {
 			err = r.ValidateIdentity(name, e.SessionID, e.TransportRequestID)
 		}
@@ -169,26 +170,27 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 	return settled
 }
 
-// SetSendReceiptQuery installs the production receipt read. Nil restores
-// Claudia's socket query. The daemon installs the sqlpipe replica read.
-func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)) {
+// SetSendReceiptQuery installs the production receipt read. Nil falls back
+// to claudiawire.QueryReceipt. The published pin fails that read closed.
+// jevons_claudia_next dials Claudia. The daemon installs the replica read.
+func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)) {
 	s.mu.Lock()
 	s.querySendReceipt = fn
 	s.mu.Unlock()
 }
 
 // LookupHeldReceipt reads one receipt the way the held-receipt sweep does.
-func (s *Server) LookupHeldReceipt(ctx context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+func (s *Server) LookupHeldReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 	s.mu.Lock()
 	query := s.querySendReceipt
 	s.mu.Unlock()
 	if query == nil {
-		query = claudia.QueryReceipt
+		query = claudiawire.QueryReceipt
 	}
 	return query(ctx, q)
 }
 
-func (s *Server) persistSendReceipt(name string, e sendq.Entry, r *claudia.RequestReceipt) error {
+func (s *Server) persistSendReceipt(name string, e sendq.Entry, r *claudiawire.RequestReceipt) error {
 	s.mu.Lock()
 	journal := s.eventJournal
 	s.mu.Unlock()
@@ -210,9 +212,9 @@ func (s *Server) persistSendReceipt(name string, e sendq.Entry, r *claudia.Reque
 // receiptStateSettles is the transport-acceptance fact. Failed and cancelled
 // execution still settle the obligation; they are not mission completion.
 // Unknown does not settle and must not be retried from transcript text.
-func receiptStateSettles(state claudia.ReceiptState) bool {
+func receiptStateSettles(state claudiawire.ReceiptState) bool {
 	switch state {
-	case claudia.ReceiptAccepted, claudia.ReceiptStarted, claudia.ReceiptCompleted, claudia.ReceiptCancelled, claudia.ReceiptFailed:
+	case claudiawire.ReceiptAccepted, claudiawire.ReceiptStarted, claudiawire.ReceiptCompleted, claudiawire.ReceiptCancelled, claudiawire.ReceiptFailed:
 		return true
 	default:
 		return false
@@ -221,19 +223,19 @@ func receiptStateSettles(state claudia.ReceiptState) bool {
 
 // receiptExecutionCause is the typed cause on the receipt. Reason is rendered
 // provider text and is not a cause, even when it contains words such as auth.
-func receiptExecutionCause(r *claudia.RequestReceipt) string {
+func receiptExecutionCause(r *claudiawire.RequestReceipt) string {
 	if r == nil {
 		return ""
 	}
 	switch r.Cause {
-	case claudia.ReceiptCauseAuth, claudia.ReceiptCauseCapacity, claudia.ReceiptCauseCancellation, claudia.ReceiptCauseFailure, claudia.ReceiptCauseUnknown:
+	case claudiawire.ReceiptCauseAuth, claudiawire.ReceiptCauseCapacity, claudiawire.ReceiptCauseCancellation, claudiawire.ReceiptCauseFailure, claudiawire.ReceiptCauseUnknown:
 		return string(r.Cause)
 	default:
 		return ""
 	}
 }
 
-func receiptSettlementDetail(r *claudia.RequestReceipt) string {
+func receiptSettlementDetail(r *claudiawire.RequestReceipt) string {
 	return fmt.Sprintf("Claudia durable receipt request=%q session=%q state=%s cause=%q reason=%q; transport accepted, mission outcome separate", r.RequestID, r.SessionID, r.State, receiptExecutionCause(r), r.Reason)
 }
 
@@ -267,7 +269,7 @@ func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
 	defer cancel()
-	r, err := s.LookupHeldReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: handoff.SessionID, RequestID: handoff.TransportRequestID})
+	r, err := s.LookupHeldReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: handoff.SessionID, RequestID: handoff.TransportRequestID})
 	if err == nil && r != nil {
 		err = r.ValidateIdentity(name, handoff.SessionID, handoff.TransportRequestID)
 	}
@@ -293,7 +295,7 @@ func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
 // The transcript watch is not consulted. A missing or unknown receipt keeps
 // the attempt and does not count as delivery.
 func (s *Server) settleBoundDrainReceipt(ctx context.Context, name string, entry sendq.Entry, generation uint64, resolve func(sendq.AttemptOutcome, string) bool) bool {
-	r, err := s.LookupHeldReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: entry.SessionID, RequestID: entry.TransportRequestID})
+	r, err := s.LookupHeldReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: entry.SessionID, RequestID: entry.TransportRequestID})
 	if err == nil {
 		err = r.ValidateIdentity(name, entry.SessionID, entry.TransportRequestID)
 	}

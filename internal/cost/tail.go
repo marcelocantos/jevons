@@ -14,8 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/marcelocantos/claudia"
-
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -92,7 +91,7 @@ func tailFile(path string, offset int64, attribute func(sessionID string) string
 				continue
 			}
 			if rec.Type == "usage" {
-				var fact claudia.UsageFact
+				var fact claudiawire.UsageFact
 				if err := json.Unmarshal(rec.UsageFact, &fact); err != nil {
 					return nil, offset, fmt.Errorf("invalid spooled usage: %w", err)
 				}

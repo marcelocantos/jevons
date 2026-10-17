@@ -9,8 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcelocantos/claudia"
-
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -24,7 +23,7 @@ func TestT1074BoundDrainQueryErrorStaysHeld(t *testing.T) {
 	if _, _, err := f.s.sendQueue().Append(f.name, payload, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, _ claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, _ claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		return nil, errors.New("journal corrupt or transport unavailable")
 	})
 	f.s.drainAgentSendQueue(f.name)
@@ -56,12 +55,12 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 	}
 	phase := "A"
 	var queries []string
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		queries = append(queries, q.RequestID)
 		if len(ids) == 0 || q.RequestID != ids[len(ids)-1] {
 			t.Fatalf("phase %s queried %q while the handoff ids are %v", phase, q.RequestID, ids)
 		}
-		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r := heldReceipt(q, claudiawire.ReceiptCompleted)
 		switch phase {
 		case "A":
 			// Reason names an auth failure. The typed cause is empty, so the
@@ -73,15 +72,15 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 			if q.RequestID == ids[0] {
 				t.Fatal("steer inherited the active turn's request id")
 			}
-			r = heldReceipt(q, claudia.ReceiptAccepted)
+			r = heldReceipt(q, claudiawire.ReceiptAccepted)
 			r.Reason = "folded"
 			r.Cause = ""
 		case "C":
 			if q.RequestID == ids[0] || q.RequestID == ids[1] {
 				t.Fatal("later request inherited an earlier receipt")
 			}
-			r.State = claudia.ReceiptFailed
-			r.Cause = claudia.ReceiptCauseAuth
+			r.State = claudiawire.ReceiptFailed
+			r.Cause = claudiawire.ReceiptCauseAuth
 			r.Reason = "provider stopped"
 			r.TurnIDs = []string{"turn-C"}
 		default:
@@ -158,14 +157,14 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 		t.Fatalf("steer invented a cause: %+v", b)
 	}
 	br, _ := b["receipt"].(map[string]any)
-	if br["reason"] != "folded" || br["cause"] != nil || br["state"] != string(claudia.ReceiptAccepted) || br["request_id"] != ids[1] {
+	if br["reason"] != "folded" || br["cause"] != nil || br["state"] != string(claudiawire.ReceiptAccepted) || br["request_id"] != ids[1] {
 		t.Fatalf("steer receipt: %+v", br)
 	}
-	if c["receipt_cause"] != string(claudia.ReceiptCauseAuth) {
+	if c["receipt_cause"] != string(claudiawire.ReceiptCauseAuth) {
 		t.Fatalf("typed cause was not journaled: %+v", c)
 	}
 	cr, _ := c["receipt"].(map[string]any)
-	if cr["cause"] != string(claudia.ReceiptCauseAuth) || cr["reason"] != "provider stopped" || cr["state"] != string(claudia.ReceiptFailed) || cr["request_id"] != ids[2] {
+	if cr["cause"] != string(claudiawire.ReceiptCauseAuth) || cr["reason"] != "provider stopped" || cr["state"] != string(claudiawire.ReceiptFailed) || cr["request_id"] != ids[2] {
 		t.Fatalf("later receipt: %+v", cr)
 	}
 	for _, id := range ids {
@@ -195,14 +194,14 @@ func TestT1074FailedSubmissionDoesNotInventCause(t *testing.T) {
 			first = id
 		}
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if first == "" || q.RequestID == first {
-			r := heldReceipt(q, claudia.ReceiptUnknown)
+			r := heldReceipt(q, claudiawire.ReceiptUnknown)
 			r.Reason = "not_found"
 			r.Cause = ""
 			return r, nil
 		}
-		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r := heldReceipt(q, claudiawire.ReceiptCompleted)
 		r.Reason = "401 unauthorized"
 		r.Cause = ""
 		r.TurnIDs = []string{"turn-B"}
@@ -253,7 +252,7 @@ func TestT1074FailedSubmissionDoesNotInventCause(t *testing.T) {
 		t.Fatalf("later receipt inherited a cause: %+v", events[0].Fields)
 	}
 	receipt, _ := events[0].Fields["receipt"].(map[string]any)
-	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) {
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudiawire.ReceiptCompleted) {
 		t.Fatalf("later receipt: %+v", receipt)
 	}
 }
@@ -274,11 +273,11 @@ func TestT1074ImmediateNilErrorDoesNotConfirm(t *testing.T) {
 		}
 		transportID = id
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if transportID == "" || q.RequestID != transportID {
 			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
 		}
-		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r := heldReceipt(q, claudiawire.ReceiptUnknown)
 		r.Reason = "not_found"
 		r.Cause = ""
 		return r, nil
@@ -320,11 +319,11 @@ func TestT1074ImmediateProseReasonDoesNotInventCause(t *testing.T) {
 		}
 		transportID = id
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if transportID == "" || q.RequestID != transportID {
 			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
 		}
-		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r := heldReceipt(q, claudiawire.ReceiptCompleted)
 		r.Reason = "401 unauthorized"
 		r.Cause = ""
 		r.TurnIDs = []string{"turn-immediate"}
@@ -345,7 +344,7 @@ func TestT1074ImmediateProseReasonDoesNotInventCause(t *testing.T) {
 		t.Fatalf("prose became a cause: %+v", events[0].Fields)
 	}
 	receipt, _ := events[0].Fields["receipt"].(map[string]any)
-	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) || receipt["request_id"] != transportID {
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudiawire.ReceiptCompleted) || receipt["request_id"] != transportID {
 		t.Fatalf("immediate receipt: %+v", receipt)
 	}
 }
@@ -366,9 +365,9 @@ func TestT1074SteerUnknownReceiptStaysHeld(t *testing.T) {
 		}
 		transportID = id
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		queried = q.RequestID
-		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r := heldReceipt(q, claudiawire.ReceiptUnknown)
 		r.Reason = "not_found"
 		r.Cause = ""
 		return r, nil

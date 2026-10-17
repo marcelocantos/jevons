@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
 const (
@@ -70,7 +70,7 @@ func (c *Collector) CatchUpOnce(ctx context.Context) (result error) {
 		return fmt.Errorf("history source requires both discovery and usage queries")
 	}
 	if !c.now().Before(c.nextDiscovery) {
-		query := claudia.GenerationQuery{Cursor: c.discoveryCursor, Limit: claudia.GenerationPageLimit}
+		query := claudiawire.GenerationQuery{Cursor: c.discoveryCursor, Limit: claudiawire.GenerationPageLimit}
 		rpcCtx, cancel := context.WithTimeout(ctx, usageHistoryTimeout)
 		page, err := c.usageSource.Discover(rpcCtx, query)
 		cancel()
@@ -81,11 +81,11 @@ func (c *Collector) CatchUpOnce(ctx context.Context) (result error) {
 			err = c.store.rememberUsageGenerations(ctx, page.Generations)
 		}
 		if err != nil {
-			var expired *claudia.GenerationDiscoveryError
-			if errors.As(err, &expired) && expired.Code == claudia.DiscoveryCursorExpired {
+			var expired *claudiawire.GenerationDiscoveryError
+			if errors.As(err, &expired) && expired.Code == claudiawire.DiscoveryCursorExpired {
 				c.discoveryCursor = "" // Known identities/cursors are never discarded.
 			}
-			if errors.As(err, &expired) && expired.Code == claudia.DiscoveryBusy {
+			if errors.As(err, &expired) && expired.Code == claudiawire.DiscoveryBusy {
 				c.nextDiscovery = c.now().Add(usageInventoryInterval)
 			}
 			result = fmt.Errorf("discover history: %w", err)
@@ -148,7 +148,7 @@ func (c *Collector) CatchUpOnce(ctx context.Context) (result error) {
 	return result
 }
 
-func (s *Store) rememberUsageGenerations(ctx context.Context, generations []claudia.GenerationIdentity) error {
+func (s *Store) rememberUsageGenerations(ctx context.Context, generations []claudiawire.GenerationIdentity) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -162,7 +162,7 @@ func (s *Store) rememberUsageGenerations(ctx context.Context, generations []clau
 	return tx.Commit()
 }
 
-func (s *Store) nextUsageQueries(ctx context.Context) ([]claudia.UsageQuery, error) {
+func (s *Store) nextUsageQueries(ctx context.Context) ([]claudiawire.UsageQuery, error) {
 	// Two bounded reads permit wraparound without holding a connection while
 	// making provider-neutral RPCs. New identities are visited on later laps.
 	for lap := 0; lap < 2; lap++ {
@@ -174,9 +174,9 @@ func (s *Store) nextUsageQueries(ctx context.Context) ([]claudia.UsageQuery, err
 		if err != nil {
 			return nil, err
 		}
-		var queries []claudia.UsageQuery
+		var queries []claudiawire.UsageQuery
 		for rows.Next() {
-			q := claudia.UsageQuery{Limit: claudia.UsagePageLimit}
+			q := claudiawire.UsageQuery{Limit: claudiawire.UsagePageLimit}
 			if err := rows.Scan(&q.Seat, &q.SessionID, &q.After); err != nil {
 				rows.Close()
 				return nil, err
@@ -195,7 +195,7 @@ func (s *Store) nextUsageQueries(ctx context.Context) ([]claudia.UsageQuery, err
 	return nil, nil
 }
 
-func (s *Store) finishUsageQuery(ctx context.Context, q claudia.UsageQuery, queryErr error) error {
+func (s *Store) finishUsageQuery(ctx context.Context, q claudiawire.UsageQuery, queryErr error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

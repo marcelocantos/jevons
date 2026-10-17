@@ -12,21 +12,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // These fixtures test the projection's transaction semantics, not provider
 // counter normalization. Actual producer/wire acceptance remains separate.
-func usagePair(call string, seq uint64) (claudia.UsageFact, claudia.UsageFact) {
-	start := claudia.UsageFact{Seat: "worker", SessionID: "generation", CallID: call,
+func usagePair(call string, seq uint64) (claudiawire.UsageFact, claudiawire.UsageFact) {
+	start := claudiawire.UsageFact{Seat: "worker", SessionID: "generation", CallID: call,
 		Seq: seq, Kind: "model", State: "started", Provider: "anthropic", Model: "fixture-model",
-		TurnID: "turn", Requests: []claudia.UsageRequestRef{{RequestID: "owner-request", AttemptID: "delivery-attempt"}},
+		TurnID: "turn", Requests: []claudiawire.UsageRequestRef{{RequestID: "owner-request", AttemptID: "delivery-attempt"}},
 		StartedAt: testNow.Format(time.RFC3339Nano), CounterSource: "adapter_normalized_positive", Coverage: "engine_invocation"}
 	final := start
 	final.Seq, final.State, final.FinishedAt = seq+1, "completed", testNow.Add(time.Second).Format(time.RFC3339Nano)
 	input, output, zero, reasoning, contextSize := int64(21), int64(4), int64(0), int64(2), int64(500)
-	final.Counters = claudia.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &zero, ReasoningTokens: &reasoning}
+	final.Counters = claudiawire.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &zero, ReasoningTokens: &reasoning}
 	final.ContextTokens = &contextSize
 	return start, final
 }
@@ -102,8 +102,8 @@ func TestStructuredUsageReplayAfterLiveFinalAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	page := &claudia.UsagePage{Seat: start.Seat, SessionID: start.SessionID, Facts: []claudia.UsageFact{start, final}, Next: 2}
-	q := claudia.UsageQuery{Seat: start.Seat, SessionID: start.SessionID}
+	page := &claudiawire.UsagePage{Seat: start.Seat, SessionID: start.SessionID, Facts: []claudiawire.UsageFact{start, final}, Next: 2}
+	q := claudiawire.UsageQuery{Seat: start.Seat, SessionID: start.SessionID}
 	if err := s.IngestUsagePage(ctx, q, page); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestStructuredUsageReplayAfterLiveFinalAndRestart(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT fact FROM usage_calls`).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
-	var stored claudia.UsageFact
+	var stored claudiawire.UsageFact
 	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +141,8 @@ func TestStructuredUsageCursorAndFactsRollbackTogether(t *testing.T) {
 	}
 	defer s.Close()
 	start, final := usagePair("call", 1)
-	page := &claudia.UsagePage{Seat: start.Seat, SessionID: start.SessionID, Facts: []claudia.UsageFact{start, final}, Next: 2}
-	q := claudia.UsageQuery{Seat: start.Seat, SessionID: start.SessionID}
+	page := &claudiawire.UsagePage{Seat: start.Seat, SessionID: start.SessionID, Facts: []claudiawire.UsageFact{start, final}, Next: 2}
+	q := claudiawire.UsageQuery{Seat: start.Seat, SessionID: start.SessionID}
 	// Fail on the second fact, after the first INSERT has succeeded.
 	if _, err := s.db.Exec(`CREATE TRIGGER fail_usage BEFORE UPDATE ON usage_calls BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END`); err != nil {
 		t.Fatal(err)
@@ -178,16 +178,16 @@ func TestStructuredUsageConflictsAndRequestMultiplicity(t *testing.T) {
 	a, af := usagePair("A", 1)
 	b, bf := usagePair("B", 3) // Same owner request, distinct provider invocation.
 	bf.Kind, b.Kind = "compaction", "compaction"
-	page := &claudia.UsagePage{Seat: a.Seat, SessionID: a.SessionID, Facts: []claudia.UsageFact{a, af, b, bf}, Next: 4}
-	q := claudia.UsageQuery{Seat: a.Seat, SessionID: a.SessionID}
+	page := &claudiawire.UsagePage{Seat: a.Seat, SessionID: a.SessionID, Facts: []claudiawire.UsageFact{a, af, b, bf}, Next: 4}
+	q := claudiawire.UsageQuery{Seat: a.Seat, SessionID: a.SessionID}
 	if err := s.IngestUsagePage(ctx, q, page); err != nil {
 		t.Fatal(err)
 	}
-	for name, change := range map[string]func(*claudia.UsageFact){
-		"counter":         func(f *claudia.UsageFact) { n := int64(999); f.Counters.InputTokens = &n },
-		"model":           func(f *claudia.UsageFact) { f.Model = "replacement" },
-		"cause":           func(f *claudia.UsageFact) { f.Cause = "changed" },
-		"second terminal": func(f *claudia.UsageFact) { f.Seq++ },
+	for name, change := range map[string]func(*claudiawire.UsageFact){
+		"counter":         func(f *claudiawire.UsageFact) { n := int64(999); f.Counters.InputTokens = &n },
+		"model":           func(f *claudiawire.UsageFact) { f.Model = "replacement" },
+		"cause":           func(f *claudiawire.UsageFact) { f.Cause = "changed" },
+		"second terminal": func(f *claudiawire.UsageFact) { f.Seq++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := af
@@ -211,7 +211,7 @@ func TestStructuredUsageConflictsAndRequestMultiplicity(t *testing.T) {
 		t.Fatalf("multiplicity lost: %+v %v", got, err)
 	}
 	// A corrupt/gapped page cannot advance either facts or cursor.
-	bad := &claudia.UsagePage{Seat: a.Seat, SessionID: a.SessionID, Facts: []claudia.UsageFact{af}, Next: 5}
+	bad := &claudiawire.UsagePage{Seat: a.Seat, SessionID: a.SessionID, Facts: []claudiawire.UsageFact{af}, Next: 5}
 	q.After = 4
 	if err := s.IngestUsagePage(ctx, q, bad); err == nil {
 		t.Fatal("gapped page accepted")
@@ -405,7 +405,7 @@ func TestUsageFailureReplayPreservesHistoricalUncertainty(t *testing.T) {
 	}
 }
 
-func usageSpoolRecord(t *testing.T, fact claudia.UsageFact) spool.Record {
+func usageSpoolRecord(t *testing.T, fact claudiawire.UsageFact) spool.Record {
 	t.Helper()
 	body, err := json.Marshal(fact)
 	if err != nil {
@@ -418,14 +418,14 @@ func TestPhysicalUsageRetainsTerminalIDsAndInclusiveInput(t *testing.T) {
 	zero, input, output, cache, total := int64(0), int64(21), int64(4), int64(7), int64(28)
 	for _, tc := range []struct {
 		name                                                   string
-		counters                                               claudia.UsageCounters
+		counters                                               claudiawire.UsageCounters
 		wantInput, wantConsumption, unknownTotal, unknownFresh int64
 	}{
-		{"inclusive only", claudia.UsageCounters{TotalInputTokens: &total, OutputTokens: &output}, 28, 32, 0, 1},
-		{"inclusive and buckets", claudia.UsageCounters{TotalInputTokens: &total, InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache, CacheCreationInputTokens: &zero}, 28, 32, 0, 0},
-		{"complete buckets", claudia.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache, CacheCreationInputTokens: &zero}, 28, 32, 0, 0},
-		{"partial buckets", claudia.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache}, 28, 32, 1, 0},
-		{"observed zero total", claudia.UsageCounters{TotalInputTokens: &zero, OutputTokens: &zero}, 0, 0, 0, 1},
+		{"inclusive only", claudiawire.UsageCounters{TotalInputTokens: &total, OutputTokens: &output}, 28, 32, 0, 1},
+		{"inclusive and buckets", claudiawire.UsageCounters{TotalInputTokens: &total, InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache, CacheCreationInputTokens: &zero}, 28, 32, 0, 0},
+		{"complete buckets", claudiawire.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache, CacheCreationInputTokens: &zero}, 28, 32, 0, 0},
+		{"partial buckets", claudiawire.UsageCounters{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &cache}, 28, 32, 1, 0},
+		{"observed zero total", claudiawire.UsageCounters{TotalInputTokens: &zero, OutputTokens: &zero}, 0, 0, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := OpenStore(":memory:")
@@ -434,15 +434,15 @@ func TestPhysicalUsageRetainsTerminalIDsAndInclusiveInput(t *testing.T) {
 			}
 			defer s.Close()
 			start, final := usagePair("physical-call", 1)
-			for _, f := range []*claudia.UsageFact{&start, &final} {
+			for _, f := range []*claudiawire.UsageFact{&start, &final} {
 				f.Coverage, f.CounterSource = "provider_attempt", "provider_reported"
 				f.InvocationID, f.ProviderAttemptID = "engine-call", f.CallID
 			}
 			final.ProviderRequestID, final.ProviderResponseID = "http-request", "response-id"
 			final.Counters = tc.counters
 			ctx := context.Background()
-			page := &claudia.UsagePage{Seat: start.Seat, SessionID: start.SessionID, Facts: []claudia.UsageFact{start, final}, Next: 2}
-			if err := s.IngestUsagePage(ctx, claudia.UsageQuery{Seat: start.Seat, SessionID: start.SessionID}, page); err != nil {
+			page := &claudiawire.UsagePage{Seat: start.Seat, SessionID: start.SessionID, Facts: []claudiawire.UsageFact{start, final}, Next: 2}
+			if err := s.IngestUsagePage(ctx, claudiawire.UsageQuery{Seat: start.Seat, SessionID: start.SessionID}, page); err != nil {
 				t.Fatal(err)
 			}
 			// A final delivered again over the spool is the same physical call.
@@ -457,7 +457,7 @@ func TestPhysicalUsageRetainsTerminalIDsAndInclusiveInput(t *testing.T) {
 			if err := s.db.QueryRow(`SELECT fact FROM usage_calls`).Scan(&body); err != nil {
 				t.Fatal(err)
 			}
-			var stored claudia.UsageFact
+			var stored claudiawire.UsageFact
 			if err := json.Unmarshal([]byte(body), &stored); err != nil {
 				t.Fatal(err)
 			}

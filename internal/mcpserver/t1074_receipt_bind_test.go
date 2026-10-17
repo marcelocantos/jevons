@@ -17,6 +17,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -193,8 +194,8 @@ func TestT1074DrainBindsReceiptAndMissionBeforeHandoff(t *testing.T) {
 	}
 	// t418Daemon's witness reports PayloadSeen for every drain. A bound
 	// request must stay held until its own receipt settles it.
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-		return heldReceipt(q, claudia.ReceiptUnknown), nil
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		return heldReceipt(q, claudiawire.ReceiptUnknown), nil
 	})
 	f.s.drainAgentSendQueue(f.name)
 	if transportID == "" || len(f.probe.sentIDs()) != 1 {
@@ -205,11 +206,11 @@ func TestT1074DrainBindsReceiptAndMissionBeforeHandoff(t *testing.T) {
 		t.Fatalf("PayloadSeen confirmed a bound drain: %+v %v", entries, err)
 	}
 	receiptJournal(t, f.s, t.TempDir())
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if q.RequestID != transportID {
 			t.Fatalf("recovery queried %q, want %q", q.RequestID, transportID)
 		}
-		return heldReceipt(q, claudia.ReceiptAccepted), nil
+		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
 	})
 	f.s.drainAgentSendQueue(f.name)
 	if len(f.probe.sentIDs()) != 1 {
@@ -222,12 +223,12 @@ func TestT1074DrainBindsReceiptAndMissionBeforeHandoff(t *testing.T) {
 
 	input, output := int64(11), int64(3)
 	now := time.Now().UTC()
-	fact := claudia.UsageFact{
+	fact := claudiawire.UsageFact{
 		Seat: f.name, SessionID: f.session, CallID: "call-1", Seq: 2,
 		Kind: "model", State: "completed", Provider: "fixture", Model: "fixture-model",
-		TurnID: "turn", Requests: []claudia.UsageRequestRef{{RequestID: transportID, AttemptID: "attempt-1"}},
+		TurnID: "turn", Requests: []claudiawire.UsageRequestRef{{RequestID: transportID, AttemptID: "attempt-1"}},
 		StartedAt: now.Format(time.RFC3339Nano), FinishedAt: now.Add(time.Second).Format(time.RFC3339Nano),
-		Counters:      claudia.UsageCounters{InputTokens: &input, OutputTokens: &output},
+		Counters:      claudiawire.UsageCounters{InputTokens: &input, OutputTokens: &output},
 		CounterSource: "adapter_normalized_positive", Coverage: "engine_invocation",
 	}
 	ctx := context.Background()
@@ -260,8 +261,8 @@ func TestT1074DrainBindsReceiptAndMissionBeforeHandoff(t *testing.T) {
 func TestT1074ImmediateAndSteerBindBeforeHandoff(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
 	})
 	const payload = "owner: send this now"
 	f.probe.check = func(text, id string) {
@@ -313,8 +314,8 @@ func TestT1074ImmediateAndSteerBindBeforeHandoff(t *testing.T) {
 func TestT1074EscalationBindsBeforeHandoff(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
 	})
 	observeSenderFixture(f.s, f.name, f.probe)
 	f.s.noteTurnInFlight(f.name)
@@ -487,8 +488,8 @@ func TestT1074CapableSendWithoutGenerationDoesNotSend(t *testing.T) {
 func TestT1074CursorStartBindsBeforeHandoff(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
 	})
 	const prompt = "Execute the cursor brief"
 	f.probe.check = func(text, id string) {
@@ -530,11 +531,11 @@ func TestT1074EscalationNilErrorDoesNotConfirm(t *testing.T) {
 		}
 		transportID = id
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if transportID == "" || q.RequestID != transportID {
 			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
 		}
-		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r := heldReceipt(q, claudiawire.ReceiptUnknown)
 		r.Reason = "not_found"
 		r.Cause = ""
 		return r, nil
@@ -572,11 +573,11 @@ func TestT1074EscalationProseReasonDoesNotInventCause(t *testing.T) {
 	f.probe.check = func(text, id string) {
 		transportID = id
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if transportID == "" || q.RequestID != transportID {
 			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
 		}
-		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r := heldReceipt(q, claudiawire.ReceiptCompleted)
 		r.Reason = "401 unauthorized"
 		r.Cause = ""
 		r.TurnIDs = []string{"turn-escalation"}
@@ -600,7 +601,7 @@ func TestT1074EscalationProseReasonDoesNotInventCause(t *testing.T) {
 		t.Fatalf("prose became a cause: %+v", events[0].Fields)
 	}
 	receipt, _ := events[0].Fields["receipt"].(map[string]any)
-	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) || receipt["request_id"] != transportID {
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudiawire.ReceiptCompleted) || receipt["request_id"] != transportID {
 		t.Fatalf("escalation receipt: %+v", receipt)
 	}
 }
@@ -616,11 +617,11 @@ func TestT1074CursorBriefNilErrorDoesNotConfirm(t *testing.T) {
 	f.probe.check = func(_, id string) {
 		transportID = id
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if transportID == "" || q.RequestID != transportID {
 			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
 		}
-		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r := heldReceipt(q, claudiawire.ReceiptUnknown)
 		r.Reason = "not_found"
 		r.Cause = ""
 		return r, nil
@@ -652,11 +653,11 @@ func TestT1074CursorBriefProseReasonDoesNotInventCause(t *testing.T) {
 	f.probe.check = func(_, id string) {
 		transportID = id
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if transportID == "" || q.RequestID != transportID {
 			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
 		}
-		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r := heldReceipt(q, claudiawire.ReceiptCompleted)
 		r.Reason = "401 unauthorized"
 		r.Cause = ""
 		r.TurnIDs = []string{"turn-cursor"}
@@ -676,7 +677,7 @@ func TestT1074CursorBriefProseReasonDoesNotInventCause(t *testing.T) {
 		t.Fatalf("prose became a cause: %+v", events[0].Fields)
 	}
 	receipt, _ := events[0].Fields["receipt"].(map[string]any)
-	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) || receipt["request_id"] != transportID {
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudiawire.ReceiptCompleted) || receipt["request_id"] != transportID {
 		t.Fatalf("cursor receipt: %+v", receipt)
 	}
 }

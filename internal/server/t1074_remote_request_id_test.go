@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
 )
 
@@ -159,11 +160,11 @@ func TestT1074HandleUserMessageNilQueryDoesNotConfirm(t *testing.T) {
 
 func TestT1074HandleUserMessageUnknownReceiptDoesNotConfirm(t *testing.T) {
 	s := remoteReceiptServer(t)
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if q.Seat != "jevons" || q.SessionID != "gen-remote" || q.RequestID == "" {
 			t.Errorf("query = %+v", q)
 		}
-		return durableOwnerReceipt(q, claudia.ReceiptUnknown, "not_found"), nil
+		return durableOwnerReceipt(q, claudiawire.ReceiptUnknown, "not_found"), nil
 	})
 	s.HandleUserMessage("alpha")
 	if ownerSendDelivered(s) {
@@ -173,12 +174,12 @@ func TestT1074HandleUserMessageUnknownReceiptDoesNotConfirm(t *testing.T) {
 
 func TestT1074HandleUserMessageSettlingReceiptConfirms(t *testing.T) {
 	s := remoteReceiptServer(t)
-	var seen *claudia.RequestReceipt
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	var seen *claudiawire.RequestReceipt
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if q.Seat != "jevons" || q.SessionID != "gen-remote" || q.RequestID == "" {
 			t.Errorf("query = %+v", q)
 		}
-		seen = durableOwnerReceipt(q, claudia.ReceiptCompleted, "401 unauthorized")
+		seen = durableOwnerReceipt(q, claudiawire.ReceiptCompleted, "401 unauthorized")
 		return seen, nil
 	})
 	s.HandleUserMessage("alpha")

@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
 // ApplyReplicatedUsage ingests one Claudia-owned usage fact delivered by a
@@ -18,7 +18,7 @@ func ApplyReplicatedUsage(ctx context.Context, s *Store, factJSON string) error 
 	if s == nil {
 		return fmt.Errorf("replicated usage: nil store")
 	}
-	var fact claudia.UsageFact
+	var fact claudiawire.UsageFact
 	if err := json.Unmarshal([]byte(factJSON), &fact); err != nil {
 		return fmt.Errorf("replicated usage: %w", err)
 	}
@@ -27,13 +27,13 @@ func ApplyReplicatedUsage(ctx context.Context, s *Store, factJSON string) error 
 
 // ApplyReplicatedReceipt checks a Claudia-owned receipt row. The logical
 // request id is the operation identity; the JSON is not a second journal.
-func ApplyReplicatedReceipt(factJSON string) (claudia.RequestReceipt, error) {
-	var receipt claudia.RequestReceipt
+func ApplyReplicatedReceipt(factJSON string) (claudiawire.RequestReceipt, error) {
+	var receipt claudiawire.RequestReceipt
 	if err := json.Unmarshal([]byte(factJSON), &receipt); err != nil {
-		return claudia.RequestReceipt{}, fmt.Errorf("replicated receipt: %w", err)
+		return claudiawire.RequestReceipt{}, fmt.Errorf("replicated receipt: %w", err)
 	}
 	if err := receipt.ValidateIdentity(receipt.Seat, receipt.SessionID, receipt.RequestID); err != nil {
-		return claudia.RequestReceipt{}, err
+		return claudiawire.RequestReceipt{}, err
 	}
 	return receipt, nil
 }

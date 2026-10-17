@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
@@ -328,17 +329,17 @@ func ownerSendDelivered(s *Server) bool {
 	return s.ObserveOwnerInteraction(time.Now()).SendDelivered
 }
 
-func durableOwnerReceipt(q claudia.ReceiptQuery, state claudia.ReceiptState, reason string) *claudia.RequestReceipt {
-	r := &claudia.RequestReceipt{
+func durableOwnerReceipt(q claudiawire.ReceiptQuery, state claudiawire.ReceiptState, reason string) *claudiawire.RequestReceipt {
+	r := &claudiawire.RequestReceipt{
 		RequestID: q.RequestID, SessionID: q.SessionID, Seat: q.Seat,
 		State: state, Reason: reason,
 		AttemptID: "claudia-attempt", TurnIDs: []string{"original-turn"},
 		AcceptedAt: "2026-10-16T01:00:00Z", UpdatedAt: "2026-10-16T01:00:00Z",
 	}
-	if state == claudia.ReceiptAccepted {
+	if state == claudiawire.ReceiptAccepted {
 		r.TurnIDs = []string{}
 	}
-	if state == claudia.ReceiptUnknown {
+	if state == claudiawire.ReceiptUnknown {
 		r.AttemptID = ""
 		r.TurnIDs = nil
 		r.AcceptedAt = ""
@@ -347,7 +348,7 @@ func durableOwnerReceipt(q claudia.ReceiptQuery, state claudia.ReceiptState, rea
 	return r
 }
 
-func assertOverseerReceiptQuery(t *testing.T, queries []claudia.ReceiptQuery, probe *overseerIDProbe) {
+func assertOverseerReceiptQuery(t *testing.T, queries []claudiawire.ReceiptQuery, probe *overseerIDProbe) {
 	t.Helper()
 	if len(probe.calls) != 1 || probe.calls[0].id == "" || probe.untagged != 0 {
 		t.Fatalf("steer = %+v untagged=%d", probe.calls, probe.untagged)
@@ -359,10 +360,10 @@ func assertOverseerReceiptQuery(t *testing.T, queries []claudia.ReceiptQuery, pr
 
 func TestT1074OverseerNilErrorDoesNotConfirm(t *testing.T) {
 	s, probe := busyOverseerReceiptServer(t, "gen-overseer")
-	var queries []claudia.ReceiptQuery
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	var queries []claudiawire.ReceiptQuery
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		queries = append(queries, q)
-		return durableOwnerReceipt(q, claudia.ReceiptUnknown, "not_found"), nil
+		return durableOwnerReceipt(q, claudiawire.ReceiptUnknown, "not_found"), nil
 	})
 	out, handled, err := s.escalateOwnerToOverseer("beta")
 	if err != nil || !handled || out.Status != "steered" {
@@ -376,11 +377,11 @@ func TestT1074OverseerNilErrorDoesNotConfirm(t *testing.T) {
 
 func TestT1074OverseerProseReasonDoesNotInventCause(t *testing.T) {
 	s, probe := busyOverseerReceiptServer(t, "gen-overseer")
-	var queries []claudia.ReceiptQuery
-	var seen *claudia.RequestReceipt
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	var queries []claudiawire.ReceiptQuery
+	var seen *claudiawire.RequestReceipt
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		queries = append(queries, q)
-		seen = durableOwnerReceipt(q, claudia.ReceiptCompleted, "401 unauthorized")
+		seen = durableOwnerReceipt(q, claudiawire.ReceiptCompleted, "401 unauthorized")
 		return seen, nil
 	})
 	out, handled, err := s.escalateOwnerToOverseer("beta")
@@ -388,7 +389,7 @@ func TestT1074OverseerProseReasonDoesNotInventCause(t *testing.T) {
 		t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
 	}
 	assertOverseerReceiptQuery(t, queries, probe)
-	if seen == nil || seen.Cause != "" || seen.Reason != "401 unauthorized" || seen.State != claudia.ReceiptCompleted {
+	if seen == nil || seen.Cause != "" || seen.Reason != "401 unauthorized" || seen.State != claudiawire.ReceiptCompleted {
 		t.Fatalf("receipt = %+v", seen)
 	}
 	if !ownerSendDelivered(s) {
@@ -445,7 +446,7 @@ func TestT1074OverseerMissingSessionDoesNotQuery(t *testing.T) {
 	s.overseerOwnerTurn = true
 	s.mu.Unlock()
 	called := 0
-	s.SetSendReceiptQuery(func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.SetSendReceiptQuery(func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		called++
 		return nil, fmt.Errorf("should not query")
 	})
@@ -468,7 +469,7 @@ func TestT1074OverseerReceiptErrorDoesNotConfirm(t *testing.T) {
 	for _, name := range []string{"error", "nil"} {
 		t.Run(name, func(t *testing.T) {
 			s, probe := busyOverseerReceiptServer(t, "gen-overseer")
-			s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+			s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 				if q.RequestID == "" || q.SessionID != "gen-overseer" || q.Seat != "jevons" {
 					t.Errorf("query = %+v", q)
 				}
@@ -493,8 +494,8 @@ func TestT1074OverseerReceiptErrorDoesNotConfirm(t *testing.T) {
 
 func TestT1074OverseerForeignReceiptDoesNotConfirm(t *testing.T) {
 	s, _ := busyOverseerReceiptServer(t, "gen-overseer")
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-		r := durableOwnerReceipt(q, claudia.ReceiptCompleted, "exact recorded outcome")
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		r := durableOwnerReceipt(q, claudiawire.ReceiptCompleted, "exact recorded outcome")
 		r.RequestID = "other-request"
 		return r, nil
 	})

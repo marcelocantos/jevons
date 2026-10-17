@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
 // installOwnerReceiptSession gives the overseer a registry generation so a
@@ -42,11 +43,11 @@ func installSettlingOwnerReceipt(t *testing.T, s *Server) {
 	t.Helper()
 	installOwnerReceiptSession(t, s)
 	name := s.overseerAgentName()
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if q.RequestID == "" || q.SessionID != "gen-overseer" || q.Seat != name {
 			t.Errorf("drain receipt query = %+v", q)
 		}
-		return durableOwnerReceipt(q, claudia.ReceiptCompleted, "exact recorded outcome"), nil
+		return durableOwnerReceipt(q, claudiawire.ReceiptCompleted, "exact recorded outcome"), nil
 	})
 }
 
@@ -82,10 +83,10 @@ func TestT1074DrainNilErrorDoesNotConfirm(t *testing.T) {
 	installOwnerReceiptSession(t, s)
 	lines := make(chan string, 8)
 	s.chatListeners = append(s.chatListeners, lines)
-	var queries []claudia.ReceiptQuery
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	var queries []claudiawire.ReceiptQuery
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		queries = append(queries, q)
-		return durableOwnerReceipt(q, claudia.ReceiptUnknown, "not_found"), nil
+		return durableOwnerReceipt(q, claudiawire.ReceiptUnknown, "not_found"), nil
 	})
 	s.overseerSendSeam = func(text, id string) error {
 		*calls = append(*calls, overseerIDCall{text: text, id: id})
@@ -123,11 +124,11 @@ func TestT1074DrainNilErrorDoesNotConfirm(t *testing.T) {
 func TestT1074DrainProseReasonDoesNotInventCause(t *testing.T) {
 	s, calls := drainReceiptServer(t)
 	installOwnerReceiptSession(t, s)
-	var queries []claudia.ReceiptQuery
-	var seen *claudia.RequestReceipt
-	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	var queries []claudiawire.ReceiptQuery
+	var seen *claudiawire.RequestReceipt
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		queries = append(queries, q)
-		seen = durableOwnerReceipt(q, claudia.ReceiptCompleted, "401 unauthorized")
+		seen = durableOwnerReceipt(q, claudiawire.ReceiptCompleted, "401 unauthorized")
 		return seen, nil
 	})
 	if err := s.SendToOverseerAs(userTurnPrefix+"beta", "om-beta"); err != nil {
@@ -139,7 +140,7 @@ func TestT1074DrainProseReasonDoesNotInventCause(t *testing.T) {
 	if len(queries) != 1 || queries[0].RequestID != "om-beta" || queries[0].SessionID != "gen-overseer" || queries[0].Seat != "jevons" {
 		t.Fatalf("query = %+v", queries)
 	}
-	if seen == nil || seen.Cause != "" || seen.Reason != "401 unauthorized" || seen.State != claudia.ReceiptCompleted {
+	if seen == nil || seen.Cause != "" || seen.Reason != "401 unauthorized" || seen.State != claudiawire.ReceiptCompleted {
 		t.Fatalf("receipt = %+v", seen)
 	}
 	if !ownerSendDelivered(s) {
@@ -175,7 +176,7 @@ func TestT1074DrainNilQueryDoesNotConfirm(t *testing.T) {
 func TestT1074DrainMissingSessionDoesNotQuery(t *testing.T) {
 	s, calls := drainReceiptServer(t)
 	called := 0
-	s.SetSendReceiptQuery(func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.SetSendReceiptQuery(func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		called++
 		return nil, fmt.Errorf("should not query")
 	})
@@ -197,7 +198,7 @@ func TestT1074DrainFleetNoteDoesNotConfirmOwnerDelivery(t *testing.T) {
 	s, calls := drainReceiptServer(t)
 	installOwnerReceiptSession(t, s)
 	called := 0
-	s.SetSendReceiptQuery(func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.SetSendReceiptQuery(func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		called++
 		return nil, fmt.Errorf("fleet note has no owner delivery")
 	})

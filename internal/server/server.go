@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/buildident"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -239,7 +240,7 @@ type Server struct {
 	recordRequestMission func(ctx context.Context, seat, requestID, mission string) error
 	// querySendReceipt reads one structured execution receipt. Nil does
 	// not dial Claudia: a missing read cannot confirm an owner handoff.
-	querySendReceipt func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)
+	querySendReceipt func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)
 	// 🎯T806: owner-message honesty. Ids ride beside the queued wire text (FIFO
 	// per text); ownerUndelivered marks texts whose refusal was announced so a
 	// retry storm tells the owner once; the timer re-drains a refused batch.

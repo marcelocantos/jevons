@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
 // RecordRequestMission freezes the host mission for one transport request.
@@ -53,7 +53,7 @@ func (s *Store) RequestMission(ctx context.Context, seat, requestID string) (str
 // UsageMission is the mission shared by every request reference on fact.
 // No references, a missing binding, or disagreeing missions stay unknown.
 // The fact itself is left unchanged.
-func (s *Store) UsageMission(ctx context.Context, fact *claudia.UsageFact) (string, bool, error) {
+func (s *Store) UsageMission(ctx context.Context, fact *claudiawire.UsageFact) (string, bool, error) {
 	if fact == nil || len(fact.Requests) == 0 {
 		return "", false, nil
 	}

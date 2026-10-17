@@ -4,11 +4,8 @@
 package mcpserver
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -39,11 +37,11 @@ func receiptHeldEntry(t *testing.T, q *sendq.Store, name, owner string, uncertai
 	return e
 }
 
-func heldReceipt(q claudia.ReceiptQuery, state claudia.ReceiptState) *claudia.RequestReceipt {
-	r := &claudia.RequestReceipt{Seat: q.Seat, SessionID: q.SessionID, RequestID: q.RequestID,
+func heldReceipt(q claudiawire.ReceiptQuery, state claudiawire.ReceiptState) *claudiawire.RequestReceipt {
+	r := &claudiawire.RequestReceipt{Seat: q.Seat, SessionID: q.SessionID, RequestID: q.RequestID,
 		AttemptID: "claudia-attempt", State: state, TurnIDs: []string{}, Reason: "exact recorded outcome",
 		AcceptedAt: "2026-10-16T01:00:00Z", UpdatedAt: "2026-10-16T01:00:01Z"}
-	if state != claudia.ReceiptAccepted {
+	if state != claudiawire.ReceiptAccepted {
 		r.TurnIDs = []string{"original-turn"}
 	}
 	return r
@@ -74,7 +72,7 @@ func parkReceiptFleet(t *testing.T, s *Server, dir string) *fleetintent.Store {
 }
 
 func TestHeldReceiptsSweepSettlesOriginalGenerationWhileParked(t *testing.T) {
-	for _, state := range []claudia.ReceiptState{claudia.ReceiptAccepted, claudia.ReceiptStarted, claudia.ReceiptCompleted, claudia.ReceiptCancelled, claudia.ReceiptFailed} {
+	for _, state := range []claudiawire.ReceiptState{claudiawire.ReceiptAccepted, claudiawire.ReceiptStarted, claudiawire.ReceiptCompleted, claudiawire.ReceiptCancelled, claudiawire.ReceiptFailed} {
 		for _, uncertain := range []bool{true, false} {
 			label := string(state) + "/orphaned-attempt"
 			if uncertain {
@@ -102,7 +100,7 @@ func TestHeldReceiptsSweepSettlesOriginalGenerationWhileParked(t *testing.T) {
 					t.Fatal(err)
 				}
 				queries := 0
-				s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+				s.querySendReceipt = func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 					queries++
 					if q.Seat != name || q.SessionID != e.SessionID || q.RequestID != e.TransportRequestID {
 						t.Fatalf("queried replacement/other input: %+v", q)
@@ -135,27 +133,36 @@ func TestHeldReceiptsSweepSettlesOriginalGenerationWhileParked(t *testing.T) {
 func TestHeldReceiptsRejectMissingUnknownCorruptOrForeignEvidence(t *testing.T) {
 	variants := []struct {
 		name  string
-		alter func(*claudia.RequestReceipt) (*claudia.RequestReceipt, error)
+		alter func(*claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error)
 	}{
-		{"error", func(r *claudia.RequestReceipt) (*claudia.RequestReceipt, error) {
+		{"error", func(r *claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) {
 			return r, errors.New("journal corrupt or transport unavailable")
 		}},
-		{"missing", func(*claudia.RequestReceipt) (*claudia.RequestReceipt, error) { return nil, nil }},
-		{"unknown", func(r *claudia.RequestReceipt) (*claudia.RequestReceipt, error) {
-			r.State, r.Reason = claudia.ReceiptUnknown, "not_found"
+		{"missing", func(*claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) { return nil, nil }},
+		{"unknown", func(r *claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) {
+			r.State, r.Reason = claudiawire.ReceiptUnknown, "not_found"
 			return r, nil
 		}},
-		{"wrong-seat", func(r *claudia.RequestReceipt) (*claudia.RequestReceipt, error) { r.Seat = "other"; return r, nil }},
-		{"wrong-generation", func(r *claudia.RequestReceipt) (*claudia.RequestReceipt, error) {
+		{"wrong-seat", func(r *claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) {
+			r.Seat = "other"
+			return r, nil
+		}},
+		{"wrong-generation", func(r *claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) {
 			r.SessionID = "replacement"
 			return r, nil
 		}},
-		{"wrong-request", func(r *claudia.RequestReceipt) (*claudia.RequestReceipt, error) { r.RequestID = "other"; return r, nil }},
-		{"wrong-state", func(r *claudia.RequestReceipt) (*claudia.RequestReceipt, error) {
+		{"wrong-request", func(r *claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) {
+			r.RequestID = "other"
+			return r, nil
+		}},
+		{"wrong-state", func(r *claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) {
 			r.State = "probably-done"
 			return r, nil
 		}},
-		{"incomplete", func(r *claudia.RequestReceipt) (*claudia.RequestReceipt, error) { r.AcceptedAt = ""; return r, nil }},
+		{"incomplete", func(r *claudiawire.RequestReceipt) (*claudiawire.RequestReceipt, error) {
+			r.AcceptedAt = ""
+			return r, nil
+		}},
 	}
 	for _, variant := range variants {
 		t.Run(variant.name, func(t *testing.T) {
@@ -164,8 +171,8 @@ func TestHeldReceiptsRejectMissingUnknownCorruptOrForeignEvidence(t *testing.T) 
 			e := receiptHeldEntry(t, s.sendQueue(), "a", "", true)
 			parkReceiptFleet(t, s, dir)
 			receiptJournal(t, s, dir)
-			s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-				return variant.alter(heldReceipt(q, claudia.ReceiptCompleted))
+			s.querySendReceipt = func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+				return variant.alter(heldReceipt(q, claudiawire.ReceiptCompleted))
 			}
 			s.SweepSendBacklogs()
 			s.drainAgentSendQueue("a")
@@ -191,11 +198,11 @@ func TestHeldReceiptsDrainSeparatesIdenticalInputsAndLeavesLegacyUnbound(t *test
 	}
 	receiptJournal(t, s, dir)
 	queries := map[string]int{}
-	s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.querySendReceipt = func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		queries[q.RequestID]++
-		state := claudia.ReceiptUnknown
+		state := claudiawire.ReceiptUnknown
 		if q.RequestID == first.TransportRequestID {
-			state = claudia.ReceiptCompleted
+			state = claudiawire.ReceiptCompleted
 		}
 		return heldReceipt(q, state), nil
 	}
@@ -220,8 +227,8 @@ func TestHeldReceiptsEvidenceWriteFailureRetainsObligation(t *testing.T) {
 		}
 		// A logger callback that cannot acknowledge fsync is insufficient.
 		s.SetEventLogger(func(string, string, map[string]any) { t.Fatal("best-effort logger used as durable evidence") })
-		s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-			return heldReceipt(q, claudia.ReceiptFailed), nil
+		s.querySendReceipt = func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+			return heldReceipt(q, claudiawire.ReceiptFailed), nil
 		}
 		s.SweepSendBacklogs()
 		rows, err := s.sendQueue().Snapshot("a")
@@ -268,8 +275,8 @@ func TestHeldReceiptsUnreadableEvidenceRetainsObligation(t *testing.T) {
 			} else {
 				receiptJournal(t, s, dir)
 			}
-			s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
-				r := heldReceipt(q, claudia.ReceiptFailed)
+			s.querySendReceipt = func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+				r := heldReceipt(q, claudiawire.ReceiptFailed)
 				if !torn {
 					// Exceeds the journal reader's existing 1 MiB line cap.
 					r.Reason = strings.Repeat("x", 1<<20)
@@ -301,7 +308,7 @@ func TestHeldReceiptsSweepSharesDeadlineAcrossSeatsAndDrains(t *testing.T) {
 	}
 	var first time.Time
 	queries := map[string]int{}
-	s.querySendReceipt = func(ctx context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.querySendReceipt = func(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok {
 			t.Fatal("receipt query is unbounded")
@@ -325,11 +332,11 @@ func TestHeldReceiptsSweepRefreshesArrivalsDuringQuery(t *testing.T) {
 	s, sender, _ := t418Daemon(t, dir)
 	receiptHeldEntry(t, s.sendQueue(), "a", "", true)
 	receiptJournal(t, s, dir)
-	s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.querySendReceipt = func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		if _, _, err := s.sendQueue().Append("a", "arrived during receipt query", time.Now()); err != nil {
 			t.Fatal(err)
 		}
-		return heldReceipt(q, claudia.ReceiptCompleted), nil
+		return heldReceipt(q, claudiawire.ReceiptCompleted), nil
 	}
 	s.SweepSendBacklogs()
 	got := sender.delivered()
@@ -345,81 +352,18 @@ func TestHeldReceiptsCannotSettleActiveOrRequeuedAttempt(t *testing.T) {
 		e := receiptHeldEntry(t, s.sendQueue(), "a", "", !active)
 		parkReceiptFleet(t, s, dir)
 		receiptJournal(t, s, dir)
-		s.querySendReceipt = func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		s.querySendReceipt = func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 			if !active {
 				if _, err := s.sendQueue().Reconcile("a", e.ID, e.AttemptID, sendq.ReconcileRequeue, "owner", "explicit requeue while query was pending", time.Now()); err != nil {
 					t.Fatal(err)
 				}
 			}
-			return heldReceipt(q, claudia.ReceiptAccepted), nil
+			return heldReceipt(q, claudiawire.ReceiptAccepted), nil
 		}
 		s.SweepSendBacklogs()
 		rows, err := s.sendQueue().Snapshot("a")
 		if err != nil || len(rows) != 1 || rows[0].ID != e.ID {
 			t.Fatalf("query settled changed/active attempt: %+v %v", rows, err)
 		}
-	}
-}
-
-func TestHeldReceiptsReapedSeatUsesPublicQueryWithoutLoading(t *testing.T) {
-	dir := t.TempDir()
-	before, _, _ := t418Daemon(t, dir)
-	e := receiptHeldEntry(t, before.sendQueue(), "reaped-seat", "", false)
-	s, sender, up := t418Daemon(t, dir)
-	receiptJournal(t, s, dir)
-	intent, err := fleetintent.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := intent.SetAgent("reaped-seat", fleetintent.Reaped, "product", "old seat removed", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	s.SetFleetIntentStore(intent)
-	// Only the read-only local receipt wire exists. No loaded seat, broker,
-	// credential provider or model is supplied by this fixture.
-	sockDir, err := os.MkdirTemp("", "jv-receipt-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	socket := filepath.Join(sockDir, "r.sock")
-	ln, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	t.Setenv("CLAUDIA_NO_BROKER", "1")
-	t.Setenv("CLAUDIA_OMP_SOCKET", socket)
-	wire := make(chan map[string]any, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		line, err := bufio.NewReader(conn).ReadBytes('\n')
-		if err != nil {
-			return
-		}
-		var msg map[string]any
-		if json.Unmarshal(line, &msg) != nil {
-			return
-		}
-		wire <- msg
-		q := claudia.ReceiptQuery{Seat: "reaped-seat", SessionID: e.SessionID, RequestID: e.TransportRequestID}
-		_ = json.NewEncoder(conn).Encode(map[string]any{"type": "receipt", "rpc_id": msg["rpc_id"], "request_id": e.TransportRequestID, "receipt": heldReceipt(q, claudia.ReceiptCancelled)})
-	}()
-	s.SweepSendBacklogs()
-	select {
-	case msg := <-wire:
-		if msg["op"] != "receipt" || msg["session_id"] != e.SessionID || msg["request_id"] != e.TransportRequestID || msg["seat"] != "reaped-seat" || msg["token"] != nil || msg["provider"] != nil || msg["model"] != nil {
-			t.Fatalf("recovery attempted model/credential operation: %+v", msg)
-		}
-	default:
-		t.Fatal("production Claudia query did not reach fixture")
-	}
-	rows, err := s.sendQueue().Snapshot("reaped-seat")
-	if err != nil || len(rows) != 0 || len(sender.delivered()) != 0 || len(up.all()) != 0 || intent.AgentState("reaped-seat") != fleetintent.Reaped {
-		t.Fatalf("reaped recovery altered lifecycle: %+v %v", rows, err)
 	}
 }

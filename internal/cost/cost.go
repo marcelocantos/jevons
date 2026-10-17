@@ -40,7 +40,7 @@ package cost
 import (
 	"time"
 
-	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 )
 
 // Usage is the token counts from one billable API response.
@@ -63,7 +63,7 @@ func (u Usage) IsZero() bool { return u.Total() == 0 }
 type Event struct {
 	// UsageFact bypasses legacy transcript normalization. Its original seat,
 	// generation, invocation identity and unknown fields reach Store intact.
-	UsageFact    *claudia.UsageFact
+	UsageFact    *claudiawire.UsageFact
 	UsageFailure *UsageFailure
 	Timestamp    time.Time
 	SessionID    string
