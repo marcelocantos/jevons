@@ -149,6 +149,8 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 			// Each is proof the transport accepted this exact input. Failed or
 			// cancelled execution is retained as such, not called completed work.
 		default:
+			// Unknown includes a started dispatch restored as interrupted.
+			// That attempt keeps its transport id and is not sent again.
 			continue
 		}
 		// LogEvent is intentionally best effort; receipt evidence is not.
