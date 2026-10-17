@@ -229,6 +229,14 @@ type Server struct {
 	notifyQueue    []string
 	notifyDraining bool
 	notifySender   func(string) error
+	// overseerSendSeam observes the host request id on the notify drain.
+	// A stub *claudia.Agent drops that id, so tests cannot see it on Send.
+	// Nil is production: sendNotes calls SendWithRequestID.
+	overseerSendSeam func(text, requestID string) error
+	// recordRequestMission freezes the overseer's target onto a host
+	// request before the provider sees the text. Nil leaves the mission
+	// unknown. Wired from the daemon next to the fleet recorder.
+	recordRequestMission func(ctx context.Context, seat, requestID, mission string) error
 	// 🎯T806: owner-message honesty. Ids ride beside the queued wire text (FIFO
 	// per text); ownerUndelivered marks texts whose refusal was announced so a
 	// retry storm tells the owner once; the timer re-drains a refused batch.

@@ -658,11 +658,66 @@ func (s *Server) settleFleetChew() bool {
 	return true
 }
 
+// SetRequestMissionRecorder installs the host write that freezes the
+// overseer's target onto a transport request before handoff.
+func (s *Server) SetRequestMissionRecorder(fn func(ctx context.Context, seat, requestID, mission string) error) {
+	s.mu.Lock()
+	s.recordRequestMission = fn
+	s.mu.Unlock()
+}
+
+// ownerHandoffRequestID is the host id minted when this owner turn was
+// accepted. A fleet batch has none and stays on the historical send.
+// The id is peeked, not popped: a failed handoff must leave it for retry,
+// and a later identical text must not take an earlier pending id.
+func (s *Server) ownerHandoffRequestID(text string) string {
+	if !isOwnerNotifyText(text) {
+		return ""
+	}
+	return s.peekOwnerMessageID(text)
+}
+
+// freezeOverseerMission writes the overseer's registry target against
+// requestID before any provider call. An empty target is not stored.
+// A nil recorder leaves the mission unknown. A write error must not send.
+func (s *Server) freezeOverseerMission(requestID string) error {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil
+	}
+	s.mu.RLock()
+	record := s.recordRequestMission
+	name := s.overseerName
+	reg := s.registry
+	s.mu.RUnlock()
+	if record == nil {
+		return nil
+	}
+	mission := ""
+	if reg != nil {
+		if d := reg.Def(name); d != nil {
+			mission = strings.TrimSpace(d.TargetID)
+		}
+	}
+	return record(context.Background(), name, requestID, mission)
+}
+
 // sendNotes delivers one coalesced note batch to the overseer. The
 // notifySender seam lets tests stub delivery; nil uses the live process.
+// An owner batch carries the id registered at acceptance. Fleet notes
+// have no host id and stay on Send.
 func (s *Server) sendNotes(text string) error {
 	if err := s.injectedBrokerFault(text); err != nil {
 		return err
+	}
+	requestID := s.ownerHandoffRequestID(text)
+	if requestID != "" {
+		if err := s.freezeOverseerMission(requestID); err != nil {
+			return err
+		}
+	}
+	if s.overseerSendSeam != nil {
+		return s.overseerSendSeam(text, requestID)
 	}
 	if s.notifySender != nil {
 		return s.notifySender(text)
@@ -672,7 +727,12 @@ func (s *Server) sendNotes(text string) error {
 		return fmt.Errorf("overseer not running")
 	}
 	return upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
-		func(a *claudia.Agent) error { return a.Send(text) })
+		func(a *claudia.Agent) error {
+			if requestID == "" {
+				return a.Send(text)
+			}
+			return a.SendWithRequestID(text, requestID)
+		})
 }
 
 // notifyErrClass classifies overseer-notify delivery failures for structured

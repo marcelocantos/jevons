@@ -36,6 +36,14 @@ type overseerEscalator interface {
 	SendEscalating(text string, esc escalate.Ladder) (claudia.DeliveryOutcome, error)
 }
 
+// requestIDEscalator is the production seat. SendEscalating passes an
+// empty id into Claudia, so a seat that can carry one must be given the
+// id minted at acceptance. A test double without the method stays on
+// SendEscalating.
+type requestIDEscalator interface {
+	SendEscalatingWithRequestID(text string, esc escalate.Ladder, requestID string) (claudia.DeliveryOutcome, error)
+}
+
 // escalateOwnerToOverseer steers text into the overseer's running owner
 // turn. handled=false means the overseer is not in one (or no ladder is
 // configured) and the ordinary path runs.
@@ -77,7 +85,19 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	echo := chatUserEchoID(text, msgID)
 	s.NoteOwnerSend(text, echo)
 	s.BroadcastChat(echo)
-	out, err := proc.SendEscalating(userTurnPrefix+text, ladder)
+	wire := userTurnPrefix + text
+	var out claudia.DeliveryOutcome
+	var err error
+	if typed, ok := proc.(requestIDEscalator); ok {
+		if err = s.freezeOverseerMission(msgID); err != nil {
+			slog.Error("🎯T903 escalating owner send to overseer failed", "err", err)
+			s.NoteOwnerResidual("delivery_failed")
+			return AgentSendOutcome{}, true, fmt.Errorf("message not delivered: %w", err)
+		}
+		out, err = typed.SendEscalatingWithRequestID(wire, ladder, msgID)
+	} else {
+		out, err = proc.SendEscalating(wire, ladder)
+	}
 	if err != nil {
 		if escalate.NotStarted(err) {
 			// Nothing reached the seat. The bubble is painted; queue behind
