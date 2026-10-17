@@ -5,6 +5,7 @@ package sendq
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,8 +145,11 @@ func TestReceiptUrgentOvertakesPendingWithoutStealingActive(t *testing.T) {
 	if err != nil || !claimed || depth != 2 {
 		t.Fatalf("urgent admission: claimed=%v depth=%d err=%v", claimed, depth, err)
 	}
-	if _, _, _, err := q.AppendAndClaimUrgent("a", "another urgent input", "second", time.Now()); err == nil {
-		t.Fatal("urgent admission stole active handoff")
+	if _, _, _, err := q.AppendAndClaimUrgent("a", "another urgent input", "second", time.Now()); !errors.Is(err, ErrActiveHandoff) {
+		t.Fatalf("urgent admission stole active handoff: %v", err)
+	}
+	if errors.Is(fmt.Errorf("operator note mentions an active handoff"), ErrActiveHandoff) {
+		t.Fatal("a mention of the words is the sentinel")
 	}
 	if _, claimed, err := q.ClaimFront("a"); err != nil || claimed {
 		t.Fatalf("ordinary claim stole active urgent handoff: %v %v", claimed, err)

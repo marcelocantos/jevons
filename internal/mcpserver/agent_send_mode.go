@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"strings"
 	"sync"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -226,12 +225,6 @@ func logSendModeSeamMissing(name string) {
 			"component", "agent_send", "name", name,
 			"fallback", "submit when idle, "+delivery.MechanismQueueUntilIdle+" when busy")
 	})
-}
-
-// isSteerUnsupported recognises claudia's ErrSteerUnsupported by text, the
-// pin having no symbol to compare against.
-func isSteerUnsupported(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "steer unsupported")
 }
 
 // describeMode renders the mode for a caller-facing message; empty for the

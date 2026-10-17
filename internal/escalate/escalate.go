@@ -60,16 +60,14 @@ func Fit(ladder Ladder, caps claudia.TurnCaps) Ladder {
 // follows is the seat's own error text, untouched.
 const brokerAgentFailedPrefix = "broker protocol: agent_failed: "
 
-// NotStarted reports whether err says the ladder never reached the seat: the
-// seat cannot steer, or it had no turn open to steer into. The ordinary path
-// then holds or submits the message. A broker-held seat relays these as text,
-// so the relayed envelope is decoded and its message compared against the
-// sentinels' own wording; a string that merely mentions them is not a match.
-func NotStarted(err error) bool {
+// SteerUnsupported reports claudia's typed steer refusal, including the form
+// the broker relays as text. ErrTurnIdle is a different fact: the seat had
+// no open turn. A string that merely mentions the sentinel is not a match.
+func SteerUnsupported(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, claudia.ErrSteerUnsupported) || errors.Is(err, claudia.ErrTurnIdle) {
+	if errors.Is(err, claudia.ErrSteerUnsupported) {
 		return true
 	}
 	msg, ok := strings.CutPrefix(err.Error(), brokerAgentFailedPrefix)
@@ -77,6 +75,25 @@ func NotStarted(err error) bool {
 		return false
 	}
 	unsupported := claudia.ErrSteerUnsupported.Error()
-	return msg == unsupported || strings.HasPrefix(msg, unsupported+": ") ||
-		msg == claudia.ErrTurnIdle.Error()
+	return msg == unsupported || strings.HasPrefix(msg, unsupported+": ")
+}
+
+// NotStarted reports whether err says the ladder never reached the seat: the
+// seat cannot steer, or it had no turn open to steer into. The ordinary path
+// then holds or submits the message. A broker-held seat relays these as text,
+// so the relayed envelope is decoded and its message compared against the
+// sentinels' own wording; a string that merely mentions them is not a match.
+// The steer half is SteerUnsupported, so the two answers cannot drift.
+func NotStarted(err error) bool {
+	if err == nil {
+		return false
+	}
+	if SteerUnsupported(err) || errors.Is(err, claudia.ErrTurnIdle) {
+		return true
+	}
+	msg, ok := strings.CutPrefix(err.Error(), brokerAgentFailedPrefix)
+	if !ok {
+		return false
+	}
+	return msg == claudia.ErrTurnIdle.Error()
 }

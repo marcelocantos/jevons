@@ -41,23 +41,31 @@ func TestT931FitKeepsOnlySupportedRungs(t *testing.T) {
 }
 
 // The refusal from 2026-09-29, verbatim as the broker relayed it, is read as
-// "never started"; a report that merely quotes it is not.
+// "never started"; a report that merely quotes it is not. SteerUnsupported
+// is the steer half of that answer: idle is not a steer refusal, and a
+// rendered mention is not the sentinel.
 func TestT931NotStartedReadsTheRelayedRefusal(t *testing.T) {
 	for _, c := range []struct {
-		err  error
-		want bool
+		err   error
+		start bool
+		steer bool
 	}{
-		{errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)"), true},
-		{errors.New("broker protocol: agent_failed: no turn in flight to steer"), true},
-		{fmt.Errorf("%w: claude provider: provider has no steer mechanism", claudia.ErrSteerUnsupported), true},
-		{claudia.ErrTurnIdle, true},
-		{errors.New("broker protocol: agent_failed: claude process not running"), false},
-		{errors.New("broker protocol: agent_failed: provider response quoted: steer unsupported: x"), false},
-		{errors.New("steer unsupported: but not relayed and not the sentinel"), false},
-		{nil, false},
+		{errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)"), true, true},
+		{errors.New("broker protocol: agent_failed: no turn in flight to steer"), true, false},
+		{fmt.Errorf("%w: claude provider: provider has no steer mechanism", claudia.ErrSteerUnsupported), true, true},
+		{claudia.ErrSteerUnsupported, true, true},
+		{claudia.ErrTurnIdle, true, false},
+		{errors.New("broker protocol: agent_failed: claude process not running"), false, false},
+		{errors.New("broker protocol: agent_failed: provider response quoted: steer unsupported: x"), false, false},
+		{errors.New("steer unsupported: but not relayed and not the sentinel"), false, false},
+		{fmt.Errorf("relayed: %w", errors.New("broker protocol: agent_failed: steer unsupported")), false, false},
+		{nil, false, false},
 	} {
-		if got := NotStarted(c.err); got != c.want {
-			t.Errorf("NotStarted(%v) = %v, want %v", c.err, got, c.want)
+		if got := NotStarted(c.err); got != c.start {
+			t.Errorf("NotStarted(%v) = %v, want %v", c.err, got, c.start)
+		}
+		if got := SteerUnsupported(c.err); got != c.steer {
+			t.Errorf("SteerUnsupported(%v) = %v, want %v", c.err, got, c.steer)
 		}
 	}
 }

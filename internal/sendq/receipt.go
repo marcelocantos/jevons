@@ -4,10 +4,16 @@
 package sendq
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// ErrActiveHandoff refuses an urgent admission while this process already
+// owns an attempt for the seat. Callers classify with errors.Is. A different
+// error that only mentions an active handoff is not this refusal.
+var ErrActiveHandoff = errors.New("sendq: urgent delivery conflicts with an active handoff")
 
 // logicalTransportID deliberately does not populate RequestID: that field
 // marks owner questions, which must not be folded into routine digests.
@@ -131,7 +137,7 @@ func (s *Store) appendAndClaim(agent, text, requestID string, at time.Time, urge
 		return Entry{}, 0, false, err
 	}
 	if urgent && s.active[agent] != "" {
-		return Entry{}, len(f.Entries), false, fmt.Errorf("sendq: urgent delivery to %q conflicts with an active handoff; not admitted", agent)
+		return Entry{}, len(f.Entries), false, fmt.Errorf("%w: urgent delivery to %q not admitted", ErrActiveHandoff, agent)
 	}
 	entry = Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
 	i, _, blocked := claimable(f.Entries, s.active[agent])

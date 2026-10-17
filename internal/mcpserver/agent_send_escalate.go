@@ -4,9 +4,9 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
@@ -141,7 +141,7 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 			if relay {
 				s.midTurn().forget(name, text)
 			}
-			if strings.Contains(berr.Error(), "active handoff") {
+			if errors.Is(berr, sendq.ErrActiveHandoff) {
 				return agentSendResult{}, false, nil
 			}
 			return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, berr)

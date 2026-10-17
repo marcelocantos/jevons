@@ -17,6 +17,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -814,8 +815,10 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	}
 
 	// 🎯T657: claudia answered that this handle cannot steer. Not busy, not a
-	// transport failure — the honest answer is to hold the text.
-	steerRefused := mode == delivery.ModeSteer && isSteerUnsupported(err)
+	// transport failure — the honest answer is to hold the text. The decision
+	// is the typed sentinel (and the broker's relay of that sentinel), not a
+	// search of the rendered error. ErrTurnIdle is not this refusal.
+	steerRefused := mode == delivery.ModeSteer && escalate.SteerUnsupported(err)
 
 	if !isPromptInFlight(err) && !steerRefused {
 		// 🎯T429: ask the error the narrow question first — does it DISPROVE
