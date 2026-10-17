@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -95,6 +96,13 @@ func TestT1054BusyQueueRestartDrainsSameRequestID(t *testing.T) {
 		}
 	}
 	setObservedSenderResolver(after, func(string) (agentSender, bool, error) { return sender, false, nil })
+	receiptJournal(t, after, dir)
+	after.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if q.Seat != "a" || q.SessionID != session || q.RequestID != "host-one" {
+			t.Fatalf("drain queried %+v", q)
+		}
+		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	})
 	after.drainAgentSendQueue("a")
 	calls, legacy := sender.snapshot()
 	if len(calls) != 1 || calls[0] != "host-one:same text" || legacy != 0 {

@@ -188,13 +188,33 @@ func TestT1074DrainBindsReceiptAndMissionBeforeHandoff(t *testing.T) {
 		f.assertBoundBeforeSend(t, payload, id, "T1074")
 		transportID = id
 	}
+	// t418Daemon's witness reports PayloadSeen for every drain. A bound
+	// request must stay held until its own receipt settles it.
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		return heldReceipt(q, claudia.ReceiptUnknown), nil
+	})
 	f.s.drainAgentSendQueue(f.name)
 	if transportID == "" || len(f.probe.sentIDs()) != 1 {
 		t.Fatalf("drain did not hand off one bound id: %q %v", transportID, f.probe.sentIDs())
 	}
 	entries, err := f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].TransportRequestID != transportID {
+		t.Fatalf("PayloadSeen confirmed a bound drain: %+v %v", entries, err)
+	}
+	receiptJournal(t, f.s, t.TempDir())
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if q.RequestID != transportID {
+			t.Fatalf("recovery queried %q, want %q", q.RequestID, transportID)
+		}
+		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	})
+	f.s.drainAgentSendQueue(f.name)
+	if len(f.probe.sentIDs()) != 1 {
+		t.Fatalf("receipt recovery sent again: %v", f.probe.sentIDs())
+	}
+	entries, err = f.s.sendQueue().Snapshot(f.name)
 	if err != nil || len(entries) != 0 {
-		t.Fatalf("confirmed handoff left the queue: %+v %v", entries, err)
+		t.Fatalf("accepted receipt left the queue: %+v %v", entries, err)
 	}
 
 	input, output := int64(11), int64(3)

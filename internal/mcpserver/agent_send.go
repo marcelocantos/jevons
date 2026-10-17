@@ -1113,6 +1113,17 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 	defer cancel()
 	generation := s.terminalGeneration(name)
 	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, transportID) })
+	// A bound host request settles from its Claudia receipt. PayloadSeen,
+	// transcript growth, and assistant prose do not confirm it.
+	if entry.TransportRequestID != "" {
+		if errors.Is(sendErr, errRequestIDUnavailable) || queueSendDefinitelyNotSent(sendErr) {
+			if resolve(sendq.DefinitelyNotSent, sendErr.Error()) && !isPromptInFlight(sendErr) {
+				s.noteSendqDeliveryFailure(name, entry, sendErr.Error())
+			}
+			return false
+		}
+		return s.settleBoundDrainReceipt(receiptCtx, name, entry, generation, resolve)
+	}
 	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
 	// Watch before treating the attempt as failed — broker-wrapped errors miss
 	// queueSendDefinitelyNotSent's exact-string match and would otherwise land

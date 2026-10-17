@@ -138,11 +138,7 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 			slog.Debug("held delivery receipt unavailable; retaining obligation", "agent", name, "entry_id", e.ID, "error", err)
 			continue
 		}
-		switch r.State {
-		case claudia.ReceiptAccepted, claudia.ReceiptStarted, claudia.ReceiptCompleted, claudia.ReceiptCancelled, claudia.ReceiptFailed:
-			// Each is proof the transport accepted this exact input. Failed or
-			// cancelled execution is retained as such, not called completed work.
-		default:
+		if !receiptStateSettles(r.State) {
 			// Unknown includes a started dispatch restored as interrupted.
 			// That attempt keeps its transport id and is not sent again.
 			continue
@@ -158,7 +154,7 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 			slog.Warn("held receipt evidence could not be persisted; retaining obligation", "agent", name, "entry_id", e.ID, "error", err)
 			continue
 		}
-		detail := fmt.Sprintf("Claudia durable receipt request=%q session=%q state=%s reason=%q; transport accepted, mission outcome separate", r.RequestID, r.SessionID, r.State, r.Reason)
+		detail := receiptSettlementDetail(r)
 		if _, err := q.Reconcile(name, e.ID, e.AttemptID, sendq.ReconcileConfirmed, "daemon:receipt", detail, time.Now()); err != nil {
 			slog.Debug("receipt observed but held attempt changed or remains locally owned", "agent", name, "entry_id", e.ID, "error", err)
 			continue
@@ -196,14 +192,88 @@ func (s *Server) persistSendReceipt(name string, e sendq.Entry, r *claudia.Reque
 	s.mu.Lock()
 	journal := s.eventJournal
 	s.mu.Unlock()
+	if journal == nil {
+		return fmt.Errorf("send receipt journal is not configured")
+	}
 	return journal.Append(eventlog.Event{
 		Component: "agent_send", Decision: "sendq_receipt_observed",
 		Msg: "Durable receipt proves transport acceptance; mission outcome is separate",
 		Fields: map[string]any{
 			"agent": name, "entry_id": e.ID, "attempt_id": e.AttemptID,
 			"owner_request_id": e.RequestID, "transport_request_id": e.TransportRequestID,
-			"session_id": e.SessionID, "receipt": r,
+			"session_id": e.SessionID, "receipt": r, "receipt_cause": receiptExecutionCause(r),
 			"transport_accepted": true, "text": e.Text, "wire_text": e.WirePayload(), "enqueued_at": e.EnqueuedAt,
 		},
 	})
+}
+
+// receiptStateSettles is the transport-acceptance fact. Failed and cancelled
+// execution still settle the obligation; they are not mission completion.
+// Unknown does not settle and must not be retried from transcript text.
+func receiptStateSettles(state claudia.ReceiptState) bool {
+	switch state {
+	case claudia.ReceiptAccepted, claudia.ReceiptStarted, claudia.ReceiptCompleted, claudia.ReceiptCancelled, claudia.ReceiptFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// receiptExecutionCause is the typed cause on the receipt. Reason is rendered
+// provider text and is not a cause, even when it contains words such as auth.
+func receiptExecutionCause(r *claudia.RequestReceipt) string {
+	if r == nil {
+		return ""
+	}
+	switch r.Cause {
+	case claudia.ReceiptCauseAuth, claudia.ReceiptCauseCapacity, claudia.ReceiptCauseCancellation, claudia.ReceiptCauseFailure, claudia.ReceiptCauseUnknown:
+		return string(r.Cause)
+	default:
+		return ""
+	}
+}
+
+func receiptSettlementDetail(r *claudia.RequestReceipt) string {
+	return fmt.Sprintf("Claudia durable receipt request=%q session=%q state=%s cause=%q reason=%q; transport accepted, mission outcome separate", r.RequestID, r.SessionID, r.State, receiptExecutionCause(r), r.Reason)
+}
+
+// settleBoundDrainReceipt settles one drain from the structured receipt.
+// The transcript watch is not consulted. A missing or unknown receipt keeps
+// the attempt and does not count as delivery.
+func (s *Server) settleBoundDrainReceipt(ctx context.Context, name string, entry sendq.Entry, generation uint64, resolve func(sendq.AttemptOutcome, string) bool) bool {
+	r, err := s.LookupHeldReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: entry.SessionID, RequestID: entry.TransportRequestID})
+	if err == nil {
+		err = r.ValidateIdentity(name, entry.SessionID, entry.TransportRequestID)
+	}
+	if err != nil || r == nil || !receiptStateSettles(r.State) {
+		detail := "structured receipt did not settle the transport obligation"
+		if err != nil {
+			detail = err.Error()
+		} else if r != nil {
+			detail = fmt.Sprintf("receipt state=%s cause=%q does not settle transport", r.State, receiptExecutionCause(r))
+		}
+		if resolve(sendq.Unverified, detail) {
+			s.reportDrainedSendNotBegun(name, entry, TurnEvidence{}, time.Now())
+		}
+		return false
+	}
+	if err := s.persistSendReceipt(name, entry, r); err != nil {
+		slog.Warn("held receipt evidence could not be persisted; retaining obligation", "agent", name, "entry_id", entry.ID, "error", err)
+		if resolve(sendq.Unverified, err.Error()) {
+			s.reportDrainedSendNotBegun(name, entry, TurnEvidence{}, time.Now())
+		}
+		return false
+	}
+	if !resolve(sendq.Confirmed, receiptSettlementDetail(r)) {
+		return false
+	}
+	s.markAgentTurnBegan(name)
+	ended := s.noteQueuedTurnBegan(name, generation)
+	if !ended {
+		s.wedges.handedOver(name, entry.ID)
+	}
+	s.clearSendqPin(name)
+	slog.Info("agent send queue: drained one message", "name", name, "entry_id", entry.ID,
+		"remaining", s.pendingAgentSends(name))
+	return ended
 }

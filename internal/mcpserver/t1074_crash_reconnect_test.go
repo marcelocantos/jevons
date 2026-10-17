@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
@@ -87,6 +88,10 @@ func TestT1074InterruptedReceiptIsNotReplayedAcrossRestart(t *testing.T) {
 				mu.Unlock()
 				receipt := heldReceipt(q, claudia.ReceiptUnknown)
 				receipt.Reason = "interrupted"
+				receipt.Cause = claudia.ReceiptCauseUnknown
+				if q.RequestID == followID {
+					receipt = heldReceipt(q, claudia.ReceiptAccepted)
+				}
 				_ = json.NewEncoder(conn).Encode(map[string]any{
 					"type": "receipt", "rpc_id": msg["rpc_id"], "request_id": q.RequestID, "receipt": receipt,
 				})
@@ -107,6 +112,7 @@ func TestT1074InterruptedReceiptIsNotReplayedAcrossRestart(t *testing.T) {
 	after.registry = reg
 	sender := &requestIDSender{}
 	setObservedSenderResolver(after, func(string) (agentSender, bool, error) { return sender, false, nil })
+	journal := receiptJournal(t, after, dir)
 
 	after.drainAgentSendQueue(name)
 	after.drainAgentSendQueue(name)
@@ -124,10 +130,22 @@ func TestT1074InterruptedReceiptIsNotReplayedAcrossRestart(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("drain did not query the durable receipt")
 	}
+	seenIDs := map[string]int{}
 	for _, q := range seen {
-		if q.Seat != name || q.SessionID != session || q.RequestID != crashedID {
-			t.Fatalf("query was not the original interrupted request: %+v", seen)
+		if q.Seat != name || q.SessionID != session || (q.RequestID != crashedID && q.RequestID != followID) {
+			t.Fatalf("query was not one of the two original requests: %+v", seen)
 		}
+		seenIDs[q.RequestID]++
+	}
+	if seenIDs[crashedID] == 0 || seenIDs[followID] == 0 {
+		t.Fatalf("drain did not query both the interrupted request and its follow-up: %+v", seen)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("receipt journal: %+v %v", events, err)
+	}
+	if events[0].Fields["transport_request_id"] != followID || events[0].Fields["receipt_cause"] != "" {
+		t.Fatalf("interrupted id was settled, or prose became a cause: %+v", events[0].Fields)
 	}
 	if _, _, err = after.sendQueue().AppendWithRequestID(name, text, crashedID, time.Now()); err == nil {
 		t.Fatal("reoffering the interrupted id was admitted")
@@ -205,6 +223,13 @@ func TestT1074StalePredecessorDoesNotTakeNextRequest(t *testing.T) {
 		t.Fatalf("stub reminted session %s", seat.SessionID())
 	}
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return seat, false, nil })
+	receiptJournal(t, s, dir)
+	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if q.Seat != name || q.SessionID != session || (q.RequestID != firstID && q.RequestID != secondID) {
+			t.Fatalf("drain queried %+v", q)
+		}
+		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	})
 
 	var mu sync.Mutex
 	var got []claudia.Event
@@ -313,6 +338,13 @@ func TestT1074UnboundTurnDoesNotTakeNextRequest(t *testing.T) {
 	}
 	t.Cleanup(func() { seat.Stop() })
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return seat, false, nil })
+	receiptJournal(t, s, dir)
+	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if q.Seat != name || q.SessionID != session || (q.RequestID != firstID && q.RequestID != secondID) {
+			t.Fatalf("drain queried %+v", q)
+		}
+		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	})
 
 	var mu sync.Mutex
 	var got []claudia.Event
