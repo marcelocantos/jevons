@@ -237,6 +237,35 @@ func receiptSettlementDetail(r *claudia.RequestReceipt) string {
 	return fmt.Sprintf("Claudia durable receipt request=%q session=%q state=%s cause=%q reason=%q; transport accepted, mission outcome separate", r.RequestID, r.SessionID, r.State, receiptExecutionCause(r), r.Reason)
 }
 
+// settleBoundHandoffReceipt settles one immediate or steer handoff from the
+// structured receipt. A nil send error has already returned by the time this
+// runs. It must not confirm that write. A missing or unknown receipt keeps
+// the attempt. The caller-visible transcript verdict is a separate answer.
+func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
+	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	defer cancel()
+	r, err := s.LookupHeldReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: handoff.SessionID, RequestID: handoff.TransportRequestID})
+	if err == nil && r != nil {
+		err = r.ValidateIdentity(name, handoff.SessionID, handoff.TransportRequestID)
+	}
+	if err != nil || r == nil || !receiptStateSettles(r.State) {
+		detail := "structured receipt did not settle the transport obligation"
+		if err != nil {
+			detail = err.Error()
+		} else if r != nil {
+			detail = fmt.Sprintf("receipt state=%s cause=%q does not settle transport", r.State, receiptExecutionCause(r))
+		}
+		s.settleHandoff(name, handoff, sendq.Unverified, detail)
+		return
+	}
+	if err := s.persistSendReceipt(name, handoff, r); err != nil {
+		slog.Warn("held receipt evidence could not be persisted; retaining obligation", "agent", name, "entry_id", handoff.ID, "error", err)
+		s.settleHandoff(name, handoff, sendq.Unverified, err.Error())
+		return
+	}
+	s.settleHandoff(name, handoff, sendq.Confirmed, receiptSettlementDetail(r))
+}
+
 // settleBoundDrainReceipt settles one drain from the structured receipt.
 // The transcript watch is not consulted. A missing or unknown receipt keeps
 // the attempt and does not count as delivery.

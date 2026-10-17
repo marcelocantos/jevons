@@ -39,9 +39,9 @@ func TestT1074BoundDrainQueryErrorStaysHeld(t *testing.T) {
 
 // TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt drives one active
 // turn, a steer, and a later request that repeats the first text. The witness
-// reports PayloadSeen for all three. Bound drains settle only from the receipt
-// queried for that transport id. Steer still confirms from a nil send error
-// and does not read a receipt; this slice did not change that defer.
+// reports PayloadSeen for all three. Each bound handoff, including the steer,
+// settles only from the receipt queried for its own transport id. A's prose
+// is not a cause, and neither the steer nor C inherits it.
 func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
@@ -58,9 +58,6 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 	var queries []string
 	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
 		queries = append(queries, q.RequestID)
-		if phase == "steer" {
-			t.Fatalf("steer read a receipt: %+v", q)
-		}
 		if len(ids) == 0 || q.RequestID != ids[len(ids)-1] {
 			t.Fatalf("phase %s queried %q while the handoff ids are %v", phase, q.RequestID, ids)
 		}
@@ -72,9 +69,16 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 			r.Reason = "401 unauthorized"
 			r.Cause = ""
 			r.TurnIDs = []string{"turn-A"}
-		case "C":
+		case "steer":
 			if q.RequestID == ids[0] {
-				t.Fatal("later request inherited the active turn's receipt")
+				t.Fatal("steer inherited the active turn's request id")
+			}
+			r = heldReceipt(q, claudia.ReceiptAccepted)
+			r.Reason = "folded"
+			r.Cause = ""
+		case "C":
+			if q.RequestID == ids[0] || q.RequestID == ids[1] {
+				t.Fatal("later request inherited an earlier receipt")
 			}
 			r.State = claudia.ReceiptFailed
 			r.Cause = claudia.ReceiptCauseAuth
@@ -103,8 +107,8 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 	if err != nil || res.Status != "steered" {
 		t.Fatalf("steer: status=%q err=%v", res.Status, err)
 	}
-	if len(queries) != queriesBeforeSteer {
-		t.Fatalf("steer queried receipts: %v", queries[queriesBeforeSteer:])
+	if len(queries) != queriesBeforeSteer+1 || queries[queriesBeforeSteer] != ids[1] {
+		t.Fatalf("steer query=%v ids=%v", queries[queriesBeforeSteer:], ids)
 	}
 	if len(ids) != 2 {
 		t.Fatalf("steer ids=%v", ids)
@@ -129,7 +133,7 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 	}
 
 	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
-	if err != nil || len(events) != 2 {
+	if err != nil || len(events) != 3 {
 		t.Fatalf("journal: %+v %v", events, err)
 	}
 	byID := map[string]map[string]any{}
@@ -138,8 +142,9 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 		byID[id] = ev.Fields
 	}
 	a := byID[ids[0]]
+	b := byID[ids[1]]
 	c := byID[ids[2]]
-	if a == nil || c == nil {
+	if a == nil || b == nil || c == nil {
 		t.Fatalf("journal ids=%v fields=%v", ids, byID)
 	}
 	if a["receipt_cause"] != "" {
@@ -149,19 +154,25 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 	if ar["reason"] != "401 unauthorized" || ar["cause"] != nil {
 		t.Fatalf("active receipt: %+v", ar)
 	}
+	if b["receipt_cause"] != "" {
+		t.Fatalf("steer invented a cause: %+v", b)
+	}
+	br, _ := b["receipt"].(map[string]any)
+	if br["reason"] != "folded" || br["cause"] != nil || br["state"] != string(claudia.ReceiptAccepted) || br["request_id"] != ids[1] {
+		t.Fatalf("steer receipt: %+v", br)
+	}
 	if c["receipt_cause"] != string(claudia.ReceiptCauseAuth) {
 		t.Fatalf("typed cause was not journaled: %+v", c)
 	}
 	cr, _ := c["receipt"].(map[string]any)
-	if cr["cause"] != string(claudia.ReceiptCauseAuth) || cr["reason"] != "provider stopped" || cr["state"] != string(claudia.ReceiptFailed) {
+	if cr["cause"] != string(claudia.ReceiptCauseAuth) || cr["reason"] != "provider stopped" || cr["state"] != string(claudia.ReceiptFailed) || cr["request_id"] != ids[2] {
 		t.Fatalf("later receipt: %+v", cr)
 	}
-	if _, ok := byID[ids[1]]; ok {
-		t.Fatal("steer wrote a receipt journal row")
-	}
-	mission, ok, err := f.usage.RequestMission(context.Background(), f.name, ids[0])
-	if err != nil || !ok || mission != "T1074" {
-		t.Fatalf("mission=%q ok=%v err=%v", mission, ok, err)
+	for _, id := range ids {
+		mission, ok, err := f.usage.RequestMission(context.Background(), f.name, id)
+		if err != nil || !ok || mission != "T1074" {
+			t.Fatalf("id %s mission=%q ok=%v err=%v", id, mission, ok, err)
+		}
 	}
 }
 
@@ -244,5 +255,129 @@ func TestT1074FailedSubmissionDoesNotInventCause(t *testing.T) {
 	receipt, _ := events[0].Fields["receipt"].(map[string]any)
 	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) {
 		t.Fatalf("later receipt: %+v", receipt)
+	}
+}
+
+// TestT1074ImmediateNilErrorDoesNotConfirm is a capable immediate send whose
+// socket write returns nil. The witness reports PayloadSeen, so the caller
+// still hears "sent". The receipt is unknown, so the queue stays uncertain
+// and no cause is journaled.
+func TestT1074ImmediateNilErrorDoesNotConfirm(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	const payload = "owner: nil write is not acceptance"
+	var transportID string
+	f.probe.check = func(text, id string) {
+		if text != payload {
+			t.Fatalf("sent %q", text)
+		}
+		transportID = id
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if transportID == "" || q.RequestID != transportID {
+			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
+		}
+		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r.Reason = "not_found"
+		r.Cause = ""
+		return r, nil
+	})
+	res, err := deliverObservedToSender(f.s, f.name, payload, false, f.probe, false)
+	if err != nil || res.Status != "sent" {
+		t.Fatalf("caller status=%q err=%v", res.Status, err)
+	}
+	if len(f.probe.sentIDs()) != 1 || transportID == "" {
+		t.Fatalf("sends=%v", f.probe.sentIDs())
+	}
+	entries, err := f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].TransportRequestID != transportID {
+		t.Fatalf("nil send error confirmed: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 0 {
+		t.Fatalf("unknown receipt was journaled: %+v %v", events, err)
+	}
+}
+
+// TestT1074ImmediateProseReasonDoesNotInventCause settles a completed receipt
+// whose Reason names an auth failure and whose typed cause is empty. The
+// queue clears and the journal does not record a cause.
+func TestT1074ImmediateProseReasonDoesNotInventCause(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	const payload = "owner: prose is not a cause"
+	var transportID string
+	f.probe.check = func(text, id string) {
+		if text != payload {
+			t.Fatalf("sent %q", text)
+		}
+		transportID = id
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if transportID == "" || q.RequestID != transportID {
+			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
+		}
+		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r.Reason = "401 unauthorized"
+		r.Cause = ""
+		r.TurnIDs = []string{"turn-immediate"}
+		return r, nil
+	})
+	res, err := deliverObservedToSender(f.s, f.name, payload, false, f.probe, false)
+	if err != nil || res.Status != "sent" {
+		t.Fatalf("caller status=%q err=%v", res.Status, err)
+	}
+	if entries, err := f.s.sendQueue().Snapshot(f.name); err != nil || len(entries) != 0 {
+		t.Fatalf("settling receipt left the queue: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("journal: %+v %v", events, err)
+	}
+	if events[0].Fields["transport_request_id"] != transportID || events[0].Fields["receipt_cause"] != "" {
+		t.Fatalf("prose became a cause: %+v", events[0].Fields)
+	}
+	receipt, _ := events[0].Fields["receipt"].(map[string]any)
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) || receipt["request_id"] != transportID {
+		t.Fatalf("immediate receipt: %+v", receipt)
+	}
+}
+
+// TestT1074SteerUnknownReceiptStaysHeld folds into the open turn. The caller
+// hears "steered" from the nil send error. The receipt is unknown, so the
+// steer's own transport id stays uncertain and is not journaled.
+func TestT1074SteerUnknownReceiptStaysHeld(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	const text = "owner: fold without a receipt"
+	var transportID string
+	var queried string
+	f.probe.check = func(sent, id string) {
+		if sent != text {
+			t.Fatalf("steered %q", sent)
+		}
+		transportID = id
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		queried = q.RequestID
+		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r.Reason = "not_found"
+		r.Cause = ""
+		return r, nil
+	})
+	res, err := deliverObservedToSenderMode(f.s, f.name, text, delivery.ModeSteer, f.probe, false, confirmHere)
+	if err != nil || res.Status != "steered" {
+		t.Fatalf("steer: status=%q err=%v", res.Status, err)
+	}
+	if len(f.probe.sentIDs()) != 1 || transportID == "" || queried != transportID {
+		t.Fatalf("queried %q ids=%v", queried, f.probe.sentIDs())
+	}
+	entries, err := f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].TransportRequestID != transportID {
+		t.Fatalf("unknown steer receipt confirmed: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 0 {
+		t.Fatalf("unknown steer receipt was journaled: %+v %v", events, err)
 	}
 }

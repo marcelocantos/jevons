@@ -21,6 +21,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
+	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
@@ -258,6 +259,10 @@ func TestT1074DrainBindsReceiptAndMissionBeforeHandoff(t *testing.T) {
 
 func TestT1074ImmediateAndSteerBindBeforeHandoff(t *testing.T) {
 	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	})
 	const payload = "owner: send this now"
 	f.probe.check = func(text, id string) {
 		if text != payload {
@@ -284,8 +289,24 @@ func TestT1074ImmediateAndSteerBindBeforeHandoff(t *testing.T) {
 	if err != nil || res.Status != "steered" {
 		t.Fatalf("steer: status=%q err=%v message=%q", res.Status, err, res.Message)
 	}
-	if len(f.probe.sentIDs()) != 2 {
-		t.Fatalf("ids=%v", f.probe.sentIDs())
+	ids := f.probe.sentIDs()
+	if len(ids) != 2 {
+		t.Fatalf("ids=%v", ids)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 2 {
+		t.Fatalf("journal: %+v %v", events, err)
+	}
+	seen := map[string]bool{}
+	for _, ev := range events {
+		id, _ := ev.Fields["transport_request_id"].(string)
+		if ev.Fields["receipt_cause"] != "" {
+			t.Fatalf("accepted receipt invented a cause: %+v", ev.Fields)
+		}
+		seen[id] = true
+	}
+	if !seen[ids[0]] || !seen[ids[1]] {
+		t.Fatalf("journal missed a handoff: ids=%v seen=%v", ids, seen)
 	}
 }
 

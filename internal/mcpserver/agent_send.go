@@ -528,22 +528,23 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		if handoff.ID == "" {
 			return
 		}
-		outcome := sendq.Confirmed
-		detail := res.Status
 		switch {
 		case releaseToPending:
-			outcome = sendq.DefinitelyNotSent
-			detail = "handoff refused before acceptance"
+			detail := "handoff refused before acceptance"
 			if err != nil {
 				detail = err.Error()
 			}
+			s.settleHandoff(name, handoff, sendq.DefinitelyNotSent, detail)
 		case err != nil:
 			// The caller received the failure. Dropping the attempt matches
 			// the historical immediate path, which did not keep a queue copy.
-			outcome = sendq.TerminalUndelivered
-			detail = err.Error()
+			s.settleHandoff(name, handoff, sendq.TerminalUndelivered, err.Error())
+		default:
+			// A nil send error is the socket write returning. It is not
+			// transport acceptance. Steer takes this path too: folding into
+			// the open turn still has its own receipt.
+			s.settleBoundHandoffReceipt(name, handoff)
 		}
-		s.settleHandoff(name, handoff, outcome, detail)
 	}()
 	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
