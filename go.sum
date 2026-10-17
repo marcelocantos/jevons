@@ -64,12 +64,16 @@ github.com/marcelocantos/doit v0.9.0 h1:OIeQgr/DadOu1TNVoJaOYLii5/hKZ6tKDIfVRV/4
 github.com/marcelocantos/doit v0.9.0/go.mod h1:3hQJqJh1PV5u6YaANPEHBD/lH1AFX23MupvC5HLLWGU=
 github.com/marcelocantos/pigeon v0.19.0 h1:1b2nPeZ7phQYmSeUrrFlqoNc4pnEtSh72Dq2KrVfgiU=
 github.com/marcelocantos/pigeon v0.19.0/go.mod h1:qcNuZm+Ub9UwEsKsxvJzH0Dh3VcZ+OuPH4d98lUDDXc=
+github.com/marcelocantos/sqlpipe/go/sqlpipe v0.31.0 h1:6btBEiy7w6IQStlXDtpliEE8sYYE63kT8JWho/NSQSY=
+github.com/marcelocantos/sqlpipe/go/sqlpipe v0.31.0/go.mod h1:HzOL1ty8hgsLAbFbfABXVrbYTWo+hEjlfGjFRl3hLGE=
 github.com/mark3labs/mcp-go v0.47.0 h1:h44yeM3DduDyQgzImYWu4pt6VRkqP/0p/95AGhWngnA=
 github.com/mark3labs/mcp-go v0.47.0/go.mod h1:JKTC7R2LLVagkEWK7Kwu7DbmA6iIvnNAod6yrHiQMag=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
+github.com/pierrec/lz4/v4 v4.1.25 h1:kocOqRffaIbU5djlIBr7Wh+cx82C0vtFb0fOurZHqD0=
+github.com/pierrec/lz4/v4 v4.1.25/go.mod h1:EoQMVJgeeEOMsCqCzqFm2O0cJvljX2nGZjcRIPL34O4=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/quic-go/qpack v0.6.0 h1:g7W+BMYynC1LbYLSqRt8PBg5Tgwxn214ZZR34VIOjz8=
