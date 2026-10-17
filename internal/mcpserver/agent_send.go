@@ -1004,7 +1004,10 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// is precisely the outcome the caller must not hear as success.
 		watch2 := s.watchAgentTurnFor(name, text)
 		if _, err2 := trySend(); err2 == nil {
-			if confirm == confirmHere && handoff.TransportRequestID != "" {
+			// A bound handoff settles from its receipt whoever owns
+			// confirmation. confirmHere already did. A caller-owned
+			// interrupt used to fall through to the transcript watch.
+			if handoff.TransportRequestID != "" {
 				s.settleBoundHandoffReceipt(name, handoff)
 				receiptSettled = true
 				if !handoffConfirmed(s, name, handoff.ID) {
@@ -1012,6 +1015,9 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 					return res, nil
 				}
 				res = s.settledHandoffCallerResult(name, rehydrated, true, nil, mm)
+				if confirm == confirmByCaller {
+					res.ReceiptSettled = true
+				}
 				return res, nil
 			}
 			ev := watch2()
@@ -1022,7 +1028,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			// same rule. An interrupt that succeeded leaves the agent known
 			// idle. A bound handoff settles from its receipt. An unbound
 			// seat still earns the verdict from the receiver's transcript.
-			if confirm == confirmHere && handoff.TransportRequestID != "" {
+			if handoff.TransportRequestID != "" {
 				s.settleBoundHandoffReceipt(name, handoff)
 				receiptSettled = true
 				if !handoffConfirmed(s, name, handoff.ID) {
@@ -1030,6 +1036,9 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 					return res, nil
 				}
 				res = s.settledHandoffCallerResult(name, rehydrated, true, err2, mm)
+				if confirm == confirmByCaller {
+					res.ReceiptSettled = true
+				}
 				return res, nil
 			}
 			ev := watch2()
