@@ -127,11 +127,11 @@ type sendConfirmation int
 const (
 	// confirmHere: deliverToSender judges, against this payload.
 	confirmHere sendConfirmation = iota
-	// confirmByCaller: the caller opened a watch before calling and will
-	// judge the outcome itself. Only the spawn path does this, and only
-	// because its evidence question is the different one — a fresh seat has
-	// an empty composer, so "did the agent stir" cannot be confused with an
-	// earlier message finally being submitted.
+	// confirmByCaller: the spawn opened a watch before calling. An incapable
+	// seat is still judged by that watch. A capable seat is settled from
+	// its structured receipt first. ReceiptSettled means that receipt
+	// accepted the handoff. delivered_unconfirmed means it did not, and the
+	// spawn keeps the seat rather than reading the transcript.
 	confirmByCaller
 )
 

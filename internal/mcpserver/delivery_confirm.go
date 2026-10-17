@@ -265,13 +265,25 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 }
 
 // submitStartBrief is one attempt: watch, send, confirm.
+//
+// A capable seat binds a receipt before the handoff. That receipt is the
+// verdict: a settled one has already returned sent, and reading the
+// transcript here would release a healthy seat when the watch is empty
+// or accept an unsettled one when the watch reports PayloadSeen. An
+// incapable seat still has no receipt, and this watch remains its verdict.
 func (s *Server) submitStartBrief(name, text string) error {
 	watch := s.watchAgentTurnFor(name, text)
 
-	// This watch owns the verdict (🎯T416): the send path must not also judge,
-	// or a healthy brief comes back with a status ConfirmTurnBegan does not
-	// recognise.
 	res, err := s.deliverByNameConfirmedByCaller(name, text, OriginAgent, false)
+	if err == nil && res.ReceiptSettled {
+		s.markAgentTurnBegan(name)
+		if s.registry != nil {
+			if d := s.registry.Def(name); d != nil {
+				s.noteMintSucceeded(d.Parent)
+			}
+		}
+		return nil
+	}
 	if confErr := ConfirmTurnBegan(res.Status, err, watch()); confErr != nil {
 		// 🎯T518: the two middle verdicts mean the brief is HELD — by this
 		// daemon's queue or by the receiver — or the instrument could not

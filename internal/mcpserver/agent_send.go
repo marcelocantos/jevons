@@ -52,6 +52,11 @@ type agentSendResult struct {
 	// receiver's user-message or queue-operation records. A status of sent
 	// alone can be inferred from an unrelated live session event (🎯T416).
 	ReceiverReceipt bool
+	// ReceiptSettled means a capable spawn handoff's structured receipt
+	// accepted the opening brief. submitStartBrief treats that as the
+	// verdict and does not consult the transcript watch. It is not a
+	// delivery status the caller is shown.
+	ReceiptSettled bool
 }
 
 // agentSender is the process surface sendToAgent needs (testable).
@@ -498,8 +503,9 @@ func (s *Server) lockAgentSend(name string) func() {
 }
 
 // unconfirmedBoundHandoffResult is the caller answer when a capable
-// confirmHere handoff's structured receipt did not settle. The transcript
-// watch is not consulted.
+// handoff's structured receipt did not settle. The transcript watch is
+// not consulted. confirmHere and the spawn path both return it. The spawn
+// predicate already keeps the seat on delivered_unconfirmed.
 func (s *Server) unconfirmedBoundHandoffResult(name, text string, rehydrated bool, mm sendMech) agentSendResult {
 	res := agentSendResult{
 		Status: "delivered_unconfirmed",
@@ -863,8 +869,23 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			return res, nil
 		}
 		if confirm == confirmByCaller {
-			// The spawn path judges this one; reporting a verdict here would
-			// hand it a status its own predicate does not know.
+			if handoff.TransportRequestID != "" {
+				// A capable opening brief is decided here, from the receipt.
+				// sent without ReceiptSettled would send the spawn back to
+				// the transcript watch. delivered_unconfirmed on a settled
+				// receipt is a status that watch does not treat as begun.
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, interrupted, nil, mm)
+				res.ReceiptSettled = true
+				return res, nil
+			}
+			// An incapable seat has no receipt. The spawn's own watch judges
+			// this status, which ConfirmTurnBegan already recognises.
 			res := agentSendResult{
 				Status:    sentStatus(rehydrated, interrupted),
 				Message:   fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name) + describeMode(mm),
@@ -900,6 +921,20 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// caller as `turn not submitted`. Where the payload may have landed, the
 		// same instrument the success path uses decides: the watch is already
 		// open, taken from a pre-send baseline, and it reads the RECEIVER.
+		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmByCaller && handoff.TransportRequestID != "" {
+			// Same rule as the nil-write arm. A reply timeout does not
+			// disprove delivery, and the transcript must not decide the
+			// opening brief once a receipt was bound.
+			s.settleBoundHandoffReceipt(name, handoff)
+			receiptSettled = true
+			if !handoffConfirmed(s, name, handoff.ID) {
+				res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+				return res, nil
+			}
+			res = s.settledHandoffCallerResult(name, rehydrated, interrupted, err, mm)
+			res.ReceiptSettled = true
+			return res, nil
+		}
 		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmHere {
 			if handoff.TransportRequestID != "" {
 				s.settleBoundHandoffReceipt(name, handoff)

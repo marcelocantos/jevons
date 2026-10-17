@@ -260,9 +260,9 @@ func handoffConfirmed(s *Server, name, entryID string) bool {
 
 // settleBoundHandoffReceipt settles one immediate or steer handoff from the
 // structured receipt. A nil send error is not transport acceptance. A missing
-// or unknown receipt keeps the attempt. confirmHere reads this result before
-// it tells the caller sent or steered. confirmByCaller still chooses its own
-// status word and only uses this to settle the queue.
+// or unknown receipt keeps the attempt. confirmHere and a capable spawn both
+// read this result before they tell the caller the handoff was sent. An
+// incapable spawn still has no receipt and is judged by its own watch.
 func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
 	if handoff.ID == "" {
 		return
