@@ -30,6 +30,7 @@ import (
 type bindProbe struct {
 	t     *testing.T
 	check func(text, id string)
+	fail  error
 	mu    sync.Mutex
 	sent  []string
 	ids   []string
@@ -48,8 +49,9 @@ func (p *bindProbe) SendWithRequestID(text, id string) error {
 	p.mu.Lock()
 	p.sent = append(p.sent, text)
 	p.ids = append(p.ids, id)
+	fail := p.fail
 	p.mu.Unlock()
-	return nil
+	return fail
 }
 func (p *bindProbe) SendModeString(string, string) (string, string, error) {
 	p.t.Errorf("untagged steer")

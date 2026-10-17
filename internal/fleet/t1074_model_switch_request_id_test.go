@@ -108,12 +108,14 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 
 	var stamped []string
 	var switchStamps []string
+	var switchEvents []claudia.Event
 	ag.SubscribeEvents(func(ev claudia.Event) {
 		if ev.Type == "assistant" && ev.IsTerminalStop() {
 			stamped = append(stamped, ev.RequestID)
 		}
 		if ev.ProgressType == claudia.ProgressModelSwitch {
 			switchStamps = append(switchStamps, ev.RequestID)
+			switchEvents = append(switchEvents, ev)
 		}
 	})
 
@@ -125,9 +127,15 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	var turn int
 	f.replyStarted = func(a *claudia.Agent) {
 		turn++
+		turnID := fmt.Sprintf("turn-%d", turn)
+		// The host id binds when the provider accepts the turn. An
+		// assistant line is not acceptance, so it carries the id only
+		// after this event has taken it.
 		a.PublishEvent(claudia.Event{
-			Type: "assistant", Text: "pong", StopReason: "end_turn",
-			TurnID: fmt.Sprintf("turn-%d", turn),
+			Type: "progress", ProgressType: claudia.ProgressPromptAccepted, TurnID: turnID,
+		})
+		a.PublishEvent(claudia.Event{
+			Type: "assistant", Text: "pong", StopReason: "end_turn", TurnID: turnID,
 		})
 	}
 	f.SetRequestMissionRecorder(func(ctx context.Context, seat, requestID, got string) error {
@@ -208,8 +216,8 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
 		t.Fatalf("plan provider = %s", def.Provider)
 	}
-	if len(frozen) != 1 || len(switchStamps) != 1 || switchStamps[0] != "" {
-		t.Fatalf("switch took a request id: frozen=%v switchStamps=%v", frozen, switchStamps)
+	if len(frozen) != 1 || len(switchStamps) != 1 || switchStamps[0] != "" || len(switchEvents) != 1 || switchEvents[0].Receipt != nil {
+		t.Fatalf("switch took a request or a receipt cause: frozen=%v switchStamps=%v events=%+v", frozen, switchStamps, switchEvents)
 	}
 	got, ok, qerr = usage.RequestMission(ctx, name, first)
 	if qerr != nil || !ok || got != mission {

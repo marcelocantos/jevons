@@ -164,3 +164,85 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 		t.Fatalf("mission=%q ok=%v err=%v", mission, ok, err)
 	}
 }
+
+// TestT1074FailedSubmissionDoesNotInventCause is a send that returns before
+// any durable acceptance. The error text says unauthorized. The receipt is
+// unknown, so the attempt stays held and no cause is journaled. After the
+// seat model changes, the same text under a new transport id settles only
+// from its own receipt, whose prose reason is not a cause.
+func TestT1074FailedSubmissionDoesNotInventCause(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	const text = "same text"
+	f.probe.fail = errors.New("401 unauthorized")
+	var first string
+	f.probe.check = func(sent, id string) {
+		if sent != text {
+			t.Fatalf("sent %q", sent)
+		}
+		if first == "" {
+			first = id
+		}
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if first == "" || q.RequestID == first {
+			r := heldReceipt(q, claudia.ReceiptUnknown)
+			r.Reason = "not_found"
+			r.Cause = ""
+			return r, nil
+		}
+		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r.Reason = "401 unauthorized"
+		r.Cause = ""
+		r.TurnIDs = []string{"turn-B"}
+		return r, nil
+	})
+	if _, _, err := f.s.sendQueue().Append(f.name, text, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.s.drainAgentSendQueue(f.name)
+	if len(f.probe.sentIDs()) != 1 || first == "" {
+		t.Fatalf("failed submission was not attempted: %v", f.probe.sentIDs())
+	}
+	entries, err := f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].TransportRequestID != first {
+		t.Fatalf("failed submission was confirmed: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 0 {
+		t.Fatalf("unknown receipt was journaled as a cause: %+v %v", events, err)
+	}
+
+	d := *f.s.registry.Def(f.name)
+	d.Model = "grok-4"
+	if err := f.s.registry.Register(d); err != nil {
+		t.Fatal(err)
+	}
+	f.probe.fail = nil
+	if _, _, err := f.s.sendQueue().Append(f.name, text, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.s.drainAgentSendQueue(f.name)
+	if len(f.probe.sentIDs()) != 2 || f.probe.sentIDs()[1] == first {
+		t.Fatalf("later request reused the failed submission: %v", f.probe.sentIDs())
+	}
+	entries, err = f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 1 || entries[0].TransportRequestID != first || entries[0].State != sendq.Uncertain {
+		t.Fatalf("failed submission was released by the later receipt: %+v %v", entries, err)
+	}
+	def := f.s.registry.Def(f.name)
+	if def.Model != "grok-4" || def.SessionID != f.session || def.TargetID != "T1074" {
+		t.Fatalf("model change reminted the seat: %+v", def)
+	}
+	events, err = eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("journal: %+v %v", events, err)
+	}
+	if events[0].Fields["transport_request_id"] == first || events[0].Fields["receipt_cause"] != "" {
+		t.Fatalf("later receipt inherited a cause: %+v", events[0].Fields)
+	}
+	receipt, _ := events[0].Fields["receipt"].(map[string]any)
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) {
+		t.Fatalf("later receipt: %+v", receipt)
+	}
+}

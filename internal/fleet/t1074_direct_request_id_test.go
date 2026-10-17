@@ -104,9 +104,15 @@ func TestT1074DirectTurnCarriesRequestID(t *testing.T) {
 	var turn int
 	f.replyStarted = func(a *claudia.Agent) {
 		turn++
+		turnID := fmt.Sprintf("turn-%d", turn)
+		// The host id binds when the provider accepts the turn. An
+		// assistant line is not acceptance, so it carries the id only
+		// after this event has taken it.
 		a.PublishEvent(claudia.Event{
-			Type: "assistant", Text: "pong", StopReason: "end_turn",
-			TurnID: fmt.Sprintf("turn-%d", turn),
+			Type: "progress", ProgressType: claudia.ProgressPromptAccepted, TurnID: turnID,
+		})
+		a.PublishEvent(claudia.Event{
+			Type: "assistant", Text: "pong", StopReason: "end_turn", TurnID: turnID,
 		})
 	}
 	f.SetRequestMissionRecorder(func(ctx context.Context, seat, requestID, got string) error {
