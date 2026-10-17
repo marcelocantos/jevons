@@ -515,8 +515,8 @@ func TestT1074CursorStartBindsBeforeHandoff(t *testing.T) {
 }
 
 // TestT1074EscalationNilErrorDoesNotConfirm is a capable escalation whose
-// ladder returns nil. The caller still hears steered. The receipt is
-// unknown, so the queue stays uncertain and nothing is journaled.
+// ladder returns nil. The receipt is unknown, so the caller hears
+// delivered_unconfirmed, the queue stays uncertain, and nothing is journaled.
 func TestT1074EscalationNilErrorDoesNotConfirm(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
@@ -540,8 +540,11 @@ func TestT1074EscalationNilErrorDoesNotConfirm(t *testing.T) {
 		return r, nil
 	})
 	res, handled, err := f.s.escalateIfBusyWithRequestID(f.name, payload, config.EscalationOwner, "owner", f.probe, "")
-	if err != nil || !handled || res.Status != "steered" {
+	if err != nil || !handled || res.Status != "delivered_unconfirmed" {
 		t.Fatalf("handled=%v status=%q err=%v", handled, res.Status, err)
+	}
+	if _, held := f.s.pendingUnconfirmedSend(f.name, time.Now()); !held {
+		t.Fatal("unsettled escalation receipt was not remembered as undecided")
 	}
 	if len(f.probe.sentIDs()) != 1 || transportID == "" {
 		t.Fatalf("sends=%v", f.probe.sentIDs())
@@ -585,6 +588,9 @@ func TestT1074EscalationProseReasonDoesNotInventCause(t *testing.T) {
 	}
 	if entries, err := f.s.sendQueue().Snapshot(f.name); err != nil || len(entries) != 0 {
 		t.Fatalf("settling escalation left the queue: %+v %v", entries, err)
+	}
+	if _, held := f.s.pendingUnconfirmedSend(f.name, time.Now()); held {
+		t.Fatal("a settling escalation receipt stayed undecided")
 	}
 	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
 	if err != nil || len(events) != 1 {

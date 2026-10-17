@@ -175,8 +175,27 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 	}
 	// A nil ladder return is the socket write. The receipt settles the
 	// transport obligation. An empty handoff is an incapable seat and has
-	// nothing to settle.
+	// nothing to settle. A bound handoff whose receipt does not settle is
+	// not steered or sent: the caller hears the same unconfirmed verdict
+	// as a bound immediate send.
 	s.settleBoundHandoffReceipt(name, handoff)
+	if handoff.ID != "" && !handoffConfirmed(s, name, handoff.ID) {
+		s.noteUnconfirmedSend(name, text)
+		msg := fmt.Sprintf(
+			"Message handed to %q but NOT confirmed as a turn: the socket write returned and the structured receipt did not settle this handoff. "+
+				"DO NOT re-send on this verdict — the attempt stays held until a receipt settles.",
+			name)
+		slog.Info("agent_send",
+			"component", "agent_send", "name", name, "status", "delivered_unconfirmed",
+			"mode", string(ladder[0].Mode), "mechanism", out.Mechanism,
+			"outcome", "escalating", "class", class, "ladder", len(ladder))
+		return agentSendResult{
+			Status:    "delivered_unconfirmed",
+			Message:   msg,
+			Mode:      delivery.Mode(ladder[0].Mode),
+			Mechanism: out.Mechanism,
+		}, true, nil
+	}
 	status, verb := "steered", "steered into its running turn"
 	if ladder[0].Mode == claudia.DeliverySubmit {
 		status, verb = "sent", "queued with the agent behind its running turn"
