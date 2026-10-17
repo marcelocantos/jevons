@@ -204,6 +204,13 @@ func (s *Server) SweepSendBacklogs() {
 			}
 			if rec, reaped := LookupReapedRecord(s.fleetIntent(), b.Agent); reaped {
 				s.noticeUncertainAttempt(b.Agent, pin, FormatReapedUncertainHoldLine(b.Agent, pin, rec))
+				// The uncertain attempt stays where it is. Pending messages
+				// behind it are not that attempt, and a reaped seat has no
+				// live sender for the flow-past drain below. The finished-seat
+				// route claims only Pending entries.
+				if b.Depth > b.Uncertain {
+					s.reportHeldReapedBacklog(b, rec, now)
+				}
 				break
 			}
 			if s.registry != nil && !s.agentIsRegistered(b.Agent) {

@@ -216,6 +216,41 @@ func (s *Server) noteOwnerDeliveredFromReceipt(requestID string) bool {
 	return true
 }
 
+// namedSendReceiptSettles reports whether a settling receipt names this
+// seat, its registry session, and requestID. A nil query, a missing
+// session, a query error, an unknown state, or a foreign receipt does not
+// settle. Reason is not a cause and is not consulted. This does not dial
+// when the query is nil, and it does not set the owner-delivery flag.
+func (s *Server) namedSendReceiptSettles(name, requestID string) bool {
+	requestID = strings.TrimSpace(requestID)
+	name = strings.TrimSpace(name)
+	if s == nil || requestID == "" || name == "" {
+		return false
+	}
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+	sessionID := ""
+	if reg != nil {
+		if d := reg.Def(name); d != nil {
+			sessionID = strings.TrimSpace(d.SessionID)
+		}
+	}
+	if sessionID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
+	defer cancel()
+	r, err := s.LookupSendReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
+	if err != nil || r == nil {
+		return false
+	}
+	if err := r.ValidateIdentity(name, sessionID, requestID); err != nil {
+		return false
+	}
+	return ownerReceiptStateSettles(r.State)
+}
+
 // ownerReceiptStateSettles is the transport-acceptance fact. Failed and
 // cancelled execution still settle the obligation. Unknown does not.
 func ownerReceiptStateSettles(state claudia.ReceiptState) bool {

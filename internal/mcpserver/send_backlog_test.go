@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T418 clause 7 — the oracle for the durability half, and it is RED against
@@ -75,8 +76,15 @@ func TestQueuedMessageSurvivesTheDaemonThatAcceptedIt(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != payload {
 		t.Fatalf("delivered = %v; want the payload the previous daemon accepted", got)
 	}
-	if depth := observedPendingSends(recovering, name); depth != 0 {
-		t.Fatalf("depth after delivery = %d; want 0", depth)
+	// The incapable sender has no receipt. The payload was handed across the
+	// restart and stays held; a second drain must not send it again.
+	entries, err := recovering.sendQueue().Snapshot(name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].Text != payload {
+		t.Fatalf("restarted unbound handoff was confirmed from the transcript: %+v %v", entries, err)
+	}
+	recovering.drainAgentSendQueue(name)
+	if got := sender.delivered(); len(got) != 1 {
+		t.Fatalf("uncertain handoff was sent again: %v", got)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T429 — A SEND REPORTS ONLY WHAT IT OBSERVED.
@@ -283,11 +284,10 @@ func TestClassifySendErrorSeparatesNonObservationFromDisproof(t *testing.T) {
 
 // ── the drain, where believing the transport is most expensive ─────────
 
-// On the drain the message has ALREADY left the daemon's queue. Believing an
-// unverified submit there loses it twice: the queue no longer holds it, and the
-// fleet is told a delivery that happened did not — a fleet-health note naming
-// an "undelivered backlog" that the receiver is at that moment working through.
-func TestDrainWithAnUnverifiedSubmitReadsTheReceiverInstead(t *testing.T) {
+// An incapable sender's nil-or-chip error is not a receipt. The receiver log
+// can show the payload and still must not confirm the handoff, start the
+// turn, or drop the queue entry. The notice says the outcome is undecided.
+func TestDrainWithAnUnverifiedSubmitDoesNotConfirmFromTheReceiver(t *testing.T) {
 	tr := newSessionLog(t)
 	tr.submitted("the turn that just ended")
 	agent := &chipSender{alive: true, sendErr: pasteChipErr(), onPaste: func(text string) {
@@ -302,22 +302,31 @@ func TestDrainWithAnUnverifiedSubmitReadsTheReceiverInstead(t *testing.T) {
 	if len(agent.sent) != 1 {
 		t.Fatalf("drain sent %d times want 1", len(agent.sent))
 	}
-	if len(inbox.texts) != 0 {
-		t.Fatalf("a delivered payload was reported to the overseer as an undelivered backlog: %v", inbox.texts)
+	if len(inbox.texts) != 1 {
+		t.Fatalf("unbound handoff notices = %v", inbox.texts)
 	}
-	if n := observedPendingSends(s, "w"); n != 0 {
-		t.Fatalf("pending=%d want 0 — the message was delivered", n)
+	note := inbox.texts[0]
+	for _, want := range []string{"UNDECIDED", "NOT evidence the message was lost", "do not re-send"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("fleet-health note missing %q: %q", want, note)
+		}
 	}
-	// The discriminating assertion, and the reason this test is not satisfied
-	// by the pre-fix tree: believing the transport made the drain RETURN, which
-	// left an empty queue, a silent log line and no record that the receiver had
-	// taken the message up. Everything above is true of that silence too. Only
-	// the turn-began mark says the daemon actually read the receiver.
-	if !s.agentHasTurnBegan("w") {
-		t.Fatal("the drain believed the transport and never read the receiver's records")
+	if strings.Contains(note, "Uncertain delivery") || strings.Contains(note, "UNDELIVERED") {
+		t.Fatalf("notice claims a finding the drain did not make: %q", note)
 	}
-	if got := s.flightState("w"); got != FlightInFlight {
-		t.Fatalf("flight=%s want in_flight — the drained payload is in a running turn", got)
+	left, err := s.sendQueue().Snapshot("w")
+	if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain {
+		t.Fatalf("handoff = %+v %v", left, err)
+	}
+	if s.agentHasTurnBegan("w") {
+		t.Fatal("transcript confirmation started a turn")
+	}
+	if got := s.flightState("w"); got == FlightInFlight {
+		t.Fatalf("flight=%s; an unbound handoff must not start a turn", got)
+	}
+	s.drainAgentSendQueue("w")
+	if len(agent.sent) != 1 {
+		t.Fatalf("retained handoff resent: %d", len(agent.sent))
 	}
 }
 
@@ -336,8 +345,14 @@ func TestDrainWithAnUnverifiedSubmitAndNoRecordsStillSurfaces(t *testing.T) {
 	if len(inbox.texts) != 1 {
 		t.Fatalf("an undelivered backlog was not surfaced to the overseer: %v", inbox.texts)
 	}
-	if !strings.Contains(inbox.texts[0], "Uncertain delivery") {
-		t.Errorf("fleet-health note does not name the failure: %q", inbox.texts[0])
+	note := inbox.texts[0]
+	for _, want := range []string{"UNDECIDED", "NOT evidence the message was lost", "do not re-send"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("fleet-health note missing %q: %q", want, note)
+		}
+	}
+	if n := observedPendingSends(s, "w"); n != 1 {
+		t.Fatalf("pending=%d want 1", n)
 	}
 }
 

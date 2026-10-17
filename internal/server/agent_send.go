@@ -214,6 +214,14 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 		// always sets the MCP deliver hook so busy queues instead (🎯T275).
 		return AgentSendOutcome{}, err
 	}
+	// A nil write is not delivery. "sent" and "rehydrated_sent" require a
+	// settling receipt for this seat, its registry session, and requestID.
+	// A nil query does not dial. The overseer branch above does not call
+	// SendWithRequestID and is unchanged.
+	if !s.namedSendReceiptSettles(name, requestID) {
+		bare.Status = "delivered_unconfirmed"
+		return bare, nil
+	}
 	if rehydrated {
 		bare.Status = "rehydrated_sent"
 	}

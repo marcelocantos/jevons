@@ -116,7 +116,7 @@ func TestT1074BareRegistryCarriesRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Status != "sent" {
+	if out.Status != "delivered_unconfirmed" {
 		t.Fatalf("bare status = %+v", out)
 	}
 	if len(frozen) != 1 || len(stamped) != 1 || stamped[0] == "" || stamped[0] != frozen[0].id || !strings.HasPrefix(stamped[0], "rq-") || frozen[0].mission != mission {
@@ -128,7 +128,7 @@ func TestT1074BareRegistryCarriesRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Status != "sent" {
+	if out.Status != "delivered_unconfirmed" {
 		t.Fatalf("second status = %+v", out)
 	}
 	if len(frozen) != 2 || len(stamped) != 2 || stamped[1] == "" || stamped[1] == first || stamped[1] != frozen[1].id || !strings.HasPrefix(stamped[1], "rq-") {

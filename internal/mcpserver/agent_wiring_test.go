@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T426 — a compaction must not make an agent invisible to the daemon.
@@ -242,8 +244,16 @@ func TestT426CompactedSuccessorDrainsQueueAndReturnsIdle(t *testing.T) {
 				// END was observed at all: before that, flight is pinned.
 				return s.flightState(name) != FlightUnknown
 			})
-			if n := observedPendingSends(s, name); n != 0 {
-				t.Fatalf("pending=%d want 0", n)
+			if n := observedPendingSends(s, name); n != 1 {
+				t.Fatalf("pending=%d want 1 (the handoff is retained; this sender has no receipt)", n)
+			}
+			left, err := s.sendQueue().Snapshot(name)
+			if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain || !strings.Contains(left[0].Detail, "no receipt") {
+				t.Fatalf("unbound handoff = %+v %v", left, err)
+			}
+			s.drainAgentSendQueue(name)
+			if got := sender.delivered(); len(got) != 1 {
+				t.Fatalf("retained handoff resent: %q", got)
 			}
 			// Clause 2's other two controls ride the same branch: the report
 			// reached the overseer.

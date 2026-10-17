@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T582 — the incident this suite reproduces: one held message on a seat
@@ -169,8 +170,50 @@ func TestT582NonGateHoldIsRoutedToTheParent(t *testing.T) {
 			t.Errorf("routed message missing %q:\n%s", want, sent)
 		}
 	}
-	if depth := observedPendingSends(f.s, agent); depth != 0 {
-		t.Fatalf("depth = %d; want 0 after routing", depth)
+	if depth := observedPendingSends(f.s, agent); depth != 1 {
+		t.Fatalf("depth = %d; want 1 — the parent call returned sent, which is not a receipt", depth)
+	}
+	entries, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain {
+		t.Fatalf("held route confirmed without a receipt: %+v %v", entries, err)
+	}
+	if !strings.Contains(entries[0].Detail, "without a receipt") {
+		t.Fatalf("detail = %q", entries[0].Detail)
+	}
+	if got := heldReapedNotices(f.up.all()); got != 1 {
+		t.Fatalf("overseer notices = %d; want exactly 1", got)
+	}
+}
+
+// rehydrated_sent is the same non-receipt as sent. The held route passes
+// interrupt=false, so interrupted_sent is that same case and this caller
+// does not produce it.
+func TestT1074HeldRehydratedSentDoesNotConfirm(t *testing.T) {
+	const agent, parent = "jv-t577-no-checkpoint-reap", "jevons-po"
+	f := t582Server(t, agent, parent, fleetlog.ReasonReapDone)
+	setObservedSenderResolver(f.s, func(name string) (agentSender, bool, error) {
+		if name == parent {
+			return f.parent, true, nil
+		}
+		return nil, false, nil
+	})
+	if _, _, err := f.s.sendQueue().Append(agent,
+		"owner: the parent was relaunched",
+		f.now.Add(-StalledBacklogAfter-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	f.sweepFor(2 * time.Minute)
+
+	if got := len(f.parent.delivered()); got != 1 {
+		t.Fatalf("parent received %d message(s); want 1", got)
+	}
+	if depth := observedPendingSends(f.s, agent); depth != 1 {
+		t.Fatalf("depth = %d; want 1 after rehydrated_sent", depth)
+	}
+	entries, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain {
+		t.Fatalf("rehydrated_sent confirmed the hold: %+v %v", entries, err)
 	}
 	if got := heldReapedNotices(f.up.all()); got != 1 {
 		t.Fatalf("overseer notices = %d; want exactly 1", got)

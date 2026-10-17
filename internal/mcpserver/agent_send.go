@@ -1110,7 +1110,7 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 		text = bound.WirePayload()
 		transportID = bound.TransportRequestID
 	}
-	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
+	_, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
 	defer cancel()
 	generation := s.terminalGeneration(name)
 	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, transportID) })
@@ -1125,60 +1125,24 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 		}
 		return s.settleBoundDrainReceipt(receiptCtx, name, entry, generation, resolve)
 	}
-	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
-	// Watch before treating the attempt as failed — broker-wrapped errors miss
-	// queueSendDefinitelyNotSent's exact-string match and would otherwise land
-	// as uncertain/PINNED even when the transcript shows PayloadQueued.
-	ev := watch()
-	outcome := ClassifySendOutcome(FlightIdle, ev)
-	if outcome == OutcomeQueuedBehindTurn {
-		detail := evidenceDetail(ev)
-		if sendErr != nil {
-			detail = describeTransportClaim(sendErr) + "; " + detail
-		}
-		if resolve(sendq.Confirmed, detail) {
-			s.clearSendqPin(name)
-			slog.Info("agent send queue: message waiting in receiver queue behind live turn",
-				"name", name, "entry_id", entry.ID, "detail", detail)
-		}
-		return false
-	}
+	// An incapable sender has no receipt. A transcript watch cannot confirm
+	// the handoff, and it must not start the turn or clear the pin. A
+	// definite non-send still goes back to Pending so the next boundary
+	// retries. Anything else stays held and is not offered again.
 	if errors.Is(sendErr, errRequestIDUnavailable) || queueSendDefinitelyNotSent(sendErr) {
 		if resolve(sendq.DefinitelyNotSent, sendErr.Error()) && !isPromptInFlight(sendErr) {
 			s.noteSendqDeliveryFailure(name, entry, sendErr.Error())
 		}
 		return false
 	}
-	// Preserve the existing successful-send verdict in this durability slice.
-	// Its generic live-event branch is inherited receipt-quality residue under
-	// T623, not a new guarantee of correlated delivery. On an errored send only
-	// evidence of this payload may release the obligation; activity alone cannot.
-	begun := outcome == OutcomeBegun
-	if sendErr != nil && !ev.PayloadSeen && !ev.PayloadEnteredTurn {
-		begun = false
+	detail := "unbound send has no receipt"
+	if sendErr != nil {
+		detail = describeTransportClaim(sendErr)
 	}
-	if !begun {
-		detail := evidenceDetail(ev)
-		if sendErr != nil {
-			detail = describeTransportClaim(sendErr) + "; " + detail
-		}
-		if resolve(sendq.Unverified, detail) {
-			s.reportDrainedSendNotBegun(name, entry, ev, time.Now())
-		}
-		return false
+	if resolve(sendq.Unverified, detail) {
+		s.reportDrainedSendNotBegun(name, entry, TurnEvidence{}, time.Now())
 	}
-	if !resolve(sendq.Confirmed, evidenceDetail(ev)) {
-		return false
-	}
-	s.markAgentTurnBegan(name)
-	ended := s.noteQueuedTurnBegan(name, generation)
-	if !ended {
-		s.wedges.handedOver(name, entry.ID)
-	}
-	s.clearSendqPin(name)
-	slog.Info("agent send queue: drained one message", "name", name, "entry_id", entry.ID,
-		"remaining", s.pendingAgentSends(name))
-	return ended
+	return false
 }
 
 // queueSendDefinitelyNotSent reports whether a drain's send provably never

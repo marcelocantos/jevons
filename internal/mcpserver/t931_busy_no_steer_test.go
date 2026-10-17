@@ -5,12 +5,14 @@ package mcpserver
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // relayedSteerRefusal is the 2026-09-29 refusal, verbatim as the broker
@@ -95,8 +97,16 @@ func TestT931PlainSendToBusyNonSteerableSeatQueuesThenDelivers(t *testing.T) {
 			if len(b.sent) != 1 || b.sent[0] != payload {
 				t.Fatalf("after the terminal stop the seat received %q, want [%q]", b.sent, payload)
 			}
-			if n := observedPendingSends(s, worker); n != 0 {
-				t.Fatalf("pending=%d after drain, want 0", n)
+			if n := observedPendingSends(s, worker); n != 1 {
+				t.Fatalf("pending=%d after drain, want 1 (no receipt)", n)
+			}
+			left, err := s.sendQueue().Snapshot(worker)
+			if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain || !strings.Contains(left[0].Detail, "no receipt") {
+				t.Fatalf("unbound handoff = %+v %v", left, err)
+			}
+			s.drainAgentSendQueue(worker)
+			if len(b.sent) != 1 {
+				t.Fatalf("retained handoff resent: %v", b.sent)
 			}
 		})
 	}

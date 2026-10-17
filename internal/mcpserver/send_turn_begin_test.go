@@ -528,7 +528,9 @@ func TestDrainedMessageThatSticksIsNotRequeuedAndIsSurfaced(t *testing.T) {
 		t.Fatalf("undelivered backlog was not surfaced to the overseer: %v", inbox.texts)
 	}
 	note := inbox.texts[0]
-	for _, want := range []string{"Fleet health", "Uncertain delivery", "full payload remains held", "NOT be automatically retried"} {
+	// An incapable sender is not confirmed from the transcript. The notice is
+	// undecided: the payload stays held, and the text must not call it lost.
+	for _, want := range []string{"Fleet health", "UNDECIDED", "NOT evidence the message was lost", "do not re-send"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("fleet-health note missing %q: %q", want, note)
 		}

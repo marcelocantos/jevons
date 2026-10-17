@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -196,7 +197,18 @@ func TestT927ReattachedSidecarTurnIsClearedAndQueueAnswered(t *testing.T) {
 				joined := strings.Join(answered, "\n")
 				return strings.Contains(joined, payloads[0]) && strings.Contains(joined, payloads[1])
 			})
-			waitFor(t, "the daemon's queue to empty", func() bool { return observedPendingSends(s, name) == 0 })
+			waitFor(t, "both handoffs to stay held without a receipt", func() bool {
+				entries, err := s.sendQueue().Snapshot(name)
+				if err != nil || len(entries) != 2 {
+					return false
+				}
+				for _, e := range entries {
+					if e.State != sendq.Uncertain || !strings.Contains(e.Detail, "no receipt") {
+						return false
+					}
+				}
+				return true
+			})
 			if _, _, n := side.snapshot(); n != 1 {
 				t.Fatalf("interrupts=%d; want exactly one clear of the lost turn", n)
 			}

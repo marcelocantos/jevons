@@ -196,10 +196,15 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 				"[held backlog from %s — that seat was %s, so this is routed to you as its parent (🎯T582)]\n\n%s",
 				b.Agent, rec.Describe(), e.Text)
 			res, derr := s.deliverByName(parent, tagged, OriginAgent, false)
+			// sent, interrupted_sent, and rehydrated_sent mean the parent
+			// call returned. That is not a receipt. Keep the payload and do
+			// not offer it again. A durable queue successor is still a hold
+			// the parent accepted into its own queue.
+			unconfirmedHandoff := false
 			if derr == nil {
 				switch res.Status {
 				case "sent", "interrupted_sent", "rehydrated_sent":
-					// Retains the existing direct-send success predicate.
+					unconfirmedHandoff = true
 				case "queued", "interrupted_queued", StatusReapedHeld:
 					if res.Queued == 0 || !q.Durable() {
 						derr = fmt.Errorf("parent hold is not a confirmed durable successor: %s", res.Message)
@@ -225,7 +230,11 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 				s.notifyFleetHealth(e.ID, fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
 				return
 			}
-			outcome = sendq.Confirmed
+			if unconfirmedHandoff {
+				outcome = sendq.Unverified
+			} else {
+				outcome = sendq.Confirmed
+			}
 			routed++
 		default:
 			s.LogEvent("agent_send", "held_backlog_dropped", map[string]any{
@@ -238,7 +247,11 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 			})
 			dropped++
 		}
-		if err := q.Resolve(b.Agent, e, outcome, "recorded reaped-seat disposition"); err != nil {
+		detail := "recorded reaped-seat disposition"
+		if outcome == sendq.Unverified {
+			detail = "parent accepted the call without a receipt; payload retained"
+		}
+		if err := q.Resolve(b.Agent, e, outcome, detail); err != nil {
 			slog.Error("held backlog route not persisted; attempt retained", "agent", b.Agent, "entry_id", e.ID, "err", err)
 			return
 		}

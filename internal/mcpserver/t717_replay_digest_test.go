@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T717 — a once-per-X notice is not collapsed into never by the overseer
@@ -143,12 +144,25 @@ func TestT717SecondRoutedHoldReachesOverseer(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.sweepFor(2 * time.Minute)
-	if got := heldReapedNotices(f.up.all()); got != 2 {
-		t.Fatalf("notices after a second routed hold = %d; want 2 (one per hold, delivered not merely emitted)\n%s",
-			got, strings.Join(f.up.all(), "\n"))
+	// The first call returned sent, so that payload stays on the reaped seat.
+	// The parent is then in a turn, and the second message is a durable queue
+	// successor: the reaped seat releases it and the parent queue holds it.
+	// The head id did not change, so the overseer is not told a second time.
+	parentGot := f.parent.delivered()
+	if len(parentGot) != 1 || !strings.Contains(parentGot[0], "first follow-up") {
+		t.Fatalf("direct parent handoff = %v", parentGot)
 	}
-	if f.up.all()[0] == f.up.all()[1] {
-		t.Fatal("the two overseer notices are byte-identical — the second hold was an echo of the first")
+	queued, err := f.s.sendQueue().Snapshot(parent)
+	if err != nil || len(queued) != 1 || !strings.Contains(queued[0].Text, "second, unrelated") || queued[0].State != sendq.Pending {
+		t.Fatalf("second hold not queued for the parent: %+v %v", queued, err)
+	}
+	held, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(held) != 1 || !strings.Contains(held[0].Text, "first follow-up") || held[0].State != sendq.Uncertain {
+		t.Fatalf("first hold = %+v %v", held, err)
+	}
+	if got := heldReapedNotices(f.up.all()); got != 1 {
+		t.Fatalf("notices after a second message on the same hold = %d; want 1\n%s",
+			got, strings.Join(f.up.all(), "\n"))
 	}
 }
 

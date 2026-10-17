@@ -101,8 +101,12 @@ func TestT774FiftyMixedEntriesDrainAsOneDigest(t *testing.T) {
 	if !strings.Contains(digest, "collapsed") || !strings.Contains(digest, "50") {
 		t.Errorf("digest does not state what was collapsed:\n%s", digest)
 	}
-	if n := observedPendingSends(s, seat); n != 0 {
-		t.Fatalf("queue not empty after digest delivery: %d", n)
+	if n := observedPendingSends(s, seat); n != 1 {
+		t.Fatalf("queue after digest delivery: %d want the digest held", n)
+	}
+	heldDigest, err := s.sendQueue().Snapshot(seat)
+	if err != nil || len(heldDigest) != 1 || heldDigest[0].State != sendq.Uncertain || !strings.Contains(heldDigest[0].Text, "digest of") {
+		t.Fatalf("digest handoff = %+v %v", heldDigest, err)
 	}
 
 	// Nothing disappears silently: an original text stays readable by id.
@@ -134,8 +138,16 @@ func TestT774SmallBacklogIsNotDigested(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != "msg 0" {
 		t.Fatalf("small backlog was digested: %v", got)
 	}
-	if n := observedPendingSends(s, "a"); n != sendq.DigestThreshold-1 {
-		t.Fatalf("remaining = %d", n)
+	if n := observedPendingSends(s, "a"); n != sendq.DigestThreshold {
+		t.Fatalf("remaining = %d want %d (the handoff stays held)", n, sendq.DigestThreshold)
+	}
+	entries, err := s.sendQueue().Snapshot("a")
+	if err != nil || len(entries) != sendq.DigestThreshold || entries[0].Text != "msg 0" || entries[0].State != sendq.Uncertain {
+		t.Fatalf("head = %+v %v", entries, err)
+	}
+	s.drainAgentSendQueue("a")
+	if got := sender.delivered(); len(got) != 2 || got[1] != "msg 1" {
+		t.Fatalf("second boundary = %v", got)
 	}
 }
 
@@ -159,7 +171,7 @@ func TestT774HeldEntryIsNotDigested(t *testing.T) {
 		t.Fatalf("submits = %d, want 1", len(sender.delivered()))
 	}
 	entries, _ := q.Snapshot("a")
-	if len(entries) != 1 || entries[0].ID != held.ID || entries[0].State != sendq.Uncertain {
+	if len(entries) != 2 || entries[0].ID != held.ID || entries[0].State != sendq.Uncertain || entries[0].Detail != "test" || entries[1].State != sendq.Uncertain || !strings.Contains(entries[1].Detail, "no receipt") || !strings.Contains(entries[1].Text, "digest of") {
 		t.Fatalf("held attempt disturbed: %+v", entries)
 	}
 	if strings.Contains(sender.delivered()[0], "held uncertain payload") {
