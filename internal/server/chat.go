@@ -702,6 +702,29 @@ func (s *Server) forgetFleetBatchRequestID(text string) {
 	}
 }
 
+// untrackedOwnerRequestID is the host id for an owner note that reached
+// the queue without one. The same wire keeps the id across a failed
+// handoff. A later admission after success is a new id.
+func (s *Server) untrackedOwnerRequestID(text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifyUntrackedOwnerIDs == nil {
+		s.notifyUntrackedOwnerIDs = map[string]string{}
+	}
+	if id := s.notifyUntrackedOwnerIDs[text]; id != "" {
+		return id
+	}
+	id := newTrackedRequestID("om")
+	s.notifyUntrackedOwnerIDs[text] = id
+	return id
+}
+
+func (s *Server) forgetUntrackedOwnerRequestID(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.notifyUntrackedOwnerIDs, text)
+}
+
 // freezeOverseerMission writes the overseer's registry target against
 // requestID before any provider call. An empty target is not stored.
 // A nil recorder leaves the mission unknown. A write error must not send.
@@ -741,16 +764,22 @@ func (s *Server) freezeSeatMission(seat, requestID string) error {
 // notifySender seam lets tests stub delivery; nil uses the live process.
 // An owner batch carries the id registered at acceptance. A fleet batch
 // mints an fn- id for the composed prompt and reuses it when that same
-// text is retried. An owner note with no registered id still uses Send.
+// text is retried. An owner note with no registered id, including an
+// owner-health re-injection, mints an om- id under the same retry rule.
 func (s *Server) sendNotes(text string) error {
 	if err := s.injectedBrokerFault(text); err != nil {
 		return err
 	}
 	requestID := s.ownerHandoffRequestID(text)
 	fleet := false
+	untrackedOwner := false
 	if requestID == "" && !isOwnerNotifyText(text) {
 		requestID = s.fleetBatchRequestID(text)
 		fleet = true
+	}
+	if requestID == "" && isOwnerNotifyText(text) {
+		requestID = s.untrackedOwnerRequestID(text)
+		untrackedOwner = true
 	}
 	if requestID != "" {
 		if err := s.freezeOverseerMission(requestID); err != nil {
@@ -778,6 +807,9 @@ func (s *Server) sendNotes(text string) error {
 	}
 	if err == nil && fleet {
 		s.forgetFleetBatchRequestID(text)
+	}
+	if err == nil && untrackedOwner {
+		s.forgetUntrackedOwnerRequestID(text)
 	}
 	return err
 }

@@ -247,16 +247,22 @@ type Server struct {
 	// use this slot.
 	notifyFleetBatchText string
 	notifyFleetBatchID   string
-	ownerUndelivered     map[string]bool
-	notifyRetryDelay     time.Duration
-	notifyRetryTimer     *time.Timer
-	notifyRetryN         int
-	overseerReattachWait time.Duration
-	brokerFaultDir       string // 🎯T811 isolate-only fault seam
-	ownerQueueMu         sync.Mutex
-	ownerQueuePath       string
-	ownerDelivered       []string
-	overseerOwnerTurn    bool
+	// notifyUntrackedOwnerIDs is the host id for an owner note that was
+	// queued without one, keyed by the exact wire text. Owner-health
+	// re-injection is that path. A failed handoff retries the same text
+	// under the same id. Success drops the entry. A registered owner id
+	// never lands here.
+	notifyUntrackedOwnerIDs map[string]string
+	ownerUndelivered        map[string]bool
+	notifyRetryDelay        time.Duration
+	notifyRetryTimer        *time.Timer
+	notifyRetryN            int
+	overseerReattachWait    time.Duration
+	brokerFaultDir          string // 🎯T811 isolate-only fault seam
+	ownerQueueMu            sync.Mutex
+	ownerQueuePath          string
+	ownerDelivered          []string
+	overseerOwnerTurn       bool
 	// overseerPhase is the current reduce of the interleaved turn-state
 	// stream (🎯T555.1); overseerCorrespondent is the in-flight notify batch
 	// stamped onto non-idle samples.
