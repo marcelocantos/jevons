@@ -4,6 +4,9 @@
 package mcpserver
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -218,5 +221,80 @@ func TestT952UnconfirmedWorkingStallDoesNotMintAgeVariedPrompts(t *testing.T) {
 	rows, err := s.sendQueue().Snapshot(agent)
 	if err != nil || len(rows) != 1 || rows[0].ID != entry.ID || rows[0].State != sendq.Pending || rows[0].Text != entry.Text {
 		t.Fatalf("obligation changed: %+v %v", rows, err)
+	}
+}
+
+// Occurrence 9edf22e9b2a6 is the other October parked seat. The retained
+// sendq row is jv-t1054-noise-classifier-scout, parked by jevons-po at
+// 2026-10-11T01:10:38Z, still queued at the 2026-10-14T05:45:26Z spool
+// snapshot. Twenty sweeps and a restart must not prompt, and must not
+// replace that entry.
+func TestT952Occurrence9edf22e9b2a6StaysQuiet(t *testing.T) {
+	const agent = "jv-t1054-noise-classifier-scout"
+	const entryID = "9edf22e9b2a6"
+	const text = "Review note for T1054: verified gate ea8ab648 GREEN on isolated 0ebb08f9. But your 20-case test corpus is synthetic/generated examples, while T1054 ledger acceptance explicitly requires reclassify at least 20 REAL messages from this session and report false-positive/false-negative counts. Please do not equate synthetic gate with that empirical precision study. Provide privacy-safe real-sample IDs/labels/counts (no private bodies), plus audit of all owner-facing routine report ingress and identify any remaining real noise paths. No broad free-text suppression; preserve fail-open. No merge/restart until reviewed."
+	enqueued := time.Date(2026, 10, 11, 1, 5, 10, 666346000, time.UTC)
+	parkedAt := time.Date(2026, 10, 11, 1, 10, 38, 923472000, time.UTC)
+	t0 := time.Date(2026, 10, 14, 5, 45, 26, 821000000, time.UTC)
+
+	dir := t.TempDir()
+	s, _, up := t418Daemon(t, dir)
+	body, err := json.Marshal(struct {
+		Agent   string        `json:"agent"`
+		Entries []sendq.Entry `json:"entries"`
+	}{
+		Agent: agent,
+		Entries: []sendq.Entry{{
+			ID:         entryID,
+			Text:       text,
+			EnqueuedAt: enqueued,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SetSendQueueDir roots the backlog at <state>/sendq. Append mints a new
+	// id, so the retained occurrence is planted on that path.
+	if err := os.WriteFile(filepath.Join(dir, "sendq", agent+".json"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(store)
+	if err := store.SetAgent(agent, fleetintent.Parked, "jevons-po", "Force stop in-flight under PO integration safety hold", parkedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	for minute := 0; minute <= 20; minute++ {
+		if minute == 10 {
+			s, _, up = t418Daemon(t, dir)
+			store, err = fleetintent.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.SetFleetIntentStore(store)
+		}
+		now := t0.Add(time.Duration(minute) * time.Minute)
+		s.noteTurnInFlight(agent)
+		s.SetSweepClock(func() time.Time { return now })
+		if minute == 0 || minute == 10 {
+			s.ReportRecoveredBacklog()
+		}
+		s.SweepSendBacklogs()
+		if got := up.all(); len(got) != 0 {
+			t.Fatalf("minute %d: parked occurrence prompted overseer: %v", minute, got)
+		}
+		rows, err := s.sendQueue().Snapshot(agent)
+		if err != nil || len(rows) != 1 || rows[0].ID != entryID || rows[0].State != sendq.Pending || rows[0].Text != text || !rows[0].EnqueuedAt.Equal(enqueued) {
+			t.Fatalf("minute %d: occurrence changed: %+v %v", minute, rows, err)
+		}
+		show := resultText(t, reconcile(t, s, map[string]any{"name": agent}))
+		// describeSendqForReconcile previews 100 bytes. The phrase past that
+		// cut stays on the snapshot assertion above.
+		if !strings.Contains(show, entryID) || !strings.Contains(show, "Review note for T1054") || !strings.Contains(show, "ea8ab648") {
+			t.Fatalf("owner read path lost occurrence %s: %s", entryID, show)
+		}
 	}
 }
