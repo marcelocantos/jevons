@@ -242,6 +242,18 @@ stay empty. Focused sidecar tests on that commit passed: 43 tests across usage,
 OMP session, provider-usage and SDK compaction. This still is not a full sidecar
 gate, not a live-provider run, and not a switch of the production seat.
 
+Claudia `3a0994df59b419b119aa08b48f0b17861be71845`, tree
+`50436da95c1516810b8a6661762ac9c309c16be2`, installs the seat's
+execution-policy Cursor handlers on the SDK provider stream. Frames for read,
+ls, grep, write, delete, shell, and the pi_* names resolve through those
+handlers while `builtInToolNames` stays empty. A missing handler still answers
+"Tool not available". Writes under a protected root are refused, and a path
+outside the seat root is refused. The same session starts a request receipt
+before dispatch and finishes it when the agent run ends. Focused sidecar tests
+on that commit passed: `omp-session.test.ts` and `omp-compaction.test.ts`, 19
+tests. This still is not a full sidecar gate, not a live-provider run, and not
+a switch of the production seat.
+
 The restart scout also corrected an initial false positive: normal Jevons exit
 already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep
 broker-owned seats running even when the broker is temporarily unresponsive.
@@ -263,8 +275,10 @@ Relevant source seams and limits:
   not use the SDK default transport or a turn captured at session construction.
   Active-provider key reads refresh from the broker; a startup copy is not a
   second credential. Pre-prompt and tool-loop threshold compaction are both
-  accounted on this adapter. Usage totals alone are not evidence of complete
-  attempt accounting, and the production seat does not use this adapter yet.
+  accounted on this adapter. Dispatch overwrites provider stream options with
+  the seat Cursor handlers and bookends the production receipt journal. Usage
+  totals alone are not evidence of complete attempt accounting, and the
+  production seat does not use this adapter yet.
 - Isolated settings and explicit tools/discovery are essential. Default MCP,
   memory, retries and internal subagents must not silently introduce another
   fleet policy or unbudgeted work source. Concurrent seats need isolated registry
