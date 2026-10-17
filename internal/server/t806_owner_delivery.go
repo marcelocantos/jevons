@@ -92,9 +92,10 @@ func (s *Server) announceOwnerUndelivered(text string, err error) {
 		fmt.Sprintf("message not delivered — will retry: %s", reason), reason)
 }
 
-// announceOwnerDelivered flips a previously announced refusal to delivered,
-// exactly once, and retires the id.
-func (s *Server) announceOwnerDelivered(text string) {
+// announceOwnerDelivered retires the id of a handoff whose write returned,
+// so a restart does not send those bytes again. acked is the receipt:
+// only then does a previously announced refusal flip to delivered.
+func (s *Server) announceOwnerDelivered(text string, acked bool) {
 	id := s.peekOwnerMessageID(text)
 	s.mu.Lock()
 	if ids := s.notifyOwnerIDs[text]; len(ids) > 1 {
@@ -109,7 +110,7 @@ func (s *Server) announceOwnerDelivered(text string) {
 	s.mu.Unlock()
 	s.noteOwnerDeliveredID(id)
 	s.persistOwnerQueue()
-	if was {
+	if was && acked {
 		s.broadcastDeliveryFrame("delivered", id, "message delivered to the overseer after retry", "")
 	}
 }

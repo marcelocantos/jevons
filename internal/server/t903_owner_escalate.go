@@ -175,12 +175,13 @@ func (s *Server) LookupSendReceipt(ctx context.Context, q claudia.ReceiptQuery) 
 
 // noteOwnerDeliveredFromReceipt sets the owner-delivery flag only when a
 // settling receipt names this seat, its registry session, and requestID.
-// Unknown, a missing session, a query error, or a nil query leaves the
-// flag clear. Reason is not a cause and is not consulted.
-func (s *Server) noteOwnerDeliveredFromReceipt(requestID string) {
+// Owner escalation and the notify-queue drain both use it. Unknown, a
+// missing session, a query error, or a nil query leaves the flag clear.
+// Reason is not a cause and is not consulted.
+func (s *Server) noteOwnerDeliveredFromReceipt(requestID string) bool {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
-		return
+		return false
 	}
 	s.mu.RLock()
 	name := s.overseerName
@@ -193,25 +194,26 @@ func (s *Server) noteOwnerDeliveredFromReceipt(requestID string) {
 		}
 	}
 	if sessionID == "" {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
 	defer cancel()
 	r, err := s.LookupSendReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
 	if err != nil || r == nil {
 		if err != nil && !errors.Is(err, errSendReceiptQueryUnconfigured) {
-			slog.Debug("owner escalation receipt unavailable; delivery not confirmed", "seat", name, "request_id", requestID, "err", err)
+			slog.Debug("owner delivery receipt unavailable; delivery not confirmed", "seat", name, "request_id", requestID, "err", err)
 		}
-		return
+		return false
 	}
 	if err := r.ValidateIdentity(name, sessionID, requestID); err != nil {
-		slog.Debug("owner escalation receipt rejected", "seat", name, "request_id", requestID, "err", err)
-		return
+		slog.Debug("owner delivery receipt rejected", "seat", name, "request_id", requestID, "err", err)
+		return false
 	}
 	if !ownerReceiptStateSettles(r.State) {
-		return
+		return false
 	}
 	s.NoteOwnerDelivered()
+	return true
 }
 
 // ownerReceiptStateSettles is the transport-acceptance fact. Failed and

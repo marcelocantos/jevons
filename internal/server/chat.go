@@ -766,9 +766,9 @@ func (s *Server) freezeSeatMission(seat, requestID string) error {
 // mints an fn- id for the composed prompt and reuses it when that same
 // text is retried. An owner note with no registered id, including an
 // owner-health re-injection, mints an om- id under the same retry rule.
-func (s *Server) sendNotes(text string) error {
+func (s *Server) sendNotes(text string) (string, error) {
 	if err := s.injectedBrokerFault(text); err != nil {
-		return err
+		return "", err
 	}
 	requestID := s.ownerHandoffRequestID(text)
 	fleet := false
@@ -783,7 +783,7 @@ func (s *Server) sendNotes(text string) error {
 	}
 	if requestID != "" {
 		if err := s.freezeOverseerMission(requestID); err != nil {
-			return err
+			return requestID, err
 		}
 	}
 	var err error
@@ -795,7 +795,7 @@ func (s *Server) sendNotes(text string) error {
 	default:
 		proc := s.CurrentProcess()
 		if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
-			return fmt.Errorf("overseer not running")
+			return requestID, fmt.Errorf("overseer not running")
 		}
 		err = upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
 			func(a *claudia.Agent) error {
@@ -811,7 +811,7 @@ func (s *Server) sendNotes(text string) error {
 	if err == nil && untrackedOwner {
 		s.forgetUntrackedOwnerRequestID(text)
 	}
-	return err
+	return requestID, err
 }
 
 // notifyErrClass classifies overseer-notify delivery failures for structured
@@ -881,7 +881,7 @@ func (s *Server) drainOverseerNotes() {
 		return
 	}
 
-	err := s.sendNotes(strings.Join(batch, "\n\n"))
+	requestID, err := s.sendNotes(strings.Join(batch, "\n\n"))
 
 	s.mu.Lock()
 	s.notifyDraining = false
@@ -924,10 +924,12 @@ func (s *Server) drainOverseerNotes() {
 	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
 	if ownerBatch {
-		s.announceOwnerDelivered(batch[0])
-		// 🎯T355: the prompt left the queue into the overseer's session —
-		// the server-ack half of send-landed.
-		s.NoteOwnerDelivered()
+		// The write returned. Send-landed and the owner-visible delivered
+		// frame are the receipt for this request. Retiring the id is
+		// separate: the bytes already left, so a restart must not send
+		// them again.
+		acked := s.noteOwnerDeliveredFromReceipt(requestID)
+		s.announceOwnerDelivered(batch[0], acked)
 	}
 	// 🎯T555.1: the batch owns the session now — accepted + correspondent
 	// before the first ACP update, so the bar does not wait for it.

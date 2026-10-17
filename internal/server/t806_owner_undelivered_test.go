@@ -77,6 +77,7 @@ func TestT806OwnerRefusalIsUndeliveredThenDeliveredOnce(t *testing.T) {
 	}
 
 	refuse = false
+	installSettlingOwnerReceipt(t, s)
 	s.drainOverseerNotes()
 	ok := sendErrors(drainFrames())
 	if len(ok) != 1 || !strings.Contains(ok[0], "delivered") || strings.Contains(ok[0], "not delivered") {
@@ -173,6 +174,7 @@ func TestT811IdenticalTextsKeepTheirOwnIDs(t *testing.T) {
 	// a delivers (one drain), then b is refused: b announces under its own
 	// id, not suppressed because a text-keyed flag from a lingered.
 	refuse = false
+	installSettlingOwnerReceipt(t, s)
 	s.drainOverseerNotes()
 	if got := frames(); got != "delivered:om-a" {
 		t.Fatalf("frames %q", got)
