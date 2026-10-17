@@ -204,8 +204,12 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 		proc = launched
 		rehydrated = true
 	}
+	requestID := newTrackedRequestID("rq")
+	if err := s.freezeSeatMission(name, requestID); err != nil {
+		return AgentSendOutcome{}, err
+	}
 	if err := upgrade.WithReadopt(context.Background(), name, proc,
-		func(a *claudia.Agent) error { return a.Send(text) }); err != nil {
+		func(a *claudia.Agent) error { return a.SendWithRequestID(text, requestID) }); err != nil {
 		// No product hook: busy is a loud failure (not silent). Production
 		// always sets the MCP deliver hook so busy queues instead (🎯T275).
 		return AgentSendOutcome{}, err

@@ -681,25 +681,35 @@ func (s *Server) ownerHandoffRequestID(text string) string {
 // requestID before any provider call. An empty target is not stored.
 // A nil recorder leaves the mission unknown. A write error must not send.
 func (s *Server) freezeOverseerMission(requestID string) error {
+	s.mu.RLock()
+	name := s.overseerName
+	s.mu.RUnlock()
+	return s.freezeSeatMission(name, requestID)
+}
+
+// freezeSeatMission writes one seat's registry target against requestID
+// before any provider call. An empty target is not stored. A nil recorder
+// leaves the mission unknown. A write error must not send.
+func (s *Server) freezeSeatMission(seat, requestID string) error {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return nil
 	}
 	s.mu.RLock()
 	record := s.recordRequestMission
-	name := s.overseerName
 	reg := s.registry
 	s.mu.RUnlock()
 	if record == nil {
 		return nil
 	}
 	mission := ""
+	seat = strings.TrimSpace(seat)
 	if reg != nil {
-		if d := reg.Def(name); d != nil {
+		if d := reg.Def(seat); d != nil {
 			mission = strings.TrimSpace(d.TargetID)
 		}
 	}
-	return record(context.Background(), name, requestID, mission)
+	return record(context.Background(), seat, requestID, mission)
 }
 
 // sendNotes delivers one coalesced note batch to the overseer. The

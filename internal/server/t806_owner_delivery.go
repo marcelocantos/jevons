@@ -139,7 +139,13 @@ func (s *Server) scheduleNotifyRetry() {
 var ownerMsgSeq atomic.Uint64
 
 func newOwnerMessageID() string {
-	return fmt.Sprintf("om-%d-%d", time.Now().UnixMilli(), ownerMsgSeq.Add(1))
+	return newTrackedRequestID("om")
+}
+
+// newTrackedRequestID mints a host request id at acceptance. kind is a
+// short path tag (om, rq, vc). Identical text is a new id.
+func newTrackedRequestID(kind string) string {
+	return fmt.Sprintf("%s-%d-%d", kind, time.Now().UnixMilli(), ownerMsgSeq.Add(1))
 }
 
 // SetOverseerReattachWait bounds how long an owner send waits for a
