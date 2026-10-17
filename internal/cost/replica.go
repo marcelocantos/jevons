@@ -5,6 +5,7 @@ package cost
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -15,9 +16,11 @@ import (
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 )
 
-// ReplicaSource is the Jevons side of the Claudia-owned usage and receipt
-// tables. The seat pump writes the Claudia file. This side handshakes and
-// reads the replica. It does not query the usage socket.
+// ReplicaSource is the Jevons side of the shared sqlpipe pair. Claudia
+// writes usage, receipts, seat status, and control outcomes. Jevons writes
+// desired seats, grants, and control intents onto the replica file and
+// replicates them when the Claudia peer is open. It does not query the
+// usage socket and it does not reconcile seats.
 type ReplicaSource struct {
 	mu      sync.Mutex
 	plane   *controlplane.Plane
@@ -28,14 +31,14 @@ type ReplicaSource struct {
 // OpenReplica opens the Claudia-owned control file under stateDir, binds it
 // as the seat-pump publisher, and names the Jevons replica beside it.
 func OpenReplica(stateDir string) (*ReplicaSource, error) {
-	plane, err := controlplane.Open(filepath.Join(stateDir, "claudia-control.db"))
+	plane, err := controlplane.Open(filepath.Join(stateDir, controlplane.ClaudiaDBFile))
 	if err != nil {
 		return nil, err
 	}
 	controlplane.Bind(plane)
 	return &ReplicaSource{
 		plane: plane,
-		path:  filepath.Join(stateDir, "control-replica.db"),
+		path:  filepath.Join(stateDir, controlplane.JevonsDBFile),
 	}, nil
 }
 
@@ -76,46 +79,55 @@ func (r *ReplicaSource) ensureReplica() error {
 	return nil
 }
 
-// sync copies committed Claudia rows into the replica. Publishes wait for
-// the handshake so the two sides do not share one sqlite connection unsafely.
+// AcceptDesiredSeat commits one desired seat on the Jevons file. The Claudia
+// peer being closed does not fail the accept; the next sync delivers the row.
+func (r *ReplicaSource) AcceptDesiredSeat(seat controlplane.DesiredSeat) error {
+	return r.acceptLocal(func(db *sqlpipe.Database) error {
+		return controlplane.PublishDesiredSeat(db, seat)
+	})
+}
+
+// AcceptGrant commits one grant on the Jevons file.
+func (r *ReplicaSource) AcceptGrant(grant controlplane.Grant) error {
+	return r.acceptLocal(func(db *sqlpipe.Database) error {
+		return controlplane.PublishGrant(db, grant)
+	})
+}
+
+// AcceptControlIntent commits one control intent on the Jevons file.
+func (r *ReplicaSource) AcceptControlIntent(intent controlplane.ControlIntent) error {
+	return r.acceptLocal(func(db *sqlpipe.Database) error {
+		return controlplane.PublishControlIntent(db, intent)
+	})
+}
+
+func (r *ReplicaSource) acceptLocal(write func(*sqlpipe.Database) error) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ensureReplica(); err != nil {
+		return err
+	}
+	if err := write(r.replica); err != nil {
+		return err
+	}
+	// Committed locally. A closed or absent Claudia peer is delivered later.
+	_ = r.sync()
+	return nil
+}
+
+// sync copies both directions. The Claudia peer claims every Claudia-owned
+// table, so status and outcomes stay Claudia's. Publishes wait for the
+// handshake so the two sides do not share one sqlite connection unsafely.
 func (r *ReplicaSource) sync() error {
 	if err := r.ensureReplica(); err != nil {
 		return err
 	}
+	if r.plane == nil {
+		return fmt.Errorf("control plane: closed")
+	}
 	return r.plane.WithDB(func(claudiaDB *sqlpipe.Database) error {
-		client, err := sqlpipe.NewPeer(claudiaDB, sqlpipe.PeerConfig{OwnedTables: map[string]bool{
-			controlplane.UsageTable:   true,
-			controlplane.ReceiptTable: true,
-		}})
-		if err != nil {
-			return err
-		}
-		defer client.Close()
-		server, err := sqlpipe.NewPeer(r.replica, sqlpipe.PeerConfig{ApproveOwnership: approveClaudiaOwnership})
-		if err != nil {
-			return err
-		}
-		defer server.Close()
-		if err := sqlpipe.SyncPeerHandshake(client, server); err != nil {
-			return err
-		}
-		if client.State() != sqlpipe.PeerLive || server.State() != sqlpipe.PeerLive {
-			return fmt.Errorf("control plane handshake not live: writer=%d reader=%d", client.State(), server.State())
-		}
-		return nil
+		return controlplane.SyncLocked(claudiaDB, r.replica)
 	})
-}
-
-func approveClaudiaOwnership(tables map[string]bool) bool {
-	if len(tables) == 0 {
-		return false
-	}
-	for name := range tables {
-		if !controlplane.Owns(name) {
-			return false
-		}
-	}
-	return true
 }
 
 func sqlText(v any) (string, bool) {
@@ -159,32 +171,69 @@ func (c *Collector) CatchUpReplicas(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	if len(qr.Rows) > 0 {
+		factCol := -1
+		for i, col := range qr.Columns {
+			if col == "fact_json" {
+				factCol = i
+				break
+			}
+		}
+		if factCol < 0 {
+			return fmt.Errorf("replica usage rows have no fact_json")
+		}
+		for _, row := range qr.Rows {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if factCol >= len(row) {
+				return fmt.Errorf("replica usage row is short")
+			}
+			body, ok := sqlText(row[factCol])
+			if !ok {
+				return fmt.Errorf("replica fact_json has type %T", row[factCol])
+			}
+			if err := ApplyReplicatedUsage(ctx, c.store, body); err != nil {
+				return err
+			}
+		}
+	}
+	// Status is checked so a corrupt projection fails catch-up. It is not
+	// applied to the fleet registry: Claudia remains the seat authority.
+	return validateReplicatedStatus(c.replica.replica)
+}
+
+func validateReplicatedStatus(db *sqlpipe.Database) error {
+	if db == nil {
+		return fmt.Errorf("replica status: closed")
+	}
+	qr, err := db.Query("SELECT status_json FROM " + controlplane.StatusTable)
+	if err != nil {
+		return err
+	}
 	if len(qr.Rows) == 0 {
 		return nil
 	}
-	factCol := -1
-	for i, col := range qr.Columns {
-		if col == "fact_json" {
-			factCol = i
+	col := -1
+	for i, name := range qr.Columns {
+		if name == "status_json" {
+			col = i
 			break
 		}
 	}
-	if factCol < 0 {
-		return fmt.Errorf("replica usage rows have no fact_json")
+	if col < 0 {
+		return fmt.Errorf("replica status rows have no status_json")
 	}
 	for _, row := range qr.Rows {
-		if err := ctx.Err(); err != nil {
-			return err
+		if col >= len(row) {
+			return fmt.Errorf("replica status row is short")
 		}
-		if factCol >= len(row) {
-			return fmt.Errorf("replica usage row is short")
-		}
-		body, ok := sqlText(row[factCol])
+		body, ok := sqlText(row[col])
 		if !ok {
-			return fmt.Errorf("replica fact_json has type %T", row[factCol])
+			return fmt.Errorf("replica status_json has type %T", row[col])
 		}
-		if err := ApplyReplicatedUsage(ctx, c.store, body); err != nil {
-			return err
+		if !json.Valid([]byte(body)) {
+			return fmt.Errorf("replica status_json is not json")
 		}
 	}
 	return nil

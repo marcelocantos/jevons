@@ -17,6 +17,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/seatpair"
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
@@ -122,6 +123,11 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		}
 		if srv != nil {
 			srv.SetSendReceiptQuery(collector.ReplicatedReceipt)
+		}
+	}
+	if mcp != nil {
+		if err := seatpair.CatchUpDir(ctx, filepath.Join(jc.StateDir, seatpair.DirName), mcp.ExecuteSeatPair); err != nil {
+			slog.Error("cost: seat pair catch-up failed", "err", err)
 		}
 	}
 

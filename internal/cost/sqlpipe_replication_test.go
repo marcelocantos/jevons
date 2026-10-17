@@ -25,8 +25,8 @@ import (
 // TestT1074SqlpipeUsageAndReceiptReplication drives the real native usage
 // producer through Claudia's usage and receipt queries, file-backed sqlpipe
 // replication, and the Jevons accounting consumer. A missing Bun or toolchain
-// is a failure. This does not achieve T1074.2 or T1074.3: the daemon still
-// polls the socket, and the seat reconciler and per-seat MCP pairs are absent.
+// is a failure. This does not achieve T1074.2 or T1074.3. It also does not
+// achieve T1074.9 or T1074.10: those need the reconcile and per-seat pair tests.
 func TestT1074SqlpipeUsageAndReceiptReplication(t *testing.T) {
 	t.Run("rejects foreign ownership", func(t *testing.T) {
 		dir := t.TempDir()
