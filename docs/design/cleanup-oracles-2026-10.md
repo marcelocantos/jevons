@@ -254,6 +254,24 @@ on that commit passed: `omp-session.test.ts` and `omp-compaction.test.ts`, 19
 tests. This still is not a full sidecar gate, not a live-provider run, and not
 a switch of the production seat.
 
+Claudia `61e21920e41b7c9d2e56e48e4a50367b5658fbe3`, tree
+`09c751793c82c8b0b481b4290103763bffda3a4d`, records one usage fact on that
+same journal for each SDK model stream. The fact is durable before the
+provider handler runs, attributed to the receipt that dispatch just started,
+and completed from the provider's own counters. A second prompt with the same
+text and a different request id is a second call. Reopening the journal does
+not add a call. Side and native compaction stay on the host's wrappers, and
+the eighteen SDK compaction scenarios still show one physical observation per
+dispatch. Focused sidecar tests on that commit passed: 112 tests across the
+usage, receipt, session and compaction suites. The Jevons consumer on
+`codex/cleanup-receipt-consumer` then caught the real Responses, OpenAI and
+Codex producers up through the public history API without a second count
+(`TestUsageProducerCanonicalHistoryCatchUp`, three subtests), and
+`TestHeldReceipts` settled bound receipts without settling unbound legacy
+holds. Neither run is a clean full gate. Host mission attribution is still
+absent, production send paths still do not bind a receipt before handoff, and
+the production seat still does not use this adapter.
+
 The restart scout also corrected an initial false positive: normal Jevons exit
 already consults `upgrade.Mode.StopAgents` and `brokerMayOwnSeats`, which keep
 broker-owned seats running even when the broker is temporarily unresponsive.
