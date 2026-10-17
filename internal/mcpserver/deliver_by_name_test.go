@@ -81,8 +81,8 @@ func TestDeliverByNameWorkerToPOToOverseerChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PO→overseer: %v", err)
 	}
-	if res.Status != "sent" {
-		t.Fatalf("PO→overseer status=%q want sent", res.Status)
+	if res.Status != "delivered_unconfirmed" {
+		t.Fatalf("PO→overseer status=%q want delivered_unconfirmed", res.Status)
 	}
 	if len(inbox.texts) != 1 || !strings.Contains(inbox.texts[0], "T309.3 converging") {
 		t.Fatalf("overseer inbox=%v", inbox.texts)

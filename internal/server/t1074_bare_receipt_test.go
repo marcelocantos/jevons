@@ -167,6 +167,30 @@ func TestT1074BareRegistryRehydratedNilQueryDoesNotConfirm(t *testing.T) {
 	}
 }
 
+func TestT1074BareOverseerNilWriteDoesNotConfirm(t *testing.T) {
+	s := &Server{}
+	s.SetOverseerName("jevons")
+	a := seatstate.New(seatstate.Args{})
+	s.SetSeats(a)
+	a.Observe(seatstate.Observation{
+		Name: "jevons", Alive: seatstate.Yes, InFlight: seatstate.No,
+		QueueDepth: seatstate.QueueUnknown, Source: "test.t1074",
+	})
+	s.SetProcess(claudia.NewStubAgent(func(string) error { return nil }))
+	for _, origin := range []string{sendOriginOwner, sendOriginAgent} {
+		out, err := s.sendToNamedAgentMode("jevons", "alpha "+origin, origin, delivery.ModeSubmit)
+		if err != nil {
+			t.Fatalf("%s: %v", origin, err)
+		}
+		if out.Status == "sent" || out.Status != "delivered_unconfirmed" {
+			t.Fatalf("%s status=%q", origin, out.Status)
+		}
+	}
+	if ownerSendDelivered(s) {
+		t.Fatal("nil overseer write confirmed owner delivery")
+	}
+}
+
 func TestT1074BareRegistryRehydratedSettlingReceiptConfirms(t *testing.T) {
 	const name = "jv-t1074-bare-rehydrate-settled"
 	s := &Server{}

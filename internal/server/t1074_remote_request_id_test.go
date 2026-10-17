@@ -128,3 +128,64 @@ func TestT1074HandleUserMessageFreezeFailureDoesNotSend(t *testing.T) {
 		t.Fatalf("nil process minted %d requests", minted)
 	}
 }
+
+func remoteReceiptServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons", SessionID: "gen-remote", TargetID: "T-remote-mission",
+		Provider: claudia.ProviderGrok, WorkDir: dir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{}
+	s.SetOverseerName("jevons")
+	s.SetRegistry(reg)
+	s.SetProcess(claudia.NewStubAgent(func(string) error { return nil }))
+	return s
+}
+
+func TestT1074HandleUserMessageNilQueryDoesNotConfirm(t *testing.T) {
+	s := remoteReceiptServer(t)
+	s.HandleUserMessage("alpha")
+	if ownerSendDelivered(s) {
+		t.Fatal("nil query confirmed owner delivery")
+	}
+}
+
+func TestT1074HandleUserMessageUnknownReceiptDoesNotConfirm(t *testing.T) {
+	s := remoteReceiptServer(t)
+	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if q.Seat != "jevons" || q.SessionID != "gen-remote" || q.RequestID == "" {
+			t.Errorf("query = %+v", q)
+		}
+		return durableOwnerReceipt(q, claudia.ReceiptUnknown, "not_found"), nil
+	})
+	s.HandleUserMessage("alpha")
+	if ownerSendDelivered(s) {
+		t.Fatal("unknown receipt confirmed owner delivery")
+	}
+}
+
+func TestT1074HandleUserMessageSettlingReceiptConfirms(t *testing.T) {
+	s := remoteReceiptServer(t)
+	var seen *claudia.RequestReceipt
+	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if q.Seat != "jevons" || q.SessionID != "gen-remote" || q.RequestID == "" {
+			t.Errorf("query = %+v", q)
+		}
+		seen = durableOwnerReceipt(q, claudia.ReceiptCompleted, "401 unauthorized")
+		return seen, nil
+	})
+	s.HandleUserMessage("alpha")
+	if seen == nil || seen.Cause != "" || seen.Reason != "401 unauthorized" {
+		t.Fatalf("receipt = %+v", seen)
+	}
+	if !ownerSendDelivered(s) {
+		t.Fatal("settling receipt did not confirm owner delivery")
+	}
+}

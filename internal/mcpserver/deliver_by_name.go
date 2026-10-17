@@ -590,14 +590,8 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	// its composer was found holding four accumulated pastes, each of which had
 	// been answered "Message delivered to overseer". The seam returning nil
 	// means the text was accepted into the notify queue, which is a statement
-	// about the queue and not about the overseer.
-	//
-	// The overseer's turn boundaries are not visible from this package (its
-	// event stream is owned by the chat layer, not the fleet event sink), so
-	// its flight state is permanently unknown here. That is the honest input:
-	// a payload that appears is confirmed, and one that does not is reported
-	// unconfirmed rather than delivered — never as the defect, because a note
-	// legitimately waiting behind an owner turn looks identical from here.
+	// about the queue and not about the overseer. A transcript hit is not a
+	// receipt, so this arm does not watch one and does not report "sent".
 
 	// 🎯T428 / 🎯T568. Every notification source — sentinel, RSI coach, fleet
 	// health, worker report notify, jevons_event_push — arrives here, so the
@@ -641,7 +635,6 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		}
 	}
 
-	watch := s.watchAgentTurnFor(name, text)
 	if err := deliver(text, origin); err != nil {
 		// The batch never reached the seam, so remembering it would refuse the
 		// retry that is the correct response to this failure.
@@ -656,33 +649,20 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		return agentSendResult{}, fmt.Errorf("send to overseer %q failed: %w", name, err)
 	}
 
-	ev := watch()
-
-	// 🎯T428 seals on the RECEIVER's records, never on deliver returning nil:
-	// the seam accepting text is a statement about the notify queue. A user
-	// message carrying the payload, a queue record draining it into the running
-	// turn, or an enqueue record holding it behind one all say the overseer has
-	// it (🎯T416 / 🎯T429); anything else leaves the batch retryable.
-	confirmed := ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued
-	ticket.Settle(confirmed)
-	if confirmed {
-		s.recordDeliveryEvidence(name, text, ev)
-	}
-
-	outcome := ClassifySendOutcome(FlightUnknown, ev)
+	// The notify queue accepted the bytes. That is not a structured receipt.
+	// PayloadSeen, a chatlog byte search, and assistant prose do not settle
+	// it, and this arm does not record delivery evidence from them. The
+	// batch stays unconfirmed: an immediate identical offer is collapsed
+	// for the grace window, and a restart is not told the overseer already
+	// has it.
+	ticket.Settle(false)
 	res := agentSendResult{
-		Status:  "sent",
-		Message: fmt.Sprintf("Message delivered to overseer %q.", name),
-	}
-	if outcome != OutcomeBegun {
-		res = agentSendResult{
-			Status: "delivered_unconfirmed",
-			Message: fmt.Sprintf(
-				"Message accepted for overseer %q but NOT confirmed as a turn: %s. "+
-					"It may be waiting behind an in-flight turn, or it may be sitting unsubmitted. "+
-					"Treat as undelivered until the overseer acts on it.",
-				name, evidenceDetail(ev)),
-		}
+		Status: "delivered_unconfirmed",
+		Message: fmt.Sprintf(
+			"Message accepted for overseer %q but NOT confirmed as a turn: "+
+				"the notify queue accepted it and no structured receipt settled this handoff. "+
+				"Treat as undelivered until a receipt settles.",
+			name),
 	}
 	slog.Info("agent_send",
 		"component", "agent_send",
@@ -691,9 +671,7 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		"status", res.Status,
 		"queued", 0,
 		"rehydrated", false,
-		"outcome", string(outcome),
-		"payload_seen", ev.PayloadSeen,
-		"evidence", ev.Detail,
+		"outcome", string(OutcomeUnconfirmed),
 	)
 	return res, nil
 }

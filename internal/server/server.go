@@ -1029,7 +1029,11 @@ func (s *Server) HandleUserMessage(text string) {
 	if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
 		func(a *claudia.Agent) error { return a.SendWithRequestID(text, requestID) }); err != nil {
 		slog.Error("jevons: send failed", "err", err)
+		return
 	}
+	// A nil write is not owner delivery. The flag waits for a settling
+	// receipt of this request. A nil query does not dial.
+	s.noteOwnerDeliveredFromReceipt(requestID)
 }
 
 // HandleAction processes a UI action from a remote client or a timer callback.

@@ -432,7 +432,7 @@ func callPush(t *testing.T, s *Server, target, event, text string) *mcp.CallTool
 // TIMEOUT IS NOT ABSENCE. The reply never comes back inside the window, and the
 // receiver's records show the payload in its turn. The tool must report
 // delivered — from those records — and must not hand the caller a failure.
-func TestEventPushWhoseReplyOutlivesTheWindowReportsDeliveryFromTheReceiver(t *testing.T) {
+func TestT1074EventPushTranscriptDoesNotConfirm(t *testing.T) {
 	tr := newSessionLog(t)
 	tr.submitted("the turn that was running when the push arrived")
 	release := make(chan struct{})
@@ -452,10 +452,13 @@ func TestEventPushWhoseReplyOutlivesTheWindowReportsDeliveryFromTheReceiver(t *t
 		t.Fatalf("a delivered push was returned as an error: %q", toolText(res))
 	}
 	text := toolText(res)
-	for _, want := range []string{"DELIVERED", "delivered_confirmed", "DO NOT re-push"} {
+	for _, want := range []string{"NOT CONFIRMED", "delivered_unconfirmed", "DO NOT re-push", "not a receipt"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %q", want, text)
 		}
+	}
+	if strings.Contains(text, "delivered_confirmed") {
+		t.Fatalf("transcript confirmed the push: %q", text)
 	}
 }
 
@@ -475,7 +478,7 @@ func TestEventPushWithNoEvidenceIsUnknownRatherThanFailure(t *testing.T) {
 		t.Fatalf("an unknown was returned as an error: %q", toolText(res))
 	}
 	text := toolText(res)
-	for _, want := range []string{"NOT CONFIRMED", "delivered_unconfirmed", "DO NOT re-push", "jevons_transcript_read"} {
+	for _, want := range []string{"NOT CONFIRMED", "delivered_unconfirmed", "DO NOT re-push", "not a receipt"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %q", want, text)
 		}

@@ -166,6 +166,10 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 		if err != nil {
 			return AgentSendOutcome{}, err
 		}
+		// The notify seam accepted the text. This return does not read a
+		// receipt, so it does not report sent. The drain settles the owner
+		// flag from the receipt on its own.
+		bare.Status = "delivered_unconfirmed"
 		return bare, nil
 	}
 
