@@ -121,6 +121,7 @@ every run today; live is the default truth.
 10. **J10-worker-shell-tool** — worker runs `run_terminal_command` (T97 permission regression); marker file oracle
 11. **J6b-mcp-reconnect** — live `jevons_mcp_reconnect` (T60/T105.1)
 11b. **J21-goal-continue-all-backends** — work mint on Claude, Grok, and Codex; after the first terminal the host starts a second user turn with no `jevons_agent_send` (🎯T510). Missing CLI is OUTAGE, not skip-and-green.
+11c. **J39-t952-hold** — a parked backlog stays readable status across 20 simulated minutes and a restart, with no model submission. The working stall's alert is the open notice, plus the 15-minute band while that queue is still pending. A live overseer may resolve the stall; the transcript then holds one or two notices, never one per sweep (🎯T952).
 
 ### Teardown oracle
 12. **J5-isolation** — sandbox journal under temp state; journey MCP gone; daily MCP intact

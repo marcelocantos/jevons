@@ -316,6 +316,8 @@ persona_notes: |
 	s.run("J33-undelivered-resend", s.jUndeliveredResend)
 	s.run("J35-worker-busy-escalates", s.jWorkerBusyVisibleQueue)
 	s.run("J36-send-ack-correlation", s.jSendAckCorrelation)
+	// J39 bounces the isolate and restores a clock-free daemon before return.
+	s.run("J39-t952-hold", s.jT952Hold)
 	// Last: J18 stops every agent and raises the fleet-mute alarm on
 	// purpose, and the overseer then works the alarm. Any journey after it
 	// shared the isolate with that work (J19's history window filled with

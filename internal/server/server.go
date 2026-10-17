@@ -230,6 +230,12 @@ type Server struct {
 	notifyQueue    []string
 	notifyDraining bool
 	notifySender   func(string) error
+	// fleetHealthJournaled counts fleet-health notes already written into
+	// the overseer transcript. The OMP sidecar does not echo that prompt
+	// as a user event, so the 🎯T63 agent_note path never sees it. A later
+	// provider echo of the same text is consumed here instead of journaled
+	// again. Guarded by mu.
+	fleetHealthJournaled map[string]int
 	// overseerSendSeam observes the host request id on the notify drain.
 	// A stub *claudia.Agent drops that id, so tests cannot see it on Send.
 	// Nil is production: sendNotes calls SendWithRequestID.

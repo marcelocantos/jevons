@@ -422,16 +422,48 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 		b.Agent, b.Depth, age.Round(time.Second), why))
 }
 
+// IsolateSweepNowFileEnv names a file of one RFC3339Nano timestamp. The
+// backlog sweep reads it only when JEVONS_TEST_FAULTS=1, which the isolate
+// journey suite sets and the development daemon does not. An unreadable
+// file leaves the sweep on the wall clock.
+const IsolateSweepNowFileEnv = "JEVONS_BACKLOG_SWEEP_NOW_FILE"
+
+const isolateTestFaultsEnv = "JEVONS_TEST_FAULTS"
+
 // sweepClock is the sweep's now. Injectable so a ten-minute run of the sweep
-// is a test that costs no wall time (🎯T582); the daemon leaves it nil.
+// is a test that costs no wall time (🎯T582). The development daemon leaves
+// the injection nil and does not set the isolate fault env, so it uses the
+// wall clock.
 func (s *Server) sweepClock() time.Time {
 	s.mu.Lock()
 	fn := s.sweepNow
 	s.mu.Unlock()
-	if fn == nil {
-		return time.Now()
+	if fn != nil {
+		return fn()
 	}
-	return fn()
+	if t, ok := isolateSweepNow(); ok {
+		return t
+	}
+	return time.Now()
+}
+
+func isolateSweepNow() (time.Time, bool) {
+	if os.Getenv(isolateTestFaultsEnv) != "1" {
+		return time.Time{}, false
+	}
+	path := strings.TrimSpace(os.Getenv(IsolateSweepNowFileEnv))
+	if path == "" {
+		return time.Time{}, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // SetSweepClock injects the backlog sweep's clock. Test-only seam: the daemon

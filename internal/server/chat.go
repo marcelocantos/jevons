@@ -334,6 +334,12 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	// overseer's own prose, and IdentityHeaderName already reads the opening
 	// header block alone, so a report QUOTING a header still lands.
 	if ev.Type == "user" {
+		if text, prose := userTurnText(ev); prose && s.consumeJournaledFleetHealth(text) {
+			// Admission already wrote this fleet-health note. The provider
+			// echo is the same text, not a second episode.
+			s.handleAdmissionSafeAgentEvent(ev, currentDurable)
+			return currentDurable
+		}
 		if text, _ := userTurnText(ev); text != "" {
 			if err := briefaddr.Check(s.overseerAgentName(), text); err != nil {
 				slog.Warn("chat: dropping wrong-seat brief from overseer wire (🎯T513)", "err", err)
@@ -583,8 +589,69 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 		s.interruptOverseerForOwner()
 	}
 
+	// Journal before the drain sends. The provider echo, if one arrives,
+	// has to find the latch already set or the transcript stores the note twice.
+	if !owner {
+		s.journalFleetHealthNote(text)
+	}
+
 	s.drainOverseerNotes()
 	return nil
+}
+
+// fleetHealthNotePrefix is the marker notifyFleetHealth puts on a notice.
+// A coalesced repeat never reaches SendToOverseer, so it is not journaled.
+const fleetHealthNotePrefix = "[Fleet health]"
+
+func isFleetHealthNote(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), fleetHealthNotePrefix)
+}
+
+// journalFleetHealthNote writes one admitted fleet-health episode into the
+// overseer transcript. Queue acceptance is the episode boundary: the sweep
+// coalesces later copies, and a busy overseer must not hide the alert until
+// its current turn ends.
+func (s *Server) journalFleetHealthNote(text string) {
+	if s == nil || !isFleetHealthNote(text) {
+		return
+	}
+	text = strings.TrimSpace(text)
+	s.mu.Lock()
+	if s.fleetHealthJournaled == nil {
+		s.fleetHealthJournaled = map[string]int{}
+	}
+	s.fleetHealthJournaled[text]++
+	s.mu.Unlock()
+	line, err := json.Marshal(map[string]any{
+		"type":      "agent_note",
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"text":      text,
+	})
+	if err != nil || !s.persistChatLine(string(line)) {
+		s.consumeJournaledFleetHealth(text)
+	}
+}
+
+// consumeJournaledFleetHealth reports whether text was journaled at
+// admission and not yet echoed. The caller skips the echo so the
+// transcript keeps one copy.
+func (s *Server) consumeJournaledFleetHealth(text string) bool {
+	if s == nil {
+		return false
+	}
+	text = strings.TrimSpace(text)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.fleetHealthJournaled[text]
+	if n == 0 {
+		return false
+	}
+	if n == 1 {
+		delete(s.fleetHealthJournaled, text)
+	} else {
+		s.fleetHealthJournaled[text] = n - 1
+	}
+	return true
 }
 
 // interruptOverseerForOwner cancels a fleet-note chew so an owner turn can
