@@ -125,6 +125,15 @@ type Server struct {
 	// read-back finds one (🎯T752).
 	grokSessions string
 
+	// reconcileMu keeps one fleet pass at a time (🎯T766.3). The cockpit
+	// tick and the sentinel repair both call Reconcile. The lock covers
+	// the whole pass so those callers cannot interleave one seat's sweeps.
+	// It is not mu: the pass locks mu in short sections.
+	reconcileMu sync.Mutex
+	// reconcileBlock runs inside the pass while reconcileMu is held.
+	// Production leaves it nil. Tests park one pass here.
+	reconcileBlock func()
+
 	mu sync.Mutex
 	// startMu serializes Launch/wire on jevons_agent_start. It must be
 	// released before any ACP prompt delivery (🎯T541): holding it across

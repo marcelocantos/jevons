@@ -34,7 +34,15 @@ var reconcileFirst sync.Once
 // Guards (fleet intent, host load, capacity) are still applied inside the
 // individual actuators; lifting them into this pass is the next slice.
 func (s *Server) Reconcile() {
-	if s == nil || s.registry == nil {
+	if s == nil {
+		return
+	}
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	if s.reconcileBlock != nil {
+		s.reconcileBlock()
+	}
+	if s.registry == nil {
 		return
 	}
 	overseer := s.overseerName()
