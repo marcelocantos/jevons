@@ -237,6 +237,9 @@ type Server struct {
 	// request before the provider sees the text. Nil leaves the mission
 	// unknown. Wired from the daemon next to the fleet recorder.
 	recordRequestMission func(ctx context.Context, seat, requestID, mission string) error
+	// querySendReceipt reads one structured execution receipt. Nil does
+	// not dial Claudia: a missing read cannot confirm an owner handoff.
+	querySendReceipt func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)
 	// 🎯T806: owner-message honesty. Ids ride beside the queued wire text (FIFO
 	// per text); ownerUndelivered marks texts whose refusal was announced so a
 	// retry storm tells the owner once; the timer re-drains a refused batch.

@@ -71,4 +71,10 @@ func TestCostGuardConsumesReplicasWithoutSocketPoll(t *testing.T) {
 	if err != nil || found.RequestID != "logical-A" || found.State != claudia.ReceiptAccepted || found.AttemptID != "attempt-A" {
 		t.Fatalf("held receipt lookup = %+v %v", found, err)
 	}
+	foundSrv, err := srv.LookupSendReceipt(ctx, claudia.ReceiptQuery{
+		Seat: "seat", SessionID: "generation", RequestID: "logical-A",
+	})
+	if err != nil || foundSrv.RequestID != "logical-A" || foundSrv.State != claudia.ReceiptAccepted || foundSrv.AttemptID != "attempt-A" {
+		t.Fatalf("server receipt lookup = %+v %v", foundSrv, err)
+	}
 }

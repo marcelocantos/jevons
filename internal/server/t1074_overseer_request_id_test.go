@@ -291,3 +291,230 @@ func missionFrozen(frozen []frozenMission, seat, id, mission string) bool {
 	}
 	return false
 }
+
+func busyOverseerReceiptServer(t *testing.T, sessionID string) (*Server, *overseerIDProbe) {
+	t.Helper()
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jevons", SessionID: sessionID, TargetID: "T-overseer-mission",
+		Provider: claudia.ProviderGrok, WorkDir: dir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	probe := &overseerIDProbe{}
+	s := &Server{}
+	s.SetOverseerName("jevons")
+	s.SetRegistry(reg)
+	a := seatstate.New(seatstate.Args{})
+	s.SetSeats(a)
+	a.Observe(seatstate.Observation{
+		Name: "jevons", Alive: seatstate.Yes, InFlight: seatstate.Yes,
+		QueueDepth: seatstate.QueueUnknown, Source: "test.t1074",
+	})
+	s.SetOwnerEscalation(func() (escalate.Ladder, bool) { return ownerLadder, true })
+	s.overseerEscalatorSeam = probe
+	s.mu.Lock()
+	s.waiting = true
+	s.overseerOwnerTurn = true
+	s.mu.Unlock()
+	return s, probe
+}
+
+func ownerSendDelivered(s *Server) bool {
+	return s.ObserveOwnerInteraction(time.Now()).SendDelivered
+}
+
+func durableOwnerReceipt(q claudia.ReceiptQuery, state claudia.ReceiptState, reason string) *claudia.RequestReceipt {
+	r := &claudia.RequestReceipt{
+		RequestID: q.RequestID, SessionID: q.SessionID, Seat: q.Seat,
+		State: state, Reason: reason,
+		AttemptID: "claudia-attempt", TurnIDs: []string{"original-turn"},
+		AcceptedAt: "2026-10-16T01:00:00Z", UpdatedAt: "2026-10-16T01:00:00Z",
+	}
+	if state == claudia.ReceiptAccepted {
+		r.TurnIDs = []string{}
+	}
+	if state == claudia.ReceiptUnknown {
+		r.AttemptID = ""
+		r.TurnIDs = nil
+		r.AcceptedAt = ""
+		r.UpdatedAt = ""
+	}
+	return r
+}
+
+func assertOverseerReceiptQuery(t *testing.T, queries []claudia.ReceiptQuery, probe *overseerIDProbe) {
+	t.Helper()
+	if len(probe.calls) != 1 || probe.calls[0].id == "" || probe.untagged != 0 {
+		t.Fatalf("steer = %+v untagged=%d", probe.calls, probe.untagged)
+	}
+	if len(queries) != 1 || queries[0].RequestID != probe.calls[0].id || queries[0].SessionID != "gen-overseer" || queries[0].Seat != "jevons" {
+		t.Fatalf("query = %+v calls = %+v", queries, probe.calls)
+	}
+}
+
+func TestT1074OverseerNilErrorDoesNotConfirm(t *testing.T) {
+	s, probe := busyOverseerReceiptServer(t, "gen-overseer")
+	var queries []claudia.ReceiptQuery
+	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		queries = append(queries, q)
+		return durableOwnerReceipt(q, claudia.ReceiptUnknown, "not_found"), nil
+	})
+	out, handled, err := s.escalateOwnerToOverseer("beta")
+	if err != nil || !handled || out.Status != "steered" {
+		t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
+	}
+	assertOverseerReceiptQuery(t, queries, probe)
+	if ownerSendDelivered(s) {
+		t.Fatal("unknown receipt confirmed owner delivery")
+	}
+}
+
+func TestT1074OverseerProseReasonDoesNotInventCause(t *testing.T) {
+	s, probe := busyOverseerReceiptServer(t, "gen-overseer")
+	var queries []claudia.ReceiptQuery
+	var seen *claudia.RequestReceipt
+	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		queries = append(queries, q)
+		seen = durableOwnerReceipt(q, claudia.ReceiptCompleted, "401 unauthorized")
+		return seen, nil
+	})
+	out, handled, err := s.escalateOwnerToOverseer("beta")
+	if err != nil || !handled || out.Status != "steered" {
+		t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
+	}
+	assertOverseerReceiptQuery(t, queries, probe)
+	if seen == nil || seen.Cause != "" || seen.Reason != "401 unauthorized" || seen.State != claudia.ReceiptCompleted {
+		t.Fatalf("receipt = %+v", seen)
+	}
+	if !ownerSendDelivered(s) {
+		t.Fatal("settling receipt with prose reason did not confirm owner delivery")
+	}
+}
+
+func TestT1074OverseerNilQueryDoesNotConfirm(t *testing.T) {
+	s, probe := busyOverseerReceiptServer(t, "gen-overseer")
+	done := make(chan struct{})
+	var out AgentSendOutcome
+	var handled bool
+	var err error
+	go func() {
+		out, handled, err = s.escalateOwnerToOverseer("beta")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("nil receipt query blocked")
+	}
+	if err != nil || !handled || out.Status != "steered" {
+		t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
+	}
+	if len(probe.calls) != 1 || probe.untagged != 0 {
+		t.Fatalf("steer = %+v untagged=%d", probe.calls, probe.untagged)
+	}
+	if ownerSendDelivered(s) {
+		t.Fatal("nil query confirmed owner delivery")
+	}
+}
+
+func TestT1074OverseerMissingSessionDoesNotQuery(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &overseerIDProbe{}
+	s := &Server{}
+	s.SetOverseerName("jevons")
+	s.SetRegistry(reg)
+	a := seatstate.New(seatstate.Args{})
+	s.SetSeats(a)
+	a.Observe(seatstate.Observation{
+		Name: "jevons", Alive: seatstate.Yes, InFlight: seatstate.Yes,
+		QueueDepth: seatstate.QueueUnknown, Source: "test.t1074",
+	})
+	s.SetOwnerEscalation(func() (escalate.Ladder, bool) { return ownerLadder, true })
+	s.overseerEscalatorSeam = probe
+	s.mu.Lock()
+	s.waiting = true
+	s.overseerOwnerTurn = true
+	s.mu.Unlock()
+	called := 0
+	s.SetSendReceiptQuery(func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		called++
+		return nil, fmt.Errorf("should not query")
+	})
+	out, handled, err := s.escalateOwnerToOverseer("beta")
+	if err != nil || !handled || out.Status != "steered" {
+		t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
+	}
+	if called != 0 {
+		t.Fatalf("queries = %d", called)
+	}
+	if len(probe.calls) != 1 {
+		t.Fatalf("steer = %+v", probe.calls)
+	}
+	if ownerSendDelivered(s) {
+		t.Fatal("missing session confirmed owner delivery")
+	}
+}
+
+func TestT1074OverseerReceiptErrorDoesNotConfirm(t *testing.T) {
+	for _, name := range []string{"error", "nil"} {
+		t.Run(name, func(t *testing.T) {
+			s, probe := busyOverseerReceiptServer(t, "gen-overseer")
+			s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+				if q.RequestID == "" || q.SessionID != "gen-overseer" || q.Seat != "jevons" {
+					t.Errorf("query = %+v", q)
+				}
+				if name == "nil" {
+					return nil, nil
+				}
+				return nil, fmt.Errorf("replica closed")
+			})
+			out, handled, err := s.escalateOwnerToOverseer("beta")
+			if err != nil || !handled || out.Status != "steered" {
+				t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
+			}
+			if len(probe.calls) != 1 || probe.calls[0].id == "" {
+				t.Fatalf("steer = %+v", probe.calls)
+			}
+			if ownerSendDelivered(s) {
+				t.Fatal("unreadable receipt confirmed owner delivery")
+			}
+		})
+	}
+}
+
+func TestT1074OverseerForeignReceiptDoesNotConfirm(t *testing.T) {
+	s, _ := busyOverseerReceiptServer(t, "gen-overseer")
+	s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		r := durableOwnerReceipt(q, claudia.ReceiptCompleted, "exact recorded outcome")
+		r.RequestID = "other-request"
+		return r, nil
+	})
+	out, handled, err := s.escalateOwnerToOverseer("beta")
+	if err != nil || !handled || out.Status != "steered" {
+		t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
+	}
+	if ownerSendDelivered(s) {
+		t.Fatal("foreign receipt confirmed owner delivery")
+	}
+}
+
+func TestT1074UntypedOverseerNilWriteDoesNotConfirm(t *testing.T) {
+	seat := &fakeOverseerSeat{phase: claudia.TurnInTurn}
+	s := t903Server(seat, true)
+	out, handled, err := s.escalateOwnerToOverseer("also check T540")
+	if err != nil || !handled || out.Status != "steered" {
+		t.Fatalf("outcome = %+v handled=%v err=%v", out, handled, err)
+	}
+	if ownerSendDelivered(s) {
+		t.Fatal("untagged nil write confirmed owner delivery")
+	}
+}
