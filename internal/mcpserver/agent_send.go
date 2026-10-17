@@ -1259,8 +1259,6 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 		text = bound.WirePayload()
 		transportID = bound.TransportRequestID
 	}
-	_, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
-	defer cancel()
 	generation := s.terminalGeneration(name)
 	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, transportID) })
 	// A bound host request settles from its Claudia receipt. PayloadSeen,
