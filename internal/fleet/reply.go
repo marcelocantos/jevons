@@ -244,17 +244,20 @@ func (r *replyAssembler) resolve() {
 // published between send and subscribe would be lost from the front of
 // the reply, and the assembler needs to be watching to recognise (and
 // discard) a previous turn's trailing terminal.
-func (f *Claudia) awaitReply(ag *claudia.Agent, provider claudia.Provider, text string) (string, error) {
+func (f *Claudia) awaitReply(ag *claudia.Agent, provider claudia.Provider, text, requestID string) (string, error) {
 	asm := newReplyAssembler(chunkSeparator(provider))
 	defer asm.Close()
 
 	token := ag.SubscribeEvents(asm.Observe)
 	defer ag.UnsubscribeEvents(token)
 
-	if err := ag.Send(text); err != nil {
+	if err := ag.SendWithRequestID(text, requestID); err != nil {
 		return "", err
 	}
 	asm.Started()
+	if f.replyStarted != nil {
+		f.replyStarted(ag)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), f.replyTimeout)
 	defer cancel()

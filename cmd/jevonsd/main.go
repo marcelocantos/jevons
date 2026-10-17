@@ -916,6 +916,7 @@ func main() {
 		mcpSrv.SetCostMonitor(guard.monitor.Snapshot)
 		mcpSrv.SetRequestMissionRecorder(guard.store.RecordRequestMission)
 		srv.SetRequestMissionRecorder(guard.store.RecordRequestMission)
+		fleetAdapter.SetRequestMissionRecorder(guard.store.RecordRequestMission)
 		srv.SetCostSource(mcpSrv.CostJSON)
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}

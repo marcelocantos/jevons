@@ -55,6 +55,14 @@ type Claudia struct {
 	replyTimeout    time.Duration
 	// Installed at startup; synchronous directs are agent-origin requests.
 	recordRequest func(name, text string) error
+	// recordRequestMission freezes AgentDef.TargetID onto the host request
+	// id before the provider call. Nil leaves the mission unknown. A write
+	// error must not send.
+	recordRequestMission func(ctx context.Context, seat, requestID, mission string) error
+	// replyStarted runs after the provider send returns and the reply
+	// assembler is watching. Tests publish the terminal event here.
+	// Production leaves it nil.
+	replyStarted func(*claudia.Agent)
 
 	mu sync.Mutex
 
@@ -210,6 +218,57 @@ func (f *Claudia) SetRequestRecorder(fn func(name, text string) error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.recordRequest = fn
+}
+
+// SetRequestMissionRecorder installs the host write that freezes a seat's
+// registry target onto one direct-turn request before handoff.
+func (f *Claudia) SetRequestMissionRecorder(fn func(ctx context.Context, seat, requestID, mission string) error) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	f.recordRequestMission = fn
+	f.mu.Unlock()
+}
+
+// newDirectRequestID is the host identity for one butler direct turn.
+// Identical text is two ids. The id is minted at acceptance, not read
+// back from the provider.
+func newDirectRequestID() string {
+	return "fd-" + uuid.NewString()
+}
+
+// freezeDirectMission writes the seat's registry target against requestID
+// before any provider call. An empty target is not stored. A nil recorder
+// leaves the mission unknown. A write error must not send.
+func (f *Claudia) freezeDirectMission(seat, requestID string) error {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil
+	}
+	f.mu.Lock()
+	record := f.recordRequestMission
+	f.mu.Unlock()
+	if record == nil {
+		return nil
+	}
+	mission := ""
+	if f.reg != nil {
+		if d := f.reg.Def(seat); d != nil {
+			mission = strings.TrimSpace(d.TargetID)
+		}
+	}
+	return record(context.Background(), seat, requestID, mission)
+}
+
+// directTurn accepts one live turn: freeze the mission, then wait for the
+// reply. The id exists before handoff. A freeze error does not send.
+func (f *Claudia) directTurn(ag *claudia.Agent, id, text string) (string, error) {
+	requestID := newDirectRequestID()
+	if err := f.freezeDirectMission(id, requestID); err != nil {
+		return "", err
+	}
+	return f.awaitReply(ag, f.providerOf(id), text, requestID)
 }
 
 // launching tells the host a launch has begun for name and returns the
@@ -536,7 +595,7 @@ func (f *Claudia) Send(id, text string) (string, error) {
 			return "", err
 		}
 	}
-	reply, err := f.awaitReply(ag, f.providerOf(id), text)
+	reply, err := f.directTurn(ag, id, text)
 	if err != nil {
 		return "", fmt.Errorf("direct turn to %q: %w", id, err)
 	}
@@ -647,7 +706,7 @@ func (f *Claudia) Deliver(id, text string) (string, error) {
 		}
 		ag = launched
 	}
-	reply, err := f.awaitReply(ag, f.providerOf(id), text)
+	reply, err := f.directTurn(ag, id, text)
 	if err != nil {
 		return "", fmt.Errorf("deliver turn to agent %q: %w", id, err)
 	}

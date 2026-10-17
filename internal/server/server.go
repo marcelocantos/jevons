@@ -999,13 +999,20 @@ func (s *Server) HandleUserMessage(text string) {
 		slog.Warn("jevons: message received before claude started")
 		return
 	}
+	// Mint before the provider call. A freeze error must not send and must
+	// not mark the overseer as already taking this turn.
+	requestID := newOwnerMessageID()
+	if err := s.freezeOverseerMission(requestID); err != nil {
+		slog.Error("jevons: mission freeze failed", "err", err)
+		return
+	}
 	s.mu.Lock()
 	s.waiting = true
 	s.overseerOwnerTurn = true // 🎯T291: remote owner speech is an owner turn
 	s.mu.Unlock()
 	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
 	if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
-		func(a *claudia.Agent) error { return a.Send(text) }); err != nil {
+		func(a *claudia.Agent) error { return a.SendWithRequestID(text, requestID) }); err != nil {
 		slog.Error("jevons: send failed", "err", err)
 	}
 }
