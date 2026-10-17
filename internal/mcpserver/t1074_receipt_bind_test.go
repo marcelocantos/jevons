@@ -311,6 +311,40 @@ func TestT1074ImmediateAndSteerBindBeforeHandoff(t *testing.T) {
 	}
 }
 
+// Idle pressure and fleet recover push through sendDaemonComposed. That
+// function is deliverByName with an empty owner request id. A capable seat
+// still binds a transport id before the process sees the text. The direct
+// fleet-recover Interrupt is a process cancel, not this send.
+func TestT1074DaemonComposedSendBindsBeforeHandoff(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
+	})
+	payload := formatIdleNudgeWire("idle-nudge", "continue the mission")
+	f.probe.check = func(text, id string) {
+		if !strings.Contains(text, payload) {
+			t.Fatalf("sent %q", text)
+		}
+		f.assertBoundBeforeSend(t, text, id, "T1074")
+	}
+	res, err := f.s.sendDaemonComposed(f.name, payload, false)
+	if err != nil || res.Status != "sent" {
+		t.Fatalf("daemon-composed send: status=%q err=%v message=%q", res.Status, err, res.Message)
+	}
+	ids := f.probe.sentIDs()
+	if len(ids) != 1 || !strings.HasPrefix(ids[0], "sendq:") {
+		t.Fatalf("ids=%v", ids)
+	}
+	if entries, err := f.s.sendQueue().Snapshot(f.name); err != nil || len(entries) != 0 {
+		t.Fatalf("daemon-composed send left the queue: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 || events[0].Fields["transport_request_id"] != ids[0] || events[0].Fields["owner_request_id"] != "" {
+		t.Fatalf("journal: %+v %v", events, err)
+	}
+}
+
 func TestT1074EscalationBindsBeforeHandoff(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
