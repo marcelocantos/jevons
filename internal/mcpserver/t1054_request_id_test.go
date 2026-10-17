@@ -5,9 +5,12 @@ package mcpserver
 
 import (
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -18,6 +21,7 @@ type requestIDSender struct {
 	calls  []string
 	legacy int
 	busy   bool
+	before func(id, text string)
 }
 
 func (f *requestIDSender) Send(string) error {
@@ -29,6 +33,9 @@ func (f *requestIDSender) Send(string) error {
 func (*requestIDSender) Interrupt() error { return nil }
 func (*requestIDSender) Alive() bool      { return true }
 func (f *requestIDSender) SendWithRequestID(text, id string) error {
+	if f.before != nil {
+		f.before(id, text)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, id+":"+text)
@@ -58,7 +65,35 @@ func TestT1054BusyQueueRestartDrainsSameRequestID(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _, _ := t418Daemon(t, dir)
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const session = "gen-a"
+	if err := reg.Register(claudia.AgentDef{
+		Name: "a", WorkDir: dir, SessionID: session, Materialized: true, Provider: "grok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after.registry = reg
 	sender := &requestIDSender{}
+	sender.before = func(id, text string) {
+		entries, serr := after.sendQueue().Snapshot("a")
+		if serr != nil {
+			t.Fatal(serr)
+		}
+		var bound *sendq.Entry
+		for i := range entries {
+			if entries[i].RequestID == "host-one" {
+				e := entries[i]
+				bound = &e
+				break
+			}
+		}
+		if bound == nil || bound.State != sendq.Attempting || bound.SessionID != session || bound.TransportRequestID != id || id != "host-one" || bound.WirePayload() != text {
+			t.Fatalf("owner id was not bound to the generation before send: id=%q text=%q entries=%+v", id, text, entries)
+		}
+	}
 	setObservedSenderResolver(after, func(string) (agentSender, bool, error) { return sender, false, nil })
 	after.drainAgentSendQueue("a")
 	calls, legacy := sender.snapshot()

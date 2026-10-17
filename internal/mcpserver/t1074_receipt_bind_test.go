@@ -5,7 +5,10 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -308,5 +311,162 @@ func TestT1074ImmediateHoldDoesNotBind(t *testing.T) {
 	entries, err := f.s.sendQueue().Snapshot(f.name)
 	if err != nil || len(entries) != 1 || entries[0].State != sendq.Pending || entries[0].TransportRequestID != "" || entries[0].Text != payload {
 		t.Fatalf("held entry = %+v %v", entries, err)
+	}
+}
+
+// capableGapServer is a request-id-capable seat with no receiving generation.
+// bindProbe.Send fails the test, so a historical handoff cannot pass quietly.
+func capableGapServer(t *testing.T, mode string) (*Server, *bindProbe, string) {
+	t.Helper()
+	const name = "jv-t1074-gap"
+	dir := t.TempDir()
+	s, _, _ := t418Daemon(t, dir)
+	probe := &bindProbe{t: t}
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return probe, false, nil })
+	switch mode {
+	case "no-registry":
+	case "no-def":
+		reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.registry = reg
+	case "empty-session":
+		path := filepath.Join(dir, "agents.json")
+		body, err := json.Marshal([]claudia.AgentDef{{
+			Name: name, WorkDir: dir, Provider: "grok",
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		reg, err := claudia.NewRegistry(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := reg.Def(name)
+		if d == nil || strings.TrimSpace(d.SessionID) != "" {
+			t.Fatalf("empty-session fixture = %+v", d)
+		}
+		s.registry = reg
+	default:
+		t.Fatalf("unknown gap %q", mode)
+	}
+	return s, probe, name
+}
+
+func TestT1074CapableSendWithoutGenerationDoesNotSend(t *testing.T) {
+	const payload = "owner: this must not reach the model untagged"
+	for _, mode := range []string{"no-registry", "no-def", "empty-session"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Run("drain", func(t *testing.T) {
+				s, probe, name := capableGapServer(t, mode)
+				if _, _, err := s.sendQueue().Append(name, payload, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				s.drainAgentSendQueue(name)
+				if len(probe.sentIDs()) != 0 {
+					t.Fatalf("drain handed off: %v", probe.sentIDs())
+				}
+				entries, err := s.sendQueue().Snapshot(name)
+				if err != nil || len(entries) != 1 || entries[0].State != sendq.Pending || entries[0].TransportRequestID != "" || entries[0].SessionID != "" {
+					t.Fatalf("unbound drain entry = %+v %v", entries, err)
+				}
+			})
+			t.Run("immediate", func(t *testing.T) {
+				s, probe, name := capableGapServer(t, mode)
+				_, err := deliverObservedToSender(s, name, payload, false, probe, false)
+				if err == nil || !strings.Contains(err.Error(), "no receiving generation") {
+					t.Fatalf("immediate err = %v", err)
+				}
+				if len(probe.sentIDs()) != 0 {
+					t.Fatalf("immediate handed off: %v", probe.sentIDs())
+				}
+				entries, serr := s.sendQueue().Snapshot(name)
+				if serr != nil || len(entries) != 0 {
+					t.Fatalf("immediate left a queue entry: %+v %v", entries, serr)
+				}
+			})
+			t.Run("steer", func(t *testing.T) {
+				s, probe, name := capableGapServer(t, mode)
+				_, err := deliverObservedToSenderMode(s, name, payload, delivery.ModeSteer, probe, false, confirmHere)
+				if err == nil || !strings.Contains(err.Error(), "no receiving generation") {
+					t.Fatalf("steer err = %v", err)
+				}
+				if len(probe.sentIDs()) != 0 {
+					t.Fatalf("steer handed off: %v", probe.sentIDs())
+				}
+			})
+			t.Run("escalation", func(t *testing.T) {
+				s, probe, name := capableGapServer(t, mode)
+				observeSenderFixture(s, name, probe)
+				s.noteTurnInFlight(name)
+				_, handled, err := s.escalateIfBusyWithRequestID(name, payload, config.EscalationOwner, "owner", probe, "")
+				if err == nil || !handled || !strings.Contains(err.Error(), "no receiving generation") {
+					t.Fatalf("handled=%v err=%v", handled, err)
+				}
+				if len(probe.sentIDs()) != 0 {
+					t.Fatalf("escalation handed off: %v", probe.sentIDs())
+				}
+			})
+			t.Run("cursor-brief", func(t *testing.T) {
+				s, probe, name := capableGapServer(t, mode)
+				err := s.submitCursorStartBrief(name, payload)
+				if err == nil {
+					t.Fatal("cursor brief sent without a generation")
+				}
+				if mode == "no-registry" {
+					if !strings.Contains(err.Error(), "no agent registry") {
+						t.Fatalf("cursor err = %v", err)
+					}
+				} else if !strings.Contains(err.Error(), "no receiving generation") {
+					t.Fatalf("cursor err = %v", err)
+				}
+				if len(probe.sentIDs()) != 0 {
+					t.Fatalf("cursor brief handed off: %v", probe.sentIDs())
+				}
+			})
+		})
+	}
+}
+
+func TestT1074CursorStartBindsBeforeHandoff(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	const prompt = "Execute the cursor brief"
+	f.probe.check = func(text, id string) {
+		if text == prompt || !strings.Contains(text, prompt) || !strings.Contains(text, "Jevons fleet standing brief") {
+			t.Fatalf("cursor start sent an uncomposed brief: %q", text)
+		}
+		f.assertBoundBeforeSend(t, text, id, "T1074")
+	}
+	if err := f.s.submitCursorStartBrief(f.name, prompt); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.probe.sentIDs()) != 1 {
+		t.Fatalf("ids=%v", f.probe.sentIDs())
+	}
+	entries, err := f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("confirmed brief left the queue: %+v %v", entries, err)
+	}
+}
+
+func TestT1074EmptyIDOnCapableSeatDoesNotSend(t *testing.T) {
+	probe := &bindProbe{t: t}
+	err := sendWithRequestID(probe, "untagged", "")
+	if !errors.Is(err, errRequestIDUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(probe.sentIDs()) != 0 {
+		t.Fatalf("capable empty id handed off: %v", probe.sentIDs())
+	}
+	plain := &recordingSender{}
+	if err := sendWithRequestID(plain, "historical", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := plain.delivered(); len(got) != 1 || got[0] != "historical" {
+		t.Fatalf("incapable send = %v", got)
 	}
 }

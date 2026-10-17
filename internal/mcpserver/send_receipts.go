@@ -30,21 +30,21 @@ func (s *Server) SetRequestMissionRecorder(fn func(ctx context.Context, seat, re
 
 // receiptBind reports whether this handoff must be bound before send.
 // A process that cannot carry a host request id keeps the historical send:
-// binding would mint an id that transport would drop. A known generation
-// with an empty session cannot be bound and must not be sent.
+// binding would mint an id that transport would drop. A process that can
+// carry one must already have a registry generation. No registry, no seat,
+// or an empty session is the same refusal: nothing is sent.
 func (s *Server) receiptBind(name string, proc agentSender) (sessionID, mission string, bind bool, err error) {
-	if s == nil || s.registry == nil || !supportsRequestID(proc) {
+	if s == nil || !supportsRequestID(proc) {
 		return "", "", false, nil
 	}
-	d := s.registry.Def(name)
-	if d == nil {
-		return "", "", false, nil
+	var d *claudia.AgentDef
+	if s.registry != nil {
+		d = s.registry.Def(name)
 	}
-	sessionID = strings.TrimSpace(d.SessionID)
-	if sessionID == "" {
+	if d == nil || strings.TrimSpace(d.SessionID) == "" {
 		return "", "", false, fmt.Errorf("agent %q has no receiving generation", name)
 	}
-	return sessionID, strings.TrimSpace(d.TargetID), true, nil
+	return strings.TrimSpace(d.SessionID), strings.TrimSpace(d.TargetID), true, nil
 }
 
 func (s *Server) freezeRequestMission(seat, requestID, mission string) error {
