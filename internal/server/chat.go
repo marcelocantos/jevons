@@ -667,14 +667,39 @@ func (s *Server) SetRequestMissionRecorder(fn func(ctx context.Context, seat, re
 }
 
 // ownerHandoffRequestID is the host id minted when this owner turn was
-// accepted. A fleet batch has none and stays on the historical send.
-// The id is peeked, not popped: a failed handoff must leave it for retry,
-// and a later identical text must not take an earlier pending id.
+// accepted. A fleet batch has none here. The id is peeked, not popped:
+// a failed handoff must leave it for retry, and a later identical text
+// must not take an earlier pending id.
 func (s *Server) ownerHandoffRequestID(text string) string {
 	if !isOwnerNotifyText(text) {
 		return ""
 	}
 	return s.peekOwnerMessageID(text)
+}
+
+// fleetBatchRequestID is the host id for one composed fleet prompt.
+// The notes are not one request until drain joins them, so the id is
+// minted at that handoff. The same bytes keep the id when the handoff
+// fails. A different composition is a different request.
+func (s *Server) fleetBatchRequestID(text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if text != "" && s.notifyFleetBatchText == text && s.notifyFleetBatchID != "" {
+		return s.notifyFleetBatchID
+	}
+	id := newTrackedRequestID("fn")
+	s.notifyFleetBatchText = text
+	s.notifyFleetBatchID = id
+	return id
+}
+
+func (s *Server) forgetFleetBatchRequestID(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifyFleetBatchText == text {
+		s.notifyFleetBatchText = ""
+		s.notifyFleetBatchID = ""
+	}
 }
 
 // freezeOverseerMission writes the overseer's registry target against
@@ -714,35 +739,47 @@ func (s *Server) freezeSeatMission(seat, requestID string) error {
 
 // sendNotes delivers one coalesced note batch to the overseer. The
 // notifySender seam lets tests stub delivery; nil uses the live process.
-// An owner batch carries the id registered at acceptance. Fleet notes
-// have no host id and stay on Send.
+// An owner batch carries the id registered at acceptance. A fleet batch
+// mints an fn- id for the composed prompt and reuses it when that same
+// text is retried. An owner note with no registered id still uses Send.
 func (s *Server) sendNotes(text string) error {
 	if err := s.injectedBrokerFault(text); err != nil {
 		return err
 	}
 	requestID := s.ownerHandoffRequestID(text)
+	fleet := false
+	if requestID == "" && !isOwnerNotifyText(text) {
+		requestID = s.fleetBatchRequestID(text)
+		fleet = true
+	}
 	if requestID != "" {
 		if err := s.freezeOverseerMission(requestID); err != nil {
 			return err
 		}
 	}
-	if s.overseerSendSeam != nil {
-		return s.overseerSendSeam(text, requestID)
+	var err error
+	switch {
+	case s.overseerSendSeam != nil:
+		err = s.overseerSendSeam(text, requestID)
+	case s.notifySender != nil:
+		err = s.notifySender(text)
+	default:
+		proc := s.CurrentProcess()
+		if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
+			return fmt.Errorf("overseer not running")
+		}
+		err = upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
+			func(a *claudia.Agent) error {
+				if requestID == "" {
+					return a.Send(text)
+				}
+				return a.SendWithRequestID(text, requestID)
+			})
 	}
-	if s.notifySender != nil {
-		return s.notifySender(text)
+	if err == nil && fleet {
+		s.forgetFleetBatchRequestID(text)
 	}
-	proc := s.CurrentProcess()
-	if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
-		return fmt.Errorf("overseer not running")
-	}
-	return upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
-		func(a *claudia.Agent) error {
-			if requestID == "" {
-				return a.Send(text)
-			}
-			return a.SendWithRequestID(text, requestID)
-		})
+	return err
 }
 
 // notifyErrClass classifies overseer-notify delivery failures for structured

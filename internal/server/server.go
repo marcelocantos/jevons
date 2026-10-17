@@ -240,7 +240,13 @@ type Server struct {
 	// 🎯T806: owner-message honesty. Ids ride beside the queued wire text (FIFO
 	// per text); ownerUndelivered marks texts whose refusal was announced so a
 	// retry storm tells the owner once; the timer re-drains a refused batch.
-	notifyOwnerIDs       map[string][]string
+	notifyOwnerIDs map[string][]string
+	// notifyFleetBatchText is the composed fleet prompt currently bound to
+	// notifyFleetBatchID. A failed handoff retries those same bytes under
+	// that id. A different composition replaces both. Owner batches do not
+	// use this slot.
+	notifyFleetBatchText string
+	notifyFleetBatchID   string
 	ownerUndelivered     map[string]bool
 	notifyRetryDelay     time.Duration
 	notifyRetryTimer     *time.Timer
