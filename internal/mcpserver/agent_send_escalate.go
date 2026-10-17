@@ -173,7 +173,10 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 		s.settleHandoff(name, handoff, sendq.Unverified, err.Error())
 		return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, err)
 	}
-	s.settleHandoff(name, handoff, sendq.Confirmed, "escalated")
+	// A nil ladder return is the socket write. The receipt settles the
+	// transport obligation. An empty handoff is an incapable seat and has
+	// nothing to settle.
+	s.settleBoundHandoffReceipt(name, handoff)
 	status, verb := "steered", "steered into its running turn"
 	if ladder[0].Mode == claudia.DeliverySubmit {
 		status, verb = "sent", "queued with the agent behind its running turn"

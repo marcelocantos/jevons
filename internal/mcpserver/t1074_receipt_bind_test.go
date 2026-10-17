@@ -312,6 +312,10 @@ func TestT1074ImmediateAndSteerBindBeforeHandoff(t *testing.T) {
 
 func TestT1074EscalationBindsBeforeHandoff(t *testing.T) {
 	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	})
 	observeSenderFixture(f.s, f.name, f.probe)
 	f.s.noteTurnInFlight(f.name)
 	const payload = "owner: steer the running turn"
@@ -328,8 +332,13 @@ func TestT1074EscalationBindsBeforeHandoff(t *testing.T) {
 	if entries, err := f.s.sendQueue().Snapshot(f.name); err != nil || len(entries) != 0 {
 		t.Fatalf("escalation left the queue: %+v %v", entries, err)
 	}
-	if len(f.probe.sentIDs()) != 1 || !strings.HasPrefix(f.probe.sentIDs()[0], "sendq:") {
-		t.Fatalf("ids=%v", f.probe.sentIDs())
+	ids := f.probe.sentIDs()
+	if len(ids) != 1 || !strings.HasPrefix(ids[0], "sendq:") {
+		t.Fatalf("ids=%v", ids)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 || events[0].Fields["transport_request_id"] != ids[0] || events[0].Fields["receipt_cause"] != "" {
+		t.Fatalf("journal: %+v %v", events, err)
 	}
 }
 
@@ -477,6 +486,10 @@ func TestT1074CapableSendWithoutGenerationDoesNotSend(t *testing.T) {
 
 func TestT1074CursorStartBindsBeforeHandoff(t *testing.T) {
 	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		return heldReceipt(q, claudia.ReceiptAccepted), nil
+	})
 	const prompt = "Execute the cursor brief"
 	f.probe.check = func(text, id string) {
 		if text == prompt || !strings.Contains(text, prompt) || !strings.Contains(text, "Jevons fleet standing brief") {
@@ -487,12 +500,178 @@ func TestT1074CursorStartBindsBeforeHandoff(t *testing.T) {
 	if err := f.s.submitCursorStartBrief(f.name, prompt); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.probe.sentIDs()) != 1 {
-		t.Fatalf("ids=%v", f.probe.sentIDs())
+	ids := f.probe.sentIDs()
+	if len(ids) != 1 {
+		t.Fatalf("ids=%v", ids)
 	}
 	entries, err := f.s.sendQueue().Snapshot(f.name)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("confirmed brief left the queue: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 || events[0].Fields["transport_request_id"] != ids[0] || events[0].Fields["receipt_cause"] != "" {
+		t.Fatalf("journal: %+v %v", events, err)
+	}
+}
+
+// TestT1074EscalationNilErrorDoesNotConfirm is a capable escalation whose
+// ladder returns nil. The caller still hears steered. The receipt is
+// unknown, so the queue stays uncertain and nothing is journaled.
+func TestT1074EscalationNilErrorDoesNotConfirm(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	observeSenderFixture(f.s, f.name, f.probe)
+	f.s.noteTurnInFlight(f.name)
+	const payload = "owner: nil ladder write is not acceptance"
+	var transportID string
+	f.probe.check = func(text, id string) {
+		if text != payload {
+			t.Fatalf("escalated %q", text)
+		}
+		transportID = id
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if transportID == "" || q.RequestID != transportID {
+			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
+		}
+		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r.Reason = "not_found"
+		r.Cause = ""
+		return r, nil
+	})
+	res, handled, err := f.s.escalateIfBusyWithRequestID(f.name, payload, config.EscalationOwner, "owner", f.probe, "")
+	if err != nil || !handled || res.Status != "steered" {
+		t.Fatalf("handled=%v status=%q err=%v", handled, res.Status, err)
+	}
+	if len(f.probe.sentIDs()) != 1 || transportID == "" {
+		t.Fatalf("sends=%v", f.probe.sentIDs())
+	}
+	entries, err := f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].TransportRequestID != transportID {
+		t.Fatalf("nil escalation confirmed: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 0 {
+		t.Fatalf("unknown escalation receipt was journaled: %+v %v", events, err)
+	}
+}
+
+// TestT1074EscalationProseReasonDoesNotInventCause settles a completed
+// escalation receipt whose Reason names an auth failure and whose typed
+// cause is empty.
+func TestT1074EscalationProseReasonDoesNotInventCause(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	observeSenderFixture(f.s, f.name, f.probe)
+	f.s.noteTurnInFlight(f.name)
+	const payload = "owner: escalation prose is not a cause"
+	var transportID string
+	f.probe.check = func(text, id string) {
+		transportID = id
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if transportID == "" || q.RequestID != transportID {
+			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
+		}
+		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r.Reason = "401 unauthorized"
+		r.Cause = ""
+		r.TurnIDs = []string{"turn-escalation"}
+		return r, nil
+	})
+	res, handled, err := f.s.escalateIfBusyWithRequestID(f.name, payload, config.EscalationOwner, "owner", f.probe, "")
+	if err != nil || !handled || res.Status != "steered" {
+		t.Fatalf("handled=%v status=%q err=%v", handled, res.Status, err)
+	}
+	if entries, err := f.s.sendQueue().Snapshot(f.name); err != nil || len(entries) != 0 {
+		t.Fatalf("settling escalation left the queue: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("journal: %+v %v", events, err)
+	}
+	if events[0].Fields["transport_request_id"] != transportID || events[0].Fields["receipt_cause"] != "" {
+		t.Fatalf("prose became a cause: %+v", events[0].Fields)
+	}
+	receipt, _ := events[0].Fields["receipt"].(map[string]any)
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) || receipt["request_id"] != transportID {
+		t.Fatalf("escalation receipt: %+v", receipt)
+	}
+}
+
+// TestT1074CursorBriefNilErrorDoesNotConfirm is a capable opening brief
+// whose socket write returns nil. The call still succeeds. The receipt is
+// unknown, so the queue stays uncertain and nothing is journaled.
+func TestT1074CursorBriefNilErrorDoesNotConfirm(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	const prompt = "Execute without a receipt"
+	var transportID string
+	f.probe.check = func(_, id string) {
+		transportID = id
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if transportID == "" || q.RequestID != transportID {
+			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
+		}
+		r := heldReceipt(q, claudia.ReceiptUnknown)
+		r.Reason = "not_found"
+		r.Cause = ""
+		return r, nil
+	})
+	if err := f.s.submitCursorStartBrief(f.name, prompt); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.probe.sentIDs()) != 1 || transportID == "" {
+		t.Fatalf("sends=%v", f.probe.sentIDs())
+	}
+	entries, err := f.s.sendQueue().Snapshot(f.name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].TransportRequestID != transportID {
+		t.Fatalf("nil cursor brief confirmed: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 0 {
+		t.Fatalf("unknown cursor receipt was journaled: %+v %v", events, err)
+	}
+}
+
+// TestT1074CursorBriefProseReasonDoesNotInventCause settles a completed
+// opening-brief receipt whose Reason names an auth failure and whose typed
+// cause is empty.
+func TestT1074CursorBriefProseReasonDoesNotInventCause(t *testing.T) {
+	f := newBindFixture(t, "T1074")
+	journal := receiptJournal(t, f.s, t.TempDir())
+	const prompt = "Execute and keep the prose out of the cause"
+	var transportID string
+	f.probe.check = func(_, id string) {
+		transportID = id
+	}
+	f.s.SetSendReceiptQuery(func(_ context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+		if transportID == "" || q.RequestID != transportID {
+			t.Fatalf("queried %q, handoff %q", q.RequestID, transportID)
+		}
+		r := heldReceipt(q, claudia.ReceiptCompleted)
+		r.Reason = "401 unauthorized"
+		r.Cause = ""
+		r.TurnIDs = []string{"turn-cursor"}
+		return r, nil
+	})
+	if err := f.s.submitCursorStartBrief(f.name, prompt); err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := f.s.sendQueue().Snapshot(f.name); err != nil || len(entries) != 0 {
+		t.Fatalf("settling brief left the queue: %+v %v", entries, err)
+	}
+	events, err := eventlog.Tail(journal.Path(), eventlog.TailOptions{Decision: "sendq_receipt_observed"})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("journal: %+v %v", events, err)
+	}
+	if events[0].Fields["transport_request_id"] != transportID || events[0].Fields["receipt_cause"] != "" {
+		t.Fatalf("prose became a cause: %+v", events[0].Fields)
+	}
+	receipt, _ := events[0].Fields["receipt"].(map[string]any)
+	if receipt["reason"] != "401 unauthorized" || receipt["cause"] != nil || receipt["state"] != string(claudia.ReceiptCompleted) || receipt["request_id"] != transportID {
+		t.Fatalf("cursor receipt: %+v", receipt)
 	}
 }
 

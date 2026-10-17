@@ -242,6 +242,9 @@ func receiptSettlementDetail(r *claudia.RequestReceipt) string {
 // runs. It must not confirm that write. A missing or unknown receipt keeps
 // the attempt. The caller-visible transcript verdict is a separate answer.
 func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
+	if handoff.ID == "" {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
 	defer cancel()
 	r, err := s.LookupHeldReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: handoff.SessionID, RequestID: handoff.TransportRequestID})

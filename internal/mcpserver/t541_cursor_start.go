@@ -156,7 +156,10 @@ func (s *Server) submitCursorStartBrief(name, prompt string) error {
 			if sendErr != nil {
 				s.settleHandoff(name, bound, sendq.TerminalUndelivered, sendErr.Error())
 			} else {
-				s.settleHandoff(name, bound, sendq.Confirmed, "cursor start brief")
+				// The write returned. Transport acceptance is the receipt,
+				// not this nil error. This is not the turn watch that hung
+				// the start RPC.
+				s.settleBoundHandoffReceipt(name, bound)
 			}
 		} else {
 			sendErr = sendWithRequestID(proc, text, "")
