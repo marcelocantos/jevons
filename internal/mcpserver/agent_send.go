@@ -525,6 +525,9 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	defer unlock()
 	var handoff sendq.Entry
 	releaseToPending := false
+	// confirmHere settles the bound handoff before it chooses a caller
+	// status, so the defer must not settle that same attempt again.
+	receiptSettled := false
 	defer func() {
 		if handoff.ID == "" {
 			return
@@ -540,10 +543,14 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			// The caller received the failure. Dropping the attempt matches
 			// the historical immediate path, which did not keep a queue copy.
 			s.settleHandoff(name, handoff, sendq.TerminalUndelivered, err.Error())
+		case receiptSettled:
+			// confirmHere already settled this attempt and chose the caller
+			// status from that result.
 		default:
 			// A nil send error is the socket write returning. It is not
 			// transport acceptance. Steer takes this path too: folding into
-			// the open turn still has its own receipt.
+			// the open turn still has its own receipt. confirmByCaller still
+			// uses this arm: the spawn path owns its own status word.
 			s.settleBoundHandoffReceipt(name, handoff)
 		}
 	}()
@@ -778,6 +785,29 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// says the turn was cut rather than joined.
 		if out.Mechanism != "" && !interrupted {
 			mm.Mechanism = out.Mechanism
+		}
+		// A bound confirmHere handoff is settled from its receipt before any
+		// caller-visible sent or steered. PayloadSeen does not record
+		// delivery, and it does not answer the caller, while that receipt
+		// is still unknown. A settling receipt keeps the existing wording.
+		if confirm == confirmHere && handoff.TransportRequestID != "" {
+			s.settleBoundHandoffReceipt(name, handoff)
+			receiptSettled = true
+			if !handoffConfirmed(s, name, handoff.ID) {
+				res = agentSendResult{
+					Status: "delivered_unconfirmed",
+					Message: fmt.Sprintf(
+						"Message handed to %q but NOT confirmed as a turn: the socket write returned and the structured receipt did not settle this handoff. "+
+							"DO NOT re-send on this verdict — the attempt stays held until a receipt settles.",
+						name) + describeMode(mm),
+					Queued:    s.pendingAgentSends(name),
+					Mode:      mode,
+					Mechanism: mm.Mechanism,
+				}
+				s.noteUnconfirmedSend(name, text)
+				logAgentSendResult(name, res, rehydrated)
+				return res, nil
+			}
 		}
 		if seam != nil && out.PhaseBefore == delivery.PhaseInTurn {
 			// Folded into the open turn: there is no new turn to watch begin,

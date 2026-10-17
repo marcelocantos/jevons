@@ -237,10 +237,30 @@ func receiptSettlementDetail(r *claudia.RequestReceipt) string {
 	return fmt.Sprintf("Claudia durable receipt request=%q session=%q state=%s cause=%q reason=%q; transport accepted, mission outcome separate", r.RequestID, r.SessionID, r.State, receiptExecutionCause(r), r.Reason)
 }
 
+// handoffConfirmed reports whether settleBoundHandoffReceipt removed the
+// attempt. A settling receipt resolves Confirmed and the row leaves the
+// queue. An unknown receipt leaves the row Uncertain.
+func handoffConfirmed(s *Server, name, entryID string) bool {
+	if s == nil || entryID == "" {
+		return false
+	}
+	entries, err := s.sendQueue().Snapshot(name)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.ID == entryID {
+			return false
+		}
+	}
+	return true
+}
+
 // settleBoundHandoffReceipt settles one immediate or steer handoff from the
-// structured receipt. A nil send error has already returned by the time this
-// runs. It must not confirm that write. A missing or unknown receipt keeps
-// the attempt. The caller-visible transcript verdict is a separate answer.
+// structured receipt. A nil send error is not transport acceptance. A missing
+// or unknown receipt keeps the attempt. confirmHere reads this result before
+// it tells the caller sent or steered. confirmByCaller still chooses its own
+// status word and only uses this to settle the queue.
 func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
 	if handoff.ID == "" {
 		return

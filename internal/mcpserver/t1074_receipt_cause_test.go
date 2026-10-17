@@ -259,11 +259,12 @@ func TestT1074FailedSubmissionDoesNotInventCause(t *testing.T) {
 }
 
 // TestT1074ImmediateNilErrorDoesNotConfirm is a capable immediate send whose
-// socket write returns nil. The witness reports PayloadSeen, so the caller
-// still hears "sent". The receipt is unknown, so the queue stays uncertain
-// and no cause is journaled.
+// socket write returns nil. The witness reports PayloadSeen. The receipt is
+// unknown, so the caller hears delivered_unconfirmed, the queue stays
+// uncertain, delivery evidence is not recorded, and no cause is journaled.
 func TestT1074ImmediateNilErrorDoesNotConfirm(t *testing.T) {
 	f := newBindFixture(t, "T1074")
+	f.s.stateDir = t.TempDir()
 	journal := receiptJournal(t, f.s, t.TempDir())
 	const payload = "owner: nil write is not acceptance"
 	var transportID string
@@ -283,8 +284,14 @@ func TestT1074ImmediateNilErrorDoesNotConfirm(t *testing.T) {
 		return r, nil
 	})
 	res, err := deliverObservedToSender(f.s, f.name, payload, false, f.probe, false)
-	if err != nil || res.Status != "sent" {
+	if err != nil || res.Status != "delivered_unconfirmed" {
 		t.Fatalf("caller status=%q err=%v", res.Status, err)
+	}
+	if f.s.priorDelivery(f.name, payload) {
+		t.Fatal("PayloadSeen recorded delivery without a settling receipt")
+	}
+	if _, held := f.s.pendingUnconfirmedSend(f.name, time.Now()); !held {
+		t.Fatal("unsettled receipt was not remembered as undecided")
 	}
 	if len(f.probe.sentIDs()) != 1 || transportID == "" {
 		t.Fatalf("sends=%v", f.probe.sentIDs())
@@ -343,9 +350,10 @@ func TestT1074ImmediateProseReasonDoesNotInventCause(t *testing.T) {
 	}
 }
 
-// TestT1074SteerUnknownReceiptStaysHeld folds into the open turn. The caller
-// hears "steered" from the nil send error. The receipt is unknown, so the
-// steer's own transport id stays uncertain and is not journaled.
+// TestT1074SteerUnknownReceiptStaysHeld folds into the open turn. The socket
+// write returns nil and the seam says the turn was in flight. The receipt is
+// unknown, so the caller does not hear "steered". The steer's own transport
+// id stays uncertain and is not journaled.
 func TestT1074SteerUnknownReceiptStaysHeld(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
@@ -366,7 +374,7 @@ func TestT1074SteerUnknownReceiptStaysHeld(t *testing.T) {
 		return r, nil
 	})
 	res, err := deliverObservedToSenderMode(f.s, f.name, text, delivery.ModeSteer, f.probe, false, confirmHere)
-	if err != nil || res.Status != "steered" {
+	if err != nil || res.Status != "delivered_unconfirmed" {
 		t.Fatalf("steer: status=%q err=%v", res.Status, err)
 	}
 	if len(f.probe.sentIDs()) != 1 || transportID == "" || queried != transportID {
