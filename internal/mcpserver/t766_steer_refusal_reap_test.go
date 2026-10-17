@@ -61,6 +61,40 @@ func TestT766SteerRefusalIsNotFinishedWork(t *testing.T) {
 	}
 }
 
+// maybeReapDoneWorkAgent is the notify path. The classifier above is not
+// that caller. A rendered refusal stays registered. A prose finish, including
+// one that quotes the refusal, still leaves.
+func TestT766SteerRefusalStaysThroughNotifyReap(t *testing.T) {
+	refusals := []string{
+		relayedSteerRefusalReport,
+		"steer unsupported",
+		"steer unsupported: but not relayed and not the sentinel",
+	}
+	for _, report := range refusals {
+		reg := t439Registry(t, "jv-t766-steer")
+		s := &Server{registry: reg}
+		s.maybeReapDoneWorkAgent("jv-t766-steer", report)
+		if reg.Def("jv-t766-steer") == nil {
+			t.Errorf("notify reap removed a steer refusal: %q", report)
+		}
+	}
+
+	reg := t439Registry(t, "jv-t766-finish")
+	s := &Server{registry: reg}
+	s.maybeReapDoneWorkAgent("jv-t766-finish", t165ProseFinish)
+	if reg.Def("jv-t766-finish") != nil {
+		t.Fatal("prose finish stayed registered on the notify reap")
+	}
+
+	quoted := t165ProseFinish + ". The log quoted \"steer unsupported\"."
+	reg = t439Registry(t, "jv-t766-quoted")
+	s = &Server{registry: reg}
+	s.maybeReapDoneWorkAgent("jv-t766-quoted", quoted)
+	if reg.Def("jv-t766-quoted") != nil {
+		t.Fatal("a prose finish that quotes the refusal stayed registered")
+	}
+}
+
 func isFinishReapReason(reason string) bool {
 	switch reason {
 	case "finished_work", "bare_done_completion", "accepted_risk", ownWorkCompleteReapReason:
