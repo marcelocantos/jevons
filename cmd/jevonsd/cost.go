@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
@@ -31,13 +32,15 @@ type costGuard struct {
 	store *cost.Store
 	// config reports the live budget policy (session bound, daily lines).
 	config func() *cost.BudgetConfig
+	// collector ingests the sqlpipe replica. It does not poll the usage socket.
+	collector *cost.Collector
 }
 
 // startCostGuard constructs and starts the clamp-down loops. It returns
 // nil (with a logged warning) rather than failing the daemon if the
 // usage DB can't open — cost monitoring is important but must not be a
 // single point of failure for the whole cockpit.
-func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watcher, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server) *costGuard {
+func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watcher, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server, mcp *mcpserver.Server) *costGuard {
 	budgetPath := filepath.Join(jc.StateDir, "budget.json")
 	// 🎯T574: budget.json is hot — limits, protected workers, and the
 	// accounting mode swap in ≤5 s. The configured overseer is always
@@ -103,12 +106,19 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		return ""
 	}
 
+	replica, err := cost.OpenReplica(jc.StateDir)
+	if err != nil {
+		slog.Error("cost: control plane unavailable — usage socket poll stays off", "err", err)
+	}
 	collector := cost.NewCollector(&cost.CollectorArgs{
 		Store:        store,
 		ProjectsRoot: jc.SessionsDir,
 		Attribute:    attribute,
-		UsageSource:  &cost.UsageSource{Discover: claudia.DiscoverGenerations, Query: claudia.QueryUsage},
+		Replica:      replica,
 	})
+	if mcp != nil && collector != nil && replica != nil {
+		mcp.SetSendReceiptQuery(collector.ReplicatedReceipt)
+	}
 
 	monitor := cost.NewMonitor(&cost.MonitorArgs{
 		Store:           store,
@@ -162,7 +172,7 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 	slog.Info("cost clamp-down started", "budget", budgetPath,
 		"cost_safety", "T334", "protected", cfg.ProtectedWorkers)
 
-	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config}
+	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config, collector: collector}
 }
 
 // brokerSeatNames lists the names of every seat the claudia broker holds.

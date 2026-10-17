@@ -122,12 +122,6 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 		slog.Warn("receipt recovery cannot read held queue", "agent", name, "error", err)
 		return 0
 	}
-	s.mu.Lock()
-	query := s.querySendReceipt
-	s.mu.Unlock()
-	if query == nil {
-		query = claudia.QueryReceipt
-	}
 	settled := 0
 	for _, e := range entries {
 		if e.State == sendq.Pending || e.TransportRequestID == "" || e.SessionID == "" {
@@ -136,7 +130,7 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 		if ctx.Err() != nil {
 			break
 		}
-		r, err := query(ctx, claudia.ReceiptQuery{Seat: name, SessionID: e.SessionID, RequestID: e.TransportRequestID})
+		r, err := s.LookupHeldReceipt(ctx, claudia.ReceiptQuery{Seat: name, SessionID: e.SessionID, RequestID: e.TransportRequestID})
 		if err == nil {
 			err = r.ValidateIdentity(name, e.SessionID, e.TransportRequestID)
 		}
@@ -177,6 +171,25 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 		}
 	}
 	return settled
+}
+
+// SetSendReceiptQuery installs the production receipt read. Nil restores
+// Claudia's socket query. The daemon installs the sqlpipe replica read.
+func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudia.ReceiptQuery) (*claudia.RequestReceipt, error)) {
+	s.mu.Lock()
+	s.querySendReceipt = fn
+	s.mu.Unlock()
+}
+
+// LookupHeldReceipt reads one receipt the way the held-receipt sweep does.
+func (s *Server) LookupHeldReceipt(ctx context.Context, q claudia.ReceiptQuery) (*claudia.RequestReceipt, error) {
+	s.mu.Lock()
+	query := s.querySendReceipt
+	s.mu.Unlock()
+	if query == nil {
+		query = claudia.QueryReceipt
+	}
+	return query(ctx, q)
 }
 
 func (s *Server) persistSendReceipt(name string, e sendq.Entry, r *claudia.RequestReceipt) error {

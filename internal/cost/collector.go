@@ -34,9 +34,13 @@ type CollectorArgs struct {
 	Attribute    func(sessionID string) string
 	ActiveWindow time.Duration
 	Now          func() time.Time
-	// UsageSource enables bounded canonical history catch-up. Nil leaves
-	// it disabled; spool polling remains independent of this source.
+	// UsageSource enables bounded canonical history catch-up over the
+	// Claudia socket. Nil leaves that socket poll disabled. Spool polling
+	// remains independent of this source.
 	UsageSource *UsageSource
+	// Replica ingests Claudia-owned sqlpipe usage and receipt tables.
+	// The daemon sets this and leaves UsageSource nil.
+	Replica *ReplicaSource
 }
 
 // UsageSource is Claudia's provider-neutral history API, injected for tests.
@@ -64,6 +68,7 @@ type Collector struct {
 	active          []string // JSONL paths from the last scan
 	health          CollectorHealth
 	usageSource     *UsageSource
+	replica         *ReplicaSource
 	replayMu        sync.Mutex
 	discoveryCursor string
 	nextDiscovery   time.Time
@@ -141,6 +146,11 @@ func (c *Collector) LastPoll() time.Time {
 	return c.health.LastPoll
 }
 
+// UsesSocketHistory reports whether this collector polls Claudia's usage socket.
+func (c *Collector) UsesSocketHistory() bool {
+	return c != nil && c.usageSource != nil
+}
+
 // Health reports the collector's loop state (🎯T654).
 func (c *Collector) Health() CollectorHealth {
 	c.mu.Lock()
@@ -164,6 +174,7 @@ func NewCollector(args *CollectorArgs) *Collector {
 		activeWindow: args.ActiveWindow,
 		now:          args.Now,
 		usageSource:  args.UsageSource,
+		replica:      args.Replica,
 	}
 	if c.attribute == nil {
 		c.attribute = func(string) string { return "" }
@@ -175,7 +186,7 @@ func NewCollector(args *CollectorArgs) *Collector {
 		c.now = time.Now
 	}
 	c.health.Started = c.now()
-	c.health.HistoryEnabled = c.usageSource != nil
+	c.health.HistoryEnabled = c.usageSource != nil || c.replica != nil
 	c.health.InventoryIncomplete = c.usageSource != nil
 	c.scan = c.ScanOnce
 	return c
@@ -318,10 +329,16 @@ func (c *Collector) Run(ctx context.Context, scanEvery, pollEvery time.Duration)
 	if pollEvery == 0 {
 		pollEvery = DefaultPollInterval
 	}
-	if c.usageSource != nil {
+	if c.replica != nil || c.usageSource != nil {
 		go func() {
 			for ctx.Err() == nil {
-				if err := c.CatchUpOnce(ctx); err != nil {
+				var err error
+				if c.replica != nil {
+					err = c.CatchUpReplicas(ctx)
+				} else {
+					err = c.CatchUpOnce(ctx)
+				}
+				if err != nil {
 					slog.Warn("cost collector: history", "err", err)
 				}
 				timer := time.NewTimer(pollEvery)

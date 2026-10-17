@@ -771,7 +771,7 @@ func main() {
 	// Token-spend clamp-down (ð¯T36): start it before the butler so its
 	// spawn/resume guards feed the butler's lifecycle. Returns nil if the
 	// usage DB is unavailable â the cockpit still runs, just unguarded.
-	guard := startCostGuard(ctx, cfg, watcher, registry, scanner, srv)
+	guard := startCostGuard(ctx, cfg, watcher, registry, scanner, srv, mcpSrv)
 
 	// ð¯T114: same Claudia adapter is Fleet (threads) and Participants
 	// (agent-only names) so Deliver/PushEvent share one id space.
