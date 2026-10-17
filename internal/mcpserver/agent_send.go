@@ -497,6 +497,55 @@ func (s *Server) lockAgentSend(name string) func() {
 	return lock.Unlock
 }
 
+// unconfirmedBoundHandoffResult is the caller answer when a capable
+// confirmHere handoff's structured receipt did not settle. The transcript
+// watch is not consulted.
+func (s *Server) unconfirmedBoundHandoffResult(name, text string, rehydrated bool, mm sendMech) agentSendResult {
+	res := agentSendResult{
+		Status: "delivered_unconfirmed",
+		Message: fmt.Sprintf(
+			"Message handed to %q but NOT confirmed as a turn: the socket write returned and the structured receipt did not settle this handoff. "+
+				"DO NOT re-send on this verdict — the attempt stays held until a receipt settles.",
+			name) + describeMode(mm),
+		Queued:    s.pendingAgentSends(name),
+		Mode:      mm.Mode,
+		Mechanism: mm.Mechanism,
+	}
+	s.noteUnconfirmedSend(name, text)
+	logAgentSendResult(name, res, rehydrated)
+	return res
+}
+
+// settledHandoffCallerResult is the caller answer after that receipt settled.
+// PayloadSeen and PayloadEnteredTurn do not choose it and are not recorded
+// as delivery evidence.
+func (s *Server) settledHandoffCallerResult(name string, rehydrated, interrupted bool, transportErr error, mm sendMech) agentSendResult {
+	msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
+	switch {
+	case interrupted:
+		msg = fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
+	case rehydrated:
+		msg += s.rehydratedAfter(name)
+	}
+	if claim := describeTransportClaim(transportErr); claim != "" {
+		msg += fmt.Sprintf(
+			" (the send transport reported %q — a claim about its own observation, contradicted by the structured receipt)",
+			claim)
+	}
+	msg += describeMode(mm)
+	res := agentSendResult{
+		Status:    sentStatus(rehydrated, interrupted),
+		Message:   msg,
+		Queued:    s.pendingAgentSends(name),
+		Mode:      mm.Mode,
+		Mechanism: mm.Mechanism,
+	}
+	logAgentSendResult(name, res, rehydrated)
+	s.markAgentTurnBegan(name)
+	s.noteTurnInFlight(name)
+	return res
+}
+
 // The provider may know a turn is open before Jevons has observed a turn
 // event. OMP marks that phase before writing the prompt to its sidecar.
 // deliverToSenderMode is the mode-carrying send path (🎯T657).
@@ -788,24 +837,13 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		}
 		// A bound confirmHere handoff is settled from its receipt before any
 		// caller-visible sent or steered. PayloadSeen does not record
-		// delivery, and it does not answer the caller, while that receipt
-		// is still unknown. A settling receipt keeps the existing wording.
+		// delivery, and it does not answer the caller, whether the receipt
+		// is still unknown or has already settled.
 		if confirm == confirmHere && handoff.TransportRequestID != "" {
 			s.settleBoundHandoffReceipt(name, handoff)
 			receiptSettled = true
 			if !handoffConfirmed(s, name, handoff.ID) {
-				res = agentSendResult{
-					Status: "delivered_unconfirmed",
-					Message: fmt.Sprintf(
-						"Message handed to %q but NOT confirmed as a turn: the socket write returned and the structured receipt did not settle this handoff. "+
-							"DO NOT re-send on this verdict — the attempt stays held until a receipt settles.",
-						name) + describeMode(mm),
-					Queued:    s.pendingAgentSends(name),
-					Mode:      mode,
-					Mechanism: mm.Mechanism,
-				}
-				s.noteUnconfirmedSend(name, text)
-				logAgentSendResult(name, res, rehydrated)
+				res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
 				return res, nil
 			}
 		}
@@ -839,6 +877,10 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			s.noteTurnInFlight(name)
 			return res, nil
 		}
+		if receiptSettled {
+			res = s.settledHandoffCallerResult(name, rehydrated, interrupted, nil, mm)
+			return res, nil
+		}
 		ev := watch()
 		outcome := s.classifySend(name, text, flight, ev)
 		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, interrupted, nil, mm)
@@ -859,6 +901,16 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// same instrument the success path uses decides: the watch is already
 		// open, taken from a pre-send baseline, and it reads the RECEIVER.
 		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmHere {
+			if handoff.TransportRequestID != "" {
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, interrupted, err, mm)
+				return res, nil
+			}
 			ev := watch()
 			outcome := s.classifySend(name, text, flight, ev)
 			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, interrupted, err, mm)
@@ -917,14 +969,34 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// is precisely the outcome the caller must not hear as success.
 		watch2 := s.watchAgentTurnFor(name, text)
 		if _, err2 := trySend(); err2 == nil {
+			if confirm == confirmHere && handoff.TransportRequestID != "" {
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, true, nil, mm)
+				return res, nil
+			}
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
 			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil, mm)
 		} else if !isPromptInFlight(err2) && !ClassifySendError(err2).DisprovesDelivery() {
 			// 🎯T429, on the interrupt arm: the same non-observation, and the
 			// same rule. An interrupt that succeeded leaves the agent known
-			// idle, so the strict verdict is available here — but it has to be
-			// earned from the receiver, not inherited from the transport.
+			// idle. A bound handoff settles from its receipt. An unbound
+			// seat still earns the verdict from the receiver's transcript.
+			if confirm == confirmHere && handoff.TransportRequestID != "" {
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, true, err2, mm)
+				return res, nil
+			}
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
 			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, err2, mm)
