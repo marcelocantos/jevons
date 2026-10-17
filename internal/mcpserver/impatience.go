@@ -131,6 +131,15 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 	activity := s.idleActivity
 	s.mu.Unlock()
 
+	if ledger != nil {
+		decision, err := ledger.Reserve(agent, time.Now(), DefaultIdleNudgeMax, DefaultIdleNudgeBackoffs)
+		if err != nil {
+			return fmt.Errorf("repressure ledger: %w", err)
+		}
+		if decision != NudgeReserved {
+			return fmt.Errorf("repressure refused: %s", decision)
+		}
+	}
 	kind := ClassifyIdleNudgeKind(briefPresent)
 	text := FormatIdleNudgeText(IdleNudgeTextArgs{
 		Name:     agent,
@@ -150,11 +159,6 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 		}
 		s.fleetBriefed[agent] = true
 		s.mu.Unlock()
-	}
-	if ledger != nil {
-		if err := ledger.Record(agent, time.Now()); err != nil {
-			slog.Warn("impatience re-pressure ledger record failed", "agent", agent, "err", err)
-		}
 	}
 	if activity != nil {
 		activity.ClearRecover(agent, time.Now())

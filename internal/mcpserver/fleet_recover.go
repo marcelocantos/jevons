@@ -507,6 +507,23 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		rep.Error = "no_pusher"
 		return rep
 	}
+	if args.Ledger != nil {
+		decision, err := args.Ledger.Reserve(d.Name, now, DefaultFleetRecoverMax, DefaultFleetRecoverBackoffs)
+		if err != nil {
+			rep.Error = err.Error()
+			slog.Warn("fleet recover ledger reserve failed", "agent", d.Name, "err", err)
+			return rep
+		}
+		if decision != NudgeReserved {
+			if decision == NudgeExhausted {
+				rep.Action = FleetRecoverMaxed
+			} else {
+				rep.Action = FleetRecoverSkip
+			}
+			rep.Reason = string(decision)
+			return rep
+		}
+	}
 
 	acceptance := ""
 	if args.MissionAcceptance != nil && targetID != "" {
@@ -557,11 +574,6 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	if kind == IdleNudgeKindFullBrief && args.MarkBriefed != nil {
 		args.MarkBriefed(d.Name)
 	}
-	if args.Ledger != nil {
-		if err := args.Ledger.Record(d.Name, now); err != nil {
-			slog.Warn("fleet recover ledger record failed", "agent", d.Name, "err", err)
-		}
-	}
 	// Clear NeedsRecover and reset idle clock (phase stays idle until ACP).
 	if args.Activity != nil {
 		args.Activity.ClearRecover(d.Name, now)
@@ -591,6 +603,23 @@ func switchSeatModel(d claudia.AgentDef, args FleetRecoverSweepArgs,
 		rep.Error = "no_model_switcher"
 		return rep
 	}
+	if args.Ledger != nil {
+		decision, err := args.Ledger.Reserve(d.Name, now, DefaultFleetRecoverMax, DefaultFleetRecoverBackoffs)
+		if err != nil {
+			rep.Error = err.Error()
+			slog.Warn("fleet recover ledger reserve failed", "agent", d.Name, "err", err)
+			return rep
+		}
+		if decision != NudgeReserved {
+			if decision == NudgeExhausted {
+				rep.Action = FleetRecoverMaxed
+			} else {
+				rep.Action = FleetRecoverSkip
+			}
+			rep.Reason = string(decision)
+			return rep
+		}
+	}
 	if err := args.SwitchModel(d.Name, obs.FallbackModel); err != nil {
 		rep.Error = err.Error()
 		slog.Warn("fleet recover model fallback failed",
@@ -601,11 +630,6 @@ func switchSeatModel(d claudia.AgentDef, args FleetRecoverSweepArgs,
 	rep.Model = obs.FallbackModel
 	if args.Activity != nil {
 		args.Activity.NoteModelSwitched(d.Name, now)
-	}
-	if args.Ledger != nil {
-		if err := args.Ledger.Record(d.Name, now); err != nil {
-			slog.Warn("fleet recover ledger record failed", "agent", d.Name, "err", err)
-		}
 	}
 	// WARN, not INFO: the fleet just spent capability to stay alive, and
 	// the owner is the one who decides whether that trade is acceptable.

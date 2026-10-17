@@ -729,6 +729,19 @@ func OpenIdleNudgeLedger(stateDir string) (*IdleNudgeLedger, error) {
 	return l, nil
 }
 
+// NudgeReserve is the durable decision to spend one automatic attempt.
+type NudgeReserve string
+
+const (
+	// NudgeReserved means the attempt is already on disk. The caller may act.
+	// A later ambiguous outcome stays spent; there is no refund.
+	NudgeReserved NudgeReserve = "reserved"
+	// NudgeExhausted means the allowance was already used.
+	NudgeExhausted NudgeReserve = "max_nudges"
+	// NudgeBackoff means the previous attempt is still inside its wait.
+	NudgeBackoff NudgeReserve = "backoff"
+)
+
 // Get returns count and last-nudge time for name.
 func (l *IdleNudgeLedger) Get(name string) (count int, last time.Time) {
 	if l == nil {
@@ -740,21 +753,77 @@ func (l *IdleNudgeLedger) Get(name string) (count int, last time.Time) {
 	return e.Count, e.LastNudge
 }
 
-// Record increments count and sets last nudge time; atomic write-and-rename.
-func (l *IdleNudgeLedger) Record(name string, at time.Time) error {
+// Reserve spends one attempt before the caller acts. The allowance check,
+// the increment, and the write share one lock, so two callers cannot both
+// observe the same remaining attempt. A failed write leaves the previous
+// allowance in place and the caller must not act.
+func (l *IdleNudgeLedger) Reserve(name string, at time.Time, max int, backoffs []time.Duration) (NudgeReserve, error) {
 	if l == nil || name == "" {
-		return nil
+		return "", fmt.Errorf("idle nudge: no ledger")
+	}
+	if max <= 0 {
+		return "", fmt.Errorf("idle nudge: reserve requires a positive allowance")
+	}
+	if at.IsZero() {
+		at = time.Now()
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.data.Agents == nil {
 		l.data.Agents = map[string]idleNudgeEntry{}
 	}
-	e := l.data.Agents[name]
-	e.Count++
-	e.LastNudge = at.UTC()
-	l.data.Agents[name] = e
-	return l.persistLocked()
+	prev, existed := l.data.Agents[name]
+	if prev.Count >= max {
+		return NudgeExhausted, nil
+	}
+	need := NextNudgeBackoff(prev.Count, backoffs)
+	if !prev.LastNudge.IsZero() && need > 0 && at.Sub(prev.LastNudge) < need {
+		return NudgeBackoff, nil
+	}
+	next := prev
+	next.Count++
+	next.LastNudge = at.UTC()
+	l.data.Agents[name] = next
+	if err := l.persistLocked(); err != nil {
+		if existed {
+			l.data.Agents[name] = prev
+		} else {
+			delete(l.data.Agents, name)
+		}
+		return "", err
+	}
+	return NudgeReserved, nil
+}
+
+// Record increments count and sets last nudge time; atomic write-and-rename.
+// A failed write does not keep the increment. Callers that are about to act
+// use Reserve, which also enforces the allowance.
+func (l *IdleNudgeLedger) Record(name string, at time.Time) error {
+	if l == nil || name == "" {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.data.Agents == nil {
+		l.data.Agents = map[string]idleNudgeEntry{}
+	}
+	prev, existed := l.data.Agents[name]
+	next := prev
+	next.Count++
+	next.LastNudge = at.UTC()
+	l.data.Agents[name] = next
+	if err := l.persistLocked(); err != nil {
+		if existed {
+			l.data.Agents[name] = prev
+		} else {
+			delete(l.data.Agents, name)
+		}
+		return err
+	}
+	return nil
 }
 
 // Reset clears an agent (e.g. after kill/deregister). Best-effort.
@@ -1096,7 +1165,26 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 		Kind:        rep.Kind,
 	})
 	event := IdleNudgeEventSource(args.PostRestart, rep.Kind)
+	if args.Ledger != nil {
+		decision, err := args.Ledger.Reserve(d.Name, now, DefaultIdleNudgeMax, DefaultIdleNudgeBackoffs)
+		if err != nil {
+			rep.Error = err.Error()
+			slog.Warn("idle nudge ledger reserve failed", "agent", d.Name, "err", err)
+			return rep
+		}
+		if decision != NudgeReserved {
+			if decision == NudgeExhausted {
+				rep.Action = IdleNudgeMaxed
+			} else {
+				rep.Action = IdleNudgeSkip
+			}
+			rep.Reason = string(decision)
+			return rep
+		}
+	}
 	if err := args.Push(d.Name, event, text); err != nil {
+		// The reservation is already durable. A failed or uncertain delivery
+		// stays spent so a restart cannot repeat it inside the same allowance.
 		rep.Error = err.Error()
 		slog.Warn("idle nudge deliver failed", "agent", d.Name, "err", err)
 		return rep
@@ -1104,11 +1192,6 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 	rep.Delivered = true
 	if rep.Kind == IdleNudgeKindFullBrief && args.MarkBriefed != nil {
 		args.MarkBriefed(d.Name)
-	}
-	if args.Ledger != nil {
-		if err := args.Ledger.Record(d.Name, now); err != nil {
-			slog.Warn("idle nudge ledger record failed", "agent", d.Name, "err", err)
-		}
 	}
 	if args.Activity != nil {
 		args.Activity.ClearRecover(d.Name, now)
