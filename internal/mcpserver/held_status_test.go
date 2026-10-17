@@ -149,3 +149,74 @@ func TestT952FleetHoldDefersReapedRecoveryWithoutLosingIt(t *testing.T) {
 		t.Fatalf("fleet resume lost first recovery notice: %v", f.up.all())
 	}
 }
+
+// t952UnconfirmedDaemon is a restarted process whose turn witness never
+// confirms a fleet-health note. The September stall was answered by the
+// model while this witness still said the receipt was unknown.
+func t952UnconfirmedDaemon(t *testing.T, dir string, up *upward) *Server {
+	t.Helper()
+	s := &Server{}
+	s.SetSendQueueDir(dir)
+	s.SetRecoverBin("", dir)
+	s.SetTurnWitness(func(string, string) turnWatch {
+		return func() TurnEvidence { return TurnEvidence{} }
+	})
+	s.SetOverseerDeliver(up.deliver)
+	return s
+}
+
+// The 2026-09-30 claudia-po stall advanced 10m25s through 15m55s and each
+// sweep started an overseer turn. Twenty simulated minutes, a restart, and
+// an unconfirmed receipt stay on the original episode: one notice, then one
+// more when the age crosses the 15-minute band, and no age-varied replacement.
+func TestT952UnconfirmedWorkingStallDoesNotMintAgeVariedPrompts(t *testing.T) {
+	const agent = "claudia-po"
+	dir := t.TempDir()
+	t0 := time.Date(2026, 9, 30, 2, 6, 0, 0, time.UTC)
+	up := &upward{}
+	s := t952UnconfirmedDaemon(t, dir, up)
+	store, err := fleetintent.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetFleetIntentStore(store)
+	if err := store.SetAgent(agent, fleetintent.Working, "owner", "long turn", t0); err != nil {
+		t.Fatal(err)
+	}
+	entry, _, err := s.sendQueue().Append(agent, "integrate the three worker reports", t0.Add(-10*time.Minute-25*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := t0
+	for minute := 0; minute <= 20; minute++ {
+		if minute == 10 {
+			s = t952UnconfirmedDaemon(t, dir, up)
+			store, err = fleetintent.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.SetFleetIntentStore(store)
+		}
+		now = t0.Add(time.Duration(minute) * time.Minute)
+		s.noteTurnInFlight(agent)
+		s.SetSweepClock(func() time.Time { return now })
+		s.SetNoticeCoalesceClock(func() time.Time { return now })
+		s.SetNotifyReplayClock(func() time.Time { return now })
+		s.SweepSendBacklogs()
+	}
+
+	var stalled []string
+	for _, line := range up.all() {
+		if strings.Contains(line, "Stalled backlog") {
+			stalled = append(stalled, line)
+		}
+	}
+	if len(stalled) != 2 {
+		t.Fatalf("stall notices=%d want 2 (the open and the 15m band); overseer saw %v", len(stalled), up.all())
+	}
+	rows, err := s.sendQueue().Snapshot(agent)
+	if err != nil || len(rows) != 1 || rows[0].ID != entry.ID || rows[0].State != sendq.Pending || rows[0].Text != entry.Text {
+		t.Fatalf("obligation changed: %+v %v", rows, err)
+	}
+}

@@ -63,8 +63,10 @@ type noticeRecord810 struct {
 	DeliveredAt time.Time `json:"delivered_at"`
 	LastOffered time.Time `json:"last_offered"`
 	Saved       int       `json:"saved"`
-	// Unconfirmed marks a delivery the receiver's records never showed; repeats
-	// are re-offered, uncounted, until confirmed or notifyReplayUnconfirmedGrace.
+	// Unconfirmed marks a delivery the receiver's records never showed.
+	// A later sweep of the same material is still that episode: it is
+	// counted, not sent again as an age-varied prompt. The exact-text
+	// replay ledger cannot recognise a rewritten age as the original batch.
 	Unconfirmed bool `json:"unconfirmed,omitempty"`
 }
 
@@ -181,13 +183,11 @@ func (s *Server) coalesceNoticeWithin(key, line string, clearedAfter time.Durati
 	last := e.LastOffered
 	e.LastOffered = now
 	cleared := now.Sub(last) > clearedAfter
-	// An UNCONFIRMED first delivery has not been seen to land, so a repeat is
-	// re-offered (and never counted as saved) until one is confirmed. Bounded:
-	// past notifyReplayUnconfirmedGrace since the first unconfirmed copy it
-	// counts as landed, so a seat whose confirmation never shows is not
-	// re-notified forever.
-	reoffer := e.Unconfirmed && now.Sub(e.DeliveredAt) < notifyReplayUnconfirmedGrace
-	if e.Digest != digest || cleared || reoffer {
+	// Same material is one episode, confirmed or not. Rewriting the age and
+	// sending again is a new overseer turn: the replay ledger hashes the
+	// exact text, so it cannot tell the rewrite from a new request. A
+	// different digest, or a key that has gone quiet, still delivers.
+	if e.Digest != digest || cleared {
 		return false, e.Saved
 	}
 	e.Saved++
