@@ -42,6 +42,11 @@ const (
 
 	// ToolPing is the internal completion probe. It is not an owner-facing tool.
 	ToolPing = "seatpair.ping"
+
+	// InitialGeneration is the generation a daemon publishes for a known
+	// seat that does not yet have one. An existing file is left as it is,
+	// so reattachment does not make outstanding intents stale.
+	InitialGeneration int64 = 1
 	// EffectLog is the executor's count of tool effects, one operation id per line.
 	EffectLog = "seatpair-effects.log"
 
@@ -565,6 +570,93 @@ func writeOutcome(db *sqlpipe.Database, intent Intent, res Result) error {
 		ON CONFLICT(operation_id) DO UPDATE SET
 		  outcome = excluded.outcome, reason = excluded.reason, body = excluded.body`,
 		intent.OperationID, intent.Seat, intent.Generation, res.Outcome, res.Reason, res.Body)
+}
+
+// PublishGeneration writes generation for seat when the file is absent.
+// An existing file is left unchanged.
+func PublishGeneration(root, seat string, generation int64) error {
+	if generation <= 0 {
+		return fmt.Errorf("seat pair: generation")
+	}
+	if err := checkSeat(seat); err != nil {
+		return err
+	}
+	dir := filepath.Join(root, seat)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, GenerationFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	_, err = io.WriteString(f, strconv.FormatInt(generation, 10)+"\n")
+	return err
+}
+
+// CurrentGeneration reads the seat's generation file. The bool is false
+// when the file is absent.
+func CurrentGeneration(root, seat string) (int64, bool, error) {
+	if err := checkSeat(seat); err != nil {
+		return 0, false, err
+	}
+	return readGeneration(filepath.Join(root, seat, GenerationFile))
+}
+
+// Inspect reads the committed intents and stored outcomes for one seat.
+// A missing database is an empty result, not an error.
+func Inspect(root, seat string) ([]Intent, map[string]Result, error) {
+	if err := checkSeat(seat); err != nil {
+		return nil, nil, err
+	}
+	intents, err := inspectIntents(filepath.Join(root, seat, MCPFile))
+	if err != nil {
+		return nil, nil, err
+	}
+	outcomes, err := inspectOutcomes(filepath.Join(root, seat, JevonsFile))
+	if err != nil {
+		return nil, nil, err
+	}
+	return intents, outcomes, nil
+}
+
+func inspectIntents(path string) ([]Intent, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	db, err := openDB(path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	if err := db.Exec(schema); err != nil {
+		return nil, err
+	}
+	return readIntents(db)
+}
+
+func inspectOutcomes(path string) (map[string]Result, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return map[string]Result{}, nil
+		}
+		return nil, err
+	}
+	db, err := openDB(path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	if err := db.Exec(schema); err != nil {
+		return nil, err
+	}
+	return readOutcomes(db)
 }
 
 func readGeneration(path string) (int64, bool, error) {

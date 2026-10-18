@@ -44,6 +44,7 @@ func (s *Server) addTool(t mcp.Tool, h func(context.Context, mcp.CallToolRequest
 	if t.Name == "jevons_agent_switch_model" {
 		h = s.detachSwitch(h) // 🎯T790: the switch outlives the caller's deadline
 	}
+	s.rememberSeatPairHandler(t.Name, h)
 	s.mcpSrv.AddTool(t, s.boundTool(t.Name, h))
 }
 
@@ -59,13 +60,19 @@ func (s *Server) boundTool(name string, h func(context.Context, mcp.CallToolRequ
 		id := s.trackMCPFlight(caller, cancel)
 		defer s.untrackMCPFlight(caller, id)
 
+		call := h
+		if seat, root := s.seatPairCall(ctx); seat != "" && root != "" {
+			call = func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return s.answerThroughSeatPair(ctx, root, seat, name, req)
+			}
+		}
 		type outcome struct {
 			res *mcp.CallToolResult
 			err error
 		}
 		ch := make(chan outcome, 1)
 		go func() {
-			res, err := h(ctx, req)
+			res, err := call(ctx, req)
 			ch <- outcome{res, err}
 		}()
 		select {

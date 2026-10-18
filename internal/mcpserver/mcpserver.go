@@ -136,6 +136,11 @@ type Server struct {
 	reconcileBlock func()
 
 	mu sync.Mutex
+
+	// seatPairMu guards seatPairHandlers. Catch-up runs the handler
+	// registered here, not the deadline wrapper that commits.
+	seatPairMu       sync.Mutex
+	seatPairHandlers map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
 	// startMu serializes Launch/wire on jevons_agent_start. It must be
 	// released before any ACP prompt delivery (🎯T541): holding it across
 	// session/prompt confirmation hangs MCP so agent_list/send/kill/event_push
