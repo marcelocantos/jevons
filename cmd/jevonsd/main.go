@@ -1125,7 +1125,7 @@ func main() {
 			mode = upgrade.ModeUpgrade
 		}
 		if mode.StopAgents() {
-			registry.StopAll()
+			stopFleetForDrain(registry)
 			if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
 				slog.Warn("could not drop stale upgrade handoff on drain", "err", err)
 			}

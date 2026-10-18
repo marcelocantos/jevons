@@ -122,6 +122,9 @@ func (s *suite) providerSwitchWithBroker() error {
 		"name": id, "provider": string(to), "owner_asked": true,
 	})
 	if err != nil {
+		if authRefreshRefused(err, out) {
+			return s.authUnavailablePreserved(id, source, to, passphrase, err)
+		}
 		return fmt.Errorf("switch %s → %s: %w (%s)", s.provider, to, err, trim(out, 200))
 	}
 	if !strings.Contains(out, "in place") {
@@ -268,6 +271,56 @@ func (s *suite) overseerSwitchWithBroker() error {
 		time.Sleep(10 * time.Second)
 	}
 	return fmt.Errorf("overseer on %s never recalled the codeword after the switch", to)
+}
+
+// authRefreshRefused is an isolate (or any broker) refusing to rotate the
+// shared plan token. The destination never starts. The source seat is the
+// one that must still be there.
+func authRefreshRefused(err error, out string) bool {
+	text := out
+	if err != nil {
+		text += "\n" + err.Error()
+	}
+	return strings.Contains(text, "refresh refused") || strings.Contains(text, "CLAUDIA_OMP_NO_REFRESH")
+}
+
+// seatPreserved reports whether a failed switch left the running seat on
+// the same plan and the same session. A missing row or a new session is
+// the work being discarded.
+func seatPreserved(before, after claudia.AgentDef) error {
+	if strings.TrimSpace(after.SessionID) == "" && strings.TrimSpace(string(after.Provider)) == "" {
+		return fmt.Errorf("seat is gone")
+	}
+	if cli.PlanProvider(after.Provider) != cli.PlanProvider(before.Provider) {
+		return fmt.Errorf("provider changed from %s to %s", before.Provider, after.Provider)
+	}
+	if after.SessionID == "" || after.SessionID != before.SessionID {
+		return fmt.Errorf("session changed from %q to %q", before.SessionID, after.SessionID)
+	}
+	return nil
+}
+
+// authUnavailablePreserved is the auth-unavailable clause. The switch did
+// not complete. The same seat must still answer from its own conversation.
+// A nil return would read as a finished provider switch, so the error names
+// the preservation and the switch that did not happen.
+func (s *suite) authUnavailablePreserved(id string, source claudia.AgentDef, to claudia.Provider, passphrase string, switchErr error) error {
+	after, err := bounceRegistrySnapshot(s.agentsPath())
+	if err != nil {
+		return fmt.Errorf("auth unavailable: registry after the refused switch: %w (switch: %v)", err, switchErr)
+	}
+	if err := seatPreserved(source, after[id]); err != nil {
+		return fmt.Errorf("auth unavailable lost %s: %w (switch: %v)", id, err, switchErr)
+	}
+	probe := "What is the mission passphrase? Reply with the passphrase only."
+	if err := s.recallWithin(id, probe, passphrase, 90*time.Second); err != nil {
+		return fmt.Errorf("auth unavailable: %s stayed on %s session %s but the conversation did not: %w (switch: %v)",
+			id, source.Provider, source.SessionID, err, switchErr)
+	}
+	fmt.Printf("auth-unavailable preserved %s provider=%s session=%s passphrase recalled; switch to %s did not complete\n",
+		id, source.Provider, source.SessionID, to)
+	return fmt.Errorf("auth unavailable preserved %s on %s session %s; provider switch to %s did not complete: %w",
+		id, source.Provider, source.SessionID, to, switchErr)
 }
 
 // switchSettleRetry is how often a switch refused for a running turn is
