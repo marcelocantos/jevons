@@ -271,6 +271,8 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	// 🎯T766.5: a held entry no longer blocks the drain. It is never resent;
 	// the pending messages behind it are offered past it, as the automatic
 	// drain does. The reply still names it, because it still needs a decision.
+	// An attempt this daemon owns blocks the whole seat, so that flow-past
+	// sentence is not the reply while the attempt is in flight.
 	heldNote := ""
 	if e, blocked, err := s.sendQueue().BlockedHead(name); err == nil && blocked {
 		heldNote = fmt.Sprintf(
@@ -283,10 +285,19 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 		flightNote = inFlightExitLine(owned)
 	}
 	if _, live := s.liveSender(name); !live {
+		if flightNote != "" {
+			var blocked strings.Builder
+			fmt.Fprintf(&blocked, "%q has no live process. Starting it does not drain this queue while this daemon owns the attempt.\n", name)
+			blocked.WriteString(flightNote)
+			if pin, pinned := s.sendqPinFor(name); pinned {
+				fmt.Fprintf(&blocked, "%s\n", formatSendqPinLine(name, pin, false))
+			}
+			return blocked.String()
+		}
 		return fmt.Sprintf(
 			"%q holds %d pending message(s), oldest waiting %s, but has no live process to deliver to.\n"+
 				"Give it one and the queue drains at the first turn boundary: jevons_agent_start name=%[1]q (no prompt).\n",
-			name, len(before), before[0].Age(now).Round(time.Second)) + heldNote + flightNote
+			name, len(before), before[0].Age(now).Round(time.Second)) + heldNote
 	}
 
 	s.drainAgentSendQueue(name)
@@ -302,7 +313,9 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Drained %q: %d of %d held message(s) delivered, %d still queued.\n",
 		name, delivered, len(before), len(after))
-	b.WriteString(heldNote)
+	if flightNote == "" {
+		b.WriteString(heldNote)
+	}
 	b.WriteString(flightNote)
 	switch {
 	case delivered == 0 && flightNote != "":
