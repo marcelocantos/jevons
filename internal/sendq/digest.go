@@ -302,14 +302,16 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		ID:         NewID(),
 		Text:       BuildDigest(agent, members),
 		EnqueuedAt: members[0].EnqueuedAt,
-		State:      Attempting,
-		AttemptID:  NewID(),
 	}
 	memberIDs := make([]string, len(members))
 	for i, m := range members {
 		memberIDs[i] = m.ID
 	}
 	merged.Members = strings.Join(memberIDs, ",")
+	merged, _, err = applyDelivery(merged, stepClaim, "", NewID(), nil)
+	if err != nil {
+		return Entry{}, false, err
+	}
 	if err := s.archive(archiveFile{DigestID: merged.ID, Agent: agent, At: time.Now().UTC(), Members: members}); err != nil {
 		return Entry{}, false, err
 	}

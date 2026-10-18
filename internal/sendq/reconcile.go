@@ -187,11 +187,16 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 	by := Reconciliation{Actor: actor, At: now.UTC(), Outcome: outcome, Evidence: evidence}
 	rec := Receipt{Agent: strings.TrimSpace(agent), By: by}
 	if outcome == ReconcileRequeue {
-		e.State, e.AttemptID, e.Detail = Pending, "", ""
-		e.Reconciled = &by
+		e, _, err = applyDelivery(e, stepRequeue, "", "", &by)
+		if err != nil {
+			return Receipt{}, err
+		}
 		f.Entries[idx] = e
 		rec.Kept = []Entry{e}
 	} else {
+		if _, _, err = applyDelivery(e, stepReconcileRemove, "", "", &by); err != nil {
+			return Receipt{}, err
+		}
 		rec.Removed = []Entry{e}
 		f.Entries = append(append([]Entry(nil), f.Entries[:idx]...), f.Entries[idx+1:]...)
 	}

@@ -101,6 +101,8 @@ type Entry struct {
 type DeliveryState string
 
 const (
+	// Pending is the empty on-disk state. EntryPhase reads it as admitted,
+	// digest, or requeued. Those three are the one claimable pending.
 	Pending    DeliveryState = ""
 	Attempting DeliveryState = "attempting"
 	Uncertain  DeliveryState = "uncertain"
@@ -135,7 +137,12 @@ type Backlog struct {
 	EntryIDs []string
 	// Uncertain counts entries that must be reconciled rather than replayed.
 	// An attempt left by a dead daemon has the same conservative meaning.
+	// An in-flight attempt is included: its state is not Pending, and a sweep
+	// must not treat that queue as idle work.
 	Uncertain int
+	// BlockReason is why the queue is not only waiting. Empty means every
+	// entry is claimable pending. It is depth's companion, not a second queue.
+	BlockReason string
 }
 
 // OldestAge is how long the head of this queue has been waiting.
@@ -151,12 +158,18 @@ func (b Backlog) Describe(now time.Time) string {
 	if b.Depth == 0 {
 		return fmt.Sprintf("%s: queue empty", b.Agent)
 	}
+	var msg string
 	if b.Uncertain > 0 {
-		return fmt.Sprintf("%s: %d held, %d delivery outcome(s) uncertain, oldest waiting %s",
+		msg = fmt.Sprintf("%s: %d held, %d delivery outcome(s) uncertain, oldest waiting %s",
 			b.Agent, b.Depth, b.Uncertain, b.OldestAge(now).Round(time.Second))
+	} else {
+		msg = fmt.Sprintf("%s: %d queued, oldest waiting %s",
+			b.Agent, b.Depth, b.OldestAge(now).Round(time.Second))
 	}
-	return fmt.Sprintf("%s: %d queued, oldest waiting %s",
-		b.Agent, b.Depth, b.OldestAge(now).Round(time.Second))
+	if b.BlockReason != "" {
+		msg += "; block: " + b.BlockReason
+	}
+	return msg
 }
 
 // file is the on-disk shape. The agent name is written into the record as
@@ -521,12 +534,12 @@ func claimable(entries []Entry, active string) (i int, blocker Entry, blocked bo
 	// Ownership serializes the entire seat, not just the prefix before the
 	// first Pending entry; check it before selecting the next obligation.
 	for _, e := range entries {
-		if e.State == Attempting && active != "" && e.AttemptID == active {
+		if EntryPhase(e, active) == PhaseInFlight {
 			return -1, e, true
 		}
 	}
 	for idx, e := range entries {
-		if e.State == Pending {
+		if claimablePhase(EntryPhase(e, active)) {
 			return idx, Entry{}, false
 		}
 	}
@@ -570,7 +583,10 @@ func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) 
 	if e.ID == "" {
 		e.ID = NewID()
 	}
-	e.State, e.AttemptID, e.Detail = Attempting, NewID(), ""
+	e, _, err = applyDelivery(e, stepClaim, "", NewID(), nil)
+	if err != nil {
+		return Entry{}, false, err
+	}
 	f.Entries[i] = e
 	if err := s.save(f); err != nil {
 		return Entry{}, false, err
@@ -595,7 +611,8 @@ func (s *Store) BlockedHead(agent string) (Entry, bool, error) {
 		return Entry{}, false, err
 	}
 	for _, e := range f.Entries {
-		if e.State == Pending || (e.State == Attempting && s.active[agent] == e.AttemptID) {
+		phase := EntryPhase(e, s.active[agent])
+		if claimablePhase(phase) || phase == PhaseInFlight {
 			continue
 		}
 		return e, true, nil
@@ -635,14 +652,25 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 	if at < 0 || f.Entries[at].AttemptID != attempt.AttemptID || f.Entries[at].State == Pending {
 		return fmt.Errorf("sendq: stale delivery attempt for %q", agent)
 	}
-	if outcome == Confirmed || outcome == TerminalUndelivered {
+	e := f.Entries[at]
+	var remove bool
+	switch outcome {
+	case Confirmed:
+		_, remove, err = applyDelivery(e, stepConfirm, detail, "", nil)
+	case TerminalUndelivered:
+		_, remove, err = applyDelivery(e, stepTerminal, detail, "", nil)
+	case Unverified:
+		e, remove, err = applyDelivery(e, stepUnverified, detail, "", nil)
+	case DefinitelyNotSent:
+		e, remove, err = applyDelivery(e, stepNotSent, detail, "", nil)
+	}
+	if err != nil {
+		return err
+	}
+	if remove {
 		f.Entries = append(f.Entries[:at:at], f.Entries[at+1:]...)
 	} else {
-		f.Entries[at].State, f.Entries[at].Detail = Uncertain, detail
-		if outcome == DefinitelyNotSent {
-			f.Entries[at].State = Pending
-			f.Entries[at].AttemptID = ""
-		}
+		f.Entries[at] = e
 	}
 	return s.save(f)
 }
@@ -823,16 +851,24 @@ func (s *Store) Backlogs() ([]Backlog, error) {
 // Backlog reports one agent's current cohort, including an empty queue. Recovery
 // uses it after receipt queries, which can race later arrivals and dispositions.
 func (s *Store) Backlog(agent string) (Backlog, error) {
-	entries, err := s.Snapshot(agent)
-	b := Backlog{Agent: agent, Depth: len(entries)}
-	if err != nil || len(entries) == 0 {
+	if s == nil {
+		return Backlog{}, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	b := Backlog{Agent: agent, Depth: len(f.Entries)}
+	if err != nil || len(f.Entries) == 0 {
 		return b, err
 	}
-	b.Oldest = entries[0].EnqueuedAt
-	for _, e := range entries {
+	b.Oldest = f.Entries[0].EnqueuedAt
+	for _, e := range f.Entries {
 		b.EntryIDs = append(b.EntryIDs, e.ID)
 		if e.State != Pending {
 			b.Uncertain++
+		}
+		if b.BlockReason == "" {
+			b.BlockReason = blockReason(EntryPhase(e, s.active[agent]))
 		}
 	}
 	return b, nil
