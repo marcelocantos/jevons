@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -221,10 +222,18 @@ func ExplainLaunchCapError(def *claudia.AgentDef, err error) error {
 		def.Name, providerLabel(def.Provider), capErr.Capability, err)
 }
 
+// rehydrateRecord is one seat's last launch refusal. Text is what the
+// fleet row shows. Cause is the typed provider cause, empty when the
+// error carried none. A sentence is never stored as a cause.
+type rehydrateRecord struct {
+	Text  string
+	Cause string
+}
+
 // rehydrateFailures remembers, per seat, the last launch refusal seen on a
 // rehydrate road, so /api/agents can say a stopped seat is known-broken
 // rather than serve a plain `stopped` row (🎯T763). Cleared on success.
-var rehydrateFailures sync.Map // name -> string
+var rehydrateFailures sync.Map // name -> rehydrateRecord
 
 // capDrops remembers, per seat, the last provider-native setting dropped
 // from its def, served on /api/agents so a drop is visible where the seat
@@ -235,7 +244,10 @@ func noteRehydrate(name string, err error) {
 	if err == nil {
 		rehydrateFailures.Delete(name)
 	} else {
-		rehydrateFailures.Store(name, err.Error())
+		rehydrateFailures.Store(name, rehydrateRecord{
+			Text:  err.Error(),
+			Cause: agenterr.ProviderCause(err),
+		})
 		logPlanAuthLoss(name, err)
 	}
 	saveRehydrateFailures()
@@ -249,7 +261,7 @@ func noteRehydrate(name string, err error) {
 // them is why it rotated, that fact lives in claudia's own log, not this
 // one — this line is jevons's half of "the logs alone" name the cause.
 func logPlanAuthLoss(name string, err error) {
-	if err == nil || !PlanAuthFailure(err.Error()) {
+	if !PlanAuthFailure(err) {
 		return
 	}
 	slog.Warn("plan auth: login failure recorded for seat",
@@ -299,7 +311,9 @@ func LaunchReconciled(reg *claudia.Registry, name string) (*claudia.Agent, error
 // else "resumable".
 func RehydrateHealth(def claudia.AgentDef) string {
 	if v, ok := rehydrateFailures.Load(def.Name); ok {
-		return "broken: " + v.(string)
+		if rec, ok := v.(rehydrateRecord); ok && rec.Text != "" {
+			return "broken: " + rec.Text
+		}
 	}
 	stale := StaleProviderCaps(def)
 	if len(stale) == 0 {

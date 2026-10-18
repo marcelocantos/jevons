@@ -5,7 +5,6 @@ package fleet
 
 import (
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
@@ -30,24 +30,17 @@ const planAuthReviveCooldown = 2 * time.Minute
 
 var planAuthReviveTried sync.Map // name -> time.Time
 
-// planAuthFailureMarkers are substrings of a recorded launch refusal that
-// mean the plan's login or credential store failed, rather than the seat.
-var planAuthFailureMarkers = []string{
-	"invalid_grant", "refresh token", "refresh failed", "keychain",
-	"plan blob", "authentication failed", "auth recovery", "login required",
-	"not logged in", "no login", "oauth",
+// PlanAuthFailure reports whether err carries the typed plan-login cause.
+// A sentence that only quotes a login failure is not that cause.
+func PlanAuthFailure(err error) bool {
+	return agenterr.ProviderCause(err) == agenterr.CauseAuth
 }
 
-// PlanAuthFailure reports whether a recorded launch failure is a plan
-// login failure that another seat's recovery also repairs.
-func PlanAuthFailure(failure string) bool {
-	failure = strings.ToLower(failure)
-	for _, m := range planAuthFailureMarkers {
-		if strings.Contains(failure, m) {
-			return true
-		}
-	}
-	return false
+// recordedPlanAuthFailure reports that a stored rehydrate record carries
+// the typed plan-login cause. The sentence kept beside it is not the cause.
+func recordedPlanAuthFailure(v any) bool {
+	rec, ok := v.(rehydrateRecord)
+	return ok && rec.Cause == agenterr.CauseAuth
 }
 
 // PlanAuthRevival is one relaunch attempt made by RevivePlanAuthPeers.
@@ -70,7 +63,7 @@ func planAuthCandidates(defs []claudia.AgentDef, alive func(string) bool,
 			continue
 		}
 		v, ok := rehydrateFailures.Load(d.Name)
-		if !ok || !PlanAuthFailure(v.(string)) {
+		if !ok || !recordedPlanAuthFailure(v) {
 			continue
 		}
 		if dec := intent.Allow(d.Name, fleetintent.ControlRevive); !dec.Allow {
@@ -113,7 +106,7 @@ func ownerReauthCandidates(defs []claudia.AgentDef, alive func(string) bool,
 		}
 		failed := false
 		if v, ok := rehydrateFailures.Load(d.Name); ok {
-			failed = PlanAuthFailure(v.(string))
+			failed = recordedPlanAuthFailure(v)
 		}
 		if !d.AutoStart && !failed {
 			continue
@@ -427,7 +420,7 @@ func noteBrokerLostFailure(name string, now time.Time, err error) (BrokerLostStu
 // this host would say so. The standing sweep then relaunches it once a seat
 // on the plan runs again. Any other adopt failure is not recorded.
 func noteAdoptFailure(name string, err error) {
-	if err != nil && PlanAuthFailure(err.Error()) {
+	if err != nil && PlanAuthFailure(err) {
 		noteRehydrate(name, err)
 	}
 }

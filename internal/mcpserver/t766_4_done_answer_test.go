@@ -118,6 +118,9 @@ func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "send_claim.go"), "ClassifySendError")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t661_oversized.go"), "IsBrokerLineLimitError")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/chat_wire.go"), "assistantProviderCause", "providerCodeCause")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../fleet/plan_auth_revive.go"), "PlanAuthFailure", "recordedPlanAuthFailure", "planAuthCandidates", "ownerReauthCandidates", "noteAdoptFailure")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../fleet/provider_caps.go"), "noteRehydrate", "logPlanAuthLoss")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../fleet/exit_cause.go"), "BrokerPlanned", "BrokerCaused")...)
 	if len(hits) != len(t7664ErrorEnglishAllowlist) {
 		t.Fatalf("error-control English classifiers = %v, allowlist %v", hits, t7664ErrorEnglishAllowlist)
 	}
