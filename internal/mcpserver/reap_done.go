@@ -184,74 +184,24 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	}
 	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.isOverseerAgent)
 	if !ok {
-		// 🎯T395 near-miss: the report carried completion language and would
-		// have reaped under the old classifier. Log the save so the veto is
-		// visible in the lifecycle stream rather than silently absent.
-		if strings.HasPrefix(reason, "awaits_overseer_") &&
-			hasCompletionClaim(strings.ToLower(report)) {
-			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped",
-				reapDecisionFields(name, reason, report))
-			slog.Info("T395 kept agent that asked rather than finished",
-				"agent", name, "reason", reason)
+		// Skip logs repeat the reason ShouldAutoReapDoneWorkAgent already
+		// returned. They match that string to the typed producer. They do
+		// not scan the report for a completion word, an ask, or a prefix
+		// of the reason (🎯T766.4).
+		var workDir string
+		if def := s.registry.Def(name); def != nil {
+			workDir = def.WorkDir
 		}
-		// 🎯T470: same visibility for a false-green veto — the daemon held
-		// that the evidence did not support the claim and must not also
-		// treat the claim as finished_work.
-		if strings.HasPrefix(reason, "false_green_") {
-			var workDir string
-			if def := s.registry.Def(name); def != nil {
-				workDir = def.WorkDir
-			}
+		if flags := FalseGreenFlagsForWorker(report, workDir); len(flags) > 0 &&
+			reason == "false_green_"+string(flags[0].Kind) {
 			fields := reapDecisionFields(name, reason, report)
-			fields["false_green_flags"] = falseGreenKinds(FalseGreenFlagsForWorker(report, workDir))
+			fields["false_green_flags"] = falseGreenKinds(flags)
 			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
 			slog.Info("T470 kept agent whose finish report was false-green flagged",
 				"agent", name, "reason", reason)
 		}
-		// 🎯T577: a checkpoint that the T165 path used to reap is kept;
-		// name it so a skipped reap is attributable as that save, not
-		// as a generic ask.
-		// 🎯T581: a local done-word ("reading done; implementing now") is
-		// a sub-step, not a finish — log the save so it is attributable.
-		if reason == "not_finished_work_report" && allCompletionClaimsLocal(strings.ToLower(report)) {
-			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped",
-				reapDecisionFields(name, "local_done_clause", report))
-			slog.Info("T581 kept agent whose done-word was a local clause, not a finish",
-				"agent", name)
-		}
-		// 🎯T750: a completion marker the worker cited rather than claimed.
-		// Without this the save takes the silent return below and leaves no
-		// record, which reads exactly like a sink that never ran.
-		if reason == "not_finished_work_report" {
-			if m, span, offset, cited := CitedCompletionClaim(report); cited {
-				fields := map[string]any{
-					"name":          name,
-					"reason":        "quoted_completion_claim",
-					"cited_marker":  m,
-					"report_span":   span,
-					"report_offset": offset,
-				}
-				s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
-				slog.Info("T750 kept agent whose completion marker was quoted, not claimed",
-					"agent", name, "cited_marker", m)
-			}
-		}
-		if strings.HasPrefix(reason, "awaits_overseer_checkpoint") ||
-			(strings.HasPrefix(reason, "awaits_overseer_") && hasForwardLookingPlan(report)) {
-			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",
-				"agent", name, "reason", reason)
-		}
-		// 🎯T972: a finished-work report was kept because it leaves scope
-		// outstanding (a pending background gate, or uncommitted changes
-		// owned in the seat's own worktree). The parent is notified by name
-		// — a retained seat that nobody hears about is indistinguishable
-		// from a stuck one.
-		if strings.HasPrefix(reason, outstandingScopeReapReasonPrefix) {
-			var workDir string
-			if def := s.registry.Def(name); def != nil {
-				workDir = def.WorkDir
-			}
-			scope := outstandingScopeReasonsForWorker(report, workDir)
+		if scope := outstandingScopeReasonsForWorker(report, workDir); len(scope) > 0 &&
+			reason == outstandingScopeReapReason(scope) {
 			fields := reapDecisionFields(name, reason, report)
 			var kinds []string
 			for _, sc := range scope {
@@ -339,32 +289,22 @@ func (s *Server) notifyPORespawnAfterCheckpointReap(parent, worker, targetID str
 	}
 }
 
-// reapDecisionFields is the lifecycle-log evidence for a reap decision (🎯T439):
-// which classifier fired, on which phrase, and the span of report text around
-// it. A reap removes an agent from the fleet irreversibly, and jv-t435 showed
-// what the absence of this costs — a worker that had asked for its brief
-// vanished as bare_done_completion, and the log recorded only that reason, so
-// nothing in the record said which words had been read as a finish.
-//
-// The span reads differently either way round, and both are worth having: on a
-// reap it is the completion phrase that fired, on a skip it is the ask that
-// vetoed. Diagnostic only — nothing decides on these fields — so a missing span
-// weakens a log line and never a decision.
+// reapDecisionFields is the lifecycle-log evidence for a reap decision.
+// The decision is the reason already returned and the envelope class
+// ClassifyDone reads. A completion sentence in the payload is not a field
+// (🎯T766.4). jv-t435 vanished on a prose span; the log now names the
+// declared kind instead of the words that used to be read as a finish.
 func reapDecisionFields(name, reason, report string) map[string]any {
-	fields := map[string]any{"name": name, "reason": reason}
-	if ask := ClassifyReportAskDetail(report); ask.Class != AskNone {
-		fields["ask_class"] = ask.Class.String()
-		if ask.Marker != "" {
-			fields["ask_marker"] = ask.Marker
-		}
-		fields["report_span"] = ask.Span
-		fields["report_offset"] = ask.Offset
-		return fields
+	fields := map[string]any{
+		"name":       name,
+		"reason":     reason,
+		"done_class": envelope.ClassifyDone(report).String(),
 	}
-	if marker, span, offset, ok := FindCompletionClaim(report); ok {
-		fields["claim_marker"] = marker
-		fields["report_span"] = span
-		fields["report_offset"] = offset
+	if m, _ := envelope.Parse(report); m != nil {
+		fields["envelope_kind"] = string(m.Kind)
+		if m.Status != envelope.ProgressNone {
+			fields["envelope_status"] = string(m.Status)
+		}
 	}
 	return fields
 }

@@ -116,8 +116,8 @@ func TestT470FalseGreenFlaggedReportNeverReaps(t *testing.T) {
 	}
 }
 
-// Clause 3: the reap decision names the sentence it matched, not a 200-char
-// window around an offset.
+// Clause 3: FindCompletionClaim still isolates the incident sentence.
+// The reap log does not copy that sentence (🎯T766.4).
 func TestT470ReapDecisionNamesMatchedSentence(t *testing.T) {
 	report := loadT470Fixture(t, "t470_jv_t391_checkpoint_report.md", 2000)
 	marker, span, offset, ok := FindCompletionClaim(report)
@@ -147,11 +147,13 @@ func TestT470ReapDecisionNamesMatchedSentence(t *testing.T) {
 	}
 
 	fields := reapDecisionFields("worker", "finished_work", "Done. Ship it tomorrow.")
-	spanField, _ := fields["report_span"].(string)
-	if spanField != "Done." && !strings.HasPrefix(spanField, "Done") {
-		// Bare "Done." is the whole sentence.
-		if fields["claim_marker"] != "done" {
-			t.Fatalf("fields=%v", fields)
-		}
+	if _, ok := fields["claim_marker"]; ok {
+		t.Fatalf("reap fields still name a prose claim: %v", fields)
+	}
+	if _, ok := fields["report_span"]; ok {
+		t.Fatalf("reap fields still carry a prose span: %v", fields)
+	}
+	if fields["done_class"] != "unknown" {
+		t.Fatalf("unenveloped prose done_class=%v", fields["done_class"])
 	}
 }

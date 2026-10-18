@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,6 +52,113 @@ func declaredRiskFinishReport(target, payload string) string {
 		SilentLedger: envelope.SilentLedgerEmpty,
 		Payload:      payload,
 	})
+}
+
+// TestT7664ReapFieldsFollowTheEnvelopeNotTheSentence drives the reap log.
+// A completion sentence, including one that says a turn is in flight, is
+// not a done class and is not a log field. A declared finish is.
+func TestT7664ReapFieldsFollowTheEnvelopeNotTheSentence(t *testing.T) {
+	prose := "Done. reading done; implementing now. A turn is in flight; the quoted marker is not a claim."
+	fields := reapDecisionFields("worker", "unknown_report", prose)
+	if fields["done_class"] != "unknown" {
+		t.Fatalf("prose done_class=%v", fields["done_class"])
+	}
+	for _, key := range []string{"claim_marker", "ask_class", "ask_marker", "report_span", "cited_marker"} {
+		if _, ok := fields[key]; ok {
+			t.Fatalf("prose field %s=%v", key, fields[key])
+		}
+	}
+
+	finish := declaredFinishReport("T766.4", prose)
+	fields = reapDecisionFields("worker", "finished_work", finish)
+	if fields["done_class"] != envelope.DoneYes.String() {
+		t.Fatalf("finish done_class=%v", fields["done_class"])
+	}
+	if fields["envelope_kind"] != string(envelope.KindFinishReport) {
+		t.Fatalf("envelope_kind=%v", fields["envelope_kind"])
+	}
+	if _, ok := fields["claim_marker"]; ok {
+		t.Fatalf("finish still names a prose claim: %v", fields)
+	}
+
+	inProgress := declaredInProgressReport("T766.4", prose)
+	fields = reapDecisionFields("worker", "outstanding_scope_in_progress", inProgress)
+	if fields["done_class"] != envelope.DoneNo.String() || fields["envelope_status"] != string(envelope.ProgressInProgress) {
+		t.Fatalf("in-progress fields=%v", fields)
+	}
+
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	reg := t439Registry(t, "jv-t7664-prose")
+	s := &Server{registry: reg}
+	s.maybeReapDoneWorkAgent("jv-t7664-prose", prose)
+	if reg.Def("jv-t7664-prose") == nil {
+		t.Fatal("prose completion reaped the seat")
+	}
+	for _, rec := range cap.snapshot() {
+		m := attrsMap(rec)
+		switch m["reason"] {
+		case "local_done_clause", "quoted_completion_claim":
+			t.Fatalf("reap log reclassified prose: %v", m)
+		}
+		if m["claim_marker"] != nil || m["ask_class"] != nil || m["cited_marker"] != nil {
+			t.Fatalf("reap log carried a prose span: %v", m)
+		}
+	}
+
+	cap.reset()
+	reg2 := t439Registry(t, "jv-t7664-finish")
+	s2 := &Server{registry: reg2}
+	s2.maybeReapDoneWorkAgent("jv-t7664-finish", finish)
+	if reg2.Def("jv-t7664-finish") != nil {
+		t.Fatal("declared finish stayed registered")
+	}
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
+	if got == nil {
+		t.Fatal("declared finish wrote no reap_done log")
+	}
+	if got["outcome"] != "ok" || got["reason"] != "finished_work" || got["done_class"] != "yes" {
+		t.Fatalf("reap log=%v", got)
+	}
+	if got["claim_marker"] != nil || got["envelope_kind"] != string(envelope.KindFinishReport) {
+		t.Fatalf("reap log=%v", got)
+	}
+}
+
+// TestT7664FalseGreenSkipLogsTheTypedReason drives maybeReapDoneWorkAgent.
+// The skip log repeats the false-green reason the typed checker returned.
+// It does not name a completion sentence inside that report.
+func TestT7664FalseGreenSkipLogsTheTypedReason(t *testing.T) {
+	report := declaredFinishReport("T470", "Done. Mission complete. SHA abcdef0123456. GATE go-test exit=1 RED id=2817ca36.")
+	reg := t439Registry(t, "jv-t7664-false-green")
+	ok, want := ShouldAutoReapDoneWorkAgent(reg, "jv-t7664-false-green", report, nil)
+	if ok || !strings.HasPrefix(want, "false_green_") {
+		t.Fatalf("reap=%v reason=%s, want a false-green veto", ok, want)
+	}
+
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	s := &Server{registry: reg}
+	s.maybeReapDoneWorkAgent("jv-t7664-false-green", report)
+	if reg.Def("jv-t7664-false-green") == nil {
+		t.Fatal("false-green report reaped the seat")
+	}
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
+	if got == nil {
+		t.Fatal("false-green skip wrote no reap_done log")
+	}
+	if got["outcome"] != "skipped" || got["reason"] != want || got["done_class"] != "yes" {
+		t.Fatalf("reap log=%v, want reason %s", got, want)
+	}
+	if got["claim_marker"] != nil || got["ask_class"] != nil {
+		t.Fatalf("false-green log named prose: %v", got)
+	}
 }
 
 func TestLooksLikeFinishedWorkReport(t *testing.T) {
