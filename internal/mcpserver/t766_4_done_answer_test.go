@@ -110,17 +110,13 @@ func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/context_overflow.go"), "IsContextOverflow")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/source.go"), "ClassifyFrom")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/hardblock.go"), "HardBlock")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/grant.go"), "IsGrantRefusal", "NotifyClass", "ErrOverseerNotRunning")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/grant.go"), "IsGrantRefusal", "NotifyClass", "ErrOverseerNotRunning", "NoteBrokerGrant", "GrantRefusal", "protocolCode", "exportedProtocolCode")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "provider_failure.go"), "jworkFailure")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/chat.go"), "notifyErrClass")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../upgrade/readopt.go"), "IsNotOwner")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "DeclaresBlockingGateWait")...)
 	if len(hits) != len(t7664ErrorEnglishAllowlist) {
 		t.Fatalf("error-control English classifiers = %v, allowlist %v", hits, t7664ErrorEnglishAllowlist)
-	}
-	boundary := englishSelectorsIn(t, filepath.Join(dir, "../agenterr/grant.go"), "NoteBrokerGrant")
-	if len(boundary) != 1 || boundary[0] != "NoteBrokerGrant: strings.Contains" {
-		t.Fatalf("grant boundary = %v, want the one broker-sentence reader", boundary)
 	}
 }
 

@@ -265,7 +265,10 @@ func TestNotifyErrClass(t *testing.T) {
 	if got := notifyErrClass(plainOwner); got != "other" {
 		t.Fatalf("rendered not_owner classified as %q", got)
 	}
-	refused := agenterr.NoteBrokerGrant(plainOwner)
+	if got := notifyErrClass(agenterr.NoteBrokerGrant(plainOwner)); got != "other" {
+		t.Fatalf("sentence through the boundary classified as %q", got)
+	}
+	refused := agenterr.GrantRefusal(plainOwner)
 	if !strings.Contains(refused.Error(), "not_owner") || notifyErrClass(refused) != "not_owner" {
 		t.Fatalf("typed not_owner = %v class %q", refused, notifyErrClass(refused))
 	}

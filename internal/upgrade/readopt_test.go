@@ -19,6 +19,25 @@ import (
 
 const notOwnerText = `broker protocol: not_owner (name="jevons"): grant jevons is not owned by this connection`
 
+// ProtocolError is the shape of claudia's broker ProtocolError.
+// The production type lives in claudia's broker package, which this
+// module does not import. Code is the machine code. The sentence is not.
+type ProtocolError struct {
+	Code string
+}
+
+func (e *ProtocolError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Code == "not_owner" {
+		return notOwnerText
+	}
+	return "broker protocol: " + e.Code
+}
+
+func notOwnerErr() error { return &ProtocolError{Code: "not_owner"} }
+
 // fakeSeat models the registry + a broker handle: the stale handle is alive
 // until detached, adopt returns a fresh handle and registers it.
 type fakeSeat struct {
@@ -62,21 +81,17 @@ func newFakeSeat() (*fakeSeat, *Readopter) {
 
 func TestT796IsNotOwnerClassification(t *testing.T) {
 	raw := errors.New(notOwnerText)
-	if IsNotOwner(raw) {
-		t.Fatal("the broker sentence is not not_owner until the boundary reads it")
+	if IsNotOwner(raw) || IsNotOwner(agenterr.NoteBrokerGrant(raw)) {
+		t.Fatal("the broker sentence is not a grant refusal")
 	}
-	noted := agenterr.NoteBrokerGrant(raw)
+	noted := agenterr.NoteBrokerGrant(notOwnerErr())
 	if !IsNotOwner(noted) || !strings.Contains(noted.Error(), "not_owner") {
-		t.Fatal("the boundary must type the broker refusal and keep its text")
+		t.Fatal("the boundary must type the protocol code and keep its text")
 	}
-	wrapped := agenterr.NoteBrokerGrant(errors.New("send failed: " + notOwnerText))
-	if !IsNotOwner(wrapped) {
-		t.Fatal("a sentence that carries the broker refusal must type once")
-	}
-	if IsNotOwner(agenterr.NoteBrokerGrant(wrapped)) != true || agenterr.NoteBrokerGrant(wrapped) != wrapped {
+	if IsNotOwner(agenterr.NoteBrokerGrant(noted)) != true || agenterr.NoteBrokerGrant(noted) != noted {
 		t.Fatal("a second boundary read must keep the typed refusal")
 	}
-	for _, e := range []error{nil, errors.New("prompt already in flight"), errors.New("overseer not running")} {
+	for _, e := range []error{nil, errors.New("prompt already in flight"), errors.New("overseer not running"), &ProtocolError{Code: "spawn_failed"}} {
 		if IsNotOwner(e) || IsNotOwner(agenterr.NoteBrokerGrant(e)) {
 			t.Fatalf("%v must not classify as not_owner", e)
 		}
@@ -207,7 +222,7 @@ func TestT796WithReadoptRetriesOnlyOnNotOwner(t *testing.T) {
 	err := WithReadopt(context.Background(), "jevons", stale, func(a *claudia.Agent) error {
 		calls = append(calls, a)
 		if a == stale {
-			return errors.New(notOwnerText)
+			return notOwnerErr()
 		}
 		return nil
 	})
@@ -227,7 +242,7 @@ func TestT796WithReadoptRetriesOnlyOnNotOwner(t *testing.T) {
 
 	// A second not_owner on the fresh handle is returned, never looped.
 	n := 0
-	err = WithReadopt(context.Background(), "jevons", f.cur, func(*claudia.Agent) error { n++; return errors.New(notOwnerText) })
+	err = WithReadopt(context.Background(), "jevons", f.cur, func(*claudia.Agent) error { n++; return notOwnerErr() })
 	if !IsNotOwner(err) || n != 2 {
 		t.Fatalf("err=%v n=%d; want exactly one retry", err, n)
 	}
@@ -235,10 +250,15 @@ func TestT796WithReadoptRetriesOnlyOnNotOwner(t *testing.T) {
 
 func TestT796WithReadoptPassesThroughWithoutReadopter(t *testing.T) {
 	DefaultReadopter = nil
-	want := errors.New(notOwnerText)
-	err := WithReadopt(context.Background(), "x", nil, func(*claudia.Agent) error { return want })
-	if err == want || !IsNotOwner(err) || !strings.Contains(err.Error(), "not_owner") {
-		t.Fatal("no Readopter installed: the broker sentence is typed and its text stays")
+	sentence := errors.New(notOwnerText)
+	err := WithReadopt(context.Background(), "x", nil, func(*claudia.Agent) error { return sentence })
+	if err != sentence || IsNotOwner(err) {
+		t.Fatal("no Readopter installed: a sentence stays the caller's error")
+	}
+	coded := notOwnerErr()
+	err = WithReadopt(context.Background(), "x", nil, func(*claudia.Agent) error { return coded })
+	if !IsNotOwner(err) || !strings.Contains(err.Error(), "not_owner") {
+		t.Fatal("no Readopter installed: the protocol code is typed and its text stays")
 	}
 	busy := errors.New("prompt already in flight")
 	if got := WithReadopt(context.Background(), "x", nil, func(*claudia.Agent) error { return busy }); got != busy {

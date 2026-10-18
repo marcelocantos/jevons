@@ -5,7 +5,7 @@ package agenterr
 
 import (
 	"errors"
-	"strings"
+	"reflect"
 )
 
 // overseerNotRunning is the typed "overseer not running" delivery failure.
@@ -42,9 +42,32 @@ func (e *grantRefusal) Unwrap() error {
 
 func (e *grantRefusal) NotifyClass() string { return "not_owner" }
 
-// NoteBrokerGrant is the one control that reads the broker's not_owner
-// sentence. It returns a typed refusal and leaves every other error as it
-// arrived. Later controls use IsGrantRefusal or NotifyClass.
+// brokerCodeNotOwner is the broker protocol code for a grant this
+// connection does not own. It is ProtocolError.Code, not a sentence.
+const brokerCodeNotOwner = "not_owner"
+
+// protocolCodeWalkLimit bounds how far a grant read follows Unwrap.
+// The refusal is the error itself or one wrap around it.
+const protocolCodeWalkLimit = 8
+
+// GrantRefusal marks err as a broker not_owner refusal. The rendered text
+// stays err.Error(). Callers that already know the refusal — the fault
+// seam, a test double — use this. A sentence is not a reason to call it.
+func GrantRefusal(err error) error {
+	if err == nil {
+		return nil
+	}
+	var already *grantRefusal
+	if errors.As(err, &already) {
+		return err
+	}
+	return &grantRefusal{text: err.Error(), next: err}
+}
+
+// NoteBrokerGrant types a broker not_owner refusal. The machine code is
+// ProtocolError.Code on the value claudia's broker returns. This module
+// does not import that package. A sentence that contains the words is
+// left as it arrived. Later controls use IsGrantRefusal or NotifyClass.
 func NoteBrokerGrant(err error) error {
 	if err == nil {
 		return nil
@@ -53,10 +76,52 @@ func NoteBrokerGrant(err error) error {
 	if errors.As(err, &already) {
 		return err
 	}
-	if strings.Contains(err.Error(), "not_owner") {
-		return &grantRefusal{text: err.Error(), next: err}
+	if protocolCode(err) != brokerCodeNotOwner {
+		return err
 	}
-	return err
+	return &grantRefusal{text: err.Error(), next: err}
+}
+
+// protocolCode reads ProtocolError.Code. The rendered sentence is not read.
+func protocolCode(err error) string {
+	for range protocolCodeWalkLimit {
+		if err == nil {
+			return ""
+		}
+		v := reflect.ValueOf(err)
+		if v.Kind() == reflect.Pointer && v.IsNil() {
+			return ""
+		}
+		if code, ok := exportedProtocolCode(err); ok {
+			return code
+		}
+		err = errors.Unwrap(err)
+	}
+	return ""
+}
+
+// exportedProtocolCode reads an exported Code string on a value whose
+// concrete type is named ProtocolError. Any other type is not a broker
+// refusal, even when it has a Code field or the words in Error.
+func exportedProtocolCode(err error) (string, bool) {
+	v := reflect.ValueOf(err)
+	if !v.IsValid() {
+		return "", false
+	}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return "", false
+		}
+		v = v.Elem()
+	}
+	if !v.IsValid() || v.Kind() != reflect.Struct || v.Type().Name() != "ProtocolError" {
+		return "", false
+	}
+	f := v.FieldByName("Code")
+	if !f.IsValid() || f.Kind() != reflect.String || !f.CanInterface() {
+		return "", false
+	}
+	return f.String(), true
 }
 
 // IsGrantRefusal reports whether err is a typed broker not_owner refusal.

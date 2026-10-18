@@ -37,7 +37,7 @@ var ErrReadoptExhausted = errors.New("broker grant could not be re-adopted")
 
 // IsNotOwner reports whether err is a typed broker refusal: this connection
 // no longer owns the seat's grant. A sentence that only says not_owner is
-// not one. NoteBrokerGrant is the one reader of that sentence.
+// not one. NoteBrokerGrant reads the broker protocol code.
 func IsNotOwner(err error) bool {
 	return agenterr.IsGrantRefusal(err)
 }
