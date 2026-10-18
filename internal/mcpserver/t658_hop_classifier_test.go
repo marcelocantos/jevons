@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
@@ -171,7 +172,11 @@ func TestT658ProgressOpenersStayOnPOOnTheWire(t *testing.T) {
 // report as before. With a store, the reroute stores the sender's words
 // (not the wrap) and the record line summarizes those same words.
 func TestT658SkippedHopRecordRequiresStoredReport(t *testing.T) {
-	report := "Blocked: needs owner verdict on the provider spend cap before I can proceed."
+	report := strings.TrimSpace(envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T658",
+		Payload: "Blocked: needs owner verdict on the provider spend cap before I can proceed.",
+	}))
 
 	t.Run("no store, no record", func(t *testing.T) {
 		po := &fakeSender{alive: true}

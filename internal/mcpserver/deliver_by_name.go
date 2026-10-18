@@ -275,11 +275,10 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 	// "needs-owner" / "oracle" (🎯T515 / 🎯T658).
 	report := relayReportBodyWithRole(text, s.roleBodyForAgent(dest))
 
-	// 🎯T392.7: a named worker report that needs no product judgement skips the
-	// PO hop. The PO still gets a one-line record. Owner directs and daemon-
-	// composed owner-surface traffic (empty actor) are never rerouted — those
-	// are not worker reports, and their identity doctrine alone can trip the
-	// keyword classifier (🎯T515).
+	// 🎯T392.7: a named worker report whose envelope declares an overseer hop
+	// skips the PO. The PO still gets a one-line record. Owner directs and
+	// daemon-composed owner-surface traffic (empty actor) are never rerouted
+	// — those are not worker reports (🎯T515). A sentence is not the hop.
 	//
 	// 🎯T565: the reroute is for a WORKER reporting up. The overseer directing
 	// its PO by name is not a report, whatever phrases the direct contains —

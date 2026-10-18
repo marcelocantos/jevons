@@ -6,6 +6,8 @@ package relayroute
 import (
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 func TestT3927OracleDoneGoesToOverseer(t *testing.T) {
@@ -27,14 +29,47 @@ func TestT3927OracleDoneGoesToOverseer(t *testing.T) {
 }
 
 func TestT3927BlockedOnGoesToOverseer(t *testing.T) {
-	if Classify("blocked on owner keypress for T383") != RouteOverseer {
-		t.Fatal("blocked-on should skip the PO hop")
+	prose := "blocked on owner keypress for T383"
+	if Classify(prose) != RouteParent {
+		t.Fatal("unenveloped blocked-on prose must stay with the parent")
+	}
+	if Reason(prose) != "parent" {
+		t.Fatalf("unenveloped reason %s, want parent", Reason(prose))
+	}
+	raw := envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       "T392.7",
+		Status:       envelope.ProgressBlocked,
+		Blocker:      "owner-keypress",
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      prose,
+	})
+	if Classify(raw) != RouteOverseer {
+		t.Fatal("declared blocked finish-report must skip the PO hop")
+	}
+	if Reason(raw) != "blocked_on" {
+		t.Fatalf("reason %s, want blocked_on", Reason(raw))
 	}
 }
 
 func TestT3927NeedsOwnerGoesToOverseer(t *testing.T) {
-	if Classify("needs-owner: class-3 taste verdict") != RouteOverseer {
-		t.Fatal("needs-owner should skip the PO hop")
+	prose := "needs-owner: class-3 taste verdict"
+	if Classify(prose) != RouteParent {
+		t.Fatal("unenveloped needs-owner prose must stay with the parent")
+	}
+	if Reason(prose) != "parent" {
+		t.Fatalf("unenveloped reason %s, want parent", Reason(prose))
+	}
+	raw := envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T392.7",
+		Payload: prose,
+	})
+	if Classify(raw) != RouteOverseer {
+		t.Fatal("declared escalation must skip the PO hop")
+	}
+	if Reason(raw) != "needs_owner" {
+		t.Fatalf("reason %s, want needs_owner", Reason(raw))
 	}
 }
 

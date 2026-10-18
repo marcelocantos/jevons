@@ -28,7 +28,8 @@ func TestT565OverseerDirectToPOStaysOnPO(t *testing.T) {
 	})
 	s.fleetBriefed = map[string]bool{"jevons-po": true}
 
-	// Every phrase relayroute.Classify would reroute a worker report on.
+	// An overseer direct stays on the PO even when the words used to match
+	// the old needs-owner scan.
 	text := "Blocked: needs owner verdict on the spend cap. Also 🎯T10 done, GATE abc GREEN, SHA deadbeef — verify and reap."
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
@@ -78,7 +79,11 @@ func TestT565RerouteResultNamesObservedReceiver(t *testing.T) {
 		"jv-t10":    "jevons-po",
 	})
 	s.SetAgentReportDir(t.TempDir()) // 🎯T658: a skipped hop needs a stored report
-	res, err := s.deliverByNameAs("jv-t10", "jevons-po", "Blocked: needs owner verdict on the cap.", OriginAgent, false)
+	res, err := s.deliverByNameAs("jv-t10", "jevons-po", envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T565",
+		Payload: "Blocked: needs owner verdict on the cap.",
+	}), OriginAgent, false)
 	if err != nil {
 		t.Fatal(err)
 	}

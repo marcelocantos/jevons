@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -241,7 +242,11 @@ func TestT3927RelayReportSkipsPOHop(t *testing.T) {
 	s.SetAgentReportDir(t.TempDir()) // 🎯T658: a skipped hop needs a stored report
 	s.fleetBriefed = map[string]bool{"jevons-po": true}
 
-	text := "Blocked: needs owner verdict on the provider spend cap before I can proceed.\nDetails stay with the overseer."
+	text := envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T392.7",
+		Payload: "Blocked: needs owner verdict on the provider spend cap before I can proceed.\nDetails stay with the overseer.",
+	})
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":  "jevons-po",
@@ -398,7 +403,11 @@ func TestT515EnvelopeDoesNotFakeRouteOrPolluteSummary(t *testing.T) {
 	s.noteTurnEnded("jevons-po")
 	po.sent = nil
 	inbox.texts = nil
-	report := "Blocked: needs owner verdict on the provider spend cap before I can proceed."
+	report := envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T515",
+		Payload: "Blocked: needs owner verdict on the provider spend cap before I can proceed.",
+	})
 	req.Params.Arguments = map[string]any{
 		"name":  "jevons-po",
 		"text":  report,
