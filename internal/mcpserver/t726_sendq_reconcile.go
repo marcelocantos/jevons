@@ -142,7 +142,9 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 
 	// The pin is the seat's blocker, and the blocker is gone. Clearing it here
 	// (rather than waiting for the next sweep to notice) is what "returns to
-	// service by that path" means from the caller's side.
+	// service by that path" means from the caller's side. An attempt this
+	// daemon still owns is not that pin: BlockedHead skips it, and a drain
+	// kicked now would not move the seat.
 	s.clearSendqPin(name)
 
 	var b strings.Builder
@@ -155,11 +157,23 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 		fmt.Fprintf(&b, "  kept %s (%s, %d bytes, waiting %s)\n",
 			e.ID, stateWord(e.State), len(e.Text), e.Age(now).Round(time.Second))
 	}
+	owned, ownedOK, ownedErr := s.sendQueue().OwnedAttempt(name)
 	if pin, pinned := s.sendqPinFor(name); pinned {
-		fmt.Fprintf(&b, "Still PINNED on %s: %s\n", pin.EntryID, FormatSendqPinLine(name, pin))
+		fmt.Fprintf(&b, "Still PINNED on %s: %s\n", pin.EntryID, formatSendqPinLine(name, pin, !ownedOK))
 		s.notifyFleetHealth(rec.By.At.Format(time.RFC3339Nano)+":"+name, fmt.Sprintf(
 			"sendq reconciled for %q (%s), but the queue is still blocked by entry %s (🎯T726).",
 			name, rec.By.Describe(), pin.EntryID))
+		if ownedOK {
+			b.WriteString(inFlightExitLine(owned))
+		}
+		return b.String()
+	}
+	if ownedErr != nil {
+		fmt.Fprintf(&b, "The owned attempt could not be read: %v\nDo not treat the queue as clear.\n", ownedErr)
+		return b.String()
+	}
+	if ownedOK {
+		b.WriteString(inFlightExitLine(owned))
 		return b.String()
 	}
 
@@ -216,7 +230,7 @@ func (s *Server) describeSendqForReconcile(name string, now time.Time) string {
 		b.WriteString(inFlightExitLine(owned))
 	}
 	if pin, pinned := s.sendqPinFor(name); pinned {
-		fmt.Fprintf(&b, "\n%s\n", FormatSendqPinLine(name, pin))
+		fmt.Fprintf(&b, "\n%s\n", formatSendqPinLine(name, pin, !ownedOK))
 		fmt.Fprintf(&b, "\nNext call, once you have LOOKED (🎯T416: payload-match at user-message level, the receiver's own "+
 			"queue-operation records, transcript-file absence):\n"+
 			"  jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%q attempt_id=%q actor=<you> evidence=<what you read>\n",
@@ -302,7 +316,7 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 		b.WriteString("The remainder follows one per turn boundary — that cadence is deliberate (🎯T416), not a stall.\n")
 	}
 	if pin, pinned := s.sendqPinFor(name); pinned {
-		fmt.Fprintf(&b, "%s\n", FormatSendqPinLine(name, pin))
+		fmt.Fprintf(&b, "%s\n", formatSendqPinLine(name, pin, flightNote == ""))
 	}
 	return b.String()
 }

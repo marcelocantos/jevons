@@ -184,8 +184,9 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 	}
 	// A submission this process is still inside is not an orphan (🎯T623): the
 	// drain that owns it will resolve it, and reconciling it here would race a
-	// live provider call.
-	if e.State == Attempting && s.active[agent] == e.AttemptID {
+	// live provider call. Attempting is the usual shape. An empty on-disk
+	// state that still carries this store's attempt id is the same phase.
+	if EntryPhase(e, s.active[agent]) == PhaseInFlight {
 		return Receipt{}, fmt.Errorf("sendq: entry %s is an ACTIVE submission owned by this daemon, not an orphan — wait for it to resolve", e.ID)
 	}
 	if outcome == ReconcileRequeue && claimablePhase(phase) {

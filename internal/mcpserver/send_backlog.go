@@ -564,17 +564,28 @@ func FormatQueueStoppage(name string, st seatstate.State, now time.Time) string 
 
 // FormatSendqPinLine is the operator-facing account of a pinned seat, shared
 // by agent_list and the fleet-health notice so the two never drift.
+// Those callers have no owned-attempt argument, so they keep the flow-past
+// sentence. The reconcile tool passes false while this daemon owns an attempt,
+// because that attempt blocks the seat and nothing behind the pin delivers.
 func FormatSendqPinLine(name string, pin SendqPin) string {
+	return formatSendqPinLine(name, pin, true)
+}
+
+func formatSendqPinLine(name string, pin SendqPin, flowPast bool) string {
 	// An empty on-disk state that still carries an attempt id is a held
 	// attempt, not an admitted message. A start does not claim it.
 	if pin.State != sendq.Pending || pin.AttemptID != "" {
+		behind := "messages behind it keep delivering past it (🎯T766.5). "
+		if !flowPast {
+			behind = "An attempt this daemon owns blocks the seat, so nothing behind this entry delivers until that attempt's result is recorded. "
+		}
 		return fmt.Sprintf("PINNED %s: sendq message %s has an unresolved %s attempt %s (%s). "+
-			"The payload remains held. A start will not retry it; messages behind it keep delivering past it (🎯T766.5). "+
+			"The payload remains held. A start will not retry it; %s"+
 			"Reconcile it with jevons_sendq_reconcile name=%[1]q (call it with only name= to see the queue, then "+
 			"action=confirmed|requeue|drop entry_id=%[2]q attempt_id=%[4]q actor=… evidence=…) — 🎯T726. "+
 			"Never edit ~/.jevons/sendq/*.json while the daemon is running. "+
 			"An explicit overseer kill discards the held obligation without claiming non-delivery.",
-			name, pin.EntryID, pinAttemptKind(pin.State), pin.AttemptID, pin.Reason)
+			name, pin.EntryID, pinAttemptKind(pin.State), pin.AttemptID, pin.Reason, behind)
 	}
 	fails := ""
 	if pin.Fails > 0 {

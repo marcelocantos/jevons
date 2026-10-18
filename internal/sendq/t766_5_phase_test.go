@@ -690,3 +690,33 @@ func TestT7665EmptyStateOwnedAttemptIsInFlight(t *testing.T) {
 		t.Fatalf("fresh backlog = %+v %v", held, err)
 	}
 }
+
+// The same owned empty state is not an orphan. Reconcile must not confirm,
+// requeue, or drop it out from under the attempt this store still owns.
+func TestT7665OwnedOmittedStateIsNotReconcilable(t *testing.T) {
+	dir := t.TempDir()
+	q := NewStore(dir)
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	first, _, err := q.Append("a", "kept", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || claimed.AttemptID == "" {
+		t.Fatalf("claim: %+v %v %v", claimed, ok, err)
+	}
+	body := []byte(`{"agent":"a","entries":[{"id":"` + first.ID + `","text":"kept","enqueued_at":"2026-10-19T12:00:00Z","attempt_id":"` + claimed.AttemptID + `"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "a.json"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, outcome := range []ReconcileOutcome{ReconcileConfirmed, ReconcileRequeue, ReconcileDrop} {
+		_, err := q.Reconcile("a", first.ID, claimed.AttemptID, outcome, "owner", "transcript has no copy", now)
+		if err == nil || !strings.Contains(err.Error(), "ACTIVE") {
+			t.Fatalf("%s err = %v, want ACTIVE", outcome, err)
+		}
+	}
+	rows, err := q.Snapshot("a")
+	if err != nil || len(rows) != 1 || rows[0].Text != "kept" || rows[0].State != Pending || rows[0].AttemptID != claimed.AttemptID || EntryPhase(rows[0], claimed.AttemptID) != PhaseInFlight {
+		t.Fatalf("reconcile changed the owned attempt: %+v %v", rows, err)
+	}
+}
