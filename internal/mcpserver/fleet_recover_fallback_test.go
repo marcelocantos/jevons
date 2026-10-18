@@ -87,8 +87,19 @@ func TestStrikesCountRefusalsNotDeliveries(t *testing.T) {
 	tr := &IdleActivityTracker{}
 	tr.NoteTerminalOutcome("seat", "Error: rate limit exceeded for this model")
 	tr.NoteTerminalOutcome("seat", "Error: rate limit exceeded for this model")
+	if got := tr.Get("seat"); got.FailureClass == agenterr.ClassRateLimit || got.RateLimitStrikes != 0 {
+		t.Fatalf("prose minted a rate_limit strike: %+v", got)
+	}
+	// The counter itself still survives a delivery. A typed cause is what
+	// would have incremented it; this seeds that result.
+	tr.mu.Lock()
+	seed := tr.by["seat"]
+	seed.FailureClass = agenterr.ClassRateLimit
+	seed.RateLimitStrikes = 2
+	tr.by["seat"] = seed
+	tr.mu.Unlock()
 	if got := tr.Get("seat").RateLimitStrikes; got != 2 {
-		t.Fatalf("two refusals = %d strikes, want 2", got)
+		t.Fatalf("seeded refusals = %d strikes, want 2", got)
 	}
 	tr.ClearRecover("seat", time.Now()) // a re-brief was delivered
 	if got := tr.Get("seat").RateLimitStrikes; got != 2 {

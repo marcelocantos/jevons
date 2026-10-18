@@ -4,6 +4,7 @@
 package agenterr_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
@@ -14,31 +15,35 @@ import (
 func TestHardBlockFixtures(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		raw  string
-		want bool
+		raw   string
+		cause string
+		want  bool
 	}{
-		{"You've hit your monthly spend limit. Run /usage-credits to manage your limit", true},
-		{"organization spend limit reached", true},
-		{"Billing hard limit exceeded — raise it at claude.ai/settings/usage", true},
-		{"out of credits", true},
-		{"402 Payment Required", true},
-		{"your API key has been revoked", true},
-		{"account has been suspended", true},
-		{"401 Unauthorized", true},
-		{"invalid API key", true},
+		{"You've hit your monthly spend limit. Run /usage-credits to manage your limit", agenterr.CauseRateLimit, true},
+		{"organization spend limit reached", agenterr.CauseRateLimit, true},
+		{"Billing hard limit exceeded — raise it at claude.ai/settings/usage", agenterr.CauseRateLimit, true},
+		{"out of credits", agenterr.CauseRateLimit, true},
+		{"402 Payment Required", agenterr.CauseRateLimit, true},
+		{"your API key has been revoked", agenterr.CauseAuth, true},
+		{"account has been suspended", agenterr.CauseAuth, true},
+		{"401 Unauthorized", agenterr.CauseAuth, true},
+		{"invalid API key", agenterr.CauseAuth, true},
 
-		// Transient — must NOT enter the fleet wall.
-		{"rate limit exceeded", false},
-		{"HTTP 429 Too Many Requests", false},
-		{"resource_exhausted: throttle", false},
-		{"Internal error", false},
-		{"connection refused", false},
-		{"502 Bad Gateway", false},
-		{"Continuing mission work on T406", false},
-		{"", false},
+		// Prose alone must NOT enter the fleet wall.
+		{"rate limit exceeded", "", false},
+		{"HTTP 429 Too Many Requests", "", false},
+		{"resource_exhausted: throttle", "", false},
+		{"Internal error", "", false},
+		{"connection refused", "", false},
+		{"502 Bad Gateway", "", false},
+		{"Continuing mission work on T406", "", false},
+		{"", "", false},
 	}
 	for _, tc := range cases {
 		class := agenterr.ClassifyText(tc.raw)
+		if tc.cause != "" {
+			class = agenterr.Classify(agenterr.WithCause(tc.cause, errors.New(tc.raw)))
+		}
 		got := agenterr.HardBlock(class, tc.raw)
 		if got != tc.want {
 			t.Errorf("HardBlock(class=%s, %q)=%v want %v", class, tc.raw, got, tc.want)
@@ -68,8 +73,11 @@ func TestHardBlockClassNoneNeverBlocks(t *testing.T) {
 func TestHardBlockSpendVsThrottle(t *testing.T) {
 	t.Parallel()
 	spend := "You've hit your monthly spend limit"
-	if c := agenterr.ClassifyText(spend); c != agenterr.ClassRateLimit {
-		t.Fatalf("spend class=%s want rate_limit", c)
+	if c := agenterr.ClassifyText(spend); c == agenterr.ClassRateLimit {
+		t.Fatal("spend prose is not a rate_limit class")
+	}
+	if c := agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(spend))); c != agenterr.ClassRateLimit {
+		t.Fatalf("caused spend class=%s want rate_limit", c)
 	}
 	if !agenterr.HardBlock(agenterr.ClassRateLimit, spend) {
 		t.Fatal("spend wall must hard-block under rate_limit")

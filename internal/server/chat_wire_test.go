@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -873,15 +874,27 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			wantTextSub: "backend_unavailable",
 		},
 		{
-			name: "Claude IsError flag is transport",
+			name: "Claude IsError with a backend cause is transport",
+			ev: claudia.Event{
+				Type:       "assistant",
+				Text:       "Internal error",
+				StopReason: "end_turn",
+				IsError:    true,
+				Reason:     agenterr.CauseBackendUnavailable,
+			},
+			wantClass:   "backend_unavailable",
+			wantTextSub: "backend_unavailable",
+		},
+		{
+			name: "Claude IsError without a cause is not backend",
 			ev: claudia.Event{
 				Type:       "assistant",
 				Text:       "Internal error",
 				StopReason: "end_turn",
 				IsError:    true,
 			},
-			wantClass:   "backend_unavailable",
-			wantTextSub: "backend_unavailable",
+			wantClass:   "unknown",
+			wantTextSub: "unknown",
 		},
 		{
 			name: "ACP chunk with the same words is authored",
@@ -1006,6 +1019,57 @@ func TestAssistantTextSource(t *testing.T) {
 	}
 	if got := assistantTextSource(claudia.Event{}); got != agenterr.SourceAuthored {
 		t.Fatalf("empty: %q", got)
+	}
+}
+
+func TestRPCFrameCauseIsNumeric(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		code int
+		want string
+	}{
+		{401, agenterr.CauseAuth},
+		{403, agenterr.CauseAuth},
+		{402, agenterr.CauseRateLimit},
+		{429, agenterr.CauseRateLimit},
+		{400, agenterr.CauseClientBug},
+		{-32700, agenterr.CauseClientBug},
+		{-32600, agenterr.CauseClientBug},
+		{-32601, agenterr.CauseClientBug},
+		{-32602, agenterr.CauseClientBug},
+		{-32603, agenterr.CauseBackendUnavailable},
+		{500, agenterr.CauseBackendUnavailable},
+		{502, agenterr.CauseBackendUnavailable},
+		{503, agenterr.CauseBackendUnavailable},
+		{504, agenterr.CauseBackendUnavailable},
+		{418, ""},
+	}
+	for _, tc := range cases {
+		raw := fmt.Sprintf(`{"code":%d,"message":"not a class"}`, tc.code)
+		ev := claudia.Event{Type: "assistant", Text: "not a class", Raw: []byte(raw)}
+		want := "none"
+		if tc.want != "" {
+			want = tc.want
+		}
+		if got := classifyAssistantEvent(ev).String(); got != want {
+			t.Errorf("code %d classified as %q, want %q", tc.code, got, want)
+		}
+	}
+	sentence := claudia.Event{Type: "assistant", Text: "401 Unauthorized", IsError: true}
+	if classifyAssistantEvent(sentence) == agenterr.ClassAuth {
+		t.Fatal("an IsError sentence is not auth")
+	}
+	sentence.Reason = agenterr.CauseAuth
+	if classifyAssistantEvent(sentence) != agenterr.ClassAuth {
+		t.Fatal("Reason auth did not classify")
+	}
+	authored := claudia.Event{
+		Type: "assistant",
+		Text: "401 Unauthorized",
+		Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk"}}`),
+	}
+	if classifyAssistantEvent(authored) != agenterr.ClassNone {
+		t.Fatal("authored 401 classified")
 	}
 }
 

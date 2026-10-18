@@ -246,6 +246,9 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			// 🎯T283: keep the strongest class seen. Previously these were
 			// logged and dropped, so a backend outage surfaced to the caller
 			// as "Worker finished (no output)" — a product defect, apparently.
+			// TaskEvent.ErrorMsg is a sentence. It has no provider-failure
+			// cause on the published wire, so auth, rate-limit, backend,
+			// and client-bug are not decided here.
 			if c := agenterr.ClassifyText(ev.ErrorMsg); c.IsFailure() {
 				errClass, errRaw = c, ev.ErrorMsg
 			}

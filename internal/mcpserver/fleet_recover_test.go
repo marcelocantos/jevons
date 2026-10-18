@@ -39,15 +39,15 @@ func TestClassifyFleetRecoverTerminalErrorAndEmpty(t *testing.T) {
 		Name: "jv-t236", Purpose: claudia.PurposeWork, ProcessRunning: true,
 		HasOpenMission: true, Phase: "idle", NeedsRecover: true,
 	}
-	// Grok Internal error → backend class → rebrief.
+	// "Internal error" is a sentence. It is unknown, and unknown still rebriefs.
 	o := base
 	o.FailureClass = agenterr.ClassifyText("Internal error")
 	act, reason := ClassifyFleetRecover(o)
 	if act != FleetRecoverRebrief || !strings.Contains(reason, "terminal_failure") {
 		t.Fatalf("internal error: %s/%s", act, reason)
 	}
-	if o.FailureClass != agenterr.ClassBackendUnavailable {
-		t.Fatalf("class=%s want backend_unavailable", o.FailureClass)
+	if o.FailureClass != agenterr.ClassUnknown {
+		t.Fatalf("class=%s want unknown", o.FailureClass)
 	}
 	// Empty terminal.
 	o = base
@@ -72,7 +72,7 @@ func TestNoteTerminalOutcomeAndSweepDeliver(t *testing.T) {
 	actTrack.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 	actTrack.NoteTerminalOutcome("w1", "Internal error")
 	got := actTrack.Get("w1")
-	if !got.NeedsRecover || got.FailureClass != agenterr.ClassBackendUnavailable {
+	if !got.NeedsRecover || got.FailureClass != agenterr.ClassUnknown {
 		t.Fatalf("latch: %+v", got)
 	}
 

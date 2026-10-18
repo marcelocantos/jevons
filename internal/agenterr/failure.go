@@ -57,8 +57,8 @@ func (c Class) IsFailure() bool {
 }
 
 // Classify maps an error to a Class. Nil and a typed busy cause → ClassNone.
-// A typed cause is never read from its rendered text. Text classification
-// remains only for an error that carries no cause.
+// Auth, rate-limit, backend, and client-bug come from the provider-failure
+// cause. The rendered sentence is not consulted for those classes.
 func Classify(err error) Class {
 	if err == nil {
 		return ClassNone
@@ -68,15 +68,24 @@ func Classify(err error) Class {
 		return ClassifyText(err.Error())
 	case CauseTurnInFlight, CauseBusy, CauseProcessNotRunning, CauseSteerUnsupported, CauseTurnIdle:
 		return ClassNone
+	case CauseAuth:
+		return ClassAuth
+	case CauseRateLimit:
+		return ClassRateLimit
+	case CauseBackendUnavailable:
+		return ClassBackendUnavailable
+	case CauseClientBug:
+		return ClassClientBug
 	default:
 		return ClassUnknown
 	}
 }
 
 // ClassifyText maps provider/ACP failure text or owner-visible copy to Class.
-// Hermetic fixture surface for 🎯T237; T236 consumes the result only.
-// Prefer structured codes when available; string patterns are a residual
-// for wire messages that only carry prose today (e.g. Grok "Internal error").
+// Auth, rate-limit, backend, and client-bug are not decided here. Those
+// classes come from a provider-failure cause read by Classify. What remains
+// is retry-exhausted, context-overflow, and a generic error word that
+// lands in ClassUnknown.
 func ClassifyText(msg string) Class {
 	s := strings.TrimSpace(msg)
 	if s == "" {
@@ -101,33 +110,8 @@ func ClassifyText(msg string) Class {
 		return ClassContextOverflow
 	}
 
-	// Auth first — "unauthorized" before generic "error". Account/key walls
-	// that Classify would otherwise miss (revoked, suspended) also land here
-	// so 🎯T406 HardBlock sees ClassAuth rather than ClassNone.
-	if containsAny(low, authMarkers...) || isAccountWall(low) {
-		return ClassAuth
-	}
-
-	// Rate limit — including account-level spend/billing walls (🎯T406).
-	// ClassifyText maps spend walls to rate_limit so 🎯T407's auth/rate_limit
-	// cluster still sees them; HardBlock then distinguishes spend from a
-	// transient 429.
-	if containsAny(low, rateLimitMarkers...) || isSpendWall(low) {
-		return ClassRateLimit
-	}
-
-	// Client / local bugs — fail closed, do not treat as cloud recovering.
-	// Exclude backend signatures that share the word "error".
-	if containsAny(low, clientBugMarkers...) {
-		if !isBackendSignature(low) {
-			return ClassClientBug
-		}
-	}
-
-	// Backend / transient outage (includes bare "Internal error").
-	if isBackendSignature(low) || containsAny(low, backendUnavailableMarkers...) {
-		return ClassBackendUnavailable
-	}
+	// Auth, rate-limit, backend, and client-bug are provider-failure causes
+	// read by Classify. A sentence that only quotes one of them is not a class.
 
 	// Residual failure-shaped text without a clear class.
 	if containsAny(low, "error", "failed", "failure", "exception") {
@@ -255,17 +239,6 @@ func detailSuffix(raw string) string {
 	return "Detail: " + truncate(raw, 240)
 }
 
-func isBackendSignature(low string) bool {
-	if isBareInternalError(low) {
-		return true
-	}
-	return containsAny(low,
-		"internal error", "internal server error",
-		"service unavailable", "backend unavailable", "backend down",
-		"provider unavailable", "provider down",
-	)
-}
-
 func isBareInternalError(lower string) bool {
 	s := strings.Trim(lower, " \t\n\r.!,:;")
 	switch s {
@@ -312,116 +285,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
-}
-
-// Marker lists — representative strings/codes from Grok ACP, Claude, Codex,
-// and common HTTP/transport failures. Live residual: real outage copy may
-// evolve; hermetic fixtures lock these (🎯T237).
-
-var authMarkers = []string{
-	"unauthorized",
-	"unauthorised",
-	"authentication",
-	"not authenticated",
-	"invalid api key",
-	"invalid_api_key",
-	"api key",
-	"apikey",
-	"not signed in",
-	"login required",
-	"forbidden",
-	"access denied",
-	"401",
-	"403",
-	"permission denied",
-	"auth failed",
-	"auth error",
-	"credentials",
-}
-
-var rateLimitMarkers = []string{
-	"rate limit",
-	"rate_limit",
-	"ratelimit",
-	"too many requests",
-	"429",
-	"quota exceeded",
-	"quota_exceeded",
-	"quota limit",
-	"capacity",
-	"throttl",
-	"resource_exhausted",
-	"requests per minute",
-	"rpm limit",
-}
-
-var clientBugMarkers = []string{
-	"no session",
-	"session not found",
-	"client closed",
-	"no transport",
-	"unknown session",
-	"refusing to mint",
-	"malformed",
-	"invalid json",
-	"json decode",
-	"decode failed",
-	"not registered",
-	"name and text are required",
-	"text is required",
-	"name is required",
-	"unsupported capability",
-	"unknown agent provider",
-	"invalid request",
-	"bad request",
-	"400",
-	"unknown method",
-	"unsupported",
-	"invalid argument",
-	"config error",
-	"configuration",
-	"parse error",
-	"method not allowed",
-	"no registry",
-	"agent registry not available",
-	"session/load",
-	"existing conversation; refusing",
-}
-
-var backendUnavailableMarkers = []string{
-	"service unavailable",
-	"backend unavailable",
-	"backend down",
-	"provider down",
-	"connection refused",
-	"connection reset",
-	"connection timed out",
-	"i/o timeout",
-	"i/o error",
-	"network is unreachable",
-	"network error",
-	"no such host",
-	"temporarily unavailable",
-	"try again",
-	"timed out",
-	"timeout",
-	"bad gateway",
-	"gateway timeout",
-	"500",
-	"503",
-	"502",
-	"504",
-	"econnrefused",
-	"econnreset",
-	"enotfound",
-	"server error",
-	"overloaded",
-	"over capacity",
-	"upstream",
-	"cloudflare",
-	"dial tcp",
-	"ws: close",
-	"websocket: close",
-	"connection closed waiting",
-	"eof",
 }

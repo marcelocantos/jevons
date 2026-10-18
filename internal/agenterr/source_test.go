@@ -23,10 +23,10 @@ func TestT455ClassifyFromFixturePairs(t *testing.T) {
 		msg  string
 		want agenterr.Class
 	}{
-		{"bare internal error", "Internal error", agenterr.ClassBackendUnavailable},
-		{"rate limit", "429 Too Many Requests", agenterr.ClassRateLimit},
-		{"auth", "401 Unauthorized", agenterr.ClassAuth},
-		{"client bug", "grok acp: no session", agenterr.ClassClientBug},
+		{"bare internal error", "Internal error", agenterr.ClassUnknown},
+		{"rate limit", "429 Too Many Requests", agenterr.ClassNone},
+		{"auth", "401 Unauthorized", agenterr.ClassNone},
+		{"client bug", "grok acp: no session", agenterr.ClassNone},
 		// Live banner on :13705: Grok streams the word "failed" as its own
 		// chunk; ClassifyText residual maps it to ClassUnknown and OwnerCopy
 		// replaced the sentence. Authored must stay none.
@@ -35,7 +35,7 @@ func TestT455ClassifyFromFixturePairs(t *testing.T) {
 		{
 			name: "quoted internal error in a report",
 			msg:  `The backend said "Internal error" but that was last hour; the fleet is working now.`,
-			want: agenterr.ClassBackendUnavailable,
+			want: agenterr.ClassUnknown,
 		},
 		{
 			// Verbatim opening of the 2026-08-15 overseer status that
@@ -101,9 +101,6 @@ func TestT455ClassifyFromDoesNotBlindDetector(t *testing.T) {
 	for _, msg := range []string{
 		"Internal error",
 		"acp session/prompt: Internal error",
-		"429 Too Many Requests",
-		"401 Unauthorized",
-		"grok acp: no session",
 		"failed",
 		"failed earlier slices",
 	} {

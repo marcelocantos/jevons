@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -175,7 +176,7 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 			// the word "failed" in it stays the sentence the agent wrote.
 			displayText := ev.Text
 			var failClass agenterr.Class
-			if class := agenterr.ClassifyFrom(assistantTextSource(ev), ev.Text); class.IsFailure() {
+			if class := classifyAssistantEvent(ev); class.IsFailure() {
 				failClass = class
 				displayText = agenterr.OwnerCopy(class, ev.Text)
 				slog.Warn("provider_failure",
@@ -385,6 +386,66 @@ func isRPCErrorFrame(raw []byte) bool {
 		return false
 	}
 	return true
+}
+
+// classifyAssistantEvent classes a chat event from a provider-failure cause.
+// Event.Reason carries one when the provider named a code. A bare JSON-RPC
+// error frame carries one in its numeric code. The message text is not a cause.
+// Authored prose is ClassNone. Transport text with no cause still falls
+// through to ClassifyText for retry-exhausted, context-overflow, and the
+// generic error word.
+func classifyAssistantEvent(ev claudia.Event) agenterr.Class {
+	if assistantTextSource(ev) != agenterr.SourceTransport {
+		return agenterr.ClassNone
+	}
+	if cause := assistantProviderCause(ev); cause != "" {
+		return agenterr.Classify(agenterr.WithCause(cause, errors.New(ev.Text)))
+	}
+	return agenterr.ClassifyText(ev.Text)
+}
+
+// assistantProviderCause reads a typed cause off the event.
+// A Reason that is already set and is not one of the four failure causes
+// is left alone, so a context-overflow reason is not rewritten from a code
+// that happens to sit on the same frame.
+func assistantProviderCause(ev claudia.Event) string {
+	switch ev.Reason {
+	case agenterr.CauseAuth, agenterr.CauseRateLimit, agenterr.CauseBackendUnavailable, agenterr.CauseClientBug:
+		return ev.Reason
+	}
+	if ev.Reason != "" {
+		return ""
+	}
+	return rpcFrameCause(ev.Raw)
+}
+
+// rpcFrameCause maps a JSON-RPC numeric code. The message string is not read.
+func rpcFrameCause(raw []byte) string {
+	if !isRPCErrorFrame(raw) {
+		return ""
+	}
+	var probe struct {
+		Code *json.Number `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || probe.Code == nil {
+		return ""
+	}
+	n, err := probe.Code.Int64()
+	if err != nil {
+		return ""
+	}
+	switch n {
+	case 401, 403:
+		return agenterr.CauseAuth
+	case 402, 429:
+		return agenterr.CauseRateLimit
+	case 400, -32700, -32600, -32601, -32602:
+		return agenterr.CauseClientBug
+	case -32603, 500, 502, 503, 504:
+		return agenterr.CauseBackendUnavailable
+	default:
+		return ""
+	}
 }
 
 // userTurnText extracts the prose of a user-role turn from a provider event,

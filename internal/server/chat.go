@@ -319,7 +319,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	// recovery while the overseer kept answering its POs (2026-09-28, 🎯T885).
 	if !s.overseerAdmissionEnabled() && ev.Type == "assistant" && ev.Text != "" {
 		source := assistantTextSource(ev)
-		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
+		if class := classifyAssistantEvent(ev); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
 		} else if source == agenterr.SourceAuthored {
 			s.observeProviderOK()
@@ -469,7 +469,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	}
 	if s.overseerAdmissionEnabled() && currentDurable && ev.Type == "assistant" && ev.Text != "" {
 		source := assistantTextSource(ev)
-		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
+		if class := classifyAssistantEvent(ev); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
 		} else if source == agenterr.SourceAuthored {
 			s.observeProviderOK()

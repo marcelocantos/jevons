@@ -71,7 +71,7 @@ func callDirect(t *testing.T, s *Server, id, text string) *mcp.CallToolResult {
 // 🎯T283 acceptance: an outage during jevons_thread_direct returns the
 // classified reason, not a bare "Internal error" the caller cannot act on.
 func TestThreadDirectClassifiesTransportOutage(t *testing.T) {
-	s, id := directServer(t, &failFleet{sendErr: fmt.Errorf("acp session/prompt: Internal error")})
+	s, id := directServer(t, &failFleet{sendErr: agenterr.WithCause(agenterr.CauseBackendUnavailable, fmt.Errorf("acp session/prompt: Internal error"))})
 	res := callDirect(t, s, id, "do the thing")
 	if !res.IsError {
 		t.Fatal("outage must surface as an error result")
@@ -138,7 +138,7 @@ func TestThreadDirectLeavesNonProviderErrorsAlone(t *testing.T) {
 // 🎯T283 acceptance: the deliver path (jevons_event_push) classifies too.
 func TestEventPushClassifiesOutage(t *testing.T) {
 	dir := t.TempDir()
-	ff := &failFleet{sendErr: fmt.Errorf("session/prompt failed: 503 Service Unavailable")}
+	ff := &failFleet{sendErr: agenterr.WithCause(agenterr.CauseBackendUnavailable, fmt.Errorf("session/prompt failed: 503 Service Unavailable"))}
 	b := newPushButler(t, dir, ff, nil)
 	if _, err := b.Spawn(butler.SpawnArgs{ID: "w1", WorkDir: dir, Parent: "jevons"}); err != nil {
 		t.Fatal(err)

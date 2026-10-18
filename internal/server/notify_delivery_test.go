@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // The OMP sidecar acknowledges a socket write before it can reject an
@@ -164,7 +166,7 @@ func TestOverseerNotifyBusyDeferLogsAtInfo(t *testing.T) {
 	busy := true
 	s.notifySender = func(text string) error {
 		if busy {
-			return fmt.Errorf("grok acp: prompt already in flight")
+			return agenterr.WithCause(agenterr.CauseTurnInFlight, fmt.Errorf("grok acp: prompt already in flight"))
 		}
 		delivered = append(delivered, text)
 		return nil
@@ -225,15 +227,25 @@ func TestOverseerNotifyBusyDeferLogsAtInfo(t *testing.T) {
 }
 
 func TestNotifyErrClass(t *testing.T) {
-	if got := notifyErrClass(fmt.Errorf("grok acp: prompt already in flight")); got != "busy" {
+	inFlight := fmt.Errorf("grok acp: prompt already in flight")
+	if got := notifyErrClass(inFlight); got == "busy" {
+		t.Fatalf("rendered busy text classified as %q", got)
+	}
+	if got := notifyErrClass(agenterr.WithCause(agenterr.CauseTurnInFlight, inFlight)); got != "busy" {
 		t.Fatalf("got %q", got)
 	}
-	// 🎯T214 J6: non-Grok busy strings classify as busy (not other).
-	if got := notifyErrClass(fmt.Errorf("task x is busy")); got != "busy" {
+	taskBusy := fmt.Errorf("task x is busy")
+	if got := notifyErrClass(taskBusy); got == "busy" {
+		t.Fatalf("rendered task busy classified as %q", got)
+	}
+	if got := notifyErrClass(agenterr.WithCause(agenterr.CauseBusy, taskBusy)); got != "busy" {
 		t.Fatalf("task busy got %q", got)
 	}
-	// 🎯T766.4: "session busy" was an invented phrase no backend produces.
-	if got := notifyErrClass(fmt.Errorf("codex app-server: turn already in flight")); got != "busy" {
+	codexBusy := fmt.Errorf("codex app-server: turn already in flight")
+	if got := notifyErrClass(codexBusy); got == "busy" {
+		t.Fatalf("rendered codex busy classified as %q", got)
+	}
+	if got := notifyErrClass(agenterr.WithCause(agenterr.CauseTurnInFlight, codexBusy)); got != "busy" {
 		t.Fatalf("codex busy got %q", got)
 	}
 	if got := notifyErrClass(fmt.Errorf("overseer not running")); got != "not_running" {

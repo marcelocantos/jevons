@@ -677,7 +677,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 					life["seat_released"] = true
 					s.notifySpawnFailure(def.Parent, def.TargetID, name, ferr.Error())
 				}
-				life["failure_class"] = agenterr.ClassifyText(ferr.Error()).String()
+				life["failure_class"] = agenterr.Classify(ferr).String()
 				life["err"] = ferr.Error()
 				life["session_id"] = sessionDisplay(def.SessionID)
 				s.logLifecycle(compAgentLifecycle, "start", "error", life)
@@ -1950,7 +1950,7 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 				// with the error verbatim, on the durable send path.
 				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
 			}
-			life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
+			life["failure_class"] = agenterr.Classify(err).String()
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
 			s.logLifecycle(compAgentLifecycle, "start", "error", life)

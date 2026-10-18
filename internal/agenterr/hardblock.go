@@ -14,10 +14,9 @@ import "strings"
 // stands every spawn/nudge/revive control down until a successful call
 // proves the provider accepts work again.
 //
-// Classification and hard-block are separate questions. ClassifyText still
-// maps spend-limit prose to rate_limit (so 🎯T407's auth/rate_limit cluster
-// keeps seeing it); HardBlock is the narrower predicate that decides
-// whether the refusal is a wall.
+// Classification and hard-block are separate questions. The class arrives
+// from a provider-failure cause. HardBlock is the narrower predicate that
+// decides whether that refusal is a wall. Spend-limit English is not a class.
 
 // HardBlock reports whether class+raw is a provider refusal no retry can
 // fix. class must already be a failure class; ClassNone never hard-blocks,

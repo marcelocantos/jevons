@@ -4,6 +4,7 @@
 package agenterr
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -15,12 +16,14 @@ func TestClassifyReplyFiresOnBareProviderFailure(t *testing.T) {
 		reply string
 		want  Class
 	}{
+		// Residual: isBareInternalError still reads a whole-reply Internal error
+		// as backend. A status sentence is not a class.
 		{"Internal error", ClassBackendUnavailable},
 		{"  Internal error.  ", ClassBackendUnavailable},
 		{"acp session/prompt: Internal error", ClassBackendUnavailable},
-		{"Error: 503 Service Unavailable", ClassBackendUnavailable},
-		{"429 Too Many Requests", ClassRateLimit},
-		{"401 Unauthorized: invalid api key", ClassAuth},
+		{"Error: 503 Service Unavailable", ClassNone},
+		{"429 Too Many Requests", ClassNone},
+		{"401 Unauthorized: invalid api key", ClassNone},
 	}
 	for _, c := range cases {
 		if got := ClassifyReply(c.reply); got != c.want {
@@ -127,20 +130,32 @@ func TestNumericStatusFragmentsAreNotFailures(t *testing.T) {
 				t.Errorf("observed successful reply classified as %s", got)
 			}
 			for _, tc := range []struct {
-				code string
-				want Class
-			}{{"400", ClassClientBug}, {"401", ClassAuth}, {"402", ClassRateLimit}, {"403", ClassAuth},
-				{"429", ClassRateLimit}, {"500", ClassBackendUnavailable},
-				{"502", ClassBackendUnavailable}, {"503", ClassBackendUnavailable}, {"504", ClassBackendUnavailable}} {
+				code  string
+				cause string
+				want  Class
+			}{
+				{"400", CauseClientBug, ClassClientBug},
+				{"401", CauseAuth, ClassAuth},
+				{"402", CauseRateLimit, ClassRateLimit},
+				{"403", CauseAuth, ClassAuth},
+				{"429", CauseRateLimit, ClassRateLimit},
+				{"500", CauseBackendUnavailable, ClassBackendUnavailable},
+				{"502", CauseBackendUnavailable, ClassBackendUnavailable},
+				{"503", CauseBackendUnavailable, ClassBackendUnavailable},
+				{"504", CauseBackendUnavailable, ClassBackendUnavailable},
+			} {
 				for _, text := range []string{tc.code, "HTTP " + tc.code, "status=" + tc.code,
 					"status: " + tc.code + ".", "HTTP/1.1 " + tc.code,
 					"ref-" + tc.code + " HTTP " + tc.code} {
-					if got := classify.fn(text); got != tc.want {
-						t.Errorf("%q classified as %s, want %s", text, got, tc.want)
+					if got := classify.fn(text); got == tc.want {
+						t.Errorf("%q classified as %s from prose", text, got)
 					}
-					if tc.code == "402" && !HardBlock(tc.want, text) {
+					if tc.code == "402" && !HardBlock(ClassRateLimit, text) {
 						t.Errorf("real billing status %q lost its hard-block", text)
 					}
+				}
+				if got := Classify(WithCause(tc.cause, errors.New(tc.code))); got != tc.want {
+					t.Errorf("WithCause(%s, %q) = %s, want %s", tc.cause, tc.code, got, tc.want)
 				}
 			}
 		})

@@ -111,7 +111,7 @@ func describeSeatFailure(def *claudia.AgentDef, name, removalReason, removalDeta
 		if len(text) > seatFailureCauseMax {
 			text = text[:seatFailureCauseMax] + "…"
 		}
-		fmt.Fprintf(&b, "; cause (%s): %s", agenterr.ClassifyText(cause.Error()), text)
+		fmt.Fprintf(&b, "; cause (%s): %s", agenterr.Classify(cause), text)
 	}
 	return b.String()
 }

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T806: an owner message the daemon cannot deliver must not stay displayed
@@ -98,7 +100,9 @@ func TestT806BusyDeferStaysQuiet(t *testing.T) {
 	s.notifyRetryDelay = time.Hour
 	lines := make(chan string, 4)
 	s.chatListeners = append(s.chatListeners, lines)
-	s.notifySender = func(string) error { return fmt.Errorf("grok acp: prompt already in flight") }
+	s.notifySender = func(string) error {
+		return agenterr.WithCause(agenterr.CauseTurnInFlight, fmt.Errorf("grok acp: prompt already in flight"))
+	}
 	_ = s.SendToOverseer(userTurnPrefix + "hello")
 	select {
 	case l := <-lines:

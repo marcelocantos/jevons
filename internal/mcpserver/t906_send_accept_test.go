@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestT906AcceptedSendDoesNotClearHardBlock(t *testing.T) {
 	s.SetOwnerNotifier(n)
 
 	raw := `provider refused the turn: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth access token has been revoked"}}`
-	class := agenterr.ClassifyText(raw)
+	class := agenterr.Classify(agenterr.WithCause(agenterr.CauseAuth, errors.New(raw)))
 	if !agenterr.HardBlock(class, raw) {
 		t.Fatalf("fixture must hard-block; class=%s", class)
 	}
@@ -73,7 +74,7 @@ func TestT906AcceptedSendDoesNotClearHardBlock(t *testing.T) {
 func TestT906RealReplyStillClearsHardBlock(t *testing.T) {
 	s, _ := t406Server(t)
 	raw := "You've hit your monthly spend limit"
-	s.ObserveProviderFailure(agenterr.ClassifyText(raw), raw)
+	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(raw))), raw)
 	if s.fleetIntent().FleetState() != fleetintent.BlockedProvider {
 		t.Fatal("setup: want blocked_provider")
 	}

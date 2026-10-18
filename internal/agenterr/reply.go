@@ -34,7 +34,8 @@ func ClassifyReply(reply string) Class {
 	}
 	low := strings.ToLower(s)
 
-	// A whole-message "Internal error" is unambiguous at any length bound.
+	// Residual: a whole-message "Internal error" is still read as
+	// backend_unavailable. It is the one English match ClassifyReply keeps.
 	if isBareInternalError(low) {
 		return ClassBackendUnavailable
 	}

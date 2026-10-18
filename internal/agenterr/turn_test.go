@@ -19,7 +19,8 @@ func TestT454ClassifyTurnOutput(t *testing.T) {
 	}{
 		{"empty", "", TurnEmpty},
 		{"spend_limit", spend, TurnRefusalOnly},
-		{"auth", auth, TurnRefusalOnly},
+		// A 401 sentence is not a cause. Account-wall phrases still are.
+		{"auth", auth, TurnSubstantive},
 		{"revoked", revoked, TurnRefusalOnly},
 		{"internal_error", "Internal error", TurnRefusalOnly},
 		{"mixed_quotes_refusal", mixed, TurnSubstantive},

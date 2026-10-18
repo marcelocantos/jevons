@@ -675,6 +675,8 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	}
 	text := strings.TrimSpace(terminalText)
 	empty := text == ""
+	// Terminal text has no provider-failure cause. Auth, rate-limit,
+	// backend, and client-bug are not read from this sentence.
 	class := agenterr.ClassifyText(text)
 	// Empty terminal always needs recover for open-mission (caller filters).
 	// Transient / unknown failures need recover; auth/client fail closed.
