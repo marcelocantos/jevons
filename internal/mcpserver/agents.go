@@ -239,7 +239,8 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 			}
 		}
 		if pinned {
-			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
+			_, ownedOK, _ := s.sendQueue().OwnedAttempt(d.Name)
+			fmt.Fprintf(&b, "  ^ %s\n", formatSendqPinLine(d.Name, pin, !ownedOK))
 		}
 		// sendqPinFor already read the queue, which publishes depth, head
 		// age, and block reason onto the authority. The list is the place

@@ -122,19 +122,22 @@ func applyDelivery(e Entry, step deliveryStep, detail, attemptID string, by *Rec
 		e.State, e.AttemptID, e.Detail = Attempting, attemptID, ""
 		return e, false, nil
 	case stepNotSent:
-		if e.State == Pending {
+		// The empty on-disk state is the pending name only with no attempt
+		// id. An owned attempt may still be stored that way. The value stays
+		// empty; the attempt id is what makes it not pending.
+		if e.AttemptID == "" {
 			return e, false, fmt.Errorf("sendq: not-sent requires an attempt")
 		}
 		e.State, e.AttemptID, e.Detail = Pending, "", detail
 		return e, false, nil
 	case stepUnverified:
-		if e.State == Pending {
+		if e.AttemptID == "" {
 			return e, false, fmt.Errorf("sendq: unverified requires an attempt")
 		}
 		e.State, e.Detail = Uncertain, detail
 		return e, false, nil
 	case stepConfirm, stepTerminal:
-		if e.State == Pending {
+		if e.AttemptID == "" {
 			return e, false, fmt.Errorf("sendq: resolve requires an attempt")
 		}
 		return e, true, nil

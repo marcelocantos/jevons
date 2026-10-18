@@ -209,7 +209,21 @@ func (s *Server) SweepSendBacklogs() {
 			// This store owns the attempt. Do not announce it as a departed
 			// hold, replay it, or drop anything behind it. reapBacklogForMissingAgent
 			// keeps every payload; this case is what keeps a live attempt off
-			// that hold notice.
+			// that hold notice. A coexisting pin does not flow past it.
+			if b.Uncertain == 0 {
+				break
+			}
+			pin, ok := s.sendqPinFor(b.Agent)
+			if !ok || pin.AttemptID == "" {
+				break
+			}
+			if _, reaped := LookupReapedRecord(s.fleetIntent(), b.Agent); reaped {
+				break
+			}
+			if s.registry != nil && !s.agentIsRegistered(b.Agent) {
+				break
+			}
+			s.noticeUncertainAttempt(b.Agent, pin, formatSendqPinLine(b.Agent, pin, false))
 		case b.Uncertain > 0:
 			// Never route, discard, or replay an attempt left by this daemon or
 			// its predecessor (🎯T623). PINNED is a live-seat word (🎯T599):

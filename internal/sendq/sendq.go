@@ -851,7 +851,10 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 	defer s.mu.Unlock()
 	// Even a failed persistence attempt ends this operation's ownership. Its
 	// durable claim remains unresolved and must become visible to recovery.
-	if s.active[agent] == attempt.AttemptID {
+	// Record ownership first: an empty on-disk state is not pending while
+	// this store owns the attempt id, and the delete below would hide that.
+	owned := attempt.AttemptID != "" && s.active[agent] == attempt.AttemptID
+	if owned {
 		delete(s.active, agent)
 	}
 	f, err := s.load(agent)
@@ -867,7 +870,7 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 			}
 		}
 	}
-	if at < 0 || f.Entries[at].AttemptID != attempt.AttemptID || f.Entries[at].State == Pending {
+	if at < 0 || f.Entries[at].AttemptID != attempt.AttemptID || (f.Entries[at].State == Pending && !owned) {
 		return fmt.Errorf("sendq: stale delivery attempt for %q", agent)
 	}
 	e := f.Entries[at]

@@ -720,3 +720,69 @@ func TestT7665OwnedOmittedStateIsNotReconcilable(t *testing.T) {
 		t.Fatalf("reconcile changed the owned attempt: %+v %v", rows, err)
 	}
 }
+
+// An owned attempt whose file omits DeliveryState is not pending. The
+// on-disk value stays empty. Resolve records the attempt result. A store
+// that does not own it still leaves the row for reconcile.
+func TestT7665OwnedOmittedStateResolvesInsteadOfStayingPending(t *testing.T) {
+	dir := t.TempDir()
+	q := NewStore(dir)
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	first, _, err := q.Append("a", "kept", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || claimed.AttemptID == "" {
+		t.Fatalf("claim: %+v %v %v", claimed, ok, err)
+	}
+	body := []byte(`{"agent":"a","entries":[{"id":"` + first.ID + `","text":"kept","enqueued_at":"2026-10-19T12:00:00Z","attempt_id":"` + claimed.AttemptID + `"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "a.json"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fresh := NewStore(dir)
+	if err := fresh.Resolve("a", claimed, DefinitelyNotSent, "cannot accept"); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("unowned resolve err = %v, want stale", err)
+	}
+	held, err := fresh.Snapshot("a")
+	if err != nil || len(held) != 1 || held[0].State != Pending || held[0].AttemptID != claimed.AttemptID || held[0].Text != "kept" || EntryPhase(held[0], "") != PhaseHeldAttempt {
+		t.Fatalf("unowned resolve changed the row: %+v %v", held, err)
+	}
+	if b, err := q.Backlog("a"); err != nil || b.Pending != 0 || b.InFlight != 1 {
+		t.Fatalf("owned backlog = %+v %v", b, err)
+	}
+	if err := q.Resolve("a", claimed, DefinitelyNotSent, "cannot accept"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := q.Snapshot("a")
+	if err != nil || len(rows) != 1 || rows[0].Text != "kept" || rows[0].AttemptID != "" || rows[0].State != Pending || EntryPhase(rows[0], "") != PhaseAdmitted {
+		t.Fatalf("not-sent = %+v %v", rows, err)
+	}
+	if b, err := q.Backlog("a"); err != nil || b.Pending != 1 || b.InFlight != 0 {
+		t.Fatalf("after not-sent = %+v %v", b, err)
+	}
+
+	confirmed, _, err := q.Append("b", "confirmed copy", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, ok, err := q.ClaimFront("b")
+	if err != nil || !ok || owned.ID != confirmed.ID {
+		t.Fatalf("claim confirmed: %+v %v %v", owned, ok, err)
+	}
+	omit := []byte(`{"agent":"b","entries":[{"id":"` + owned.ID + `","text":"confirmed copy","enqueued_at":"2026-10-19T12:00:00Z","attempt_id":"` + owned.AttemptID + `"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "b.json"), omit, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Resolve("b", owned, Confirmed, "receiver has it"); err != nil {
+		t.Fatal(err)
+	}
+	left, err := q.Snapshot("b")
+	if err != nil || len(left) != 0 {
+		t.Fatalf("confirmed left %+v %v", left, err)
+	}
+	archived, err := q.ReadSupersession(owned.ID)
+	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].Text != "confirmed copy" {
+		t.Fatalf("archive = %+v %v", archived, err)
+	}
+}
