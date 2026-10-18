@@ -286,6 +286,7 @@ persona_notes: |
 	s.run("J6-mcp-tool-surface", s.jMCPToolSurface)
 	s.run("J6c-overseer-tools-attached", s.jOverseerToolsAttached)
 	s.run("J43-sdk-seat-pair", s.jSDKSeatPair)
+	s.run("J44-control-plane-lifecycle", s.jControlPlaneLifecycle)
 	s.run("J6b-mcp-reconnect", s.jMCPReconnect)
 	s.run("J7-overseer-registry", s.jOverseerInRegistry)
 	s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
