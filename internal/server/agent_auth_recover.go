@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -283,23 +284,16 @@ func recoverableDestinationProvider(provider claudia.Provider) claudia.Provider 
 }
 
 // destinationAuthRecoverable is only a presentation/action hint for an
-// already-failed migration. It never judges credential validity itself; the
-// Claudia broker does that when the owner explicitly asks it to recover.
+// already-failed migration whose failure carries a typed auth cause.
+// A sentence that quotes a refresh or keychain error is not that cause.
+// It never judges credential validity itself; the Claudia broker does that
+// when the owner explicitly asks it to recover.
 func destinationAuthRecoverable(action planusage.PlanAction) bool {
 	if action.Action != planusage.SeatMigrate || action.Execution != "failed" ||
 		recoverableDestinationProvider(claudia.Provider(action.To)) == "" {
 		return false
 	}
-	failure := strings.ToLower(action.Failure)
-	for _, marker := range []string{
-		"invalid_grant", "refresh token", "keychain", "authentication failed",
-		"login required", "not logged in", "no login",
-	} {
-		if strings.Contains(failure, marker) {
-			return true
-		}
-	}
-	return false
+	return action.FailureCause == agenterr.CauseAuth
 }
 
 // handlePlanDestinationAuthRecover repairs a plan login on the owner's click:

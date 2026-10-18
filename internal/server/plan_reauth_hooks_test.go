@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -22,7 +23,8 @@ func TestDestinationReauthMarksRetryAndRevivesPlanPeers(t *testing.T) {
 	decision := planusage.PlanAction{
 		Name: "jevons", From: "grok", To: "claude", Action: planusage.SeatMigrate,
 		Execution: "failed", Failure: "anthropic refresh failed: invalid_grant",
-		Author: claudia.DecisionAuthor,
+		FailureCause: agenterr.CauseAuth,
+		Author:       claudia.DecisionAuthor,
 	}
 	s := New("test", t.TempDir())
 	s.SetPlanDecisions(func() []planusage.PlanAction { return []planusage.PlanAction{decision} })

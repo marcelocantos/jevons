@@ -68,6 +68,9 @@ type PlanAction struct {
 	// placement choice is not proof that a migration finished.
 	Execution string
 	Failure   string
+	// FailureCause is the typed provider cause of this result. Empty means
+	// the failure arrived as a sentence. A sentence is not a cause.
+	FailureCause string `json:"FailureCause,omitempty"`
 	// ReauthAvailable is an owner action for a failed destination login.
 	// The server decorates the read-only decision; Claudia owns recovery.
 	ReauthAvailable bool

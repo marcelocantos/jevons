@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -84,5 +85,49 @@ func TestPlanSweepLaunchesAStoppedSeatAfterItsSwitch(t *testing.T) {
 	}
 	if def := reg.Def("worker"); def.Provider != "anthropic" || def.SessionID != "s-worker" {
 		t.Fatalf("def = %+v, want anthropic on session s-worker", def)
+	}
+}
+
+// A failed switch keeps the typed cause beside the sentence. The same
+// sentence without a cause does not become an auth failure on the decision
+// the owner is shown.
+func TestPlanSwitchKeepsAuthCauseOffTheSentence(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		cause string
+	}{
+		{"typed auth", agenterr.WithCause(agenterr.CauseAuth, errors.New("OAuthError: invalid_grant")), agenterr.CauseAuth},
+		{"quoted keychain", errors.New("keychain was not read at startup"), ""},
+		{"quoted refresh", errors.New("OAuthError: invalid_grant"), ""},
+		{"other cause", agenterr.WithCause(agenterr.CauseSpendWall, errors.New("OAuthError: invalid_grant")), agenterr.CauseSpendWall},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg, err := claudia.NewRegistry(t.TempDir() + "/agents.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reg.Register(claudia.AgentDef{Name: "jevons", SessionID: "old", Provider: "xai-oauth", Purpose: claudia.PurposeWork}); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Date(2026, 9, 28, 9, 35, 0, 0, time.UTC)
+			s := New(t.TempDir(), nil, nil)
+			s.SetRegistry(reg)
+			s.SetPlanUsageSource(func() planusage.Snapshot {
+				return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+					t39015Weekly("grok", 10, 90, now),
+					t39015Weekly("claude", 90, 10, now),
+				}}
+			})
+			s.SetModelSwitcher(&fakeSwitcher{err: tc.err})
+			acts := s.SweepPlanPolicy()
+			if len(acts) != 1 || acts[0].Execution != "failed" || acts[0].Failure != tc.err.Error() || acts[0].FailureCause != tc.cause {
+				t.Fatalf("sweep = %+v, want failed %q cause %q", acts, tc.err, tc.cause)
+			}
+			decisions := s.PlanPolicyDecisions()
+			if len(decisions) != 1 || decisions[0].Name != "jevons" || decisions[0].Failure != tc.err.Error() || decisions[0].FailureCause != tc.cause {
+				t.Fatalf("decisions = %+v, want cause %q kept beside the sentence", decisions, tc.cause)
+			}
+		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/planusage"
@@ -106,7 +107,9 @@ func (s *Server) planSwitch(a *planusage.PlanAction) {
 		// The seat is still where it was and still working; the next tick
 		// retries. Parking here would turn a refused switch into an outage.
 		slog.Warn("plan policy switch failed", "name", a.Name, "to", a.To, "err", err)
-		a.Execution, a.Failure = "failed", err.Error()
+		a.Execution = "failed"
+		a.Failure = err.Error()
+		a.FailureCause = agenterr.ProviderCause(err)
 		return
 	}
 	if !sw.Live {
@@ -158,7 +161,9 @@ func (s *Server) MarkPlanRetryAfterReauth(provider claudia.Provider) {
 	defer s.planDecisionMu.Unlock()
 	for name, last := range s.planLastResults {
 		if last.Execution == "failed" && cli.PlanProvider(claudia.Provider(last.To)) == plan {
-			last.Execution, last.Failure = "pending", "destination login recovered; retrying"
+			last.Execution = "pending"
+			last.Failure = "destination login recovered; retrying"
+			last.FailureCause = ""
 			s.planLastResults[name] = last
 		}
 	}
@@ -180,7 +185,7 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 		d := &decisions[i]
 		last, ok := s.planLastResults[d.Name]
 		if ok && last.From == d.From && last.To == d.To && last.Action == d.Action {
-			d.Execution, d.Failure = last.Execution, last.Failure
+			d.Execution, d.Failure, d.FailureCause = last.Execution, last.Failure, last.FailureCause
 		}
 	}
 	s.planDecisionMu.RUnlock()
