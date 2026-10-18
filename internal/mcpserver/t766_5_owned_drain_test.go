@@ -105,3 +105,96 @@ func TestT7665OwnedAttemptDrainDoesNotFlowPastAPin(t *testing.T) {
 		t.Fatalf("drain changed the queue: %+v %v", rows, err)
 	}
 }
+
+// A queue whose only row is uncertain is not pending. Starting the seat does
+// not take it, and a live drain does not offer it again at the next boundary.
+func TestT7665HeldOnlyDrainDoesNotPromiseAStartOrARetry(t *testing.T) {
+	const name, payload = "claudia-po", "fate unknown"
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+
+	s, sender, _ := t418Daemon(t, t.TempDir())
+	held := plantUncertain(t, s, name, payload, now)
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
+	drained := resultText(t, reconcile(t, s, map[string]any{"name": name, "action": "drain"}))
+	for _, want := range []string{held.ID, held.AttemptID, "no live process", "jevons_sendq_reconcile"} {
+		if !strings.Contains(drained, want) {
+			t.Fatalf("no-live drain omits %q:\n%s", want, drained)
+		}
+	}
+	for _, banned := range []string{"pending message", "jevons_agent_start", "first turn boundary", "drain past it"} {
+		if strings.Contains(drained, banned) {
+			t.Fatalf("no-live drain promises a start (%q):\n%s", banned, drained)
+		}
+	}
+	if len(sender.delivered()) != 0 {
+		t.Fatalf("no-live drain delivered the hold: %q", sender.delivered())
+	}
+	rows, err := s.sendQueue().Snapshot(name)
+	if err != nil || len(rows) != 1 || rows[0].ID != held.ID || rows[0].Text != payload || rows[0].State != sendq.Uncertain {
+		t.Fatalf("no-live drain changed the hold: %+v %v", rows, err)
+	}
+
+	live, liveSender, _ := t418Daemon(t, t.TempDir())
+	liveHeld := plantUncertain(t, live, name, payload, now)
+	drained = resultText(t, reconcile(t, live, map[string]any{"name": name, "action": "drain"}))
+	for _, want := range []string{liveHeld.ID, liveHeld.AttemptID, "jevons_sendq_reconcile"} {
+		if !strings.Contains(drained, want) {
+			t.Fatalf("live drain omits %q:\n%s", want, drained)
+		}
+	}
+	for _, banned := range []string{"pending message", "jevons_agent_start", "offered again at its next boundary", "drain past it"} {
+		if strings.Contains(drained, banned) {
+			t.Fatalf("live drain offers a held entry again (%q):\n%s", banned, drained)
+		}
+	}
+	if len(liveSender.delivered()) != 0 {
+		t.Fatalf("live drain delivered the hold: %q", liveSender.delivered())
+	}
+	rows, err = live.sendQueue().Snapshot(name)
+	if err != nil || len(rows) != 1 || rows[0].ID != liveHeld.ID || rows[0].Text != payload || rows[0].State != sendq.Uncertain {
+		t.Fatalf("live drain changed the hold: %+v %v", rows, err)
+	}
+}
+
+// The no-live start sentence counts claimable rows. A held row in front is
+// not one of them, and the start call stays, because the claimable row drains
+// once the seat has a process.
+func TestT7665NoLivePendingCountSkipsTheHeldRow(t *testing.T) {
+	const name = "claudia-po"
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	s, _, _ := t418Daemon(t, t.TempDir())
+	held := plantUncertain(t, s, name, "uncertain sibling", now)
+	if _, _, err := s.sendQueue().Append(name, "still waiting", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
+
+	drained := resultText(t, reconcile(t, s, map[string]any{"name": name, "action": "drain"}))
+	for _, want := range []string{"1 pending message", "jevons_agent_start", held.ID, "drain past it"} {
+		if !strings.Contains(drained, want) {
+			t.Fatalf("drain omits %q:\n%s", want, drained)
+		}
+	}
+	if strings.Contains(drained, "2 pending message") {
+		t.Fatalf("drain counted the held row as pending:\n%s", drained)
+	}
+	rows, err := s.sendQueue().Snapshot(name)
+	if err != nil || len(rows) != 2 || rows[0].State != sendq.Uncertain || rows[1].Text != "still waiting" || rows[1].State != sendq.Pending {
+		t.Fatalf("drain changed the queue: %+v %v", rows, err)
+	}
+}
+
+func plantUncertain(t *testing.T, s *Server, name, text string, at time.Time) sendq.Entry {
+	t.Helper()
+	if _, _, err := s.sendQueue().Append(name, text, at); err != nil {
+		t.Fatal(err)
+	}
+	e, ok, err := s.sendQueue().ClaimFront(name)
+	if err != nil || !ok || e.Text != text {
+		t.Fatalf("claim: %+v %v %v", e, ok, err)
+	}
+	if err := s.sendQueue().Resolve(name, e, sendq.Unverified, "fate unknown"); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}

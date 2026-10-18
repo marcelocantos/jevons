@@ -268,21 +268,41 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	if len(before) == 0 {
 		return fmt.Sprintf("sendq for %q is empty: nothing to drain.\n", name)
 	}
-	// 🎯T766.5: a held entry no longer blocks the drain. It is never resent;
-	// the pending messages behind it are offered past it, as the automatic
-	// drain does. The reply still names it, because it still needs a decision.
-	// An attempt this daemon owns blocks the whole seat, so that flow-past
-	// sentence is not the reply while the attempt is in flight.
-	heldNote := ""
-	if e, blocked, err := s.sendQueue().BlockedHead(name); err == nil && blocked {
-		heldNote = fmt.Sprintf(
-			"Entry %s has an unresolved %s attempt %s and stays held — it is never resent, and the messages behind it drain past it (🎯T766.5).\n"+
-				"Settle it with: jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%[1]s attempt_id=%[3]s actor=… evidence=…\n",
-			e.ID, pinAttemptKind(e.State), e.AttemptID, name)
+	// Pending is the claimable phases only. A held attempt and an uncertain
+	// entry stay in the snapshot and are not that count. EntryPhase with an
+	// empty active id reads an owned attempt as held; the owned-attempt
+	// reply below does not use this count.
+	pendingN := 0
+	var oldestWait time.Duration
+	for _, e := range before {
+		switch sendq.EntryPhase(e, "") {
+		case sendq.PhaseAdmitted, sendq.PhaseDigest, sendq.PhaseRequeued:
+			age := e.Age(now)
+			if pendingN == 0 || age > oldestWait {
+				oldestWait = age
+			}
+			pendingN++
+		}
 	}
 	flightNote := ""
 	if owned, ok, err := s.sendQueue().OwnedAttempt(name); err == nil && ok {
 		flightNote = inFlightExitLine(owned)
+	}
+	// 🎯T766.5: a held entry no longer blocks the drain. It is never resent.
+	// Claimable messages behind it are offered past it, as the automatic
+	// drain does. The reply still names it, because it still needs a decision.
+	// That flow-past clause is false while this daemon owns an attempt, and
+	// false when nothing behind the hold is claimable.
+	heldNote := ""
+	if e, blocked, err := s.sendQueue().BlockedHead(name); err == nil && blocked {
+		flow := ""
+		if flightNote == "" && pendingN > 0 {
+			flow = ", and the messages behind it drain past it (🎯T766.5)"
+		}
+		heldNote = fmt.Sprintf(
+			"Entry %s has an unresolved %s attempt %s and stays held — it is never resent%s.\n"+
+				"Settle it with: jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%[1]s attempt_id=%[3]s actor=… evidence=…\n",
+			e.ID, pinAttemptKind(e.State), e.AttemptID, flow, name)
 	}
 	if _, live := s.liveSender(name); !live {
 		if flightNote != "" {
@@ -294,10 +314,16 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 			}
 			return blocked.String()
 		}
+		if pendingN == 0 {
+			var blocked strings.Builder
+			fmt.Fprintf(&blocked, "%q has no live process. Starting it does not drain this queue while nothing here is waiting to be delivered.\n", name)
+			blocked.WriteString(heldNote)
+			return blocked.String()
+		}
 		return fmt.Sprintf(
 			"%q holds %d pending message(s), oldest waiting %s, but has no live process to deliver to.\n"+
 				"Give it one and the queue drains at the first turn boundary: jevons_agent_start name=%[1]q (no prompt).\n",
-			name, len(before), before[0].Age(now).Round(time.Second)) + heldNote
+			name, pendingN, oldestWait.Round(time.Second)) + heldNote
 	}
 
 	s.drainAgentSendQueue(name)
@@ -320,6 +346,8 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	switch {
 	case delivered == 0 && flightNote != "":
 		// The in-flight line already names why nothing moved.
+	case delivered == 0 && pendingN == 0:
+		// A held or uncertain entry is not offered at the next boundary.
 	case delivered == 0:
 		b.WriteString("Nothing moved — the seat is most likely mid-turn, and the backlog is offered again at its next boundary.\n")
 	case len(after) > 0:
