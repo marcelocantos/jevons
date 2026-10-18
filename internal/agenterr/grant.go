@@ -46,8 +46,13 @@ func (e *grantRefusal) NotifyClass() string { return "not_owner" }
 // connection does not own. It is ProtocolError.Code, not a sentence.
 const brokerCodeNotOwner = "not_owner"
 
-// protocolCodeWalkLimit bounds how far a grant read follows Unwrap.
-// The refusal is the error itself or one wrap around it.
+// brokerCodeFrameTooLarge is the broker protocol code for a frame the
+// wire refused. It is ProtocolError.Code, not a sentence.
+const brokerCodeFrameTooLarge = "frame_too_large"
+
+// protocolCodeWalkLimit bounds how far a protocol read follows a wrap.
+// The refusal is the error itself, one wrap around it, or either side of
+// a wrap that carries two errors.
 const protocolCodeWalkLimit = 8
 
 // GrantRefusal marks err as a broker not_owner refusal. The rendered text
@@ -82,20 +87,38 @@ func NoteBrokerGrant(err error) error {
 	return &grantRefusal{text: err.Error(), next: err}
 }
 
+// IsFrameTooLarge reports a broker frame the wire refused.
+// The code is ProtocolError.Code. A sentence that quotes the line limit
+// is not that refusal, and neither is any other protocol code.
+func IsFrameTooLarge(err error) bool {
+	return protocolCode(err) == brokerCodeFrameTooLarge
+}
+
 // protocolCode reads ProtocolError.Code. The rendered sentence is not read.
+// A wrap that carries two errors is walked on both sides: errors.Unwrap
+// does not see the second one.
 func protocolCode(err error) string {
-	for range protocolCodeWalkLimit {
-		if err == nil {
-			return ""
+	queue := []error{err}
+	for steps := 0; steps < protocolCodeWalkLimit && len(queue) > 0; steps++ {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == nil {
+			continue
 		}
-		v := reflect.ValueOf(err)
+		v := reflect.ValueOf(cur)
 		if v.Kind() == reflect.Pointer && v.IsNil() {
-			return ""
+			continue
 		}
-		if code, ok := exportedProtocolCode(err); ok {
+		if code, ok := exportedProtocolCode(cur); ok {
 			return code
 		}
-		err = errors.Unwrap(err)
+		if u, ok := cur.(interface{ Unwrap() error }); ok {
+			queue = append(queue, u.Unwrap())
+			continue
+		}
+		if m, ok := cur.(interface{ Unwrap() []error }); ok {
+			queue = append(queue, m.Unwrap()...)
+		}
 	}
 	return ""
 }

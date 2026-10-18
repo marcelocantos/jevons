@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
@@ -83,15 +84,12 @@ func FormatOversizedSeatLine(name string, lines []transcript.OversizedLine) stri
 		len(lines), transcript.BrokerLineLimit, name, describeOversized(lines))
 }
 
-// IsBrokerLineLimitError recognises claudia's broker refusal of a line over
-// the wire cap, by text — the pin has no typed error for it.
+// IsBrokerLineLimitError reports a broker frame_too_large refusal.
+// The code is ProtocolError.Code, read without importing the broker.
+// A sentence that quotes the line limit is not that refusal, and the
+// historical malformed wording is not either.
 func IsBrokerLineLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "line limit") ||
-		strings.Contains(msg, fmt.Sprintf("%d-byte", transcript.BrokerLineLimit))
+	return agenterr.IsFrameTooLarge(err)
 }
 
 // OversizedSendAdvice replaces the bare broker error when the receiver's

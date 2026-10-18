@@ -110,12 +110,14 @@ func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/context_overflow.go"), "IsContextOverflow")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/source.go"), "ClassifyFrom")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/hardblock.go"), "HardBlock")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/grant.go"), "IsGrantRefusal", "NotifyClass", "ErrOverseerNotRunning", "NoteBrokerGrant", "GrantRefusal", "protocolCode", "exportedProtocolCode")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/grant.go"), "IsGrantRefusal", "NotifyClass", "ErrOverseerNotRunning", "NoteBrokerGrant", "GrantRefusal", "protocolCode", "exportedProtocolCode", "IsFrameTooLarge")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "provider_failure.go"), "jworkFailure")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/chat.go"), "notifyErrClass")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../upgrade/readopt.go"), "IsNotOwner")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "DeclaresBlockingGateWait")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "send_claim.go"), "ClassifySendError")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t661_oversized.go"), "IsBrokerLineLimitError")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/chat_wire.go"), "assistantProviderCause", "providerCodeCause")...)
 	if len(hits) != len(t7664ErrorEnglishAllowlist) {
 		t.Fatalf("error-control English classifiers = %v, allowlist %v", hits, t7664ErrorEnglishAllowlist)
 	}

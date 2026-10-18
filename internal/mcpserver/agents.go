@@ -253,7 +253,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		}
 		// 🎯T661: a session the broker wire cannot carry is named on the row,
 		// so a PO sees why sends to it fail before trying one.
-		if lines := s.seatOversized(d, DefaultSessionRoots()); len(lines) > 0 {
+		if lines := s.seatOversized(d, s.transcriptRoots()); len(lines) > 0 {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatOversizedSeatLine(d.Name, lines))
 		}
 	}

@@ -416,7 +416,45 @@ func assistantProviderCause(ev claudia.Event) string {
 	if ev.Reason != "" {
 		return ""
 	}
-	return rpcFrameCause(ev.Raw)
+	if cause := rpcFrameCause(ev.Raw); cause != "" {
+		return cause
+	}
+	return providerCodeCause(ev.Raw)
+}
+
+// providerCodeCause maps the provider's own error code on a transcript
+// line. Published Claudia v0.57.0 sets Event.IsError from that field and
+// leaves Reason empty, so the code is still on Raw. The message text is
+// not read. An unrecognised code, including a sentence in the field, has
+// no cause.
+func providerCodeCause(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var probe struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || len(probe.Error) == 0 {
+		return ""
+	}
+	var code string
+	if err := json.Unmarshal(probe.Error, &code); err != nil || code == "" {
+		return ""
+	}
+	switch code {
+	case "billing_error":
+		return agenterr.CauseSpendWall
+	case "rate_limit":
+		return agenterr.CauseRateLimit
+	case "authentication_failed", "authentication_error":
+		return agenterr.CauseAuth
+	case "model_not_found":
+		return agenterr.CauseClientBug
+	case "overloaded_error", "internal_error":
+		return agenterr.CauseBackendUnavailable
+	default:
+		return ""
+	}
 }
 
 // rpcFrameCause maps a JSON-RPC numeric code. The message string is not read.

@@ -980,7 +980,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// not this payload — say which records, and how to recover.
 		if IsBrokerLineLimitError(err) && s.registry != nil {
 			if d := s.registry.Def(name); d != nil {
-				if lines := s.seatOversized(*d, DefaultSessionRoots()); len(lines) > 0 {
+				if lines := s.seatOversized(*d, s.transcriptRoots()); len(lines) > 0 {
 					advice := OversizedSendAdvice(name, len(text), lines, err)
 					slog.Warn("agent_send", "component", "agent_send", "name", name,
 						"status", "failed", "mode", string(mode), "failure_class", "oversized_session",
