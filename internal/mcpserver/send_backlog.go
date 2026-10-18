@@ -198,9 +198,10 @@ func (s *Server) SweepSendBacklogs() {
 		switch {
 		case b.InFlight > 0:
 			// This store owns the attempt. Do not reap it, replay it, or
-			// start the message behind it. ClaimFront already refuses the
-			// seat; this case is what keeps the sweep from treating the
-			// queue as idle pending now that InFlight is not Uncertain.
+			// drop the claimable message behind it. ClaimFrontID refuses the
+			// owned attempt and, with it, the whole seat. reapBacklogForMissingAgent
+			// still drops a claimable snapshot id behind that attempt. This
+			// case is what keeps the sweep from calling that reap.
 		case b.Uncertain > 0:
 			// Never route, discard, or replay an attempt left by this daemon or
 			// its predecessor (🎯T623). PINNED is a live-seat word (🎯T599):
@@ -367,7 +368,26 @@ func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
 			return
 		}
 		if !claimed {
-			continue // A concurrent drain owns or already resolved this entry.
+			// ClaimFrontID refuses every id while an attempt is owned.
+			// The claimable message behind that attempt is still this
+			// snapshot's to drop. TakeClaimableID archives and removes
+			// it. The attempt itself is not claimable, so it stays.
+			taken, ok, derr := q.TakeClaimableID(b.Agent, id)
+			if derr != nil {
+				slog.Error("departed-agent claimable drop failed", "agent", b.Agent, "entry_id", id, "err", derr)
+				return
+			}
+			if !ok {
+				continue
+			}
+			s.LogEvent("agent_send", "backlog_undelivered", map[string]any{
+				"agent": b.Agent, "entry_id": taken.ID, "attempt_id": taken.AttemptID,
+				"bytes": len(taken.Text), "reason": "addressee no longer registered",
+			})
+			s.notifyFleetHealth(taken.ID, fmt.Sprintf("UNDELIVERED: queued message %s (%d bytes) for %q has no registered addressee. "+
+				"It waited %s and is being discarded with a terminal record; re-send to a live agent if still needed.",
+				taken.ID, len(taken.Text), b.Agent, taken.Age(now).Round(time.Second)))
+			continue
 		}
 		s.LogEvent("agent_send", "backlog_undelivered", map[string]any{
 			"agent": b.Agent, "entry_id": e.ID, "attempt_id": e.AttemptID,

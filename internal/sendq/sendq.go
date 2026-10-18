@@ -600,6 +600,54 @@ func (s *Store) ClaimFrontID(agent, id string) (Entry, bool, error) {
 	return s.claimFront(agent, id, true)
 }
 
+// TakeClaimableID archives and removes one claimable entry by id.
+// ClaimFrontID refuses the whole seat while this store owns an attempt, so
+// it cannot drop the message behind that attempt. This can. The attempt, a
+// held attempt, and an uncertain entry are not claimable and stay. A missing
+// id returns ok=false. A failed archive leaves the queue unchanged.
+func (s *Store) TakeClaimableID(agent, id string) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Entry{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	at := -1
+	for i, e := range f.Entries {
+		if e.ID == id {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return Entry{}, false, nil
+	}
+	e := f.Entries[at]
+	if !claimablePhase(EntryPhase(e, s.active[agent])) {
+		return Entry{}, false, nil
+	}
+	if err := s.archiveSupersession(Supersession{
+		Agent:   strings.TrimSpace(agent),
+		At:      time.Now().UTC(),
+		HoldID:  e.ID,
+		Removed: []Entry{e},
+	}); err != nil {
+		return Entry{}, false, err
+	}
+	f.Entries = append(f.Entries[:at:at], f.Entries[at+1:]...)
+	if err := s.save(f); err != nil {
+		return Entry{}, false, err
+	}
+	return e, true, nil
+}
+
 func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) {
 	if s == nil {
 		return Entry{}, false, fmt.Errorf("sendq: no store")
