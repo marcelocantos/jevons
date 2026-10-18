@@ -197,14 +197,14 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 			held++
 			continue
 		}
-		e, claimed, err := q.ClaimFrontID(b.Agent, id)
+		// ClaimID, not ClaimFrontID. The kept head is still the first
+		// claimable entry, and ClaimFrontID will not take the one behind it.
+		e, claimed, err := q.ClaimID(b.Agent, id)
 		if err != nil {
 			slog.Error("held backlog claim failed", "agent", b.Agent, "entry_id", id, "err", err)
 			break
 		}
 		if !claimed {
-			// ClaimFrontID takes only the first claimable id. A kept
-			// claimable head leaves this later entry in place.
 			continue
 		}
 		tagged := fmt.Sprintf(

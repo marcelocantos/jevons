@@ -626,10 +626,70 @@ func (s *Store) ClaimFront(agent string) (Entry, bool, error) {
 	return s.claimFront(agent, "", false)
 }
 
-// ClaimFrontID claims only an observed entry, so stale cleanup cannot consume
-// a replacement which arrived after its backlog snapshot.
+// ClaimFrontID claims only the first claimable entry, and only when that
+// entry is the observed id. A stale snapshot cannot consume a replacement
+// which arrived ahead of it. A claimable entry behind another claimable
+// entry is left for ClaimID.
 func (s *Store) ClaimFrontID(agent, id string) (Entry, bool, error) {
 	return s.claimFront(agent, id, true)
+}
+
+// ClaimID claims one claimable entry by id, including one behind a claimable
+// entry the caller is leaving in place. An attempt this store owns still
+// blocks the seat. A missing or non-claimable id returns ok=false and does
+// not change the queue.
+func (s *Store) ClaimID(agent, id string) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Entry{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil || len(f.Entries) == 0 {
+		return Entry{}, false, err
+	}
+	for _, e := range f.Entries {
+		if EntryPhase(e, s.active[agent]) == PhaseInFlight {
+			return e, false, nil
+		}
+	}
+	at := -1
+	for i, e := range f.Entries {
+		if e.ID == id {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return Entry{}, false, nil
+	}
+	e := f.Entries[at]
+	if !claimablePhase(EntryPhase(e, s.active[agent])) {
+		return e, false, nil
+	}
+	e, _, err = applyDelivery(e, stepClaim, "", NewID(), nil)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	f.Entries[at] = e
+	if s.active == nil {
+		s.active = map[string]string{}
+	}
+	prev, had := s.active[agent]
+	s.active[agent] = e.AttemptID
+	if err := s.save(f); err != nil {
+		if had {
+			s.active[agent] = prev
+		} else {
+			delete(s.active, agent)
+		}
+		return Entry{}, false, err
+	}
+	return e, true, nil
 }
 
 // TakeClaimableID archives and removes one claimable entry by id.

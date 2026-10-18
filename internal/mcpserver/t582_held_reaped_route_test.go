@@ -220,6 +220,54 @@ func TestT7665FinishedReapedRouteKeepsTheClaimablePayload(t *testing.T) {
 	}
 }
 
+// A kept claimable head is not a reason to leave the later message unrouted.
+// ClaimFrontID still refuses that later id. The route claims the later id
+// itself and leaves the head where it is.
+func TestT7665KeptClaimableHeadDoesNotBlockTheLaterRoute(t *testing.T) {
+	const agent, parent = "jv-t577-no-checkpoint-reap", "jevons-po"
+	const gate = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
+	const follow = "owner: the follow-up slice for this mission needs a seat"
+	f := t582Server(t, agent, parent, fleetlog.ReasonReapAchieve)
+	if _, _, err := f.s.sendQueue().Append(agent, gate, f.now.Add(-2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.s.sendQueue().Append(agent, follow, f.now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	backlogs, err := f.s.sendQueue().Backlogs()
+	if err != nil || len(backlogs) != 1 || len(backlogs[0].EntryIDs) != 2 {
+		t.Fatalf("backlog: %+v %v", backlogs, err)
+	}
+	later := backlogs[0].EntryIDs[1]
+	if _, claimed, err := f.s.sendQueue().ClaimFrontID(agent, later); err != nil || claimed {
+		t.Fatalf("ClaimFrontID took a later id: claimed=%v err=%v", claimed, err)
+	}
+	rec, ok := LookupReapedRecord(f.s.fleetIntent(), agent)
+	if !ok {
+		t.Fatal("reaped record missing")
+	}
+
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+
+	got := f.parent.delivered()
+	if len(got) != 1 || !strings.Contains(got[0], follow) || strings.Contains(got[0], "GATE make-test-go") {
+		t.Fatalf("parent received %#v; want only the later message", got)
+	}
+	rows, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(rows) != 2 ||
+		rows[0].Text != gate || rows[0].State != sendq.Pending ||
+		rows[1].Text != follow || rows[1].State != sendq.Uncertain {
+		t.Fatalf("route did not keep the head and hand off the later message: %+v %v", rows, err)
+	}
+	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
+		t.Fatal("route archived the kept head")
+	}
+	if got := heldReapedNotices(f.up.all()); got != 1 {
+		t.Fatalf("overseer notices = %d; want exactly 1\n%s", got, strings.Join(f.up.all(), "\n---\n"))
+	}
+}
+
 // A hold that is not gate feedback goes to the parent, tagged with the reaped
 // name — the message has a reader, and it is not the overseer.
 func TestT582NonGateHoldIsRoutedToTheParent(t *testing.T) {

@@ -37,6 +37,43 @@ func TestT7665AdmittedIsThePendingPhase(t *testing.T) {
 	}
 }
 
+func TestT7665ClaimIDTakesALaterClaimableAndLeavesTheHead(t *testing.T) {
+	q := NewStore(t.TempDir())
+	now := time.Now()
+	head, _, err := q.Append("a", "gate feedback stays", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail, _, err := q.Append("a", "follow-up", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, err := q.ClaimFrontID("a", tail.ID); err != nil || claimed {
+		t.Fatalf("ClaimFrontID took the later id: claimed=%v err=%v", claimed, err)
+	}
+	got, ok, err := q.ClaimID("a", tail.ID)
+	if err != nil || !ok || got.ID != tail.ID || got.State != Attempting {
+		t.Fatalf("ClaimID = %+v %v %v", got, ok, err)
+	}
+	left, err := q.Snapshot("a")
+	if err != nil || len(left) != 2 || left[0].ID != head.ID || left[0].State != Pending || left[1].ID != tail.ID || left[1].State != Attempting {
+		t.Fatalf("head was not left in place: %+v %v", left, err)
+	}
+	if _, ok, err := q.ClaimID("a", head.ID); err != nil || ok {
+		t.Fatalf("in-flight seat allowed another claim: ok=%v err=%v", ok, err)
+	}
+	if err := q.Resolve("a", got, Unverified, "parent accepted the call without a receipt"); err != nil {
+		t.Fatal(err)
+	}
+	left, err = q.Snapshot("a")
+	if err != nil || len(left) != 2 || left[0].State != Pending || left[0].Text != "gate feedback stays" || left[1].State != Uncertain {
+		t.Fatalf("after the later handoff: %+v %v", left, err)
+	}
+	if _, err := q.ReadSupersession(head.ID); err == nil {
+		t.Fatal("ClaimID archived the head")
+	}
+}
+
 func TestT7665NotSentReturnsTheSameEntryToTheFront(t *testing.T) {
 	q := NewStore(t.TempDir())
 	now := time.Now()
