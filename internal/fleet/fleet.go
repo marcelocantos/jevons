@@ -368,7 +368,8 @@ func CodexWorkSandbox(prov claudia.Provider, purpose, role string) string {
 	if strings.EqualFold(strings.TrimSpace(role), "auditor") {
 		return ""
 	}
-	if prov != claudia.ProviderCodex {
+	// openai-codex is the id Launch stores; the plan is still Codex.
+	if cli.PlanProvider(prov) != claudia.ProviderCodex {
 		return ""
 	}
 	if purpose != "" && purpose != claudia.PurposeWork {

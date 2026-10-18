@@ -110,7 +110,10 @@ func (s *Server) announceOwnerDelivered(text string, acked bool) {
 	s.mu.Unlock()
 	s.noteOwnerDeliveredID(id)
 	s.persistOwnerQueue()
-	if was && acked {
+	// acked is a settling receipt. A configured query that does not settle
+	// stays silent. With no query at all, the successful write of a message
+	// already announced undelivered is the delivery the cockpit flips.
+	if was && (acked || !s.receiptQueryConfigured()) {
 		s.broadcastDeliveryFrame("delivered", id, "message delivered to the overseer after retry", "")
 	}
 }

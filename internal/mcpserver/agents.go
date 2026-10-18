@@ -879,7 +879,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
 	}
-	def.Provider = claudia.Provider(pick.Provider)
+	// The registry stores the id Launch talks to. Catalog ranking above
+	// keeps pick.Provider, the plan id (claude, codex, grok).
+	def.Provider = cli.SubscriptionSeatProvider(claudia.Provider(pick.Provider))
 	routeNote := pick.Cite()
 
 	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.

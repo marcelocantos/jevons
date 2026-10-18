@@ -6,7 +6,6 @@ package mcpserver
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -120,9 +119,10 @@ func TestT412PreFixDerivationIsRedOnTheSameFixture(t *testing.T) {
 	}
 }
 
-// Clause 2: the ladder's actuator refuses a nudge into the void, so a tick
-// that touches N unmaterialized agents reports them as failures — never
-// actions=N errors=0. RePressure is the sink the tick's Actuate fires.
+// Clause 2: the ladder's actuator must not report success against a
+// stopped materialized seat whose conversation was never observed lost.
+// dead_unmaterialized is a live process over absent Claude evidence; this
+// fixture is not that. RePressure still has to fail, and the session stays.
 func TestT412LadderRefusesRePressureToDeadSeat(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
@@ -131,7 +131,8 @@ func TestT412LadderRefusesRePressureToDeadSeat(t *testing.T) {
 	}
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
-	deadSeatDef(t, reg, "jv-t374-script-abort-root", "0c8a2875-dead-seat")
+	const sessionID = "0c8a2875-dead-seat"
+	deadSeatDef(t, reg, "jv-t374-script-abort-root", sessionID)
 	s.observeRegistryLiveness()
 
 	sink := &rePressureSink{server: s}
@@ -140,8 +141,8 @@ func TestT412LadderRefusesRePressureToDeadSeat(t *testing.T) {
 		t.Fatal("repressure into an unmaterialized seat returned success: " +
 			"the actions=7 errors=0 lie of 2026-08-10")
 	}
-	if !strings.Contains(err.Error(), AgentStatusDeadUnmaterialized) {
-		t.Fatalf("repressure refusal does not name the state: %v", err)
+	if got := reg.Def("jv-t374-script-abort-root").SessionID; got != sessionID {
+		t.Fatalf("session changed from %s to %s", sessionID, got)
 	}
 }
 

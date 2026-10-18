@@ -10,13 +10,15 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// The persisted def is the transport that the real registry Launch uses;
-// startConfigFromDef alone is not an oracle for the running path.
+// The persisted def is the seat id the real registry Launch talks to.
+// A plan id (claude, codex, grok) is stored as that seat. An id that is
+// already a seat id stays one. startConfigFromDef alone is not an oracle
+// for the running path: the reloaded registry row is.
 func TestT1047FreshSubscriptionTransportParity(t *testing.T) {
 	for _, tc := range []struct{ plan, transport claudia.Provider }{
-		{claudia.ProviderClaude, claudia.ProviderClaude},
-		{claudia.ProviderCodex, claudia.ProviderCodex},
-		{claudia.ProviderGrok, claudia.ProviderGrok},
+		{claudia.ProviderClaude, "anthropic"},
+		{claudia.ProviderCodex, "openai-codex"},
+		{claudia.ProviderGrok, "xai-oauth"},
 		{claudia.ProviderCursor, claudia.ProviderCursor},
 		{"anthropic", "anthropic"},
 		{"openai-codex", "openai-codex"},

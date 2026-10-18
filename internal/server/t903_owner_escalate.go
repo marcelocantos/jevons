@@ -159,6 +159,17 @@ func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudiawire.Receip
 	s.mu.Unlock()
 }
 
+// receiptQueryConfigured reports whether a receipt read is installed.
+// A nil query does not dial.
+func (s *Server) receiptQueryConfigured() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.querySendReceipt != nil
+}
+
 // LookupSendReceipt reads one receipt through the installed query.
 // A nil query returns errSendReceiptQueryUnconfigured and does not dial.
 func (s *Server) LookupSendReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {

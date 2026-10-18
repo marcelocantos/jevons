@@ -232,14 +232,12 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 			name, fleetintent.Describe(dec.Blocking), dec.Reason)
 	}
 
-	// 🎯T409: lost-session recovery belongs on this path. It is what a
-	// parent report and the impatience ladder call, and they retry on a
-	// timer. registry.Launch latches a Cursor session/load refusal
-	// (RequireResume after a bounce, even when store.db was never written)
-	// and every later call returns that same error. SessionLost does not
-	// see a Cursor row, so the rotate-before-launch arm never engages.
-	// LaunchRecovering rotates once after that refusal and launches the
-	// fresh id; a store a leftover still holds is not rotated (🎯T541.1).
+	// 🎯T409: launch recovery belongs on this path. It is what a parent
+	// report and the impatience ladder call, and they retry on a timer.
+	// LaunchRecovering keeps a refused canonical resume on the same
+	// generation. Missing vendor files and provider refusal prose do not
+	// authorize a replacement mint. A store a leftover still holds is not
+	// rotated (🎯T541.1).
 	// 🎯T1066: a send to a stopped seat frontier-consume minted is not a
 	// licence to start it while the frontier is paused or once its target
 	// is achieved — the 2026-10-11 wake wave came in through sends exactly

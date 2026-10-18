@@ -30,8 +30,8 @@ const DefaultGrokModel = "grok-4.6"
 // agent is launched on provider with an empty pin. Empty when the
 // backend has no standing default we should invent.
 func DefaultModelForProvider(provider claudia.Provider) string {
-	switch claudia.Provider(strings.ToLower(strings.TrimSpace(string(provider)))) {
-	case claudia.ProviderGrok, "xai":
+	switch PlanProvider(provider) {
+	case claudia.ProviderGrok:
 		return DefaultGrokModel
 	default:
 		return ""

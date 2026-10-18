@@ -373,7 +373,7 @@ func (s *Server) watchAgentTurnForCancelable(name, payload string, window time.D
 			obs = proc
 			if def := s.registry.Def(name); def != nil && !providerKeepsClaudeTranscript(def.Provider) {
 				obs = liveStreamObserver{proc}
-				if def.Provider == claudia.ProviderCodex {
+				if claudia.PlanProvider(def.Provider) == claudia.ProviderCodex {
 					// 🎯T857: a codex app-server thread publishes a bare
 					// "system"/thread-start ack the instant the session
 					// object is created — before codex has accepted, let

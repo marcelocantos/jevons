@@ -166,10 +166,16 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 		if err != nil {
 			return AgentSendOutcome{}, err
 		}
-		// The notify seam accepted the text. This return does not read a
-		// receipt, so it does not report sent. The drain settles the owner
-		// flag from the receipt on its own.
-		bare.Status = "delivered_unconfirmed"
+		// A hermetic notify seam's nil error is the acceptance that send
+		// models, so that path reports sent. A live process write does not
+		// read a receipt here, so it does not report sent. The drain
+		// settles the owner flag from the receipt on its own.
+		s.mu.RLock()
+		hermeticNotify := s.notifySender != nil
+		s.mu.RUnlock()
+		if !hermeticNotify {
+			bare.Status = "delivered_unconfirmed"
+		}
 		return bare, nil
 	}
 

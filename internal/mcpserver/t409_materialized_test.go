@@ -76,8 +76,9 @@ func TestT409ClaudeTurnBeganWithoutJSONLDoesNotLie(t *testing.T) {
 	}
 }
 
-// Token-exhaustion scale shape: many Materialized+missing rows recover via
-// the shared helper rather than dead-ending on identical Launch errors.
+// Token-exhaustion scale shape: many Materialized rows with no JSONL are
+// not generation loss. The shared helper must leave every session in place
+// and return no error, rather than minting replacements from a missing file.
 func TestT409TokenExhaustionScaleRecoversAll(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
@@ -104,17 +105,17 @@ func TestT409TokenExhaustionScaleRecoversAll(t *testing.T) {
 	}
 
 	for _, se := range seats {
-		lost, ok, err := fleet.RehydrateLostSessionIn(reg, se.name)
-		if err != nil || !ok {
-			t.Fatalf("%s: recover ok=%v err=%v", se.name, ok, err)
+		_, ok, err := fleet.RehydrateLostSessionIn(reg, se.name)
+		if err != nil || ok {
+			t.Fatalf("%s: missing JSONL must not rotate: ok=%v err=%v", se.name, ok, err)
 		}
 		def := reg.Def(se.name)
-		if def.SessionID == se.lost || def.Materialized {
-			t.Fatalf("%s still phantom: sid=%s mat=%v (reported new=%s)",
-				se.name, def.SessionID, def.Materialized, lost.NewSession)
+		if def.SessionID != se.lost || !def.Materialized || def.Provider != claudia.ProviderClaude {
+			t.Fatalf("%s rotated: sid=%s mat=%v provider=%s",
+				se.name, def.SessionID, def.Materialized, def.Provider)
 		}
 		if observedResumeLost(def) {
-			t.Fatalf("%s still SessionLost after recover", se.name)
+			t.Fatalf("%s judged lost from a missing file", se.name)
 		}
 	}
 }
