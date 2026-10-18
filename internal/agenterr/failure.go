@@ -56,15 +56,21 @@ func (c Class) IsFailure() bool {
 	return c != ClassNone
 }
 
-// Classify maps an error to a Class. Nil and busy → ClassNone.
+// Classify maps an error to a Class. Nil and a typed busy cause → ClassNone.
+// A typed cause is never read from its rendered text. Text classification
+// remains only for an error that carries no cause.
 func Classify(err error) Class {
 	if err == nil {
 		return ClassNone
 	}
-	if IsPromptBusy(err) {
+	switch ProviderCause(err) {
+	case "":
+		return ClassifyText(err.Error())
+	case CauseTurnInFlight, CauseBusy, CauseProcessNotRunning, CauseSteerUnsupported, CauseTurnIdle:
 		return ClassNone
+	default:
+		return ClassUnknown
 	}
-	return ClassifyText(err.Error())
 }
 
 // ClassifyText maps provider/ACP failure text or owner-visible copy to Class.
@@ -77,11 +83,6 @@ func ClassifyText(msg string) Class {
 		return ClassNone
 	}
 	low := strings.ToLower(s)
-
-	// Busy is not a provider failure.
-	if isBusyMessage(low) {
-		return ClassNone
-	}
 
 	// 🎯T862.12: the retry budget itself ran out. Checked ahead of the
 	// backend/timeout markers because the underlying transient cause
@@ -281,13 +282,6 @@ func isBareInternalError(lower string) bool {
 		return true
 	}
 	return false
-}
-
-func isBusyMessage(lower string) bool {
-	return containsAny(lower,
-		"already in flight",
-		" is busy",
-	)
 }
 
 func containsAny(low string, needles ...string) bool {

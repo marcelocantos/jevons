@@ -10,14 +10,18 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
-// relayedSteerRefusal is the 2026-09-29 refusal, verbatim as the broker
-// relayed it to the daemon: a string, which errors.Is cannot match.
-var relayedSteerRefusal = errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)")
+// relayedSteerRefusal is the 2026-09-29 refusal. The sentence is unchanged.
+// The cause is what the ordinary path holds. A bare sentence is not.
+var relayedSteerRefusal = &t7664Cause{
+	cause: agenterr.CauseSteerUnsupported,
+	text:  "broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)",
+}
 
 // noSteerSeat is a busy Claude Code seat that cannot say what it can do: it
 // runs a ladder in principle, but a steer is refused the way the broker

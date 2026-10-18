@@ -10,7 +10,16 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
+
+type causeStub struct {
+	cause string
+	text  string
+}
+
+func (e causeStub) Error() string         { return e.text }
+func (e causeStub) ProviderCause() string { return e.cause }
 
 var ownerLadder = Ladder{
 	{Mode: claudia.DeliverySteer},
@@ -50,15 +59,18 @@ func TestT931NotStartedReadsTheRelayedRefusal(t *testing.T) {
 		start bool
 		steer bool
 	}{
-		{errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)"), true, true},
-		{errors.New("broker protocol: agent_failed: no turn in flight to steer"), true, false},
+		{causeStub{cause: agenterr.CauseSteerUnsupported, text: "broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)"}, true, true},
+		{causeStub{cause: agenterr.CauseTurnIdle, text: "broker protocol: agent_failed: no turn in flight to steer"}, true, false},
 		{fmt.Errorf("%w: claude provider: provider has no steer mechanism", claudia.ErrSteerUnsupported), true, true},
 		{claudia.ErrSteerUnsupported, true, true},
 		{claudia.ErrTurnIdle, true, false},
+		{errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)"), false, false},
+		{errors.New("broker protocol: agent_failed: no turn in flight to steer"), false, false},
 		{errors.New("broker protocol: agent_failed: claude process not running"), false, false},
 		{errors.New("broker protocol: agent_failed: provider response quoted: steer unsupported: x"), false, false},
 		{errors.New("steer unsupported: but not relayed and not the sentinel"), false, false},
 		{fmt.Errorf("relayed: %w", errors.New("broker protocol: agent_failed: steer unsupported")), false, false},
+		{errors.New("401 unauthorized"), false, false},
 		{nil, false, false},
 	} {
 		if got := NotStarted(c.err); got != c.start {

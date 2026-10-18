@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
@@ -36,13 +37,16 @@ func (f *modeErrSender) SendModeString(string, string) (string, string, error) {
 	return "", "", f.err
 }
 
-// 🎯T766.4 seam: the steer decision holds a typed or relayed
-// ErrSteerUnsupported. A rendered mention is a send failure. An idle turn
-// is not that refusal: the busy-phrase check may still hold it, and the
-// copy must not say claudia refused the mechanism. The call is
+// 🎯T766.4 seam: the steer decision holds a typed ErrSteerUnsupported,
+// including the broker relay of that cause. A rendered mention is a send
+// failure. An idle turn is CauseTurnIdle: it is held with the fold copy,
+// and that copy must not say claudia refused the mechanism. The call is
 // deliverToSenderMode, which is what an owner steer runs.
 func TestT766SteerRefusalIsTypedNotRendered(t *testing.T) {
-	relayed := errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)")
+	relayed := &t7664Cause{
+		cause: agenterr.CauseSteerUnsupported,
+		text:  "broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)",
+	}
 	quoted := errors.New("broker protocol: agent_failed: provider response quoted: steer unsupported: x")
 	bare := errors.New("steer unsupported: but not relayed and not the sentinel")
 	const (

@@ -4,11 +4,11 @@
 package mcpserver
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
@@ -91,7 +91,7 @@ func (r *retrySender) Send(text string) error {
 		return err
 	}
 	if r.fail != "" {
-		return fmt.Errorf("%s", r.fail)
+		return &t7664Cause{cause: agenterr.CauseTurnInFlight, text: r.fail}
 	}
 	return nil
 }

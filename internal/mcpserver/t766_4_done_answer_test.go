@@ -89,6 +89,25 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	}
 }
 
+// t7664ErrorEnglishAllowlist is the English classifiers the send/error
+// control path may call. Pinned at zero (🎯T766.4).
+var t7664ErrorEnglishAllowlist = []string{}
+
+func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	dir := filepath.Dir(file)
+	hits := englishSelectorsIn(t, filepath.Join(dir, "agent_send.go"), "queueSendDefinitelyNotSent")
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/busy.go"), "IsPromptBusy")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agenterr/cause.go"), "ProviderCause")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../escalate/escalate.go"), "SteerUnsupported", "NotStarted")...)
+	if len(hits) != len(t7664ErrorEnglishAllowlist) {
+		t.Fatalf("error-control English classifiers = %v, allowlist %v", hits, t7664ErrorEnglishAllowlist)
+	}
+}
+
 func englishSelectorsIn(t *testing.T, path string, names ...string) []string {
 	t.Helper()
 	fset := token.NewFileSet()

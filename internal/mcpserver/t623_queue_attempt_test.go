@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -13,10 +14,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
+
+type t7664Cause struct {
+	cause string
+	text  string
+}
+
+func (e *t7664Cause) Error() string         { return e.text }
+func (e *t7664Cause) ProviderCause() string { return e.cause }
 
 type queueAttemptSender struct{ send func(string) error }
 
@@ -73,19 +84,19 @@ func TestT623DrainErrorNeverLosesOrBlindlyRetriesPayload(t *testing.T) {
 		err   error
 		retry bool
 	}{
-		{"known busy refusal", errors.New("grok acp: prompt already in flight"), true},
-		{"process gone before write", errors.New("claude process not running"), true},
+		{"known busy refusal", fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight), true},
+		{"process gone before write", &t7664Cause{cause: agenterr.CauseProcessNotRunning, text: "claude process not running"}, true},
+		{"process gone rendered text", errors.New("claude process not running"), false},
 		{"EOF after write", io.EOF, false},
 		{"closed awaiting response", errors.New("codex app-server: closed waiting for turn/start"), false},
 		{"unrecognized provider error", errors.New("provider failed"), false},
 		{"quoted busy text", errors.New("provider response quoted: grok acp: prompt already in flight"), false},
-		// 🎯T766: the live specimen. Every error from a broker-hosted
-		// seat arrives wrapped like this, and on 2026-09-20 20:55 one of them
-		// resolved Uncertain and froze 104 messages behind it for seventeen
-		// hours, because the classifier compared the whole rendered string
-		// against four unwrapped literals. A wrapped refusal must be
-		// classified identically to the bare one it wraps.
-		{"broker-wrapped busy refusal", errors.New("broker protocol: agent_failed: cursor acp: prompt already in flight"), true},
+		{"rendered broker refusal", errors.New("broker protocol: agent_failed: cursor acp: prompt already in flight"), false},
+		{"unauthorized prose", errors.New("401 unauthorized"), false},
+		// A broker refusal and the same cause wrapped again classify the same.
+		// The rendered sentence is not the cause.
+		{"broker refusal cause", &t7664Cause{cause: agenterr.CauseTurnInFlight, text: "broker protocol: agent_failed: cursor acp: prompt already in flight"}, true},
+		{"wrapped broker refusal cause", fmt.Errorf("send: %w", &t7664Cause{cause: agenterr.CauseTurnInFlight, text: "broker protocol: agent_failed: grok acp: prompt already in flight"}), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -338,7 +349,7 @@ func TestT623BusyRefusalsRemainOrdinaryWaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
-		return queueAttemptSender{send: func(string) error { return errors.New("grok acp: prompt already in flight") }}, false, nil
+		return queueAttemptSender{send: func(string) error { return fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight) }}, false, nil
 	})
 	for range SendqPinFailureThreshold + 1 {
 		s.drainAgentSendQueue("a")
@@ -357,7 +368,7 @@ func TestT623BrokerWrappedBusyStaysPendingForRetry(t *testing.T) {
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return queueAttemptSender{send: func(string) error {
 			calls++
-			return errors.New("broker protocol: agent_failed: grok acp: prompt already in flight")
+			return &t7664Cause{cause: agenterr.CauseTurnInFlight, text: "broker protocol: agent_failed: grok acp: prompt already in flight"}
 		}}, false, nil
 	})
 	// PayloadQueued used to confirm this refusal. A transcript is not a receipt.

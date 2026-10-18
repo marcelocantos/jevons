@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
@@ -173,7 +175,7 @@ func (f *fakeSender) Send(text string) error {
 	}
 	if f.inFlight {
 		f.mu.Unlock()
-		return fmt.Errorf("grok acp: prompt already in flight")
+		return &t7664Cause{cause: agenterr.CauseTurnInFlight, text: "grok acp: prompt already in flight"}
 	}
 	f.sent = append(f.sent, text)
 	f.inFlight = true
@@ -196,18 +198,17 @@ func (f *fakeSender) Interrupt() error {
 }
 
 func TestIsPromptInFlight(t *testing.T) {
-	// Grok ACP (historical).
-	if !isPromptInFlight(fmt.Errorf("send to x: grok acp: prompt already in flight")) {
-		t.Fatal("expected Grok ACP match")
+	if !isPromptInFlight(fmt.Errorf("send to x: %w", claudia.ErrTurnInFlight)) {
+		t.Fatal("wrapped ErrTurnInFlight is busy")
 	}
-	// 🎯T214 J6: non-Grok busy shapes must queue, not hard-fail.
-	if !isPromptInFlight(fmt.Errorf("task worker-1 is busy")) {
-		t.Fatal("expected Task busy match")
+	if !isPromptInFlight(&t7664Cause{cause: agenterr.CauseBusy, text: "task worker-1 is busy"}) {
+		t.Fatal("typed task busy is busy")
 	}
-	// 🎯T766.4: this used an invented "prompt in progress" phrasing no
-	// backend produces; codex's own busy refusal is the real non-ACP shape.
-	if !isPromptInFlight(fmt.Errorf("codex app-server: turn already in flight")) {
-		t.Fatal("expected codex busy match")
+	if !isPromptInFlight(&t7664Cause{cause: agenterr.CauseTurnInFlight, text: "codex app-server: turn already in flight"}) {
+		t.Fatal("typed codex turn is busy")
+	}
+	if isPromptInFlight(fmt.Errorf("grok acp: prompt already in flight")) || isPromptInFlight(fmt.Errorf("codex app-server: turn already in flight")) || isPromptInFlight(errors.New("401 unauthorized")) {
+		t.Fatal("rendered text is not busy")
 	}
 	if isPromptInFlight(fmt.Errorf("other")) {
 		t.Fatal("unexpected match")
@@ -217,7 +218,8 @@ func TestIsPromptInFlight(t *testing.T) {
 	}
 }
 
-// 🎯T214 J6: deliverToSender queues on non-Grok busy strings (not only ACP).
+// 🎯T214 J6: deliverToSender queues a typed task-busy cause. The sentence
+// stays the historical text. The cause is what queues.
 func TestDeliverToSenderQueuesOnTaskBusy(t *testing.T) {
 	s := &Server{}
 	fs := &busyStringSender{alive: true, busyErr: "task abc is busy"}
@@ -244,7 +246,7 @@ func (f *busyStringSender) Alive() bool { return f.alive }
 
 func (f *busyStringSender) Send(text string) error {
 	if f.busyErr != "" {
-		return fmt.Errorf("%s", f.busyErr)
+		return &t7664Cause{cause: agenterr.CauseBusy, text: f.busyErr}
 	}
 	f.sent = append(f.sent, text)
 	return nil

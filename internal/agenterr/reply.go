@@ -38,9 +38,6 @@ func ClassifyReply(reply string) Class {
 	if isBareInternalError(low) {
 		return ClassBackendUnavailable
 	}
-	if isBusyMessage(low) {
-		return ClassNone
-	}
 	if len([]rune(s)) > maxReplyFailureChars || countNonEmptyLines(s) > maxReplyFailureLines {
 		return ClassNone
 	}

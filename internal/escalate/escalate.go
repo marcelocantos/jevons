@@ -15,10 +15,8 @@
 package escalate
 
 import (
-	"errors"
-	"strings"
-
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // capsReader is a seat that reports what it can do to an open turn. A
@@ -55,45 +53,21 @@ func Fit(ladder Ladder, caps claudia.TurnCaps) Ladder {
 	return fitted
 }
 
-// brokerAgentFailedPrefix is how claudia's broker renders a seat failure it
-// relays: ProtocolError.Error() with Code agent_failed and no Field. What
-// follows is the seat's own error text, untouched.
-const brokerAgentFailedPrefix = "broker protocol: agent_failed: "
-
-// SteerUnsupported reports claudia's typed steer refusal, including the form
-// the broker relays as text. ErrTurnIdle is a different fact: the seat had
-// no open turn. A string that merely mentions the sentinel is not a match.
+// SteerUnsupported reports claudia's typed steer refusal. The broker carries
+// the same cause on the relayed error. A rendered sentence is not a match.
 func SteerUnsupported(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, claudia.ErrSteerUnsupported) {
-		return true
-	}
-	msg, ok := strings.CutPrefix(err.Error(), brokerAgentFailedPrefix)
-	if !ok {
-		return false
-	}
-	unsupported := claudia.ErrSteerUnsupported.Error()
-	return msg == unsupported || strings.HasPrefix(msg, unsupported+": ")
+	return agenterr.ProviderCause(err) == agenterr.CauseSteerUnsupported
 }
 
 // NotStarted reports whether err says the ladder never reached the seat: the
 // seat cannot steer, or it had no turn open to steer into. The ordinary path
-// then holds or submits the message. A broker-held seat relays these as text,
-// so the relayed envelope is decoded and its message compared against the
-// sentinels' own wording; a string that merely mentions them is not a match.
-// The steer half is SteerUnsupported, so the two answers cannot drift.
+// then holds or submits the message. Both facts are causes. A sentence that
+// quotes them is not.
 func NotStarted(err error) bool {
-	if err == nil {
-		return false
-	}
-	if SteerUnsupported(err) || errors.Is(err, claudia.ErrTurnIdle) {
+	switch agenterr.ProviderCause(err) {
+	case agenterr.CauseSteerUnsupported, agenterr.CauseTurnIdle:
 		return true
-	}
-	msg, ok := strings.CutPrefix(err.Error(), brokerAgentFailedPrefix)
-	if !ok {
+	default:
 		return false
 	}
-	return msg == claudia.ErrTurnIdle.Error()
 }

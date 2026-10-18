@@ -8,6 +8,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
@@ -18,7 +20,7 @@ import (
 // interrupt false, so this is not the opening brief.
 func callerInterruptSend(t *testing.T, f *bindFixture, payload string, second error) (agentSendResult, error, int, string) {
 	t.Helper()
-	f.probe.fail = errors.New("prompt already in flight")
+	f.probe.fail = claudia.ErrTurnInFlight
 	var calls int
 	var transportID string
 	f.probe.check = func(text, id string) {

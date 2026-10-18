@@ -8,6 +8,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -136,7 +138,7 @@ func TestT1074InterruptBackstopSettlesFromReceipt(t *testing.T) {
 		f := newBindFixture(t, "T1074")
 		f.s.stateDir = t.TempDir()
 		const payload = "owner: interrupt payload seen is not acceptance"
-		f.probe.fail = errors.New("prompt already in flight")
+		f.probe.fail = claudia.ErrTurnInFlight
 		var calls int
 		var transportID string
 		f.probe.check = func(text, id string) {
@@ -179,7 +181,7 @@ func TestT1074InterruptBackstopSettlesFromReceipt(t *testing.T) {
 		receiptJournal(t, f.s, t.TempDir())
 		f.s.SetTurnWitness(transcriptMiss())
 		const payload = "owner: interrupt receipt settles without a transcript hit"
-		f.probe.fail = errors.New("prompt already in flight")
+		f.probe.fail = claudia.ErrTurnInFlight
 		var calls int
 		var transportID string
 		f.probe.check = func(text, id string) {

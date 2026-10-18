@@ -92,7 +92,13 @@ func TestClassifyErrorNilBusyAndInternal(t *testing.T) {
 		t.Fatal("nil err → none")
 	}
 	if agenterr.Classify(fmt.Errorf("grok acp: prompt already in flight")) != agenterr.ClassNone {
-		t.Fatal("busy must not be a failure class")
+		t.Fatal("rendered busy text is not a failure class")
+	}
+	if agenterr.Classify(causeStub{cause: agenterr.CauseTurnInFlight, text: "401 unauthorized"}) != agenterr.ClassNone {
+		t.Fatal("typed busy was classified from its text")
+	}
+	if agenterr.Classify(fmt.Errorf("401 unauthorized")) == agenterr.ClassNone {
+		t.Fatal("untyped 401 lost its residual class")
 	}
 	c := agenterr.Classify(fmt.Errorf("Internal error"))
 	if c != agenterr.ClassBackendUnavailable {

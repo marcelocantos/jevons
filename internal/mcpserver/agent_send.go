@@ -905,13 +905,14 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, interrupted, nil, mm)
 	}
 
-	// 🎯T657: claudia answered that this handle cannot steer. Not busy, not a
-	// transport failure — the honest answer is to hold the text. The decision
-	// is the typed sentinel (and the broker's relay of that sentinel), not a
-	// search of the rendered error. ErrTurnIdle is not this refusal.
+	// 🎯T657 / 🎯T766.4: a steer that never started is held. steer_unsupported
+	// means this handle cannot steer. turn_idle means nothing is open to
+	// fold into, so the copy stays the ordinary fold sentence. A rendered
+	// sentence is a send failure.
 	steerRefused := mode == delivery.ModeSteer && escalate.SteerUnsupported(err)
+	steerHeld := mode == delivery.ModeSteer && escalate.NotStarted(err)
 
-	if !isPromptInFlight(err) && !steerRefused {
+	if !isPromptInFlight(err) && !steerHeld {
 		// 🎯T429: ask the error the narrow question first — does it DISPROVE
 		// delivery? A transport that could not verify a submission has not
 		// observed the receiver at all, and returning its claim as a failure is
@@ -1296,61 +1297,14 @@ func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string
 // "not sent" duplicates a delivery, a false "uncertain" only stalls one
 // entry behind a pin the owner can see. So doubt resolves to uncertain.
 //
-// 🎯T766: this question has been answered two wrong ways in a row, and both
-// were failures of the same kind — classifying prose.
-//
-// It began as an exact-string switch over four provider literals. Every
-// error from a broker-hosted seat arrives wrapped as
-// "broker protocol: agent_failed: cursor acp: prompt already in flight",
-// which equals none of them, so a plain busy refusal was not "definitely not
-// sent": the entry resolved Unverified, the queue head became Uncertain, and
-// ClaimFront refuses a non-Pending head. One refusal froze a seat's entire
-// queue with no automatic exit — jevons-po sat at 87 stranded messages, the
-// oldest fourteen hours old, and the only exit anyone used was a reconcile
-// that discards the payload.
-//
-// Replacing it with agenterr.IsPromptBusy, which matches on substring,
-// bought the wrapping and sold the guarantee: "provider response quoted:
-// grok acp: prompt already in flight" is a report *about* a refusal, not a
-// refusal, and substring matching cannot tell those apart. Neither can any
-// other textual rule, because both strings are a prefix followed by the same
-// phrase. That is 🎯T623's own case, and it caught this.
-//
-// So this does not match text at all where it matters. It decodes the one
-// envelope whose format is defined — broker.ProtocolError.Error(), whose Msg
-// is the provider's own error verbatim — and compares that exactly. A quoted
-// report is not that envelope, so it stays uncertain; a wrapped refusal is,
-// so it retries.
-//
-// The real seam is claudia exporting a predicate over its typed
-// *broker.ProtocolError, which Go's internal/ rule puts out of reach from
-// here (🎯T767).
+// The cause is agenterr.ProviderCause. A rendered sentence, including
+// "401 unauthorized" and a report that quotes a refusal, is not a cause.
+// Turn-in-flight and process-not-running are the only definite non-sends.
 func queueSendDefinitelyNotSent(err error) bool {
-	if err == nil {
-		return false
-	}
-	switch providerRefusalText(err) {
-	case "claude process not running",
-		"grok acp: prompt already in flight", "cursor acp: prompt already in flight",
-		"codex app-server: turn already in flight":
+	switch agenterr.ProviderCause(err) {
+	case agenterr.CauseTurnInFlight, agenterr.CauseProcessNotRunning:
 		return true
 	default:
 		return false
 	}
-}
-
-// brokerAgentFailedPrefix is how claudia renders a provider failure the
-// daemon relayed: broker.ProtocolError.Error() with Code CodeAgentFailed and
-// no Field. Msg after it is the provider's error, untouched.
-const brokerAgentFailedPrefix = "broker protocol: agent_failed: "
-
-// providerRefusalText returns the provider's own error message, unwrapping a
-// relayed broker failure. Anything else is returned as it stands, so a string
-// that merely mentions a refusal is compared as the whole string it is.
-func providerRefusalText(err error) string {
-	msg := err.Error()
-	if rest, ok := strings.CutPrefix(msg, brokerAgentFailedPrefix); ok {
-		return rest
-	}
-	return msg
 }

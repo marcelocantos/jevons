@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
@@ -179,7 +180,7 @@ func assertQueuedPush(t *testing.T, res *mcp.CallToolResult, target string) {
 func TestT620EventPushQueuesWhenPromptInFlight(t *testing.T) {
 	p := &busyPushParticipants{
 		names: map[string]bool{"jevons-po": true},
-		err:   fmt.Errorf("grok acp: prompt already in flight"),
+		err:   fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight),
 	}
 	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
 	res := pushCall(t, s, "jevons-po", "worker-finished", "slice A landed")
@@ -204,7 +205,7 @@ func TestT620EventPushQueuesWhenPromptInFlight(t *testing.T) {
 func TestT620EventPushQueuesWhenFlightInFlightWithoutCallingDeliver(t *testing.T) {
 	p := &busyPushParticipants{
 		names: map[string]bool{"jevons-po": true},
-		err:   fmt.Errorf("grok acp: prompt already in flight"),
+		err:   fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight),
 	}
 	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
 	s.noteTurnInFlight("jevons-po")
@@ -222,7 +223,7 @@ func TestT620EventPushQueuesWhenFlightInFlightWithoutCallingDeliver(t *testing.T
 func TestT620EventPushQueuedDrainsOnTurnComplete(t *testing.T) {
 	p := &busyPushParticipants{
 		names: map[string]bool{"jevons-po": true},
-		err:   fmt.Errorf("grok acp: prompt already in flight"),
+		err:   fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight),
 	}
 	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
 	res := pushCall(t, s, "jevons-po", "worker-finished", "slice A landed")
