@@ -37,7 +37,7 @@ func TestNormalizeTargetGrepID(t *testing.T) {
 func TestFillIdleResidueEvidenceFromReportAndIntent(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	finish := "🎯T410 done. Commit abcdef1 lands the classifier.\n`go test ./internal/staffops/ -run T410` PASS."
+	finish := declaredFinishReport("T410", "🎯T410 done. Commit abcdef1 lands the classifier.\n`go test ./internal/staffops/ -run T410` PASS.")
 	if _, err := agentreport.Save(dir, "jv-fin", finish, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}

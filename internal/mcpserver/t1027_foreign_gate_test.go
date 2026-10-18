@@ -136,7 +136,7 @@ func TestT1027NotifyPathFlagsACrossRepoGateCitation(t *testing.T) {
 // reaped finished_work; the veto names the flag.
 func TestT1027ReapPathRefusesACrossRepoGateCitation(t *testing.T) {
 	arrai, jevons, rec := t1027Fixture(t)
-	report := "Implemented the fix. All tests pass. Done.\n\n    " + rec.Attestation() + "\n"
+	report := declaredFinishReport("T1027", "Implemented the fix. All tests pass. Done.\n\n    "+rec.Attestation()+"\n")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("control must look like finished_work before the T1027 veto")
 	}

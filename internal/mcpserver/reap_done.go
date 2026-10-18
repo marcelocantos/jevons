@@ -17,80 +17,50 @@ import (
 	"github.com/marcelocantos/jevons/internal/reapverify"
 )
 
-// LooksLikeFinishedWorkReport is true when a terminal agent response claims
-// completion. Used to auto-deregister finished work agents (🎯T165 / 🎯T195).
-//
-// 🎯T195: a completion claim alone is enough for reaping (hygiene) even when
-// the report omits oracle markers — imperfect "done" must not leave zombie
-// implementers. Overseer acceptance still requires oracle or accepted-risk
-// under 🎯T31.1; reaping ≠ accepting the work.
-// Mid-turn status with a SHA or "go test" alone does not match — a completion
-// claim is required so WIP progress does not reap the worker.
-//
-// 🎯T395: a completion word is necessary but not sufficient. A report that asks
-// the overseer for a decision, states it has not acted yet, or arrives visibly
-// cut is not a finish however confidently the rest of it reads — see
-// ClassifyReportAsk. The veto is one-way on purpose: reaping is destructive and
-// irreversible, keeping is cheap, so ambiguity resolves toward keeping.
-//
-// 🎯T445: the ask classes are phrase lists, so the completion word cannot be
-// the whole positive case either — an ask worded outside every list must not
-// fall through to a reap. The claim has to arrive in a positive finish shape
-// (a bare claim clause, or a claim with oracle evidence or accepted-risk) —
-// see hasFinishShape.
-func typedFinishReport(report string) bool {
-	m, err := envelope.Parse(report)
-	return m != nil && err == nil && m.Kind == envelope.KindFinishReport
-}
-
+// LooksLikeFinishedWorkReport is the supervision name of the one
+// is-this-report-done answer (🎯T766.4). The reap path calls
+// reportDoneForReap, which reads the same envelope.ClassifyDone. A report
+// that declares no envelope kind is unknown, not finished. Reaping is not
+// acceptance: a declared finish still owes oracle or accepted-risk under
+// 🎯T31.1, and that check is the envelope's own validation.
 func LooksLikeFinishedWorkReport(report string) bool {
-	// 🎯T938: a finish-report declaring status blocked is a seat waiting on
-	// someone else, not finished work. Reaping it would strand the mission
-	// the moment the blocker clears.
-	if reportOpenStatus(report) != "" {
-		return false
-	}
-	if m, err := envelope.Parse(report); m != nil && err == nil {
-		switch m.Kind {
-		case envelope.KindFinishReport:
-			// T784: a slice's oracle does not make the mission terminal.
-			return midWorkReportScope(report) == nil
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest, envelope.KindScoutReport, envelope.KindEscalation:
-			// 🎯T536.3: scout-report is a fog handoff, not product-done.
-			return false
-		}
-	}
-	s := strings.ToLower(strings.TrimSpace(report))
-	if s == "" {
-		return false
-	}
-	// 🎯T723 / 🎯T716: a reap needs an affirmative claim. Empty and the
-	// harness ack are classified no-claim; they never become a finish
-	// even if a later finish-shape mutation matches their vocabulary.
-	if ClassifyReportAsk(report) == AskNoClaim {
-		return false
-	}
-	if !hasFinishShape(s) {
-		return false
-	}
-	if hasForwardLookingPlan(report) {
-		return false
-	}
-	return !ReportAwaitsOverseer(report)
+	return envelope.IsDoneReport(report)
 }
 
-// finishedWorkReapReason classifies why a finished-work report is reaping.
-func finishedWorkReapReason(report string) string {
-	switch ClassifyCompletionReport(report) {
-	case CompletionAcceptedRisk:
-		return "accepted_risk"
-	case CompletionOracleEvidence:
-		return "finished_work"
-	case CompletionBareDone:
-		return "bare_done_completion" // 🎯T195 imperfect report
+// reportDoneForReap is the reap path's only answer to is-this-report-done
+// (🎯T766.4). Prose is not a fallback.
+func reportDoneForReap(report string) (bool, string) {
+	switch envelope.ClassifyDone(report) {
+	case envelope.DoneYes:
+		return true, ""
+	case envelope.DoneNo:
+		m, _ := envelope.Parse(report)
+		if m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressBlocked {
+			return false, IdleSkipBlockedOnOwner
+		}
+		if m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressInProgress {
+			return false, outstandingScopeReapReason([]OutstandingScope{{
+				Kind:   "in_progress",
+				Detail: "the worker explicitly reports status in-progress",
+			}})
+		}
+		return false, "not_finished_work_report"
 	default:
+		return false, "unknown_report"
+	}
+}
+
+// finishedWorkReapReason names why a typed finish-report is reaping.
+// The class comes from envelope slots. Payload prose is not consulted.
+func finishedWorkReapReason(report string) string {
+	m, err := envelope.Parse(report)
+	if m == nil || err != nil || m.Kind != envelope.KindFinishReport {
 		return "finished_work"
 	}
+	if m.HasRisk() {
+		return "accepted_risk"
+	}
+	return "finished_work"
 }
 
 // DurableFleetAgent reports whether name must not be auto-reaped on done
@@ -118,57 +88,20 @@ func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool 
 	return false
 }
 
-// ShouldAutoReapDoneWorkAgent decides whether a finished-work report should
-// stop+Remove the agent from the live fleet registry (🎯T165 / 🎯T195).
+// ShouldAutoReapDoneWorkAgent decides whether a declared finish-report
+// should stop+Remove the agent from the live fleet registry (🎯T165).
 // Refuses durable roles, unregistered names, agents with descendants, and
-// reports with no completion claim. Bare done (no oracle markers) still reaps
-// work leaves — imperfect implementer reports must not leave zombies (🎯T195).
+// reports that do not declare a valid finish-report (🎯T766.4). Unenveloped
+// prose is unknown, not finished.
 func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isOverseer func(string) bool) (bool, string) {
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
 	}
-	// A declared blocked goal is an external wait, even when the envelope
-	// still says in-progress. Preserve T784's outstanding-scope reason for
-	// ordinary in-progress reports; its parent notice depends on that reason.
-	if reportOpenStatus(report) == IdleActionPark {
-		return false, IdleSkipBlockedOnOwner
-	}
-	if scope := midWorkReportScope(report); scope != nil {
-		return false, outstandingScopeReapReason([]OutstandingScope{*scope})
-	}
-	// A partially invalid envelope may still carry a parsed status slot;
-	// never turn that field into a finished-work inference.
-	if reportOpenStatus(report) == IdleActionKeep {
-		return false, "in_progress_report"
-	}
-	// 🎯T395 before the generic no-claim case: a report that asks for a decision
-	// is the opposite of a completion claim, and the lifecycle log should say so
-	// rather than lumping it in with ordinary mid-turn chatter.
-	//
-	// Typed remaining-work reports were retained above; the generic ask
-	// classifier below remains the fallback for unenveloped prose.
-	if !typedFinishReport(report) {
-		if ask := ClassifyReportAsk(report); ask != AskNone {
-			// 🎯T723: no-claim (empty / bare ack) keeps the seat but is not
-			// an overseer ask. The lifecycle reason must not say awaits_overseer.
-			if ask == AskNoClaim {
-				return false, "no_work_claim"
-			}
-			return false, "awaits_overseer_" + ask.String()
-		}
-	}
-	// 🎯T985: a report with no Done. finish shape that says this seat has
-	// nothing left — its target already achieved by someone else, no
-	// further acceptance criteria open — is own-work-complete, and a seat
-	// with no more work is reaped, not left to idle until someone parks it.
-	// Every veto below (false-green, durable role, outstanding scope,
-	// descendants) still applies to it.
-	ownWorkComplete := false
-	if !LooksLikeFinishedWorkReport(report) {
-		if !LooksLikeOwnWorkCompleteReport(report) {
-			return false, "not_finished_work_report"
-		}
-		ownWorkComplete = true
+	// 🎯T766.4: the done answer is the declared envelope kind. Unenveloped
+	// prose is unknown, not a finish and not an ask-class reap.
+	done, reason := reportDoneForReap(report)
+	if !done {
+		return false, reason
 	}
 	// 🎯T470: a report the false-green check flagged is never auto-reaped as
 	// finished_work in the same pass — jv-t391 was flagged
@@ -204,9 +137,6 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	}
 	if len(reg.Descendants(name)) > 0 {
 		return false, "has_descendants"
-	}
-	if ownWorkComplete {
-		return true, ownWorkCompleteReapReason
 	}
 	return true, finishedWorkReapReason(report)
 }

@@ -181,13 +181,23 @@ func TestT716CheckpointScopeWinsOverFinishKind(t *testing.T) {
 		SilentLedger: envelope.SilentLedgerEmpty,
 		Payload:      payload,
 	})
-	if LooksLikeFinishedWorkReport(finish) {
-		t.Fatal("T784: checkpoint scope remains open even inside a finish-report")
+	// 🎯T766.4: checkpoint words in the payload do not outrank a valid
+	// finish-report. Remaining work is status in-progress.
+	if !LooksLikeFinishedWorkReport(finish) {
+		t.Fatal("a valid finish-report is done; payload checkpoint words are not a veto")
 	}
 	reg = t395Registry(t, "jv-t716-finish")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t716-finish", finish, nil)
-	if ok {
-		t.Fatalf("checkpoint envelope reaped (reason %s)", reason)
+	if !ok {
+		t.Fatalf("valid finish-report did not reap (reason %s)", reason)
+	}
+	open := envelope.Format(&envelope.Message{
+		Kind: envelope.KindFinishReport, Target: "T716", SHA: "abcdef0123456",
+		Status: envelope.ProgressInProgress, SilentLedger: envelope.SilentLedgerEmpty,
+		Payload: payload,
+	})
+	if LooksLikeFinishedWorkReport(open) {
+		t.Fatal("in-progress finish-report must not be done")
 	}
 }
 
@@ -198,11 +208,12 @@ func TestT716GenuineFinishStillReaps(t *testing.T) {
 	if ClassifyReportAsk(report) != AskNone {
 		t.Fatalf("genuine finish classified as ask: %s", ClassifyReportAsk(report))
 	}
-	if !LooksLikeFinishedWorkReport(report) {
-		t.Fatal("genuine finish must still reap")
+	done := declaredFinishReport("T716", report)
+	if !LooksLikeFinishedWorkReport(done) {
+		t.Fatal("declared finish-report must be done")
 	}
 	reg := t395Registry(t, "jv-t716-done")
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t716-done", report, nil)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t716-done", done, nil)
 	if !ok {
 		t.Fatalf("genuine finish did not reap (reason %s)", reason)
 	}
@@ -211,7 +222,7 @@ func TestT716GenuineFinishStillReaps(t *testing.T) {
 func TestT716BareNextTurnWithoutColonStillReaps(t *testing.T) {
 	// Control: "Done. Ready for the next turn." is not a remaining-work
 	// heading. The colon is what names what the worker will do next turn.
-	if !LooksLikeFinishedWorkReport(reapBareDoneNextTurn) {
-		t.Fatal("bare-done control fixture must still look like finished work")
+	if LooksLikeFinishedWorkReport(reapBareDoneNextTurn) {
+		t.Fatal("unenveloped bare-done must not look like finished work")
 	}
 }

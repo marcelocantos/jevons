@@ -51,8 +51,15 @@ type OutstandingScope struct {
 // regardless of where it runs.
 func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktree bool) []OutstandingScope {
 	var out []OutstandingScope
-	if scope := midWorkReportScope(report); scope != nil {
-		out = append(out, *scope)
+	// 🎯T766.4: payload English is not a reap veto. A valid finish-report
+	// is done even when the payload mentions a checkpoint. The status
+	// slot is recorded here so a parent notice can name an explicit
+	// in-progress report; ClassifyDone already refused it as done.
+	if m, err := envelope.Parse(report); err == nil && m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressInProgress {
+		out = append(out, OutstandingScope{
+			Kind:   "in_progress",
+			Detail: "the worker explicitly reports status in-progress",
+		})
 	}
 	if declaresBlockingGateWaitLocalized(report) {
 		out = append(out, OutstandingScope{
@@ -86,8 +93,9 @@ func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktr
 	return out
 }
 
-// midWorkReportScope gives declared remaining work precedence over the
-// envelope kind (T784). Evidence for a slice does not close its mission.
+// midWorkReportScope reads a finish-report's status slot and, historically,
+// payload English. The reap path does not call it (🎯T766.4): remaining
+// work is status in-progress, decided by ClassifyDone.
 func midWorkReportScope(report string) *OutstandingScope {
 	m, err := envelope.Parse(report)
 	if m == nil || err != nil || m.Kind != envelope.KindFinishReport {

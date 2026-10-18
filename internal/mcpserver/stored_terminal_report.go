@@ -65,7 +65,7 @@ func storedTerminalFromReport(reportText string) (hasStoredTerminal, looksFinish
 	if !IsStoredTerminalReportKind(reportText) {
 		return false, false
 	}
-	return true, LooksLikeFinishedWorkReport(reportText)
+	return true, envelope.IsDoneReport(reportText)
 }
 
 // workerIdleSuppressReason is the 🎯T761 gate for worker-idle emission: the

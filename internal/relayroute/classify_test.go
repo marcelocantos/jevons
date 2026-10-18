@@ -9,12 +9,20 @@ import (
 )
 
 func TestT3927OracleDoneGoesToOverseer(t *testing.T) {
-	got := Classify("🎯T392.7 done. GATE abc GREEN tree=clean@deadbeef. SHA deadbeef.")
-	if got != RouteOverseer {
-		t.Fatalf("oracle-done classified %s, want overseer", got)
+	raw := "```jevons\njevons: kind finish-report\njevons: target T392.7\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\njevons: silent-ledger none\n```\n\nWork landed."
+	if got := Classify(raw); got != RouteOverseer {
+		t.Fatalf("oracle finish-report classified %s, want overseer", got)
 	}
-	if Reason("GATE x GREEN, tests pass, done") != "oracle_done" {
-		t.Fatalf("reason %s", Reason("GATE x GREEN, tests pass, done"))
+	if Reason(raw) != "oracle_done" {
+		t.Fatalf("reason %s", Reason(raw))
+	}
+	// 🎯T766.4: the same words without a declared kind are not a done report.
+	prose := "🎯T392.7 done. GATE abc GREEN tree=clean@deadbeef. SHA deadbeef."
+	if got := Classify(prose); got != RouteParent {
+		t.Fatalf("unenveloped oracle prose classified %s, want parent", got)
+	}
+	if Reason("GATE x GREEN, tests pass, done") != "parent" {
+		t.Fatalf("unenveloped reason %s, want parent", Reason("GATE x GREEN, tests pass, done"))
 	}
 }
 
@@ -141,12 +149,17 @@ func TestT860AttributedOracleDoesNotSatisfyOracleHalf(t *testing.T) {
 	}
 }
 
-// 🎯T860: the genuine positive stays green — no disclaimer, no attribution.
+// 🎯T766.4: the genuine positive is a declared finish-report. The same
+// sentence with no envelope stays with the parent.
 func TestT860GenuineOracleDoneStillWorks(t *testing.T) {
-	if Classify("GATE x GREEN, tests pass, done") != RouteOverseer {
-		t.Fatal("genuine oracle-done must still route to overseer")
+	raw := "```jevons\njevons: kind finish-report\njevons: target T860\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\njevons: silent-ledger none\n```\n\nGATE x GREEN, tests pass, done."
+	if Classify(raw) != RouteOverseer {
+		t.Fatal("declared finish-report must route to overseer")
 	}
-	if Reason("GATE x GREEN, tests pass, done") != "oracle_done" {
-		t.Fatal("genuine oracle-done reason must still be oracle_done")
+	if Reason(raw) != "oracle_done" {
+		t.Fatal("declared finish-report reason must be oracle_done")
+	}
+	if Classify("GATE x GREEN, tests pass, done") != RouteParent {
+		t.Fatal("unenveloped oracle prose must stay with the parent")
 	}
 }

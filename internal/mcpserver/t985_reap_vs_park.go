@@ -136,35 +136,23 @@ var blockedOnExternalPhrases = []string{
 //
 // Quoted, cited, negated and fenced text is masked before the phrase scan
 // (🎯T750): "the PO said 'nothing left' but I disagree" is not a claim.
+// ClassifyWorkerIdleDisposition reads the same done answer as reap
+// (🎯T766.4). A declared finish-report reaps. A declared blocked
+// finish-report parks. Anything that declares nothing is keep: prose
+// "already achieved" and "blocked on" are not a disposition.
 func ClassifyWorkerIdleDisposition(text string) WorkerIdleAction {
-	if strings.TrimSpace(text) == "" {
+	switch envelope.ClassifyDone(text) {
+	case envelope.DoneYes:
+		return IdleActionReap
+	case envelope.DoneNo:
+		m, err := envelope.Parse(text)
+		if err == nil && m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressBlocked {
+			return IdleActionPark
+		}
+		return IdleActionKeep
+	default:
 		return IdleActionKeep
 	}
-	if action := reportOpenStatus(text); action != "" {
-		return action
-	}
-	lower := claimScanText(strings.ToLower(text))
-	// 🎯T1024: a seat narrating an active wait on an alive external process
-	// (a queued gate on the shared lease, a monitored background run) is
-	// blocked on something external that may resume — park, not reap —
-	// whatever completion word a sub-step earned. A decisive nothing-left
-	// phrase still outranks it, as it outranks every external-block shape.
-	if declaresUnresolvedExternalWait(text) && !containsAny(lower, nothingLeftPhrases) {
-		return IdleActionPark
-	}
-	if LooksLikeFinishedWorkReport(text) {
-		return IdleActionReap
-	}
-	if containsAny(lower, nothingLeftPhrases) {
-		return IdleActionReap
-	}
-	if containsAny(lower, blockedOnExternalPhrases) {
-		return IdleActionPark
-	}
-	if containsAny(lower, completionPhrases) {
-		return IdleActionReap
-	}
-	return IdleActionKeep
 }
 
 func containsAny(lower string, phrases []string) bool {

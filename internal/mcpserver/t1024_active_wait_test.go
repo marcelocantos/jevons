@@ -102,7 +102,7 @@ func TestT1024ActiveWaitIsNotAFinishReap(t *testing.T) {
 				t.Fatalf("scope = %+v, want one %s entry", scope, activeWaitScopeKind)
 			}
 			reg := t439Registry(t, tc.name)
-			ok, reason := ShouldAutoReapDoneWorkAgent(reg, tc.name, tc.report, nil)
+			ok, reason := ShouldAutoReapDoneWorkAgent(reg, tc.name, declaredFinishReport("T1024", tc.report), nil)
 			if ok {
 				t.Fatalf("reaped a worker actively waiting on an alive gate (reason %s)", reason)
 			}
@@ -123,8 +123,8 @@ func TestT1024ActiveWaitParksNotReaps(t *testing.T) {
 		{"verify-land", t1024VerifyLandReport(t)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ClassifyWorkerIdleDisposition(tc.report); got != IdleActionPark {
-				t.Fatalf("ClassifyWorkerIdleDisposition = %s, want %s", got, IdleActionPark)
+			if got := ClassifyWorkerIdleDisposition(tc.report); got != IdleActionKeep {
+				t.Fatalf("ClassifyWorkerIdleDisposition = %s, want %s", got, IdleActionKeep)
 			}
 			d := ClassifyStopDisposition("", "", tc.report, false, false, false)
 			if d.Action != IdleActionPark {
@@ -149,8 +149,8 @@ func TestT1024SentinelDoesNotReadActiveWaitAsFinished(t *testing.T) {
 			t.Errorf("%s: sentinel reads a mid-wait report as finished", tc.name)
 		}
 	}
-	if !storedReportLooksFinished(t972PlainFinishReport) {
-		t.Error("a genuine finish with no outstanding scope must still read as finished to the sentinel")
+	if !storedReportLooksFinished(declaredFinishReport("T972", t972PlainFinishReport)) {
+		t.Error("a declared finish with no outstanding scope must still read as finished to the sentinel")
 	}
 }
 
@@ -176,15 +176,16 @@ func TestT1024GenuineFinishStillReaps(t *testing.T) {
 			if span, ok := FindActiveExternalWait(tc.report); ok {
 				t.Fatalf("read a genuine finish as an active wait on %q", span)
 			}
-			if !LooksLikeFinishedWorkReport(tc.report) {
+			done := declaredFinishReport("T1024", tc.report)
+			if !LooksLikeFinishedWorkReport(done) {
 				t.Fatal("control fixture must read as a finish, or it tests nothing")
 			}
 			name := fmt.Sprintf("jv-t1024-control-%d", i) // never a -po suffix: that is a durable role
 			reg := t439Registry(t, name)
-			if ok, reason := ShouldAutoReapDoneWorkAgent(reg, name, tc.report, nil); !ok {
+			if ok, reason := ShouldAutoReapDoneWorkAgent(reg, name, done, nil); !ok {
 				t.Fatalf("a genuine finish must still reap (reason %s)", reason)
 			}
-			if got := ClassifyWorkerIdleDisposition(tc.report); got != IdleActionReap {
+			if got := ClassifyWorkerIdleDisposition(done); got != IdleActionReap {
 				t.Fatalf("ClassifyWorkerIdleDisposition = %s, want %s", got, IdleActionReap)
 			}
 		})
@@ -232,7 +233,7 @@ func TestT1024MaybeReapKeepsSeatAndNotifiesParent(t *testing.T) {
 		Detail: "transcript gained a user message carrying this payload",
 	}))
 
-	s.maybeReapDoneWorkAgent("arrai-t41-verify-land", t1024VerifyLandReport(t))
+	s.maybeReapDoneWorkAgent("arrai-t41-verify-land", declaredFinishReport("T1024", t1024VerifyLandReport(t)))
 
 	if reg.Def("arrai-t41-verify-land") == nil {
 		t.Fatal("a worker queued on the shared gate lease must not be reaped")

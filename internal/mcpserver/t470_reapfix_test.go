@@ -78,7 +78,7 @@ func TestT470IncidentReportsAreNotFinishedWork(t *testing.T) {
 func TestT470GenuineFinishStillReaps(t *testing.T) {
 	reg := regWithTree(t)
 	// No GATE id line: citing an invented id trips attestation_unknown (🎯T386).
-	report := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T470 PASS"
+	report := declaredFinishReport("T470", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T470 PASS")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("genuine finish not read as finished_work")
 	}
@@ -97,8 +97,9 @@ func TestT470FalseGreenFlaggedReportNeverReaps(t *testing.T) {
 	reg := regWithTree(t)
 	// Finish-shaped (bare claim + oracle markers) but cites a RED gate — the
 	// same contradiction that flagged jv-t391 attestation_not_green before it
-	// was reaped finished_work 447ms later.
-	report := "Done. Mission complete. SHA abcdef0123456. GATE go-test exit=1 RED id=2817ca36."
+	// was reaped finished_work 447ms later. The veto runs only after a
+	// declared finish (🎯T766.4).
+	report := declaredFinishReport("T470", "Done. Mission complete. SHA abcdef0123456. GATE go-test exit=1 RED id=2817ca36.")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("control must look like finished_work before the false-green veto")
 	}

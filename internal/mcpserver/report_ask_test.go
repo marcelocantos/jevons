@@ -41,9 +41,9 @@ func t395Fixtures(t *testing.T) []struct {
 	}{
 		{
 			name: "genuine finish with SHA and green oracle reaps",
-			report: "🎯T395 done. Commit 4f2b8c1 lands the classifier and its oracle.\n" +
-				"`go test ./internal/mcpserver/ -run T395` PASS (8 cases, RED against the\n" +
-				"pre-fix tree and against the never-reap mutation).",
+			report: declaredFinishReport("T395", "🎯T395 done. Commit 4f2b8c1 lands the classifier and its oracle.\n"+
+				"`go test ./internal/mcpserver/ -run T395` PASS (8 cases, RED against the\n"+
+				"pre-fix tree and against the never-reap mutation)."),
 			wantReap: true,
 			wantAsk:  AskNone,
 		},
@@ -62,8 +62,8 @@ func t395Fixtures(t *testing.T) []struct {
 			wantAsk:  AskExplicitIncomplete,
 		},
 		{
-			name:     "imperfect bare done still reaps (🎯T165 / 🎯T195)",
-			report:   "Done.",
+			name:     "declared finish-report reaps",
+			report:   declaredFinishReport("T395", "Done."),
 			wantReap: true,
 			wantAsk:  AskNone,
 		},
@@ -115,9 +115,9 @@ func TestT395ReapFixtures(t *testing.T) {
 			if ask := ClassifyReportAsk(tc.report); ask != tc.wantAsk {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", ask, tc.wantAsk)
 			}
-			if !tc.wantReap && ClassifyReportAsk(tc.report) != AskNone {
-				if !strings.HasPrefix(reason, "awaits_overseer_") {
-					t.Fatalf("non-reap reason = %q, want awaits_overseer_*", reason)
+			if !tc.wantReap {
+				if reason != "unknown_report" && reason != IdleSkipBlockedOnOwner && !strings.HasPrefix(reason, outstandingScopeReapReasonPrefix) {
+					t.Fatalf("non-reap reason = %q, want unknown_report", reason)
 				}
 			}
 		})
@@ -163,9 +163,13 @@ func TestT395AsksAreNotFinishes(t *testing.T) {
 			if got := ClassifyReportAsk(tc.report); got != tc.want {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", got, tc.want)
 			}
-			wantFinish := tc.want == AskNone && hasCompletionClaim(strings.ToLower(tc.report))
-			if got := LooksLikeFinishedWorkReport(tc.report); got != wantFinish {
-				t.Fatalf("LooksLikeFinishedWorkReport = %v, want %v", got, wantFinish)
+			if got := LooksLikeFinishedWorkReport(tc.report); got {
+				t.Fatal("unenveloped prose looked finished")
+			}
+			if tc.want == AskNone && hasCompletionClaim(strings.ToLower(tc.report)) {
+				if !LooksLikeFinishedWorkReport(declaredFinishReport("T395", tc.report)) {
+					t.Fatal("declared finish-report must be done")
+				}
 			}
 		})
 	}
@@ -269,7 +273,7 @@ func TestT395ReapStillFiresForOrdinaryFinishes(t *testing.T) {
 	}
 	for _, report := range finishes {
 		reg := t395Registry(t, "jv-worker")
-		ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", report, nil)
+		ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", declaredFinishReport("T395", report), nil)
 		if !ok {
 			t.Fatalf("report %q did not reap (%s) — 🎯T165 / 🎯T195 must survive the T395 narrowing", report, reason)
 		}

@@ -35,7 +35,7 @@ func TestT869OverseerSequenceDoesNotReprompt(t *testing.T) {
 	if shouldForwardAgentReply(reply, 0) {
 		t.Fatal("plan-only reply was forwarded to the parent")
 	}
-	const finish = "Done — implemented the hold. suite green."
+	finish := declaredFinishReport("T869", "Done — implemented the hold. suite green.")
 	if !shouldForwardAgentReply(finish, 0) {
 		t.Fatal("a finish with no tool call in the closing message must still be forwarded")
 	}

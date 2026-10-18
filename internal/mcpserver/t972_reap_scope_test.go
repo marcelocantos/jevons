@@ -156,7 +156,7 @@ func TestShouldAutoReapDoneWorkAgentKeepsSeatWithOwnedUncommittedScope(t *testin
 	}
 
 	reg := t972RegisterAt(t, "jv-t972-owned-scope", linked)
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t972-owned-scope", t972PlainFinishReport, nil)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t972-owned-scope", declaredFinishReport("T972", t972PlainFinishReport), nil)
 	if ok {
 		t.Fatalf("reaped a seat with uncommitted changes owned in its own worktree (reason %s)", reason)
 	}
@@ -176,7 +176,7 @@ func TestShouldAutoReapDoneWorkAgentIgnoresSharedCloneDirtyState(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := t972RegisterAt(t, "jv-t972-shared-dirty", shared)
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t972-shared-dirty", t972PlainFinishReport, nil)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t972-shared-dirty", declaredFinishReport("T972", t972PlainFinishReport), nil)
 	if !ok {
 		t.Fatalf("a seat whose workdir IS the shared clone must not be kept on the clone's own dirty state (reason %s)", reason)
 	}
@@ -185,7 +185,7 @@ func TestShouldAutoReapDoneWorkAgentIgnoresSharedCloneDirtyState(t *testing.T) {
 func TestShouldAutoReapDoneWorkAgentKeepsSeatWaitingOnGate(t *testing.T) {
 	name := "jv-t972-gate-wait"
 	reg := t395Registry(t, name)
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, name, t972PendingGateReport, nil)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, name, declaredFinishReport("T972", t972PendingGateReport), nil)
 	if ok {
 		t.Fatalf("reaped a seat that declared a blocking wait on a tracked gate (reason %s)", reason)
 	}
@@ -200,7 +200,7 @@ func TestShouldAutoReapDoneWorkAgentKeepsSeatWaitingOnGate(t *testing.T) {
 func TestShouldAutoReapDoneWorkAgentStillReapsGenuineFinish(t *testing.T) {
 	name := "jv-t972-genuine-finish"
 	reg := t395Registry(t, name)
-	ok, _ := ShouldAutoReapDoneWorkAgent(reg, name, t972PlainFinishReport, nil)
+	ok, _ := ShouldAutoReapDoneWorkAgent(reg, name, declaredFinishReport("T972", t972PlainFinishReport), nil)
 	if !ok {
 		t.Fatal("a genuine finish report with no outstanding scope must still reap")
 	}
@@ -237,7 +237,7 @@ func TestMaybeReapDoneWorkAgentKeepsSeatAndNotifiesParentOfOutstandingScope(t *t
 		Detail: "transcript gained a user message carrying this payload",
 	}))
 
-	s.maybeReapDoneWorkAgent("jv-t972-sink-gate-wait", t972PendingGateReport)
+	s.maybeReapDoneWorkAgent("jv-t972-sink-gate-wait", declaredFinishReport("T972", t972PendingGateReport))
 
 	if reg.Def("jv-t972-sink-gate-wait") == nil {
 		t.Fatal("a seat with a pending background gate must not be reaped")
@@ -272,7 +272,7 @@ func TestMaybeReapDoneWorkAgentGenuineFinishDoesNotNotifyParentOfScope(t *testin
 		t.Fatalf("a genuine finish must not notify the parent about outstanding scope, got send to %q", name)
 		return nil, false, nil
 	})
-	s.maybeReapDoneWorkAgent("jv-t972-clean-finish", t972PlainFinishReport)
+	s.maybeReapDoneWorkAgent("jv-t972-clean-finish", declaredFinishReport("T972", t972PlainFinishReport))
 	if reg.Def("jv-t972-clean-finish") != nil {
 		t.Fatal("genuine finish with no outstanding scope must reap")
 	}

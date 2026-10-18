@@ -133,13 +133,17 @@ func TestT446MetaMentionReportReaps(t *testing.T) {
 		d := ClassifyReportAskDetail(report)
 		t.Fatalf("ClassifyReportAsk = %s (marker %q, span %q), want %s", got, d.Marker, d.Span, AskNone)
 	}
-	if !LooksLikeFinishedWorkReport(report) {
-		t.Fatal("🎯T446: a finished report that names the ask vocabulary is a finished-work report")
+	if LooksLikeFinishedWorkReport(report) {
+		t.Fatal("unenveloped prose is not a finished-work report")
+	}
+	done := declaredFinishReport("T446", report)
+	if !LooksLikeFinishedWorkReport(done) {
+		t.Fatal("🎯T446: a declared finish that names the ask vocabulary is a finished-work report")
 	}
 
 	reg := t439Registry(t, "jv-t439-reap-request")
 	s := &Server{registry: reg}
-	s.maybeReapDoneWorkAgent("jv-t439-reap-request", report)
+	s.maybeReapDoneWorkAgent("jv-t439-reap-request", done)
 	if reg.Def("jv-t439-reap-request") != nil {
 		t.Fatal("🎯T165 / 🎯T195: the finished worker stayed in the fleet")
 	}
@@ -254,7 +258,11 @@ func TestT446MentionsAndRequests(t *testing.T) {
 				t.Fatalf("ClassifyReportAsk = %s (marker %q), want %s", got, d.Marker, tc.wantAsk)
 			}
 			reg := t439Registry(t, "jv-worker")
-			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", tc.report, nil)
+			reapReport := tc.report
+			if tc.wantReap {
+				reapReport = declaredFinishReport("T446", tc.report)
+			}
+			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", reapReport, nil)
 			if ok != tc.wantReap {
 				t.Fatalf("ShouldAutoReapDoneWorkAgent = %v (%s), want %v", ok, reason, tc.wantReap)
 			}

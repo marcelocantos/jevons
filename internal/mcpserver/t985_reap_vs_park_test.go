@@ -13,7 +13,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
-	"github.com/marcelocantos/jevons/internal/fleetlog"
 )
 
 // 🎯T985 specimens. The first three are the real park reasons jevons-po
@@ -47,16 +46,16 @@ func TestT985ClassifiesOwnWorkCompleteVsBlockedOnExternal(t *testing.T) {
 		text string
 		want WorkerIdleAction
 	}{
-		{"acceptance: already achieved by someone else, nothing left → reap", t985AlreadyAchievedReport, IdleActionReap},
-		{"acceptance: cross-repo remainder outside mandate → park", t985ExternalBlockReport, IdleActionPark},
+		{"acceptance: already achieved prose declares nothing → keep", t985AlreadyAchievedReport, IdleActionKeep},
+		{"acceptance: cross-repo remainder prose declares nothing → keep", t985ExternalBlockReport, IdleActionKeep},
 		{"acceptance: typed blocked finish-report (owner decision / design gate) → park", t985OwnerDecisionBlock, IdleActionPark},
-		{"real park reason jv-t947-plan-token → reap (nothing left outranks the claudia-side mention)", t985ParkReasonT947, IdleActionReap},
-		{"real park reason jv-t972-reap-scope → reap", t985ParkReasonT972, IdleActionReap},
-		{"real park reason jv-t765.1-worker → park", t985ParkReasonT765_1, IdleActionPark},
-		{"superseded → reap", "This worker is superseded; the leaf was folded into T990.", IdleActionReap},
-		{"genuine finish shape still reaps", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T985 PASS", IdleActionReap},
-		{"achieved but still blocked on the rest → park (the seat owns a remainder)", "jevons-side achieved; blocked on claudia-po for the rest of the slice.", IdleActionPark},
-		{"owner go-ahead wait → park", "Blocked on owner go-ahead for a daemon restart; the seat may resume later.", IdleActionPark},
+		{"real park reason jv-t947-plan-token prose → keep", t985ParkReasonT947, IdleActionKeep},
+		{"real park reason jv-t972-reap-scope prose → keep", t985ParkReasonT972, IdleActionKeep},
+		{"real park reason jv-t765.1-worker prose → keep", t985ParkReasonT765_1, IdleActionKeep},
+		{"superseded prose → keep", "This worker is superseded; the leaf was folded into T990.", IdleActionKeep},
+		{"declared finish-report reaps", declaredFinishReport("T985", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T985 PASS"), IdleActionReap},
+		{"achieved but still blocked prose → keep", "jevons-side achieved; blocked on claudia-po for the rest of the slice.", IdleActionKeep},
+		{"owner go-ahead prose → keep", "Blocked on owner go-ahead for a daemon restart; the seat may resume later.", IdleActionKeep},
 		{"quoted nothing-left is not a claim (🎯T750)", "The PO wrote \"nothing left for this worker\" but two criteria are still open; continuing.", IdleActionKeep},
 		{"mid-work is keep, not a guess", "still reading the tree", IdleActionKeep},
 		{"stand-down for the night is keep (parks on the stop path)", "parked for the night", IdleActionKeep},
@@ -114,11 +113,12 @@ func TestT985ShouldAutoReapOwnWorkCompleteNotExternalBlock(t *testing.T) {
 	t.Parallel()
 	reg := t439Registry(t, "jv-t985-reap")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t985-reap", t985AlreadyAchievedReport, nil)
-	if !ok {
-		t.Fatalf("already-achieved did not reap (%s)", reason)
+	if ok || reason != "unknown_report" {
+		t.Fatalf("unenveloped already-achieved reap=%v reason=%s, want unknown", ok, reason)
 	}
-	if reason != ownWorkCompleteReapReason {
-		t.Fatalf("reap reason = %q, want %s", reason, ownWorkCompleteReapReason)
+	ok, reason = ShouldAutoReapDoneWorkAgent(reg, "jv-t985-reap", declaredFinishReport("T985", t985AlreadyAchievedReport), nil)
+	if !ok || reason != "finished_work" {
+		t.Fatalf("declared finish reap=%v reason=%s", ok, reason)
 	}
 
 	reg2 := t439Registry(t, "jv-t985-park")
@@ -136,8 +136,12 @@ func TestT985MaybeReapOnAlreadyAchievedReport(t *testing.T) {
 	reg := t439Registry(t, "jv-t985-sink")
 	s := &Server{registry: reg}
 	s.maybeReapDoneWorkAgent("jv-t985-sink", t985AlreadyAchievedReport)
+	if reg.Def("jv-t985-sink") == nil {
+		t.Fatal("unenveloped already-achieved report was reaped")
+	}
+	s.maybeReapDoneWorkAgent("jv-t985-sink", declaredFinishReport("T985", t985AlreadyAchievedReport))
 	if reg.Def("jv-t985-sink") != nil {
-		t.Fatal("already-achieved terminal report must auto-reap (notify path)")
+		t.Fatal("declared finish-report stayed registered on the notify path")
 	}
 }
 
@@ -152,10 +156,11 @@ func TestT985ClassifyStopDisposition(t *testing.T) {
 		durable, hasDescendants, ownedUncommitted bool
 		want                                      WorkerIdleAction
 	}{
-		{name: "T947 reason → reap", reason: t985ParkReasonT947, want: IdleActionReap},
-		{name: "T972 reason → reap", reason: t985ParkReasonT972, want: IdleActionReap},
+		{name: "T947 prose reason → park", reason: t985ParkReasonT947, want: IdleActionPark},
+		{name: "T972 prose reason → park", reason: t985ParkReasonT972, want: IdleActionPark},
 		{name: "T765.1 reason → park", reason: t985ParkReasonT765_1, want: IdleActionPark},
-		{name: "silent reason, stored already-achieved → reap", stored: t985AlreadyAchievedReport, want: IdleActionReap},
+		{name: "silent reason, stored prose already-achieved → park", stored: t985AlreadyAchievedReport, want: IdleActionPark},
+		{name: "silent reason, stored declared finish → reap", stored: declaredFinishReport("T985", t985AlreadyAchievedReport), want: IdleActionReap},
 		{name: "silent reason, stored blocked → park", stored: t985OwnerDecisionBlock, want: IdleActionPark},
 		{name: "silent reason, nothing stored → park", want: IdleActionPark},
 		{name: "unclassifiable reason → park", reason: "parked for the night", want: IdleActionPark},
@@ -232,24 +237,25 @@ func t985Stop(t *testing.T, s *Server, args map[string]any) string {
 // and still parks a silent stop (the T165 residual).
 func TestT985StopReapsOwnWorkCompleteAndParksExternalBlock(t *testing.T) {
 	t.Parallel()
-	const t947, t972, t765, idle = "jv-t947-plan-token", "jv-t972-reap-scope", "jv-t765.1-worker", "jv-t985-idle"
-	s, reg := t985Hub(t, t947, t972, t765, idle)
+	const t947, t972, t765, idle, declared = "jv-t947-plan-token", "jv-t972-reap-scope", "jv-t765.1-worker", "jv-t985-idle", "jv-t985-declared"
+	s, reg := t985Hub(t, t947, t972, t765, idle, declared)
 
 	for name, reason := range map[string]string{t947: t985ParkReasonT947, t972: t985ParkReasonT972} {
 		out := t985Stop(t, s, map[string]any{"name": name, "actor": "jevons-po", "reason": reason})
-		if !strings.Contains(out, "reaped") || strings.Contains(out, "stopped and parked") {
-			t.Fatalf("%s: own-work-complete stop parked instead of reaping: %s", name, out)
+		if !strings.Contains(out, "stopped and parked") {
+			t.Fatalf("%s: unenveloped stop reason reaped: %s", name, out)
 		}
-		if reg.Def(name) != nil {
-			t.Fatalf("%s still registered after an own-work-complete stop — T985 wants reap", name)
+		if reg.Def(name) == nil {
+			t.Fatalf("%s was removed on an unenveloped stop reason", name)
 		}
-		rec, ok := s.fleetIntent().Agents[name]
-		if !ok || rec.State != fleetintent.Reaped {
-			t.Fatalf("%s intent = %+v, want reaped", name, rec)
+		if rec := s.fleetIntent().Agents[name]; rec.State != fleetintent.Parked {
+			t.Fatalf("%s intent = %+v, want parked", name, rec)
 		}
-		if rec.StopReason != fleetlog.ReasonReapStop {
-			t.Fatalf("%s stop_reason = %q, want %s", name, rec.StopReason, fleetlog.ReasonReapStop)
-		}
+	}
+
+	outDeclared := t985Stop(t, s, map[string]any{"name": declared, "actor": "jevons-po", "reason": declaredFinishReport("T985", "Done.")})
+	if !strings.Contains(outDeclared, "reaped") || reg.Def(declared) != nil {
+		t.Fatalf("declared finish-report stop did not reap: %s", outDeclared)
 	}
 
 	out := t985Stop(t, s, map[string]any{"name": t765, "actor": "jevons-po", "reason": t985ParkReasonT765_1})

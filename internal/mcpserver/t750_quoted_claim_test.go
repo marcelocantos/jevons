@@ -78,8 +78,11 @@ func TestT750WitnessTheUnmaskedScanMatched(t *testing.T) {
 }
 
 func TestT750AssertedMarkerStillReaps(t *testing.T) {
-	if !LooksLikeFinishedWorkReport(t745FinishedReport) {
-		t.Fatal("the 17:56:27 report ends on an unquoted GOAL_STATUS: complete in the worker's own voice; it must still reap")
+	if LooksLikeFinishedWorkReport(t745FinishedReport) {
+		t.Fatal("unenveloped GOAL_STATUS prose must not be done")
+	}
+	if !LooksLikeFinishedWorkReport(declaredFinishReport("T750", t745FinishedReport)) {
+		t.Fatal("the same report inside a finish-report must be done")
 	}
 	marker, span, _, ok := FindCompletionClaim(t745FinishedReport)
 	if !ok || marker != "complete" {
@@ -112,14 +115,16 @@ func TestT750CitedMarkerShapes(t *testing.T) {
 		{"declining to emit the marker",
 			"Residual: accepted risk on the live path. I am not emitting GOAL_STATUS: complete because the gate has not run.", false},
 
-		{"bare done still reaps",
-			"Done.", true},
-		{"claim with oracle evidence still reaps",
-			"The fix is committed as 477983f4. Oracle: go test ./internal/mcpserver -run T750, GREEN. Work is done.", true},
-		{"claim with accepted risk still reaps",
-			"Implementation complete. Residual: accepted risk — I did not reproduce the specimen on the running surface.", true},
-		{"claim on a line that also quotes one still reaps",
-			"The objective said: emit exactly GOAL_STATUS: complete.\n\nOracle: go test ./internal/mcpserver -run T750, GREEN. The work is done and committed as 477983f4.", true},
+		{"bare done declares nothing",
+			"Done.", false},
+		{"claim with oracle evidence declares nothing",
+			"The fix is committed as 477983f4. Oracle: go test ./internal/mcpserver -run T750, GREEN. Work is done.", false},
+		{"claim with accepted risk declares nothing",
+			"Implementation complete. Residual: accepted risk — I did not reproduce the specimen on the running surface.", false},
+		{"claim on a line that also quotes one declares nothing",
+			"The objective said: emit exactly GOAL_STATUS: complete.\n\nOracle: go test ./internal/mcpserver -run T750, GREEN. The work is done and committed as 477983f4.", false},
+		{"declared finish-report is done",
+			declaredFinishReport("T750", "Work is done."), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,8 +159,8 @@ func TestT750SeatIsKeptOnAQuotedMarker(t *testing.T) {
 	if ok {
 		t.Fatalf("a report whose only completion marker is negated reaps (reason %s)", reason)
 	}
-	if reason != "not_finished_work_report" {
-		t.Errorf("reason = %q, want not_finished_work_report", reason)
+	if reason != "unknown_report" {
+		t.Errorf("reason = %q, want unknown_report", reason)
 	}
 
 	s, reg2 := reapSinkServer(t, agent)
@@ -172,7 +177,7 @@ func TestT750SeatIsKeptOnAQuotedMarker(t *testing.T) {
 func TestT750SeatIsReapedOnItsOwnMarker(t *testing.T) {
 	const agent = "jv-t745-busy-pane"
 	reg := t395Registry(t, agent)
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, agent, t745FinishedReport, nil)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, agent, declaredFinishReport("T750", t745FinishedReport), nil)
 	if !ok {
 		t.Fatalf("the report that ends on an unquoted GOAL_STATUS: complete did not reap (reason %s)", reason)
 	}
@@ -180,7 +185,7 @@ func TestT750SeatIsReapedOnItsOwnMarker(t *testing.T) {
 	s, reg2 := reapSinkServer(t, agent)
 	s.agentEventSink(agent)(claudia.Event{
 		Type:       "assistant",
-		Text:       t745FinishedReport,
+		Text:       declaredFinishReport("T750", t745FinishedReport),
 		StopReason: "end_turn",
 	})
 	if reg2.Def(agent) != nil {

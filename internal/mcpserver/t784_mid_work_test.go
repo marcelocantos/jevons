@@ -18,9 +18,9 @@ func TestT784MidWorkOracleNeverReaps(t *testing.T) {
 		status        envelope.Progress
 	}{
 		{"status", "Done. Slice oracle passed.", envelope.ProgressInProgress},
-		{"next", "Slice oracle GREEN. Next step: implement the remaining call graph ratchet.", envelope.ProgressNone},
-		{"remaining", "Slice oracle GREEN. Remaining scope: migrate callers and run the clean gate.", envelope.ProgressLanded},
-		{"next_work", "Slice oracle GREEN. Next work: remove the adapter.", envelope.ProgressNone},
+		{"next", "Slice oracle GREEN. Next step: implement the remaining call graph ratchet.", envelope.ProgressInProgress},
+		{"remaining", "Slice oracle GREEN. Remaining scope: migrate callers and run the clean gate.", envelope.ProgressInProgress},
+		{"next_work", "Slice oracle GREEN. Next work: remove the adapter.", envelope.ProgressInProgress},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := envelope.Format(&envelope.Message{Kind: envelope.KindFinishReport, Target: "T765", SHA: "abcdef0123456", Status: tc.status, SilentLedger: envelope.SilentLedgerEmpty, Payload: tc.payload})

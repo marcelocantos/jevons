@@ -13,14 +13,10 @@ import (
 // It is an error string, not a terminal work report.
 const relayedSteerRefusalReport = "broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)"
 
-// t165ProseFinish is the standing 🎯T165 prose finish. A steer-refusal
-// mention must not strip this shape.
-const t165ProseFinish = "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS"
-
-// 🎯T766: a rendered steer refusal is not finished work. The prose finish
-// contracts stay: a bare claim, an oracle finish, and a finish that merely
-// quotes the refusal still reap. The reap path does not consult the steer
-// sentinel; these strings are not completion claims.
+// 🎯T766: a rendered steer refusal is not finished work. 🎯T766.4: neither
+// is unenveloped prose. A declared finish-report reaps, including one whose
+// payload quotes the refusal. The reap path does not consult the steer
+// sentinel.
 func TestT766SteerRefusalIsNotFinishedWork(t *testing.T) {
 	reg := regWithTree(t)
 	isWork := func(string) bool { return false }
@@ -40,18 +36,19 @@ func TestT766SteerRefusalIsNotFinishedWork(t *testing.T) {
 		}
 	}
 
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", t165ProseFinish, isWork)
-	if !ok {
-		t.Fatalf("prose oracle finish must still reap; reason %s", reason)
+	prose := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS"
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", prose, isWork)
+	if ok {
+		t.Fatalf("unenveloped prose reaped (%s)", reason)
 	}
-	if reason != "finished_work" {
-		t.Fatalf("prose oracle finish reason = %q", reason)
+	if reason != "unknown_report" {
+		t.Fatalf("unenveloped prose reason = %q, want unknown_report", reason)
 	}
 
-	quoted := t165ProseFinish + ". The log quoted \"steer unsupported\"."
+	quoted := declaredFinishReport("T165", prose+". The log quoted \"steer unsupported\".")
 	ok, reason = ShouldAutoReapDoneWorkAgent(reg, "worker", quoted, isWork)
 	if !ok {
-		t.Fatalf("quoting the refusal inside a prose finish must still reap; reason %s", reason)
+		t.Fatalf("quoting the refusal inside a declared finish-report must still reap; reason %s", reason)
 	}
 	if reason != "finished_work" {
 		t.Fatalf("quoted-mention finish reason = %q", reason)
@@ -61,9 +58,9 @@ func TestT766SteerRefusalIsNotFinishedWork(t *testing.T) {
 	}
 }
 
-// maybeReapDoneWorkAgent is the notify path. The classifier above is not
-// that caller. A rendered refusal stays registered. A prose finish, including
-// one that quotes the refusal, still leaves.
+// maybeReapDoneWorkAgent is the notify path. A rendered refusal stays
+// registered. Unenveloped prose stays. A declared finish-report, including
+// one whose payload quotes the refusal, leaves.
 func TestT766SteerRefusalStaysThroughNotifyReap(t *testing.T) {
 	refusals := []string{
 		relayedSteerRefusalReport,
@@ -79,19 +76,27 @@ func TestT766SteerRefusalStaysThroughNotifyReap(t *testing.T) {
 		}
 	}
 
+	prose := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS"
 	reg := t439Registry(t, "jv-t766-finish")
 	s := &Server{registry: reg}
-	s.maybeReapDoneWorkAgent("jv-t766-finish", t165ProseFinish)
-	if reg.Def("jv-t766-finish") != nil {
-		t.Fatal("prose finish stayed registered on the notify reap")
+	s.maybeReapDoneWorkAgent("jv-t766-finish", prose)
+	if reg.Def("jv-t766-finish") == nil {
+		t.Fatal("unenveloped prose was reaped on the notify path")
 	}
 
-	quoted := t165ProseFinish + ". The log quoted \"steer unsupported\"."
+	reg = t439Registry(t, "jv-t766-declared")
+	s = &Server{registry: reg}
+	s.maybeReapDoneWorkAgent("jv-t766-declared", declaredFinishReport("T165", prose))
+	if reg.Def("jv-t766-declared") != nil {
+		t.Fatal("declared finish-report stayed registered on the notify reap")
+	}
+
+	quoted := declaredFinishReport("T165", prose+". The log quoted \"steer unsupported\".")
 	reg = t439Registry(t, "jv-t766-quoted")
 	s = &Server{registry: reg}
 	s.maybeReapDoneWorkAgent("jv-t766-quoted", quoted)
 	if reg.Def("jv-t766-quoted") != nil {
-		t.Fatal("a prose finish that quotes the refusal stayed registered")
+		t.Fatal("a declared finish that quotes the refusal stayed registered")
 	}
 }
 

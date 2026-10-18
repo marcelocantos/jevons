@@ -96,8 +96,8 @@ func TestT439BriefRequestDoesNotReap(t *testing.T) {
 	if ok {
 		t.Fatalf("🎯T439: brief request reaped as %s", reason)
 	}
-	if reason != "awaits_overseer_request" {
-		t.Fatalf("non-reap reason = %q, want awaits_overseer_request", reason)
+	if reason != "unknown_report" {
+		t.Fatalf("non-reap reason = %q, want unknown_report", reason)
 	}
 	if reg.Def("jv-t435-reap-event") == nil {
 		t.Fatal("agent left the registry")
@@ -177,7 +177,11 @@ func TestT439RequestsAndFinishes(t *testing.T) {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", got, tc.wantAsk)
 			}
 			reg := t439Registry(t, "jv-worker")
-			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", tc.report, nil)
+			reapReport := tc.report
+			if tc.wantReap {
+				reapReport = declaredFinishReport("T439", tc.report)
+			}
+			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", reapReport, nil)
 			if ok != tc.wantReap {
 				t.Fatalf("ShouldAutoReapDoneWorkAgent = %v (%s), want %v", ok, reason, tc.wantReap)
 			}
@@ -276,44 +280,29 @@ func TestT439ReapLogRecordsDecisionAndSpan(t *testing.T) {
 	s := &Server{registry: reg}
 	s.maybeReapDoneWorkAgent("jv-t435-reap-event", report)
 
-	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
-	if got == nil {
-		t.Fatalf("no agent_lifecycle reap_done record; records=%d", len(cap.snapshot()))
-	}
-	if got["outcome"] != "skipped" {
-		t.Fatalf("outcome = %v, want skipped", got["outcome"])
-	}
-	if got["reason"] != "awaits_overseer_request" || got["ask_class"] != "request" {
-		t.Fatalf("reason=%v ask_class=%v", got["reason"], got["ask_class"])
-	}
-	if got["ask_marker"] != "did not receive" {
-		t.Fatalf("ask_marker = %v", got["ask_marker"])
-	}
-	span, _ := got["report_span"].(string)
-	if !strings.Contains(span, "did not receive your detailed brief") {
-		t.Fatalf("report_span = %q", span)
-	}
+	// 🎯T766.4: unenveloped prose is unknown, not an ask-class skip. The
+	// ask span stays on ClassifyReportAskDetail; the reap log fires for a
+	// declared finish.
 	if reg.Def("jv-t435-reap-event") == nil {
 		t.Fatal("agent was reaped")
 	}
+	if got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done"); got != nil && got["outcome"] == "ok" {
+		t.Fatalf("unenveloped request was reaped: %v", got)
+	}
 
-	// A genuine finish reaps, and its log line quotes the completion word.
 	cap.reset()
 	reg2 := t439Registry(t, "jv-worker")
 	s2 := &Server{registry: reg2}
-	s2.maybeReapDoneWorkAgent("jv-worker", "Done.")
+	s2.maybeReapDoneWorkAgent("jv-worker", declaredFinishReport("T439", "Done."))
 
-	got = findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
 	if got == nil {
-		t.Fatal("no reap_done record for a genuine finish")
+		t.Fatal("no reap_done record for a declared finish")
 	}
-	if got["outcome"] != "ok" || got["reason"] != "bare_done_completion" {
+	if got["outcome"] != "ok" || got["reason"] != "finished_work" {
 		t.Fatalf("outcome=%v reason=%v", got["outcome"], got["reason"])
 	}
-	if got["claim_marker"] != "done" || got["report_span"] != "Done." {
-		t.Fatalf("claim_marker=%v report_span=%v", got["claim_marker"], got["report_span"])
-	}
 	if reg2.Def("jv-worker") != nil {
-		t.Fatal("🎯T165 / 🎯T195: a genuine bare done must still leave the fleet")
+		t.Fatal("a declared finish must leave the fleet")
 	}
 }

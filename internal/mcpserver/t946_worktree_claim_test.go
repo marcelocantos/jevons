@@ -146,8 +146,8 @@ func TestT946IncidentReportsAreNotFinishedWork(t *testing.T) {
 			if ok {
 				t.Fatalf("incident report reaps (reason %s)", reason)
 			}
-			if !strings.HasPrefix(reason, "awaits_overseer_") {
-				t.Fatalf("reason = %q, want awaits_overseer_* (the phrase-level veto)", reason)
+			if reason != "unknown_report" {
+				t.Fatalf("reason = %q, want unknown_report", reason)
 			}
 		})
 	}
@@ -158,7 +158,7 @@ func TestT946IncidentReportsAreNotFinishedWork(t *testing.T) {
 // checkpoint, no closing question) must still not reap finished_work when it
 // cites no SHA/gate id and the worker's worktree is dirty.
 func TestT946UncitedOracleClaimOverDirtyWorktreeNeverReaps(t *testing.T) {
-	report := "Implemented the fix. All tests pass. Done."
+	report := declaredRiskFinishReport("T946", "Implemented the fix. All tests pass. Done.")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("control must look like finished_work before the T946 veto — otherwise this is not testing the new check")
 	}
@@ -182,7 +182,7 @@ func TestT946UncitedOracleClaimOverDirtyWorktreeNeverReaps(t *testing.T) {
 // veto is about contradicted evidence, not a blanket refusal of prose-only
 // oracle markers.
 func TestT946UncitedOracleClaimOverCleanWorktreeStillReaps(t *testing.T) {
-	report := "Implemented the fix. All tests pass. Done."
+	report := declaredRiskFinishReport("T946", "Implemented the fix. All tests pass. Done.")
 	reg := regWithWorkerDir(t, seededGitWorktree(t, dirtyNone))
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
 	if !ok {
@@ -194,10 +194,11 @@ func TestT946UncitedOracleClaimOverCleanWorktreeStillReaps(t *testing.T) {
 // artifact is exactly what the veto asks for, and shaevidence's own
 // extraction (🎯T427) recognises it.
 func TestT946CitedSHAOverDirtyWorktreeStillReaps(t *testing.T) {
-	report := "Implemented the fix. All tests pass. Done. Committed abcdef0123456."
-	if !reportCitesOracleID(report) {
+	prose := "Implemented the fix. All tests pass. Done. Committed abcdef0123456."
+	if !reportCitesOracleID(prose) {
 		t.Fatal("control must cite a SHA")
 	}
+	report := declaredFinishReport("T946", prose)
 	reg := regWithWorkerDir(t, seededGitWorktree(t, dirtyTrackedEdit))
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
 	if !ok {

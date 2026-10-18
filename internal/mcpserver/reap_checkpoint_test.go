@@ -110,7 +110,11 @@ func TestT497CheckpointDoesNotReap(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := t395Registry(t, "jv-t496-owner-reply")
-			got, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t496-owner-reply", tc.report, nil)
+			reapReport := tc.report
+			if tc.wantReap {
+				reapReport = declaredFinishReport("T497", tc.report)
+			}
+			got, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t496-owner-reply", reapReport, nil)
 			if got != tc.wantReap {
 				t.Fatalf("ShouldAutoReapDoneWorkAgent = %v (%s), want %v", got, reason, tc.wantReap)
 			}
@@ -146,9 +150,13 @@ func TestT497CheckpointShapes(t *testing.T) {
 			if got := ClassifyReportAsk(tc.report); got != tc.want {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", got, tc.want)
 			}
-			wantFinish := tc.want == AskNone && hasCompletionClaim(strings.ToLower(tc.report))
-			if got := LooksLikeFinishedWorkReport(tc.report); got != wantFinish {
-				t.Fatalf("LooksLikeFinishedWorkReport = %v, want %v", got, wantFinish)
+			if got := LooksLikeFinishedWorkReport(tc.report); got {
+				t.Fatalf("unenveloped prose looked finished")
+			}
+			if tc.want == AskNone && hasCompletionClaim(strings.ToLower(tc.report)) {
+				if !LooksLikeFinishedWorkReport(declaredFinishReport("T497", tc.report)) {
+					t.Fatal("declared finish-report must be done")
+				}
 			}
 		})
 	}
@@ -178,8 +186,8 @@ func TestT497ReasonNamesTheCheckpoint(t *testing.T) {
 	if ok {
 		t.Fatal("checkpoint report reaped")
 	}
-	if reason != "awaits_overseer_checkpoint" {
-		t.Fatalf("reason = %q, want awaits_overseer_checkpoint", reason)
+	if reason != "unknown_report" {
+		t.Fatalf("reason = %q, want unknown_report", reason)
 	}
 	f := ClassifyReportAskDetail(loadCheckpointReport(t))
 	if f.Marker != "checkpoint" || !strings.Contains(strings.ToLower(f.Span), "checkpoint") {
