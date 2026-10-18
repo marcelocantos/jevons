@@ -85,12 +85,19 @@ func TestT985BlockedEnvelopeOutranksNothingLeft(t *testing.T) {
 	}
 }
 
-// LooksLikeOwnWorkCompleteReport carries the finish-path vetoes: an ask, a
-// forward-looking plan or a report awaiting the overseer is not a reap.
+// LooksLikeOwnWorkCompleteReport is the idle reap answer. Unenveloped
+// "nothing left" prose is not finished. A declared finish-report is.
 func TestT985OwnWorkCompleteReportVetoes(t *testing.T) {
 	t.Parallel()
-	if !LooksLikeOwnWorkCompleteReport(t985AlreadyAchievedReport) {
-		t.Fatal("already-achieved report must read as own-work-complete")
+	if LooksLikeOwnWorkCompleteReport(t985AlreadyAchievedReport) {
+		t.Fatal("unenveloped already-achieved prose read as own-work-complete")
+	}
+	finish := declaredFinishReport("T985", t985AlreadyAchievedReport)
+	if !LooksLikeOwnWorkCompleteReport(finish) {
+		t.Fatal("declared finish-report is not own-work-complete")
+	}
+	if ClassifyWorkerIdleDisposition(finish) != IdleActionReap {
+		t.Fatal("own-work-complete diverged from the idle reap answer")
 	}
 	for name, text := range map[string]string{
 		"forward plan":     "Nothing left on the scout. Next step: wire the stop handler.",

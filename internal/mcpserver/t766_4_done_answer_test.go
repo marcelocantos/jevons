@@ -82,7 +82,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits := append(englishSelectorsIn(t, filepath.Join(dir, "reap_done.go"),
 		"LooksLikeFinishedWorkReport", "reportDoneForReap", "ShouldAutoReapDoneWorkAgent", "finishedWorkReapReason",
 		"maybeReapDoneWorkAgent", "reapDecisionFields"),
-		englishSelectorsIn(t, filepath.Join(dir, "t985_reap_vs_park.go"), "ClassifyWorkerIdleDisposition")...)
+		englishSelectorsIn(t, filepath.Join(dir, "t985_reap_vs_park.go"), "ClassifyWorkerIdleDisposition", "LooksLikeOwnWorkCompleteReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "stored_terminal_report.go"), "storedTerminalFromReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
