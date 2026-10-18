@@ -197,7 +197,7 @@ func (s *Server) describeSendqForReconcile(name string, now time.Time) string {
 	}
 	for _, e := range entries {
 		fmt.Fprintf(&b, "  %s  %-10s  %5d bytes  waiting %s\n",
-			e.ID, stateWord(e.State), len(e.Text), e.Age(now).Round(time.Second))
+			e.ID, reconcileStateWord(e), len(e.Text), e.Age(now).Round(time.Second))
 		if e.AttemptID != "" {
 			fmt.Fprintf(&b, "      attempt %s%s\n", e.AttemptID, detailSuffix(e.Detail))
 		}
@@ -253,13 +253,13 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 		heldNote = fmt.Sprintf(
 			"Entry %s has an unresolved %s attempt %s and stays held — it is never resent, and the messages behind it drain past it (🎯T766.5).\n"+
 				"Settle it with: jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%[1]s attempt_id=%[3]s actor=… evidence=…\n",
-			e.ID, e.State, e.AttemptID, name)
+			e.ID, pinAttemptKind(e.State), e.AttemptID, name)
 	}
 	if _, live := s.liveSender(name); !live {
 		return fmt.Sprintf(
 			"%q holds %d pending message(s), oldest waiting %s, but has no live process to deliver to.\n"+
 				"Give it one and the queue drains at the first turn boundary: jevons_agent_start name=%[1]q (no prompt).\n",
-			name, len(before), before[0].Age(now).Round(time.Second))
+			name, len(before), before[0].Age(now).Round(time.Second)) + heldNote
 	}
 
 	s.drainAgentSendQueue(name)
@@ -291,6 +291,16 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	return b.String()
 }
 
+// pinAttemptKind is the word in an unresolved-attempt notice. The empty
+// on-disk state is still Pending, and a leftover that pairs it with an
+// attempt id is a held attempt.
+func pinAttemptKind(st sendq.DeliveryState) string {
+	if st == sendq.Pending {
+		return "held"
+	}
+	return string(st)
+}
+
 // stateWord names a delivery state for an operator. Pending's empty string is
 // the legacy representation and reads as a missing column in a listing.
 func stateWord(st sendq.DeliveryState) string {
@@ -298,6 +308,15 @@ func stateWord(st sendq.DeliveryState) string {
 		return "pending"
 	}
 	return string(st)
+}
+
+// reconcileStateWord is the show-listing column. An omitted state beside an
+// attempt id is not an admitted pending message.
+func reconcileStateWord(e sendq.Entry) string {
+	if e.State == sendq.Pending && sendq.EntryPhase(e, "") == sendq.PhaseHeldAttempt {
+		return "held attempt"
+	}
+	return stateWord(e.State)
 }
 
 func detailSuffix(detail string) string {

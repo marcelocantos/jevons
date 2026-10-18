@@ -565,14 +565,16 @@ func FormatQueueStoppage(name string, st seatstate.State, now time.Time) string 
 // FormatSendqPinLine is the operator-facing account of a pinned seat, shared
 // by agent_list and the fleet-health notice so the two never drift.
 func FormatSendqPinLine(name string, pin SendqPin) string {
-	if pin.State != sendq.Pending {
+	// An empty on-disk state that still carries an attempt id is a held
+	// attempt, not an admitted message. A start does not claim it.
+	if pin.State != sendq.Pending || pin.AttemptID != "" {
 		return fmt.Sprintf("PINNED %s: sendq message %s has an unresolved %s attempt %s (%s). "+
 			"The payload remains held. A start will not retry it; messages behind it keep delivering past it (🎯T766.5). "+
 			"Reconcile it with jevons_sendq_reconcile name=%[1]q (call it with only name= to see the queue, then "+
 			"action=confirmed|requeue|drop entry_id=%[2]q attempt_id=%[4]q actor=… evidence=…) — 🎯T726. "+
 			"Never edit ~/.jevons/sendq/*.json while the daemon is running. "+
 			"An explicit overseer kill discards the held obligation without claiming non-delivery.",
-			name, pin.EntryID, pin.State, pin.AttemptID, pin.Reason)
+			name, pin.EntryID, pinAttemptKind(pin.State), pin.AttemptID, pin.Reason)
 	}
 	fails := ""
 	if pin.Fails > 0 {
@@ -727,7 +729,7 @@ func FormatReapedUncertainHoldLine(name string, pin SendqPin, rec fleetintent.Re
 			"The seat is %s — a recoverable closed address, not a live PINNED seat. "+
 			"The payload remains held; a start will not retry it. jevons_agent_kill is a no-op here (🎯T401/🎯T686). "+
 			"Resolve the attempt with jevons_sendq_reconcile name=%[1]q entry_id=%[2]q attempt_id=%[4]q (🎯T726).",
-		name, pin.EntryID, pin.State, pin.AttemptID, pin.Reason, closed)
+		name, pin.EntryID, pinAttemptKind(pin.State), pin.AttemptID, pin.Reason, closed)
 }
 
 // noticeUncertainAttempt delivers one fleet-health line per unresolved
