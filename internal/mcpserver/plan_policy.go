@@ -126,17 +126,10 @@ func (s *Server) planSwitch(a *planusage.PlanAction) {
 	slog.Info("plan policy switched", "name", a.Name, "from", a.From, "to", a.To, "model", sw.Model, "live", sw.Live)
 }
 
-// turnInFlight reports a switch refused because the seat's turn is still
-// running.
+// turnInFlight reports a switch refused because the error's typed cause is
+// a turn still running. A sentence that quotes that fact is not the cause.
 func turnInFlight(err error) bool {
-	if err == nil {
-		return false
-	}
-	if isPromptInFlight(err) {
-		return true
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "turn is in flight") || strings.Contains(msg, "turn in flight") || strings.Contains(msg, "a turn is running")
+	return isPromptInFlight(err)
 }
 
 func (s *Server) rememberPlanResults(actions []planusage.PlanAction) {

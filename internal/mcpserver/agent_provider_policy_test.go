@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -134,37 +136,55 @@ func TestT691HostInterruptPolicyDefersBusySeatUnlessOptedIn(t *testing.T) {
 }
 
 func TestT691BrokerBusyRaceIsHostDeferralNotSwitchFailure(t *testing.T) {
-	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reg.Register(claudia.AgentDef{
-		Name: "worker", SessionID: "source", Provider: claudia.ProviderClaude,
-		Purpose: claudia.PurposeWork,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	s := New(t.TempDir(), nil, nil)
-	s.SetRegistry(reg)
-	sw := &fakeSwitcher{err: fmt.Errorf("switch worker: a turn is in flight; wait for it, or force to interrupt it")}
-	s.SetModelSwitcher(sw)
-	now := time.Now()
-	s.SetPlanUsageSource(func() planusage.Snapshot {
-		return planusage.Snapshot{At: now, Backends: []planusage.Backend{
-			t39015Weekly("claude", 20, 80, now),
-			t39015Weekly("codex", 80, 20, now),
-		}}
-	})
-	acts := s.SweepPlanPolicy()
-	if len(acts) != 1 || acts[0].Author != claudia.DecisionAuthor ||
-		acts[0].Execution != "deferred" || !strings.Contains(acts[0].Failure, "forbids interruption") {
-		t.Fatalf("broker busy race was not a host deferral: %+v", acts)
-	}
-	if switches, _ := sw.calls(); len(switches) != 1 || strings.HasSuffix(switches[0], " force") {
-		t.Fatalf("the switch was forced without host consent: %v", switches)
-	}
-	if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Execution != "deferred" {
-		t.Fatalf("decision surface lost busy deferral: %+v", got)
+	sentence := errors.New("switch worker: a turn is in flight; wait for it, or force to interrupt it")
+	for _, tc := range []struct {
+		name      string
+		err       error
+		execution string
+	}{
+		{"quoted sentence", sentence, "failed"},
+		{"typed cause", agenterr.WithCause(agenterr.CauseTurnInFlight, sentence), "deferred"},
+		{"published sentinel", fmt.Errorf("switch worker: %w", claudia.ErrTurnInFlight), "deferred"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reg.Register(claudia.AgentDef{
+				Name: "worker", SessionID: "source", Provider: claudia.ProviderClaude,
+				Purpose: claudia.PurposeWork,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			s := New(t.TempDir(), nil, nil)
+			s.SetRegistry(reg)
+			sw := &fakeSwitcher{err: tc.err}
+			s.SetModelSwitcher(sw)
+			now := time.Now()
+			s.SetPlanUsageSource(func() planusage.Snapshot {
+				return planusage.Snapshot{At: now, Backends: []planusage.Backend{
+					t39015Weekly("claude", 20, 80, now),
+					t39015Weekly("codex", 80, 20, now),
+				}}
+			})
+			acts := s.SweepPlanPolicy()
+			if len(acts) != 1 || acts[0].Author != claudia.DecisionAuthor || acts[0].Execution != tc.execution {
+				t.Fatalf("sweep = %+v, want execution %s", acts, tc.execution)
+			}
+			if tc.execution == "deferred" && !strings.Contains(acts[0].Failure, "forbids interruption") {
+				t.Fatalf("typed busy race was not a host deferral: %+v", acts)
+			}
+			if tc.execution == "failed" && (acts[0].Failure != tc.err.Error() || acts[0].FailureCause != "") {
+				t.Fatalf("quoted sentence became a cause: %+v", acts)
+			}
+			if switches, _ := sw.calls(); len(switches) != 1 || strings.HasSuffix(switches[0], " force") {
+				t.Fatalf("the switch was forced without host consent: %v", switches)
+			}
+			if got := s.PlanPolicyDecisions(); len(got) != 1 || got[0].Execution != tc.execution {
+				t.Fatalf("decision surface = %+v, want execution %s", got, tc.execution)
+			}
+		})
 	}
 }
 
