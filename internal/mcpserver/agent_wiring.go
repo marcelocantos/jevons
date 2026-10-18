@@ -393,7 +393,7 @@ func (s *Server) sweepAgentWiring(overseerName string) int {
 		// already-running agent has found an agent the daemon could not see
 		// turn boundaries for, and the queue depth is how much of the fleet's
 		// traffic was stranded behind that blindness.
-		if pending := s.pendingAgentSends(name); pending > 0 {
+		if pending := s.heldAgentSends(name); pending > 0 {
 			slog.Warn("🎯T426 agent event stream was dark — messages held across an unobserved turn boundary",
 				"agent", name, "queued", pending,
 				"detail", "re-attached; the queue drains at this agent's next observed terminal stop")

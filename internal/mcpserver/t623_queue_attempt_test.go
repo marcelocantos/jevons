@@ -245,8 +245,8 @@ func TestT623TerminalDuringWitnessPreservesNextDrain(t *testing.T) {
 		t.Fatalf("after the racing drain: %+v %v", mid, err)
 	}
 	s.drainAgentSendQueue("a")
-	if len(got) != 2 || got[1] != "second" || observedPendingSends(s, "a") != 2 {
-		t.Fatalf("pending behind a held handoff was not offered: sent=%v depth=%d", got, observedPendingSends(s, "a"))
+	if len(got) != 2 || got[1] != "second" || observedQueueDepth(s, "a") != 2 || observedPendingSends(s, "a") != 0 {
+		t.Fatalf("pending behind a held handoff was not offered: sent=%v pending=%d depth=%d", got, observedPendingSends(s, "a"), observedQueueDepth(s, "a"))
 	}
 	left, _ := s.sendQueue().Snapshot("a")
 	if len(left) != 2 || left[0].State != sendq.Uncertain || left[1].State != sendq.Uncertain {

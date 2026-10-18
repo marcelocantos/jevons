@@ -101,8 +101,8 @@ func TestT931PlainSendToBusyNonSteerableSeatQueuesThenDelivers(t *testing.T) {
 			if len(b.sent) != 1 || b.sent[0] != payload {
 				t.Fatalf("after the terminal stop the seat received %q, want [%q]", b.sent, payload)
 			}
-			if n := observedPendingSends(s, worker); n != 1 {
-				t.Fatalf("pending=%d after drain, want 1 (no receipt)", n)
+			if pending, held := observedPendingSends(s, worker), observedQueueDepth(s, worker); pending != 0 || held != 1 {
+				t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
 			}
 			left, err := s.sendQueue().Snapshot(worker)
 			if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain || !strings.Contains(left[0].Detail, "no receipt") {

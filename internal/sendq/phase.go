@@ -12,7 +12,7 @@ import "fmt"
 // JSON fields:
 //
 //  1. admitted — State is empty, there is no digest, and no operator has
-//     requeued it. This is the only meaning of pending: accepted, not claimed.
+//     requeued it. Accepted, and not claimed.
 //  2. digest — State is empty and Members is set. One admitted obligation.
 //     The originals live in the digest archive.
 //  3. in_flight — State is attempting and this store owns AttemptID.

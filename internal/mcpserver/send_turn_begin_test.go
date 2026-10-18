@@ -517,8 +517,8 @@ func TestDrainedMessageThatSticksIsNotRequeuedAndIsSurfaced(t *testing.T) {
 	if len(agent.sent) != 1 {
 		t.Fatalf("drain sent %d times want 1", len(agent.sent))
 	}
-	if n := observedPendingSends(s, "w"); n != 1 {
-		t.Fatalf("uncertain payload no longer retained: %d held", n)
+	if pending, held := observedPendingSends(s, "w"), observedQueueDepth(s, "w"); pending != 0 || held != 1 {
+		t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
 	}
 	s.drainAgentSendQueue("w")
 	if len(agent.sent) != 1 {

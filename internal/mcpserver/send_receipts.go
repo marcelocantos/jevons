@@ -353,6 +353,6 @@ func (s *Server) settleBoundDrainReceipt(ctx context.Context, name string, entry
 	}
 	s.clearSendqPin(name)
 	slog.Info("agent send queue: drained one message", "name", name, "entry_id", entry.ID,
-		"remaining", s.pendingAgentSends(name))
+		"remaining", s.heldAgentSends(name))
 	return ended
 }

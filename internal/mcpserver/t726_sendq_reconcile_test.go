@@ -173,8 +173,8 @@ func TestT726SupersededMessagesReachTheReceiverAsOne(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != "authoritative: do B" {
 		t.Fatalf("receiver got %v; want exactly one authoritative message", got)
 	}
-	if depth := observedPendingSends(s, name); depth != 1 {
-		t.Fatalf("queue depth after delivery = %d want 1 (no receipt)", depth)
+	if pending, held := observedPendingSends(s, name), observedQueueDepth(s, name); pending != 0 || held != 1 {
+		t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
 	}
 	left, err := s.sendQueue().Snapshot(name)
 	if err != nil || len(left) != 1 || left[0].Text != "authoritative: do B" || left[0].State != sendq.Uncertain {

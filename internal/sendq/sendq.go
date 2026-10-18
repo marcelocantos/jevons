@@ -142,6 +142,10 @@ type Backlog struct {
 	Uncertain int
 	// InFlight counts attempts this store owns. It is not an uncertain receipt.
 	InFlight int
+	// Pending is the one pending meaning: admitted, digest, and requeued.
+	// In-flight, held-attempt, and uncertain entries stay in Depth. They are
+	// not pending. Depth remains every phase, so a blocked queue stays visible.
+	Pending int
 	// BlockReason is why the queue is not only waiting. Empty means every
 	// entry is claimable pending. It is depth's companion, not a second queue.
 	BlockReason string
@@ -813,13 +817,23 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 	return len(removedEntries), nil
 }
 
-// Depth is the number of messages waiting for an agent. An unreadable queue
-// reports zero AND an error; callers that only want the number (a status
-// line) may ignore the error, but none may read zero as "nothing waiting"
-// while an error is set.
+// Depth is the number of messages waiting for an agent, every phase.
+// An unreadable queue reports zero AND an error; callers that only want
+// the number (a status line) may ignore the error, but none may read zero
+// as "nothing waiting" while an error is set.
 func (s *Store) Depth(agent string) (int, error) {
 	entries, err := s.Snapshot(agent)
 	return len(entries), err
+}
+
+// Pending is the claimable count: admitted, digest, and requeued.
+// An unreadable queue reports zero AND an error, same as Depth.
+func (s *Store) Pending(agent string) (int, error) {
+	b, err := s.Backlog(agent)
+	if err != nil {
+		return 0, err
+	}
+	return b.Pending, nil
 }
 
 // Clear drops an agent's whole queue. Used when a seat is removed: a backlog
@@ -941,6 +955,9 @@ func (s *Store) Backlog(agent string) (Backlog, error) {
 	for _, e := range f.Entries {
 		b.EntryIDs = append(b.EntryIDs, e.ID)
 		phase := EntryPhase(e, active)
+		if claimablePhase(phase) {
+			b.Pending++
+		}
 		switch phase {
 		case PhaseInFlight:
 			b.InFlight++

@@ -170,8 +170,8 @@ func TestT582NonGateHoldIsRoutedToTheParent(t *testing.T) {
 			t.Errorf("routed message missing %q:\n%s", want, sent)
 		}
 	}
-	if depth := observedPendingSends(f.s, agent); depth != 1 {
-		t.Fatalf("depth = %d; want 1 — the parent call returned sent, which is not a receipt", depth)
+	if pending, held := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 0 || held != 1 {
+		t.Fatalf("unverified route pending=%d depth=%d; the parent call returned sent, which is not a receipt", pending, held)
 	}
 	entries, err := f.s.sendQueue().Snapshot(agent)
 	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain {
@@ -208,8 +208,8 @@ func TestT1074HeldRehydratedSentDoesNotConfirm(t *testing.T) {
 	if got := len(f.parent.delivered()); got != 1 {
 		t.Fatalf("parent received %d message(s); want 1", got)
 	}
-	if depth := observedPendingSends(f.s, agent); depth != 1 {
-		t.Fatalf("depth = %d; want 1 after rehydrated_sent", depth)
+	if pending, held := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 0 || held != 1 {
+		t.Fatalf("rehydrated_sent pending=%d depth=%d; want the hold kept and not pending", pending, held)
 	}
 	entries, err := f.s.sendQueue().Snapshot(agent)
 	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain {

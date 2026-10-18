@@ -122,7 +122,7 @@ func (s *Server) snapshotHeldSeats(names []string) []HeldSeatSnapshot {
 	}
 	var out []HeldSeatSnapshot
 	for _, name := range names {
-		depth := s.pendingAgentSends(name)
+		depth := s.heldAgentSends(name)
 		if depth <= 0 {
 			continue
 		}

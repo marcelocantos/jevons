@@ -69,6 +69,10 @@ func TestT7665DequeueLeavesInFlightAndRequeueUnarchived(t *testing.T) {
 	if err := s.sendQueue().Resolve(other, held, sendq.Unverified, "no receiver evidence"); err != nil {
 		t.Fatal(err)
 	}
+	// The fixture sender is alive. Requeue would otherwise kick an async drain
+	// that rewrites the queue during TempDir cleanup. This oracle is the
+	// requeue mutation, which must not archive.
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
 	res := reconcile(t, s, map[string]any{
 		"name": other, "action": "requeue", "entry_id": held.ID, "attempt_id": held.AttemptID,
 		"actor": "jevons-po", "evidence": "transcript has no copy",

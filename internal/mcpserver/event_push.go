@@ -162,9 +162,13 @@ func (s *Server) queueBusyDirectiveEventPush(target, event, wire string, life ma
 		return mcp.NewToolResultError(fmt.Sprintf("event push NOT QUEUED: %v", err)), nil
 	}
 	ticket.Settle(true)
-	life["status"], life["queued"], life["superseded"] = "queued", n, len(removed)
+	pending := n
+	if p := s.pendingAgentSends(target); p >= 0 {
+		pending = p
+	}
+	life["status"], life["queued"], life["superseded"] = "queued", pending, len(removed)
 	s.logLifecycle(compEventPush, "push", "ok", life)
-	return mcp.NewToolResultText(fmt.Sprintf("queued: %q event %q held (%d pending); superseded %d authorization(s)", target, event, n, len(removed))), nil
+	return mcp.NewToolResultText(fmt.Sprintf("queued: %q event %q held (%d pending); superseded %d authorization(s)", target, event, pending, len(removed))), nil
 }
 
 // queueBusyEventPush holds an event-push on sendq for the next turn boundary
@@ -183,13 +187,17 @@ func (s *Server) queueBusyEventPush(target, event, wire string, life map[string]
 	// The batch is held (sendq), so a same-bytes retry must not stack a
 	// second copy the way a toolFailure retry did on 2026-09-02.
 	ticket.Settle(true)
+	pending := n
+	if p := s.pendingAgentSends(target); p >= 0 {
+		pending = p
+	}
 	life["status"] = "queued"
-	life["queued"] = n
+	life["queued"] = pending
 	s.logLifecycle(compEventPush, "push", "ok", life)
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"queued: %q has a turn in flight; event %q held (%d pending) for delivery when the current turn ends — "+
 			"held by the daemon, not pasted into the agent's composer. Not a delivery error.",
-		target, event, n)), nil
+		target, event, pending)), nil
 }
 
 // 🎯T429 clause 5 — WHY THIS TOOL HAS A CLOCK OF ITS OWN.

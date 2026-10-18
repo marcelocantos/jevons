@@ -1484,7 +1484,7 @@ func (s *Server) handleAgentKill(ctx context.Context, req mcp.CallToolRequest) (
 	desc := plan.Removed
 	// Refusal looks at every descendant (a PO with its own sendq is still a
 	// remintable parent); T530 drain restarts apply only to seats that leave.
-	refuse, reason, restartNames := ClassifyKillHeldSendq(name, allDesc, s.pendingAgentSends)
+	refuse, reason, restartNames := ClassifyKillHeldSendq(name, allDesc, s.heldAgentSends)
 	if !subtree {
 		restartNames = nil
 	}

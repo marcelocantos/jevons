@@ -85,7 +85,8 @@ func isPromptInFlight(err error) bool {
 }
 
 // enqueueAgentSend appends text for delivery after the current turn and
-// returns the total pending for name.
+// returns the queue depth, every phase. The claimable count is
+// pendingAgentSends.
 //
 // 🎯T418: the error is returned rather than logged, and every caller reports it
 // instead of answering "queued". A daemon that could not write the queue is not
@@ -127,7 +128,25 @@ func (s *Server) dequeueAgentSend(name string) sendq.Entry {
 	return rec.Removed[0]
 }
 
+// pendingAgentSends is the claimable count: admitted, digest, and requeued.
+// A seat whose queue was never observed stays unknown. An unreadable queue
+// stays unknown, so a failed read is not an empty pending count.
+// In-flight, held-attempt, and uncertain entries are heldAgentSends.
 func (s *Server) pendingAgentSends(name string) int {
+	st, ok := s.Seats().Get(name)
+	if !ok || st.QueueDepth == seatstate.QueueUnknown {
+		return seatstate.QueueUnknown
+	}
+	n, err := s.sendQueue().Pending(name)
+	if err != nil {
+		return seatstate.QueueUnknown
+	}
+	return n
+}
+
+// heldAgentSends is every phase still stored for the seat. Kill, recovery,
+// and "messages held" read this. It is not the pending count.
+func (s *Server) heldAgentSends(name string) int {
 	st, _ := s.Seats().Get(name)
 	return st.QueueDepth
 }
@@ -648,13 +667,17 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			if qerr != nil {
 				return agentSendResult{}, undeliverableQueueError(name, qerr)
 			}
+			pending := s.pendingAgentSends(name)
+			if pending < 0 {
+				pending = n
+			}
 			mm.Mechanism = delivery.MechanismClientQueue
 			msg := fmt.Sprintf(
 				"agent %q is running and idle, but fleet intent says it should not receive a turn: %s (%s) — "+
 					"message held by the daemon (%d pending), NOT delivered; it drains once the intent is lifted "+
 					"(jevons_fleet_intent state=working) — 🎯T1066.",
-				name, fleetintent.Describe(dec.Blocking), dec.Reason, n)
-			res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: n, Mode: mode, Mechanism: mm.Mechanism}
+				name, fleetintent.Describe(dec.Blocking), dec.Reason, pending)
+			res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: pending, Mode: mode, Mechanism: mm.Mechanism}
 			logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightIdle, TurnEvidence{})
 			return res, nil
 		}
@@ -687,6 +710,10 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		if qerr != nil {
 			return agentSendResult{}, undeliverableQueueError(name, qerr)
 		}
+		pending := s.pendingAgentSends(name)
+		if pending < 0 {
+			pending = n
+		}
 		mm.Mechanism = delivery.MechanismClientQueue
 		if mode == delivery.ModeSteer {
 			mm.Mechanism = delivery.MechanismQueueUntilIdle
@@ -695,10 +722,10 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
 				"held by the daemon, not pasted into the agent's composer. "+
 				"To cut the current turn short instead: jevons_agent_send with mode=interrupt.",
-			name, n)
+			name, pending)
 		if darkStream {
 			slog.Warn("🎯T426 queued behind an unobserved turn boundary — event stream was dark",
-				"agent", name, "queued", n,
+				"agent", name, "queued", pending,
 				"detail", "in_flight was written before the sink detached; re-attached on this send")
 			msg = fmt.Sprintf(
 				"queued (%d pending) for %q, BUT ITS IN-FLIGHT RECORD IS NOT TRUSTWORTHY: the daemon had lost "+
@@ -708,9 +735,9 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 					"If nothing moves, that agent's turn already ended before the re-attach: confirm from ITS "+
 					"transcript (terminal assistant message + turn_duration, file not growing) and then use "+
 					"jevons_agent_send with mode=interrupt.",
-				n, name)
+				pending, name)
 		}
-		res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: n, Mode: mode, Mechanism: mm.Mechanism}
+		res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: pending, Mode: mode, Mechanism: mm.Mechanism}
 		logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightInFlight, TurnEvidence{})
 		return res, nil
 	}
@@ -816,9 +843,9 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 
 	out, err := trySend()
 	if errors.Is(err, errHandoffQueued) {
-		n := 1
-		if entries, serr := s.sendQueue().Snapshot(name); serr == nil && len(entries) > 0 {
-			n = len(entries)
+		n := s.pendingAgentSends(name)
+		if n < 0 {
+			n = 1
 		}
 		mm.Mechanism = delivery.MechanismClientQueue
 		res = agentSendResult{
@@ -1082,9 +1109,12 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 				why = "steer asked for but claudia reports this handle cannot steer"
 			}
 		}
-		n := 1
-		if entries, serr := s.sendQueue().Snapshot(name); serr == nil && len(entries) > 0 {
-			n = len(entries)
+		// This attempt is in flight until the return releases it to pending.
+		n := s.pendingAgentSends(name)
+		if n < 0 {
+			n = 1
+		} else {
+			n++
 		}
 		res = agentSendResult{
 			Status: "queued",
@@ -1103,6 +1133,9 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
 	if qerr != nil {
 		return agentSendResult{}, undeliverableQueueError(name, qerr)
+	}
+	if pending := s.pendingAgentSends(name); pending >= 0 {
+		n = pending
 	}
 	mm.Mechanism = delivery.MechanismClientQueue
 	why := "prompt already in flight"

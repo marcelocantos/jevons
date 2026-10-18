@@ -244,8 +244,8 @@ func TestT426CompactedSuccessorDrainsQueueAndReturnsIdle(t *testing.T) {
 				// END was observed at all: before that, flight is pinned.
 				return s.flightState(name) != FlightUnknown
 			})
-			if n := observedPendingSends(s, name); n != 1 {
-				t.Fatalf("pending=%d want 1 (the handoff is retained; this sender has no receipt)", n)
+			if pending, held := observedPendingSends(s, name), observedQueueDepth(s, name); pending != 0 || held != 1 {
+				t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
 			}
 			left, err := s.sendQueue().Snapshot(name)
 			if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain || !strings.Contains(left[0].Detail, "no receipt") {

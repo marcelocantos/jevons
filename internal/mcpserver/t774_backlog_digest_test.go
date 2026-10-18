@@ -101,7 +101,10 @@ func TestT774FiftyMixedEntriesDrainAsOneDigest(t *testing.T) {
 	if !strings.Contains(digest, "collapsed") || !strings.Contains(digest, "50") {
 		t.Errorf("digest does not state what was collapsed:\n%s", digest)
 	}
-	if n := observedPendingSends(s, seat); n != 1 {
+	if n := observedPendingSends(s, seat); n != 0 {
+		t.Fatalf("uncertain digest counted as pending: %d", n)
+	}
+	if n := observedQueueDepth(s, seat); n != 1 {
 		t.Fatalf("queue after digest delivery: %d want the digest held", n)
 	}
 	heldDigest, err := s.sendQueue().Snapshot(seat)
@@ -138,8 +141,8 @@ func TestT774SmallBacklogIsNotDigested(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != "msg 0" {
 		t.Fatalf("small backlog was digested: %v", got)
 	}
-	if n := observedPendingSends(s, "a"); n != sendq.DigestThreshold {
-		t.Fatalf("remaining = %d want %d (the handoff stays held)", n, sendq.DigestThreshold)
+	if n, held := observedPendingSends(s, "a"), observedQueueDepth(s, "a"); n != sendq.DigestThreshold-1 || held != sendq.DigestThreshold {
+		t.Fatalf("pending=%d depth=%d; the held handoff is not pending and the other %d stay", n, held, sendq.DigestThreshold-1)
 	}
 	entries, err := s.sendQueue().Snapshot("a")
 	if err != nil || len(entries) != sendq.DigestThreshold || entries[0].Text != "msg 0" || entries[0].State != sendq.Uncertain {

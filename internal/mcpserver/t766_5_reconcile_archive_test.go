@@ -43,6 +43,10 @@ func TestT7665ToolConfirmedAndDropArchiveThePayload(t *testing.T) {
 func TestT7665ToolRequeueDoesNotArchive(t *testing.T) {
 	const name = "claudia-po"
 	s, _, _, held := pinnedDaemon(t, name, "requeued tool copy")
+	// pinnedDaemon's sender is alive, so a successful requeue would kick an
+	// async drain that rewrites this queue after the assertion. The archive
+	// decision is the reconcile mutation. A dead seat leaves that entry put.
+	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return nil, false, nil })
 	res := reconcile(t, s, map[string]any{
 		"name": name, "action": "requeue", "entry_id": held.ID, "attempt_id": held.AttemptID,
 		"actor": "jevons-po", "evidence": "transcript has no copy",

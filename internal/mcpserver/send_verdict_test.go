@@ -351,8 +351,8 @@ func TestDrainWithAnUnverifiedSubmitAndNoRecordsStillSurfaces(t *testing.T) {
 			t.Errorf("fleet-health note missing %q: %q", want, note)
 		}
 	}
-	if n := observedPendingSends(s, "w"); n != 1 {
-		t.Fatalf("pending=%d want 1", n)
+	if pending, held := observedPendingSends(s, "w"), observedQueueDepth(s, "w"); pending != 0 || held != 1 {
+		t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
 	}
 }
 
