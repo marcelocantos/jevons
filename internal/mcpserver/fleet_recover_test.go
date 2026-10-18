@@ -71,8 +71,14 @@ func TestNoteTerminalOutcomeAndSweepDeliver(t *testing.T) {
 	actTrack := NewIdleActivityTracker()
 	actTrack.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 	actTrack.NoteTerminalOutcome("w1", "Internal error")
+	if got := actTrack.Get("w1"); got.NeedsRecover || got.FailureClass != agenterr.ClassNone {
+		t.Fatalf("sentence requested recover: %+v", got)
+	}
+	if got := actTrack.ApplyTerminalCause("w1", agenterr.CauseBackendUnavailable); got != agenterr.ClassBackendUnavailable {
+		t.Fatalf("backend cause class=%s", got)
+	}
 	got := actTrack.Get("w1")
-	if !got.NeedsRecover || got.FailureClass != agenterr.ClassUnknown {
+	if !got.NeedsRecover || got.FailureClass != agenterr.ClassBackendUnavailable {
 		t.Fatalf("latch: %+v", got)
 	}
 

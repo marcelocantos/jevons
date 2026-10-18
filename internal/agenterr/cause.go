@@ -19,6 +19,8 @@ const (
 	CauseTurnIdle           = "turn_idle"
 	CauseAuth               = "auth"
 	CauseRateLimit          = "rate_limit"
+	CauseSpendWall          = "spend_wall"
+	CauseAccountWall        = "account_wall"
 	CauseBackendUnavailable = "backend_unavailable"
 	CauseClientBug          = "client_bug"
 )

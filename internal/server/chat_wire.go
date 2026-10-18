@@ -405,12 +405,13 @@ func classifyAssistantEvent(ev claudia.Event) agenterr.Class {
 }
 
 // assistantProviderCause reads a typed cause off the event.
-// A Reason that is already set and is not one of the four failure causes
+// A Reason that is already set and is not one of the known failure causes
 // is left alone, so a context-overflow reason is not rewritten from a code
-// that happens to sit on the same frame.
+// that happens to sit on the same frame. A sentence in Reason is not a cause.
 func assistantProviderCause(ev claudia.Event) string {
 	switch ev.Reason {
-	case agenterr.CauseAuth, agenterr.CauseRateLimit, agenterr.CauseBackendUnavailable, agenterr.CauseClientBug:
+	case agenterr.CauseAuth, agenterr.CauseRateLimit, agenterr.CauseSpendWall, agenterr.CauseAccountWall,
+		agenterr.CauseBackendUnavailable, agenterr.CauseClientBug:
 		return ev.Reason
 	}
 	if ev.Reason != "" {
@@ -437,7 +438,9 @@ func rpcFrameCause(raw []byte) string {
 	switch n {
 	case 401, 403:
 		return agenterr.CauseAuth
-	case 402, 429:
+	case 402:
+		return agenterr.CauseSpendWall
+	case 429:
 		return agenterr.CauseRateLimit
 	case 400, -32700, -32600, -32601, -32602:
 		return agenterr.CauseClientBug

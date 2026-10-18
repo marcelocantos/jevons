@@ -662,25 +662,16 @@ func FormatFleetRecoverSummary(reps []FleetRecoverReport) string {
 
 // --- activity: terminal failure tracking ---
 
-// NoteTerminalOutcome records structured failure class + recover need after
-// an end_turn (or equivalent). Pure class via agenterr (T237); no prose scrape
-// in the recovery decision path beyond ClassifyText fixtures.
-//
-// 🎯T454: also latches RefusalHold from whole-turn classification so the
-// impatience ladder cannot close on a spend-limit / auth wall as if the
-// agent had resumed work.
+// NoteTerminalOutcome records the end of a turn from its text. The sentence
+// is not a provider-failure cause: failure class, refusal hold, and
+// rate-limit strikes come from ApplyTerminalCause. An empty terminal still
+// needs recover. A substantive sentence clears a hold latched earlier.
 func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	if t == nil || name == "" {
 		return
 	}
 	text := strings.TrimSpace(terminalText)
 	empty := text == ""
-	// Terminal text has no provider-failure cause. Auth, rate-limit,
-	// backend, and client-bug are not read from this sentence.
-	class := agenterr.ClassifyText(text)
-	// Empty terminal always needs recover for open-mission (caller filters).
-	// Transient / unknown failures need recover; auth/client fail closed.
-	needs := empty || fleetRecoverWorthy(class)
 	kind := agenterr.ClassifyTurnOutput(text)
 
 	t.mu.Lock()
@@ -693,27 +684,49 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	prev.Updated = t.clock()
 	prev.ToolCallID = ""
 	prev.ToolCallSince = time.Time{}
-	prev.FailureClass = class
-	if class == agenterr.ClassRateLimit {
-		prev.RateLimitStrikes++
-	} else if !empty {
-		// A terminal that got far enough to say something other than
-		// "rate limited" proves the model can still answer.
+	prev.FailureClass = agenterr.ClassNone
+	if !empty {
+		// A sentence is not a rate-limit strike. A typed cause, applied
+		// after this call, is what increments the counter.
 		prev.RateLimitStrikes = 0
 	}
 	prev.TerminalEmpty = empty
-	prev.NeedsRecover = needs
+	prev.NeedsRecover = empty
 	prev.LastTerminal = truncate(text, 400)
-	switch kind {
-	case agenterr.TurnRefusalOnly:
-		prev.RefusalHold = true
-	case agenterr.TurnSubstantive:
+	if kind == agenterr.TurnSubstantive {
 		prev.RefusalHold = false
 		prev.SubstantivePulse = true
 	}
-	// TurnEmpty leaves RefusalHold unchanged — an empty terminal after a
-	// wall is not evidence the account recovered.
+	// Empty and refusal-only prose leave RefusalHold unchanged. A typed
+	// hard-block cause latches it in ApplyTerminalCause.
 	t.by[name] = prev
+}
+
+// ApplyTerminalCause records a provider-failure cause observed on the
+// terminal event. A sentence, an empty reason, and any unknown reason are
+// ClassNone and change nothing. Call it after NoteTerminalOutcome so a
+// substantive sentence can clear a hold before a hard-block cause re-latches.
+func (t *IdleActivityTracker) ApplyTerminalCause(name, cause string) agenterr.Class {
+	class := agenterr.ClassFromCause(cause)
+	if t == nil || name == "" || !class.IsFailure() {
+		return class
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.by == nil {
+		t.by = make(map[string]IdleActivity)
+	}
+	prev := t.by[name]
+	prev.FailureClass = class
+	if class == agenterr.ClassRateLimit {
+		prev.RateLimitStrikes++
+	}
+	prev.NeedsRecover = prev.TerminalEmpty || fleetRecoverWorthy(class)
+	if agenterr.HardBlock(class, "") {
+		prev.RefusalHold = true
+	}
+	t.by[name] = prev
+	return class
 }
 
 // NoteTurnErrored records whether the backend reported the latest turn as

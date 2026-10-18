@@ -15,7 +15,9 @@ import (
 //
 // Enumerated classes:
 //   - backend_unavailable: cloud/provider outage, 5xx, Internal error, timeout
-//   - rate_limit: 429 / quota / throttle
+//   - rate_limit: 429 / quota / throttle. Ordinary throttle stays transient.
+//   - spend_wall: account spend or billing refusal. Not a 429.
+//   - account_wall: revoked key or blocked account that is not an auth class.
 //   - auth: 401 / 403 / API key / unauthorized
 //   - client_bug: local config, wire, session, bad request
 //   - retry_exhausted: the CLI's own retry budget ran out on a transient
@@ -31,6 +33,8 @@ const (
 	ClassNone               Class = ""
 	ClassBackendUnavailable Class = "backend_unavailable"
 	ClassRateLimit          Class = "rate_limit"
+	ClassSpendWall          Class = "spend_wall"
+	ClassAccountWall        Class = "account_wall"
 	ClassAuth               Class = "auth"
 	ClassClientBug          Class = "client_bug"
 	ClassUnknown            Class = "unknown"
@@ -57,8 +61,9 @@ func (c Class) IsFailure() bool {
 }
 
 // Classify maps an error to a Class. Nil and a typed busy cause → ClassNone.
-// Auth, rate-limit, backend, and client-bug come from the provider-failure
-// cause. The rendered sentence is not consulted for those classes.
+// Auth, rate-limit, spend, account, backend, and client-bug come from the
+// provider-failure cause. The rendered sentence is not consulted for those
+// classes.
 func Classify(err error) Class {
 	if err == nil {
 		return ClassNone
@@ -68,16 +73,32 @@ func Classify(err error) Class {
 		return ClassifyText(err.Error())
 	case CauseTurnInFlight, CauseBusy, CauseProcessNotRunning, CauseSteerUnsupported, CauseTurnIdle:
 		return ClassNone
+	case CauseAuth, CauseRateLimit, CauseSpendWall, CauseAccountWall, CauseBackendUnavailable, CauseClientBug:
+		return ClassFromCause(ProviderCause(err))
+	default:
+		return ClassUnknown
+	}
+}
+
+// ClassFromCause maps an exact known provider-failure cause to a class.
+// Any other string, including a sentence and an empty cause, is ClassNone.
+// It does not read the rendered text.
+func ClassFromCause(cause string) Class {
+	switch cause {
 	case CauseAuth:
 		return ClassAuth
 	case CauseRateLimit:
 		return ClassRateLimit
+	case CauseSpendWall:
+		return ClassSpendWall
+	case CauseAccountWall:
+		return ClassAccountWall
 	case CauseBackendUnavailable:
 		return ClassBackendUnavailable
 	case CauseClientBug:
 		return ClassClientBug
 	default:
-		return ClassUnknown
+		return ClassNone
 	}
 }
 
@@ -160,6 +181,12 @@ func OwnerCopy(class Class, raw string) string {
 			detailSuffix(raw)
 	case ClassRateLimit:
 		return "Provider rate limit (rate_limit). Backing off; will retry when capacity allows. " +
+			detailSuffix(raw)
+	case ClassSpendWall:
+		return "Provider spend limit (spend_wall). This will not recover by waiting. " +
+			detailSuffix(raw)
+	case ClassAccountWall:
+		return "Provider account blocked (account_wall). This will not recover by waiting. " +
 			detailSuffix(raw)
 	case ClassAuth:
 		return "Provider authentication failed (auth). Check Grok/Claude/Codex sign-in or API keys — this will not recover by waiting. " +

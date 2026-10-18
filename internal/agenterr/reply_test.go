@@ -136,7 +136,7 @@ func TestNumericStatusFragmentsAreNotFailures(t *testing.T) {
 			}{
 				{"400", CauseClientBug, ClassClientBug},
 				{"401", CauseAuth, ClassAuth},
-				{"402", CauseRateLimit, ClassRateLimit},
+				{"402", CauseSpendWall, ClassSpendWall},
 				{"403", CauseAuth, ClassAuth},
 				{"429", CauseRateLimit, ClassRateLimit},
 				{"500", CauseBackendUnavailable, ClassBackendUnavailable},
@@ -150,8 +150,11 @@ func TestNumericStatusFragmentsAreNotFailures(t *testing.T) {
 					if got := classify.fn(text); got == tc.want {
 						t.Errorf("%q classified as %s from prose", text, got)
 					}
-					if tc.code == "402" && !HardBlock(ClassRateLimit, text) {
-						t.Errorf("real billing status %q lost its hard-block", text)
+					if tc.code == "402" && HardBlock(ClassRateLimit, text) {
+						t.Errorf("rate_limit text %q hard-blocked", text)
+					}
+					if tc.code == "402" && !HardBlock(ClassSpendWall, text) {
+						t.Errorf("spend class lost its hard-block on %q", text)
 					}
 				}
 				if got := Classify(WithCause(tc.cause, errors.New(tc.code))); got != tc.want {

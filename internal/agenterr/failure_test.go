@@ -128,6 +128,15 @@ func TestTypedProviderCauseClassifiesWrappedAndBare(t *testing.T) {
 	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New("slow down"))); got != agenterr.ClassRateLimit {
 		t.Fatalf("CauseRateLimit = %q", got)
 	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New("slow down"))); got != agenterr.ClassSpendWall {
+		t.Fatalf("CauseSpendWall = %q", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseAccountWall, errors.New("revoked"))); got != agenterr.ClassAccountWall {
+		t.Fatalf("CauseAccountWall = %q", got)
+	}
+	if got := agenterr.ClassFromCause("You've hit your monthly spend limit"); got != agenterr.ClassNone {
+		t.Fatalf("sentence cause = %q", got)
+	}
 	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseClientBug, errors.New("no session"))); got != agenterr.ClassClientBug {
 		t.Fatalf("CauseClientBug = %q", got)
 	}
@@ -150,6 +159,9 @@ func TestTransientBackend(t *testing.T) {
 	if agenterr.TransientBackend(agenterr.ClassAuth) {
 		t.Fatal("auth must not auto-recover loop")
 	}
+	if agenterr.TransientBackend(agenterr.ClassSpendWall) || agenterr.TransientBackend(agenterr.ClassAccountWall) {
+		t.Fatal("spend and account walls must not auto-recover")
+	}
 	if agenterr.TransientBackend(agenterr.ClassNone) {
 		t.Fatal("none is not transient")
 	}
@@ -160,6 +172,8 @@ func TestOwnerCopyNotBareInternalError(t *testing.T) {
 	classes := []agenterr.Class{
 		agenterr.ClassBackendUnavailable,
 		agenterr.ClassRateLimit,
+		agenterr.ClassSpendWall,
+		agenterr.ClassAccountWall,
 		agenterr.ClassAuth,
 		agenterr.ClassClientBug,
 		agenterr.ClassUnknown,

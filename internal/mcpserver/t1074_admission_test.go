@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
@@ -360,6 +361,10 @@ func recoverSweep(t *testing.T, ledger *IdleNudgeLedger, now time.Time, push Fle
 	activity := NewIdleActivityTracker()
 	activity.now = func() time.Time { return now }
 	activity.NoteTerminalOutcome("w1", "Internal error")
+	if got := activity.Get("w1"); got.NeedsRecover || got.FailureClass != agenterr.ClassNone {
+		t.Fatalf("sentence requested recover: %+v", got)
+	}
+	activity.ApplyTerminalCause("w1", agenterr.CauseBackendUnavailable)
 	return FleetRecoverSweepArgs{
 		Reg: reg, Activity: activity, Ledger: ledger,
 		ProcessRunning: func(string) bool { return true },

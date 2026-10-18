@@ -1030,7 +1030,7 @@ func TestRPCFrameCauseIsNumeric(t *testing.T) {
 	}{
 		{401, agenterr.CauseAuth},
 		{403, agenterr.CauseAuth},
-		{402, agenterr.CauseRateLimit},
+		{402, agenterr.CauseSpendWall},
 		{429, agenterr.CauseRateLimit},
 		{400, agenterr.CauseClientBug},
 		{-32700, agenterr.CauseClientBug},
@@ -1062,6 +1062,24 @@ func TestRPCFrameCauseIsNumeric(t *testing.T) {
 	sentence.Reason = agenterr.CauseAuth
 	if classifyAssistantEvent(sentence) != agenterr.ClassAuth {
 		t.Fatal("Reason auth did not classify")
+	}
+	spend := claudia.Event{
+		Type:    "assistant",
+		Text:    "You've hit your monthly spend limit",
+		IsError: true,
+		Raw:     []byte(`{"code":429,"message":"You've hit your monthly spend limit"}`),
+		Reason:  "You've hit your monthly spend limit",
+	}
+	if classifyAssistantEvent(spend) != agenterr.ClassNone {
+		t.Fatal("a spend sentence in Reason classified, and it must not fall through to the 429")
+	}
+	spend.Reason = agenterr.CauseSpendWall
+	if classifyAssistantEvent(spend) != agenterr.ClassSpendWall {
+		t.Fatal("Reason spend_wall did not classify ahead of the 429 frame")
+	}
+	spend.Reason = agenterr.CauseRateLimit
+	if got := classifyAssistantEvent(spend); got != agenterr.ClassRateLimit {
+		t.Fatalf("Reason rate_limit classified as %s", got)
 	}
 	authored := claudia.Event{
 		Type: "assistant",

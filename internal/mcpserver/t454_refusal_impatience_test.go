@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/converge"
 )
 
@@ -43,11 +44,17 @@ func TestT454ImpatienceRefusalHoldFromTerminal(t *testing.T) {
 	}
 	rep.agents = nil
 
-	// Refusal-only terminal latches the hold.
+	// Spend prose does not latch. The typed cause on the same sentence does.
 	spend := "You've hit your monthly spend limit. Run /usage-credits to manage your limit."
 	activity.NoteTerminalOutcome("jv-t317-stuck", spend)
+	if activity.Get("jv-t317-stuck").RefusalHold {
+		t.Fatal("spend prose latched RefusalHold")
+	}
+	if got := activity.ApplyTerminalCause("jv-t317-stuck", agenterr.CauseSpendWall); got != agenterr.ClassSpendWall {
+		t.Fatalf("spend cause class=%s", got)
+	}
 	if !activity.Get("jv-t317-stuck").RefusalHold {
-		t.Fatal("NoteTerminalOutcome must latch RefusalHold on spend-limit text")
+		t.Fatal("typed spend cause must latch RefusalHold")
 	}
 
 	// Phase=working under hold must not close; rungs must not climb.

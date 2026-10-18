@@ -75,7 +75,7 @@ func t406Spawned(fleet fleetintent.State) bool {
 func TestT406SpendLimitEntersHardBlockAndSuppressesSpawn(t *testing.T) {
 	s, n := t406Server(t)
 	raw := "You've hit your monthly spend limit. Run /usage-credits to manage your limit"
-	class := agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(raw)))
+	class := agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New(raw)))
 	if !agenterr.HardBlock(class, raw) {
 		t.Fatalf("fixture must hard-block; class=%s", class)
 	}
@@ -118,6 +118,17 @@ func TestT406TransientErrorDoesNotEnterHardBlock(t *testing.T) {
 			t.Fatalf("transient %q entered %q", raw, got)
 		}
 	}
+	spend := "You've hit your monthly spend limit. Run /usage-credits to manage your limit"
+	for _, cause := range []string{"", agenterr.CauseRateLimit} {
+		class := agenterr.ClassifyText(spend)
+		if cause != "" {
+			class = agenterr.Classify(agenterr.WithCause(cause, errors.New(spend)))
+		}
+		s.ObserveProviderFailure(class, spend)
+		if got := s.fleetIntent().FleetState(); got != fleetintent.Working {
+			t.Fatalf("cause %q entered %q", cause, got)
+		}
+	}
 	if t406Spawned(fleetintent.Working) != true {
 		t.Fatal("working fleet must still spawn")
 	}
@@ -131,7 +142,7 @@ func TestT406TransientErrorDoesNotEnterHardBlock(t *testing.T) {
 func TestT406SuccessfulCallClearsHardBlock(t *testing.T) {
 	s, _ := t406Server(t)
 	raw := "You've hit your monthly spend limit"
-	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(raw))), raw)
+	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New(raw))), raw)
 	if s.fleetIntent().FleetState() != fleetintent.BlockedProvider {
 		t.Fatal("setup: want blocked_provider")
 	}
@@ -154,7 +165,7 @@ func TestT406HardBlockSurvivesStoreReopen(t *testing.T) {
 	s := &Server{}
 	s.SetFleetIntentStore(store)
 	raw := "You've hit your monthly spend limit"
-	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(raw))), raw)
+	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New(raw))), raw)
 
 	reopened, err := fleetintent.Open(storePath)
 	if err != nil {
@@ -168,7 +179,7 @@ func TestT406HardBlockSurvivesStoreReopen(t *testing.T) {
 func TestT406FleetIntentHTTP(t *testing.T) {
 	s, _ := t406Server(t)
 	raw := "You've hit your monthly spend limit"
-	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(raw))), raw)
+	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New(raw))), raw)
 
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
@@ -215,7 +226,7 @@ func TestT406OverBroadAnyErrorMutantFails(t *testing.T) {
 func TestT406PreFixTreeWouldKeepSpawning(t *testing.T) {
 	s, _ := t406Server(t)
 	raw := "You've hit your monthly spend limit"
-	class := agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(raw)))
+	class := agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New(raw)))
 	if !agenterr.HardBlock(class, raw) {
 		t.Fatal("fixture")
 	}

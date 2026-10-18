@@ -1700,6 +1700,11 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			s.mu.Unlock()
 			if tracker != nil {
 				tracker.NoteTerminalTurn(name, text, n)
+				// Reason is the typed cause. The accumulated sentence is not.
+				class := tracker.ApplyTerminalCause(name, ev.Reason)
+				if agenterr.HardBlock(class, "") {
+					s.ObserveProviderFailure(class, text)
+				}
 				tracker.NoteTurnErrored(name, ev.IsError)
 			}
 			if text != "" {

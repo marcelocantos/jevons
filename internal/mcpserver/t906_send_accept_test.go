@@ -74,7 +74,7 @@ func TestT906AcceptedSendDoesNotClearHardBlock(t *testing.T) {
 func TestT906RealReplyStillClearsHardBlock(t *testing.T) {
 	s, _ := t406Server(t)
 	raw := "You've hit your monthly spend limit"
-	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New(raw))), raw)
+	s.ObserveProviderFailure(agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New(raw))), raw)
 	if s.fleetIntent().FleetState() != fleetintent.BlockedProvider {
 		t.Fatal("setup: want blocked_provider")
 	}
