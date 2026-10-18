@@ -411,10 +411,13 @@ func (s *Store) AppendWithRequestID(agent, text, requestID string, at time.Time)
 	return e, len(f.Entries), nil
 }
 
-// AppendSuperseding is Append that first removes every still-Pending entry for
-// which supersedes reports true (🎯T821). Attempting and Uncertain entries are
-// never touched: they may already be in the receiver's hands. The returned
-// count is how many held entries the new one replaced.
+// AppendSuperseding is Append that first removes admitted entries for which
+// supersedes reports true (🎯T821). The removed payloads are archived under
+// the new entry's id before the queue changes. A digest and an operator
+// requeue stay: they are not the admitted phase, even though their on-disk
+// state is empty. Attempting and Uncertain entries are never touched: they
+// may already be in the receiver's hands. The returned count is how many
+// admitted entries the new one replaced.
 func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
 	return s.AppendSupersedingWithRequestID(agent, text, "", at, supersedes)
 }
@@ -437,20 +440,30 @@ func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at
 		return Entry{}, 0, 0, err
 	}
 	kept := make([]Entry, 0, len(f.Entries)+1)
-	replaced := 0
+	var removed []Entry
 	for _, old := range f.Entries {
-		if old.State == Pending && old.RequestID == "" && old.TransportRequestID == "" && supersedes != nil && supersedes(old) {
-			replaced++
+		if EntryPhase(old, s.active[agent]) == PhaseAdmitted && old.RequestID == "" && old.TransportRequestID == "" && supersedes != nil && supersedes(old) {
+			removed = append(removed, old)
 			continue
 		}
 		kept = append(kept, old)
 	}
 	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
+	if len(removed) > 0 {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      at.UTC(),
+			HoldID:  e.ID,
+			Removed: removed,
+		}); err != nil {
+			return Entry{}, 0, 0, err
+		}
+	}
 	f.Entries = append(kept, e)
 	if err := s.save(f); err != nil {
 		return Entry{}, 0, 0, err
 	}
-	return e, len(f.Entries), replaced, nil
+	return e, len(f.Entries), len(removed), nil
 }
 
 // PushFront returns an entry to the head of the queue, for the drain that

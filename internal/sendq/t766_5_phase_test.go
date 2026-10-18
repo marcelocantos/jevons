@@ -265,3 +265,69 @@ func TestT7665PopFrontRequiresAnOperatorReceipt(t *testing.T) {
 		t.Fatalf("empty pop = %+v %v %v", empty, ok, err)
 	}
 }
+
+// A predicate that matches every entry must still leave a digest and an
+// operator requeue in the queue. Those phases share the empty on-disk state
+// with an admitted entry. Only the admitted payload moves, and it moves into
+// the supersession archive rather than disappearing.
+func TestT7665SupersedeRecordsAdmittedAndLeavesOtherPhases(t *testing.T) {
+	q := NewStore(t.TempDir())
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	operator, _, err := q.Append("a", "operator sent this back", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, ok, err := q.ClaimFront("a")
+	if err != nil || !ok {
+		t.Fatalf("claim operator: %+v %v %v", attempt, ok, err)
+	}
+	if err := q.Resolve("a", attempt, Unverified, "no receiver evidence"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= DigestThreshold; i++ {
+		if _, _, err := q.Append("a", "folded member", now.Add(time.Duration(i+1)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest, ok, err := q.ClaimDigest("a")
+	if err != nil || !ok || digest.Members == "" {
+		t.Fatalf("digest = %+v %v %v", digest, ok, err)
+	}
+	if err := q.Resolve("a", digest, DefinitelyNotSent, "cannot accept"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Reconcile("a", operator.ID, attempt.AttemptID, ReconcileRequeue, "owner", "transcript has no copy", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.Append("a", "ordinary admitted", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	newest, _, replaced, err := q.AppendSuperseding("a", "newest", now.Add(2*time.Minute), func(Entry) bool { return true })
+	if err != nil || replaced != 1 {
+		t.Fatalf("replaced = %d err %v", replaced, err)
+	}
+	left, err := q.Snapshot("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawOperator, sawDigest, sawNewest bool
+	for _, e := range left {
+		switch e.ID {
+		case operator.ID:
+			sawOperator = e.Text == "operator sent this back" && EntryPhase(e, "") == PhaseRequeued
+		case digest.ID:
+			sawDigest = e.Members == digest.Members && EntryPhase(e, "") == PhaseDigest
+		case newest.ID:
+			sawNewest = e.Text == "newest"
+		default:
+			t.Fatalf("unexpected entry left in the queue: %+v", e)
+		}
+	}
+	if !sawOperator || !sawDigest || !sawNewest {
+		t.Fatalf("queue = %+v", left)
+	}
+	archived, err := q.ReadSupersession(newest.ID)
+	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].Text != "ordinary admitted" {
+		t.Fatalf("archive = %+v %v", archived, err)
+	}
+}
