@@ -23,6 +23,8 @@ const (
 	CauseAccountWall        = "account_wall"
 	CauseBackendUnavailable = "backend_unavailable"
 	CauseClientBug          = "client_bug"
+	CauseRetryExhausted     = "retry_exhausted"
+	CauseContextOverflow    = "context_overflow"
 )
 
 // causedFailure carries a provider-failure cause without changing the

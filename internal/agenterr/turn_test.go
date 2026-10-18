@@ -18,12 +18,11 @@ func TestT454ClassifyTurnOutput(t *testing.T) {
 		want TurnKind
 	}{
 		{"empty", "", TurnEmpty},
-		// Spend and revoked prose are not causes. A bare Internal error still
-		// is, through ClassifyReply.
+		// Spend, revoked, and a bare Internal error are sentences, not causes.
 		{"spend_limit", spend, TurnSubstantive},
 		{"auth", auth, TurnSubstantive},
 		{"revoked", revoked, TurnSubstantive},
-		{"internal_error", "Internal error", TurnRefusalOnly},
+		{"internal_error", "Internal error", TurnSubstantive},
 		{"mixed_quotes_refusal", mixed, TurnSubstantive},
 		{"substantive", work, TurnSubstantive},
 	}

@@ -886,15 +886,14 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			wantTextSub: "backend_unavailable",
 		},
 		{
-			name: "Claude IsError without a cause is not backend",
+			name: "Claude IsError without a cause is not a class",
 			ev: claudia.Event{
 				Type:       "assistant",
 				Text:       "Internal error",
 				StopReason: "end_turn",
 				IsError:    true,
 			},
-			wantClass:   "unknown",
-			wantTextSub: "unknown",
+			wantTextExact: "Internal error",
 		},
 		{
 			name: "ACP chunk with the same words is authored",

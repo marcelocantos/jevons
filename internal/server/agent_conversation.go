@@ -6,7 +6,6 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 
@@ -208,7 +207,7 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 	// specimen was refused 0.3 s before re-attach). Wait a bounded moment for
 	// re-attach before nacking; only a sustained absence is a nack.
 	if !s.awaitOverseerProcess() {
-		return fmt.Errorf("overseer not running")
+		return agenterr.ErrOverseerNotRunning()
 	}
 	msgID := newOwnerMessageID()
 	echo := chatUserEchoID(text, msgID)

@@ -869,7 +869,7 @@ func (s *Server) sendNotes(text string) (string, error) {
 	default:
 		proc := s.CurrentProcess()
 		if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
-			return requestID, fmt.Errorf("overseer not running")
+			return requestID, agenterr.ErrOverseerNotRunning()
 		}
 		err = upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
 			func(a *claudia.Agent) error {
@@ -898,15 +898,10 @@ func notifyErrClass(err error) string {
 	if agenterr.IsPromptBusy(err) {
 		return "busy"
 	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "overseer not running"):
-		return "not_running"
-	case strings.Contains(msg, "not_owner"):
-		return "not_owner"
-	default:
-		return "other"
+	if class := agenterr.NotifyClass(err); class != "" {
+		return class
 	}
+	return "other"
 }
 
 // SetAllowNotifyDrain installs the fleet-intent gate for the overseer notify

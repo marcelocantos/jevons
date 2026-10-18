@@ -209,11 +209,14 @@ func TestT406OverBroadAnyErrorMutantFails(t *testing.T) {
 			_ = s.SetFleetIntent(fleetintent.BlockedProvider, "mutant", "any failure")
 		}
 	}
-	mutantObserve(agenterr.ClassifyText("Internal error"), "Internal error")
+	if agenterr.ClassifyText("Internal error").IsFailure() {
+		t.Fatal("Internal error prose is not a failure class")
+	}
+	mutantObserve(agenterr.ClassUnknown, "Internal error")
 	if s.fleetIntent().FleetState() != fleetintent.BlockedProvider {
 		t.Fatal("mutant setup")
 	}
-	// Product path on the same fixture must leave working.
+	// Product path on the same sentence must leave working.
 	s2, _ := t406Server(t)
 	s2.ObserveProviderFailure(agenterr.ClassifyText("Internal error"), "Internal error")
 	if s2.fleetIntent().FleetState() != fleetintent.Working {

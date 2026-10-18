@@ -6,12 +6,15 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 const notOwnerText = `broker protocol: not_owner (name="jevons"): grant jevons is not owned by this connection`
@@ -58,14 +61,23 @@ func newFakeSeat() (*fakeSeat, *Readopter) {
 }
 
 func TestT796IsNotOwnerClassification(t *testing.T) {
-	if !IsNotOwner(errors.New(notOwnerText)) {
-		t.Fatal("the broker's own refusal must classify as not_owner")
+	raw := errors.New(notOwnerText)
+	if IsNotOwner(raw) {
+		t.Fatal("the broker sentence is not not_owner until the boundary reads it")
 	}
-	if !IsNotOwner(errors.New("send failed: " + notOwnerText)) {
-		t.Fatal("a wrapped refusal must classify")
+	noted := agenterr.NoteBrokerGrant(raw)
+	if !IsNotOwner(noted) || !strings.Contains(noted.Error(), "not_owner") {
+		t.Fatal("the boundary must type the broker refusal and keep its text")
+	}
+	wrapped := agenterr.NoteBrokerGrant(errors.New("send failed: " + notOwnerText))
+	if !IsNotOwner(wrapped) {
+		t.Fatal("a sentence that carries the broker refusal must type once")
+	}
+	if IsNotOwner(agenterr.NoteBrokerGrant(wrapped)) != true || agenterr.NoteBrokerGrant(wrapped) != wrapped {
+		t.Fatal("a second boundary read must keep the typed refusal")
 	}
 	for _, e := range []error{nil, errors.New("prompt already in flight"), errors.New("overseer not running")} {
-		if IsNotOwner(e) {
+		if IsNotOwner(e) || IsNotOwner(agenterr.NoteBrokerGrant(e)) {
 			t.Fatalf("%v must not classify as not_owner", e)
 		}
 	}
@@ -224,8 +236,13 @@ func TestT796WithReadoptRetriesOnlyOnNotOwner(t *testing.T) {
 func TestT796WithReadoptPassesThroughWithoutReadopter(t *testing.T) {
 	DefaultReadopter = nil
 	want := errors.New(notOwnerText)
-	if err := WithReadopt(context.Background(), "x", nil, func(*claudia.Agent) error { return want }); err != want {
-		t.Fatal("no Readopter installed: the refusal is the caller's")
+	err := WithReadopt(context.Background(), "x", nil, func(*claudia.Agent) error { return want })
+	if err == want || !IsNotOwner(err) || !strings.Contains(err.Error(), "not_owner") {
+		t.Fatal("no Readopter installed: the broker sentence is typed and its text stays")
+	}
+	busy := errors.New("prompt already in flight")
+	if got := WithReadopt(context.Background(), "x", nil, func(*claudia.Agent) error { return busy }); got != busy {
+		t.Fatal("a non-matching error is the caller's")
 	}
 }
 

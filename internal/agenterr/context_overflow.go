@@ -3,8 +3,6 @@
 
 package agenterr
 
-import "strings"
-
 // ClassContextOverflow: the provider refused a turn because the seat's
 // conversation is longer than the model's context window (🎯T926).
 //
@@ -23,27 +21,10 @@ import "strings"
 // provider serves the rest of the fleet.
 const ClassContextOverflow Class = "context_overflow"
 
-// contextOverflowMarkers are the providers' own phrasings of the refusal,
-// plus claudia's ErrContextOverflow text and its Event.Reason code. Taken
-// from pi-ai's context-overflow evidence patterns, keeping only phrases
-// that cannot be read as a rate limit ("too many tokens" per minute is one).
-var contextOverflowMarkers = []string{
-	"prompt is too long",                    // Anthropic
-	"input is too long for requested model", // Amazon Bedrock
-	"exceeds the context window",            // OpenAI
-	"maximum prompt length is",              // xAI
-	"maximum context length is",             // OpenRouter
-	"context_length_exceeded",               // OpenAI error code
-	"context length exceeded",               // generic
-	"model_context_window_exceeded",         // z.ai
-	"context overflow",                      // claudia ErrContextOverflow
-	"context_overflow",                      // claudia Event.Reason
-}
-
-// IsContextOverflow reports whether msg is a provider's refusal of a prompt
-// longer than the model's context window.
-func IsContextOverflow(msg string) bool {
-	return containsAny(strings.ToLower(msg), contextOverflowMarkers...)
+// IsContextOverflow reports whether err carries the context-overflow cause.
+// A sentence that only says the prompt is too long does not.
+func IsContextOverflow(err error) bool {
+	return ProviderCause(err) == CauseContextOverflow
 }
 
 func contextOverflowCopy(raw string) string {

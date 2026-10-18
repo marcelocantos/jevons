@@ -248,8 +248,26 @@ func TestNotifyErrClass(t *testing.T) {
 	if got := notifyErrClass(agenterr.WithCause(agenterr.CauseTurnInFlight, codexBusy)); got != "busy" {
 		t.Fatalf("codex busy got %q", got)
 	}
-	if got := notifyErrClass(fmt.Errorf("overseer not running")); got != "not_running" {
-		t.Fatalf("got %q", got)
+	if got := notifyErrClass(fmt.Errorf("overseer not running")); got != "other" {
+		t.Fatalf("rendered not-running text classified as %q", got)
+	}
+	down := agenterr.ErrOverseerNotRunning()
+	if down.Error() != "overseer not running" {
+		t.Fatalf("typed down error = %q", down.Error())
+	}
+	if got := notifyErrClass(down); got != "not_running" {
+		t.Fatalf("typed not-running got %q", got)
+	}
+	if got := notifyErrClass(fmt.Errorf("send: %w", down)); got != "not_running" {
+		t.Fatalf("wrapped not-running got %q", got)
+	}
+	plainOwner := fmt.Errorf("broker protocol: not_owner")
+	if got := notifyErrClass(plainOwner); got != "other" {
+		t.Fatalf("rendered not_owner classified as %q", got)
+	}
+	refused := agenterr.NoteBrokerGrant(plainOwner)
+	if !strings.Contains(refused.Error(), "not_owner") || notifyErrClass(refused) != "not_owner" {
+		t.Fatalf("typed not_owner = %v class %q", refused, notifyErrClass(refused))
 	}
 	if got := notifyErrClass(fmt.Errorf("connection reset")); got != "other" {
 		t.Fatalf("got %q", got)

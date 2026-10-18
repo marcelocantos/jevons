@@ -64,7 +64,7 @@ func TestT7664JworkErrorSentenceDoesNotHardBlock(t *testing.T) {
 	if fold.errClass.IsFailure() {
 		t.Fatalf("published error sentence classified as %s", fold.errClass)
 	}
-	failClass, _ := s.settleJworkFailure("w", fold, "")
+	failClass, _ := s.settleJworkFailure("w", fold, "Internal error")
 	if failClass.IsFailure() {
 		t.Fatalf("settle classified the sentence as %s", failClass)
 	}

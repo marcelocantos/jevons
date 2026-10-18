@@ -16,11 +16,10 @@ func TestClassifyReplyFiresOnBareProviderFailure(t *testing.T) {
 		reply string
 		want  Class
 	}{
-		// Residual: isBareInternalError still reads a whole-reply Internal error
-		// as backend. A status sentence is not a class.
-		{"Internal error", ClassBackendUnavailable},
-		{"  Internal error.  ", ClassBackendUnavailable},
-		{"acp session/prompt: Internal error", ClassBackendUnavailable},
+		// A whole-reply sentence is not a class, including Internal error.
+		{"Internal error", ClassNone},
+		{"  Internal error.  ", ClassNone},
+		{"acp session/prompt: Internal error", ClassNone},
 		{"Error: 503 Service Unavailable", ClassNone},
 		{"429 Too Many Requests", ClassNone},
 		{"401 Unauthorized: invalid api key", ClassNone},
@@ -32,21 +31,22 @@ func TestClassifyReplyFiresOnBareProviderFailure(t *testing.T) {
 	}
 }
 
-// The J10 shape: an outage arrives as the whole turn where a shell marker was
-// expected. It must classify as backend_unavailable, not read as a tool that
-// silently failed to run.
+// The J10 shape used to read a whole-turn "Internal error" as the outage.
+// The sentence is not a cause. The cause is.
 func TestClassifyReplyJ10OutageTurn(t *testing.T) {
 	class := ClassifyReply("Internal error")
-	if class != ClassBackendUnavailable {
-		t.Fatalf("class = %v, want backend_unavailable", class)
+	if class != ClassNone {
+		t.Fatalf("class = %v, want none", class)
 	}
-	if !class.IsTransient() {
-		t.Error("backend_unavailable must be transient so recovery re-pressures")
+	_, _, ok := ReplyFailure("Internal error")
+	if ok {
+		t.Fatal("ReplyFailure must not report a sentence as the outage")
 	}
-	_, ownerMsg, ok := ReplyFailure("Internal error")
-	if !ok {
-		t.Fatal("ReplyFailure must report the outage")
+	caused := Classify(WithCause(CauseBackendUnavailable, errors.New("Internal error")))
+	if caused != ClassBackendUnavailable || !caused.IsTransient() {
+		t.Fatalf("caused = %v", caused)
 	}
+	ownerMsg := OwnerCopy(caused, "Internal error")
 	if !strings.Contains(ownerMsg, "backend_unavailable") {
 		t.Errorf("owner copy must name the class, got %q", ownerMsg)
 	}

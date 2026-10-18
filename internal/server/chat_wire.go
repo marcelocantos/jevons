@@ -169,11 +169,10 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 				}
 				return "", false
 			}
-			// 🎯T237: rewrite bare provider failure prose (e.g. "Internal error")
-			// so owner-visible copy carries class; structured slog for T236.
-			// 🎯T455: only when the frame that carried it was the backend's own
-			// answer — authored prose is never classified, so a sentence with
-			// the word "failed" in it stays the sentence the agent wrote.
+			// 🎯T237: a typed provider-failure cause rewrites owner-visible copy
+			// so it carries the class; structured slog for T236.
+			// 🎯T455: authored prose is never classified, and neither is a
+			// transport sentence that carries no cause.
 			displayText := ev.Text
 			var failClass agenterr.Class
 			if class := classifyAssistantEvent(ev); class.IsFailure() {
@@ -391,17 +390,16 @@ func isRPCErrorFrame(raw []byte) bool {
 // classifyAssistantEvent classes a chat event from a provider-failure cause.
 // Event.Reason carries one when the provider named a code. A bare JSON-RPC
 // error frame carries one in its numeric code. The message text is not a cause.
-// Authored prose is ClassNone. Transport text with no cause still falls
-// through to ClassifyText for retry-exhausted, context-overflow, and the
-// generic error word.
+// Authored prose is ClassNone. Transport text with no cause is ClassNone.
 func classifyAssistantEvent(ev claudia.Event) agenterr.Class {
 	if assistantTextSource(ev) != agenterr.SourceTransport {
 		return agenterr.ClassNone
 	}
-	if cause := assistantProviderCause(ev); cause != "" {
-		return agenterr.Classify(agenterr.WithCause(cause, errors.New(ev.Text)))
+	cause := assistantProviderCause(ev)
+	if cause == "" {
+		return agenterr.ClassNone
 	}
-	return agenterr.ClassifyText(ev.Text)
+	return agenterr.Classify(agenterr.WithCause(cause, errors.New(ev.Text)))
 }
 
 // assistantProviderCause reads a typed cause off the event.
@@ -411,7 +409,8 @@ func classifyAssistantEvent(ev claudia.Event) agenterr.Class {
 func assistantProviderCause(ev claudia.Event) string {
 	switch ev.Reason {
 	case agenterr.CauseAuth, agenterr.CauseRateLimit, agenterr.CauseSpendWall, agenterr.CauseAccountWall,
-		agenterr.CauseBackendUnavailable, agenterr.CauseClientBug:
+		agenterr.CauseBackendUnavailable, agenterr.CauseClientBug,
+		agenterr.CauseRetryExhausted, agenterr.CauseContextOverflow:
 		return ev.Reason
 	}
 	if ev.Reason != "" {

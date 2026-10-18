@@ -6,7 +6,6 @@ package agenterr
 import (
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 // Class is a structured provider/ACP failure class (🎯T237).
@@ -60,22 +59,23 @@ func (c Class) IsFailure() bool {
 	return c != ClassNone
 }
 
-// Classify maps an error to a Class. Nil and a typed busy cause → ClassNone.
-// Auth, rate-limit, spend, account, backend, and client-bug come from the
-// provider-failure cause. The rendered sentence is not consulted for those
-// classes.
+// Classify maps an error to a Class. Nil, a typed busy cause, and an error
+// with no provider-failure cause are ClassNone. A rendered sentence is not
+// a class. Auth, rate-limit, spend, account, backend, client-bug,
+// retry-exhausted, and context-overflow come from the cause.
 func Classify(err error) Class {
 	if err == nil {
 		return ClassNone
 	}
-	switch ProviderCause(err) {
+	switch cause := ProviderCause(err); cause {
 	case "":
-		return ClassifyText(err.Error())
+		return ClassNone
 	case CauseTurnInFlight, CauseBusy, CauseProcessNotRunning, CauseSteerUnsupported, CauseTurnIdle:
 		return ClassNone
-	case CauseAuth, CauseRateLimit, CauseSpendWall, CauseAccountWall, CauseBackendUnavailable, CauseClientBug:
-		return ClassFromCause(ProviderCause(err))
 	default:
+		if class := ClassFromCause(cause); class != ClassNone {
+			return class
+		}
 		return ClassUnknown
 	}
 }
@@ -97,47 +97,19 @@ func ClassFromCause(cause string) Class {
 		return ClassBackendUnavailable
 	case CauseClientBug:
 		return ClassClientBug
+	case CauseRetryExhausted:
+		return ClassRetryExhausted
+	case CauseContextOverflow:
+		return ClassContextOverflow
 	default:
 		return ClassNone
 	}
 }
 
-// ClassifyText maps provider/ACP failure text or owner-visible copy to Class.
-// Auth, rate-limit, backend, and client-bug are not decided here. Those
-// classes come from a provider-failure cause read by Classify. What remains
-// is retry-exhausted, context-overflow, and a generic error word that
-// lands in ClassUnknown.
-func ClassifyText(msg string) Class {
-	s := strings.TrimSpace(msg)
-	if s == "" {
-		return ClassNone
-	}
-	low := strings.ToLower(s)
-
-	// 🎯T862.12: the retry budget itself ran out. Checked ahead of the
-	// backend/timeout markers because the underlying transient cause
-	// ("timed out", "500") is often quoted alongside the exhaustion
-	// phrase and would otherwise mask it as a plain backend_unavailable —
-	// an ambiguous generic failure is exactly the outcome this class
-	// exists to replace.
-	if IsRetryExhausted(low) {
-		return ClassRetryExhausted
-	}
-
-	// 🎯T926: a prompt longer than the model's window. Ahead of client_bug,
-	// where its "400 invalid_request_error" would otherwise land, and of
-	// rate_limit, whose "maximum" markers it must not trip.
-	if IsContextOverflow(s) {
-		return ClassContextOverflow
-	}
-
-	// Auth, rate-limit, backend, and client-bug are provider-failure causes
-	// read by Classify. A sentence that only quotes one of them is not a class.
-
-	// Residual failure-shaped text without a clear class.
-	if containsAny(low, "error", "failed", "failure", "exception") {
-		return ClassUnknown
-	}
+// ClassifyText reports the class of a rendered sentence. A sentence is not
+// a provider-failure cause, so this is ClassNone. Retry-exhausted and
+// context-overflow are causes read by Classify.
+func ClassifyText(string) Class {
 	return ClassNone
 }
 
@@ -260,51 +232,7 @@ func detailSuffix(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	if isBareInternalError(strings.ToLower(raw)) {
-		return "(provider returned Internal error)"
-	}
 	return "Detail: " + truncate(raw, 240)
-}
-
-func isBareInternalError(lower string) bool {
-	s := strings.Trim(lower, " \t\n\r.!,:;")
-	switch s {
-	case "internal error", "internal", "an internal error", "an internal error occurred",
-		"internal server error", "error: internal error",
-		"acp session/prompt: internal error", "acp session/prompt: internal":
-		return true
-	}
-	if strings.HasSuffix(s, ": internal error") || strings.HasSuffix(s, ": internal") {
-		return true
-	}
-	// Whole-message Internal error with only short noise around it.
-	if strings.Contains(s, "internal error") && len(s) <= 48 {
-		return true
-	}
-	return false
-}
-
-func containsAny(low string, needles ...string) bool {
-	for _, n := range needles {
-		if !strings.Contains(low, n) {
-			continue
-		}
-		if n != "" && strings.Trim(n, "0123456789") == "" {
-			// HTTP codes are tokens, not arbitrary digit sequences inside
-			// IDs, filenames, paths or numbers. Keep identifier punctuation
-			// inside each token; only trailing sentence periods are ignored.
-			for _, token := range strings.FieldsFunc(low, func(r rune) bool {
-				return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("_-./", r)
-			}) {
-				if strings.TrimRight(token, ".") == n {
-					return true
-				}
-			}
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func truncate(s string, n int) string {

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T811: the smallest seam an isolate journey needs to reproduce the broker's
@@ -71,5 +73,5 @@ func (s *Server) injectedBrokerFault(text string) error {
 	// The journey's failure report reads this line to say whether the fault fired.
 	slog.Info("🎯T811 fault seam refused an owner delivery", "component", "fault_seam",
 		"armed", armed, "text_len", len(text))
-	return fmt.Errorf("%s", brokerNotOwnerText)
+	return agenterr.NoteBrokerGrant(fmt.Errorf("%s", brokerNotOwnerText))
 }

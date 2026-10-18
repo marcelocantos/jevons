@@ -39,15 +39,21 @@ func TestClassifyFleetRecoverTerminalErrorAndEmpty(t *testing.T) {
 		Name: "jv-t236", Purpose: claudia.PurposeWork, ProcessRunning: true,
 		HasOpenMission: true, Phase: "idle", NeedsRecover: true,
 	}
-	// "Internal error" is a sentence. It is unknown, and unknown still rebriefs.
+	// "Internal error" is a sentence. It is not a class. NeedsRecover with
+	// no class still re-pressures, and an unknown class names the failure.
 	o := base
 	o.FailureClass = agenterr.ClassifyText("Internal error")
-	act, reason := ClassifyFleetRecover(o)
-	if act != FleetRecoverRebrief || !strings.Contains(reason, "terminal_failure") {
-		t.Fatalf("internal error: %s/%s", act, reason)
+	if o.FailureClass != agenterr.ClassNone {
+		t.Fatalf("class=%s want none", o.FailureClass)
 	}
-	if o.FailureClass != agenterr.ClassUnknown {
-		t.Fatalf("class=%s want unknown", o.FailureClass)
+	act, reason := ClassifyFleetRecover(o)
+	if act != FleetRecoverRebrief || reason != "needs_recover" {
+		t.Fatalf("sentence: %s/%s", act, reason)
+	}
+	o.FailureClass = agenterr.ClassUnknown
+	act, reason = ClassifyFleetRecover(o)
+	if act != FleetRecoverRebrief || !strings.Contains(reason, "terminal_failure") {
+		t.Fatalf("unknown class: %s/%s", act, reason)
 	}
 	// Empty terminal.
 	o = base

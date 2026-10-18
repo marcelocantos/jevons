@@ -4,112 +4,78 @@
 package agenterr_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
-// 🎯T455: the same refusal string is a provider failure only when the
-// backend returned it. Quoting it is not an outage.
+// 🎯T455: the same refusal string is not a provider failure from either
+// side of the wire. Quoting it is not an outage, and neither is receiving
+// the sentence as transport text. The class is a typed cause.
 func TestT455ClassifyFromFixturePairs(t *testing.T) {
 	t.Parallel()
 
-	// Load-bearing pairs: ClassifyText would fire on every row (so a
-	// classifier that ignores Source fails the authored arm), and the
-	// transport arm must keep that same class (so a classifier that
-	// records nothing also fails).
-	pairs := []struct {
-		name string
-		msg  string
-		want agenterr.Class
-	}{
-		{"bare internal error", "Internal error", agenterr.ClassUnknown},
-		{"rate limit", "429 Too Many Requests", agenterr.ClassNone},
-		{"auth", "401 Unauthorized", agenterr.ClassNone},
-		{"client bug", "grok acp: no session", agenterr.ClassNone},
-		// Live banner on :13705: Grok streams the word "failed" as its own
-		// chunk; ClassifyText residual maps it to ClassUnknown and OwnerCopy
-		// replaced the sentence. Authored must stay none.
-		{"failed earlier slices", "failed earlier slices", agenterr.ClassUnknown},
-		{"bare failed token", "failed", agenterr.ClassUnknown},
-		{
-			name: "quoted internal error in a report",
-			msg:  `The backend said "Internal error" but that was last hour; the fleet is working now.`,
-			want: agenterr.ClassUnknown,
-		},
-		{
-			// Verbatim opening of the 2026-08-15 overseer status that
-			// manufactured a provider_failure. Whatever class the words
-			// map to, authored must not record it.
-			name: "incident overseer spend-limit status",
-			msg:  "**The whole fleet is dead — Claude account monthly spend limit reached.**",
-			want: agenterr.ClassifyText("**The whole fleet is dead — Claude account monthly spend limit reached.**"),
-		},
-		{
-			name: "incident overseer holding copy",
-			msg:  "The spend limit is still in force and I'm holding the fleet.",
-			want: agenterr.ClassifyText("The spend limit is still in force and I'm holding the fleet."),
-		},
+	pairs := []string{
+		"Internal error",
+		"429 Too Many Requests",
+		"401 Unauthorized",
+		"grok acp: no session",
+		"failed earlier slices",
+		"failed",
+		`The backend said "Internal error" but that was last hour; the fleet is working now.`,
+		"**The whole fleet is dead — Claude account monthly spend limit reached.**",
+		"The spend limit is still in force and I'm holding the fleet.",
 	}
 
-	sawTransportFailure := false
-	sawAuthoredWouldHaveFired := false
-	for _, p := range pairs {
-		if got := agenterr.ClassifyFrom(agenterr.SourceAuthored, p.msg); got != agenterr.ClassNone {
-			t.Errorf("authored %s: ClassifyFrom=%q want none", p.name, got)
+	for _, msg := range pairs {
+		if got := agenterr.ClassifyFrom(agenterr.SourceAuthored, msg); got != agenterr.ClassNone {
+			t.Errorf("authored %q: ClassifyFrom=%q want none", msg, got)
 		}
-		if got := agenterr.ClassifyFrom(agenterr.SourceTransport, p.msg); got != p.want {
-			t.Errorf("transport %s: ClassifyFrom=%q want %q", p.name, got, p.want)
+		if got := agenterr.ClassifyFrom(agenterr.SourceTransport, msg); got != agenterr.ClassNone {
+			t.Errorf("transport %q: ClassifyFrom=%q want none", msg, got)
 		}
-		if p.want.IsFailure() {
-			sawTransportFailure = true
-			if agenterr.ClassifyText(p.msg).IsFailure() {
-				sawAuthoredWouldHaveFired = true
-			}
+		if agenterr.ClassifyText(msg) != agenterr.ClassNone {
+			t.Errorf("ClassifyText(%q) = %q, want none", msg, agenterr.ClassifyText(msg))
 		}
-	}
-	if !sawTransportFailure {
-		t.Fatal("over-broadness: fixture set must include a genuine transport refusal")
-	}
-	if !sawAuthoredWouldHaveFired {
-		t.Fatal("oracle too weak: at least one authored row must be a string ClassifyText would have recorded")
 	}
 
-	// Empty / unknown source fail closed — guessing authored→transport is
-	// the pollution T455 exists to stop.
+	caused := agenterr.Classify(agenterr.WithCause(agenterr.CauseBackendUnavailable, errors.New("Internal error")))
+	if caused != agenterr.ClassBackendUnavailable {
+		t.Fatalf("typed backend cause = %q", caused)
+	}
+	if agenterr.Classify(errors.New("Internal error")) != agenterr.ClassNone {
+		t.Fatal("the same sentence without a cause classified")
+	}
+
+	// Empty / unknown source fail closed.
 	if got := agenterr.ClassifyFrom("", "Internal error"); got != agenterr.ClassNone {
 		t.Errorf("empty source classified as %q, want none", got)
 	}
 	if got := agenterr.ClassifyFrom(agenterr.Source("chat"), "Internal error"); got != agenterr.ClassNone {
 		t.Errorf("unknown source classified as %q, want none", got)
 	}
-
-	// The pair invariant itself: identical characters cannot classify
-	// the same from both sides. A pre-fix ClassifyText-only tree fails
-	// this; an always-none classifier fails the transport arm above.
-	authored := agenterr.ClassifyFrom(agenterr.SourceAuthored, "Internal error")
-	transport := agenterr.ClassifyFrom(agenterr.SourceTransport, "Internal error")
-	if authored == transport {
-		t.Fatal("source must discriminate; identical refusal string classified the same from both sides")
-	}
 }
 
 func TestT455ClassifyFromDoesNotBlindDetector(t *testing.T) {
 	t.Parallel()
-	// 🎯T406 clause 4 / T455 clause 3: a real backend refusal still
-	// classifies, with the same class ClassifyText already assigned.
+	// The detector is the cause. Transport prose is not a failure, and a
+	// typed cause still classifies when the sentence is unrelated.
 	for _, msg := range []string{
 		"Internal error",
 		"acp session/prompt: Internal error",
 		"failed",
 		"failed earlier slices",
 	} {
-		want := agenterr.ClassifyText(msg)
-		if !want.IsFailure() {
-			t.Fatalf("fixture %q is not a failure under ClassifyText; oracle is weak", msg)
+		if agenterr.ClassifyText(msg).IsFailure() {
+			t.Fatalf("fixture %q classified from its words", msg)
 		}
-		if got := agenterr.ClassifyFrom(agenterr.SourceTransport, msg); got != want {
-			t.Errorf("transport %q = %q want %q (class drifted)", msg, got, want)
+		if got := agenterr.ClassifyFrom(agenterr.SourceTransport, msg); got != agenterr.ClassNone {
+			t.Errorf("transport %q = %q want none", msg, got)
 		}
+	}
+	unrelated := agenterr.WithCause(agenterr.CauseBackendUnavailable, errors.New("the fleet is fine"))
+	if got := agenterr.Classify(unrelated); got != agenterr.ClassBackendUnavailable {
+		t.Fatalf("typed cause = %q", got)
 	}
 }

@@ -75,8 +75,8 @@ func jworkFailure(errClass agenterr.Class, errRaw, result string) (agenterr.Clas
 
 // replyFailure converts a reply that is nothing but a provider failure signal
 // into an MCP error result, or returns nil when the reply is real work.
-// This is the arm that matters for Grok ACP, which delivers "Internal error"
-// as the assistant turn rather than as a transport error.
+// A reply sentence, including "Internal error", is not that signal. The
+// class arrives on the error, not in the words.
 //
 // A real reply also clears a provider hard-block (🎯T406 clause 4): evidence
 // the provider accepts work again, not a timer and not an assertion.

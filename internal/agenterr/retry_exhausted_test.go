@@ -4,6 +4,7 @@
 package agenterr_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -26,19 +27,33 @@ func TestClassifyTextRetryExhausted(t *testing.T) {
 		"gave up after 1 retry: 500 internal server error",
 	}
 	for _, in := range cases {
-		if got := agenterr.ClassifyText(in); got != agenterr.ClassRetryExhausted {
-			t.Errorf("ClassifyText(%q) = %q, want retry_exhausted", in, got)
+		if got := agenterr.ClassifyText(in); got != agenterr.ClassNone {
+			t.Errorf("ClassifyText(%q) = %q, want none", in, got)
+		}
+		if agenterr.IsRetryExhausted(errors.New(in)) {
+			t.Errorf("IsRetryExhausted(%q) read the sentence", in)
+		}
+		caused := agenterr.WithCause(agenterr.CauseRetryExhausted, errors.New(in))
+		if !agenterr.IsRetryExhausted(caused) {
+			t.Errorf("typed cause of %q was not retry-exhausted", in)
+		}
+		if got := agenterr.Classify(caused); got != agenterr.ClassRetryExhausted {
+			t.Errorf("Classify(%q) = %q, want retry_exhausted", in, got)
 		}
 	}
 }
 
 func TestIsRetryExhausted(t *testing.T) {
 	t.Parallel()
-	if !agenterr.IsRetryExhausted("Max Retries Exceeded") {
-		t.Fatal("expected retry-exhausted marker to match case-insensitively")
+	prose := errors.New("Max Retries Exceeded")
+	if agenterr.IsRetryExhausted(prose) {
+		t.Fatal("a sentence is not retry-exhausted")
 	}
-	if agenterr.IsRetryExhausted("Internal error") {
-		t.Fatal("a plain backend failure must not classify as retry_exhausted")
+	if !agenterr.IsRetryExhausted(agenterr.WithCause(agenterr.CauseRetryExhausted, errors.New("the fleet is fine"))) {
+		t.Fatal("the cause is retry-exhausted even when the sentence is not")
+	}
+	if agenterr.IsRetryExhausted(agenterr.WithCause(agenterr.CauseBackendUnavailable, errors.New("Internal error"))) {
+		t.Fatal("a backend cause must not classify as retry_exhausted")
 	}
 }
 

@@ -8,10 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -35,10 +35,11 @@ import (
 // on purpose: the owner is notified once and every later delivery fails fast.
 var ErrReadoptExhausted = errors.New("broker grant could not be re-adopted")
 
-// IsNotOwner reports whether err is the broker refusing a delivery because this
-// connection no longer owns the seat's grant.
+// IsNotOwner reports whether err is a typed broker refusal: this connection
+// no longer owns the seat's grant. A sentence that only says not_owner is
+// not one. NoteBrokerGrant is the one reader of that sentence.
 func IsNotOwner(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "not_owner")
+	return agenterr.IsGrantRefusal(err)
 }
 
 // Re-adopt pacing. A re-adopt replays the seat's ring to a fresh consumer, the
@@ -219,7 +220,7 @@ var DefaultReadopter *Readopter
 // the seat once and runs op on the fresh handle. Every other outcome, and every
 // call while no Readopter is installed, is op's own.
 func WithReadopt(ctx context.Context, name string, proc *claudia.Agent, op func(*claudia.Agent) error) error {
-	err := op(proc)
+	err := agenterr.NoteBrokerGrant(op(proc))
 	if !IsNotOwner(err) || DefaultReadopter == nil {
 		return err
 	}
@@ -227,5 +228,5 @@ func WithReadopt(ctx context.Context, name string, proc *claudia.Agent, op func(
 	if rerr != nil {
 		return fmt.Errorf("%w (re-adopt: %v)", err, rerr)
 	}
-	return op(fresh)
+	return agenterr.NoteBrokerGrant(op(fresh))
 }

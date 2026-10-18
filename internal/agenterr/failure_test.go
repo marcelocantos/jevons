@@ -31,13 +31,12 @@ func TestClassifyTextFixtures(t *testing.T) {
 		{"task abc is busy", agenterr.ClassNone},
 		{"codex app-server: turn already in flight", agenterr.ClassNone}, // real codex busy (🎯T766.4 replaced an invented phrase)
 
-		// A sentence that only quotes a class is not that class.
-		// "error" / "failed" still land in the generic unknown bucket.
-		{"Internal error", agenterr.ClassUnknown},
-		{"INTERNAL ERROR", agenterr.ClassUnknown},
-		{"internal error", agenterr.ClassUnknown},
+		// A sentence is not a class, including one that says error or failed.
+		{"Internal error", agenterr.ClassNone},
+		{"INTERNAL ERROR", agenterr.ClassNone},
+		{"internal error", agenterr.ClassNone},
 		{"Internal", agenterr.ClassNone},
-		{"acp session/prompt: Internal error", agenterr.ClassUnknown},
+		{"acp session/prompt: Internal error", agenterr.ClassNone},
 		{"service unavailable", agenterr.ClassNone},
 		{"connection refused", agenterr.ClassNone},
 		{"dial tcp: connection refused", agenterr.ClassNone},
@@ -57,7 +56,7 @@ func TestClassifyTextFixtures(t *testing.T) {
 		{"401 Unauthorized", agenterr.ClassNone},
 		{"invalid API key", agenterr.ClassNone},
 		{"not signed in — run grok auth", agenterr.ClassNone},
-		{"authentication failed", agenterr.ClassUnknown},
+		{"authentication failed", agenterr.ClassNone},
 		{"403 Forbidden", agenterr.ClassNone},
 		{"grok acp: no session", agenterr.ClassNone},
 		{"grok acp: client closed", agenterr.ClassNone},
@@ -69,10 +68,10 @@ func TestClassifyTextFixtures(t *testing.T) {
 		{"unknown agent provider \"xyz\"", agenterr.ClassNone},
 		{"agent registry not available", agenterr.ClassNone},
 
-		// unknown failure-shaped
-		{"something failed mysteriously", agenterr.ClassUnknown},
-		{"something failed unexpectedly", agenterr.ClassUnknown},
-		{"unexpected error from harness", agenterr.ClassUnknown},
+		// Failure-shaped prose is still not a class.
+		{"something failed mysteriously", agenterr.ClassNone},
+		{"something failed unexpectedly", agenterr.ClassNone},
+		{"unexpected error from harness", agenterr.ClassNone},
 	}
 	for _, tc := range cases {
 		got := agenterr.ClassifyText(tc.in)
@@ -96,8 +95,14 @@ func TestClassifyErrorNilBusyAndInternal(t *testing.T) {
 	if got := agenterr.Classify(fmt.Errorf("401 unauthorized")); got == agenterr.ClassAuth {
 		t.Fatalf("untyped 401 classified as %q", got)
 	}
-	if got := agenterr.Classify(fmt.Errorf("Internal error")); got != agenterr.ClassUnknown {
-		t.Fatalf("untyped internal error = %q, want unknown", got)
+	if got := agenterr.Classify(fmt.Errorf("Internal error")); got != agenterr.ClassNone {
+		t.Fatalf("untyped internal error = %q, want none", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseRetryExhausted, fmt.Errorf("the fleet is fine"))); got != agenterr.ClassRetryExhausted {
+		t.Fatalf("retry cause = %q", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseContextOverflow, fmt.Errorf("slow down"))); got != agenterr.ClassContextOverflow {
+		t.Fatalf("overflow cause = %q", got)
 	}
 }
 
@@ -195,11 +200,8 @@ func TestOwnerCopyNotBareInternalError(t *testing.T) {
 func TestClassifyAndFormat(t *testing.T) {
 	t.Parallel()
 	class, msg := agenterr.ClassifyAndFormat(fmt.Errorf("Internal error"))
-	if class != agenterr.ClassUnknown {
-		t.Fatalf("class=%q", class)
-	}
-	if msg == "Internal error" || !strings.Contains(msg, "unknown") {
-		t.Fatalf("msg=%q", msg)
+	if class != agenterr.ClassNone || msg != "Internal error" {
+		t.Fatalf("untyped class=%q msg=%q", class, msg)
 	}
 	class, msg = agenterr.ClassifyAndFormat(agenterr.WithCause(agenterr.CauseBackendUnavailable, fmt.Errorf("Internal error")))
 	if class != agenterr.ClassBackendUnavailable || !strings.Contains(msg, "backend_unavailable") {

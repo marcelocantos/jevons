@@ -14,8 +14,8 @@ const (
 	// TurnEmpty: no terminal text.
 	TurnEmpty TurnKind = iota
 	// TurnRefusalOnly: the entire output is a provider failure ClassifyReply
-	// already names (a bare Internal error). A spend limit or a revoked key
-	// is a cause, not this reading.
+	// already names. A sentence, including a bare Internal error, a spend
+	// limit, or a revoked key, is not this reading. Those are causes.
 	TurnRefusalOnly
 	// TurnSubstantive: the agent produced real work. A turn that quotes a
 	// refusal while also reporting progress is substantive — ClassifyReply
