@@ -163,8 +163,9 @@ func (s *Server) ReportRecoveredBacklog() {
 //     by the bounce, and a queue that waits for the next one waits for an event
 //     nothing will now generate.
 //   - the agent is not in the registry at all → the seat is gone, so the
-//     message has nowhere to be delivered. Report it with its payload size and
-//     age, then drop it: a queue against a name nobody will fill is not pending.
+//     message has nowhere to be delivered. Report the hold once, by entry id
+//     and size, not by quoting the text. The payload stays until an owner
+//     records a drop or an overseer kill discards it. The daemon does not.
 //   - the agent is registered but busy or not running → leave it queued, and
 //     say so once it has been waiting longer than StalledBacklogAfter.
 func (s *Server) SweepSendBacklogs() {
@@ -205,11 +206,10 @@ func (s *Server) SweepSendBacklogs() {
 		}
 		switch {
 		case b.InFlight > 0:
-			// This store owns the attempt. Do not reap it, replay it, or
-			// drop the claimable message behind it. ClaimFrontID refuses the
-			// owned attempt and, with it, the whole seat. reapBacklogForMissingAgent
-			// still drops a claimable snapshot id behind that attempt. This
-			// case is what keeps the sweep from calling that reap.
+			// This store owns the attempt. Do not announce it as a departed
+			// hold, replay it, or drop anything behind it. reapBacklogForMissingAgent
+			// keeps every payload; this case is what keeps a live attempt off
+			// that hold notice.
 		case b.Uncertain > 0:
 			// Never route, discard, or replay an attempt left by this daemon or
 			// its predecessor (🎯T623). PINNED is a live-seat word (🎯T599):
@@ -250,7 +250,8 @@ func (s *Server) SweepSendBacklogs() {
 		case !s.agentIsRegistered(b.Agent):
 			// 🎯T401: a reaped seat is recoverable — gate feedback stays held
 			// until jevons_agent_start (or intent lift + start) recreates it.
-			// A never-registered / aged-out name still drops (T418 clause 5).
+			// A never-registered / aged-out name is held, not dropped (🎯T766.5).
+			// The payload stays until jevons_sendq_reconcile or an overseer kill.
 			if rec, ok := LookupReapedRecord(s.fleetIntent(), b.Agent); ok {
 				s.reportHeldReapedBacklog(b, rec, now)
 				continue
@@ -363,52 +364,45 @@ func (s *Server) agentIsRegistered(name string) bool {
 	return false
 }
 
-// reapBacklogForMissingAgent drops a queue whose addressee has left the fleet,
-// after saying what was in it. The payload is named by size and age rather than
-// quoted: the point is that someone learns a message was never delivered, and
-// pasting an arbitrarily long payload into a health notice buries that.
+// reapBacklogForMissingAgent reports a queue whose addressee has left the
+// fleet. It does not claim, archive, or remove. A daemon decision is not an
+// owner decision: the payload stays until jevons_sendq_reconcile records a
+// drop, or an overseer kill discards it. The notice names the head entry's
+// id and size, not the text, and a second pass for the same hold is silent.
+// A failed snapshot leaves the queue untouched and does not consume the notice.
 func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
-	q := s.sendQueue()
-	for _, id := range b.EntryIDs {
-		e, claimed, err := q.ClaimFrontID(b.Agent, id)
-		if err != nil {
-			slog.Error("departed-agent backlog claim failed", "agent", b.Agent, "entry_id", id, "err", err)
-			return
-		}
-		if !claimed {
-			// ClaimFrontID refuses every id while an attempt is owned.
-			// The claimable message behind that attempt is still this
-			// snapshot's to drop. TakeClaimableID archives and removes
-			// it. The attempt itself is not claimable, so it stays.
-			taken, ok, derr := q.TakeClaimableID(b.Agent, id)
-			if derr != nil {
-				slog.Error("departed-agent claimable drop failed", "agent", b.Agent, "entry_id", id, "err", derr)
-				return
+	if b.Depth == 0 {
+		return
+	}
+	rows, err := s.sendQueue().Snapshot(b.Agent)
+	if err != nil {
+		slog.Error("departed-agent backlog unreadable", "agent", b.Agent, "err", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	hold := heldBacklogKey(b)
+	if s.noticedReapedBacklog(b.Agent, hold) {
+		return
+	}
+	head := rows[0]
+	if len(b.EntryIDs) > 0 {
+		for _, e := range rows {
+			if e.ID == b.EntryIDs[0] {
+				head = e
+				break
 			}
-			if !ok {
-				continue
-			}
-			s.LogEvent("agent_send", "backlog_undelivered", map[string]any{
-				"agent": b.Agent, "entry_id": taken.ID, "attempt_id": taken.AttemptID,
-				"bytes": len(taken.Text), "reason": "addressee no longer registered",
-			})
-			s.notifyFleetHealth(taken.ID, fmt.Sprintf("UNDELIVERED: queued message %s (%d bytes) for %q has no registered addressee. "+
-				"It waited %s and is being discarded with a terminal record; re-send to a live agent if still needed.",
-				taken.ID, len(taken.Text), b.Agent, taken.Age(now).Round(time.Second)))
-			continue
-		}
-		s.LogEvent("agent_send", "backlog_undelivered", map[string]any{
-			"agent": b.Agent, "entry_id": e.ID, "attempt_id": e.AttemptID,
-			"bytes": len(e.Text), "reason": "addressee no longer registered",
-		})
-		s.notifyFleetHealth(e.ID, fmt.Sprintf("UNDELIVERED: queued message %s (%d bytes) for %q has no registered addressee. "+
-			"It waited %s and is being discarded with a terminal record; re-send to a live agent if still needed.",
-			e.ID, len(e.Text), b.Agent, e.Age(now).Round(time.Second)))
-		if err := q.Resolve(b.Agent, e, sendq.TerminalUndelivered, "addressee no longer registered; sender notified"); err != nil {
-			slog.Error("backlog terminal outcome not persisted; attempt remains held", "agent", b.Agent, "entry_id", e.ID, "err", err)
-			return
 		}
 	}
+	s.LogEvent("agent_send", "backlog_held", map[string]any{
+		"agent": b.Agent, "entry_id": head.ID, "bytes": len(head.Text),
+		"queued": len(rows), "reason": "addressee no longer registered",
+	})
+	s.notifyFleetHealth(head.ID, fmt.Sprintf("HELD: queued message %s (%d bytes) for %q has no registered addressee. "+
+		"It waited %s. The payload stays. Record a drop with jevons_sendq_reconcile, "+
+		"or an overseer kill discards it. The daemon will not discard it.",
+		head.ID, len(head.Text), b.Agent, head.Age(now).Round(time.Second)))
 }
 
 // backlogHeldByIntent distinguishes intentional no-action holds from reaped

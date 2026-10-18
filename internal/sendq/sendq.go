@@ -81,8 +81,9 @@ type Entry struct {
 	// EnqueuedAt is when the daemon accepted it. The age of the oldest entry
 	// is the number that says whether a queue is waiting or stalled.
 	EnqueuedAt time.Time `json:"enqueued_at"`
-	// Empty state is the legacy pending representation. Attempting/uncertain
-	// entries remain on disk but cannot be claimed by an automatic retry.
+	// Empty state is the legacy pending representation when AttemptID is
+	// empty. Attempting, uncertain, and an empty state that still carries
+	// an attempt id remain on disk but cannot be claimed by an automatic retry.
 	State     DeliveryState `json:"state,omitempty"`
 	AttemptID string        `json:"attempt_id,omitempty"`
 	Detail    string        `json:"detail,omitempty"`
@@ -101,8 +102,10 @@ type Entry struct {
 type DeliveryState string
 
 const (
-	// Pending is the empty on-disk state. EntryPhase reads it as admitted,
-	// digest, or requeued. Those three are the one claimable pending.
+	// Pending is the empty on-disk state. With no attempt id, EntryPhase
+	// reads it as admitted, digest, or requeued — the one claimable pending.
+	// An empty state that still carries an attempt id is a held attempt, or
+	// in flight when this store owns that id. The name stays.
 	Pending    DeliveryState = ""
 	Attempting DeliveryState = "attempting"
 	Uncertain  DeliveryState = "uncertain"
@@ -832,8 +835,9 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 // (🎯T766.5.1). Each removed payload is archived under its own id before the
 // queue changes. An operator requeue shares the empty on-disk state, so a
 // matched requeued copy is discharged too, and the archive is what keeps
-// that text. An Attempting or Uncertain delivery may have reached the
-// receiver and must be reconciled, not discharged. Pending digests are
+// that text. An Attempting or Uncertain delivery, and an empty state that
+// still carries an attempt id, may have reached the receiver and must be
+// reconciled, not discharged. Pending digests are
 // unfolded from their archived originals before matching, so a receipt for
 // one member cannot discard unrelated accepted messages or replay that
 // member inside the digest on the next drain. Receipt-bound entries retain
@@ -852,7 +856,7 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 	kept := make([]Entry, 0, len(f.Entries))
 	var removedEntries []Entry
 	for _, e := range f.Entries {
-		if e.State != Pending || e.TransportRequestID != "" {
+		if !claimablePhase(EntryPhase(e, s.active[agent])) || e.TransportRequestID != "" {
 			kept = append(kept, e)
 			continue
 		}

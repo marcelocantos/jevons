@@ -441,17 +441,28 @@ func TestT623CleanupUsesOriginalEntryIDs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Another drain consumes one old entry and a new one arrives before
-			// cleanup gets the stale snapshot. Depth is still two, IDs differ.
+			// The drain leaves the first entry uncertain and does not take the
+			// second. A new arrival lands before cleanup sees the stale
+			// snapshot of the original two ids.
 			s.drainAgentSendQueue("a")
 			if _, err := s.enqueueAgentSend("a", "new arrival"); err != nil {
 				t.Fatal(err)
 			}
 			if mode == "missing" {
 				s.reapBacklogForMissingAgent(backlogs[0], time.Now())
-			} else {
-				s.routeHeldReapedBacklog(backlogs[0], fleetintent.Record{}, time.Now())
+				entries, err := s.sendQueue().Snapshot("a")
+				if err != nil || len(entries) != 3 ||
+					entries[0].Text != "first" || entries[0].State != sendq.Uncertain ||
+					entries[1].Text != "second" || entries[1].State != sendq.Pending ||
+					entries[2].Text != "new arrival" || entries[2].State != sendq.Pending {
+					t.Fatalf("departed reap discarded a payload: %+v %v", entries, err)
+				}
+				if _, err := s.sendQueue().ReadSupersession(entries[1].ID); err == nil {
+					t.Fatal("departed reap archived the claimable entry")
+				}
+				return
 			}
+			s.routeHeldReapedBacklog(backlogs[0], fleetintent.Record{}, time.Now())
 			entries, err := s.sendQueue().Snapshot("a")
 			if err != nil || len(entries) != 2 || entries[0].Text != "first" || entries[0].State != sendq.Uncertain || entries[1].Text != "new arrival" || entries[1].State != sendq.Pending {
 				t.Fatalf("stale cleanup touched the retained handoff or the new cohort: %+v %v", entries, err)

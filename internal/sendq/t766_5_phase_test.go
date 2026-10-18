@@ -4,6 +4,8 @@
 package sendq
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -510,5 +512,144 @@ func TestT7665ResolveArchivesOnlyTheDroppedEntry(t *testing.T) {
 		if _, err := q.ReadSupersession(id); err == nil {
 			t.Fatalf("kept entry %s was archived", id)
 		}
+	}
+}
+
+// An on-disk entry can omit state and still carry an attempt id. That shape
+// is not the claimable pending. The loader accepts it. The exit is an
+// operator requeue that names the attempt, not a JSON edit.
+func TestT7665EmptyStateWithAttemptIDIsNotPending(t *testing.T) {
+	dir := t.TempDir()
+	const raw = `{"agent":"a","entries":[{"id":"e1","text":"kept","enqueued_at":"2026-10-19T12:00:00Z","attempt_id":"att-1","directive":{"family":"job","kind":"authorization"}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "a.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q := NewStore(dir)
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	rows, err := q.Snapshot("a")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("load: %+v %v", rows, err)
+	}
+	e := rows[0]
+	if e.State != Pending || e.AttemptID != "att-1" || e.Text != "kept" || EntryPhase(e, "") != PhaseHeldAttempt {
+		t.Fatalf("phase = %s state = %q attempt = %q text = %q", EntryPhase(e, ""), e.State, e.AttemptID, e.Text)
+	}
+	if EntryPhase(e, "att-1") != PhaseInFlight {
+		t.Fatalf("owned phase = %s; want in flight", EntryPhase(e, "att-1"))
+	}
+	claimed, ok, err := q.ClaimFront("a")
+	if err != nil || ok || claimed.Text != "kept" || claimed.State != Pending || claimed.AttemptID != "att-1" {
+		t.Fatalf("claim treated the leftover as pending: %+v %v %v", claimed, ok, err)
+	}
+	b, err := q.Backlog("a")
+	if err != nil || b.Pending != 0 || b.Depth != 1 || b.InFlight != 0 || b.Uncertain != 1 || b.BlockReason != "held attempt" {
+		t.Fatalf("backlog = %+v %v", b, err)
+	}
+	if removed, err := q.DischargePending("a", func(Entry) bool { return true }); err != nil || removed != 0 {
+		t.Fatalf("discharge removed %d err %v", removed, err)
+	}
+	if _, _, err := q.Append("a", "other", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Consolidate("a", "", "folded", "owner", "must not fold a leftover attempt", now); err == nil {
+		t.Fatal("consolidate folded a leftover attempt")
+	}
+	if _, _, _, err := q.ApplyDirective("a", "stop", Directive{Family: "job", Kind: "hold"}, true, now); err == nil {
+		t.Fatal("hold removed a leftover authorization")
+	}
+	for i := 0; i < DigestThreshold; i++ {
+		if _, _, err := q.Append("a", "fold me", now.Add(time.Duration(i+2)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest, ok, err := q.ClaimDigest("a")
+	if err != nil || !ok {
+		t.Fatalf("digest = %+v %v %v", digest, ok, err)
+	}
+	rows, err = q.Snapshot("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw bool
+	for _, row := range rows {
+		if row.ID != "e1" {
+			continue
+		}
+		saw = row.Text == "kept" && row.State == Pending && row.AttemptID == "att-1" && EntryPhase(row, "") == PhaseHeldAttempt
+	}
+	if !saw {
+		t.Fatalf("digest destroyed the leftover: %+v", rows)
+	}
+	if _, err := q.ReadArchived("e1"); err == nil {
+		t.Fatal("digest archived the leftover")
+	}
+	if _, err := q.ReadSupersession("e1"); err == nil {
+		t.Fatal("a daemon path archived the leftover")
+	}
+	if _, err := q.Reconcile("a", "e1", "", ReconcileRequeue, "owner", "file omitted state", now); err == nil {
+		t.Fatal("requeue without the attempt id was accepted")
+	}
+	rec, err := q.Reconcile("a", "e1", "att-1", ReconcileRequeue, "owner", "file omitted state", now)
+	if err != nil || len(rec.Kept) != 1 || rec.Kept[0].AttemptID != "" || rec.Kept[0].State != Pending {
+		t.Fatalf("requeue = %+v %v", rec, err)
+	}
+	rows, err = q.Snapshot("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Entry
+	for _, row := range rows {
+		if row.ID == "e1" {
+			back = row
+		}
+	}
+	if back.ID != "e1" || back.AttemptID != "" || back.State != Pending || back.Text != "kept" || EntryPhase(back, "") != PhaseRequeued {
+		t.Fatalf("after requeue = %+v", back)
+	}
+	if err := q.Resolve("a", digest, Confirmed, "folded"); err != nil {
+		t.Fatal(err)
+	}
+	offered, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || offered.ID != "e1" {
+		t.Fatalf("requeued leftover was not offered: %+v %v %v", offered, ok, err)
+	}
+}
+
+// The same omitted state is in flight when this store already owns the attempt id.
+func TestT7665EmptyStateOwnedAttemptIsInFlight(t *testing.T) {
+	dir := t.TempDir()
+	q := NewStore(dir)
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	first, _, err := q.Append("a", "kept", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || claimed.ID != first.ID || claimed.AttemptID == "" {
+		t.Fatalf("claim: %+v %v %v", claimed, ok, err)
+	}
+	body := []byte(`{"agent":"a","entries":[{"id":"` + first.ID + `","text":"kept","enqueued_at":"2026-10-19T12:00:00Z","attempt_id":"` + claimed.AttemptID + `"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "a.json"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := q.Backlog("a")
+	if err != nil || b.Pending != 0 || b.Depth != 1 || b.InFlight != 1 || b.BlockReason != "in flight" {
+		t.Fatalf("owned backlog = %+v %v", b, err)
+	}
+	rows, err := q.Snapshot("a")
+	if err != nil || len(rows) != 1 || rows[0].State != Pending || rows[0].AttemptID != claimed.AttemptID || rows[0].Text != "kept" {
+		t.Fatalf("rewritten row = %+v %v", rows, err)
+	}
+	if EntryPhase(rows[0], claimed.AttemptID) != PhaseInFlight {
+		t.Fatalf("phase = %s", EntryPhase(rows[0], claimed.AttemptID))
+	}
+	again, ok, err := q.ClaimFront("a")
+	if err != nil || ok {
+		t.Fatalf("claim of an owned empty state: %+v %v %v", again, ok, err)
+	}
+	fresh := NewStore(dir)
+	held, err := fresh.Backlog("a")
+	if err != nil || held.Pending != 0 || held.Depth != 1 || held.InFlight != 0 || held.BlockReason != "held attempt" {
+		t.Fatalf("fresh backlog = %+v %v", held, err)
 	}
 }

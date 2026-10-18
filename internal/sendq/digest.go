@@ -263,7 +263,8 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	if err != nil || len(f.Entries) == 0 {
 		return Entry{}, false, err
 	}
-	if _, _, blocked := claimable(f.Entries, s.active[agent]); blocked {
+	active := s.active[agent]
+	if _, _, blocked := claimable(f.Entries, active); blocked {
 		return Entry{}, false, nil
 	}
 	// Typed directives, owner questions, and previously bound receipt identities
@@ -271,15 +272,16 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	// a digest has one delivery attempt and cannot carry one question identity
 	// for several distinct requests. A later hold must be
 	// able to remove the precise pending authorization under the queue lock.
+	// An empty state that still carries an attempt id is not pending.
 	for _, e := range f.Entries {
-		if e.State == Pending && (e.Directive != nil || e.RequestID != "" || e.TransportRequestID != "") {
+		if claimablePhase(EntryPhase(e, active)) && (e.Directive != nil || e.RequestID != "" || e.TransportRequestID != "") {
 			return Entry{}, false, nil
 		}
 	}
 	var members []Entry
 	first := -1
 	for i, e := range f.Entries {
-		if e.State != Pending {
+		if !claimablePhase(EntryPhase(e, active)) {
 			continue
 		}
 		if first < 0 {
@@ -320,7 +322,7 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		if i == first {
 			kept = append(kept, merged)
 		}
-		if e.State != Pending {
+		if !claimablePhase(EntryPhase(e, active)) {
 			kept = append(kept, e)
 		}
 	}

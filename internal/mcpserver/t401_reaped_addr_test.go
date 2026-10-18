@@ -179,13 +179,17 @@ func TestT401BacklogForReapedIsHeldNotDropped(t *testing.T) {
 		t.Fatalf("reaped backlog depth=%d; want 1 held (not dropped)", depth)
 	}
 
-	// Control: never-registered backlog still drops (T418).
+	// Control: a never-registered backlog is held, not dropped (🎯T766.5).
 	if _, _, err := s.sendQueue().Append("jv-t401-ghost", "orphan", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	s.SweepSendBacklogs()
-	if depth := observedPendingSends(s, "jv-t401-ghost"); depth != 0 {
-		t.Fatalf("ghost backlog depth=%d; want 0 dropped", depth)
+	if depth := observedPendingSends(s, "jv-t401-ghost"); depth != 1 {
+		t.Fatalf("ghost backlog depth=%d; want 1 held", depth)
+	}
+	ghost, err := s.sendQueue().Snapshot("jv-t401-ghost")
+	if err != nil || len(ghost) != 1 || ghost[0].Text != "orphan" {
+		t.Fatalf("ghost queue = %+v %v", ghost, err)
 	}
 }
 

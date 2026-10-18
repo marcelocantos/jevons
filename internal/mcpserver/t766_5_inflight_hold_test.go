@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,9 +15,8 @@ import (
 )
 
 // An owned attempt is not Backlog.Uncertain. The sweep's in-flight branch
-// must leave the attempt and the claimable entry behind it. Reap itself
-// drops that claimable entry; ClaimFrontID refusing the attempt is not
-// what saves the entry behind it.
+// must leave the attempt and the claimable entry behind it. A departed-seat
+// reap also keeps both; it does not discard the tail.
 func TestT7665InFlightQueueIsNotReaped(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
@@ -58,10 +58,10 @@ func TestT7665InFlightQueueIsNotReaped(t *testing.T) {
 	}
 }
 
-// reapBacklogForMissingAgent drops the claimable entry behind an owned
-// attempt. The sweep test above stays green only because the in-flight
-// branch does not call this.
-func TestT7665ReapDropsClaimableTailBehindOwnedAttempt(t *testing.T) {
+// reapBacklogForMissingAgent keeps the claimable entry behind an owned
+// attempt. The notice names the hold and does not quote either payload.
+// A second call does not alarm again.
+func TestT7665ReapKeepsTheTailBehindAnOwnedAttempt(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
 	if err != nil {
@@ -70,12 +70,13 @@ func TestT7665ReapDropsClaimableTailBehindOwnedAttempt(t *testing.T) {
 	s, _, up := t418Daemon(t, dir)
 	s.registry = reg
 	const agent = "jv-departed"
+	const tailText = "behind the attempt"
 	now := time.Now().Add(-time.Hour)
 	first, _, err := s.sendQueue().Append(agent, "in flight payload", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tail, _, err := s.sendQueue().Append(agent, "behind the attempt", now.Add(time.Second))
+	tail, _, err := s.sendQueue().Append(agent, tailText, now.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,18 +89,24 @@ func TestT7665ReapDropsClaimableTailBehindOwnedAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.reapBacklogForMissingAgent(b, time.Now())
+	s.reapBacklogForMissingAgent(b, time.Now())
 	rows, err := s.sendQueue().Snapshot(agent)
-	if err != nil || len(rows) != 1 || rows[0].ID != attempt.ID || rows[0].State != sendq.Attempting || rows[0].Text != "in flight payload" {
-		t.Fatalf("reap consumed the owned attempt or left the tail: %+v %v", rows, err)
+	if err != nil || len(rows) != 2 ||
+		rows[0].ID != attempt.ID || rows[0].State != sendq.Attempting || rows[0].Text != "in flight payload" ||
+		rows[1].ID != tail.ID || rows[1].State != sendq.Pending || rows[1].Text != tailText {
+		t.Fatalf("reap changed the queue: %+v %v", rows, err)
 	}
-	archived, err := s.sendQueue().ReadSupersession(tail.ID)
-	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].Text != "behind the attempt" {
-		t.Fatalf("tail archive = %+v %v", archived, err)
+	if _, err := s.sendQueue().ReadSupersession(tail.ID); err == nil {
+		t.Fatal("reap archived the claimable tail")
 	}
 	if _, err := s.sendQueue().ReadSupersession(attempt.ID); err == nil {
 		t.Fatal("reap archived the owned attempt")
 	}
-	if !containsLine(up.all(), "UNDELIVERED") {
-		t.Fatalf("tail drop was silent: %v", up.all())
+	joined := strings.Join(up.all(), "\n")
+	if strings.Count(joined, "HELD:") != 1 || strings.Contains(joined, "UNDELIVERED") {
+		t.Fatalf("notice = %q", up.all())
+	}
+	if strings.Contains(joined, tailText) || strings.Contains(joined, "in flight payload") {
+		t.Fatal("the health notice quoted a payload")
 	}
 }

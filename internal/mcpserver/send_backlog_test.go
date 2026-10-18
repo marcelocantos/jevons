@@ -109,10 +109,9 @@ func TestSweepDeliversABacklogNoBoundaryWillEverDrain(t *testing.T) {
 	}
 }
 
-// Clause 5's sibling for the send queue: a backlog addressed to a seat that no
-// longer exists is reported and dropped. Kept forever, it is neither delivered
-// nor surfaced — the state clause 9 forbids.
-func TestBacklogForADepartedAgentIsSurfacedThenDropped(t *testing.T) {
+// A backlog addressed to a seat that is not in the registry is reported and
+// kept. The daemon does not discard it. A second sweep does not alarm again.
+func TestBacklogForADepartedAgentIsHeld(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
 	if err != nil {
@@ -125,20 +124,27 @@ func TestBacklogForADepartedAgentIsSurfacedThenDropped(t *testing.T) {
 		t.Fatalf("seed queue: %v", err)
 	}
 	s.SweepSendBacklogs()
+	s.SweepSendBacklogs()
 
-	if !containsLine(up.all(), "UNDELIVERED") {
-		t.Fatalf("a queue for a departed agent was dropped silently; overseer saw %q", up.all())
+	joined := strings.Join(up.all(), "\n")
+	if strings.Count(joined, "HELD:") != 1 {
+		t.Fatalf("held notices = %d, want 1; overseer saw %q", strings.Count(joined, "HELD:"), up.all())
 	}
-	if depth := observedPendingSends(s, "jv-departed"); depth != 0 {
-		t.Fatalf("depth = %d; want 0 — a queue against a seat nobody will fill is not pending", depth)
+	if strings.Contains(joined, "UNDELIVERED") {
+		t.Fatalf("departed sweep discarded a payload: %v", up.all())
+	}
+	if depth := observedPendingSends(s, "jv-departed"); depth != 1 {
+		t.Fatalf("depth = %d; want 1 — the payload stays until an owner records a drop", depth)
+	}
+	rows, err := s.sendQueue().Snapshot("jv-departed")
+	if err != nil || len(rows) != 1 || rows[0].Text != "reply to your question" {
+		t.Fatalf("queue = %+v %v", rows, err)
 	}
 }
 
-// The departed-agent sweep is a shipped TerminalUndelivered Resolve. The
-// health notice names bytes, not the text. The payload has to be in the
-// archive or the drop destroyed it. An empty queue plus an UNDELIVERED line
-// is not that record.
-func TestT7665DepartedAgentDropArchivesThePayload(t *testing.T) {
+// The departed-agent sweep does not archive or remove. The health notice
+// names the entry id and the byte size, not the text.
+func TestT7665DepartedAgentHoldKeepsThePayload(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
 	if err != nil {
@@ -147,25 +153,36 @@ func TestT7665DepartedAgentDropArchivesThePayload(t *testing.T) {
 	s, _, up := t418Daemon(t, dir)
 	s.registry = reg
 
-	const payload = "reply that must survive the departed-agent drop"
+	const payload = "reply that must survive the departed-agent hold"
 	admitted, _, err := s.sendQueue().Append("jv-departed", payload, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.SweepSendBacklogs()
+	s.SweepSendBacklogs()
 
-	if !containsLine(up.all(), "UNDELIVERED") {
-		t.Fatalf("departed drop was silent; overseer saw %q", up.all())
+	joined := strings.Join(up.all(), "\n")
+	if strings.Count(joined, "HELD:") != 1 {
+		t.Fatalf("held notices:\n%s", joined)
 	}
-	if depth := observedPendingSends(s, "jv-departed"); depth != 0 {
-		t.Fatalf("depth = %d; want 0", depth)
+	if strings.Contains(joined, "UNDELIVERED") {
+		t.Fatalf("departed sweep discarded a payload:\n%s", joined)
 	}
-	if strings.Contains(strings.Join(up.all(), "\n"), payload) {
-		t.Fatal("the health notice quoted the payload; the archive is the record")
+	if strings.Contains(joined, payload) {
+		t.Fatal("the health notice quoted the payload")
 	}
-	archived, err := s.sendQueue().ReadSupersession(admitted.ID)
-	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].ID != admitted.ID || archived.Removed[0].Text != payload {
-		t.Fatalf("archive = %+v %v", archived, err)
+	if !strings.Contains(joined, admitted.ID) || !strings.Contains(joined, fmt.Sprintf("%d bytes", len(payload))) {
+		t.Fatalf("notice did not name the entry and its size:\n%s", joined)
+	}
+	if depth := observedPendingSends(s, "jv-departed"); depth != 1 {
+		t.Fatalf("depth = %d; want 1", depth)
+	}
+	rows, err := s.sendQueue().Snapshot("jv-departed")
+	if err != nil || len(rows) != 1 || rows[0].ID != admitted.ID || rows[0].Text != payload {
+		t.Fatalf("queue = %+v %v", rows, err)
+	}
+	if _, err := s.sendQueue().ReadSupersession(admitted.ID); err == nil {
+		t.Fatal("departed sweep archived the payload")
 	}
 }
 

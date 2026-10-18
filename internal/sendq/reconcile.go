@@ -173,9 +173,14 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 		return Receipt{}, fmt.Errorf("sendq: entry %s now carries attempt %s, not %s — re-read the queue before reconciling",
 			e.ID, e.AttemptID, attemptID)
 	}
-	if e.State != Pending && attemptID == "" {
+	phase := EntryPhase(e, "")
+	if !claimablePhase(phase) && attemptID == "" {
+		label := string(e.State)
+		if label == "" {
+			label = string(phase)
+		}
 		return Receipt{}, fmt.Errorf("sendq: entry %s has an unresolved %s attempt %s; name it as attempt_id so the disposition cannot land on a stale view",
-			e.ID, e.State, e.AttemptID)
+			e.ID, label, e.AttemptID)
 	}
 	// A submission this process is still inside is not an orphan (🎯T623): the
 	// drain that owns it will resolve it, and reconciling it here would race a
@@ -183,10 +188,11 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 	if e.State == Attempting && s.active[agent] == e.AttemptID {
 		return Receipt{}, fmt.Errorf("sendq: entry %s is an ACTIVE submission owned by this daemon, not an orphan — wait for it to resolve", e.ID)
 	}
-	if outcome == ReconcileRequeue && e.State == Pending {
+	if outcome == ReconcileRequeue && claimablePhase(phase) {
 		return Receipt{}, fmt.Errorf("sendq: entry %s is already pending; nothing to requeue", e.ID)
 	}
 
+	priorAttempt := e.AttemptID
 	by := Reconciliation{Actor: actor, At: now.UTC(), Outcome: outcome, Evidence: evidence}
 	rec := Receipt{Agent: strings.TrimSpace(agent), By: by}
 	if outcome == ReconcileRequeue {
@@ -217,7 +223,7 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 	if err := s.save(f); err != nil {
 		return Receipt{}, err
 	}
-	if s.active[agent] == e.AttemptID && e.AttemptID != "" {
+	if s.active[agent] == priorAttempt && priorAttempt != "" {
 		delete(s.active, agent)
 	}
 	rec.Depth = len(f.Entries)
@@ -266,11 +272,15 @@ func (s *Store) Consolidate(agent, keepID, text, actor, evidence string, now tim
 		if e.TransportRequestID != "" {
 			return Receipt{}, fmt.Errorf("sendq: receipt-bound entry %s cannot be consolidated", e.ID)
 		}
-		if e.State != Pending {
+		if phase := EntryPhase(e, s.active[agent]); !claimablePhase(phase) {
+			label := string(e.State)
+			if label == "" {
+				label = string(phase)
+			}
 			return Receipt{}, fmt.Errorf(
 				"sendq: entry %s has an unresolved %s attempt %s — reconcile it before consolidating; "+
 					"folding it away would claim non-delivery this call has no evidence for (🎯T416)",
-				e.ID, e.State, e.AttemptID)
+				e.ID, label, e.AttemptID)
 		}
 	}
 	idx := len(f.Entries) - 1

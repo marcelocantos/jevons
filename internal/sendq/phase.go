@@ -15,13 +15,17 @@ import "fmt"
 //     requeued it. Accepted, and not claimed.
 //  2. digest — State is empty and Members is set. One admitted obligation.
 //     The originals live in the digest archive.
-//  3. in_flight — State is attempting and this store owns AttemptID.
-//  4. held_attempt — State is attempting and this store does not own it.
-//     A dead daemon left it. It is not offered again.
+//  3. in_flight — this store owns AttemptID. State is attempting, or the
+//     on-disk state is empty and still carries that attempt id.
+//  4. held_attempt — AttemptID is set and this store does not own it.
+//     State is attempting, or the on-disk state is empty. A dead daemon
+//     left it, or a file omitted state beside an attempt id. It is not
+//     offered again.
 //  5. uncertain — State is uncertain. Held until an attempt result or an
 //     operator reconciliation. It is not offered again.
-//  6. requeued — State is empty and Reconciled is set. The operator sent it
-//     back to pending. The record is history on that same state.
+//  6. requeued — State is empty, AttemptID is empty, and Reconciled is set.
+//     The operator sent it back to pending. The record is history on that
+//     same state.
 type Phase string
 
 const (
@@ -34,8 +38,11 @@ const (
 )
 
 // EntryPhase reads one entry. activeAttempt is the attempt id this store
-// owns for the seat, or empty when it owns none. An empty DeliveryState is
-// admitted, digest, or requeued. Those three are the claimable pending.
+// owns for the seat, or empty when it owns none. An empty DeliveryState
+// with no attempt id is admitted, digest, or requeued. Those three are the
+// claimable pending. An empty DeliveryState that still carries an attempt
+// id is not pending: this store's attempt is in flight, and any other
+// attempt id is a held attempt. The on-disk name stays empty.
 func EntryPhase(e Entry, activeAttempt string) Phase {
 	switch e.State {
 	case Attempting:
@@ -46,6 +53,16 @@ func EntryPhase(e Entry, activeAttempt string) Phase {
 	case Uncertain:
 		return PhaseUncertain
 	case Pending:
+		// Writers clear AttemptID when they return an entry to the empty
+		// state. A file that still pairs that state with an attempt id is
+		// a leftover, not an admitted message. Rejecting the file would
+		// wedge the queue until someone edited the JSON.
+		if e.AttemptID != "" {
+			if activeAttempt != "" && e.AttemptID == activeAttempt {
+				return PhaseInFlight
+			}
+			return PhaseHeldAttempt
+		}
 		if e.Members != "" {
 			return PhaseDigest
 		}
@@ -96,7 +113,7 @@ const (
 func applyDelivery(e Entry, step deliveryStep, detail, attemptID string, by *Reconciliation) (Entry, bool, error) {
 	switch step {
 	case stepClaim:
-		if e.State != Pending {
+		if !claimablePhase(EntryPhase(e, "")) {
 			return e, false, fmt.Errorf("sendq: claim requires a pending entry")
 		}
 		if attemptID == "" {
@@ -122,7 +139,7 @@ func applyDelivery(e Entry, step deliveryStep, detail, attemptID string, by *Rec
 		}
 		return e, true, nil
 	case stepRequeue:
-		if e.State == Pending {
+		if claimablePhase(EntryPhase(e, "")) {
 			return e, false, fmt.Errorf("sendq: entry %s is already pending; nothing to requeue", e.ID)
 		}
 		if by == nil {
