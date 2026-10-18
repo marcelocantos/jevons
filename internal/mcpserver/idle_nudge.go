@@ -17,6 +17,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/turnev"
@@ -89,44 +90,21 @@ const (
 	// IdleSkipStarved: quiet past the bar, but the host has no CPU left to
 	// give — starved, not stalled (🎯T708).
 	IdleSkipStarved = "starved_host_critical"
-	// IdleSkipWaitingOnGate: the last turn declared a blocking wait on a
-	// tracked background gate (🎯T565) — the idle is the wait.
+	// IdleSkipWaitingOnGate: the last turn's status slot says the work is
+	// not idle for want of direction (🎯T565). A sentence is not that claim.
 	IdleSkipWaitingOnGate = "waiting_on_gate"
 )
 
-// gateWaitVerbs and gateWaitObjects together recognise a turn whose text
-// says the agent is deliberately waiting on a gate it already started: a
-// verb of waiting near a name for the gate. Both halves are required so a
-// report that merely mentions `bin/gate` in passing does not park the agent.
-var (
-	gateWaitVerbs   = []string{"waiting on", "waiting for", "blocked on", "blocking wait", "wait on", "until it finishes", "until it completes", "still running"}
-	gateWaitObjects = []string{"bin/gate", "gate ", "gate run", "background gate", "test-go", "test-journey", "make test", "go test", "ci run", "background task", "run_in_background", "task notification", "task-notification"}
-)
-
-// DeclaresBlockingGateWait reports whether a completed turn's text says the
-// agent is waiting on a tracked background gate rather than idle for want of
-// direction (🎯T565). Pure; the caller supplies the last terminal text.
+// DeclaresBlockingGateWait reports whether a completed turn declares a
+// typed wait (🎯T565 / 🎯T766.4). The status slot is the claim:
+// in-progress or blocked. A sentence that says "waiting on bin/gate" is
+// not. Validation may fail; the slot is still read.
 func DeclaresBlockingGateWait(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	if t == "" {
+	m, _ := envelope.Parse(text)
+	if m == nil {
 		return false
 	}
-	verb := false
-	for _, v := range gateWaitVerbs {
-		if strings.Contains(t, v) {
-			verb = true
-			break
-		}
-	}
-	if !verb {
-		return false
-	}
-	for _, o := range gateWaitObjects {
-		if strings.Contains(t, o) {
-			return true
-		}
-	}
-	return false
+	return m.Status == envelope.ProgressInProgress || m.Status == envelope.ProgressBlocked
 }
 
 // IdleNudgeKind is the payload shape once ClassifyIdleNudge returns nudge.
@@ -174,10 +152,10 @@ type IdleNudgeObs struct {
 	// session_id (🎯T545.1). The post-restart wake still full_briefs
 	// that seat. Fleet recover unstick does not treat it as the same turn.
 	SessionReminted bool
-	// WaitingOnGate is true when the agent's last completed turn declares a
-	// blocking wait on a tracked background gate (🎯T565). An idle phase
-	// under that declaration is the wait, not a stall: nudging it produced
-	// six identical "still waiting" turns in forty seconds (jv-t555.1).
+	// WaitingOnGate is true when the last completed turn's status slot is
+	// in-progress or blocked (🎯T565). An idle phase under that declaration
+	// is the wait, not a stall: nudging it produced six identical "still
+	// waiting" turns in forty seconds (jv-t555.1). Prose is not the claim.
 	WaitingOnGate bool
 	// TurnInFlight: send-path flightState == FlightInFlight (🎯T761).
 	TurnInFlight bool

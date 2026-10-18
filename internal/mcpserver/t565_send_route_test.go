@@ -11,6 +11,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T565: `jevons_agent_send name=jevons-po actor=jevons` must land in the
@@ -135,17 +137,27 @@ func TestT565ReceiverMismatchIsError(t *testing.T) {
 // turns in ~40s under repressure).
 func TestT565DeclaresBlockingGateWait(t *testing.T) {
 	t.Parallel()
+	wait := "Waiting on the background gate `bin/gate -- make test-go` to finish; nothing to do until the task notification arrives."
 	cases := []struct {
 		text string
 		want bool
 	}{
-		{"Waiting on the background gate `bin/gate -- make test-go` to finish; nothing to do until the task notification arrives.", true},
-		{"Blocked on go test ./... still running in the background (id 3f2a).", true},
-		{"Still running: make test-journey in the background — waiting for it before I report.", true},
+		{declaredInProgressReport("T565", wait), true},
+		{envelope.Format(&envelope.Message{
+			Kind: envelope.KindFinishReport, Target: "T565", Status: envelope.ProgressBlocked,
+			Blocker: "bin/gate", SilentLedger: envelope.SilentLedgerEmpty, Payload: wait,
+		}), true},
+		{wait, false},
+		{"Blocked on go test ./... still running in the background (id 3f2a).", false},
+		{"Still running: make test-journey in the background — waiting for it before I report.", false},
 		{"", false},
 		{"Committed 9ba550d3; bin/gate -- make test-go GREEN id=abc.", false},
 		{"Waiting for the owner's verdict on the design.", false},
 		{"Idle. What next?", false},
+		{envelope.Format(&envelope.Message{
+			Kind: envelope.KindFinishReport, Target: "T565", Status: envelope.ProgressLive,
+			SHA: "abcdef0123456", Verdict: envelope.VerdictGreen, SilentLedger: envelope.SilentLedgerEmpty,
+		}), false},
 	}
 	for _, c := range cases {
 		if got := DeclaresBlockingGateWait(c.text); got != c.want {
@@ -176,21 +188,28 @@ func TestT565IdleNudgeSkipsWaitingOnGate(t *testing.T) {
 }
 
 // The sweep reads the declaration off the tracker's last terminal text —
-// the product path, not a test-only field.
+// the product path, not a test-only field. The status slot is the claim.
 func TestT565SweepReadsGateWaitFromLastTerminal(t *testing.T) {
 	t.Parallel()
-	tracker := NewIdleActivityTracker()
-	tracker.by["jv-t1"] = IdleActivity{
-		Phase:        "idle",
-		Updated:      tracker.clock().Add(-DefaultIdleNudgeThreshold * 4),
-		LastTerminal: "Waiting on bin/gate -- make test-go in the background; will report when the task notification lands.",
-	}
+	prose := "Waiting on bin/gate -- make test-go in the background; will report when the task notification lands."
 	d := claudia.AgentDef{Name: "jv-t1", Purpose: claudia.PurposeWork, TargetID: "T1", AutoStart: true}
-	rep := classifyIdleNudgeFor(d, IdleNudgeSweepArgs{
-		Activity:       tracker,
-		ProcessRunning: func(string) bool { return true },
-		MissionOpen:    func(string) bool { return true },
-	}, tracker.clock())
+	sweep := func(text string) IdleNudgeReport {
+		tracker := NewIdleActivityTracker()
+		tracker.by["jv-t1"] = IdleActivity{
+			Phase:        "idle",
+			Updated:      tracker.clock().Add(-DefaultIdleNudgeThreshold * 4),
+			LastTerminal: text,
+		}
+		return classifyIdleNudgeFor(d, IdleNudgeSweepArgs{
+			Activity:       tracker,
+			ProcessRunning: func(string) bool { return true },
+			MissionOpen:    func(string) bool { return true },
+		}, tracker.clock())
+	}
+	if rep := sweep(prose); rep.Reason == IdleSkipWaitingOnGate {
+		t.Fatalf("prose wait got %s/%s, want a skip that is not a gate-wait", rep.Action, rep.Reason)
+	}
+	rep := sweep(declaredInProgressReport("T565", prose))
 	if rep.Action != IdleNudgeSkip || rep.Reason != IdleSkipWaitingOnGate {
 		t.Fatalf("got %s/%s want skip/%s", rep.Action, rep.Reason, IdleSkipWaitingOnGate)
 	}

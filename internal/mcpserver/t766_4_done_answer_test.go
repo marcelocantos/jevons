@@ -114,6 +114,7 @@ func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "provider_failure.go"), "jworkFailure")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/chat.go"), "notifyErrClass")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../upgrade/readopt.go"), "IsNotOwner")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "DeclaresBlockingGateWait")...)
 	if len(hits) != len(t7664ErrorEnglishAllowlist) {
 		t.Fatalf("error-control English classifiers = %v, allowlist %v", hits, t7664ErrorEnglishAllowlist)
 	}
