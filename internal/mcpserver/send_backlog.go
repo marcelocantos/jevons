@@ -298,10 +298,11 @@ func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record
 			"oldest_age", age.Round(time.Second).String())
 		return
 	}
-	// 🎯T582: a seat reaped on finish is not coming back for this. Route the
-	// hold to its parent (or drop gate feedback about the achieved target with
-	// one eventlog record) and tell the overseer once, rather than advising
-	// jevons_agent_start on a finished seat every sweep.
+	// 🎯T582: a seat reaped on finish is not coming back for this. Route a
+	// non-gate hold to its recorded parent. Gate feedback about an achieved
+	// target, and a hold with no recorded parent, stays until an operator
+	// reconcile or an overseer kill. Tell the overseer once, rather than
+	// advising jevons_agent_start on a finished seat every sweep.
 	if age >= heldReapedRouteAfter && reapRoutable(rec) {
 		s.routeHeldReapedBacklog(b, rec, now)
 		return

@@ -464,8 +464,14 @@ func TestT623CleanupUsesOriginalEntryIDs(t *testing.T) {
 			}
 			s.routeHeldReapedBacklog(backlogs[0], fleetintent.Record{}, time.Now())
 			entries, err := s.sendQueue().Snapshot("a")
-			if err != nil || len(entries) != 2 || entries[0].Text != "first" || entries[0].State != sendq.Uncertain || entries[1].Text != "new arrival" || entries[1].State != sendq.Pending {
-				t.Fatalf("stale cleanup touched the retained handoff or the new cohort: %+v %v", entries, err)
+			if err != nil || len(entries) != 3 ||
+				entries[0].Text != "first" || entries[0].State != sendq.Uncertain ||
+				entries[1].Text != "second" || entries[1].State != sendq.Pending ||
+				entries[2].Text != "new arrival" || entries[2].State != sendq.Pending {
+				t.Fatalf("finished-seat route discarded a payload: %+v %v", entries, err)
+			}
+			if _, err := s.sendQueue().ReadSupersession(entries[1].ID); err == nil {
+				t.Fatal("finished-seat route archived the claimable entry")
 			}
 		})
 	}

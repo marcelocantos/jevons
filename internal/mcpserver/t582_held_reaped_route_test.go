@@ -138,12 +138,85 @@ func TestT582OneNoticePerReapedSeatOverTenMinutes(t *testing.T) {
 	if !strings.Contains(notice, "do NOT jevons_agent_start") {
 		t.Fatalf("notice does not say the seat is finished:\n%s", notice)
 	}
-	if depth := observedPendingSends(f.s, agent); depth != 0 {
-		t.Fatalf("depth = %d; want 0 — the hold is resolved, not left to re-alarm", depth)
+	const payload = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
+	rows, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(rows) != 1 || rows[0].State != sendq.Pending || rows[0].Text != payload {
+		t.Fatalf("sweep discarded the claimable payload: %+v %v", rows, err)
 	}
-	// Gate feedback about the achieved target is dropped, not routed onward.
+	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
+		t.Fatal("sweep archived the claimable payload")
+	}
+	if pending, depth := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 1 || depth != 1 {
+		t.Fatalf("pending=%d depth=%d; want the payload still claimable", pending, depth)
+	}
+	if strings.Contains(notice, "Dropped") || strings.Contains(notice, payload) {
+		t.Fatalf("notice drops or quotes the payload:\n%s", notice)
+	}
+	if !strings.Contains(notice, "The payload stays") || !strings.Contains(notice, "daemon will not discard") {
+		t.Fatalf("notice does not say the payload stays:\n%s", notice)
+	}
+	// Gate feedback about the achieved target is not routed onward.
 	if got := len(f.parent.delivered()); got != 0 {
 		t.Fatalf("parent received %d message(s); gate feedback about an achieved target has no actor", got)
+	}
+}
+
+// 🎯T766.5: routeHeldReapedBacklog must not discard a claimable payload on a
+// finished-and-reaped seat. Gate feedback about the achieved target is not
+// delivered to the parent, and it is not removed. The payload stays until
+// jevons_sendq_reconcile records a drop or an overseer kill discards it.
+func TestT7665FinishedReapedRouteKeepsTheClaimablePayload(t *testing.T) {
+	const agent, parent = "jv-t577-no-checkpoint-reap", "jevons-po"
+	const payload = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
+	f := t582Server(t, agent, parent, fleetlog.ReasonReapAchieve)
+	if _, _, err := f.s.sendQueue().Append(agent, payload, f.now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	backlogs, err := f.s.sendQueue().Backlogs()
+	if err != nil || len(backlogs) != 1 {
+		t.Fatal(err)
+	}
+	rec, ok := LookupReapedRecord(f.s.fleetIntent(), agent)
+	if !ok {
+		t.Fatal("reaped record missing")
+	}
+
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+
+	rows, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(rows) != 1 || rows[0].State != sendq.Pending || rows[0].Text != payload {
+		t.Fatalf("route discarded the claimable payload: %+v %v", rows, err)
+	}
+	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
+		t.Fatal("route archived the claimable payload")
+	}
+	if pending, depth := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 1 || depth != 1 {
+		t.Fatalf("pending=%d depth=%d; want the payload still claimable", pending, depth)
+	}
+	if got := len(f.parent.delivered()); got != 0 {
+		t.Fatalf("parent received %d; gate feedback on an achieve reap is not delivered", got)
+	}
+	lines := f.up.all()
+	if got := heldReapedNotices(lines); got != 1 {
+		t.Fatalf("overseer notices = %d; want exactly 1 after two routes\n%s", got, strings.Join(lines, "\n---\n"))
+	}
+	notice := lines[0]
+	for _, banned := range []string{"Dropped", payload} {
+		if strings.Contains(notice, banned) {
+			t.Fatalf("notice contains %q:\n%s", banned, notice)
+		}
+	}
+	for _, want := range []string{
+		"Held backlog on",
+		"do NOT jevons_agent_start",
+		"The payload stays",
+		"jevons_sendq_reconcile",
+		"daemon will not discard",
+	} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("notice missing %q:\n%s", want, notice)
+		}
 	}
 }
 
