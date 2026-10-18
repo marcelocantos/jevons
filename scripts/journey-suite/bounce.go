@@ -300,9 +300,13 @@ func (s *suite) jBounceResume() error {
 	if err != nil {
 		return fmt.Errorf("snapshot before bounce: %w", err)
 	}
-	if before[id].SessionID == "" || before[id].Provider != s.provider {
+	if before[id].SessionID == "" {
 		return fmt.Errorf("bounce fixture lacks its selected provider/session identity")
 	}
+	if err := expectLandedProvider(s.provider, before[id].Provider); err != nil {
+		return fmt.Errorf("bounce fixture: %w", err)
+	}
+	landed := string(cli.PlanProvider(before[id].Provider))
 	if before[overseerName].SessionID == "" {
 		return fmt.Errorf("bounce owner conversation lacks a provider session identity")
 	}
@@ -310,7 +314,7 @@ func (s *suite) jBounceResume() error {
 	if err != nil {
 		return err
 	}
-	if err := queueJourneyProvider(preLogs, id, string(s.provider)); err != nil {
+	if err := queueJourneyProvider(preLogs, id, landed); err != nil {
 		return fmt.Errorf("original aside: %w", err)
 	}
 	if err := s.signalStop(8 * time.Second); err != nil {
@@ -372,7 +376,7 @@ func (s *suite) jBounceResume() error {
 	if !bytes.HasPrefix(logs, preLogs) {
 		return fmt.Errorf("daemon launch log was replaced during bounce")
 	}
-	if err := queueJourneyProvider(logs[len(preLogs):], id, string(s.provider)); err != nil {
+	if err := queueJourneyProvider(logs[len(preLogs):], id, landed); err != nil {
 		return fmt.Errorf("replacement aside: %w", err)
 	}
 

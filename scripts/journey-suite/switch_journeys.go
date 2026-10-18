@@ -87,11 +87,11 @@ func (s *suite) providerSwitchWithBroker() error {
 		return err
 	}
 	defer func() { _, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id}) }()
-	to := switchJourneyDestination(s.provider)
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey switch worker",
-		// The source is the isolate's provider: the switch is under test
-		// here, not placement.
+		// The source request is the isolate's provider. An unsteerable
+		// pin is dropped at mint (🎯T791); the switch below follows the
+		// plan that actually started.
 		"provider": string(cli.PlanProvider(s.provider)),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
@@ -109,9 +109,13 @@ func (s *suite) providerSwitchWithBroker() error {
 		return fmt.Errorf("source registry: %w", err)
 	}
 	source := before[id]
-	if source.SessionID == "" || cli.PlanProvider(source.Provider) != cli.PlanProvider(s.provider) {
+	if source.SessionID == "" {
 		return fmt.Errorf("source identity is not the running provider: %+v", source)
 	}
+	if err := expectLandedProvider(s.provider, source.Provider); err != nil {
+		return fmt.Errorf("source identity: %w", err)
+	}
+	to := switchJourneyDestination(cli.PlanProvider(source.Provider))
 	// owner_asked: the journey plays the owner requesting this move (🎯T561
 	// refuses an un-asked leave of a provider with weekly remaining).
 	out, err := s.mcpText("jevons_agent_switch_model", map[string]any{

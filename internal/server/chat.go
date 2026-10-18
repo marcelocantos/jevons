@@ -995,6 +995,7 @@ func (s *Server) drainOverseerNotes() {
 		// frame are the receipt for this request. Retiring the id is
 		// separate: the bytes already left, so a restart must not send
 		// them again.
+		s.noteOwnerRequest(requestID)
 		acked := s.noteOwnerDeliveredFromReceipt(requestID)
 		s.announceOwnerDelivered(batch[0], acked)
 	}

@@ -56,6 +56,11 @@ type ownerHealthState struct {
 	sendAt        time.Time
 	sendJournaled bool
 	sendDelivered bool
+	// sendRequestID is the owner-turn id the drain handed to the
+	// overseer. A later re-inject queries that receipt again before
+	// minting another prompt: the first query can lose the race with
+	// the replica write, and Started already settles.
+	sendRequestID string
 	// requeuedID / requeuedAt dedupe re-injection: send-landed and
 	// reply-or-residual can stand open at once over the same lost turn, and
 	// the owner must be asked their own question at most once per round.
@@ -156,6 +161,7 @@ func (s *Server) NoteOwnerSend(text, echo string) {
 	// so durability is not a gap the owner can suffer on this deployment.
 	h.sendJournaled = s.stateStore() == nil && !s.hasChatLog()
 	h.sendDelivered = false
+	h.sendRequestID = ""
 	h.ownerTurnAt = now
 	h.replySealedAt = time.Time{}
 	h.residual = ""
@@ -181,6 +187,15 @@ func (s *Server) noteChatJournaled(line string) {
 	if h.sendEcho != "" && line == h.sendEcho {
 		h.sendJournaled = true
 	}
+}
+
+// noteOwnerRequest remembers the id of an owner drain that the
+// overseer accepted. NoteOwnerSend clears it. Empty means this turn
+// never left the queue, so a re-inject still has nothing to re-query.
+func (s *Server) noteOwnerRequest(requestID string) {
+	s.ownerMu.Lock()
+	defer s.ownerMu.Unlock()
+	s.ownerHealthLocked().sendRequestID = strings.TrimSpace(requestID)
 }
 
 // NoteOwnerDelivered records the server ack half of send-landed: the owner's
@@ -530,6 +545,15 @@ func (a ownerActuator) requeueOwnerSend(g converge.OwnerGap, now time.Time) erro
 	queued := slices.Contains(a.s.notifyQueue, wire) || slices.Contains(a.s.notifyInFlight, wire)
 	a.s.mu.RUnlock()
 	if queued {
+		return converge.ErrOwnerStepNotApplicable
+	}
+	// The drain's first receipt query can miss a row the replica has
+	// not published yet. Re-read that same id before minting a second
+	// prompt. Do not hold ownerMu across the query.
+	a.s.ownerMu.Lock()
+	requestID := a.s.ownerHealthLocked().sendRequestID
+	a.s.ownerMu.Unlock()
+	if requestID != "" && a.s.noteOwnerDeliveredFromReceipt(requestID) {
 		return converge.ErrOwnerStepNotApplicable
 	}
 	slog.Warn("owner health: re-injecting unacked owner turn",
