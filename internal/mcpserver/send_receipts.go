@@ -170,6 +170,29 @@ func (s *Server) reconcileHeldReceipts(ctx context.Context, name string) int {
 	return settled
 }
 
+// SettleHeldReceipts closes transport obligations whose receipts already
+// settle. Shutdown calls it so a cancelled or completed receipt is not left
+// as an uncertain sendq row after this process exits. A missing receipt
+// stays; this pass does not invent a delivery and does not replay.
+func (s *Server) SettleHeldReceipts() {
+	if s == nil {
+		return
+	}
+	q := s.sendQueue()
+	backlogs, err := q.Backlogs()
+	if err != nil {
+		slog.Error("shutdown receipt settle: queue unreadable", "component", "agent_send", "err", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	defer cancel()
+	for _, b := range backlogs {
+		if b.Uncertain > 0 {
+			s.reconcileHeldReceipts(ctx, b.Agent)
+		}
+	}
+}
+
 // SetSendReceiptQuery installs the production receipt read. Nil falls back
 // to claudiawire.QueryReceipt. The published pin fails that read closed.
 // jevons_claudia_next dials Claudia. The daemon installs the replica read.

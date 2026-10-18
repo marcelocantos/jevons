@@ -30,12 +30,13 @@ import (
 // bindProbe is a seat that can carry a host request id. An untagged send
 // fails the test: the production handoff must use the bound transport id.
 type bindProbe struct {
-	t     *testing.T
-	check func(text, id string)
-	fail  error
-	mu    sync.Mutex
-	sent  []string
-	ids   []string
+	t           *testing.T
+	check       func(text, id string)
+	fail        error
+	escalateErr error
+	mu          sync.Mutex
+	sent        []string
+	ids         []string
 }
 
 func (p *bindProbe) Alive() bool      { return true }
@@ -80,7 +81,11 @@ func (p *bindProbe) SendEscalatingWithRequestID(text string, _ escalate.Ladder, 
 	p.mu.Lock()
 	p.sent = append(p.sent, text)
 	p.ids = append(p.ids, id)
+	escErr := p.escalateErr
 	p.mu.Unlock()
+	if escErr != nil {
+		return claudia.DeliveryOutcome{}, escErr
+	}
 	return claudia.DeliveryOutcome{Mechanism: "steer"}, nil
 }
 

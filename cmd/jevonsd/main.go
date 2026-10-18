@@ -1164,6 +1164,10 @@ func main() {
 		}
 		slog.Info("shutting down", "signal", sig, "exit_mode", mode.String(),
 			"stop_agents", mode.StopAgents())
+		// Receipts that already settled must leave the send queue before
+		// this process exits. A later snapshot otherwise reads an uncertain
+		// row whose receipt is cancelled.
+		mcpSrv.SettleHeldReceipts()
 		cancel()
 		httpSrv.Close()
 	}()

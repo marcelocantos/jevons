@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -106,6 +107,12 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) || !(s.flightState(name) == FlightInFlight) {
 		return agentSendResult{}, false, nil
 	}
+	// Drain reconciles before it claims. This ladder does not. An earlier
+	// handoff whose receipt is already terminal would otherwise stay an
+	// uncertain row until some later sweep, including across shutdown.
+	receiptCtx, receiptCancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	s.reconcileHeldReceipts(receiptCtx, name)
+	receiptCancel()
 	// 🎯T931: the ladder holds only rungs this seat can run. A steer-first
 	// ladder cannot start on a seat with no steer mechanism, so the ordinary
 	// path holds the message for the turn boundary.
@@ -170,7 +177,15 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 				"component", "agent_send", "name", name, "class", class, "err", err.Error())
 			return agentSendResult{}, false, nil
 		}
-		s.settleHandoff(name, handoff, sendq.Unverified, err.Error())
+		// A hard disconnect is the same claim as an immediate send: the
+		// payload did not reach a receipt, and keeping the row uncertain
+		// leaves an obligation this path will not retry. A reply timeout
+		// still cannot prove that, so that row stays unverified.
+		if ClassifySendError(err).DisprovesDelivery() {
+			s.settleHandoff(name, handoff, sendq.TerminalUndelivered, err.Error())
+		} else {
+			s.settleHandoff(name, handoff, sendq.Unverified, err.Error())
+		}
 		return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, err)
 	}
 	// A nil ladder return is the socket write. The receipt settles the
