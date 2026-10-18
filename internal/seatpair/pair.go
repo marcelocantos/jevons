@@ -12,10 +12,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
@@ -40,6 +42,8 @@ const (
 
 	// ToolPing is the internal completion probe. It is not an owner-facing tool.
 	ToolPing = "seatpair.ping"
+	// EffectLog is the executor's count of tool effects, one operation id per line.
+	EffectLog = "seatpair-effects.log"
 
 	OutcomeAccepted  = "accepted"
 	OutcomeStale     = "stale"
@@ -321,36 +325,153 @@ func (c *Caller) lookup(operationID string) (Result, bool, error) {
 }
 
 func syncPair(mcpDB, jevonsDB *sqlpipe.Database) error {
+	_, err := exchangePair(mcpDB, jevonsDB, pairDeliver)
+	return err
+}
+
+// FaultSync disturbs one seat handshake and does not run the tool effect.
+// drop discards the client's opening messages and returns how many were
+// discarded. duplicate runs two full handshakes; the second replays the
+// queued changesets, and the return is 1. CatchUpDir does not call this.
+// A later CatchUpDir opens a new handshake, which is how a lost frame is
+// recovered and a replayed frame stays one effect.
+func FaultSync(root, seat string, drop, duplicate bool) (int, error) {
+	if drop == duplicate {
+		return 0, fmt.Errorf("seat pair: fault requires exactly one of drop or duplicate")
+	}
+	if err := checkSeat(seat); err != nil {
+		return 0, err
+	}
+	mcpPath := filepath.Join(root, seat, MCPFile)
+	mcpDB, err := openDB(mcpPath)
+	if err != nil {
+		return 0, err
+	}
+	defer mcpDB.Close()
+	jevDB, err := openDB(filepath.Join(root, seat, JevonsFile))
+	if err != nil {
+		return 0, err
+	}
+	defer jevDB.Close()
+	if err := mcpDB.Exec(schema); err != nil {
+		return 0, err
+	}
+	if err := jevDB.Exec(schema); err != nil {
+		return 0, err
+	}
+	if drop {
+		return exchangePair(mcpDB, jevDB, pairDrop)
+	}
+	if _, err := exchangePair(mcpDB, jevDB, pairDeliver); err != nil {
+		return 0, err
+	}
+	// A second handshake replays the queued changesets. That is the duplicate frame.
+	if _, err := exchangePair(mcpDB, jevDB, pairDeliver); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+const (
+	pairDeliver = iota
+	pairDrop
+)
+
+func exchangePair(mcpDB, jevonsDB *sqlpipe.Database, mode int) (int, error) {
 	client, err := sqlpipe.NewPeer(mcpDB, sqlpipe.PeerConfig{OwnedTables: map[string]bool{IntentTable: true}})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer client.Close()
 	server, err := sqlpipe.NewPeer(jevonsDB, sqlpipe.PeerConfig{ApproveOwnership: approveMCPIntent})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer server.Close()
-	if err := sqlpipe.SyncPeerHandshake(client, server); err != nil {
-		return err
+	pending, err := client.Start()
+	if err != nil {
+		return 0, err
+	}
+	if mode == pairDrop {
+		return len(pending), nil
+	}
+	for len(pending) > 0 || client.State() != sqlpipe.PeerLive || server.State() != sqlpipe.PeerLive {
+		var back []sqlpipe.PeerOutMessage
+		for _, om := range pending {
+			hr, err := server.HandleMessage(om.Msg)
+			if err != nil {
+				return 0, err
+			}
+			back = append(back, hr.Messages...)
+		}
+		pending = nil
+		for _, om := range back {
+			hr, err := client.HandleMessage(om.Msg)
+			if err != nil {
+				return 0, err
+			}
+			pending = append(pending, hr.Messages...)
+		}
+		if len(pending) == 0 && (client.State() != sqlpipe.PeerLive || server.State() != sqlpipe.PeerLive) {
+			break
+		}
 	}
 	if client.State() != sqlpipe.PeerLive || server.State() != sqlpipe.PeerLive {
-		return fmt.Errorf("seat pair handshake not live: mcp=%d jevons=%d", client.State(), server.State())
+		return 0, fmt.Errorf("seat pair handshake not live: mcp=%d jevons=%d", client.State(), server.State())
 	}
 	for range 8 {
 		n, err := flushInto(client, server)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		m, err := flushInto(server, client)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if n == 0 && m == 0 {
-			return nil
+			return 0, nil
 		}
 	}
-	return fmt.Errorf("seat pair: sync did not converge")
+	return 0, fmt.Errorf("seat pair: sync did not converge")
+}
+
+// NoteEffect records one execution of operationID under stateDir and returns
+// how many times that id has been executed, including this call. The per-seat
+// databases are not this log. A second catch-up that skips a finished outcome
+// does not call it.
+func NoteEffect(stateDir, operationID string) (int64, error) {
+	if stateDir == "" || strings.TrimSpace(operationID) == "" {
+		return 0, fmt.Errorf("seat pair: effect note")
+	}
+	if strings.ContainsAny(operationID, "\r\n") {
+		return 0, fmt.Errorf("seat pair: effect note id")
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return 0, err
+	}
+	f, err := os.OpenFile(filepath.Join(stateDir, EffectLog), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return 0, err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	body, err := io.ReadAll(f)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, line := range strings.Split(string(body), "\n") {
+		if line == operationID {
+			n++
+		}
+	}
+	if _, err := f.Write([]byte(operationID + "\n")); err != nil {
+		return 0, err
+	}
+	return n + 1, nil
 }
 
 func approveMCPIntent(tables map[string]bool) bool {

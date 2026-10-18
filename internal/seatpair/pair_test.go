@@ -307,6 +307,96 @@ func t107410Child(t *testing.T) {
 	}
 }
 
+func TestT107410LostFrameRecoversAndDuplicateRunsOnce(t *testing.T) {
+	root := t.TempDir()
+	a, err := OpenCaller(root, "seat-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lostID, err := a.Commit(context.Background(), &CommitArgs{Generation: 1, Tool: ToolPing, ArgsJSON: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "seat-a", GenerationFile), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	discarded, err := FaultSync(root, "seat-a", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discarded == 0 {
+		t.Fatal("drop discarded no handshake message")
+	}
+	if intentsContain(t, filepath.Join(root, "seat-a", JevonsFile), lostID) {
+		t.Fatal("dropped frame was applied")
+	}
+	var calls int
+	effect := func(context.Context, Intent) Result {
+		calls++
+		return Result{Outcome: OutcomeAccepted, Reason: "pong"}
+	}
+	if err := CatchUpDir(context.Background(), root, effect); err != nil {
+		t.Fatal(err)
+	}
+	if err := CatchUpDir(context.Background(), root, effect); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("lost-frame effect calls = %d", calls)
+	}
+
+	b, err := OpenCaller(root, "seat-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dupID, err := b.Commit(context.Background(), &CommitArgs{Generation: 1, Tool: ToolPing, ArgsJSON: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "seat-b", GenerationFile), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extras, err := FaultSync(root, "seat-b", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if extras != 1 {
+		t.Fatalf("duplicate extras = %d", extras)
+	}
+	if !intentsContain(t, filepath.Join(root, "seat-b", JevonsFile), dupID) {
+		t.Fatal("duplicate delivery lost the intent")
+	}
+	if intentsContain(t, filepath.Join(root, "seat-b", JevonsFile), lostID) || intentsContain(t, filepath.Join(root, "seat-a", JevonsFile), dupID) {
+		t.Fatal("fault sync crossed seats")
+	}
+	before := calls
+	if err := CatchUpDir(context.Background(), root, effect); err != nil {
+		t.Fatal(err)
+	}
+	if err := CatchUpDir(context.Background(), root, effect); err != nil {
+		t.Fatal(err)
+	}
+	if calls != before+1 {
+		t.Fatalf("duplicate-frame effect calls = %d, before %d", calls, before)
+	}
+}
+
+func TestNoteEffectCountsAcrossOpen(t *testing.T) {
+	dir := t.TempDir()
+	n, err := NoteEffect(dir, "op-1")
+	if err != nil || n != 1 {
+		t.Fatalf("first = %d %v", n, err)
+	}
+	n, err = NoteEffect(dir, "op-1")
+	if err != nil || n != 2 {
+		t.Fatalf("second = %d %v", n, err)
+	}
+	n, err = NoteEffect(dir, "op-2")
+	if err != nil || n != 1 {
+		t.Fatalf("other = %d %v", n, err)
+	}
+}
+
 func intentsContain(t *testing.T, path, id string) bool {
 	t.Helper()
 	db, err := sqlpipe.OpenDatabase(path)
