@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/claudia/controlplane"
 )
 
 func TestIsolatedBrokerCommandCarriesConsumerConfiguration(t *testing.T) {
@@ -47,6 +48,24 @@ func TestIsolatedBrokerCommandCarriesConsumerConfiguration(t *testing.T) {
 
 func TestIsolateControlFileIsTheBrokerControlFile(t *testing.T) {
 	root, state := t.TempDir(), t.TempDir()
+	if err := prepareIsolateControlFile(root); err != nil {
+		t.Fatal(err)
+	}
+	prepared := filepath.Join(root, "state", claudia.ClaudiaDBFile)
+	info, err := os.Stat(prepared)
+	if err != nil || info.IsDir() || info.Size() == 0 {
+		t.Fatalf("prepared control file: %v %+v", err, info)
+	}
+	plane, err := controlplane.Open(prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plane.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(state, claudia.ClaudiaDBFile)); !os.IsNotExist(err) {
+		t.Fatalf("prepare wrote the jevons state: %v", err)
+	}
 	if err := linkIsolateControlFile(state, root); err != nil {
 		t.Fatal(err)
 	}

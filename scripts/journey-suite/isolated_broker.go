@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/claudia/controlplane"
 	"github.com/marcelocantos/claudia/omp"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
@@ -138,6 +139,13 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		return nil, err
 	}
 	socket := filepath.Join(root, "broker.sock")
+	// The published broker binds the seat pump only when claudia-control.db
+	// already exists. It does not create a missing file.
+	if err := prepareIsolateControlFile(root); err != nil {
+		_ = logFile.Close()
+		cleanup()
+		return nil, fmt.Errorf("prepare isolate control file: %w", err)
+	}
 	cmd := isolatedBrokerCommand(os.Environ(), bin, root, s.stateDir, sidecarScript)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
@@ -255,6 +263,22 @@ func copySidecarFile(src, dst string) error {
 		return fmt.Errorf("stage Claudia sidecar %s: %w", filepath.Base(dst), err)
 	}
 	return nil
+}
+
+// prepareIsolateControlFile creates the broker control file before serve.
+// The broker binds the seat pump when this file already exists and does not
+// create it when missing. The file is the broker's, not the jevons state
+// directory and not the host ~/.jevons.
+func prepareIsolateControlFile(brokerRoot string) error {
+	brokerState := filepath.Join(brokerRoot, "state")
+	if err := os.MkdirAll(brokerState, 0o700); err != nil {
+		return err
+	}
+	plane, err := controlplane.Open(filepath.Join(brokerState, claudia.ClaudiaDBFile))
+	if err != nil {
+		return err
+	}
+	return plane.Close()
 }
 
 // linkIsolateControlFile makes the isolate daemon's OpenReplica path and the
