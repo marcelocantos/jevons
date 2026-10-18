@@ -331,3 +331,80 @@ func TestT7665SupersedeRecordsAdmittedAndLeavesOtherPhases(t *testing.T) {
 		t.Fatalf("archive = %+v %v", archived, err)
 	}
 }
+
+// DischargePending is the receiver-has-it exit. A matched admitted copy and a
+// matched operator requeue leave the queue only after their payloads are
+// archived. An uncertain entry stays even when the predicate matches it.
+func TestT7665DischargeArchivesMatchedAndRequeued(t *testing.T) {
+	q := NewStore(t.TempDir())
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	uncertain, _, err := q.Append("a", "uncertain copy", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || attempt.ID != uncertain.ID {
+		t.Fatalf("claim uncertain: %+v %v %v", attempt, ok, err)
+	}
+	if err := q.Resolve("a", attempt, Unverified, "no receiver evidence"); err != nil {
+		t.Fatal(err)
+	}
+	requeued, _, err := q.Append("a", "requeued copy", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || second.ID != requeued.ID {
+		t.Fatalf("claim requeue: %+v %v %v", second, ok, err)
+	}
+	if err := q.Resolve("a", second, Unverified, "no receiver evidence"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Reconcile("a", requeued.ID, second.AttemptID, ReconcileRequeue, "owner", "transcript has no copy", now); err != nil {
+		t.Fatal(err)
+	}
+	admitted, _, err := q.Append("a", "admitted copy", now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.Append("a", "still waiting", now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := q.DischargePending("a", func(e Entry) bool {
+		return e.Text == "requeued copy" || e.Text == "admitted copy" || e.Text == "uncertain copy"
+	})
+	if err != nil || removed != 2 {
+		t.Fatalf("removed = %d err %v", removed, err)
+	}
+	left, err := q.Snapshot("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawUncertain, sawWaiting bool
+	for _, e := range left {
+		switch e.ID {
+		case uncertain.ID:
+			sawUncertain = e.Text == "uncertain copy" && EntryPhase(e, "") == PhaseUncertain
+		case requeued.ID, admitted.ID:
+			t.Fatalf("discharged entry still queued: %+v", e)
+		default:
+			sawWaiting = e.Text == "still waiting" && EntryPhase(e, "") == PhaseAdmitted
+		}
+	}
+	if !sawUncertain || !sawWaiting || len(left) != 2 {
+		t.Fatalf("queue = %+v", left)
+	}
+	for _, id := range []string{requeued.ID, admitted.ID} {
+		got, err := q.ReadSupersession(id)
+		if err != nil || len(got.Removed) != 1 || got.Removed[0].ID != id {
+			t.Fatalf("archive %s = %+v %v", id, got, err)
+		}
+	}
+	requeuedArchive, err := q.ReadSupersession(requeued.ID)
+	if err != nil || requeuedArchive.Removed[0].Text != "requeued copy" || requeuedArchive.Removed[0].Reconciled == nil {
+		t.Fatalf("requeued archive = %+v %v", requeuedArchive, err)
+	}
+	if _, err := q.ReadSupersession(uncertain.ID); err == nil {
+		t.Fatal("uncertain entry was archived")
+	}
+}

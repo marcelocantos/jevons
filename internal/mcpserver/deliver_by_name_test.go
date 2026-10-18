@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/relayroute"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // chainServer builds a Server whose fleet arm resolves to fake senders and
@@ -57,6 +59,55 @@ func chainServer(t *testing.T, fleet map[string]*fakeSender) (*Server, *overseer
 	// send_turn_begin_test.go.
 	s.SetTurnWitness(witnessYielding(TurnEvidence{Observed: true, PayloadSeen: true}))
 	return s, inbox
+}
+
+// A parent report that already reached the receiver discharges the queued
+// copy through deliverByName. The copy here was operator-requeued, which
+// shares the empty on-disk state with an admission. The payload stays in
+// the supersession archive. A non-report beside it stays in the queue.
+func TestT7665DeliveredReportDischargeArchivesTheRequeuedCopy(t *testing.T) {
+	parent := &fakeSender{alive: true}
+	s, _ := chainServer(t, map[string]*fakeSender{"jevons-po": parent})
+	const report = "[Agent jv-t7665-worker responded] report_id=20261019T120000Z-abcd\nbody that must survive"
+	if _, err := s.enqueueAgentSend("jevons-po", report); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := s.sendQueue().Snapshot("jevons-po")
+	if err != nil || len(queued) != 1 || queued[0].Text != report {
+		t.Fatalf("queued = %+v %v", queued, err)
+	}
+	attempt, ok, err := s.sendQueue().ClaimFront("jevons-po")
+	if err != nil || !ok || attempt.ID != queued[0].ID {
+		t.Fatalf("claim: %+v %v %v", attempt, ok, err)
+	}
+	if err := s.sendQueue().Resolve("jevons-po", attempt, sendq.Unverified, "no receiver evidence"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	if _, err := s.sendQueue().Reconcile("jevons-po", queued[0].ID, attempt.AttemptID, sendq.ReconcileRequeue, "owner", "transcript has no copy", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.enqueueAgentSend("jevons-po", "gate: fix your commit"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.deliverByName("jevons-po", report, OriginAgent, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "sent" || !res.ReceiverReceipt {
+		t.Fatalf("delivery = %+v", res)
+	}
+	if len(parent.sent) != 1 || !strings.Contains(parent.sent[0], "body that must survive") {
+		t.Fatalf("parent sent = %v", parent.sent)
+	}
+	left, err := s.sendQueue().Snapshot("jevons-po")
+	if err != nil || len(left) != 1 || !strings.Contains(left[0].Text, "gate: fix") {
+		t.Fatalf("queue after discharge = %+v %v", left, err)
+	}
+	archived, err := s.sendQueue().ReadSupersession(queued[0].ID)
+	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].Text != report || archived.Removed[0].Reconciled == nil {
+		t.Fatalf("archive = %+v %v", archived, err)
+	}
 }
 
 func TestDeliverByNameWorkerToPOToOverseerChain(t *testing.T) {

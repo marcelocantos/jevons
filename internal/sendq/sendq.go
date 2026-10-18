@@ -717,13 +717,16 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 }
 
 // DischargePending removes copies positively identified in receiver records
-// (🎯T766.5.1). Only Pending entries are touched: an Attempting/Uncertain
-// delivery may have reached the receiver and must be reconciled, not silently
-// forgotten. Pending digests are unfolded from their archived originals before
-// matching, so a receipt for one member cannot discard unrelated accepted
-// messages or replay that member inside the digest on the next drain.
-// Receipt-bound entries retain their exact identity; this legacy matcher must
-// neither settle them nor unfold a previously bound digest into new inputs.
+// (🎯T766.5.1). Each removed payload is archived under its own id before the
+// queue changes. An operator requeue shares the empty on-disk state, so a
+// matched requeued copy is discharged too, and the archive is what keeps
+// that text. An Attempting or Uncertain delivery may have reached the
+// receiver and must be reconciled, not discharged. Pending digests are
+// unfolded from their archived originals before matching, so a receipt for
+// one member cannot discard unrelated accepted messages or replay that
+// member inside the digest on the next drain. Receipt-bound entries retain
+// their exact identity; this legacy matcher must neither settle them nor
+// unfold a previously bound digest into new inputs.
 func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, error) {
 	if s == nil {
 		return 0, fmt.Errorf("sendq: no store")
@@ -735,7 +738,7 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 		return 0, err
 	}
 	kept := make([]Entry, 0, len(f.Entries))
-	removed := 0
+	var removedEntries []Entry
 	for _, e := range f.Entries {
 		if e.State != Pending || e.TransportRequestID != "" {
 			kept = append(kept, e)
@@ -749,7 +752,7 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 			survivors := make([]Entry, 0, len(members))
 			for _, m := range members {
 				if matches(m) {
-					removed++
+					removedEntries = append(removedEntries, m)
 				} else {
 					survivors = append(survivors, m)
 				}
@@ -762,19 +765,29 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 			continue
 		}
 		if matches(e) {
-			removed++
+			removedEntries = append(removedEntries, e)
 			continue
 		}
 		kept = append(kept, e)
 	}
-	if removed == 0 {
+	if len(removedEntries) == 0 {
 		return 0, nil
+	}
+	for _, e := range removedEntries {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      time.Now().UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return 0, err
+		}
 	}
 	f.Entries = kept
 	if err := s.save(f); err != nil {
 		return 0, err
 	}
-	return removed, nil
+	return len(removedEntries), nil
 }
 
 // Depth is the number of messages waiting for an agent. An unreadable queue
