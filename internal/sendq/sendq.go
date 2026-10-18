@@ -787,6 +787,32 @@ func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) 
 	return e, true, nil
 }
 
+// OwnedAttempt returns the entry this process is inside, if any.
+// Reconcile refuses that attempt. Claim will not take it, or anything
+// behind it, until Resolve records the result. A restarted store owns
+// nothing, so the same row is then a held attempt.
+func (s *Store) OwnedAttempt(agent string) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	active := s.active[agent]
+	if active == "" {
+		return Entry{}, false, nil
+	}
+	for _, e := range f.Entries {
+		if EntryPhase(e, active) == PhaseInFlight {
+			return e, true, nil
+		}
+	}
+	return Entry{}, false, nil
+}
+
 // BlockedHead atomically reads an unresolved attempt and its local ownership.
 // A healthy in-progress operation is not an orphan requiring reconciliation.
 func (s *Store) BlockedHead(agent string) (Entry, bool, error) {

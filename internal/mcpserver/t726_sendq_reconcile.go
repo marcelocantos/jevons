@@ -195,9 +195,14 @@ func (s *Server) describeSendqForReconcile(name string, now time.Time) string {
 	} else {
 		fmt.Fprintf(&b, "sendq for %q holds %d message(s), oldest first:\n", name, len(entries))
 	}
+	owned, ownedOK, _ := s.sendQueue().OwnedAttempt(name)
+	ownedAttempt := ""
+	if ownedOK {
+		ownedAttempt = owned.AttemptID
+	}
 	for _, e := range entries {
 		fmt.Fprintf(&b, "  %s  %-10s  %5d bytes  waiting %s\n",
-			e.ID, reconcileStateWord(e), len(e.Text), e.Age(now).Round(time.Second))
+			e.ID, reconcileStateWord(e, ownedAttempt), len(e.Text), e.Age(now).Round(time.Second))
 		if e.AttemptID != "" {
 			fmt.Fprintf(&b, "      attempt %s%s\n", e.AttemptID, detailSuffix(e.Detail))
 		}
@@ -206,13 +211,17 @@ func (s *Server) describeSendqForReconcile(name string, now time.Time) string {
 		}
 		fmt.Fprintf(&b, "      %s\n", previewPayload(e.Text))
 	}
+	if ownedOK {
+		b.WriteString("\n")
+		b.WriteString(inFlightExitLine(owned))
+	}
 	if pin, pinned := s.sendqPinFor(name); pinned {
 		fmt.Fprintf(&b, "\n%s\n", FormatSendqPinLine(name, pin))
 		fmt.Fprintf(&b, "\nNext call, once you have LOOKED (🎯T416: payload-match at user-message level, the receiver's own "+
 			"queue-operation records, transcript-file absence):\n"+
 			"  jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%q attempt_id=%q actor=<you> evidence=<what you read>\n",
 			name, pin.EntryID, pin.AttemptID)
-	} else if len(entries) > 0 {
+	} else if len(entries) > 0 && !ownedOK {
 		fmt.Fprintf(&b, "\nNothing is unresolved, so nothing needs deciding. Offer the head to the seat now:\n"+
 			"  jevons_sendq_reconcile name=%q action=drain\n", name)
 		if len(entries) > 1 {
@@ -255,11 +264,15 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 				"Settle it with: jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%[1]s attempt_id=%[3]s actor=… evidence=…\n",
 			e.ID, pinAttemptKind(e.State), e.AttemptID, name)
 	}
+	flightNote := ""
+	if owned, ok, err := s.sendQueue().OwnedAttempt(name); err == nil && ok {
+		flightNote = inFlightExitLine(owned)
+	}
 	if _, live := s.liveSender(name); !live {
 		return fmt.Sprintf(
 			"%q holds %d pending message(s), oldest waiting %s, but has no live process to deliver to.\n"+
 				"Give it one and the queue drains at the first turn boundary: jevons_agent_start name=%[1]q (no prompt).\n",
-			name, len(before), before[0].Age(now).Round(time.Second)) + heldNote
+			name, len(before), before[0].Age(now).Round(time.Second)) + heldNote + flightNote
 	}
 
 	s.drainAgentSendQueue(name)
@@ -276,7 +289,10 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	fmt.Fprintf(&b, "Drained %q: %d of %d held message(s) delivered, %d still queued.\n",
 		name, delivered, len(before), len(after))
 	b.WriteString(heldNote)
+	b.WriteString(flightNote)
 	switch {
+	case delivered == 0 && flightNote != "":
+		// The in-flight line already names why nothing moved.
 	case delivered == 0:
 		b.WriteString("Nothing moved — the seat is most likely mid-turn, and the backlog is offered again at its next boundary.\n")
 	case len(after) > 0:
@@ -310,9 +326,21 @@ func stateWord(st sendq.DeliveryState) string {
 	return string(st)
 }
 
+// inFlightExitLine names the only exit for an attempt this daemon owns.
+// Reconcile is refused, and drain will not pass it.
+func inFlightExitLine(e sendq.Entry) string {
+	return fmt.Sprintf(
+		"Entry %s is in flight as attempt %s. This daemon owns it. jevons_sendq_reconcile will not confirm, requeue, or drop it while the attempt is active. The exit is that attempt's result: a definite non-send returns the same entry to pending, and a confirmed or undelivered result archives the payload before removing it. Drain will not take this entry or anything behind it until then. A restart leaves the attempt held, and the exit is then jevons_sendq_reconcile action=confirmed|requeue|drop entry_id=%s attempt_id=%s.\n",
+		e.ID, e.AttemptID, e.ID, e.AttemptID)
+}
+
 // reconcileStateWord is the show-listing column. An omitted state beside an
-// attempt id is not an admitted pending message.
-func reconcileStateWord(e sendq.Entry) string {
+// attempt id is not an admitted pending message. An attempt this daemon
+// owns is in flight, not an admitted pending message either.
+func reconcileStateWord(e sendq.Entry, ownedAttempt string) string {
+	if sendq.EntryPhase(e, ownedAttempt) == sendq.PhaseInFlight {
+		return "in flight"
+	}
 	if e.State == sendq.Pending && sendq.EntryPhase(e, "") == sendq.PhaseHeldAttempt {
 		return "held attempt"
 	}
