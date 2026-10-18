@@ -117,12 +117,12 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		Attribute:    attribute,
 		Replica:      replica,
 	})
-	if collector != nil && replica != nil {
+	if collector != nil {
 		if mcp != nil {
-			mcp.SetSendReceiptQuery(collector.ReplicatedReceipt)
+			collector.BindSendReceiptQuery(mcp.SetSendReceiptQuery)
 		}
 		if srv != nil {
-			srv.SetSendReceiptQuery(collector.ReplicatedReceipt)
+			collector.BindSendReceiptQuery(srv.SetSendReceiptQuery)
 		}
 	}
 	if mcp != nil {

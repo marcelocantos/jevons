@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
@@ -43,6 +44,28 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	inFlight := false
 
 	dir := t.TempDir()
+	lane := openSwitchReceiptLane(t, dir)
+	expectReceipt := func(id string, turns []string) {
+		t.Helper()
+		if !lane.live {
+			return
+		}
+		got, err := lane.read(ctx, name, t1074DirectSession, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.RequestID != id || got.AttemptID != "attempt-"+id || got.State != claudiawire.ReceiptCompleted || got.Cause != "" {
+			t.Fatalf("receipt id=%s got=%+v", id, got)
+		}
+		if len(got.TurnIDs) != len(turns) {
+			t.Fatalf("receipt turns=%v want %v", got.TurnIDs, turns)
+		}
+		for i := range turns {
+			if got.TurnIDs[i] != turns[i] {
+				t.Fatalf("receipt turns=%v want %v", got.TurnIDs, turns)
+			}
+		}
+	}
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +184,10 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	if qerr != nil || !ok || got != mission {
 		t.Fatalf("stored mission before switch id=%q got=%q ok=%v err=%v", first, got, ok, qerr)
 	}
+	if lane.live {
+		lane.publish(name, t1074DirectSession, first, claudiawire.ReceiptCompleted, "", "", []string{"turn-1"})
+	}
+	expectReceipt(first, []string{"turn-1"})
 	mu.Lock()
 	if sends != 1 || len(switches) != 0 {
 		t.Fatalf("before switch sends=%d switches=%v", sends, switches)
@@ -188,6 +215,7 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	if qerr != nil || !ok || got != mission {
 		t.Fatalf("refused switch changed mission id=%q got=%q ok=%v err=%v", first, got, ok, qerr)
 	}
+	expectReceipt(first, []string{"turn-1"})
 
 	sw, err := f.SwitchModel(name, "", toModel, false)
 	if err != nil {
@@ -223,6 +251,7 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	if qerr != nil || !ok || got != mission {
 		t.Fatalf("landed switch changed mission id=%q got=%q ok=%v err=%v", first, got, ok, qerr)
 	}
+	expectReceipt(first, []string{"turn-1"})
 
 	reply, err = f.Send(name, "alpha")
 	if err != nil {
@@ -245,6 +274,11 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	if qerr != nil || !ok || got != mission {
 		t.Fatalf("first mission moved id=%q got=%q ok=%v err=%v", first, got, ok, qerr)
 	}
+	if lane.live {
+		lane.publish(name, t1074DirectSession, frozen[1].id, claudiawire.ReceiptCompleted, "", "", []string{"turn-2"})
+	}
+	expectReceipt(frozen[1].id, []string{"turn-2"})
+	expectReceipt(first, []string{"turn-1"})
 	def = reg.Def(name)
 	if def.SessionID != t1074DirectSession || def.TargetID != mission || def.Model != toModel {
 		t.Fatalf("later send reminted the seat: %+v", def)

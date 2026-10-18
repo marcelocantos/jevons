@@ -1,0 +1,66 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build jevons_claudia_next
+
+package mcpserver
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/claudiawire"
+	"github.com/marcelocantos/jevons/internal/cost"
+)
+
+const receiptLaneWhen = "2026-10-19T00:00:00.000000000Z"
+
+// receiptLane is the receipt publish the sidecar pump performs. The read is
+// the replica query startCostGuard installs.
+type receiptLane struct {
+	publish func(seat, session, id string, state claudiawire.ReceiptState, cause claudiawire.ReceiptCause, reason string, turns []string)
+}
+
+// bindReceiptLane opens the control plane and installs ReplicatedReceipt.
+// It does not start the collector loop. controlplane.Bind is process-global,
+// so callers stay sequential.
+func bindReceiptLane(t *testing.T, s *Server, dir string) receiptLane {
+	t.Helper()
+	store, err := cost.OpenStore(filepath.Join(dir, "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	replica, err := cost.OpenReplica(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = replica.Close() })
+	collector := cost.NewCollector(&cost.CollectorArgs{Store: store, Replica: replica})
+	if collector.UsesSocketHistory() {
+		t.Fatal("receipt proof polled the usage socket")
+	}
+	collector.BindSendReceiptQuery(s.SetSendReceiptQuery)
+	t.Log("production replica receipt query")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = s.LookupHeldReceipt(ctx, claudiawire.ReceiptQuery{Seat: "lane", SessionID: "lane", RequestID: "absent"})
+	if err == nil || !strings.Contains(err.Error(), "replicated receipt absent") {
+		t.Fatalf("production replica receipt query was not installed: %v", err)
+	}
+	return receiptLane{publish: func(seat, session, id string, state claudiawire.ReceiptState, cause claudiawire.ReceiptCause, reason string, turns []string) {
+		claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+			Seat: seat, SessionID: session, RequestID: id,
+			State: state, Cause: cause, Reason: reason,
+			AttemptID:  "attempt-" + id,
+			TurnIDs:    append([]string{}, turns...),
+			AcceptedAt: receiptLaneWhen,
+			UpdatedAt:  receiptLaneWhen,
+		})
+	}}
+}

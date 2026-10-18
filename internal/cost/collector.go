@@ -151,6 +151,16 @@ func (c *Collector) UsesSocketHistory() bool {
 	return c != nil && c.usageSource != nil
 }
 
+// BindSendReceiptQuery installs this collector's replica receipt read.
+// startCostGuard is the production caller. A nil collector, a nil replica,
+// or a nil setter leaves the query unset. This does not start Run.
+func (c *Collector) BindSendReceiptQuery(set func(func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error))) {
+	if c == nil || c.replica == nil || set == nil {
+		return
+	}
+	set(c.ReplicatedReceipt)
+}
+
 // Health reports the collector's loop state (🎯T654).
 func (c *Collector) Health() CollectorHealth {
 	c.mu.Lock()

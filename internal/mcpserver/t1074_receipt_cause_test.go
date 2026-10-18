@@ -183,6 +183,7 @@ func TestT1074ActiveSteerLaterRequestSettlesOnlyItsOwnReceipt(t *testing.T) {
 func TestT1074FailedSubmissionDoesNotInventCause(t *testing.T) {
 	f := newBindFixture(t, "T1074")
 	journal := receiptJournal(t, f.s, t.TempDir())
+	lane := bindReceiptLane(t, f.s, t.TempDir())
 	const text = "same text"
 	f.probe.fail = errors.New("401 unauthorized")
 	var first string
@@ -192,21 +193,11 @@ func TestT1074FailedSubmissionDoesNotInventCause(t *testing.T) {
 		}
 		if first == "" {
 			first = id
+			lane.publish(f.name, f.session, id, claudiawire.ReceiptUnknown, "", "not_found", nil)
+			return
 		}
+		lane.publish(f.name, f.session, id, claudiawire.ReceiptCompleted, "", "401 unauthorized", []string{"turn-B"})
 	}
-	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
-		if first == "" || q.RequestID == first {
-			r := heldReceipt(q, claudiawire.ReceiptUnknown)
-			r.Reason = "not_found"
-			r.Cause = ""
-			return r, nil
-		}
-		r := heldReceipt(q, claudiawire.ReceiptCompleted)
-		r.Reason = "401 unauthorized"
-		r.Cause = ""
-		r.TurnIDs = []string{"turn-B"}
-		return r, nil
-	})
 	if _, _, err := f.s.sendQueue().Append(f.name, text, time.Now()); err != nil {
 		t.Fatal(err)
 	}

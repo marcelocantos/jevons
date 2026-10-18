@@ -74,12 +74,7 @@ func TestT1074StalePredecessorDoesNotTakeNextRequest(t *testing.T) {
 	}
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return seat, false, nil })
 	receiptJournal(t, s, dir)
-	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
-		if q.Seat != name || q.SessionID != session || (q.RequestID != firstID && q.RequestID != secondID) {
-			t.Fatalf("drain queried %+v", q)
-		}
-		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
-	})
+	lane := bindReceiptLane(t, s, dir)
 
 	var mu sync.Mutex
 	var got []claudia.Event
@@ -87,6 +82,9 @@ func TestT1074StalePredecessorDoesNotTakeNextRequest(t *testing.T) {
 		mu.Lock()
 		got = append(got, ev)
 		mu.Unlock()
+		if ev.IsTerminalStop() && ev.RequestID != "" {
+			lane.publish(name, session, ev.RequestID, claudiawire.ReceiptCompleted, "", "", []string{ev.TurnID})
+		}
 	})
 
 	if _, _, err := s.sendQueue().AppendWithRequestID(name, text, firstID, time.Now()); err != nil {
@@ -189,12 +187,7 @@ func TestT1074UnboundTurnDoesNotTakeNextRequest(t *testing.T) {
 	t.Cleanup(func() { seat.Stop() })
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return seat, false, nil })
 	receiptJournal(t, s, dir)
-	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
-		if q.Seat != name || q.SessionID != session || (q.RequestID != firstID && q.RequestID != secondID) {
-			t.Fatalf("drain queried %+v", q)
-		}
-		return heldReceipt(q, claudiawire.ReceiptAccepted), nil
-	})
+	lane := bindReceiptLane(t, s, dir)
 
 	var mu sync.Mutex
 	var got []claudia.Event
@@ -202,6 +195,9 @@ func TestT1074UnboundTurnDoesNotTakeNextRequest(t *testing.T) {
 		mu.Lock()
 		got = append(got, ev)
 		mu.Unlock()
+		if ev.IsTerminalStop() && ev.RequestID != "" {
+			lane.publish(name, session, ev.RequestID, claudiawire.ReceiptCompleted, "", "", []string{ev.TurnID})
+		}
 	})
 
 	if _, _, err := s.sendQueue().AppendWithRequestID(name, text, firstID, time.Now()); err != nil {
