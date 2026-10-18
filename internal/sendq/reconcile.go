@@ -200,6 +200,17 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 		if _, _, err = applyDelivery(e, stepReconcileRemove, "", "", &by); err != nil {
 			return Receipt{}, err
 		}
+		// e is the on-disk entry, text included. A confirmed or drop
+		// disposition leaves the queue only after that payload is archived
+		// under the entry id. A failed archive leaves the queue unchanged.
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      now.UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return Receipt{}, err
+		}
 		rec.Removed = []Entry{e}
 		f.Entries = append(append([]Entry(nil), f.Entries[:idx]...), f.Entries[idx+1:]...)
 	}
@@ -295,6 +306,19 @@ func (s *Store) Consolidate(agent, keepID, text, actor, evidence string, now tim
 	survivor.EnqueuedAt = oldest
 	survivor.Reconciled = &by
 	f.Entries = []Entry{survivor}
+	// The folded payloads leave the queue only after each one is archived
+	// under its own id. The survivor stays, and is not archived. A failed
+	// archive leaves the queue unchanged.
+	for _, removed := range rec.Removed {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      now.UTC(),
+			HoldID:  removed.ID,
+			Removed: []Entry{removed},
+		}); err != nil {
+			return Receipt{}, err
+		}
+	}
 	if err := s.save(f); err != nil {
 		return Receipt{}, err
 	}
