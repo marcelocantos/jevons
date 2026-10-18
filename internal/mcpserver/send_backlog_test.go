@@ -134,6 +134,41 @@ func TestBacklogForADepartedAgentIsSurfacedThenDropped(t *testing.T) {
 	}
 }
 
+// The departed-agent sweep is a shipped TerminalUndelivered Resolve. The
+// health notice names bytes, not the text. The payload has to be in the
+// archive or the drop destroyed it. An empty queue plus an UNDELIVERED line
+// is not that record.
+func TestT7665DepartedAgentDropArchivesThePayload(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _, up := t418Daemon(t, dir)
+	s.registry = reg
+
+	const payload = "reply that must survive the departed-agent drop"
+	admitted, _, err := s.sendQueue().Append("jv-departed", payload, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SweepSendBacklogs()
+
+	if !containsLine(up.all(), "UNDELIVERED") {
+		t.Fatalf("departed drop was silent; overseer saw %q", up.all())
+	}
+	if depth := observedPendingSends(s, "jv-departed"); depth != 0 {
+		t.Fatalf("depth = %d; want 0", depth)
+	}
+	if strings.Contains(strings.Join(up.all(), "\n"), payload) {
+		t.Fatal("the health notice quoted the payload; the archive is the record")
+	}
+	archived, err := s.sendQueue().ReadSupersession(admitted.ID)
+	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].ID != admitted.ID || archived.Removed[0].Text != payload {
+		t.Fatalf("archive = %+v %v", archived, err)
+	}
+}
+
 // The reporting threshold, in both directions. A queue thirty seconds behind a
 // working agent is a queue doing its job; one that has not moved in hours is
 // the state six stacked messages sat in while every send reported success.

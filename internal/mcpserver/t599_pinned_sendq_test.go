@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -45,7 +46,7 @@ func t599PlantUndeliverable(t *testing.T, s *Server) sendq.Entry {
 func TestT599OverseerKillDiscardsHeldSendq(t *testing.T) {
 	s, dir := t530Server(t)
 	t530RegisterTree(t, s, dir)
-	t599PlantUndeliverable(t, s)
+	entry := t599PlantUndeliverable(t, s)
 
 	type logged struct {
 		decision string
@@ -97,6 +98,10 @@ func TestT599OverseerKillDiscardsHeldSendq(t *testing.T) {
 	if discards != 1 {
 		t.Fatalf("want exactly one kill_discard_sendq eventlog record, got %d", discards)
 	}
+	archived, err := s.sendQueue().ReadSupersession(entry.ID)
+	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].ID != entry.ID || archived.Removed[0].Text != entry.Text {
+		t.Fatalf("kill archive = %+v %v", archived, err)
+	}
 }
 
 // Clause 2: a parent kill still respects the guard, and the refusal names the
@@ -104,7 +109,7 @@ func TestT599OverseerKillDiscardsHeldSendq(t *testing.T) {
 func TestT599ParentKillRefusalNamesOverrideAndDrainPath(t *testing.T) {
 	s, dir := t530Server(t)
 	t530RegisterTree(t, s, dir)
-	t599PlantUndeliverable(t, s)
+	entry := t599PlantUndeliverable(t, s)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"name": t599Seat, "actor": "jevons-po"}
@@ -126,6 +131,9 @@ func TestT599ParentKillRefusalNamesOverrideAndDrainPath(t *testing.T) {
 	}
 	if depth := observedPendingSends(s, t599Seat); depth != 1 {
 		t.Fatalf("refused kill must not touch the queue; depth=%d", depth)
+	}
+	if _, err := s.sendQueue().ReadSupersession(entry.ID); !os.IsNotExist(err) {
+		t.Fatalf("refused kill archived the payload: %v", err)
 	}
 }
 

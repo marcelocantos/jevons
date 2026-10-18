@@ -408,3 +408,99 @@ func TestT7665DischargeArchivesMatchedAndRequeued(t *testing.T) {
 		t.Fatal("uncertain entry was archived")
 	}
 }
+
+// Confirmed and TerminalUndelivered are the Resolve exits that drop the
+// entry. The payload is archived under that entry's id. Unverified and
+// DefinitelyNotSent keep the entry and write no archive. Deleting the
+// archive call on the remove path leaves the queue empty and fails the
+// confirmed and terminal reads. Archiving the non-remove path fails the
+// unverified and not-sent reads.
+func TestT7665ResolveArchivesOnlyTheDroppedEntry(t *testing.T) {
+	q := NewStore(t.TempDir())
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+
+	confirmed, _, err := q.Append("a", "confirmed copy", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedAttempt, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || confirmedAttempt.ID != confirmed.ID {
+		t.Fatalf("claim confirmed: %+v %v %v", confirmedAttempt, ok, err)
+	}
+	if err := q.Resolve("a", confirmedAttempt, Confirmed, "receipt accepted"); err != nil {
+		t.Fatal(err)
+	}
+
+	terminal, _, err := q.Append("a", "terminal copy", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalAttempt, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || terminalAttempt.ID != terminal.ID {
+		t.Fatalf("claim terminal: %+v %v %v", terminalAttempt, ok, err)
+	}
+	if err := q.Resolve("a", terminalAttempt, TerminalUndelivered, "addressee gone"); err != nil {
+		t.Fatal(err)
+	}
+
+	unverified, _, err := q.Append("a", "unverified copy", now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unverifiedAttempt, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || unverifiedAttempt.ID != unverified.ID {
+		t.Fatalf("claim unverified: %+v %v %v", unverifiedAttempt, ok, err)
+	}
+	if err := q.Resolve("a", unverifiedAttempt, Unverified, "no receiver evidence"); err != nil {
+		t.Fatal(err)
+	}
+
+	notSent, _, err := q.Append("a", "not sent copy", now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notSentAttempt, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || notSentAttempt.ID != notSent.ID {
+		t.Fatalf("claim not-sent: %+v %v %v", notSentAttempt, ok, err)
+	}
+	if err := q.Resolve("a", notSentAttempt, DefinitelyNotSent, "cannot accept"); err != nil {
+		t.Fatal(err)
+	}
+
+	left, err := q.Snapshot("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawUnverified, sawNotSent bool
+	for _, e := range left {
+		switch e.ID {
+		case confirmed.ID, terminal.ID:
+			t.Fatalf("dropped entry still queued: %+v", e)
+		case unverified.ID:
+			sawUnverified = e.Text == "unverified copy" && EntryPhase(e, "") == PhaseUncertain
+		case notSent.ID:
+			sawNotSent = e.Text == "not sent copy" && EntryPhase(e, "") == PhaseAdmitted
+		default:
+			t.Fatalf("unexpected entry: %+v", e)
+		}
+	}
+	if !sawUnverified || !sawNotSent || len(left) != 2 {
+		t.Fatalf("queue = %+v", left)
+	}
+	for _, want := range []struct {
+		id, text string
+	}{
+		{confirmed.ID, "confirmed copy"},
+		{terminal.ID, "terminal copy"},
+	} {
+		got, err := q.ReadSupersession(want.id)
+		if err != nil || len(got.Removed) != 1 || got.Removed[0].ID != want.id || got.Removed[0].Text != want.text {
+			t.Fatalf("archive %s = %+v %v", want.id, got, err)
+		}
+	}
+	for _, id := range []string{unverified.ID, notSent.ID} {
+		if _, err := q.ReadSupersession(id); err == nil {
+			t.Fatalf("kept entry %s was archived", id)
+		}
+	}
+}

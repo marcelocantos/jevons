@@ -648,7 +648,10 @@ func (s *Store) BlockedHead(agent string) (Entry, bool, error) {
 }
 
 // Resolve records one attempt's outcome. Unverified retains the payload without
-// offering it again. Both entry and attempt IDs guard late results.
+// offering it again. Confirmed and TerminalUndelivered leave the queue only
+// after that entry's payload is archived under its own id. DefinitelyNotSent
+// puts the same entry back and archives nothing. Both entry and attempt IDs
+// guard late results.
 func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, detail string) error {
 	if s == nil {
 		return fmt.Errorf("sendq: no store")
@@ -695,6 +698,16 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 		return err
 	}
 	if remove {
+		// e is the on-disk entry, text included. Archive it before the
+		// removal is saved. A failed archive leaves the queue unchanged.
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      time.Now().UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return err
+		}
 		f.Entries = append(f.Entries[:at:at], f.Entries[at+1:]...)
 	} else {
 		f.Entries[at] = e
@@ -807,9 +820,11 @@ func (s *Store) Clear(agent string) error {
 	return err
 }
 
-// Discard is an explicit authority override. Return the exact removed entries
-// under the same lock so the caller can record IDs and uncertain dispositions.
-// Automatic drains/reapers must use ClaimFront/Resolve instead.
+// Discard is an explicit authority override. Each removed payload is archived
+// under its own id before the queue is emptied. A failed archive leaves the
+// queue unchanged. Return the exact removed entries under the same lock so
+// the caller can record IDs and uncertain dispositions. Automatic
+// drains/reapers must use ClaimFront/Resolve instead.
 func (s *Store) Discard(agent string) ([]Entry, error) {
 	if s == nil {
 		return nil, fmt.Errorf("sendq: no store")
@@ -819,6 +834,16 @@ func (s *Store) Discard(agent string) ([]Entry, error) {
 	f, err := s.load(agent)
 	if err != nil {
 		return nil, err
+	}
+	for _, e := range f.Entries {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      time.Now().UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.save(file{Agent: agent}); err != nil {
 		return nil, err
