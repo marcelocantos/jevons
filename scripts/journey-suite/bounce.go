@@ -35,7 +35,8 @@ func (s *suite) isolateDaemonEnv() []string {
 			strings.HasPrefix(entry, "CLAUDIA_OMP_SOCKET=") ||
 			strings.HasPrefix(entry, "JEVONS_SPOOL_DIR=") ||
 			strings.HasPrefix(entry, "CLAUDIA_OMP_SPOOL_DIR=") ||
-			strings.HasPrefix(entry, "XDG_STATE_HOME=") {
+			strings.HasPrefix(entry, "XDG_STATE_HOME=") ||
+			strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") {
 			continue
 		}
 		env = append(env, entry)
@@ -55,13 +56,23 @@ func (s *suite) isolateDaemonEnv() []string {
 		"JEVONS_TEST_FAULTS=1",
 	)
 	// 🎯T625.6: hermetic plan feed; the journey's own daemonEnv follows
-	// and, being later, overrides it.
+	// and, being later, overrides it. 🎯T940 forces NO_REFRESH after that
+	// so a journey cannot clear it.
 	planEnv, err := defaultPlanFixtureEnv(s.stateDir, string(s.provider))
 	if err != nil {
 		panic(fmt.Sprintf("isolate plan fixture: %v", err))
 	}
 	env = append(env, planEnv)
-	return append(env, s.daemonEnv...)
+	for _, entry := range s.daemonEnv {
+		// 🎯T940: the isolate daemon links Claudia and calls plan login
+		// in-process. An inherited or per-journey empty value must not
+		// win, or an expired seat rotates the shared Keychain item.
+		if strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "CLAUDIA_OMP_NO_REFRESH=1")
 }
 
 func (s *suite) startDaemon() error {
