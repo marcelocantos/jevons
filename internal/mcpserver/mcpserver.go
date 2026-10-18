@@ -176,6 +176,9 @@ type Server struct {
 	// overseer-addressed send reuses the owner chat journal and notify queue.
 	// Nil falls back to notifyJevon for agent-origin text (see deliverToOverseer).
 	overseerDeliver OverseerDeliverFunc
+	// overseerNotifyDrain runs after an intent write so a queue held by a
+	// non-working fleet drains once the fleet is runnable again. Nil is a no-op.
+	overseerNotifyDrain func()
 	// notifyReplay remembers which notification batches the overseer already
 	// holds, so the one channel every source funnels through refuses to
 	// re-deliver byte-identical content (🎯T428). Nil until first use; see

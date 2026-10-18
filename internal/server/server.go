@@ -230,6 +230,10 @@ type Server struct {
 	notifyQueue    []string
 	notifyDraining bool
 	notifySender   func(string) error
+	// allowNotifyDrain reports whether fleet intent permits beginning an
+	// overseer turn. Nil allows, so a server with no fleet store keeps the
+	// pre-gate behaviour. Invoked without s.mu held.
+	allowNotifyDrain func() bool
 	// fleetHealthJournaled counts fleet-health notes already written into
 	// the overseer transcript. The OMP sidecar does not echo that prompt
 	// as a user event, so the 🎯T63 agent_note path never sees it. A later

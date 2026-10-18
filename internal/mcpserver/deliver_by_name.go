@@ -4,12 +4,14 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -639,6 +641,23 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		// The batch never reached the seam, so remembering it would refuse the
 		// retry that is the correct response to this failure.
 		ticket.Abandon()
+		if errors.Is(err, delivery.ErrNotifyHeldByIntent) {
+			dec := s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit)
+			msg := fmt.Sprintf(
+				"overseer %q must not receive a turn while fleet intent refuses one: %s (%s) — "+
+					"message held by the daemon, NOT delivered; it drains once the intent is lifted "+
+					"(jevons_fleet_intent state=working)",
+				name, fleetintent.Describe(dec.Blocking), dec.Reason)
+			res := agentSendResult{Status: "queued", Message: msg}
+			slog.Info("agent_send",
+				"component", "agent_send",
+				"name", name,
+				"origin", string(origin),
+				"status", res.Status,
+				"outcome", "held_fleet_intent",
+			)
+			return res, nil
+		}
 		slog.Warn("agent_send",
 			"component", "agent_send",
 			"name", name,

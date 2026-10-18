@@ -299,6 +299,7 @@ persona_notes: |
 	s.run("J37-busy-escalation", s.jBusyEscalation)
 	s.run("J38-midturn-answer", s.jMidTurnAnswer)
 	s.run("J14-bounce-resume", s.jBounceResume)
+	s.run("J40-owner-pause-resume", s.jOwnerPauseResume)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J19-root-history-paint", s.j19RootHistoryPaint)
 	s.run("J22-send-once", s.jSendOnce)

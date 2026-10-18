@@ -130,6 +130,7 @@ func (s *Server) SetAgentIntent(name string, st fleetintent.State, by, reason st
 		// daemon cannot remember a park across the restart that would undo it.
 		slog.Warn("fleet intent not recorded — no intent store installed",
 			"component", "fleet_intent", "name", name, "state", string(st), "by", by)
+		s.kickOverseerNotifyDrain()
 		return nil
 	}
 	if err := store.SetAgent(name, st, by, reason, time.Now()); err != nil {
@@ -139,6 +140,7 @@ func (s *Server) SetAgentIntent(name string, st fleetintent.State, by, reason st
 		"component", "fleet_intent",
 		"name", name, "state", string(st), "by", by, "reason", reason,
 	)
+	s.kickOverseerNotifyDrain()
 	return nil
 }
 
@@ -149,6 +151,7 @@ func (s *Server) SetFleetIntent(st fleetintent.State, by, reason string) error {
 	if store == nil {
 		slog.Warn("fleet intent not recorded — no intent store installed",
 			"component", "fleet_intent", "state", string(st), "by", by)
+		s.kickOverseerNotifyDrain()
 		return nil
 	}
 	if err := store.SetFleet(st, by, reason, time.Now()); err != nil {
@@ -157,7 +160,34 @@ func (s *Server) SetFleetIntent(st fleetintent.State, by, reason string) error {
 	slog.Info("fleet intent set (fleet-wide)",
 		"component", "fleet_intent", "state", string(st), "by", by, "reason", reason,
 	)
+	s.kickOverseerNotifyDrain()
 	return nil
+}
+
+// SetOverseerNotifyDrain installs the hook that runs after an intent write.
+// Production wires it to the HTTP server's notify drain so a held overseer
+// queue leaves once the fleet is runnable. Nil disables the kick.
+func (s *Server) SetOverseerNotifyDrain(fn func()) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.overseerNotifyDrain = fn
+	s.mu.Unlock()
+}
+
+// kickOverseerNotifyDrain runs the installed hook without holding s.mu.
+// The drain's own gate no-ops while intent still refuses a turn.
+func (s *Server) kickOverseerNotifyDrain() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	fn := s.overseerNotifyDrain
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // ForgetAgentIntent drops a stored intent when the name leaves the registry.

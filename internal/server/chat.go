@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/briefaddr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -596,6 +597,12 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 	}
 
 	s.drainOverseerNotes()
+	// A working fleet still returns nil when the seat is busy: the text is
+	// queued and the caller hears delivered_unconfirmed. A non-working fleet
+	// must not. The drain above leaves the text in the queue either way.
+	if !s.notifyDrainAllowed() {
+		return delivery.ErrNotifyHeldByIntent
+	}
 	return nil
 }
 
@@ -902,6 +909,72 @@ func notifyErrClass(err error) string {
 	}
 }
 
+// SetAllowNotifyDrain installs the fleet-intent gate for the overseer notify
+// queue. A nil callback allows every drain.
+func (s *Server) SetAllowNotifyDrain(allow func() bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.allowNotifyDrain = allow
+	s.mu.Unlock()
+}
+
+// notifyDrainAllowed is true when no gate is installed or the gate allows
+// a turn. The callback runs without s.mu held.
+func (s *Server) notifyDrainAllowed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	allow := s.allowNotifyDrain
+	s.mu.Unlock()
+	if allow == nil {
+		return true
+	}
+	return allow()
+}
+
+// DrainOverseerNotes delivers any queued overseer note the fleet intent
+// currently allows. A blocked fleet leaves the queue untouched.
+func (s *Server) DrainOverseerNotes() {
+	if s == nil {
+		return
+	}
+	s.drainOverseerNotes()
+}
+
+// notifyDrainStopLocked reports whether this drain must leave the queue
+// alone. The caller holds s.mu. decision is set when the stop should be logged.
+func (s *Server) notifyDrainStopLocked() (stop bool, decision string) {
+	// A successful socket write does not mean the provider has accepted the
+	// prompt. OMP can reject a second prompt asynchronously, so do not offer
+	// another batch while the first turn is still open (🎯T623).
+	if s.notifyDraining || s.waiting || len(s.notifyQueue) == 0 {
+		return true, ""
+	}
+	// 🎯T915: after the owner's cancel, nothing queued runs until the
+	// owner's own next send (which releases the hold) or the window lapses.
+	if s.ownerCancelHold {
+		return true, "hold_after_owner_cancel"
+	}
+	return false, ""
+}
+
+func (s *Server) logNotifyDrainStop(decision string) {
+	if decision == "" {
+		return
+	}
+	s.mu.Lock()
+	depth := len(s.notifyQueue)
+	s.mu.Unlock()
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", decision,
+		"depth", depth,
+	)
+}
+
 // drainOverseerNotes attempts to deliver queued async notifications.
 //
 // 🎯T291:
@@ -915,23 +988,33 @@ func notifyErrClass(err error) string {
 // (🎯T62 — nothing dropped). Drain-in-progress serializes concurrent callers.
 func (s *Server) drainOverseerNotes() {
 	s.mu.Lock()
-	// A successful socket write does not mean the provider has accepted the
-	// prompt. OMP can reject a second prompt asynchronously, so do not offer
-	// another batch while the first turn is still open (🎯T623).
-	if s.notifyDraining || s.waiting || len(s.notifyQueue) == 0 {
+	if stop, decision := s.notifyDrainStopLocked(); stop {
 		s.mu.Unlock()
+		s.logNotifyDrainStop(decision)
 		return
 	}
-	// 🎯T915: after the owner's cancel, nothing queued runs until the
-	// owner's own next send (which releases the hold) or the window lapses.
-	if s.ownerCancelHold {
+	s.mu.Unlock()
+
+	// 🎯T1066: the worker drain's hand-off gate, applied to the overseer
+	// queue. Checked after the empty/busy/cancel stops, and before sendNotes,
+	// so a blocked fleet never mints a receipt. Re-check the stops after the
+	// callback: it runs without s.mu.
+	if !s.notifyDrainAllowed() {
+		s.mu.Lock()
 		depth := len(s.notifyQueue)
 		s.mu.Unlock()
 		slog.Info("notify_queue",
 			"component", "notify_queue",
-			"decision", "hold_after_owner_cancel",
+			"decision", "hold_fleet_intent",
 			"depth", depth,
 		)
+		return
+	}
+
+	s.mu.Lock()
+	if stop, decision := s.notifyDrainStopLocked(); stop {
+		s.mu.Unlock()
+		s.logNotifyDrainStop(decision)
 		return
 	}
 	batch, rest, ownerBatch := takeNotifyDrainBatch(s.notifyQueue)

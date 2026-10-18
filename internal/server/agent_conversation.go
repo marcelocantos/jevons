@@ -5,11 +5,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
 // 🎯T309.2: ONE agent-addressed conversation family. Three operations —
@@ -213,6 +215,15 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 	s.NoteOwnerSend(text, echo)
 	s.BroadcastChat(echo)
 	if err := s.SendToOverseerAs(userTurnPrefix+text, msgID); err != nil {
+		if errors.Is(err, delivery.ErrNotifyHeldByIntent) {
+			// The owner bubble is already on screen and the text is queued.
+			// This is not a provider failure and not a drop; the lift drains it.
+			slog.Info("chat: owner turn held by fleet intent",
+				"component", "notify_queue",
+				"decision", "hold_fleet_intent",
+			)
+			return err
+		}
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
 		if !class.IsFailure() {
 			ownerMsg = err.Error()

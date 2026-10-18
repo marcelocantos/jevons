@@ -1044,6 +1044,16 @@ func main() {
 	mcpSrv.SetOverseerDeliver(func(text string, origin mcpserver.SendOrigin) error {
 		return srv.DeliverToOverseerAs(text, string(origin))
 	})
+	// The overseer notify queue is the worker drain's hand-off gate. A
+	// non-working fleet holds the text; lifting intent drains it.
+	notifyGateName := cfg.OverseerName
+	if strings.TrimSpace(notifyGateName) == "" {
+		notifyGateName = "jevons"
+	}
+	srv.SetAllowNotifyDrain(func() bool {
+		return mcpSrv.AllowFleetControl(notifyGateName, fleetintent.ControlDeliverSubmit).Allow
+	})
+	mcpSrv.SetOverseerNotifyDrain(srv.DrainOverseerNotes)
 	// ð¯T82: event-driven fleet panel refresh when agents.json mutates.
 	srv.WatchAgentsFile(registryPath)
 
