@@ -65,10 +65,11 @@ func TestT409ClaudeTurnBeganWithoutJSONLDoesNotLie(t *testing.T) {
 
 	s.markAgentTurnBegan(name)
 
-	// Claude MarkMaterialized requires durable JSONL — without it the flag
-	// stays false. Process-local turn evidence is still recorded (T305).
-	if reg.Def(name).Materialized {
-		t.Fatal("Claude Materialized set without JSONL — would RequireResume the void")
+	// Published Claudia v0.54.0 attests every sidecar provider from the host
+	// turn. The historical name recorded a JSONL veto that the registry no
+	// longer applies. Process-local turn evidence is still recorded (T305).
+	if !reg.Def(name).Materialized {
+		t.Fatal("Claude turn began did not attest Materialized")
 	}
 	if !s.agentHasTurnBegan(name) {
 		t.Fatal("turn began should still be recorded process-locally")

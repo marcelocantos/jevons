@@ -48,10 +48,7 @@ func TestT1074HandleUserMessageCarriesRequestID(t *testing.T) {
 			t.Errorf("stored mission before send id=%q got=%q ok=%v err=%v", last.id, got, ok, qerr)
 			return fmt.Errorf("mission missing")
 		}
-		ag.PublishEvent(claudia.Event{
-			Type: "assistant", Text: "ok", StopReason: "end_turn",
-			TurnID: fmt.Sprintf("remote-%d", len(frozen)),
-		})
+		publishAcceptedTerminal(ag, fmt.Sprintf("remote-%d", len(frozen)), "ok")
 		return nil
 	})
 	var stamped []string

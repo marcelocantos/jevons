@@ -58,6 +58,19 @@ func launchFallbackWorker(t *testing.T, s *Server, name, mission string, send fu
 	return ag
 }
 
+// publishAcceptedTerminal follows the published Claudia v0.54.0 correlator.
+// A queued host request binds when the provider accepts the turn. A later
+// assistant stop on that same turn inherits the id. An assistant line by
+// itself does not consume the pending send.
+func publishAcceptedTerminal(ag *claudia.Agent, turnID, text string) {
+	ag.PublishEvent(claudia.Event{
+		Type: "progress", ProgressType: claudia.ProgressPromptAccepted, TurnID: turnID,
+	})
+	ag.PublishEvent(claudia.Event{
+		Type: "assistant", Text: text, StopReason: "end_turn", TurnID: turnID,
+	})
+}
+
 func recordFallbackMission(t *testing.T, s *Server, usage *cost.Store, frozen *[]frozenMission) {
 	t.Helper()
 	s.SetRequestMissionRecorder(func(ctx context.Context, seat, requestID, got string) error {
@@ -98,10 +111,7 @@ func TestT1074BareRegistryCarriesRequestID(t *testing.T) {
 			t.Errorf("stored mission before bare send id=%q got=%q ok=%v err=%v", last.id, got, ok, qerr)
 			return fmt.Errorf("mission missing")
 		}
-		ag.PublishEvent(claudia.Event{
-			Type: "assistant", Text: "pong", StopReason: "end_turn",
-			TurnID: fmt.Sprintf("bare-%d", len(frozen)),
-		})
+		publishAcceptedTerminal(ag, fmt.Sprintf("bare-%d", len(frozen)), "pong")
 		return nil
 	})
 	var stamped []string
@@ -189,10 +199,7 @@ func TestT1074VoiceDelegateCarriesRequestID(t *testing.T) {
 			t.Errorf("stored mission before voice send id=%q got=%q ok=%v err=%v", last.id, got, ok, qerr)
 			return fmt.Errorf("mission missing")
 		}
-		ag.PublishEvent(claudia.Event{
-			Type: "assistant", Text: "pong", StopReason: "end_turn",
-			TurnID: fmt.Sprintf("voice-%d", len(frozen)),
-		})
+		publishAcceptedTerminal(ag, fmt.Sprintf("voice-%d", len(frozen)), "pong")
 		return nil
 	})
 	var stamped []string

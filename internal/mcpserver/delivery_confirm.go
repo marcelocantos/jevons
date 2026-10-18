@@ -72,12 +72,10 @@ func (s *Server) markAgentTurnBegan(name string) {
 	// real, so it promotes Materialized — the flag recovery reads to decide
 	// whether a seat can be resumed rather than re-minted.
 	//
-	// Called unconditionally on purpose. MarkMaterialized itself refuses a
-	// Claude row with no durable JSONL behind it ("cannot mark materialized
-	// without session JSONL"), and that judgment belongs to the registry,
-	// which owns the evidence — a provider check here would be a second
-	// copy of it, free to drift. The error is expected for exactly that
-	// case and is not a failure of this path.
+	// Called unconditionally on purpose. Published Claudia attests every
+	// sidecar provider from this host turn. Resume admission reads the
+	// canonical seat store, not a Claude JSONL file. MarkMaterialized
+	// returns an error only for an unknown agent or a persist failure.
 	if reg != nil {
 		// An accepted send is not evidence that the OMP model exists or has
 		// answered. In particular an explicit Spark pin can pass Launch and
