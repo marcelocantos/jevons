@@ -281,6 +281,43 @@ func prepareIsolateControlFile(brokerRoot string) error {
 	return plane.Close()
 }
 
+// snapshotControlFile copies the broker control file, including any WAL
+// siblings, into dest. A missing file is not an error: the broker does not
+// create one when it was never prepared.
+func snapshotControlFile(root, dest string) error {
+	state := filepath.Join(root, "state")
+	entries, err := os.ReadDir(state)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), claudia.ClaudiaDBFile) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(dest, 0o700); err != nil {
+		return err
+	}
+	for _, name := range names {
+		body, err := os.ReadFile(filepath.Join(state, name))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dest, name), body, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // linkIsolateControlFile makes the isolate daemon's OpenReplica path and the
 // broker's control file the same inode. OpenReplica joins the jevons state
 // directory with claudia-control.db. The broker reconciles that name under
@@ -363,6 +400,10 @@ func (b *isolatedBroker) close() error {
 			<-b.done
 		}
 	}
+	// The broker root is deleted below. The control file is the only record
+	// of whether the seat pump wrote a receipt. Keep it beside the daemon
+	// log, which the suite retains when -keep is set.
+	stopped = errors.Join(stopped, snapshotControlFile(b.root, filepath.Join(filepath.Dir(b.log.Name()), "control-snapshot")))
 	if body, err := os.ReadFile(filepath.Join(b.root, "omp-sidecar.log")); err == nil {
 		stopped = errors.Join(stopped, os.WriteFile(filepath.Join(filepath.Dir(b.log.Name()), "omp-sidecar.log"), body, 0o600))
 	}

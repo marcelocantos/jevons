@@ -92,6 +92,49 @@ func TestIsolateControlFileIsTheBrokerControlFile(t *testing.T) {
 	}
 }
 
+func TestSnapshotControlFileCopiesWALSiblings(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db := []byte("control-bytes")
+	wal := []byte("wal-bytes")
+	if err := os.WriteFile(filepath.Join(state, claudia.ClaudiaDBFile), db, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, claudia.ClaudiaDBFile+"-wal"), wal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "grants.db"), []byte("grants"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "control-snapshot")
+	if err := snapshotControlFile(root, dest); err != nil {
+		t.Fatal(err)
+	}
+	gotDB, err := os.ReadFile(filepath.Join(dest, claudia.ClaudiaDBFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotWAL, err := os.ReadFile(filepath.Join(dest, claudia.ClaudiaDBFile+"-wal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotDB) != string(db) || string(gotWAL) != string(wal) {
+		t.Fatalf("snapshot db=%q wal=%q", gotDB, gotWAL)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "grants.db")); !os.IsNotExist(err) {
+		t.Fatalf("grant file copied: %v", err)
+	}
+}
+
+func TestSnapshotControlFileMissingIsQuiet(t *testing.T) {
+	if err := snapshotControlFile(t.TempDir(), filepath.Join(t.TempDir(), "control-snapshot")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDumpIsolateLogsIncludesBroker(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "claudia-broker.log"), []byte("broker-saw-the-seat\n"), 0o600); err != nil {
