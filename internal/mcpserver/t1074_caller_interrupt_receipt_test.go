@@ -5,7 +5,6 @@ package mcpserver
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -128,7 +127,7 @@ func TestT1074CallerInterruptTimeoutSettlesFromReceipt(t *testing.T) {
 		queried = q.RequestID
 		return heldReceipt(q, claudiawire.ReceiptCompleted), nil
 	})
-	res, err, calls, transportID := callerInterruptSend(t, f, payload, errors.New("operation timed out"))
+	res, err, calls, transportID := callerInterruptSend(t, f, payload, context.DeadlineExceeded)
 	if err != nil || res.Status != "interrupted_sent" || !res.ReceiptSettled {
 		t.Fatalf("caller status=%q settled=%v err=%v calls=%d", res.Status, res.ReceiptSettled, err, calls)
 	}

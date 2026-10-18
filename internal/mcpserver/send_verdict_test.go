@@ -258,9 +258,18 @@ func TestClassifySendErrorSeparatesNonObservationFromDisproof(t *testing.T) {
 		{"wrapped reply deadline",
 			fmt.Errorf("deliver turn to agent %q: %w", "jevons-po", context.DeadlineExceeded),
 			ClaimReplyUnverified},
-		{"operation timed out",
+		// A sentence that quotes a timeout is not the typed deadline. The
+		// specimen words are what an MCP client said about a push that had
+		// already landed; they do not decide the claim.
+		{"quoted operation timed out",
 			errors.New("push \"jevons-po\" (event \"worker-finished\"): The operation timed out"),
-			ClaimReplyUnverified},
+			ClaimNotSent},
+		{"quoted deadline",
+			errors.New("context deadline exceeded"),
+			ClaimNotSent},
+		{"quoted timed out waiting",
+			errors.New("timed out waiting for a turn"),
+			ClaimNotSent},
 		// Disproof: each of these is a statement about the handover.
 		{"no such agent", errors.New(`no agent "ghost"`), ClaimNotSent},
 		{"registry refused", errors.New(`could not rehydrate agent "w": pane exited`), ClaimNotSent},

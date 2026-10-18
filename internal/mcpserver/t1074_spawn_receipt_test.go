@@ -5,7 +5,6 @@ package mcpserver
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -103,7 +102,7 @@ func TestT1074SpawnTimeoutSettlesFromReceipt(t *testing.T) {
 	f.s.stateDir = t.TempDir()
 	receiptJournal(t, f.s, t.TempDir())
 	f.s.SetTurnWitness(transcriptMiss())
-	f.probe.fail = errors.New("operation timed out")
+	f.probe.fail = context.DeadlineExceeded
 	const prompt = "Execute the opening brief after a reply timeout."
 	sent, transportID := captureSpawnHandoff(t, f, prompt)
 	f.s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {

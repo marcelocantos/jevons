@@ -17,7 +17,8 @@ import (
 // TestEscalatingDisconnectSettlesPriorReceipt drives escalateIfBusyWithRequestID,
 // the busy-seat send. A prior uncertain row whose receipt is cancelled is
 // removed before the new attempt. A hard disconnect removes the new row.
-// A reply timeout keeps only that new row.
+// A sentence that only says the call timed out removes it too. A
+// context.DeadlineExceeded reply wait keeps only that new row.
 func TestEscalatingDisconnectSettlesPriorReceipt(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -25,7 +26,8 @@ func TestEscalatingDisconnectSettlesPriorReceipt(t *testing.T) {
 		remain bool
 	}{
 		{name: "disconnect", err: errors.New("sidecar disconnected before receipt")},
-		{name: "timeout", err: errors.New("operation timed out"), remain: true},
+		{name: "quoted timeout", err: errors.New("operation timed out")},
+		{name: "timeout", err: context.DeadlineExceeded, remain: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newBindFixture(t, "T1074")

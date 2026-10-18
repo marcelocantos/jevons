@@ -5,7 +5,6 @@ package mcpserver
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -100,7 +99,7 @@ func TestT1074TimeoutSettlesFromReceipt(t *testing.T) {
 	f.s.stateDir = t.TempDir()
 	receiptJournal(t, f.s, t.TempDir())
 	f.s.SetTurnWitness(transcriptMiss())
-	f.probe.fail = errors.New("operation timed out")
+	f.probe.fail = context.DeadlineExceeded
 	const payload = "owner: timeout is not the receipt"
 	var transportID string
 	f.probe.check = func(text, id string) {
