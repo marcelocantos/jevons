@@ -30,4 +30,49 @@ func TestJourneyIsolateFindsTheSidecarInThePinnedModule(t *testing.T) {
 			t.Fatalf("journey isolate cannot stage the sidecar: %s missing from %s: %v", name, dir, err)
 		}
 	}
+	manifest, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(manifest), "patches/") {
+		patches, err := os.ReadDir(filepath.Join(dir, "patches"))
+		if err != nil || len(patches) == 0 {
+			t.Fatalf("package.json names patches/ but the pinned sidecar has none: %v", err)
+		}
+	}
+}
+
+func TestIsolatedSidecarStagesPatchFiles(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "patches"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "node_modules", "secret"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(rel, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(src, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("package.json", `{"patchedDependencies":{"x":"patches/x.patch"}}`)
+	write("bun.lock", "lock")
+	write("server.ts", "export {}\n")
+	write("patches/x.patch", "diff\n")
+	write("node_modules/secret/index.js", "nope\n")
+	if err := copyIsolatedSidecarSource(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "patches", "x.patch"))
+	if err != nil || string(got) != "diff\n" {
+		t.Fatalf("patch = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "bun.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("node_modules staged: %v", err)
+	}
 }

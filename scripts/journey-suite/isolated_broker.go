@@ -170,6 +170,10 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 // A clean checkout has no sidecar/node_modules. Copy only the locked source
 // into the journey state and install there, so Bun cannot silently resolve a
 // different version from its global cache and the test never mutates a repo.
+//
+// patches/ is part of that lock. package.json names those files, and
+// `bun install --frozen-lockfile` refuses to start when they are absent.
+// node_modules and other directories stay behind.
 func (s *suite) stageIsolatedSidecar() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("CLAUDIA_OMP_SERVER")); override != "" {
 		return override, nil
@@ -179,25 +183,8 @@ func (s *suite) stageIsolatedSidecar() (string, error) {
 	if err := os.MkdirAll(dst, 0o700); err != nil {
 		return "", fmt.Errorf("stage isolated sidecar: %w", err)
 	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return "", fmt.Errorf("read Claudia sidecar source: %w", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if name != "package.json" && name != "bun.lockb" && !strings.HasSuffix(name, ".ts") {
-			continue
-		}
-		body, err := os.ReadFile(filepath.Join(src, name))
-		if err != nil {
-			return "", fmt.Errorf("read Claudia sidecar %s: %w", name, err)
-		}
-		if err := os.WriteFile(filepath.Join(dst, name), body, 0o600); err != nil {
-			return "", fmt.Errorf("stage Claudia sidecar %s: %w", name, err)
-		}
+	if err := copyIsolatedSidecarSource(src, dst); err != nil {
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -211,6 +198,60 @@ func (s *suite) stageIsolatedSidecar() (string, error) {
 		return "", fmt.Errorf("isolated Claudia sidecar script: %w", err)
 	}
 	return script, nil
+}
+
+// copyIsolatedSidecarSource copies the locked sidecar inputs. Top-level
+// TypeScript, the package manifest, and either lockfile name are included.
+// patches/ is the only directory: those files are named by the manifest.
+func copyIsolatedSidecarSource(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return fmt.Errorf("read Claudia sidecar source: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		from := filepath.Join(src, name)
+		to := filepath.Join(dst, name)
+		if entry.IsDir() {
+			if name != "patches" {
+				continue
+			}
+			if err := os.MkdirAll(to, 0o700); err != nil {
+				return fmt.Errorf("stage Claudia sidecar patches: %w", err)
+			}
+			patches, err := os.ReadDir(from)
+			if err != nil {
+				return fmt.Errorf("read Claudia sidecar patches: %w", err)
+			}
+			for _, patch := range patches {
+				if patch.IsDir() {
+					continue
+				}
+				if err := copySidecarFile(filepath.Join(from, patch.Name()), filepath.Join(to, patch.Name())); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if name != "package.json" && name != "bun.lock" && name != "bun.lockb" && !strings.HasSuffix(name, ".ts") {
+			continue
+		}
+		if err := copySidecarFile(from, to); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copySidecarFile(src, dst string) error {
+	body, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read Claudia sidecar %s: %w", filepath.Base(src), err)
+	}
+	if err := os.WriteFile(dst, body, 0o600); err != nil {
+		return fmt.Errorf("stage Claudia sidecar %s: %w", filepath.Base(dst), err)
+	}
+	return nil
 }
 
 // isolatedBrokerCommand configures the separately launched broker, including
