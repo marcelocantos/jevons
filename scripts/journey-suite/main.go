@@ -265,7 +265,7 @@ persona_notes: |
 	}
 
 	if err := s.startDaemon(); err != nil {
-		dumpTail(logPath, 40)
+		dumpIsolateLogs(os.Stderr, filepath.Dir(logPath), 40)
 		// 🎯T837: an isolate whose overseer never ran is a harness outage —
 		// no journey got to assert anything — and says why it is stopped.
 		if isOutage(err) {
@@ -337,7 +337,7 @@ persona_notes: |
 		fmt.Printf("ISOLATE OUTAGE: %s; %d later journey(s) OUT without an isolate\n", o, o.later)
 	}
 	if s.failures > 0 {
-		dumpTail(logPath, 60)
+		dumpIsolateLogs(os.Stderr, filepath.Dir(logPath), 60)
 		fmt.Printf("FAIL: %d journey(s) failed\n", s.failures)
 		exitNow(1)
 	}
@@ -345,7 +345,7 @@ persona_notes: |
 	// the suite says which it saw rather than letting a backend outage read as
 	// a broken product.
 	if s.outages > 0 {
-		dumpTail(logPath, 30)
+		dumpIsolateLogs(os.Stderr, filepath.Dir(logPath), 30)
 		if len(s.isolateOutages) > 0 {
 			fmt.Printf("OUTAGE: %d journey(s) could not run — the isolate died (see ISOLATE OUTAGE above for the first cause); not a journey verdict.\n", s.outages)
 		} else {
@@ -902,17 +902,21 @@ func freePort() (int, error) {
 	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
-func dumpTail(path string, n int) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return
+func dumpIsolateLogs(w io.Writer, stateDir string, n int) {
+	if w == nil {
+		w = os.Stderr
 	}
-	lines := strings.Split(string(b), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
+	for _, name := range []string{"jevonsd.log", "claudia-broker.log", "omp-sidecar.log"} {
+		b, err := os.ReadFile(filepath.Join(stateDir, name))
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(b), "\n")
+		if len(lines) > n {
+			lines = lines[len(lines)-n:]
+		}
+		fmt.Fprintf(w, "—— %s ——\n%s\n", name, strings.Join(lines, "\n"))
 	}
-	fmt.Fprintln(os.Stderr, "—— jevonsd log tail ——")
-	fmt.Fprintln(os.Stderr, strings.Join(lines, "\n"))
 }
 
 func trim(s string, n int) string {

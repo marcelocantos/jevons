@@ -4,10 +4,14 @@
 package main
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/claudia"
 )
 
 func TestIsolatedBrokerCommandCarriesConsumerConfiguration(t *testing.T) {
@@ -38,5 +42,45 @@ func TestIsolatedBrokerCommandCarriesConsumerConfiguration(t *testing.T) {
 		if got := findEnv(cmd.Env, name); got != want || count != 1 {
 			t.Fatalf("%s=%q count=%d, want %q exactly once", name, got, count, want)
 		}
+	}
+}
+
+func TestIsolateControlFileIsTheBrokerControlFile(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	if err := linkIsolateControlFile(state, root); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Readlink(filepath.Join(state, claudia.ClaudiaDBFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "state", claudia.ClaudiaDBFile)
+	if got != want {
+		t.Fatalf("control link %q, want %q", got, want)
+	}
+	cmd := isolatedBrokerCommand(nil, "claudia", root, state, filepath.Join(root, "server.ts"))
+	stateDir := ""
+	for i, arg := range cmd.Args {
+		if arg == "-state-dir" && i+1 < len(cmd.Args) {
+			stateDir = cmd.Args[i+1]
+		}
+	}
+	if stateDir != filepath.Dir(want) {
+		t.Fatalf("broker state %q, want the control file's directory %q", stateDir, filepath.Dir(want))
+	}
+	if stateDir == state || strings.HasSuffix(stateDir, "/.jevons") {
+		t.Fatalf("broker grants landed in the jevons state %q", stateDir)
+	}
+}
+
+func TestDumpIsolateLogsIncludesBroker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "claudia-broker.log"), []byte("broker-saw-the-seat\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	dumpIsolateLogs(&buf, dir, 20)
+	if !strings.Contains(buf.String(), "broker-saw-the-seat") {
+		t.Fatalf("broker log missing from %q", buf.String())
 	}
 }

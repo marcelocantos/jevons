@@ -160,6 +160,9 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		conn, err := net.DialTimeout("unix", socket, 200*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
+			if err := linkIsolateControlFile(s.stateDir, root); err != nil {
+				return nil, errors.Join(fmt.Errorf("link isolate control file: %w", err), b.close())
+			}
 			return b, nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -252,6 +255,24 @@ func copySidecarFile(src, dst string) error {
 		return fmt.Errorf("stage Claudia sidecar %s: %w", filepath.Base(dst), err)
 	}
 	return nil
+}
+
+// linkIsolateControlFile makes the isolate daemon's OpenReplica path and the
+// broker's control file the same inode. OpenReplica joins the jevons state
+// directory with claudia-control.db. The broker reconciles that name under
+// its own state directory, which is not the jevons state directory and not
+// the host ~/.jevons. Grants stay in the broker directory.
+func linkIsolateControlFile(jevonsState, brokerRoot string) error {
+	brokerState := filepath.Join(brokerRoot, "state")
+	if err := os.MkdirAll(brokerState, 0o700); err != nil {
+		return err
+	}
+	link := filepath.Join(jevonsState, claudia.ClaudiaDBFile)
+	target := filepath.Join(brokerState, claudia.ClaudiaDBFile)
+	if err := os.Remove(link); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Symlink(target, link)
 }
 
 // isolatedBrokerCommand configures the separately launched broker, including

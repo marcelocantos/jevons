@@ -7,6 +7,7 @@ package cost
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,23 @@ import (
 	"github.com/marcelocantos/claudia/controlplane"
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 )
+
+func TestOpenReplicaFollowsIsolateControlLink(t *testing.T) {
+	broker := t.TempDir()
+	jevonsState := t.TempDir()
+	target := filepath.Join(broker, controlplane.ClaudiaDBFile)
+	if err := os.Symlink(target, filepath.Join(jevonsState, controlplane.ClaudiaDBFile)); err != nil {
+		t.Fatal(err)
+	}
+	src, err := OpenReplica(jevonsState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("OpenReplica did not create the broker control file: %v", err)
+	}
+}
 
 func TestT10749AcceptDesiredSeatWhilePlaneClosed(t *testing.T) {
 	dir := t.TempDir()
