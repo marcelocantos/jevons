@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/claudia"
 )
 
 // Adversarial peers for the 🎯T625 cancel-ordering and provider-observation
@@ -144,26 +146,35 @@ func TestT625AssertLaunchedOnObservesTheNamedBackend(t *testing.T) {
 		return fmt.Sprintf("msg=%q name=%s provider=%s\n", "agent started", name, provider)
 	}
 	for _, tc := range []struct {
-		name   string
-		log    string
-		names  []string
-		wantOK bool
+		name     string
+		provider string
+		log      string
+		names    []string
+		wantOK   bool
 	}{
 		{"both workers launched on the selected backend",
-			line("jv-a", "grok") + line("jv-b", "grok"), []string{"jv-a", "jv-b"}, true},
+			"", line("jv-a", "grok") + line("jv-b", "grok"), []string{"jv-a", "jv-b"}, true},
 		{"one worker fell back to another backend",
-			line("jv-a", "grok") + line("jv-b", "claude"), []string{"jv-a", "jv-b"}, false},
+			"", line("jv-a", "grok") + line("jv-b", "claude"), []string{"jv-a", "jv-b"}, false},
 		{"a worker never launched at all",
-			line("jv-a", "grok"), []string{"jv-a", "jv-b"}, false},
-		{"no launch evidence whatsoever", "", []string{"jv-a"}, false},
+			"", line("jv-a", "grok"), []string{"jv-a", "jv-b"}, false},
+		{"no launch evidence whatsoever", "", "", []string{"jv-a"}, false},
 		{"another agent's launch cannot stand in",
-			line("jevons", "grok"), []string{"jv-a"}, false},
+			"", line("jevons", "grok"), []string{"jv-a"}, false},
 		{"a message quoting a launch line is not a launch",
-			fmt.Sprintf("msg=%q\n", `agent started name=jv-a provider=grok`), []string{"jv-a"}, false},
+			"", fmt.Sprintf("msg=%q\n", `agent started name=jv-a provider=grok`), []string{"jv-a"}, false},
+		{"unsteerable pin accepts the steerable plan that started",
+			"cursor", line("jv-a", "codex"), []string{"jv-a"}, true},
+		{"unsteerable pin rejects a launch on itself",
+			"cursor", line("jv-a", "cursor"), []string{"jv-a"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			s := &suite{stateDir: dir, logPath: dir + "/jevonsd.log", provider: "grok"}
+			prov := tc.provider
+			if prov == "" {
+				prov = "grok"
+			}
+			s := &suite{stateDir: dir, logPath: dir + "/jevonsd.log", provider: claudia.Provider(prov)}
 			if err := os.WriteFile(s.logPath, []byte(tc.log), 0o600); err != nil {
 				t.Fatal(err)
 			}

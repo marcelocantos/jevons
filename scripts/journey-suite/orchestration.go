@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +16,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 )
+
+// ensureJourneyGitRepo makes dir a git repository. Codex work seats
+// request sandbox git write, and Claudia refuses that grant when the
+// workdir is not in a repository.
+func ensureJourneyGitRepo(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "init", "-q", dir)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git init %s: %v (%s)", dir, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
 
 // Orchestration journeys (MCP-direct against the isolated daemon).
 //
@@ -315,7 +332,9 @@ func (s *suite) jTwoAgentsSameWorkdir() error {
 // the browser, but the product spawn/direct path under live Grok.
 func (s *suite) jPOWorkerLineageFanout() error {
 	work := filepath.Join(s.stateDir, "fanout-work")
-	if err := os.MkdirAll(work, 0o755); err != nil {
+	// A codex work seat asks for sandbox git write, and that grant
+	// refuses a directory that is not a repository.
+	if err := ensureJourneyGitRepo(work); err != nil {
 		return err
 	}
 	po, worker := "jv-fanout-po", "jv-fanout-worker"

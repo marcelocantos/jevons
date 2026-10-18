@@ -193,6 +193,33 @@ func (s *suite) jT418QueueBounce() error {
 	return fmt.Errorf("entry=%s did not complete its fresh shell effect and settle after restart", entry.ID)
 }
 
+// queueJourneyLaunchProvider is the plan that the named "agent started"
+// line recorded. Two different plans for one name is not one launch.
+func queueJourneyLaunchProvider(logs []byte, name string) (string, error) {
+	var found string
+	seen := false
+	for _, line := range strings.Split(string(logs), "\n") {
+		event, err := queueJourneyLogFields(line)
+		if err != nil || event["msg"] != "agent started" || event["name"] != name {
+			continue
+		}
+		raw := event["provider"]
+		if raw == "" {
+			return "", fmt.Errorf("agent %s launch has no provider", name)
+		}
+		plan := string(cli.PlanProvider(claudia.Provider(raw)))
+		if seen && plan != found {
+			return "", fmt.Errorf("agent %s launched on %q and %q", name, found, plan)
+		}
+		found = plan
+		seen = true
+	}
+	if !seen {
+		return "", fmt.Errorf("no named runtime launch evidence for %s", name)
+	}
+	return found, nil
+}
+
 // The named runtime launch, not the requested default or another agent's
 // launch, establishes which provider actually executed this journey.
 func queueJourneyProvider(logs []byte, name, expected string) error {
