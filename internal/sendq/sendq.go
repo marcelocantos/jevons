@@ -488,11 +488,13 @@ func (s *Store) PushFront(agent string, e Entry) error {
 }
 
 // PopFront removes the oldest claimable entry and returns it on a receipt.
-// The caller names who took it and what they observed. A blank actor or a
-// blank evidence line removes nothing. An in-flight attempt and a queue of
-// only unresolved attempts stay where they are. An empty queue is ok=false
-// and a nil error. Reconcile rejects ReconcilePop: taking the payload is not
-// a confirmed, requeued, or dropped delivery.
+// The removed payload is archived under its own id before the queue is
+// saved. A failed archive leaves the queue unchanged. The caller names who
+// took it and what they observed. A blank actor or a blank evidence line
+// removes nothing. An in-flight attempt and a queue of only unresolved
+// attempts stay where they are, and neither is archived. An empty queue is
+// ok=false and a nil error. Reconcile rejects ReconcilePop: taking the
+// payload is not a confirmed, requeued, or dropped delivery.
 func (s *Store) PopFront(agent, actor, evidence string, now time.Time) (Receipt, bool, error) {
 	if s == nil {
 		return Receipt{}, false, fmt.Errorf("sendq: no store")
@@ -518,6 +520,14 @@ func (s *Store) PopFront(agent, actor, evidence string, now time.Time) (Receipt,
 		return Receipt{}, false, fmt.Errorf("sendq: %q holds only unresolved delivery attempts", agent)
 	}
 	e := f.Entries[i]
+	if err := s.archiveSupersession(Supersession{
+		Agent:   strings.TrimSpace(agent),
+		At:      now.UTC(),
+		HoldID:  e.ID,
+		Removed: []Entry{e},
+	}); err != nil {
+		return Receipt{}, false, err
+	}
 	f.Entries = append(f.Entries[:i:i], f.Entries[i+1:]...)
 	if err := s.save(f); err != nil {
 		return Receipt{}, false, err

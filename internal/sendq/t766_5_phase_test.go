@@ -242,6 +242,9 @@ func TestT7665PopFrontRequiresAnOperatorReceipt(t *testing.T) {
 	if err != nil || len(left) != 1 || left[0].Text != "accepted payload" {
 		t.Fatalf("blank pop removed the entry: %+v %v", left, err)
 	}
+	if _, err := q.ReadSupersession(left[0].ID); err == nil {
+		t.Fatal("blank pop archived the payload")
+	}
 	if _, err := q.Reconcile("a", left[0].ID, "", ReconcilePop, "operator", "a pop is not a reconcile", now); err == nil {
 		t.Fatal("reconcile accepted a pop")
 	}
@@ -249,9 +252,14 @@ func TestT7665PopFrontRequiresAnOperatorReceipt(t *testing.T) {
 	if err != nil || len(still) != 1 || still[0].Text != "accepted payload" {
 		t.Fatalf("rejected pop changed the queue: %+v %v", still, err)
 	}
+	poppedID := left[0].ID
 	rec, ok, err := q.PopFront("a", "operator", "owner took the payload", now)
 	if err != nil || !ok || len(rec.Removed) != 1 || rec.Removed[0].Text != "accepted payload" {
 		t.Fatalf("pop = %+v %v %v", rec, ok, err)
+	}
+	archived, err := q.ReadSupersession(poppedID)
+	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].ID != poppedID || archived.Removed[0].Text != "accepted payload" {
+		t.Fatalf("pop archive = %+v %v", archived, err)
 	}
 	if rec.By.Actor != "operator" || rec.By.Evidence != "owner took the payload" || rec.By.Outcome != ReconcilePop || !rec.By.At.Equal(now.UTC()) {
 		t.Fatalf("receipt by = %+v", rec.By)
