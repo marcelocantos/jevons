@@ -132,8 +132,17 @@ type State struct {
 	// means nobody has said.
 	LastActivity time.Time
 	// QueueDepth is how many messages are waiting for this seat, or
-	// QueueUnknown.
+	// QueueUnknown. It counts every phase, including ones that are not
+	// claimable, so a blocked queue does not look empty.
 	QueueDepth int
+	// QueueOldest is the head entry's enqueue time when the queue has been
+	// read and is non-empty. Zero means there is no head, or nobody has
+	// reported one. The age is computed at read time.
+	QueueOldest time.Time
+	// QueueBlock is why the queue is not only waiting. Nil means no claim,
+	// including a stale queue. A pointer to an empty string means the queue
+	// is not blocked.
+	QueueBlock *string
 	// OwnerQueueDepth is the separate owner notification queue.
 	OwnerQueueDepth int
 	// BornStuck is whether an accepted opening prompt never produced a
@@ -151,6 +160,16 @@ type State struct {
 	fieldAt     [signalCount]time.Time
 	fieldSource [signalCount]string
 	sessionAt   time.Time
+}
+
+// QueueOldestAge is how long the head of the queue has been waiting.
+// It is zero when the depth is unknown, the queue is empty, or the head
+// has no enqueue time.
+func (s State) QueueOldestAge(now time.Time) time.Duration {
+	if s.QueueDepth <= 0 || s.QueueOldest.IsZero() {
+		return 0
+	}
+	return now.Sub(s.QueueOldest)
 }
 
 // Fresh reports whether s was observed within stale of now.
@@ -187,6 +206,11 @@ type Observation struct {
 	LastActivity time.Time
 	// QueueDepth QueueUnknown means no claim.
 	QueueDepth int
+	// QueueOldest is applied together with a QueueBlock claim. Zero with
+	// that claim means the queue has no head.
+	QueueOldest time.Time
+	// QueueBlock nil makes no claim. A pointer to "" means not blocked.
+	QueueBlock *string
 	// OwnerQueueDepth nil makes no claim about the owner delivery queue.
 	OwnerQueueDepth *int
 
@@ -341,6 +365,13 @@ func (a *Authority) Observe(obs Observation) {
 		cur.fieldAt[queueSignal] = at
 		cur.fieldSource[queueSignal] = obs.Source
 		cur.QueueDepth = obs.QueueDepth
+		// Oldest and block ride the same clock as depth. A report that
+		// does not claim a block leaves the previous claim alone.
+		if obs.QueueBlock != nil {
+			block := *obs.QueueBlock
+			cur.QueueBlock = &block
+			cur.QueueOldest = obs.QueueOldest
+		}
 	}
 
 	if obs.OwnerQueueDepth != nil && !at.Before(cur.fieldAt[ownerQueueSignal]) {
@@ -420,6 +451,8 @@ func (a *Authority) decay(s State) State {
 	}
 	if stale(queueSignal) {
 		s.QueueDepth = QueueUnknown
+		s.QueueOldest = time.Time{}
+		s.QueueBlock = nil
 	}
 	if stale(resumeSignal) {
 		s.ResumeLost = Unknown

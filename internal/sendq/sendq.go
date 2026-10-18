@@ -191,8 +191,36 @@ type file struct {
 // mutated concurrently by unrelated agents' turn boundaries, and a shared
 // file would serialise every drain behind every enqueue for the sake of a
 // single inode.
+// Stoppage is one read of a queue: every phase in Depth, the head entry's
+// enqueue time in Oldest, and the first block reason in queue order.
+// An empty Block means the queue is not blocked. Oldest is zero when the
+// queue has no head. Age is not stored here; the reader subtracts from now.
+type Stoppage struct {
+	Agent  string
+	Depth  int
+	Oldest time.Time
+	Block  string
+}
+
+// stoppageOf reads the entries already in hand. It does not lock and it does
+// not call the store. active is the attempt id this store owns, or empty.
+func stoppageOf(agent string, entries []Entry, active string) Stoppage {
+	out := Stoppage{Agent: strings.TrimSpace(agent), Depth: len(entries)}
+	if len(entries) == 0 {
+		return out
+	}
+	out.Oldest = entries[0].EnqueuedAt
+	for _, e := range entries {
+		if reason := blockReason(EntryPhase(e, active)); reason != "" {
+			out.Block = reason
+			break
+		}
+	}
+	return out
+}
+
 type Store struct {
-	observe func(string, int)
+	observe func(Stoppage)
 
 	mu  sync.Mutex
 	dir string
@@ -213,8 +241,9 @@ type Store struct {
 func NewStore(dir string) *Store { return &Store{dir: strings.TrimSpace(dir)} }
 
 // SetObserver installs the queue's observation feed. It runs under the queue
-// lock and must not call back into the store.
-func (s *Store) SetObserver(observe func(string, int)) {
+// lock, on a successful load or save, and must not call back into the store.
+// The report is the entries in hand plus the attempt this store owns.
+func (s *Store) SetObserver(observe func(Stoppage)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.observe = observe
@@ -251,7 +280,7 @@ func (s *Store) path(agent string) (string, error) {
 func (s *Store) load(agent string) (out file, err error) {
 	defer func() {
 		if err == nil && s.observe != nil {
-			s.observe(agent, len(out.Entries))
+			s.observe(stoppageOf(agent, out.Entries, s.active[agent]))
 		}
 	}()
 	if !s.Durable() {
@@ -302,7 +331,7 @@ func (s *Store) load(agent string) (out file, err error) {
 func (s *Store) save(f file) (err error) {
 	defer func() {
 		if err == nil && s.observe != nil {
-			s.observe(f.Agent, len(f.Entries))
+			s.observe(stoppageOf(f.Agent, f.Entries, s.active[f.Agent]))
 		}
 	}()
 	if !s.Durable() {
@@ -677,13 +706,21 @@ func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) 
 		return Entry{}, false, err
 	}
 	f.Entries[i] = e
-	if err := s.save(f); err != nil {
-		return Entry{}, false, err
-	}
+	// Ownership is recorded before save. The observer runs inside save, and
+	// an owned attempt it has not heard about is published as a held attempt.
 	if s.active == nil {
 		s.active = map[string]string{}
 	}
+	prev, had := s.active[agent]
 	s.active[agent] = e.AttemptID
+	if err := s.save(f); err != nil {
+		if had {
+			s.active[agent] = prev
+		} else {
+			delete(s.active, agent)
+		}
+		return Entry{}, false, err
+	}
 	return e, true, nil
 }
 
@@ -994,11 +1031,14 @@ func (s *Store) Backlog(agent string) (Backlog, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := s.load(agent)
-	b := Backlog{Agent: agent, Depth: len(f.Entries)}
-	if err != nil || len(f.Entries) == 0 {
-		return b, err
+	if err != nil {
+		return Backlog{Agent: agent}, err
 	}
-	b.Oldest = f.Entries[0].EnqueuedAt
+	view := stoppageOf(agent, f.Entries, s.active[agent])
+	b := Backlog{Agent: agent, Depth: view.Depth, Oldest: view.Oldest, BlockReason: view.Block}
+	if len(f.Entries) == 0 {
+		return b, nil
+	}
 	active := s.active[agent]
 	for _, e := range f.Entries {
 		b.EntryIDs = append(b.EntryIDs, e.ID)
@@ -1015,9 +1055,6 @@ func (s *Store) Backlog(agent string) (Backlog, error) {
 			if e.State != Pending {
 				b.Uncertain++
 			}
-		}
-		if b.BlockReason == "" {
-			b.BlockReason = blockReason(phase)
 		}
 	}
 	return b, nil

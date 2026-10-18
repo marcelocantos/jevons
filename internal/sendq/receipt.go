@@ -146,14 +146,26 @@ func (s *Store) appendAndClaim(agent, text, requestID string, at time.Time, urge
 		entry.State, entry.AttemptID = Attempting, NewID()
 	}
 	f.Entries = append(f.Entries, entry)
-	if err := s.save(f); err != nil {
-		return Entry{}, 0, false, err
-	}
+	// Ownership is recorded before save so a claimed urgent entry is
+	// observed as in flight, not as a held attempt.
+	var prev string
+	var had bool
 	if claimed {
 		if s.active == nil {
 			s.active = map[string]string{}
 		}
+		prev, had = s.active[agent]
 		s.active[agent] = entry.AttemptID
+	}
+	if err := s.save(f); err != nil {
+		if claimed {
+			if had {
+				s.active[agent] = prev
+			} else {
+				delete(s.active, agent)
+			}
+		}
+		return Entry{}, 0, false, err
 	}
 	return entry, len(f.Entries), claimed, nil
 }

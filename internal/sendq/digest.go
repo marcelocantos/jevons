@@ -325,13 +325,21 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		}
 	}
 	f.Entries = kept
-	if err := s.save(f); err != nil {
-		return Entry{}, false, err
-	}
+	// Ownership is recorded before save so the observer does not publish
+	// this attempt as one a dead daemon left behind.
 	if s.active == nil {
 		s.active = map[string]string{}
 	}
+	prev, had := s.active[agent]
 	s.active[agent] = merged.AttemptID
+	if err := s.save(f); err != nil {
+		if had {
+			s.active[agent] = prev
+		} else {
+			delete(s.active, agent)
+		}
+		return Entry{}, false, err
+	}
 	return merged, true, nil
 }
 

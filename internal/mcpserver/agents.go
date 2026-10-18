@@ -241,6 +241,12 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if pinned {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
 		}
+		// sendqPinFor already read the queue, which publishes depth, head
+		// age, and block reason onto the authority. The list is the place
+		// an operator reads that without opening a log.
+		if line := FormatQueueStoppage(d.Name, s.seatState(d.Name), time.Now()); line != "" {
+			fmt.Fprintf(&b, "  ^ %s\n", line)
+		}
 		if line, wedged := s.WedgedSeat(d.Name); wedged {
 			fmt.Fprintf(&b, "  ^ %s\n", line)
 		}

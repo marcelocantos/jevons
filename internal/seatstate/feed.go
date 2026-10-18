@@ -24,7 +24,8 @@ import (
 //     ended, the seat said something. It is the only source with sub-second
 //     resolution, and the only one that is empty when the sink is dark —
 //     which the authority must represent as unknown rather than as calm.
-//   - the send queue reports its own depth. Nothing else may claim it.
+//   - the send queue reports its own depth, head age, and block reason.
+//     Nothing else may claim them.
 //
 // A feed that cannot observe must say nothing rather than report a zero.
 // Every function here takes that seriously: there is no path by which a
@@ -103,17 +104,30 @@ func (a *Authority) FromTurnEvent(name string, terminal bool, at time.Time) {
 	})
 }
 
-// FromQueue folds the send queue's own depth. depth must be a real count;
-// a caller that could not read the queue calls nothing.
-func (a *Authority) FromQueue(name string, depth int, at time.Time) {
-	if name == "" || depth < 0 {
+// QueueReport is one read of a seat's send queue. Depth counts every phase.
+// Oldest is the head entry's enqueue time; zero means the queue has no head.
+// Block nil makes no claim about why the queue is stopped. A pointer to an
+// empty string means it is not blocked.
+type QueueReport struct {
+	Depth  int
+	Oldest time.Time
+	Block  *string
+}
+
+// FromQueue folds the send queue's own depth, head age, and block reason.
+// A negative depth is a failed read and is ignored, so it cannot wipe a
+// report the queue already published.
+func (a *Authority) FromQueue(name string, report QueueReport, at time.Time) {
+	if name == "" || report.Depth < 0 {
 		return
 	}
 	a.Observe(Observation{
-		Name:       name,
-		QueueDepth: depth,
-		Source:     "sendq",
-		At:         at,
+		Name:        name,
+		QueueDepth:  report.Depth,
+		QueueOldest: report.Oldest,
+		QueueBlock:  report.Block,
+		Source:      "sendq",
+		At:          at,
 	})
 }
 

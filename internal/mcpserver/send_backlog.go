@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
@@ -61,7 +62,14 @@ func (s *Server) sendQueue() *sendq.Store {
 	if s.agentSendQ == nil {
 		s.agentSendQ = sendq.NewStore("")
 	}
-	s.agentSendQ.SetObserver(func(name string, depth int) { s.Seats().FromQueue(name, depth, time.Now()) })
+	s.agentSendQ.SetObserver(func(q sendq.Stoppage) {
+		block := q.Block
+		s.Seats().FromQueue(q.Agent, seatstate.QueueReport{
+			Depth:  q.Depth,
+			Oldest: q.Oldest,
+			Block:  &block,
+		}, time.Now())
+	})
 	return s.agentSendQ
 }
 
@@ -540,6 +548,23 @@ type SendqPin struct {
 	At        time.Time
 	State     sendq.DeliveryState
 	AttemptID string
+}
+
+// FormatQueueStoppage is the agent_list line for a queue the authority has
+// read and that still holds messages. An unknown depth and an empty queue
+// say nothing: a missing claim is not an empty queue, and an empty queue is
+// not a stoppage. Age is computed from the stored enqueue time. A block
+// claim of "" is "not blocked" and adds no block clause.
+func FormatQueueStoppage(name string, st seatstate.State, now time.Time) string {
+	if st.QueueDepth <= 0 {
+		return ""
+	}
+	msg := fmt.Sprintf("QUEUE %s: %d queued, oldest waiting %s",
+		name, st.QueueDepth, st.QueueOldestAge(now).Round(time.Second))
+	if st.QueueBlock != nil && *st.QueueBlock != "" {
+		msg += "; block: " + *st.QueueBlock
+	}
+	return msg
 }
 
 // FormatSendqPinLine is the operator-facing account of a pinned seat, shared
