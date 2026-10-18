@@ -28,6 +28,18 @@ func declaredFinishReport(target, payload string) string {
 	})
 }
 
+// declaredInProgressReport is a finish-report whose status slot says the
+// work is not done. Payload prose is not that claim (🎯T766.4).
+func declaredInProgressReport(target, payload string) string {
+	return envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       target,
+		Status:       envelope.ProgressInProgress,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      payload,
+	})
+}
+
 // declaredRiskFinishReport is a valid finish-report with accepted-risk and
 // no SHA or gate id. The uncited-claim veto (🎯T946) only runs after a
 // declared finish, and a SHA slot would cite an oracle id.

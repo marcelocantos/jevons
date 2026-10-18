@@ -14,21 +14,23 @@ import (
 	"github.com/marcelocantos/jevons/internal/worktreereap"
 )
 
-// 🎯T972 (split from 🎯T784): a finished-work report must not reap a seat
-// that leaves real scope outstanding — a declared blocking wait on a
-// tracked background gate, or uncommitted changes owned in the seat's own
-// isolated worktree (🎯T254.2) that the report never mentioned. Unrelated
-// dirty state in a shared clone (not this seat's own worktree) must not
-// count as owned scope.
+// 🎯T972: a declared finish must not reap a seat whose own isolated
+// worktree (🎯T254.2) still holds uncommitted changes the report never
+// mentioned. Unrelated dirty state in a shared clone must not count.
+// A sentence that says the worker is waiting on a gate is not that fact
+// (🎯T766.4). Status in-progress is.
 
 const t972PendingGateReport = "Done. The T972 fix is committed as abcdef0123456; go test ./internal/mcpserver -run T972 passed locally. Waiting on bin/gate to finish the clean run before closing out."
 
 const t972PlainFinishReport = "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T972 PASS"
 
 func TestOutstandingScopeReasonsPendingGate(t *testing.T) {
-	scope := OutstandingScopeReasons(t972PendingGateReport, nil, false)
-	if len(scope) != 1 || scope[0].Kind != "pending_gate" {
-		t.Fatalf("scope = %+v, want one pending_gate entry", scope)
+	if scope := OutstandingScopeReasons(t972PendingGateReport, nil, false); len(scope) != 0 {
+		t.Fatalf("scope = %+v, want none — a gate-wait sentence is not scope", scope)
+	}
+	scope := OutstandingScopeReasons(declaredInProgressReport("T972", t972PendingGateReport), nil, false)
+	if len(scope) != 1 || scope[0].Kind != "in_progress" {
+		t.Fatalf("scope = %+v, want one in_progress entry from the status slot", scope)
 	}
 }
 
@@ -78,8 +80,8 @@ func TestOutstandingScopeReasonsBothKinds(t *testing.T) {
 		DirtyFiles: 1, DirtySample: []string{"M x.go"},
 	}
 	scope := OutstandingScopeReasons(t972PendingGateReport, tree, true)
-	if len(scope) != 2 {
-		t.Fatalf("scope = %+v, want both pending_gate and owned_uncommitted", scope)
+	if len(scope) != 1 || scope[0].Kind != "owned_uncommitted" {
+		t.Fatalf("scope = %+v, want only owned_uncommitted — the gate-wait sentence is not a second kind", scope)
 	}
 }
 
@@ -185,12 +187,17 @@ func TestShouldAutoReapDoneWorkAgentIgnoresSharedCloneDirtyState(t *testing.T) {
 func TestShouldAutoReapDoneWorkAgentKeepsSeatWaitingOnGate(t *testing.T) {
 	name := "jv-t972-gate-wait"
 	reg := t395Registry(t, name)
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, name, declaredFinishReport("T972", t972PendingGateReport), nil)
-	if ok {
-		t.Fatalf("reaped a seat that declared a blocking wait on a tracked gate (reason %s)", reason)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, name, t972PendingGateReport, nil)
+	if ok || reason != "unknown_report" {
+		t.Fatalf("unenveloped wait prose reap=%v reason=%s, want unknown", ok, reason)
 	}
-	if reason != outstandingScopeReapReasonPrefix+"pending_gate" {
-		t.Fatalf("reason = %q, want %q", reason, outstandingScopeReapReasonPrefix+"pending_gate")
+	ok, reason = ShouldAutoReapDoneWorkAgent(reg, name, declaredFinishReport("T972", t972PendingGateReport), nil)
+	if !ok {
+		t.Fatalf("a declared finish whose payload mentions a gate wait must reap (reason %s)", reason)
+	}
+	ok, reason = ShouldAutoReapDoneWorkAgent(reg, name, declaredInProgressReport("T972", t972PendingGateReport), nil)
+	if ok || reason != outstandingScopeReapReasonPrefix+"in_progress" {
+		t.Fatalf("in-progress reap=%v reason=%s, want kept as %sin_progress", ok, reason, outstandingScopeReapReasonPrefix)
 	}
 }
 
@@ -237,16 +244,16 @@ func TestMaybeReapDoneWorkAgentKeepsSeatAndNotifiesParentOfOutstandingScope(t *t
 		Detail: "transcript gained a user message carrying this payload",
 	}))
 
-	s.maybeReapDoneWorkAgent("jv-t972-sink-gate-wait", declaredFinishReport("T972", t972PendingGateReport))
+	s.maybeReapDoneWorkAgent("jv-t972-sink-gate-wait", declaredInProgressReport("T972", t972PendingGateReport))
 
 	if reg.Def("jv-t972-sink-gate-wait") == nil {
-		t.Fatal("a seat with a pending background gate must not be reaped")
+		t.Fatal("a seat whose finish-report says status in-progress must not be reaped")
 	}
 	if len(po.sent) != 1 {
 		t.Fatalf("PO deliveries = %d, want 1: %v", len(po.sent), po.sent)
 	}
 	got := po.sent[0]
-	for _, want := range []string{"reap-scope 🎯T972", "🎯T972", "jv-t972-sink-gate-wait", "blocking wait"} {
+	for _, want := range []string{"reap-scope 🎯T972", "🎯T972", "jv-t972-sink-gate-wait", "in-progress"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PO notice missing %q:\n%s", want, got)
 		}
@@ -272,7 +279,7 @@ func TestMaybeReapDoneWorkAgentGenuineFinishDoesNotNotifyParentOfScope(t *testin
 		t.Fatalf("a genuine finish must not notify the parent about outstanding scope, got send to %q", name)
 		return nil, false, nil
 	})
-	s.maybeReapDoneWorkAgent("jv-t972-clean-finish", declaredFinishReport("T972", t972PlainFinishReport))
+	s.maybeReapDoneWorkAgent("jv-t972-clean-finish", declaredFinishReport("T972", t972PendingGateReport))
 	if reg.Def("jv-t972-clean-finish") != nil {
 		t.Fatal("genuine finish with no outstanding scope must reap")
 	}

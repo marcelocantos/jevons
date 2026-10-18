@@ -88,9 +88,10 @@ func TestT1024ActiveWaitIsNamedInTheReport(t *testing.T) {
 	}
 }
 
-// TestT1024ActiveWaitIsNotAFinishReap runs both reports through the reap
-// decision the daemon actually takes: the seat is kept, and the reason
-// names the 🎯T972 scope scan's new classifier so a reader can disagree.
+// TestT1024ActiveWaitIsNotAFinishReap runs both incident reports through
+// the reap decision. They declare no envelope kind, so they are unknown,
+// not a finish and not an active-wait veto. Wrapping the same prose in a
+// declared finish-report does not restore that veto (🎯T766.4).
 func TestT1024ActiveWaitIsNotAFinishReap(t *testing.T) {
 	for _, tc := range []struct{ name, report string }{
 		{"arrai-t41-nest-quadratic", t1024NestQuadraticReport(t)},
@@ -98,16 +99,17 @@ func TestT1024ActiveWaitIsNotAFinishReap(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scope := OutstandingScopeReasons(tc.report, nil, false)
-			if len(scope) != 1 || scope[0].Kind != activeWaitScopeKind {
-				t.Fatalf("scope = %+v, want one %s entry", scope, activeWaitScopeKind)
+			if len(scope) != 0 {
+				t.Fatalf("scope = %+v, want none — monitoring prose is not outstanding scope", scope)
 			}
 			reg := t439Registry(t, tc.name)
-			ok, reason := ShouldAutoReapDoneWorkAgent(reg, tc.name, declaredFinishReport("T1024", tc.report), nil)
-			if ok {
-				t.Fatalf("reaped a worker actively waiting on an alive gate (reason %s)", reason)
+			ok, reason := ShouldAutoReapDoneWorkAgent(reg, tc.name, tc.report, nil)
+			if ok || reason != "unknown_report" {
+				t.Fatalf("unenveloped wait reap=%v reason=%s, want unknown", ok, reason)
 			}
-			if want := outstandingScopeReapReasonPrefix + activeWaitScopeKind; reason != want {
-				t.Fatalf("reason = %q, want %q", reason, want)
+			ok, reason = ShouldAutoReapDoneWorkAgent(reg, tc.name, declaredFinishReport("T1024", tc.report), nil)
+			if strings.Contains(reason, activeWaitScopeKind) || strings.Contains(reason, "pending_gate") {
+				t.Fatalf("payload prose vetoed a declared finish: reap=%v reason=%s", ok, reason)
 			}
 		})
 	}
@@ -203,8 +205,9 @@ func TestT1024QuotedWaitIsNotTheWorkersWait(t *testing.T) {
 }
 
 // TestT1024MaybeReapKeepsSeatAndNotifiesParent is the end-to-end path the
-// incident took (maybeReapDoneWorkAgent): the seat stays registered and the
-// parent is told, with the worker's own sentence quoted.
+// incident took (maybeReapDoneWorkAgent). The stored report declares no
+// envelope kind, so the seat stays and the parent is not handed an
+// active-wait veto.
 func TestT1024MaybeReapKeepsSeatAndNotifiesParent(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
@@ -233,18 +236,12 @@ func TestT1024MaybeReapKeepsSeatAndNotifiesParent(t *testing.T) {
 		Detail: "transcript gained a user message carrying this payload",
 	}))
 
-	s.maybeReapDoneWorkAgent("arrai-t41-verify-land", declaredFinishReport("T1024", t1024VerifyLandReport(t)))
+	s.maybeReapDoneWorkAgent("arrai-t41-verify-land", t1024VerifyLandReport(t))
 
 	if reg.Def("arrai-t41-verify-land") == nil {
-		t.Fatal("a worker queued on the shared gate lease must not be reaped")
+		t.Fatal("an unenveloped wait report must not reap the seat")
 	}
-	if len(po.sent) != 1 {
-		t.Fatalf("PO deliveries = %d, want 1: %v", len(po.sent), po.sent)
-	}
-	got := po.sent[0]
-	for _, want := range []string{"reap-scope 🎯T972", "arrai-t41-verify-land", "active wait", "alive and still queued"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("PO notice missing %q:\n%s", want, got)
-		}
+	if len(po.sent) != 0 {
+		t.Fatalf("PO deliveries = %d, want 0 for an unknown report: %v", len(po.sent), po.sent)
 	}
 }

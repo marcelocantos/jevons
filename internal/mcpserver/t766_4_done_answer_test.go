@@ -84,6 +84,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 		englishSelectorsIn(t, filepath.Join(dir, "t985_reap_vs_park.go"), "ClassifyWorkerIdleDisposition")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "stored_terminal_report.go"), "storedTerminalFromReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
 	}
@@ -142,6 +143,9 @@ func englishSelectorsIn(t *testing.T, path string, names ...string) []string {
 		"hasFinishShape": true, "hasCompletionClaim": true, "hasForwardLookingPlan": true,
 		"LooksLikeOwnWorkCompleteReport": true, "containsAny": true,
 		"FindCompletionClaim": true, "ReportAwaitsOverseer": true,
+		"FindActiveExternalWait": true, "declaresBlockingGateWaitLocalized": true,
+		"DeclaresBlockingGateWait": true, "declaresActiveExternalWait": true,
+		"declaresUnresolvedExternalWait": true,
 	}
 	var hits []string
 	for _, decl := range f.Decls {

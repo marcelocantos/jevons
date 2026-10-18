@@ -126,12 +126,11 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if DurableFleetAgent(name, def.Purpose, isOverseer) {
 		return false, "durable_role"
 	}
-	// 🎯T972: a finished-work report is not reaped while it leaves scope
-	// outstanding — a declared blocking wait on a background gate, or
-	// uncommitted changes owned in the seat's own worktree that the report
-	// never mentioned. Checked after false-green (a contradicted claim is
-	// the stronger veto) and before the descendants check (a seat can be
-	// mid-gate with no descendants at all).
+	// 🎯T972: a finished-work report is not reaped while the seat's own
+	// worktree holds uncommitted files the report never mentioned. A
+	// sentence in the payload is not that fact (🎯T766.4). Checked after
+	// false-green (a contradicted claim is the stronger veto) and before
+	// the descendants check.
 	if scope := outstandingScopeReasonsForWorker(report, workDir); len(scope) > 0 {
 		return false, outstandingScopeReapReason(scope)
 	}
