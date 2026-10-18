@@ -48,14 +48,17 @@ func TestPopFrontIsFIFOAndEmptiesTheRecord(t *testing.T) {
 			t.Fatalf("Append: %v", err)
 		}
 	}
-	e, ok, err := s.PopFront("a")
-	if err != nil || !ok || e.Text != "one" {
-		t.Fatalf("PopFront = %q, %v, %v; want one, true, nil", e.Text, ok, err)
+	rec, ok, err := s.PopFront("a", "operator", "fifo check", at)
+	if err != nil || !ok || len(rec.Removed) != 1 || rec.Removed[0].Text != "one" {
+		t.Fatalf("PopFront = %+v, %v, %v; want one, true, nil", rec, ok, err)
 	}
-	if _, _, err := s.PopFront("a"); err != nil {
+	if rec.By.Actor != "operator" || rec.By.Evidence != "fifo check" || rec.By.Outcome != ReconcilePop {
+		t.Fatalf("receipt = %+v; want the operator and the evidence", rec.By)
+	}
+	if _, _, err := s.PopFront("a", "operator", "second entry", at); err != nil {
 		t.Fatalf("PopFront: %v", err)
 	}
-	if _, ok, err := s.PopFront("a"); ok || err != nil {
+	if _, ok, err := s.PopFront("a", "operator", "drained", at); ok || err != nil {
 		t.Fatalf("PopFront on drained queue = %v, %v; want false, nil", ok, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "a.json")); !os.IsNotExist(err) {
@@ -74,10 +77,11 @@ func TestPushFrontKeepsTheOriginalAge(t *testing.T) {
 	if _, _, err := s.Append("a", "behind it", accepted.Add(time.Minute)); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	e, _, err := s.PopFront("a")
-	if err != nil {
-		t.Fatalf("PopFront: %v", err)
+	rec, _, err := s.PopFront("a", "operator", "return to head", accepted)
+	if err != nil || len(rec.Removed) != 1 {
+		t.Fatalf("PopFront: %+v %v", rec, err)
 	}
+	e := rec.Removed[0]
 	if err := s.PushFront("a", e); err != nil {
 		t.Fatalf("PushFront: %v", err)
 	}
@@ -179,9 +183,9 @@ func TestMemoryBackedStoreBehavesTheSameAndAdmitsItIsNotDurable(t *testing.T) {
 	if err != nil || len(backlogs) != 1 || backlogs[0].Depth != 1 {
 		t.Fatalf("Backlogs = %+v, %v; want one queue of depth 1", backlogs, err)
 	}
-	e, ok, err := s.PopFront("a")
-	if err != nil || !ok || e.Text != "held" {
-		t.Fatalf("PopFront = %q, %v, %v; want held, true, nil", e.Text, ok, err)
+	rec, ok, err := s.PopFront("a", "operator", "memory drain", at)
+	if err != nil || !ok || len(rec.Removed) != 1 || rec.Removed[0].Text != "held" {
+		t.Fatalf("PopFront = %+v, %v, %v; want held, true, nil", rec, ok, err)
 	}
 	if names, err := s.Agents(); err != nil || len(names) != 0 {
 		t.Fatalf("Agents after drain = %v, %v; want empty", names, err)

@@ -195,3 +195,73 @@ func TestT7665DigestIsOnePendingObligation(t *testing.T) {
 		t.Fatalf("digest was not the one pending obligation: %+v %v %v", retry, ok, err)
 	}
 }
+
+func TestT7665InFlightIsNotUncertain(t *testing.T) {
+	q := NewStore(t.TempDir())
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	first, _, err := q.Append("a", "owned attempt", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := q.Append("a", "behind the attempt", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	attempt, ok, err := q.ClaimFront("a")
+	if err != nil || !ok || attempt.ID != first.ID {
+		t.Fatalf("claim: %+v %v %v", attempt, ok, err)
+	}
+	b, err := q.Backlog("a")
+	if err != nil || b.Depth != 2 || b.Uncertain != 0 || b.InFlight != 1 || b.BlockReason != "in flight" {
+		t.Fatalf("in-flight backlog = %+v %v", b, err)
+	}
+	if desc := b.Describe(now); !strings.Contains(desc, "2 queued") || !strings.Contains(desc, "oldest waiting") || !strings.Contains(desc, "block: in flight") {
+		t.Fatalf("Describe = %q; want the queue, its age, and the in-flight block", desc)
+	}
+	if err := q.Resolve("a", attempt, Unverified, "no receiver evidence"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := q.Backlog("a")
+	if err != nil || after.Uncertain != 1 || after.InFlight != 0 || after.BlockReason != "uncertain" {
+		t.Fatalf("after unverified = %+v %v", after, err)
+	}
+}
+
+func TestT7665PopFrontRequiresAnOperatorReceipt(t *testing.T) {
+	q := NewStore(t.TempDir())
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	if _, _, err := q.Append("a", "accepted payload", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := q.PopFront("a", "", "", now); err == nil || ok {
+		t.Fatalf("blank actor pop = ok %v err %v", ok, err)
+	}
+	if _, ok, err := q.PopFront("a", "operator", " ", now); err == nil || ok {
+		t.Fatalf("blank evidence pop = ok %v err %v", ok, err)
+	}
+	left, err := q.Snapshot("a")
+	if err != nil || len(left) != 1 || left[0].Text != "accepted payload" {
+		t.Fatalf("blank pop removed the entry: %+v %v", left, err)
+	}
+	if _, err := q.Reconcile("a", left[0].ID, "", ReconcilePop, "operator", "a pop is not a reconcile", now); err == nil {
+		t.Fatal("reconcile accepted a pop")
+	}
+	still, err := q.Snapshot("a")
+	if err != nil || len(still) != 1 || still[0].Text != "accepted payload" {
+		t.Fatalf("rejected pop changed the queue: %+v %v", still, err)
+	}
+	rec, ok, err := q.PopFront("a", "operator", "owner took the payload", now)
+	if err != nil || !ok || len(rec.Removed) != 1 || rec.Removed[0].Text != "accepted payload" {
+		t.Fatalf("pop = %+v %v %v", rec, ok, err)
+	}
+	if rec.By.Actor != "operator" || rec.By.Evidence != "owner took the payload" || rec.By.Outcome != ReconcilePop || !rec.By.At.Equal(now.UTC()) {
+		t.Fatalf("receipt by = %+v", rec.By)
+	}
+	gone, err := q.Snapshot("a")
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("queue after pop = %+v %v", gone, err)
+	}
+	empty, ok, err := q.PopFront("a", "operator", "nothing left", now)
+	if err != nil || ok || len(empty.Removed) != 0 {
+		t.Fatalf("empty pop = %+v %v %v", empty, ok, err)
+	}
+}

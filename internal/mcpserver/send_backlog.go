@@ -173,6 +173,8 @@ func (s *Server) SweepSendBacklogs() {
 	for _, b := range backlogs {
 		// Receipt reads do not dispatch work or lift intent. Even a parked or
 		// reaped seat can resolve a handoff to its stored original generation.
+		// An owned attempt is InFlight, not an uncertain receipt. Do not
+		// query or settle it on this pass.
 		if b.Uncertain > 0 {
 			s.reconcileHeldReceipts(receiptCtx, b.Agent)
 			// The query can race arrivals, claims and operator dispositions.
@@ -194,6 +196,11 @@ func (s *Server) SweepSendBacklogs() {
 			continue
 		}
 		switch {
+		case b.InFlight > 0:
+			// This store owns the attempt. Do not reap it, replay it, or
+			// start the message behind it. ClaimFront already refuses the
+			// seat; this case is what keeps the sweep from treating the
+			// queue as idle pending now that InFlight is not Uncertain.
 		case b.Uncertain > 0:
 			// Never route, discard, or replay an attempt left by this daemon or
 			// its predecessor (🎯T623). PINNED is a live-seat word (🎯T599):

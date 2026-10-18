@@ -61,6 +61,9 @@ const (
 	// ReconcileDrop: it may or may not have landed and will not be pursued.
 	// A deliberate, attributed abandonment — never a silent one.
 	ReconcileDrop ReconcileOutcome = "drop"
+	// ReconcilePop records that an operator took the payload off the queue.
+	// Reconcile rejects it. A pop is not a confirmed, requeued, or dropped delivery.
+	ReconcilePop ReconcileOutcome = "pop"
 	// ReconcileConsolidate marks the survivor of a supersession.
 	ReconcileConsolidate ReconcileOutcome = "consolidate"
 )

@@ -187,6 +187,8 @@ func (s *Server) SettleHeldReceipts() {
 	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
 	defer cancel()
 	for _, b := range backlogs {
+		// InFlight is a live attempt this process owns. Reconcile refuses
+		// that row, and this pass does not ask. Uncertain is the receipt work.
 		if b.Uncertain > 0 {
 			s.reconcileHeldReceipts(ctx, b.Agent)
 		}

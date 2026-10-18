@@ -115,16 +115,16 @@ func (s *Server) enqueueAgentSendWithRequestID(name, text, requestID string) (in
 // unreadable queue is reported as empty AND logged: the drain runs on an event,
 // with nobody to return an error to, so the alternative to logging is silence.
 func (s *Server) dequeueAgentSend(name string) sendq.Entry {
-	e, ok, err := s.sendQueue().PopFront(name)
+	rec, ok, err := s.sendQueue().PopFront(name, "dequeueAgentSend", "oldest pending entry removed for delivery", time.Now())
 	if err != nil {
 		slog.Error("agent send queue: unreadable; nothing drained",
 			"component", "agent_send", "name", name, "err", err)
 		return sendq.Entry{}
 	}
-	if !ok {
+	if !ok || len(rec.Removed) == 0 {
 		return sendq.Entry{}
 	}
-	return e
+	return rec.Removed[0]
 }
 
 func (s *Server) pendingAgentSends(name string) int {

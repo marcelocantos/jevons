@@ -135,11 +135,13 @@ type Backlog struct {
 	// EntryIDs freezes the observed cohort for automatic cleanup. A later
 	// arrival must not replace an entry another drain has since removed.
 	EntryIDs []string
-	// Uncertain counts entries that must be reconciled rather than replayed.
-	// An attempt left by a dead daemon has the same conservative meaning.
-	// An in-flight attempt is included: its state is not Pending, and a sweep
-	// must not treat that queue as idle work.
+	// Uncertain counts entries that must be reconciled rather than replayed:
+	// an uncertain delivery, or an attempt left by a dead daemon. An attempt
+	// this store owns is not one of those. It is InFlight, and a sweep must
+	// not treat that queue as idle work either.
 	Uncertain int
+	// InFlight counts attempts this store owns. It is not an uncertain receipt.
+	InFlight int
 	// BlockReason is why the queue is not only waiting. Empty means every
 	// entry is claimable pending. It is depth's companion, not a second queue.
 	BlockReason string
@@ -472,36 +474,48 @@ func (s *Store) PushFront(agent string, e Entry) error {
 	return s.save(f)
 }
 
-// PopFront removes and returns the oldest queued message.
-func (s *Store) PopFront(agent string) (Entry, bool, error) {
+// PopFront removes the oldest claimable entry and returns it on a receipt.
+// The caller names who took it and what they observed. A blank actor or a
+// blank evidence line removes nothing. An in-flight attempt and a queue of
+// only unresolved attempts stay where they are. An empty queue is ok=false
+// and a nil error. Reconcile rejects ReconcilePop: taking the payload is not
+// a confirmed, requeued, or dropped delivery.
+func (s *Store) PopFront(agent, actor, evidence string, now time.Time) (Receipt, bool, error) {
 	if s == nil {
-		return Entry{}, false, fmt.Errorf("sendq: no store")
+		return Receipt{}, false, fmt.Errorf("sendq: no store")
+	}
+	actor, evidence, err := validAttribution(actor, evidence)
+	if err != nil {
+		return Receipt{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := s.load(agent)
 	if err != nil {
-		return Entry{}, false, err
+		return Receipt{}, false, err
 	}
 	if len(f.Entries) == 0 {
-		return Entry{}, false, nil
+		return Receipt{}, false, nil
 	}
 	i, _, blocked := claimable(f.Entries, s.active[agent])
 	if blocked {
-		return Entry{}, false, fmt.Errorf("sendq: %q has a delivery attempt in flight", agent)
+		return Receipt{}, false, fmt.Errorf("sendq: %q has a delivery attempt in flight", agent)
 	}
 	if i < 0 {
-		if len(f.Entries) > 0 {
-			return Entry{}, false, fmt.Errorf("sendq: %q holds only unresolved delivery attempts", agent)
-		}
-		return Entry{}, false, nil
+		return Receipt{}, false, fmt.Errorf("sendq: %q holds only unresolved delivery attempts", agent)
 	}
 	e := f.Entries[i]
 	f.Entries = append(f.Entries[:i:i], f.Entries[i+1:]...)
 	if err := s.save(f); err != nil {
-		return Entry{}, false, err
+		return Receipt{}, false, err
 	}
-	return e, true, nil
+	rec := Receipt{
+		Agent:   strings.TrimSpace(agent),
+		By:      Reconciliation{Actor: actor, At: now.UTC(), Outcome: ReconcilePop, Evidence: evidence},
+		Removed: []Entry{e},
+		Depth:   len(f.Entries),
+	}
+	return rec, true, nil
 }
 
 // claimable finds the entry a drain may take next (🎯T766.5).
@@ -862,13 +876,22 @@ func (s *Store) Backlog(agent string) (Backlog, error) {
 		return b, err
 	}
 	b.Oldest = f.Entries[0].EnqueuedAt
+	active := s.active[agent]
 	for _, e := range f.Entries {
 		b.EntryIDs = append(b.EntryIDs, e.ID)
-		if e.State != Pending {
+		phase := EntryPhase(e, active)
+		switch phase {
+		case PhaseInFlight:
+			b.InFlight++
+		case PhaseUncertain, PhaseHeldAttempt:
 			b.Uncertain++
+		default:
+			if e.State != Pending {
+				b.Uncertain++
+			}
 		}
 		if b.BlockReason == "" {
-			b.BlockReason = blockReason(EntryPhase(e, s.active[agent]))
+			b.BlockReason = blockReason(phase)
 		}
 	}
 	return b, nil
