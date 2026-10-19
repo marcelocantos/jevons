@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/gate"
 )
 
 // t7664ReapEnglishAllowlist is the English classifiers the reap/done control
@@ -89,7 +90,8 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "false_green.go"), "FalseGreenFlagsForWorker")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
@@ -256,6 +258,49 @@ func TestT7664ProseOracleDoesNotCloseOwnerIntent(t *testing.T) {
 	s2, reg2 := reapSinkServer(t, doneAgent)
 	s2.agentEventSink(doneAgent)(claudia.Event{Type: "assistant", Text: risk, StopReason: "end_turn"})
 	if reg2.Def(doneAgent) != nil {
+		t.Fatal("declared risk finish stayed registered")
+	}
+}
+
+// TestT7664MarkerWordsDoNotVetoReapOnADirtyTree drives the reap decision
+// on a dirty git worktree. "All tests pass" is not an uncited-claim veto.
+// The prose seat stays. A declared risk finish of that sentence is removed.
+func TestT7664MarkerWordsDoNotVetoReapOnADirtyTree(t *testing.T) {
+	prose := "Implemented the fix. All tests pass. Done."
+	dir := seededGitWorktree(t, dirtyTrackedEdit)
+	tree := gate.ProbeTree(dir)
+	if tree == nil || tree.Clean || tree.DirtyFiles == 0 {
+		t.Fatal("fixture is not a dirty worktree")
+	}
+	if UncitedClaimAgainstDirtyWorktree(prose, tree) {
+		t.Fatal("marker words vetoed a dirty worktree")
+	}
+	reg := regWithWorkerDir(t, dir)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", prose, func(string) bool { return false })
+	if ok || reason != "unknown_report" {
+		t.Fatalf("prose reap=%v reason=%s", ok, reason)
+	}
+
+	finish := declaredRiskFinishReport("T766.4", prose)
+	const agent = "jv-t7664-dirty-marker"
+	sinkReg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sinkReg.Register(claudia.AgentDef{
+		Name: agent, WorkDir: dir, SessionID: "s-dirty",
+		Purpose: claudia.PurposeWork, Parent: "jevons-po",
+		Materialized: true, Provider: "grok", TargetID: "T766.4",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{registry: sinkReg, notifyJevon: func(string) {}}
+	s.agentEventSink(agent)(claudia.Event{Type: "assistant", Text: prose, StopReason: "end_turn"})
+	if sinkReg.Def(agent) == nil {
+		t.Fatal("marker sentence reaped the seat")
+	}
+	s.agentEventSink(agent)(claudia.Event{Type: "assistant", Text: finish, StopReason: "end_turn"})
+	if sinkReg.Def(agent) != nil {
 		t.Fatal("declared risk finish stayed registered")
 	}
 }
