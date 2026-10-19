@@ -11,7 +11,6 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/gate"
-	"github.com/marcelocantos/jevons/internal/shaevidence"
 )
 
 // CompletionEvidenceClass is a hermetic classification of a finish report
@@ -156,18 +155,9 @@ func hasOracleEvidence(string) bool { return false }
 // not accepted risk. HasAcceptedRisk reads the envelope risk slot.
 func hasAcceptedRisk(string) bool { return false }
 
-// hasCompletionClaim is true when the report ASSERTS completion. 🎯T750: the
-// scan runs over claimScanText, so a marker the worker quoted, fenced, or
-// negated is not read as a claim it made.
-func hasCompletionClaim(lower string) bool {
-	scan := claimScanText(lower)
-	for _, m := range completionClaimMarkers {
-		if containsWordish(scan, m) {
-			return true
-		}
-	}
-	return false
-}
+// hasCompletionClaim is not a control decision (🎯T766.4). A sentence is
+// not a completion claim. The done answer is the envelope.
+func hasCompletionClaim(string) bool { return false }
 
 // containsWordish matches phrase as a whole word or phrase: the characters
 // flanking it must not be letters or digits.
@@ -199,32 +189,10 @@ func indexWordish(lower, phrase string) int {
 	return -1
 }
 
-// FindCompletionClaim locates the completion word that makes report read as a
-// claim, and the span of text around it (🎯T439). Reported so a reap can say in
-// the lifecycle log which words it fired on, rather than leaving a worker's
-// disappearance from the fleet unexplained.
-//
-// Diagnostic only: no decision is taken from this, so a miss costs an empty
-// span in a log line and nothing more.
-func FindCompletionClaim(report string) (marker, span string, offset int, ok bool) {
-	// 🎯T750: name the claim the worker made, so the log line and the reap
-	// decision are reading the same text.
-	lower := claimScanText(asciiLower(report))
-	best, at := "", -1
-	for _, m := range completionClaimMarkers {
-		i := indexWordish(lower, m)
-		if i < 0 || (at >= 0 && i >= at) {
-			continue
-		}
-		best, at = m, i
-	}
-	if at < 0 {
-		return "", "", 0, false
-	}
-	// 🎯T470: name the sentence that matched, not a 200-byte window around
-	// an offset — a wrong reap must be diagnosable from the log alone.
-	span, offset = matchedSentence(report, at, at+len(best))
-	return best, span, offset, true
+// FindCompletionClaim does not name a sentence as a claim (🎯T766.4).
+// A reap log does not decide from a completion word.
+func FindCompletionClaim(string) (marker, span string, offset int, ok bool) {
+	return "", "", 0, false
 }
 
 func wordRuneBefore(s string, i int) bool {
@@ -311,19 +279,11 @@ func HasActivationEvidence(report string) bool {
 	return false
 }
 
-// reportCitesOracleID is true when report names a checkable oracle artifact:
-// an envelope sha/gate-id slot, an evidence-shaped SHA in prose (🎯T427
-// shape), or a GATE attestation line (🎯T386 shape). Marker words alone —
-// "pass", "green", "oracle" — name nothing a reader can go check.
+// reportCitesOracleID is true only for a valid envelope oracle slot
+// (🎯T766.4). A SHA or GATE line in prose is not a citation.
 func reportCitesOracleID(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasOracle() {
-		return true
-	}
-	body := oracleScanBody(report)
-	if len(shaevidence.ExtractEvidenceSHAs(body)) > 0 {
-		return true
-	}
-	return len(gate.ParseAttestations(body)) > 0
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasOracle()
 }
 
 // UncitedClaimAgainstDirtyWorktree is not a reap veto (🎯T766.4).

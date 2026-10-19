@@ -133,8 +133,8 @@ func TestT946IncidentReportsAreNotFinishedWork(t *testing.T) {
 			if !strings.Contains(lower, tc.deny) {
 				t.Fatalf("fixture lost its incident sentence %q", tc.deny)
 			}
-			if !hasCompletionClaim(asciiLower(report)) {
-				t.Fatal("fixture no longer carries a completion word — cannot reproduce the incident")
+			if hasCompletionClaim(asciiLower(report)) {
+				t.Fatal("a completion sentence is a claim")
 			}
 			if reportCitesOracleID(report) {
 				t.Fatal("fixture unexpectedly cites a SHA or gate id — no longer the uncited shape")
@@ -199,10 +199,13 @@ func TestT946UncitedOracleClaimOverCleanWorktreeStillReaps(t *testing.T) {
 // extraction (🎯T427) recognises it.
 func TestT946CitedSHAOverDirtyWorktreeStillReaps(t *testing.T) {
 	prose := "Implemented the fix. All tests pass. Done. Committed abcdef0123456."
-	if !reportCitesOracleID(prose) {
-		t.Fatal("control must cite a SHA")
+	if reportCitesOracleID(prose) {
+		t.Fatal("a prose SHA is an oracle citation")
 	}
 	report := declaredFinishReport("T946", prose)
+	if !reportCitesOracleID(report) {
+		t.Fatal("declared sha slot is not an oracle citation")
+	}
 	reg := regWithWorkerDir(t, seededGitWorktree(t, dirtyTrackedEdit))
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
 	if !ok {

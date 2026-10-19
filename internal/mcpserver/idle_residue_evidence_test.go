@@ -6,6 +6,7 @@ package mcpserver
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,8 +79,11 @@ func TestT7664ReportAskIsDeclaredNotASentence(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	prose := "Blocked pending your answer: need one real keypress before I can close."
-	if ClassifyReportAsk(prose) == AskNone || ClassifyReportAsk(prose) == AskNoClaim {
-		t.Fatal("specimen no longer matches the prose ask classifier")
+	if !strings.Contains(prose, "Blocked pending your answer") {
+		t.Fatal("specimen lost the ask words")
+	}
+	if ClassifyReportAsk(prose) != AskNone {
+		t.Fatal("a sentence is an ask")
 	}
 	if ReportAwaitsOverseer(prose) {
 		t.Fatal("unenveloped ask sentence awaited the overseer")

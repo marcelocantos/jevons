@@ -58,8 +58,11 @@ func TestT716IncidentReportIsTheIncidentShape(t *testing.T) {
 	if !strings.Contains(lower, "next turn:") {
 		t.Fatal("fixture lost its Next turn: remaining-work heading")
 	}
-	if !hasCompletionClaim(lower) {
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — cannot reproduce the incident")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a completion claim")
 	}
 	if !strings.Contains(lower, "go test") {
 		t.Fatal("fixture lost the oracle-shaped words — cannot reproduce the incident")
@@ -74,8 +77,8 @@ func TestT716IncidentReportIsNotTerminal(t *testing.T) {
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("jv-t702 checkpoint 3 classified as finished_work")
 	}
-	if ask := ClassifyReportAsk(report); ask != AskCheckpoint {
-		t.Fatalf("ClassifyReportAsk = %s, want checkpoint", ask)
+	if ask := ClassifyReportAsk(report); ask != AskNone {
+		t.Fatalf("ClassifyReportAsk = %s, want none", ask)
 	}
 	reg := t395Registry(t, "jv-t702-seat-activity")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t702-seat-activity", report, nil)
@@ -110,17 +113,17 @@ func TestT716KeepSignalsIndependently(t *testing.T) {
 		{
 			name:   "numbered checkpoint declaration",
 			report: "Checkpoint 3 — mapped the parser. Builds green. Done this turn: the map.",
-			want:   AskCheckpoint,
+			want:   AskNone,
 		},
 		{
 			name:   "not yet committed",
 			report: "Done this turn. Builds green. Not yet committed or tested.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 		{
 			name:   "next turn remaining work",
 			report: "Done this turn. Builds green.\n\n**Next turn:** write the tests and commit.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 	}
 	for _, tc := range cases {
@@ -146,9 +149,9 @@ func TestT716NumberedCheckpointIsADeclaration(t *testing.T) {
 		report string
 		want   ReportAskClass
 	}{
-		{"em dash after number", "Checkpoint 3 — parser mapped; writer next.", AskCheckpoint},
-		{"colon after number", "Checkpoint 3: wired the decoder.", AskCheckpoint},
-		{"hash ordinal", "Checkpoint #3 — ending this slice.", AskCheckpoint},
+		{"em dash after number", "Checkpoint 3 — parser mapped; writer next.", AskNone},
+		{"colon after number", "Checkpoint 3: wired the decoder.", AskNone},
+		{"hash ordinal", "Checkpoint #3 — ending this slice.", AskNone},
 		{"mention still a mention", "Done. Commit 4f2b8c1; go test PASS. Checkpoint reports now classify as open work.", AskNone},
 		{"handling still a mention", "Done. Commit 4f2b8c1; go test PASS. Checkpoint handling no longer reaps numbered banners.", AskNone},
 	}

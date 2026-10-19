@@ -69,8 +69,8 @@ func TestT577IncidentReportIsNotTerminal(t *testing.T) {
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("jv-t568 checkpoint classified as finished_work")
 	}
-	if ask := ClassifyReportAsk(report); ask != AskCheckpoint {
-		t.Fatalf("ClassifyReportAsk = %s, want checkpoint", ask)
+	if ask := ClassifyReportAsk(report); ask != AskNone {
+		t.Fatalf("ClassifyReportAsk = %s, want none", ask)
 	}
 	reg := t395Registry(t, "jv-t568-intent-closed")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t568-intent-closed", report, nil)
@@ -124,22 +124,22 @@ func TestT577ForwardLookingPlanShapesDoNotReap(t *testing.T) {
 		{
 			name:   "jammed checkpoint after period",
 			report: "Surveyed the loader.Checkpoint (turn-depth ceiling). Next step: implement the close rule.",
-			want:   AskCheckpoint,
+			want:   AskNone,
 		},
 		{
 			name:   "next step remaining work",
 			report: "Mapped the resume path. TargetID that is achieved in the ledger is the close rule. Next step: implement both rules.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 		{
 			name:   "i'll resume",
 			report: "Diagnosis complete. I'll resume on the writer after this turn.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 		{
 			name:   "ending the turn here",
 			report: "Wired the decoder. Ending the turn here; encoder is next.",
-			want:   AskCheckpoint,
+			want:   AskNone,
 		},
 	}
 	for _, tc := range cases {

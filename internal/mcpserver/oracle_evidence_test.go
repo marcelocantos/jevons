@@ -92,8 +92,12 @@ func TestHasActivationEvidence(t *testing.T) {
 }
 
 func TestLooksLikeHermeticOnlyDaemonClaim(t *testing.T) {
-	if !LooksLikeHermeticOnlyDaemonClaim("Done. hermetic go test ./internal/server PASS") {
-		t.Fatal("hermetic-only achieve claim should flag T194 anti-pattern")
+	prose := "Done. hermetic go test ./internal/server PASS"
+	if LooksLikeHermeticOnlyDaemonClaim(prose) {
+		t.Fatal("a hermetic sentence is a daemon claim")
+	}
+	if !LooksLikeHermeticOnlyDaemonClaim(declaredFinishReport("T194", prose)) {
+		t.Fatal("a declared hermetic finish with no activation evidence must flag")
 	}
 	if LooksLikeHermeticOnlyDaemonClaim("Done. restart-jevonsd + curl /api/frontier HTTP 200. go test green") {
 		t.Fatal("daily-path evidence must clear hermetic-only flag")

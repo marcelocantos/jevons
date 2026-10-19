@@ -419,65 +419,28 @@ type ReportAskFinding struct {
 	Offset int
 }
 
-// ClassifyReportAsk reports whether a terminal report is asking the overseer
-// for something rather than declaring the mission over. Pure string heuristic —
-// the overseer's judgment still applies.
+// ClassifyReportAsk reports whether a terminal report is an ask.
+// A sentence is not an ask (🎯T766.4). The done answer is the envelope.
 func ClassifyReportAsk(report string) ReportAskClass {
 	return ClassifyReportAskDetail(report).Class
 }
 
-// ClassifyReportAskDetail is ClassifyReportAsk with the span of report text the
-// decision fired on, for the reap lifecycle log.
-//
-// Priority runs most-specific first so the lifecycle log names a useful reason:
-// a visible cut (unknowable intent) > a named missing input > an explicit
-// "I have not acted" > a stated decision request > a closing question.
-//
-// A request outranks the rest because it is the most actionable for the parent:
-// the span names what to send back.
+// ClassifyReportAskDetail keeps the structural non-claims: an empty body,
+// a truncated delivery, and an exact bare ack. It does not match phrases.
 func ClassifyReportAskDetail(report string) ReportAskFinding {
 	s := strings.TrimSpace(report)
 	if s == "" {
-		// 🎯T723: an empty body is not AskNone. AskNone means "no ask, so a
-		// finish shape may reap." Silence asserts nothing; it keeps the seat.
+		// 🎯T723: an empty body is not AskNone. Silence asserts nothing.
 		return ReportAskFinding{Class: AskNoClaim, Marker: "empty"}
 	}
 	if agentreport.IsTruncatedDelivery(s) {
 		return ReportAskFinding{Class: AskTruncated, Span: truncationSpan(s)}
 	}
-	// 🎯T723: the 22-byte harness ack is a turn-boundary artefact, not a
-	// work claim. Reuse T402's exact-match vocabulary (noopwedge.IsBareAck)
-	// rather than a second phrase list. A report that merely CONTAINS the
-	// phrase still has content and is not this class.
+	// 🎯T723: the harness ack is a turn-boundary artefact, not a work claim.
+	// Exact-match vocabulary only. A report that merely contains the phrase
+	// is not this class.
 	if noopwedge.IsBareAck(s) {
 		return ReportAskFinding{Class: AskNoClaim, Marker: "bare_ack", Span: s}
-	}
-	lower := asciiLower(s)
-	// A checkpoint declaration outranks the marker classes: a report that names
-	// its own genre has answered the question the rest of this function is
-	// guessing at (🎯T497).
-	if f, ok := checkpointDeclaration(s, lower); ok {
-		return f
-	}
-	for _, class := range []struct {
-		class   ReportAskClass
-		markers []string
-		accept  func(lower, marker string, at int) bool
-	}{
-		{AskRequest, requestMarkers, isRequestAsk},
-		{AskCheckpoint, checkpointMarkers, nil},
-		{AskExplicitIncomplete, explicitIncompleteMarkers, nil},
-		{AskDecisionRequest, decisionRequestMarkers, nil},
-	} {
-		if m, i := firstAcceptedMarker(lower, class.markers, class.accept); i >= 0 {
-			// 🎯T470: name the sentence that matched, not a 200-byte window.
-			span, off := matchedSentence(s, i, i+len(m))
-			return ReportAskFinding{Class: class.class, Marker: m, Span: span, Offset: off}
-		}
-	}
-	if i := closingQuestionIndex(s); i >= 0 {
-		span, off := matchedSentence(s, i, len(s))
-		return ReportAskFinding{Class: AskClosingQuestion, Span: span, Offset: off}
 	}
 	return ReportAskFinding{Class: AskNone}
 }

@@ -232,27 +232,10 @@ func hasAnyCompletionMarker(lower string) bool {
 // unreadable. ok is true only when the report would have read as a finish
 // BEFORE the mask and does not after it, so the record marks the save this
 // target makes and not every passing mention of a completion word.
-func CitedCompletionClaim(report string) (marker, span string, offset int, ok bool) {
-	lower := asciiLower(report)
-	if hasCompletionClaim(lower) {
-		return "", "", 0, false // asserted, not cited
-	}
-	if !wouldHaveFinishedBeforeT750(lower) {
-		return "", "", 0, false
-	}
-	best, at := "", -1
-	for _, m := range completionClaimMarkers {
-		i := indexWordish(lower, m)
-		if i < 0 || (at >= 0 && i >= at) {
-			continue
-		}
-		best, at = m, i
-	}
-	if at < 0 {
-		return "", "", 0, false
-	}
-	span, offset = matchedSentence(report, at, at+len(best))
-	return best, span, offset, true
+// CitedCompletionClaim does not name a quoted sentence as a save
+// (🎯T766.4). A cited completion word is not a claim.
+func CitedCompletionClaim(string) (marker, span string, offset int, ok bool) {
+	return "", "", 0, false
 }
 
 // wouldHaveFinishedBeforeT750 is not a finish decision (🎯T766.4). The

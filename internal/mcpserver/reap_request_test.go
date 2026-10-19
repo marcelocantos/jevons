@@ -56,8 +56,12 @@ func t439Registry(t *testing.T, name string) *claudia.Registry {
 // either property it stops being a regression test for anything.
 func TestT439BriefRequestIsTheIncidentShape(t *testing.T) {
 	report := loadBriefRequestReport(t)
-	if !hasCompletionClaim(strings.ToLower(report)) {
+	lower := strings.ToLower(report)
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — it cannot reproduce the incident")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a completion claim")
 	}
 	if !strings.Contains(report, "Please resend it before I write anything") {
 		t.Fatal("fixture no longer carries the brief request")
@@ -84,8 +88,8 @@ func TestT439BriefRequestIsTheIncidentShape(t *testing.T) {
 func TestT439BriefRequestDoesNotReap(t *testing.T) {
 	report := loadBriefRequestReport(t)
 
-	if got := ClassifyReportAsk(report); got != AskRequest {
-		t.Fatalf("ClassifyReportAsk = %s, want %s", got, AskRequest)
+	if got := ClassifyReportAsk(report); got != AskNone {
+		t.Fatalf("ClassifyReportAsk = %s, want %s", got, AskNone)
 	}
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("🎯T439: a report that asks for its brief is not a finished-work report")
@@ -119,25 +123,25 @@ func TestT439RequestsAndFinishes(t *testing.T) {
 		{
 			name:     "brief never arrived",
 			report:   "I did not receive your detailed brief — only the target id. Please resend it. Recon done meanwhile.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
 			name:     "asks for a resend",
 			report:   "Analysis complete. The brief was truncated; re-send the acceptance clauses and I'll continue.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
 			name:     "blocked on an unblock",
 			report:   "Done with everything I can reach. Please unblock the credentials and I'll finish the rest.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
 			name:     "waiting on an answer",
 			report:   "Groundwork complete. Still waiting for the schema you were going to send.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -211,8 +215,8 @@ func TestT439RequestVetoIsOneWay(t *testing.T) {
 	}
 	for _, r := range reports {
 		for _, q := range requests {
-			if ClassifyReportAsk(q) != AskRequest {
-				t.Fatalf("request fixture %q is not classified as a request — the property is vacuous", q)
+			if _, i := firstMarker(asciiLower(q), requestMarkers); i < 0 {
+				t.Fatalf("request fixture %q no longer carries a request phrase — the property is vacuous", q)
 			}
 			withRequest := strings.TrimSpace(r + "\n\n" + q)
 			reg := t439Registry(t, "jv-worker")
@@ -232,35 +236,17 @@ func TestT439SpanLocatesTheDecision(t *testing.T) {
 	report := loadBriefRequestReport(t)
 
 	ask := ClassifyReportAskDetail(report)
-	if ask.Class != AskRequest {
-		t.Fatalf("class = %s, want %s", ask.Class, AskRequest)
+	if ask.Class != AskNone {
+		t.Fatalf("class = %s, want %s", ask.Class, AskNone)
 	}
-	if ask.Marker != "did not receive" {
-		t.Fatalf("marker = %q, want the first request phrase in the report", ask.Marker)
+	if !strings.Contains(report, "did not receive your detailed brief") {
+		t.Fatal("fixture lost the brief-request sentence")
 	}
-	if !strings.Contains(ask.Span, "did not receive your detailed brief") {
-		t.Fatalf("span %q does not quote the phrase that fired", ask.Span)
+	if _, _, _, ok := FindCompletionClaim(report); ok {
+		t.Fatal("a sentence is a completion claim")
 	}
-	if ask.Offset < 0 || ask.Offset+len(ask.Span) > len(report) ||
-		report[ask.Offset:ask.Offset+len(ask.Span)] != ask.Span {
-		t.Fatalf("span is not at offset %d in the report", ask.Offset)
-	}
-	// 🎯T470: decision spans are the matched sentence/clause, not a 200-byte
-	// window — a long sentence is still the right diagnostic unit.
-	if !strings.Contains(ask.Span, ask.Marker) {
-		t.Fatalf("span %q lost its marker %q", ask.Span, ask.Marker)
-	}
-
-	// The reap direction quotes the completion word instead.
-	marker, span, offset, ok := FindCompletionClaim(report)
-	if !ok {
-		t.Fatal("no completion claim found in a report that reaped as one")
-	}
-	if marker != "done" || !strings.Contains(span, "done") {
-		t.Fatalf("completion marker=%q span=%q", marker, span)
-	}
-	if report[offset:offset+len(span)] != span {
-		t.Fatalf("completion span is not at offset %d", offset)
+	if !hasAnyCompletionMarker(strings.ToLower(report)) {
+		t.Fatal("fixture no longer carries a completion word")
 	}
 }
 

@@ -38,14 +38,14 @@ func TestT470IncidentReportsAreNotFinishedWork(t *testing.T) {
 			name:    "jv-t390-plan-usage 20260815T062910Z-09c58493",
 			file:    "t470_jv_t390_checkpoint_report.md",
 			min:     2000,
-			wantAsk: AskCheckpoint, // opens with Checkpoint — …; also denies achievement
+			wantAsk: AskNone, // a checkpoint sentence is not an ask
 			deny:    "nothing here is achieved",
 		},
 		{
 			name:    "jv-t391-guard-all-paths 20260815T062936Z-8e58ef45",
 			file:    "t470_jv_t391_checkpoint_report.md",
 			min:     2000,
-			wantAsk: AskCheckpoint, // 🎯T577: jammed "init.**Checkpoint —" is a declaration
+			wantAsk: AskNone, // a jammed checkpoint sentence is not an ask
 			deny:    "oracles are missing",
 		},
 	}
@@ -56,8 +56,11 @@ func TestT470IncidentReportsAreNotFinishedWork(t *testing.T) {
 			if !strings.Contains(strings.ToLower(report), strings.ToLower(tc.deny)) {
 				t.Fatalf("fixture lost its non-completion sentence %q", tc.deny)
 			}
-			if !hasCompletionClaim(asciiLower(report)) {
+			if !hasAnyCompletionMarker(asciiLower(report)) {
 				t.Fatal("fixture no longer carries a completion word — cannot reproduce the incident")
+			}
+			if hasCompletionClaim(asciiLower(report)) {
+				t.Fatal("a completion sentence is a completion claim")
 			}
 			if LooksLikeFinishedWorkReport(report) {
 				t.Fatal("incident report classified as finished_work")
@@ -116,34 +119,16 @@ func TestT470FalseGreenFlaggedReportNeverReaps(t *testing.T) {
 	}
 }
 
-// Clause 3: FindCompletionClaim still isolates the incident sentence.
-// The reap log does not copy that sentence (🎯T766.4).
+// Clause 3: a sentence is not a completion claim. The fixture still
+// carries the incident clause. The reap log does not copy a prose span
+// (🎯T766.4).
 func TestT470ReapDecisionNamesMatchedSentence(t *testing.T) {
 	report := loadT470Fixture(t, "t470_jv_t391_checkpoint_report.md", 2000)
-	marker, span, offset, ok := FindCompletionClaim(report)
-	if !ok {
-		t.Fatal("expected a completion claim in the incident fixture")
+	if _, _, _, ok := FindCompletionClaim(report); ok {
+		t.Fatal("a sentence is a completion claim")
 	}
-	if marker != "complete" {
-		t.Fatalf("marker = %q, want complete (the incident word)", marker)
-	}
-	if offset < 0 || offset+len(span) > len(report) || report[offset:offset+len(span)] != span {
-		t.Fatalf("span not at offset %d", offset)
-	}
-	// Must be the clause carrying "complete", not a 200-byte mid-cut window.
-	if !strings.Contains(strings.ToLower(span), "complete") {
-		t.Fatalf("span lost the claim word: %q", span)
-	}
-	if strings.HasPrefix(span, "ed.") || strings.HasSuffix(span, "Let me") {
-		t.Fatalf("span looks like the old 200-byte window clip: %q", span)
-	}
-	if len(span) > 400 {
-		t.Fatalf("span is %d bytes — expected a sentence/clause, not a paragraph", len(span))
-	}
-	// Semicolon breaks the clause so the claim sentence is isolable.
-	lower := strings.ToLower(span)
-	if !strings.Contains(lower, "implementation is complete") {
-		t.Fatalf("span = %q, want the 'Implementation is complete' clause", span)
+	if !strings.Contains(strings.ToLower(report), "implementation is complete") {
+		t.Fatal("fixture lost the incident clause")
 	}
 
 	fields := reapDecisionFields("worker", "finished_work", "Done. Ship it tomorrow.")

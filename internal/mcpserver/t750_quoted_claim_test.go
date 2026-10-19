@@ -86,12 +86,11 @@ func TestT750AssertedMarkerStillReaps(t *testing.T) {
 	if !LooksLikeFinishedWorkReport(declaredFinishReport("T750", t745FinishedReport)) {
 		t.Fatal("the same report inside a finish-report must be done")
 	}
-	marker, span, _, ok := FindCompletionClaim(t745FinishedReport)
-	if !ok || marker != "complete" {
-		t.Fatalf("expected the asserted marker to be named; got %q ok=%v", marker, ok)
+	if _, _, _, ok := FindCompletionClaim(t745FinishedReport); ok {
+		t.Fatal("a GOAL_STATUS sentence is a completion claim")
 	}
-	if span != "GOAL_STATUS: complete" {
-		t.Errorf("the log must name the line the worker emitted; got span %q", span)
+	if !strings.Contains(t745FinishedReport, "GOAL_STATUS: complete") {
+		t.Fatal("specimen lost the asserted line")
 	}
 }
 

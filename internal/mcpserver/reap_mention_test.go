@@ -88,8 +88,12 @@ func TestT446MentionReportsAreTheIncidentShape(t *testing.T) {
 		{"negated mention", t446NegatedMentionReport(t), "re-send"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if !hasCompletionClaim(strings.ToLower(tc.report)) {
+			lower := strings.ToLower(tc.report)
+			if !hasAnyCompletionMarker(lower) {
 				t.Fatal("fixture carries no completion word — there was no reap for the mention to block")
+			}
+			if hasCompletionClaim(lower) {
+				t.Fatal("a completion sentence is a completion claim")
 			}
 			m, i := firstMarker(asciiLower(tc.report), requestMarkers)
 			if i < 0 {
@@ -149,39 +153,22 @@ func TestT446MetaMentionReportReaps(t *testing.T) {
 	}
 }
 
-// TestT446QuotedCommitSubjectIsTheDeclaredResidual pins what this target does
-// NOT fix, so the gap is visible in the suite rather than in a paragraph
-// somebody has to remember.
-//
-// The second report is still held — not as a request now, but as
-// explicit_incomplete, because it quotes its own commit subject as evidence:
-// "*fix(T439): a worker asking for its brief has not finished*". The claim in
-// those words belongs to the commit title, not to the worker.
-//
-// It is left alone deliberately. The guards that fit the request class do not
-// transfer: an explicit-incomplete marker is a statement about the worker's own
-// state, and every rule that would reject the quotation ("must be in the
-// worker's own voice", "must be clause-initial", "emphasis spans are
-// citations") also rejects ordinary ways of writing the real thing — "the work
-// is not finished", "**not finished**". Getting that wrong reaps a worker that
-// said it had not finished, which is the destructive direction 🎯T395 and
-// 🎯T439 exist to prevent. Keeping a finished worker registered costs an idle
-// process the sentinel prunes.
-//
-// When a later target does fix it, this test is the one that fails.
+// TestT446QuotedCommitSubjectIsTheDeclaredResidual pins the negated-mention
+// fixture. A quoted commit subject is not an ask class (🎯T766.4). The
+// words stay in the fixture. Unenveloped prose does not reap.
 func TestT446QuotedCommitSubjectIsTheDeclaredResidual(t *testing.T) {
 	report := t446NegatedMentionReport(t)
 
 	d := ClassifyReportAskDetail(report)
-	if d.Class != AskExplicitIncomplete {
-		t.Fatalf("residual has moved: class = %s (marker %q) — update or retire this test", d.Class, d.Marker)
+	if d.Class != AskNone {
+		t.Fatalf("a quoted commit subject is an ask: class = %s", d.Class)
 	}
-	if d.Marker != "not finished" || !strings.Contains(d.Span, "a worker asking for its brief has not finished") {
-		t.Fatalf("residual is no longer the quoted commit subject: marker=%q span=%q", d.Marker, d.Span)
+	if !strings.Contains(strings.ToLower(report), "not finished") || !strings.Contains(report, "a worker asking for its brief has not finished") {
+		t.Fatal("fixture lost the quoted commit subject")
 	}
 	reg := t439Registry(t, "jv-t439-reap-request")
-	if ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-t439-reap-request", report, nil); ok {
-		t.Fatal("residual has moved: the report now reaps — update or retire this test")
+	if ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t439-reap-request", report, nil); ok {
+		t.Fatalf("unenveloped prose reaps (%s)", reason)
 	}
 }
 
@@ -205,7 +192,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "negation belongs to its own clause",
 			report:   "I did not get anything, please resend the brief.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -217,7 +204,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "imperative is the verb",
 			report:   "Analysis complete. Re-send the acceptance clauses and I'll continue.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -229,7 +216,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "a bare verb after a request cue is a request",
 			report:   "Finished the recon. Could you resend the acceptance clauses?",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -241,7 +228,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "🎯T439 shape survives untouched",
 			report:   "I did not receive your detailed brief — only the target id. Please resend it. Recon done meanwhile.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -291,9 +278,12 @@ func TestT446RejectedMentionDoesNotVetoALaterRequest(t *testing.T) {
 			t.Fatalf("mention fixture %q is still classified as an ask — the property is vacuous", m)
 		}
 		for _, q := range requests {
+			if _, i := firstMarker(asciiLower(q), requestMarkers); i < 0 {
+				t.Fatalf("request fixture %q no longer carries a request phrase", q)
+			}
 			report := "Done. " + m + "\n\n" + q
-			if got := ClassifyReportAsk(report); got != AskRequest {
-				t.Errorf("mention %q swallowed request %q: class = %s", m, q, got)
+			if got := ClassifyReportAsk(report); got != AskNone {
+				t.Errorf("a sentence became an ask (%s): %q + %q", got, m, q)
 			}
 			reg := t439Registry(t, "jv-worker")
 			if ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", report, nil); ok {

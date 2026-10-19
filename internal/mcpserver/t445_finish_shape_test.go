@@ -71,8 +71,8 @@ func TestT445ReapedCheckpointReportIsNotAFinish(t *testing.T) {
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("reaped checkpoint fixture reads as finish")
 	}
-	if ask := ClassifyReportAsk(report); ask == AskNone {
-		t.Fatal("checkpoint fixture not recognised as an ask/checkpoint")
+	if ask := ClassifyReportAsk(report); ask != AskNone {
+		t.Fatal("a checkpoint sentence is an ask")
 	}
 	reg := regWithTree(t)
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })

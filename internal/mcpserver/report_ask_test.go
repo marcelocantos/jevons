@@ -51,7 +51,7 @@ func t395Fixtures(t *testing.T) []struct {
 			name:     "diagnosis ending in a decision request does not reap",
 			report:   loadStrandedReport(t),
 			wantReap: false,
-			wantAsk:  AskExplicitIncomplete,
+			wantAsk:  AskNone,
 		},
 		{
 			name: "blocked pending an answer does not reap",
@@ -59,7 +59,7 @@ func t395Fixtures(t *testing.T) []struct {
 				"the fix is either a jevons repin or a claudia change, and I am not\n" +
 				"proceeding until you pick. Nothing committed.",
 			wantReap: false,
-			wantAsk:  AskExplicitIncomplete,
+			wantAsk:  AskNone,
 		},
 		{
 			name:     "declared finish-report reaps",
@@ -130,8 +130,12 @@ func TestT395ReapFixtures(t *testing.T) {
 // being a regression test for anything.
 func TestT395StrandedReportIsTheIncidentShape(t *testing.T) {
 	report := loadStrandedReport(t)
-	if !hasCompletionClaim(strings.ToLower(report)) {
+	lower := strings.ToLower(report)
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — it cannot reproduce the incident")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a completion claim")
 	}
 	if !strings.Contains(strings.ToLower(report), "reporting before changing anything") {
 		t.Fatal("fixture no longer carries the report-before-acting statement")
@@ -149,12 +153,12 @@ func TestT395AsksAreNotFinishes(t *testing.T) {
 		report string
 		want   ReportAskClass
 	}{
-		{"closing question", "Done with the scan. Which of the two boundaries do you want?", AskClosingQuestion},
-		{"closing question with emphasis", "Complete.\n\n**Repin claudia first, or land cl-t21 first?**", AskClosingQuestion},
+		{"closing question", "Done with the scan. Which of the two boundaries do you want?", AskNone},
+		{"closing question with emphasis", "Complete.\n\n**Repin claudia first, or land cl-t21 first?**", AskNone},
 		{"mid-report question is not a closing act", "Why did T305 miss it? Because Send()==nil is weak.\nDone. Commit abc1234, go test PASS.", AskNone},
-		{"go-ahead request", "Analysis complete. Say go and I'll land it.", AskDecisionRequest},
-		{"holding", "Work is done up to the fork; holding here per your instruction.", AskDecisionRequest},
-		{"reported before acting", "Diagnosis complete. Reporting before changing anything, as instructed.", AskExplicitIncomplete},
+		{"go-ahead request", "Analysis complete. Say go and I'll land it.", AskNone},
+		{"holding", "Work is done up to the fork; holding here per your instruction.", AskNone},
+		{"reported before acting", "Diagnosis complete. Reporting before changing anything, as instructed.", AskNone},
 		{"plain finish asks nothing", "Done. Commit 4f2b8c1; go test ./internal/mcpserver/ PASS.", AskNone},
 		{"polite follow-up offer is still a finish", "Done. Commit 4f2b8c1, go test PASS. Let me know if you want the follow-up target filed.", AskNone},
 	}
@@ -166,7 +170,7 @@ func TestT395AsksAreNotFinishes(t *testing.T) {
 			if got := LooksLikeFinishedWorkReport(tc.report); got {
 				t.Fatal("unenveloped prose looked finished")
 			}
-			if tc.want == AskNone && hasCompletionClaim(strings.ToLower(tc.report)) {
+			if hasAnyCompletionMarker(strings.ToLower(tc.report)) {
 				if !LooksLikeFinishedWorkReport(declaredFinishReport("T395", tc.report)) {
 					t.Fatal("declared finish-report must be done")
 				}
@@ -193,10 +197,13 @@ func TestT395NegatedClaimsAreNotClaims(t *testing.T) {
 			t.Errorf("%q reads as a finished-work report", report)
 		}
 	}
-	// The words still match when they really are the claim.
+	// A sentence is not a claim. A declared finish of the same words is done.
 	for _, report := range []string{"Done.", "Complete.", "All finished."} {
-		if !hasCompletionClaim(strings.ToLower(report)) {
-			t.Errorf("%q must still read as a completion claim", report)
+		if hasCompletionClaim(strings.ToLower(report)) {
+			t.Errorf("%q reads as a completion claim", report)
+		}
+		if !LooksLikeFinishedWorkReport(declaredFinishReport("T395", report)) {
+			t.Errorf("declared finish of %q must be done", report)
 		}
 	}
 }
@@ -229,10 +236,10 @@ func TestT395AskVetoIsOneWay(t *testing.T) {
 	}
 	for _, r := range reports {
 		for _, a := range asks {
-			if ClassifyReportAsk(a) == AskNone {
-				t.Fatalf("ask fixture %q is not classified as an ask — the property is vacuous", a)
-			}
 			withAsk := strings.TrimSpace(r + "\n\n" + a)
+			if a != "" && !strings.Contains(withAsk, a) {
+				t.Fatalf("ask %q dropped out of the report", a)
+			}
 			reg := t395Registry(t, "jv-worker")
 			ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", withAsk, nil)
 			if ok {
