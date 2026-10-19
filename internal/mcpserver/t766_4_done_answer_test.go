@@ -183,7 +183,7 @@ func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../fleet/provider_caps.go"), "noteRehydrate", "logPlanAuthLoss", "RehydrateBroken")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../fleet/exit_cause.go"), "BrokerPlanned", "BrokerCaused")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/agent_auth_recover.go"), "destinationAuthRecoverable", "reauthablePlanFailure")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "plan_policy.go"), "planSwitch", "turnInFlight")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "plan_policy.go"), "planSwitch", "turnInFlight", "alreadyPlanParked")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../relayroute/classify.go"), "Classify", "Reason", "envelopeRoute")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t869_plan_only.go"), "shouldForwardAgentReply", "barePlanSentence")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ReportAwaitsOverseer")...)

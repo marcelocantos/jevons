@@ -6,7 +6,6 @@ package mcpserver
 import (
 	"errors"
 	"log/slog"
-	"strings"
 
 	"github.com/marcelocantos/claudia"
 
@@ -57,11 +56,10 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		// Re-noting stamps a fresh At every SweepPlanPolicy tick, which makes
 		// T662 treat each sweep as a new MASS STOP burst and re-notify the
 		// overseer under token depletion (same five POs every ~5m).
-		reason := "plan policy parked: " + a.Reason
-		if s.alreadyPlanParked(a.Name, reason) {
+		if s.alreadyPlanParked(a.Name) {
 			continue
 		}
-		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, reason, planPolicyActor, "")
+		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+a.Reason, planPolicyActor, "")
 		if s.registry != nil {
 			s.registry.Stop(a.Name)
 			seatstate.ObserveStopped(s.registry, a.Name)
@@ -195,10 +193,11 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 // may interrupt or park this particular seat, and reports a host deferral
 // instead of silently changing the provider decision.
 
-// alreadyPlanParked reports that name is already stopped for this plan-policy
-// reason, so a second SweepPlanPolicy tick must not mint another seat_stop
-// (and another MASS STOP window).
-func (s *Server) alreadyPlanParked(name, reason string) bool {
+// alreadyPlanParked reports that name is already stopped by plan policy, so a
+// second SweepPlanPolicy tick must not mint another seat_stop (and another
+// MASS STOP window). The stop source is the decision. The recorded reason
+// sentence is not a classifier.
+func (s *Server) alreadyPlanParked(name string) bool {
 	if s == nil || name == "" {
 		return false
 	}
@@ -208,12 +207,7 @@ func (s *Server) alreadyPlanParked(name, reason string) bool {
 		}
 	}
 	last, ok := s.seatStops().Last(name)
-	if !ok || last.Source != seatstop.SourcePlanPolicy {
-		return false
-	}
-	// Same reason, or any prior plan-policy park while still down: intent is
-	// already parked and the stop ledger already explains the seat.
-	return last.Reason == reason || strings.HasPrefix(last.Reason, "plan policy parked:")
+	return ok && last.Source == seatstop.SourcePlanPolicy
 }
 
 func (s *Server) planHostDeferral(action planusage.PlanAction) string {
