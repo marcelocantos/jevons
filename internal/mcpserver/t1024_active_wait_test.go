@@ -68,24 +68,23 @@ func TestT1024ReportsAreTheIncidentShape(t *testing.T) {
 	}
 }
 
-// TestT1024ActiveWaitIsNamedInTheReport is the classifier oracle: both real
-// reports narrate an active wait on a named alive external process, and
-// the sentence returned is the worker's own monitoring narration.
+// TestT1024ActiveWaitIsNamedInTheReport pins that the incident narration
+// is not a wait slot. The sentences stay in the fixtures. The classifier
+// does not return them.
 func TestT1024ActiveWaitIsNamedInTheReport(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, report, wantInSpan string
+		name, report, wantInReport string
 	}{
 		{"nest-quadratic", t1024NestQuadraticReport(t), "queue"},
 		{"verify-land", t1024VerifyLandReport(t), "alive and still queued"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			span, ok := FindActiveExternalWait(tc.report)
-			if !ok {
-				t.Fatal("FindActiveExternalWait did not recognise a worker queued on the shared gate lease")
+			if !strings.Contains(strings.ToLower(tc.report), tc.wantInReport) {
+				t.Fatalf("fixture lost the narration %q", tc.wantInReport)
 			}
-			if !strings.Contains(strings.ToLower(span), tc.wantInSpan) {
-				t.Fatalf("span = %q, want it to name the wait (%q)", span, tc.wantInSpan)
+			if span, ok := FindActiveExternalWait(tc.report); ok {
+				t.Fatalf("monitoring prose classified as a wait: %q", span)
 			}
 		})
 	}

@@ -77,15 +77,6 @@ func ClassifyWorkerIdleDisposition(text string) WorkerIdleAction {
 	}
 }
 
-func containsAny(lower string, phrases []string) bool {
-	for _, p := range phrases {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
-}
-
 // LooksLikeOwnWorkCompleteReport is the 🎯T985 name for a report whose own
 // work is finished. It is ClassifyWorkerIdleDisposition's reap answer
 // (🎯T766.4): a declared finish-report. A sentence that says nothing is

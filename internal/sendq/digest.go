@@ -66,14 +66,8 @@ func classify(e Entry) classified {
 	c := classified{e: e, kind: kindOther}
 	for _, line := range strings.Split(e.Text, "\n") {
 		line = strings.TrimSpace(line)
-		// formatIdleNudgeWire glues "[event: <kind>]" onto the first line
-		// of the body. Peel that wrapper so the fact on the same line is
-		// visible. The wrapper is not the decision.
-		if rest, found := strings.CutPrefix(line, "[event:"); found {
-			if i := strings.IndexByte(rest, ']'); i >= 0 {
-				line = strings.TrimSpace(rest[i+1:])
-			}
-		}
+		// A rendered "[event:]" wrapper is not a fact, including when a
+		// fact is glued after it on the same line. The fact is its own line.
 		fields := strings.Fields(line)
 		if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[2] == "" {
 			continue

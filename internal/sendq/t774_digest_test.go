@@ -23,8 +23,9 @@ func t774Queue(t *testing.T, s *Store, n int) {
 
 func TestClassifyReadsDeclaredFacts(t *testing.T) {
 	route := envelope.SeatFact(envelope.IntentRoute, "w1") + " report_id=abc\nbody"
-	idle := "[event: worker-idle] " + envelope.SeatFact(envelope.IntentIdle, "w2") + "\nWorker: w2\n"
+	idle := envelope.SeatFact(envelope.IntentIdle, "w2") + "\nWorker: w2\n"
 	held := envelope.SeatFact(envelope.IntentHeld, "h6") + "\n[held backlog from h6 — reaped]\n\nbody"
+	glued := "[event: worker-idle] " + envelope.SeatFact(envelope.IntentIdle, "w2") + "\nWorker: w2\n"
 	if got := classify(Entry{Text: route}); got.kind != kindReport || got.sender != "w1" || reportID(route) != "abc" {
 		t.Fatalf("route classify=%+v id=%q", got, reportID(route))
 	}
@@ -38,6 +39,7 @@ func TestClassifyReadsDeclaredFacts(t *testing.T) {
 		"[Agent w1 responded] report_id=abc\nw1 status",
 		"[event: worker-idle] A work agent entered phase=idle.\n\nWorker: w2\n",
 		"[held backlog from h6 — that seat was reaped]\n\nbody",
+		glued,
 	} {
 		if got := classify(Entry{Text: text}); got.kind != kindOther {
 			t.Fatalf("rendered banner classified as %v: %q", got.kind, text)

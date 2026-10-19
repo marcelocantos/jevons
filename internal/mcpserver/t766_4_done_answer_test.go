@@ -88,7 +88,9 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 		englishSelectorsIn(t, filepath.Join(dir, "t985_reap_vs_park.go"), "ClassifyWorkerIdleDisposition", "LooksLikeOwnWorkCompleteReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "stored_terminal_report.go"), "storedTerminalFromReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope", "declaresBlockingGateWaitLocalized")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t1024_active_wait.go"), "FindActiveExternalWait", "declaresActiveExternalWait", "declaresUnresolvedExternalWait", "storedReportLooksFinished")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "DeclaresBlockingGateWait")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree", "hasOracleEvidence", "hasAcceptedRisk", "hasCompletionClaim", "FindCompletionClaim", "reportCitesOracleID", "HasActivationEvidence", "LooksLikeHermeticOnlyDaemonClaim", "LiveRenderOracleDidNotRun", "LooksLikeSilentBrowserOracleFallback")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "open_intent.go"), "hasOpenIntentProductEvidence", "openIntentEvidenceCandidate", "openIntentAnswerShaped", "openIntentSubstantiveReply", "ownerIntentClosedByLaterSubstantiveReply", "OwnerQuestionAnsweredWithExplanation", "openIntentFleetOpsEvidence", "openIntentTopicalLink", "isOpenIntentAckOnly", "parseFleetOpExcerpt", "fleetOpsToolIs", "isOpenIntentFleetOpsTool", "synthesizeOpenIntentFleetOpsTool", "OwnerFleetDirectiveCompleted", "keepOpenIntentAssistant", "ownerFleetDirectiveTargets", "isOpenIntentRestartNudge", "isOpenIntentSendProbe", "isOpenIntentHarness", "isOpenIntentProtocolJSON", "flattenOpenIntentToolInput")...)
@@ -377,10 +379,7 @@ func englishSelectorsIn(t *testing.T, path string, names ...string) []string {
 	bannedCall := map[string]bool{
 		"hasFinishShape": true, "hasCompletionClaim": true, "hasForwardLookingPlan": true,
 		"LooksLikeOwnWorkCompleteReport": true, "containsAny": true,
-		"FindCompletionClaim":    true,
-		"FindActiveExternalWait": true, "declaresBlockingGateWaitLocalized": true,
-		"DeclaresBlockingGateWait": true, "declaresActiveExternalWait": true,
-		"declaresUnresolvedExternalWait": true,
+		"FindCompletionClaim": true,
 	}
 	var hits []string
 	for _, decl := range f.Decls {
