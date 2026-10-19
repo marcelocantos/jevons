@@ -422,7 +422,7 @@ func (c *Collector) ReplicatedReceipt(ctx context.Context, q claudiawire.Receipt
 		return nil, err
 	}
 	if len(bodies) == 0 {
-		return nil, fmt.Errorf("replicated receipt absent")
+		return nil, fmt.Errorf("replicated %w", claudiawire.ErrReceiptAbsent)
 	}
 	receipt, err := ApplyReplicatedReceipt(bodies[0])
 	if err != nil {

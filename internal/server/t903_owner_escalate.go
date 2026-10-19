@@ -210,7 +210,9 @@ func (s *Server) noteOwnerDeliveredFromReceipt(requestID string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
 	defer cancel()
-	r, err := s.LookupSendReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
+	// The receipt reaches the replica after the send returns; an absent
+	// row is read again until the deadline (claudiawire.AwaitReceipt).
+	r, err := claudiawire.AwaitReceipt(ctx, s.LookupSendReceipt, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
 	if err != nil || r == nil {
 		if err != nil && !errors.Is(err, errSendReceiptQueryUnconfigured) {
 			slog.Debug("owner delivery receipt unavailable; delivery not confirmed", "seat", name, "request_id", requestID, "err", err)
@@ -253,7 +255,9 @@ func (s *Server) namedSendReceiptSettles(name, requestID string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
 	defer cancel()
-	r, err := s.LookupSendReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
+	// The receipt reaches the replica after the send returns; an absent
+	// row is read again until the deadline (claudiawire.AwaitReceipt).
+	r, err := claudiawire.AwaitReceipt(ctx, s.LookupSendReceipt, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
 	if err != nil || r == nil {
 		return false
 	}

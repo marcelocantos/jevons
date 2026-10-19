@@ -215,6 +215,18 @@ func (s *Server) LookupHeldReceipt(ctx context.Context, q claudiawire.ReceiptQue
 	return query(ctx, q)
 }
 
+// awaitHandoffReceipt reads the receipt of a handoff this process has just
+// written. The send returning means the sidecar admitted the request; the
+// receipt row reaches the replica afterwards (Claudia wakes the sender
+// before its seat pump publishes, and the control plane replicates
+// asynchronously). A single read straight after the send therefore loses
+// that race and leaves a delivered steer or drain unconfirmed (J38). An
+// absent row is read again until ctx ends; every other answer is final.
+// The held-receipt sweep stays a single read: it owes no fresh receipt.
+func (s *Server) awaitHandoffReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+	return claudiawire.AwaitReceipt(ctx, s.LookupHeldReceipt, q)
+}
+
 func (s *Server) persistSendReceipt(name string, e sendq.Entry, r *claudiawire.RequestReceipt) error {
 	s.mu.Lock()
 	journal := s.eventJournal
@@ -294,7 +306,7 @@ func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
 	defer cancel()
-	r, err := s.LookupHeldReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: handoff.SessionID, RequestID: handoff.TransportRequestID})
+	r, err := s.awaitHandoffReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: handoff.SessionID, RequestID: handoff.TransportRequestID})
 	if err == nil && r != nil {
 		err = r.ValidateIdentity(name, handoff.SessionID, handoff.TransportRequestID)
 	}
@@ -320,7 +332,7 @@ func (s *Server) settleBoundHandoffReceipt(name string, handoff sendq.Entry) {
 // The transcript watch is not consulted. A missing or unknown receipt keeps
 // the attempt and does not count as delivery.
 func (s *Server) settleBoundDrainReceipt(ctx context.Context, name string, entry sendq.Entry, generation uint64, resolve func(sendq.AttemptOutcome, string) bool) bool {
-	r, err := s.LookupHeldReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: entry.SessionID, RequestID: entry.TransportRequestID})
+	r, err := s.awaitHandoffReceipt(ctx, claudiawire.ReceiptQuery{Seat: name, SessionID: entry.SessionID, RequestID: entry.TransportRequestID})
 	if err == nil {
 		err = r.ValidateIdentity(name, entry.SessionID, entry.TransportRequestID)
 	}
