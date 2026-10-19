@@ -591,7 +591,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 				running++
 			} else {
 				stopped++
-				if purposeIsProductOwner(d.Purpose) {
+				if purposeIsProductOwner(s.seatRoleOf(d)) {
 					idlePO++
 				}
 			}

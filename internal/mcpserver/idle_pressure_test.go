@@ -222,6 +222,10 @@ func TestIdlePressureSweepSkipsUnboundPOWithoutChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{registry: reg, idleActivity: activity, idleNudgeLedger: ledger}
+	// lonely-po was spawned as a product owner (recorded role, 🎯T766.4).
+	if err := s.recordAgentRole("lonely-po", purposeProductOwner); err != nil {
+		t.Fatal(err)
+	}
 
 	pushes := 0
 	reps := s.idlePressureSweep(idlePressureDeps{
@@ -273,6 +277,10 @@ func TestIdlePressureSweepSkipsPOWithEngagedChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{registry: reg, idleActivity: activity, idleNudgeLedger: ledger}
+	// jevons-po was spawned as a product owner (recorded role, 🎯T766.4).
+	if err := s.recordAgentRole("jevons-po", purposeProductOwner); err != nil {
+		t.Fatal(err)
+	}
 
 	var pushed []string
 	reps := s.idlePressureSweep(idlePressureDeps{

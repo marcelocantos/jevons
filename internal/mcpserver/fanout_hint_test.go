@@ -39,7 +39,7 @@ func TestFormatFanOutHintsZeroChildren(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := FormatFanOutHints(reg, "jevons")
+	got := FormatFanOutHints(reg, "jevons", nil)
 	if !strings.Contains(got, "jevons-po") || !strings.Contains(got, "zero children") {
 		t.Fatalf("want zero-children hint for po, got %q", got)
 	}
@@ -63,7 +63,7 @@ func TestFormatFanOutHintsWithChildrenClear(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := FormatFanOutHints(reg, "jevons")
+	got := FormatFanOutHints(reg, "jevons", nil)
 	if got != "" {
 		t.Fatalf("want no hint when children exist, got %q", got)
 	}

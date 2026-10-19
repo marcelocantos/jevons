@@ -258,7 +258,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
 	// missions should have fan-out — visible without only RHS eyeballing.
-	if hints := FormatFanOutHints(s.registry, s.overseerName()); hints != "" {
+	if hints := FormatFanOutHints(s.registry, s.overseerName(), s.seatRoleOf); hints != "" {
 		b.WriteString("\n")
 		b.WriteString(hints)
 	}
@@ -494,7 +494,10 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	// 🎯T511 / 🎯T536.2: resolve declarative role (explicit or purpose/name default).
 	roleName := strings.TrimSpace(strings.ToLower(roleArg))
 	if roleName == "" {
-		roleName = roles.DefaultForPurpose(purpose, name)
+		// An omitted role keeps the role recorded for this seat (a PO
+		// remint stays a PO), else the role its purpose implies. The name
+		// does not decide (🎯T766.4).
+		roleName = s.agentRole(name, purpose)
 	}
 	resolved, err := s.resolveRoleDef(roleName)
 	if err != nil {
@@ -841,7 +844,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	role := strings.TrimSpace(s.pendingSpawnRole)
 	s.mu.Unlock()
 	if role == "" {
-		role = roles.DefaultForPurpose(purpose, name)
+		role = s.agentRole(name, purpose)
 	}
 	existed := s.registry.Def(name) != nil
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)

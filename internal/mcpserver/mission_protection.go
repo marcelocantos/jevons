@@ -98,7 +98,7 @@ func (s *Server) reserveMissionStart(name, workdir, target, parent, purpose, act
 			}
 		}
 	}
-	if DurableFleetAgent(name, purpose, s.isOverseerAgent) || target == "" {
+	if DurableFleetAgent(name, s.agentRole(name, purpose), s.isOverseerAgent) || target == "" {
 		return noop, nil
 	}
 	id, notice, err := st.Reserve(missionbound.Start{Scope: missionScope(workdir), Target: normalizeAgentTargetID(target), Seat: name, Actor: actor, OverrideReason: reason}, override, actor == "owner" || s.isOverseerAgent(actor), time.Now())

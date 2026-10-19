@@ -648,7 +648,10 @@ func TestSweepIdleNudgesPostRestartSkipsPOAndAside(t *testing.T) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok", AutoStart: true},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons",
+		// The PO's declared role rides the registry row (AgentDef.Role):
+		// this pure sweep reads the row, and production fills Role from
+		// the recorded role via SeatRole. The name decides nothing.
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Role: purposeProductOwner, Parent: "jevons",
 			Materialized: true, Provider: "grok", AutoStart: true},
 		{Name: "jv-t171-worker", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po",
 			Materialized: true, Provider: "grok", AutoStart: true, TargetID: "T171"},

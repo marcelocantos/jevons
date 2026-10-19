@@ -65,7 +65,7 @@ func TestT195AchieveDoesNotReapPOEvenWithTargetID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := reg.Register(claudia.AgentDef{
-		Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: purposeProductOwner,
+		Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: "product-owner",
 		Parent: "jevons", Materialized: true, Provider: "grok", TargetID: "T195",
 	}); err != nil {
 		t.Fatal(err)

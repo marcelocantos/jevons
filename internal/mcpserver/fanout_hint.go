@@ -8,12 +8,16 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
-// purposeCoordinator reports a declared product-owner or boss purpose
-// (🎯T111.4). The seat name does not decide.
-func purposeCoordinator(purpose string) bool {
-	switch strings.ToLower(strings.TrimSpace(purpose)) {
+// purposeCoordinator reports a product-owner or boss role (🎯T111.4). Pass
+// the seat's declared role (Server.agentRole / roles.OfSeat); claudia's
+// purpose enum never says product owner on a live row. The seat name does
+// not decide.
+func purposeCoordinator(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
 	case purposeProductOwner, "boss":
 		return true
 	default:
@@ -23,8 +27,9 @@ func purposeCoordinator(purpose string) bool {
 
 // FormatFanOutHints returns an oversight note when PO/boss agents have
 // zero children in the registry (detectable without only RHS eyeballing).
-// Empty string when nothing to report.
-func FormatFanOutHints(reg *claudia.Registry, overseerName string) string {
+// Empty string when nothing to report. seatRole answers a row's declared
+// role (production: Server.seatRoleOf); nil reads the row alone.
+func FormatFanOutHints(reg *claudia.Registry, overseerName string, seatRole func(claudia.AgentDef) string) string {
 	if reg == nil {
 		return ""
 	}
@@ -33,7 +38,11 @@ func FormatFanOutHints(reg *claudia.Registry, overseerName string) string {
 		if d.Name == overseerName {
 			continue
 		}
-		if !purposeCoordinator(d.Purpose) {
+		role := roles.OfSeat(d.Role, d.Purpose)
+		if seatRole != nil {
+			role = seatRole(d)
+		}
+		if !purposeCoordinator(role) {
 			continue
 		}
 		// Children = agents whose Parent is this name.

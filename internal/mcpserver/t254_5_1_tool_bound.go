@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
-	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -204,11 +204,14 @@ func (s *Server) cancelMCPFlights(name string) {
 }
 
 // isSpawnClassSeat reports PO / overseer seats whose hung MCP is a
-// control-plane outage (🎯T254.5.2).
-func isSpawnClassSeat(name, purpose string) bool {
+// control-plane outage (🎯T254.5.2). role is the seat's declared role (a
+// bare purpose reads as the role it implies); the name does not decide.
+func isSpawnClassSeat(name, role string) bool {
 	_ = name
-	if purpose == claudia.PurposeOverseer {
+	switch roles.OfSeat(role, "") {
+	case roles.Overseer, roles.ProductOwner:
 		return true
+	default:
+		return false
 	}
-	return purposeIsProductOwner(purpose)
 }

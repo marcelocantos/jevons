@@ -940,6 +940,10 @@ type IdleNudgeSweepArgs struct {
 	// (the zero value, every existing caller/test) preserves prior
 	// behaviour exactly.
 	AutoSpawnPaused bool
+	// SeatRole optionally answers a row's declared fleet role (🎯T766.4):
+	// production wires Server.seatRoleOf, which reads the role recorded at
+	// spawn. Nil reads the row alone (AgentDef.Role, else its purpose).
+	SeatRole func(d claudia.AgentDef) string
 }
 
 // SweepIdleNudges classifies every registered agent and delivers nudges.
@@ -960,6 +964,9 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 	for _, d := range args.Reg.List() {
 		if d.Name == "" || d.Name == overseer {
 			continue
+		}
+		if args.SeatRole != nil {
+			d.Role = args.SeatRole(d)
 		}
 		rep := classifyIdleNudgeFor(d, args, now)
 		if rep.Action == IdleNudgeSkip && rep.Reason == "not_work_purpose" {
@@ -993,7 +1000,11 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 		if d == nil {
 			continue
 		}
-		out[i] = deliverIdleNudge(*d, args, now, r)
+		row := *d
+		if args.SeatRole != nil {
+			row.Role = args.SeatRole(row)
+		}
+		out[i] = deliverIdleNudge(row, args, now, r)
 	}
 	return out
 }
@@ -1463,9 +1474,10 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		}
 	}
 
-	defs := s.registry.List()
+	defs := s.withSeatRoles(s.registry.List())
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:             s.registry,
+		SeatRole:        s.seatRoleOf,
 		SessionPhase:    deps.SessionPhase,
 		Activity:        activity,
 		Ledger:          ledger,
@@ -1579,6 +1591,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
+		SeatRole:  s.seatRoleOf,
 		Reg:       s.registry,
 		Activity:  activity,
 		Ledger:    ledger,
@@ -1709,7 +1722,7 @@ func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 	missionOpen := memoMissionOpen(s.missionOpenHook())
 	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, missionOpen)
 	intent := s.fleetIntent()
-	openMission := HasOpenMissionForIdle(*def, missionOpen, workKids, engagedKids)
+	openMission := HasOpenMissionForIdle(s.withSeatRole(*def), missionOpen, workKids, engagedKids)
 	if suppress, reason := s.workerIdleSuppressReason(name); suppress {
 		slog.Info("worker-idle notification withheld — terminal or in-flight",
 			"agent", name, "reason", reason)
@@ -2072,6 +2085,7 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	}
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:             s.registry,
+		SeatRole:        s.seatRoleOf,
 		Activity:        activity,
 		Ledger:          ledger,
 		Push:            push,

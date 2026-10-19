@@ -93,6 +93,17 @@ func DefaultForPurpose(purpose, agentName string) string {
 	}
 }
 
+// OfSeat is a seat's declared role: the explicit role when one is recorded,
+// else the role its declared purpose implies (🎯T766.4). Claudia's purpose
+// is the work|aside|overseer enum, so a product owner or boss is only ever
+// named by its role. The seat name never decides.
+func OfSeat(role, purpose string) string {
+	if r := Normalize(role); r != "" {
+		return r
+	}
+	return DefaultForPurpose(purpose, "")
+}
+
 // DoctrineMarker opens the role-doctrine section Assemble injects between
 // the universal brief and the mission. StripDoctrine is its inverse.
 const DoctrineMarker = "[Jevons role doctrine]"

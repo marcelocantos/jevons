@@ -293,7 +293,7 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 		}
 	}
 	who := strings.TrimSpace(actor)
-	if origin == OriginAgent && !overseerArm && purposeCoordinator(destPurpose) &&
+	if origin == OriginAgent && !overseerArm && purposeCoordinator(s.agentRole(dest, destPurpose)) &&
 		who != "" && who != ActorOwnerSurface &&
 		!s.isOverseerAgent(who) && strings.ToLower(who) != strings.ToLower(dest) &&
 		relayroute.Classify(report) == relayroute.RouteOverseer &&

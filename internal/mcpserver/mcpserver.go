@@ -757,11 +757,22 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 // plan feed asks claudia.Resolve and records the pick — jevons does not
 // re-adjudicate it. No feed → config default (T476).
 //
-// 🎯T475: omit-task_type derivation uses the agent name so product-owner
-// seats (suffix -po) get ceo even when purpose=work — they must not
-// inherit work→code_implement→Claude/Opus.
+// 🎯T475: omit-task_type derivation uses the seat's declared role so a
+// product owner gets ceo even though its purpose is work — it must not
+// inherit work→code_implement→Claude/Opus. The role is the one this mint
+// is spawning (role=, carried as pendingSpawnRole), else the role recorded
+// for the seat; the name does not decide (🎯T766.4).
 func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose, name string, ownerAsked bool) cost.MintProviderPick {
 	tt := cost.TaskTypeForMint(name, purpose, taskTypeArg)
+	if strings.TrimSpace(taskTypeArg) == "" {
+		s.mu.Lock()
+		role := strings.TrimSpace(s.pendingSpawnRole)
+		s.mu.Unlock()
+		if role == "" {
+			role = s.agentRole(name, purpose)
+		}
+		tt = cost.TaskTypeFromRole(role, purpose)
+	}
 	dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
 	_, fromFile := s.llmPortfolioSource()
 	cfg := string(s.resolvedDefaultProvider())

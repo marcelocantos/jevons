@@ -159,7 +159,7 @@ func (s *Server) stopDispositionFor(name string, args map[string]any) StopDispos
 		// as the pre-T985 code did.
 		return StopDisposition{IdleActionPark, "not registered"}
 	}
-	durable := DurableFleetAgent(name, def.Purpose, s.isOverseerAgent)
+	durable := DurableFleetAgent(name, s.seatRoleOf(*def), s.isOverseerAgent)
 	hasDescendants := len(s.registry.Descendants(name)) > 0
 	ownedUncommitted := false
 	for _, sc := range outstandingScopeReasonsForWorker("", def.WorkDir) {

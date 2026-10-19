@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/modelladder"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
 // 🎯T236: after provider outage or failed turns, re-pressure open-mission
@@ -328,6 +329,10 @@ type FleetRecoverSweepArgs struct {
 	// declining ControlDeliverSubmit skips BOTH the interrupt and the push
 	// for this agent this sweep, reported as FleetRecoverSkip.
 	Intent func(name string) fleetintent.Decision
+	// SeatRole optionally answers a row's declared fleet role (🎯T766.4).
+	// Production wires Server.seatRoleOf (the role recorded at spawn). Nil
+	// reads the row alone (AgentDef.Role, else its purpose).
+	SeatRole func(d claudia.AgentDef) string
 }
 
 // SweepFleetRecover classifies every registered work agent and unsticks /
@@ -348,6 +353,9 @@ func SweepFleetRecover(args FleetRecoverSweepArgs) []FleetRecoverReport {
 	for _, d := range args.Reg.List() {
 		if d.Name == "" || d.Name == overseer {
 			continue
+		}
+		if args.SeatRole != nil {
+			d.Role = args.SeatRole(d)
 		}
 		rep := evaluateAndMaybeRecover(d, args, now)
 		if rep.Action == FleetRecoverSkip && rep.Reason == "not_work_purpose" {
@@ -466,7 +474,7 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		SinceLastRecov:    sinceRecov,
 		EverRecovered:     ever,
 		Backoffs:          DefaultFleetRecoverBackoffs,
-		SpawnClass:        isSpawnClassSeat(d.Name, purpose),
+		SpawnClass:        isSpawnClassSeat(d.Name, roles.OfSeat(d.Role, purpose)),
 		SameToolID:        act.ToolCallID,
 		SameToolSince:     sameToolSince,
 		SessionReminted:   args.SessionReminted != nil && args.SessionReminted(d.Name),

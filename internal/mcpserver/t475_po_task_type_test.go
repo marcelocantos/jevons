@@ -35,10 +35,19 @@ func TestT475POMintDefaultsCEONotCodeImplement(t *testing.T) {
 		t.Fatalf("fixture: ceo seed → %q, want grok", ceoRoute.Provider)
 	}
 
+	// The PO is minted as role=product-owner, which handleAgentStart
+	// carries into stitchAgentStart as pendingSpawnRole. Its purpose is
+	// work; the role, not the -po name, is the fact (🎯T766.4).
+	s.mu.Lock()
+	s.pendingSpawnRole = purposeProductOwner
+	s.mu.Unlock()
 	po, existed, note, err := s.stitchAgentStart(
 		"jevons-po", t.TempDir(), "", "", "",
 		"jevons", claudia.PurposeWork, "", "",
 	)
+	s.mu.Lock()
+	s.pendingSpawnRole = ""
+	s.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}

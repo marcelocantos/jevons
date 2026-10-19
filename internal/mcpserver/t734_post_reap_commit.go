@@ -319,7 +319,7 @@ func (s *Server) liveSuccessorForTarget(seat, targetID string) string {
 		if NormalizeTargetID(def.TargetID) != want {
 			continue
 		}
-		if DurableFleetAgent(def.Name, def.Purpose, s.isOverseerAgent) {
+		if DurableFleetAgent(def.Name, s.seatRoleOf(def), s.isOverseerAgent) {
 			continue
 		}
 		return def.Name

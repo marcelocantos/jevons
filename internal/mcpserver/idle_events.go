@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
 )
@@ -281,8 +282,9 @@ func DaemonRestartEventTargets(byParent map[string][]WorkerIdleRef, overseer, de
 // overseer, PO/boss coordinators, deliberate-stop, design-gated, or finished.
 //
 // Open mission: purpose=work AND process running AND (AutoStart OR bound
-// target_id). A product-owner, boss, aside, or overseer purpose is not
-// this path. The seat name is not read.
+// target_id). A product-owner or boss role (d.Role, or the role its purpose
+// implies), an aside, or the overseer is not this path. The seat name is
+// not read.
 //
 // intent is the 🎯T414 snapshot. Note what this gate must keep doing: an
 // agent whose intent is working and whose process died is exactly the case
@@ -307,6 +309,11 @@ func EligibleOpenMissionResume(d claudia.AgentDef, running, deliberateStop, desi
 		return false
 	}
 	if purpose != claudia.PurposeWork {
+		return false
+	}
+	// A coordinator's declared role (d.Role, filled from the recorded role
+	// on the production path) takes it off the implementer short-resume.
+	if purposeCoordinator(roles.OfSeat(d.Role, d.Purpose)) {
 		return false
 	}
 	tid := strings.TrimSpace(d.TargetID)
@@ -455,8 +462,8 @@ func CountEngagedWorkChildren(defs []claudia.AgentDef, parentName string, phaseB
 // SuppressParentIdleThrash is the pure 🎯T330 gate: a declared product-owner
 // or boss with ≥1 engaged work children must not be re-continue-thrashed
 // by idle-pressure or worker-idle open-mission classification.
-func SuppressParentIdleThrash(purpose string, engagedChildCount int) bool {
-	return purposeCoordinator(purpose) && engagedChildCount > 0
+func SuppressParentIdleThrash(role string, engagedChildCount int) bool {
+	return purposeCoordinator(role) && engagedChildCount > 0
 }
 
 // HasOpenMissionForIdle is the default open-mission heuristic for enter-idle
@@ -464,7 +471,8 @@ func SuppressParentIdleThrash(purpose string, engagedChildCount int) bool {
 //
 // purpose=work with a bound TargetID is open (callers may tighten with
 // missionOpen). Unbound implementers stay open so the parent can reap.
-// A declared product-owner or boss purpose uses the coordinator rules.
+// A product-owner or boss role (d.Role, filled from the recorded role on
+// the production path) uses the coordinator rules.
 // Aside and overseer are never open. The seat name is not read.
 //
 // 🎯T244: an unbound coordinator with zero work children is NOT open
@@ -482,8 +490,9 @@ func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string)
 	if low == claudia.PurposeOverseer || low == claudia.PurposeAside {
 		return false
 	}
-	if purposeCoordinator(purpose) {
-		if SuppressParentIdleThrash(purpose, engagedChildCount) {
+	role := roles.OfSeat(d.Role, d.Purpose)
+	if purposeCoordinator(role) {
+		if SuppressParentIdleThrash(role, engagedChildCount) {
 			return false
 		}
 		tid := strings.TrimSpace(d.TargetID)

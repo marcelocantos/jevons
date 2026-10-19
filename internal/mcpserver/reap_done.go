@@ -15,6 +15,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/reapverify"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
 // LooksLikeFinishedWorkReport is the supervision name of the one
@@ -63,30 +64,45 @@ func finishedWorkReapReason(report string) string {
 	return "finished_work"
 }
 
-// purposeProductOwner is the declared product-owner purpose. A seat name
+// purposeProductOwner is the product-owner role token. Claudia's purpose
+// is the work|aside|overseer enum, so in a live registry this arrives as a
+// recorded role (agent_roles.json), not as AgentDef.Purpose. A seat name
 // ending in -po is not this fact.
-const purposeProductOwner = "product-owner"
+const purposeProductOwner = roles.ProductOwner
 
 // DurableFleetAgent reports whether name must not be auto-reaped on done
 // (overseer, asides, product owners). Deliberate stop without kill remains
-// allowed for everyone (🎯T165 residual). Purpose decides. The name does not.
-func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool {
+// allowed for everyone (🎯T165 residual). role is the seat's declared role
+// (Server.agentRole on the production path); a bare purpose reads as the
+// role it implies. The name does not decide.
+func DurableFleetAgent(name, role string, isOverseer func(string) bool) bool {
 	if name == "" {
 		return true
 	}
 	if isOverseer != nil && isOverseer(name) {
 		return true
 	}
-	p := strings.ToLower(strings.TrimSpace(purpose))
-	if p == "" {
-		p = claudia.PurposeWork
-	}
-	switch p {
-	case claudia.PurposeOverseer, claudia.PurposeAside, purposeProductOwner:
+	switch roles.OfSeat(role, "") {
+	case roles.Overseer, roles.Aside, roles.ProductOwner:
 		return true
 	default:
 		return false
 	}
+}
+
+// durableSeat is ShouldAutoReapDoneWorkAgent's durable hook on the
+// production path: the overseer, or a seat whose declared role is durable.
+func (s *Server) durableSeat(name string) bool {
+	if s.isOverseerAgent(name) {
+		return true
+	}
+	purpose := ""
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			purpose = d.Purpose
+		}
+	}
+	return DurableFleetAgent(name, s.agentRole(name, purpose), nil)
 }
 
 // ShouldAutoReapDoneWorkAgent decides whether a declared finish-report
@@ -94,7 +110,11 @@ func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool 
 // Refuses durable roles, unregistered names, agents with descendants, and
 // reports that do not declare a valid finish-report (🎯T766.4). Unenveloped
 // prose is unknown, not finished.
-func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isOverseer func(string) bool) (bool, string) {
+//
+// isDurable answers for seats the registry row alone cannot name: the
+// overseer, and (on the production path, Server.durableSeat) a seat whose
+// recorded role is durable.
+func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isDurable func(string) bool) (bool, string) {
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
 	}
@@ -124,7 +144,7 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isO
 	if def == nil {
 		return false, "not_registered"
 	}
-	if DurableFleetAgent(name, def.Purpose, isOverseer) {
+	if DurableFleetAgent(name, roles.OfSeat(def.Role, def.Purpose), isDurable) {
 		return false, "durable_role"
 	}
 	// 🎯T972: a finished-work report is not reaped while the seat's own
@@ -183,7 +203,7 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		parent = def.Parent
 		targetID = def.TargetID
 	}
-	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.isOverseerAgent)
+	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.durableSeat)
 	if !ok {
 		// Skip logs repeat the reason ShouldAutoReapDoneWorkAgent already
 		// returned. They match that string to the typed producer. They do

@@ -88,13 +88,13 @@ func DeriveAgentRole(name, purpose, role string) string {
 	return RoleWork
 }
 
-// IdentityFromDef reads the header's inputs off a registry row.
-// Role doctrine uses purpose/name heuristics here; identityHeaderFor overlays
-// the recorded spawn role from agent_roles.json when present.
+// IdentityFromDef reads the header's inputs off a registry row: the row's
+// declared role (AgentDef.Role), else its purpose. identityHeaderFor
+// overlays the recorded spawn role from agent_roles.json when present.
 func IdentityFromDef(d claudia.AgentDef) AgentIdentity {
 	return AgentIdentity{
 		Name:     strings.TrimSpace(d.Name),
-		Role:     DeriveAgentRole(d.Name, d.Purpose, ""),
+		Role:     DeriveAgentRole(d.Name, d.Purpose, d.Role),
 		Purpose:  strings.TrimSpace(d.Purpose),
 		Parent:   strings.TrimSpace(d.Parent),
 		WorkDir:  strings.TrimSpace(d.WorkDir),

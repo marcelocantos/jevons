@@ -179,7 +179,7 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 				running++
 			} else {
 				stopped++
-				if purposeIsProductOwner(d.Purpose) {
+				if purposeIsProductOwner(s.seatRoleOf(d)) {
 					idlePO++
 				}
 			}
@@ -232,11 +232,12 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 	return signals, resources
 }
 
-// purposeIsProductOwner reports the declared product-owner purpose.
-// A seat name ending in -po is not this fact. Path portfolios (T200)
-// remain a richer count than this purpose bit.
-func purposeIsProductOwner(purpose string) bool {
-	return strings.ToLower(strings.TrimSpace(purpose)) == purposeProductOwner
+// purposeIsProductOwner reports the product-owner role token. Pass the
+// seat's declared role (Server.seatRoleOf): a live product owner carries
+// purpose=work, and the recorded role is what names it. A seat name ending
+// in -po is not this fact. Path portfolios (T200) remain a richer count.
+func purposeIsProductOwner(role string) bool {
+	return strings.ToLower(strings.TrimSpace(role)) == purposeProductOwner
 }
 
 func (s *Server) deliverStaffOpsReport(overseer, text string) error {

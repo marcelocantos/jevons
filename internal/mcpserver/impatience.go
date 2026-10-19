@@ -442,7 +442,7 @@ func (s *Server) observeForImpatience(
 		// 🎯T330: PO/boss with engaged children is not open for parent thrash.
 		phaseOf := func(name string) string { return s.seatState(name).Phase.String() }
 
-		missionOpen = HasOpenMissionForIdle(d, hooks.MissionOpen,
+		missionOpen = HasOpenMissionForIdle(s.withSeatRole(d), hooks.MissionOpen,
 			CountWorkChildren(defs, d.Name),
 			CountEngagedWorkChildren(defs, d.Name, phaseOf, hooks.MissionOpen))
 	}

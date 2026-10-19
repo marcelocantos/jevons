@@ -156,11 +156,17 @@ func TestT425SpawnOpeningPromptNamesItsRecipient(t *testing.T) {
 	} {
 		t.Run(tc.arm, func(t *testing.T) {
 			s, sender := t425Fixture(t, def)
+			// The seat was spawned as role=product-owner: that recorded
+			// role (agent_roles.json) is the typed fact that it is a PO.
+			// Its purpose stays work and its name decides nothing (🎯T766.4).
+			if err := s.recordAgentRole(name, purposeProductOwner); err != nil {
+				t.Fatal(err)
+			}
 			d := s.registry.Def(name)
 			if d == nil {
 				t.Fatal("fixture row missing")
 			}
-			want := IdentityFromDef(*d)
+			want := IdentityFromDef(s.withSeatRole(*d))
 
 			if tc.product {
 				if err := s.deliverStartPrompt(name, "Take 🎯T425."); err != nil {
