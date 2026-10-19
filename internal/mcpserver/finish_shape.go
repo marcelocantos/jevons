@@ -137,22 +137,20 @@ func bareClaimClause(clause string) bool {
 // informational), not a report; escalating it spends an overseer turn on
 // nothing.
 //
-// Recognition reuses the classifiers that already exist, never a new phrase
-// list: noopwedge.IsBareAck (🎯T402's exact-match, length-bounded vocabulary —
-// an ack with a payload after it is a report, not an ack), hasFinishShape
-// (🎯T445 — a positive completion claim must go on to the overseer and the
-// reap), and relayroute.Classify (🎯T392.7 — a direct-route class such as
-// needs-owner or blocked-on keeps escalating). Only a text every one of those
-// declines is suppressed.
+// Recognition is declared, never a completion sentence (🎯T766.4): a valid
+// ack envelope is an ack; noopwedge.IsBareAck is 🎯T402's exact-match
+// vocabulary (an ack with a payload after it is a report, not an ack); a
+// declared done report (envelope.IsDoneReport) is not suppressed; and
+// relayroute.Classify (🎯T392.7) keeps a direct overseer route escalating.
+// A sentence that says the work is done is not that decision.
 func bareAckTurnReport(text string) bool {
 	if m, err := envelope.Parse(text); m != nil && err == nil && m.Kind == envelope.KindAck {
 		return true
 	}
-	if !noopwedge.IsBareAck(text) {
+	if envelope.IsDoneReport(text) {
 		return false
 	}
-	lower := strings.ToLower(strings.TrimSpace(text))
-	if hasFinishShape(lower) {
+	if !noopwedge.IsBareAck(text) {
 		return false
 	}
 	return relayroute.Classify(text) != relayroute.RouteOverseer

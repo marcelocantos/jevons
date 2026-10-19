@@ -1771,9 +1771,9 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 
 	// 🎯T502: a bare acknowledgement ("No response requested.") is a
 	// turn-boundary artefact, not a report. The idle signal still reaches the
-	// parent through the 🎯T207/T414 tracker, and anything with a finish shape,
-	// an ask, or a T392.7 direct-route class still escalates. See
-	// bareAckTurnReport.
+	// parent through the 🎯T207/T414 tracker. A declared done report is not
+	// suppressed, and a T392.7 overseer route still escalates. A completion
+	// sentence is not that decision (🎯T766.4). See bareAckTurnReport.
 	//
 	// 🎯T747: it is not stored either. It was stored at first (649 of 3848
 	// files on one machine were this 22-byte ack), which made a seat that ended

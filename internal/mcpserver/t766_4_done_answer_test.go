@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
@@ -86,6 +87,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "stored_terminal_report.go"), "storedTerminalFromReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
 	}
@@ -130,6 +132,49 @@ func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_residue_evidence.go"), "fillIdleResidueEvidence")...)
 	if len(hits) != len(t7664ErrorEnglishAllowlist) {
 		t.Fatalf("error-control English classifiers = %v, allowlist %v", hits, t7664ErrorEnglishAllowlist)
+	}
+}
+
+// TestT7664BareAckSuppressesVocabularyNotAFinishSentence drives the
+// production notify seam. A declared finish-report is delivered. The exact
+// ack vocabulary is not. A completion sentence is not what decides either.
+func TestT7664BareAckSuppressesVocabularyNotAFinishSentence(t *testing.T) {
+	prose := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS"
+	if envelope.IsDoneReport(prose) {
+		t.Fatal("unenveloped prose is not a declared done report")
+	}
+	if bareAckTurnReport(prose) {
+		t.Fatal("prose completion was suppressed as a bare ack")
+	}
+
+	finish := declaredFinishReport("T766.4", "Landed.")
+	if !envelope.IsDoneReport(finish) {
+		t.Fatal("fixture is not a declared done report")
+	}
+	if bareAckTurnReport(finish) {
+		t.Fatal("declared finish-report was suppressed as a bare ack")
+	}
+
+	deliver := func(text string) []string {
+		s := &Server{}
+		var got []string
+		s.SetNotify(func(msg string) { got = append(got, msg) })
+		s.agentEventSink("jv-t7664-ack")(claudia.Event{
+			Type: "assistant", Text: text, StopReason: "end_turn",
+		})
+		return got
+	}
+	if got := deliver(finish); len(got) != 1 {
+		t.Fatalf("declared finish deliveries=%d", len(got))
+	}
+	if got := deliver(liveMisrouteAck); len(got) != 0 {
+		t.Fatalf("bare ack reached the overseer: %v", got)
+	}
+	if got := deliver(prose); len(got) != 1 {
+		t.Fatalf("prose completion deliveries=%d, want the notify path to forward it", len(got))
+	}
+	if !bareAckTurnReport("Noted.") {
+		t.Fatal("exact ack vocabulary was not suppressed")
 	}
 }
 
