@@ -75,6 +75,7 @@ func poFanoutFixture(t *testing.T, ledger string, extra ...claudia.AgentDef) (*S
 	}
 	defs := append([]claudia.AgentDef{{
 		Name: "jevons-po", WorkDir: dir, SessionID: "po-1", Parent: "jevons",
+		Purpose: purposeProductOwner,
 	}}, extra...)
 	for _, d := range defs {
 		if err := reg.Register(d); err != nil {
@@ -304,6 +305,7 @@ func TestSentinelPOOnForeignLedgerIsNotFaulted(t *testing.T) {
 	alive := map[string]bool{"squz-po": true}
 	s, dir := poFanoutFixture(t, readyLedger, claudia.AgentDef{
 		Name: "squz-po", WorkDir: foreign, SessionID: "squz-1", Parent: "jevons",
+		Purpose: purposeProductOwner,
 	})
 	setPhase(s, "squz-po", "idle", time.Time{})
 

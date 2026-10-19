@@ -66,6 +66,21 @@ func TestT254_5_1InterruptCancelsHandler(t *testing.T) {
 	}
 }
 
+func TestSpawnClassFollowsPurpose(t *testing.T) {
+	if !isSpawnClassSeat("plain", claudia.PurposeOverseer) {
+		t.Fatal("overseer purpose is spawn class")
+	}
+	if !isSpawnClassSeat("plain", purposeProductOwner) {
+		t.Fatal("product-owner purpose is spawn class")
+	}
+	if isSpawnClassSeat("jevons-po", claudia.PurposeWork) {
+		t.Fatal("a purpose-work seat named jevons-po is not spawn class")
+	}
+	if isSpawnClassSeat("jevons-po", "") {
+		t.Fatal("an empty purpose is not spawn class")
+	}
+}
+
 func TestT254_5_2SameToolCallUnsticksPO(t *testing.T) {
 	t.Parallel()
 	o := FleetRecoverObs{

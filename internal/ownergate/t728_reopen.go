@@ -50,10 +50,10 @@ import (
 // multi-paragraph attestation in this ledger — is silently truncated at the
 // first one, and a truncated attestation passes every non-empty check while
 // being exactly the loss this ceremony exists to prevent. What is written by
-// this code is read back by this code: the attestation goes after
-// MarkerPreserved at the end of a scalar YAML round-trips whole, and
-// PreservedAttestation slices from the marker to the end with no boundary to
-// guess at. Reading bullseye's paragraph remains as a last resort for a row
+// this code is read back by this code: MarkerPreserved opens its own line and
+// the attestation is every line after that line, so a multi-paragraph
+// attestation comes back whole. A mid-line copy of the marker words is not
+// the slot. Reading bullseye's paragraph remains as a last resort for a row
 // reopened by some other hand, and says so.
 
 const (
@@ -65,9 +65,8 @@ const (
 	// put back.
 	MarkerReopened = "REOPENED TO RECORD OWNER GATE"
 
-	// MarkerPreserved introduces an attestation carried across a reopen. It is
-	// always last in the text that carries it, so recovering the attestation
-	// is a slice to the end rather than a search for where it stops.
+	// MarkerPreserved opens its own line. The attestation is the text on the
+	// following lines. A mid-line copy of these words is not the slot.
 	MarkerPreserved = "PRESERVED ATTESTATION:"
 )
 
@@ -176,13 +175,14 @@ func (r Reopen) achievedPhrase() string {
 	return "on an unrecorded date"
 }
 
-// withPreserved appends the attestation to a text, last, under the marker.
+// withPreserved appends the attestation on the lines after a line that opens
+// with MarkerPreserved. The marker is not written into the middle of a sentence.
 func withPreserved(text, attestation string) string {
 	att := strings.TrimSpace(attestation)
 	if att == "" {
 		return text
 	}
-	return text + " " + MarkerPreserved + " " + att
+	return text + "\n" + MarkerPreserved + "\n" + att
 }
 
 // IsReopenedGate reports whether an assignment reason was written by the reopen
@@ -217,19 +217,47 @@ func ReopenedAchievedDate(reason string) string {
 // PreservedAttestation recovers the attestation a reopen dropped.
 //
 // Pass it the text this package wrote — a reopened gate's `owned_by.reason`, or
-// the reopen audit in `context`. The attestation is everything after the last
-// MarkerPreserved, so a multi-paragraph attestation comes back whole; there is
-// no boundary to infer, which is the entire reason it is written that way.
-//
-// The fallback reads bullseye's own "Achieved <date>: …" audit paragraph, for a
-// row reopened by some other hand than this ceremony. That read stops at the
-// first blank line and so can truncate; it is a last resort ahead of returning
-// nothing, and callers say which one they got.
+// the reopen audit in `context`. The attestation is every line after the last
+// line that opens with MarkerPreserved, so a multi-paragraph attestation comes
+// back whole. A mid-line copy of the marker words is not the slot, and a
+// historical row that wrote the marker inline returns empty.
+// AttestationFromAchieveAudit is the truncating last resort for a row reopened
+// by some other hand; callers say which one they got.
 func PreservedAttestation(text string) string {
-	if i := strings.LastIndex(text, MarkerPreserved); i >= 0 {
-		return strings.TrimSpace(text[i+len(MarkerPreserved):])
+	return textAfterOpeningMarker(text, MarkerPreserved)
+}
+
+// textAfterOpeningMarker returns the document after the last line that opens
+// with marker. The break rule matches markerRemainder: the marker may stand
+// alone or be followed by space, tab, or one of "(:.,". A copy of the marker
+// later in a line is not that line. markerRemainder itself stays first-match
+// and returns only the remainder of the matching line.
+func textAfterOpeningMarker(text, marker string) string {
+	if marker == "" {
+		return ""
 	}
-	return ""
+	want := strings.ToUpper(marker)
+	lines := strings.Split(text, "\n")
+	at := -1
+	for i, line := range lines {
+		trimmed := strings.ToUpper(strings.TrimSpace(line))
+		rest, ok := strings.CutPrefix(trimmed, want)
+		if !ok {
+			continue
+		}
+		if rest == "" {
+			at = i
+			continue
+		}
+		switch rest[0] {
+		case ' ', '\t', '(', ':', '.', ',':
+			at = i
+		}
+	}
+	if at < 0 || at+1 >= len(lines) {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(lines[at+1:], "\n"))
 }
 
 // splitAchievedStamp reports the body after a line that opens with the

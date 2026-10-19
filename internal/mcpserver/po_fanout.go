@@ -58,6 +58,7 @@ type poFanoutObserved struct {
 // leaves must already carry AlreadyEngaged / ForceEngage as the frontier block
 // computed them: legitimate sleep is exactly poproactive.Sleep over that set,
 // which is what keeps this off agent-name heuristics for the gating decision.
+// Which seats are product owners is the declared purpose, not the name.
 func (s *Server) samplePOFanout(rt *sentinelRuntime, leaves []poproactive.LeafObs, overseer, workdir string, now time.Time, grace time.Duration, running func(string) bool) []staffops.POFanoutObs {
 	if s == nil || s.registry == nil || rt == nil {
 		return nil
@@ -84,7 +85,7 @@ func (s *Server) samplePOFanout(rt *sentinelRuntime, leaves []poproactive.LeafOb
 	var observed []poFanoutObserved
 	for _, d := range defs {
 		name := strings.TrimSpace(d.Name)
-		if name == "" || name == overseer || !isPOName(name) {
+		if name == "" || name == overseer || !purposeIsProductOwner(d.Purpose) {
 			continue
 		}
 		// Product scope: a PO on another repo's ledger is not answerable for

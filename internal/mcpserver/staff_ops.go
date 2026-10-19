@@ -179,7 +179,7 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 				running++
 			} else {
 				stopped++
-				if isPOName(d.Name) {
+				if purposeIsProductOwner(d.Purpose) {
 					idlePO++
 				}
 			}
@@ -232,18 +232,11 @@ func (s *Server) sampleStaffOps(frontierDepth int) ([]staffops.Signal, staffops.
 	return signals, resources
 }
 
-// isPOName is a thin heuristic for idle PO count (name ends with -po or is *po*).
-// Not ledger membership — residual: path portfolios (T200) for richer counts.
-func isPOName(name string) bool {
-	n := strings.ToLower(strings.TrimSpace(name))
-	if n == "" {
-		return false
-	}
-	if strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") {
-		return true
-	}
-	// e.g. jevons-po already matched; also plain "po" role names.
-	return n == "po" || strings.Contains(n, "-po-")
+// purposeIsProductOwner reports the declared product-owner purpose.
+// A seat name ending in -po is not this fact. Path portfolios (T200)
+// remain a richer count than this purpose bit.
+func purposeIsProductOwner(purpose string) bool {
+	return strings.ToLower(strings.TrimSpace(purpose)) == purposeProductOwner
 }
 
 func (s *Server) deliverStaffOpsReport(overseer, text string) error {

@@ -142,6 +142,20 @@ func TestT728RestoreAttestationReproducesTheOriginal(t *testing.T) {
 	}
 }
 
+func TestPreservedAttestationReadsTheLineAfterTheMarker(t *testing.T) {
+	if got := PreservedAttestation("notes PRESERVED ATTESTATION: secret"); got != "" {
+		t.Fatalf("inline marker recovered %q", got)
+	}
+	got := PreservedAttestation("header\nPRESERVED ATTESTATION:\nline one\n\nline two")
+	if got != "line one\n\nline two" {
+		t.Fatalf("following lines = %q", got)
+	}
+	last := PreservedAttestation("PRESERVED ATTESTATION:\nfirst\nPRESERVED ATTESTATION:\nsecond")
+	if last != "second" {
+		t.Fatalf("last opening line = %q", last)
+	}
+}
+
 // A re-achieved row must not read as still awaiting the owner.
 func TestT728RestoredAttestationIsNotAwaiting(t *testing.T) {
 	att := RestoreAttestation(VerdictAccept, "", "jevons-po", "2026-09-21", t728Attestation, time.Now())

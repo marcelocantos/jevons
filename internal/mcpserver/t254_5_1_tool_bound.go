@@ -206,8 +206,9 @@ func (s *Server) cancelMCPFlights(name string) {
 // isSpawnClassSeat reports PO / overseer seats whose hung MCP is a
 // control-plane outage (🎯T254.5.2).
 func isSpawnClassSeat(name, purpose string) bool {
+	_ = name
 	if purpose == claudia.PurposeOverseer {
 		return true
 	}
-	return isPOName(name)
+	return purposeIsProductOwner(purpose)
 }
