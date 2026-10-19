@@ -54,13 +54,22 @@ func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
 // unreadable is unknown, never idle.
 func classifyAgentSessionPhase(d claudia.AgentDef, roots discovery.Roots) turnev.Phase {
 	if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
-		recs, err := spool.ReadSeat(spool.Dir(), d.Name)
-		if err != nil || len(recs) == 0 {
-			return turnev.PhaseUnknown
-		}
-		return turnev.ClassifyPhase(turnev.DecodeAll(bytes.NewReader(spool.AsJSONL(recs))))
+		return sidecarSpoolPhase(spool.Dir(), d.Name)
 	}
 	return turnev.PhaseFromFile(AgentTranscriptPath(d, roots))
+}
+
+// sidecarSpoolPhase folds the seat's newest phase-moving spool record, which
+// answers what folding its whole history (ReadSeat → AsJSONL → ClassifyPhase)
+// answers, at the cost of what was appended since the last call: the 30 s
+// seat-observation tick runs this for every registered seat, and the full
+// read kept the daemon at a whole core over an 11 GB spool (🎯T1084).
+func sidecarSpoolPhase(dir, seat string) turnev.Phase {
+	rec, ok, err := spool.LatestPhaseRecord(dir, seat)
+	if err != nil || !ok {
+		return turnev.PhaseUnknown
+	}
+	return turnev.ClassifyPhase(turnev.DecodeAll(bytes.NewReader(spool.AsJSONL([]spool.Record{rec}))))
 }
 
 // ReadSessionEvidence asks whether durable transcript evidence exists for the

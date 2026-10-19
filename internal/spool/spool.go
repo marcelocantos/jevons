@@ -89,11 +89,7 @@ func ReadSeatSince(dir, seat string, since time.Time) ([]Record, error) {
 		}
 		return nil, err
 	}
-	encoded, err := json.Marshal(seat)
-	if err != nil {
-		return nil, err
-	}
-	key := append([]byte(`"seat":`), encoded...)
+	key := seatKey(seat)
 	var out []Record
 	for _, name := range names {
 		path := filepath.Join(dir, name)
@@ -106,30 +102,16 @@ func ReadSeatSince(dir, seat string, since time.Time) ([]Record, error) {
 		if err != nil {
 			return nil, err
 		}
-		sc := bufio.NewScanner(f)
+		sc := bufio.NewScanner(countingReader{f})
 		sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
 		for sc.Scan() {
 			raw := sc.Bytes()
 			if !bytes.Contains(raw, key) {
 				continue
 			}
-			line := bytes.TrimSpace(raw)
-			if len(line) == 0 {
+			rec, ok := decodeLine(raw)
+			if !ok || rec.Seat != seat {
 				continue
-			}
-			var rec Record
-			if err := json.Unmarshal(line, &rec); err != nil {
-				continue
-			}
-			if rec.Seat != seat {
-				continue
-			}
-			if rec.RawTS != "" {
-				if ts, err := time.Parse(time.RFC3339Nano, rec.RawTS); err == nil {
-					rec.TS = ts
-				} else if ts, err := time.Parse(time.RFC3339, rec.RawTS); err == nil {
-					rec.TS = ts
-				}
 			}
 			out = append(out, rec)
 		}
@@ -139,6 +121,35 @@ func ReadSeatSince(dir, seat string, since time.Time) ([]Record, error) {
 		}
 	}
 	return out, nil
+}
+
+// seatKey is the bytes a line naming seat carries: its "seat" field as
+// encoding/json writes it. ReadSeatSince decodes only lines that contain it.
+func seatKey(seat string) []byte {
+	encoded, _ := json.Marshal(seat) // a string always marshals
+	return append([]byte(`"seat":`), encoded...)
+}
+
+// decodeLine is one spool line as a Record. ok is false for a blank line
+// or one that does not decode; ReadSeatSince skips both, and the phase
+// index applies the same rule (🎯T1084) so the two cannot drift.
+func decodeLine(raw []byte) (Record, bool) {
+	line := bytes.TrimSpace(raw)
+	if len(line) == 0 {
+		return Record{}, false
+	}
+	var rec Record
+	if err := json.Unmarshal(line, &rec); err != nil {
+		return Record{}, false
+	}
+	if rec.RawTS != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, rec.RawTS); err == nil {
+			rec.TS = ts
+		} else if ts, err := time.Parse(time.RFC3339, rec.RawTS); err == nil {
+			rec.TS = ts
+		}
+	}
+	return rec, true
 }
 
 // LatestPath is the newest dated log that names seat. Empty when the
@@ -220,6 +231,15 @@ type fileIndex struct {
 	mod    int64
 	seats  map[string]bool
 	ts     map[string]time.Time
+	// phase is, per seat, the newest complete line that may move the
+	// seat's phase fold, and tail the unterminated last line when it may
+	// (🎯T1084; see phase.go).
+	phase map[string]*phaseMark
+	tail  *phaseMark
+}
+
+func newFileIndex() *fileIndex {
+	return &fileIndex{seats: map[string]bool{}, ts: map[string]time.Time{}, phase: map[string]*phaseMark{}}
 }
 
 type indexedSeats struct {
@@ -229,24 +249,63 @@ type indexedSeats struct {
 var (
 	seatIndexMu sync.Mutex
 	seatIndexes = map[string]*indexedSeats{}
-	// scannedBytes counts spool bytes the index has read, for tests.
+	// scannedBytes counts spool bytes read from day files, for tests.
 	scannedBytes atomic.Int64
 )
+
+// ScannedBytes is how many day-file bytes this process has read through
+// the spool readers. Tests diff it across a call to prove what the call
+// cost (🎯T936, 🎯T1084); it is not a production signal.
+func ScannedBytes() int64 { return scannedBytes.Load() }
+
+// countingReader adds what it reads to scannedBytes.
+type countingReader struct{ r io.Reader }
+
+func (c countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	scannedBytes.Add(int64(n))
+	return n, err
+}
 
 // seatIndex maps a seat to the newest dated log that names it, and
 // separately to the "ts" of that seat's own newest line (🎯T893: the file
 // is shared, the ts field is not). Unchanged files are not read again, and
 // a grown file is read only past what was already indexed.
 func seatIndex(dir string) (map[string]string, map[string]time.Time, error) {
+	seatIndexMu.Lock()
+	defer seatIndexMu.Unlock()
+	idx, names, err := refreshIndexLocked(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Date order: a later file naming a seat wins, for its path and its ts.
+	hits := map[string]string{}
+	ts := map[string]time.Time{}
+	for _, name := range names {
+		fi := idx.files[name]
+		for seat := range fi.seats {
+			hits[seat] = filepath.Join(dir, name)
+			if t, ok := fi.ts[seat]; ok {
+				ts[seat] = t
+			} else {
+				delete(ts, seat)
+			}
+		}
+	}
+	return hits, ts, nil
+}
+
+// refreshIndexLocked brings dir's index up to date with what is on disk and
+// returns it with the day-file names, older first. A missing dir is an
+// empty index. The caller holds seatIndexMu.
+func refreshIndexLocked(dir string) (*indexedSeats, []string, error) {
 	names, err := listDayFiles(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]string{}, map[string]time.Time{}, nil
+			return &indexedSeats{files: map[string]*fileIndex{}}, nil, nil
 		}
 		return nil, nil, err
 	}
-	seatIndexMu.Lock()
-	defer seatIndexMu.Unlock()
 	idx := seatIndexes[dir]
 	if idx == nil {
 		idx = &indexedSeats{files: map[string]*fileIndex{}}
@@ -266,10 +325,10 @@ func seatIndex(dir string) (map[string]string, map[string]time.Time, error) {
 		}
 		if fi == nil || st.Size() < fi.offset {
 			// New, or rewritten shorter than what was read: start over.
-			fi = &fileIndex{seats: map[string]bool{}, ts: map[string]time.Time{}}
+			fi = newFileIndex()
 			idx.files[name] = fi
 		}
-		off, err := scanSeatNamesFrom(path, fi.offset, fi.seats, fi.ts)
+		off, err := fi.scanFrom(path)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -282,29 +341,18 @@ func seatIndex(dir string) (map[string]string, map[string]time.Time, error) {
 			delete(idx.files, name)
 		}
 	}
-	// Date order: a later file naming a seat wins, for its path and its ts.
-	hits := map[string]string{}
-	ts := map[string]time.Time{}
-	for _, name := range names {
-		fi := idx.files[name]
-		for seat := range fi.seats {
-			hits[seat] = filepath.Join(dir, name)
-			if t, ok := fi.ts[seat]; ok {
-				ts[seat] = t
-			} else {
-				delete(ts, seat)
-			}
-		}
-	}
-	return hits, ts, nil
+	return idx, names, nil
 }
 
-// scanSeatNamesFrom records, per seat named in path from byte offset on,
-// that the file names it and the "ts" of its newest line there (last in
-// file wins, since lines are chronological). Only each line's prefix is
-// decoded. It returns the offset just past the last complete line: a line
-// still being written is read again, whole, next time.
-func scanSeatNamesFrom(path string, offset int64, seats map[string]bool, ts map[string]time.Time) (int64, error) {
+// scanFrom reads path from fi.offset on. Per seat it records that the file
+// names it, the "ts" of its newest line there (last in file wins, since
+// lines are chronological), and the newest line that may move its phase
+// (🎯T1084). Only each line's head is decoded, except a text line, which is
+// small and decoded whole. It returns the offset just past the last complete
+// line: a line still being written is read again, whole, next time, and
+// until then is fi.tail.
+func (fi *fileIndex) scanFrom(path string) (int64, error) {
+	offset := fi.offset
 	f, err := os.Open(path)
 	if err != nil {
 		return offset, err
@@ -313,17 +361,26 @@ func scanSeatNamesFrom(path string, offset int64, seats map[string]bool, ts map[
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return offset, err
 	}
+	fi.tail = nil
 	r := bufio.NewReaderSize(f, 64*1024)
 	for {
-		prefix, n, complete, err := nextLinePrefix(r)
+		head, whole, n, complete, err := nextLineHead(r)
 		scannedBytes.Add(n)
-		if complete {
-			offset += n
-			if seat := seatField(prefix); seat != "" {
-				seats[seat] = true
-				if t, ok := tsField(prefix); ok {
-					ts[seat] = t
+		if n > 0 {
+			mark := markLine(head, whole, offset, n)
+			if complete {
+				if seat := seatField(head); seat != "" {
+					fi.seats[seat] = true
+					if t, ok := tsField(head); ok {
+						fi.ts[seat] = t
+					}
 				}
+				if mark != nil {
+					fi.phase[mark.seat] = mark
+				}
+				offset += n
+			} else {
+				fi.tail = mark
 			}
 		}
 		if err == io.EOF {
@@ -335,28 +392,42 @@ func scanSeatNamesFrom(path string, offset int64, seats map[string]bool, ts map[
 	}
 }
 
-// nextLinePrefix reads one line: its first 512 bytes, its full length, and
-// whether it ended in a newline (a line cut short by EOF is still being
-// written).
-func nextLinePrefix(r *bufio.Reader) (prefix []byte, n int64, complete bool, err error) {
+// headLen is how much of a line the index reads to learn its seat, ts and
+// type. The sidecar writes those three first.
+const headLen = 512
+
+// nextLineHead reads one line: its first headLen bytes, the whole line when
+// the head says it is a text record, its full length, and whether it ended
+// in a newline (a line cut short by EOF is still being written).
+func nextLineHead(r *bufio.Reader) (head, whole []byte, n int64, complete bool, err error) {
+	first, keep := true, false
 	for {
 		chunk, err := r.ReadSlice('\n')
 		n += int64(len(chunk))
-		if len(prefix) < 512 {
-			room := 512 - len(prefix)
+		if len(head) < headLen {
+			room := headLen - len(head)
 			if len(chunk) > room {
-				prefix = append(prefix, chunk[:room]...)
+				head = append(head, chunk[:room]...)
 			} else {
-				prefix = append(prefix, chunk...)
+				head = append(head, chunk...)
 			}
+		}
+		if first {
+			// A first chunk is the whole line or a full buffer, so the
+			// head is complete by now.
+			first = false
+			keep = LineType(head) == "text"
+		}
+		if keep {
+			whole = append(whole, chunk...)
 		}
 		if err == bufio.ErrBufferFull {
 			continue
 		}
 		if err != nil {
-			return prefix, n, false, err
+			return head, whole, n, false, err
 		}
-		return prefix, n, true, nil
+		return head, whole, n, true, nil
 	}
 }
 
