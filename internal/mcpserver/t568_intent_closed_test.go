@@ -51,7 +51,7 @@ func TestT568InstructionPlusSubstantiveReplyCloses(t *testing.T) {
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
-			Text: "Please relabel Cursor's plan window as monthly, not weekly.",
+			Text: "Please relabel Cursor's plan window as monthly, not weekly. (T550)",
 			TS:   time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC),
 		},
 		{
@@ -153,7 +153,7 @@ func TestT568LoadSubstantiveReplyFromChatlog(t *testing.T) {
 	if err := os.MkdirAll(chatDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	user := `{"type":"user","timestamp":"2026-08-26T10:00:00Z","message":{"role":"user","content":"Please relabel Cursor's plan window as monthly, not weekly."}}`
+	user := `{"type":"user","timestamp":"2026-08-26T10:00:00Z","message":{"role":"user","content":"Please relabel Cursor's plan window as monthly, not weekly. (T550)"}}`
 	prose := `{"type":"assistant","timestamp":"2026-08-26T10:02:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Cursor's included-usage window is a billing-cycle month. The ticker should say monthly, not weekly; unused does not roll over."}]}}`
 	body := strings.Join([]string{user, prose}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(chatDir, "jevons.jsonl"), []byte(body), 0o644); err != nil {

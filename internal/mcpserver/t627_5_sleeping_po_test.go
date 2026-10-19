@@ -67,7 +67,7 @@ func TestT627_5OverseerResumeIndependentWhenResidualClosedOrStale(t *testing.T) 
 		{
 			name: ResidualAnsweredOrClosed,
 			lines: []string{
-				t592UserLine("Please implement the original transcript correction.", old),
+				t592UserLine("Please implement the original T627 transcript correction.", old),
 				t7664AssistantLine(old.Add(time.Minute), declaredFinishReport("T627", "transcript correction")),
 			},
 			want: ResidualAnsweredOrClosed,

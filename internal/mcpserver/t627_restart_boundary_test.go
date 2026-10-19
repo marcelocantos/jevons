@@ -75,7 +75,7 @@ func TestRestartRecoveryReadsOwnerStateAfterPONotification(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			stateDir := t.TempDir()
 			boot := time.Now().UTC().Truncate(time.Second)
-			old := t592UserLine("Please implement the original transcript correction.", boot.Add(-time.Minute))
+			old := t592UserLine("Please implement the original T627 transcript correction.", boot.Add(-time.Minute))
 			t592WriteChatlog(t, stateDir, []string{old})
 			s, inbox := t452Fixture(t, "jevons", "session", claudia.AgentDef{Name: "jevons", Purpose: claudia.PurposeOverseer}, claudia.AgentDef{Name: "jevons-po", Parent: "jevons", Purpose: claudia.PurposeWork})
 			s.bootAt = boot

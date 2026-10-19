@@ -20,7 +20,7 @@ func TestT477ExtractAnsweredQuestionDoesNotRefire(t *testing.T) {
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
-			Text: "Why did jevons-po mint on Opus 5? The config says grok.",
+			Text: "Why did jevons-po mint on Opus 5? The config says grok. (T475)",
 			TS:   time.Date(2026, 8, 15, 10, 12, 0, 0, time.UTC),
 		},
 		{
@@ -73,7 +73,7 @@ func TestT477DirectiveStillNeedsProductEvidence(t *testing.T) {
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
-			Text: "Please switch jevons-po minting back to grok and clean up the override",
+			Text: "Please switch jevons-po minting back to grok and clean up the override (T475)",
 		},
 		{
 			Role: "assistant",
@@ -159,7 +159,7 @@ func TestT477LoadAnsweredQuestionFromChatlog(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(chatDir, "jevons.jsonl")
-	user := `{"type":"user","timestamp":"2026-08-15T10:12:00Z","message":{"role":"user","content":"Why did jevons-po mint on Opus 5? The config says grok."}}`
+	user := `{"type":"user","timestamp":"2026-08-15T10:12:00Z","message":{"role":"user","content":"Why did jevons-po mint on Opus 5? The config says grok. (T475)"}}`
 	prose := `{"type":"assistant","timestamp":"2026-08-15T10:14:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Because the grok entry in ~/.jevons/config.yaml loses to a leftover llm-portfolio.json override: the portfolio file takes precedence at mint time, and it still pinned Opus 5."}]}}`
 	body := strings.Join([]string{user, prose}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

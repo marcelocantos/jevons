@@ -95,12 +95,8 @@ func TestT446MentionReportsAreTheIncidentShape(t *testing.T) {
 			if hasCompletionClaim(lower) {
 				t.Fatal("a completion sentence is a completion claim")
 			}
-			m, i := firstMarker(asciiLower(tc.report), requestMarkers)
-			if i < 0 {
-				t.Fatal("unguarded scan finds no request phrase — the fixture no longer reproduces the incident")
-			}
-			if m != tc.wantMarker {
-				t.Fatalf("unguarded marker = %q, want %q", m, tc.wantMarker)
+			if !strings.Contains(asciiLower(tc.report), tc.wantMarker) {
+				t.Fatalf("fixture lost %q", tc.wantMarker)
 			}
 		})
 	}
@@ -278,9 +274,6 @@ func TestT446RejectedMentionDoesNotVetoALaterRequest(t *testing.T) {
 			t.Fatalf("mention fixture %q is still classified as an ask — the property is vacuous", m)
 		}
 		for _, q := range requests {
-			if _, i := firstMarker(asciiLower(q), requestMarkers); i < 0 {
-				t.Fatalf("request fixture %q no longer carries a request phrase", q)
-			}
 			report := "Done. " + m + "\n\n" + q
 			if got := ClassifyReportAsk(report); got != AskNone {
 				t.Errorf("a sentence became an ask (%s): %q + %q", got, m, q)
@@ -290,38 +283,5 @@ func TestT446RejectedMentionDoesNotVetoALaterRequest(t *testing.T) {
 				t.Errorf("🎯T439: %q + %q reaps", m, q)
 			}
 		}
-	}
-}
-
-// TestT446GuardsAreEachLoadBearing checks the three guards one at a time at the
-// level they are written, so a failure names which one moved rather than only
-// that the classifier changed.
-func TestT446GuardsAreEachLoadBearing(t *testing.T) {
-	cases := []struct {
-		name   string
-		text   string
-		marker string
-		want   bool
-	}{
-		{"whole phrase", "please re-send the brief", "re-send", true},
-		{"head of a longer word", "re-sending would stack a copy", "re-send", false},
-		{"plural of the noun", "the daemon resends the brief on wake", "resend", false},
-		{"negated in clause", "i did not re-send anything", "re-send", false},
-		{"negation in an earlier clause", "i did not get anything, please resend it", "resend", true},
-		{"clause-initial imperative", "the brief was truncated; resend the clauses", "resend", true},
-		{"bare noun in apposition", "an input it is waiting on (brief resend, an answer)", "resend", false},
-		{"after a request cue", "could you resend the acceptance clauses", "resend", true},
-		{"phrase carrying its own grammar", "i did not receive your detailed brief", "did not receive", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			at := strings.Index(tc.text, tc.marker)
-			if at < 0 {
-				t.Fatalf("marker %q is not in %q", tc.marker, tc.text)
-			}
-			if got := isRequestAsk(tc.text, tc.marker, at); got != tc.want {
-				t.Fatalf("isRequestAsk(%q, %q) = %v, want %v", tc.text, tc.marker, got, tc.want)
-			}
-		})
 	}
 }

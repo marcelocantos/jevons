@@ -11,12 +11,11 @@ import (
 	"time"
 )
 
-// 🎯T512: owner kill/stop/park/reap directives must close open-intent resume
-// when later ops evidence shows the named seat is gone or fleet intent matches.
-// T344 only closes on SHA/PASS/achieve; ops directives have none of those, so
-// before this every bounce re-injected "Kill jevons-po" as owner-intent-resume.
+// 🎯T512: owner kill/stop/park/reap directives close open-intent resume when
+// a later structured fleet-op excerpt names the same seat. A killed or
+// parked sentence is not that excerpt (🎯T766.4).
 
-func TestT512ExtractKillCompletedDoesNotRefire(t *testing.T) {
+func TestT512ExtractKillProseStaysOpen(t *testing.T) {
 	t.Parallel()
 	turns := []OwnerIntentTurn{
 		{
@@ -31,8 +30,28 @@ func TestT512ExtractKillCompletedDoesNotRefire(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("kill prose must stay open, residual=%q", got.Residual)
+	}
+}
+
+func TestT512ExtractStructuredKillCloses(t *testing.T) {
+	t.Parallel()
+	turns := []OwnerIntentTurn{
+		{
+			Role: "user",
+			Text: "Kill jevons-po",
+			TS:   time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			Role: "assistant",
+			Text: "fleet-op agent_kill jevons-po",
+			TS:   time.Date(2026, 8, 18, 12, 1, 0, 0, time.UTC),
+		},
+	}
+	got := ExtractOpenOwnerIntent(turns)
 	if got.Recoverable() {
-		t.Fatalf("completed kill must not recover as open work, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("structured agent_kill must not recover, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want residual %q, got %q", ResidualAnsweredOrClosed, got.Residual)
@@ -46,11 +65,8 @@ func TestT512ExtractKillJevonsPOSpelling(t *testing.T) {
 		{Role: "assistant", Text: "jevons-po killed and deregistered; gone from the registry."},
 	}
 	got := ExtractOpenOwnerIntent(turns)
-	if got.Recoverable() {
-		t.Fatalf("Kill Jevons PO with ops evidence must close, got text=%q residual=%q", got.Text, got.Residual)
-	}
-	if got.Residual != ResidualAnsweredOrClosed {
-		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
+	if !got.Recoverable() {
+		t.Fatalf("Kill Jevons PO prose must stay open, residual=%q", got.Residual)
 	}
 }
 
@@ -81,7 +97,7 @@ func TestT512ExtractKillUnrelatedSeatDoesNotClose(t *testing.T) {
 	}
 }
 
-func TestT512ExtractStopParkCompleted(t *testing.T) {
+func TestT512ExtractStopParkProseStaysOpen(t *testing.T) {
 	t.Parallel()
 	turns := []OwnerIntentTurn{
 		{Role: "user", Text: "Please stop the `jv-t100-worker` agent"},
@@ -91,40 +107,51 @@ func TestT512ExtractStopParkCompleted(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
-	if got.Recoverable() {
-		t.Fatalf("stop/park completion must close, got text=%q residual=%q", got.Text, got.Residual)
-	}
-	if got.Residual != ResidualAnsweredOrClosed {
-		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
+	if !got.Recoverable() {
+		t.Fatalf("stop/park prose must stay open, residual=%q", got.Residual)
 	}
 }
 
 func TestT512OwnerFleetDirectiveCompletedHelpers(t *testing.T) {
 	t.Parallel()
-	if !OwnerFleetDirectiveCompleted("Kill jevons-po", []string{
+	if OwnerFleetDirectiveCompleted("Kill jevons-po", []string{
 		"Killed jevons-po and deregistered it from the fleet.",
 	}) {
-		t.Fatal("expected kill+deregister evidence to complete the directive")
+		t.Fatal("kill prose must not complete the directive")
+	}
+	if !OwnerFleetDirectiveCompleted("Kill jevons-po", []string{
+		"fleet-op agent_kill jevons-po",
+	}) {
+		t.Fatal("structured agent_kill must complete the directive")
+	}
+	if OwnerFleetDirectiveCompleted("Kill jevons-po", []string{
+		"fleet-op agent_kill jv-t999-other",
+	}) {
+		t.Fatal("structured kill of another seat must not complete the directive")
 	}
 	if OwnerFleetDirectiveCompleted("Kill jevons-po", []string{"working on the kill"}) {
 		t.Fatal("progress chatter must not complete a kill directive")
 	}
 	if OwnerFleetDirectiveCompleted("Please fix the chat wire bug", []string{
-		"Killed and deregistered jevons-po.",
+		"fleet-op agent_kill jevons-po",
 	}) {
-		t.Fatal("non-fleet directives must not close on ops evidence")
+		t.Fatal("non-fleet directives must not close on a fleet-op excerpt")
 	}
 	if OwnerFleetDirectiveCompleted("Kill all workers", []string{
-		"Killed and deregistered every worker seat.",
+		"fleet-op agent_kill jevons-po",
 	}) {
 		t.Fatal("nameless mass kill must not pretend a concrete seat closed")
 	}
+	if !OwnerFleetDirectiveCompleted("Please stop the `jv-t100-worker` agent", []string{
+		"fleet-op agent_stop jv-t100-worker",
+	}) {
+		t.Fatal("structured agent_stop must complete the stop directive")
+	}
 }
 
-// TestT512LoadKillCompletedFromChatlog is the restart-resume half: kill
-// completion carries no SHA/PASS/achieve markers, so before T512 the chatlog
-// loader dropped the assistant turn and every bounce re-fired the kill.
-func TestT512LoadKillCompletedFromChatlog(t *testing.T) {
+// TestT512LoadKillProseStaysOpen is the chatlog half: a killed/deregistered
+// sentence is not a fleet-op excerpt, so the kill directive still recovers.
+func TestT512LoadKillProseStaysOpen(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	chatDir := filepath.Join(dir, "chatlog")
@@ -140,11 +167,8 @@ func TestT512LoadKillCompletedFromChatlog(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := LoadOpenOwnerIntent(dir, "jevons")
-	if got.Recoverable() {
-		t.Fatalf("completed kill must not re-fire from chatlog, got text=%q residual=%q", got.Text, got.Residual)
-	}
-	if got.Residual != ResidualAnsweredOrClosed {
-		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
+	if !got.Recoverable() {
+		t.Fatalf("kill prose must re-fire from chatlog, residual=%q", got.Residual)
 	}
 }
 

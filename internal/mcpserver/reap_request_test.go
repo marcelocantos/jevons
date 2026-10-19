@@ -66,19 +66,8 @@ func TestT439BriefRequestIsTheIncidentShape(t *testing.T) {
 	if !strings.Contains(report, "Please resend it before I write anything") {
 		t.Fatal("fixture no longer carries the brief request")
 	}
-	for _, class := range []struct {
-		name    string
-		markers []string
-	}{
-		{"decision request", decisionRequestMarkers},
-		{"explicit incomplete", explicitIncompleteMarkers},
-	} {
-		if m, i := firstMarker(asciiLower(report), class.markers); i >= 0 {
-			t.Fatalf("fixture matches a 🎯T395 %s marker %q — the T439 class is not what saves it", class.name, m)
-		}
-	}
-	if closingQuestionIndex(report) >= 0 {
-		t.Fatal("fixture closes on a question — the 🎯T395 closing-question class would already have saved it")
+	if got := ClassifyReportAsk(report); got != AskNone {
+		t.Fatalf("a sentence is an ask (%s)", got)
 	}
 }
 
@@ -215,10 +204,10 @@ func TestT439RequestVetoIsOneWay(t *testing.T) {
 	}
 	for _, r := range reports {
 		for _, q := range requests {
-			if _, i := firstMarker(asciiLower(q), requestMarkers); i < 0 {
-				t.Fatalf("request fixture %q no longer carries a request phrase — the property is vacuous", q)
-			}
 			withRequest := strings.TrimSpace(r + "\n\n" + q)
+			if got := ClassifyReportAsk(withRequest); got != AskNone {
+				t.Errorf("a sentence is an ask (%s): %q", got, q)
+			}
 			reg := t439Registry(t, "jv-worker")
 			ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", withRequest, nil)
 			if ok {

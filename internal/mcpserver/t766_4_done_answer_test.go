@@ -91,7 +91,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree", "hasOracleEvidence", "hasAcceptedRisk", "hasCompletionClaim", "FindCompletionClaim", "reportCitesOracleID", "HasActivationEvidence", "LooksLikeHermeticOnlyDaemonClaim", "LiveRenderOracleDidNotRun", "LooksLikeSilentBrowserOracleFallback")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "open_intent.go"), "hasOpenIntentProductEvidence", "openIntentEvidenceCandidate", "openIntentAnswerShaped", "openIntentSubstantiveReply", "ownerIntentClosedByLaterSubstantiveReply", "OwnerQuestionAnsweredWithExplanation")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "open_intent.go"), "hasOpenIntentProductEvidence", "openIntentEvidenceCandidate", "openIntentAnswerShaped", "openIntentSubstantiveReply", "ownerIntentClosedByLaterSubstantiveReply", "OwnerQuestionAnsweredWithExplanation", "openIntentFleetOpsEvidence", "openIntentTopicalLink", "isOpenIntentAckOnly", "parseFleetOpExcerpt", "fleetOpsToolIs", "isOpenIntentFleetOpsTool", "synthesizeOpenIntentFleetOpsTool", "OwnerFleetDirectiveCompleted", "keepOpenIntentAssistant")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "false_green.go"), "FalseGreenFlagsForWorker")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750", "CitedCompletionClaim")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "local_done.go"), "allCompletionClaimsLocal")...)
@@ -226,7 +226,7 @@ func TestT7664ProseOracleDoesNotReapThroughTheSink(t *testing.T) {
 // An accepted-risk sentence is not a risk slot. The sink keeps that seat
 // and removes a declared risk finish.
 func TestT7664ProseOracleDoesNotCloseOwnerIntent(t *testing.T) {
-	owner := "Why is the jiggle layout thrash still happening?"
+	owner := "Why is the jiggle layout thrash still happening? (T766.4)"
 	prose := "Done. The jiggle layout thrash is fixed. go test ./internal/mcpserver -run Layout PASS"
 	if HasOracleEvidence(prose) || HasAcceptedRisk(prose) {
 		t.Fatal("a sentence is oracle evidence or accepted risk")

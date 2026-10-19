@@ -281,7 +281,7 @@ func TestExtractOpenOwnerIntentAnsweredOrClosedJiggleEvidence(t *testing.T) {
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
-			Text: "Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time? Why is it affecting the layout in such a subtle way?",
+			Text: "Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time? Why is it affecting the layout in such a subtle way? (T341)",
 			TS:   time.Date(2026, 8, 8, 15, 43, 49, 0, time.UTC),
 		},
 		{
@@ -362,7 +362,7 @@ func TestLoadOpenOwnerIntentAnsweredFromChatlogToolUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(chatDir, "jevons.jsonl")
-	user := `{"type":"user","timestamp":"2026-08-08T15:43:49Z","message":{"role":"user","content":"Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time?"}}`
+	user := `{"type":"user","timestamp":"2026-08-08T15:43:49Z","message":{"role":"user","content":"Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time? (T341)"}}`
 	ts := time.Date(2026, 8, 8, 15, 55, 38, 0, time.UTC)
 	prose := t7664AchieveToolLine(ts, "T341", "Independent overseer gate: SHA cf4bdce fix(web): stop continuous ~1px main-chat jiggle from pin thrash (T341). Hermetic PASS.")
 	body := strings.Join([]string{user, prose}, "\n") + "\n"
@@ -389,7 +389,7 @@ func TestLoadOpenOwnerIntentAnsweredFromChatlogToolUse(t *testing.T) {
 
 func TestOwnerIntentAnsweredWithProductEvidence(t *testing.T) {
 	t.Parallel()
-	owner := "Why is all the text jiggling by a pixel from layout thrash?"
+	owner := "Why is all the text jiggling by a pixel from layout thrash? (T341)"
 	prose := "SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved."
 	if OwnerIntentAnsweredWithProductEvidence(owner, []string{prose}) {
 		t.Fatal("a SHA sentence is not product evidence")
