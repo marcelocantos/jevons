@@ -14,18 +14,21 @@ struct ContentView: View {
     var body: some View {
         Group {
             if let artifact = pairingArtifact, !artifact.isExpired() {
-                // Production path: bundled web UI talking to jevonsd
-                // through pigeon, authenticated by the persisted
-                // PairingArtifact.
+                // Production path: canonical React over the pigeon HTTP/WS
+                // tunnel, authenticated by the persisted PairingArtifact.
                 WebUIView(artifact: artifact)
                     .ignoresSafeArea()
-            } else if let mainView = connection.mainView {
-                // Server-driven UI — render the view tree from jevond.
-                ServerView(node: mainView) { action, value in
-                    handleAction(action, value: value)
-                }
+            } else if case .disconnected = connection.state {
+                // A remembered endpoint does not reconnect after an
+                // explicit disconnect. Never fall through to ServerView.
+                ConnectView(onPaired: { pairingArtifact = $0 })
+            } else if let url = connection.httpBaseURL {
+                // Direct path: load the daemon's canonical React origin.
+                // ServerView and any bundled web/index.html cannot intercept.
+                WebUIView(serverURL: url)
+                    .ignoresSafeArea()
             } else {
-                // Fallback to purpose-built views.
+                // Connecting / error before an HTTP base URL is known.
                 fallbackView
             }
         }
@@ -39,6 +42,8 @@ struct ContentView: View {
             }
         }) {
             if let sheetView = connection.sheetView {
+                // Sheets remain native for the residual server-driven
+                // chrome that is not the cockpit path (🎯T628).
                 ServerView(node: sheetView) { action, value in
                     connection.sendAction(action, value: value)
                 }
@@ -55,41 +60,20 @@ struct ContentView: View {
         )
     }
 
-    private func handleAction(_ action: String, value: String) {
-        if action == "toggle_voice" {
-            voiceManager.toggle()
-            return
-        }
-        connection.sendAction(action, value: value)
-    }
-
     @ViewBuilder
     private var fallbackView: some View {
         switch connection.state {
         case .disconnected:
             ConnectView(onPaired: { pairingArtifact = $0 })
         case .connecting:
-            if connection.hasConnected, let url = connection.httpBaseURL {
-                WebUIView(serverURL: url)
-                    .ignoresSafeArea()
-            } else {
-                ProgressView("Connecting...")
-            }
+            ProgressView("Connecting...")
         case .connected:
-            if let url = connection.httpBaseURL {
-                WebUIView(serverURL: url)
-                    .ignoresSafeArea()
-            } else {
-                ChatView()
-            }
+            // httpBaseURL should already have won above; keep a
+            // non-cockpit placeholder only if the URL is still missing.
+            ProgressView("Loading cockpit...")
         case .error:
             if connection.hasConnected {
-                if let url = connection.httpBaseURL {
-                    WebUIView(serverURL: url)
-                        .ignoresSafeArea()
-                } else {
-                    ChatView()
-                }
+                ProgressView("Reconnecting...")
             } else {
                 ConnectView(onPaired: { pairingArtifact = $0 })
             }

@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command commitscope is the pre-commit half of the shared-index guard
-// (🎯T377) and the shared-ledger content-scope warning (🎯T748). It reads
-// which index git is committing from, asks internal/commitscope whether
-// that index can contain paths this worker never named, and refuses the
-// commit when it can. A path-scoped commit of bullseye.yaml is allowed
-// (the PO must close targets) but is told when that file's current diff
-// contains target rows the actor did not write.
+// (🎯T377), the shared-ledger content-scope warning (🎯T748), the stale
+// React-bundle guard (🎯T812), and the uncompilable scripts/cmd package
+// guard (🎯T822). It reads which index git is committing from, asks
+// internal/commitscope whether that index can contain paths this worker
+// never named, and refuses the commit when it can. A path-scoped commit
+// of bullseye.yaml is allowed (the PO must close targets) but is told
+// when that file's current diff contains target rows the actor did not
+// write. Touched packages under scripts/ and cmd/ are `go build`'d
+// against the index tree so a missing import cannot land.
 //
 // Exit status is the hook contract:
 //
@@ -85,6 +88,16 @@ func main() {
 		Contents:       contents,
 		Claimed:        commitscope.ParseClaimed(os.Getenv(commitscope.ClaimEnv)),
 	})
+	// 🎯T822: after scope/bundle pass, refuse a commit whose index leaves a
+	// touched scripts/ or cmd/ package uncompilable. Runs only when staged
+	// paths include watched .go files, so docs-only commits are not slowed.
+	if !v.Refused {
+		msg, refused := goCompileVerdict(staged, commitscope.OffValue(os.Getenv(commitscope.GoCompileEnv)))
+		v.Message += msg
+		if refused {
+			v.Refused = true
+		}
+	}
 	if v.Message != "" {
 		fmt.Fprint(os.Stderr, v.Message)
 		logBundleBypass(v.Message)

@@ -192,8 +192,8 @@ func TestT555_3MapperConsumesTypedProgressAndUsage(t *testing.T) {
 		t.Fatalf("permission: %+v ok=%v", p, ok)
 	}
 	p, ok = phaseFromEvent(claudia.Event{
-		Type: "assistant",
-		Text: "hi",
+		Type:  "assistant",
+		Text:  "hi",
 		Usage: claudia.Usage{OutputTokens: 9},
 	})
 	if !ok || p.Phase != PhaseStreaming || p.Tokens != 9 {

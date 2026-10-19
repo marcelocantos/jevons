@@ -307,3 +307,225 @@ targets:
 		t.Fatalf("want missing-target error, got %v", err)
 	}
 }
+
+
+// 🎯T333.1 — usefulness is distinct from disposition rates, and a judgment
+// that produced no compression is visible as performative.
+func TestUsefulnessMetricsDistinguishUsefulVsPerformative(t *testing.T) {
+	s := dispositionFixtureStore(t)
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+
+	if err := s.RecordDelivered([]Judgment{
+		{Fingerprint: "fp-useful", Name: "real gap"},
+		{Fingerprint: "fp-performative", Name: "ticket theatre"},
+		{Fingerprint: "fp-acted", Name: "ops fix"},
+		{Fingerprint: "fp-pending", Name: "untouched"},
+		{Fingerprint: "fp-ignored", Name: "noise"},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	// Two filed judgments + one act_other + one ignore + one pending.
+	for _, fp := range []string{"fp-useful", "fp-performative"} {
+		if _, err := s.SetDisposition(SetDispositionArgs{
+			Fingerprint: fp, Disposition: DispositionFile,
+			TargetID: "T" + fp, TargetCwd: "/repo", Now: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.SetDisposition(SetDispositionArgs{
+		Fingerprint: "fp-acted", Disposition: DispositionActOther,
+		Reason: "fixed in place", Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDisposition(SetDispositionArgs{
+		Fingerprint: "fp-ignored", Disposition: DispositionIgnoreWithReason,
+		Reason: "one-off", Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ledger outcomes drive crude usefulness inference on SyncOutcomes.
+	read := func(_ string, id string) (string, error) {
+		switch id {
+		case "Tfp-useful":
+			return OutcomeAchieved, nil
+		case "Tfp-performative":
+			return OutcomeSetAside, nil
+		default:
+			return "converging", nil
+		}
+	}
+	if n, err := s.SyncOutcomes(read, now.Add(time.Hour)); err != nil || n != 2 {
+		t.Fatalf("SyncOutcomes = (%d, %v), want (2, nil)", n, err)
+	}
+
+	// Explicit escalation_down for the acted judgment (not ledger-inferred).
+	if _, err := s.SetUsefulness(SetUsefulnessArgs{
+		Fingerprint: "fp-acted",
+		Usefulness:  UsefulnessEscalationDown,
+		Note:        "same error cluster count fell after the ops fix",
+		Now:         now.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := s.Metrics(now.Add(2*time.Hour), 14*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Disposition rates still independent.
+	if m.Filed != 2 || m.ActOther != 1 || m.Ignored != 1 || m.Pending != 1 {
+		t.Fatalf("disposition rates wrong: %+v", m)
+	}
+	if m.Achieved != 1 || m.SetAside != 1 {
+		t.Fatalf("outcome rates wrong: %+v", m)
+	}
+	// Usefulness rates distinct: useful (implemented + escalation) vs performative.
+	if m.ImplementedStayedUseful != 1 {
+		t.Fatalf("implemented_stayed_useful=%d want 1: %+v", m.ImplementedStayedUseful, m)
+	}
+	if m.EscalationDown != 1 {
+		t.Fatalf("escalation_down=%d want 1: %+v", m.EscalationDown, m)
+	}
+	if m.NoEffect != 1 {
+		t.Fatalf("no_effect=%d want 1 (performative visible): %+v", m.NoEffect, m)
+	}
+	if m.UsefulnessUnscored != 0 {
+		// All three candidates (2 file + 1 act_other) are scored.
+		t.Fatalf("unscored=%d want 0: %+v", m.UsefulnessUnscored, m)
+	}
+	if m.UsefulnessUseful() != 2 {
+		t.Fatalf("UsefulnessUseful()=%d want 2", m.UsefulnessUseful())
+	}
+	if m.UsefulnessScored() != 3 {
+		t.Fatalf("UsefulnessScored()=%d want 3", m.UsefulnessScored())
+	}
+
+	// Ignore is not a usefulness candidate — its absence from unscored is the point.
+	entries, err := s.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byFP := map[string]DispositionEntry{}
+	for _, e := range entries {
+		byFP[e.Fingerprint] = e
+	}
+	if byFP["fp-useful"].Usefulness != UsefulnessImplementedStayedUseful {
+		t.Fatalf("fp-useful usefulness=%q", byFP["fp-useful"].Usefulness)
+	}
+	if byFP["fp-performative"].Usefulness != UsefulnessNoEffect {
+		t.Fatalf("fp-performative usefulness=%q (must be visible as no compression)", byFP["fp-performative"].Usefulness)
+	}
+	if byFP["fp-acted"].Usefulness != UsefulnessEscalationDown {
+		t.Fatalf("fp-acted usefulness=%q", byFP["fp-acted"].Usefulness)
+	}
+	if byFP["fp-ignored"].Usefulness != "" {
+		t.Fatalf("ignored judgment should not carry usefulness, got %q", byFP["fp-ignored"].Usefulness)
+	}
+}
+
+func TestInferUsefulnessAndNormalize(t *testing.T) {
+	if got := InferUsefulness(OutcomeAchieved); got != UsefulnessImplementedStayedUseful {
+		t.Fatalf("achieved → %q", got)
+	}
+	if got := InferUsefulness(OutcomeSetAside); got != UsefulnessNoEffect {
+		t.Fatalf("set_aside → %q", got)
+	}
+	if got := InferUsefulness("converging"); got != "" {
+		t.Fatalf("open → %q", got)
+	}
+	if !isUsefulnessCandidate(DispositionFile) || !isUsefulnessCandidate(DispositionActOther) {
+		t.Fatal("file/act_other must be candidates")
+	}
+	if isUsefulnessCandidate(DispositionPark) || isUsefulnessCandidate(DispositionIgnoreWithReason) || isUsefulnessCandidate(DispositionPending) {
+		t.Fatal("park/ignore/pending must not be candidates")
+	}
+	if _, err := NormalizeUsefulness("shrug"); err == nil {
+		t.Fatal("want error for unknown usefulness")
+	}
+	if v, err := NormalizeUsefulness(UsefulnessNoEffect); err != nil || v != UsefulnessNoEffect {
+		t.Fatalf("normalize no_effect = (%q, %v)", v, err)
+	}
+}
+
+func TestSetUsefulnessValidationAndClear(t *testing.T) {
+	s := dispositionFixtureStore(t)
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	if _, err := s.SetUsefulness(SetUsefulnessArgs{Fingerprint: "fp", Usefulness: "nope"}); err == nil {
+		t.Fatal("want error for bad usefulness")
+	}
+	if _, err := s.SetUsefulness(SetUsefulnessArgs{Usefulness: UsefulnessNoEffect}); err == nil {
+		t.Fatal("want error for missing fingerprint")
+	}
+	e, err := s.SetUsefulness(SetUsefulnessArgs{
+		Fingerprint: "fp-new", Usefulness: UsefulnessNoEffect, Note: "no later effect", Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Usefulness != UsefulnessNoEffect || e.UsefulnessNote != "no later effect" || e.UsefulnessAt.IsZero() {
+		t.Fatalf("entry wrong: %+v", e)
+	}
+	// Clear.
+	cleared, err := s.SetUsefulness(SetUsefulnessArgs{Fingerprint: "fp-new", Usefulness: "", Now: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Usefulness != "" || !cleared.UsefulnessAt.IsZero() || cleared.UsefulnessNote != "" {
+		t.Fatalf("clear failed: %+v", cleared)
+	}
+}
+
+func TestRecordDeliveredClearsUsefulnessOnReopen(t *testing.T) {
+	s := dispositionFixtureStore(t)
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	if err := s.RecordDelivered([]Judgment{{Fingerprint: "fp", Name: "gap"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDisposition(SetDispositionArgs{
+		Fingerprint: "fp", Disposition: DispositionFile, TargetID: "T5", TargetCwd: "/r", Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SyncOutcomes(func(string, string) (string, error) { return OutcomeAchieved, nil }, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := s.Entries()
+	if err != nil || len(entries) != 1 || entries[0].Usefulness != UsefulnessImplementedStayedUseful {
+		t.Fatalf("pre-reopen usefulness missing: %+v err=%v", entries, err)
+	}
+	// Re-delivery with prior outcome: reopen clears usefulness.
+	if err := s.RecordDelivered([]Judgment{{Fingerprint: "fp", Name: "gap again"}}, now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = s.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := entries[0]
+	if e.Disposition != DispositionPending || e.Outcome != "" || e.Usefulness != "" {
+		t.Fatalf("want cleared usefulness on reopen, got %+v", e)
+	}
+}
+
+func TestUsefulnessUnscoredUntilOutcome(t *testing.T) {
+	s := dispositionFixtureStore(t)
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	if err := s.RecordDelivered([]Judgment{{Fingerprint: "fp", Name: "open"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDisposition(SetDispositionArgs{
+		Fingerprint: "fp", Disposition: DispositionFile, TargetID: "T1", TargetCwd: "/r", Now: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.Metrics(now, 14*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Filed != 1 || m.UsefulnessUnscored != 1 || m.UsefulnessScored() != 0 {
+		t.Fatalf("want unscored filed judgment visible: %+v", m)
+	}
+}

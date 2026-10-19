@@ -132,11 +132,16 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 	s.mu.Unlock()
 
 	kind := ClassifyIdleNudgeKind(briefPresent)
+	roleBody := ""
+	if s != nil {
+		roleBody = s.roleBodyForAgent(agent)
+	}
 	text := FormatIdleNudgeText(IdleNudgeTextArgs{
 		Name:     agent,
 		TargetID: mission,
 		Reason:   "impatience_ladder_repressure",
 		Kind:     kind,
+		RoleBody: roleBody,
 	})
 	event := IdleNudgeEventSource(false, kind)
 	wire := formatIdleNudgeWire(event, text)

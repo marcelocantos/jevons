@@ -303,6 +303,8 @@ type FleetRecoverSweepArgs struct {
 	ProcessRunning     func(name string) bool
 	BriefPresent       func(name string) bool
 	MarkBriefed        func(name string)
+	// RoleBody optional: 🎯T511 role doctrine for full_brief assembly.
+	RoleBody           func(name string) string
 	DesignGated        func(targetID string) bool
 	MissionOpen        func(targetID string) bool
 	LastTerminalReport func(name string) string
@@ -512,6 +514,10 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	if args.MissionAcceptance != nil && targetID != "" {
 		acceptance = args.MissionAcceptance(targetID)
 	}
+	roleBody := ""
+	if args.RoleBody != nil {
+		roleBody = args.RoleBody(d.Name)
+	}
 	text := FormatIdleNudgeText(IdleNudgeTextArgs{
 		Name:        d.Name,
 		TargetID:    targetID,
@@ -519,6 +525,7 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		Reason:      reason,
 		PostRestart: false,
 		Kind:        kind,
+		RoleBody:    roleBody,
 	})
 	// Prefix reason with recovery context so workers see outage recovery.
 	if !strings.Contains(text, "RECOVER") {

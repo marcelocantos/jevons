@@ -10,6 +10,7 @@ const path = require('node:path');
 const { parseArgs } = require('node:util');
 const { chromium } = require('./playwright.cjs')();
 const { submitAside, ownerEcho } = require('./boundary-oracle.cjs');
+const { prePrompt, reaskPrompt, ownerPrompt, assertPromptShape, isPasteDecline } = require('./boundary-prompts.cjs');
 const { values } = parseArgs({ options: {
   host: { type: 'string' }, provider: { type: 'string' }, workdir: { type: 'string' }, aside: { type: 'string' },
   'daemon-log': { type: 'string' }, 'sweep-deadline-ms': { type: 'string' }, screenshot: { type: 'string' },
@@ -106,8 +107,10 @@ async function main() {
     const helper = path.join(work, 'wait.cjs');
     const holdLimit = main ? 90000 : sweepDeadline + 90000;
     await fs.writeFile(helper, `const fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(ready)}, ${JSON.stringify(nonce)});\nconst limit = setTimeout(() => { console.error('owner boundary was not released'); process.exit(2); }, ${holdLimit});\nconst poll = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(poll); clearTimeout(limit); fs.writeFileSync(${JSON.stringify(completed)}, ${JSON.stringify(nonce)}); console.log('released'); } }, 25);\n`);
-    const prompt = `Perform this short interaction check in order. First emit ${pre} as a visible commentary message, not just tool input. Then run exactly this shell command using your tool: node ${helper}. Wait for it to finish. Then reply with exactly ${post}. Do not read or change the helper or its files; the test harness releases it. Do not spawn agents.`;
-    const owner = `Reply with exactly: ${ack}`;
+    // 🎯T831: short single-line requests — long blocks collapse to paste chips
+    // and the provider declines without acting. Shape is hermetically gated.
+    const prompt = assertPromptShape('PRE', prePrompt({ pre, post, helper }));
+    const owner = assertPromptShape('owner', ownerPrompt(ack));
     const start = frames.length;
     // 🎯T813: the provider may end a turn without the visible PRE or the tool
     // call. `attemptStart` scopes the ordering assertions to the current ask,
@@ -135,17 +138,22 @@ async function main() {
         return seen || list.some(f => terminal(f.body)) ? 'skipped' : null;
       }, label);
       let first = await preOrEnded('nonterminal PRE');
-      // Observed cause (🎯T813): a long owner message reaches the provider as a
-      // collapsed paste, and it sometimes answers "only pasted text, nothing from
-      // you" without acting. The re-ask is therefore short and plain, so it is not
-      // collapsed; two are allowed, each recorded, and none moves a timeout.
+      // 🎯T813/T831: if the provider still skips PRE (or declines a paste chip),
+      // re-ask with the same short shape. A paste-decline is named as T831 so it
+      // is never confused with an ordering assertion failure.
       const MAX_REASKS = 2;
       for (let attempt = 1; first === 'skipped'; attempt++) {
-        const said = assistants().slice(-3).map(f => JSON.stringify(content(f.body).slice(0, 160)));
+        const recent = assistants().slice(-3).map(f => content(f.body));
+        const said = recent.map(t => JSON.stringify(t.slice(0, 160)));
+        const decline = recent.find(isPasteDecline);
+        if (decline) {
+          throw new Error(`T831 provider declined the prompt as pasted text (not a product ordering failure): ${JSON.stringify(decline.slice(0, 200))}`);
+        }
         if (attempt > MAX_REASKS) throw new Error(`provider skipped the PRE plus tool call after ${MAX_REASKS} re-asks (last replies: ${said.join(' | ') || 'none'})`);
         console.log(`RETRY ${name} ${attempt}/${MAX_REASKS}: provider ended its turn without a visible PRE plus tool call (replies: ${said.join(' | ') || 'none'}); re-asking`);
         attemptStart = frames.length;
-        await page.locator(input).fill(`Do this now: write ${pre}, then run node ${helper}, then reply ${post}.`);
+        const again = assertPromptShape('re-ask', reaskPrompt({ pre, post, helper }));
+        await page.locator(input).fill(again);
         await page.locator(button).click();
         first = await preOrEnded(`nonterminal PRE after re-ask ${attempt}`);
       }

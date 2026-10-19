@@ -168,16 +168,11 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 				}
 				return "", false
 			}
-			// 🎯T237: rewrite bare provider failure prose (e.g. "Internal error")
-			// so owner-visible copy carries class; structured slog for T236.
-			// 🎯T455: only when the frame that carried it was the backend's own
-			// answer — authored prose is never classified, so a sentence with
-			// the word "failed" in it stays the sentence the agent wrote.
-			displayText := ev.Text
-			var failClass agenterr.Class
+			// 🎯T237 / 🎯T455: classify only transport-sourced frames. Authored
+			// prose stays the sentence the agent wrote.
+			// 🎯T782: a transport failure is a distinct system row
+			// (type=provider_error), never assistant prose in the transcript.
 			if class := agenterr.ClassifyFrom(assistantTextSource(ev), ev.Text); class.IsFailure() {
-				failClass = class
-				displayText = agenterr.OwnerCopy(class, ev.Text)
 				slog.Warn("provider_failure",
 					"component", "provider_failure",
 					"failure_class", class.String(),
@@ -185,7 +180,24 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 					"surface", "chat_wire",
 					"raw", strings.TrimSpace(ev.Text),
 				)
+				wire := map[string]any{
+					"type":          "provider_error",
+					"timestamp":     ts,
+					"text":          agenterr.OwnerCopy(class, ev.Text),
+					"failure_class": class.String(),
+					"retryable":     class.IsTransient(),
+					"raw":           strings.TrimSpace(ev.Text),
+				}
+				if ev.StopReason != "" {
+					wire["stop_reason"] = ev.StopReason
+				}
+				b, err := json.Marshal(wire)
+				if err != nil {
+					return "", false
+				}
+				return string(b), true
 			}
+			displayText := ev.Text
 			envMsg, envErr := envelope.Parse(displayText)
 			if envMsg != nil && envErr != nil && envMsg.Kind.LoadBearing() {
 				displayText = envelope.Annotate(displayText, envErr)
@@ -203,9 +215,6 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 				"type":      "assistant",
 				"timestamp": ts,
 				"message":   msg,
-			}
-			if failClass.IsFailure() {
-				wire["failure_class"] = failClass.String()
 			}
 			if envMsg != nil {
 				wireEnv := map[string]any{

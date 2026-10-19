@@ -152,12 +152,23 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	if !*keep {
-		defer os.RemoveAll(stateDir)
-		defer killPrivateClaudiaTmux(stateDir)
-	} else {
+	if *keep {
 		fmt.Println("KEEP state:", stateDir)
 	}
+	// 🎯T846: sandbox teardown (tmux anchor + temp tree) must run on EVERY
+	// exit path. A defer is skipped by exitNow/os.Exit and by signals that
+	// go through exitNow — which is how 200+ jevons-journey-* dirs and their
+	// claudia-anchor tmux servers piled up on the host. Register before the
+	// daemon starts so a boot-time fatal still reclaims the sandbox. stop()
+	// is registered later and runs first (LIFO), so the daemon is down and
+	// the private tmux kill inside stop has already run when we RemoveAll.
+	cleanups.Add(func() {
+		killPrivateClaudiaTmux(stateDir)
+		if *keep {
+			return
+		}
+		_ = os.RemoveAll(stateDir)
+	})
 	// Relocate the executable as well as cwd: an executable-relative lookup
 	// of ../ui/dist must not let a broken package borrow checkout assets.
 	packaged, err := os.ReadFile(daemon)
@@ -236,6 +247,11 @@ persona_notes: |
 		// isolates do not write provider configs; this reclaims a leaked
 		// user-scope journey name if one is still present.
 		mcpRemoveFor(provider, mcpName)
+		// 🎯T846 / 🎯T780: kill the private claudia-anchor here, not only in a
+		// defer. exitNow skips defers; stop is on the cleanups path, so this
+		// is what actually runs on failure and signal. Idempotent with the
+		// sandbox cleanup registered above.
+		killPrivateClaudiaTmux(stateDir)
 		if started {
 			fmt.Println("stopped isolated jevonsd; removed MCP", mcpName)
 		} else if s.isolateDown != nil {
@@ -352,6 +368,10 @@ persona_notes: |
 		exitNow(2)
 	}
 	fmt.Println("PASS: journey suite green (isolated; daily stream untouched)")
+	// 🎯T846: happy path must take the same teardown path as failures —
+	// exitNow runs cleanups (sandbox remove + tmux kill). A bare return
+	// would rely on defers that fatal/signal already cannot use.
+	exitNow(0)
 }
 
 // assertIsolation checks path + MCP isolation: journal lives only under the

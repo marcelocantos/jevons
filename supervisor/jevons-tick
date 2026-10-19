@@ -1,0 +1,49 @@
+#!/bin/bash
+# One-shot supervision pass wrapper. Records heartbeat / last-line on success.
+# The actual claude -p invocation lives in run-tick.sh (🎯T704 / 🎯T700).
+#
+# 🎯T700: a pass that could not escalate must not look like quiet. If the
+# transcript shows blurter (or Bash) was refused for approval, rewrite the
+# finish line and exit non-zero so the alarm and the log both notice.
+set -u
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:${HOME}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+HERE="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+STATE="${JEVONS_SUPERVISOR_STATE:-$HOME/.jevons/supervisor}"
+LOG="${JEVONS_TICK_LOG:-$STATE/tick.log}"
+mkdir -p "$STATE"
+
+started=$(date +%s)
+echo "=== tick $(date -Iseconds)" >>"$LOG"
+
+tmp="$STATE/.tick.out"
+set +e
+"$HERE/run-tick.sh" >"$tmp" 2>&1
+rc=$?
+set -e
+
+# 🎯T700 loud-fail: approval-gated blurter/Bash must not read as a healthy quiet.
+muzzled=0
+if grep -Eiq 'blurter.*(approval|permission|requires approval)|requires approval.*blurter|mcp__blurter__.*denied|blurter.*denied' "$tmp" 2>/dev/null; then
+  muzzled=1
+fi
+if grep -Eiq "This command requires approval" "$tmp" 2>/dev/null && grep -Eiq 'blurter' "$tmp" 2>/dev/null; then
+  muzzled=1
+fi
+if [ "$muzzled" -eq 1 ]; then
+  printf '%s\n' "muzzled: escalation channel refused (🎯T700) — not quiet" >>"$tmp"
+  rc=70
+fi
+
+tail -40 "$tmp" >>"$LOG"
+if [ "$rc" -eq 0 ]; then
+  date +%s >"$STATE/heartbeat"
+  tail -1 "$tmp" >"$STATE/last-line"
+  echo "--- ok in $(( $(date +%s) - started ))s: $(tail -1 "$tmp" | cut -c1-120)" >>"$LOG"
+else
+  # Still record last-line so a muzzled pass is greppable and not silent.
+  tail -1 "$tmp" >"$STATE/last-line"
+  echo "--- FAILED rc=$rc in $(( $(date +%s) - started ))s: $(tail -1 "$tmp" | cut -c1-120)" >>"$LOG"
+fi
+rm -f "$tmp"
+exit "$rc"

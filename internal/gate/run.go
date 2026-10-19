@@ -115,13 +115,22 @@ func Run(args *RunArgs) (*Record, error) {
 	// waits for the host-pressure lease before it starts, so N seats each
 	// running the same heavy suite queue rather than collectively OOM the
 	// host. A store-less Run (tests only) skips the lease.
-	if args.Store != nil && HeavyCommand(args.Command) {
+	heavy := HeavyCommand(args.Command)
+	if args.Store != nil && heavy {
 		release, token, err := acquireHeavyLeaseCommand(args.Store.Root, os.Getenv(heavyLeaseEnv), args.Command, args.Dir)
 		if err != nil {
 			return rec, fmt.Errorf("gate run %s: heavy lease: %w", rec.ID, err)
 		}
 		defer release()
 		cmd.Env = append(cmd.Environ(), heavyLeaseEnv+"="+token)
+	}
+	// 🎯T781 — a heavy suite also takes a CPU budget from the capacity
+	// governor (GOMAXPROCS / -p / nice), so one docratchet cannot claim every
+	// core the way it did on 2026-09-21. Applied whenever the command is
+	// heavy, including store-less test Runs that want to exercise the budget;
+	// JEVONS_HEAVY_SUITE_UNLIMITED=1 is the deliberate escape.
+	if heavy {
+		applyHeavySuiteBudget(cmd, args.Command)
 	}
 
 	runErr := cmd.Run()

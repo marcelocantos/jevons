@@ -1,0 +1,82 @@
+#!/bin/bash
+# Supervision loop. supervisord holds this with KeepAlive; each tick is a
+# fresh run-tick.sh under a timeout, so a wedged tick costs one tick (🎯T405).
+#
+# The T704 flags live only in run-tick.sh — this loop must not re-introduce a
+# bare `claude -p` that re-opens the blindness hole.
+set -u
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:${HOME}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+HERE="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+STATE="${JEVONS_SUPERVISOR_STATE:-$HOME/.jevons/supervisor}"
+INTERVAL="${JEVONS_TICK_INTERVAL:-900}"
+mkdir -p "$STATE"
+
+# One stdout stream: wrapper lines + full claude output. supervisord rotates it.
+exec 2>&1
+
+echo "=== loop started $(date -Iseconds) pid=$$"
+echo $$ >"$STATE/loop.pid"
+
+while true; do
+  started=$(date +%s)
+  echo "=== tick $(date -Iseconds)"
+
+  tmp="$STATE/.tick.out"
+  set +e
+  "$HERE/run-tick.sh" 2>&1 | tee "$tmp"
+  # tee's status is 0; the real status is run-tick's (pipefail not portable here).
+  # Re-run is wrong; capture via PIPESTATUS under bash.
+  rc=${PIPESTATUS[0]}
+  set -e
+
+  if [ "$rc" -eq 0 ]; then
+    date +%s >"$STATE/heartbeat"
+    tail -1 "$tmp" >"$STATE/last-line"
+    echo "--- ok in $(( $(date +%s) - started ))s: $(tail -1 "$tmp" | cut -c1-120)"
+
+    # Hourly sign of life from the wrapper so it does not depend on the model.
+    last_report=$(cat "$STATE/last-report" 2>/dev/null || echo 0)
+    if [ $(( $(date +%s) - last_report )) -ge 3300 ]; then
+      seats=$(curl -sf -m 6 http://127.0.0.1:13705/api/agents 2>/dev/null | python3 -c "
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print('unknown'); raise SystemExit
+a=d if isinstance(d,list) else d.get('agents',[])
+print(', '.join(f\"{x.get('name')}({x.get('provider')})\" for x in a) or 'none')
+" 2>/dev/null)
+      cap=$(curl -sf -m 6 http://127.0.0.1:13705/api/plan-usage 2>/dev/null | python3 -c "
+import json,sys,datetime
+try: d=json.load(sys.stdin)
+except Exception: print('unknown'); raise SystemExit
+now=datetime.datetime.now(datetime.timezone.utc); out=[]
+for b in d.get('backends',[]):
+    for w in b.get('windows') or []:
+        if w.get('name')!='weekly' or not w.get('resets_at'): continue
+        t=datetime.datetime.fromisoformat(w['resets_at'].replace('Z','+00:00'))
+        out.append(f\"{b['provider']} {w.get('used_percent')}% used, {(t-now).total_seconds()/3600:.0f}h left\")
+print('; '.join(out) or 'unknown')
+" 2>/dev/null)
+      blurter send --app jevons-fleet --severity info \
+        --subject "Overnight pass $(date '+%H:%M')" \
+        --body "$(tail -1 "$tmp")
+
+Seats: ${seats}
+Weekly: ${cap}" || echo "blurter failed: hourly report not sent"
+      date +%s >"$STATE/last-report"
+    fi
+  else
+    # Spent session window looks the same. Skip; do not escalate (window rolls).
+    echo "--- FAILED rc=$rc in $(( $(date +%s) - started ))s"
+  fi
+  rm -f "$tmp"
+
+  # Mutual supervision with the launchd alarm (🎯T405).
+  if ! launchctl list 2>/dev/null | grep -q com.marcelocantos.jevons-tick-alarm; then
+    blurter send --app jevons-supervisor --severity problem \
+      --subject "Jevons supervision alarm is not loaded" \
+      --body "The loop is running but its staleness alarm is gone from launchd, so a future stall would be silent. Reinstate: launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.marcelocantos.jevons-tick-alarm.plist" || echo "blurter failed: could not report the missing alarm"
+  fi
+
+  sleep "$INTERVAL"
+done

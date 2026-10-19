@@ -111,6 +111,23 @@ func (s *Server) stopGuardFor(name string) (bool, string) {
 	return StopGuard(s.flightState(name), pending, now)
 }
 
+// killGuardFor is stopGuardFor for kill. A born-stuck seat (🎯T679.2) accepted
+// a prompt that never produced a transcript: FlightInFlight never clears, so
+// T664 would block forever. 🎯T786: parent or daemon kill must free the slot
+// without force=true. Stop still uses stopGuardFor — parking a born-stuck
+// seat is not the cleanup path, and the T679 oracle keeps that refusal.
+func (s *Server) killGuardFor(name string) (bool, string) {
+	if s == nil {
+		return false, ""
+	}
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil && s.bornStuck(*d) {
+			return false, ""
+		}
+	}
+	return s.stopGuardFor(name)
+}
+
 // FormatStopRefusal is the caller-facing refusal: it names why, the
 // instrument that decides it, and the override.
 func FormatStopRefusal(verb, name, why string) string {

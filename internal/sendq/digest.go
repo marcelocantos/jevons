@@ -175,14 +175,42 @@ func BuildDigest(seat string, entries []Entry) string {
 	if len(reports) > 0 {
 		fmt.Fprintf(&body, "\n== Worker reports (%d senders, newest sender first) ==\n", len(reports))
 		for _, sender := range newestFirst(reports) {
-			rs := reports[sender]
-			newest := rs[len(rs)-1]
-			fmt.Fprintf(&body, "\n-- %s: newest of %d report(s), %s, entry id=%s --\n%s\n",
-				sender, len(rs), stamp(newest.e.EnqueuedAt), newest.e.ID, strings.TrimSpace(newest.e.Text))
-			if len(rs) > 1 {
-				collapsed += len(rs) - 1
-				fmt.Fprintf(&body, "   superseded by the above: %d earlier report(s) from %s, readable by entry id: %s\n",
-					len(rs)-1, sender, ids(rs[:len(rs)-1]))
+			// 🎯T826: collapse only supersedable non-terminal progress. Terminal
+			// reports, GATE/SHA/ask/refusal carriers stay in full; at most one
+			// progress report per worker survives (the newest).
+			var keep, progress []classified
+			for _, c := range reports[sender] {
+				if IsSupersedableProgressReport(c.e.Text) {
+					progress = append(progress, c)
+				} else {
+					keep = append(keep, c)
+				}
+			}
+			var delivered []classified
+			delivered = append(delivered, keep...)
+			var superseded []classified
+			if n := len(progress); n > 0 {
+				delivered = append(delivered, progress[n-1])
+				superseded = progress[:n-1]
+			}
+			sort.SliceStable(delivered, func(i, j int) bool {
+				return delivered[i].e.EnqueuedAt.Before(delivered[j].e.EnqueuedAt)
+			})
+			fmt.Fprintf(&body, "\n-- %s: %d report(s) kept of %d, newest activity %s --\n",
+				sender, len(delivered), len(reports[sender]), stamp(reports[sender][len(reports[sender])-1].e.EnqueuedAt))
+			for _, c := range delivered {
+				why := progressKeepReason(c.e.Text)
+				label := "progress"
+				if why != "" {
+					label = why
+				}
+				fmt.Fprintf(&body, "\n   [%s] %s, entry id=%s\n%s\n",
+					label, stamp(c.e.EnqueuedAt), c.e.ID, strings.TrimSpace(c.e.Text))
+			}
+			if len(superseded) > 0 {
+				collapsed += len(superseded)
+				fmt.Fprintf(&body, "   superseded progress from %s: %d earlier non-terminal report(s), readable by entry id: %s\n",
+					sender, len(superseded), ids(superseded))
 			}
 			// A relay for a seat that has since reported is folded into its report.
 			if hs := helds[sender]; len(hs) > 0 {

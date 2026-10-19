@@ -4,6 +4,7 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -194,7 +195,7 @@ func rotateOntoFreshSession(reg *claudia.Registry, def *claudia.AgentDef) (LostS
 }
 
 // LaunchRecovering is registry.Launch with lost-session recovery in
-// front of it (🎯T409).
+// front of it (🎯T409 / 🎯T674).
 //
 // claudia fails closed when a row is Materialized and its transcript is
 // gone, which is correct — silently minting a replacement would discard
@@ -208,31 +209,51 @@ func rotateOntoFreshSession(reg *claudia.Registry, def *claudia.AgentDef) (LostS
 // Thirteen call sites reach registry.Launch. Recovery belongs here, once,
 // rather than in each of them — a guard that every caller must remember
 // is a guard that some caller will forget.
+//
+// 🎯T674: when Launch fails because the exclusive provider home is gone
+// (GROK_HOME / CODEX_HOME), rotate onto a fresh session under the same
+// name rather than leaving the seat dead until someone kills it by hand.
 func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error) {
+	agent, _, err := LaunchRecoveringReported(context.Background(), reg, name)
+	return agent, err
+}
+
+// LaunchRecoveringReported is LaunchRecovering and also returns any remint
+// that ran, so a start path can name the lost session once instead of
+// silently claiming the old conversation continues (🎯T674 acceptance 2).
+// ctx cancels the underlying Launch (🎯T541.2).
+func LaunchRecoveringReported(ctx context.Context, reg *claudia.Registry, name string) (*claudia.Agent, LostSession, error) {
 	defer seatstate.ObserveRegistrySeat(reg, name)
 	if reg == nil {
-		return nil, fmt.Errorf("launch %q: no agent registry", name)
+		return nil, LostSession{}, fmt.Errorf("launch %q: no agent registry", name)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var reported LostSession
 	if lost, ok, err := RehydrateLostSessionIn(reg, name); err != nil {
 		// Not fatal: fall through and let Launch report the real problem.
 		slog.Warn("lost-session rehydrate failed; launching anyway",
 			"name", name, "err", err)
 	} else if ok {
+		reported = lost
 		slog.Info("launch rehydrated lost session", "name", name, "detail", lost.Describe())
 	}
-	agent, err := LaunchReconciled(reg, name)
+	agent, err := LaunchReconciledContext(ctx, reg, name)
 	if remintAfterResumeError(reg.Def(name), err) {
 		def := reg.Def(name)
 		rotated, rerr := rotateOntoFreshSession(reg, def)
 		if rerr != nil {
 			slog.Warn("resume-denied rehydrate failed", "name", name, "err", rerr)
-			return nil, err
+			return nil, reported, err
 		}
+		reported = rotated
 		slog.Warn("launch reminted after provider resume refusal",
 			"name", name, "detail", rotated.Describe())
-		return LaunchReconciled(reg, name)
+		agent, err = LaunchReconciledContext(ctx, reg, name)
+		return agent, reported, err
 	}
-	return agent, err
+	return agent, reported, err
 }
 
 // Resume refusals that report the conversation absent, not unresumable.
@@ -261,32 +282,48 @@ func HistoryAbsent(err error) bool {
 	return strings.Contains(msg, absentClaudeJSONL) || strings.Contains(msg, absentSidecarSpool)
 }
 
-// remintAfterResumeError is the 🎯T627.1 gate: a failed Launch may rotate
-// onto a fresh session when the history is absent (HistoryAbsent), and
-// otherwise only in two cases.
+// SessionHomeMissing reports that err is a resume refusal because the
+// exclusive provider home for the stored session is gone from disk
+// (🎯T674). Claudia will not mkdir on resume for Grok or Codex; a cold
+// provider switch or a deleted state tree leaves every later launch
+// stating a path that cannot exist. The seat must remint, not sit dead
+// until someone kills it by hand.
 //
-// Cursor session/load Invalid params, where stacking a second ACP writer
-// on the same store is 🎯T541.1.
+// Matched strings are claudia's own wording:
+//   - "exclusive GROK_HOME unavailable for session …"
+//   - "thread/resume: exclusive CODEX_HOME missing at …"
+// A session/load failure on a store that still exists is not this.
+func SessionHomeMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "exclusive GROK_HOME unavailable") ||
+		strings.Contains(msg, "exclusive CODEX_HOME missing")
+}
+
+// remintAfterResumeError is the 🎯T627.1 / 🎯T674 gate: a failed Launch may
+// rotate onto a fresh session when the history is absent (HistoryAbsent),
+// when the exclusive provider home is gone (SessionHomeMissing), and
+// otherwise only for Cursor session/load Invalid params (🎯T541.1 —
+// stacking a second ACP writer on the same store).
 //
-// Grok "exclusive GROK_HOME unavailable": claudia will not mkdir on
-// resume, and the directory was never published. A cold provider switch
-// keeps the previous session id, so every later launch stats a path that
-// cannot exist and the cockpit stops after eight attempts. Grok's
-// session/load failure ("existing conversation; refusing to mint") shares
-// wording with [claudia.ErrCursorResumeDenied] and must still fail closed.
+// Grok's session/load failure ("existing conversation; refusing to mint")
+// shares wording with [claudia.ErrCursorResumeDenied] and must still fail
+// closed — SessionHomeMissing is the only Grok path that remints.
+// SessionHomeMissing is provider-agnostic on purpose: the 🎯T674 specimen
+// had provider=claude on the row while the stored session pointed at a
+// Grok exclusive home, and matching on the declared provider would have
+// left that seat dead.
 func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
 	if err == nil || def == nil {
 		return false
 	}
-	if HistoryAbsent(err) {
+	if HistoryAbsent(err) || SessionHomeMissing(err) {
 		return true
 	}
-	switch def.Provider {
-	case claudia.ProviderCursor:
+	if def.Provider == claudia.ProviderCursor {
 		return claudia.IsCursorResumeDenied(err)
-	case claudia.ProviderGrok:
-		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")
-	default:
-		return false
 	}
+	return false
 }

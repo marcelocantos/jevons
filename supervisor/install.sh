@@ -25,6 +25,14 @@ mkdir -p "$CONF_DIR"
 mkdir -p "$HOME/.local/var/log"
 chmod +x "$REPO/supervisor/run-jevonsd.sh"
 
+# 🎯T779: control-plane LaunchAgent must not stay on launchd's throttled
+# Background/Standard class. Write-only here — bounce is explicit via
+# ensure-interactive-priority.sh --apply (restarts every supervised service).
+if [ "${SUPERVISOR_SKIP_INTERACTIVE_PRIO:-}" != 1 ] && [ -x "$REPO/supervisor/ensure-interactive-priority.sh" ]; then
+  chmod +x "$REPO/supervisor/ensure-interactive-priority.sh" "$REPO/supervisor/check-control-plane-priority.sh" 2>/dev/null || true
+  "$REPO/supervisor/ensure-interactive-priority.sh" || echo "🎯T779: ensure-interactive-priority soft-failed (plist may be absent)" >&2
+fi
+
 render() {
   name="$1"
   dest="$CONF_DIR/${name}.ini"
@@ -40,6 +48,20 @@ if [ "${SUPERVISOR_RETIRE_VANILLA_ONLY:-}" != 1 ]; then
     exit 1
   fi
   render jevonsd
+  # 🎯T704: tracked unattended tick (notes/gates/blurter reachable headless).
+  # Template sets autostart=false — render only; operator starts when wanted.
+  if [ -f "$REPO/supervisor/jevons-tick.ini" ]; then
+    chmod +x "$REPO/supervisor/run-tick.sh" \
+             "$REPO/supervisor/jevons-tick" \
+             "$REPO/supervisor/jevons-tick-loop" \
+             "$REPO/supervisor/jevons-tick-alarm" 2>/dev/null || true
+    render jevons-tick
+    mkdir -p "$HOME/.local/bin"
+    for s in jevons-tick jevons-tick-loop jevons-tick-alarm; do
+      printf '#!/bin/sh\nexec "%s/supervisor/%s" "$@"\n' "$REPO" "$s" >"$HOME/.local/bin/$s"
+      chmod +x "$HOME/.local/bin/$s"
+    done
+  fi
   # Claudia owns the host broker socket. Retire the Jevons broker
   # definition so a later supervisord reload cannot reclaim it.
   rm -f "$CONF_DIR/jevons-broker.ini"

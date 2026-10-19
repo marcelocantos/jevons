@@ -228,11 +228,14 @@ func (r *Reader) appendHistory(readings []claudia.PlanUsage) {
 		return
 	}
 	samples := samplesFromReadings(readings, r.args.Now())
-	if len(samples) == 0 {
-		return
-	}
-	if err := r.args.History.Append(samples); err != nil {
-		slog.Warn("plan usage history append", "err", err)
+	// Samples and payloads are independent. A refusal can carry a body
+	// with no published remaining figure (🎯T683 / 🎯T677); skipping the
+	// whole path when samples are empty would drop the evidence this
+	// table exists to keep.
+	if len(samples) > 0 {
+		if err := r.args.History.Append(samples); err != nil {
+			slog.Warn("plan usage history append", "err", err)
+		}
 	}
 	r.appendResponses(readings)
 }

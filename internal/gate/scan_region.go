@@ -45,6 +45,7 @@ var hazardRules = []hazardRule{
 // whole report. Every FlagKind is either here or in hazardRules (🎯T742).
 var structuredFlagKinds = []FlagKind{
 	FlagAttestationNotGreen,
+	FlagAttestationUnexpectedGreen,
 	FlagAttestationUnknown,
 	FlagAttestationContradicted,
 	FlagAttestationKilled,

@@ -31,7 +31,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
+	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/sandboxcap"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -181,6 +183,8 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	// list call is sufficient to mark and notify but is not required.
 	s.sweepBornStuck()
 	tm.mark("sweep_born_stuck")
+	s.sweepInert() // 🎯T754: queued + climbing age = inert, not busy
+	tm.mark("sweep_inert")
 	s.sweepSeatMCPOnRequest() // 🎯T797, cache only on the request path (🎯T804)
 	tm.mark("sweep_seat_mcp")
 	s.notifyDeadAgents(reps)
@@ -212,8 +216,14 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		// be moved by its parent. 🎯T679.2: born-stuck stays in the status
 		// column; PINNED remains on the annotation line beside it.
 		pin, pinned := s.sendqPinFor(d.Name)
-		if pinned && status != AgentStatusBornStuck {
+		if pinned && status != AgentStatusBornStuck && status != AgentStatusInert {
 			status = "PINNED"
+		}
+		// 🎯T754: inert is a stronger claim than ordinary running/working —
+		// a seat that queues while frozen must not look busy.
+		if info, ok := s.inertSeat(d.Name); ok && status != AgentStatusBornStuck {
+			_ = info
+			status = AgentStatusInert
 		}
 		parent := d.Parent
 		if parent == "" {
@@ -232,6 +242,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if status == AgentStatusBornStuck {
 			diag := s.birthDescription(d, s.birthClock())
 			fmt.Fprintf(&b, "  ^ %s\n", FormatBornStuckLine(d, diag.Elapsed))
+		}
+		if status == AgentStatusInert {
+			if info, ok := s.inertSeat(d.Name); ok {
+				fmt.Fprintf(&b, "  ^ %s\n", FormatInertLine(d.Name, info, s.birthClock()))
+			}
 		}
 		if alive {
 			if diag := s.diagnoseSeatMCPOnRequest(d, s.birthClock()); len(diag.Missing) > 0 {
@@ -335,6 +350,70 @@ func (s *Server) notifyFleetHealth(occurrence, line string) {
 	if res.Status == "sent" || res.Status == StatusSuppressedReplay || res.Status == "delivered_unconfirmed" {
 		s.noteNoticeDelivered(occurrence, wire, res.Status != "delivered_unconfirmed")
 	}
+}
+
+// refuseSandboxPlacement is 🎯T596: a target that needs a localhost listener
+// or gate-log write is not placed on a backend whose sandbox lacks it.
+// tags come from the ledger; empty tags or an unknown target never refuse.
+func refuseSandboxPlacement(provider claudia.Provider, tags []string) string {
+	return sandboxcap.PlacementRefusal(provider, sandboxcap.NeedsFromTags(tags))
+}
+
+// targetSandboxTags loads ledger tags for targetID under workdir. Missing
+// ledger or unknown target yields nil (placement stays open).
+func targetSandboxTags(workdir, targetID string) []string {
+	targetID = strings.TrimSpace(strings.TrimPrefix(targetID, "🎯"))
+	if targetID == "" {
+		return nil
+	}
+	tags, ok := targetfile.LoadTargetTagsFromCwd(workdir, targetID)
+	if !ok {
+		return nil
+	}
+	return tags
+}
+
+// mintProviderAmong picks the first eligible plan-dest backend that is in
+// allow (🎯T596 redirect). Empty when none of allow is mint-eligible right now.
+func (s *Server) mintProviderAmong(allow []string, taskTypeArg, purpose, name string) string {
+	if s == nil || len(allow) == 0 {
+		return ""
+	}
+	set := map[string]bool{}
+	for _, a := range allow {
+		set[strings.ToLower(strings.TrimSpace(a))] = true
+	}
+	_, cands, now, th, ok := s.planPolicyInputs()
+	if ok {
+		var filtered []planusage.DestCand
+		for _, c := range cands {
+			p := strings.ToLower(strings.TrimSpace(c.Provider))
+			plan := strings.ToLower(string(cli.PlanProvider(claudia.Provider(p))))
+			if set[p] || set[plan] {
+				filtered = append(filtered, c)
+			}
+		}
+		if len(filtered) > 0 {
+			if resolved, err := planusage.ResolveMint(context.Background(), filtered, now, th); err == nil && resolved.Provider != "" {
+				return strings.ToLower(string(resolved.Provider))
+			}
+		}
+	}
+	// No live plan feed (or none eligible under pressure): prefer the first
+	// allow entry that is not mint-ineligible when we can tell.
+	for _, a := range allow {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if a == "" {
+			continue
+		}
+		if s.providerDestEligible(a) {
+			return a
+		}
+	}
+	if len(allow) > 0 {
+		return strings.ToLower(strings.TrimSpace(allow[0]))
+	}
+	return ""
 }
 
 func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -576,6 +655,36 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		s.noteSeatWait(targetID, pick.Detail)
 		return mcp.NewToolResultError("plan dest empty; refusing to land on a hot or unsteerable dest (🎯T390.1.5 / 🎯T791): " + pick.Detail), nil
 	}
+	// 🎯T596: refuse a backend whose sandbox lacks a capability the target needs
+	// (localhost listener / gate-log write). Prefer re-resolving onto an eligible
+	// backend when the first pick was automatic; an explicit provider= pin is
+	// refused with the capability and the eligible list.
+	if !rowExisted {
+		if tags := targetSandboxTags(workdir, targetID); len(sandboxcap.NeedsFromTags(tags)) > 0 {
+			needs := sandboxcap.NeedsFromTags(tags)
+			if why := sandboxcap.PlacementRefusal(claudia.Provider(pick.Provider), needs); why != "" {
+				explicitKept := strings.TrimSpace(providerArg) != "" && strings.EqualFold(strings.TrimSpace(pick.Provider), strings.TrimSpace(providerArg))
+				if !explicitKept && !ownerAsked {
+					if alt := s.mintProviderAmong(sandboxcap.EligibleBackends(needs), taskTypeArg, purpose, name); alt != "" {
+						pick.Provider = alt
+						providerArg = alt // stitchAgentStart re-picks from providerArg
+						pick.Detail = strings.TrimSpace(pick.Detail + "; 🎯T596 redirected off ineligible sandbox")
+						why = ""
+					}
+				}
+				if why != "" {
+					s.mu.Lock()
+					s.pendingSpawnRole = ""
+					s.pendingOwnerAsked = false
+					s.mu.Unlock()
+					life["err"] = "sandbox_capability"
+					s.logLifecycle(compAgentLifecycle, "start", "error", life)
+					s.noteSeatWait(targetID, why)
+					return mcp.NewToolResultError(why), nil
+				}
+			}
+		}
+	}
 	if !rowExisted {
 		if dest := strings.TrimSpace(pick.Provider); dest != "" {
 			if blocked := s.checkDestSpawnAllowed(purpose, name, dest); blocked != nil {
@@ -598,6 +707,17 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	s.pendingSpawnRole = ""
 	s.pendingOwnerAsked = false
 	s.mu.Unlock()
+	if err == nil && def != nil && !existed {
+		if why := refuseSandboxPlacement(def.Provider, targetSandboxTags(workdir, targetID)); why != "" {
+			// Row was just minted onto an ineligible backend — drop it so the
+			// target is not left engaged by a seat that cannot do the work.
+			_ = s.killRootAndClearTurns(name)
+			life["err"] = "sandbox_capability"
+			s.logLifecycle(compAgentLifecycle, "start", "error", life)
+			s.noteSeatWait(targetID, why)
+			return mcp.NewToolResultError(why), nil
+		}
+	}
 	if err != nil {
 		life["err"] = err.Error()
 		life["existed"] = existed
@@ -631,7 +751,17 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	}
 
 	s.startMu.Lock()
-	proc, err := s.launchAgentBounded(ctx, name)
+	proc, launchRemint, err := s.launchAgentBoundedReported(ctx, name)
+	if launchRemint.NewSession != "" && rehydrated == "" {
+		// 🎯T674: exclusive-home / resume-refusal remint inside Launch —
+		// report it once so the caller never thinks the old conversation
+		// continued.
+		rehydrated = launchRemint.Describe()
+		life["rehydrated_from"] = launchRemint.OldSession
+		if d := s.registry.Def(name); d != nil {
+			def = d
+		}
+	}
 	if err != nil {
 		s.startMu.Unlock()
 		life["err"] = err.Error()
@@ -981,8 +1111,23 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.MCPServers = mcpattach.SessionServers(s.mcp, def.Provider, def.WorkDir)
 	}
 	def.MCPExclusive = mcpattach.Exclusive
+	// 🎯T1032: a cross-provider start (or any remint onto a provider that
+	// refuses settings the row still carries) must drop droppable
+	// provider-native fields before Register+Launch. The 2026-10-07
+	// incident was codex workspace-write sandbox_policy left on a claude
+	// row — Launch failed closed with "sandbox_policy capability is
+	// unsupported". A restriction the destination cannot enforce refuses
+	// here without rewriting the row.
+	fromProv := stored
+	dropped, err := fleet.ScrubProviderCaps(def)
+	if err != nil {
+		return nil, existed, routeNote, err
+	}
 	if err := s.registry.Register(*def); err != nil {
 		return nil, existed, "", err
+	}
+	if len(dropped) > 0 {
+		fleet.NoteProviderCapDrop(name, fromProv, string(def.Provider), "start", dropped)
 	}
 	_ = s.recordAgentRole(name, role)
 	if d := s.registry.Def(name); d != nil {
@@ -1732,6 +1877,20 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 					"agent": name,
 				})
 				return
+			}
+			// 🎯T404.2: a valid owner-decision without question-default still
+			// records and pages the question (🎯T378), but the author is told
+			// on its own channel so a resend can add the default. Unlike T793
+			// this does not skip the reap path — a blocked report is not
+			// reaped as done, and a done report with this defect is rare.
+			if notice := envelope.MissingQuestionDefaultNotice(text); notice != "" {
+				if _, err := s.deliverByName(name, notice, OriginAgent, false); err != nil {
+					slog.Warn("T404.2 missing-default notice undeliverable", "agent", name, "err", err)
+				} else {
+					s.logLifecycle(compAgentLifecycle, "envelope", "missing_default_notice", map[string]any{
+						"agent": name,
+					})
+				}
 			}
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
 			s.maybeReapDoneWorkAgent(name, text)

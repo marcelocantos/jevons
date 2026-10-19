@@ -56,6 +56,17 @@ func IsDailyStateDir(dir string) bool {
 	return got == want
 }
 
+// IsDevelopmentDaemon reports whether this process is the owner's
+// development jevonsd (:13705 + ~/.jevons). Journey isolates and other
+// throwaway daemons are not (🎯T974): they must not run the mutual-
+// supervision loop that watches the real launchd watchdog, or they raise
+// a false supervisor-gap notice ~90–120s after boot and flip the
+// overseer's cockpit phase to "error", which breaks waitBootSweepQuiet
+// for any journey that lives that long (J3/T840).
+func IsDevelopmentDaemon(port int, stateDir string) bool {
+	return port == DevelopmentPort && IsDailyStateDir(stateDir)
+}
+
 // RefuseJourneyDevState refuses the journey default port when state_dir
 // is the development root. Without this, `jevonsd -port 13715 -workdir <repo>`
 // loads ~/.jevons/config.yaml and shares workers.db / agents.json with

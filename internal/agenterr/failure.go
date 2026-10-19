@@ -402,6 +402,10 @@ var backendUnavailableMarkers = []string{
 	"connection refused",
 	"connection reset",
 	"connection timed out",
+	"connection stalled", // 🎯T782 RetriableError: Connection stalled
+	"retriableerror",     // 🎯T782 Error: RetriableError: …
+	"http/2 stream closed", // 🎯T782 [canceled] http/2 stream closed
+	"stream closed",
 	"i/o timeout",
 	"i/o error",
 	"network is unreachable",

@@ -100,7 +100,7 @@ func citedGateIDs(report string) (ids []string, evidence map[string]string) {
 	if m, _ := envelope.Parse(report); m != nil && m.GateID != "" {
 		add(m.GateID, "jevons: gate-id "+m.GateID)
 	}
-	for id := range envelope.ControlIDs(report) {
+	for id := range envelope.HonestNonPassRoles(report) {
 		add(id, "jevons: gate-role "+id)
 	}
 	return ids, evidence

@@ -9,12 +9,18 @@ import (
 )
 
 func TestT3927OracleDoneGoesToOverseer(t *testing.T) {
-	got := Classify("🎯T392.7 done. GATE abc GREEN tree=clean@deadbeef. SHA deadbeef.")
+	// 🎯T766.4: oracle_done is a finish-report envelope, not prose done+GATE.
+	raw := "```jevons\njevons: kind finish-report\njevons: target T392.7\njevons: oracle sha=deadbeef gate-id=abc\njevons: verdict GREEN\njevons: silent-ledger none\n```\n\nWork landed."
+	got := Classify(raw)
 	if got != RouteOverseer {
 		t.Fatalf("oracle-done classified %s, want overseer", got)
 	}
-	if Reason("GATE x GREEN, tests pass, done") != "oracle_done" {
-		t.Fatalf("reason %s", Reason("GATE x GREEN, tests pass, done"))
+	if Reason(raw) != "oracle_done" {
+		t.Fatalf("reason %s", Reason(raw))
+	}
+	// Prose that used to invent oracle_done is parent (🎯T860 / 🎯T766.4).
+	if Classify("GATE x GREEN, tests pass, done") != RouteParent {
+		t.Fatal("unenveloped done+GATE must not skip the PO hop")
 	}
 }
 
@@ -141,12 +147,18 @@ func TestT860AttributedOracleDoesNotSatisfyOracleHalf(t *testing.T) {
 	}
 }
 
-// 🎯T860: the genuine positive stays green — no disclaimer, no attribution.
+// 🎯T860 / 🎯T766.4: genuine oracle_done is a finish-report envelope. Prose
+// done+GATE no longer invents the route (the T860 specimen class is closed
+// by eliminating the English path, not by adding more English vetoes).
 func TestT860GenuineOracleDoneStillWorks(t *testing.T) {
-	if Classify("GATE x GREEN, tests pass, done") != RouteOverseer {
-		t.Fatal("genuine oracle-done must still route to overseer")
+	raw := "```jevons\njevons: kind finish-report\njevons: target T860\njevons: oracle sha=abcdef0123456 gate-id=deadbeef\njevons: verdict GREEN\njevons: silent-ledger none\n```\n\nGATE deadbeef GREEN, tests pass, done."
+	if Classify(raw) != RouteOverseer {
+		t.Fatal("genuine envelope oracle-done must still route to overseer")
 	}
-	if Reason("GATE x GREEN, tests pass, done") != "oracle_done" {
-		t.Fatal("genuine oracle-done reason must still be oracle_done")
+	if Reason(raw) != "oracle_done" {
+		t.Fatal("genuine envelope oracle-done reason must still be oracle_done")
+	}
+	if Classify("GATE x GREEN, tests pass, done") != RouteParent {
+		t.Fatal("unenveloped done+GATE is not oracle_done under T766.4")
 	}
 }

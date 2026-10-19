@@ -6,10 +6,10 @@ package mcpserver
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -39,21 +39,25 @@ func deferStartPrompt(p claudia.Provider) bool {
 }
 
 func (s *Server) launchAgent(ctx context.Context, name string) (*claudia.Agent, error) {
+	agent, _, err := s.launchAgentRecovering(ctx, name)
+	return agent, err
+}
+
+// launchAgentRecovering is the product launch path: lost-session and missing
+// exclusive-home recovery (🎯T409 / 🎯T674) with cooperative cancellation
+// (🎯T541.2 via LaunchContext). The remint, when one ran, is returned so
+// agent_start can name the lost session once rather than silently resume a
+// blank conversation. ReconcileProviderCaps and ExplainLaunchCapError run
+// inside fleet.LaunchRecoveringReported.
+func (s *Server) launchAgentRecovering(ctx context.Context, name string) (*claudia.Agent, fleet.LostSession, error) {
 	if s != nil && s.launchAgentFn != nil {
-		return s.launchAgentFn(ctx, name)
+		agent, err := s.launchAgentFn(ctx, name)
+		return agent, fleet.LostSession{}, err
 	}
 	if s == nil || s.registry == nil {
-		return nil, fmt.Errorf("no agent registry")
+		return nil, fleet.LostSession{}, fmt.Errorf("no agent registry")
 	}
-	if contextual, ok := any(s.registry).(interface {
-		LaunchContext(context.Context, string) (*claudia.Agent, error)
-	}); ok {
-		return contextual.LaunchContext(ctx, name)
-	}
-	// The published Claudia pin predates cancellation. Keep it buildable,
-	// but do not pretend its synchronous legacy operation has a hard deadline.
-	slog.Warn("Claudia dependency lacks cancellable agent startup", "name", name)
-	return s.registry.Launch(name)
+	return fleet.LaunchRecoveringReported(ctx, s.registry, name)
 }
 
 func (s *Server) launchWait() time.Duration {
@@ -67,17 +71,24 @@ func (s *Server) launchWait() time.Duration {
 // cleanup: a returned handle may already have been running before this call.
 // Legacy or non-cooperative success is preserved even after the deadline.
 func (s *Server) launchAgentBounded(ctx context.Context, name string) (*claudia.Agent, error) {
+	agent, _, err := s.launchAgentBoundedReported(ctx, name)
+	return agent, err
+}
+
+// launchAgentBoundedReported is launchAgentBounded and also returns any remint
+// (🎯T674) so the start result can name the lost session.
+func (s *Server) launchAgentBoundedReported(ctx context.Context, name string) (*claudia.Agent, fleet.LostSession, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	wait := s.launchWait()
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	proc, err := s.launchAgent(ctx, name)
+	proc, lost, err := s.launchAgentRecovering(ctx, name)
 	if err != nil && ctx.Err() != nil {
-		return nil, fmt.Errorf("launch timed out or canceled after %s (T541.2): %w", wait, ctx.Err())
+		return nil, lost, fmt.Errorf("launch timed out or canceled after %s (T541.2): %w", wait, ctx.Err())
 	}
-	return proc, err
+	return proc, lost, err
 }
 
 // startMutexHeld reports whether startMu is currently locked. Tests use

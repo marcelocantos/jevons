@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package claudiapin proves that jevons/go.mod's claudia pin contains the
-// fleet-needed commits, and is loud when a sibling claudia master has
-// landed fixes the pin does not yet include (🎯T448).
+// fleet-needed commits, is loud when a sibling claudia master has landed
+// fixes the pin does not yet include (🎯T448), and fails when jevons
+// source references a claudia symbol absent from the published pin
+// (🎯T608) — so a release-gate red is declared, not an ordinary undefined.
 package claudiapin
 
 import (

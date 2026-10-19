@@ -34,6 +34,11 @@ const (
 	// FlagAttestationNotGreen: the report cites a gate attestation whose own
 	// verdict is not GREEN, or whose status is not zero.
 	FlagAttestationNotGreen FlagKind = "attestation_not_green"
+	// FlagAttestationUnexpectedGreen: the report declares a role that expects
+	// RED (mutation, red-demo, differential broken leg, control) and then
+	// cites that gate as GREEN (🎯T759). A mutation that does not go RED is a
+	// guard with no teeth — GREEN is the failure, not the pass.
+	FlagAttestationUnexpectedGreen FlagKind = "attestation_unexpected_green"
 	// FlagAttestationUnknown: the report cites a gate id with no record
 	// behind it. The line was not produced by a run this machine performed.
 	FlagAttestationUnknown FlagKind = "attestation_unknown"
@@ -104,12 +109,16 @@ const (
 	// caught a real defect, which the worker then fixed. Bannering these was
 	// 🎯T472's second named case (jv-t391-guard-all-paths).
 	RoleDefectCaught CitationRole = "defect_caught"
-	// RoleControl: the report cites the red as a before-state, a mutation
-	// check, or a rebased run isolating this commit as the sole cause of a
-	// green (🎯T722). Bannering these was ge-t191-ndk-discovery's defect: the
-	// checker fired four times on one correct report, and the rebased red
-	// that proved causality was what it called a failed pass.
+	// RoleControl: the report cites the red as a before-state or a rebased
+	// run isolating this commit as the sole cause of a green (🎯T722). A
+	// control alone, with no companion green, is still a claimed pass —
+	// the red is evidence *for* a pass.
 	RoleControl CitationRole = "control"
+	// RoleMutation: the report cites a deliberate RED that proves a guard
+	// has teeth, or a red-demo that is the acceptance deliverable (🎯T759).
+	// Unlike control, the RED is the whole result — no companion green is
+	// required, and a GREEN under this role is the failure.
+	RoleMutation CitationRole = "mutation"
 	// RoleNegativeObservation records a host termination as a termination only,
 	// never as a passing or failing test result (🎯T1048).
 	RoleNegativeObservation CitationRole = "negative_observation"
@@ -223,9 +232,22 @@ var controlFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
 	`\brebase[d]?\b`,
 	`\bisolat(es|ing) (my |the )?commit\b`,
 	`\bsole cause\b`,
-	`\bmutation check\b`,
 	`\bparent commit\b`,
 	`\bon the parent\b`,
+	`\bdifferential\b`,
+	`\bbroken.?leg\b`,
+}, "|"))
+
+// mutationFramingRe matches a report offering a RED as the deliverable itself
+// (🎯T759): a mutation kill, a red-demo acceptance, a guard that fires. No
+// companion green is required — the RED is success by construction.
+var mutationFramingRe = regexp.MustCompile(`(?i)` + strings.Join([]string{
+	`\bmutation check\b`,
+	`\bmutation (kill|evidence|arm)\b`,
+	`\bmutation that does not go RED\b`,
+	`\bred-?demo\b`,
+	`\bdeclared (mutation|RED)\b`,
+	`\bguard (fires|kills)\b`,
 }, "|"))
 
 // These are deliberately conjunctive, local descriptions, not a report-wide
@@ -288,6 +310,10 @@ func ClassifyCitation(window string, c CitedAttestation) CitationRole {
 	if controlFramingRe.MatchString(framing) {
 		return RoleControl
 	}
+	// Mutation / red-demo prose is the deliverable itself (🎯T759).
+	if mutationFramingRe.MatchString(framing) {
+		return RoleMutation
+	}
 	// A window that also calls this gate a pass is not an honest non-pass
 	// role, whatever else it says. Refusing the exemption here is the safe
 	// direction for falsification / inherited / defect (🎯T443 / 🎯T472):
@@ -332,11 +358,36 @@ func isControlName(name string) bool {
 // draw a FALSE-GREEN banner: the red is doing a job other than "my work passed".
 func isHonestNonPass(role CitationRole) bool {
 	switch role {
-	case RoleFalsification, RoleInherited, RoleDefectCaught, RoleControl, RoleNegativeObservation, RoleDisclosure:
+	case RoleFalsification, RoleInherited, RoleDefectCaught, RoleControl, RoleMutation,
+		RoleNegativeObservation, RoleDisclosure:
 		return true
 	default:
 		return false
 	}
+}
+
+// roleFromDeclared maps a 🎯T759 envelope gate-role onto a CitationRole.
+func roleFromDeclared(r envelope.GateRole) CitationRole {
+	// Role is already normalised by parseGateRole.
+	switch r.Role {
+	case envelope.GateRoleControl, envelope.GateRoleDifferential:
+		return RoleControl
+	case envelope.GateRoleMutation, envelope.GateRoleRedDemo:
+		return RoleMutation
+	case envelope.GateRoleBlocker:
+		return RoleInherited
+	case envelope.GateRoleFalsification:
+		return RoleFalsification
+	default:
+		return RoleClaimedPass
+	}
+}
+
+// needsCompanionGreen reports whether an honest-red role still needs a GREEN
+// citation elsewhere in the report (🎯T722 controls). Mutation and red-demo
+// do not (🎯T759).
+func needsCompanionGreen(role CitationRole) bool {
+	return role == RoleControl
 }
 
 // citationWindow returns the line range whose prose gives the citation on line
@@ -374,7 +425,7 @@ func citationWindow(lines []string, isAttestation map[int]bool, i int) (start, e
 // Citations are located per line rather than searched for across the whole
 // report, so an attestation wrapped across a line break is simply never exempt
 // — the conservative answer, and the one that cannot be arranged deliberately.
-func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string]bool, framingLines map[int]bool) {
+func honestRedRoles(lines []string, declared map[string]envelope.GateRole) (exempt map[string]bool, framingLines map[int]bool) {
 	isAttestation := make(map[int]bool, len(lines))
 	hasGreen := false
 	for i, ln := range lines {
@@ -407,18 +458,22 @@ func honestRedRoles(lines []string, declared map[string]bool) (exempt map[string
 			if c.Verdict.IsKilled() && role != RoleNegativeObservation {
 				continue
 			}
-			// 🎯T722: a -before name or a declared gate-role slot upgrades
-			// the default claimed_pass, not a window that already claims
-			// this citation as a pass. Name-alone with no GREEN in the
-			// report stays a claimed pass (a control is evidence for a
-			// pass; only-RED is still flagged).
+			// 🎯T722 / 🎯T759: a -before name or a declared gate-role slot
+			// upgrades the default claimed_pass, not a window that already
+			// claims this citation as a pass. Name-alone with no GREEN in
+			// the report stays a claimed pass for controls (a control is
+			// evidence for a pass; only-RED is still flagged) — but a
+			// declared mutation / red-demo is the deliverable alone.
 			if role == RoleClaimedPass &&
-				(declared[c.ID] || isControlName(c.Name)) &&
 				!passLaunderingRe.MatchString(framing) &&
 				!hasGreenClaim(framing) {
-				role = RoleControl
+				if r, ok := declared[c.ID]; ok {
+					role = roleFromDeclared(r)
+				} else if isControlName(c.Name) {
+					role = RoleControl
+				}
 			}
-			if role == RoleControl && !hasGreen {
+			if needsCompanionGreen(role) && !hasGreen {
 				continue
 			}
 			if !isHonestNonPass(role) {
@@ -490,7 +545,8 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 	var flags []Flag
 	lines := strings.Split(text, "\n")
 	cited := ParseAttestations(text)
-	exempt, framingLines := honestRedRoles(lines, envelope.ControlIDs(text))
+	declared := envelope.HonestNonPassRoles(text)
+	exempt, framingLines := honestRedRoles(lines, declared)
 	claimsGreen := claimsGreenPass(lower)
 
 	// Attestation checks first: a cited record is the strongest evidence
@@ -563,6 +619,27 @@ func FlagFalseGreen(report string, lookup func(string) (*Record, bool)) []Flag {
 			flags = append(flags, f)
 		}
 		flags = append(flags, emptyPackageFlags(lines, rec, c)...)
+	}
+
+	// 🎯T759 inverse: a declared role that expects RED, cited as GREEN, is
+	// a guard with no teeth. The exemption map does not apply — those ids
+	// are red-roles, and green under them is the defect.
+	for _, c := range cited {
+		r, ok := declared[c.ID]
+		if !ok || !r.ExpectsRed() {
+			continue
+		}
+		if !(c.Verdict.IsGreen() && c.StatusIsZero()) {
+			continue
+		}
+		flags = append(flags, Flag{
+			Kind: FlagAttestationUnexpectedGreen,
+			Detail: fmt.Sprintf(
+				"gate %q is declared role %s (expects RED) but is cited GREEN exit=%s — "+
+					"a mutation/control/red-demo that passes is a guard with no teeth (🎯T759)",
+				c.Name, r.Role, c.Status),
+			Evidence: c.Raw,
+		})
 	}
 
 	if !claimsGreen {

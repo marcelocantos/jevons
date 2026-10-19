@@ -70,6 +70,11 @@ type SpendReport struct {
 	// means these totals are a floor, not a measurement.
 	UnparsedLines int `json:"unparsed_lines,omitempty"`
 
+	// FilesWalked is how many matching session files the scan opened. A
+	// baseline oracle uses this to name a missing or relocated corpus
+	// (🎯T684) instead of reporting a bare numeric mismatch.
+	FilesWalked int `json:"files_walked,omitempty"`
+
 	ByAgent []AgentSpend `json:"by_agent"`
 	Notes   []string     `json:"notes,omitempty"`
 }
@@ -234,7 +239,7 @@ func CollectSpend(args SpendArgs) (SpendReport, error) {
 		}
 		dir := resolve(root)
 		unparsed := 0
-		_, werr := walkMatching(dir, args.Collect.MaxFiles, func(path string, _ fs.DirEntry) bool {
+		files, werr := walkMatching(dir, args.Collect.MaxFiles, func(path string, _ fs.DirEntry) bool {
 			return match(path)
 		}, func(path string) error {
 			sid := sessionID(path)
@@ -249,6 +254,7 @@ func CollectSpend(args SpendArgs) (SpendReport, error) {
 			unparsed += skipped
 			return err
 		})
+		rep.FilesWalked += files
 		if werr != nil {
 			rep.Notes = append(rep.Notes, string(h)+" walk: "+werr.Error())
 		}

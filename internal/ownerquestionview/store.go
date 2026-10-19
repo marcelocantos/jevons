@@ -252,3 +252,67 @@ func (s *Store) OpenVersion(id Identity) (bool, error) {
 	}
 	return false, nil
 }
+
+
+// DefaultSilenceWindow is how long an unanswered question with a default
+// waits before the fleet proceeds on that default (🎯T404.2). Override via
+// config owner_questions.silence_window.
+const DefaultSilenceWindow = 24 * time.Hour
+
+// ProceededOnDefaultNote is the resolution text written when silence
+// retires a question that carried a default.
+const ProceededOnDefaultNote = "moot: proceeded on default"
+
+// DueForSilence reports whether an open question with a default has waited
+// past the silence window. A question with no default is never due — it
+// stays open and keeps its STALLS mark until the owner answers or an
+// explicit resolve retires it.
+func DueForSilence(q Question, now time.Time, window time.Duration) bool {
+	if q.State != Open || strings.TrimSpace(q.Default) == "" {
+		return false
+	}
+	if window <= 0 {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if q.UpdatedAt.IsZero() {
+		return false
+	}
+	return !q.UpdatedAt.After(now.Add(-window))
+}
+
+// RetireOnSilence marks every open question that carries a default and has
+// waited past window as moot: proceeded on default. Questions with no
+// default are left open. Returns the retired rows so the caller can tell
+// each asker to proceed. window <= 0 disables the sweep.
+func (s *Store) RetireOnSilence(now time.Time, window time.Duration) ([]Question, error) {
+	if window <= 0 {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var retired []Question
+	err := s.mutate(func(rows []Question) ([]Question, error) {
+		for i := range rows {
+			if !DueForSilence(rows[i], now, window) {
+				continue
+			}
+			rows[i].State = Moot
+			if rows[i].Review != nil {
+				rows[i].Review.Lifecycle = ownerquestion.Moot
+			}
+			note := ProceededOnDefaultNote + ": " + strings.TrimSpace(rows[i].Default)
+			rows[i].Resolution = note
+			rows[i].UpdatedAt = now
+			retired = append(retired, rows[i])
+		}
+		return rows, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return retired, nil
+}

@@ -441,6 +441,18 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 			}
 		}
 	}
+	// 🎯T785: a fleet mode=interrupt against a seat whose tool is still
+	// fresh is demoted to submit so the running call is not cancelled the
+	// way an owner Esc would be. Owner interrupt (🎯T711) is left alone.
+	mode, _ = s.demoteFleetInterruptForTool(name, origin, mode)
+	// 🎯T785: label a fleet interrupt that still proceeds (stuck tool / no
+	// tool id) so the seat does not invent an owner rejection.
+	text = noteFleetInterruptIfNeeded(origin, mode, text)
+	// 🎯T785: queue a non-owner delivery while a tool_call_id is mid-flight
+	// even when the turn-flight ledger is idle/unknown (stale after bounce).
+	if res, handled, err := s.protectToolInFlight(name, text, requestID, origin, mode, rehydrated); handled {
+		return res, err
+	}
 	// 🎯T899: an urgent sender presses a busy seat instead of waiting for
 	// its turn to end. An explicit mode (steer, interrupt, queue) is the
 	// caller's own choice and is left alone.

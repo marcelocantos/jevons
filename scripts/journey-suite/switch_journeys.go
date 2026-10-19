@@ -114,7 +114,9 @@ func (s *suite) providerSwitchWithBroker() error {
 	}
 	// owner_asked: the journey plays the owner requesting this move (🎯T561
 	// refuses an un-asked leave of a provider with weekly remaining).
-	out, err := s.mcpText("jevons_agent_switch_model", map[string]any{
+	// 🎯T833: a T790 detached switch that outlives the call deadline is in
+	// flight — repeat the exact call until it settles (or the join bound).
+	out, err := s.switchModelWhenSettled(map[string]any{
 		"name": id, "provider": string(to), "owner_asked": true,
 	})
 	if err != nil {
@@ -191,7 +193,7 @@ func (s *suite) stoppedProviderSwitchWithBroker() error {
 	}); err != nil {
 		return fmt.Errorf("stop seat: %w", err)
 	}
-	out, err := s.mcpText("jevons_agent_switch_model", map[string]any{
+	out, err := s.switchModelWhenSettled(map[string]any{
 		"name": id, "provider": string(to), "owner_asked": true,
 	})
 	if err != nil {
@@ -264,6 +266,52 @@ func (s *suite) overseerSwitchWithBroker() error {
 		time.Sleep(10 * time.Second)
 	}
 	return fmt.Errorf("overseer on %s never recalled the codeword after the switch", to)
+}
+
+// switchJoinTimeout bounds how long a detached switch (🎯T790) may take to
+// settle before the journey calls it failed. switchJoinRetry is how often the
+// exact call is repeated while the daemon reports the move still in flight.
+const (
+	switchJoinTimeout = 3 * time.Minute
+	switchJoinRetry   = 2 * time.Second
+)
+
+// isSwitchPending reports whether err is the 🎯T790 pending result of
+// jevons_agent_switch_model: the move is still running in the daemon past the
+// call's deadline. A genuine switch failure is not pending.
+func isSwitchPending(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// MCPToolCall trims the error text, so match the early phrase too.
+	return strings.Contains(msg, "still running past this call's deadline") ||
+		strings.Contains(msg, "CONTINUES in the daemon") || strings.Contains(msg, "T790")
+}
+
+// switchModelWhenSettled calls jevons_agent_switch_model and, when the daemon
+// answers with the 🎯T790 detached-switch pending text, repeats the exact call
+// (which joins the flight or reads the recorded outcome) until it settles or
+// switchJoinTimeout passes. A migrate/switch that genuinely fails still fails
+// the journey at once (🎯T833).
+func (s *suite) switchModelWhenSettled(args map[string]any) (string, error) {
+	deadline := time.Now().Add(switchJoinTimeout)
+	var lastOut string
+	var lastErr error
+	for {
+		out, err := s.mcpText("jevons_agent_switch_model", args)
+		if err == nil {
+			return out, nil
+		}
+		if !isSwitchPending(err) {
+			return out, err
+		}
+		lastOut, lastErr = out, err
+		if !time.Now().Before(deadline) {
+			return lastOut, fmt.Errorf("detached switch never settled within %s: %w", switchJoinTimeout, lastErr)
+		}
+		time.Sleep(switchJoinRetry)
+	}
 }
 
 // switchSettleRetry is how often a switch refused for a running turn is

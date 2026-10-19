@@ -167,6 +167,8 @@ type Server struct {
 	// capacitySource returns the background-work admission picture for
 	// GET /api/capacity (🎯T359). Nil until the governor is wired.
 	capacitySource func() any
+	// fleetHealthSource returns the PO-fanout picture for GET /api/fleet-health (🎯T713).
+	fleetHealthSource func() any
 	// planUsageSource returns the subscription plan-usage picture for
 	// GET /api/plan-usage (🎯T390). Nil until the reader is wired.
 	planUsageSource func() any
@@ -365,6 +367,8 @@ type Server struct {
 	// seatWaitClear withdraws a frontier target's wait for a seat (🎯T980).
 	seatWaitClear func(target string)
 	wedgedReader  func(name string) (string, bool)
+	inertReader   func(name string) (string, bool) // 🎯T754
+	inertObserver func()                           // 🎯T754 sample before list
 	// deadSeatNoter records a dead seat the fleet feed handled (🎯T925).
 	deadSeatNoter  func(name, cause, detail string)
 	massStopReader func() string
@@ -632,6 +636,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/rsi/dispositions", s.handleRSIDispositions)     // 🎯T354: owner-visible coach judgments
 	mux.HandleFunc("GET /api/research/notes", s.handleResearchNotes)         // 🎯T356: durable research notes
 	mux.HandleFunc("GET /api/research/notes/{id}", s.handleResearchNote)     // 🎯T356: one note with revisions
+	mux.HandleFunc("GET /api/repowatch", s.handleRepoWatch)                  // 🎯T1022.2: PO GitHub watch state
 	mux.HandleFunc("GET /api/gates/{id}", s.handleGetGate)                   // 🎯T697: supervisor gate lookup
 	mux.HandleFunc("GET /api/security/status", s.handleSecurityStatus)       // 🎯T335
 	mux.HandleFunc("POST /api/security/confined-exec", s.handleConfinedExec) // 🎯T335 writ vertical
@@ -641,8 +646,9 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("GET /api/frontier/graph", s.handleFrontierGraph)         // 🎯T185: unachieved dependency Mermaid
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
-	mux.HandleFunc("GET /api/capacity", s.handleCapacity)    // 🎯T359: background admission
-	mux.HandleFunc("GET /api/plan-usage", s.handlePlanUsage) // 🎯T390: subscription plan remaining
+	mux.HandleFunc("GET /api/capacity", s.handleCapacity)        // 🎯T359: background admission
+	mux.HandleFunc("GET /api/fleet-health", s.handleFleetHealth) // 🎯T713: PO fan-out via API
+	mux.HandleFunc("GET /api/plan-usage", s.handlePlanUsage)     // 🎯T390: subscription plan remaining
 	mux.HandleFunc("GET /api/plan-usage/thresholds", s.handlePlanUsageThresholds)
 	mux.HandleFunc("GET /api/plan-usage/decisions", s.handlePlanUsageDecisions)
 	mux.HandleFunc("POST /api/plan-usage/auth/recover/{provider}", s.handlePlanDestinationAuthRecover)

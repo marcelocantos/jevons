@@ -255,6 +255,18 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   neither ⇒ mid-turn read (🎯T417) or genuinely lost. File-exists alone says
   nothing about WHICH message landed.
 
+## Guard tests reach production call sites (🎯T419)
+- A green unit test of a silent-failure guard alone is not proof it runs in
+  production. At least one test drives it through its real caller under the
+  gating predicate (call-site reachability / production call site).
+- Pinning instance: MarkDelivered was unit-tested green and unreachable under
+  a reply-completion predicate (retired with handover). Living pin:
+  delivery.RecordPayload via recordDeliveryEvidence under OutcomeBegun
+  (TestT419DeliveryEvidenceReachedThroughBegunSend).
+- Catalogue: internal/guardreach. Audit residuals are reported, not silently
+  fixed: docs/audits/guard-call-site-reachability-2026-10.md.
+
+
 ## Fleet spawn (🎯T78)
 - Create child work via jevons_agent_start / jevons_thread_spawn, not Grok spawn_subagent.
 
@@ -469,6 +481,15 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   rely on hand-pruning zombies from the RHS.
 
 ---
+
+## PO GitHub repo watch (🎯T1022 / 🎯T1022.3)
+- Daemon owns awareness (repo-watch brief) and escalation transport
+  (jevons_repo_escalate → blurter). PO owns judgment. Do not call blurter from the seat.
+- Direct action only for the conservative classes in docs/design/po-github-watch.md:
+  issue duplicate/question/bug_report/spam; PR docs-only or bot minor/patch dep bump with green CI.
+- Merging is Ship-plane opened only for those two PR classes (🎯T1022 grant). 🎯T104 stays in force.
+- Else escalate with assessment + recommended action. Do not auto-mirror every issue into bullseye.
+
 `
 
 // EnsureFleetBrief prefixes text with FleetStandingBrief when this is the

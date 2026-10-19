@@ -29,6 +29,33 @@ func TestIsDailyStateDir(t *testing.T) {
 	}
 }
 
+func TestIsDevelopmentDaemon(t *testing.T) {
+	daily := Default().StateDir
+	isolate := t.TempDir()
+	cases := []struct {
+		name string
+		port int
+		dir  string
+		want bool
+	}{
+		{"development", DevelopmentPort, daily, true},
+		{"development trailing slash", DevelopmentPort, daily + "/", true},
+		{"journey port + daily (refused by T526, not development)", JourneyPort, daily, false},
+		{"journey isolate", JourneyPort, isolate, false},
+		{"ephemeral port + isolate (make test-journey -port 0)", 0, isolate, false},
+		{"development port + isolate state", DevelopmentPort, isolate, false},
+		{"other port + daily", 13716, daily, false},
+		{"empty state", DevelopmentPort, "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsDevelopmentDaemon(c.port, c.dir); got != c.want {
+				t.Fatalf("IsDevelopmentDaemon(%d, %q) = %v, want %v", c.port, c.dir, got, c.want)
+			}
+		})
+	}
+}
+
 func TestRefuseJourneyDevState(t *testing.T) {
 	daily := Default().StateDir
 	isolate := t.TempDir()

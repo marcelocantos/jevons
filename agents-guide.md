@@ -329,6 +329,29 @@ allows it; until then this convention plus jevons MCP tools is the
 enforced path. Brief every new agent with target IDs and ownership —
 never bare "go".
 
+### Guard tests reach production call sites (🎯T419)
+
+A green unit test of a guard alone is not proof the guard runs in production.
+For any guard whose failure is silent (double-seed prevention, delivery
+evidence, exclusive claim, queue resolve, treeguard ledger discard), at least
+one test must drive it through its **real caller under the predicate that gates
+that caller** — not by invoking the guarded function directly.
+
+**Pinning instance (2026-08-10):** `handover.Store.MarkDelivered` had
+`TestStoreMarkDeliveredPreventsDoubleSeeding` green and was never reached:
+`migrate.go` called it only when `Claudia.Deliver` returned nil, and Deliver
+waited on reply completion inside a 10-minute timeout, not turn-begin. A
+delivered seed stayed pending. That path is retired (in-place switch, claudia
+🎯T195). The living successor is `delivery.RecordPayload` via
+`recordDeliveryEvidence` under `OutcomeBegun` —
+`TestT419DeliveryEvidenceReachedThroughBegunSend`.
+
+Standing catalogue and check: `internal/guardreach`. Doctrine ratchet:
+`scripts/docratchet` TestT419. Audit residuals:
+`docs/audits/guard-call-site-reachability-2026-10.md` (report, do not silently
+fix). Related: 🎯T416 / 🎯T417 / 🎯T418.
+
+
 ### Same-repo fan-out: worktrees and one integrator (🎯T254.2)
 
 A work agent started in a repo that already holds another work agent (in
@@ -1277,3 +1300,39 @@ swallowed; the real fix belongs in claudia's readiness detection.
   collector still tails session files for activity; pricing tables will
   improve as Grok usage telemetry is understood.
 - Do not diagnose MCP readiness with bare `curl` — use `lsof` + a tool call.
+
+## PO GitHub repo watch (🎯T1022 / 🎯T1022.3) — hard doctrine
+
+Each product-owner seat watches its GitHub repo. Awareness is daemon-owned
+(`internal/repowatch`, typed `repo-watch` brief via `jevons_repo_watch`);
+**judgment is yours**. Escalation transport is daemon-owned
+(`jevons_repo_escalate` → ownerquestions → blurter) — do **not** call
+`blurter_send` from the seat (non-interactive sessions hit a permission
+prompt).
+
+### "Straightforward and low risk" — direct action only if every line fits
+
+**Issues (direct):**
+- Duplicate of an open target/issue → comment with the reference, close as duplicate.
+- Question answerable from committed docs → answer with a doc link; leave open.
+- Clear, reproducible, well-scoped bug report → mirror via `bullseye_github_sync`,
+  acknowledge on the issue. Fixing it is ordinary Build work under the usual
+  oracle rules; the issue closes when the target achieves.
+- Spam/off-topic → close with a one-line reason.
+
+**Pull requests (direct = review, and merge only where stated):**
+- Docs-only / comments-only / typo fixes: approve and squash-merge **if** CI is
+  green and the diff contains no code or config.
+- Dependency bumps from a bot (dependabot/renovate) with green CI and a
+  **minor/patch** semver delta: approve and squash-merge.
+- Everything else (CI/config-only, any code change, external author outside the
+  two classes above, any PR without green CI, anything touching auth/secrets/
+  release/`.github/`): review with comments if useful, **never merge**, escalate
+  with a recommendation via `jevons_repo_escalate`.
+
+Merging is Ship-plane. 🎯T1022 is the owner opening Ship for **exactly** the
+two merge classes above and nothing else. This is **not** general PR autopilot
+— 🎯T104 stays in force for all other Ship.
+
+Classifier: `repowatch.ClassifyRepoItemRisk` (pure; specimens in package tests).
+Design: `docs/design/po-github-watch.md`.

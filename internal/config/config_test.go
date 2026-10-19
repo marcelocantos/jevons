@@ -958,6 +958,7 @@ func TestInstructionSurfacesDoNotMintDailyUniverse(t *testing.T) {
 	for _, rel := range []struct{ name, path string }{
 		{"AGENTS.md", filepath.Join("..", "..", "AGENTS.md")},
 		{"agents-guide.md", filepath.Join("..", "..", "agents-guide.md")},
+		{"help_agent.md", filepath.Join("..", "cli", "help_agent.md")},
 		{"fleet_brief.go", filepath.Join("..", "mcpserver", "fleet_brief.go")},
 	} {
 		b, err := os.ReadFile(rel.path)

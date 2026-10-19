@@ -257,11 +257,13 @@ ios:
 # `go test ./... | grep -v '^ok'` reports GREP's exit code, not the
 # tests'. gotest keeps the exit code, counts what ran, treats zero tests
 # and build failures as failures, and puts the transcript in a file.
-# How many cores the test suites may take. This machine has 16 and the
-# suite will happily use all of them -- docratchet alone builds whole
-# repos in parallel worktrees and was measured at ~1286% CPU, which makes
-# the machine unusable for whoever is sitting at it. Leave some behind.
+# How many cores the test suites may take (🎯T781). Same single knob as
+# capacity.Policy.HeavySuiteMaxProcs / ~/.jevons/capacity.json
+# "heavy_suite_max_procs": gate and gotest resolve it too, so a fleet seat
+# that runs `bin/gate -- go test` or bare gotest cannot take the whole host
+# the way docratchet did on 2026-09-21 (~1400% CPU). Leave some behind.
 # Override per-run: make test-go TEST_CPUS=16
+# Or set heavy_suite_max_procs in capacity.json for every gate/gotest.
 TEST_CPUS ?= 8
 export GOMAXPROCS = $(TEST_CPUS)
 
@@ -270,7 +272,8 @@ export GOMAXPROCS = $(TEST_CPUS)
 # throwaway worktrees, and each of those children is its own scheduler --
 # so N test binaries x a full build each still saturates the box. -p caps
 # how many package binaries run at once, which is the multiplier that
-# actually hurts. Kept well under TEST_CPUS for that reason.
+# actually hurts. Derived as MaxProcs/2 by the capacity helper; Makefile
+# keeps the matching default so `make test-go` agrees with gate/gotest.
 TEST_PKG_PAR ?= 4
 
 # Per-package `go test` timeout (🎯T808). Go's default is 10m, and
@@ -343,12 +346,23 @@ ui-check-bundle: ui-deps
 # supervisor/*.ini with @REPO@, rendered into Homebrew supervisor.d.
 # Vite :5173 is not a standing program — make ui-dev is opt-in HMR.
 # jevonsd-install (launchd KeepAlive) remains until SUPERVISOR_TAKEOVER=1.
-.PHONY: supervisor-install supervisor-status
+.PHONY: supervisor-install supervisor-status supervisor-interactive supervisor-priority-check
 supervisor-install: bin/jevonsd
 	supervisor/install.sh
 
 supervisor-status:
 	-supervisorctl status jevonsd
+
+# 🎯T779: raise supervisord (and every child) to Interactive-class PRI.
+# Default make target only writes the LaunchAgent key; --apply bounces
+# the job (restarts every supervised service) so live PRI takes effect.
+supervisor-interactive:
+	chmod +x supervisor/ensure-interactive-priority.sh supervisor/check-control-plane-priority.sh
+	supervisor/ensure-interactive-priority.sh
+
+supervisor-priority-check:
+	chmod +x supervisor/check-control-plane-priority.sh
+	supervisor/check-control-plane-priority.sh
 
 # Daily UI LaunchAgents (legacy 🎯T540.4 path). Prefer make supervisor-install.
 UI_DAEMON_LABEL := com.marcelocantos.jevons-ui

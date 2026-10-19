@@ -413,6 +413,13 @@ func (a *Authority) decay(s State) State {
 	if stale(phaseSignal) {
 		s.Phase = turnev.PhaseUnknown
 	}
+	// 🎯T783: a fresh InFlight=Yes claim is phase truth. Phase can go stale
+	// while the broker feed keeps refreshing flight every second; without
+	// this, Get served phase=unknown/idle against InFlight=Yes and the row
+	// lied while Migrate refused the turn.
+	if s.InFlight == Yes && !stale(flightSignal) {
+		s.Phase = turnev.PhaseWorking
+	}
 	// LastActivity is historical evidence, not a current condition.
 	// Lack of later activity does not erase its timestamp.
 	if stale(statusSignal) {

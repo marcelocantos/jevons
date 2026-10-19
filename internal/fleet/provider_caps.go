@@ -4,6 +4,7 @@
 package fleet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -170,6 +171,33 @@ func reconcileAfterSwitch(reg *claudia.Registry, name string, from claudia.Provi
 	return nil
 }
 
+// ScrubProviderCaps drops, in place, every setting def's current provider
+// refuses, and describes each drop. A setting that is a restriction the
+// provider cannot enforce leaves def untouched and wraps
+// ErrProviderSwitchWouldWeaken. Callers that just changed the provider
+// (agent_start cross-provider, SwitchModel) run this before persisting so
+// a codex sandbox_policy does not fail closed on claude (🎯T1032).
+func ScrubProviderCaps(def *claudia.AgentDef) (dropped []string, err error) {
+	if def == nil {
+		return nil, nil
+	}
+	return dropStaleProviderCaps(def)
+}
+
+// NoteProviderCapDrop records a visible drop of provider-native settings
+// (CapDrop / structured log). how is a short verb such as "start" or "switch".
+func NoteProviderCapDrop(name, from, to, how string, dropped []string) {
+	if name == "" || len(dropped) == 0 {
+		return
+	}
+	if strings.TrimSpace(how) == "" {
+		how = "reconcile"
+	}
+	noteCapDrop(name, fmt.Sprintf("%s→%s (%s): dropped %s",
+		providerLabel(claudia.Provider(from)), providerLabel(claudia.Provider(to)),
+		how, strings.Join(dropped, "; ")))
+}
+
 // ReconcileProviderCaps repairs a registered def that already contradicts
 // its provider — minted before this guard, or switched before switches
 // dropped what the destination refuses. It re-registers
@@ -234,9 +262,22 @@ var capDrops sync.Map // name -> string
 func noteRehydrate(name string, err error) {
 	if err == nil {
 		rehydrateFailures.Delete(name)
-	} else {
-		rehydrateFailures.Store(name, err.Error())
-		logPlanAuthLoss(name, err)
+		saveRehydrateFailures()
+		return
+	}
+	next := err.Error()
+	prior := ""
+	if v, ok := rehydrateFailures.Load(name); ok {
+		prior, _ = v.(string)
+	}
+	kept := preferRehydrateFailure(prior, next)
+	rehydrateFailures.Store(name, kept)
+	// Log the refusal that just arrived, even when we keep the prior on the
+	// row — the daemon log still needs the generic retry for attribution.
+	logPlanAuthLoss(name, err)
+	if kept != next && prior != "" {
+		slog.Info("rehydrate failure: kept more specific prior auth cause",
+			"seat", name, "prior", prior, "ignored", next)
 	}
 	saveRehydrateFailures()
 }
@@ -278,15 +319,24 @@ func CapDrop(name string) string {
 // then launches, explains a capability refusal, and records the outcome for
 // RehydrateHealth.
 func LaunchReconciled(reg *claudia.Registry, name string) (*claudia.Agent, error) {
+	return LaunchReconciledContext(context.Background(), reg, name)
+}
+
+// LaunchReconciledContext is LaunchReconciled with cooperative startup
+// cancellation (🎯T541.2). Nil ctx is treated as Background.
+func LaunchReconciledContext(ctx context.Context, reg *claudia.Registry, name string) (*claudia.Agent, error) {
 	defer seatstate.ObserveRegistrySeat(reg, name)
 	if reg == nil {
 		return nil, fmt.Errorf("launch %q: no agent registry", name)
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if err := ReconcileProviderCaps(reg, name); err != nil {
 		noteRehydrate(name, err)
 		return nil, err
 	}
-	agent, err := reg.Launch(name)
+	agent, err := reg.LaunchContext(ctx, name)
 	err = ExplainLaunchCapError(reg.Def(name), err)
 	noteRehydrate(name, err)
 	return agent, err

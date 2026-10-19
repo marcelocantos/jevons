@@ -597,3 +597,24 @@ func CorrectionNotice(text string) string {
 		"Reminder: a silent-decision confidence is a float in the range 0 to 1 " +
 		"(e.g. confidence=0.3), least-confident first — not a 1-10 score or an integer rank."
 }
+
+// MissingQuestionDefaultNotice is what the daemon sends BACK TO THE AUTHOR
+// when a valid owner-decision block states no question-default (🎯T404.2).
+// The question is still recorded and paged (refusing it would be the 🎯T378
+// failure); the notice names the slot so the author can resend with a
+// default rather than leaving the owner as a hard stall. Returns "" when
+// the text is not a well-formed owner-decision block, or when it already
+// carries a default.
+func MissingQuestionDefaultNotice(text string) string {
+	m, err := Parse(text)
+	if m == nil || err != nil || m.Kind != KindFinishReport || m.BlockClass != BlockOwnerDecision {
+		return ""
+	}
+	if strings.TrimSpace(m.QuestionDefault) != "" {
+		return ""
+	}
+	return "⚠ Your finish-report owner-decision block has no question-default (🎯T404.2). " +
+		"Name the slot `jevons: question-default …` with what you will do if the owner never answers, " +
+		"so silence degrades into a decision rather than a stall. The question was still recorded and paged " +
+		"(dropping it would be the 🎯T378 failure); a resend with a default supersedes this version."
+}

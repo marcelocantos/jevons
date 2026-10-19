@@ -1350,3 +1350,155 @@ func TestT5625MuxSendErrorEchoesCorrelationID(t *testing.T) {
 		t.Fatalf("error id = %+v, want s8-def", body["id"])
 	}
 }
+
+// 🎯T64.3: a full send buffer must not mark the event sent — a later fan can retry.
+func TestT643DroppedEnqueueDoesNotMarkSent(t *testing.T) {
+	h := newMuxHub()
+	// Buffer of 1: first successful put fills it; second put cannot enqueue.
+	w := &muxWatch{
+		visible:    muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		sub:        muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		subscribed: true,
+		sent:       map[string]struct{}{},
+	}
+	sess := &muxSession{send: make(chan []byte, 1), transcripts: map[string]*muxWatch{"jevons": w}}
+	h.add(sess)
+
+	h.fanTranscript("jevons", `{"type":"assistant","stream_id":"s1","message":{"content":[{"type":"text","text":"Checking."}]}}`)
+	if !w.alreadySent("e:1") {
+		t.Fatal("first put must mark e:1 sent when enqueue succeeds")
+	}
+	select {
+	case got := <-sess.send:
+		var env muxEnvelope
+		if err := json.Unmarshal(got, &env); err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			ID   string `json:"id"`
+			Op   string `json:"op"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(env.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.ID != "e:1" || body.Op != "put" || body.Text != "Checking." {
+			t.Fatalf("first live put body=%+v", body)
+		}
+	default:
+		t.Fatal("first put missing from send queue")
+	}
+
+	// Fill the buffer so the next fan cannot enqueue.
+	sess.send <- []byte(`{"fill":true}`)
+	// Clear sent so a re-put of a new event is the probe (e:2 tool).
+	// Use a fresh assistant on a new stream that would be e:2... actually
+	// next fold after Checking. with a tool is e:2 KindSteps.
+	delete(w.sent, "e:1") // not needed for tool path; tool is a new id
+
+	h.fanTranscript("jevons", `{"type":"assistant","stream_id":"s1","message":{"content":[{"type":"tool_use","name":"Read","id":"call_1"}]}}`)
+	if w.alreadySent("e:2") {
+		t.Fatal("dropped enqueue must not mark e:2 sent")
+	}
+	// Drain the filler; channel is free again.
+	<-sess.send
+	// Re-fan the same steps event by applying a stamp-less second path:
+	// force fanFoldsLocked with the current cache event so the put retries.
+	h.mu.Lock()
+	evs := h.events["jevons"]
+	var retry []muxwin.LiveFold
+	for _, e := range evs {
+		if e.ID == "e:2" {
+			retry = append(retry, muxwin.LiveFold{Event: e, Op: "put"})
+		}
+	}
+	h.fanFoldsLocked("jevons", retry)
+	h.mu.Unlock()
+	if !w.alreadySent("e:2") {
+		t.Fatal("retry after free buffer must mark e:2 sent")
+	}
+	select {
+	case got := <-sess.send:
+		if !strings.Contains(string(got), `"id":"e:2"`) {
+			t.Fatalf("retry payload=%s", got)
+		}
+	default:
+		t.Fatal("retry put missing after buffer freed")
+	}
+}
+
+// 🎯T64.3: live fan put→tool→append keeps one assistant bubble and carries text.
+func TestT643LiveFanPutToolAppendCarriesText(t *testing.T) {
+	h := newMuxHub()
+	w := &muxWatch{
+		visible:    muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		sub:        muxwin.Resolved{Lo: 1, Hi: 0, Following: true},
+		subscribed: true,
+		sent:       map[string]struct{}{},
+	}
+	sess := &muxSession{send: make(chan []byte, 8), transcripts: map[string]*muxWatch{"jevons": w}}
+	h.add(sess)
+
+	readFrame := func() (id, op, text string) {
+		t.Helper()
+		select {
+		case got := <-sess.send:
+			var env muxEnvelope
+			if err := json.Unmarshal(got, &env); err != nil {
+				t.Fatal(err)
+			}
+			var body struct {
+				ID   string `json:"id"`
+				Op   string `json:"op"`
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(env.Body, &body); err != nil {
+				t.Fatal(err)
+			}
+			return body.ID, body.Op, body.Text
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for live frame")
+			return "", "", ""
+		}
+	}
+
+	h.fanTranscript("jevons", `{"type":"assistant","stream_id":"s1","message":{"content":[{"type":"text","text":"Checking."}]}}`)
+	id, op, text := readFrame()
+	if id != "e:1" || op != "put" || text != "Checking." {
+		t.Fatalf("first put id=%s op=%s text=%q", id, op, text)
+	}
+
+	h.fanTranscript("jevons", `{"type":"assistant","stream_id":"s1","message":{"content":[{"type":"tool_use","name":"Read","id":"c1"}]}}`)
+	id, op, text = readFrame()
+	if id != "e:2" || op != "put" {
+		t.Fatalf("tool put id=%s op=%s", id, op)
+	}
+
+	h.fanTranscript("jevons", `{"type":"assistant","stream_id":"s1","message":{"content":[{"type":"text","text":" Yes."}]}}`)
+	id, op, text = readFrame()
+	if id != "e:1" || op != "append" || text != " Yes." {
+		t.Fatalf("append id=%s op=%s text=%q want e:1 append Yes.", id, op, text)
+	}
+
+	h.mu.Lock()
+	evs := h.events["jevons"]
+	h.mu.Unlock()
+	asst := 0
+	for _, e := range evs {
+		if e.Kind == muxwin.KindAssistant {
+			asst++
+			if proseFromEventBody(e.Body) != "Checking. Yes." {
+				t.Fatalf("joined bubble %q", proseFromEventBody(e.Body))
+			}
+		}
+	}
+	if asst != 1 {
+		t.Fatalf("assistant bubbles=%d want 1", asst)
+	}
+}
+
+func proseFromEventBody(body json.RawMessage) string {
+	var ev map[string]any
+	_ = json.Unmarshal(body, &ev)
+	return proseFromEvent(ev)
+}

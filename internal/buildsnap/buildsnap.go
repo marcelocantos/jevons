@@ -35,6 +35,11 @@
 // build failure / install failure, each with a different correct response).
 // Both belong in a program per the shared bash doctrine, which is also why the
 // restart lock became cmd/runlock.
+//
+// 🎯T655: when the ambient Xcode developer dir refuses a cgo build because
+// the license is unaccepted (exit 69), runMake retries once under
+// DEVELOPER_DIR=/Library/Developer/CommandLineTools, or raises a
+// blurter-visible owner notice naming `sudo xcodebuild -license`.
 package buildsnap
 
 import (
@@ -63,6 +68,14 @@ type Config struct {
 	Dest string
 	// Log receives progress lines. nil discards them.
 	Log func(string)
+	// CLTDir overrides the Command Line Tools developer directory used as
+	// the 🎯T655 Xcode-license fallback. Empty means
+	// /Library/Developer/CommandLineTools. Tests point it at a fixture.
+	CLTDir string
+	// NotifyLicense, when set, receives the owner-facing Xcode-license
+	// notice instead of the default blurter send. Tests capture it;
+	// production leaves it nil.
+	NotifyLicense func(message string)
 }
 
 // Result reports what was built, for the caller's log and for 🎯T194 evidence.
@@ -237,15 +250,89 @@ func usable(dir string) bool {
 // runMake builds inside the snapshot. Output is streamed to the caller's
 // stderr so a compile error is read in the restart log, where the operator is
 // already looking.
+//
+// 🎯T655: when the build fails because the Xcode license is unaccepted
+// (exit 69 / Apple's license prose), retry once with
+// DEVELOPER_DIR=<Command Line Tools>. CLT builds do not need the Xcode.app
+// license. If the fallback is unavailable or also fails, raise a
+// blurter-visible owner notice naming `sudo xcodebuild -license` and
+// return the failure — never activate a stale binary under a "success".
 func runMake(cfg Config) error {
-	cmd := exec.Command("make", "-C", cfg.SnapDir, cfg.Target)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
+	out, err := runMakeOnce(cfg, nil)
+	if err == nil {
+		return nil
+	}
+	if !isXcodeLicenseFailure(out, err) {
 		return fmt.Errorf("build %s in snapshot %s: %w", cfg.Target, cfg.SnapDir, err)
 	}
-	return nil
+
+	clt := cltDir(cfg)
+	if !cltUsable(clt) {
+		detail := fmt.Sprintf("Command Line Tools not found at %s.", clt)
+		notifyXcodeLicense(cfg, detail)
+		return fmt.Errorf("build %s in snapshot %s: Xcode license error and no CLT fallback at %s: %w\n%s",
+			cfg.Target, cfg.SnapDir, clt, err, licenseNoticeBody)
+	}
+
+	cfg.logf("🎯T655 Xcode license unaccepted; retrying with DEVELOPER_DIR=%s", clt)
+	out2, err2 := runMakeOnce(cfg, []string{"DEVELOPER_DIR=" + clt})
+	if err2 == nil {
+		cfg.logf("🎯T655 build succeeded under Command Line Tools")
+		return nil
+	}
+	notifyXcodeLicense(cfg, fmt.Sprintf("CLT fallback at %s also failed.", clt))
+	return fmt.Errorf("build %s in snapshot %s: Xcode license error; CLT fallback (%s) also failed: %w\n%s\nfirst attempt: %v\n%s",
+		cfg.Target, cfg.SnapDir, clt, err2, licenseNoticeBody, err, strings.TrimSpace(out+"\n"+out2))
+}
+
+// runMakeOnce runs make once, optionally extending the environment.
+// stdout/stderr are teed to the process stderr and captured for license
+// detection. envExtra entries are KEY=VALUE strings, applied on top of
+// the process environment (and replacing any existing KEY).
+func runMakeOnce(cfg Config, envExtra []string) (string, error) {
+	cmd := exec.Command("make", "-C", cfg.SnapDir, cfg.Target)
+	var buf strings.Builder
+	// MultiWriter keeps the restart log readable while we still see the
+	// license prose for classification.
+	sink := io.MultiWriter(os.Stderr, &buf)
+	cmd.Stdout = sink
+	cmd.Stderr = sink
+	cmd.Env = mergeEnv(os.Environ(), envExtra)
+	err := cmd.Run()
+	return buf.String(), err
+}
+
+// mergeEnv returns base with extra KEY=VALUE pairs applied. A key in
+// extra replaces any existing entry of the same key in base; other base
+// entries are kept. extra nil is a pure copy of base.
+func mergeEnv(base, extra []string) []string {
+	if len(extra) == 0 {
+		out := make([]string, len(base))
+		copy(out, base)
+		return out
+	}
+	index := make(map[string]int, len(base))
+	out := make([]string, len(base))
+	copy(out, base)
+	for i, kv := range out {
+		if k, _, ok := strings.Cut(kv, "="); ok {
+			index[k] = i
+		}
+	}
+	for _, kv := range extra {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			out = append(out, kv)
+			continue
+		}
+		if i, hit := index[k]; hit {
+			out[i] = kv
+			continue
+		}
+		index[k] = len(out)
+		out = append(out, kv)
+	}
+	return out
 }
 
 // install copies src over dst through a temporary file in dst's directory and

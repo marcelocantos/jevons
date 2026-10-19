@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/seatstate"
+	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T416 — what a send DID, in four answers rather than two.
@@ -304,14 +305,16 @@ func (s *Server) observeTurnFlight(name string, f TurnFlight) {
 	}
 	switch f {
 	case FlightInFlight:
+		// 🎯T783: InFlight and Phase move together — a flight claim without a
+		// phase lift is how the row said idle while sends refused "turn in flight".
 		s.Seats().Observe(seatstate.Observation{
 			Name: name, Alive: seatstate.Yes, InFlight: seatstate.Yes,
-			QueueDepth: seatstate.QueueUnknown,
-			Source:     "turn.flight", At: time.Now(),
+			Phase: turnev.PhaseWorking, QueueDepth: seatstate.QueueUnknown,
+			Source: "turn.flight", At: time.Now(),
 		})
 	case FlightIdle:
 		s.Seats().Observe(seatstate.Observation{
-			Name: name, InFlight: seatstate.No,
+			Name: name, InFlight: seatstate.No, Phase: turnev.PhaseIdle,
 			QueueDepth: seatstate.QueueUnknown,
 			Source:     "turn.flight", At: time.Now(),
 		})

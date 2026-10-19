@@ -4,10 +4,10 @@
 package harnessusage
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +28,14 @@ import (
 // the original figures exactly. A measurement that disagrees with its
 // reference is a bug in one of them; moving the reference to match is how
 // you lose the ability to tell which.
+//
+// 🎯T684 (2026-10-14): the oracle no longer reads the live ~/.grok tree.
+// That tree is a moving target — harness layout changes and session
+// rotation silently emptied the historical window, and the failure mode
+// looked like a CollectSpend regression (turns=2 want 1070). The durable
+// corpus under testdata/baseline/grok/ is the standing reference: it is
+// committed, layout-stable, and produces the original 🎯T392 aggregates.
+// A missing or near-empty corpus fails naming the gap; it never skips.
 var (
 	baselineSince = time.Date(2026, 8, 8, 1, 53, 0, 0, time.UTC)
 	baselineUntil = time.Date(2026, 8, 9, 11, 53, 0, 0, time.UTC)
@@ -58,6 +66,23 @@ func writeJSONL(t *testing.T, path string, lines ...string) {
 func grokTurn(session string, ts int64, in, out, cached, calls int, stop string) string {
 	return fmt.Sprintf(`{"timestamp":%d,"method":"_x.ai/session/update","params":{"sessionId":%q,"update":{"sessionUpdate":"turn_completed","prompt_id":"p%d","stop_reason":%q,"usage":{"inputTokens":%d,"outputTokens":%d,"cachedReadTokens":%d,"modelCalls":%d,"costUsdTicks":1,"modelUsage":{"grok-4.5-build":{"totalTokens":%d}}}}}}`,
 		ts, session, ts, stop, in, out, cached, calls, in+out)
+}
+
+// baselineGrokRoot returns the committed durable corpus (🎯T684).
+// Resolved from this source file so the test does not depend on cwd.
+func baselineGrokRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed — cannot locate baseline corpus")
+	}
+	root := filepath.Join(filepath.Dir(file), "testdata", "baseline", "grok")
+	sessions := resolveGrokSessions(root)
+	if !isDir(sessions) {
+		t.Fatalf("baseline corpus missing: resolved root=%s sessions=%s — the durable 🎯T684 fixture under internal/harnessusage/testdata/baseline/grok must be present; a CollectSpend regression is not diagnosable without it",
+			root, sessions)
+	}
+	return root
 }
 
 // The decomposition is the product: turns x calls x context. A report that
@@ -146,44 +171,26 @@ func TestCollectSpendTreatsMissingCallCountAsOne(t *testing.T) {
 // until CollectSpend reproduces the numbers T392 was written against, no
 // post-change measurement it produces is trustworthy.
 //
-// It reads the owner's real Grok session logs, so it skips where those are
-// absent (CI, a fresh clone) rather than failing — but it must never pass
-// vacuously, so a present-but-empty root is a failure, not a skip.
-//
-// Grok session files rotate off disk over time. When the frozen window no
-// longer contains enough turns to reproduce the baseline, skip and name the
-// gap rather than report turns=2 want 1070 (🎯T680).
+// 🎯T684: reads the committed corpus under testdata/baseline/grok, never
+// the live ~/.grok tree. Missing or near-empty corpus fails naming the
+// gap (root, window, turn count); it does not skip and it does not look
+// like a collector numeric mismatch.
 func TestCollectSpendReproducesFrozenBaseline(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home dir: %v", err)
-	}
-	root := filepath.Join(home, ".grok")
-	if _, err := os.Stat(resolveGrokSessions(root)); err != nil {
-		t.Skipf("no Grok session logs on this machine: %v", err)
-	}
+	root := baselineGrokRoot(t)
 
 	rep, err := CollectSpend(SpendArgs{
-		Collect:        CollectArgs{Roots: map[Harness]string{HarnessGrok: root}},
-		Since:          baselineSince,
-		Until:          baselineUntil,
-		Harnesses:      []Harness{HarnessGrok},
-		AgentBySession: loadBaselineAgents(t),
-		Coordinators:   BaselineCoordinators,
+		Collect:      CollectArgs{Roots: map[Harness]string{HarnessGrok: root}},
+		Since:        baselineSince,
+		Until:        baselineUntil,
+		Harnesses:    []Harness{HarnessGrok},
+		Coordinators: BaselineCoordinators,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Turns == 0 {
-		t.Fatal("no turns in the baseline window — the walk found nothing, which is a broken oracle, not a clean run")
-	}
+	assertBaselineCorpusSane(t, root, rep)
+
 	if rep.Turns != baselineTurns {
-		// Less than half the frozen turn count means the historical session
-		// files for this window are gone — a skip, not a collector regression.
-		if rep.Turns < baselineTurns/2 {
-			t.Skipf("Grok session logs for frozen baseline window %s..%s contain %d turns (want %d) — historical session data no longer on this machine",
-				baselineSince.Format(time.RFC3339), baselineUntil.Format(time.RFC3339), rep.Turns, baselineTurns)
-		}
 		t.Errorf("turns=%d want %d", rep.Turns, baselineTurns)
 	}
 	if rep.ModelCalls != baselineCalls {
@@ -197,6 +204,112 @@ func TestCollectSpendReproducesFrozenBaseline(t *testing.T) {
 	}
 	if rep.CancelledTurns != baselineCancelled {
 		t.Errorf("cancelled turns=%d want %d", rep.CancelledTurns, baselineCancelled)
+	}
+}
+
+// 🎯T684: a near-empty walk is reported as a broken oracle (names root,
+// window, counts), never as "turns=2 want 1070".
+func TestT684NearEmptyCorpusIsNamedBrokenOracle(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "grok")
+	writeJSONL(t, filepath.Join(root, "sessions", "thin", "updates.jsonl"),
+		grokTurn("thin", 1786154000, 1000, 10, 0, 1, "end_turn"),
+		grokTurn("thin", 1786154100, 1000, 10, 0, 1, "end_turn"),
+	)
+	rep, err := CollectSpend(SpendArgs{
+		Collect:   CollectArgs{Roots: map[Harness]string{HarnessGrok: root}},
+		Since:     baselineSince,
+		Until:     baselineUntil,
+		Harnesses: []Harness{HarnessGrok},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Turns != 2 {
+		t.Fatalf("fixture setup: turns=%d want 2", rep.Turns)
+	}
+	// Drive the guard through the pure message helper.
+	got := baselineCorpusSaneMessage(root, rep)
+	if got == "" {
+		t.Fatal("near-empty corpus produced no broken-oracle message")
+	}
+	resolved := resolveGrokSessions(root)
+	for _, want := range []string{
+		resolved,
+		"near-empty",
+		fmt.Sprintf("files=%d", rep.FilesWalked),
+		fmt.Sprintf("turns=%d", rep.Turns),
+		fmt.Sprintf("%d", baselineTurns),
+		"🎯T684",
+		"broken oracle",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("broken-oracle message %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "want 1070") && !strings.Contains(got, "broken oracle") {
+		t.Errorf("message still reads as a bare numeric mismatch: %q", got)
+	}
+}
+
+// 🎯T684: an empty walk is the same class of failure as near-empty.
+func TestT684EmptyCorpusIsNamedBrokenOracle(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "grok")
+	if err := os.MkdirAll(filepath.Join(root, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := CollectSpend(SpendArgs{
+		Collect:   CollectArgs{Roots: map[Harness]string{HarnessGrok: root}},
+		Since:     baselineSince,
+		Until:     baselineUntil,
+		Harnesses: []Harness{HarnessGrok},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Turns != 0 {
+		t.Fatalf("fixture setup: turns=%d want 0", rep.Turns)
+	}
+	got := baselineCorpusSaneMessage(root, rep)
+	if got == "" {
+		t.Fatal("empty corpus produced no broken-oracle message")
+	}
+	resolved := resolveGrokSessions(root)
+	for _, want := range []string{
+		resolved,
+		"empty",
+		"files=0",
+		"turns=0",
+		"🎯T684",
+		"broken oracle",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("broken-oracle message %q missing %q", got, want)
+		}
+	}
+}
+
+// baselineCorpusSaneMessage is the pure form of assertBaselineCorpusSane:
+// returns the failure text, or "" when the corpus is sane. Tests assert
+// on the text; the production path calls t.Fatalf with it.
+func baselineCorpusSaneMessage(root string, rep SpendReport) string {
+	sessions := resolveGrokSessions(root)
+	if rep.Turns == 0 {
+		return fmt.Sprintf("baseline corpus empty: resolved root=%s window=%s..%s files=%d turns=0 (want %d) — broken oracle, not a CollectSpend regression (🎯T684)",
+			sessions, baselineSince.Format(time.RFC3339), baselineUntil.Format(time.RFC3339), rep.FilesWalked, baselineTurns)
+	}
+	if rep.Turns < baselineTurns/2 {
+		return fmt.Sprintf("baseline corpus near-empty: resolved root=%s window=%s..%s files=%d turns=%d (want %d) — broken oracle, not a CollectSpend regression (🎯T684)",
+			sessions, baselineSince.Format(time.RFC3339), baselineUntil.Format(time.RFC3339), rep.FilesWalked, rep.Turns, baselineTurns)
+	}
+	return ""
+}
+
+func assertBaselineCorpusSane(t *testing.T, root string, rep SpendReport) {
+	t.Helper()
+	if msg := baselineCorpusSaneMessage(root, rep); msg != "" {
+		t.Fatal(msg)
 	}
 }
 
@@ -240,26 +353,3 @@ func TestCollectSpendWalksDatedSpool(t *testing.T) {
 	}
 }
 
-func loadBaselineAgents(t *testing.T) map[string]string {
-	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".jevons", "agents.json"))
-	if err != nil {
-		return nil
-	}
-	var defs []struct {
-		Name      string `json:"name"`
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal(data, &defs); err != nil {
-		return nil
-	}
-	m := map[string]string{}
-	for _, d := range defs {
-		m[d.SessionID] = d.Name
-	}
-	return m
-}
