@@ -10,24 +10,15 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// looksLikePOOrBoss is a thin name heuristic for multi-slice coordinators
-// that should fan out (🎯T111.4). Does not ban legitimate solo agents.
-func looksLikePOOrBoss(name string) bool {
-	n := strings.ToLower(strings.TrimSpace(name))
-	if n == "" {
+// purposeCoordinator reports a declared product-owner or boss purpose
+// (🎯T111.4). The seat name does not decide.
+func purposeCoordinator(purpose string) bool {
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case purposeProductOwner, "boss":
+		return true
+	default:
 		return false
 	}
-	if strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") {
-		return true
-	}
-	if strings.Contains(n, "-boss") || strings.Contains(n, "_boss") || strings.HasSuffix(n, "boss") {
-		return true
-	}
-	// Common product-owner handles.
-	if strings.HasSuffix(n, "-owner") || n == "po" {
-		return true
-	}
-	return false
 }
 
 // FormatFanOutHints returns an oversight note when PO/boss agents have
@@ -42,7 +33,7 @@ func FormatFanOutHints(reg *claudia.Registry, overseerName string) string {
 		if d.Name == overseerName {
 			continue
 		}
-		if !looksLikePOOrBoss(d.Name) {
+		if !purposeCoordinator(d.Purpose) {
 			continue
 		}
 		// Children = agents whose Parent is this name.

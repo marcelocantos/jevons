@@ -5,7 +5,6 @@ package ownergate
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -72,12 +71,36 @@ const (
 	MarkerPreserved = "PRESERVED ATTESTATION:"
 )
 
-// dateRe matches the ISO day stamps bullseye writes into its audit lines.
-var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+// isoDate reports a YYYY-MM-DD token. The shape is the date, not a search
+// for the word that introduces it.
+func isoDate(s string) bool {
+	if len(s) != len("2006-01-02") {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 4, 7:
+			if c != '-' {
+				return false
+			}
+		default:
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
 
-// achievedAuditRe matches the audit paragraph bullseye appends on achieve:
-// "Achieved 2026-09-21: <attestation>".
-var achievedAuditRe = regexp.MustCompile(`(?m)^Achieved \d{4}-\d{2}-\d{2}: `)
+// achievedField is the declared date slot on a reopen line. Empty when the
+// row had no recorded achieved date.
+func (r Reopen) achievedField() string {
+	d := strings.TrimSpace(r.AchievedOn)
+	if isoDate(d) {
+		return "achieved=" + d
+	}
+	return "achieved="
+}
 
 // Reopen is one achieved row about to be reopened to hold a gate.
 type Reopen struct {
@@ -112,14 +135,14 @@ func (r Reopen) Reason() (string, error) {
 		by = "unknown"
 	}
 	text := fmt.Sprintf(
-		"%s — %s recorded the 🎯T449 owner gate on %s against a row achieved %s (🎯T728). "+
+		"%s %s — %s recorded the 🎯T449 owner gate on %s against a row achieved %s (🎯T728). "+
 			"The code landed and gated; the sole residue is the owner's taste verdict, which an achieved row cannot hold: "+
 			"bullseye refuses `owner` on a terminal status and refuses content edits to an achieved row, so the reopen it "+
 			"documents is the ceremony. This is not a retraction of the work — it records that the closure was premature "+
 			"while the owner's answer is outstanding. Owner gate: %s Evidence: %s "+
 			"On accept (`jevons_owner_gate op=answer verdict=accept`) the row is re-achieved with the attestation below "+
 			"restored verbatim; on reject it stays active and work resumes from the landed commit.",
-		MarkerReopened, by, LedgerDay(when), r.achievedPhrase(),
+		MarkerReopened, r.achievedField(), by, LedgerDay(when), r.achievedPhrase(),
 		ensureSentence(strings.TrimSpace(r.Record.Question)),
 		ensureSentence(strings.TrimSpace(r.Record.Evidence)))
 	return withPreserved(text, r.Attestation), nil
@@ -136,11 +159,11 @@ func (r Reopen) GateReason() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text := fmt.Sprintf("%s %s — this row was achieved %s and was reopened to hold this gate (🎯T728). "+
+	text := fmt.Sprintf("%s\n%s %s — this row was achieved %s and was reopened to hold this gate (🎯T728). "+
 		"Answer it with `jevons_owner_gate op=answer`: accept re-achieves the row and restores the attestation carried "+
 		"below; reject leaves it active and work resumes from the landed commit. This is not unstarted work, and it must "+
 		"not be hand-achieved while the gate is open.",
-		base, MarkerReopened, r.achievedPhrase())
+		base, MarkerReopened, r.achievedField(), r.achievedPhrase())
 	return withPreserved(text, r.Attestation), nil
 }
 
@@ -164,27 +187,29 @@ func withPreserved(text, attestation string) string {
 
 // IsReopenedGate reports whether an assignment reason was written by the reopen
 // ceremony — that is, whether answering it has an achievement to put back.
-// Read before the answer half decides what accept means.
+// Read before the answer half decides what accept means. The marker opens a
+// line. A sentence that uses the same words later is not the ceremony.
 func IsReopenedGate(reason string) bool {
-	return strings.Contains(strings.ToUpper(reason), MarkerReopened)
+	return opensWithMarker(reason, MarkerReopened)
 }
 
-// ReopenedAchievedDate recovers the date the row had been achieved from a
-// reopened gate's reason. Empty when the reason does not carry one, which the
-// callers render as unrecorded rather than guessing.
+// ReopenedAchievedDate recovers the declared achieved= date from a line that
+// opens with the reopen marker. Empty when that slot is absent or not a date.
+// Prose that says the row was achieved is not the slot.
 func ReopenedAchievedDate(reason string) string {
-	const needle = "ACHIEVED "
-	upper := strings.ToUpper(reason)
-	for i := strings.Index(upper, needle); i >= 0; {
-		rest := strings.TrimLeft(reason[i+len(needle):], " ")
-		if d := dateRe.FindString(rest); d != "" {
-			return d
+	rest, ok := markerRemainder(reason, MarkerReopened)
+	if !ok {
+		return ""
+	}
+	for _, field := range strings.Fields(rest) {
+		val, found := strings.CutPrefix(field, "ACHIEVED=")
+		if !found {
+			continue
 		}
-		next := strings.Index(upper[i+1:], needle)
-		if next < 0 {
-			break
+		if isoDate(val) {
+			return val
 		}
-		i += 1 + next
+		return ""
 	}
 	return ""
 }
@@ -207,17 +232,48 @@ func PreservedAttestation(text string) string {
 	return ""
 }
 
+// splitAchievedStamp reports the body after a line that opens with the
+// declared stamp: the word Achieved and a YYYY-MM-DD date. "Achieved by …"
+// is not a stamp.
+func splitAchievedStamp(trim string) (string, bool) {
+	fields := strings.Fields(trim)
+	if len(fields) < 2 || fields[0] != "Achieved" {
+		return "", false
+	}
+	date := strings.TrimSuffix(fields[1], ":")
+	if !isoDate(date) {
+		return "", false
+	}
+	idx := strings.Index(trim, date)
+	if idx < 0 {
+		return "", false
+	}
+	rest := strings.TrimSpace(trim[idx+len(date):])
+	rest = strings.TrimPrefix(rest, ":")
+	return strings.TrimSpace(rest), true
+}
+
 // AttestationFromAchieveAudit is the truncating last resort described on
 // PreservedAttestation, kept separate so no caller reaches it by accident.
 func AttestationFromAchieveAudit(context string) string {
-	locs := achievedAuditRe.FindAllStringIndex(context, -1)
-	if len(locs) == 0 {
-		return ""
-	}
-	last := locs[len(locs)-1]
-	body := context[last[1]:]
-	if end := strings.Index(body, "\n\n"); end >= 0 {
-		body = body[:end]
+	var body string
+	found := false
+	for _, line := range strings.Split(context, "\n") {
+		if rest, ok := splitAchievedStamp(strings.TrimSpace(line)); ok {
+			found = true
+			body = rest
+			continue
+		}
+		if !found {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		if body != "" {
+			body += "\n"
+		}
+		body += line
 	}
 	return strings.TrimSpace(body)
 }

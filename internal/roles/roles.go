@@ -73,20 +73,24 @@ func Normalize(name string) string {
 	return n
 }
 
-// DefaultForPurpose maps legacy purpose (🎯T114) onto a role when spawn
-// omits role=.
+// DefaultForPurpose maps a declared purpose onto a role when spawn omits
+// role=. The agent name does not decide.
 func DefaultForPurpose(purpose, agentName string) string {
-	switch strings.TrimSpace(strings.ToLower(purpose)) {
-	case "overseer":
+	_ = agentName
+	switch Normalize(purpose) {
+	case Overseer:
 		return Overseer
-	case "aside":
+	case Aside:
 		return Aside
-	}
-	n := strings.ToLower(strings.TrimSpace(agentName))
-	if strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") || n == "po" {
+	case ProductOwner:
 		return ProductOwner
+	case Boss:
+		return Boss
+	case Auditor:
+		return Auditor
+	default:
+		return Worker
 	}
-	return Worker
 }
 
 // DoctrineMarker opens the role-doctrine section Assemble injects between

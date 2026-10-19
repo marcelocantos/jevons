@@ -659,25 +659,22 @@ func ShouldKeepKicking(leaves []LeafObs) bool {
 	return Classify(leaves).Mode == Kick
 }
 
-// looksLikePOOrBoss mirrors mcpserver fan-out name heuristic (thin, pure).
-func looksLikePOOrBoss(name string) bool {
-	n := strings.ToLower(strings.TrimSpace(name))
-	if n == "" {
+// purposeCoordinator matches a declared product-owner or boss purpose.
+// The seat name does not decide. Kept beside the mcpserver copy so the
+// two packages do not import each other.
+func purposeCoordinator(purpose string) bool {
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "product-owner", "boss":
+		return true
+	default:
 		return false
 	}
-	if n == "po" || strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") || strings.Contains(n, "-po-") {
-		return true
-	}
-	if strings.Contains(n, "-boss") || strings.Contains(n, "_boss") || strings.HasSuffix(n, "boss") {
-		return true
-	}
-	return false
 }
 
 // AgentObs is the minimal agent shape for open-mission thrash compose (no claudia).
 type AgentObs struct {
 	Name     string
-	Purpose  string // work | aside | overseer; empty = work
+	Purpose  string // work | product-owner | boss | aside | overseer; empty = work
 	TargetID string
 }
 
@@ -697,24 +694,27 @@ func OpenMissionForProactive(d AgentObs, mode Mode, workChildCount int) bool {
 	if purpose == "" {
 		purpose = "work"
 	}
-	if purpose != "work" {
+	low := strings.ToLower(purpose)
+	if low == "overseer" || low == "aside" {
+		return false
+	}
+	if low != "work" && !purposeCoordinator(purpose) {
 		return false
 	}
 	tid := strings.TrimSpace(d.TargetID)
-	if mode == Sleep && workChildCount <= 0 && tid == "" {
-		// Standing idle after empty frontier — never thrash as open mission.
-		if looksLikePOOrBoss(d.Name) {
+	if purposeCoordinator(purpose) {
+		// Sleep and kick share this rule: an unbound coordinator with no
+		// work children is standing idle. mode remains a parameter
+		// because every caller still passes the frontier mode it saw.
+		if mode != Sleep && mode != Kick {
 			return false
 		}
-	}
-	// T244: unbound PO/boss with zero work children = not open mission.
-	if tid == "" {
-		if looksLikePOOrBoss(d.Name) && workChildCount <= 0 {
+		if tid == "" && workChildCount <= 0 {
 			return false
 		}
-		return true // unbound implementer still visible to parent
+		return true
 	}
-	return true // bound target open by default
+	return true
 }
 
 // POOpenMissionForProactive is the doctrine-facing name for OpenMissionForProactive.

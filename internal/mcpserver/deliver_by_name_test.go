@@ -881,9 +881,24 @@ func newLineageRegistry(t *testing.T, parents map[string]string) *claudia.Regist
 		t.Fatal(err)
 	}
 	for name, parent := range parents {
-		if _, err := reg.EnsureAgentWithParent(name, "/work/"+name, "", parent, false); err != nil {
+		def, err := reg.EnsureAgentWithParent(name, "/work/"+name, "", parent, false)
+		if err != nil {
 			t.Fatalf("EnsureAgentWithParent %s→%s: %v", name, parent, err)
+		}
+		// The mint API has no purpose argument. These fixtures used a -po
+		// name as the product-owner declaration. Record that as the purpose
+		// the product now reads.
+		if poShapedFixture(name) {
+			def.Purpose = purposeProductOwner
+			if err := reg.Register(*def); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	return reg
+}
+
+func poShapedFixture(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == "po" || strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") || strings.Contains(n, "-po-")
 }

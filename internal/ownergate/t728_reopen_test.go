@@ -103,6 +103,12 @@ func TestT728ReopenedGateIsRecognisedAndDated(t *testing.T) {
 	if IsReopenedGate(plain) {
 		t.Fatal("an ordinary gate must not be mistaken for a reopened one — accept would re-achieve a row that was never achieved")
 	}
+	if IsReopenedGate("please note REOPENED TO RECORD OWNER GATE today") {
+		t.Fatal("the marker words later in a line are not the ceremony")
+	}
+	if d := ReopenedAchievedDate("REOPENED TO RECORD OWNER GATE — this row was achieved 2026-09-21"); d != "" {
+		t.Fatalf("prose achieved date %q is not the declared slot", d)
+	}
 }
 
 // An unknown date is said, not invented (🎯T31).

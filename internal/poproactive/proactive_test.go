@@ -132,7 +132,7 @@ func TestIsDesignGatedLeafMarkers(t *testing.T) {
 
 // 🎯T325.1 compose T244: sleep + unbound PO + zero children ⇒ not open mission (no thrash).
 func TestOpenMissionForProactiveSleepNoThrash(t *testing.T) {
-	po := AgentObs{Name: "jevons-po", Purpose: "work"}
+	po := AgentObs{Name: "jevons-po", Purpose: "product-owner"}
 	if OpenMissionForProactive(po, Sleep, 0) {
 		t.Fatal("sleeping unbound PO with zero kids must not be open mission")
 	}
@@ -144,7 +144,7 @@ func TestOpenMissionForProactiveSleepNoThrash(t *testing.T) {
 		t.Fatal("sleep with work children still open mission for supervision")
 	}
 	// Bound target remains open.
-	bound := AgentObs{Name: "jevons-po", Purpose: "work", TargetID: "T10"}
+	bound := AgentObs{Name: "jevons-po", Purpose: "product-owner", TargetID: "T10"}
 	if !OpenMissionForProactive(bound, Sleep, 0) {
 		t.Fatal("bound PO stays open mission")
 	}

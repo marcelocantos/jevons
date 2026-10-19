@@ -38,7 +38,7 @@ func TestShouldEmitWorkerIdle(t *testing.T) {
 // 🎯T244: unbound PO with zero work children is not open mission — no worker-idle thrash.
 func TestHasOpenMissionForIdleUnboundPO(t *testing.T) {
 	t.Parallel()
-	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork}
+	po := claudia.AgentDef{Name: "jevons-po", Purpose: purposeProductOwner}
 	if HasOpenMissionForIdle(po, nil, 0, 0) {
 		t.Fatal("unbound PO with zero work children must not be open mission")
 	}
@@ -55,7 +55,7 @@ func TestHasOpenMissionForIdleUnboundPO(t *testing.T) {
 		t.Fatal("PO with engaged work children must not be open mission (T330)")
 	}
 	// Residual: PO with bound target_id still open even with zero children.
-	bound := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork, TargetID: "T99"}
+	bound := claudia.AgentDef{Name: "jevons-po", Purpose: purposeProductOwner, TargetID: "T99"}
 	if !HasOpenMissionForIdle(bound, nil, 0, 0) {
 		t.Fatal("PO with target_id must stay open mission")
 	}
@@ -67,6 +67,10 @@ func TestHasOpenMissionForIdleUnboundPO(t *testing.T) {
 	worker := claudia.AgentDef{Name: "jv-t244", Purpose: claudia.PurposeWork}
 	if !HasOpenMissionForIdle(worker, nil, 0, 0) {
 		t.Fatal("unbound implementer must remain open mission")
+	}
+	named := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork}
+	if !HasOpenMissionForIdle(named, nil, 0, 0) {
+		t.Fatal("purpose work stays open mission even when the name ends in -po")
 	}
 	// Aside / non-work never open.
 	aside := claudia.AgentDef{Name: "aside-1", Purpose: claudia.PurposeAside}
@@ -82,17 +86,17 @@ func TestHasOpenMissionForIdleUnboundPO(t *testing.T) {
 // 🎯T330: pure classifier — parent idle + engaged child → no re-pressure.
 func TestSuppressParentIdleThrashT330(t *testing.T) {
 	t.Parallel()
-	if !SuppressParentIdleThrash("jevons-po", 1) {
+	if !SuppressParentIdleThrash(purposeProductOwner, 1) {
 		t.Fatal("PO with engaged child must suppress thrash")
 	}
-	if !SuppressParentIdleThrash("slice-boss", 2) {
+	if !SuppressParentIdleThrash("boss", 2) {
 		t.Fatal("boss with engaged children must suppress thrash")
 	}
-	if SuppressParentIdleThrash("jevons-po", 0) {
+	if SuppressParentIdleThrash(purposeProductOwner, 0) {
 		t.Fatal("orphan PO (zero engaged) must not suppress — residual pressures")
 	}
-	if SuppressParentIdleThrash("jv-t329-inspect", 1) {
-		t.Fatal("implementer name must never suppress via parent gate")
+	if SuppressParentIdleThrash(claudia.PurposeWork, 1) {
+		t.Fatal("implementer purpose must never suppress via parent gate")
 	}
 }
 
@@ -135,7 +139,7 @@ func TestIsEngagedWorkChildAndCount(t *testing.T) {
 		t.Fatalf("engaged children=%d want 2 (bound + working)", n)
 	}
 	// Compose open-mission gate: PO with those kids is sleep-OK.
-	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork}
+	po := claudia.AgentDef{Name: "jevons-po", Purpose: purposeProductOwner}
 	engaged := CountEngagedWorkChildren(defs, "jevons-po", phaseOf, nil)
 	total := CountWorkChildren(defs, "jevons-po")
 	if total != 3 {
@@ -332,9 +336,13 @@ func TestEligibleOpenMissionResume(t *testing.T) {
 		t.Fatal("missionless non-AutoStart must not resume")
 	}
 	// PO/boss get path-1 events, not short resume
-	po := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork, AutoStart: true}
+	po := claudia.AgentDef{Name: "jevons-po", Purpose: purposeProductOwner, AutoStart: true}
 	if EligibleOpenMissionResume(po, true, false, false, false, fleetintent.Snapshot{}) {
 		t.Fatal("PO must not get open-mission short resume")
+	}
+	named := claudia.AgentDef{Name: "jevons-po", Purpose: claudia.PurposeWork, AutoStart: true}
+	if !EligibleOpenMissionResume(named, true, false, false, false, fleetintent.Snapshot{}) {
+		t.Fatal("purpose work is an implementer even when the name ends in -po")
 	}
 	aside := claudia.AgentDef{Name: "aside-1", Purpose: claudia.PurposeAside, AutoStart: true}
 	if EligibleOpenMissionResume(aside, true, false, false, false, fleetintent.Snapshot{}) {

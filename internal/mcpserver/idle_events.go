@@ -281,7 +281,8 @@ func DaemonRestartEventTargets(byParent map[string][]WorkerIdleRef, overseer, de
 // overseer, PO/boss coordinators, deliberate-stop, design-gated, or finished.
 //
 // Open mission: purpose=work AND process running AND (AutoStart OR bound
-// target_id) AND not the durable PO/boss name heuristic.
+// target_id). A product-owner, boss, aside, or overseer purpose is not
+// this path. The seat name is not read.
 //
 // intent is the 🎯T414 snapshot. Note what this gate must keep doing: an
 // agent whose intent is working and whose process died is exactly the case
@@ -306,10 +307,6 @@ func EligibleOpenMissionResume(d claudia.AgentDef, running, deliberateStop, desi
 		return false
 	}
 	if purpose != claudia.PurposeWork {
-		return false
-	}
-	// POs/bosses get daemon-restarted (path 1), not implementer short-resume.
-	if looksLikePOOrBoss(d.Name) {
 		return false
 	}
 	tid := strings.TrimSpace(d.TargetID)
@@ -455,45 +452,58 @@ func CountEngagedWorkChildren(defs []claudia.AgentDef, parentName string, phaseB
 	return n
 }
 
-// SuppressParentIdleThrash is the pure 🎯T330 gate: a PO/boss with ≥1 engaged
-// work children must not be re-continue-thrashed by idle-pressure or
-// worker-idle open-mission classification (sleep-OK while implementers work).
-func SuppressParentIdleThrash(name string, engagedChildCount int) bool {
-	return looksLikePOOrBoss(name) && engagedChildCount > 0
+// SuppressParentIdleThrash is the pure 🎯T330 gate: a declared product-owner
+// or boss with ≥1 engaged work children must not be re-continue-thrashed
+// by idle-pressure or worker-idle open-mission classification.
+func SuppressParentIdleThrash(purpose string, engagedChildCount int) bool {
+	return purposeCoordinator(purpose) && engagedChildCount > 0
 }
 
 // HasOpenMissionForIdle is the default open-mission heuristic for enter-idle
 // and idle-pressure eligibility.
 //
 // purpose=work with a bound TargetID is open (callers may tighten with
-// missionOpen). Unbound implementers stay open so the parent PO can reap.
+// missionOpen). Unbound implementers stay open so the parent can reap.
+// A declared product-owner or boss purpose uses the coordinator rules.
+// Aside and overseer are never open. The seat name is not read.
 //
-// 🎯T244: unbound PO/boss-shaped agents with zero work children are NOT open
+// 🎯T244: an unbound coordinator with zero work children is NOT open
 // mission — long-lived standing idle must not thrash the overseer.
 //
-// 🎯T330: PO/boss with ≥1 engaged work children is sleep-OK — not open mission
-// for parent re-continue thrash; children own progress. Residual: orphan PO
-// idle with zero children still uses T244; open-frontier kick remains T325.1.
+// 🎯T330: a coordinator with ≥1 engaged work children is sleep-OK — not
+// open mission for parent re-continue thrash; children own progress.
 // engagedChildCount 0 preserves pre-T330 behaviour when callers omit it.
 func HasOpenMissionForIdle(d claudia.AgentDef, missionOpen func(targetID string) bool, workChildCount, engagedChildCount int) bool {
-	purpose := d.Purpose
+	purpose := strings.TrimSpace(d.Purpose)
 	if purpose == "" {
 		purpose = claudia.PurposeWork
 	}
-	if purpose != claudia.PurposeWork {
+	low := strings.ToLower(purpose)
+	if low == claudia.PurposeOverseer || low == claudia.PurposeAside {
 		return false
 	}
-	// 🎯T330: supervising engaged implementers ⇒ sleep-OK, no parent thrash.
-	if SuppressParentIdleThrash(d.Name, engagedChildCount) {
+	if purposeCoordinator(purpose) {
+		if SuppressParentIdleThrash(purpose, engagedChildCount) {
+			return false
+		}
+		tid := strings.TrimSpace(d.TargetID)
+		if tid == "" && workChildCount <= 0 {
+			return false
+		}
+		if tid == "" {
+			return true
+		}
+		if missionOpen != nil {
+			return missionOpen(tid)
+		}
+		return true
+	}
+	if low != claudia.PurposeWork {
 		return false
 	}
 	tid := strings.TrimSpace(d.TargetID)
 	if tid == "" {
-		// 🎯T244: unbound PO/boss with no work children = standing idle, not open mission.
-		if looksLikePOOrBoss(d.Name) && workChildCount <= 0 {
-			return false
-		}
-		return true // unbound implementer, or PO with only unengaged kids (reap)
+		return true
 	}
 	if missionOpen != nil {
 		return missionOpen(tid)

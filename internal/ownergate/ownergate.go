@@ -239,13 +239,13 @@ func IsOwnerHandle(owner string) bool {
 	return false
 }
 
-// opensWithMarker reports whether a line of text opens with the declared
-// marker. A sentence that uses the same words later in the line is not the
-// marker. The marker comparison is case-insensitive because the writer and
-// a pasted copy are the same token.
-func opensWithMarker(text, marker string) bool {
+// markerRemainder returns the text after the declared marker on the first
+// line that opens with it. A sentence that uses the same words later in the
+// line is not the marker. The comparison is case-insensitive because the
+// writer and a pasted copy are the same token.
+func markerRemainder(text, marker string) (string, bool) {
 	if marker == "" {
-		return false
+		return "", false
 	}
 	marker = strings.ToUpper(marker)
 	for _, line := range strings.Split(text, "\n") {
@@ -255,14 +255,20 @@ func opensWithMarker(text, marker string) bool {
 			continue
 		}
 		if rest == "" {
-			return true
+			return "", true
 		}
 		switch rest[0] {
 		case ' ', '\t', '(', ':', '.', ',':
-			return true
+			return rest, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// opensWithMarker reports whether a line of text opens with the declared marker.
+func opensWithMarker(text, marker string) bool {
+	_, ok := markerRemainder(text, marker)
+	return ok
 }
 
 // IsAnswered reports whether the record opens with the answered marker.

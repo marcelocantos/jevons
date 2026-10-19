@@ -286,8 +286,14 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 	// on 2026-08-29 `name=jevons-po actor=jevons` classified as needs-owner
 	// and was delivered into the overseer's own transcript, twice. The PO
 	// speaking to itself is not a report either.
+	destPurpose := ""
+	if s.registry != nil {
+		if def := s.registry.Def(dest); def != nil {
+			destPurpose = def.Purpose
+		}
+	}
 	who := strings.TrimSpace(actor)
-	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
+	if origin == OriginAgent && !overseerArm && purposeCoordinator(destPurpose) &&
 		who != "" && who != ActorOwnerSurface &&
 		!s.isOverseerAgent(who) && strings.ToLower(who) != strings.ToLower(dest) &&
 		relayroute.Classify(report) == relayroute.RouteOverseer &&

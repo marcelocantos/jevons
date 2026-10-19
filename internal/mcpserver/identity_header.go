@@ -30,11 +30,9 @@ import (
 // composed at send time, so no agent has to make a registry call before it can
 // act on its own brief.
 
-// Roles a recipient can occupy, as the header names them. Role is DERIVED, not
-// read straight off AgentDef.Purpose: every product owner in the live registry
-// carries purpose=work (bullseye-po, jevons-po, claudia-po …), so purpose alone
-// would have told bullseye-po it was a work agent — the same wrong answer it
-// gave itself. The name suffix is what distinguishes a PO, per isPOName.
+// Roles a recipient can occupy, as the header names them. Role is derived
+// from the explicit role and the declared purpose. A seat name does not
+// decide the stratum.
 const (
 	RoleOverseer     = "overseer"
 	RoleProductOwner = "product owner"
@@ -61,13 +59,12 @@ type AgentIdentity struct {
 // DeriveAgentRole answers which role doctrine binds this recipient.
 //
 // Explicit role (from agent_roles.json / spawn role=, 🎯T511 / 🎯T536.2) wins
-// when set. Otherwise purpose=overseer and purpose=aside are authoritative.
-// Otherwise the name decides: a registry that stores purpose=work for every PO
-// cannot distinguish the stratum, and isPOName is the same heuristic the
-// staff-ops idle count already trusts. Residual: an agent named without the
-// -po suffix that is nevertheless a product owner reads as a work agent
-// (🎯T200 path portfolios are the richer answer, and are not wired here).
+// when set. Otherwise purpose=overseer, purpose=aside, and
+// purpose=product-owner are authoritative. A name suffix is not a role.
+// Boss purpose reads as a work agent: product-owner doctrine is the
+// product-owner purpose, not every coordinator.
 func DeriveAgentRole(name, purpose, role string) string {
+	_ = name
 	switch roles.Normalize(role) {
 	case roles.Auditor:
 		return RoleAuditor
@@ -85,8 +82,7 @@ func DeriveAgentRole(name, purpose, role string) string {
 		return RoleOverseer
 	case claudia.PurposeAside:
 		return RoleAside
-	}
-	if isPOName(name) {
+	case purposeProductOwner:
 		return RoleProductOwner
 	}
 	return RoleWork

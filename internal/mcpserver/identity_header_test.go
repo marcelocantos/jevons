@@ -378,21 +378,20 @@ func TestIdentityHeaderCarriesT692LifecycleNarration(t *testing.T) {
 	}
 }
 
-// Acceptance 4's derivation, stated as a table because the failure mode is a
-// role read off the wrong field: every PO in the live registry carries
-// purpose=work, so Purpose alone reproduces bullseye-po's own wrong answer.
+// Acceptance 4's derivation: explicit purpose decides. A -po name with
+// purpose work is a work agent. purpose product-owner is a product owner
+// even when the name does not say so.
 func TestT425DeriveAgentRole(t *testing.T) {
 	for _, tc := range []struct {
 		name, purpose, want string
 	}{
 		{"jevons", claudia.PurposeOverseer, RoleOverseer},
-		{"jevons-po", claudia.PurposeWork, RoleProductOwner},
-		{"bullseye-po", claudia.PurposeWork, RoleProductOwner},
-		{"bullseye_po", "", RoleProductOwner},
+		{"jevons-po", claudia.PurposeWork, RoleWork},
+		{"bullseye-po", claudia.PurposeWork, RoleWork},
+		{"bullseye_po", "", RoleWork},
+		{"plain-seat", purposeProductOwner, RoleProductOwner},
 		{"jv-t425-identity", claudia.PurposeWork, RoleWork},
 		{"ask-about-costs", claudia.PurposeAside, RoleAside},
-		// purpose=overseer wins over a -po suffix: an explicit role beats a
-		// naming heuristic.
 		{"weird-po", claudia.PurposeOverseer, RoleOverseer},
 	} {
 		if got := DeriveAgentRole(tc.name, tc.purpose, ""); got != tc.want {

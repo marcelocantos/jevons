@@ -99,8 +99,13 @@ func TestConcurrentAdmissionsAndCancel(t *testing.T) {
 func TestSeedLifecycleAndRejectCorruption(t *testing.T) {
 	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	var history strings.Builder
-	for _, name := range []string{"worker", "worker", "jevons", "jevons-po"} {
-		fmt.Fprintf(&history, `{"ts":"2026-10-02T23:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"name":%q,"target_id":"T1","workdir":"repo","outcome":"ok"}}`+"\n", name)
+	for _, row := range []struct{ name, purpose string }{
+		{"worker", "work"},
+		{"worker", "work"},
+		{"jevons", "overseer"},
+		{"jevons-po", "product-owner"},
+	} {
+		fmt.Fprintf(&history, `{"ts":"2026-10-02T23:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"name":%q,"purpose":%q,"target_id":"T1","workdir":"repo","outcome":"ok"}}`+"\n", row.name, row.purpose)
 	}
 	path := filepath.Join(t.TempDir(), "s.json")
 	s, e := Open(path, Policy{2, 24}, strings.NewReader(history.String()), nil, now)
@@ -118,6 +123,30 @@ func TestSeedLifecycleAndRejectCorruption(t *testing.T) {
 	}
 	if _, e = Open(filepath.Join(t.TempDir(), "s.json"), Policy{2, 24}, strings.NewReader("broken\n"), nil, now); e == nil {
 		t.Fatal("malformed history ignored")
+	}
+}
+
+func TestWorkerPurposeNotName(t *testing.T) {
+	if !Worker("suffix-po", "work", "") {
+		t.Fatal("purpose work is a worker even when the name ends in -po")
+	}
+	if !Worker("po", "work", "") {
+		t.Fatal("the name po is a worker when the purpose is work")
+	}
+	if Worker("suffix-po", "product-owner", "") {
+		t.Fatal("purpose product-owner is not a worker")
+	}
+	if Worker("plain", "work", "product-owner") {
+		t.Fatal("role product-owner is not a worker")
+	}
+	if Worker("plain", "work", "boss") || Worker("plain", "work", "aside") || Worker("plain", "", "overseer") {
+		t.Fatal("coordinator roles are not workers")
+	}
+	if Worker("jevons", "work", "") {
+		t.Fatal("the overseer seat token is not a worker")
+	}
+	if Worker("plain", "overseer", "") {
+		t.Fatal("purpose overseer is not a worker")
 	}
 }
 
