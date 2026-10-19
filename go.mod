@@ -6,10 +6,10 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.58.0
+	github.com/marcelocantos/claudia v0.59.0
 	github.com/marcelocantos/doit v0.9.0
 	github.com/marcelocantos/pigeon v0.19.0
-	github.com/marcelocantos/sqlpipe/go/sqlpipe v0.32.0
+	github.com/marcelocantos/sqlpipe/go/sqlpipe v0.33.0
 	github.com/mark3labs/mcp-go v0.47.0
 	golang.org/x/image v0.44.0
 	golang.org/x/net v0.61.0
