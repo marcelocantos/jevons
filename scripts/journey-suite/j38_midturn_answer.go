@@ -76,6 +76,13 @@ func (s *suite) midTurnAnswerWithBroker() error {
 	if relayedAt.IsZero() {
 		return fmt.Errorf("no mid-turn answer was relayed to the overseer for %s", id)
 	}
+	// The relay is an agent note to an idle overseer, handed off by its own
+	// drain, so its batch receipt settles it: status=sent. Before that read
+	// existed, every such relay logged delivered_unconfirmed and nothing
+	// later settled it (gate 252cf6ac).
+	if line := relayLogLine(s.logPath, id); !strings.Contains(line, "status=sent") {
+		return fmt.Errorf("the mid-turn answer relay was not settled by its receipt: %s", line)
+	}
 	if _, err := s.waitReplyContaining(id, len(base), "SLEPTTWICE", 150*time.Second); err != nil {
 		return fmt.Errorf("the worker did not finish its turn: %w", err)
 	}
@@ -107,4 +114,18 @@ func logHasRelay(path, agent string) bool {
 		}
 	}
 	return false
+}
+
+// relayLogLine is the daemon's relay record for agent, or "".
+func relayLogLine(path, agent string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, relayLine) && strings.Contains(line, "agent="+agent) {
+			return line
+		}
+	}
+	return ""
 }
