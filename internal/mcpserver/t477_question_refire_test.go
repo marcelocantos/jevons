@@ -11,17 +11,12 @@ import (
 	"time"
 )
 
-// 🎯T477: an already-answered owner *question* must not re-fire as open intent
-// after a daemon bounce. T344 closes resume only on product evidence
-// (SHA/PASS/achieve); a question answered with an explanation — the live
-// incident was "why did jevons-po mint on Opus 5", answered twice with the
-// config-precedence explanation — matched none of those markers, so every
-// bounce re-injected the same chatlog turn as owner-intent-resume.
+// 🎯T477: an already-answered owner question must not re-fire as open intent
+// after a daemon bounce. An explanation sentence is not that answer
+// (🎯T766.4). A declared finish on the same topic is.
 
 func TestT477ExtractAnsweredQuestionDoesNotRefire(t *testing.T) {
 	t.Parallel()
-	// Live incident shape: owner why-question, later assistant explanation
-	// citing knobs/files — no SHA, no PASS, no achieve attestation.
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
@@ -35,8 +30,13 @@ func TestT477ExtractAnsweredQuestionDoesNotRefire(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("an explanation sentence must stay open, residual=%q", got.Residual)
+	}
+	turns[1].Text = declaredFinishReport("T475", "jevons-po mint config says grok opus")
+	got = ExtractOpenOwnerIntent(turns)
 	if got.Recoverable() {
-		t.Fatalf("answered question must not recover as open work, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("declared finish on the same question must not recover, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want residual %q, got %q", ResidualAnsweredOrClosed, got.Residual)
@@ -68,9 +68,8 @@ func TestT477ProgressChatterDoesNotCloseQuestion(t *testing.T) {
 
 func TestT477DirectiveStillNeedsProductEvidence(t *testing.T) {
 	t.Parallel()
-	// T477's explanation-close is still questions-only. 🎯T568 then closes any
-	// later *substantive* overseer reply (this explanation is one). A directive
-	// whose later turn is only progress chatter still recovers — see T512:61.
+	// An explanation sentence does not close a directive. A declared finish
+	// on the same complaint does. The helper still refuses a non-question.
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
@@ -82,8 +81,16 @@ func TestT477DirectiveStillNeedsProductEvidence(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("an explanation sentence must not close the directive, residual=%q", got.Residual)
+	}
+	if OwnerQuestionAnsweredWithExplanation(turns[0].Text, []string{turns[1].Text}) {
+		t.Fatal("T477 helper must still refuse a directive (not a question)")
+	}
+	turns[1].Text = declaredFinishReport("T475", "switch jevons-po minting back to grok and clean the override")
+	got = ExtractOpenOwnerIntent(turns)
 	if got.Recoverable() {
-		t.Fatalf("T568: later substantive reply must close the directive, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("declared finish on the directive must close, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
@@ -125,10 +132,8 @@ func TestT477ReAskOfAnsweredQuestionStillRecovers(t *testing.T) {
 
 func TestT477UnrelatedExplanationDoesNotCloseQuestion(t *testing.T) {
 	t.Parallel()
-	// T477 topical link still required on the helper: an explanation about
-	// something else is not an answer to *this* question. 🎯T568 then closes
-	// resume anyway — a later substantive overseer turn after the newest
-	// instruction means the instruction is not unfinished open work.
+	// An explanation about something else is not an answer, and a sentence
+	// is not a close (🎯T766.4).
 	owner := "Why did jevons-po mint on Opus 5?"
 	reply := "Because the watchdog plist carries its own PATH snapshot, the restart script rebuilds bin/detach from committed HEAD before re-execing."
 	if OwnerQuestionAnsweredWithExplanation(owner, []string{reply}) {
@@ -138,18 +143,14 @@ func TestT477UnrelatedExplanationDoesNotCloseQuestion(t *testing.T) {
 		{Role: "user", Text: owner},
 		{Role: "assistant", Text: reply},
 	})
-	if got.Recoverable() {
-		t.Fatalf("T568: later substantive reply must close resume, residual=%q", got.Residual)
-	}
-	if got.Residual != ResidualAnsweredOrClosed {
-		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
+	if !got.Recoverable() {
+		t.Fatalf("an unrelated explanation sentence must stay open, residual=%q", got.Residual)
 	}
 }
 
-// TestT477LoadAnsweredQuestionFromChatlog is the restart-resume half: the
-// explanation answer carries no product-evidence markers, so before T477 the
-// chatlog loader dropped it and the extractor saw only the question — the
-// re-fire happened on the development surface even if extraction were fixed.
+// TestT477LoadAnsweredQuestionFromChatlog is the restart-resume half.
+// An explanation sentence is dropped. A declared finish on the same
+// question is retained and closes.
 func TestT477LoadAnsweredQuestionFromChatlog(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -158,16 +159,25 @@ func TestT477LoadAnsweredQuestionFromChatlog(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(chatDir, "jevons.jsonl")
-	body := strings.Join([]string{
-		`{"type":"user","timestamp":"2026-08-15T10:12:00Z","message":{"role":"user","content":"Why did jevons-po mint on Opus 5? The config says grok."}}`,
-		`{"type":"assistant","timestamp":"2026-08-15T10:14:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Because the grok entry in ~/.jevons/config.yaml loses to a leftover llm-portfolio.json override: the portfolio file takes precedence at mint time, and it still pinned Opus 5."}]}}`,
-	}, "\n") + "\n"
+	user := `{"type":"user","timestamp":"2026-08-15T10:12:00Z","message":{"role":"user","content":"Why did jevons-po mint on Opus 5? The config says grok."}}`
+	prose := `{"type":"assistant","timestamp":"2026-08-15T10:14:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Because the grok entry in ~/.jevons/config.yaml loses to a leftover llm-portfolio.json override: the portfolio file takes precedence at mint time, and it still pinned Opus 5."}]}}`
+	body := strings.Join([]string{user, prose}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadOpenOwnerIntent(dir, "jevons")
+	if !got.Recoverable() {
+		t.Fatalf("an explanation sentence must re-fire from chatlog, residual=%q", got.Residual)
+	}
+	ts := time.Date(2026, 8, 15, 10, 14, 0, 0, time.UTC)
+	finish := t7664AssistantLine(ts, declaredFinishReport("T475", "jevons-po mint config says grok opus"))
+	body = strings.Join([]string{user, finish}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = LoadOpenOwnerIntent(dir, "jevons")
 	if got.Recoverable() {
-		t.Fatalf("answered question must not re-fire from chatlog, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("declared finish must not re-fire from chatlog, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)

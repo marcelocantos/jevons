@@ -25,10 +25,8 @@ import (
 
 // 🎯T328: post-restart resume of unfinished owner instructions.
 // 🎯T344: do not re-fire owner turns already answered with product evidence.
-// 🎯T477: an owner *question* is also closed by a topically-linked explanation
-// answer — "why did X" answered with "because Y" carries no SHA/PASS/achieve
-// marker, and before this every bounce re-fired the answered question as
-// owner-intent-resume.
+// 🎯T477: an owner question is not closed by an explanation sentence.
+// A declared oracle or accepted-risk slot on the same topic is.
 // 🎯T512: an owner fleet directive (kill/stop/park/reap a named seat) is closed
 // by later ops evidence (killed/deregistered, gone from agent_list, fleet
 // intent reaped/parked) for that seat — ops directives have no code SHA, and
@@ -40,14 +38,11 @@ import (
 // http-send-probe-do-not-treat-as-owner-intent, …) are never recoverable
 // open owner work — probes are intentionally labelled, not answered by
 // T344/T477 closure.
-// 🎯T568: an owner instruction is closed once (a) a later substantive
-// overseer reply appears in the owner chatlog after the instruction's
-// observed timestamp, or (b) an overseer reply names a TargetID that is
-// achieved/set_aside in the ledger. A bare ack does not close. The live
-// miss was the 2026-08-26 "Cursor monthly cycle?" question: answered and
-// landed as 🎯T550, then re-issued as MANDATORY open work on every bounce
-// because T528 only closes IDs named in the *owner* text and T477 dropped
-// the reply at load (not explanation-shaped).
+// 🎯T568: a later sentence is not a close (🎯T766.4). An overseer reply
+// that names a TargetID achieved or set_aside in the ledger still closes,
+// even when the owner text named none. A bare ack does not close. The
+// live miss was the 2026-08-26 "Cursor monthly cycle?" question, landed
+// as 🎯T550, then re-issued because the owner text named no id.
 //
 // Durable source: state_dir/chatlog/<overseer>.jsonl (survives control-plane
 // bounce). On restart, when a recoverable open owner instruction is found,
@@ -56,8 +51,8 @@ import (
 //
 // Residual classes (no resume payload; daemon-restarted status path only):
 //   - no_chatlog / no_user_turns / only_harness / ack_only / no_recoverable_intent
-//   - answered_or_closed (T344/T477/T512/T528/T568: later evidence, substantive
-//     reply, or ledger close)
+//   - answered_or_closed (T344/T477/T512/T528/T568: declared evidence,
+//     fleet ops, or a ledger-closed target id)
 //   - session fully wiped (chatlog missing or empty after materialize loss)
 
 const (
@@ -278,9 +273,8 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
-	// 🎯T477: a question is answered by explanation prose, not only by product
-	// evidence. T568 then closes any later substantive reply (non-fleet);
-	// fleet kill/stop/park/reap keep T512's same-seat ops contract.
+	// 🎯T477: explanation prose is not an answer. The helper returns false
+	// until a declared slot exists. Fleet kill/stop/park/reap keep T512.
 	if OwnerQuestionAnsweredWithExplanation(last.Text, laterAnswers) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
@@ -291,12 +285,10 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
-	// 🎯T568: later substantive overseer reply (not a bare ack) closes, and a
-	// reply that names a ledger-closed TargetID closes even when the owner
-	// instruction named none (Cursor-monthly / 🎯T550).
-	// Fleet kill/stop/park/reap keep the T512 same-seat ops contract — an
-	// unrelated-seat completion is a later substantive turn but must not
-	// close the named directive (t512_kill_resume_test.go unrelated-seat).
+	// 🎯T568: a later sentence does not close. The callee returns false.
+	// A reply that names a ledger-closed TargetID still closes when the
+	// owner instruction named none (Cursor-monthly / 🎯T550).
+	// Fleet kill/stop/park/reap keep the T512 same-seat ops contract.
 	if len(ownerFleetDirectiveTargets(last.Text)) == 0 &&
 		ownerIntentClosedByLaterSubstantiveReply(laterAnswers) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
@@ -380,13 +372,9 @@ func OwnerIntentAnsweredWithProductEvidence(ownerText string, laterAssistant []s
 }
 
 // OwnerQuestionAnsweredWithExplanation reports whether the owner turn is a
-// question that a later assistant excerpt answers with explanation prose on
-// the same topic (🎯T477). Questions only: ownerqa.IsQuestion is the gate, so
-// directives keep the T344 product-evidence contract. The answer must be
-// answer-shaped (explanatory substance, not a progress ack) and topically
-// linked, so "looking into it" and an unrelated explanation both leave the
-// question open — the cost of a false close is a lost resume, which is the
-// T328 regression class.
+// question that a later excerpt answers on the same topic (🎯T477).
+// openIntentAnswerShaped returns false: an explanation sentence is not
+// that answer (🎯T766.4). Questions only: ownerqa.IsQuestion is the gate.
 func OwnerQuestionAnsweredWithExplanation(ownerText string, laterAssistant []string) bool {
 	ownerText = strings.TrimSpace(ownerText)
 	if ownerText == "" || !ownerqa.IsQuestion(ownerText) {
@@ -404,8 +392,9 @@ func OwnerQuestionAnsweredWithExplanation(ownerText string, laterAssistant []str
 	return false
 }
 
-// ownerIntentClosedByLaterSubstantiveReply reports whether any later overseer
-// excerpt is a real reply rather than a bare ack / progress chatter (🎯T568).
+// ownerIntentClosedByLaterSubstantiveReply reports whether a later excerpt
+// closes the instruction (🎯T568). The callee returns false: a sentence
+// is not that close (🎯T766.4).
 func ownerIntentClosedByLaterSubstantiveReply(laterAssistant []string) bool {
 	for _, a := range laterAssistant {
 		if openIntentSubstantiveReply(a) {
@@ -759,69 +748,20 @@ func openIntentFleetOpsToolTarget(input map[string]any) string {
 	return ""
 }
 
-// openIntentExplanationConnectives mark prose as explaining a cause rather
-// than acknowledging work. Deliberately concrete: generic verbs would let
-// status chatter close a question.
-var openIntentExplanationConnectives = []string{
-	"because", "due to", "caused by", "the cause", "root cause", "the reason",
-	"reason is", "turns out", "loses to", "wins over", "takes precedence",
-	"overrides", "overridden", "shadowed by", "falls back", "comes from",
-	"leftover",
-}
-
-// openIntentProgressMarkers veto answer shape: a turn announcing that the
-// answer is being sought is not the answer.
+// openIntentProgressMarkers veto fleet-ops evidence: a turn announcing that
+// the answer is being sought is not ops evidence.
 var openIntentProgressMarkers = []string{
 	"looking into", "investigating", "digging into", "working on",
 	"will report", "stand by", "one moment", "checking ",
 }
 
-// openIntentFileTokenRe matches a concrete file/knob citation — the
-// "citing knobs/files" half of an explanation answer.
-var openIntentFileTokenRe = regexp.MustCompile(`(?i)[\w./~-]+\.(go|yaml|yml|json|md|js|ts|html|css|sh|sql|txt|plist)\b`)
+// openIntentAnswerShaped is not an explanation close (🎯T766.4).
+// A connective or a file name is not an answer.
+func openIntentAnswerShaped(string) bool { return false }
 
-// openIntentAnswerShaped reports whether assistant prose has the substance of
-// an explanation answer (🎯T477): an explanatory connective, or a concrete
-// file/knob citation without progress-marker framing. Short turns never
-// qualify — an answer that fits in an ack is an ack.
-func openIntentAnswerShaped(text string) bool {
-	t := strings.TrimSpace(text)
-	if utf8.RuneCountInString(t) < 40 {
-		return false
-	}
-	low := strings.ToLower(t)
-	for _, m := range openIntentProgressMarkers {
-		if strings.Contains(low, m) {
-			return false
-		}
-	}
-	for _, c := range openIntentExplanationConnectives {
-		if strings.Contains(low, c) {
-			return true
-		}
-	}
-	return openIntentFileTokenRe.MatchString(t)
-}
-
-// openIntentSubstantiveReply reports a later overseer turn with enough
-// substance to count as a reply (🎯T568). Bare acks and progress chatter
-// ("looking into it") stay open — T512's kill-without-evidence tape.
-func openIntentSubstantiveReply(text string) bool {
-	t := strings.TrimSpace(text)
-	if t == "" || utf8.RuneCountInString(t) < 40 {
-		return false
-	}
-	if isOpenIntentAckOnly(t) {
-		return false
-	}
-	low := strings.ToLower(t)
-	for _, m := range openIntentProgressMarkers {
-		if strings.Contains(low, m) {
-			return false
-		}
-	}
-	return true
-}
+// openIntentSubstantiveReply is not a close (🎯T766.4).
+// A long sentence is not a reply that finishes owner work.
+func openIntentSubstantiveReply(string) bool { return false }
 
 // hasOpenIntentProductEvidence is true when the excerpt declares an oracle
 // or accepted-risk slot. A SHA sentence, a hermetic PASS, or the word
@@ -1325,24 +1265,9 @@ func keepOpenIntentAssistant(text string) bool {
 	return openIntentTargetIDRe.MatchString(text)
 }
 
-// openIntentEvidenceCandidate is a cheaper pre-filter before full product
-// evidence check — catches achieve/SHA-ish tool payloads worth retaining.
-func openIntentEvidenceCandidate(text string) bool {
-	low := strings.ToLower(text)
-	if commitSHARe.MatchString(text) {
-		return true
-	}
-	if openIntentTargetIDRe.MatchString(text) &&
-		(strings.Contains(low, "achiev") || strings.Contains(low, "attestation") ||
-			strings.Contains(low, "pass") || strings.Contains(low, "fix(") ||
-			strings.Contains(low, "oracle") || strings.Contains(low, "hermetic")) {
-		return true
-	}
-	if strings.Contains(low, "attestation") {
-		return true
-	}
-	return false
-}
+// openIntentEvidenceCandidate is not product evidence (🎯T766.4).
+// A SHA or the word achieved is not a slot.
+func openIntentEvidenceCandidate(string) bool { return false }
 
 // parseOpenIntentChatlogLine extracts role + plain text from a chatlog JSONL line.
 // Assistant tool_use bodies are flattened when they carry evidence-shaped fields.

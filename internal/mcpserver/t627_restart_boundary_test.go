@@ -89,7 +89,7 @@ func TestRestartRecoveryReadsOwnerStateAfterPONotification(t *testing.T) {
 					case "replaced":
 						lines = []string{old, t592UserLine("Please implement the different current request.", boot.Add(time.Second))}
 					case "answered":
-						lines = []string{old, `{"type":"assistant","message":{"content":"The transcript correction is complete. Commit abc1234; go test ./... passed."}}`}
+						lines = []string{old, t7664AssistantLine(boot.Add(-30*time.Second), declaredFinishReport("T627", "transcript correction"))}
 					}
 					t592WriteChatlog(t, stateDir, lines)
 				}}, false, nil

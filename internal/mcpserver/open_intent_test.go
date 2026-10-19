@@ -4,12 +4,78 @@
 package mcpserver
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func t7664AssistantLine(ts time.Time, content string) string {
+	type message struct {
+		Content string `json:"content"`
+	}
+	type row struct {
+		Type      string  `json:"type"`
+		Timestamp string  `json:"timestamp"`
+		Message   message `json:"message"`
+	}
+	b, err := json.Marshal(row{
+		Type:      "assistant",
+		Timestamp: ts.Format(time.RFC3339),
+		Message:   message{Content: content},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func t7664AchieveToolLine(ts time.Time, id, attestation string) string {
+	type toolInput struct {
+		Op          string `json:"op"`
+		ID          string `json:"id"`
+		Attestation string `json:"attestation"`
+	}
+	type input struct {
+		ToolName  string    `json:"tool_name"`
+		ToolInput toolInput `json:"tool_input"`
+	}
+	type block struct {
+		Type  string `json:"type"`
+		Name  string `json:"name"`
+		Input input  `json:"input"`
+	}
+	type message struct {
+		Role    string  `json:"role"`
+		Content []block `json:"content"`
+	}
+	type row struct {
+		Type      string  `json:"type"`
+		Timestamp string  `json:"timestamp"`
+		Message   message `json:"message"`
+	}
+	b, err := json.Marshal(row{
+		Type:      "assistant",
+		Timestamp: ts.Format(time.RFC3339),
+		Message: message{
+			Role: "assistant",
+			Content: []block{{
+				Type: "tool_use",
+				Name: "use_tool",
+				Input: input{
+					ToolName:  "bullseye__bullseye_commit",
+					ToolInput: toolInput{Op: "achieve", ID: id, Attestation: attestation},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
 
 // 🎯T328: open owner intent recovery after control-plane bounce.
 
@@ -210,7 +276,8 @@ func TestIsOpenIntentRestartNudge(t *testing.T) {
 
 func TestExtractOpenOwnerIntentAnsweredOrClosedJiggleEvidence(t *testing.T) {
 	t.Parallel()
-	// Live incident shape: owner jiggle question, later overseer evidence for T341.
+	// A SHA sentence is not product evidence. A declared finish on the
+	// same jiggle complaint is (🎯T766.4).
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
@@ -224,8 +291,13 @@ func TestExtractOpenOwnerIntentAnsweredOrClosedJiggleEvidence(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("a SHA sentence must stay open, residual=%q", got.Residual)
+	}
+	turns[1].Text = declaredFinishReport("T341", "stop jiggle pin thrash")
+	got = ExtractOpenOwnerIntent(turns)
 	if got.Recoverable() {
-		t.Fatalf("answered jiggle must not recover open work, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("declared finish must not recover the jiggle, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want residual %q, got %q", ResidualAnsweredOrClosed, got.Residual)
@@ -290,17 +362,25 @@ func TestLoadOpenOwnerIntentAnsweredFromChatlogToolUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(chatDir, "jevons.jsonl")
-	// User jiggle + assistant tool_use achieve attestation (live chatlog shape).
-	body := strings.Join([]string{
-		`{"type":"user","timestamp":"2026-08-08T15:43:49Z","message":{"role":"user","content":"Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time?"}}`,
-		`{"type":"assistant","timestamp":"2026-08-08T15:55:38Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"use_tool","input":{"tool_name":"bullseye__bullseye_commit","tool_input":{"op":"achieve","id":"T341","attestation":"Independent overseer gate: SHA cf4bdce fix(web): stop continuous ~1px main-chat jiggle from pin thrash (T341). Hermetic PASS."}}}]}}`,
-	}, "\n") + "\n"
+	user := `{"type":"user","timestamp":"2026-08-08T15:43:49Z","message":{"role":"user","content":"Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time?"}}`
+	ts := time.Date(2026, 8, 8, 15, 55, 38, 0, time.UTC)
+	prose := t7664AchieveToolLine(ts, "T341", "Independent overseer gate: SHA cf4bdce fix(web): stop continuous ~1px main-chat jiggle from pin thrash (T341). Hermetic PASS.")
+	body := strings.Join([]string{user, prose}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadOpenOwnerIntent(dir, "jevons")
+	if !got.Recoverable() {
+		t.Fatalf("a SHA attestation must stay open, residual=%q", got.Residual)
+	}
+	finish := t7664AchieveToolLine(ts, "T341", declaredFinishReport("T341", "stop jiggle pin thrash"))
+	body = strings.Join([]string{user, finish}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = LoadOpenOwnerIntent(dir, "jevons")
 	if got.Recoverable() {
-		t.Fatalf("tool_use achieve evidence must close jiggle, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("tool_use declared finish must close jiggle, got text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)

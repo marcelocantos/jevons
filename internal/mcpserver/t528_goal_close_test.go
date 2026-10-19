@@ -64,11 +64,21 @@ func TestT528GoalOneIdentifiedContinueStillAllowed(t *testing.T) {
 func TestT528GoalStatusCompleteWithEvidenceCloses(t *testing.T) {
 	t.Parallel()
 	goal := "SPAWN T512 T520 T527 remint mission"
-	turns := []OwnerIntentTurn{
+	prose := []OwnerIntentTurn{
 		{Role: "user", Text: goal},
 		{
 			Role: "assistant",
 			Text: "T512 T520 T527 achieved; SHA abcdef0123456789abcd and GATE green.\nGOAL_STATUS: complete",
+		},
+	}
+	if !ExtractOpenOwnerIntent(prose).Recoverable() {
+		t.Fatal("a SHA sentence is not GOAL_STATUS evidence")
+	}
+	turns := []OwnerIntentTurn{
+		{Role: "user", Text: goal},
+		{
+			Role: "assistant",
+			Text: declaredFinishReport("T528", "T512 T520 T527 remint\nGOAL_STATUS: complete"),
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)

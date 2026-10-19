@@ -139,8 +139,8 @@ func TestLooksLikeHermeticOnlyDaemonClaim(t *testing.T) {
 }
 
 func TestT430LiveRenderOracleDidNotRun(t *testing.T) {
-	if !LiveRenderOracleDidNotRun("Live-render oracle DID NOT RUN: Browser is already in use for profile") {
-		t.Fatal("expected explicit non-result")
+	if LiveRenderOracleDidNotRun("Live-render oracle DID NOT RUN: Browser is already in use for profile") {
+		t.Fatal("a sentence is not a browser-oracle admission")
 	}
 	if LiveRenderOracleDidNotRun("Done. go test ./internal/mcpattach -run T430 PASS") {
 		t.Fatal("plain hermetic finish is not a browser non-result")
@@ -149,12 +149,12 @@ func TestT430LiveRenderOracleDidNotRun(t *testing.T) {
 
 func TestT430LooksLikeSilentBrowserOracleFallback(t *testing.T) {
 	silent := "Browser is already in use for /Users/marcelo/.config/playwright-mcp/profile; cited go test ./internal/ui PASS as live evidence"
-	if !LooksLikeSilentBrowserOracleFallback(silent) {
-		t.Fatal("hermetic cited after browser lock must flag silent fallback")
+	if LooksLikeSilentBrowserOracleFallback(silent) {
+		t.Fatal("hermetic cited after a browser sentence is not a silent fallback")
 	}
 	honest := "Browser is already in use for playwright-mcp/profile. Live-render oracle DID NOT RUN. No hermetic substitution."
 	if LooksLikeSilentBrowserOracleFallback(honest) {
-		t.Fatal("explicit DID NOT RUN must not flag as silent fallback")
+		t.Fatal("an honest non-result sentence is not a silent fallback")
 	}
 	clean := "Done. SHA abcdef0. go test ./internal/mcpattach -run T430 PASS"
 	if LooksLikeSilentBrowserOracleFallback(clean) {

@@ -4,7 +4,6 @@
 package mcpserver
 
 import (
-	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -48,10 +47,6 @@ func (c CompletionEvidenceClass) String() string {
 		return "unknown"
 	}
 }
-
-// commitSHARe matches short/full git SHAs (7–40 hex). Word-boundary style
-// via non-hex flanks so "pass" / common English words are not false hits.
-var commitSHARe = regexp.MustCompile(`(?i)(?:^|[^0-9a-f])([0-9a-f]{7,40})(?:[^0-9a-f]|$)`)
 
 var completionClaimMarkers = []string{
 	"done",
@@ -244,77 +239,10 @@ func LooksLikeHermeticOnlyDaemonClaim(report string) bool {
 	return HasOracleEvidence(report) && !HasActivationEvidence(report)
 }
 
-// LiveRenderOracleDidNotRun reports whether text admits a browser live-render
-// oracle did not run (🎯T430 clause 3). A refused browser is a reportable
-// non-result — not something to paper over with hermetics.
-func LiveRenderOracleDidNotRun(report string) bool {
-	lower := strings.ToLower(report)
-	// Explicit non-result admissions only. The lock error string alone is
-	// not an admission — a worker can still silently cite hermetics after it.
-	markers := []string{
-		"live-render oracle did not run",
-		"live render oracle did not run",
-		"browser oracle did not run",
-		"live-render oracle skipped",
-		"live browser probe did not run",
-		"live-path oracle did not run",
-		"live path oracle did not run",
-		"oracle did not run",
-		"could not obtain a browser",
-		"browser refused",
-		"playwright refused",
-	}
-	for _, m := range markers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
+// LiveRenderOracleDidNotRun is not a browser-oracle admission (🎯T766.4).
+// A sentence that says the live-render oracle did not run is not that admission.
+func LiveRenderOracleDidNotRun(string) bool { return false }
 
-// LooksLikeSilentBrowserOracleFallback is true when a report cites hermetic /
-// synthetic evidence in the same breath as a browser/live-render block, without
-// admitting the live oracle did not run (🎯T430 clause 3 / 🎯T386). Instructional
-// residual — pure classifier for overseer/finish-shape review, not a hard block.
-func LooksLikeSilentBrowserOracleFallback(report string) bool {
-	if strings.TrimSpace(report) == "" {
-		return false
-	}
-	if LiveRenderOracleDidNotRun(report) {
-		return false
-	}
-	lower := strings.ToLower(report)
-	browserBlocked := false
-	for _, m := range []string{
-		"browser is already in use",
-		"use --isolated",
-		"playwright-mcp/profile",
-		"could not open a browser",
-		"browser locked",
-		"shared profile",
-	} {
-		if strings.Contains(lower, m) {
-			browserBlocked = true
-			break
-		}
-	}
-	if !browserBlocked {
-		return false
-	}
-	// Substituted evidence shapes that must not stand in for the live probe.
-	for _, m := range []string{
-		"go test",
-		"make test",
-		"hermetic",
-		"synthetic",
-		"test-web",
-		"test-ui",
-		"journey green",
-		"model caption",
-	} {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
+// LooksLikeSilentBrowserOracleFallback is not a silent-fallback finding (🎯T766.4).
+// Citing hermetics beside a browser sentence is not that finding.
+func LooksLikeSilentBrowserOracleFallback(string) bool { return false }
