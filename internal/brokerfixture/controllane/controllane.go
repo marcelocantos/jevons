@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 // Package controllane is the receipt lane fleet and mcpserver tests read
 // through: a real broker process (brokerfixture) publishes receipts into its
 // own file, and Jevons' replica, opened as startCostGuard opens it, receives
@@ -23,7 +21,7 @@ import (
 )
 
 // arrivalTimeout bounds how long a published receipt may take to reach
-// Jevons' file over an established link.
+// Jevons' file over the link.
 const arrivalTimeout = 30 * time.Second
 
 // Lane is one broker and the Jevons replica linked to it.
@@ -36,11 +34,11 @@ type Lane struct {
 
 	Replica   *cost.ReplicaSource
 	Collector *cost.Collector
-	epoch     uint64
 }
 
 // Start runs a broker and opens Jevons' replica in dir, linked to it, with a
-// collector over store. It returns once the link is established.
+// collector over store. It does not wait for the link: a broker write that
+// lands before or during the handshake still reaches the replica.
 func Start(t testing.TB, dir string, store *cost.Store) *Lane {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -66,10 +64,6 @@ func (l *Lane) open() {
 	if l.Collector.UsesSocketHistory() {
 		l.t.Fatal("receipt proof polled the usage socket")
 	}
-	l.epoch = brokerfixture.AwaitLinkEstablished(l.t, func() (bool, uint64) {
-		st := replica.LinkState()
-		return st.Linked, st.Epoch
-	}, 0)
 }
 
 // Reopen is a Jevons restart: the replica closes and opens again on the

@@ -196,8 +196,8 @@ func (s *Server) SettleHeldReceipts() {
 }
 
 // SetSendReceiptQuery installs the production receipt read. Nil falls back
-// to claudiawire.QueryReceipt. The published pin fails that read closed.
-// jevons_claudia_next dials Claudia. The daemon installs the replica read.
+// to claudiawire.QueryReceipt, which dials Claudia. The daemon installs the
+// replica read.
 func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)) {
 	s.mu.Lock()
 	s.querySendReceipt = fn

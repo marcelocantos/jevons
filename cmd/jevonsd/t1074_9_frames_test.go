@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 package main
 
 import (
@@ -42,7 +40,6 @@ func TestT10749LostFrameRecoversAndDuplicateIngestsOnce(t *testing.T) {
 
 	ctx, stop := context.WithCancel(context.Background())
 	guard, _, _ := startTestCostGuard(t, ctx, dir)
-	epoch := awaitLinkEstablished(t, guard.replica, 0)
 	broker.PublishUsage(completedFact("seat-a", "call-a", 1))
 	waitUntil(t, "call-a", func() bool { return replicaHas(t, guard, "call-a") })
 	requireCalls(t, ctx, guard, 1)
@@ -58,7 +55,6 @@ func TestT10749LostFrameRecoversAndDuplicateIngestsOnce(t *testing.T) {
 		return replicaHas(t, guard, "call-b") && replicaHas(t, guard, "call-c")
 	})
 	requireCalls(t, ctx, guard, 3)
-	awaitLinkEstablished(t, guard.replica, epoch) // the redial the gap forced
 
 	proxy.DuplicateChangesets(1)
 	broker.PublishUsage(completedFact("seat-d", "call-d", 1))
@@ -81,7 +77,6 @@ func TestT10749LostFrameRecoversAndDuplicateIngestsOnce(t *testing.T) {
 	restarted, _, _ := startTestCostGuard(t, ctx2, dir)
 	t.Cleanup(func() { _ = restarted.replica.Close() })
 	requireCalls(t, ctx2, restarted, 4)
-	awaitLinkEstablished(t, restarted.replica, 0)
 	broker.PublishUsage(completedFact("seat-e", "call-e", 1))
 	waitUntil(t, "call-e after the Jevons restart", func() bool { return replicaHas(t, restarted, "call-e") })
 	requireCalls(t, ctx2, restarted, 5)
@@ -89,26 +84,21 @@ func TestT10749LostFrameRecoversAndDuplicateIngestsOnce(t *testing.T) {
 	requireHeldBy(t, broker.ControlFile(), broker.Pid())
 }
 
-// TestT10749BrokerWriteDuringHandshakeKeepsFlowing reproduces the Claudia
-// link defects reported with 🎯T1074.9, with no link-established
-// precondition. It is expected RED until the Claudia link is fixed; it is
-// the reproduction the Claudia fix is checked against.
+// TestT10749BrokerWriteDuringHandshakeKeepsFlowing is the regression for
+// the link defects reported with 🎯T1074.9 and fixed in sqlpipe v0.33.0
+// (Claudia v0.59.0). It writes on the broker while the guard's fresh link
+// may still be in its handshake, with no wait for the link.
 //
-// Defect 1 (every run observed): the broker writes call-a while the guard's
-// fresh link is still in its handshake. Claudia delivers that row twice, in
+// Defect 1: Claudia delivered a row written during the handshake twice, in
 // the handshake diff and again as changeset seq 1; the consumer's apply
-// aborts on the conflict ("changeset_apply: not an error") and the link
-// ends and redials. The test reports that ended link and carries on.
+// aborted on the conflict and the link ended and redialled. The test
+// requires that no link ended.
 //
-// Defect 2 (timing-dependent; seen on every run of an earlier shape of
-// TestT10749LostFrameRecoversAndDuplicateIngestsOnce): after that redial,
-// whose diff re-carries call-a, the broker's next write (call-b) is
+// Defect 2: after that redial, the broker's next write (call-b) was
 // committed in its own file but never sent as a changeset on the live
-// link; the broker's _sqlpipe_meta master_seq stays 1, and a Jevons write
-// that gives the broker a frame to answer draws only an Ack. The proxy
-// counts the changeset the broker sends for call-b (and drops it, which the
-// next changeset's gap would recover); none arrives. The bound is the
-// delivery budget of a live link, not a retry.
+// link. The proxy counts the changeset the broker sends for call-b (and
+// drops it, which the next changeset's gap would recover); one must arrive
+// within the delivery budget of a live link, not a retry.
 func TestT10749BrokerWriteDuringHandshakeKeepsFlowing(t *testing.T) {
 	broker := brokerfixture.Start(t)
 	proxyBroker := filepath.Join(filepath.Dir(broker.Socket), "proxy.sock")
@@ -150,13 +140,3 @@ func TestT10749BrokerWriteDuringHandshakeKeepsFlowing(t *testing.T) {
 // liveLinkDeliveryBudget bounds how long a live link may take to deliver a
 // committed broker write. Delivery is one changeset frame on a local socket.
 const liveLinkDeliveryBudget = 10 * time.Second
-
-// awaitLinkEstablished is brokerfixture.AwaitLinkEstablished for a
-// replica; see there for why these tests wait for it.
-func awaitLinkEstablished(t *testing.T, src *cost.ReplicaSource, after uint64) uint64 {
-	t.Helper()
-	return brokerfixture.AwaitLinkEstablished(t, func() (bool, uint64) {
-		st := src.LinkState()
-		return st.Linked, st.Epoch
-	}, after)
-}

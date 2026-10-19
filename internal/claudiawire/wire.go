@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 package claudiawire
 
 import (
@@ -11,8 +9,8 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// Aliases of the Claudia module selected by the build. The default build
-// uses the local copies in the pin files instead.
+// Aliases of the Claudia usage, receipt and generation contracts. Jevons
+// consumes them through this package so one file names the Claudia wire.
 
 type UsageFact = claudia.UsageFact
 type UsageCounters = claudia.UsageCounters

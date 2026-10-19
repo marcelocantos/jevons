@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 package cost
 
 import (
@@ -64,7 +62,6 @@ func TestT10749TopologyTwoProcessesOverTheWire(t *testing.T) {
 	collector := NewCollector(&CollectorArgs{Store: store, Replica: src})
 
 	replicaPath := filepath.Join(jevonsState, controlplane.JevonsDBFile)
-	epoch := awaitLinkEstablished(t, src, 0)
 	requireTopology(t, broker, replicaPath)
 	if _, err := controlplane.OpenReplica(broker.ControlFile()); !errors.Is(err, controlplane.ErrNotOwner) {
 		t.Fatalf("opening the broker's file as a replica = %v, want ErrNotOwner", err)
@@ -104,13 +101,11 @@ func TestT10749TopologyTwoProcessesOverTheWire(t *testing.T) {
 		return countWhere(t, db, controlplane.UsageTable, "call_id IN ('call-2', 'call-3')") == 2
 	})
 	requireUsageCalls(t, collector, store, 3)
-	epoch = awaitLinkEstablished(t, src, epoch)
 
 	// A severed transport: the proxy closes the connection, the link ends,
 	// and the reconnect loop dials again. A fact published on the new link
 	// arrives.
 	proxy.Sever()
-	epoch = awaitLinkEstablished(t, src, epoch)
 	broker.PublishUsage(topologyFact(7))
 	waitReplica(t, src, "fact 7 after the transport was severed", func(db *sqlpipe.Database) bool {
 		return countWhere(t, db, controlplane.UsageTable, "call_id = 'call-7'") == 1
@@ -149,7 +144,6 @@ func TestT10749TopologyTwoProcessesOverTheWire(t *testing.T) {
 	if broker.Pid() == firstPid {
 		t.Fatalf("broker restart kept pid %d", firstPid)
 	}
-	awaitLinkEstablished(t, src, epoch)
 	waitReplica(t, src, "the restarted broker's reconcile status for the desired seat", func(db *sqlpipe.Database) bool {
 		statuses, err := controlplane.SeatStatuses(db)
 		return err == nil && statuses["seat-topology"].State == "ungranted"
@@ -196,16 +190,6 @@ func requireTopology(t *testing.T, broker *brokerfixture.Broker, replicaPath str
 	if _, err := os.Lstat(filepath.Join(broker.StateDir, controlplane.JevonsDBFile)); !os.IsNotExist(err) {
 		t.Fatalf("broker state holds Jevons' file name: %v", err)
 	}
-}
-
-// awaitLinkEstablished is brokerfixture.AwaitLinkEstablished for a
-// replica; see there for why these tests wait for it.
-func awaitLinkEstablished(t *testing.T, src *ReplicaSource, after uint64) uint64 {
-	t.Helper()
-	return brokerfixture.AwaitLinkEstablished(t, func() (bool, uint64) {
-		st := src.LinkState()
-		return st.Linked, st.Epoch
-	}, after)
 }
 
 func requireUsageCalls(t *testing.T, c *Collector, store *Store, want int64) {

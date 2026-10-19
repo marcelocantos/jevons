@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 package main
 
 import (
@@ -40,7 +38,6 @@ func TestCostGuardConsumesReplicasWithoutSocketPoll(t *testing.T) {
 	if guard.collector.UsesSocketHistory() {
 		t.Fatal("daemon still polls the usage socket")
 	}
-	awaitLinkEstablished(t, guard.replica, 0)
 
 	broker.PublishUsage(completedFact("seat", "call-1", 1))
 	broker.PublishReceipt(claudia.RequestReceipt{

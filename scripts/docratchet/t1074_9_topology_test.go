@@ -61,18 +61,13 @@ var t10749BrokerFileNames = map[string]bool{
 
 func TestT10749NoJevonsBinaryReachesTheBrokersFile(t *testing.T) {
 	root := repoRoot(t)
-	var flags []string
-	if t10749NextBuild {
-		flags = []string{"-tags=jevons_claudia_next"}
-	}
-	mains := t10749ControlPlaneMains(t, root, flags)
+	mains := t10749ControlPlaneMains(t, root)
 	if len(mains) == 0 {
 		t.Fatal("no main under cmd/ links the control plane or sqlpipe; the ratchet would be vacuous")
 	}
 	pkgs, err := packages.Load(&packages.Config{
-		Dir:        root,
-		BuildFlags: flags,
-		Mode:       packages.LoadAllSyntax,
+		Dir:  root,
+		Mode: packages.LoadAllSyntax,
 	}, mains...)
 	if err != nil {
 		t.Fatal(err)
@@ -127,26 +122,23 @@ func TestT10749NoJevonsBinaryReachesTheBrokersFile(t *testing.T) {
 			t.Errorf("%s (%s) is reachable from a Jevons binary: %s", name, why, t10749Chain(res, f))
 		}
 	}
-	// The positive control: the rule is not vacuous on a build that has a
-	// consumer. Jevons' own replica and its link are reachable.
-	if t10749NextBuild {
-		for _, name := range []string{
-			"github.com/marcelocantos/claudia/controlplane.OpenReplica",
-			"(*github.com/marcelocantos/claudia/controlplane.Replica).Link",
-		} {
-			if _, ok := reached[name]; !ok {
-				t.Errorf("%s is not reachable from jevonsd: the consumer is not wired, or this ratchet sees the wrong program", name)
-			}
+	// The positive control: the rule is not vacuous. Jevons' own replica
+	// and its link are reachable.
+	for _, name := range []string{
+		"github.com/marcelocantos/claudia/controlplane.OpenReplica",
+		"(*github.com/marcelocantos/claudia/controlplane.Replica).Link",
+	} {
+		if _, ok := reached[name]; !ok {
+			t.Errorf("%s is not reachable from jevonsd: the consumer is not wired, or this ratchet sees the wrong program", name)
 		}
 	}
 }
 
 // t10749ControlPlaneMains lists the main packages under cmd/ that link the
 // control plane or sqlpipe.
-func t10749ControlPlaneMains(t *testing.T, root string, flags []string) []string {
+func t10749ControlPlaneMains(t *testing.T, root string) []string {
 	t.Helper()
-	args := append([]string{"list"}, flags...)
-	args = append(args, "-f", `{{if eq .Name "main"}}{{.ImportPath}}{{range .Deps}} {{.}}{{end}}{{end}}`, "./cmd/...")
+	args := []string{"list", "-f", `{{if eq .Name "main"}}{{.ImportPath}}{{range .Deps}} {{.}}{{end}}{{end}}`, "./cmd/..."}
 	cmd := exec.Command("go", args...)
 	cmd.Dir = root
 	out, err := cmd.Output()

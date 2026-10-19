@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 package cost
 
 import (
@@ -21,33 +19,24 @@ import (
 	"github.com/marcelocantos/claudia/omp"
 )
 
-// This is explicit paired-source integration evidence, not a normal hermetic
-// pass when skipped. Use the same frozen Claudia checkout as the Go module
-// replacement, with its sidecar dependencies installed from the frozen lock:
-// JEVONS_USAGE_INTEGRATION_CLAUDIA=/path/to/claudia bin/gate -- go test
-// -mod=readonly -modfile=/tmp/paired.mod -race ./internal/cost
-// -run '^TestUsageProducerCanonicalHistoryCatchUp$' -count=1
+// This runs the sidecar of the Claudia module this binary links, staged and
+// installed from its frozen lockfile (claudiaSidecar), so the pinned module
+// is what it exercises. JEVONS_USAGE_INTEGRATION_CLAUDIA names a checkout
+// whose own installed sidecar runs instead. A missing Bun is a failure.
 // The provider fixtures execute the real seat, maintenance, and provider parsers with fake fetch;
 // the actual sidecar only handles provider-free discovery and history queries.
 func TestUsageProducerCanonicalHistoryCatchUp(t *testing.T) {
-	claudiaRoot := os.Getenv("JEVONS_USAGE_INTEGRATION_CLAUDIA")
-	if claudiaRoot == "" {
-		t.Skip("paired-source integration not enabled; set JEVONS_USAGE_INTEGRATION_CLAUDIA to the exact Claudia module replacement checkout")
-	}
-	claudiaRoot, err := filepath.Abs(claudiaRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
 	bun, err := exec.LookPath("bun")
 	if err != nil {
-		t.Fatal("enabled integration requires Bun: ", err)
+		t.Fatal("usage producer integration requires Bun: ", err)
 	}
+	sidecar := claudiaSidecar(t, bun)
 	for _, fixture := range []canonicalUsageFixture{
-		{name: "responses_retry", script: "sidecar/testdata/provider-usage-producer.ts", provider: "xai-oauth", input: 38, output: 5, fresh: 31, cache: 7, consumption: 43, invocations: 1, kinds: []string{"model", "model"}},
-		{name: "openai_compaction", script: "sidecar/testdata/native-usage-producer.ts", args: []string{"success", "openai"}, provider: "openai", input: 128, output: 11, fresh: 81, cache: 47, consumption: 139, invocations: 2, kinds: []string{"compaction", "model"}},
-		{name: "codex_compaction", script: "sidecar/testdata/native-usage-producer.ts", args: []string{"success", "codex"}, provider: "openai-codex", input: 128, output: 11, fresh: 81, cache: 47, consumption: 139, invocations: 2, kinds: []string{"compaction", "model"}},
+		{name: "responses_retry", script: "testdata/provider-usage-producer.ts", provider: "xai-oauth", input: 38, output: 5, fresh: 31, cache: 7, consumption: 43, invocations: 1, kinds: []string{"model", "model"}},
+		{name: "openai_compaction", script: "testdata/native-usage-producer.ts", args: []string{"success", "openai"}, provider: "openai", input: 128, output: 11, fresh: 81, cache: 47, consumption: 139, invocations: 2, kinds: []string{"compaction", "model"}},
+		{name: "codex_compaction", script: "testdata/native-usage-producer.ts", args: []string{"success", "codex"}, provider: "openai-codex", input: 128, output: 11, fresh: 81, cache: 47, consumption: 139, invocations: 2, kinds: []string{"compaction", "model"}},
 	} {
-		t.Run(fixture.name, func(t *testing.T) { checkCanonicalUsageProducer(t, claudiaRoot, bun, fixture) })
+		t.Run(fixture.name, func(t *testing.T) { checkCanonicalUsageProducer(t, sidecar, bun, fixture) })
 	}
 }
 
@@ -59,7 +48,7 @@ type canonicalUsageFixture struct {
 	kinds                                    []string
 }
 
-func checkCanonicalUsageProducer(t *testing.T, claudiaRoot, bun string, want canonicalUsageFixture) {
+func checkCanonicalUsageProducer(t *testing.T, sidecar, bun string, want canonicalUsageFixture) {
 	t.Helper()
 	// macOS Unix-domain socket names must fit its short pathname limit.
 	root, err := os.MkdirTemp("/tmp", "jv-usage-")
@@ -71,7 +60,7 @@ func checkCanonicalUsageProducer(t *testing.T, claudiaRoot, bun string, want can
 	defer cancel()
 	spoolRoot := filepath.Join(root, "lost-spool")
 	fixture := exec.CommandContext(ctx, bun, append([]string{want.script, root}, want.args...)...)
-	fixture.Dir = claudiaRoot
+	fixture.Dir = sidecar
 	// Whitelist process setup only: no inherited credentials, proxy settings,
 	// provider switches, or home configuration can affect the fake transport.
 	fixture.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + root, "JEVONS_SPOOL_DIR=" + spoolRoot, "CLAUDIA_OMP_SPOOL_DIR=" + spoolRoot}
@@ -96,8 +85,8 @@ func checkCanonicalUsageProducer(t *testing.T, claudiaRoot, bun string, want can
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := exec.CommandContext(ctx, bun, "sidecar/server.ts", socket)
-	server.Dir, server.Env = claudiaRoot, fixture.Env
+	server := exec.CommandContext(ctx, bun, "server.ts", socket)
+	server.Dir, server.Env = sidecar, fixture.Env
 	server.Stdout, server.Stderr = log, log
 	if err := server.Start(); err != nil {
 		_ = log.Close()

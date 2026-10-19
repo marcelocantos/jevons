@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 // Package brokerfixture runs a real Claudia broker in its own process for
 // Jevons tests of the control-plane pair (🎯T1074.9). The broker owns
 // claudia-control.db in its own state directory and serves the control
@@ -62,7 +60,7 @@ func Start(t testing.TB) *Broker {
 	t.Helper()
 	work := t.TempDir()
 	bin := filepath.Join(work, "fixturebroker")
-	build := exec.Command("go", "build", "-tags", "jevons_claudia_next", "-o", bin, fixtureMain)
+	build := exec.Command("go", "build", "-o", bin, fixtureMain)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fixture broker: %v\n%s", err, out)
 	}
@@ -260,32 +258,4 @@ func Holders(path string) ([]int, error) {
 	}
 	slices.Sort(pids)
 	return pids, nil
-}
-
-// AwaitLinkEstablished waits until state reports an established broker link
-// with an epoch newer than after, and returns that epoch. state is a
-// replica's link state (cost.ReplicaSource.LinkState, unpacked: this package
-// cannot import cost, whose own tests import it).
-//
-// It is the precondition consumer tests put before a broker write that
-// follows a (re)dial. Claudia's link mishandles a broker write that lands
-// during the handshake: the row is delivered in the diff and again as a
-// changeset, the consumer's apply aborts on the conflict, and after the
-// redial the broker can stop sending changesets on that link. Those defects
-// are reported with 🎯T1074.9 and reproduced, unguarded, by cmd/jevonsd
-// TestT10749BrokerWriteDuringHandshakeKeepsFlowing. Remove this
-// precondition once the Claudia link is fixed.
-func AwaitLinkEstablished(t testing.TB, state func() (linked bool, epoch uint64), after uint64) uint64 {
-	t.Helper()
-	deadline := time.Now().Add(startTimeout)
-	for {
-		linked, epoch := state()
-		if linked && epoch > after {
-			return epoch
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no broker link established after epoch %d", after)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }

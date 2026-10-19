@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 // Command fixturebroker is a Claudia broker for Jevons tests: the real
 // daemon.New, in its own process, with its own state directory and socket,
 // so the broker owns claudia-control.db and serves the control socket

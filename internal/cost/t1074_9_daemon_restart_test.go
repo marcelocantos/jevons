@@ -1,8 +1,6 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 package cost
 
 import (
@@ -66,7 +64,6 @@ func TestT10749DisconnectedAcceptSurvivesRestarts(t *testing.T) {
 	}
 
 	broker.Restart()
-	epoch := awaitLinkEstablished(t, src, 0)
 	// A broker fact arriving here means the handshake has run, and the
 	// handshake is what carries Jevons' rows the other way.
 	broker.PublishUsage(topologyFact(1))
@@ -74,7 +71,6 @@ func TestT10749DisconnectedAcceptSurvivesRestarts(t *testing.T) {
 		return countWhere(t, db, controlplane.UsageTable, "call_id = 'call-1'") == 1
 	})
 	broker.Restart()
-	epoch = awaitLinkEstablished(t, src, epoch)
 	var status controlplane.SeatStatus
 	var outcome controlplane.ControlOutcome
 	waitReplica(t, src, "the reconciled status and the stale outcome", func(db *sqlpipe.Database) bool {
@@ -97,7 +93,6 @@ func TestT10749DisconnectedAcceptSurvivesRestarts(t *testing.T) {
 	}
 
 	broker.Restart()
-	awaitLinkEstablished(t, src, epoch)
 	broker.PublishUsage(topologyFact(2))
 	waitReplica(t, src, "the third broker's fact", func(db *sqlpipe.Database) bool {
 		return countWhere(t, db, controlplane.UsageTable, "call_id = 'call-2'") == 1

@@ -169,8 +169,7 @@ func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudiawire.UsageFact) 
 		}
 		previous = &old
 	}
-	// The transition contract lives in claudiawire. jevons_claudia_next calls
-	// Claudia. The published pin uses the local copy of that contract.
+	// The transition contract is Claudia's, reached through claudiawire.
 	// The host owns only persistence and attribution.
 	apply, err := claudiawire.ValidateUsageTransition(previous, f)
 	if err != nil {

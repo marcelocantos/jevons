@@ -1,21 +1,18 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build jevons_claudia_next
-
 package cost
 
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime/debug"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -94,11 +91,11 @@ func TestT1074SqlpipeUsageAndReceiptReplication(t *testing.T) {
 
 func replicateProducerFacts(t *testing.T) {
 	t.Helper()
-	claudiaRoot := claudiaCleanupRoot(t)
 	bun, err := exec.LookPath("bun")
 	if err != nil {
 		t.Fatal("sqlpipe replication requires Bun: ", err)
 	}
+	sidecar := claudiaSidecar(t, bun)
 	root, err := os.MkdirTemp("/tmp", "jv-sqlp-")
 	if err != nil {
 		t.Fatal(err)
@@ -107,8 +104,8 @@ func replicateProducerFacts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	producer := exec.CommandContext(ctx, bun, "sidecar/testdata/native-usage-producer.ts", root, "success", "openai")
-	producer.Dir = claudiaRoot
+	producer := exec.CommandContext(ctx, bun, "testdata/native-usage-producer.ts", root, "success", "openai")
+	producer.Dir = sidecar
 	spoolRoot := filepath.Join(root, "lost-spool")
 	producer.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -128,8 +125,8 @@ func replicateProducerFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := exec.CommandContext(ctx, bun, "sidecar/server.ts", socket)
-	server.Dir, server.Env = claudiaRoot, producer.Env
+	server := exec.CommandContext(ctx, bun, "server.ts", socket)
+	server.Dir, server.Env = sidecar, producer.Env
 	server.Stdout, server.Stderr = logFile, logFile
 	if err := server.Start(); err != nil {
 		_ = logFile.Close()
@@ -343,43 +340,83 @@ func assertCanonicalOpenAI(t *testing.T, ctx context.Context, store *Store) {
 	}
 }
 
-func claudiaCleanupRoot(t *testing.T) string {
+func claudiaSidecar(t *testing.T, bun string) string {
 	t.Helper()
 	if p := os.Getenv("JEVONS_USAGE_INTEGRATION_CLAUDIA"); p != "" {
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		st, err := os.Stat(abs)
+		st, err := os.Stat(filepath.Join(abs, "sidecar"))
 		if err != nil || !st.IsDir() {
-			t.Fatalf("JEVONS_USAGE_INTEGRATION_CLAUDIA is not a directory: %s", abs)
+			t.Fatalf("JEVONS_USAGE_INTEGRATION_CLAUDIA has no sidecar directory: %s", abs)
 		}
-		return abs
+		return filepath.Join(abs, "sidecar")
 	}
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		t.Fatal("build info unavailable; sqlpipe replication needs the cleanup Claudia module")
+	// The Claudia module this binary links: the module cache under the
+	// published pin, or a checkout a go.work names. Neither is run in place:
+	// the module cache is read-only and has no node_modules, and a checkout
+	// is not this test's to mutate. Stage the locked sidecar source (top-level
+	// files, patches/ that package.json names, and testdata/ the producer
+	// and its fixtures live in) and install from its frozen lockfile, as the journey suite
+	// stages its isolated sidecar.
+	src := filepath.Dir(omp.ServerScript())
+	dst := filepath.Join(t.TempDir(), "sidecar")
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		t.Fatalf("read Claudia sidecar source: %v", err)
 	}
-	for _, m := range info.Deps {
-		if m.Path != "github.com/marcelocantos/claudia" {
+	for _, entry := range entries {
+		from, to := filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())
+		if !entry.IsDir() {
+			copySidecarFile(t, from, to)
 			continue
 		}
-		if m.Replace == nil || m.Replace.Path == "" {
-			// A go.work pairing has no replace in the build info; ask the
-			// go command which directory it resolved the module to.
-			if dir := workspaceClaudiaDir(); dir != "" {
-				return dir
+		if entry.Name() != "patches" && entry.Name() != "testdata" {
+			continue
+		}
+		err := filepath.WalkDir(from, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
 			}
-			t.Fatal("claudia module has no local replace and no go.work checkout; run with the paired modfile or go.work")
+			rel, err := filepath.Rel(from, path)
+			if err != nil {
+				return err
+			}
+			copySidecarFile(t, path, filepath.Join(to, rel))
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("stage Claudia sidecar %s: %v", entry.Name(), err)
 		}
-		st, err := os.Stat(m.Replace.Path)
-		if err != nil || !st.IsDir() {
-			t.Fatalf("claudia replace path is not a directory: %s", m.Replace.Path)
-		}
-		return m.Replace.Path
 	}
-	t.Fatal("claudia module missing from build info")
-	return ""
+	ctx, cancel := context.WithTimeout(context.Background(), sidecarInstallTimeout)
+	defer cancel()
+	install := exec.CommandContext(ctx, bun, "install", "--frozen-lockfile")
+	install.Dir = dst
+	if out, err := install.CombinedOutput(); err != nil {
+		t.Fatalf("install the staged Claudia sidecar (%s): %v\n%s", src, err, out)
+	}
+	return dst
+}
+
+// sidecarInstallTimeout bounds the staged sidecar's install. A warm Bun
+// cache makes it a copy; a cold one downloads the native addon.
+const sidecarInstallTimeout = 5 * time.Minute
+
+func copySidecarFile(t *testing.T, from, to string) {
+	t.Helper()
+	body, err := os.ReadFile(from)
+	if err != nil {
+		t.Fatalf("read Claudia sidecar file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The module cache's files are read-only; the staged copy is not.
+	if err := os.WriteFile(to, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func openControlFile(t *testing.T, path string) *sqlpipe.Database {
@@ -535,19 +572,4 @@ func closeDBs(t *testing.T, dbs ...*sqlpipe.Database) {
 			t.Fatal(err)
 		}
 	}
-}
-
-// workspaceClaudiaDir is the Claudia checkout a go.work names, or "" when
-// the module comes from the module cache.
-func workspaceClaudiaDir() string {
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/marcelocantos/claudia").Output()
-	if err != nil {
-		return ""
-	}
-	dir := strings.TrimSpace(string(out))
-	cache, err := exec.Command("go", "env", "GOMODCACHE").Output()
-	if err != nil || dir == "" || strings.HasPrefix(dir, strings.TrimSpace(string(cache))+string(filepath.Separator)) {
-		return ""
-	}
-	return dir
 }
