@@ -42,7 +42,7 @@ func hasFinishShape(string) bool { return false }
 // nothing.
 //
 // Recognition is declared, never a completion sentence (🎯T766.4): a valid
-// ack envelope is an ack; noopwedge.IsBareAck is 🎯T402's exact-match
+// ack envelope is an ack; noopwedge.IsExactAck is 🎯T402's exact-match
 // vocabulary (an ack with a payload after it is a report, not an ack); a
 // declared done report (envelope.IsDoneReport) is not suppressed; and
 // relayroute.Classify (🎯T392.7) keeps a direct overseer route escalating.
@@ -54,7 +54,7 @@ func bareAckTurnReport(text string) bool {
 	if envelope.IsDoneReport(text) {
 		return false
 	}
-	if !noopwedge.IsBareAck(text) {
+	if !noopwedge.IsExactAck(text) {
 		return false
 	}
 	return relayroute.Classify(text) != relayroute.RouteOverseer

@@ -80,10 +80,13 @@ func (h Handle) Empty() bool {
 	return strings.TrimSpace(h.Agent) == "" || strings.TrimSpace(h.ReportID) == ""
 }
 
-// TruncationMarkerPrefix is the stable, greppable opening of the marker. Both
-// the oracle and any consumer that wants to detect an elided delivery match on
-// this rather than on the prose around it.
+// TruncationMarkerPrefix is the visible opening of the marker the overseer
+// reads. Classifiers do not search it. TruncationFact is the declared slot.
 const TruncationMarkerPrefix = "[⚠️ REPORT TRUNCATED"
+
+// TruncationFact is one whole line. A sentence that quotes the visible
+// marker is not a truncated delivery.
+const TruncationFact = "open-intent delivery-truncated"
 
 // Elide prepares text for delivery under bound bytes.
 //
@@ -188,6 +191,8 @@ func trimToRuneBoundaryTail(s string, n int) string {
 func truncationMarker(elided, total int, h Handle) string {
 	var b strings.Builder
 	b.WriteString("\n\n")
+	b.WriteString(TruncationFact)
+	b.WriteString("\n")
 	b.WriteString(TruncationMarkerPrefix)
 	fmt.Fprintf(&b, " — %d of %d bytes elided from the MIDDLE of this report.", elided, total)
 	if h.Empty() {
@@ -202,8 +207,13 @@ func truncationMarker(elided, total int, h Handle) string {
 }
 
 // IsTruncatedDelivery reports whether a delivered message carries the
-// explicit marker. Used by tests and by any consumer that wants to know a
-// message is partial without re-deriving the bound.
+// declared truncation fact on its own line. The visible marker prose is not
+// the slot. A historical delivery that only quoted that prose is not truncated.
 func IsTruncatedDelivery(delivered string) bool {
-	return strings.Contains(delivered, TruncationMarkerPrefix)
+	for _, line := range strings.Split(delivered, "\n") {
+		if strings.ToLower(strings.TrimSpace(line)) == TruncationFact {
+			return true
+		}
+	}
+	return false
 }

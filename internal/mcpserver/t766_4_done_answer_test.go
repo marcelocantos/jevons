@@ -95,7 +95,9 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "false_green.go"), "FalseGreenFlagsForWorker")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750", "CitedCompletionClaim")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "local_done.go"), "allCompletionClaimsLocal")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ClassifyReportAskDetail", "hasForwardLookingPlan")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ClassifyReportAsk", "ClassifyReportAskDetail", "hasForwardLookingPlan")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agentreport/elide.go"), "IsTruncatedDelivery")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../noopwedge/noopwedge.go"), "IsExactAck")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../userturn/userturn.go"), "LegacyInjectionText", "unwrapUserQuery")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/deeper.go"), "isHarnessInject", "frictionSignal", "ChatTurnsToEvidence")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/retro.go"), "isWeakRetroPhrase", "isFixSubject", "isRevertSubject", "commitTypeToken")...)
@@ -373,7 +375,6 @@ func englishSelectorsIn(t *testing.T, path string, names ...string) []string {
 		"strings.EqualFold": true,
 	}
 	bannedCall := map[string]bool{
-		"ClassifyReportAsk": true, "ClassifyReportAskDetail": true,
 		"hasFinishShape": true, "hasCompletionClaim": true, "hasForwardLookingPlan": true,
 		"LooksLikeOwnWorkCompleteReport": true, "containsAny": true,
 		"FindCompletionClaim":    true,

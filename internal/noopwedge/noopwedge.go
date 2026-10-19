@@ -152,9 +152,24 @@ var bareAcks = map[string]bool{
 	"will do":               true,
 }
 
+// IsExactAck reports whether the whole text is one bare-ack token.
+// The comparison is the lowered token. A silent-marker prefix is not this
+// fact, and a payload after the token is not an ack.
+func IsExactAck(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" || len([]rune(t)) > ackMaxRunes {
+		return false
+	}
+	lower := strings.ToLower(t)
+	return bareAcks[strings.TrimSpace(strings.TrimRight(lower, " \t\r\n.!。"))]
+}
+
 // IsBareAck reports whether a turn's whole assistant text is a content-free
 // acknowledgement — an explicit decline to act. Empty text is deliberately
 // NOT an ack; see the note on bareAcks.
+//
+// The reap and notify path uses IsExactAck. This function also treats a
+// silent marker with nothing after it as an ack for the no-op wedge.
 func IsBareAck(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" || len([]rune(t)) > ackMaxRunes {
@@ -168,8 +183,9 @@ func IsBareAck(text string) bool {
 		if lower == "" {
 			return true
 		}
+		return IsExactAck(lower)
 	}
-	return bareAcks[strings.TrimSpace(strings.TrimRight(lower, " \t\r\n.!。"))]
+	return IsExactAck(text)
 }
 
 // silent reports a turn that produced nothing at all — no text, no tool

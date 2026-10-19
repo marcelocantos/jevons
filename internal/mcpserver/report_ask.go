@@ -134,7 +134,7 @@ func ClassifyReportAskDetail(report string) ReportAskFinding {
 	// 🎯T723: the harness ack is a turn-boundary artefact, not a work claim.
 	// Exact-match vocabulary only. A report that merely contains the phrase
 	// is not this class.
-	if noopwedge.IsBareAck(s) {
+	if noopwedge.IsExactAck(s) {
 		return ReportAskFinding{Class: AskNoClaim, Marker: "bare_ack", Span: s}
 	}
 	return ReportAskFinding{Class: AskNone}
