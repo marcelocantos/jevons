@@ -729,6 +729,7 @@ func main() {
 	// 🎯T418: accepted messages live in state_dir/sendq so a restart
 	// between accept and deliver no longer eats them.
 	mcpSrv.SetSendQueueDir(cfg.StateDir)
+	mcpSrv.SetDaemonStateDir(cfg.StateDir) // 🎯T1082: isolate agents are told their own state dir
 
 	// 🎯T414: the shared answer to "should this agent be running?", opened
 	// before any control can ask it. Durable and opened here rather than

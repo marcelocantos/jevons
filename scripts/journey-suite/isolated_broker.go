@@ -99,7 +99,9 @@ func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
 			}
 		}
 		logErr := logFile.Close()
-		result = errors.Join(result, stopErr, brokerErr, logErr, os.RemoveAll(state))
+		// 🎯T1082: this child's agents are scanned before their store goes.
+		guardErr := s.devGuard.noteStore(state)
+		result = errors.Join(result, stopErr, brokerErr, logErr, guardErr, os.RemoveAll(state))
 	}()
 	b, err = child.startIsolatedBroker()
 	if err != nil {

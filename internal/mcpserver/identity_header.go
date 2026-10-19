@@ -9,6 +9,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/briefaddr"
+	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/roles"
 )
@@ -54,6 +55,9 @@ type AgentIdentity struct {
 	Parent   string
 	WorkDir  string
 	TargetID string
+	// StateDir is the daemon's own state directory, set only when it is not
+	// the development daemon's ~/.jevons (🎯T1082).
+	StateDir string
 }
 
 // DeriveAgentRole answers which role doctrine binds this recipient.
@@ -140,6 +144,14 @@ func FormatIdentityHeader(id AgentIdentity) string {
 	}
 	if wd := strings.TrimSpace(id.WorkDir); wd != "" {
 		fmt.Fprintf(&b, "- WORKDIR: %s\n", wd)
+	}
+	if sd := strings.TrimSpace(id.StateDir); sd != "" {
+		// 🎯T1082: an isolate's agents, told only that development state is
+		// ~/.jevons, went and read it — one opened the development
+		// database with sqlite3 from inside the journey suite.
+		fmt.Fprintf(&b, "- STATE DIR: %s — this daemon's own state. It is not the development "+
+			"daemon's ~/.jevons: never read, list, open, query or write anything under ~/.jevons; "+
+			"a ~/.jevons/... path in your instructions means %s/... here (🎯T1082).\n", sd, sd)
 	}
 	if tid := FormatTargetID(id.TargetID); tid != "" {
 		fmt.Fprintf(&b, "- TARGET: %s\n", tid)
@@ -250,6 +262,7 @@ func (s *Server) identityHeaderFor(name string) string {
 	if r := s.agentRole(d.Name, d.Purpose); r != "" {
 		id.Role = DeriveAgentRole(d.Name, d.Purpose, r)
 	}
+	id.StateDir = s.isolateStateDir()
 	return FormatIdentityHeader(id)
 }
 
@@ -294,4 +307,21 @@ func (s *Server) withIdentity(name, text string) string {
 // every ambient notice.
 func (s *Server) sendDaemonComposed(name, text string, interrupt bool) (agentSendResult, error) {
 	return s.sendToAgent(name, s.withIdentity(name, text), interrupt)
+}
+
+// SetDaemonStateDir records the daemon's state directory, so the identity
+// header can tell an isolate's agents where their state is (🎯T1082). It is
+// an atomic, not s.mu: the header is composed on send paths that hold s.mu.
+func (s *Server) SetDaemonStateDir(dir string) {
+	s.daemonStateDir.Store(strings.TrimSpace(dir))
+}
+
+// isolateStateDir is the daemon's state directory when it is not the
+// development daemon's own, else "".
+func (s *Server) isolateStateDir() string {
+	dir, _ := s.daemonStateDir.Load().(string)
+	if dir == "" || (config.Config{StateDir: dir}).IsDevelopmentState() {
+		return ""
+	}
+	return dir
 }

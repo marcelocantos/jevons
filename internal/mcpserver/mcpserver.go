@@ -474,6 +474,8 @@ type Server struct {
 	// deterministic notice does not depend on.
 	recoverBin string
 	stateDir   string
+	// daemonStateDir is cfg.StateDir (🎯T1082); see SetDaemonStateDir.
+	daemonStateDir atomic.Value
 	// spawnOrderEvidence caches the journalled start attempts 🎯T762 reconciles
 	// against: the journal is a full scan, and /api/agents asks per row.
 	spawnOrderMu       sync.Mutex
