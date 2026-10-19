@@ -76,6 +76,11 @@ func TestT7664DeclaredKindIsTheDoneAnswer(t *testing.T) {
 	}
 }
 
+// TestT7664ReapDoneEnglishAllowlistZero scans the listed bodies only; it
+// does not follow callees. The structural ratchet is
+// TestT76641ReapDecisionsReachNoProseMatcher (scripts/docratchet), which
+// walks the call graph from the reap/stop/idle decisions (🎯T766.4.1).
+// This census stays as a fast local net, not as the proof.
 func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
@@ -94,7 +99,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree", "hasOracleEvidence", "hasAcceptedRisk", "hasCompletionClaim", "FindCompletionClaim", "reportCitesOracleID", "HasActivationEvidence", "LooksLikeHermeticOnlyDaemonClaim", "LiveRenderOracleDidNotRun", "LooksLikeSilentBrowserOracleFallback")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "open_intent.go"), "hasOpenIntentProductEvidence", "openIntentEvidenceCandidate", "openIntentAnswerShaped", "openIntentSubstantiveReply", "ownerIntentClosedByLaterSubstantiveReply", "OwnerQuestionAnsweredWithExplanation", "openIntentFleetOpsEvidence", "openIntentTopicalLink", "isOpenIntentAckOnly", "parseFleetOpExcerpt", "fleetOpsToolIs", "isOpenIntentFleetOpsTool", "synthesizeOpenIntentFleetOpsTool", "OwnerFleetDirectiveCompleted", "keepOpenIntentAssistant", "ownerFleetDirectiveTargets", "isOpenIntentRestartNudge", "isOpenIntentSendProbe", "isOpenIntentHarness", "isOpenIntentProtocolJSON", "flattenOpenIntentToolInput")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "false_green.go"), "FalseGreenFlagsForWorker")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_gate_veto.go"), "reapGateVeto", "TypedGateFlags")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750", "CitedCompletionClaim")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "local_done.go"), "allCompletionClaimsLocal")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ClassifyReportAsk", "ClassifyReportAskDetail", "hasForwardLookingPlan")...)

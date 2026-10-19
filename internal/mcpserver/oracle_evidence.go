@@ -229,7 +229,8 @@ func reportCitesOracleID(report string) bool {
 
 // UncitedClaimAgainstDirtyWorktree is not a reap veto (🎯T766.4).
 // Marker words are not oracle evidence, so a dirty worktree is not
-// judged from a sentence. FalseGreenFlagsForWorker still calls this.
+// judged from a sentence. Nothing on the reap path calls it
+// (🎯T766.4.1); owned uncommitted scope is the 🎯T972 typed check.
 func UncitedClaimAgainstDirtyWorktree(string, *gate.TreeProvenance) bool { return false }
 
 // LooksLikeHermeticOnlyDaemonClaim is true when a report declares an oracle

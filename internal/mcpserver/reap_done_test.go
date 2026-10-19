@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/gate"
 )
 
 // declaredFinishReport is a valid finish-report. Unenveloped prose is not
@@ -130,9 +131,12 @@ func TestT7664ReapFieldsFollowTheEnvelopeNotTheSentence(t *testing.T) {
 
 // TestT7664FalseGreenSkipLogsTheTypedReason drives maybeReapDoneWorkAgent.
 // The skip log repeats the false-green reason the typed checker returned.
-// It does not name a completion sentence inside that report.
+// It does not name a completion sentence inside that report. The RED gate
+// is the declared gate-id slot (🎯T766.4.1): a GATE line in the payload is
+// prose the reap no longer reads.
 func TestT7664FalseGreenSkipLogsTheTypedReason(t *testing.T) {
-	report := declaredFinishReport("T470", "Done. Mission complete. SHA abcdef0123456. GATE go-test exit=1 RED id=2817ca36.")
+	t76641Store(t, t76641Record("2817ca36", gate.VerdictRed, 1))
+	report := declaredGateFinishReport("T470", "2817ca36", envelope.VerdictGreen, "Done. Mission complete.")
 	reg := t439Registry(t, "jv-t7664-false-green")
 	ok, want := ShouldAutoReapDoneWorkAgent(reg, "jv-t7664-false-green", report, nil)
 	if ok || !strings.HasPrefix(want, "false_green_") {

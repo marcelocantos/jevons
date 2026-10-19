@@ -135,20 +135,18 @@ func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isD
 	if !done {
 		return false, reason
 	}
-	// 🎯T470: a report the false-green check flagged is never auto-reaped as
-	// finished_work in the same pass — jv-t391 was flagged
-	// attestation_not_green and reaped finished_work 447ms later.
-	//
-	// 🎯T946: the check also reads the worker's own worktree when one is
-	// registered — a report that never cites a SHA or gate id but reads as
-	// oracle evidence on marker words alone, over an uncommitted worktree,
-	// is the same shape as a contradicted attestation (jv-t906-accept-lifts-block,
-	// jv-t943-stale-token-reload).
+	// 🎯T470: a declared finish whose declared evidence is contradicted is
+	// never auto-reaped as finished_work in the same pass — jv-t391 was
+	// flagged attestation_not_green and reaped finished_work 447ms later.
+	// 🎯T1027: nor one resting on another repo's gate. The veto reads typed
+	// facts only (🎯T766.4.1): the envelope's slots and the gate record they
+	// name. The prose rules of the report-time FALSE-GREEN banner are not
+	// reachable from here.
 	var workDir string
 	if wd := reg.Def(name); wd != nil {
 		workDir = wd.WorkDir
 	}
-	if flags := FalseGreenFlagsForWorker(report, workDir); len(flags) > 0 {
+	if flags := reapGateVeto(report, workDir); len(flags) > 0 {
 		return false, "false_green_" + string(flags[0].Kind)
 	}
 	def := reg.Def(name)
@@ -224,7 +222,7 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		if def := s.registry.Def(name); def != nil {
 			workDir = def.WorkDir
 		}
-		if flags := FalseGreenFlagsForWorker(report, workDir); len(flags) > 0 &&
+		if flags := reapGateVeto(report, workDir); len(flags) > 0 &&
 			reason == "false_green_"+string(flags[0].Kind) {
 			fields := reapDecisionFields(name, reason, report)
 			fields["false_green_flags"] = falseGreenKinds(flags)

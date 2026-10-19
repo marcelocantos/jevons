@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/gate"
 )
 
 // 🎯T470: mid-mission checkpoints that deny completion must not reap, a
@@ -94,15 +97,21 @@ func TestT470GenuineFinishStillReaps(t *testing.T) {
 	}
 }
 
-// Clause 2: any 🎯T386 false-green flag blocks auto-reap even when the prose
-// otherwise looks like a finish (the jv-t391 shape: claim + GATE RED).
+// Clause 2: a declared finish whose declared evidence is contradicted never
+// auto-reaps (the jv-t391 shape: claim + RED gate).
+//
+// 🎯T766.4.1: the RED gate is the envelope's gate-id slot, resolved against
+// the store. Before, it was a GATE line in the payload read by the banner's
+// regexes; that expectation was wrong once a control may not decide by
+// English, and the typed fact is what carries the jv-t391 contradiction now.
 func TestT470FalseGreenFlaggedReportNeverReaps(t *testing.T) {
+	t76641Store(t, t76641Record("2817ca36", gate.VerdictRed, 1))
 	reg := regWithTree(t)
-	// Finish-shaped (bare claim + oracle markers) but cites a RED gate — the
-	// same contradiction that flagged jv-t391 attestation_not_green before it
-	// was reaped finished_work 447ms later. The veto runs only after a
-	// declared finish (🎯T766.4).
-	report := declaredFinishReport("T470", "Done. Mission complete. SHA abcdef0123456. GATE go-test exit=1 RED id=2817ca36.")
+	// A declared finish citing a RED gate — the same contradiction that
+	// flagged jv-t391 attestation_not_green before it was reaped
+	// finished_work 447ms later. The veto runs only after a declared finish
+	// (🎯T766.4).
+	report := declaredGateFinishReport("T470", "2817ca36", envelope.VerdictGreen, "Done. Mission complete.")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("control must look like finished_work before the false-green veto")
 	}

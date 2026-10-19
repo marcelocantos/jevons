@@ -14,6 +14,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/gate"
 )
 
@@ -133,10 +134,12 @@ func TestT1027NotifyPathFlagsACrossRepoGateCitation(t *testing.T) {
 }
 
 // The reap path: a finished-work report resting on a foreign gate is never
-// reaped finished_work; the veto names the flag.
+// reaped finished_work; the veto names the flag. The gate is the declared
+// gate-id slot (🎯T766.4.1): the reap reads typed facts, and a GATE line in
+// the payload is prose it no longer scans.
 func TestT1027ReapPathRefusesACrossRepoGateCitation(t *testing.T) {
 	arrai, jevons, rec := t1027Fixture(t)
-	report := declaredFinishReport("T1027", "Implemented the fix. All tests pass. Done.\n\n    "+rec.Attestation()+"\n")
+	report := declaredGateFinishReport("T1027", rec.ID, envelope.VerdictGreen, "Implemented the fix. All tests pass. Done.\n\n    "+rec.Attestation()+"\n")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("control must look like finished_work before the T1027 veto")
 	}
