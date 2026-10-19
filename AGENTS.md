@@ -650,7 +650,8 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   Bash-channel answer when tools are gone: `out_of_scope` vs `down`
   vs `unknown`.   Residual: Codex exclusive writes `CODEX_HOME` from
   `MCPServers` (app-server has no thread/start MCP field).
-  Published pin is claudia v0.30.0 (hermetic Session MCP; no EnsureMCP).
+  Published pin is claudia v0.59.0 (hermetic Session MCP; no EnsureMCP;
+  consumer replica over the broker's control socket).
 - **Claudia pin seam (🎯T448):** `go.mod` pins the last *published*
   claudia release. Local-master claudia (🎯T104) is consumed via
   `../go.work` and buildsnap's snapshot sibling inject — not a committed
