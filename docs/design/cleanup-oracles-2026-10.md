@@ -40,6 +40,19 @@ Clean focused withdrawal gate `GREEN b69ad8a6` measured Jevons `7c4669fba0664406
 
 ## Runtime boundary reassessment: OMP coding-agent SDK
 
+> **Reversed 2026-10-19 by 🎯T1074.12.** A one-day test hosted two seats on
+> the SDK's `AgentSession` in one sidecar (Claudia branch
+> `t1074.12-sdk-two-seats`): it ran, but needed nine host-side workarounds
+> against the SDK's queue, abort and compaction behaviour, leaked three
+> `Settings` keys across seats through process-global state, and stayed at
+> 6 red plus 1 intermittent against the bare engine's 287/0. Seats stay on
+> bare `pi-agent-core`; Claudia `t1074.12-bare-core` (d5b520d, f057396)
+> removes the SDK, attested by full `make gate` on tree 5c05b49b with 269
+> sidecar tests passing. The section below is the reasoning that led to the
+> spike, kept for the record; its "OMP as a service" target design is not
+> the current design. The receipt, usage and sqlpipe work stands, because it
+> lives on Claudia's own `History` journal, not on the SDK.
+
 Owner discussion on 2026-10-16 reopened the choice of bare `pi-agent-core`.
 Source inspection of `pi-coding-agent` at `v18.2.11` found a public embeddable
 `AgentSession` and `SessionManager`, not only a terminal application. The
