@@ -48,11 +48,9 @@ targets:
     status: identified
     owned_by:
       owner: owner
-      reason: >-
-        BUILT, AWAITING OWNER VERDICT — recorded 2026-08-15 by jevons-po
-        (🎯T449). Evidence: landed at 8f25010. OWNER VERDICT ANSWERED
-        (reject) 2026-08-15 recorded by jevons-po: still jumps on the second
-        aside.
+      reason: |-
+        BUILT, AWAITING OWNER VERDICT — recorded 2026-08-15 by jevons-po (🎯T449). Evidence: landed at 8f25010.
+        OWNER VERDICT ANSWERED (reject) 2026-08-15 recorded by jevons-po: still jumps on the second aside.
 `
 
 func t449Sweep(t *testing.T) map[string]FrontierConsumeReport {
