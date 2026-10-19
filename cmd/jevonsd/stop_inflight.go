@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // receiptDrainWait is how long a normal shutdown waits after interrupting
@@ -34,10 +36,19 @@ func interruptLiveTurns(reg *claudia.Registry) int {
 	if reg == nil {
 		return 0
 	}
+	// Whether a turn is in flight is the seat authority's answer, fed fresh
+	// from the registry here (🎯T766): shutdown does not derive it from the
+	// process handle itself. RegistryAuthority still answers after
+	// FollowRegistry's context has ended and unbound the daemon's authority.
+	seats := seatstate.RegistryAuthority(reg)
+	seats.ObserveRegistry(reg)
 	n := 0
 	for _, def := range reg.List() {
+		if st, _ := seats.Get(def.Name); st.InFlight != seatstate.Yes {
+			continue
+		}
 		agent := reg.Get(def.Name)
-		if agent == nil || !agent.PromptInFlight() {
+		if agent == nil {
 			continue
 		}
 		if err := agent.Interrupt(); err != nil {
@@ -63,9 +74,10 @@ func waitTurnsIdle(reg *claudia.Registry, budget time.Duration) {
 }
 
 func registryTurnInFlight(reg *claudia.Registry) bool {
+	seats := seatstate.RegistryAuthority(reg)
+	seats.ObserveRegistry(reg)
 	for _, def := range reg.List() {
-		agent := reg.Get(def.Name)
-		if agent != nil && agent.PromptInFlight() {
+		if st, _ := seats.Get(def.Name); st.InFlight == seatstate.Yes {
 			return true
 		}
 	}
