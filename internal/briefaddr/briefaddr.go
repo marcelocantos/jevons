@@ -122,7 +122,9 @@ func Check(dest, text string) error {
 	if addressed == "" {
 		return nil
 	}
-	if strings.EqualFold(strings.TrimSpace(addressed), strings.TrimSpace(dest)) {
+	// Names compare case-insensitively because delivery resolves them that
+	// way. This is the two seat names, not a banner.
+	if strings.ToLower(strings.TrimSpace(addressed)) == strings.ToLower(strings.TrimSpace(dest)) {
 		return nil
 	}
 	return &MisaddressedBriefError{Addressed: addressed, Destination: strings.TrimSpace(dest)}

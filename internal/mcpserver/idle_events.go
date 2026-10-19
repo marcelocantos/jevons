@@ -133,6 +133,8 @@ func FormatWorkerIdleText(w WorkerIdleRef) string {
 // prescribe continue / re-brief / restart.
 func FormatWorkerIdleAmbiguousText(w WorkerIdleRef, detail string) string {
 	var b strings.Builder
+	b.WriteString(envelope.SeatFact(envelope.IntentIdle, w.Name))
+	b.WriteByte('\n')
 	b.WriteString("A work agent under you has a stored terminal report, but the product ")
 	b.WriteString("cannot tell whether it finished or is stuck.\n\n")
 	fmt.Fprintf(&b, "Worker: %s\n", strings.TrimSpace(w.Name))

@@ -609,13 +609,31 @@ func TestSweepIdleNudgesEmptyTargetIDWorkEligible(t *testing.T) {
 func TestFormatIdleNudgeWire(t *testing.T) {
 	t.Parallel()
 	got := formatIdleNudgeWire("idle-nudge-brief", "hello")
-	if got != "[event: idle-nudge-brief] hello" {
+	want := envelope.EventFact("idle-nudge-brief") + "\n[event: idle-nudge-brief] hello"
+	if got != want {
 		t.Fatalf("got %q", got)
+	}
+	if !IsIdleNudgeText(got) {
+		t.Fatal("declared idle-nudge-brief fact was not a nudge")
+	}
+	if IsIdleNudgeText("[event: idle-nudge-brief] hello") {
+		t.Fatal("display wrapper is not an idle nudge")
+	}
+	if IsIdleNudgeText("[event: idle-nudge] hello") {
+		t.Fatal("display wrapper is not an idle nudge")
 	}
 	fact := envelope.SeatFact(envelope.IntentIdle, "jv-a")
 	kept := formatIdleNudgeWire("worker-idle", fact+"\nA work agent went idle\nWorker: jv-a\n")
-	if kept != fact+"\n[event: worker-idle] A work agent went idle\nWorker: jv-a" {
+	wantKept := fact + "\n" + envelope.EventFact("worker-idle") + "\n[event: worker-idle] A work agent went idle\nWorker: jv-a"
+	if kept != wantKept {
 		t.Fatalf("fact was not kept as line 1: %q", kept)
+	}
+	if IsIdleNudgeText(kept) {
+		t.Fatal("worker-idle event fact is not an idle nudge")
+	}
+	nudge := formatIdleNudgeWire("idle-nudge", fact+"\nresume")
+	if !IsIdleNudgeText(nudge) {
+		t.Fatal("idle-nudge fact under a seat fact was not a nudge")
 	}
 }
 

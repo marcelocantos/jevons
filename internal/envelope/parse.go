@@ -26,6 +26,9 @@ const (
 	// PrefixIdentityEnd is the last line of a composed identity header.
 	// The payload starts on the next line. Role doctrine above it is display.
 	PrefixIdentityEnd = "open-intent prefix identity-end"
+	// PrefixOwnerTurn is line 1 of an owner notify. A rendered "[user]"
+	// line is display, not this fact (🎯T766.4).
+	PrefixOwnerTurn = "open-intent prefix owner-turn"
 
 	// IntentOpen is the first field of a declared open-intent fact.
 	IntentOpen = "open-intent"
@@ -35,12 +38,21 @@ const (
 	IntentRoute = "route"
 	IntentIdle  = "idle"
 	IntentHeld  = "held"
+	// IntentEvent is the second field of an event fact. The third field
+	// is the event kind (idle-nudge, worker-idle), not a seat name.
+	IntentEvent = "event"
 )
 
 // SeatFact is the line "open-intent <kind> <name>". kind is IntentRoute,
 // IntentIdle, or IntentHeld. Producers emit it; classifiers read the fields.
 func SeatFact(kind, name string) string {
 	return IntentOpen + " " + kind + " " + strings.TrimSpace(name)
+}
+
+// EventFact is the line "open-intent event <kind>". Classifiers read the
+// fields. A rendered "[event: …]" line is not this fact.
+func EventFact(kind string) string {
+	return IntentOpen + " " + IntentEvent + " " + strings.TrimSpace(kind)
 }
 
 // BannerHeading opens the note prepended to a malformed load-bearing

@@ -53,11 +53,12 @@ func (s *Server) LoadOwnerQueue(path string) error {
 		if r.ID != "" && slices.Contains(f.Delivered, r.ID) {
 			continue
 		}
+		text := ownerQueueFact(r.Text)
 		if r.ID != "" {
-			s.registerOwnerMessageID(r.Text, r.ID)
+			s.registerOwnerMessageID(text, r.ID)
 		}
 		s.mu.Lock()
-		s.notifyQueue = append(s.notifyQueue, r.Text)
+		s.notifyQueue = append(s.notifyQueue, text)
 		s.observeOwnerQueueLocked()
 		s.mu.Unlock()
 		replayed++

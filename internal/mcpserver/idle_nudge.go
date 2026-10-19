@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -411,26 +410,31 @@ func IdleNudgeEventSource(postRestart bool, kind IdleNudgeKind) string {
 	return "idle-nudge"
 }
 
-// formatIdleNudgeWire wraps the resume body like butler.FormatEventPush so
-// workers can distinguish automated idle pressure from owner chat.
-// Kept local so the fire-and-forget send path does not need a Butler.
+// formatIdleNudgeWire puts the event fact ahead of the body so classifiers
+// read the fact. A leading seat fact stays line 1 and the event fact follows
+// it. The "[event:]" line is display for workers and older readers. It is
+// not what IsIdleNudgeText matches. Kept local so the fire-and-forget send
+// path does not need a Butler.
 func formatIdleNudgeWire(event, text string) string {
 	src := strings.TrimSpace(event)
 	if src == "" {
 		src = "idle-nudge"
 	}
+	fact := envelope.EventFact(src)
 	text = strings.TrimSpace(text)
-	// A leading seat fact stays line 1. The event wrapper is display on the
-	// next line so coalesce and classify read the fact, not "[event:".
+	display := fmt.Sprintf("[event: %s]", src)
 	line, rest, _ := strings.Cut(text, "\n")
 	if seatFactLine(line) {
 		rest = strings.TrimSpace(rest)
 		if rest == "" {
-			return line + "\n" + fmt.Sprintf("[event: %s]", src)
+			return line + "\n" + fact + "\n" + display
 		}
-		return line + "\n" + fmt.Sprintf("[event: %s] %s", src, rest)
+		return line + "\n" + fact + "\n" + display + " " + rest
 	}
-	return fmt.Sprintf("[event: %s] %s", src, text)
+	if text == "" {
+		return fact + "\n" + display
+	}
+	return fact + "\n" + display + " " + text
 }
 
 func seatFactLine(line string) bool {
@@ -446,13 +450,21 @@ func seatFactLine(line string) bool {
 	}
 }
 
-var idleNudgeWireRE = regexp.MustCompile(`(?m)^\[event:\s*idle-nudge(?:-brief)?\]`)
-
-// IsIdleNudgeText reports whether text is an idle-nudge / idle-nudge-brief
-// wire message (🎯T821). Anchored at a line start so a brief that merely
-// quotes the marker mid-line does not match.
+// IsIdleNudgeText reports whether text carries an idle-nudge or
+// idle-nudge-brief event fact (🎯T821). A rendered "[event:]" line is not
+// a nudge. The fact may sit under a leading seat fact.
 func IsIdleNudgeText(text string) bool {
-	return idleNudgeWireRE.MatchString(text)
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[1] != envelope.IntentEvent {
+			continue
+		}
+		switch fields[2] {
+		case "idle-nudge", "idle-nudge-brief":
+			return true
+		}
+	}
+	return false
 }
 
 // SessionLooksBriefed reports whether transcript/user text already carries

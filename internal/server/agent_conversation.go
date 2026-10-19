@@ -111,6 +111,7 @@ func overseerTurnsFromWire(lines []string) []map[string]any {
 			// The ACP echo of an owner turn is prefixed; the clean echo the
 			// browser sent is the journal's owner bubble (chat_wire.go).
 			text = strings.TrimPrefix(text, userTurnPrefix)
+			text = strings.TrimPrefix(text, "[user]\n")
 			if strings.TrimSpace(text) == "" {
 				continue
 			}

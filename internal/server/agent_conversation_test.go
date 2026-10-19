@@ -242,22 +242,34 @@ func TestOverseerFamilyHonoursConfiguredName(t *testing.T) {
 // Journal projection details: prefixed ACP echoes are not double-counted as a
 // separate owner turn, and frames outside the conversation are skipped.
 func TestOverseerTurnsFromWireProjection(t *testing.T) {
+	factWire, err := json.Marshal(userTurnPrefix + "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyWire, err := json.Marshal("[user]\nlegacy")
+	if err != nil {
+		t.Fatal(err)
+	}
 	turns := overseerTurnsFromWire([]string{
 		`{"type":"system","timestamp":"2026-08-08T01:00:00Z"}`,
 		`{"type":"user","message":{"role":"user","content":"first"}}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a"}]}}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"b"}]}}`,
-		`{"type":"user","message":{"role":"user","content":"` + strings.TrimSuffix(userTurnPrefix, "\n") + `\nsecond"}}`,
+		`{"type":"user","message":{"role":"user","content":` + string(factWire) + `}}`,
+		`{"type":"user","message":{"role":"user","content":` + string(legacyWire) + `}}`,
 		`not json`,
 	})
-	if len(turns) != 3 {
+	if len(turns) != 4 {
 		t.Fatalf("turns=%v", turns)
 	}
 	if turns[1]["text"] != "a\nb" {
 		t.Fatalf("assistant fragments must join: %v", turns[1])
 	}
 	if turns[2]["turn_number"] != 2 || turns[2]["text"] != "second" {
-		t.Fatalf("second turn=%v (prefix must be stripped)", turns[2])
+		t.Fatalf("second turn=%v (owner fact must be stripped)", turns[2])
+	}
+	if turns[3]["turn_number"] != 3 || turns[3]["text"] != "legacy" {
+		t.Fatalf("legacy display prefix was not stripped: %v", turns[3])
 	}
 }
 

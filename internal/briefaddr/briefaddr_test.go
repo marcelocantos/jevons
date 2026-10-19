@@ -61,6 +61,9 @@ func TestCheckWrongSeatVsOwnSeatVsHeaderless(t *testing.T) {
 	if err := Check("jevons-po", poBrief); err != nil {
 		t.Fatalf("correctly addressed brief refused: %v", err)
 	}
+	if err := Check("Jevons-PO", poBrief); err != nil {
+		t.Fatalf("case-different seat name refused: %v", err)
+	}
 	if err := Check("jevons", ownBrief); err != nil {
 		t.Fatalf("overseer-addressed brief refused: %v", err)
 	}

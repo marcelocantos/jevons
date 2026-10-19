@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 func t7664AssistantLine(ts time.Time, content string) string {
@@ -184,10 +186,18 @@ func TestFormatOverseerOpenIntentResumeNotSilentIdleOnly(t *testing.T) {
 	if !strings.Contains(text, "jv-t328") {
 		t.Fatal("fleet context should list workers:", text)
 	}
-	// Event wire shape for probes.
+	// Event wire shape for probes. The decision is the event fact. The
+	// rendered wrapper is display and is not an idle nudge.
 	wire := formatIdleNudgeWire(eventOwnerIntentResume, text)
-	if !strings.HasPrefix(wire, "[event: owner-intent-resume]") {
-		t.Fatalf("wire prefix: %q", wire)
+	first, _, _ := strings.Cut(wire, "\n")
+	if first != envelope.EventFact(eventOwnerIntentResume) {
+		t.Fatalf("wire decision line: %q", first)
+	}
+	if !strings.Contains(wire, "[event: owner-intent-resume]") {
+		t.Fatalf("wire display: %q", wire)
+	}
+	if IsIdleNudgeText(wire) {
+		t.Fatal("owner-intent resume is not an idle nudge")
 	}
 	if !strings.Contains(wire, "Shove the Musk") {
 		t.Fatal("wire must not strip instruction")

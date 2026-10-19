@@ -26,6 +26,7 @@ func TestNotifyCoalesceKey(t *testing.T) {
 	agentA := agentNote("jv-a", "first body")
 	agentA2 := agentNote("jv-a", "second body")
 	owner := userTurnPrefix + "hello"
+	displayOnly := "[user]\nhello"
 	other := "budget alert: burn high"
 	englishIdle := "[event: worker-idle] A work agent under you entered phase=idle\n\nWorker: jv-a\nTarget: 🎯T1\n"
 	englishAgent := "[Agent jv-a responded]\nfirst body"
@@ -47,6 +48,12 @@ func TestNotifyCoalesceKey(t *testing.T) {
 	}
 	if notifyCoalesceKey(owner) != "" {
 		t.Fatal("owner turns must not coalesce")
+	}
+	if !isOwnerNotifyText(owner) {
+		t.Fatal("owner-turn fact was not an owner turn")
+	}
+	if isOwnerNotifyText(displayOnly) || notifyCoalesceKey(displayOnly) != "" {
+		t.Fatal("a rendered [user] line is not an owner turn")
 	}
 	if notifyCoalesceKey(other) != "" {
 		t.Fatal("unkeyed notes must not coalesce")
@@ -97,19 +104,20 @@ func TestTakeNotifyDrainBatchOwnerFirst(t *testing.T) {
 	q := []string{
 		"[event: worker-idle]\nWorker: jv-a\n",
 		"[Agent jv-b responded]\nok",
+		"[user]\nnot the fact",
 		userTurnPrefix + "owner says hi",
 		"[event: worker-idle]\nWorker: jv-c\n",
 	}
 	batch, rest, owner := takeNotifyDrainBatch(q)
-	if !owner || len(batch) != 1 || !isOwnerNotifyText(batch[0]) {
+	if !owner || len(batch) != 1 || !isOwnerNotifyText(batch[0]) || !strings.Contains(batch[0], "owner says hi") {
 		t.Fatalf("want single owner batch, got owner=%v batch=%v", owner, batch)
 	}
-	if len(rest) != 3 {
-		t.Fatalf("rest depth=%d want 3", len(rest))
+	if len(rest) != 4 {
+		t.Fatalf("rest depth=%d want 4", len(rest))
 	}
-	// Remaining drain is all fleet, one batch.
+	// Remaining drain is all fleet, one batch. The display prefix is fleet.
 	batch2, rest2, owner2 := takeNotifyDrainBatch(rest)
-	if owner2 || len(batch2) != 3 || len(rest2) != 0 {
+	if owner2 || len(batch2) != 4 || len(rest2) != 0 {
 		t.Fatalf("fleet batch owner=%v batch=%d rest=%d", owner2, len(batch2), len(rest2))
 	}
 }

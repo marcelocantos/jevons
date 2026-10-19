@@ -168,6 +168,22 @@ func TestEchoedOwnerTurnLineFiltersPreFixJournal(t *testing.T) {
 	if !echoedOwnerTurnLine(string(poisoned)) {
 		t.Error("pre-fix owner echo not recognised; it would repaint on replay")
 	}
+	legacy, err := json.Marshal(map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role":    "user",
+			"content": "[user]\n" + ownerEchoBody,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !echoedOwnerTurnLine(string(legacy)) {
+		t.Error("display-only [user] echo not recognised; it would repaint on replay")
+	}
+	if line, ok := chatWireLine(claudia.Event{Type: "user", Text: "[user]\n" + ownerEchoBody}); ok || line != "" {
+		t.Fatalf("display-only echo painted: ok=%v line=%q", ok, line)
+	}
 
 	// Everything else in the journal must survive the filter.
 	keep := []string{

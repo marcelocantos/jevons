@@ -58,10 +58,24 @@ func notifyAgentRespondedName(text string) (string, bool) {
 	return openingSeatFact(rest, envelope.IntentRoute)
 }
 
-// isOwnerNotifyText reports whether the queue item is a genuine owner turn
-// (userTurnPrefix). Owner items never coalesce and always drain first.
+// isOwnerNotifyText reports whether the queue item is a genuine owner turn.
+// The decision is the owner-turn fact on line 1. A rendered "[user]" line
+// is not an owner turn. Owner items never coalesce and always drain first.
 func isOwnerNotifyText(text string) bool {
-	return strings.HasPrefix(text, userTurnPrefix)
+	line, _, _ := strings.Cut(text, "\n")
+	return strings.TrimSpace(line) == envelope.PrefixOwnerTurn
+}
+
+// ownerQueueFact prepends the owner-turn fact to a row from the owner-queue
+// file that was written before the fact existed. The file stores only owner
+// turns, so membership is the declaration. The display bytes are left as they
+// are. A row that already opens with the fact is unchanged.
+func ownerQueueFact(text string) string {
+	line, _, _ := strings.Cut(text, "\n")
+	if strings.TrimSpace(line) == envelope.PrefixOwnerTurn {
+		return text
+	}
+	return envelope.PrefixOwnerTurn + "\n" + text
 }
 
 // coalesceNotifyEnqueue appends note to queue, replacing any earlier item

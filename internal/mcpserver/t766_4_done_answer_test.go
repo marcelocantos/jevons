@@ -102,14 +102,15 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../envelope/parse.go"), "stripStandingBrief", "stripOnePrefix", "stripDeclaredPrefix", "splitFence", "parseSlotLine", "Format")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../envelope/fences.go"), "FenceStarts")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t731_stale_report.go"), "parseAgentRespondedLine", "hasReapedSeatBanner")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../briefaddr/briefaddr.go"), "IdentityHeaderName")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../briefaddr/briefaddr.go"), "IdentityHeaderName", "Check")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "identity_header.go"), "FormatIdentityHeader", "withIdentity")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t597_briefless.go"), "IsFullRebrief")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../sendq/digest.go"), "classify", "reportID")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "deliver_by_name.go"), "stripLeadingIdentityEnvelope")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/notify_queue.go"), "notifyCoalesceKey", "notifyAgentRespondedName", "openingSeatFact")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/notify_queue.go"), "notifyCoalesceKey", "notifyAgentRespondedName", "openingSeatFact", "isOwnerNotifyText")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "fleet_brief.go"), "EnsureFleetBriefWithRole", "textHasHarnessFact")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "SessionLooksBriefed")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "SessionLooksBriefed", "formatIdleNudgeWire", "IsIdleNudgeText")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_events.go"), "FormatWorkerIdleAmbiguousText")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
 	}

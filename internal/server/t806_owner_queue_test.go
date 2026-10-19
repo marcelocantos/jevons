@@ -72,6 +72,30 @@ func TestT806ReplaySkipsDeliveredID(t *testing.T) {
 	}
 }
 
+// A pending row written before the owner-turn fact is still an owner turn.
+// The file stores only owner turns, so replay prepends the fact and does
+// not decide by the display prefix.
+func TestT806LegacyOwnerRowGainsFact(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owner_queue.json")
+	legacy := "[user]\nhello"
+	data, _ := json.Marshal(ownerQueueFile{
+		Pending: []ownerQueueRecord{{ID: "om-9", Text: legacy}},
+	})
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newQueueServer(t, path, func(string) error { return nil })
+	if len(s.notifyQueue) != 1 || !isOwnerNotifyText(s.notifyQueue[0]) {
+		t.Fatalf("legacy owner row = %v", s.notifyQueue)
+	}
+	if !strings.Contains(s.notifyQueue[0], "hello") || !strings.Contains(s.notifyQueue[0], "[user]\n") {
+		t.Fatalf("legacy display was rewritten away: %q", s.notifyQueue[0])
+	}
+	if s.peekOwnerMessageID(s.notifyQueue[0]) != "om-9" {
+		t.Fatal("legacy row id was not kept on the fact text")
+	}
+}
+
 // Malformed state is a hard error, never a silent reset.
 func TestT806MalformedOwnerQueueIsHardError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "owner_queue.json")

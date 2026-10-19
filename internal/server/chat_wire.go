@@ -19,12 +19,13 @@ import (
 
 // userTurnPrefix marks a turn delivered to the overseer as a genuine owner
 // message, distinguishing it from injected agent/system notifications
-// (worker replies, budget alerts) that share the ACP "user" role. The
-// browser renders prefixed turns as owner bubbles (prefix elided) and folds
-// unprefixed notifications into the activity strip; the overseer itself sees
-// the marker so it can tell the owner's words from a notification and relay
-// only what the owner's instructions warrant (🎯T63).
-const userTurnPrefix = "[user]\n"
+// (worker replies, budget alerts) that share the ACP "user" role. Line 1
+// is the owner-turn fact, which is what the notify queue decides on. The
+// following "[user]" line is display: the overseer still sees it, and
+// journals written before the fact still start with it (🎯T63, 🎯T766.4).
+// The browser renders prefixed turns as owner bubbles (prefix elided) and
+// folds unprefixed notifications into the activity strip.
+const userTurnPrefix = envelope.PrefixOwnerTurn + "\n[user]\n"
 
 // chatWireLine converts a claudia Event into the stable JSON line the
 // web chat UI expects. Grok ACP events carry ACP session/update params
@@ -124,7 +125,8 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 		// rendered its clean bubble via chatUserEcho on send, so this provider
 		// echo is a duplicate — drop it (also de-dups the journal, which
 		// used to store the owner turn twice: echo + provider echo).
-		if strings.HasPrefix(text, userTurnPrefix) {
+		// Journals from before the owner fact start with the display line.
+		if isOwnerNotifyText(text) || strings.HasPrefix(text, "[user]\n") {
 			return "", false
 		}
 		// No marker → an injected agent/system notification (a worker reply,
@@ -559,7 +561,7 @@ func userTurnText(ev claudia.Event) (text string, prose bool) {
 // on this so history shows what live now emits.
 func echoedOwnerTurnLine(line string) bool {
 	text, prose := userTurnText(claudia.Event{Raw: []byte(line)})
-	return prose && strings.HasPrefix(text, userTurnPrefix)
+	return prose && (isOwnerNotifyText(text) || strings.HasPrefix(text, "[user]\n"))
 }
 
 // stampStreamID injects stream_id onto a chat wire JSON object (🎯T223).
