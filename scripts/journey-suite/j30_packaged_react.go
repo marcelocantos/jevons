@@ -42,6 +42,17 @@ func (s *suite) jPackagedReactSendCutIn() error {
 // it undelivered with Resend, and Resend must deliver the same message once.
 // Nothing reaches the development overseer or its grant.
 func (s *suite) jUndeliveredResend() error {
+	// The seam refuses the notify-queue handoff (sendNotes). An owner message
+	// sent while the overseer is still inside an earlier owner turn takes the
+	// 🎯T903 steer ladder instead and never reaches that handoff. In gate
+	// 252cf6ac J32, just before, left its queued owner turn running: J33's
+	// message logged "agent_send name=jevons status=steered … class=owner",
+	// the seam fired 0 times, and the reply arrived with no undelivered row.
+	// Run alone, the overseer was idle and J33 passed. The journey is about
+	// the queued handoff, so it starts from an idle overseer, as J3 does.
+	if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, 5*time.Minute); err != nil {
+		return fmt.Errorf("overseer never settled before the undelivered-resend journey: %w", err)
+	}
 	return s.jPackagedReactScript("t811-undelivered.cjs", 10*time.Minute)
 }
 

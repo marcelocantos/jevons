@@ -17,6 +17,9 @@ func TestT952IsolateVerdictMatchesTheAllowance(t *testing.T) {
 	overseerStarted := `level=INFO msg="agent started" name=jevons provider=cursor`
 	reoffer := `level=INFO msg="🎯T418 backlog sweep: re-offering a held message" component=agent_send agent=t952-stall queued=1`
 	holdReoffer := `level=INFO msg="🎯T418 backlog sweep: re-offering a held message" component=agent_send agent=t952-hold queued=1`
+	// Gate 252cf6ac, byte for byte: the overseer dropped the stall on the record.
+	reconciled := `time=2026-10-20T09:30:05.227+11:00 level=INFO msg=agent_send.sendq_reconcile component=agent_send source=server decision=sendq_reconcile outcome=drop removed="[map[attempt_id: bytes:39 enqueued_at:2026-10-14T05:35:01Z entry_id:3d08454cb769 state: text:t952-stall integrate the worker reports]]" removed_bytes=39 depth_after=0 agent=t952-stall actor=jevons evidence="Journey fixture t952-stall: session d6989db4 has no transcript file; seat activity none since mint; workdir empty; auto_start false; start refused (existing conversation required, no session to resume). Held text is journey residue 't952-stall integrate the worker reports' enqueued 2026-10-14T05:35:01Z. Cannot deliver; drain blocked on locked DB earlier. Drop orphan hold."`
+	refusedStart := `time=2026-10-20T09:29:57.280+11:00 level=WARN msg=agent_lifecycle.start component=agent_lifecycle source=server decision=start outcome=error name=t952-stall err="broker protocol: agent_failed: existing conversation required"`
 
 	cases := []struct {
 		name string
@@ -31,6 +34,8 @@ func TestT952IsolateVerdictMatchesTheAllowance(t *testing.T) {
 		{name: "overseer started the stall after the open notice", f: t952Facts{HoldIntact: true, StallNotices: 1, StallResolved: t952StallResolved(started + "\n" + stallWarn)}, log: started, pass: true},
 		{name: "drain of a live stall after both bands", f: t952Facts{HoldIntact: true, StallNotices: 2, StallResolved: t952StallResolved(reoffer)}, pass: true},
 		{name: "empty stall queue with only the warn", f: t952Facts{HoldIntact: true, StallNotices: 1, StallResolved: t952StallResolved(stallWarn + "\n" + holdWarn + "\n" + overseerStarted)}, pass: false},
+		{name: "overseer reconciled the stall on the record after a refused start", f: t952Facts{HoldIntact: true, StallNotices: 1, StallResolved: t952StallResolved(refusedStart + "\n" + reconciled)}, log: refusedStart + "\n" + reconciled, pass: true},
+		{name: "a refused start alone is not a resolution", f: t952Facts{HoldIntact: true, StallNotices: 1, StallResolved: t952StallResolved(refusedStart)}, log: refusedStart, pass: false},
 		{name: "resolved with the alert lost", f: t952Facts{HoldIntact: true, StallResolved: true}, pass: false},
 		{name: "hold was re-offered", f: t952Facts{HoldIntact: true, HoldSubmitted: t952HoldSubmitted(holdReoffer), StallPending: true, StallNotices: 2}, pass: false},
 		{name: "hold named in a no-action body", f: t952Facts{HoldIntact: true, StallPending: true, StallNotices: 2, HoldNamed: 1}, pass: false},

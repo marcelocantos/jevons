@@ -47,6 +47,15 @@ func TestMain(m *testing.M) {
 	case "":
 		os.Exit(m.Run())
 
+	case sidecarHolderMode:
+		// Stands in for the broker's sidecar: holds the socket's lock for
+		// its whole life and names itself in the pid file, as omp's does.
+		if err := runSidecarHolder(os.Getenv("JOURNEY_SIDECAR_SOCKET")); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+
 	case "fatal":
 		// Exactly the shape of the leak: register teardown, then die
 		// through fatal() — which is what waitReady failure does.
