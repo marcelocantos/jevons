@@ -822,7 +822,7 @@ func eventRowFromEvent(e eventlog.Event) staffops.EventRow {
 	case bool:
 		row.Drill = v
 	case string:
-		row.Drill = strings.EqualFold(strings.TrimSpace(v), "true")
+		row.Drill = strings.ToLower(strings.TrimSpace(v)) == "true"
 	}
 	if fc, ok := e.Fields["failure_class"].(string); ok {
 		row.FailureClass = strings.TrimSpace(fc)

@@ -66,7 +66,7 @@ func ChatTurnsToEvidence(turns []ChatTurn) []Evidence {
 		kind := "chat_gap"
 		comp := "owner_chat"
 		dec := "friction"
-		if strings.EqualFold(t.Source, "session") {
+		if strings.ToLower(t.Source) == "session" {
 			kind = "transcript_friction"
 			comp = "session"
 			dec = "transcript"

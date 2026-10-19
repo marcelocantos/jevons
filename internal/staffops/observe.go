@@ -145,12 +145,12 @@ type AgentObs struct {
 	Detail         string
 	// 🎯T410 evidence — daemon-held, not phase=idle alone. ClassifyIdleResidue
 	// names stalled vs finished-awaiting-gate vs blocked-on-owner from these.
-	BoundTarget          string
+	BoundTarget         string
 	HasBoundCommits     bool
-	TargetLedgerStatus   string
-	ReportLooksFinished  bool
-	OwnerAskPresent      bool
-	IntentBlockedOwner   bool
+	TargetLedgerStatus  string
+	ReportLooksFinished bool
+	OwnerAskPresent     bool
+	IntentBlockedOwner  bool
 	// 🎯T984: AgainstIntent names a seat running although its intent stood
 	// it down; Diverged names a seat the broker runs while this daemon holds
 	// no live process for it. Empty when neither holds.
@@ -271,7 +271,7 @@ func BuildSignals(in ObserveInput) []Signal {
 				IdleResidue:         true,
 				OpenMission:         true,
 				BoundTarget:         a.BoundTarget,
-				HasBoundCommits:    a.HasBoundCommits,
+				HasBoundCommits:     a.HasBoundCommits,
 				TargetLedgerStatus:  a.TargetLedgerStatus,
 				ReportLooksFinished: a.ReportLooksFinished,
 				OwnerAskPresent:     a.OwnerAskPresent || intentBlocked,
@@ -450,14 +450,18 @@ type EventRow struct {
 }
 
 // drillToken is the normalized source/component stamp used by synthetic RSI
-// ops drills (source=rsi-drill, component=rsi_drill).
+// ops drills (source=rsi-drill, component=rsi_drill). A message that
+// mentions the drill, or a decision whose source merely contains "drill",
+// is not this stamp.
 const drillToken = "rsi_drill"
 
-// drillMsgMarker is the message marker synthetic RSI drills carry.
-const drillMsgMarker = "rsi_ops_live_drill"
-
-// drillDecision is the eventlog decision stamped by RSI ops live drills.
-const drillDecision = "live_drill"
+const (
+	anomalyNotifyQueue   = "notify_queue"
+	anomalyNotRunning    = "not_running"
+	anomalyRestartThrash = "restart_thrash"
+	anomalyBusyStorm     = "busy_storm"
+	anomalyLevelError    = "error"
+)
 
 // normalizeDrillToken lowercases and folds '-' to '_' so rsi-drill and
 // rsi_drill compare equal. Exact token match only — a real error from a
@@ -471,32 +475,19 @@ func normalizeDrillToken(s string) string {
 // appended deliberately to exercise the coach loop (🎯T243/🎯T333); the
 // sentinel must ignore them instead of classifying file+PO / daemon_error.
 //
-// Pure: matches the drill markers only — source or component exactly
-// rsi-drill/rsi_drill, msg containing rsi_ops_live_drill, decision live_drill
-// from a drill source, or an explicit fields.drill marker.
+// Pure: the explicit Drill field, or source/component exactly rsi-drill /
+// rsi_drill. A rendered message is not a drill.
 func IsSyntheticDrillRow(r EventRow) bool {
 	if r.Drill {
 		return true
 	}
 	src := normalizeDrillToken(r.Source)
 	comp := normalizeDrillToken(r.Component)
-	if src == drillToken || comp == drillToken {
-		return true
-	}
-	if strings.Contains(strings.ToLower(r.Msg), drillMsgMarker) {
-		return true
-	}
-	// decision=live_drill alone is not enough — require a drill-ish origin so a
-	// real component that ever emits that decision still classifies normally.
-	if normalizeDrillToken(r.Decision) == drillDecision &&
-		(strings.Contains(src, "drill") || strings.Contains(comp, "drill")) {
-		return true
-	}
-	return false
+	return src == drillToken || comp == drillToken
 }
 
 // ClusterEventAnomalies reduces recent eventlog rows into EventObs for BuildSignals.
-// Pure: substring/component heuristics only (busy storm, restart thrash, notify_queue).
+// Pure: declared component, decision, and level. A rendered log line is not a kind.
 func ClusterEventAnomalies(rows []EventRow, now time.Time, window time.Duration) []EventObs {
 	if window <= 0 {
 		window = 15 * time.Minute
@@ -539,17 +530,17 @@ func ClusterEventAnomalies(rows []EventRow, now time.Time, window time.Duration)
 		if providerBlockClass(r) != "" {
 			continue
 		}
-		msg := strings.ToLower(r.Msg + " " + r.Component + " " + r.Decision + " " + r.Level)
+		comp := strings.ToLower(strings.TrimSpace(r.Component))
+		dec := strings.ToLower(strings.TrimSpace(r.Decision))
+		level := strings.ToLower(r.Level)
 		switch {
-		case strings.Contains(msg, "notify_queue") || strings.Contains(msg, "not_running"):
+		case comp == anomalyNotifyQueue || dec == anomalyNotifyQueue || dec == anomalyNotRunning:
 			bump("notify_queue", "notify_queue", "event:notify_queue", r.Msg)
-		case strings.Contains(msg, "restart") && (strings.Contains(msg, "thrash") ||
-			strings.Contains(msg, "bounce") || strings.Contains(msg, "rapid")):
+		case comp == anomalyRestartThrash || dec == anomalyRestartThrash:
 			bump("restart_thrash", "restart_thrash", "event:restart_thrash", r.Msg)
-		case strings.Contains(msg, "busy") && (strings.Contains(msg, "storm") ||
-			strings.Contains(msg, "stuck") || strings.Contains(msg, "flood")):
+		case comp == anomalyBusyStorm || dec == anomalyBusyStorm:
 			bump("busy_storm", "busy_storm", "event:busy_storm", r.Msg)
-		case strings.EqualFold(r.Level, "error") || strings.Contains(msg, "panic"):
+		case level == anomalyLevelError:
 			bump("daemon_error:"+r.Component, "daemon_error",
 				"event:error:"+firstNonEmpty(r.Component, "daemon"), r.Msg)
 		}

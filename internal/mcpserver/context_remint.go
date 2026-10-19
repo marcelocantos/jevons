@@ -46,7 +46,7 @@ func (s *Server) refuseContextRemintSwitch(name, target string, ownerAsked bool)
 	if !ok || plan.Mode != planusage.RemintSameProvider {
 		return ""
 	}
-	if strings.EqualFold(strings.TrimSpace(target), plan.Provider) {
+	if strings.ToLower(strings.TrimSpace(target)) == strings.ToLower(plan.Provider) {
 		return ""
 	}
 	return "refused (🎯T561): " + plan.Advice(name) +

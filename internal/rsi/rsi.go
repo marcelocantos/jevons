@@ -387,7 +387,7 @@ func actionable(e Evidence) bool {
 		return false
 	default:
 		// Other kinds with error outcome still count.
-		return strings.EqualFold(e.Outcome, "error") || strings.EqualFold(e.Outcome, "fail")
+		return strings.ToLower(e.Outcome) == "error" || strings.ToLower(e.Outcome) == "fail"
 	}
 }
 

@@ -108,6 +108,8 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account
 	return removed, nil
 }
 
+const ledgerStatusAchieved = "achieved"
+
 // listAchievedTargetIDs reads a bullseye ledger and returns target IDs with
 // status=achieved (normalized). set_aside is not treated as achieve-reap.
 func listAchievedTargetIDs(ledgerPath string) (map[string]bool, error) {
@@ -124,7 +126,7 @@ func listAchievedTargetIDs(ledgerPath string) (map[string]bool, error) {
 		return nil, fmt.Errorf("parse ledger: %w", err)
 	}
 	for id, t := range doc.Targets {
-		if strings.EqualFold(strings.TrimSpace(t.Status), "achieved") {
+		if strings.ToLower(strings.TrimSpace(t.Status)) == ledgerStatusAchieved {
 			nid := NormalizeTargetID(id)
 			if nid != "" {
 				out[nid] = true

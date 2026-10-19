@@ -365,7 +365,7 @@ func CodexWorkSandboxRefusal(prov claudia.Provider, purpose, role string) string
 }
 
 func CodexWorkSandbox(prov claudia.Provider, purpose, role string) string {
-	if strings.EqualFold(strings.TrimSpace(role), "auditor") {
+	if strings.ToLower(strings.TrimSpace(role)) == "auditor" {
 		return ""
 	}
 	// openai-codex is the id Launch stores; the plan is still Codex.

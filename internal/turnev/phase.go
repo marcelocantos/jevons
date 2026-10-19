@@ -95,7 +95,7 @@ func (f *phaseFold) step(r Record) {
 	default:
 		// System records after an assistant close the turn
 		// (session 76cef0a9 lines 112–113).
-		if f.last == PhaseWorking && strings.EqualFold(r.Type, "system") {
+		if f.last == PhaseWorking && strings.ToLower(r.Type) == "system" {
 			f.last = PhaseIdle
 		}
 	}

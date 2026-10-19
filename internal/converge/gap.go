@@ -128,7 +128,10 @@ type Observation struct {
 	BlockedOnOwner bool
 }
 
-const purposeWork = "work"
+const (
+	purposeWork  = "work"
+	phaseWorking = "working"
+)
 
 // ClassifyObservation is the decidable core of the doctrine: it maps one
 // observation to gap / satisfied / out-of-scope, and never consults step
@@ -196,7 +199,7 @@ func ClassifyObservation(o Observation) (Condition, GapKind, string) {
 			return ConditionGap, GapKindIdle, "refusal_only_turn"
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(o.Phase), "working") {
+	if strings.ToLower(strings.TrimSpace(o.Phase)) == phaseWorking {
 		if o.ProviderResume {
 			return ConditionSatisfied, "", "provider_resumed_service"
 		}

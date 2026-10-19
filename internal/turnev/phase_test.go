@@ -31,6 +31,23 @@ func TestT423EndedSessionIsIdle(t *testing.T) {
 	}
 }
 
+func TestT423SystemFoldClosesWorkingTurn(t *testing.T) {
+	recs := []Record{
+		rec(KindAssistant, func(r *Record) { r.Text = "still writing" }),
+		rec(KindOther, func(r *Record) { r.Type = "System" }),
+	}
+	if got := ClassifyPhase(recs); got != PhaseIdle {
+		t.Fatalf("System record classified %s, want idle", got)
+	}
+	stay := []Record{
+		rec(KindAssistant, func(r *Record) { r.Text = "still writing" }),
+		rec(KindOther, func(r *Record) { r.Type = "note" }),
+	}
+	if got := ClassifyPhase(stay); got != PhaseWorking {
+		t.Fatalf("non-system record classified %s, want working", got)
+	}
+}
+
 func TestT423MidTurnIsWorking(t *testing.T) {
 	// jv-t374 mid-Playwright: tool_use, file growing, no end_turn.
 	recs := []Record{

@@ -212,11 +212,11 @@ func TestRunCycleDryRunDoesNotMarkCooldown(t *testing.T) {
 		Kind: "gap", Symptom: "gap:x", Severity: "medium",
 	}
 	res := RunCycle(CycleArgs{
-		Signals: []Signal{sig},
+		Signals:  []Signal{sig},
 		Cooldown: cd,
-		Budget:  budget,
-		Now:     now,
-		DryRun:  true,
+		Budget:   budget,
+		Now:      now,
+		DryRun:   true,
 	})
 	if res.Primary != ActionFilePO {
 		t.Fatalf("primary=%s", res.Primary)
@@ -425,14 +425,15 @@ func TestFrontierStallObsReadyOnly(t *testing.T) {
 func TestClusterEventAnomalies(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	rows := []EventRow{
-		{Msg: "notify_queue not_running for agent x", TS: now},
-		{Msg: "notify_queue not_running again", TS: now},
-		{Msg: "notify_queue not_running thrice", TS: now},
-		{Msg: "restart thrash detected", TS: now},
-		{Msg: "busy storm on fleet", TS: now},
-		{Level: "error", Component: "server", Msg: "panic recover", TS: now},
-		{Level: "error", Component: "server", Msg: "panic recover 2", TS: now},
+		{Component: "notify_queue", Decision: "not_running", TS: now},
+		{Component: "notify_queue", Decision: "not_running", TS: now},
+		{Component: "notify_queue", Decision: "not_running", TS: now},
+		{Decision: "restart_thrash", TS: now},
+		{Decision: "busy_storm", TS: now},
+		{Level: "error", Component: "server", Msg: "recover", TS: now},
+		{Level: "error", Component: "server", Msg: "recover 2", TS: now},
 		{Msg: "old", TS: now.Add(-time.Hour)}, // outside window
+		{Msg: "notify_queue not_running for agent x", TS: now},
 	}
 	obs := ClusterEventAnomalies(rows, now, 15*time.Minute)
 	if len(obs) < 3 {
@@ -442,8 +443,8 @@ func TestClusterEventAnomalies(t *testing.T) {
 	for _, o := range obs {
 		found[o.Kind] = o.Count
 	}
-	if found["notify_queue"] < 3 {
-		t.Fatalf("notify_queue count=%d", found["notify_queue"])
+	if found["notify_queue"] != 3 {
+		t.Fatalf("notify_queue count=%d, prose must not cluster", found["notify_queue"])
 	}
 	if found["restart_thrash"] < 1 {
 		t.Fatal("missing restart_thrash")

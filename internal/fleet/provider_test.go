@@ -31,6 +31,9 @@ func TestCodexWorkSandbox(t *testing.T) {
 	if got := CodexWorkSandbox(claudia.ProviderCodex, claudia.PurposeWork, "auditor"); got != "" {
 		t.Fatalf("auditor must be read-only, got %q", got)
 	}
+	if got := CodexWorkSandbox(claudia.ProviderCodex, claudia.PurposeWork, "Auditor"); got != "" {
+		t.Fatalf("Auditor fold must be read-only, got %q", got)
+	}
 }
 
 func TestProviderForLaunchNoClobber(t *testing.T) {

@@ -1179,7 +1179,7 @@ func flattenOpenIntentToolInput(input map[string]any) string {
 		}
 	}
 	// op=achieve is strong signal even without attestation field alone.
-	if op, ok := input["op"].(string); ok && strings.EqualFold(op, "achieve") {
+	if op, ok := input["op"].(string); ok && strings.ToLower(op) == "achieve" {
 		parts = append(parts, "op=achieve")
 		if id, ok := input["id"].(string); ok {
 			parts = append(parts, "id="+id)

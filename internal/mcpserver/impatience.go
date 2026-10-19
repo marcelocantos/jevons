@@ -252,7 +252,7 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 		// 🎯T454: phase=working under a refusal hold is not progress — it is
 		// the agent thrashing against a wall. 🎯T869: a plan-only turn is
 		// not progress either, and must not arm the next repressure.
-		if strings.EqualFold(strings.TrimSpace(obs.Phase), "working") && !obs.RefusalHold && !obs.PlanOnly {
+		if strings.ToLower(strings.TrimSpace(obs.Phase)) == "working" && !obs.RefusalHold && !obs.PlanOnly {
 			e.ladder.ObserveProgress(d.Name, attenuate.SignalTargetWorking, now)
 		}
 	}

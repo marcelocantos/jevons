@@ -36,10 +36,10 @@ func TestIsSyntheticDrillRow(t *testing.T) {
 		{"source marker", EventRow{Source: "rsi-drill", Level: "error", Msg: "boom"}, true},
 		{"component marker", EventRow{Component: "rsi_drill", Level: "error", Msg: "boom"}, true},
 		{"msg marker", EventRow{Component: "server", Level: "error",
-			Msg: "rsi_ops_live_drill: synthetic coach stimulus"}, true},
+			Msg: "rsi_ops_live_drill: synthetic coach stimulus"}, false},
 		{"fields drill marker", EventRow{Component: "server", Level: "error", Drill: true}, true},
 		{"decision from drill source", EventRow{Source: "ops-drill", Decision: "live_drill",
-			Level: "error", Msg: "boom"}, true},
+			Level: "error", Msg: "boom"}, false},
 
 		{"real server error", EventRow{Component: "server", Level: "error", Msg: "panic recover"}, false},
 		{"real rsi coach error", EventRow{Source: "server", Component: "rsi_coach",
@@ -73,8 +73,8 @@ func TestClusterEventAnomaliesIgnoresDrillRows(t *testing.T) {
 func TestClusterEventAnomaliesRealErrorsUnchanged(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	real := []EventRow{
-		{Source: "server", Level: "error", Component: "server", Msg: "panic recover", TS: now},
-		{Source: "server", Level: "error", Component: "server", Msg: "panic recover 2", TS: now},
+		{Source: "server", Level: "error", Component: "server", Msg: "recover", TS: now},
+		{Source: "server", Level: "error", Component: "server", Msg: "recover 2", TS: now},
 	}
 	want := ClusterEventAnomalies(real, now, 15*time.Minute)
 	if len(want) != 1 || want[0].Kind != "daemon_error" || want[0].Count != 2 {
@@ -118,8 +118,8 @@ func TestDrillRowsDoNotFilePO(t *testing.T) {
 	}
 
 	realErrors := []EventRow{
-		{Source: "server", Level: "error", Component: "server", Msg: "panic recover", TS: now},
-		{Source: "server", Level: "error", Component: "server", Msg: "panic recover 2", TS: now},
+		{Source: "server", Level: "error", Component: "server", Msg: "recover", TS: now},
+		{Source: "server", Level: "error", Component: "server", Msg: "recover 2", TS: now},
 	}
 	withReal := RunCycle(CycleArgs{
 		Signals: BuildSignals(ObserveInput{
