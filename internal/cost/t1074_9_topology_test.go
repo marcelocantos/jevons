@@ -222,11 +222,11 @@ func requireUsageCalls(t *testing.T, c *Collector, store *Store, want int64) {
 	}
 }
 
-// topologyFact is a completed usage fact. A started one would be rewritten
-// by the broker's shutdown settle (CancelStartedUsageFacts), which keeps the
-// seq and adds a cause; Claudia's own transition contract refuses that
-// rewrite, so a broker restart in this test would trip it. That defect is
-// Claudia's, reported with 🎯T1074.9, and is not what this oracle measures.
+// topologyFact is a completed usage fact. A v0.58.0 broker's exit settle
+// rewrote a started fact in place (same seq, cause added), which Claudia's
+// transition contract refuses; Claudia's fix/usage-cancel-transition stops
+// that rewrite, and TestReplicaCatchUpRecordsRejectedFactAndContinues covers
+// catch-up over such a row. Neither is what this oracle measures.
 func topologyFact(n int) claudia.UsageFact {
 	return claudia.UsageFact{
 		Seq: uint64(n), CallID: "call-" + strconv.Itoa(n), Seat: "seat-topology", SessionID: "generation-topology",
