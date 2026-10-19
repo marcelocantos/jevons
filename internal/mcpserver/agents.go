@@ -31,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -859,7 +860,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// A pre-T1046 accepted send could mark an unsupported OMP pin as
 	// Materialized before any model reply. Diagnose before PickMintModel or
 	// Register can treat that flag as a valid resume binding.
-	if existed && def.Materialized && spool.SidecarProvider(string(def.Provider)) && cli.PlanProvider(def.Provider) == claudia.ProviderCodex &&
+	if existed && def.Materialized && seatprovider.Resolve(def.Provider).Sidecar && seatprovider.Resolve(def.Provider).Plan == seatprovider.Codex &&
 		strings.TrimSpace(def.Model) != "" && !s.codexCatalogHasModel(def.Model) {
 		if reason := s.unsupportedMaterializedModel(def); reason != "" {
 			return nil, true, "", fmt.Errorf("seat %q: unsupported OMP model %q: %s", name, def.Model, reason)
@@ -890,7 +891,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	}
 	// The registry stores the id Launch talks to. Catalog ranking above
 	// keeps pick.Provider, the plan id (claude, codex, grok).
-	def.Provider = cli.SubscriptionSeatProvider(claudia.Provider(pick.Provider))
+	def.Provider = seatprovider.Resolve(claudia.Provider(pick.Provider)).Launch
 	routeNote := pick.Cite()
 
 	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.
@@ -987,7 +988,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		}
 	}
 	if s.mcp.URL != "" {
-		def.MCPServers = mcpattach.SessionServers(s.mcp, def.Provider, def.WorkDir)
+		def.MCPServers = mcpattach.SessionServers(s.mcp, def.WorkDir)
 	}
 	def.MCPExclusive = mcpattach.Exclusive
 	if err := s.registry.Register(*def); err != nil {
@@ -1059,7 +1060,7 @@ func (s *Server) codexCatalogHasModel(model string) bool {
 		catalog = s.modelCatalog()
 	}
 	for _, row := range catalog {
-		if cli.PlanProvider(row.Provider) == claudia.ProviderCodex && row.Session &&
+		if seatprovider.Resolve(row.Provider).Plan == seatprovider.Codex && row.Session &&
 			row.Access == claudia.ModelAccessPlan && row.Model == model {
 			return true
 		}
@@ -1073,7 +1074,7 @@ func (s *Server) codexCatalogHasModel(model string) bool {
 // launch follows the same recovery path. Explicit pins and materialized
 // conversations are not overridden: they must retain their resume binding.
 func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider string, materialized bool) cost.MintModelPick {
-	if strings.TrimSpace(explicit) != "" || materialized || cli.PlanProvider(claudia.Provider(provider)) != claudia.ProviderCodex ||
+	if strings.TrimSpace(explicit) != "" || materialized || seatprovider.Resolve(claudia.Provider(provider)).Plan != seatprovider.Codex ||
 		p.Model != cost.ModelCodexSpark {
 		return p
 	}
@@ -1083,7 +1084,7 @@ func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider str
 	}
 	fallback := ""
 	for _, row := range catalog {
-		if cli.PlanProvider(row.Provider) != claudia.ProviderCodex || !row.Session || row.Access != claudia.ModelAccessPlan {
+		if seatprovider.Resolve(row.Provider).Plan != seatprovider.Codex || !row.Session || row.Access != claudia.ModelAccessPlan {
 			continue
 		}
 		if row.Model == p.Model {
@@ -1114,7 +1115,7 @@ func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sess
 // Claudia owns provider aliases and the sole sidecar transport on cold starts.
 func preserveLiveProvider(def *claudia.AgentDef, live claudia.Provider) error {
 	if live != "" {
-		if cli.PlanProvider(live) != cli.PlanProvider(def.Provider) {
+		if seatprovider.Resolve(live).Plan != seatprovider.Resolve(def.Provider).Plan {
 			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; use jevons_agent_switch_model, or stop it first", def.Name, live, def.Provider)
 		}
 		def.Provider = live

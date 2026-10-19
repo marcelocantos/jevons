@@ -77,7 +77,7 @@ func TestT464IsolateNeverWritesTheDailyRegistration(t *testing.T) {
 	if _, err := os.Stat(a.ClaudeJSON); err == nil {
 		t.Fatal("isolate boot must not write state_dir/mcp")
 	}
-	list := mcpattach.SessionServers(a, "claude", "")
+	list := mcpattach.SessionServers(a, "")
 	if len(list) != 1 || list[0].Name != "jevonsmcp-journey" {
 		t.Fatalf("isolate SessionServers = %+v", list)
 	}

@@ -17,6 +17,8 @@ package harnessusage
 
 import (
 	"fmt"
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,19 +44,28 @@ var AllHarnesses = []Harness{
 	HarnessCursor,
 }
 
-// ParseHarness accepts common aliases (claude-code, acp, …).
+// ParseHarness accepts a provider name in either vocabulary (🎯T1079) and
+// the CLI aliases the harnesses go by (claude-code, grok-build, acp, openai).
 func ParseHarness(s string) (Harness, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "claude", "claude-code", "anthropic":
+	case "claude-code":
 		return HarnessClaude, nil
-	case "grok", "grok-build", "acp", "xai":
+	case "grok-build", "acp":
 		return HarnessGrok, nil
-	case "codex", "openai-codex", "openai":
+	case "openai":
 		return HarnessCodex, nil
-	case "cursor":
-		return HarnessCursor, nil
 	case "all", "*":
 		return "", fmt.Errorf("use CollectAll, not ParseHarness(%q)", s)
+	}
+	switch seatprovider.Resolve(claudia.Provider(s)).Plan {
+	case seatprovider.Claude:
+		return HarnessClaude, nil
+	case seatprovider.Grok:
+		return HarnessGrok, nil
+	case seatprovider.Codex:
+		return HarnessCodex, nil
+	case seatprovider.Cursor:
+		return HarnessCursor, nil
 	default:
 		return "", fmt.Errorf("unknown harness %q (want claude|grok|codex|cursor)", s)
 	}

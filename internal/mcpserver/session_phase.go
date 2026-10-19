@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
@@ -28,7 +29,7 @@ func DefaultSessionRoots() discovery.Roots {
 // AgentTranscriptPath is the current session file for d — registry session
 // id at the moment of the read, not a stale id (🎯T423 clause 6).
 func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
-	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+	if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		// Sidecar seats have no vendor JSONL. Callers that need bytes
 		// use classifyAgentSessionPhase / spool.ReadSeat (🎯T866.4).
 		return ""
@@ -52,7 +53,7 @@ func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
 // Decode via ClassifyPhase on the agent's current session. Missing or
 // unreadable is unknown, never idle.
 func classifyAgentSessionPhase(d claudia.AgentDef, roots discovery.Roots) turnev.Phase {
-	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+	if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		recs, err := spool.ReadSeat(spool.Dir(), d.Name)
 		if err != nil || len(recs) == 0 {
 			return turnev.PhaseUnknown
@@ -75,12 +76,15 @@ func ReadSessionEvidence(provider claudia.Provider, sessionID, workDir string) S
 	if sessionID == "" || workDir == "" {
 		return SessionEvidenceUnknown
 	}
-	if spool.SidecarProvider(string(provider)) {
+	if seatprovider.Resolve(provider).Sidecar {
 		// Sidecar seats have no Claude JSONL. Absence of that file is
 		// not a dead conversation and is not idle (🎯T866.3).
 		return SessionEvidenceUnknown
 	}
-	if provider != "" && provider != claudia.ProviderClaude {
+	// Every named plan is a sidecar seat since claudia v0.58 (a legacy row
+	// storing claude is the anthropic seat, 🎯T1079); only an unset provider
+	// still takes Claude Code's JSONL convention.
+	if seatprovider.Resolve(provider).Plan != seatprovider.Unset {
 		return SessionEvidenceUnknown
 	}
 	ok, err := claudia.SessionExists(sessionID, workDir)

@@ -132,11 +132,13 @@ func TestT501RawCodexObserverReplaysTheUnbriefedSeatFailure(t *testing.T) {
 }
 
 // TestT501ProviderSurfaceClassification: only Claude-shaped agents keep
-// the durable ~/.claude transcript; codex and grok are live-stream.
+// the durable ~/.claude transcript; codex and grok are live-stream, and so
+// is a claude row, which is the anthropic sidecar seat (🎯T1079).
 func TestT501ProviderSurfaceClassification(t *testing.T) {
 	for provider, durable := range map[claudia.Provider]bool{
 		"":                     true,
-		claudia.ProviderClaude: true,
+		claudia.ProviderClaude: false,
+		"anthropic":            false,
 		claudia.ProviderCodex:  false,
 		claudia.ProviderGrok:   false,
 	} {

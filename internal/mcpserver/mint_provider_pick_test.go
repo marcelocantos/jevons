@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // t583Server is a mint-only server: registry, config default grok, and a
@@ -82,7 +82,7 @@ func TestT1013_6OmitProviderMintHasNoClaudeBias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("omit-provider mint = %q, want grok (greener, no Claude bias left to override it)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {
@@ -121,7 +121,7 @@ func TestExhaustedClaudeFallsBackToGreenDest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
+		if seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok {
 			t.Fatalf("%s: fallback = %q, want grok", tc.name, def.Provider)
 		}
 		if strings.Contains(note, "claude-first") {
@@ -192,7 +192,7 @@ func TestT1013_6EveryTaskTypeUsesSamePlanRankingNoClaudeBias(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tt, err)
 		}
-		if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
+		if seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok {
 			t.Fatalf("task_type %s minted %q, want grok (no Claude bias; note %q)", tt, def.Provider, note)
 		}
 		if strings.Contains(note, "claude-first") {

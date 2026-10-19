@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Status values mirror claudia's PlanUsageStatus on the wire, so the cockpit
@@ -215,7 +216,7 @@ type Snapshot struct {
 // Backend returns the named provider's entry.
 func (s Snapshot) Backend(provider string) (Backend, bool) {
 	for _, b := range s.Backends {
-		if strings.EqualFold(b.Provider, provider) {
+		if seatprovider.Same(claudia.Provider(b.Provider), claudia.Provider(provider)) {
 			return b, true
 		}
 	}

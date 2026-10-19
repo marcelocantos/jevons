@@ -14,11 +14,11 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 func t715Caps() map[string]int {
@@ -101,7 +101,7 @@ func TestT715OmitProviderMintsGrokWhenClaudeAtCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("omit spawn minted %q, want grok; note=%q", def.Provider, note)
 	}
 }

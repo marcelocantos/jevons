@@ -7,6 +7,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // registerOverseerSeat ensures the overseer's registry row on every boot,
@@ -15,8 +16,9 @@ import (
 // Worker mints have stored the sidecar seat id since f0c3f7bd (grok →
 // xai-oauth, claude → anthropic, codex → openai-codex): Claudia runs every
 // one of those plans on the omp sidecar, and Jevons' sidecar branches
-// (spool.SidecarProvider) recognise the seat only by that id. The overseer
-// kept the plan id from config. Its records were in the spool all along,
+// (then spool.SidecarProvider) recognised the seat only by that id; since
+// 🎯T1079 seatprovider.Resolve reads either spelling. The overseer kept the
+// plan id from config. Its records were in the spool all along,
 // but the owner-send payload watch never confirmed a turn (so Materialized
 // was never promoted), and after a restart the transcript observer had no
 // turn-began, no materialized flag and no evidence it would read, so the
@@ -32,7 +34,7 @@ func registerOverseerSeat(registry *claudia.Registry, name, dir, model string, d
 	}
 	// 🎯T148: keep the stored provider on resume; only set the default when
 	// empty. The plan is kept; only its spelling becomes the seat id.
-	def.Provider = cli.SubscriptionSeatProvider(cli.SelectAgentProvider("", def.Provider, defaultProvider))
+	def.Provider = seatprovider.Resolve(cli.SelectAgentProvider("", def.Provider, defaultProvider)).Launch
 	// 🎯T114: overseer purpose on the unified participant record.
 	if def.Purpose == "" {
 		def.Purpose = claudia.PurposeOverseer

@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/ownerquestions"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -305,7 +306,9 @@ func (s *Server) ObserveCockpit() cockpitObs {
 		// says a prompt is outstanding", which is exactly the condition a
 		// wedge also satisfies; treating it as evidence of work would
 		// make the stuck-busy case 🎯T204 exists for unconvictable.
-		if st.Provider == string(claudia.ProviderClaude) {
+		// Nor on the sidecar, whose in-flight flag is the client's word too:
+		// a claude row is the anthropic sidecar seat (🎯T1079).
+		if id := seatprovider.Resolve(claudia.Provider(st.Provider)); id.Plan == seatprovider.Claude && !id.Sidecar {
 			o.PaneWorking = o.PromptInFlight
 		}
 	}

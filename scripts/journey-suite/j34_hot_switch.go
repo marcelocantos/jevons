@@ -15,8 +15,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // A live seat on a hot provider must follow Claudia's placement verdict once,
@@ -33,7 +33,7 @@ func (s *suite) jHotProviderSwitch() error {
 }
 
 func (s *suite) hotProviderSwitchWithBroker() error {
-	dest := cli.PlanProvider(s.provider)
+	dest := seatprovider.Resolve(s.provider).Plan.AsProvider()
 	if dest != claudia.ProviderGrok && dest != claudia.ProviderCodex {
 		return fmt.Errorf("J34 requires a Grok or Codex isolate, got %s", s.provider)
 	}
@@ -70,7 +70,7 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 		return err
 	}
 	source := before[id]
-	if cli.PlanProvider(source.Provider) != claudia.ProviderClaude || source.SessionID == "" {
+	if seatprovider.Resolve(source.Provider).Plan != seatprovider.Claude || source.SessionID == "" {
 		return fmt.Errorf("worker did not start on Claude: %+v", source)
 	}
 
@@ -105,7 +105,7 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 		}
 	}
 	if choice == nil || choice.Author != claudia.DecisionAuthor || choice.Action != planusage.SeatMigrate ||
-		cli.PlanProvider(claudia.Provider(choice.To)) != dest || choice.Reason == "" {
+		seatprovider.Resolve(claudia.Provider(choice.To)).Plan.AsProvider() != dest || choice.Reason == "" {
 		return fmt.Errorf("Claudia did not explain an eligible move: choice=%+v decisions=%+v", choice, decisions)
 	}
 	resp, err = http.Post("http://"+s.host+"/api/plan-usage/sweep", "application/json", bytes.NewReader([]byte("{}")))
@@ -162,7 +162,7 @@ func (s *suite) hotProviderSwitchWithBroker() error {
 		return err
 	}
 	if got := reopened[id]; got.SessionID != destination.SessionID ||
-		cli.PlanProvider(got.Provider) != dest {
+		seatprovider.Resolve(got.Provider).Plan.AsProvider() != dest {
 		return fmt.Errorf("hot seat moved again after restart: destination=%+v reopened=%+v", destination, got)
 	}
 	// The broker resumes the seat with a restart nudge, so a turn is open

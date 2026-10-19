@@ -32,7 +32,7 @@ func deadSeatDef(t *testing.T, reg *claudia.Registry, name, sessionID string) cl
 	def := claudia.AgentDef{
 		Name:         name,
 		WorkDir:      t.TempDir(),
-		Provider:     claudia.ProviderClaude,
+		Provider:     claudeJSONLSeat,
 		SessionID:    sessionID,
 		Materialized: true,
 	}
@@ -156,7 +156,7 @@ func TestT412RotatedRowIsNeverBriefedNotRunning(t *testing.T) {
 	def := claudia.AgentDef{
 		Name:      "jv-t375-consistent-cockpit-snapshot",
 		WorkDir:   t.TempDir(),
-		Provider:  claudia.ProviderClaude,
+		Provider:  claudeJSONLSeat,
 		SessionID: "232f204d-fresh-mint",
 		// Materialized=false: RehydratedDef's contract after a 🎯T409 rotation.
 	}

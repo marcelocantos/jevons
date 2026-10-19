@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/sendq"
 
@@ -36,7 +37,7 @@ const defaultLaunchDeadline = 5 * time.Minute
 // deferStartPrompt reports whether this provider must use start-then-send
 // instead of waiting for turn confirmation on the start RPC.
 func deferStartPrompt(p claudia.Provider) bool {
-	return p == claudia.ProviderCursor
+	return seatprovider.Resolve(p).Plan == seatprovider.Cursor
 }
 
 func (s *Server) launchAgent(ctx context.Context, name string) (*claudia.Agent, error) {

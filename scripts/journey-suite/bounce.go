@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -306,7 +306,7 @@ func (s *suite) jBounceResume() error {
 	if err := expectLandedProvider(s.provider, before[id].Provider); err != nil {
 		return fmt.Errorf("bounce fixture: %w", err)
 	}
-	landed := string(cli.PlanProvider(before[id].Provider))
+	landed := string(seatprovider.Resolve(before[id].Provider).Plan.AsProvider())
 	if before[overseerName].SessionID == "" {
 		return fmt.Errorf("bounce owner conversation lacks a provider session identity")
 	}
@@ -361,7 +361,7 @@ func (s *suite) jBounceResume() error {
 		// The broker reclaims a seat under its plan's seat id (grok →
 		// xai-oauth), so the identity is the session and the plan.
 		if next, ok := after[name]; !ok || next.SessionID != agent.SessionID ||
-			cli.PlanProvider(next.Provider) != cli.PlanProvider(agent.Provider) {
+			seatprovider.Resolve(next.Provider).Plan != seatprovider.Resolve(agent.Provider).Plan {
 			return fmt.Errorf("bounce changed existing session/provider for %s: before %s/%s, after %s/%s (present=%v)",
 				name, agent.Provider, agent.SessionID, next.Provider, next.SessionID, ok)
 		}

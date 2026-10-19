@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // SeatAction is Claudia's placement verb for one seat.
@@ -212,7 +211,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		if p == "" {
 			p = c.Backend.Provider
 		}
-		exclusions = append(exclusions, cli.PlanProvider(claudia.Provider(p)))
+		exclusions = append(exclusions, seatprovider.Resolve(claudia.Provider(p)).Plan.AsProvider())
 		capped = append(capped, p)
 	}
 	// 🎯T948: a seat on a plan the owner has put in a dest band stays,
@@ -228,7 +227,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
 			continue
 		}
-		plan := strings.ToLower(string(claudia.PlanProvider(claudia.Provider(a.Provider))))
+		plan := strings.ToLower(string(seatprovider.Resolve(claudia.Provider(a.Provider)).Plan.AsProvider()))
 		if ov := held[plan]; ov != nil && !a.RecoverPlanPark {
 			out = append(out, PlanAction{Name: a.Name, From: plan, Action: SeatStay,
 				Reason: "owner override (" + string(ov.Band) + "): " + ov.Reason, Author: "owner"})
@@ -276,11 +275,11 @@ type seatDecision struct {
 // claudia.Resolve with Background set, which is Claudia's own
 // ahead / hot / exhausted veto on destinations.
 func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, th Thresholds, extraExclude []claudia.Provider) seatDecision {
-	current := cli.PlanProvider(claudia.Provider(a.Provider))
+	current := seatprovider.Resolve(claudia.Provider(a.Provider)).Plan.AsProvider()
 	byProv := map[claudia.Provider]claudia.PlanUsage{}
 	normalized := make([]claudia.PlanUsage, 0, len(usage))
 	for _, u := range usage {
-		u.Provider = cli.PlanProvider(u.Provider)
+		u.Provider = seatprovider.Resolve(u.Provider).Plan.AsProvider()
 		if u.Provider == "" {
 			continue
 		}
@@ -294,7 +293,7 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 	}
 	others := 0
 	for p := range byProv {
-		if p != current {
+		if !seatprovider.Same(p, current) {
 			others++
 		}
 	}
@@ -306,19 +305,19 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 	}
 	excluded := map[claudia.Provider]bool{current: current != "" && !a.RecoverPlanPark}
 	for _, p := range extraExclude {
-		if id := cli.PlanProvider(p); id != "" {
+		if id := seatprovider.Resolve(p).Plan.AsProvider(); id != "" {
 			excluded[id] = true
 		}
 	}
 	for _, p := range a.ExcludeProviders {
-		if id := cli.PlanProvider(p); id != "" {
+		if id := seatprovider.Resolve(p).Plan.AsProvider(); id != "" {
 			excluded[id] = true
 		}
 	}
 	if len(a.AllowedProviders) > 0 {
 		allow := map[claudia.Provider]bool{}
 		for _, p := range a.AllowedProviders {
-			allow[cli.PlanProvider(p)] = true
+			allow[seatprovider.Resolve(p).Plan.AsProvider()] = true
 		}
 		for _, row := range claudia.ModelCatalog() {
 			if !allow[row.Provider] {
@@ -332,7 +331,7 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 			exclusions = append(exclusions, row.Provider)
 		}
 	}
-	prefer := cli.PlanProvider(a.PreferProvider)
+	prefer := seatprovider.Resolve(a.PreferProvider).Plan.AsProvider()
 	pick, err := claudia.Resolve(context.Background(), claudia.ModelPredicates{
 		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
 		PreferPlan: true, RequireUsage: true, Background: true,

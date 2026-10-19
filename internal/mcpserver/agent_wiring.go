@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -207,7 +208,7 @@ func (s *Server) attachAgentSink(name string, proc *claudia.Agent) bool {
 		s.noteReattachedMidTurn(name, turn, turnInFlight, launching)
 		if s.registry != nil {
 			if def := s.registry.Def(name); def != nil &&
-				spool.SidecarProvider(string(def.Provider)) &&
+				seatprovider.Resolve(def.Provider).Sidecar &&
 				spool.SeatHasHistory(spool.Dir(), name) {
 				s.recoverMissedTurnsFromSpool(name, attachedAt)
 				return

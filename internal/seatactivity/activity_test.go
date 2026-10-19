@@ -60,58 +60,45 @@ func stamp(t *testing.T, path string, when time.Time) {
 	}
 }
 
+// claudeJSONLSeat is the provider a seat with Claude Code JSONL records
+// stores: none. Every named plan, claude included, is a sidecar seat since
+// claudia v0.58 (🎯T1079).
+const claudeJSONLSeat claudia.Provider = ""
+
 func TestLocateClaudePresentAndAbsent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	work := t.TempDir()
 	sid := "t702-claude-sid"
-	absent := Locate(Query{Name: "claude-seat", Provider: claudia.ProviderClaude, SessionID: sid, WorkDir: work})
+	absent := Locate(Query{Name: "claude-seat", Provider: claudeJSONLSeat, SessionID: sid, WorkDir: work})
 	if absent.State != discovery.LookupAbsent {
 		t.Fatalf("missing JSONL: %+v want absent", absent)
 	}
 	path := plantClaudeJSONL(t, work, sid, `{"type":"user"}`+"\n")
-	present := Locate(Query{Name: "claude-seat", Provider: claudia.ProviderClaude, SessionID: sid, WorkDir: work})
+	present := Locate(Query{Name: "claude-seat", Provider: claudeJSONLSeat, SessionID: sid, WorkDir: work})
 	if present.State != discovery.LookupPresent || present.Path != path {
 		t.Fatalf("claude JSONL: %+v want present %q", present, path)
 	}
 }
 
-func TestLocateGrokPresentHomesUnobservableAndAbsent(t *testing.T) {
+// 🎯T1079: a grok row is the xai-oauth sidecar seat. A Grok Build store
+// holding its session id is the refused CLI transport's leftover, not the
+// seat's conversation, so neither spelling reads it.
+func TestLocateGrokRowIsTheSidecarSeat(t *testing.T) {
+	t.Setenv("JEVONS_SPOOL_DIR", t.TempDir())
 	sessions := filepath.Join(t.TempDir(), "sessions")
 	work := "/tmp/t702-repo"
-	want := plantGrokUpdates(t, sessions, work, t702GrokSID, `{"method":"session/update"}`+"\n")
-	present := Locate(Query{
-		Name: "grok-seat", Provider: claudia.ProviderGrok, SessionID: t702GrokSID,
-		Roots: discovery.Roots{GrokSessions: sessions},
-	})
-	if present.State != discovery.LookupPresent || present.Path != want {
-		t.Fatalf("ordinary grok: %+v want present %q", present, want)
-	}
-
-	homes := t.TempDir()
-	homePath := plantGrokUpdates(t, discovery.ClaudiaGrokHomeSessionsDir(homes, t702GrokHomeSID), work, t702GrokHomeSID, `{"method":"session/update"}`+"\n")
-	viaHomes := Locate(Query{
-		Name: "grok-homes-seat", Provider: claudia.ProviderGrok, SessionID: t702GrokHomeSID,
-		Roots: discovery.Roots{ClaudiaGrokHomes: homes},
-	})
-	if viaHomes.State != discovery.LookupPresent || viaHomes.Path != homePath {
-		t.Fatalf("grok-homes: %+v want present %q", viaHomes, homePath)
-	}
-
-	unresolved := Locate(Query{Name: "grok-seat", Provider: claudia.ProviderGrok, SessionID: t702GrokSID})
-	if unresolved.State != discovery.LookupUnobservable {
-		t.Fatalf("no roots: %+v want unobservable", unresolved)
-	}
-
-	empty := filepath.Join(t.TempDir(), "sessions")
-	if err := os.MkdirAll(empty, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	absent := Locate(Query{
-		Name: "grok-seat", Provider: claudia.ProviderGrok, SessionID: t702GrokSID,
-		Roots: discovery.Roots{GrokSessions: empty},
-	})
-	if absent.State != discovery.LookupAbsent {
-		t.Fatalf("empty grok root: %+v want absent", absent)
+	plantGrokUpdates(t, sessions, work, t702GrokSID, `{"method":"session/update"}`+"\n")
+	for _, provider := range []claudia.Provider{claudia.ProviderGrok, "xai-oauth"} {
+		got := Locate(Query{
+			Name: "grok-seat", Provider: provider, SessionID: t702GrokSID,
+			Roots: discovery.Roots{GrokSessions: sessions},
+		})
+		if got.State != discovery.LookupUnobservable || got.Path != "" {
+			t.Fatalf("%s over a Grok Build store: %+v want unobservable", provider, got)
+		}
+		if !strings.Contains(got.Reason, "xai-oauth sidecar seat") {
+			t.Fatalf("%s reason must name the sidecar seat, got %q", provider, got.Reason)
+		}
 	}
 }
 
@@ -126,7 +113,7 @@ func TestLocateCursorIsUnobservable(t *testing.T) {
 	if got.Path != "" {
 		t.Fatalf("cursor must not cite a path, got %q", got.Path)
 	}
-	if !strings.Contains(got.Reason, "store.db") {
+	if !strings.Contains(got.Reason, "spool") {
 		t.Fatalf("cursor reason must say why, got %q", got.Reason)
 	}
 }
@@ -142,15 +129,15 @@ func TestLookupKnownAgeUsesInjectedClock(t *testing.T) {
 	// Mutation: ignoring q.Now and using time.Now() makes both ages ~years,
 	// not 10s and 45min, against this 2020 clock.
 	now := time.Date(2020, 1, 1, 12, 0, 0, 0, time.UTC)
-	sessions := filepath.Join(t.TempDir(), "sessions")
-	freshPath := plantGrokUpdates(t, sessions, "/tmp/t702", t702GrokSID, "{}\n")
-	stalePath := plantGrokUpdates(t, sessions, "/tmp/t702", t702GrokHomeSID, "{}\n")
+	t.Setenv("HOME", t.TempDir())
+	work := t.TempDir()
+	freshPath := plantClaudeJSONL(t, work, t702GrokSID, "{}\n")
+	stalePath := plantClaudeJSONL(t, work, t702GrokHomeSID, "{}\n")
 	stamp(t, freshPath, now.Add(-10*time.Second))
 	stamp(t, stalePath, now.Add(-45*time.Minute))
-	roots := discovery.Roots{GrokSessions: sessions}
 
-	fresh := Lookup(Query{Provider: claudia.ProviderGrok, SessionID: t702GrokSID, Roots: roots, Now: now})
-	stale := Lookup(Query{Provider: claudia.ProviderGrok, SessionID: t702GrokHomeSID, Roots: roots, Now: now})
+	fresh := Lookup(Query{Provider: claudeJSONLSeat, SessionID: t702GrokSID, WorkDir: work, Now: now})
+	stale := Lookup(Query{Provider: claudeJSONLSeat, SessionID: t702GrokHomeSID, WorkDir: work, Now: now})
 	if fresh.Verdict != VerdictKnown || stale.Verdict != VerdictKnown {
 		t.Fatalf("fresh=%+v stale=%+v want known", fresh, stale)
 	}
@@ -180,12 +167,12 @@ func TestLookupUnknownNeverReportsZeroAge(t *testing.T) {
 
 func TestLookupFutureMtimeClampsAgeToZero(t *testing.T) {
 	now := time.Date(2020, 1, 1, 12, 0, 0, 0, time.UTC)
-	sessions := filepath.Join(t.TempDir(), "sessions")
-	path := plantGrokUpdates(t, sessions, "/tmp/t702", t702GrokSID, "{}\n")
+	t.Setenv("HOME", t.TempDir())
+	work := t.TempDir()
+	path := plantClaudeJSONL(t, work, t702GrokSID, "{}\n")
 	stamp(t, path, now.Add(time.Hour))
 	got := Lookup(Query{
-		Provider: claudia.ProviderGrok, SessionID: t702GrokSID,
-		Roots: discovery.Roots{GrokSessions: sessions}, Now: now,
+		Provider: claudeJSONLSeat, SessionID: t702GrokSID, WorkDir: work, Now: now,
 	})
 	if got.Verdict != VerdictKnown {
 		t.Fatalf("future mtime: %+v want known", got)

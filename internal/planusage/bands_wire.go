@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // WithBands returns a copy of snap with every window's Band filled in at now.
@@ -47,7 +48,7 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 	for i := range out.Backends {
 		be := &out.Backends[i]
 		if be.Available() {
-			if strings.EqualFold(be.Provider, "claude") {
+			if seatprovider.Resolve(claudia.Provider(be.Provider)).Plan == seatprovider.Claude {
 				be.Spend = spendIfActive(be.rawSpend, be.Windows)
 			} else {
 				be.Spend = nil

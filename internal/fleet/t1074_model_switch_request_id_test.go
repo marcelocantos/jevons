@@ -15,6 +15,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
@@ -231,17 +232,17 @@ func TestT1074ModelSwitchPreservesRequestIdentity(t *testing.T) {
 	landedSwitches := append([]string(nil), switches...)
 	landedSends := sends
 	mu.Unlock()
-	if landedSends != 1 || len(landedSwitches) != 1 || landedSwitches[0] != string(claudia.SubscriptionSeatProvider(claudia.ProviderGrok))+"/"+toModel {
+	if landedSends != 1 || len(landedSwitches) != 1 || landedSwitches[0] != string(seatprovider.Resolve(claudia.ProviderGrok).Launch)+"/"+toModel {
 		t.Fatalf("switch handoff sends=%d switches=%v", landedSends, landedSwitches)
 	}
 	def = reg.Def(name)
 	if def.Model != toModel || def.SessionID != t1074DirectSession || def.TargetID != mission {
 		t.Fatalf("landed switch lost identity: %+v", def)
 	}
-	if def.Provider != claudia.SubscriptionSeatProvider(claudia.ProviderGrok) {
+	if def.Provider != seatprovider.Resolve(claudia.ProviderGrok).Launch {
 		t.Fatalf("provider = %s, want the sidecar seat id", def.Provider)
 	}
-	if claudia.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("plan provider = %s", def.Provider)
 	}
 	if len(frozen) != 1 || len(switchStamps) != 1 || switchStamps[0] != "" || len(switchEvents) != 1 || switchEvents[0].Receipt != nil {

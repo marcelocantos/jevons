@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 const (
@@ -35,6 +36,24 @@ func t702PlantGrok(t *testing.T, sessionsDir, workDir, sid string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// t702PlantSpool writes the sidecar's record of a seat's turn at when. Every
+// seat runs on the sidecar since claudia v0.58, whichever spelling its row
+// stores (🎯T1079), so the spool is where a seat's recency is read: a
+// legacy grok row's Grok Build store is not its conversation any more.
+func t702PlantSpool(t *testing.T, dir, seat string, when time.Time) {
+	t.Helper()
+	path := filepath.Join(dir, "events-"+when.UTC().Format(time.DateOnly)+".log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	line := `{"ts":"` + when.UTC().Format(time.RFC3339Nano) + `","seat":"` + seat + `","type":"turn_end"}` + "\n"
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func t702Stamp(t *testing.T, path string, when time.Time) {
@@ -92,6 +111,8 @@ func t702ByName(t *testing.T, rows []map[string]any, name string) map[string]any
 // drop-the-field mutation: a missing JSON key is not a zero Go field.
 func TestT702HandlerServesDistinguishableAges(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	spoolDir := t.TempDir()
+	t.Setenv(spool.DirEnv, spoolDir)
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -101,23 +122,17 @@ func TestT702HandlerServesDistinguishableAges(t *testing.T) {
 	homes := t.TempDir()
 	now := time.Now()
 
-	freshPath := t702PlantGrok(t, sessions, work, t702FreshSID)
-	stalePath := t702PlantGrok(t, discovery.ClaudiaGrokHomeSessionsDir(homes, t702StaleSID), work, t702StaleSID)
-	t702Stamp(t, freshPath, now.Add(-10*time.Second))
-	t702Stamp(t, stalePath, now.Add(-45*time.Minute))
-
-	claudePath := claudia.SessionJSONLPath(t702ClaudeSID, work)
-	if err := os.MkdirAll(filepath.Dir(claudePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(claudePath, []byte(`{"type":"user"}`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t702Stamp(t, claudePath, now.Add(-10*time.Second))
+	// A stale Grok Build store for the legacy grok row: the seat's spool
+	// says 10s, and the vendor file must not be what is served (🎯T1079).
+	vendor := t702PlantGrok(t, sessions, work, t702FreshSID)
+	t702Stamp(t, vendor, now.Add(-3*time.Hour))
+	t702PlantSpool(t, spoolDir, "grok-fresh", now.Add(-10*time.Second))
+	t702PlantSpool(t, spoolDir, "grok-stale", now.Add(-45*time.Minute))
+	t702PlantSpool(t, spoolDir, "claude-fresh", now.Add(-10*time.Second))
 
 	for _, d := range []claudia.AgentDef{
 		{Name: "grok-fresh", WorkDir: work, SessionID: t702FreshSID, Provider: claudia.ProviderGrok},
-		{Name: "grok-stale", WorkDir: work, SessionID: t702StaleSID, Provider: claudia.ProviderGrok},
+		{Name: "grok-stale", WorkDir: work, SessionID: t702StaleSID, Provider: "xai-oauth"},
 		{Name: "claude-fresh", WorkDir: work, SessionID: t702ClaudeSID, Provider: claudia.ProviderClaude},
 		{Name: "cursor-opaque", WorkDir: work, SessionID: t702FreshSID, Provider: claudia.ProviderCursor},
 	} {
@@ -150,7 +165,7 @@ func TestT702HandlerServesDistinguishableAges(t *testing.T) {
 		t.Fatalf("10s grok seat aged past 30min: %v — supervisor would call it stalled", freshAge)
 	}
 	if staleAge < 30*60 {
-		t.Fatalf("45min grok-homes seat aged under 30min: %v — supervisor would miss the stall", staleAge)
+		t.Fatalf("45min xai-oauth seat aged under 30min: %v — supervisor would miss the stall", staleAge)
 	}
 }
 
@@ -158,6 +173,8 @@ func TestT702HandlerServesDistinguishableAges(t *testing.T) {
 // decorateSeatActivity (or Lookup) writes time.Now() as last-move / age, the
 // 2020 clock below cannot produce 10s and 45min.
 func TestT702DecorateRejectsWallClockNow(t *testing.T) {
+	spoolDir := t.TempDir()
+	t.Setenv(spool.DirEnv, spoolDir)
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -165,14 +182,12 @@ func TestT702DecorateRejectsWallClockNow(t *testing.T) {
 	work := t.TempDir()
 	sessions := filepath.Join(t.TempDir(), "sessions")
 	now := time.Date(2020, 1, 1, 12, 0, 0, 0, time.UTC)
-	freshPath := t702PlantGrok(t, sessions, work, t702FreshSID)
-	stalePath := t702PlantGrok(t, sessions, work, t702StaleSID)
-	t702Stamp(t, freshPath, now.Add(-10*time.Second))
-	t702Stamp(t, stalePath, now.Add(-45*time.Minute))
+	t702PlantSpool(t, spoolDir, "grok-fresh", now.Add(-10*time.Second))
+	t702PlantSpool(t, spoolDir, "grok-stale", now.Add(-45*time.Minute))
 
 	for _, d := range []claudia.AgentDef{
 		{Name: "grok-fresh", WorkDir: work, SessionID: t702FreshSID, Provider: claudia.ProviderGrok},
-		{Name: "grok-stale", WorkDir: work, SessionID: t702StaleSID, Provider: claudia.ProviderGrok},
+		{Name: "grok-stale", WorkDir: work, SessionID: t702StaleSID, Provider: "xai-oauth"},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)

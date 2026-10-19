@@ -12,9 +12,9 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 func t39015Weekly(name string, rem, used float64, now time.Time) planusage.Backend {
@@ -121,7 +121,7 @@ func TestStitchOmitProviderUsesPlanDestWhenDefaultAhead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderCodex {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Codex {
 		t.Fatalf("omit mint dest=%q want codex (grok ahead)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {

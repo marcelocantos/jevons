@@ -13,7 +13,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/sendq"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
@@ -207,7 +207,7 @@ func queueJourneyLaunchProvider(logs []byte, name string) (string, error) {
 		if raw == "" {
 			return "", fmt.Errorf("agent %s launch has no provider", name)
 		}
-		plan := string(cli.PlanProvider(claudia.Provider(raw)))
+		plan := string(seatprovider.Resolve(claudia.Provider(raw)).Plan.AsProvider())
 		if seen && plan != found {
 			return "", fmt.Errorf("agent %s launched on %q and %q", name, found, plan)
 		}
@@ -231,7 +231,7 @@ func queueJourneyProvider(logs []byte, name, expected string) error {
 		}
 		// A subscription plan launches under its seat id (grok → xai-oauth),
 		// so the evidence is the plan, not the literal launch id.
-		if cli.PlanProvider(claudia.Provider(event["provider"])) != cli.PlanProvider(claudia.Provider(expected)) {
+		if seatprovider.Resolve(claudia.Provider(event["provider"])).Plan != seatprovider.Resolve(claudia.Provider(expected)).Plan {
 			return fmt.Errorf("agent %s launched on %q, requested %q", name, event["provider"], expected)
 		}
 		found = true
@@ -311,7 +311,7 @@ func (s *suite) jT418Mute() error {
 
 	spawnOut, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": name, "workdir": work, "description": "T418 mute fixture worker",
-		"provider": string(cli.PlanProvider(s.provider)),
+		"provider": string(seatprovider.Resolve(s.provider).Plan.AsProvider()),
 	})
 	if out := asOutage("spawn", err); out != nil {
 		return out

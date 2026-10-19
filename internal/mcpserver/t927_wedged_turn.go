@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/sendq"
-	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 // 🎯T927 — a turn that died with its host handle is cleared, not waited on.
@@ -245,7 +245,7 @@ func (s *Server) isSidecarSeat(name string) bool {
 		return false
 	}
 	def := s.registry.Def(name)
-	return def != nil && spool.SidecarProvider(string(def.Provider))
+	return def != nil && seatprovider.Resolve(def.Provider).Sidecar
 }
 
 // reconcileWedgedTurn decides whether a backlog held behind a turn in flight

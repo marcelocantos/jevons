@@ -9,6 +9,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
@@ -154,7 +155,7 @@ func (s *Server) observeSeatTranscript(d claudia.AgentDef) {
 	st := s.seatState(d.Name)
 	if st.Alive.Known() {
 		ev := ReadSessionEvidence(d.Provider, d.SessionID, d.WorkDir)
-		if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+		if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
 			ev = SessionEvidencePresent
 		}
 		status := classifyAgentListPhase(st.Alive == seatstate.Yes, s.agentHasTurnBegan(d.Name), d.Materialized, ev)

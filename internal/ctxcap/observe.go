@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Observation of live context (🎯T392.1).
@@ -78,20 +80,18 @@ func (o Observer) Observe(a AgentRef) Observation {
 // was inert on Claude until the 🎯T392 post-change measurement showed
 // mean context RISING to 205k under a 100k cap.
 func contextTokens(provider string, u cost.Usage) int64 {
-	switch provider {
-	case "grok", "xai":
+	if seatprovider.Resolve(claudia.Provider(provider)).Plan == seatprovider.Grok {
 		return u.Input
-	default:
-		return u.Input + u.CacheRead + u.CacheCreate
 	}
+	return u.Input + u.CacheRead + u.CacheCreate
 }
 
 // usagePath locates the file carrying the session's usage frames. Grok
 // records them in updates.jsonl beside the chat history; Claude records
 // them inline in the session transcript itself.
 func (o Observer) usagePath(a AgentRef) string {
-	switch a.Provider {
-	case "grok", "xai":
+	switch seatprovider.Resolve(claudia.Provider(a.Provider)).Plan {
+	case seatprovider.Grok:
 		if o.Roots.GrokSessions == "" {
 			return ""
 		}

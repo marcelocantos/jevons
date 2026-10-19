@@ -10,9 +10,8 @@ import (
 
 	"strings"
 
-	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T305 — delivery confirmation and never-briefed status.
@@ -83,7 +82,7 @@ func (s *Server) markAgentTurnBegan(name string) {
 		// not turn that into a durable RequireResume obligation for a void
 		// Codex conversation. Preserve the process-local turn-began mark above;
 		// a later provider reply can carry its own durable evidence.
-		if d := reg.Def(name); d != nil && cli.PlanProvider(d.Provider) == claudia.ProviderCodex &&
+		if d := reg.Def(name); d != nil && seatprovider.Resolve(d.Provider).Plan == seatprovider.Codex &&
 			d.Model == cost.ModelCodexSpark && !s.codexCatalogHasModel(d.Model) {
 			return
 		}

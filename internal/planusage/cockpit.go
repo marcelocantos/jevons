@@ -5,6 +5,8 @@ package planusage
 
 import (
 	"fmt"
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"strings"
 )
 
@@ -12,7 +14,7 @@ import (
 // (no subscription remaining). Everything else — including unpublished
 // Grok and exhausted Claude — stays so the owner can see why.
 func ShowOnBar(b Backend) bool {
-	if strings.EqualFold(b.Provider, "bedrock") && !b.Available() && b.FleetAgents <= 0 {
+	if seatprovider.Resolve(claudia.Provider(b.Provider)).Plan == seatprovider.Bedrock && !b.Available() && b.FleetAgents <= 0 {
 		return false
 	}
 	return true

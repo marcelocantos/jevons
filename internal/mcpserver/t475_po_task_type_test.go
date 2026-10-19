@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T475: omit-provider / omit-task_type product-owner mint does not
@@ -54,7 +54,7 @@ func TestT475POMintDefaultsCEONotCodeImplement(t *testing.T) {
 	if existed {
 		t.Fatal("PO mint reported existed")
 	}
-	if cli.PlanProvider(po.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(po.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("PO provider=%q want grok", po.Provider)
 	}
 	if strings.Contains(strings.ToLower(po.Model), "claude") ||
@@ -75,7 +75,7 @@ func TestT475POMintDefaultsCEONotCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(worker.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(worker.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("worker provider=%q want grok (config)", worker.Provider)
 	}
 	if !strings.Contains(wnote, "task_type: code_implement") {

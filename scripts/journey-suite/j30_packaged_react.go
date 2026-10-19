@@ -18,7 +18,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // J30 exercises the actual packaged React composer and mux wire. No direct
@@ -77,7 +77,7 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	if err != nil {
 		return err
 	}
-	if cli.PlanProvider(overseer) != cli.PlanProvider(s.provider) {
+	if seatprovider.Resolve(overseer).Plan != seatprovider.Resolve(s.provider).Plan {
 		fmt.Printf("NOTE %s is on %s, not the suite's %s: an earlier journey moved it; its checks follow its current provider (T832)\n", overseerName, overseer, provider)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -175,7 +175,7 @@ func latestLaunchProvider(logs []byte, name string, current claudia.Provider) er
 	if latest == "" {
 		return fmt.Errorf("no named runtime launch evidence for %s", name)
 	}
-	if cli.PlanProvider(claudia.Provider(latest)) != cli.PlanProvider(current) {
+	if seatprovider.Resolve(claudia.Provider(latest)).Plan != seatprovider.Resolve(current).Plan {
 		return fmt.Errorf("agent %s last launched on %q, but the registry names %q", name, latest, current)
 	}
 	return nil

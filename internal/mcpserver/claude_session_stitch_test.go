@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T215: Hermetic Jevons→claudia Session stitch for provider=claude.
@@ -220,7 +221,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	}
 	// Selection is a subscription identity; an unpinned seat stores the
 	// sidecar's runtime id. The exact runtime mapping has its own T866.5 oracle.
-	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("empty provider work mint → %q, want grok (config); note=%q", def.Provider, note)
 	}
 	if !strings.Contains(note, "provider_knob: config") {
@@ -240,7 +241,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(mech.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(mech.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("mechanical omit-provider → %q want grok; note=%q", mech.Provider, note)
 	}
 	if !strings.Contains(note, "provider_knob: config") {
@@ -265,7 +266,7 @@ func TestStitchAgentStartPortfolioRoutesCodeImplement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(spread.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(spread.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("after claude at soft cap, omit mint → %q want config grok; note=%q", spread.Provider, note)
 	}
 }

@@ -44,6 +44,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatreg"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -1077,7 +1078,7 @@ func main() {
 	}
 	fleetAdapter.SetMCP(mcpAttach)
 	mcpSrv.SetMCP(mcpAttach)
-	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.Provider, jevonDef.WorkDir)
+	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.WorkDir)
 	jevonDef.MCPExclusive = mcpattach.Exclusive
 	stampRegistrySessionMCP(registry, mcpAttach, jevonDef)
 	if err := registry.Register(*jevonDef); err != nil {
@@ -1775,25 +1776,25 @@ func claudeBin() string {
 // binOnPath: provider CLI found on PATH. candidatePath: non-empty when a
 // known install path exists off-PATH (Grok only today).
 func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, candidatePath string) string {
-	switch provider {
-	case claudia.ProviderClaude:
+	switch seatprovider.Resolve(provider).Plan {
+	case seatprovider.Claude:
 		if binOnPath {
 			return "the Claude agent failed to start â check that the Claude CLI is authenticated " +
 				"and see the jevonsd log for details (overseer provider is claude)"
 		}
 		return "the Claude CLI is not installed (or not on PATH) â install Claude Code, authenticate, " +
 			"then restart jevonsd (overseer provider is claude; this is not a Grok CLI issue)"
-	case claudia.ProviderCodex:
+	case seatprovider.Codex:
 		if binOnPath {
 			return "the Codex agent failed to start â check Codex auth and see the jevonsd log " +
 				"(overseer provider is codex)"
 		}
 		return "the Codex CLI is not installed (or not on PATH) â install Codex, authenticate, " +
 			"then restart jevonsd (overseer provider is codex; this is not a Grok CLI issue)"
-	case claudia.ProviderBedrock:
+	case seatprovider.Bedrock:
 		return "the Bedrock agent failed to start — check AWS credentials/region and see the " +
 			"jevonsd log (overseer provider is bedrock; this is not a Grok CLI issue)"
-	case claudia.ProviderCursor:
+	case seatprovider.Cursor:
 		if binOnPath {
 			return "the Cursor agent failed to start — session/load of the existing conversation failed or the ACP child died; see the jevonsd log (overseer provider is cursor; this is not a Grok CLI issue)"
 		}
@@ -1826,8 +1827,8 @@ func overseerDownReason(provider claudia.Provider, resumeDenied error) string {
 // overseerUnavailableReason probes the host for the selected overseer
 // provider's CLI and returns a legible, actionable explanation (🎯T54, 🎯T214).
 func overseerUnavailableReason(provider claudia.Provider) string {
-	switch provider {
-	case claudia.ProviderClaude:
+	switch seatprovider.Resolve(provider).Plan {
+	case seatprovider.Claude:
 		if _, err := exec.LookPath("claude"); err == nil {
 			return diagnoseOverseerUnavailable(provider, true, "")
 		}
@@ -1837,12 +1838,12 @@ func overseerUnavailableReason(provider claudia.Provider) string {
 			}
 		}
 		return diagnoseOverseerUnavailable(provider, false, "")
-	case claudia.ProviderCodex:
+	case seatprovider.Codex:
 		_, err := exec.LookPath("codex")
 		return diagnoseOverseerUnavailable(provider, err == nil, "")
-	case claudia.ProviderBedrock:
+	case seatprovider.Bedrock:
 		return diagnoseOverseerUnavailable(provider, false, "")
-	case claudia.ProviderCursor:
+	case seatprovider.Cursor:
 		if _, err := exec.LookPath("cursor-agent"); err == nil {
 			return diagnoseOverseerUnavailable(provider, true, "")
 		}

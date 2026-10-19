@@ -5,6 +5,8 @@ package cost
 
 import (
 	"fmt"
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"strings"
 )
 
@@ -106,7 +108,7 @@ func PickMintProvider(a MintProviderArgs) MintProviderPick {
 				TaskType:       a.Portfolio.TaskType,
 			}
 		}
-		if dest := strings.ToLower(strings.TrimSpace(a.PlanDest)); dest != "" && dest != cfg {
+		if dest := strings.ToLower(strings.TrimSpace(a.PlanDest)); dest != "" && !seatprovider.Same(claudia.Provider(dest), claudia.Provider(cfg)) {
 			return MintProviderPick{
 				Provider:       dest,
 				Knob:           KnobPlanDest,
@@ -123,7 +125,7 @@ func PickMintProvider(a MintProviderArgs) MintProviderPick {
 
 func (p *MintProviderPick) noteLoser(a MintProviderArgs) {
 	want := strings.ToLower(strings.TrimSpace(a.Portfolio.Provider))
-	if want == "" || want == p.Provider {
+	if want == "" || seatprovider.Same(claudia.Provider(want), claudia.Provider(p.Provider)) {
 		return
 	}
 	p.LosingProvider = want

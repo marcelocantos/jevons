@@ -16,8 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Model-switch journeys (claudia 🎯T195). A seat switches provider in place:
@@ -32,7 +31,7 @@ import (
 // switchJourneyDestination is the other plan a journey moves to. Codex
 // and Claude carry the moves, so the journeys do not spend Cursor.
 func switchJourneyDestination(from claudia.Provider) claudia.Provider {
-	if cli.PlanProvider(from) == claudia.ProviderCodex {
+	if seatprovider.Resolve(from).Plan == seatprovider.Codex {
 		return claudia.ProviderClaude
 	}
 	return claudia.ProviderCodex
@@ -41,7 +40,7 @@ func switchJourneyDestination(from claudia.Provider) claudia.Provider {
 // switchedInPlace checks the registry row after a switch: on the
 // destination plan, on the same session.
 func switchedInPlace(source, after claudia.AgentDef, to claudia.Provider) error {
-	if cli.PlanProvider(after.Provider) != cli.PlanProvider(to) {
+	if seatprovider.Resolve(after.Provider).Plan != seatprovider.Resolve(to).Plan {
 		return fmt.Errorf("seat is on %s, want %s", after.Provider, to)
 	}
 	if after.SessionID == "" || after.SessionID != source.SessionID {
@@ -92,7 +91,7 @@ func (s *suite) providerSwitchWithBroker() error {
 		// The source request is the isolate's provider. An unsteerable
 		// pin is dropped at mint (🎯T791); the switch below follows the
 		// plan that actually started.
-		"provider": string(cli.PlanProvider(s.provider)),
+		"provider": string(seatprovider.Resolve(s.provider).Plan.AsProvider()),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
@@ -115,7 +114,7 @@ func (s *suite) providerSwitchWithBroker() error {
 	if err := expectLandedProvider(s.provider, source.Provider); err != nil {
 		return fmt.Errorf("source identity: %w", err)
 	}
-	to := switchJourneyDestination(cli.PlanProvider(source.Provider))
+	to := switchJourneyDestination(seatprovider.Resolve(source.Provider).Plan.AsProvider())
 	// owner_asked: the journey plays the owner requesting this move (🎯T561
 	// refuses an un-asked leave of a provider with weekly remaining).
 	out, err := s.mcpText("jevons_agent_switch_model", map[string]any{
@@ -178,7 +177,7 @@ func (s *suite) stoppedProviderSwitchWithBroker() error {
 	to := switchJourneyDestination(s.provider)
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey stopped switch worker",
-		"provider": string(cli.PlanProvider(s.provider)),
+		"provider": string(seatprovider.Resolve(s.provider).Plan.AsProvider()),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
@@ -291,7 +290,7 @@ func seatPreserved(before, after claudia.AgentDef) error {
 	if strings.TrimSpace(after.SessionID) == "" && strings.TrimSpace(string(after.Provider)) == "" {
 		return fmt.Errorf("seat is gone")
 	}
-	if cli.PlanProvider(after.Provider) != cli.PlanProvider(before.Provider) {
+	if seatprovider.Resolve(after.Provider).Plan != seatprovider.Resolve(before.Provider).Plan {
 		return fmt.Errorf("provider changed from %s to %s", before.Provider, after.Provider)
 	}
 	if after.SessionID == "" || after.SessionID != before.SessionID {

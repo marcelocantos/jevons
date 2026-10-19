@@ -13,8 +13,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 func bandOfFixture(t *testing.T, provider string, rem, used float64) planusage.BandInfo {
@@ -80,7 +80,7 @@ func TestCursorFixtureMintsSteerableCompanion(t *testing.T) {
 	if len(snap.Backends) < 2 {
 		t.Fatalf("cursor fixture backends = %+v, want the pin plus steerable plans", snap.Backends)
 	}
-	companion := string(cli.PlanProvider(switchJourneyDestination(claudia.ProviderCursor)))
+	companion := string(seatprovider.Resolve(switchJourneyDestination(claudia.ProviderCursor)).Plan.AsProvider())
 	if companion == "" || companion == "cursor" || planusage.UnsteerableReason(companion) != "" {
 		t.Fatalf("companion %q is not a steerable plan distinct from cursor", companion)
 	}
@@ -105,7 +105,7 @@ func TestCursorFixtureMintsSteerableCompanion(t *testing.T) {
 	if planusage.UnsteerableReason(string(pick.Provider)) != "" || string(pick.Provider) == "cursor" {
 		t.Fatalf("ResolveMint = %s, want a steerable plan other than cursor", pick.Provider)
 	}
-	if cli.PlanProvider(pick.Provider) != claudia.Provider(companion) {
+	if seatprovider.Resolve(pick.Provider).Plan.AsProvider() != claudia.Provider(companion) {
 		t.Fatalf("ResolveMint = %s, want companion %s", pick.Provider, companion)
 	}
 }

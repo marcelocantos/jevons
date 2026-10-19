@@ -43,7 +43,7 @@ func t797Transcript(attached ...string) string {
 
 func t797Setup(t *testing.T, transcript string) *t679_2Env {
 	t.Helper()
-	e := t679_2Harness(t, claudia.ProviderClaude, t679_2SID)
+	e := t679_2Harness(t, claudeJSONLSeat, t679_2SID)
 	cfg := `{"mcpServers":{"bullseye":{"type":"http","url":"http://127.0.0.1:1/mcp"}}}`
 	if err := os.WriteFile(filepath.Join(e.home, ".claude.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)

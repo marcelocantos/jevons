@@ -29,6 +29,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Only the last turns matter, and a long-lived session file runs to tens of
@@ -175,10 +176,13 @@ func (f *fleetModelResolver) Model(provider claudia.Provider, workDir, sessionID
 	if f == nil {
 		return ""
 	}
-	switch provider {
-	case claudia.ProviderGrok:
+	// Keyed by plan (🎯T1079). A sidecar session id names no vendor log, so
+	// a sidecar seat reads "" from either reader, whichever spelling its row
+	// stores.
+	switch seatprovider.Resolve(provider).Plan {
+	case seatprovider.Grok:
 		return f.grok.Model(workDir, sessionID)
-	case claudia.ProviderClaude:
+	case seatprovider.Claude:
 		return f.claude.Model(workDir, sessionID)
 	default:
 		return ""

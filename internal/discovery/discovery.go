@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -624,9 +626,12 @@ func SidecarSeatHasHistory(seat string) bool {
 }
 
 // TranscriptPathForSeat is empty for a sidecar seat — callers must read
-// ~/.jevons/spool instead of a vendor JSONL (🎯T866.4).
+// ~/.jevons/spool instead of a vendor JSONL (🎯T866.4). A plan name is the
+// same seat as its launch name (🎯T1079): Claudia runs grok, claude, codex
+// and cursor on the sidecar, so a legacy row's vendor JSONL is not where
+// its conversation continues. omp marks a reminted seat.
 func TranscriptPathForSeat(r Roots, sessionID, provider string, omp bool) string {
-	if spool.ResumeFromSpool(provider, omp) {
+	if omp || seatprovider.Resolve(claudia.Provider(provider)).Sidecar {
 		return SidecarSeatPath()
 	}
 	return TranscriptPath(r, sessionID)

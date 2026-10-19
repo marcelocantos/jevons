@@ -10,23 +10,6 @@ import (
 	"testing"
 )
 
-func TestResumeFromSpoolIncludesGrokAndCursor(t *testing.T) {
-	for _, id := range []string{"cursor", "anthropic", "openai-codex", "xai-oauth"} {
-		if !ResumeFromSpool(id, false) {
-			t.Fatalf("%s must resume from spool", id)
-		}
-		if !SidecarProvider(id) {
-			t.Fatalf("SidecarProvider(%s)", id)
-		}
-	}
-	if ResumeFromSpool("grok", false) || ResumeFromSpool("claude", false) || ResumeFromSpool("codex", false) {
-		t.Fatal("grok/claude/codex CLI ids resume from vendor JSONL until reminted")
-	}
-	if !ResumeFromSpool("grok", true) {
-		t.Fatal("a reminted grok seat reads the spool")
-	}
-}
-
 func TestAsJSONLAndEnsureView(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "events-2026-09-25.log"), []byte(

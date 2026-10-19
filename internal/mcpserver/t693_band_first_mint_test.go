@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 func t693Weekly(provider string, rem, used float64, remain time.Duration, now time.Time) planusage.Backend {
@@ -45,7 +45,7 @@ func TestT693OmitMintUnderBeatsOk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Claude {
 		t.Fatalf("omit mint = %q, want claude (under beats ok despite Grok slack)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {
@@ -91,7 +91,7 @@ func TestT693OmitMintFableSpentDoesNotVetoClaude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderClaude {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Claude {
 		t.Fatalf("Fable spent ≠ Claude unavailable: mint=%q note=%q", def.Provider, note)
 	}
 	if def.Model == "claude-fable-5" {

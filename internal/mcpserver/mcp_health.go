@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/mcphealth"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T379: an agent inherits its MCP server list from the provider's
@@ -34,7 +35,7 @@ const mcpHealthTTL = 30 * time.Second
 type mcpHealthCache struct {
 	mu   sync.Mutex
 	at   time.Time
-	prov claudia.Provider
+	prov seatprovider.Identity
 	note string
 }
 
@@ -53,13 +54,18 @@ func claudeUserConfigPath() string {
 // mcpRegistrationsFor reads the registrations an agent of this provider will
 // inherit at start.
 //
-// Claude only, deliberately. Grok keeps its user-scope list in
-// ~/.grok/config.toml, and parsing TOML would mean taking a dependency this
-// project declines; `grok mcp list` does not print URLs, so there is nothing
-// to dial. Declared residual rather than a silent gap: a Grok agent gets no
-// health note, and ok=false says so instead of reporting "all healthy".
+// A Claude Code CLI seat only: that CLI inherited ~/.claude.json at start,
+// the seat that also keeps a Claude JSONL (providerKeepsClaudeTranscript).
+// A sidecar seat is handed AgentDef.MCPServers instead, and its launch names
+// every server that listed no tools (🎯T934); a dead registration never
+// fails that launch. A row storing the plan name claude is the anthropic
+// sidecar seat it launches as (🎯T1079), which never had this note, so the
+// two spellings agree. Grok kept its user-scope list in ~/.grok/config.toml,
+// and parsing TOML would mean taking a dependency this project declines.
+// Declared residual rather than a silent gap: ok=false says so instead of
+// reporting "all healthy".
 func mcpRegistrationsFor(provider claudia.Provider) (regs []mcphealth.Registration, ok bool) {
-	if provider != claudia.ProviderClaude {
+	if !providerKeepsClaudeTranscript(provider) {
 		return nil, false
 	}
 	path := claudeUserConfigPath()
@@ -86,7 +92,7 @@ func mcpRegistrationsFor(provider claudia.Provider) (regs []mcphealth.Registrati
 // looks for.
 func mcpHealthNote(provider claudia.Provider) string {
 	mcpHealth.mu.Lock()
-	if mcpHealth.prov == provider && time.Since(mcpHealth.at) < mcpHealthTTL {
+	if mcpHealth.prov == seatprovider.Resolve(provider) && time.Since(mcpHealth.at) < mcpHealthTTL {
 		note := mcpHealth.note
 		mcpHealth.mu.Unlock()
 		return note
@@ -99,7 +105,7 @@ func mcpHealthNote(provider claudia.Provider) string {
 	}
 
 	mcpHealth.mu.Lock()
-	mcpHealth.prov, mcpHealth.at, mcpHealth.note = provider, time.Now(), note
+	mcpHealth.prov, mcpHealth.at, mcpHealth.note = seatprovider.Resolve(provider), time.Now(), note
 	mcpHealth.mu.Unlock()
 	return note
 }
@@ -146,7 +152,7 @@ func (s *Server) noteAgentMCPHealth(name string, provider claudia.Provider) stri
 // fresh probe.
 func mcpHealthResetForTest() {
 	mcpHealth.mu.Lock()
-	mcpHealth.prov, mcpHealth.at, mcpHealth.note = "", time.Time{}, ""
+	mcpHealth.prov, mcpHealth.at, mcpHealth.note = seatprovider.Identity{}, time.Time{}, ""
 	mcpHealth.mu.Unlock()
 }
 

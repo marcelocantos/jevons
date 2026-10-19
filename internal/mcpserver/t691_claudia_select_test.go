@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T691: omit-provider mint with a live plan feed cites claudia as author
@@ -36,7 +36,7 @@ func TestT691OmitMintCitesClaudia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cli.PlanProvider(def.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(def.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("omit mint = %q, want a Grok plan seat (greener; no Claude bias)", def.Provider)
 	}
 	if !strings.Contains(note, "provider_knob: claudia") {

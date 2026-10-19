@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
@@ -69,12 +70,11 @@ const (
 // chat path accumulates them. Every other provider publishes one event per content block or
 // whole message, where a newline preserves the author's paragraphing.
 func chunkSeparator(p claudia.Provider) string {
-	switch p {
-	// Sidecar seats stream token fragments under their seat ids. Since
-	// T766.2 a seat's observed provider is that id, not the plan name, and
-	// the broker's event wire does not carry claudia's append marker, so
-	// they must be named here (journey J12, 2026-10-05).
-	case claudia.ProviderGrok, claudia.ProviderCursor, "xai-oauth", "anthropic", "openai-codex":
+	// Sidecar seats stream token fragments. Since T766.2 a seat's observed
+	// provider is its launch id, and the broker's event wire does not carry
+	// claudia's append marker (journey J12, 2026-10-05). A plan name is the
+	// same sidecar seat (🎯T1079): claude and codex rows were missing here.
+	if seatprovider.Resolve(p).Sidecar {
 		return ""
 	}
 	return "\n"

@@ -13,8 +13,8 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // A plan login failure is shared by every seat on that plan. When the owner
@@ -53,13 +53,13 @@ type PlanAuthRevival struct {
 // rehydrate failed on plan authentication and whose intent allows revival.
 func planAuthCandidates(defs []claudia.AgentDef, alive func(string) bool,
 	intent fleetintent.Snapshot, provider claudia.Provider) []string {
-	plan := cli.PlanProvider(provider)
-	if plan == "" {
+	plan := seatprovider.Resolve(provider).Plan
+	if plan == seatprovider.Unset {
 		return nil
 	}
 	var out []string
 	for _, d := range defs {
-		if d.Name == "" || cli.PlanProvider(d.Provider) != plan || alive(d.Name) {
+		if d.Name == "" || seatprovider.Resolve(d.Provider).Plan != plan || alive(d.Name) {
 			continue
 		}
 		v, ok := rehydrateFailures.Load(d.Name)
@@ -95,13 +95,13 @@ func RevivePlanAuthPeers(reg *claudia.Registry, intent fleetintent.Snapshot,
 // them; a seat the owner stopped is parked and stays stopped.
 func ownerReauthCandidates(defs []claudia.AgentDef, alive func(string) bool,
 	intent fleetintent.Snapshot, provider claudia.Provider) []string {
-	plan := cli.PlanProvider(provider)
-	if plan == "" {
+	plan := seatprovider.Resolve(provider).Plan
+	if plan == seatprovider.Unset {
 		return nil
 	}
 	var out []string
 	for _, d := range defs {
-		if d.Name == "" || cli.PlanProvider(d.Provider) != plan || alive(d.Name) {
+		if d.Name == "" || seatprovider.Resolve(d.Provider).Plan != plan || alive(d.Name) {
 			continue
 		}
 		failed := false
@@ -169,7 +169,7 @@ func RevivePlanAuthWhereHealthy(reg *claudia.Registry, intent fleetintent.Snapsh
 	healthy := map[claudia.Provider]bool{}
 	for _, d := range reg.List() {
 		if p := reg.Get(d.Name); p != nil && (seatstate.ReadRegistry(reg, d.Name).Alive == seatstate.Yes) {
-			if plan := cli.PlanProvider(d.Provider); plan != "" {
+			if plan := seatprovider.Resolve(d.Provider).Plan.AsProvider(); plan != "" {
 				healthy[plan] = true
 			}
 		}

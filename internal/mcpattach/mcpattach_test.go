@@ -64,7 +64,7 @@ func TestSessionServersAppendsJevonsmcpAndKeepsDiscovered(t *testing.T) {
 	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	list := SessionServers(a, claudia.ProviderClaude, "")
+	list := SessionServers(a, "")
 	var names []string
 	var jevonsURL string
 	for _, s := range list {
@@ -93,7 +93,7 @@ func TestSessionServersReplacesStaleJevonsmcp(t *testing.T) {
 	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	list := SessionServers(a, claudia.ProviderClaude, "")
+	list := SessionServers(a, "")
 	if len(list) != 1 || list[0].URL != a.URL {
 		t.Fatalf("want one live jevonsmcp, got %+v", list)
 	}
@@ -102,11 +102,11 @@ func TestSessionServersReplacesStaleJevonsmcp(t *testing.T) {
 func TestIsolateCodexSessionKeepsHTTP(t *testing.T) {
 	a := fixtureArgs(t, "jevonsmcp-journey", "http://127.0.0.1:13715/mcp")
 	a.Isolate = true
-	got := SessionServers(a, claudia.ProviderCodex, "")
+	got := SessionServers(a, "")
 	if len(got) != 1 || got[0].Name != "jevonsmcp-journey" || got[0].URL != a.URL {
 		t.Fatalf("isolate Codex SessionServers = %+v; want journey HTTP jevonsmcp", got)
 	}
-	claude := SessionServers(a, claudia.ProviderClaude, "")
+	claude := SessionServers(a, "")
 	if len(claude) != 1 || claude[0].Name != "jevonsmcp-journey" {
 		t.Fatalf("isolate Claude should still carry the journey server: %+v", claude)
 	}
@@ -126,7 +126,7 @@ func TestSessionServersRewritesProxiedHTTP(t *testing.T) {
 	a.Proxied = []claudia.MCPServer{{
 		Name: "atlassian", Type: "http", URL: "http://127.0.0.1:13705/upstream/atlassian",
 	}}
-	list := SessionServers(a, claudia.ProviderClaude, "")
+	list := SessionServers(a, "")
 	byName := map[string]claudia.MCPServer{}
 	for _, s := range list {
 		byName[s.Name] = s
@@ -218,7 +218,7 @@ args = ["mcp"]
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	list := SessionServers(a, "xai-oauth", "")
+	list := SessionServers(a, "")
 	byName := map[string]claudia.MCPServer{}
 	for _, s := range list {
 		byName[s.Name] = s
@@ -232,7 +232,7 @@ args = ["mcp"]
 	if _, ok := byName["computer-use"]; ok {
 		t.Fatalf("xai-oauth leaked Codex computer-use: %+v", list)
 	}
-	codex := SessionServers(a, claudia.ProviderCodex, "")
+	codex := SessionServers(a, "")
 	codexNames := map[string]bool{}
 	for _, s := range codex {
 		codexNames[s.Name] = true
@@ -261,7 +261,7 @@ func TestT871DropsComputerUseFromClaudeMap(t *testing.T) {
 	if err := os.WriteFile(a.ClaudeJSON, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	list := SessionServers(a, "xai-oauth", "")
+	list := SessionServers(a, "")
 	byName := map[string]claudia.MCPServer{}
 	for _, s := range list {
 		byName[s.Name] = s
@@ -305,7 +305,7 @@ func TestT430SessionServersIsolatesPlaywrightByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list := SessionServers(a, claudia.ProviderClaude, "")
+	list := SessionServers(a, "")
 	var pw *claudia.MCPServer
 	var mnemoURL string
 	for i := range list {

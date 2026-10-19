@@ -13,8 +13,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Default isolate plan feed (🎯T625.6): a weekly window with 90% left,
@@ -106,7 +106,7 @@ func isolatePlanReadings(run string) []planReading {
 // the journey's switch destination when that plan can be steered,
 // otherwise claude, then codex.
 func steerableCompanion(run string) string {
-	dest := string(cli.PlanProvider(switchJourneyDestination(claudia.Provider(run))))
+	dest := string(seatprovider.Resolve(switchJourneyDestination(claudia.Provider(run))).Plan.AsProvider())
 	if dest != run && planusage.UnsteerableReason(dest) == "" {
 		return dest
 	}
@@ -177,7 +177,7 @@ func expectLandedProvider(requested, got claudia.Provider) error {
 		return fmt.Errorf("landed provider is empty")
 	}
 	if planusage.UnsteerableReason(string(requested)) == "" {
-		if cli.PlanProvider(got) != cli.PlanProvider(requested) {
+		if seatprovider.Resolve(got).Plan != seatprovider.Resolve(requested).Plan {
 			return fmt.Errorf("steerable seat landed on %s, want %s", got, requested)
 		}
 		return nil

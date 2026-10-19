@@ -15,6 +15,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // t987Server is the 2026-10-02 incident shape: grok's readings are green,
@@ -142,7 +143,7 @@ func TestT987OverrideRoutesAroundTheKeptOffPlan(t *testing.T) {
 	if def.Provider == claudia.ProviderClaude {
 		t.Fatalf("mint landed on owner-overridden exhausted claude: note=%q", note)
 	}
-	if want := claudia.SubscriptionSeatProvider(claudia.ProviderGrok); def.Provider != want {
+	if want := seatprovider.Resolve(claudia.ProviderGrok).Launch; def.Provider != want {
 		t.Fatalf("want the grok seat provider %q, got %q note=%q", want, def.Provider, note)
 	}
 }

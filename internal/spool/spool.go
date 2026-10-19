@@ -22,27 +22,6 @@ import (
 // DirEnv overrides the default ~/.jevons/spool (tests and isolates).
 const DirEnv = "JEVONS_SPOOL_DIR"
 
-// SidecarProvider reports whether Launch for this provider id talks to
-// the Oh My Pi sidecar rather than a vendor CLI (🎯T866.5).
-func SidecarProvider(id string) bool {
-	switch id {
-	case "anthropic", "openai-codex", "cursor", "xai-oauth":
-		return true
-	default:
-		return false
-	}
-}
-
-// ResumeFromSpool reports whether fail-closed resume for this seat
-// reads the dated spool. Native sidecar ids do. Fleet grok stays on
-// vendor JSONL until remint (🎯T627.1 / T866.6). omp marks a remint.
-func ResumeFromSpool(provider string, omp bool) bool {
-	if omp {
-		return true
-	}
-	return SidecarProvider(provider)
-}
-
 // Record is one sidecar line. Each names its seat.
 type Record struct {
 	TS        time.Time       `json:"-"`

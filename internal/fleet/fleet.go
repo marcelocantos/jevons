@@ -24,6 +24,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -302,12 +303,13 @@ func (f *Claudia) SetMCP(a mcpattach.Args) {
 	f.mcp = a
 }
 
-// SessionMCPServers is the list a registry row should carry for provider.
-func (f *Claudia) SessionMCPServers(provider claudia.Provider, workDir string) []claudia.MCPServer {
+// SessionMCPServers is the list a registry row should carry (the same for
+// every provider, 🎯T1079).
+func (f *Claudia) SessionMCPServers(workDir string) []claudia.MCPServer {
 	if f == nil || strings.TrimSpace(f.mcp.URL) == "" {
 		return nil
 	}
-	return mcpattach.SessionServers(f.mcp, provider, workDir)
+	return mcpattach.SessionServers(f.mcp, workDir)
 }
 
 func mcpServersEqual(a, b []claudia.MCPServer) bool {
@@ -369,7 +371,7 @@ func CodexWorkSandbox(prov claudia.Provider, purpose, role string) string {
 		return ""
 	}
 	// openai-codex is the id Launch stores; the plan is still Codex.
-	if cli.PlanProvider(prov) != claudia.ProviderCodex {
+	if seatprovider.Resolve(prov).Plan != seatprovider.Codex {
 		return ""
 	}
 	if purpose != "" && purpose != claudia.PurposeWork {
@@ -462,7 +464,7 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 			SandboxNetworkAccess: codexNetwork(prov, purpose),
 			SandboxGitWrite:      CodexWorkGitWrite(prov, purpose, ""),
 			Goal:                 WorkSessionGoal(purpose, "", t.Description, true),
-			MCPServers:           f.SessionMCPServers(prov, t.WorkDir),
+			MCPServers:           f.SessionMCPServers(t.WorkDir),
 			MCPExclusive:         mcpattach.Exclusive,
 		}); err != nil {
 			return fmt.Errorf("register agent %q: %w", t.ID, err)
@@ -517,7 +519,7 @@ func (f *Claudia) ensureRegistered(t *thread.Thread) error {
 		dirty = true
 	}
 	if f.mcp.URL != "" {
-		want := f.SessionMCPServers(def.Provider, def.WorkDir)
+		want := f.SessionMCPServers(def.WorkDir)
 		if !mcpServersEqual(def.MCPServers, want) {
 			def.MCPServers = want
 			dirty = true

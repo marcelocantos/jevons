@@ -238,6 +238,12 @@ func TestTranscriptPathForSeatIsEmptyForSidecar(t *testing.T) {
 	if p := TranscriptPathForSeat(Roots{ClaudeProjects: projects}, sid, "anthropic", false); p != "" {
 		t.Fatalf("anthropic sidecar path = %q, want empty", p)
 	}
+	// 🎯T1079: a legacy row that stored the plan name is the same sidecar seat.
+	for _, plan := range []string{"grok", "claude", "codex", "Grok"} {
+		if p := TranscriptPathForSeat(Roots{ClaudeProjects: projects}, sid, plan, false); p != "" {
+			t.Fatalf("%s sidecar path = %q, want empty", plan, p)
+		}
+	}
 }
 
 func TestSidecarSeatHasHistoryReadsDatedSpool(t *testing.T) {

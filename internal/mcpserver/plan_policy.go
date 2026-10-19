@@ -10,9 +10,9 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -147,11 +147,11 @@ func (s *Server) MarkPlanRetryAfterReauth(provider claudia.Provider) {
 	if s == nil {
 		return
 	}
-	plan := cli.PlanProvider(provider)
+	plan := seatprovider.Resolve(provider).Plan
 	s.planDecisionMu.Lock()
 	defer s.planDecisionMu.Unlock()
 	for name, last := range s.planLastResults {
-		if last.Execution == "failed" && cli.PlanProvider(claudia.Provider(last.To)) == plan {
+		if last.Execution == "failed" && seatprovider.Resolve(claudia.Provider(last.To)).Plan == plan {
 			last.Execution = "pending"
 			last.Failure = "destination login recovered; retrying"
 			last.FailureCause = ""

@@ -24,7 +24,7 @@ func TestT679_1ClaudePresentAbsentAndPermission(t *testing.T) {
 	sid := "dfb91d71-t6791"
 
 	absent := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: "jv-t679.1-claude", Provider: claudia.ProviderClaude,
+		Name: "jv-t679.1-claude", Provider: claudeJSONLSeat,
 		SessionID: sid, WorkDir: workDir,
 	})
 	if absent.Verdict != ExistenceAbsent {
@@ -39,7 +39,7 @@ func TestT679_1ClaudePresentAbsentAndPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	present := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: "jv-t679.1-claude", Provider: claudia.ProviderClaude,
+		Name: "jv-t679.1-claude", Provider: claudeJSONLSeat,
 		SessionID: sid, WorkDir: workDir,
 	})
 	if present.Verdict != ExistencePresent || present.Path != path {
@@ -55,7 +55,7 @@ func TestT679_1ClaudePresentAbsentAndPermission(t *testing.T) {
 		t.Skip("chmod 000 did not deny stat; cannot exercise claude permission failure")
 	}
 	denied := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: "jv-t679.1-claude", Provider: claudia.ProviderClaude,
+		Name: "jv-t679.1-claude", Provider: claudeJSONLSeat,
 		SessionID: sid, WorkDir: workDir,
 	})
 	if denied.Verdict != ExistenceUnobservable {
@@ -63,59 +63,31 @@ func TestT679_1ClaudePresentAbsentAndPermission(t *testing.T) {
 	}
 }
 
-func TestT679_1GrokResolvesExclusiveMCPAndRetainsErrors(t *testing.T) {
+// A grok row is the xai-oauth sidecar seat it launches as (🎯T1079). The
+// Grok Build store this test once resolved (exclusive-MCP homes, 🎯T679.1)
+// is the CLI transport claudia v0.58 refuses, so a session file left there
+// is not the seat's conversation: both spellings read unobservable, never a
+// present or absent verdict drawn from it. GrokUpdatesLookup's own error
+// retention stays pinned in internal/discovery.
+func TestT679_1GrokRowIsTheSidecarSeat(t *testing.T) {
 	root := t.TempDir()
 	ordinary := filepath.Join(root, "sessions")
-	if err := os.MkdirAll(ordinary, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	exclusive := filepath.Join(root, "claudia-mcp-grok-home", "sessions")
 	dir := filepath.Join(exclusive, discovery.EncodeCWDBucket("/tmp/repo"), t679Session)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(dir, "updates.jsonl")
-	if err := os.WriteFile(want, []byte(`{"method":"session/update"}`+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "updates.jsonl"), []byte(`{"method":"session/update"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: "jv-t679.1-grok", Provider: claudia.ProviderGrok,
-		SessionID: t679Session,
-		Roots: discovery.Roots{
-			GrokSessions:     ordinary,
-			GrokHomeSessions: []string{exclusive},
-		},
-	})
-	if got.Verdict != ExistencePresent || got.Path != want {
-		t.Fatalf("grok exclusive-MCP: %+v want present %q", got, want)
-	}
-
-	unresolved := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: "jv-t679.1-grok", Provider: claudia.ProviderGrok,
-		SessionID: t679Session,
-	})
-	if unresolved.Verdict != ExistenceUnobservable {
-		t.Fatalf("grok with no roots: %+v want unobservable", unresolved)
-	}
-
-	denied := t.TempDir()
-	if err := os.Chmod(denied, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(denied, 0o755) })
-	if _, err := os.ReadDir(denied); err == nil {
-		t.Skip("chmod 000 did not deny listing")
-	}
-	perm := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: "jv-t679.1-grok", Provider: claudia.ProviderGrok,
-		SessionID: t679Session,
-		Roots:     discovery.Roots{GrokSessions: denied},
-	})
-	if perm.Verdict != ExistenceUnobservable {
-		t.Fatalf("grok permission failure: %+v want unobservable", perm)
-	}
-	if perm.Reason == "" || !strings.Contains(perm.Reason, "cannot list") {
-		t.Fatalf("permission failure must retain the lookup error, got %q", perm.Reason)
+	roots := discovery.Roots{GrokSessions: ordinary, GrokHomeSessions: []string{exclusive}}
+	for _, provider := range []claudia.Provider{claudia.ProviderGrok, "xai-oauth"} {
+		got := LookupTranscriptExistence(TranscriptExistenceQuery{
+			Name: "jv-t679.1-grok", Provider: provider, SessionID: t679Session, Roots: roots,
+		})
+		if got.Verdict != ExistenceUnobservable || got.Path != "" {
+			t.Fatalf("%s with a Grok Build store: %+v want unobservable", provider, got)
+		}
 	}
 }
 
@@ -162,7 +134,7 @@ func TestT679_1CursorIsUnobservableEvenWithPhantomJSONLAndStoreDB(t *testing.T) 
 	if got.Path != "" {
 		t.Fatalf("cursor unobservable must not cite a path, got %q", got.Path)
 	}
-	if !strings.Contains(got.Reason, "store.db") || !strings.Contains(got.Reason, "phantom") {
+	if !strings.Contains(got.Reason, "sidecar seat has no spool record") {
 		t.Fatalf("cursor reason must record why, got %q", got.Reason)
 	}
 	ok, err := claudia.SessionExists(sid, workDir)
@@ -206,7 +178,7 @@ func TestT679_1ProviderKeepsClaudeTranscriptStillRefusesCursor(t *testing.T) {
 	if providerKeepsClaudeTranscript(claudia.ProviderCursor) {
 		t.Fatal("cursor must stay a live-stream surface; the existence seam must not bypass T501")
 	}
-	if !providerKeepsClaudeTranscript(claudia.ProviderClaude) {
-		t.Fatal("claude must remain the durable JSONL surface")
+	if !providerKeepsClaudeTranscript(claudeJSONLSeat) {
+		t.Fatal("a seat with no stored provider must remain the durable JSONL surface")
 	}
 }

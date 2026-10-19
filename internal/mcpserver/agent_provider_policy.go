@@ -9,9 +9,8 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/mark3labs/mcp-go/mcp"
-
-	"github.com/marcelocantos/jevons/internal/cli"
 )
 
 func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -53,7 +52,7 @@ func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRe
 		if !ok {
 			return mcp.NewToolResultError("prefer_provider must be a string"), nil
 		}
-		prefer = cli.PlanProvider(claudia.Provider(strings.TrimSpace(value)))
+		prefer = seatprovider.Resolve(claudia.Provider(strings.TrimSpace(value))).Plan.AsProvider()
 	}
 	allowed := st.AllowedProviders
 	allowNone := st.AllowNone
@@ -66,7 +65,7 @@ func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRe
 			return mcp.NewToolResultError("allowed_providers: " + err.Error()), nil
 		}
 		for i := range parsed {
-			parsed[i] = cli.PlanProvider(parsed[i])
+			parsed[i] = seatprovider.Resolve(parsed[i]).Plan.AsProvider()
 		}
 		allowed = parsed
 		allowNone = len(parsed) == 0
@@ -81,7 +80,7 @@ func (s *Server) handleAgentProviderPolicy(_ context.Context, req mcp.CallToolRe
 			return mcp.NewToolResultError("exclude_providers: " + err.Error()), nil
 		}
 		for i := range parsed {
-			parsed[i] = cli.PlanProvider(parsed[i])
+			parsed[i] = seatprovider.Resolve(parsed[i]).Plan.AsProvider()
 		}
 		excluded = parsed
 	}

@@ -54,7 +54,7 @@ func remintedSession(t *testing.T, sessionID string) string {
 func TestT444ReMintedSessionIsNotNeverBriefed(t *testing.T) {
 	workDir := remintedSession(t, "dfb91d71-remint")
 
-	ev := ReadSessionEvidence(claudia.ProviderClaude, "dfb91d71-remint", workDir)
+	ev := ReadSessionEvidence(claudeJSONLSeat, "dfb91d71-remint", workDir)
 	if ev != SessionEvidencePresent {
 		t.Fatalf("session evidence for a re-minted session with a transcript: %s want present", ev)
 	}
@@ -91,7 +91,7 @@ func TestT444AbsentTranscriptStillNeverBriefed(t *testing.T) {
 	t.Setenv("HOME", home)
 	workDir := t.TempDir()
 
-	ev := ReadSessionEvidence(claudia.ProviderClaude, "never-minted", workDir)
+	ev := ReadSessionEvidence(claudeJSONLSeat, "never-minted", workDir)
 	if ev != SessionEvidenceAbsent {
 		t.Fatalf("session evidence with no transcript on disk: %s want absent", ev)
 	}
@@ -112,8 +112,8 @@ func TestT444UnlocatableRecordsAreUnknownNotNeverBriefed(t *testing.T) {
 		sessionID string
 		workDir   string
 	}{
-		{"no session id", claudia.ProviderClaude, "", workDir},
-		{"no workdir", claudia.ProviderClaude, "s1", ""},
+		{"no session id", claudeJSONLSeat, "", workDir},
+		{"no workdir", claudeJSONLSeat, "s1", ""},
 		{"provider with no transcript convention", claudia.ProviderGrok, "s1", workDir},
 	}
 	for _, tc := range cases {
@@ -176,7 +176,7 @@ func TestT444AgentListRowAfterReMint(t *testing.T) {
 	if err := reg.Register(claudia.AgentDef{
 		Name: name, WorkDir: workDir, SessionID: session,
 		Purpose: claudia.PurposeWork, Parent: "bullseye-po",
-		Provider: claudia.ProviderClaude,
+		Provider: claudeJSONLSeat,
 		// Materialized false: minted before the transcript existed, never
 		// re-checked. This is the live registry's own state for 30 of 48 rows.
 	}); err != nil {

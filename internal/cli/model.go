@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Provider-default model ids for session-truth badge binding (🎯T324).
@@ -30,12 +31,10 @@ const DefaultGrokModel = "grok-4.6"
 // agent is launched on provider with an empty pin. Empty when the
 // backend has no standing default we should invent.
 func DefaultModelForProvider(provider claudia.Provider) string {
-	switch PlanProvider(provider) {
-	case claudia.ProviderGrok:
+	if seatprovider.Resolve(provider).Plan == seatprovider.Grok {
 		return DefaultGrokModel
-	default:
-		return ""
 	}
+	return ""
 }
 
 // BindSessionModel resolves the session-truth model for a Launch /

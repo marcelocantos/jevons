@@ -44,6 +44,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/seatload"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -740,11 +741,14 @@ func activeProcessLoad(defs []claudia.AgentDef, state func(string) seatstate.Sta
 			(st.Alive == seatstate.No || parkedWithoutHandle(d.Name)) {
 			continue
 		}
-		p := strings.ToLower(strings.TrimSpace(string(d.Provider)))
-		if p == "" {
-			p = string(cli.DefaultProvider)
+		// Keyed by plan, as the portfolio's soft caps are (🎯T1079): a seat
+		// stored as xai-oauth spends the grok cap. Keyed by the raw string,
+		// every launch-id seat counted against a cap no portfolio names.
+		p := seatprovider.Resolve(d.Provider).Plan
+		if p == seatprovider.Unset {
+			p = seatprovider.Resolve(cli.DefaultProvider).Plan
 		}
-		load[p]++
+		load[p.String()]++
 	}
 	return load
 }

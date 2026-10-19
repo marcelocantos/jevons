@@ -5,6 +5,8 @@ package cost
 
 import (
 	"fmt"
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"strings"
 	"unicode/utf8"
 )
@@ -73,7 +75,7 @@ func PickMintModel(a MintModelArgs) MintModelPick {
 	if peer == "" {
 		return MintModelPick{}
 	}
-	if prov == HarnessCodex && !a.CodexEligible {
+	if seatprovider.Resolve(claudia.Provider(prov)).Plan == seatprovider.Codex && !a.CodexEligible {
 		return MintModelPick{
 			Knob:   KnobIneligible,
 			Reason: "codex weekly ineligible; not pinning " + ModelCodexSpark + " (🎯T390.1.5)",

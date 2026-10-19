@@ -6,6 +6,8 @@ package cost
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"os"
 	"strings"
 )
@@ -405,10 +407,10 @@ func IsFastCheapTask(taskType string) bool {
 // FastCheapPeer is the compiled fast-cheap model for a harness, empty
 // when that provider has no Spark-class peer (Claude has none).
 func FastCheapPeer(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case HarnessGrok:
+	switch seatprovider.Resolve(claudia.Provider(provider)).Plan {
+	case seatprovider.Grok:
 		return ModelGrokFast
-	case HarnessCodex:
+	case seatprovider.Codex:
 		return ModelCodexSpark
 	default:
 		return ""
