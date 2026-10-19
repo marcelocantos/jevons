@@ -189,11 +189,14 @@ func TestDurableFleetAgent(t *testing.T) {
 	if !DurableFleetAgent("jevons", claudia.PurposeOverseer, isO) {
 		t.Fatal("overseer must be durable")
 	}
-	if !DurableFleetAgent("jevons-po", claudia.PurposeWork, isO) {
-		t.Fatal("jevons-po must be durable")
+	if DurableFleetAgent("jevons-po", claudia.PurposeWork, isO) {
+		t.Fatal("a -po name with purpose work is not durable")
 	}
-	if !DurableFleetAgent("po", claudia.PurposeWork, isO) {
-		t.Fatal("po fixture must be durable")
+	if !DurableFleetAgent("jevons-po", purposeProductOwner, isO) {
+		t.Fatal("purpose product-owner must be durable")
+	}
+	if DurableFleetAgent("po", claudia.PurposeWork, isO) {
+		t.Fatal("the name po is not a purpose")
 	}
 	if !DurableFleetAgent("att-billing", claudia.PurposeAside, isO) {
 		t.Fatal("aside must be durable")
@@ -212,7 +215,7 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok"},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons", Materialized: true, Provider: "grok"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: purposeProductOwner, Parent: "jevons", Materialized: true, Provider: "grok"},
 		{Name: "jv-t165-reap-done", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po", Materialized: true, Provider: "grok"},
 	} {
 		if err := reg.Register(d); err != nil {
@@ -316,7 +319,7 @@ func TestT195ImperfectDoneReportHermetic(t *testing.T) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok"},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons", Materialized: true, Provider: "grok"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: purposeProductOwner, Parent: "jevons", Materialized: true, Provider: "grok"},
 		{Name: "jv-t195-reap-imperfect", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po", Materialized: true, Provider: "grok", TargetID: "T195"},
 	} {
 		if err := reg.Register(d); err != nil {

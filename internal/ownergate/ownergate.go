@@ -239,25 +239,51 @@ func IsOwnerHandle(owner string) bool {
 	return false
 }
 
-// IsAnswered reports whether the record carries an answered marker. Checked
-// before IsAwaiting everywhere: an answered gate is no longer a gate.
+// opensWithMarker reports whether a line of text opens with the declared
+// marker. A sentence that uses the same words later in the line is not the
+// marker. The marker comparison is case-insensitive because the writer and
+// a pasted copy are the same token.
+func opensWithMarker(text, marker string) bool {
+	if marker == "" {
+		return false
+	}
+	marker = strings.ToUpper(marker)
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.ToUpper(strings.TrimSpace(line))
+		rest, ok := strings.CutPrefix(line, marker)
+		if !ok {
+			continue
+		}
+		if rest == "" {
+			return true
+		}
+		switch rest[0] {
+		case ' ', '\t', '(', ':', '.', ',':
+			return true
+		}
+	}
+	return false
+}
+
+// IsAnswered reports whether the record opens with the answered marker.
+// Checked before IsAwaiting everywhere: an answered gate is no longer a gate.
 func IsAnswered(reason, context string) bool {
-	return strings.Contains(strings.ToUpper(reason+" "+context), MarkerAnswered)
+	return opensWithMarker(reason, MarkerAnswered) || opensWithMarker(context, MarkerAnswered)
 }
 
 // IsAwaiting reports the awaiting-owner-verdict state for one target.
 //
-// True when the ledger says so, two ways: the assignment reason (or context)
-// carries the awaiting marker, or the target is assigned to the owner at all
-// — assigning work to the human IS the claim that the ball is in their court,
-// and a reader that ignored it would re-create the bug for every assignment
-// made by hand. Both are recorded states; neither is inferred from how
-// finished the prose sounds.
+// True when the ledger says so, two ways: a line of the assignment reason
+// or context opens with the awaiting marker, or the target is assigned to
+// the owner at all — assigning work to the human IS the claim that the ball
+// is in their court, and a reader that ignored it would re-create the bug
+// for every assignment made by hand. Both are recorded states; neither is
+// inferred from how finished the prose sounds.
 func IsAwaiting(owner, reason, context string) bool {
 	if IsAnswered(reason, context) {
 		return false
 	}
-	if strings.Contains(strings.ToUpper(reason+" "+context), "AWAITING OWNER VERDICT") {
+	if opensWithMarker(reason, MarkerAwaiting) || opensWithMarker(context, MarkerAwaiting) {
 		return true
 	}
 	return IsOwnerHandle(owner)

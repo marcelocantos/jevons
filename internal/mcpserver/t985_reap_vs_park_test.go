@@ -203,7 +203,7 @@ func t985Hub(t *testing.T, names ...string) (*Server, *claudia.Registry) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok"},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons", Materialized: true, Provider: "grok"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: purposeProductOwner, Parent: "jevons", Materialized: true, Provider: "grok"},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)

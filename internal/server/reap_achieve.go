@@ -23,8 +23,13 @@ import (
 // reaping. POs / overseer / asides stay; deliberate stop without kill is
 // unchanged. Multi-target agents without a matching TargetID stay.
 
+// purposeProductOwner is the declared product-owner purpose. A seat name
+// ending in -po is not this fact. Mirrors mcpserver.purposeProductOwner.
+const purposeProductOwner = "product-owner"
+
 // durableFleetAgentForAchieve mirrors mcpserver.DurableFleetAgent so this
-// package does not import mcpserver (cycle). Keep in sync.
+// package does not import mcpserver (cycle). Keep in sync. Purpose decides.
+// The name does not.
 func durableFleetAgentForAchieve(name, purpose string, isOverseer func(string) bool) bool {
 	if name == "" {
 		return true
@@ -32,18 +37,16 @@ func durableFleetAgentForAchieve(name, purpose string, isOverseer func(string) b
 	if isOverseer != nil && isOverseer(name) {
 		return true
 	}
-	p := strings.TrimSpace(purpose)
+	p := strings.ToLower(strings.TrimSpace(purpose))
 	if p == "" {
 		p = claudia.PurposeWork
 	}
-	if p == claudia.PurposeOverseer || p == claudia.PurposeAside {
+	switch p {
+	case claudia.PurposeOverseer, claudia.PurposeAside, purposeProductOwner:
 		return true
+	default:
+		return false
 	}
-	lower := strings.ToLower(name)
-	if lower == "po" || strings.HasSuffix(lower, "-po") {
-		return true
-	}
-	return false
 }
 
 // ReapWorkAgentsOnTargetAchieve removes non-durable work agents whose

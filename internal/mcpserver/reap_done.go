@@ -63,9 +63,13 @@ func finishedWorkReapReason(report string) string {
 	return "finished_work"
 }
 
+// purposeProductOwner is the declared product-owner purpose. A seat name
+// ending in -po is not this fact.
+const purposeProductOwner = "product-owner"
+
 // DurableFleetAgent reports whether name must not be auto-reaped on done
 // (overseer, asides, product owners). Deliberate stop without kill remains
-// allowed for everyone (🎯T165 residual).
+// allowed for everyone (🎯T165 residual). Purpose decides. The name does not.
 func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool {
 	if name == "" {
 		return true
@@ -73,19 +77,16 @@ func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool 
 	if isOverseer != nil && isOverseer(name) {
 		return true
 	}
-	p := strings.TrimSpace(purpose)
+	p := strings.ToLower(strings.TrimSpace(purpose))
 	if p == "" {
 		p = claudia.PurposeWork
 	}
-	if p == claudia.PurposeOverseer || p == claudia.PurposeAside {
+	switch p {
+	case claudia.PurposeOverseer, claudia.PurposeAside, purposeProductOwner:
 		return true
+	default:
+		return false
 	}
-	// Standing POs: jevons-po, *-po, and the short "po" test/fixture name.
-	lower := strings.ToLower(name)
-	if lower == "po" || strings.HasSuffix(lower, "-po") {
-		return true
-	}
-	return false
 }
 
 // ShouldAutoReapDoneWorkAgent decides whether a declared finish-report
