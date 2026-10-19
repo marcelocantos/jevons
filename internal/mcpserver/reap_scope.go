@@ -18,8 +18,9 @@ import (
 // when the seat's own worktree still holds uncommitted files the report
 // never mentioned. Reaping that seat loses the diff. A sentence in the
 // payload is not that fact (🎯T766.4): a gate wait or an active-wait
-// narration does not keep the seat. Status in-progress is the typed claim
-// that the report is not done, and ClassifyDone already refused it.
+// narration does not keep the seat. Status in-progress and the active-wait
+// slot (🎯T1024 typed by 🎯T766.4.1) are the typed claims that the report
+// is not done, and ClassifyDone already refused both.
 //
 // This scan runs after the done answer. When it finds owned uncommitted
 // files, the seat stays registered. Retention is cheap, and a reap is
@@ -28,8 +29,8 @@ import (
 
 // OutstandingScope is one thing a finished-work report leaves unresolved.
 type OutstandingScope struct {
-	// Kind is a short machine-readable tag: "in_progress" or
-	// "owned_uncommitted". Used as a lifecycle-log/reason suffix.
+	// Kind is a short machine-readable tag: "active_wait", "in_progress",
+	// or "owned_uncommitted". Used as a lifecycle-log/reason suffix.
 	Kind string
 	// Detail is the operator-facing sentence naming the specific scope —
 	// what a parent notice quotes.
@@ -49,6 +50,15 @@ type OutstandingScope struct {
 // narration (🎯T766.4).
 func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktree bool) []OutstandingScope {
 	var out []OutstandingScope
+	// 🎯T1024 / 🎯T766.4.1: a finish-report that declares an active external
+	// wait is the 2026-10-07 incident shape. It comes first so the reap
+	// reason (outstanding_scope_active_wait) and this list agree, and the
+	// parent notice names the wait.
+	if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
+		for _, w := range m.ActiveWaits {
+			out = append(out, activeWaitScope(w))
+		}
+	}
 	// The status slot is recorded here so a parent notice can name an
 	// explicit in-progress report. ClassifyDone already refused it as done.
 	// Validation may fail (an in-progress report owes no oracle). The status

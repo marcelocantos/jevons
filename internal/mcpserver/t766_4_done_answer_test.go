@@ -89,7 +89,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "stored_terminal_report.go"), "storedTerminalFromReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope", "declaresBlockingGateWaitLocalized")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t1024_active_wait.go"), "FindActiveExternalWait", "declaresActiveExternalWait", "declaresUnresolvedExternalWait", "storedReportLooksFinished")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t1024_active_wait.go"), "declaredActiveWait", "activeWaitScope", "storedReportLooksFinished")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "DeclaresBlockingGateWait")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree", "hasOracleEvidence", "hasAcceptedRisk", "hasCompletionClaim", "FindCompletionClaim", "reportCitesOracleID", "HasActivationEvidence", "LooksLikeHermeticOnlyDaemonClaim", "LiveRenderOracleDidNotRun", "LooksLikeSilentBrowserOracleFallback")...)

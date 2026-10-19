@@ -25,6 +25,12 @@ func Validate(m *Message) error {
 		if strings.TrimSpace(m.Target) == "" {
 			return fmt.Errorf("finish-report requires target")
 		}
+		if m.HasActiveWait() {
+			// 🎯T1024 / 🎯T766.4.1: a seat still watching an alive external
+			// process is not finished. The report is contradictory, and the
+			// author is told so (CorrectionNotice) rather than reaped.
+			return fmt.Errorf("finish-report must not carry active-wait (%s): a seat still waiting is not finished — send status-ping with status in-progress and the active-wait slot, and the finish-report once the wait resolves", m.ActiveWaits[0])
+		}
 		if m.Status == ProgressBlocked {
 			// 🎯T938: a blocked report claims no completion, so it owes no
 			// oracle — it owes the name of what it waits on.

@@ -77,6 +77,18 @@ func TestClassifyDoneEnvelopeOnly(t *testing.T) {
 			DoneNo,
 		},
 		{
+			// 🎯T766.4.1: a finish-report that declares an active external
+			// wait is contradictory — never Done, whatever oracle it carries.
+			"finish-report carrying active-wait",
+			"```jevons\njevons: kind finish-report\njevons: target T41\njevons: oracle sha=9890903\njevons: verdict GREEN\njevons: active-wait lease slowpath gate on 9890903, queued fifth on the shared heavy lease\njevons: silent-ledger none\n```\n\nThe landing is done and verified.",
+			DoneUnknown,
+		},
+		{
+			"status-ping carrying active-wait",
+			"```jevons\njevons: kind status-ping\njevons: target T41\njevons: status in-progress\njevons: active-wait gate t41-slowpath\n```\n\nStill queued.",
+			DoneNo,
+		},
+		{
 			"malformed finish-report",
 			"```jevons\njevons: kind finish-report\njevons: target T766.4\n```\n\nDone.",
 			DoneUnknown,

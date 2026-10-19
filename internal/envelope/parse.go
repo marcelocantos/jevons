@@ -100,6 +100,10 @@ type Message struct {
 	FogBlindspot []string
 	// GateRoles are declared roles for cited gate ids (🎯T722). Repeatable.
 	GateRoles []GateRole
+	// ActiveWaits are declared active external waits (🎯T1024 typed by
+	// 🎯T766.4.1): the seat is watching an alive process it does not
+	// control. Repeatable. On a finish-report this is a contradiction.
+	ActiveWaits []ActiveWait
 	// Extra holds unknown jevons: keys so a newer emitter is not refused.
 	Extra   map[string]string
 	Payload string
@@ -189,6 +193,7 @@ func (m *Message) SlotsFingerprint() string {
 		ledgerFingerprint(m),
 		fogFingerprint(m),
 		gateRoleFingerprint(m),
+		activeWaitFingerprint(m),
 	}, "\n")
 }
 
@@ -492,6 +497,12 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 			return err
 		}
 		msg.GateRoles = append(msg.GateRoles, r)
+	case "active-wait", "active_wait":
+		w, err := parseActiveWait(value)
+		if err != nil {
+			return err
+		}
+		msg.ActiveWaits = append(msg.ActiveWaits, w)
 	default:
 		msg.Extra[key] = value
 	}
@@ -612,6 +623,9 @@ func Format(m *Message) string {
 			continue
 		}
 		writeSlot(&b, "gate-role", r.ID+" "+r.Role)
+	}
+	for _, w := range m.ActiveWaits {
+		writeSlot(&b, "active-wait", w.String())
 	}
 	b.WriteString("```\n")
 	if p := strings.TrimLeft(m.Payload, "\n"); p != "" {

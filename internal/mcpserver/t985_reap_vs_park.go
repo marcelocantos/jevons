@@ -59,10 +59,15 @@ const (
 // (or a stop reason) into reap vs park vs keep (🎯T985).
 //
 // It reads the same done answer as reap (🎯T766.4). A declared
-// finish-report reaps. A declared blocked finish-report parks. A report
-// that declares nothing is keep: prose "already achieved" and "blocked on"
-// are not a disposition.
+// finish-report reaps. A declared blocked finish-report parks. A declared
+// active external wait parks, whatever the kind (🎯T1024, typed by
+// 🎯T766.4.1): the seat is watching a process that will resume it. A
+// report that declares nothing is keep: prose "already achieved", "blocked
+// on", and "still queued" are not a disposition.
 func ClassifyWorkerIdleDisposition(text string) WorkerIdleAction {
+	if _, ok := declaredActiveWait(text); ok {
+		return IdleActionPark
+	}
 	switch envelope.ClassifyDone(text) {
 	case envelope.DoneYes:
 		return IdleActionReap

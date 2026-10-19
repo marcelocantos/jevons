@@ -41,6 +41,11 @@ func (c DoneClass) IsDone() bool { return c == DoneYes }
 //
 // Rules:
 //   - No fence / Parse returns nil → DoneUnknown.
+//   - KindFinishReport carrying an active-wait slot → DoneUnknown. The
+//     report claims a finish and declares an alive external wait in the
+//     same breath; it is contradictory, so it is never Done (🎯T1024,
+//     typed by 🎯T766.4.1). Readers that must decide reap vs park read
+//     the slot itself (ActiveWaitIn) and park.
 //   - KindFinishReport with status blocked or in-progress → DoneNo, even
 //     when another required slot is missing. The status slot is the claim.
 //   - KindFinishReport that fails validation, or that carries neither oracle
@@ -58,6 +63,9 @@ func ClassifyDone(text string) DoneClass {
 	}
 	switch m.Kind {
 	case KindFinishReport:
+		if m.HasActiveWait() {
+			return DoneUnknown
+		}
 		if m.Status == ProgressBlocked || m.IsBlocked() {
 			return DoneNo
 		}

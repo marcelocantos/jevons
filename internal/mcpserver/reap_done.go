@@ -30,7 +30,18 @@ func LooksLikeFinishedWorkReport(report string) bool {
 
 // reportDoneForReap is the reap path's only answer to is-this-report-done
 // (🎯T766.4). Prose is not a fallback.
+//
+// A declared active external wait (🎯T1024, typed by 🎯T766.4.1) keeps the
+// seat whatever the kind: on a finish-report it is the contradictory
+// incident shape and names outstanding scope, so the parent is told; on a
+// status-ping it is an ordinary mid-wait turn and keeps quietly.
 func reportDoneForReap(report string) (bool, string) {
+	if w, ok := declaredActiveWait(report); ok {
+		if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
+			return false, outstandingScopeReapReason([]OutstandingScope{activeWaitScope(w)})
+		}
+		return false, activeWaitKeepReason
+	}
 	switch envelope.ClassifyDone(report) {
 	case envelope.DoneYes:
 		return true, ""
@@ -325,6 +336,9 @@ func reapDecisionFields(name, reason, report string) map[string]any {
 		fields["envelope_kind"] = string(m.Kind)
 		if m.Status != envelope.ProgressNone {
 			fields["envelope_status"] = string(m.Status)
+		}
+		if m.HasActiveWait() {
+			fields["envelope_active_wait"] = m.ActiveWaits[0].String()
 		}
 	}
 	return fields

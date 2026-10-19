@@ -87,6 +87,11 @@ func (s *Server) workerIdleSuppressReason(name string) (suppress bool, reason st
 	if _, blocked := envelope.BlockedOn(report); blocked {
 		return false, ""
 	}
+	// 🎯T1024 / 🎯T766.4.1: a declared active wait is a seat watching a
+	// process that will resume it, not an idle seat with news.
+	if _, waiting := envelope.ActiveWaitIn(report); waiting {
+		return true, activeWaitKeepReason
+	}
 	if IsStoredTerminalReportKind(report) {
 		return true, "stored_terminal_report"
 	}

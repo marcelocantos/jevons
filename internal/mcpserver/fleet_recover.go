@@ -767,8 +767,9 @@ func (t *IdleActivityTracker) NoteTerminalTurn(name, text string, toolCalls int)
 	defer t.mu.Unlock()
 	prev := t.by[name]
 	prev.LastToolCalls = toolCalls
-	_, blocked := envelope.BlockedOn(text) // 🎯T938: a blocked report is a report, not a plan
-	if toolCalls > 0 || LooksLikeFinishedWorkReport(text) || blocked {
+	_, blocked := envelope.BlockedOn(text)    // 🎯T938: a blocked report is a report, not a plan
+	_, waiting := envelope.ActiveWaitIn(text) // 🎯T1024: so is a declared active wait
+	if toolCalls > 0 || LooksLikeFinishedWorkReport(text) || blocked || waiting {
 		prev.PlanOnly = false
 		t.by[name] = prev
 		return

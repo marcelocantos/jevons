@@ -96,14 +96,15 @@ const (
 
 // DeclaresBlockingGateWait reports whether a completed turn declares a
 // typed wait (🎯T565 / 🎯T766.4). The status slot is the claim:
-// in-progress or blocked. A sentence that says "waiting on bin/gate" is
-// not. Validation may fail; the slot is still read.
+// in-progress or blocked; so is an active-wait slot (🎯T1024, typed by
+// 🎯T766.4.1). A sentence that says "waiting on bin/gate" is not.
+// Validation may fail; the slots are still read.
 func DeclaresBlockingGateWait(text string) bool {
 	m, _ := envelope.Parse(text)
 	if m == nil {
 		return false
 	}
-	return m.Status == envelope.ProgressInProgress || m.Status == envelope.ProgressBlocked
+	return m.Status == envelope.ProgressInProgress || m.Status == envelope.ProgressBlocked || m.HasActiveWait()
 }
 
 // IdleNudgeKind is the payload shape once ClassifyIdleNudge returns nudge.
