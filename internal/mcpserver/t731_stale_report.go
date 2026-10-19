@@ -39,7 +39,6 @@ const (
 	// (byte-identical overseer batches) because a reap banner changes bytes.
 	StatusSuppressedDuplicateReport = "suppressed_duplicate_report"
 
-	agentRespondedPrefix    = "[Agent "
 	reapedSeatPrefix        = "[reaped seat "
 	parentReportOfferedFile = "parent-report-offered.jsonl"
 )
@@ -77,7 +76,7 @@ func formatReportAge(d time.Duration) string {
 
 func agentRespondedRoutingLine(agent string, h agentreport.Handle, now time.Time) string {
 	agent = strings.TrimSpace(agent)
-	line := fmt.Sprintf("[Agent %s responded]", agent)
+	line := envelope.SeatFact(envelope.IntentRoute, agent)
 	if h.Empty() || strings.TrimSpace(h.Agent) != agent {
 		return line
 	}
@@ -145,31 +144,17 @@ func (s *Server) stampReportAgeAtDelivery(text string, now time.Time) string {
 
 func parseAgentRespondedLine(line string) (name, reportID string, ok bool) {
 	line = strings.TrimRight(line, "\r")
-	if !strings.HasPrefix(line, agentRespondedPrefix) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[1] != envelope.IntentRoute || fields[2] == "" {
 		return "", "", false
 	}
-	const mark = " responded]"
-	i := strings.Index(line, mark)
-	if i < 0 {
-		return "", "", false
-	}
-	name = strings.TrimSpace(line[len(agentRespondedPrefix):i])
-	if name == "" {
-		return "", "", false
-	}
-	rest := strings.TrimSpace(line[i+len(mark):])
-	if rest == "" {
-		return name, "", true
-	}
-	rest = strings.TrimSpace(strings.TrimPrefix(rest, "|"))
-	for _, tok := range strings.Fields(rest) {
-		if !strings.HasPrefix(tok, "report_id=") {
+	name = fields[2]
+	for _, tok := range fields[3:] {
+		id, found := strings.CutPrefix(tok, "report_id=")
+		if !found || id == "" {
 			continue
 		}
-		id := strings.TrimPrefix(tok, "report_id=")
-		if id != "" && !strings.ContainsAny(id, " \t]") {
-			return name, id, true
-		}
+		return name, id, true
 	}
 	return name, "", true
 }
@@ -222,13 +207,7 @@ func hasReapedSeatBanner(text string) bool {
 	if nl >= 0 {
 		first = s[:nl]
 	}
-	if strings.TrimSpace(first) == envelope.PrefixReapedSeat {
-		return true
-	}
-	// A copy wrapped before the fact line still counts, so prepareParentReport
-	// does not stamp a second banner onto it.
-	const legacy = "[reaped seat "
-	return len(s) >= len(legacy) && s[:len(legacy)] == legacy
+	return strings.TrimSpace(first) == envelope.PrefixReapedSeat
 }
 
 func (s *Server) prepareParentReport(dest, text string, fulfilling bool) parentReportPrep {

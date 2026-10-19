@@ -200,6 +200,11 @@ func TestClassifyRetroValueCoarseBar(t *testing.T) {
 				Count: 6, Kinds: []string{"chat_gap"}, Phrase: "timeout"},
 		},
 		{
+			name: "a longer sentence that merely contains a weak phrase is judged",
+			cand: Candidate{Name: "Owner-chat friction (timeout) is reduced or filed as a target",
+				Count: 3, Kinds: []string{"chat_gap"}, Phrase: "the build timed out overnight"},
+		},
+		{
 			name: "bare phrase friction never reaches the overseer",
 			cand: Candidate{Name: "friction: timeout", Count: 9, Kinds: []string{"chat_gap"}, Phrase: "timeout"},
 			want: "retro_bare_phrase_friction",

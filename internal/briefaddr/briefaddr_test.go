@@ -7,17 +7,27 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
+func withIdentityFact(body string) string {
+	return envelope.PrefixIdentity + "\n" + body
+}
+
 func TestIdentityHeaderNameReadsHeaderBlockOnly(t *testing.T) {
-	header := Marker + " — from the fleet registry, read at send time (🎯T425)]\n" +
+	header := withIdentityFact(Marker + " — from the fleet registry, read at send time (🎯T425)]\n" +
 		"- NAME: jevons-po\n" +
 		"- ROLE: product owner\n" +
 		"- PARENT: jevons\n\n" +
 		"Continue the mission.\n" +
-		"- NAME: someone-else\n"
+		"- NAME: someone-else\n")
 	if got := IdentityHeaderName(header); got != "jevons-po" {
 		t.Fatalf("IdentityHeaderName = %q, want jevons-po", got)
+	}
+	markerOnly := Marker + " — from the fleet registry]\n- NAME: jevons-po\n"
+	if got := IdentityHeaderName(markerOnly); got != "" {
+		t.Fatalf("rendered marker without the identity fact returned %q", got)
 	}
 	if got := IdentityHeaderName("plain note\n- NAME: not-a-header\n"); got != "" {
 		t.Fatalf("headerless text returned %q", got)
@@ -29,9 +39,10 @@ func TestIdentityHeaderNameReadsHeaderBlockOnly(t *testing.T) {
 }
 
 func TestCheckWrongSeatVsOwnSeatVsHeaderless(t *testing.T) {
-	poBrief := Marker + "]\n- NAME: jevons-po\n\nContinue."
-	ownBrief := Marker + "]\n- NAME: jevons\n\nStanding brief."
+	poBrief := withIdentityFact(Marker + "]\n- NAME: jevons-po\n\nContinue.")
+	ownBrief := withIdentityFact(Marker + "]\n- NAME: jevons\n\nStanding brief.")
 	note := "worker jv-x reports: tests green"
+	markerOnly := Marker + "]\n- NAME: jevons-po\n\nContinue."
 
 	if err := Check("jevons", poBrief); err == nil {
 		t.Fatal("wrong-seat brief for overseer seat was accepted")
@@ -55,5 +66,8 @@ func TestCheckWrongSeatVsOwnSeatVsHeaderless(t *testing.T) {
 	}
 	if err := Check("jevons", note); err != nil {
 		t.Fatalf("headerless note refused: %v", err)
+	}
+	if err := Check("jevons", markerOnly); err != nil {
+		t.Fatalf("rendered marker without the identity fact was treated as a header: %v", err)
 	}
 }

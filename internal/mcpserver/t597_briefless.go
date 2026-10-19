@@ -243,35 +243,30 @@ func latestWorkdirTouch(dir string, since time.Time) (string, time.Time, bool) {
 	return hitPath, hitAt, sharedSkipped
 }
 
-// openingBriefMarkers are phrases a full opening brief carries that ordinary
-// fleet chatter does not. Any one of them over rebriefProseBound classifies
-// as a re-brief; the envelope arm needs no marker.
-//
-// "spawn-brief" / "kind spawn-brief" are not markers: envelope.Parse already
-// catches a real fence, and a >1KB message that merely discusses a brief
-// (the 🎯T721 specimen's second refusal) is not itself a re-brief.
-var openingBriefMarkers = []string{
-	"[Who you are",
-	"standing brief",
-	"[Jevons role doctrine]",
-	"opening brief",
-	"You are jv-",
-}
-
 // IsFullRebrief classifies text as a full (re-)brief: a spawn-brief envelope,
-// or >1KB of prose carrying opening-brief markers. Pure — the send gate and
-// the tapes share it.
+// or >1KB of prose that opens with the identity fact or the standing-brief
+// fact. Mentioning a brief, or opening with the rendered marker, is not a
+// re-brief. Pure — the send gate and the tapes share it.
 func IsFullRebrief(text string) (bool, string) {
 	if m := parseIncomingEnvelope(text); m != nil && m.Kind == envelope.KindSpawnBrief {
 		return true, "a spawn-brief envelope"
 	}
-	if len(text) > rebriefProseBound {
-		for _, marker := range openingBriefMarkers {
-			if strings.Contains(text, marker) {
-				return true, fmt.Sprintf(
-					">1KB opening-brief prose (%d bytes, carries %q)", len(text), marker)
-			}
-		}
+	if len(text) <= rebriefProseBound {
+		return false, ""
+	}
+	body := strings.TrimLeft(text, " \t\r\n")
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	first = strings.TrimSpace(first)
+	if first == envelope.PrefixIdentity {
+		return true, fmt.Sprintf(">1KB identity-fact prose (%d bytes)", len(text))
+	}
+	fields := strings.Fields(first)
+	if len(fields) == 3 && fields[0] == envelope.IntentOpen && fields[1] == "harness" && fields[2] == "standing-brief" {
+		return true, fmt.Sprintf(">1KB standing-brief fact (%d bytes)", len(text))
 	}
 	return false, ""
 }

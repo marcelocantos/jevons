@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T774 — A BACKLOG DRAINS AS ONE DIGEST, NOT ONE RECIPIENT TURN PER ENTRY.
@@ -56,55 +58,53 @@ type classified struct {
 	sender string
 }
 
-func firstLines(text string, n int) []string {
-	lines := strings.SplitN(text, "\n", n+1)
-	if len(lines) > n {
-		lines = lines[:n]
-	}
-	return lines
-}
-
-// classify recognises the machine-generated shapes that supersede each other.
-// Anything else is kindOther: the digest never guesses about it.
+// classify recognises declared open-intent facts that supersede each other.
+// A rendered banner is kindOther: the digest never guesses about it.
+// The first idle, held, or route fact line wins, so a false-green banner
+// ahead of a route fact does not hide the sender.
 func classify(e Entry) classified {
 	c := classified{e: e, kind: kindOther}
-	text := strings.TrimSpace(e.Text)
-	switch {
-	case strings.HasPrefix(text, "[event: worker-idle]"):
-		for _, line := range strings.Split(text, "\n") {
-			if w, ok := strings.CutPrefix(line, "Worker: "); ok && strings.TrimSpace(w) != "" {
-				c.kind, c.sender = kindIdle, strings.TrimSpace(w)
-				return c
+	for _, line := range strings.Split(e.Text, "\n") {
+		line = strings.TrimSpace(line)
+		// formatIdleNudgeWire glues "[event: <kind>]" onto the first line
+		// of the body. Peel that wrapper so the fact on the same line is
+		// visible. The wrapper is not the decision.
+		if rest, found := strings.CutPrefix(line, "[event:"); found {
+			if i := strings.IndexByte(rest, ']'); i >= 0 {
+				line = strings.TrimSpace(rest[i+1:])
 			}
 		}
-	case strings.HasPrefix(text, "[held backlog from "):
-		rest := strings.TrimPrefix(text, "[held backlog from ")
-		if i := strings.IndexAny(rest, " \n]"); i > 0 {
-			c.kind, c.sender = kindHeld, rest[:i]
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[2] == "" {
+			continue
+		}
+		switch fields[1] {
+		case envelope.IntentIdle:
+			c.kind, c.sender = kindIdle, fields[2]
 			return c
-		}
-	}
-	// A report may carry a banner line or two ahead of its header.
-	for _, line := range firstLines(text, 4) {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "[Agent "); ok {
-			if name, _, found := strings.Cut(rest, " responded]"); found && name != "" {
-				c.kind, c.sender = kindReport, name
-				return c
-			}
+		case envelope.IntentHeld:
+			c.kind, c.sender = kindHeld, fields[2]
+			return c
+		case envelope.IntentRoute:
+			c.kind, c.sender = kindReport, fields[2]
+			return c
 		}
 	}
 	return c
 }
 
-// reportID pulls "report_id=…" from a report's header, or "".
+// reportID pulls "report_id=…" from a route fact, or "".
 func reportID(text string) string {
-	for _, line := range firstLines(text, 4) {
-		if i := strings.Index(line, "report_id="); i >= 0 {
-			id := line[i+len("report_id="):]
-			if j := strings.IndexAny(id, " \t"); j >= 0 {
-				id = id[:j]
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[1] != envelope.IntentRoute {
+			continue
+		}
+		for _, tok := range fields {
+			id, ok := strings.CutPrefix(tok, "report_id=")
+			if ok && id != "" {
+				return id
 			}
-			return id
 		}
 	}
 	return ""

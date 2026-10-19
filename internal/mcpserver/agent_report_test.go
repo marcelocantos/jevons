@@ -97,7 +97,7 @@ func TestNotifyShortReportIsUnchanged(t *testing.T) {
 
 	s.notify("jv-t999-x", report)
 
-	want := envelope.PrefixAgentResponded + "\n[Agent jv-t999-x responded]\n" + report
+	want := envelope.PrefixAgentResponded + "\n" + envelope.SeatFact(envelope.IntentRoute, "jv-t999-x") + "\n" + report
 	if *delivered != want {
 		t.Errorf("short report delivery changed:\n got: %q\nwant: %q", *delivered, want)
 	}

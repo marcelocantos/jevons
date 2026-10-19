@@ -57,7 +57,7 @@ func TestT757QueuedDeliveryStampsAgeAtFlush(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Queued copy may have been formatted before flush without a fresh age.
-	queued := "[Agent " + t731Worker + " responded] report_id=" + rec.ID + "\n" + t731Report
+	queued := envelope.SeatFact(envelope.IntentRoute, t731Worker) + " report_id=" + rec.ID + "\n" + t731Report
 
 	s.noteTurnInFlight(t731Parent)
 	res, err := s.deliverByName(t731Parent, queued, OriginAgent, false)
@@ -100,7 +100,7 @@ func TestT757LiveParentDeliveryIncludesAge(t *testing.T) {
 
 func TestParseAgentRespondedWithAge(t *testing.T) {
 	t.Parallel()
-	name, id, ok := parseAgentRespondedLine("[Agent jv-t757-probe responded] report_id=20260921T010203Z-abcd age=5h")
+	name, id, ok := parseAgentRespondedLine(envelope.SeatFact(envelope.IntentRoute, t757Worker) + " report_id=20260921T010203Z-abcd age=5h")
 	if !ok || name != t757Worker || id != "20260921T010203Z-abcd" {
 		t.Fatalf("with age: name=%q id=%q ok=%v", name, id, ok)
 	}

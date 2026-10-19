@@ -118,14 +118,15 @@ func TestFalseGreenBannerLeadsTheDeliveredMessage(t *testing.T) {
 	if len(flags) == 0 {
 		t.Fatal("fixture no longer trips the checker")
 	}
-	msg := falseGreenLead("jv-t386-gate", flags, "[Agent jv-t386-gate responded]\n"+report)
+	route := envelope.SeatFact(envelope.IntentRoute, "jv-t386-gate")
+	msg := falseGreenLead("jv-t386-gate", flags, route+"\n"+report)
 	if !strings.Contains(msg, gate.BannerHeading) {
 		t.Fatalf("banner missing from the delivered message:\n%s", msg)
 	}
 	if !strings.HasPrefix(msg, envelope.PrefixFalseGreen+"\n") {
 		t.Fatalf("false-green fact is not the prefix:\n%s", msg)
 	}
-	if !strings.Contains(msg, "[Agent jv-t386-gate responded]") {
+	if !strings.Contains(msg, route) || !strings.Contains(msg, "make test-go passes") {
 		t.Fatal("the report itself was lost behind the banner")
 	}
 	rendered := gate.Banner(flags) + "\n\n" + envelope.Format(&envelope.Message{
@@ -134,7 +135,7 @@ func TestFalseGreenBannerLeadsTheDeliveredMessage(t *testing.T) {
 	if got, err := envelope.Parse(rendered); err != nil || got != nil {
 		t.Fatalf("rendered false-green banner parsed: got=%v err=%v", got, err)
 	}
-	led := falseGreenLead("jv-t386-gate", flags, envelope.PrefixAgentResponded+"\n[Agent jv-t386-gate responded]\n"+envelope.Format(&envelope.Message{
+	led := falseGreenLead("jv-t386-gate", flags, envelope.PrefixAgentResponded+"\n"+route+"\n"+envelope.Format(&envelope.Message{
 		Kind: envelope.KindAck, SilentLedger: envelope.SilentLedgerEmpty,
 	}))
 	got, err := envelope.Parse(led)

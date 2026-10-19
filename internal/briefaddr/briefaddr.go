@@ -28,6 +28,8 @@ package briefaddr
 import (
 	"fmt"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // Marker opens a 🎯T425 identity header. mcpserver writes it; every
@@ -40,35 +42,45 @@ const nameLabel = "- NAME: "
 // IdentityHeaderName reports the name a 🎯T425 identity header claims for its
 // reader, or "" when text carries no header.
 //
-// The answer is taken from the header BLOCK only — the marker line the message
-// OPENS with, and the "- LABEL: value" lines that immediately follow it.
-// Everything below is the brief, and the brief quotes agent names freely (a
-// worker pasting a header it received quotes a "- NAME: " line verbatim). A
-// parser that scanned the whole message would let the body answer a question
-// only the header may answer.
+// The answer is taken from the header BLOCK only. The message must open
+// with the declared identity fact. The rendered marker line may follow,
+// then the "- LABEL: value" lines. A message that only starts with the
+// rendered marker is not a header. Everything below the block is the
+// brief, and the brief quotes agent names freely (a worker pasting a
+// header it received quotes a "- NAME: " line verbatim). A parser that
+// scanned the whole message would let the body answer a question only
+// the header may answer.
 //
 // Anchored at the start for the same reason, and it matters more than it
-// looks: the header is only ever written at position 0, so a marker deeper in
-// the body belongs to a quotation. The message most likely to quote a whole
-// header is the report 🎯T452 asks a misdelivered-to agent to send, and
-// answering with the quoted name would have the send path refuse the one
-// message that describes the incident.
+// looks: the fact is only ever written at position 0, so a marker deeper
+// in the body belongs to a quotation. The message most likely to quote a
+// whole header is the report 🎯T452 asks a misdelivered-to agent to send,
+// and answering with the quoted name would have the send path refuse the
+// one message that describes the incident.
 func IdentityHeaderName(text string) string {
 	body := strings.TrimLeft(text, " \t\r\n")
-	if !strings.HasPrefix(body, Marker) {
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	if strings.TrimSpace(first) != envelope.PrefixIdentity {
 		return ""
 	}
 	lines := strings.Split(body, "\n")
-	for n, line := range lines {
-		if n == 0 {
-			continue // the marker line itself
-		}
+	skippedMarker := false
+	for _, line := range lines[1:] {
 		if name, ok := strings.CutPrefix(line, nameLabel); ok {
 			return strings.TrimSpace(name)
 		}
-		if !strings.HasPrefix(line, "- ") {
-			return "" // end of the header block; the NAME line was not in it
+		if len(line) >= 2 && line[:2] == "- " {
+			continue
 		}
+		if !skippedMarker && line != "" {
+			skippedMarker = true
+			continue
+		}
+		return ""
 	}
 	return ""
 }

@@ -1822,7 +1822,7 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 			"retrievable", !handle.Empty())
 	}
 
-	msg := envelope.PrefixAgentResponded + "\n" + fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
+	msg := envelope.PrefixAgentResponded + "\n" + agentRespondedRoutingLine(agentName, agentreport.Handle{}, time.Time{}) + "\n" + elision.Text
 	parentMsg := formatAgentResponded(agentName, handle, elision.Text, s.deliveryNow())
 
 	// 🎯T386: a green the report's own evidence does not support is flagged

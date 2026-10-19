@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/targetfile"
 	"github.com/marcelocantos/jevons/internal/wakebatch"
@@ -105,6 +106,8 @@ func ResolveEventParent(def claudia.AgentDef, defaultPO, overseer string) string
 // when a worker transitions into idle with open mission.
 func FormatWorkerIdleText(w WorkerIdleRef) string {
 	var b strings.Builder
+	b.WriteString(envelope.SeatFact(envelope.IntentIdle, w.Name))
+	b.WriteByte('\n')
 	b.WriteString("A work agent under you entered phase=idle after generating (turn ended) ")
 	b.WriteString("while it still looks like open mission work.\n\n")
 	fmt.Fprintf(&b, "Worker: %s\n", strings.TrimSpace(w.Name))

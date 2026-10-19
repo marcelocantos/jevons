@@ -123,7 +123,8 @@ func TestParseAfterAgentPrefix(t *testing.T) {
 	if got, err := Parse(rendered); err != nil || got != nil {
 		t.Fatalf("rendered agent chrome parsed: got=%v err=%v", got, err)
 	}
-	wrapped := PrefixAgentResponded + "\n" + rendered
+	route := SeatFact(IntentRoute, "jv-t509-envelopes")
+	wrapped := PrefixAgentResponded + "\n" + route + "\n" + inner
 	got, err := Parse(wrapped)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -131,15 +132,19 @@ func TestParseAfterAgentPrefix(t *testing.T) {
 	if got == nil || got.Kind != KindFinishReport {
 		t.Fatalf("got %+v", got)
 	}
+	between := PrefixAgentResponded + "\n" + route + "\n" + rendered
+	if got, err := Parse(between); err != nil || got != nil {
+		t.Fatalf("chrome between the route fact and the fence parsed: got=%v err=%v", got, err)
+	}
 }
 
 func TestParseAfterReapedSeatPrefix(t *testing.T) {
 	inner := Format(validFinish())
-	rendered := "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n[Agent jv-t731-probe responded] report_id=abc\n" + inner
+	rendered := "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n" + SeatFact(IntentRoute, "jv-t731-probe") + " report_id=abc\n" + inner
 	if got, err := Parse(rendered); err != nil || got != nil {
 		t.Fatalf("rendered reap chrome parsed: got=%v err=%v", got, err)
 	}
-	wrapped := PrefixReapedSeat + "\n" + "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n" + PrefixAgentResponded + "\n[Agent jv-t731-probe responded] report_id=abc\n" + inner
+	wrapped := PrefixReapedSeat + "\n" + "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n" + PrefixAgentResponded + "\n" + SeatFact(IntentRoute, "jv-t731-probe") + " report_id=abc\n" + inner
 	got, err := Parse(wrapped)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -232,6 +237,14 @@ func TestIncompleteFenceIsUnenveloped(t *testing.T) {
 	m, err := Parse(raw)
 	if err != nil || m != nil {
 		t.Fatalf("mid-stream incomplete fence is not malformed: m=%v err=%v", m, err)
+	}
+}
+
+func TestParseSlotLineIgnoresSigilCase(t *testing.T) {
+	raw := "```jevons\nJEVONS: kind ack\n```\n"
+	got, err := Parse(raw)
+	if err != nil || got == nil || got.Kind != KindAck {
+		t.Fatalf("got=%v err=%v", got, err)
 	}
 }
 

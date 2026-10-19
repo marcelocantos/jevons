@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T513: a brief whose 🎯T425 identity header names a fleet agent is that
@@ -40,7 +41,8 @@ func TestT513WrongSeatBriefDroppedFromOverseerChat(t *testing.T) {
 
 	// The misdelivery: a brief composed for jevons-po, injected into the
 	// overseer's session and echoed back as a user event.
-	wrongSeat := "[Who you are — from the fleet registry, read at send time (🎯T425)]\n" +
+	wrongSeat := envelope.PrefixIdentity + "\n" +
+		"[Who you are — from the fleet registry, read at send time (🎯T425)]\n" +
 		"- NAME: jevons-po\n" +
 		"- ROLE: work agent (registry purpose=work)\n" +
 		"- PARENT: jevons\n" +
@@ -96,7 +98,8 @@ func TestT513WrongSeatBriefDroppedFromOverseerChat(t *testing.T) {
 
 	// Control A: the overseer's own standing brief names the overseer — that
 	// is correctly addressed and must still land.
-	ownSeat := "[Who you are — from the fleet registry, read at send time (🎯T425)]\n" +
+	ownSeat := envelope.PrefixIdentity + "\n" +
+		"[Who you are — from the fleet registry, read at send time (🎯T425)]\n" +
 		"- NAME: jevons\n" +
 		"- ROLE: overseer\n\n" +
 		"Jevons fleet standing brief."

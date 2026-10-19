@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
@@ -529,7 +530,12 @@ const identityDoctrineCloser = "carry on with your own work."
 
 func stripLeadingIdentityEnvelope(text string) string {
 	body := strings.TrimLeft(text, " \t\r\n")
-	if !strings.HasPrefix(body, IdentityHeaderMarker) {
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	if strings.TrimSpace(first) != envelope.PrefixIdentity {
 		return text
 	}
 	// Idle / recover wires put the event marker immediately after the header.

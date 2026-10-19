@@ -9,6 +9,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/briefaddr"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/roles"
 )
 
@@ -42,9 +43,9 @@ const (
 	RoleAuditor      = "auditor"
 )
 
-// IdentityHeaderMarker opens the header. Callers test for it to stay
-// idempotent: a message that already carries an identity never gets a second.
-// One definition, shared with every addressing check (🎯T452 / 🎯T513).
+// IdentityHeaderMarker is the rendered header line. Idempotence is the
+// declared identity fact on line 1, not this marker (🎯T766.4). One
+// definition, shared with every addressing check (🎯T452 / 🎯T513).
 const IdentityHeaderMarker = briefaddr.Marker
 
 // AgentIdentity is one registry row as its own subject needs to read it.
@@ -126,6 +127,8 @@ func FormatIdentityHeader(id AgentIdentity) string {
 	}
 
 	var b strings.Builder
+	b.WriteString(envelope.PrefixIdentity)
+	b.WriteByte('\n')
 	b.WriteString(IdentityHeaderMarker)
 	b.WriteString(" — from the fleet registry, read at send time (🎯T425)]\n")
 	fmt.Fprintf(&b, "- NAME: %s\n", name)
@@ -263,7 +266,13 @@ func (s *Server) identityHeaderFor(name string) string {
 // is reporting: the send path below then refuses it, and the incident goes
 // unreported because it was described accurately.
 func (s *Server) withIdentity(name, text string) string {
-	if strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), IdentityHeaderMarker) {
+	body := strings.TrimLeft(text, " \t\r\n")
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	if strings.TrimSpace(first) == envelope.PrefixIdentity {
 		return text
 	}
 	header := s.identityHeaderFor(name)

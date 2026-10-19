@@ -9,11 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // t568Payload is long enough for turnev.Needle and distinctive enough
 // that an unrelated chatlog line cannot match it.
-const t568Payload = "[Agent jevons-po responded]\n" +
+const t568Payload = envelope.IntentOpen + " " + envelope.IntentRoute + " jevons-po\n" +
 	"T561 spawn landed; composer-pocket routing is the remaining ask; " +
 	"T564 spawn is hours old and already delivered. Do not treat this as fresh."
 

@@ -23,7 +23,22 @@ const (
 	PrefixFalseGreen     = "open-intent prefix false-green"
 	PrefixEnvelopeCheck  = "open-intent prefix envelope-check"
 	PrefixIdentity       = "open-intent prefix identity"
+
+	// IntentOpen is the first field of a declared open-intent fact.
+	IntentOpen = "open-intent"
+	// IntentRoute, IntentIdle, and IntentHeld are the second field.
+	// The third field is the seat name. Classifiers match these fields.
+	// A rendered banner is not one of these facts (🎯T766.4).
+	IntentRoute = "route"
+	IntentIdle  = "idle"
+	IntentHeld  = "held"
 )
+
+// SeatFact is the line "open-intent <kind> <name>". kind is IntentRoute,
+// IntentIdle, or IntentHeld. Producers emit it; classifiers read the fields.
+func SeatFact(kind, name string) string {
+	return IntentOpen + " " + kind + " " + strings.TrimSpace(name)
+}
 
 // BannerHeading opens the note prepended to a malformed load-bearing
 // envelope on the message path. Silence is the normal case.
@@ -225,9 +240,11 @@ func stripOnePrefix(s string) (string, bool) {
 }
 
 // stripDeclaredPrefix peels one "open-intent prefix <kind>" fact.
-// agent-responded and reaped-seat also drop the chrome line that follows
-// the fact. identity, false-green, and envelope-check drop through the
-// next blank line. A rendered banner with no fact stays.
+// agent-responded and reaped-seat also drop the next line: the route
+// fact, or the reaped-seat display sentence. A rendered banner between
+// that line and the fence is not dropped and hides the fence.
+// identity, false-green, and envelope-check drop through the next blank
+// line. A rendered banner with no fact stays.
 func stripDeclaredPrefix(s string) (string, bool) {
 	nl := strings.IndexByte(s, '\n')
 	first := s
@@ -339,7 +356,8 @@ func parseSlots(fence string) (*Message, error) {
 }
 
 func parseSlotLine(line string) (key, value string, ok bool) {
-	if !strings.HasPrefix(strings.ToLower(line), Sigil) {
+	lower := strings.ToLower(line)
+	if len(lower) < len(Sigil) || lower[:len(Sigil)] != Sigil {
 		return "", "", false
 	}
 	rest := strings.TrimSpace(line[len(Sigil):])
@@ -584,7 +602,7 @@ func Format(m *Message) string {
 	if p := strings.TrimLeft(m.Payload, "\n"); p != "" {
 		b.WriteByte('\n')
 		b.WriteString(p)
-		if !strings.HasSuffix(p, "\n") {
+		if p[len(p)-1] != '\n' {
 			b.WriteByte('\n')
 		}
 	}

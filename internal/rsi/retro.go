@@ -557,7 +557,7 @@ func isWeakRetroPhrase(phrase string) bool {
 		return false
 	}
 	for _, w := range retroWeakPhrases {
-		if strings.Contains(p, w) {
+		if p == w {
 			return true
 		}
 	}

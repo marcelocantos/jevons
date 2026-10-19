@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 func t774Queue(t *testing.T, s *Store, n int) {
@@ -15,6 +17,30 @@ func t774Queue(t *testing.T, s *Store, n int) {
 	for i := 0; i < n; i++ {
 		if _, _, err := s.Append("a", fmt.Sprintf("SUPERVISOR m%d: body", i), time.Now().Add(time.Duration(i)*time.Second)); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestClassifyReadsDeclaredFacts(t *testing.T) {
+	route := envelope.SeatFact(envelope.IntentRoute, "w1") + " report_id=abc\nbody"
+	idle := "[event: worker-idle] " + envelope.SeatFact(envelope.IntentIdle, "w2") + "\nWorker: w2\n"
+	held := envelope.SeatFact(envelope.IntentHeld, "h6") + "\n[held backlog from h6 — reaped]\n\nbody"
+	if got := classify(Entry{Text: route}); got.kind != kindReport || got.sender != "w1" || reportID(route) != "abc" {
+		t.Fatalf("route classify=%+v id=%q", got, reportID(route))
+	}
+	if got := classify(Entry{Text: idle}); got.kind != kindIdle || got.sender != "w2" {
+		t.Fatalf("idle classify=%+v", got)
+	}
+	if got := classify(Entry{Text: held}); got.kind != kindHeld || got.sender != "h6" {
+		t.Fatalf("held classify=%+v", got)
+	}
+	for _, text := range []string{
+		"[Agent w1 responded] report_id=abc\nw1 status",
+		"[event: worker-idle] A work agent entered phase=idle.\n\nWorker: w2\n",
+		"[held backlog from h6 — that seat was reaped]\n\nbody",
+	} {
+		if got := classify(Entry{Text: text}); got.kind != kindOther {
+			t.Fatalf("rendered banner classified as %v: %q", got.kind, text)
 		}
 	}
 }

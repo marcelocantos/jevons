@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -159,6 +160,14 @@ func (s *Server) forgetReapedBacklogNotice(name string) {
 	delete(s.heldReapedNoticed, name)
 }
 
+// formatHeldBacklogRoute is the parent copy of a finished seat's hold.
+// The first line is the held fact. The rendered sentence is display.
+func formatHeldBacklogRoute(agent, why, text string) string {
+	agent = strings.TrimSpace(agent)
+	return fmt.Sprintf("%s\n[held backlog from %s — that seat was %s, so this is routed to you as its parent (🎯T582)]\n\n%s",
+		envelope.SeatFact(envelope.IntentHeld, agent), agent, why, text)
+}
+
 // routeHeldReapedBacklog is the sweep's answer for a queue held against a seat
 // reaped on finish. A non-gate hold with a recorded parent is delivered to
 // that parent. Gate feedback about an achieve reap, and any hold with no
@@ -207,9 +216,7 @@ func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record,
 		if !claimed {
 			continue
 		}
-		tagged := fmt.Sprintf(
-			"[held backlog from %s — that seat was %s, so this is routed to you as its parent (🎯T582)]\n\n%s",
-			b.Agent, rec.Describe(), e.Text)
+		tagged := formatHeldBacklogRoute(b.Agent, rec.Describe(), e.Text)
 		res, derr := s.deliverByName(parent, tagged, OriginAgent, false)
 		// sent, interrupted_sent, and rehydrated_sent mean the parent
 		// call returned. That is not a receipt. Keep the payload and do

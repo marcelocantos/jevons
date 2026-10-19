@@ -69,7 +69,7 @@ func chainServer(t *testing.T, fleet map[string]*fakeSender) (*Server, *overseer
 func TestT7665DeliveredReportDischargeArchivesTheRequeuedCopy(t *testing.T) {
 	parent := &fakeSender{alive: true}
 	s, _ := chainServer(t, map[string]*fakeSender{"jevons-po": parent})
-	const report = "[Agent jv-t7665-worker responded] report_id=20261019T120000Z-abcd\nbody that must survive"
+	report := envelope.SeatFact(envelope.IntentRoute, "jv-t7665-worker") + " report_id=20261019T120000Z-abcd\nbody that must survive"
 	if _, err := s.enqueueAgentSend("jevons-po", report); err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestNotifyRoutesThroughDeliverByName(t *testing.T) {
 	if len(inbox.texts) != 1 {
 		t.Fatalf("overseer inbox=%v", inbox.texts)
 	}
-	if !strings.Contains(inbox.texts[0], "[Agent jv-t309.3-fleet-deliver responded]") {
+	if !strings.Contains(inbox.texts[0], envelope.SeatFact(envelope.IntentRoute, "jv-t309.3-fleet-deliver")) {
 		t.Fatalf("framing lost: %q", inbox.texts[0])
 	}
 	if !strings.Contains(inbox.texts[0], "commit abc123") {

@@ -85,7 +85,7 @@ func TestT690DeniedSendStillDeliversTerminalReportToParent(t *testing.T) {
 	if len(po.sent) != 1 {
 		t.Fatalf("parent deliveries=%d want 1 (daemon parent-report); got %v", len(po.sent), po.sent)
 	}
-	if !strings.Contains(po.sent[0], "[Agent "+t690Worker+" responded]") {
+	if !strings.Contains(po.sent[0], envelope.SeatFact(envelope.IntentRoute, t690Worker)) {
 		t.Fatalf("parent copy lost agent framing: %q", po.sent[0])
 	}
 	if !strings.Contains(po.sent[0], "parent must receive this without jevons_agent_send") {

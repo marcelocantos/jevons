@@ -12,6 +12,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
@@ -28,25 +30,32 @@ func t774Fill(t *testing.T, s *Server, seat string) (senders []string) {
 			t.Fatal(err)
 		}
 	}
-	// 20 reports from 5 workers, four each.
+	// 20 reports from 5 workers, four each. The route fact is what classify reads.
 	for i := 0; i < 4; i++ {
 		for w := 1; w <= 5; w++ {
-			add(fmt.Sprintf("[Agent w%d responded] report_id=2026092%dT0%d0000Z-%02d%02d\nw%d status round %d", w, i, i, w, i, w, i))
+			name := fmt.Sprintf("w%d", w)
+			id := fmt.Sprintf("2026092%dT0%d0000Z-%02d%02d", i, i, w, i)
+			line := agentRespondedRoutingLine(name, agentreport.Handle{Agent: name, ReportID: id}, time.Time{})
+			add(line + fmt.Sprintf("\n%s status round %d", name, i))
 		}
 	}
-	// 10 worker-idle events: two per worker w1..w5.
+	// 10 worker-idle events: two per worker w1..w5. The wire and the body
+	// are the producers the daemon actually sends.
 	for i := 0; i < 2; i++ {
 		for w := 1; w <= 5; w++ {
-			add(fmt.Sprintf("[event: worker-idle] A work agent entered phase=idle.\n\nWorker: w%d\nTarget: T%d\nParent: %s\n\nround %d", w, w, seat, i))
+			body := FormatWorkerIdleText(WorkerIdleRef{
+				Name: fmt.Sprintf("w%d", w), TargetID: fmt.Sprintf("T%d", w), Parent: seat,
+			})
+			add(formatIdleNudgeWire(eventWorkerIdle, body+fmt.Sprintf("\nround %d", i)))
 		}
 	}
 	// 9 held-backlog relays: 3 for w1 (which has reports: folded), 6 for
 	// h6 (no reports: latest survives).
 	for i := 0; i < 3; i++ {
-		add(fmt.Sprintf("[held backlog from w1 — that seat was reaped, so this is routed to you as its parent (🎯T582)]\n\n[event: idle-nudge] NUDGE w1 %d", i))
+		add(formatHeldBacklogRoute("w1", "reaped", fmt.Sprintf("[event: idle-nudge] NUDGE w1 %d", i)))
 	}
 	for i := 0; i < 6; i++ {
-		add(fmt.Sprintf("[held backlog from h6 — that seat was reaped, so this is routed to you as its parent (🎯T582)]\n\n[event: idle-nudge] NUDGE h6 %d", i))
+		add(formatHeldBacklogRoute("h6", "reaped", fmt.Sprintf("[event: idle-nudge] NUDGE h6 %d", i)))
 	}
 	// 11 free-form messages from distinct authors.
 	for i := 0; i < 11; i++ {
@@ -115,7 +124,7 @@ func TestT774FiftyMixedEntriesDrainAsOneDigest(t *testing.T) {
 	// Nothing disappears silently: an original text stays readable by id.
 	id := t774SupersededReportID(t, digest)
 	orig, err := s.sendQueue().ReadArchived(id)
-	if err != nil || !strings.Contains(orig.Text, "[Agent w") || !strings.Contains(orig.Text, "status round") {
+	if err != nil || !strings.Contains(orig.Text, envelope.SeatFact(envelope.IntentRoute, "w")) || !strings.Contains(orig.Text, "status round") {
 		t.Fatalf("archived original %q unreadable: %v %+v", id, err, orig)
 	}
 	res, err := s.handleSendqReconcile(context.Background(), mcp.CallToolRequest{Params: mcp.CallToolParams{

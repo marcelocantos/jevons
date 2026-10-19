@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T425 — the brief that carries role doctrine names its own reader.
@@ -99,8 +101,17 @@ func t425Fixture(t *testing.T, defs ...claudia.AgentDef) (*Server, *t425Sender) 
 // value. Returned as a reason so the control arm can report WHICH part the
 // pre-fix message lacked rather than merely that it lacked something.
 func namesItsRecipient(msg string, want AgentIdentity) string {
-	if !strings.HasPrefix(strings.TrimSpace(msg), IdentityHeaderMarker) {
-		return "does not open with the identity header"
+	body := strings.TrimSpace(msg)
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	if first != envelope.PrefixIdentity {
+		return "does not open with the identity fact"
+	}
+	if !strings.Contains(msg, IdentityHeaderMarker) {
+		return "does not carry the identity header"
 	}
 	for _, f := range []struct{ label, value string }{
 		{"NAME", want.Name},
