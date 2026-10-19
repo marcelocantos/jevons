@@ -108,23 +108,18 @@ var completionClaimMarkers = []string{
 	"mission complete",
 }
 
-// HasOracleEvidence reports whether report contains executable-oracle
-// markers (tests/green/SHA). Envelope oracle slots win when present
-// (🎯T509); otherwise the prose heuristic.
+// HasOracleEvidence is true only for a valid envelope oracle slot (🎯T509 /
+// 🎯T766.4). A sentence is not oracle evidence.
 func HasOracleEvidence(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasOracle() {
-		return true
-	}
-	return hasOracleEvidence(strings.ToLower(oracleScanBody(report)))
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasOracle()
 }
 
-// HasAcceptedRisk reports explicit accepted-risk / class-3 residual language.
-// Envelope risk slots win when present (🎯T509).
+// HasAcceptedRisk is true only for a valid envelope risk slot (🎯T509 /
+// 🎯T766.4). A sentence is not accepted risk.
 func HasAcceptedRisk(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasRisk() {
-		return true
-	}
-	return hasAcceptedRisk(strings.ToLower(oracleScanBody(report)))
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasRisk()
 }
 
 func oracleScanBody(report string) string {

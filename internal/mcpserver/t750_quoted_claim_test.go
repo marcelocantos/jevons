@@ -193,17 +193,11 @@ func TestT750SeatIsReapedOnItsOwnMarker(t *testing.T) {
 	}
 }
 
-// The save must be attributable in the lifecycle stream, not merely correct.
-// A quoted-marker keep used to take the silent return in the !ok branch, so
-// it left no record at all — and an absent record is what a dark sink
-// (🎯T426 / 🎯T744) also looks like.
+// A quoted sentence is not a cited finish (🎯T766.4). The pre-mask English
+// shape is not a save record.
 func TestT750SaveIsVisibleInTheLifecycleStream(t *testing.T) {
-	marker, span, _, ok := CitedCompletionClaim(t745BusyPaneReport)
-	if !ok {
-		t.Fatal("the quoted-marker save produced no citable record; it would log nothing and read as a dark sink")
-	}
-	if marker == "" || span == "" {
-		t.Errorf("record must name the cited marker and its sentence; got marker %q span %q", marker, span)
+	if _, _, _, ok := CitedCompletionClaim(t745BusyPaneReport); ok {
+		t.Fatal("a quoted sentence was a cited finish")
 	}
 
 	// A report that asserts its claim is reaped, not saved, so it must not

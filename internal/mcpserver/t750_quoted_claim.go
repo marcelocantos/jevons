@@ -255,21 +255,7 @@ func CitedCompletionClaim(report string) (marker, span string, offset int, ok bo
 	return best, span, offset, true
 }
 
-// wouldHaveFinishedBeforeT750 is hasFinishShape as it read before the mask:
-// a completion word anywhere, plus accepted-risk, oracle evidence, or a bare
-// claim clause. Kept here rather than left implicit so the log records a save
-// only where there was something to save from.
-func wouldHaveFinishedBeforeT750(lower string) bool {
-	if !hasAnyCompletionMarker(lower) {
-		return false
-	}
-	if hasAcceptedRisk(lower) || hasOracleEvidence(lower) {
-		return true
-	}
-	for _, clause := range strings.FieldsFunc(lower, finishClauseDelimiter) {
-		if bareClaimClause(clause) {
-			return true
-		}
-	}
-	return false
-}
+// wouldHaveFinishedBeforeT750 is not a finish decision (🎯T766.4). The
+// pre-mask English shape is not a cited save. A quoted sentence is
+// unknown, not finished.
+func wouldHaveFinishedBeforeT750(string) bool { return false }

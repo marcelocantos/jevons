@@ -89,7 +89,8 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
 	}
@@ -208,6 +209,54 @@ func TestT7664ProseOracleDoesNotReapThroughTheSink(t *testing.T) {
 	s2.agentEventSink(doneAgent)(claudia.Event{Type: "assistant", Text: finish, StopReason: "end_turn"})
 	if reg2.Def(doneAgent) != nil {
 		t.Fatal("declared finish stayed registered")
+	}
+}
+
+// TestT7664ProseOracleDoesNotCloseOwnerIntent drives the owner-intent
+// answer path. An oracle sentence is not oracle evidence and does not
+// close the complaint. A declared finish-report with an oracle slot does.
+// An accepted-risk sentence is not a risk slot. The sink keeps that seat
+// and removes a declared risk finish.
+func TestT7664ProseOracleDoesNotCloseOwnerIntent(t *testing.T) {
+	owner := "Why is the jiggle layout thrash still happening?"
+	prose := "Done. The jiggle layout thrash is fixed. go test ./internal/mcpserver -run Layout PASS"
+	if HasOracleEvidence(prose) || HasAcceptedRisk(prose) {
+		t.Fatal("a sentence is oracle evidence or accepted risk")
+	}
+	if OwnerIntentAnsweredWithProductEvidence(owner, []string{prose}) {
+		t.Fatal("oracle sentence closed the owner intent")
+	}
+	if wouldHaveFinishedBeforeT750(strings.ToLower(prose)) {
+		t.Fatal("a completion sentence is a historical finish")
+	}
+	riskProse := "Done. The jiggle layout thrash fix carries accepted risk for the owner."
+	if HasAcceptedRisk(riskProse) {
+		t.Fatal("an accepted-risk sentence is a risk slot")
+	}
+
+	finish := declaredFinishReport("T766.4", "The jiggle layout thrash is fixed.")
+	if !HasOracleEvidence(finish) {
+		t.Fatal("declared sha slot is not oracle evidence")
+	}
+	if !OwnerIntentAnsweredWithProductEvidence(owner, []string{finish}) {
+		t.Fatal("declared oracle did not close the owner intent")
+	}
+	risk := declaredRiskFinishReport("T766.4", "The jiggle layout thrash fix is residual.")
+	if !HasAcceptedRisk(risk) || HasOracleEvidence(risk) {
+		t.Fatalf("risk slot accepted=%v oracle=%v", HasAcceptedRisk(risk), HasOracleEvidence(risk))
+	}
+
+	const agent = "jv-t7664-prose-risk"
+	s, reg := reapSinkServer(t, agent)
+	s.agentEventSink(agent)(claudia.Event{Type: "assistant", Text: riskProse, StopReason: "end_turn"})
+	if reg.Def(agent) == nil {
+		t.Fatal("accepted-risk sentence reaped the seat")
+	}
+	const doneAgent = "jv-t7664-declared-risk"
+	s2, reg2 := reapSinkServer(t, doneAgent)
+	s2.agentEventSink(doneAgent)(claudia.Event{Type: "assistant", Text: risk, StopReason: "end_turn"})
+	if reg2.Def(doneAgent) != nil {
+		t.Fatal("declared risk finish stayed registered")
 	}
 }
 
