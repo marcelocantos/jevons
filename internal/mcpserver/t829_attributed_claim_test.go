@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -36,8 +37,11 @@ func TestT829WitnessTheUnmaskedScanMatched(t *testing.T) {
 	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("specimen no longer carries a completion marker; the test has drifted off the shape it pins")
 	}
-	if !hasOracleEvidence(lower) {
-		t.Fatal("specimen no longer carries oracle-evidence vocabulary (GREEN); without it hasFinishShape never reached its short-circuit")
+	if !strings.Contains(lower, "green") {
+		t.Fatal("specimen no longer carries oracle-evidence vocabulary (GREEN)")
+	}
+	if hasOracleEvidence(lower) {
+		t.Fatal("an oracle sentence is oracle evidence")
 	}
 	if hasCompletionClaim(lower) {
 		t.Fatal("masked scan still reads an asserted claim in a report whose only marker relays the owner's action on a different target")

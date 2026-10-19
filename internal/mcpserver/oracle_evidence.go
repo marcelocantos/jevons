@@ -54,33 +54,6 @@ func (c CompletionEvidenceClass) String() string {
 // via non-hex flanks so "pass" / common English words are not false hits.
 var commitSHARe = regexp.MustCompile(`(?i)(?:^|[^0-9a-f])([0-9a-f]{7,40})(?:[^0-9a-f]|$)`)
 
-// 🎯T784: bare "pass" is removed — "the scout pass is done" (a status
-// noun, not a test verdict) false-positived as oracle evidence, which
-// short-circuited hasFinishShape's bare-claim check and reaped a worker
-// mid-status (jv-t762-dropped-spawn-half, 2026-09-21). "passed" stays: it
-// is verb-shaped and paired oracle prose ("the test passed", "N passed")
-// is the common case; a bare "tests pass" / "suite passes" phrasing is
-// covered by the compound entries below instead of the single word.
-var oracleEvidenceMarkers = []string{
-	"go test",
-	"make test",
-	"test-web",
-	"test-go",
-	"test-journey",
-	"test-ui",
-	"tests pass",
-	"test passes",
-	"suite passes",
-	"passed",
-	"green",
-	"oracle",
-	"hermetic",
-	"sha ",
-	"commit ",
-	"commits ",
-	"attestation",
-}
-
 var acceptedRiskMarkers = []string{
 	"accepted risk",
 	"accepted-risk",
@@ -188,36 +161,9 @@ func LooksLikeMissingSilentLedger(report string) bool {
 	return ClassifyCompletionReport(report) == CompletionMissingSilentLedger
 }
 
-func hasOracleEvidence(lower string) bool {
-	if commitSHARe.MatchString(lower) {
-		// Require a claim-adjacent or evidence-shaped context: bare hex
-		// alone in a paragraph can false-positive; require SHA/commit word
-		// nearby or an explicit test/pass marker.
-		if strings.Contains(lower, "sha") || strings.Contains(lower, "commit") {
-			return true
-		}
-	}
-	// 🎯T784: word-boundary match, not a bare substring scan. A short
-	// marker like "pass" false-positived inside "the scout pass is done"
-	// (jv-t762-dropped-spawn-half, 2026-09-21), reading a status update
-	// as oracle evidence and short-circuiting hasFinishShape's bare-claim
-	// check straight into a reap.
-	for _, m := range oracleEvidenceMarkers {
-		if containsWordish(lower, strings.TrimSpace(m)) {
-			return true
-		}
-	}
-	// SHA without the word "sha" still counts when report also claims done
-	// with a short hex token after "SHA"/"sha" pattern handled above, or
-	// conventional "SHA abcdef0" form.
-	if commitSHARe.MatchString(lower) && (strings.Contains(lower, "sha") ||
-		strings.Contains(lower, "commit") ||
-		strings.Contains(lower, "landed") ||
-		strings.Contains(lower, "merged")) {
-		return true
-	}
-	return false
-}
+// hasOracleEvidence is not a control decision (🎯T766.4). A sentence is
+// not oracle evidence. HasOracleEvidence reads the envelope oracle slot.
+func hasOracleEvidence(string) bool { return false }
 
 func hasAcceptedRisk(lower string) bool {
 	for _, m := range acceptedRiskMarkers {

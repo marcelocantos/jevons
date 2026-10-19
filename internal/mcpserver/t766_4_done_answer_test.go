@@ -90,7 +90,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree", "hasOracleEvidence")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "false_green.go"), "FalseGreenFlagsForWorker")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
@@ -192,6 +192,9 @@ func TestT7664ProseOracleDoesNotReapThroughTheSink(t *testing.T) {
 	if hasFinishShape(strings.ToLower(prose)) {
 		t.Fatal("a completion sentence is a finish shape")
 	}
+	if hasOracleEvidence(strings.ToLower(prose)) {
+		t.Fatal("an oracle sentence is oracle evidence")
+	}
 	if got := ClassifyCompletionReport(prose); got != CompletionNoClaim || LooksLikeBareDone(prose) || HasOracleOrRisk(prose) {
 		t.Fatalf("class=%s bare=%v oracle=%v", got, LooksLikeBareDone(prose), HasOracleOrRisk(prose))
 	}
@@ -203,8 +206,8 @@ func TestT7664ProseOracleDoesNotReapThroughTheSink(t *testing.T) {
 	}
 
 	finish := declaredFinishReport("T766.4", prose)
-	if got := ClassifyCompletionReport(finish); got != CompletionOracleEvidence || !HasOracleOrRisk(finish) {
-		t.Fatalf("declared class=%s oracle=%v", got, HasOracleOrRisk(finish))
+	if got := ClassifyCompletionReport(finish); got != CompletionOracleEvidence || !HasOracleOrRisk(finish) || !HasOracleEvidence(finish) {
+		t.Fatalf("declared class=%s oracle=%v slot=%v", got, HasOracleOrRisk(finish), HasOracleEvidence(finish))
 	}
 	const doneAgent = "jv-t7664-declared-oracle"
 	s2, reg2 := reapSinkServer(t, doneAgent)

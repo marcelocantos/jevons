@@ -33,8 +33,14 @@ func TestT581IncidentReportIsTheIncidentShape(t *testing.T) {
 	if !strings.Contains(lower, "reading done") || !strings.Contains(lower, "implementing now") {
 		t.Fatal("fixture lost the local done-word grammar")
 	}
-	if !hasCompletionClaim(lower) || !hasOracleEvidence(lower) {
-		t.Fatal("fixture no longer carries the done + oracle words that reaped it")
+	if !strings.Contains(lower, "oracle") || !strings.Contains(lower, "green") {
+		t.Fatal("fixture lost the oracle words")
+	}
+	if !hasCompletionClaim(lower) {
+		t.Fatal("fixture no longer carries the done word that reaped it")
+	}
+	if hasOracleEvidence(lower) {
+		t.Fatal("an oracle sentence is oracle evidence")
 	}
 	if hasForwardLookingPlan(lower) {
 		t.Fatal("T577's list now covers this report; T581 rule would be untested")

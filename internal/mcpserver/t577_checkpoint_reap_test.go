@@ -56,8 +56,11 @@ func TestT577IncidentReportIsTheIncidentShape(t *testing.T) {
 	if hasCompletionClaim(lower) {
 		t.Fatal("fixture's quoted completion word is being read as an asserted claim (🎯T750)")
 	}
-	if !hasOracleEvidence(lower) {
-		t.Fatal("fixture no longer carries oracle-shaped words — cannot reproduce the incident")
+	if !strings.Contains(lower, "make test-go") {
+		t.Fatal("fixture lost the oracle-shaped words — cannot reproduce the incident")
+	}
+	if hasOracleEvidence(lower) {
+		t.Fatal("an oracle sentence is oracle evidence")
 	}
 }
 
