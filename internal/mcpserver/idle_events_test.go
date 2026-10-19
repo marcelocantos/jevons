@@ -241,6 +241,7 @@ func TestSkipSleepingCoordinatorRestart(t *testing.T) {
 		{"open intent", po, overseer, false, true, 0, false, ""},
 		{"has work children", po, overseer, false, false, 1, false, ""},
 		{"overseer never skipped", overseer, overseer, false, false, 0, false, ""},
+		{"overseer case", "Jevons", "jevons", false, false, 0, false, ""},
 		{"empty overseer defaults", po, "", false, false, 0, true, reasonSleepingPO},
 		{"empty target", "", overseer, false, false, 0, false, ""},
 	}

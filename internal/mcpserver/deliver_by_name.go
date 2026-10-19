@@ -240,7 +240,7 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 	// under some other spelling would deliver into the overseer's transcript
 	// while reporting the addressed name — the 2026-08-29 misroute, seen from
 	// the other side. Refusing is loud and delivers nothing.
-	if overseerArm && !strings.EqualFold(dest, name) {
+	if overseerArm && strings.ToLower(dest) != strings.ToLower(name) {
 		slog.Error("🎯T565 receiver resolved to a different seat than addressed",
 			"component", "agent_send",
 			"addressed", name,
@@ -289,7 +289,7 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 	who := strings.TrimSpace(actor)
 	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
 		who != "" && who != ActorOwnerSurface &&
-		!s.isOverseerAgent(who) && !strings.EqualFold(who, dest) &&
+		!s.isOverseerAgent(who) && strings.ToLower(who) != strings.ToLower(dest) &&
 		relayroute.Classify(report) == relayroute.RouteOverseer &&
 		s.storeRelayedReport(who, report) {
 		po := dest

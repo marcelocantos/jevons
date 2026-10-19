@@ -1582,7 +1582,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
 	}
-	if strings.EqualFold(name, s.overseerName()) {
+	if strings.ToLower(name) == strings.ToLower(s.overseerName()) {
 		return true
 	}
 	if s.transcript != nil && s.transcript.GetID != nil && s.registry != nil {
@@ -1611,7 +1611,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 // isOverseerSeatRow reports whether a registry row could be the overseer:
 // explicit purpose=overseer, or a root row (no parent).
 func isOverseerSeatRow(d claudia.AgentDef) bool {
-	if strings.EqualFold(strings.TrimSpace(d.Purpose), claudia.PurposeOverseer) {
+	if strings.ToLower(strings.TrimSpace(d.Purpose)) == strings.ToLower(claudia.PurposeOverseer) {
 		return true
 	}
 	return strings.TrimSpace(d.Parent) == ""

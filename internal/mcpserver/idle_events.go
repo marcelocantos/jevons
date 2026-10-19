@@ -211,7 +211,7 @@ func SkipSleepingCoordinatorRestart(target, overseer string, processAlive, openI
 	if overseer == "" {
 		overseer = "jevons"
 	}
-	if target == "" || strings.EqualFold(target, overseer) {
+	if target == "" || strings.ToLower(target) == strings.ToLower(overseer) {
 		return false, ""
 	}
 	if processAlive {

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // --- fixture builders: the exact journal shapes internal/server writes ---
@@ -87,7 +89,7 @@ func TestIsQuestionHoldsTheSilentDistinction(t *testing.T) {
 		"can you check whether the port is bound?",
 		"how do I re-pair the device",
 		"Two things. First the build is red.\nShould I revert it?",
-		"[user]\nwhat is the status of T378?",
+		envelope.PrefixOwnerTurn + "\n[user]\nwhat is the status of T378",
 		"**why did that fail?**",
 	}
 	for _, q := range questions {
@@ -115,6 +117,8 @@ func TestIsQuestionHoldsTheSilentDistinction(t *testing.T) {
 		"proceed with the plan",
 		"Do the T385 work first.",
 		"whatever you think is best",
+		"[user]\nwhat is the status of T378",
+		"[user]what is the status of T378",
 		"", "   ", "\n",
 	}
 	for _, s := range notQuestions {

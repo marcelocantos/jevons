@@ -20,9 +20,8 @@ import (
 // userTurnPrefix marks a turn delivered to the overseer as a genuine owner
 // message, distinguishing it from injected agent/system notifications
 // (worker replies, budget alerts) that share the ACP "user" role. Line 1
-// is the owner-turn fact, which is what the notify queue decides on. The
-// following "[user]" line is display: the overseer still sees it, and
-// journals written before the fact still start with it (🎯T63, 🎯T766.4).
+// is the owner-turn fact, which is what the notify queue and journal
+// replay decide on. The following "[user]" line is display (🎯T63, 🎯T766.4).
 // The browser renders prefixed turns as owner bubbles (prefix elided) and
 // folds unprefixed notifications into the activity strip.
 const userTurnPrefix = envelope.PrefixOwnerTurn + "\n[user]\n"
@@ -121,12 +120,12 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 			}
 			return "", false
 		}
-		// A genuine owner turn carries userTurnPrefix. The browser already
+		// A genuine owner turn carries the owner-turn fact. The browser already
 		// rendered its clean bubble via chatUserEcho on send, so this provider
 		// echo is a duplicate — drop it (also de-dups the journal, which
 		// used to store the owner turn twice: echo + provider echo).
-		// Journals from before the owner fact start with the display line.
-		if isOwnerNotifyText(text) || strings.HasPrefix(text, "[user]\n") {
+		// A rendered "[user]" line is not that fact (🎯T766.4).
+		if isOwnerNotifyText(text) {
 			return "", false
 		}
 		// No marker → an injected agent/system notification (a worker reply,
@@ -552,16 +551,14 @@ func userTurnText(ev claudia.Event) (text string, prose bool) {
 }
 
 // echoedOwnerTurnLine reports whether a stored chat wire line is a provider
-// echo of an owner turn — a user-role line whose prose still carries the
-// internal userTurnPrefix marker (🎯T382).
+// echo of an owner turn — a user-role line whose prose carries the
+// owner-turn fact (🎯T382, 🎯T766.4).
 //
-// Live traffic no longer produces these, but journals written before the fix
-// contain them, and replaying one repaints the owner's message — its
-// attachments and a literal "[user]" line with it. Both replay paths filter
-// on this so history shows what live now emits.
+// A journal line whose text is only a rendered "[user]" prefix is not an
+// echo. Live wires start with the fact, so those echoes still drop.
 func echoedOwnerTurnLine(line string) bool {
 	text, prose := userTurnText(claudia.Event{Raw: []byte(line)})
-	return prose && (isOwnerNotifyText(text) || strings.HasPrefix(text, "[user]\n"))
+	return prose && isOwnerNotifyText(text)
 }
 
 // stampStreamID injects stream_id onto a chat wire JSON object (🎯T223).

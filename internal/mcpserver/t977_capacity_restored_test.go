@@ -141,7 +141,7 @@ func TestT977CapacityRestoredDoesNotLiftOwnerParkedFleetIntent(t *testing.T) {
 	}
 	s := &Server{}
 	s.SetFleetIntentStore(store)
-	if err := s.SetFleetIntent(fleetintent.Parked, "owner",
+	if err := s.SetFleetIntent(fleetintent.Parked, "Owner",
 		"standing the fleet down for capacity while I'm travelling"); err != nil {
 		t.Fatal(err)
 	}

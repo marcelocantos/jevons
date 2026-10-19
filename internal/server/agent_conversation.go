@@ -49,7 +49,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
 	}
-	return strings.EqualFold(name, s.overseerAgentName())
+	return strings.ToLower(name) == strings.ToLower(s.overseerAgentName())
 }
 
 // overseerTurnsFromWire projects owner chat journal lines (chat wire frames)
@@ -108,10 +108,10 @@ func overseerTurnsFromWire(lines []string) []map[string]any {
 		switch frame.Type {
 		case "user":
 			text := wireContentText(frame.Message.Content)
-			// The ACP echo of an owner turn is prefixed; the clean echo the
-			// browser sent is the journal's owner bubble (chat_wire.go).
+			// The ACP echo of an owner turn starts with userTurnPrefix
+			// (fact plus display line). A rendered "[user]" line is the
+			// owner's text, not a prefix to peel (🎯T766.4).
 			text = strings.TrimPrefix(text, userTurnPrefix)
-			text = strings.TrimPrefix(text, "[user]\n")
 			if strings.TrimSpace(text) == "" {
 				continue
 			}

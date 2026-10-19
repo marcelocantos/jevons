@@ -148,9 +148,9 @@ func TestUserTurnTextLeavesStructuredLinesAlone(t *testing.T) {
 	}
 }
 
-// TestEchoedOwnerTurnLineFiltersPreFixJournal covers the durable half: the
-// owner's journal already holds echoes written before the fix, and both replay
-// paths drop them so a reload does not repaint what live no longer emits.
+// TestEchoedOwnerTurnLineFiltersPreFixJournal covers the durable half: a
+// stored owner echo is the owner-turn fact. A rendered "[user]" line is not
+// that fact, so replay keeps it (🎯T766.4).
 func TestEchoedOwnerTurnLineFiltersPreFixJournal(t *testing.T) {
 	// Verbatim shape of the poisoned record in the owner's own chatlog
 	// (~/.jevons/chatlog/jevons.jsonl, the line after his clean bubble).
@@ -166,7 +166,10 @@ func TestEchoedOwnerTurnLineFiltersPreFixJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !echoedOwnerTurnLine(string(poisoned)) {
-		t.Error("pre-fix owner echo not recognised; it would repaint on replay")
+		t.Error("owner-turn fact echo not recognised; it would repaint on replay")
+	}
+	if line, ok := chatWireLine(claudia.Event{Type: "user", Text: userTurnPrefix + ownerEchoBody}); ok || line != "" {
+		t.Fatalf("owner-turn fact was painted: ok=%v line=%q", ok, line)
 	}
 	legacy, err := json.Marshal(map[string]any{
 		"type": "user",
@@ -178,11 +181,12 @@ func TestEchoedOwnerTurnLineFiltersPreFixJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !echoedOwnerTurnLine(string(legacy)) {
-		t.Error("display-only [user] echo not recognised; it would repaint on replay")
+	if echoedOwnerTurnLine(string(legacy)) {
+		t.Error("display-only [user] line was treated as an owner echo")
 	}
-	if line, ok := chatWireLine(claudia.Event{Type: "user", Text: "[user]\n" + ownerEchoBody}); ok || line != "" {
-		t.Fatalf("display-only echo painted: ok=%v line=%q", ok, line)
+	line, ok := chatWireLine(claudia.Event{Type: "user", Text: "[user]\n" + ownerEchoBody})
+	if !ok || !strings.Contains(line, "Why is UI not rendering markdown in requests?") {
+		t.Fatalf("display-only line was dropped: ok=%v line=%q", ok, line)
 	}
 
 	// Everything else in the journal must survive the filter.

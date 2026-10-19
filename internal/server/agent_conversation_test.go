@@ -268,8 +268,8 @@ func TestOverseerTurnsFromWireProjection(t *testing.T) {
 	if turns[2]["turn_number"] != 2 || turns[2]["text"] != "second" {
 		t.Fatalf("second turn=%v (owner fact must be stripped)", turns[2])
 	}
-	if turns[3]["turn_number"] != 3 || turns[3]["text"] != "legacy" {
-		t.Fatalf("legacy display prefix was not stripped: %v", turns[3])
+	if turns[3]["turn_number"] != 3 || turns[3]["text"] != "[user]\nlegacy" {
+		t.Fatalf("legacy display line was peeled: %v", turns[3])
 	}
 }
 
