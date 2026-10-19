@@ -68,7 +68,11 @@ func TestOwnerTurnBarrierOnLiveAndReplay(t *testing.T) {
 			{"owner image-only", "owner", "", true},
 			{"agent injection", "agent", "new question", false},
 			{"legacy owner", "", "new question", true},
-			{"legacy injection", "", "[event: report] background result", false},
+			// A legacy row (no turn_origin) is an injection only by the
+			// declared harness fact; a rendered "[event: …]" banner is owner
+			// text (🎯T766.4, userturn.LegacyInjectionText).
+			{"legacy injection", "", "open-intent harness event", false},
+			{"legacy rendered banner", "", "[event: report] background result", true},
 			{"legacy protocol", "", `{"type":"permission_request"}`, false},
 		} {
 			t.Run(sid+"/"+tc.name, func(t *testing.T) {
