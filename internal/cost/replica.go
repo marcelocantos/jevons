@@ -262,7 +262,7 @@ func (c *Collector) ReplicatedReceipt(ctx context.Context, q claudiawire.Receipt
 		return nil, err
 	}
 	if len(qr.Rows) == 0 {
-		return nil, fmt.Errorf("replicated receipt absent")
+		return nil, fmt.Errorf("replicated %w", claudiawire.ErrReceiptAbsent)
 	}
 	col := -1
 	for i, name := range qr.Columns {
