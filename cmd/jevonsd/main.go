@@ -1032,6 +1032,11 @@ func main() {
 	mcpSrv.SetOverseerDeliver(func(text string, origin mcpserver.SendOrigin) error {
 		return srv.DeliverToOverseerAs(text, string(origin))
 	})
+	// An agent note to the overseer settles from its batch's receipt when
+	// this send's own drain handed it off (🎯T902 relay, worker reports).
+	mcpSrv.SetOverseerDeliverReceipted(func(text string, origin mcpserver.SendOrigin) (bool, error) {
+		return srv.DeliverToOverseerAsReceipted(text, string(origin))
+	})
 	// The overseer notify queue is the worker drain's hand-off gate. A
 	// non-working fleet holds the text; lifting intent drains it.
 	notifyGateName := cfg.OverseerName

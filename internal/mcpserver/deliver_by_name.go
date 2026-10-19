@@ -84,6 +84,18 @@ func (s *Server) SetOverseerDeliver(fn OverseerDeliverFunc) {
 	s.overseerDeliver = fn
 }
 
+// OverseerReceiptFunc is OverseerDeliverFunc that also reports whether a
+// structured receipt settled the handoff (server.DeliverToOverseerAsReceipted).
+type OverseerReceiptFunc func(text string, origin SendOrigin) (settled bool, err error)
+
+// SetOverseerDeliverReceipted wires the receipt-reporting overseer arm. When
+// set it is used in place of the OverseerDeliverFunc.
+func (s *Server) SetOverseerDeliverReceipted(fn OverseerReceiptFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overseerDeliverReceipted = fn
+}
+
 // SetAgentRequestRecorder attaches the canonical journal for non-overseer
 // admission. A failed record refuses submission; it never claims delivery.
 func (s *Server) SetAgentRequestRecorder(fn func(name, text string, origin SendOrigin) error) {
@@ -559,8 +571,17 @@ func stripLeadingIdentityEnvelope(text string) string {
 func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentSendResult, error) {
 	s.mu.Lock()
 	deliver := s.overseerDeliver
+	receipted := s.overseerDeliverReceipted
 	legacy := s.notifyJevon
 	s.mu.Unlock()
+	settled := false
+	if receipted != nil {
+		deliver = func(t string, o SendOrigin) error {
+			var err error
+			settled, err = receipted(t, o)
+			return err
+		}
+	}
 
 	if deliver == nil && legacy != nil {
 		if origin == OriginOwner {
@@ -657,6 +678,27 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 			"err", err.Error(),
 		)
 		return agentSendResult{}, fmt.Errorf("send to overseer %q failed: %w", name, err)
+	}
+
+	if settled {
+		// The batch carrying this text went out in this call and Claudia's
+		// receipt for its request id settled it: that is delivery.
+		ticket.Settle(true)
+		res := agentSendResult{
+			Status:         "sent",
+			ReceiptSettled: true,
+			Message:        fmt.Sprintf("Message delivered to overseer %q: its structured receipt settled the handoff.", name),
+		}
+		slog.Info("agent_send",
+			"component", "agent_send",
+			"name", name,
+			"origin", string(origin),
+			"status", res.Status,
+			"queued", 0,
+			"rehydrated", false,
+			"outcome", "receipt_settled",
+		)
+		return res, nil
 	}
 
 	// The notify queue accepted the bytes. That is not a structured receipt.
