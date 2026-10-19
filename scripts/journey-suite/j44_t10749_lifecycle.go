@@ -6,11 +6,14 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,12 +23,20 @@ import (
 )
 
 // jControlPlaneLifecycle is the 🎯T1074.9 live clause. A cursor overseer
-// turn publishes usage and a receipt on the shared control plane. After
-// the Jevons process restarts, that same session is still the seat, and
-// the replica and the canonical usage count match the pre-restart facts.
+// turn makes the broker publish usage and a receipt in its own control
+// file; they reach jevonsd's own replica over the control socket. Each file
+// is open in exactly one process, its owner, before and after the restart.
+// After the Jevons process restarts, that same session is still the seat,
+// and the replica and the canonical usage count match the pre-restart facts.
 func (s *suite) jControlPlaneLifecycle() error {
+	if s.broker == nil {
+		return fmt.Errorf("J44 needs the suite's own Claudia broker (provider %s runs direct)", s.provider)
+	}
 	session, err := s.waitOverseerSession(overseerName, 2*time.Minute)
 	if err != nil {
+		return err
+	}
+	if err := s.requireControlTopology(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
@@ -65,6 +76,9 @@ func (s *suite) jControlPlaneLifecycle() error {
 	}
 	after, err := s.waitControlFacts(overseerName, session, 20*time.Second)
 	if err != nil {
+		return fmt.Errorf("after restart: %w", err)
+	}
+	if err := s.requireControlTopology(); err != nil {
 		return fmt.Errorf("after restart: %w", err)
 	}
 	if !before.equal(after) {
@@ -123,14 +137,64 @@ func (f controlFacts) terminal() bool {
 	return false
 }
 
+// requireControlTopology checks the two-database shape: the broker's file
+// is open in the broker process alone, Jevons' replica in jevonsd alone,
+// and neither process keeps a copy of the other's file in its own state.
+func (s *suite) requireControlTopology() error {
+	brokerPath := s.broker.controlFile()
+	replicaPath := filepath.Join(s.stateDir, controlplane.JevonsDBFile)
+	if _, err := os.Lstat(filepath.Join(s.stateDir, controlplane.ClaudiaDBFile)); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("jevons state holds the broker's file name %s: %v", controlplane.ClaudiaDBFile, err)
+	}
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(brokerPath), controlplane.JevonsDBFile)); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("broker state holds Jevons' file name %s: %v", controlplane.JevonsDBFile, err)
+	}
+	for _, want := range []struct {
+		path, owner string
+		pid         int
+	}{
+		{brokerPath, "the broker", s.broker.cmd.Process.Pid},
+		{replicaPath, "jevonsd", s.cmd.Process.Pid},
+	} {
+		pids, err := openingPIDs(want.path)
+		if err != nil {
+			return err
+		}
+		if len(pids) != 1 || pids[0] != want.pid {
+			return fmt.Errorf("%s is open in pids %v; want %s (pid %d) alone", want.path, pids, want.owner, want.pid)
+		}
+	}
+	return nil
+}
+
+// openingPIDs lists the processes holding path open, by lsof. lsof exits 1
+// when no process has it open; that is an empty list, not an error.
+func openingPIDs(path string) ([]int, error) {
+	out, err := exec.Command("lsof", "-t", "--", path).Output()
+	var exit *exec.ExitError
+	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1 && len(out) == 0) {
+		return nil, fmt.Errorf("lsof %s: %w", path, err)
+	}
+	var pids []int
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, fmt.Errorf("lsof %s: pid %q", path, field)
+		}
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	return pids, nil
+}
+
 func (s *suite) waitControlFacts(seat, session string, d time.Duration) (controlFacts, error) {
-	brokerPath := filepath.Join(s.stateDir, controlplane.ClaudiaDBFile)
+	brokerPath := s.broker.controlFile()
 	replicaPath := filepath.Join(s.stateDir, controlplane.JevonsDBFile)
 	deadline := time.Now().Add(d)
 	var last error
 	for {
-		broker, berr := readControlFacts(brokerPath, seat, session)
-		replica, rerr := readControlFacts(replicaPath, seat, session)
+		broker, berr := readControlCopy(brokerPath, seat, session)
+		replica, rerr := readControlCopy(replicaPath, seat, session)
 		switch {
 		case berr != nil:
 			last = fmt.Errorf("broker file: %w", berr)
@@ -148,6 +212,28 @@ func (s *suite) waitControlFacts(seat, session string, d time.Duration) (control
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// readControlCopy reads facts from a byte copy of a control file. The
+// journey never opens a live control file as a database: each has one
+// owner. Neither file uses WAL, so the main file is the whole database
+// between its owner's transactions; a copy torn by a commit fails to read
+// and the caller polls again.
+func readControlCopy(path, seat, session string) (controlFacts, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return controlFacts{}, err
+	}
+	dir, err := os.MkdirTemp("", "j44-control-")
+	if err != nil {
+		return controlFacts{}, err
+	}
+	defer os.RemoveAll(dir)
+	copyPath := filepath.Join(dir, filepath.Base(path))
+	if err := os.WriteFile(copyPath, body, 0o600); err != nil {
+		return controlFacts{}, err
+	}
+	return readControlFacts(copyPath, seat, session)
 }
 
 func readControlFacts(path, seat, session string) (controlFacts, error) {

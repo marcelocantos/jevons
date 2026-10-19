@@ -18,7 +18,7 @@ import (
 // stand-in is still a refusal. replica.go is the real source and builds
 // only with jevons_claudia_next.
 func TestPublishedPinOpenReplicaAndCatchUpFailClosed(t *testing.T) {
-	src, err := OpenReplica(t.TempDir())
+	src, err := OpenReplica(context.Background(), t.TempDir())
 	if src != nil || err == nil || !strings.Contains(err.Error(), "control plane unavailable: published claudia v0.53.0") {
 		t.Fatalf("OpenReplica = %v %v", src, err)
 	}

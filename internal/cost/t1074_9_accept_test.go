@@ -7,84 +7,100 @@ package cost
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/controlplane"
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 )
 
-func TestOpenReplicaFollowsIsolateControlLink(t *testing.T) {
-	broker := t.TempDir()
-	jevonsState := t.TempDir()
-	target := filepath.Join(broker, controlplane.ClaudiaDBFile)
-	if err := os.Symlink(target, filepath.Join(jevonsState, controlplane.ClaudiaDBFile)); err != nil {
-		t.Fatal(err)
-	}
-	src, err := OpenReplica(jevonsState)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = src.Close() })
-	if _, err := os.Stat(target); err != nil {
-		t.Fatalf("OpenReplica did not create the broker control file: %v", err)
-	}
-}
-
-func TestT10749AcceptDesiredSeatWhilePlaneClosed(t *testing.T) {
+// OpenReplica opens Jevons' own file and nothing else. The broker's file
+// name never appears in the Jevons state directory.
+func TestOpenReplicaKeepsOnlyJevonsFile(t *testing.T) {
 	dir := t.TempDir()
-	src, err := OpenReplica(dir)
+	src, err := OpenReplicaLinked(context.Background(), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = src.Close() })
-	if err := src.plane.Close(); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(dir, controlplane.JevonsDBFile)); err != nil {
+		t.Fatalf("Jevons' own file: %v", err)
 	}
-	seat := controlplane.DesiredSeat{
-		Seat: "seat-a", Generation: 1, Revision: 1, Provider: "grok", Model: "m",
-		WorkDir: t.TempDir(), ConfigJSON: `{"model":"m"}`,
-	}
-	if err := src.AcceptDesiredSeat(seat); err != nil {
-		t.Fatal(err)
-	}
-	if n := countTable(t, src.replica, controlplane.DesiredSeatTable); n != 1 {
-		t.Fatalf("replica rows = %d", n)
-	}
-	plane, err := controlplane.Open(filepath.Join(dir, controlplane.ClaudiaDBFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	src.plane = plane
-	if err := src.sync(); err != nil {
-		t.Fatal(err)
-	}
-	if err := src.sync(); err != nil {
-		t.Fatal(err)
-	}
-	var got []controlplane.DesiredSeat
-	if err := plane.WithDB(func(db *sqlpipe.Database) error {
-		rows, err := controlplane.DesiredSeats(db)
-		got = rows
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Seat != "seat-a" || got[0].ConfigJSON != `{"model":"m"}` {
-		t.Fatalf("delivered = %+v", got)
+	if _, err := os.Lstat(filepath.Join(dir, controlplane.ClaudiaDBFile)); !os.IsNotExist(err) {
+		t.Fatalf("OpenReplica touched the broker's file name: %v", err)
 	}
 }
 
+// OpenReplica dials the broker's control socket only when the broker is on
+// for this process. With CLAUDIA_NO_BROKER set, a hermetic or direct-mode
+// daemon must not reach the machine's broker.
+func TestOpenReplicaDialsOnlyWhenTheBrokerIsOn(t *testing.T) {
+	sockDir, err := os.MkdirTemp("/tmp", "jrc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	brokerSock := filepath.Join(sockDir, "broker.sock")
+	ln, err := net.Listen("unix", claudia.ControlSocketPath(brokerSock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	dials := make(chan struct{}, 64)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+			dials <- struct{}{}
+		}
+	}()
+	t.Setenv("CLAUDIA_BROKER_SOCKET", brokerSock)
+
+	t.Setenv("CLAUDIA_NO_BROKER", "1")
+	off, err := OpenReplica(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-dials:
+		t.Fatal("OpenReplica dialled the broker with CLAUDIA_NO_BROKER=1")
+	case <-time.After(3 * linkUpAfter):
+	}
+	if err := off.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CLAUDIA_NO_BROKER", "0")
+	on, err := OpenReplica(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = on.Close() })
+	select {
+	case <-dials:
+	case <-time.After(30 * time.Second):
+		t.Fatal("OpenReplica did not dial the broker's control socket with the broker on")
+	}
+}
+
+// A corrupt status projection delivered into Jevons' file fails catch-up.
+// The row is written straight into Jevons' file here, standing in for a
+// corrupt delivery.
 func TestT10749CorruptStatusFailsCatchUp(t *testing.T) {
-	dir := t.TempDir()
-	src, err := OpenReplica(dir)
+	src, err := OpenReplicaLinked(context.Background(), t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = src.Close() })
-	if err := src.plane.WithDB(func(db *sqlpipe.Database) error {
+	if err := src.replica.Write(func(db *sqlpipe.Database) error {
 		return db.Exec(`INSERT INTO claudia_seat_status
 			(seat, session_id, generation, revision, runtime_id, state, status_json)
 			VALUES ('seat-a', 'sess', 1, 1, 'sess', 'running', 'not-json')`)
@@ -96,17 +112,4 @@ func TestT10749CorruptStatusFailsCatchUp(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not json") {
 		t.Fatalf("catch-up = %v", err)
 	}
-}
-
-func countTable(t *testing.T, db *sqlpipe.Database, table string) int {
-	t.Helper()
-	qr, err := db.Query("SELECT COUNT(*) FROM " + table)
-	if err != nil {
-		t.Fatal(err)
-	}
-	n, ok := qr.Rows[0][0].(int64)
-	if !ok {
-		t.Fatalf("count type %T", qr.Rows[0][0])
-	}
-	return int(n)
 }

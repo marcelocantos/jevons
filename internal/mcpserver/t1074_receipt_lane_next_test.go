@@ -14,21 +14,22 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/brokerfixture/controllane"
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
 )
 
 const receiptLaneWhen = "2026-10-19T00:00:00.000000000Z"
 
-// receiptLane is the receipt publish the sidecar pump performs. The read is
-// the replica query startCostGuard installs.
+// receiptLane is the receipt publish the broker's seat pump performs, in the
+// broker's own process and file. The read is the replica query
+// startCostGuard installs.
 type receiptLane struct {
 	publish func(seat, session, id string, state claudiawire.ReceiptState, cause claudiawire.ReceiptCause, reason string, turns []string)
 }
 
-// bindReceiptLane opens the control plane and installs ReplicatedReceipt.
-// It does not start the collector loop. controlplane.Bind is process-global,
-// so callers stay sequential.
+// bindReceiptLane starts a broker process, opens Jevons' replica linked to
+// it, and installs ReplicatedReceipt. It does not start the collector loop.
 func bindReceiptLane(t *testing.T, s *Server, dir string) receiptLane {
 	t.Helper()
 	store, err := cost.OpenStore(filepath.Join(dir, "usage.db"))
@@ -36,15 +37,8 @@ func bindReceiptLane(t *testing.T, s *Server, dir string) receiptLane {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	replica, err := cost.OpenReplica(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = replica.Close() })
-	collector := cost.NewCollector(&cost.CollectorArgs{Store: store, Replica: replica})
-	if collector.UsesSocketHistory() {
-		t.Fatal("receipt proof polled the usage socket")
-	}
+	lane := controllane.Start(t, dir, store)
+	collector := lane.Collector
 	collector.BindSendReceiptQuery(s.SetSendReceiptQuery)
 	t.Log("production replica receipt query")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -54,7 +48,7 @@ func bindReceiptLane(t *testing.T, s *Server, dir string) receiptLane {
 		t.Fatalf("production replica receipt query was not installed: %v", err)
 	}
 	return receiptLane{publish: func(seat, session, id string, state claudiawire.ReceiptState, cause claudiawire.ReceiptCause, reason string, turns []string) {
-		claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+		lane.PublishReceipt(claudia.RequestReceipt{
 			Seat: seat, SessionID: session, RequestID: id,
 			State: state, Cause: cause, Reason: reason,
 			AttemptID:  "attempt-" + id,

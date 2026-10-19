@@ -88,6 +88,9 @@ type suite struct {
 	// brokerSocket is set only while a migration journey owns a throwaway
 	// Claudia broker. Other journeys keep their direct-mode drain semantics.
 	brokerSocket string
+	// broker is the throwaway Claudia broker behind brokerSocket, when the
+	// suite owns one. J44 reads its control file and its pid.
+	broker *isolatedBroker
 	// readyWait overrides readyTimeout when non-zero (hermetic tests only).
 	readyWait time.Duration
 
@@ -262,6 +265,7 @@ persona_notes: |
 			fatal(fmt.Errorf("start journey broker: %w", err))
 		}
 		s.brokerSocket = primaryBroker.socket
+		s.broker = primaryBroker
 	}
 
 	if err := s.startDaemon(); err != nil {

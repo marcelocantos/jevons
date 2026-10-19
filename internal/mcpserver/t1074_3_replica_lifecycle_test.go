@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/brokerfixture/controllane"
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -24,13 +25,16 @@ import (
 )
 
 // replicaSeat is the production handoff target. Drain and steer must use the
-// request-id methods. The seat publishes through RecordObservedReceipt, which
-// is what the sidecar pump calls, and only when the test has armed a receipt.
+// request-id methods. The seat's receipts are published by a real broker
+// process (the seat pump's RecordObservedReceipt, in the broker), and only
+// when the test has armed a receipt.
 type replicaSeat struct {
 	t       *testing.T
 	seat    string
 	session string
 	text    string
+	// lane is the broker that publishes the seat's receipts.
+	lane *controllane.Lane
 
 	mu      sync.Mutex
 	publish bool
@@ -95,8 +99,9 @@ func (p *replicaSeat) note(text, id string) {
 	p.mu.Unlock()
 	if publish {
 		// The pump publishes before the send returns. Settlement then reads
-		// the replica, which is the order startCostGuard's query sees.
-		claudia.RecordObservedReceipt(&receipt)
+		// the replica, which is the order startCostGuard's query sees: the
+		// lane returns once the receipt is in Jevons' replica.
+		p.lane.PublishReceipt(receipt)
 	}
 }
 
@@ -107,10 +112,10 @@ func (p *replicaSeat) sentIDs() []string {
 }
 
 // TestT10743HostRequestSurvivesSteerRetryRestart is the production receipt
-// path: OpenReplica, NewCollector, and SetSendReceiptQuery(ReplicatedReceipt),
-// the installer inside startCostGuard. It does not stub that query, and it
-// does not run the collector loop. controlplane.Bind is process-global, so
-// this test stays sequential.
+// path: Jevons' replica linked to a real broker process, NewCollector, and
+// SetSendReceiptQuery(ReplicatedReceipt), the installer inside
+// startCostGuard. It does not stub that query, and it does not run the
+// collector loop.
 func TestT10743HostRequestSurvivesSteerRetryRestart(t *testing.T) {
 	const (
 		name    = "jv-t1074-3"
@@ -139,29 +144,15 @@ func TestT10743HostRequestSurvivesSteerRetryRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var plane *cost.ReplicaSource
-	t.Cleanup(func() {
-		if plane != nil {
-			_ = plane.Close()
-		}
-	})
+	lane := controllane.Start(t, dir, store)
+	collector := lane.Collector
+	reopen := false
 	bindPlane := func(s *Server) {
 		t.Helper()
-		if plane != nil {
-			if err := plane.Close(); err != nil {
-				t.Fatal(err)
-			}
-			plane = nil
+		if reopen {
+			collector = lane.Reopen()
 		}
-		replica, err := cost.OpenReplica(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		plane = replica
-		collector := cost.NewCollector(&cost.CollectorArgs{Store: store, Replica: replica})
-		if collector.UsesSocketHistory() {
-			t.Fatal("receipt proof polled the usage socket")
-		}
+		reopen = true
 		s.SetSendReceiptQuery(collector.ReplicatedReceipt)
 	}
 	var journal *eventlog.Journal
@@ -174,7 +165,7 @@ func TestT10743HostRequestSurvivesSteerRetryRestart(t *testing.T) {
 		bindPlane(s)
 	}
 
-	firstSeat := &replicaSeat{t: t, seat: name, session: session, text: text}
+	firstSeat := &replicaSeat{t: t, seat: name, session: session, text: text, lane: lane}
 	first, _, _ := t418Daemon(t, dir)
 	journal = receiptJournal(t, first, filepath.Join(dir, "journal"))
 	wire(first, firstSeat)
@@ -209,7 +200,7 @@ func TestT10743HostRequestSurvivesSteerRetryRestart(t *testing.T) {
 
 	// A second daemon reads the same queue. Its sender has not executed
 	// anything. The receipt is still absent, so the held row stays held.
-	restartedSeat := &replicaSeat{t: t, seat: name, session: session, text: text}
+	restartedSeat := &replicaSeat{t: t, seat: name, session: session, text: text, lane: lane}
 	restarted, _, _ := t418Daemon(t, dir)
 	wire(restarted, restartedSeat)
 	restarted.drainAgentSendQueue(name)
@@ -232,7 +223,7 @@ func TestT10743HostRequestSurvivesSteerRetryRestart(t *testing.T) {
 	// The receipt arrives after the crash, through the rebound plane. Prose
 	// that says unauthorized is not a typed cause. Settlement removes the
 	// obligation and does not send again.
-	claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+	lane.PublishReceipt(claudia.RequestReceipt{
 		RequestID: hostID, SessionID: session, Seat: name,
 		State: claudia.ReceiptCompleted, AttemptID: "attempt-" + hostID,
 		TurnIDs: []string{"turn-A"}, Reason: "401 unauthorized",
@@ -337,7 +328,7 @@ func TestT10743HostRequestSurvivesSteerRetryRestart(t *testing.T) {
 	want(steerID, claudia.ReceiptAccepted, "", "folded", "attempt-"+steerID, 0)
 	want(laterID, claudia.ReceiptFailed, claudia.ReceiptCauseAuth, "provider stopped", "attempt-"+laterID, 1)
 
-	claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+	lane.PublishReceipt(claudia.RequestReceipt{
 		RequestID: hostID, SessionID: session, Seat: name,
 		State: claudia.ReceiptCompleted, AttemptID: "attempt-" + hostID,
 		TurnIDs: []string{"turn-A"}, Reason: "401 unauthorized",

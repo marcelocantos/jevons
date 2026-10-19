@@ -14,14 +14,16 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/brokerfixture/controllane"
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
 )
 
 // TestT1074StartedAndCancelledReceiptsSurvivePlaneReconnect publishes a
 // started receipt and a cancelled receipt, closes the control plane, and
-// reads both back through the replica query startCostGuard installs.
-// controlplane.Bind is process-global, so this test stays sequential.
+// reads both back through the replica query startCostGuard installs. A real
+// broker process publishes them in its own file; they reach Jevons' replica
+// over the control socket.
 func TestT1074StartedAndCancelledReceiptsSurvivePlaneReconnect(t *testing.T) {
 	const (
 		seat    = "jv-t1074-3-states"
@@ -37,33 +39,13 @@ func TestT1074StartedAndCancelledReceiptsSurvivePlaneReconnect(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	s := &Server{}
-	var plane *cost.ReplicaSource
-	t.Cleanup(func() {
-		if plane != nil {
-			_ = plane.Close()
-		}
-	})
-	bind := func() {
+	lane := controllane.Start(t, dir, store)
+	bind := func(collector *cost.Collector) {
 		t.Helper()
-		if plane != nil {
-			if err := plane.Close(); err != nil {
-				t.Fatal(err)
-			}
-			plane = nil
-		}
-		replica, err := cost.OpenReplica(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		plane = replica
-		collector := cost.NewCollector(&cost.CollectorArgs{Store: store, Replica: replica})
-		if collector.UsesSocketHistory() {
-			t.Fatal("receipt proof polled the usage socket")
-		}
 		collector.BindSendReceiptQuery(s.SetSendReceiptQuery)
 		t.Log("production replica receipt query")
 	}
-	bind()
+	bind(lane.Collector)
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	_, err = s.LookupHeldReceipt(probeCtx, claudiawire.ReceiptQuery{Seat: "lane", SessionID: "lane", RequestID: "absent"})
@@ -74,20 +56,20 @@ func TestT1074StartedAndCancelledReceiptsSurvivePlaneReconnect(t *testing.T) {
 	startedID := "host-started"
 	cancelledID := "host-cancelled"
 	unknownID := "host-unknown"
-	claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+	lane.PublishReceipt(claudia.RequestReceipt{
 		RequestID: startedID, SessionID: session, Seat: seat,
 		State: claudia.ReceiptStarted, AttemptID: "attempt-" + startedID,
 		TurnIDs: []string{"turn-started"}, Cause: "", Reason: "still running",
 		AcceptedAt: when, UpdatedAt: when,
 	})
-	claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+	lane.PublishReceipt(claudia.RequestReceipt{
 		RequestID: cancelledID, SessionID: session, Seat: seat,
 		State: claudia.ReceiptCancelled, AttemptID: "attempt-" + cancelledID,
 		TurnIDs: []string{"turn-cancelled"}, Cause: claudia.ReceiptCauseCancellation,
 		Reason:     "broker shutdown",
 		AcceptedAt: when, UpdatedAt: when,
 	})
-	claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+	lane.PublishReceipt(claudia.RequestReceipt{
 		RequestID: unknownID, SessionID: session, Seat: seat,
 		State: claudia.ReceiptUnknown, AttemptID: "attempt-" + unknownID,
 		TurnIDs: []string{}, Cause: "", Reason: "not_found",
@@ -123,9 +105,9 @@ func TestT1074StartedAndCancelledReceiptsSurvivePlaneReconnect(t *testing.T) {
 		t.Fatalf("states share an identity: %+v %+v %+v", beforeStarted, beforeCancelled, beforeUnknown)
 	}
 
-	// Reconnect closes the plane and binds a new replica read. The rows
+	// A Jevons restart closes the replica and opens it again. The rows
 	// already stored are what the reopened query returns.
-	bind()
+	bind(lane.Reopen())
 	afterStarted := read(startedID, claudia.ReceiptStarted, "", "still running", "turn-started")
 	afterCancelled := read(cancelledID, claudia.ReceiptCancelled, claudia.ReceiptCauseCancellation, "broker shutdown", "turn-cancelled")
 	afterUnknown, err := s.LookupHeldReceipt(ctx, claudiawire.ReceiptQuery{Seat: seat, SessionID: session, RequestID: unknownID})

@@ -34,11 +34,13 @@ func TestT10749ReconcileDoesNotResetAllowance(t *testing.T) {
 		return claudia.StartStub(ctx, cfg, nil)
 	}})
 	t.Cleanup(func() { reg.StopAll() })
-	path := filepath.Join(dir, controlplane.ClaudiaDBFile)
-	db, err := sqlpipe.OpenDatabase(path)
+	// The reconcile is Claudia's, run here on a scratch database standing in
+	// for the broker's file: no process but the broker opens that file.
+	db, err := sqlpipe.OpenDatabase(filepath.Join(dir, "reconcile-input.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = db.Close() })
 	if err := controlplane.EnsureSchema(db); err != nil {
 		t.Fatal(err)
 	}
@@ -54,10 +56,7 @@ func TestT10749ReconcileDoesNotResetAllowance(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := controlplane.ReconcileFile(context.Background(), path, reg); err != nil {
+	if err := controlplane.Reconcile(context.Background(), db, reg); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := ledger.Get("seat-a"); n != 1 {

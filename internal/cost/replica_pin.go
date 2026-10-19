@@ -17,8 +17,9 @@ import (
 // the real source, and it builds only with jevons_claudia_next.
 type ReplicaSource struct{}
 
-// OpenReplica reports that the published pin has no control plane.
-func OpenReplica(string) (*ReplicaSource, error) {
+// OpenReplica reports that the published pin has no control plane. It
+// opens no file and dials nothing.
+func OpenReplica(context.Context, string) (*ReplicaSource, error) {
 	return nil, fmt.Errorf("control plane unavailable: published claudia v0.53.0")
 }
 

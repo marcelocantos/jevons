@@ -35,6 +35,9 @@ type costGuard struct {
 	config func() *cost.BudgetConfig
 	// collector ingests the sqlpipe replica. It does not poll the usage socket.
 	collector *cost.Collector
+	// replica is Jevons' own control-plane file. Its broker link ends with
+	// the daemon context; nil when the control plane is unavailable.
+	replica *cost.ReplicaSource
 }
 
 // startCostGuard constructs and starts the clamp-down loops. It returns
@@ -107,7 +110,7 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		return ""
 	}
 
-	replica, err := cost.OpenReplica(jc.StateDir)
+	replica, err := cost.OpenReplica(ctx, jc.StateDir)
 	if err != nil {
 		slog.Error("cost: control plane unavailable — usage socket poll stays off", "err", err)
 	}
@@ -183,7 +186,7 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 	slog.Info("cost clamp-down started", "budget", budgetPath,
 		"cost_safety", "T334", "protected", cfg.ProtectedWorkers)
 
-	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config, collector: collector}
+	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config, collector: collector, replica: replica}
 }
 
 // brokerSeatNames lists the names of every seat the claudia broker holds.

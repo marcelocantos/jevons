@@ -9,126 +9,222 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/controlplane"
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 )
 
-// ReplicaSource is the Jevons side of the shared sqlpipe pair. Claudia
-// writes usage, receipts, seat status, and control outcomes. Jevons writes
-// desired seats, grants, and control intents onto the replica file and
-// replicates them when the Claudia peer is open. It does not query the
-// usage socket and it does not reconcile seats.
+// Link retry bounds. A refused or failed dial is retried after
+// linkRetryMin, doubling to linkRetryMax while the broker stays away. A
+// link that stayed up for linkUpAfter counts as established: it is logged
+// once, and the next failure starts the backoff again from linkRetryMin.
+const (
+	linkRetryMin = 100 * time.Millisecond
+	linkRetryMax = 5 * time.Second
+	linkUpAfter  = 500 * time.Millisecond
+)
+
+// ReplicaSource is Jevons' half of the control-plane pair (🎯T1074.9): its
+// own file, controlplane.JevonsDBFile in the Jevons state directory, which
+// jevonsd alone opens. Jevons writes desired seats, grants and control
+// intents there. The Claudia broker owns its own file and writes usage,
+// receipts, seat status and control outcomes there. Changesets cross
+// between the two processes over the broker's control socket; neither
+// process opens the other's file. ReplicaSource does not reconcile seats
+// and does not query the usage socket.
 type ReplicaSource struct {
-	mu      sync.Mutex
-	plane   *controlplane.Plane
-	path    string
-	replica *sqlpipe.Database
+	replica *controlplane.Replica
+	cancel  context.CancelFunc
+	done    chan struct{}
+
+	stateMu sync.Mutex
+	attempt int
+	linked  bool
+	epoch   uint64
+	ended   uint64
+	downErr string
 }
 
-// OpenReplica opens the Claudia-owned control file under stateDir, binds it
-// as the seat-pump publisher, and names the Jevons replica beside it.
-func OpenReplica(stateDir string) (*ReplicaSource, error) {
-	plane, err := controlplane.Open(filepath.Join(stateDir, controlplane.ClaudiaDBFile))
+// LinkState is the broker link as this replica last observed it. Linked is
+// true once a link has stayed up for linkUpAfter (the consumer's Link call
+// gives no handshake-done signal); Epoch counts those establishments, so a
+// caller can wait for the link that follows a restart; Ended counts link
+// attempts that ended (failed dials included); DownReason is why the last
+// reported link ended, empty while linked.
+type LinkState struct {
+	Linked     bool
+	Epoch      uint64
+	Ended      uint64
+	DownReason string
+}
+
+// LinkState reports the broker link's current state.
+func (r *ReplicaSource) LinkState() LinkState {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	return LinkState{Linked: r.linked, Epoch: r.epoch, Ended: r.ended, DownReason: r.downErr}
+}
+
+// OpenReplica opens Jevons' own control file under stateDir and keeps it
+// linked to the control socket of the broker this process would dial
+// (claudia.ControlSocket) until ctx ends or Close. With the broker
+// switched off for this process (CLAUDIA_NO_BROKER), the file is opened and
+// nothing is dialled: a hermetic or direct-mode daemon must not reach a
+// broker it was told to stay away from.
+func OpenReplica(ctx context.Context, stateDir string) (*ReplicaSource, error) {
+	socket := ""
+	if brokerDisabled() {
+		slog.Info("control plane: broker switched off for this process; replica is not linked", "env", "CLAUDIA_NO_BROKER")
+	} else {
+		s, err := claudia.ControlSocket()
+		if err != nil {
+			return nil, fmt.Errorf("control plane: broker control socket: %w", err)
+		}
+		socket = s
+	}
+	return OpenReplicaLinked(ctx, stateDir, socket)
+}
+
+// OpenReplicaLinked is OpenReplica with the control socket named. An empty
+// socket opens the file and links nothing. Accepts commit locally either
+// way; a link that comes up later delivers them in its handshake.
+func OpenReplicaLinked(ctx context.Context, stateDir, socket string) (*ReplicaSource, error) {
+	if strings.TrimSpace(stateDir) == "" {
+		return nil, fmt.Errorf("control plane: empty state dir")
+	}
+	replica, err := controlplane.OpenReplica(filepath.Join(stateDir, controlplane.JevonsDBFile))
 	if err != nil {
 		return nil, err
 	}
-	controlplane.Bind(plane)
-	return &ReplicaSource{
-		plane: plane,
-		path:  filepath.Join(stateDir, controlplane.JevonsDBFile),
-	}, nil
+	linkCtx, cancel := context.WithCancel(ctx)
+	r := &ReplicaSource{replica: replica, cancel: cancel, done: make(chan struct{})}
+	if socket == "" {
+		close(r.done)
+		return r, nil
+	}
+	go r.keepLinked(linkCtx, socket)
+	return r, nil
 }
 
-// Close releases the replica file and the Claudia-owned file.
+// brokerDisabled mirrors the claudia library's reading of
+// CLAUDIA_NO_BROKER: unset, "", 0, false, no and off leave the broker on;
+// any other value switches it off.
+func brokerDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLAUDIA_NO_BROKER"))) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// keepLinked runs Replica.Link until ctx ends, dialling again after each
+// link ends. Each fresh link starts with sqlpipe's handshake, which is what
+// delivers whatever either side committed while no link was up.
+func (r *ReplicaSource) keepLinked(ctx context.Context, socket string) {
+	defer close(r.done)
+	wait := linkRetryMin
+	for ctx.Err() == nil {
+		r.stateMu.Lock()
+		r.attempt++
+		attempt := r.attempt
+		r.stateMu.Unlock()
+		up := time.AfterFunc(linkUpAfter, func() { r.markLinked(attempt, socket) })
+		err := r.replica.Link(ctx, socket)
+		wasUp := !up.Stop()
+		if ctx.Err() != nil {
+			return
+		}
+		r.markDown(socket, err)
+		if wasUp {
+			wait = linkRetryMin
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if !wasUp {
+			wait = min(2*wait, linkRetryMax)
+		}
+	}
+}
+
+func (r *ReplicaSource) markLinked(attempt int, socket string) {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	if attempt != r.attempt || r.linked {
+		return
+	}
+	r.linked, r.downErr = true, ""
+	r.epoch++
+	slog.Info("control plane: linked to the broker", "socket", socket)
+}
+
+func (r *ReplicaSource) markDown(socket string, err error) {
+	reason := "broker closed the link"
+	if err != nil {
+		reason = err.Error()
+	}
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	r.attempt++ // a late markLinked for the ended attempt is ignored
+	r.ended++
+	if !r.linked && r.downErr != "" {
+		return // already reported down; retries stay quiet
+	}
+	r.linked, r.downErr = false, reason
+	slog.Warn("control plane: broker link down; retrying", "socket", socket, "reason", reason)
+}
+
+// Close stops the link and releases Jevons' file.
 func (r *ReplicaSource) Close() error {
 	if r == nil {
 		return nil
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var err error
-	if r.replica != nil {
-		err = r.replica.Close()
-		r.replica = nil
-	}
-	if r.plane != nil {
-		if closeErr := r.plane.Close(); err == nil {
-			err = closeErr
-		}
-	}
-	controlplane.Bind(nil)
-	return err
+	r.cancel()
+	<-r.done
+	return r.replica.Close()
 }
 
-func (r *ReplicaSource) ensureReplica() error {
-	if r.replica != nil {
-		return nil
+// Read runs fn against Jevons' own file. The Claudia tables there are what
+// the broker last delivered over the link.
+func (r *ReplicaSource) Read(fn func(*sqlpipe.Database) error) error {
+	if r == nil {
+		return fmt.Errorf("control plane: no replica")
 	}
-	db, err := sqlpipe.OpenDatabase(r.path)
-	if err != nil {
-		return err
-	}
-	if err := controlplane.EnsureSchema(db); err != nil {
-		_ = db.Close()
-		return err
-	}
-	r.replica = db
-	return nil
+	return r.replica.Read(fn)
 }
 
-// AcceptDesiredSeat commits one desired seat on the Jevons file. The Claudia
-// peer being closed does not fail the accept; the next sync delivers the row.
+// AcceptDesiredSeat commits one desired seat on Jevons' file. No live link
+// does not fail the accept; the next link's handshake delivers the row.
 func (r *ReplicaSource) AcceptDesiredSeat(seat controlplane.DesiredSeat) error {
-	return r.acceptLocal(func(db *sqlpipe.Database) error {
+	return r.replica.Write(func(db *sqlpipe.Database) error {
 		return controlplane.PublishDesiredSeat(db, seat)
 	})
 }
 
-// AcceptGrant commits one grant on the Jevons file.
+// AcceptGrant commits one grant on Jevons' file.
 func (r *ReplicaSource) AcceptGrant(grant controlplane.Grant) error {
-	return r.acceptLocal(func(db *sqlpipe.Database) error {
+	return r.replica.Write(func(db *sqlpipe.Database) error {
 		return controlplane.PublishGrant(db, grant)
 	})
 }
 
-// AcceptControlIntent commits one control intent on the Jevons file.
+// AcceptControlIntent commits one control intent on Jevons' file.
 func (r *ReplicaSource) AcceptControlIntent(intent controlplane.ControlIntent) error {
-	return r.acceptLocal(func(db *sqlpipe.Database) error {
+	return r.replica.Write(func(db *sqlpipe.Database) error {
 		return controlplane.PublishControlIntent(db, intent)
-	})
-}
-
-func (r *ReplicaSource) acceptLocal(write func(*sqlpipe.Database) error) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if err := r.ensureReplica(); err != nil {
-		return err
-	}
-	if err := write(r.replica); err != nil {
-		return err
-	}
-	// Committed locally. A closed or absent Claudia peer is delivered later.
-	_ = r.sync()
-	return nil
-}
-
-// sync copies both directions. The Claudia peer claims every Claudia-owned
-// table, so status and outcomes stay Claudia's. Publishes wait for the
-// handshake so the two sides do not share one sqlite connection unsafely.
-func (r *ReplicaSource) sync() error {
-	if err := r.ensureReplica(); err != nil {
-		return err
-	}
-	if r.plane == nil {
-		return fmt.Errorf("control plane: closed")
-	}
-	return r.plane.WithDB(func(claudiaDB *sqlpipe.Database) error {
-		return controlplane.SyncLocked(claudiaDB, r.replica)
 	})
 }
 
@@ -143,8 +239,38 @@ func sqlText(v any) (string, bool) {
 	}
 }
 
-// CatchUpReplicas ingests usage rows from the Jevons replica. Replaying a
-// fact does not add usage. The usage socket is not read.
+// columnText returns column name of every row as text.
+func columnText(qr sqlpipe.QueryResult, name string) ([]string, error) {
+	if len(qr.Rows) == 0 {
+		return nil, nil
+	}
+	col := -1
+	for i, c := range qr.Columns {
+		if c == name {
+			col = i
+			break
+		}
+	}
+	if col < 0 {
+		return nil, fmt.Errorf("replica rows have no %s", name)
+	}
+	out := make([]string, 0, len(qr.Rows))
+	for _, row := range qr.Rows {
+		if col >= len(row) {
+			return nil, fmt.Errorf("replica %s row is short", name)
+		}
+		body, ok := sqlText(row[col])
+		if !ok {
+			return nil, fmt.Errorf("replica %s has type %T", name, row[col])
+		}
+		out = append(out, body)
+	}
+	return out, nil
+}
+
+// CatchUpReplicas ingests the usage rows the broker has delivered into
+// Jevons' file. Replaying a fact does not add usage. The usage socket is
+// not read, and nothing is synced here: the link delivers on its own.
 func (c *Collector) CatchUpReplicas(ctx context.Context) (result error) {
 	if c == nil || c.replica == nil {
 		return nil
@@ -164,76 +290,47 @@ func (c *Collector) CatchUpReplicas(ctx context.Context) (result error) {
 		c.mu.Unlock()
 	}()
 
-	c.replica.mu.Lock()
-	defer c.replica.mu.Unlock()
-	if err := c.replica.sync(); err != nil {
+	// Copy the rows out under the replica lock and ingest after it, so a
+	// slow usage store never holds the link.
+	var facts []string
+	var statusErr error
+	if err := c.replica.Read(func(db *sqlpipe.Database) error {
+		qr, err := db.Query("SELECT fact_json FROM " + controlplane.UsageTable + " ORDER BY seat, session_id, seq")
+		if err != nil {
+			return err
+		}
+		if facts, err = columnText(qr, "fact_json"); err != nil {
+			return err
+		}
+		// Status is checked so a corrupt projection fails catch-up. It is
+		// not applied to the fleet registry: Claudia remains the seat
+		// authority.
+		statusErr = validateReplicatedStatus(db)
+		return nil
+	}); err != nil {
 		return err
 	}
-	qr, err := c.replica.replica.Query("SELECT fact_json FROM " + controlplane.UsageTable + " ORDER BY seat, session_id, seq")
-	if err != nil {
-		return err
-	}
-	if len(qr.Rows) > 0 {
-		factCol := -1
-		for i, col := range qr.Columns {
-			if col == "fact_json" {
-				factCol = i
-				break
-			}
+	for _, body := range facts {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if factCol < 0 {
-			return fmt.Errorf("replica usage rows have no fact_json")
-		}
-		for _, row := range qr.Rows {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if factCol >= len(row) {
-				return fmt.Errorf("replica usage row is short")
-			}
-			body, ok := sqlText(row[factCol])
-			if !ok {
-				return fmt.Errorf("replica fact_json has type %T", row[factCol])
-			}
-			if err := ApplyReplicatedUsage(ctx, c.store, body); err != nil {
-				return err
-			}
+		if err := ApplyReplicatedUsage(ctx, c.store, body); err != nil {
+			return err
 		}
 	}
-	// Status is checked so a corrupt projection fails catch-up. It is not
-	// applied to the fleet registry: Claudia remains the seat authority.
-	return validateReplicatedStatus(c.replica.replica)
+	return statusErr
 }
 
 func validateReplicatedStatus(db *sqlpipe.Database) error {
-	if db == nil {
-		return fmt.Errorf("replica status: closed")
-	}
 	qr, err := db.Query("SELECT status_json FROM " + controlplane.StatusTable)
 	if err != nil {
 		return err
 	}
-	if len(qr.Rows) == 0 {
-		return nil
+	bodies, err := columnText(qr, "status_json")
+	if err != nil {
+		return err
 	}
-	col := -1
-	for i, name := range qr.Columns {
-		if name == "status_json" {
-			col = i
-			break
-		}
-	}
-	if col < 0 {
-		return fmt.Errorf("replica status rows have no status_json")
-	}
-	for _, row := range qr.Rows {
-		if col >= len(row) {
-			return fmt.Errorf("replica status row is short")
-		}
-		body, ok := sqlText(row[col])
-		if !ok {
-			return fmt.Errorf("replica status_json has type %T", row[col])
-		}
+	for _, body := range bodies {
 		if !json.Valid([]byte(body)) {
 			return fmt.Errorf("replica status_json is not json")
 		}
@@ -241,44 +338,33 @@ func validateReplicatedStatus(db *sqlpipe.Database) error {
 	return nil
 }
 
-// ReplicatedReceipt reads one receipt from the replica after a catch-up.
-// The held-receipt sweep uses this instead of the usage socket.
+// ReplicatedReceipt reads one receipt from Jevons' file, as the broker last
+// delivered it. The held-receipt sweep uses this instead of the usage
+// socket.
 func (c *Collector) ReplicatedReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 	if c == nil || c.replica == nil {
 		return nil, fmt.Errorf("replicated receipt: no replica")
 	}
-	if err := c.CatchUpReplicas(ctx); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	c.replica.mu.Lock()
-	defer c.replica.mu.Unlock()
-	if c.replica.replica == nil {
-		return nil, fmt.Errorf("replicated receipt: replica is closed")
-	}
-	qr, err := c.replica.replica.Query(
-		"SELECT receipt_json FROM "+controlplane.ReceiptTable+" WHERE seat = ? AND session_id = ? AND request_id = ?",
-		q.Seat, q.SessionID, q.RequestID)
-	if err != nil {
+	var bodies []string
+	if err := c.replica.Read(func(db *sqlpipe.Database) error {
+		qr, err := db.Query(
+			"SELECT receipt_json FROM "+controlplane.ReceiptTable+" WHERE seat = ? AND session_id = ? AND request_id = ?",
+			q.Seat, q.SessionID, q.RequestID)
+		if err != nil {
+			return err
+		}
+		bodies, err = columnText(qr, "receipt_json")
+		return err
+	}); err != nil {
 		return nil, err
 	}
-	if len(qr.Rows) == 0 {
+	if len(bodies) == 0 {
 		return nil, fmt.Errorf("replicated receipt absent")
 	}
-	col := -1
-	for i, name := range qr.Columns {
-		if name == "receipt_json" {
-			col = i
-			break
-		}
-	}
-	if col < 0 || col >= len(qr.Rows[0]) {
-		return nil, fmt.Errorf("replicated receipt row has no receipt_json")
-	}
-	body, ok := sqlText(qr.Rows[0][col])
-	if !ok {
-		return nil, fmt.Errorf("replicated receipt_json has type %T", qr.Rows[0][col])
-	}
-	receipt, err := ApplyReplicatedReceipt(body)
+	receipt, err := ApplyReplicatedReceipt(bodies[0])
 	if err != nil {
 		return nil, err
 	}
