@@ -164,26 +164,25 @@ func IsExactAck(text string) bool {
 	return bareAcks[strings.TrimSpace(strings.TrimRight(lower, " \t\r\n.!。"))]
 }
 
+// SilentAckFact is the whole trimmed text of an empty silent acknowledgement.
+// A rendered "[silent]" marker is not this fact, including when an ack token
+// is glued after the marker on the same line.
+const SilentAckFact = "open-intent silent-ack"
+
 // IsBareAck reports whether a turn's whole assistant text is a content-free
 // acknowledgement — an explicit decline to act. Empty text is deliberately
 // NOT an ack; see the note on bareAcks.
 //
-// The reap and notify path uses IsExactAck. This function also treats a
-// silent marker with nothing after it as an ack for the no-op wedge.
+// The reap and notify path uses IsExactAck. This function also treats
+// SilentAckFact as an ack for the no-op wedge. The comparison is the lowered
+// whole text. A rendered silent marker is display.
 func IsBareAck(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" || len([]rune(t)) > ackMaxRunes {
 		return false
 	}
-	// A [silent] marker with nothing after it is an ack; with a payload after
-	// it, it is an ops report that the owner merely does not see (🎯T238).
-	lower := strings.ToLower(t)
-	if stripped, ok := strings.CutPrefix(lower, "[silent]"); ok {
-		lower = strings.TrimSpace(stripped)
-		if lower == "" {
-			return true
-		}
-		return IsExactAck(lower)
+	if strings.ToLower(t) == SilentAckFact {
+		return true
 	}
 	return IsExactAck(text)
 }

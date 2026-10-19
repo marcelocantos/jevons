@@ -99,7 +99,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "local_done.go"), "allCompletionClaimsLocal")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ClassifyReportAsk", "ClassifyReportAskDetail", "hasForwardLookingPlan")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../agentreport/elide.go"), "IsTruncatedDelivery")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../noopwedge/noopwedge.go"), "IsExactAck")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../noopwedge/noopwedge.go"), "IsExactAck", "IsBareAck")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../userturn/userturn.go"), "LegacyInjectionText", "unwrapUserQuery")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/deeper.go"), "isHarnessInject", "frictionSignal", "ChatTurnsToEvidence")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/retro.go"), "isWeakRetroPhrase", "isFixSubject", "isRevertSubject", "commitTypeToken")...)
