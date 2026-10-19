@@ -14,14 +14,17 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/brokerfixture/controllane"
 	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cost"
 )
 
 const switchReceiptWhen = "2026-10-19T00:00:00.000000000Z"
 
-// switchReceiptLane reads receipts through the query startCostGuard installs.
-// live is true only on this build. The collector loop stays stopped.
+// switchReceiptLane reads receipts through the query startCostGuard installs,
+// over Jevons' replica linked to a real broker process, which publishes them
+// in its own file. live is true only on this build. The collector loop stays
+// stopped.
 type switchReceiptLane struct {
 	live    bool
 	publish func(seat, session, id string, state claudiawire.ReceiptState, cause claudiawire.ReceiptCause, reason string, turns []string)
@@ -35,15 +38,8 @@ func openSwitchReceiptLane(t *testing.T, dir string) switchReceiptLane {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	replica, err := cost.OpenReplica(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = replica.Close() })
-	collector := cost.NewCollector(&cost.CollectorArgs{Store: store, Replica: replica})
-	if collector.UsesSocketHistory() {
-		t.Fatal("receipt proof polled the usage socket")
-	}
+	lane := controllane.Start(t, dir, store)
+	collector := lane.Collector
 	var query func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)
 	collector.BindSendReceiptQuery(func(fn func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)) {
 		query = fn
@@ -61,7 +57,7 @@ func openSwitchReceiptLane(t *testing.T, dir string) switchReceiptLane {
 	return switchReceiptLane{
 		live: true,
 		publish: func(seat, session, id string, state claudiawire.ReceiptState, cause claudiawire.ReceiptCause, reason string, turns []string) {
-			claudia.RecordObservedReceipt(&claudia.RequestReceipt{
+			lane.PublishReceipt(claudia.RequestReceipt{
 				Seat: seat, SessionID: session, RequestID: id,
 				State: state, Cause: cause, Reason: reason,
 				AttemptID:  "attempt-" + id,

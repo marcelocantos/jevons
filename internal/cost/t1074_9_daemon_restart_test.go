@@ -7,54 +7,35 @@ package cost
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/controlplane"
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
+
+	"github.com/marcelocantos/jevons/internal/brokerfixture"
 )
 
-// TestT10749DisconnectedAcceptSurvivesDaemonRestart writes the desired seat,
-// grant, and a stale stop through the Jevons replica while the Claudia file
-// is closed. CatchUpReplicas, the collector method the cost guard runs, is
-// what delivers those rows. Each child is a new process. It loads grants.json,
-// the registry file daemon.New opens, then calls ReconcileControlFile and
-// OpenControlPublisher, the two control-plane calls inside daemon.New.
-// The second child is the restart. The stale stop names the next generation
-// and must not change the session.
-func TestT10749DisconnectedAcceptSurvivesDaemonRestart(t *testing.T) {
-	if os.Getenv("T1074_9_DAEMON") == "1" {
-		runT10749DaemonChild(t)
-		return
-	}
+// TestT10749DisconnectedAcceptSurvivesRestarts accepts a desired seat and a
+// stale stop on Jevons' own file while the broker is down, restarts Jevons
+// (closes and reopens the replica), then brings the broker up. The reconnect
+// loop's handshake delivers both rows to the broker's file; the broker's
+// next start reconciles them (no grant, so nothing launches) and its status
+// and the stale outcome come back over the link. A further broker restart
+// on unchanged desired state adds no outcome and no second status row.
+func TestT10749DisconnectedAcceptSurvivesRestarts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	broker := brokerfixture.Start(t)
+	broker.Stop()
 	dir := t.TempDir()
-	work := filepath.Join(dir, "work")
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	src, err := OpenReplica(dir)
+
+	src, err := OpenReplicaLinked(ctx, dir, broker.ControlSocket())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := src.plane.Close(); err != nil {
-		t.Fatal(err)
-	}
-	src.plane = nil
-	seat := controlplane.DesiredSeat{
+	if err := src.AcceptDesiredSeat(controlplane.DesiredSeat{
 		Seat: "seat-a", Generation: 1, Revision: 1, Provider: "grok", Model: "m",
-		WorkDir: work, ConfigJSON: `{}`,
-	}
-	if err := src.AcceptDesiredSeat(seat); err != nil {
-		t.Fatal(err)
-	}
-	if err := src.AcceptGrant(controlplane.Grant{
-		Seat: "seat-a", GrantID: "g", Revision: 1, Scope: `{"name":"read"}`,
+		WorkDir: t.TempDir(), ConfigJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -66,161 +47,70 @@ func TestT10749DisconnectedAcceptSurvivesDaemonRestart(t *testing.T) {
 	if err := src.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if n := countDesired(t, filepath.Join(dir, controlplane.ClaudiaDBFile)); n != 0 {
-		t.Fatalf("closed plane delivered %d desired seats", n)
-	}
-	if n := countDesired(t, filepath.Join(dir, controlplane.JevonsDBFile)); n != 1 {
-		t.Fatalf("replica desired seats = %d", n)
-	}
 
-	src, err = OpenReplica(dir)
+	src, err = OpenReplicaLinked(ctx, dir, broker.ControlSocket())
 	if err != nil {
 		t.Fatal(err)
 	}
-	catchUp := NewCollector(&CollectorArgs{Replica: src})
-	if err := catchUp.CatchUpReplicas(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := catchUp.CatchUpReplicas(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if n := countDesired(t, filepath.Join(dir, controlplane.ClaudiaDBFile)); n != 1 {
-		t.Fatalf("delivered desired seats = %d", n)
-	}
-	if err := src.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	runDaemon := func() {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestT10749DisconnectedAcceptSurvivesDaemonRestart$", "-test.count=1")
-		cmd.Env = append(os.Environ(), "T1074_9_DAEMON=1", "T1074_9_DIR="+dir, "T1074_9_SEAT=seat-a")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("child: %v\n%s", err, out)
+	t.Cleanup(func() { _ = src.Close() })
+	if err := src.Read(func(db *sqlpipe.Database) error {
+		if n := countWhere(t, db, controlplane.DesiredSeatTable, "seat = 'seat-a'"); n != 1 {
+			t.Fatalf("desired seats after the Jevons restart = %d", n)
 		}
-	}
-	runDaemon()
-	runDaemon()
-
-	body, err := os.ReadFile(filepath.Join(dir, "sessions.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.FieldsFunc(string(body), func(r rune) bool { return r == '\n' })
-	if len(lines) != 2 {
-		t.Fatalf("session lines = %q", lines)
-	}
-	first := strings.Fields(lines[0])
-	second := strings.Fields(lines[1])
-	if len(first) != 2 || len(second) != 2 || first[0] == "" || first[0] != second[0] {
-		t.Fatalf("sessions = %q", lines)
-	}
-	if first[1] != "false" || second[1] != "true" {
-		t.Fatalf("resume flags = %q", lines)
-	}
-
-	src, err = OpenReplica(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer src.Close()
-	if err := NewCollector(&CollectorArgs{Replica: src}).CatchUpReplicas(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var status controlplane.SeatStatus
-	var outcome controlplane.ControlOutcome
-	if err := src.plane.WithDB(func(db *sqlpipe.Database) error {
-		statuses, err := controlplane.SeatStatuses(db)
-		if err != nil {
-			return err
+		if n := countWhere(t, db, controlplane.IntentTable, "operation_id = 'op-stale'"); n != 1 {
+			t.Fatalf("intents after the Jevons restart = %d", n)
 		}
-		status = statuses["seat-a"]
-		outcomes, err := controlplane.ControlOutcomes(db)
-		outcome = outcomes["op-stale"]
-		return err
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if status.State != "running" || status.Generation != 1 || status.SessionID != first[0] || status.RuntimeID != first[0] {
+
+	broker.Restart()
+	epoch := awaitLinkEstablished(t, src, 0)
+	// A broker fact arriving here means the handshake has run, and the
+	// handshake is what carries Jevons' rows the other way.
+	broker.PublishUsage(topologyFact(1))
+	waitReplica(t, src, "the broker's first fact", func(db *sqlpipe.Database) bool {
+		return countWhere(t, db, controlplane.UsageTable, "call_id = 'call-1'") == 1
+	})
+	broker.Restart()
+	epoch = awaitLinkEstablished(t, src, epoch)
+	var status controlplane.SeatStatus
+	var outcome controlplane.ControlOutcome
+	waitReplica(t, src, "the reconciled status and the stale outcome", func(db *sqlpipe.Database) bool {
+		statuses, err := controlplane.SeatStatuses(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outcomes, err := controlplane.ControlOutcomes(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, outcome = statuses["seat-a"], outcomes["op-stale"]
+		return status.State != "" && outcome.Outcome != ""
+	})
+	if status.State != "ungranted" || status.Generation != 1 {
 		t.Fatalf("status = %+v", status)
 	}
-	if outcome.Outcome != "stale" || outcome.Reason != "generation" {
+	if outcome.Outcome != "stale" || outcome.Reason != "generation" || outcome.Generation != 2 {
 		t.Fatalf("outcome = %+v", outcome)
 	}
-	var replicaStatus controlplane.SeatStatus
-	var replicaOutcome controlplane.ControlOutcome
-	statuses, err := controlplane.SeatStatuses(src.replica)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replicaStatus = statuses["seat-a"]
-	outcomes, err := controlplane.ControlOutcomes(src.replica)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replicaOutcome = outcomes["op-stale"]
-	if replicaStatus.SessionID != status.SessionID || replicaStatus.State != status.State || replicaOutcome != outcome {
-		t.Fatalf("replica status=%+v outcome=%+v", replicaStatus, replicaOutcome)
-	}
-}
 
-func runT10749DaemonChild(t *testing.T) {
-	dir := os.Getenv("T1074_9_DIR")
-	seat := os.Getenv("T1074_9_SEAT")
-	if dir == "" || seat == "" {
-		t.Fatal("child dir")
-	}
-	logPath := filepath.Join(dir, "sessions.txt")
-	reg, err := claudia.NewRegistry(filepath.Join(dir, "grants.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reg.StopAll()
-	reg.SetLaunchers(&claudia.RegistryLaunchers{Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
-		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return nil, err
+	broker.Restart()
+	awaitLinkEstablished(t, src, epoch)
+	broker.PublishUsage(topologyFact(2))
+	waitReplica(t, src, "the third broker's fact", func(db *sqlpipe.Database) bool {
+		return countWhere(t, db, controlplane.UsageTable, "call_id = 'call-2'") == 1
+	})
+	if err := src.Read(func(db *sqlpipe.Database) error {
+		if n := countWhere(t, db, controlplane.OutcomeTable, "operation_id = 'op-stale'"); n != 1 {
+			t.Fatalf("outcomes for op-stale = %d", n)
 		}
-		_, werr := fmt.Fprintf(f, "%s %v\n", cfg.SessionID, cfg.RequireResume)
-		cerr := f.Close()
-		if werr != nil {
-			return nil, werr
+		if n := countWhere(t, db, controlplane.StatusTable, "seat = 'seat-a'"); n != 1 {
+			t.Fatalf("status rows for seat-a = %d", n)
 		}
-		if cerr != nil {
-			return nil, cerr
-		}
-		return claudia.StartStub(ctx, cfg, nil)
-	}})
-	controlPath := filepath.Join(dir, claudia.ClaudiaDBFile)
-	if err := reg.ReconcileControlFile(context.Background(), controlPath); err != nil {
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	closePlane, err := claudia.OpenControlPublisher(controlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if closePlane != nil {
-		defer closePlane()
-	}
-	def := reg.Def(seat)
-	if def == nil || def.SessionID == "" {
-		t.Fatalf("def = %+v", def)
-	}
-}
-
-func countDesired(t *testing.T, path string) int {
-	t.Helper()
-	db, err := sqlpipe.OpenDatabase(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	rows, err := controlplane.DesiredSeats(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return len(rows)
 }

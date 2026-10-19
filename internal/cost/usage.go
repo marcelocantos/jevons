@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,6 +66,26 @@ type UsageFailure struct {
 	At                       time.Time
 }
 
+// ErrUsageFactRejected marks a usage fact that fails Claudia's fact or
+// transition contract. It is evidence that cannot be verified, not an
+// infrastructure failure: a caller that walks many facts records it as an
+// observation failure and carries on, rather than stopping at it.
+var ErrUsageFactRejected = errors.New("usage fact rejected")
+
+// RecordRejectedUsageFact records one rejected fact as an observation
+// failure. at is the time window the fact covers. The same message for the
+// same generation is recorded once, so a fact rejected on every catch-up
+// pass is one failure, not one per pass. A failure is never removed: a fact
+// that later becomes valid is ingested then, and the earlier loss of
+// observation stays on record.
+func (s *Store) RecordRejectedUsageFact(ctx context.Context, seat, session string, at time.Time, message string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO usage_failures (seat, session_id, ts, message)
+		SELECT ?, ?, ?, ? WHERE NOT EXISTS
+		(SELECT 1 FROM usage_failures WHERE seat = ? AND session_id = ? AND message = ?)`,
+		seat, session, at.UTC().Format(usageTimeLayout), message, seat, session, message)
+	return err
+}
+
 // UsageCursor is the last contiguous journal sequence durably consumed.
 // It is independent of live events, whose delivery can have gaps.
 func (s *Store) UsageCursor(ctx context.Context, seat, session string) (uint64, error) {
@@ -116,7 +137,7 @@ func (s *Store) IngestUsagePage(ctx context.Context, query claudiawire.UsageQuer
 // the contiguous replay cursor. Repeated delivery contributes no new usage.
 func (s *Store) IngestUsageFact(ctx context.Context, seat, session string, fact *claudiawire.UsageFact) error {
 	if err := fact.ValidateIdentity(seat, session); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrUsageFactRejected, err)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -152,8 +173,11 @@ func ingestUsageFact(ctx context.Context, tx *sql.Tx, f *claudiawire.UsageFact) 
 	// Claudia. The published pin uses the local copy of that contract.
 	// The host owns only persistence and attribution.
 	apply, err := claudiawire.ValidateUsageTransition(previous, f)
-	if err != nil || !apply {
-		return false, err
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrUsageFactRejected, err)
+	}
+	if !apply {
+		return false, nil
 	}
 	body, err := json.Marshal(f)
 	if err != nil {

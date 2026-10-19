@@ -20,7 +20,7 @@ func ApplyReplicatedUsage(ctx context.Context, s *Store, factJSON string) error 
 	}
 	var fact claudiawire.UsageFact
 	if err := json.Unmarshal([]byte(factJSON), &fact); err != nil {
-		return fmt.Errorf("replicated usage: %w", err)
+		return fmt.Errorf("%w: replicated usage: %w", ErrUsageFactRejected, err)
 	}
 	return s.IngestUsageFact(ctx, fact.Seat, fact.SessionID, &fact)
 }

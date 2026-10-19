@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,7 +365,12 @@ func claudiaCleanupRoot(t *testing.T) string {
 			continue
 		}
 		if m.Replace == nil || m.Replace.Path == "" {
-			t.Fatal("claudia module has no local replace; run with the paired modfile")
+			// A go.work pairing has no replace in the build info; ask the
+			// go command which directory it resolved the module to.
+			if dir := workspaceClaudiaDir(); dir != "" {
+				return dir
+			}
+			t.Fatal("claudia module has no local replace and no go.work checkout; run with the paired modfile or go.work")
 		}
 		st, err := os.Stat(m.Replace.Path)
 		if err != nil || !st.IsDir() {
@@ -529,4 +535,19 @@ func closeDBs(t *testing.T, dbs ...*sqlpipe.Database) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// workspaceClaudiaDir is the Claudia checkout a go.work names, or "" when
+// the module comes from the module cache.
+func workspaceClaudiaDir() string {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/marcelocantos/claudia").Output()
+	if err != nil {
+		return ""
+	}
+	dir := strings.TrimSpace(string(out))
+	cache, err := exec.Command("go", "env", "GOMODCACHE").Output()
+	if err != nil || dir == "" || strings.HasPrefix(dir, strings.TrimSpace(string(cache))+string(filepath.Separator)) {
+		return ""
+	}
+	return dir
 }

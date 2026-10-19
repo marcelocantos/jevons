@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/claudia/controlplane"
 	"github.com/marcelocantos/claudia/omp"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
@@ -106,6 +105,7 @@ func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
 		return err
 	}
 	child.brokerSocket = b.socket
+	child.broker = b
 	if err := child.startDaemon(); err != nil {
 		return fmt.Errorf("start brokered isolate: %w", err)
 	}
@@ -139,13 +139,10 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		return nil, err
 	}
 	socket := filepath.Join(root, "broker.sock")
-	// The published broker binds the seat pump only when claudia-control.db
-	// already exists. It does not create a missing file.
-	if err := prepareIsolateControlFile(root); err != nil {
-		_ = logFile.Close()
-		cleanup()
-		return nil, fmt.Errorf("prepare isolate control file: %w", err)
-	}
+	// The broker creates and owns its control file (🎯T1074.9). The
+	// isolate daemon keeps its own control-replica.db in its own state
+	// directory and links to claudia.ControlSocketPath(socket); nothing
+	// here opens, creates or links the broker's file.
 	cmd := isolatedBrokerCommand(os.Environ(), bin, root, s.stateDir, sidecarScript)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
@@ -168,9 +165,6 @@ func (s *suite) startIsolatedBroker() (*isolatedBroker, error) {
 		conn, err := net.DialTimeout("unix", socket, 200*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			if err := linkIsolateControlFile(s.stateDir, root); err != nil {
-				return nil, errors.Join(fmt.Errorf("link isolate control file: %w", err), b.close())
-			}
 			return b, nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -265,25 +259,9 @@ func copySidecarFile(src, dst string) error {
 	return nil
 }
 
-// prepareIsolateControlFile creates the broker control file before serve.
-// The broker binds the seat pump when this file already exists and does not
-// create it when missing. The file is the broker's, not the jevons state
-// directory and not the host ~/.jevons.
-func prepareIsolateControlFile(brokerRoot string) error {
-	brokerState := filepath.Join(brokerRoot, "state")
-	if err := os.MkdirAll(brokerState, 0o700); err != nil {
-		return err
-	}
-	plane, err := controlplane.Open(filepath.Join(brokerState, claudia.ClaudiaDBFile))
-	if err != nil {
-		return err
-	}
-	return plane.Close()
-}
-
 // snapshotControlFile copies the broker control file, including any WAL
-// siblings, into dest. A missing file is not an error: the broker does not
-// create one when it was never prepared.
+// siblings, into dest, after the broker has stopped. A missing file is not
+// an error: a broker that failed before opening it never created one.
 func snapshotControlFile(root, dest string) error {
 	state := filepath.Join(root, "state")
 	entries, err := os.ReadDir(state)
@@ -316,24 +294,6 @@ func snapshotControlFile(root, dest string) error {
 		}
 	}
 	return nil
-}
-
-// linkIsolateControlFile makes the isolate daemon's OpenReplica path and the
-// broker's control file the same inode. OpenReplica joins the jevons state
-// directory with claudia-control.db. The broker reconciles that name under
-// its own state directory, which is not the jevons state directory and not
-// the host ~/.jevons. Grants stay in the broker directory.
-func linkIsolateControlFile(jevonsState, brokerRoot string) error {
-	brokerState := filepath.Join(brokerRoot, "state")
-	if err := os.MkdirAll(brokerState, 0o700); err != nil {
-		return err
-	}
-	link := filepath.Join(jevonsState, claudia.ClaudiaDBFile)
-	target := filepath.Join(brokerState, claudia.ClaudiaDBFile)
-	if err := os.Remove(link); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Symlink(target, link)
 }
 
 // isolatedBrokerCommand configures the separately launched broker, including
@@ -380,6 +340,12 @@ func isolatedBrokerEnv(base []string, socket, ompSocket, sidecarScript, stateHom
 	return append(env, "CLAUDIA_BROKER_SOCKET="+socket, "CLAUDIA_NO_BROKER=0",
 		"CLAUDIA_OMP_SOCKET="+ompSocket, "CLAUDIA_OMP_SERVER="+sidecarScript, "XDG_STATE_HOME="+stateHome,
 		"JEVONS_SPOOL_DIR="+spoolDir, "CLAUDIA_OMP_SPOOL_DIR="+spoolDir, "CLAUDIA_OMP_NO_REFRESH=1")
+}
+
+// controlFile is the broker's own control-plane file. Only the broker opens
+// it as a database; the journey reads byte copies (copyControlFile).
+func (b *isolatedBroker) controlFile() string {
+	return filepath.Join(b.root, "state", claudia.ClaudiaDBFile)
 }
 
 func (b *isolatedBroker) close() error {

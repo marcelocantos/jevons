@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/claudia/controlplane"
 )
 
 func TestIsolatedBrokerCommandCarriesConsumerConfiguration(t *testing.T) {
@@ -46,36 +45,16 @@ func TestIsolatedBrokerCommandCarriesConsumerConfiguration(t *testing.T) {
 	}
 }
 
-func TestIsolateControlFileIsTheBrokerControlFile(t *testing.T) {
+// The broker's control file lives in the broker's state directory and the
+// journey only names it there. Nothing in the jevons state carries the
+// broker's file name: the isolate daemon keeps its own control-replica.db
+// and links to the broker over the control socket (🎯T1074.9).
+func TestIsolateControlFileBelongsToTheBroker(t *testing.T) {
 	root, state := t.TempDir(), t.TempDir()
-	if err := prepareIsolateControlFile(root); err != nil {
-		t.Fatal(err)
-	}
-	prepared := filepath.Join(root, "state", claudia.ClaudiaDBFile)
-	info, err := os.Stat(prepared)
-	if err != nil || info.IsDir() || info.Size() == 0 {
-		t.Fatalf("prepared control file: %v %+v", err, info)
-	}
-	plane, err := controlplane.Open(prepared)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := plane.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(state, claudia.ClaudiaDBFile)); !os.IsNotExist(err) {
-		t.Fatalf("prepare wrote the jevons state: %v", err)
-	}
-	if err := linkIsolateControlFile(state, root); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.Readlink(filepath.Join(state, claudia.ClaudiaDBFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := &isolatedBroker{root: root}
 	want := filepath.Join(root, "state", claudia.ClaudiaDBFile)
-	if got != want {
-		t.Fatalf("control link %q, want %q", got, want)
+	if got := b.controlFile(); got != want {
+		t.Fatalf("broker control file %q, want %q", got, want)
 	}
 	cmd := isolatedBrokerCommand(nil, "claudia", root, state, filepath.Join(root, "server.ts"))
 	stateDir := ""
@@ -89,6 +68,33 @@ func TestIsolateControlFileIsTheBrokerControlFile(t *testing.T) {
 	}
 	if stateDir == state || strings.HasSuffix(stateDir, "/.jevons") {
 		t.Fatalf("broker grants landed in the jevons state %q", stateDir)
+	}
+	if _, err := os.Lstat(filepath.Join(state, claudia.ClaudiaDBFile)); !os.IsNotExist(err) {
+		t.Fatalf("jevons state carries the broker's file name: %v", err)
+	}
+}
+
+// openingPIDs is J44's topology probe. It names this process while the file
+// is open here, and no process once it is closed.
+func TestOpeningPIDsNamesTheHolder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "held.db")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pids, err := openingPIDs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pids) != 1 || pids[0] != os.Getpid() {
+		t.Fatalf("holders of an open file = %v, want [%d]", pids, os.Getpid())
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pids, err = openingPIDs(path)
+	if err != nil || len(pids) != 0 {
+		t.Fatalf("holders of a closed file = %v %v", pids, err)
 	}
 }
 
