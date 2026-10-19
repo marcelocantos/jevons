@@ -160,26 +160,62 @@ func LedgerDay(t time.Time) string {
 	return t.In(time.Local).Format(ledgerDayLayout)
 }
 
-// HasLandedEvidence reports whether text names something a reader could go
-// and check: a commit-shaped hex token, a gate attestation, or a test name.
+// HasLandedEvidence reports whether text names a declared check: a
+// commit-shaped hex token, a gate id field (id=<hex>), or a Go test
+// identifier. The words "gate", "test", and "commit" are not evidence.
 func HasLandedEvidence(text string) bool {
 	t := strings.TrimSpace(text)
 	if len(t) < minEvidenceLen {
 		return false
 	}
-	lower := strings.ToLower(t)
-	if strings.Contains(lower, "gate ") || strings.Contains(lower, "id=") ||
-		strings.Contains(lower, "test") || strings.Contains(lower, "commit") {
-		return true
+	for _, field := range strings.Fields(t) {
+		if declaredTestName(field) || declaredGateID(field) {
+			return true
+		}
 	}
 	for _, tok := range strings.FieldsFunc(t, func(r rune) bool {
-		return !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F'))
+		return !isHexRune(r)
 	}) {
 		if len(tok) >= 7 && len(tok) <= 40 && hasDigit(tok) {
 			return true
 		}
 	}
 	return false
+}
+
+func isHexRune(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
+func declaredTestName(field string) bool {
+	rest, ok := strings.CutPrefix(field, "Test")
+	if !ok || rest == "" {
+		return false
+	}
+	for i, c := range rest {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_':
+			if i == 0 && c >= 'a' && c <= 'z' {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func declaredGateID(field string) bool {
+	rest, ok := strings.CutPrefix(field, "id=")
+	if !ok || len(rest) < 7 || len(rest) > 40 {
+		return false
+	}
+	for _, r := range rest {
+		if !isHexRune(r) {
+			return false
+		}
+	}
+	return hasDigit(rest)
 }
 
 func hasDigit(s string) bool {

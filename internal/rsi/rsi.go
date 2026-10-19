@@ -314,7 +314,8 @@ func FingerprintOf(name, context string) string {
 }
 
 // EventsToEvidence maps eventlog-shaped rows into Evidence.
-// outcome=error, level=error/warn with failure-ish msg, or explicit failure kinds.
+// Kind is a declared component, decision, level, or outcome token.
+// Message text is not a kind.
 func EventsToEvidence(rows []EventRow) []Evidence {
 	out := make([]Evidence, 0, len(rows))
 	for _, r := range rows {
@@ -391,41 +392,67 @@ func actionable(e Evidence) bool {
 	}
 }
 
+const (
+	eventOutcomeError = "error"
+	eventOutcomeFail  = "fail"
+	eventLevelError   = "error"
+	eventLevelWarn    = "warn"
+
+	eventCompPush        = "event_push"
+	eventCompTool        = "tool"
+	eventCompToolFailure = "tool_failure"
+	eventCompCost        = "cost"
+	eventCompCostAnomaly = "cost_anomaly"
+	eventDecStuck        = "stuck"
+	eventDecStuckWork    = "stuck_work"
+
+	eventKindPushError      = "event_push_error"
+	eventKindToolFailure    = "tool_failure"
+	eventKindCostAnomaly    = "cost_anomaly"
+	eventKindLifecycleError = "lifecycle_error"
+	eventKindStuckWork      = "stuck_work"
+)
+
+// classifyEvent reads declared component, decision, level, and outcome tokens.
+// A rendered message is not a kind: "cost" or "stuck" inside the text does not classify.
 func classifyEvent(r EventRow) string {
 	level := strings.ToLower(strings.TrimSpace(r.Level))
 	outcome := strings.ToLower(strings.TrimSpace(r.Outcome))
 	comp := strings.ToLower(strings.TrimSpace(r.Component))
 	dec := strings.ToLower(strings.TrimSpace(r.Decision))
-	msg := strings.ToLower(r.Msg)
 
-	if outcome == "error" || outcome == "fail" || level == "error" {
-		if comp == "event_push" {
-			return "event_push_error"
+	if outcome == eventOutcomeError || outcome == eventOutcomeFail || level == eventLevelError {
+		switch comp {
+		case eventCompPush:
+			return eventKindPushError
+		case eventCompTool, eventCompToolFailure:
+			return eventKindToolFailure
+		case eventCompCost, eventCompCostAnomaly:
+			return eventKindCostAnomaly
 		}
-		if strings.Contains(comp, "tool") || strings.Contains(msg, "tool") {
-			return "tool_failure"
+		switch dec {
+		case eventCompTool, eventCompToolFailure:
+			return eventKindToolFailure
+		case eventCompCost, eventCompCostAnomaly:
+			return eventKindCostAnomaly
+		case eventDecStuck, eventDecStuckWork:
+			return eventKindStuckWork
 		}
-		if strings.Contains(comp, "cost") || strings.Contains(msg, "cost") {
-			return "cost_anomaly"
-		}
-		return "lifecycle_error"
+		return eventKindLifecycleError
 	}
-	// Warn-level signals: cost anomalies, stuck work, and failure-ish text.
-	if level == "warn" {
-		if strings.Contains(msg, "stuck") || strings.Contains(dec, "stuck") {
-			return "stuck_work"
+	if level == eventLevelWarn {
+		switch comp {
+		case eventDecStuck, eventDecStuckWork:
+			return eventKindStuckWork
+		case eventCompCost, eventCompCostAnomaly:
+			return eventKindCostAnomaly
 		}
-		if strings.Contains(msg, "cost") || strings.Contains(comp, "cost") ||
-			strings.Contains(msg, "anomaly") || strings.Contains(msg, "burn") {
-			return "cost_anomaly"
+		switch dec {
+		case eventDecStuck, eventDecStuckWork:
+			return eventKindStuckWork
+		case eventCompCost, eventCompCostAnomaly:
+			return eventKindCostAnomaly
 		}
-		if strings.Contains(msg, "fail") || strings.Contains(msg, "error") ||
-			strings.Contains(msg, "timeout") {
-			return "lifecycle_error"
-		}
-	}
-	if strings.Contains(msg, "stuck") && (level == "warn" || level == "error") {
-		return "stuck_work"
 	}
 	return ""
 }

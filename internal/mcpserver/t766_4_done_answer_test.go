@@ -98,7 +98,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ClassifyReportAskDetail", "hasForwardLookingPlan")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../userturn/userturn.go"), "LegacyInjectionText", "unwrapUserQuery")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/deeper.go"), "isHarnessInject", "frictionSignal", "ChatTurnsToEvidence")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/retro.go"), "isWeakRetroPhrase")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/retro.go"), "isWeakRetroPhrase", "isFixSubject", "isRevertSubject", "commitTypeToken")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../envelope/parse.go"), "stripStandingBrief", "stripOnePrefix", "stripDeclaredPrefix", "splitFence", "parseSlotLine", "Format")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../envelope/fences.go"), "FenceStarts")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t731_stale_report.go"), "parseAgentRespondedLine", "hasReapedSeatBanner")...)
@@ -125,12 +125,13 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../fleet/fleet.go"), "CodexWorkSandbox")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "context_remint.go"), "refuseContextRemintSwitch")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "sentinel.go"), "eventRowFromEvent")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/rsi.go"), "actionable")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/rsi.go"), "actionable", "classifyEvent")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/quality.go"), "ClassifyFilingQuality")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../server/t921_supervisor_origin.go"), "supervisorOrigin")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../staffops/observe.go"), "IsSyntheticDrillRow", "ClusterEventAnomalies")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../staffops/fleet_run.go"), "providerBlockClass")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../turnev/phase.go"), "step")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../ownergate/ownergate.go"), "HasLandedEvidence", "declaredTestName", "declaredGateID")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
 	}

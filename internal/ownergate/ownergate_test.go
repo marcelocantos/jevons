@@ -83,6 +83,9 @@ func TestReasonAcceptsEachCurrencyOfLandedEvidence(t *testing.T) {
 			t.Fatalf("writer and reader disagree about %q", reason)
 		}
 	}
+	if HasLandedEvidence("the test passed and the commit reached the gate today") {
+		t.Fatal("the words test, commit, and gate are not landed evidence")
+	}
 }
 
 // An answered gate is no longer a gate. Reject in particular must return the

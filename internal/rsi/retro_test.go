@@ -100,7 +100,10 @@ func TestPathScopeAndSubjectShapes(t *testing.T) {
 	for subject, want := range map[string]bool{
 		"fix(sentinel): ignore synthetic rows": true,
 		"fix: whatever":                        true,
-		"web: kill residual jiggle":            true,
+		"hotfix: row":                          true,
+		"web: kill residual jiggle":            false,
+		"please fix the build":                 false,
+		"still broken again":                   false,
 		"feat(rsi): retrospective mine":        false,
 		"docs: architecture refresh":           false,
 	} {
