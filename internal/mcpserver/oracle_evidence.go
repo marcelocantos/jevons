@@ -54,19 +54,6 @@ func (c CompletionEvidenceClass) String() string {
 // via non-hex flanks so "pass" / common English words are not false hits.
 var commitSHARe = regexp.MustCompile(`(?i)(?:^|[^0-9a-f])([0-9a-f]{7,40})(?:[^0-9a-f]|$)`)
 
-var acceptedRiskMarkers = []string{
-	"accepted risk",
-	"accepted-risk",
-	"class-3",
-	"class 3",
-	"human gate",
-	"owner accept",
-	"owner smoke",
-	"residual:",
-	"residual declared",
-	"isolated class-3",
-}
-
 var completionClaimMarkers = []string{
 	"done",
 	"complete",
@@ -165,14 +152,9 @@ func LooksLikeMissingSilentLedger(report string) bool {
 // not oracle evidence. HasOracleEvidence reads the envelope oracle slot.
 func hasOracleEvidence(string) bool { return false }
 
-func hasAcceptedRisk(lower string) bool {
-	for _, m := range acceptedRiskMarkers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
+// hasAcceptedRisk is not a control decision (🎯T766.4). A sentence is
+// not accepted risk. HasAcceptedRisk reads the envelope risk slot.
+func hasAcceptedRisk(string) bool { return false }
 
 // hasCompletionClaim is true when the report ASSERTS completion. 🎯T750: the
 // scan runs over claimScanText, so a marker the worker quoted, fenced, or

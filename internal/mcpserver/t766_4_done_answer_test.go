@@ -90,7 +90,7 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree", "hasOracleEvidence")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk", "HasOracleEvidence", "HasAcceptedRisk", "UncitedClaimAgainstDirtyWorktree", "hasOracleEvidence", "hasAcceptedRisk")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "false_green.go"), "FalseGreenFlagsForWorker")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
@@ -235,7 +235,7 @@ func TestT7664ProseOracleDoesNotCloseOwnerIntent(t *testing.T) {
 		t.Fatal("a completion sentence is a historical finish")
 	}
 	riskProse := "Done. The jiggle layout thrash fix carries accepted risk for the owner."
-	if HasAcceptedRisk(riskProse) {
+	if HasAcceptedRisk(riskProse) || hasAcceptedRisk(strings.ToLower(riskProse)) {
 		t.Fatal("an accepted-risk sentence is a risk slot")
 	}
 

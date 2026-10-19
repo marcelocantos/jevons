@@ -423,10 +423,10 @@ func assistantProviderCause(ev claudia.Event) string {
 }
 
 // providerCodeCause maps the provider's own error code on a transcript
-// line. Published Claudia v0.57.0 sets Event.IsError from that field and
-// leaves Reason empty, so the code is still on Raw. The message text is
-// not read. An unrecognised code, including a sentence in the field, has
-// no cause.
+// line. Claudia v0.58.0 stamps Event.Reason from that code. A frame whose
+// Reason is still empty keeps the code on Raw. The message text is not
+// read. An unrecognised code, including a sentence in the field, has no
+// cause.
 func providerCodeCause(raw []byte) string {
 	if len(raw) == 0 {
 		return ""

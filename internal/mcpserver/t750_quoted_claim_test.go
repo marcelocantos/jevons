@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -12,8 +13,8 @@ import (
 // 🎯T750: a worker is reaped only on a completion claim it made.
 //
 // The specimen is jv-t745-busy-pane's 17:51:01Z checkpoint: four numbered
-// "Still to do" items, a "Residual:" paragraph that satisfies hasAcceptedRisk,
-// and a closing sentence whose only completion marker is negated. Verbatim
+// "Still to do" items, a "Residual:" paragraph, and a closing sentence whose only
+// completion marker is negated. Verbatim
 // except for the word "Checkpoint.", which is removed on purpose — with it,
 // 🎯T716's ask class vetoes the reap and this test would pass without
 // exercising the claim classifier at all. What is under test is that the
@@ -60,17 +61,18 @@ func TestT750QuotedMarkerDoesNotReap(t *testing.T) {
 
 // The red witness. Without the mask, hasFinishShape read this text as a
 // finish: an unmasked marker scan matches the negated "complete", and the
-// "Residual:" paragraph satisfies hasAcceptedRisk, which short-circuits the
-// shape test before the bare-claim-clause rule is ever consulted. Asserting
-// both halves here keeps the defect documented in the suite rather than in a
-// stash that no longer exists.
+// "Residual:" paragraph used to satisfy hasAcceptedRisk. hasAcceptedRisk
+// now returns false. The residual words stay in the specimen.
 func TestT750WitnessTheUnmaskedScanMatched(t *testing.T) {
 	lower := asciiLower(t745BusyPaneReport)
 	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("specimen no longer carries a completion marker at all; the test has drifted off the shape it pins")
 	}
-	if !hasAcceptedRisk(lower) {
-		t.Fatal("specimen no longer carries accepted-risk language; without it hasFinishShape never took the short-circuit that made this a finish")
+	if !strings.Contains(lower, "residual:") {
+		t.Fatal("specimen no longer carries the residual words")
+	}
+	if hasAcceptedRisk(lower) {
+		t.Fatal("an accepted-risk sentence is accepted risk")
 	}
 	if hasCompletionClaim(lower) {
 		t.Fatal("masked scan still reads an asserted claim in a report whose only marker is negated")
