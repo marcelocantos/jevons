@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -87,7 +88,8 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "stored_terminal_report.go"), "storedTerminalFromReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t938_seat_blocker.go"), "classifyStoredReport")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "reap_scope.go"), "OutstandingScopeReasons", "midWorkReportScope")...)
-	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "finish_shape.go"), "bareAckTurnReport", "hasFinishShape")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "oracle_evidence.go"), "ClassifyCompletionReport", "LooksLikeBareDone", "HasOracleOrRisk")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
 	}
@@ -175,6 +177,37 @@ func TestT7664BareAckSuppressesVocabularyNotAFinishSentence(t *testing.T) {
 	}
 	if !bareAckTurnReport("Noted.") {
 		t.Fatal("exact ack vocabulary was not suppressed")
+	}
+}
+
+// TestT7664ProseOracleDoesNotReapThroughTheSink drives the turn sink.
+// An oracle sentence is not a finish shape and not an evidence class, so
+// the seat stays. A declared finish-report of that same sentence is oracle
+// evidence and the sink removes the seat.
+func TestT7664ProseOracleDoesNotReapThroughTheSink(t *testing.T) {
+	prose := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T31 PASS"
+	if hasFinishShape(strings.ToLower(prose)) {
+		t.Fatal("a completion sentence is a finish shape")
+	}
+	if got := ClassifyCompletionReport(prose); got != CompletionNoClaim || LooksLikeBareDone(prose) || HasOracleOrRisk(prose) {
+		t.Fatalf("class=%s bare=%v oracle=%v", got, LooksLikeBareDone(prose), HasOracleOrRisk(prose))
+	}
+	const agent = "jv-t7664-prose-oracle"
+	s, reg := reapSinkServer(t, agent)
+	s.agentEventSink(agent)(claudia.Event{Type: "assistant", Text: prose, StopReason: "end_turn"})
+	if reg.Def(agent) == nil {
+		t.Fatal("oracle sentence reaped the seat")
+	}
+
+	finish := declaredFinishReport("T766.4", prose)
+	if got := ClassifyCompletionReport(finish); got != CompletionOracleEvidence || !HasOracleOrRisk(finish) {
+		t.Fatalf("declared class=%s oracle=%v", got, HasOracleOrRisk(finish))
+	}
+	const doneAgent = "jv-t7664-declared-oracle"
+	s2, reg2 := reapSinkServer(t, doneAgent)
+	s2.agentEventSink(doneAgent)(claudia.Event{Type: "assistant", Text: finish, StopReason: "end_turn"})
+	if reg2.Def(doneAgent) != nil {
+		t.Fatal("declared finish stayed registered")
 	}
 }
 

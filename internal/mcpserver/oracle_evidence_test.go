@@ -5,51 +5,50 @@ package mcpserver
 
 import "testing"
 
-// 🎯T31.1: pure classifier for finish reports (oracle vs accepted-risk vs bare done).
+// 🎯T766.4: an unenveloped sentence is not a completion class. Envelope
+// slots still are.
 func TestClassifyCompletionReport(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want CompletionEvidenceClass
-	}{
-		{"empty", "", CompletionNoClaim},
-		{"status only", "still reading the tree", CompletionNoClaim},
-		{"bare done", "Done. Mission complete.", CompletionBareDone},
-		{"bare finished", "All finished, ready for review.", CompletionBareDone},
-		{"oracle go test", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T31 PASS", CompletionOracleEvidence},
-		{"oracle make test", "complete — make test-web green", CompletionOracleEvidence},
-		{"oracle word", "Oracle: node web/scripts/foo_test.js PASS", CompletionOracleEvidence},
-		{"accepted risk", "Done with accepted risk: owner smoke residual (class-3)", CompletionAcceptedRisk},
-		{"class-3 only", "Residual: isolated class-3 human gate for visual feel", CompletionAcceptedRisk},
-		{"accepted-risk hyphen", "accepted-risk: no hermetic path for this spike", CompletionAcceptedRisk},
-		{"risk beats bare claim", "finished; accepted risk logged", CompletionAcceptedRisk},
-		{"oracle beats bare claim", "done; hermetic TestEnsureFleetBriefInjectsOnce green", CompletionOracleEvidence},
+	for _, in := range []string{
+		"",
+		"still reading the tree",
+		"Done. Mission complete.",
+		"All finished, ready for review.",
+		"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T31 PASS",
+		"complete — make test-web green",
+		"Oracle: node web/scripts/foo_test.js PASS",
+		"Done with accepted risk: owner smoke residual (class-3)",
+		"Residual: isolated class-3 human gate for visual feel",
+		"accepted-risk: no hermetic path for this spike",
+		"finished; accepted risk logged",
+		"done; hermetic TestEnsureFleetBriefInjectsOnce green",
+	} {
+		if got := ClassifyCompletionReport(in); got != CompletionNoClaim {
+			t.Fatalf("ClassifyCompletionReport(%q)=%s want no_claim", in, got)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ClassifyCompletionReport(tc.in)
-			if got != tc.want {
-				t.Fatalf("ClassifyCompletionReport(%q)=%s want %s", tc.in, got, tc.want)
-			}
-		})
+	if got := ClassifyCompletionReport(declaredFinishReport("T31", "Landed.")); got != CompletionOracleEvidence {
+		t.Fatalf("declared finish class=%s", got)
 	}
 }
 
 func TestLooksLikeBareDoneAndHasOracleOrRisk(t *testing.T) {
-	if !LooksLikeBareDone("Done, nothing else.") {
-		t.Fatal("expected bare done")
+	if LooksLikeBareDone("Done, nothing else.") {
+		t.Fatal("unenveloped prose is not a bare done")
 	}
 	if LooksLikeBareDone("Done. go test ./... PASS") {
-		t.Fatal("oracle evidence must not look bare")
+		t.Fatal("unenveloped oracle prose is not a bare done")
 	}
-	if !HasOracleOrRisk("SHA deadbeef make test green") {
-		t.Fatal("expected oracle or risk")
+	if HasOracleOrRisk("SHA deadbeef make test green") {
+		t.Fatal("unenveloped oracle prose is not oracle evidence")
 	}
-	if !HasOracleOrRisk("accepted risk residual for owner") {
-		t.Fatal("expected risk path")
+	if HasOracleOrRisk("accepted risk residual for owner") {
+		t.Fatal("unenveloped risk prose is not accepted risk")
 	}
 	if HasOracleOrRisk("done") {
 		t.Fatal("bare done is not oracle-or-risk")
+	}
+	if !HasOracleOrRisk(declaredFinishReport("T31", "Landed.")) {
+		t.Fatal("declared finish with oracle slots must be oracle evidence")
 	}
 }
 

@@ -147,58 +147,41 @@ func HasOracleOrRisk(report string) bool {
 	return c == CompletionOracleEvidence || c == CompletionAcceptedRisk
 }
 
-// ClassifyCompletionReport classifies a worker/PO finish report.
-// Priority: envelope fields (🎯T509 / 🎯T536.1) when present, else
-// accepted-risk > oracle evidence > bare-done claim > no claim.
+// ClassifyCompletionReport classifies a worker/PO finish report from
+// envelope fields (🎯T509 / 🎯T536.1). A sentence is not a claim (🎯T766.4).
 func ClassifyCompletionReport(report string) CompletionEvidenceClass {
-	if m, err := envelope.Parse(report); m != nil {
-		switch m.Kind {
-		case envelope.KindFinishReport:
-			if envelope.MissingSilentLedger(m) {
-				return CompletionMissingSilentLedger
-			}
-			if err == nil {
-				if m.HasRisk() {
-					return CompletionAcceptedRisk
-				}
-				if m.HasOracle() {
-					return CompletionOracleEvidence
-				}
-				return CompletionBareDone
-			}
-			// Other malformation with a ledger still present: do not treat
-			// payload prose as a complete oracle finish.
-			if m.HasSilentLedger() {
-				if m.HasRisk() {
-					return CompletionAcceptedRisk
-				}
-				if m.HasOracle() {
-					return CompletionOracleEvidence
-				}
-			}
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
-			if err == nil {
-				return CompletionNoClaim
-			}
-		}
-		if m.Payload != "" {
-			report = m.Payload
-		}
-	}
-	s := strings.ToLower(strings.TrimSpace(report))
-	if s == "" {
+	m, err := envelope.Parse(report)
+	if m == nil {
 		return CompletionNoClaim
 	}
-	// Accepted risk is an explicit residual path — preferred over bare claim
-	// even when "done" words co-occur.
-	if hasAcceptedRisk(s) {
-		return CompletionAcceptedRisk
-	}
-	if hasOracleEvidence(s) {
-		return CompletionOracleEvidence
-	}
-	if hasCompletionClaim(s) {
-		return CompletionBareDone
+	switch m.Kind {
+	case envelope.KindFinishReport:
+		if envelope.MissingSilentLedger(m) {
+			return CompletionMissingSilentLedger
+		}
+		if err == nil {
+			if m.HasRisk() {
+				return CompletionAcceptedRisk
+			}
+			if m.HasOracle() {
+				return CompletionOracleEvidence
+			}
+			return CompletionBareDone
+		}
+		// Other malformation with a ledger still present: do not treat
+		// payload prose as a complete oracle finish.
+		if m.HasSilentLedger() {
+			if m.HasRisk() {
+				return CompletionAcceptedRisk
+			}
+			if m.HasOracle() {
+				return CompletionOracleEvidence
+			}
+		}
+	case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
+		if err == nil {
+			return CompletionNoClaim
+		}
 	}
 	return CompletionNoClaim
 }

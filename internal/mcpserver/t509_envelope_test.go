@@ -138,12 +138,12 @@ func TestT509ChatterDropsDuplicateStatusPing(t *testing.T) {
 	}
 }
 
-func TestT509UnenvelopedFallsBackToProse(t *testing.T) {
-	if ClassifyCompletionReport("Done.") != CompletionBareDone {
-		t.Fatal("unenveloped bare done")
+func TestT509UnenvelopedProseIsNotAClaim(t *testing.T) {
+	if ClassifyCompletionReport("Done.") != CompletionNoClaim {
+		t.Fatal("unenveloped bare done is a claim")
 	}
-	if ClassifyCompletionReport("Done. SHA abcdef0 go test PASS") != CompletionOracleEvidence {
-		t.Fatal("unenveloped oracle")
+	if ClassifyCompletionReport("Done. SHA abcdef0 go test PASS") != CompletionNoClaim {
+		t.Fatal("unenveloped oracle sentence is a claim")
 	}
 }
 

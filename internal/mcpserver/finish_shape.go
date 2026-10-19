@@ -65,36 +65,9 @@ func finishClauseDelimiter(r rune) bool {
 	return false
 }
 
-// hasFinishShape reports whether lower — a trimmed, lowercased report —
-// positively claims completion in one of the recognised finish shapes (🎯T445).
-func hasFinishShape(lower string) bool {
-	if !hasCompletionClaim(lower) {
-		return false
-	}
-	// 🎯T581: "reading done; implementing now" is a sub-step closing, not a
-	// finish, however much oracle vocabulary the rest of the turn carries.
-	if allCompletionClaimsLocal(lower) {
-		return false
-	}
-	if hasAcceptedRisk(lower) || hasOracleEvidence(lower) {
-		return true
-	}
-	return hasBareClaimClause(lower)
-}
-
-// hasBareClaimClause is true when some clause of lower consists of a completion
-// claim and glue words alone — the clause IS the claim (🎯T195's "Done.",
-// "Mission complete."), rather than a sentence that happens to contain a
-// completion word.
-func hasBareClaimClause(lower string) bool {
-	// 🎯T750: a quoted or negated clause is not a claim clause.
-	for _, clause := range strings.FieldsFunc(claimScanText(lower), finishClauseDelimiter) {
-		if bareClaimClause(clause) {
-			return true
-		}
-	}
-	return false
-}
+// hasFinishShape is not a finish decision (🎯T766.4). A lowered sentence is
+// not a declared done report. Reap and notify read envelope.IsDoneReport.
+func hasFinishShape(string) bool { return false }
 
 func bareClaimClause(clause string) bool {
 	claimed := false

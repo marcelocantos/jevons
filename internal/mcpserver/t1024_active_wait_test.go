@@ -33,12 +33,10 @@ func t1024VerifyLandReport(t *testing.T) string {
 }
 
 // TestT1024ReportsAreTheIncidentShape pins that the fixtures still
-// reproduce the incident, so the green below means the new guard is doing
-// the work. Each report reads as a finish to the classifier that reaped it
-// (hasFinishShape: completion word + oracle evidence), on the exact marker
-// the lifecycle log recorded, and the 🎯T565 verb-shaped gate-wait veto
-// that should have kept the seat is silent on both. If any of that lapses,
-// the regression test is testing nothing.
+// contain the completion words the old classifier reaped on, and that
+// hasFinishShape does not treat those sentences as a finish (🎯T766.4).
+// The 🎯T565 verb-shaped gate-wait veto stays silent on both. The reap
+// decision is TestT1024ActiveWaitIsNotAFinishReap.
 func TestT1024ReportsAreTheIncidentShape(t *testing.T) {
 	for _, tc := range []struct {
 		name, report, wantMarker, wantSpan string
@@ -48,8 +46,8 @@ func TestT1024ReportsAreTheIncidentShape(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lower := strings.ToLower(strings.TrimSpace(tc.report))
-			if !hasFinishShape(lower) {
-				t.Fatal("fixture no longer reads as a finish shape — there was no reap for the guard to block")
+			if hasFinishShape(lower) {
+				t.Fatal("a completion sentence is a finish shape")
 			}
 			marker, span, _, ok := FindCompletionClaim(tc.report)
 			if !ok || marker != tc.wantMarker || span != tc.wantSpan {
