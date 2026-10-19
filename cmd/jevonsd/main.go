@@ -968,22 +968,9 @@ func main() {
 	if overseerModelChoice == "" {
 		overseerModelChoice = cfg.Model
 	}
-	jevonDef, err := registry.EnsureAgent(cfg.OverseerName, jevDir, overseerModelChoice, true)
+	jevonDef, err := registerOverseerSeat(registry, cfg.OverseerName, jevDir, overseerModelChoice, defaultProvider)
 	if err != nil {
 		slog.Error("jevon agent setup failed", "err", err)
-		os.Exit(1)
-	}
-	// ð¯T148: keep stored provider on resume; only set default when empty.
-	jevonDef.Provider = cli.SelectAgentProvider("", jevonDef.Provider, defaultProvider)
-	// ð¯T114: overseer purpose on the unified participant record.
-	if jevonDef.Purpose == "" {
-		jevonDef.Purpose = claudia.PurposeOverseer
-	}
-
-	// Overseer MCP registration happens after the listener is bound, so the
-	// advertised URL names the port actually served (ð¯T379). See below.
-	if err := registry.Register(*jevonDef); err != nil {
-		slog.Error("jevon agent register failed", "err", err)
 		os.Exit(1)
 	}
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
