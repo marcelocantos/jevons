@@ -371,14 +371,17 @@ subagents that die with the parent).
    (pause, still registered); **kill** with `jevons_agent_kill` (stop +
    deregister — gone from the fleet; use when the owner says kill).
    **Finished work agents auto-deregister** (stop+Remove) when their terminal
-   report claims done — including imperfect bare done (🎯T165 / 🎯T195 product
-   path — not persona-only). Ledger achieve of a bound TargetID also reaps
+   report is a declared finish-report (🎯T165 / 🎯T195 product path — not
+   persona-only); a bare "done" with no envelope is unknown and stays
+   (🎯T766.4). Ledger achieve of a bound TargetID also reaps
    engaged implementers. A worker whose own work is fully complete or
    superseded is **reaped rather than parked** (🎯T985), including already
    achieved by someone else with no further acceptance open. Parking is
    reserved for a worker blocked on something external that may resume
    (cross-repo outside mandate, owner decision pending, design gate).
-   `ClassifyWorkerIdleDisposition`. POs and the overseer stay.
+   Stop with `disposition=reap|park` — the reason's wording is not
+   classified (🎯T766.4.1). `ClassifyWorkerIdleDisposition`. POs (spawned
+   with `role=product-owner`) and the overseer stay.
 2. **Durable thread** — `jevons_thread_spawn` (id + workdir), then
    `jevons_thread_direct` when you need a reply; remove with
    `jevons_thread_remove` when done.
@@ -626,9 +629,11 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
 - **Typed envelopes (🎯T509):** load-bearing fleet messages (finish
   reports especially) open at line 1 with a fenced `jevons` block of
   `jevons:` slots (`jevons: kind finish-report`). Schema and enums:
-  `internal/envelope` — do not restate them. Read envelope fields when
-  present; fall back to prose heuristics only for unenveloped messages.
-  YAML front matter (`---`) is not this format.
+  `internal/envelope` — do not restate them. Read envelope fields. A
+  report that declares nothing is **unknown** to the daemon's controls —
+  reap, stop, idle (🎯T766.4): not finished, not blocked, not waiting.
+  You may still read its prose as a judge; the daemon does not decide by
+  it. YAML front matter (`---`) is not this format.
 - **Silent-decision ledger (🎯T536.1):** finish-reports must carry
   `silent-ledger none` or ranked `silent-decision` slots (least-confident
   first). confidence is a float in the range 0 to 1, e.g.
@@ -643,6 +648,20 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   daemon holds off idle nudges and impatience re-pressure and does not
   reap it; you hold the blocker. Answering the seat (owner or ancestor
   message) resumes pressure.
+- **Actively waiting (🎯T1024, typed by 🎯T766.4.1):** a worker watching
+  an alive external process it does not control — its gate queued on the
+  shared heavy lease, a background monitor, a CI run — must declare it
+  with `jevons: active-wait <class> <what>` (class from
+  `envelope.WaitClass`) on a `status-ping` with `status in-progress`, on
+  any report that is not a finish. The daemon parks rather than reaps it
+  and holds off idle nudges. A finish-report that carries the slot is
+  contradictory and is not a finish. Narration ("alive and still queued")
+  is not read: without the slot, the report is unknown.
+- **The reap veto is typed (🎯T766.4.1):** a declared finish is kept when
+  its own `verdict` slot is not GREEN, or the gate record behind its
+  `gate-id` slot is missing / KILLED / not GREEN / exit ≠ 0, or measured
+  another repo's commit (🎯T1027). The FALSE-GREEN banner's prose rules
+  annotate the report for you; they do not decide the reap.
 - **Fog-of-war scout (🎯T536.3):** non-trivial Build work is scouted
   before implement. Spawn-briefs carry `phase scout|implement`; a scout
   terminal is `kind scout-report` (ledger + fog-known/unknown/blindspot),
@@ -928,7 +947,11 @@ When {{.OwnerRef}} says something, match the intent to the right agent:
 - Simple questions → answer directly without spawning agents
 
 If no product owner exists for a repo, create one via
-jevons_agent_start before routing (then that PO spawns implementers).
+jevons_agent_start **with `role=product-owner`** before routing (then that
+PO spawns implementers). The role recorded at spawn is what makes a seat a
+PO (🎯T766.4.1) — not its name, not its purpose. A PO started or rehydrated
+without `role=product-owner` counts as a worker: a finish-report reaps it
+and the PO idle and fan-out gates do not see it.
 
 ## MCP Tools
 
@@ -973,8 +996,9 @@ survive daemon restarts — you never lose one.
 ### Agent Management
 - **jevons_agent_list** — List all registered agents and their status.
 - **jevons_agent_start** — Start a persistent agent in a repo. Creates
-  and registers it if new. Use this for product owners.
-  Required: name, workdir. Optional: model, provider (claudia backend id; 🎯T148).
+  and registers it if new. Use this for product owners, with
+  `role=product-owner` (🎯T766.4.1).
+  Required: name, workdir. Optional: role, model, provider (claudia backend id; 🎯T148).
 - **jevons_agent_send** — Fire-and-forget: sends a message to a running
   agent and returns immediately. The agent's response arrives
   asynchronously as a notification pushed into your conversation —
@@ -1017,11 +1041,14 @@ survive daemon restarts — you never lose one.
   is replayed into that turn as an attachment and never becomes a user message,
   so read the queue records before concluding anything is lost — flushing by
   hand on that reading delivers a second copy.
-- **jevons_agent_stop** — Stop a running agent. Parked (still registered,
-  resumes later) when `reason` names an external block; **reaped** when the
-  reason reads as finished work — nothing left for this worker, already
-  achieved, superseded (🎯T985). `disposition=park|reap` fixes it.
-  Required: name.
+- **jevons_agent_stop** — Stop a running agent. The disposition is
+  declared, not read from English (🎯T766.4.1): pass `disposition=reap`
+  when the worker has nothing left — own work complete, already achieved,
+  superseded (🎯T985) — and `disposition=park` when it is blocked on
+  something external that may resume. Without it, only a reason or stored
+  report that is an envelope decides (declared finish-report reaps; blocked
+  finish-report or `active-wait` parks); everything else parks. `reason`
+  stays the human record of why. Required: name.
 
 ### MCP resilience (🎯T60)
 - **jevons_mcp_reconnect** — Reconnect dropped MCP servers mid-session

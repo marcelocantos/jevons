@@ -180,6 +180,13 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   (T125). Exception: PO dead/unregistered → rehydrate PO first, then PO
   spawns. Instructional until registry enforcement. Persona + agents-guide
   + fleet brief.
+- **A product owner is spawned with `role=product-owner` (🎯T766.4.1):**
+  PO recognition reads the role recorded at spawn
+  (`state_dir/agent_roles.json`, 🎯T511), not the seat name and not
+  claudia's purpose (work|aside|overseer). A PO started or rehydrated
+  without `role=product-owner` counts as a worker: it is not durable, so a
+  finish-report reaps it, and the PO idle, restart, and fan-out gates do
+  not see it (59e22661). Persona + agents-guide + fleet brief.
 - **Domain portfolios default (🎯T200):** product owners whose workdir is
   under `github.com/marcelocantos/…` belong in the **personal** portfolio
   by default. Membership is declarative path match in
@@ -251,8 +258,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   messages open at line 1 with a fenced `jevons` block of `jevons:`
   slots (`jevons: kind finish-report`) wrapping English payload. Schema
   and enums: `internal/envelope` — do not restate them. Worker terminal
-  reports MUST be a `finish-report` envelope. Unenveloped messages fall
-  back to prose heuristics. YAML front matter is not this format.
+  reports MUST be a `finish-report` envelope. A report that declares
+  nothing is **unknown** to every control — reap, stop, idle, done
+  (`envelope.ClassifyDone`, 🎯T766.4): not finished, not blocked, not
+  waiting. Prose is not a fallback for a decision; display and the
+  report-time FALSE-GREEN banner may still read it. YAML front matter is
+  not this format.
 - **Silent-decision ledger (🎯T536.1):** finish-reports carry
   `silent-ledger none` or a ranked `silent-decision` list
   (least-confident first). A green oracle with a missing ledger is
@@ -280,9 +291,10 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   you". Hermetic: mint a seat whose policy denies send, produce a
   terminal report, assert the parent receives it.
 - **Finished work auto-deregister (🎯T165 / 🎯T195):** when a **work**
-  agent’s terminal report claims done — including imperfect bare done
-  without oracle markers — the product **stop+Removes** it from the live
-  fleet (not persona-only hygiene). Ledger achieve of a mission TargetID
+  agent’s terminal report is a declared finish-report (oracle or
+  accepted-risk slot; `envelope.ClassifyDone` answers Done) the product
+  **stop+Removes** it from the live fleet (not persona-only hygiene). A
+  bare "done" with no envelope is unknown and stays (🎯T766.4). Ledger achieve of a mission TargetID
   also reaps engaged implementers. Hermetic: spawn fixture → done/achieve
   path → `agent_list` omits name. Residual: POs and overseer stay;
   multi-target agents without matching TargetID stay; deliberate stop
@@ -294,38 +306,49 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   a standing parked row. **Parking** (`jevons_agent_stop`, staying registered) is reserved
   for a seat genuinely blocked on something external that may resume:
   cross-repo work outside its mandate, an owner decision pending, a design
-  gate. The daemon enforces it: a `jevons_agent_stop` whose `reason` reads
-  as finished work ("nothing left for this worker", "already achieved",
-  "superseded") is converted to a reap (`reap_stop`); a reason naming an
-  external block ("blocked on", "cross-repo", "owner decision") parks;
-  `disposition=park|reap` fixes it outright. Durable roles and seats with
-  descendants always park (kill them with `jevons_agent_kill`). A terminal
-  report that says "already achieved, nothing left" with no Done. shape is
-  reaped as `own_work_complete`. The 2026-09-30 parks of
+  gate. **A stop reason is a declared disposition** (🎯T766.4.1): pass
+  `disposition=park|reap` on `jevons_agent_stop`. The reason's English is
+  not classified — "nothing left for this worker" or "blocked on" decides
+  nothing. Without `disposition`, a reason (or, when the reason is silent,
+  the seat's latest stored report) that is itself an envelope decides by
+  its slots: a declared finish-report reaps (`reap_stop`), a blocked
+  finish-report or an `active-wait` slot parks; anything else parks.
+  Durable roles and seats with descendants always park (kill them with
+  `jevons_agent_kill`). The 2026-09-30 parks of
   jv-t947-plan-token and jv-t972-reap-scope are the superseded shape;
   jv-t765.1-worker's bullseye-side block is the park that stays correct.
   Pure helpers: `ClassifyWorkerIdleDisposition`, `ClassifyStopDisposition`,
   `LooksLikeOwnWorkCompleteReport`. Hermetic: `TestT985*` in
   `internal/mcpserver`.
-- **An active wait is not a finish (🎯T1024):** a worker narrating an
-  active wait on an alive external process it does not control — "my gate
-  run is alive and still queued", "queued fifth on the shared heavy lease",
-  "the monitor armed last turn is still watching" — is mid-wait, whatever
-  completion word a sub-step earned ("the landing is done and verified",
-  "50365 finished (another worker's gate)"). On 2026-10-07 two arrai seats
-  were reaped `finished_work` on exactly those sentences: completion word +
-  oracle evidence is the 🎯T445 finish shape, and the 🎯T972 pending-gate
-  veto only hears 🎯T565's wait verbs ("waiting on", "still running"), not
-  monitoring vocabulary. `FindActiveExternalWait` recognises a sentence
-  that states a continuing wait, names the thing waited on (gate, lease,
-  lock, queue, monitor, background process), and does not also say it
-  resolved (GREEN, exit=, passed, failed, came back, past tense). The
-  🎯T972 scan keeps the seat as `outstanding_scope_active_wait` and tells
-  the parent, quoting the sentence; 🎯T985 parks rather than reaps; the
-  sentinel's `finished_awaiting_gate` reads outstanding scope too. A finish
-  that recounts a wait it saw through still reaps. Specimens are the real
-  stored reports, byte for byte: `internal/mcpserver/testdata/t1024_*`;
-  hermetic `TestT1024*`.
+- **An active wait is not a finish (🎯T1024, typed by 🎯T766.4.1):** a
+  worker actively waiting on an alive external process it does not control
+  — its own gate queued on the shared heavy lease, a background monitor, a
+  CI run — **declares** it: `jevons: active-wait <class> <what>`, class
+  from `envelope.WaitClass` (`internal/envelope`), on a `status-ping`
+  with `status in-progress`, and sends the finish-report only once the
+  wait resolves. On 2026-10-07 two arrai seats were reaped `finished_work`
+  while narrating "alive and still queued" beside a completion word for a
+  sub-step; the sentence detector that fixed it is gone, because a control
+  does not decide by English. The slot decides, never the payload: a
+  finish-report carrying it is contradictory (`ClassifyDone` answers
+  Unknown; the envelope check tells the author), the reap keeps the seat
+  (`outstanding_scope_active_wait`, with a 🎯T972 parent notice naming the
+  wait; a status-ping keeps quietly as `active_wait`), the stop and idle
+  dispositions park it (🎯T985), and idle-nudge holds off. Narration with
+  no slot is unknown — not a finish, not a wait. Specimens: the real stored
+  reports byte for byte (`internal/mcpserver/testdata/t1024_*_report.md`)
+  and their typed re-encodings; hermetic `TestT1024*`, `TestT76641*`.
+- **The reap veto reads gate records, not regexes (🎯T766.4.1):** a
+  declared finish is kept, not reaped, when its typed evidence fails —
+  its own `verdict` slot is not GREEN, the record behind its `gate-id`
+  slot is missing, KILLED, not GREEN or exit ≠ 0 (unless `gate-role`
+  declares it a control), or a declared gate measured a commit the
+  worker's repo does not hold (🎯T1027). `reapGateVeto` /
+  `TypedGateFlags` (`internal/mcpserver`). The prose rules of
+  `gate.FlagFalseGreen` stay the report-time FALSE-GREEN banner and are
+  unreachable from reap, stop and idle decisions — ratcheted over the call
+  graph (`scripts/docratchet`, `TestT76641ReapDecisionsReachNoProseMatcher`),
+  not a census of function bodies.
 - **Greenfield oracle elicitation (🎯T31.2):** for new software (no
   external reference), co-develop an **oracle-coverage map** alongside
   design — **pinned** / **fuzzy** / load-bearing **when X expect Y**

@@ -549,6 +549,19 @@ match only; no GM agent required (🎯T201 set aside). Residual:
 instructional spawn hygiene; display reparent is config/registry, not
 kill lineage.
 
+**A PO is spawned with `role=product-owner` (🎯T766.4.1):**
+
+```
+jevons_agent_start name=<repo>-po workdir=… role=product-owner …
+```
+
+PO recognition reads the role recorded at spawn
+(`state_dir/agent_roles.json`), not the seat name and not claudia's
+purpose (work|aside|overseer). A PO started or rehydrated without
+`role=product-owner` counts as a worker: it is not durable, so a
+finish-report reaps it, and the PO idle, restart and fan-out gates do not
+see it (59e22661).
+
 ### Idea capture (🎯T325.3) — durable intake, not scrollback
 
 Owner sparks via `idea:`, `capture:`, aside, or mid-chat must land in a
@@ -838,6 +851,28 @@ seat (`blocked_on_owner`), T165 does not reap it, and the parent's inbox
 notice carries the blocker. The hold ends when the owner or an ancestor
 messages the seat, or when the seat stores a newer report.
 
+**An active wait is declared, not narrated (🎯T1024, typed by
+🎯T766.4.1).** A seat watching an alive external process it does not
+control — its own gate queued on the shared heavy lease, a background
+monitor, a CI run — is not finished, whatever a sub-step earned. On any
+report that is not a finish, declare the wait with the `active-wait` slot
+(class `gate`, `lease`, `process` or `ci` — `envelope.WaitClass`, then
+what you wait on) on a `status-ping` with `status in-progress`:
+
+```jevons
+jevons: kind status-ping
+jevons: target T41
+jevons: status in-progress
+jevons: active-wait lease slowpath gate on 9890903, queued fifth on the shared heavy lease
+```
+
+Send the finish-report once the wait resolves. The daemon reads the slot,
+never the payload: the reap keeps the seat, a stop or idle disposition
+parks it (🎯T985), and idle-nudge holds off. A finish-report that carries
+`active-wait` is contradictory — not a finish, and the envelope check tells
+you so. Narration with no slot ("alive and still queued") is unknown: the
+sentence detector that used to read it is gone.
+
 **A question to the owner is an object, not prose (🎯T404).** When the
 block is an owner decision, say so with `block-class owner-decision` and
 the question slots. **Every question carries a default**: state what you
@@ -926,14 +961,18 @@ before implement; do not guess through hidden map. Design-gated /
 parked-for-design / T31.2 fuzzy / host saturation (T460) still block
 advancing into implementation — scout does not punch through those gates.
 
-English rationale follows the closing fence. Unenveloped messages still
-fall back to prose heuristics. YAML front matter (`---`) is not this
-format. The cockpit paints a compact header, not a raw dump.
+English rationale follows the closing fence. A report that declares
+nothing is **unknown** to every control — reap, stop, idle, done
+(`envelope.ClassifyDone`, 🎯T766.4): not finished, not blocked, not
+waiting. Prose is not a fallback for a decision. YAML front matter
+(`---`) is not this format. The cockpit paints a compact header, not a
+raw dump.
 
 **Finished work agents leave the fleet without hand-pruning (🎯T165 / 🎯T195):**
-when a work agent's terminal report claims done — including imperfect bare
-done without oracle markers — the product stop+Removes them from the
-registry (RHS / `agent_list` omit the name). When a mission target is
+when a work agent's terminal report is a declared finish-report (oracle or
+accepted-risk slot) the product stop+Removes them from the registry (RHS /
+`agent_list` omit the name). A bare "done" with no envelope is unknown and
+stays. When a mission target is
 achieved on the bullseye ledger, work agents engaged on that TargetID are
 also reaped.
 
@@ -945,17 +984,16 @@ further acceptance criteria are open. The prior convention this session
 jv-t972-reap-scope) is superseded. Parking (`jevons_agent_stop`, staying
 registered) is reserved for a worker blocked on something external that
 may resume later: cross-repo work outside its mandate, an owner decision
-pending, a design gate. The daemon enforces it on `jevons_agent_stop`:
-a `reason` that reads as finished work ("nothing left for this worker",
-"already achieved", "superseded") is converted to a reap (`reap_stop`); a
-reason naming an external block ("blocked on", "cross-repo", "owner
-decision", "design gate") parks; a silent reason reads the seat's latest
-stored report the same way, and an unclassifiable one parks.
-`disposition=park|reap` fixes the outcome. Durable roles (PO / aside /
+pending, a design gate. **A stop reason is a declared disposition
+(🎯T766.4.1):** pass `disposition=reap` or `disposition=park` on
+`jevons_agent_stop`. The reason's English is not classified — "nothing
+left for this worker" or "blocked on" decides nothing. Without
+`disposition`, a reason (or, when the reason is silent, the seat's latest
+stored report) that is itself an envelope decides by its slots: a
+declared finish-report reaps (`reap_stop`), a blocked finish-report or an
+`active-wait` slot parks; anything else parks. Durable roles (PO / aside /
 overseer) and seats with live descendants always park — kill those with
-`jevons_agent_kill`. A terminal report that says "already achieved,
-nothing left" with no Done. finish shape is reaped as
-`own_work_complete`. Pure helpers: `ClassifyWorkerIdleDisposition`,
+`jevons_agent_kill`. Pure helpers: `ClassifyWorkerIdleDisposition`,
 `ClassifyStopDisposition`, `LooksLikeOwnWorkCompleteReport`.
 Residual: POs and overseer stay; multi-target agents without a matching
 TargetID stay; 🎯T90 deep anomaly supervisor is separate.
@@ -1049,6 +1087,16 @@ names the report it judged (`Report from <agent>.`), so a banner delivered
 beside another agent's report cannot be read as that one's — the
 2026-10-07 incident was that misreading by a supervisor, not a worker's
 citation.
+
+**The reap reads gate records, not the banner (🎯T766.4.1).** The banner's
+string-matching rules are advice to whoever reads the report; they do not
+decide whether your seat is reaped. The reap veto reads typed facts only:
+your finish-report's own `verdict` slot (not GREEN keeps the seat), the
+record behind its `gate-id` slot (missing, KILLED, not GREEN or exit ≠ 0
+keeps it, unless `gate-role` declares that id a control), and the commit
+each declared gate measured (another repo's keeps it, 🎯T1027). A `GATE`
+line in your payload is prose to the reap — put the id in the `gate-id`
+slot.
 
 **Residual:** the banner marks a report, it does not block delivery; a
 record with no tree provenance is unknown, never foreign.

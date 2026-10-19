@@ -349,6 +349,30 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   the owner or your parent messages you. That wait is a park-class
   external block (🎯T985), not a finished-work reap.
 
+## Actively waiting (🎯T1024, typed by 🎯T766.4.1)
+- When you are watching an alive external process you do not control —
+  your own gate queued on the shared heavy lease, a background monitor, a
+  CI run — you are not finished, whatever a sub-step earned. Declare the
+  wait on any report that is not a finish: a status-ping with
+  "jevons: status in-progress" and "jevons: active-wait <class> <what you
+  wait on>", class one of gate | lease | process | ci (schema:
+  internal/envelope, WaitClass). Send the finish-report once it resolves.
+- The daemon reads the slot, never your payload: it keeps you (no reap),
+  a stop or idle disposition parks you, and idle nudges hold off. A
+  finish-report carrying active-wait is contradictory — not a finish.
+  Narration with no slot ("alive and still queued") is unknown.
+
+## A report that declares nothing is unknown (🎯T766.4)
+- Reap, stop, idle and done decisions read envelope slots only. An
+  unenveloped report is not finished, not blocked, not waiting — it is
+  unknown, and nothing is decided on its prose.
+- The reap veto reads gate records, not the FALSE-GREEN banner
+  (🎯T766.4.1): put your gate id in the gate-id slot. The seat is kept when
+  its own verdict slot is not GREEN, when that record is missing, KILLED,
+  not GREEN or exit ≠ 0 (unless gate-role declares it a control), or when
+  it measured another repo's commit (🎯T1027). A GATE line in the payload
+  is prose to the reap.
+
 ## Reap vs park (🎯T985)
 - A worker whose own work is fully complete or superseded, with nothing
   left to do, is **reaped** (stop+Remove) rather than parked — including
@@ -360,13 +384,15 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   worker genuinely blocked on something external that may resume later:
   cross-repo work outside its mandate, an owner decision pending, a
   design gate.
-- The daemon enforces it on jevons_agent_stop: a reason that reads as
-  finished work ("nothing left for this worker", "already achieved",
-  "superseded") is converted to a reap (reap_stop); a reason naming an
-  external block ("blocked on", "cross-repo", "owner decision", "design
-  gate") parks; disposition=park|reap fixes the outcome. Durable roles and
-  seats with descendants always park (use jevons_agent_kill). Pure
-  helpers: ClassifyWorkerIdleDisposition, ClassifyStopDisposition.
+- A stop reason is a declared disposition (🎯T766.4.1): pass
+  disposition=reap or disposition=park on jevons_agent_stop. The reason's
+  English is not classified — "nothing left for this worker" or "blocked
+  on" decides nothing. Without disposition, only a reason or stored report
+  that is itself an envelope decides: a declared finish-report reaps
+  (reap_stop); a blocked finish-report or an active-wait slot parks;
+  anything else parks. Durable roles and seats with descendants always
+  park (use jevons_agent_kill). Pure helpers:
+  ClassifyWorkerIdleDisposition, ClassifyStopDisposition.
 
 ## Fog-of-war scout before implement (🎯T536.3)
 - Non-trivial Build work is scouted before implement. Spawn-briefs carry
@@ -388,6 +414,10 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   jevons-po (not parent=jevons). Overseer routes to jevons-po; PO spawns.
 - Exception: PO dead/unregistered → rehydrate PO first, then PO spawns.
 - Residual: instructional until registry enforcement.
+- A product owner is spawned (and rehydrated) with role=product-owner
+  (🎯T766.4.1). The role recorded at spawn is what makes a seat a PO — not
+  its name, not its purpose. A PO without it counts as a worker: a
+  finish-report reaps it, and PO idle and fan-out gates do not see it.
 
 ## Filing reflex (🎯T130)
 - Real product gap / repeated failure / standing behavioural rule mid-work →
@@ -461,8 +491,8 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   before sending (🎯T427). Local master only (🎯T104) — no PR autopilot.
 - Do not ambient-autopilot /push or gh pr create.
 - Finished work agents auto-deregister (stop+Remove) when the terminal
-  report claims done — including imperfect bare done without oracle markers
-  (🎯T165 / 🎯T195). Ledger achieve of a mission TargetID also reaps engaged
+  report is a declared finish-report (🎯T165 / 🎯T195); a bare "done" with
+  no envelope is unknown and stays (🎯T766.4). Ledger achieve of a mission TargetID also reaps engaged
   implementers. A worker whose own work is fully complete or superseded is
   reaped rather than parked (🎯T985), including already-achieved-by-someone-else
   with no further acceptance open. Parking is reserved for a worker blocked
