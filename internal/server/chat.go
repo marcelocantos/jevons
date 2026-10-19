@@ -1592,7 +1592,7 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		}
 		if !running {
 			info.Rehydrate = fleet.RehydrateHealth(d)
-			info.ReauthAvailable = reauthablePlanFailure(d.Provider, info.Rehydrate)
+			info.ReauthAvailable = reauthablePlanFailure(d.Provider, d)
 		}
 		info.DroppedCaps = fleet.CapDrop(d.Name)
 		// 🎯T365: target filings and idea/capture asides share purpose=aside;

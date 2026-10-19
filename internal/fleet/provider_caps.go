@@ -304,27 +304,37 @@ func LaunchReconciled(reg *claudia.Registry, name string) (*claudia.Agent, error
 	return agent, err
 }
 
-// RehydrateHealth classifies whether a stopped seat can be relaunched:
-// "broken: <why>" when its last rehydrate failed or its def carries a
-// restriction its provider cannot enforce, "repairable: <why>" when its
-// def carries settings its provider refuses that the next rehydrate drops,
-// else "resumable".
+// RehydrateHealth is the fleet-row text for whether a stopped seat can be
+// relaunched. The decision is RehydrateBroken, not a prefix of this text.
 func RehydrateHealth(def claudia.AgentDef) string {
+	health, _ := classifyRehydrate(def)
+	return health
+}
+
+// RehydrateBroken reports a stopped seat whose last rehydrate failed, or
+// whose def carries a restriction its provider cannot drop. The display
+// text still says "broken: <why>". The offer does not read that text (🎯T766.4).
+func RehydrateBroken(def claudia.AgentDef) bool {
+	_, broken := classifyRehydrate(def)
+	return broken
+}
+
+func classifyRehydrate(def claudia.AgentDef) (health string, broken bool) {
 	if v, ok := rehydrateFailures.Load(def.Name); ok {
 		if rec, ok := v.(rehydrateRecord); ok && rec.Text != "" {
-			return "broken: " + rec.Text
+			return "broken: " + rec.Text, true
 		}
 	}
 	stale := StaleProviderCaps(def)
 	if len(stale) == 0 {
-		return "resumable"
+		return "resumable", false
 	}
 	probe := def
 	if _, err := dropStaleProviderCaps(&probe); err != nil {
-		return "broken: " + err.Error()
+		return "broken: " + err.Error(), true
 	}
 	return fmt.Sprintf("repairable: stored def carries %s, which the %s provider refuses; dropped on the next rehydrate",
-		capNames(stale), providerLabel(def.Provider))
+		capNames(stale), providerLabel(def.Provider)), false
 }
 
 func providerLabel(p claudia.Provider) string {

@@ -215,68 +215,14 @@ func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
-// dailyPathEvidenceMarkers cite an activated owner-visible surface (🎯T194 /
-// 🎯T572). Hermetic-only finish reports for daemon/API work are not sufficient.
-var dailyPathEvidenceMarkers = []string{
-	"restart-jevonsd",
-	"restart-jevonsd",
-	"live probe",
-	"development path",
-	"development surface",
-	"daily path", // legacy accept — speech is development (🎯T572)
-	"daily-path",
-	"curl ",
-	"curl\t",
-	"http 200",
-	"http/1.1 200",
-	"non-404",
-	"not 404",
-	":13705",
-	"127.0.0.1:13705",
-	"localhost:13705",
-	"/api/frontier",
-	"/health",
-	"stale binary", // often named when proving bounce fixed it
-	"zero-downtime upgrade",
-	"proven zero-downtime",
-}
-
-// hermeticOnlyMarkers are evidence that does not activate the development surface.
-// Used only to document the T194 residual in tests — HasActivationEvidence
-// does not treat these as daily-path proof.
-var hermeticOnlyMarkers = []string{
-	"go test",
-	"make test",
-	"hermetic",
-	"test-web",
-	"test-go",
-	"node web/scripts",
-}
-
-// HasActivationEvidence reports whether a finish report cites activation
-// of the development surface (restart script, curl, :13705, …). 🎯T552 / 🎯T553.2:
+// HasActivationEvidence reports whether a finish report declares activation
+// of the development surface in the envelope daily slot. 🎯T552 / 🎯T553.2:
 // this is a seam classifier, not an achieve gate. Observation of the
-// running surface is the test. Pure string heuristic.
+// running surface is the test. A sentence that names a restart or a curl
+// is not that slot (🎯T766.4).
 func HasActivationEvidence(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasActivation() {
-		return true
-	}
-	s := strings.ToLower(strings.TrimSpace(oracleScanBody(report)))
-	if s == "" {
-		return false
-	}
-	for _, m := range dailyPathEvidenceMarkers {
-		if strings.Contains(s, m) {
-			return true
-		}
-	}
-	// Live HTTP probe shapes: "GET … 200", "curl -sS … → 200"
-	if strings.Contains(s, "get ") && (strings.Contains(s, "200") || strings.Contains(s, "non-404")) {
-		if strings.Contains(s, "http") || strings.Contains(s, "/api/") || strings.Contains(s, ":13705") {
-			return true
-		}
-	}
-	return false
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasActivation()
 }
 
 // reportCitesOracleID is true only for a valid envelope oracle slot
@@ -291,25 +237,11 @@ func reportCitesOracleID(report string) bool {
 // judged from a sentence. FalseGreenFlagsForWorker still calls this.
 func UncitedClaimAgainstDirtyWorktree(string, *gate.TreeProvenance) bool { return false }
 
-// LooksLikeHermeticOnlyDaemonClaim is true when the report claims completion
-// with hermetic/test oracle language but no daily-path evidence (🎯T194
-// anti-pattern: achieve while stale binary may still serve). Instructional
-// residual for overseer review — not a hard block.
+// LooksLikeHermeticOnlyDaemonClaim is true when a report declares an oracle
+// and does not declare activation (🎯T194). A hermetic sentence is not that
+// claim (🎯T766.4). Instructional residual for overseer review — not a hard block.
 func LooksLikeHermeticOnlyDaemonClaim(report string) bool {
-	if HasActivationEvidence(report) {
-		return false
-	}
-	if !hasCompletionClaim(strings.ToLower(report)) && !HasOracleEvidence(report) {
-		return false
-	}
-	// Require hermetic-ish oracle markers so pure bare-done is T31, not T194.
-	lower := strings.ToLower(report)
-	for _, m := range hermeticOnlyMarkers {
-		if strings.Contains(lower, m) {
-			return hasCompletionClaim(lower) || HasOracleEvidence(report)
-		}
-	}
-	return false
+	return HasOracleEvidence(report) && !HasActivationEvidence(report)
 }
 
 // LiveRenderOracleDidNotRun reports whether text admits a browser live-render

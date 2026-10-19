@@ -3,7 +3,11 @@
 
 package mcpserver
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
+)
 
 // 🎯T766.4: an unenveloped sentence is not a completion class. Envelope
 // slots still are.
@@ -61,8 +65,18 @@ func TestCompletionEvidenceClassString(t *testing.T) {
 	}
 }
 
-// 🎯T194: daily-path evidence required for daemon/API achieve; hermetics alone insufficient.
+// 🎯T194 / 🎯T766.4: activation is the envelope daily slot. A sentence that
+// names a restart, a curl, or the development surface is not that slot.
 func TestHasActivationEvidence(t *testing.T) {
+	activated := envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       "T194",
+		SHA:          "abcdef0123456",
+		Daily:        "restart-jevonsd",
+		Verdict:      envelope.VerdictGreen,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      "observed on the development surface",
+	})
 	cases := []struct {
 		name string
 		in   string
@@ -71,15 +85,17 @@ func TestHasActivationEvidence(t *testing.T) {
 		{"empty", "", false},
 		{"hermetic only", "Done. SHA abcdef0. go test ./internal/server -run Frontier PASS", false},
 		{"make test only", "complete — make test green", false},
-		{"restart-jevonsd", "Done. Detached restart-jevonsd succeeded; SHA deadbeef", true},
-		{"live curl", "Live probe: curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:13705/api/frontier → 200", true},
-		{"http 200 frontier", "GET http://127.0.0.1:13705/api/frontier → HTTP 200 with targets JSON", true},
-		{"non-404", "restart-jevonsd exit 0; /api/frontier non-404", true},
-		{"daily path phrase", "proven on the daily path after bounce", true},
-		{"development path phrase", "proven on the development path after bounce", true},
-		{"development surface phrase", "observed on the development surface", true},
-		{"zero-downtime residual", "proven zero-downtime upgrade; product path green", true},
+		{"restart sentence", "Done. Detached restart-jevonsd succeeded; SHA deadbeef", false},
+		{"live curl sentence", "Live probe: curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:13705/api/frontier → 200", false},
+		{"http 200 frontier sentence", "GET http://127.0.0.1:13705/api/frontier → HTTP 200 with targets JSON", false},
+		{"non-404 sentence", "restart-jevonsd exit 0; /api/frontier non-404", false},
+		{"daily path sentence", "proven on the daily path after bounce", false},
+		{"development path sentence", "proven on the development path after bounce", false},
+		{"development surface sentence", "observed on the development surface", false},
+		{"zero-downtime sentence", "proven zero-downtime upgrade; product path green", false},
 		{"status only", "still rebuilding", false},
+		{"declared oracle without daily", declaredFinishReport("T194", "go test ./internal/server PASS"), false},
+		{"declared daily slot", activated, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,20 +110,31 @@ func TestHasActivationEvidence(t *testing.T) {
 func TestLooksLikeHermeticOnlyDaemonClaim(t *testing.T) {
 	prose := "Done. hermetic go test ./internal/server PASS"
 	if LooksLikeHermeticOnlyDaemonClaim(prose) {
-		t.Fatal("a hermetic sentence is a daemon claim")
+		t.Fatal("a hermetic sentence is not a daemon claim")
 	}
 	if !LooksLikeHermeticOnlyDaemonClaim(declaredFinishReport("T194", prose)) {
-		t.Fatal("a declared hermetic finish with no activation evidence must flag")
+		t.Fatal("a declared hermetic finish with no activation slot must flag")
+	}
+	activated := envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       "T194",
+		SHA:          "abcdef0123456",
+		Daily:        "restart-jevonsd",
+		Verdict:      envelope.VerdictGreen,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      "curl /api/frontier HTTP 200",
+	})
+	if LooksLikeHermeticOnlyDaemonClaim(activated) {
+		t.Fatal("a declared daily slot must clear the hermetic-only flag")
 	}
 	if LooksLikeHermeticOnlyDaemonClaim("Done. restart-jevonsd + curl /api/frontier HTTP 200. go test green") {
-		t.Fatal("daily-path evidence must clear hermetic-only flag")
+		t.Fatal("a restart sentence is not activation and is not a hermetic-only claim")
 	}
 	if LooksLikeHermeticOnlyDaemonClaim("still reading the tree") {
 		t.Fatal("non-claim must not flag")
 	}
 	if LooksLikeHermeticOnlyDaemonClaim("Done. Mission complete.") {
-		// bare done is T31, not T194 hermetic-only
-		t.Fatal("bare done without hermetic markers is not hermetic-only daemon claim")
+		t.Fatal("bare done without an oracle slot is not a hermetic-only daemon claim")
 	}
 }
 

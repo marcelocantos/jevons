@@ -23,11 +23,11 @@ import (
 )
 
 // reauthablePlanFailure is a presentation hint, not the broker's auth gate.
-// Offer recovery on a stopped broken plan seat regardless of error wording:
-// a failed Keychain read can surface as an OS error with no "keychain" token.
-// The broker decides whether to retry the read, refresh, or open sign-in.
-func reauthablePlanFailure(provider claudia.Provider, health string) bool {
-	return strings.HasPrefix(health, "broken:") && reauthablePlanProvider(provider)
+// Offer recovery when the seat's rehydrate state is broken, for a plan
+// provider. The error text is not read (🎯T766.4). The broker decides
+// whether to retry the read, refresh, or open sign-in.
+func reauthablePlanFailure(provider claudia.Provider, def claudia.AgentDef) bool {
+	return fleet.RehydrateBroken(def) && reauthablePlanProvider(provider)
 }
 
 func reauthablePlanProvider(provider claudia.Provider) bool {
@@ -102,7 +102,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		s.recoverRunningSeatAuth(w, r, reg, *def)
 		return
 	}
-	if !reauthablePlanFailure(def.Provider, fleet.RehydrateHealth(*def)) {
+	if !reauthablePlanFailure(def.Provider, *def) {
 		writeJSONError(w, http.StatusConflict, "agent no longer has a plan authentication failure")
 		return
 	}

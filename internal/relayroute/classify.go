@@ -13,8 +13,6 @@
 package relayroute
 
 import (
-	"strings"
-
 	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
@@ -57,9 +55,8 @@ func Classify(report string) Route {
 func envelopeRoute(report string) (body string, decided bool, route Route) {
 	m, err := envelope.Parse(report)
 	if m == nil {
-		if fenceBeyondLine1(report) {
-			return "", true, RouteParent
-		}
+		// Parse accepts a fence on line 1 only. A later fence is not an
+		// envelope, and the words ahead of it are not scanned (🎯T766.4).
 		return report, false, RouteParent
 	}
 	switch m.Kind {
@@ -86,16 +83,6 @@ func envelopeRoute(report string) (body string, decided bool, route Route) {
 		return "", true, RouteParent
 	}
 	return m.Payload, false, RouteParent
-}
-
-// fenceBeyondLine1 reports whether text carries a ```jevons fence that
-// Parse did not accept because prose precedes it. Parse treats such a fence
-// as a quotation; for routing it means daemon framing this package does not
-// know about sits ahead of the sender's envelope, and the words ahead of it
-// are not the sender's report.
-func fenceBeyondLine1(text string) bool {
-	return strings.Contains(text, "\n```"+envelope.FenceInfo+"\n") ||
-		strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), "```"+envelope.FenceInfo+"\n")
 }
 
 func (r Route) String() string { return string(r) }

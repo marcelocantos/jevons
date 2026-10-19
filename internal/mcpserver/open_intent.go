@@ -357,8 +357,8 @@ func parseAssistantGoalStatus(text string) (string, bool) {
 }
 
 // OwnerIntentAnsweredWithProductEvidence reports whether any later assistant
-// excerpt answers the owner complaint with product evidence (SHA and/or
-// hermetic PASS and/or achieved-target attestation) for the same topic (🎯T344).
+// excerpt answers the owner complaint with a declared oracle or accepted-risk
+// slot for the same topic (🎯T344). A SHA sentence is not that slot (🎯T766.4).
 func OwnerIntentAnsweredWithProductEvidence(ownerText string, laterAssistant []string) bool {
 	ownerText = strings.TrimSpace(ownerText)
 	if ownerText == "" {
@@ -823,47 +823,11 @@ func openIntentSubstantiveReply(text string) bool {
 	return true
 }
 
-// hasOpenIntentProductEvidence detects SHA / hermetic PASS / achieved-target
-// product evidence in an assistant excerpt (stricter than bare chatter).
+// hasOpenIntentProductEvidence is true when the excerpt declares an oracle
+// or accepted-risk slot. A SHA sentence, a hermetic PASS, or the word
+// achieved is not product evidence (🎯T766.4).
 func hasOpenIntentProductEvidence(text string) bool {
-	s := strings.TrimSpace(text)
-	if s == "" {
-		return false
-	}
-	low := strings.ToLower(s)
-	hasSHA := commitSHARe.MatchString(s)
-	hasTarget := openIntentTargetIDRe.MatchString(s)
-	hasAchieved := strings.Contains(low, "achieved") || strings.Contains(low, "attestation")
-	hasFixCommit := strings.Contains(low, "fix(") || strings.Contains(low, "feat(")
-	hasPass := strings.Contains(low, "pass") &&
-		(strings.Contains(low, "hermetic") ||
-			strings.Contains(low, "test") ||
-			strings.Contains(low, "oracle") ||
-			strings.Contains(low, "playwright") ||
-			strings.Contains(low, "go test") ||
-			strings.Contains(low, "make test") ||
-			strings.Contains(low, "node "))
-
-	// SHA + closing context (fix/feat/achieved/pass/sha/commit/landed).
-	if hasSHA && (hasAchieved || hasFixCommit || hasPass ||
-		strings.Contains(low, "sha") || strings.Contains(low, "commit") ||
-		strings.Contains(low, "landed") || strings.Contains(low, "merged")) {
-		return true
-	}
-	// Achieved target attestation (with or without SHA).
-	if hasAchieved && (hasTarget || hasSHA) {
-		return true
-	}
-	// Hermetic PASS with target or SHA ties the oracle to work product.
-	if hasPass && (hasTarget || hasSHA) {
-		return true
-	}
-	// Reuse T31 oracle classifier when it already sees SHA/test evidence
-	// alongside a completion claim (achieved/done/finished).
-	if HasOracleEvidence(s) && hasCompletionClaim(low) {
-		return true
-	}
-	return false
+	return HasOracleEvidence(text) || HasAcceptedRisk(text)
 }
 
 // openIntentTopicalLink is true when owner complaint and evidence answer

@@ -310,19 +310,22 @@ func TestLoadOpenOwnerIntentAnsweredFromChatlogToolUse(t *testing.T) {
 func TestOwnerIntentAnsweredWithProductEvidence(t *testing.T) {
 	t.Parallel()
 	owner := "Why is all the text jiggling by a pixel from layout thrash?"
-	if !OwnerIntentAnsweredWithProductEvidence(owner, []string{
-		"SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved.",
-	}) {
-		t.Fatal("expected answered with product evidence")
+	prose := "SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved."
+	if OwnerIntentAnsweredWithProductEvidence(owner, []string{prose}) {
+		t.Fatal("a SHA sentence is not product evidence")
 	}
 	if OwnerIntentAnsweredWithProductEvidence(owner, []string{"looking into it"}) {
 		t.Fatal("working chatter is not product evidence")
 	}
+	finish := declaredFinishReport("T341", "stop jiggle pin thrash")
+	if !OwnerIntentAnsweredWithProductEvidence(owner, []string{finish}) {
+		t.Fatal("declared oracle on the same complaint must close")
+	}
 	if OwnerIntentAnsweredWithProductEvidence(
 		"Please implement the billing export CSV",
-		[]string{"SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved."},
+		[]string{finish},
 	) {
-		t.Fatal("unrelated evidence must not close a different complaint")
+		t.Fatal("unrelated declared evidence must not close a different complaint")
 	}
 }
 
