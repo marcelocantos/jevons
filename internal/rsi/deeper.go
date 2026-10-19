@@ -390,50 +390,78 @@ func isHarnessInject(text string) bool {
 	}
 }
 
-// frictionSignal reports whether text carries owner/session product friction
-// and returns a short stable phrase for clustering (not the full message).
+// frictionSignal reports a declared friction fact and the stable phrase
+// that fact clusters under. The line is "open-intent friction <token>".
+// Owner prose is not a signal (🎯T766.4).
 func frictionSignal(text string) (bool, string) {
-	low := strings.ToLower(text)
-	// Order: longer / more specific phrases first so clustering stays useful.
-	phrases := []string{
-		"still not working",
-		"still not fixed",
-		"still broken",
-		"doesn't work",
-		"does not work",
-		"doesnt work",
-		"not working",
-		"broken again",
-		"keeps failing",
-		"keeps happening",
-		"same bug",
-		"same issue",
-		"how many times",
-		"this is broken",
-		"this broke",
-		"regression",
-		"why is this still",
-		"why does this",
-		"shouldn't have to",
-		"should not have to",
-		"forgot to file",
-		"should have filed",
-		"standing rule",
-		"going forward",
-		"from now on",
-		"permission denied",
-		"timed out",
-		"timeout",
-		"panic:",
-		"failed to",
-		"error:",
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "friction" {
+		return false, ""
 	}
-	for _, p := range phrases {
-		if strings.Contains(low, p) {
-			return true, p
-		}
+	switch fields[2] {
+	case "still-not-working":
+		return true, "still not working"
+	case "still-not-fixed":
+		return true, "still not fixed"
+	case "still-broken":
+		return true, "still broken"
+	case "doesnt-work":
+		return true, "doesnt work"
+	case "does-not-work":
+		return true, "does not work"
+	case "not-working":
+		return true, "not working"
+	case "broken-again":
+		return true, "broken again"
+	case "keeps-failing":
+		return true, "keeps failing"
+	case "keeps-happening":
+		return true, "keeps happening"
+	case "same-bug":
+		return true, "same bug"
+	case "same-issue":
+		return true, "same issue"
+	case "how-many-times":
+		return true, "how many times"
+	case "this-is-broken":
+		return true, "this is broken"
+	case "this-broke":
+		return true, "this broke"
+	case "regression":
+		return true, "regression"
+	case "why-is-this-still":
+		return true, "why is this still"
+	case "why-does-this":
+		return true, "why does this"
+	case "shouldnt-have-to":
+		return true, "shouldnt have to"
+	case "should-not-have-to":
+		return true, "should not have to"
+	case "forgot-to-file":
+		return true, "forgot to file"
+	case "should-have-filed":
+		return true, "should have filed"
+	case "standing-rule":
+		return true, "standing rule"
+	case "going-forward":
+		return true, "going forward"
+	case "from-now-on":
+		return true, "from now on"
+	case "permission-denied":
+		return true, "permission denied"
+	case "timed-out":
+		return true, "timed out"
+	case "timeout":
+		return true, "timeout"
+	case "panic":
+		return true, "panic:"
+	case "failed-to":
+		return true, "failed to"
+	case "error":
+		return true, "error:"
+	default:
+		return false, ""
 	}
-	return false, ""
 }
 
 func firstNonEmpty(vals ...string) string {

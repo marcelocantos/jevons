@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 const t757Worker = "jv-t757-probe"
@@ -85,12 +86,15 @@ func TestT757LiveParentDeliveryIncludesAge(t *testing.T) {
 	if len(parent.sent) != 1 {
 		t.Fatalf("parent deliveries=%d want 1; %v", len(parent.sent), parent.sent)
 	}
-	firstLine := strings.SplitN(parent.sent[0], "\n", 2)[0]
-	if !strings.Contains(firstLine, "report_id=") {
-		t.Fatalf("routing line missing report_id: %q", firstLine)
+	lines := strings.Split(parent.sent[0], "\n")
+	if len(lines) < 2 || lines[0] != envelope.PrefixAgentResponded {
+		t.Fatalf("parent copy missing the agent-responded fact:\n%s", parent.sent[0])
 	}
-	if !strings.Contains(firstLine, " age=") {
-		t.Fatalf("routing line missing age: %q", firstLine)
+	if !strings.Contains(lines[1], "report_id=") {
+		t.Fatalf("routing line missing report_id: %q", lines[1])
+	}
+	if !strings.Contains(lines[1], " age=") {
+		t.Fatalf("routing line missing age: %q", lines[1])
 	}
 }
 

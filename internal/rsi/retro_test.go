@@ -241,8 +241,8 @@ func TestRetroCycleJudgesHistoryAndSuppressesNoise(t *testing.T) {
 	})...)
 	// Noise: two owner-chat turns carrying a weak phrase.
 	ev = append(ev, ChatTurnsToEvidence([]ChatTurn{
-		{Role: "user", Text: "that timed out again", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at},
-		{Role: "user", Text: "it timed out", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at.Add(time.Minute)},
+		{Role: "user", Text: "open-intent friction timed-out", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at},
+		{Role: "user", Text: "open-intent friction timed-out", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at.Add(time.Minute)},
 	})...)
 
 	d := &fakeDeliverer{}

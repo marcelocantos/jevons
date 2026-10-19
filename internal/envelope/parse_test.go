@@ -119,7 +119,11 @@ func TestStripStandingBriefFact(t *testing.T) {
 
 func TestParseAfterAgentPrefix(t *testing.T) {
 	inner := Format(validFinish())
-	wrapped := "[Agent jv-t509-envelopes responded]\n" + inner
+	rendered := "[Agent jv-t509-envelopes responded]\n" + inner
+	if got, err := Parse(rendered); err != nil || got != nil {
+		t.Fatalf("rendered agent chrome parsed: got=%v err=%v", got, err)
+	}
+	wrapped := PrefixAgentResponded + "\n" + rendered
 	got, err := Parse(wrapped)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -131,13 +135,54 @@ func TestParseAfterAgentPrefix(t *testing.T) {
 
 func TestParseAfterReapedSeatPrefix(t *testing.T) {
 	inner := Format(validFinish())
-	wrapped := "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n[Agent jv-t731-probe responded] report_id=abc\n" + inner
+	rendered := "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n[Agent jv-t731-probe responded] report_id=abc\n" + inner
+	if got, err := Parse(rendered); err != nil || got != nil {
+		t.Fatalf("rendered reap chrome parsed: got=%v err=%v", got, err)
+	}
+	wrapped := PrefixReapedSeat + "\n" + "[reaped seat jv-t731-probe at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]\n" + PrefixAgentResponded + "\n[Agent jv-t731-probe responded] report_id=abc\n" + inner
 	got, err := Parse(wrapped)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if got == nil || got.Kind != KindFinishReport {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestParseFenceInfoIgnoresCase(t *testing.T) {
+	raw := "```JEVONS\njevons: kind ack\n```\n"
+	got, err := Parse(raw)
+	if err != nil || got == nil || got.Kind != KindAck {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+}
+
+func TestAnnotateFactStillParses(t *testing.T) {
+	raw := "```jevons\njevons: kind finish-report\n```\n\nno ledger"
+	_, err := Parse(raw)
+	if err == nil {
+		t.Fatal("fixture should be malformed")
+	}
+	rendered := Banner(err) + "\n\n" + raw
+	if got, parseErr := Parse(rendered); parseErr != nil || got != nil {
+		t.Fatalf("rendered envelope banner parsed: got=%v err=%v", got, parseErr)
+	}
+	got, parseErr := Parse(Annotate(raw, err))
+	if got == nil || got.Kind != KindFinishReport {
+		t.Fatalf("annotated fence not visible: got=%v err=%v", got, parseErr)
+	}
+}
+
+func TestIdentityHeaderFactStrips(t *testing.T) {
+	inner := Format(validFinish())
+	rendered := "[Who you are — from the fleet registry]\n- NAME: jevons\n\n" + inner
+	if got, stripped := StripPrefixes(rendered); stripped {
+		t.Fatalf("rendered identity header must stay, got %q", got)
+	}
+	fact := PrefixIdentity + "\n" + rendered
+	got, err := Parse(fact)
+	if err != nil || got == nil || got.Kind != KindFinishReport {
+		t.Fatalf("identity fact did not reveal the fence: got=%v err=%v", got, err)
 	}
 }
 

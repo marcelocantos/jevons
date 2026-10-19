@@ -16,8 +16,9 @@ func TestChatTurnsToEvidenceOwnerFriction(t *testing.T) {
 		{Role: "user", Text: "hello", Source: "owner_chat", SourceID: "c1"},
 		{Role: "user", Text: "the deploy still not working on iOS", Source: "owner_chat", SourceID: "c2"},
 		{Role: "assistant", Text: "I'll fix it", Source: "owner_chat", SourceID: "c3"},
-		{Role: "user", Text: "still not working after restart", Source: "owner_chat", SourceID: "c4"},
-		{Role: "user", Text: "random update", Source: "owner_chat", SourceID: "c5"},
+		{Role: "user", Text: "open-intent friction still-not-working", Source: "owner_chat", SourceID: "c4"},
+		{Role: "user", Text: "open-intent friction still-not-working", Source: "owner_chat", SourceID: "c5"},
+		{Role: "user", Text: "random update", Source: "owner_chat", SourceID: "c6"},
 	}
 	ev := ChatTurnsToEvidence(turns)
 	if len(ev) != 2 {
@@ -50,12 +51,13 @@ func TestChatTurnsToEvidenceSessionTranscript(t *testing.T) {
 	// 🎯T92.2: mnemo/session transcript surface (not only lifecycle JSONL).
 	turns := []ChatTurn{
 		{Role: "user", Text: "tool call failed to connect", Source: "session", SourceID: "sess-a"},
-		{Role: "user", Text: "again: failed to connect to MCP", Source: "session", SourceID: "sess-b"},
+		{Role: "user", Text: "open-intent friction failed-to", Source: "session", SourceID: "sess-b"},
+		{Role: "user", Text: "open-intent friction failed-to", Source: "session", SourceID: "sess-b2"},
 		{Role: "error", Text: "panic: nil pointer", Source: "session", SourceID: "sess-c"},
 	}
 	ev := ChatTurnsToEvidence(turns)
-	if len(ev) < 2 {
-		t.Fatalf("want session friction evidence, got %+v", ev)
+	if len(ev) != 3 {
+		t.Fatalf("want 2 friction facts plus the error turn, prose excluded, got %d %+v", len(ev), ev)
 	}
 	for _, e := range ev {
 		if e.Kind != "transcript_friction" {
@@ -87,8 +89,14 @@ func TestFrictionSignalIgnoresBenignAgain(t *testing.T) {
 			t.Errorf("false positive friction on %q", text)
 		}
 	}
-	if ok, phrase := frictionSignal("this is broken on master"); !ok || phrase != "this is broken" {
+	if ok, phrase := frictionSignal("this is broken on master"); ok || phrase != "" {
+		t.Errorf("prose is not a friction fact: ok=%v phrase=%q", ok, phrase)
+	}
+	if ok, phrase := frictionSignal("open-intent friction this-is-broken"); !ok || phrase != "this is broken" {
 		t.Errorf("want this is broken, got ok=%v phrase=%q", ok, phrase)
+	}
+	if ok, _ := frictionSignal("open-intent friction this-is-broken extra"); ok {
+		t.Error("a fourth token is not a friction fact")
 	}
 }
 
@@ -130,7 +138,8 @@ func TestLoadChatLogTurns(t *testing.T) {
 		`{"type":"user","timestamp":"2026-08-03T10:00:00Z","message":{"role":"user","content":"hello"}}`,
 		`{"type":"assistant","timestamp":"2026-08-03T10:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`,
 		`{"type":"user","timestamp":"2026-08-03T10:01:00Z","message":{"role":"user","content":"deploy still broken on device"}}`,
-		`{"type":"user","timestamp":"2026-08-03T10:02:00Z","message":{"role":"user","content":"still broken after rebuild"}}`,
+		`{"type":"user","timestamp":"2026-08-03T10:02:00Z","message":{"role":"user","content":"open-intent friction still-broken"}}`,
+		`{"type":"user","timestamp":"2026-08-03T10:02:30Z","message":{"role":"user","content":"open-intent friction still-broken"}}`,
 		`{"type":"user","timestamp":"2026-08-03T10:03:00Z","message":{"role":"user","content":"[Daemon restart. Your session was rotated]"}}`,
 		`{"type":"user","timestamp":"2026-08-03T10:04:00Z","message":{"role":"user","content":"open-intent harness daemon-restart"}}`,
 	}, "\n") + "\n"
@@ -141,9 +150,10 @@ func TestLoadChatLogTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The rendered restart banner is owner text. The declared fact is not.
-	if len(turns) != 4 {
-		t.Fatalf("want 4 user turns (fact skipped, banner kept), got %d %+v", len(turns), turns)
+	// The rendered restart banner and the prose complaint are owner text.
+	// The harness fact is skipped. The friction facts stay and count.
+	if len(turns) != 5 {
+		t.Fatalf("want 5 user turns (harness fact skipped, banner and prose kept), got %d %+v", len(turns), turns)
 	}
 	ev := ChatTurnsToEvidence(turns)
 	if len(ev) != 2 {
@@ -187,7 +197,7 @@ func TestLoadRecentSessionTurns(t *testing.T) {
 		}
 		// Touch order: sleep not needed if we set mtime via WriteFile order + Chtimes.
 		path := filepath.Join(d, "chat_history.jsonl")
-		line := `{"type":"user","content":"keeps failing on spawn"}` + "\n"
+		line := `{"type":"user","content":"open-intent friction keeps-failing"}` + "\n"
 		if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +230,7 @@ func TestRunCycleFromChatLogDeeperPath(t *testing.T) {
 	}
 	body := ""
 	for i := 0; i < 3; i++ {
-		body += `{"type":"user","message":{"role":"user","content":"the mobile smoke still not working"}}` + "\n"
+		body += `{"type":"user","message":{"role":"user","content":"open-intent friction still-not-working"}}` + "\n"
 	}
 	if err := os.WriteFile(chatPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -262,11 +272,11 @@ func TestRunCycleSessionTranscriptAndMaxMint(t *testing.T) {
 	state := t.TempDir()
 	sessRoot := filepath.Join(state, "sessions")
 	phrases := []string{
-		"still not working on a",
-		"doesn't work on b",
-		"keeps failing on c",
-		"this is broken on d",
-		"regression on e",
+		"open-intent friction still-not-working",
+		"open-intent friction does-not-work",
+		"open-intent friction keeps-failing",
+		"open-intent friction this-is-broken",
+		"open-intent friction regression",
 	}
 	for i, p := range phrases {
 		d := filepath.Join(sessRoot, "p", "s"+string(rune('a'+i)))
@@ -341,8 +351,10 @@ func TestRunCycleChatAndEventlogTogether(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(chatPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Prose is not friction. Two declared facts cluster into the chat candidate.
 	chat := `{"type":"user","message":{"role":"user","content":"notification path doesn't work"}}` + "\n" +
-		`{"type":"user","message":{"role":"user","content":"still doesn't work after restart"}}` + "\n"
+		`{"type":"user","message":{"role":"user","content":"open-intent friction doesnt-work"}}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"open-intent friction doesnt-work"}}` + "\n"
 	if err := os.WriteFile(chatPath, []byte(chat), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -365,6 +377,15 @@ func TestRunCycleChatAndEventlogTogether(t *testing.T) {
 	}
 	if len(res.Proposed) < 2 {
 		t.Fatalf("want eventlog + chat candidates, proposed=%+v", res.Proposed)
+	}
+	var sawChat bool
+	for _, p := range res.Proposed {
+		if p.Phrase == "doesnt work" {
+			sawChat = true
+		}
+	}
+	if !sawChat {
+		t.Fatalf("chat fact did not cluster, proposed=%+v", res.Proposed)
 	}
 	if len(res.Filed) != 2 {
 		t.Fatalf("want 2 filed (max), got %+v", res.Filed)

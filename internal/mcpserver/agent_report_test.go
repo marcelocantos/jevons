@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T388 product-path oracle. The pure elision/store logic is pinned in
@@ -96,7 +97,7 @@ func TestNotifyShortReportIsUnchanged(t *testing.T) {
 
 	s.notify("jv-t999-x", report)
 
-	want := "[Agent jv-t999-x responded]\n" + report
+	want := envelope.PrefixAgentResponded + "\n[Agent jv-t999-x responded]\n" + report
 	if *delivered != want {
 		t.Errorf("short report delivery changed:\n got: %q\nwant: %q", *delivered, want)
 	}

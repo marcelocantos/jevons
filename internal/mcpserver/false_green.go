@@ -160,6 +160,16 @@ func FalseGreenBanner(report string) string {
 	return gate.Banner(FalseGreenFlags(report))
 }
 
+// falseGreenLead is the notify-path prefix: a declared fact, then the
+// rendered banner, then the report. StripPrefixes peels the fact. The
+// rendered banner alone is not a prefix.
+func falseGreenLead(agent string, flags []gate.Flag, msg string) string {
+	if len(flags) == 0 {
+		return msg
+	}
+	return envelope.PrefixFalseGreen + "\n" + gate.BannerFor(agent, flags) + "\n\n" + msg
+}
+
 // falseGreenKinds names the flags for the lifecycle log, which is read as a
 // stream rather than as prose.
 func falseGreenKinds(flags []gate.Flag) []string {

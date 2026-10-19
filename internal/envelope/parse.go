@@ -15,6 +15,14 @@ const (
 	FenceInfo = "jevons"
 	// Sigil prefixes every slot line. Spelled out; never abbreviated.
 	Sigil = "jevons:"
+
+	// Prefix facts are the only daemon chrome StripPrefixes peels.
+	// A rendered banner is not one of these lines (🎯T766.4).
+	PrefixAgentResponded = "open-intent prefix agent-responded"
+	PrefixReapedSeat     = "open-intent prefix reaped-seat"
+	PrefixFalseGreen     = "open-intent prefix false-green"
+	PrefixEnvelopeCheck  = "open-intent prefix envelope-check"
+	PrefixIdentity       = "open-intent prefix identity"
 )
 
 // BannerHeading opens the note prepended to a malformed load-bearing
@@ -161,9 +169,9 @@ func (m *Message) SlotsFingerprint() string {
 //	(msg, err)  — envelope present but malformed / missing required slots
 //
 // The fence is sought at line 1 of the author's content after stripping
-// known daemon prefixes ([Agent … responded], [reaped seat …] 🎯T731,
-// identity header, check banners). A fence deeper in the body is treated
-// as a quotation and is not an envelope.
+// a declared prefix fact (open-intent prefix <kind>) or a standing-brief
+// fact. A rendered banner is not stripped. A fence deeper in the body is
+// treated as a quotation and is not an envelope.
 func Parse(text string) (*Message, error) {
 	body, _ := StripPrefixes(text)
 	if body == "" {
@@ -207,34 +215,50 @@ func StripPrefixes(text string) (string, bool) {
 
 func stripOnePrefix(s string) (string, bool) {
 	s = strings.TrimLeft(s, "\r")
-	if strings.HasPrefix(s, "[Agent ") || strings.HasPrefix(s, "[reaped seat ") {
-		if i := strings.IndexByte(s, '\n'); i >= 0 {
-			return s[i+1:], true
-		}
-		return "", true
-	}
-	if strings.HasPrefix(s, "[Who you are") {
-		// Identity header runs until a blank line followed by the standing
-		// brief or the author's content. A lone blank line ends it.
-		rest := s
-		if i := strings.Index(rest, "\n\n"); i >= 0 {
-			return rest[i+2:], true
-		}
-		return "", true
-	}
-	if strings.HasPrefix(s, "⚠ FALSE-GREEN") || strings.HasPrefix(s, "⚠ ENVELOPE CHECK") {
-		if i := strings.Index(s, "\n\n"); i >= 0 {
-			return s[i+2:], true
-		}
-		if i := strings.IndexByte(s, '\n'); i >= 0 {
-			return s[i+1:], true
-		}
-		return "", true
+	if rest, ok := stripDeclaredPrefix(s); ok {
+		return rest, true
 	}
 	if rest, ok := stripStandingBrief(s); ok {
 		return rest, true
 	}
 	return s, false
+}
+
+// stripDeclaredPrefix peels one "open-intent prefix <kind>" fact.
+// agent-responded and reaped-seat also drop the chrome line that follows
+// the fact. identity, false-green, and envelope-check drop through the
+// next blank line. A rendered banner with no fact stays.
+func stripDeclaredPrefix(s string) (string, bool) {
+	nl := strings.IndexByte(s, '\n')
+	first := s
+	if nl >= 0 {
+		first = s[:nl]
+	}
+	fields := strings.Fields(first)
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "prefix" {
+		return "", false
+	}
+	switch fields[2] {
+	case "agent-responded", "reaped-seat":
+		if nl < 0 {
+			return "", true
+		}
+		rest := s[nl+1:]
+		if i := strings.IndexByte(rest, '\n'); i >= 0 {
+			return rest[i+1:], true
+		}
+		return "", true
+	case "identity", "false-green", "envelope-check":
+		if i := strings.Index(s, "\n\n"); i >= 0 {
+			return s[i+2:], true
+		}
+		if nl >= 0 {
+			return s[nl+1:], true
+		}
+		return "", true
+	default:
+		return "", false
+	}
 }
 
 // stripStandingBrief peels a brief that opens with the declared fact
@@ -263,28 +287,26 @@ func stripStandingBrief(s string) (string, bool) {
 // so a mid-stream paint is not flagged as malformed.
 func splitFence(text string) (fence, payload string, ok bool) {
 	s := strings.TrimLeft(text, " \t")
-	if !strings.HasPrefix(s, "```") {
+	const open = "```"
+	if len(s) < len(open) || s[:len(open)] != open {
 		return "", "", false
 	}
 	nl := strings.IndexByte(s, '\n')
 	if nl < 0 {
 		return "", "", false
 	}
-	info := strings.TrimSpace(strings.TrimPrefix(s[:nl], "```"))
+	info := strings.TrimSpace(s[len(open):nl])
 	fields := strings.Fields(info)
-	if len(fields) == 0 || !strings.EqualFold(fields[0], FenceInfo) {
+	if len(fields) == 0 || strings.ToLower(fields[0]) != FenceInfo {
 		return "", "", false
 	}
 	rest := s[nl+1:]
-	closer := "\n```"
+	const closer = "\n```"
 	ci := strings.Index(rest, closer)
 	if ci < 0 {
-		// Closing fence as the last characters, no trailing newline.
-		if strings.HasSuffix(rest, "\n```") || rest == "```" {
-			if rest == "```" {
-				return "", "", true
-			}
-			return rest[:len(rest)-4], "", true
+		// Closing fence as the whole remainder, with no newline before it.
+		if rest == "```" {
+			return "", "", true
 		}
 		return "", "", false
 	}
@@ -595,7 +617,7 @@ func Annotate(text string, err error) string {
 	if err == nil {
 		return text
 	}
-	return Banner(err) + "\n\n" + text
+	return PrefixEnvelopeCheck + "\n" + Banner(err) + "\n\n" + text
 }
 
 // CorrectionNotice is what the daemon sends BACK TO THE AUTHOR (not the

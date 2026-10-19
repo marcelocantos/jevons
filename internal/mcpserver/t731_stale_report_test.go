@@ -103,8 +103,11 @@ func TestFormatReapedReportBannerCarriesTime(t *testing.T) {
 	if !strings.Contains(got, "not current ledger or fleet state") {
 		t.Fatalf("missing stale-claim sentence: %q", got)
 	}
-	if !strings.HasPrefix(got, reapedSeatPrefix) {
+	if !strings.HasPrefix(got, envelope.PrefixReapedSeat+"\n") {
 		t.Fatalf("prefix: %q", got)
+	}
+	if !strings.Contains(got, reapedSeatPrefix) {
+		t.Fatalf("missing chrome: %q", got)
 	}
 }
 
@@ -178,7 +181,7 @@ func TestT731LiveSeatReportIsUnmarked(t *testing.T) {
 	if strings.Contains(inbox.texts[0], reapedSeatPrefix) {
 		t.Fatalf("overseer copy of a live report was marked:\n%s", inbox.texts[0])
 	}
-	if inbox.texts[0] != "[Agent "+t731Live+" responded]\n"+t731Report {
+	if inbox.texts[0] != envelope.PrefixAgentResponded+"\n[Agent "+t731Live+" responded]\n"+t731Report {
 		t.Fatalf("overseer short-report chrome drifted:\n%q", inbox.texts[0])
 	}
 	_ = live
@@ -207,7 +210,7 @@ func TestT731ReapedBannerStillParsesEnvelope(t *testing.T) {
 	})
 	wrapped := FormatReapedReportBanner(t731Worker, fleetintent.Record{
 		At: time.Date(2026, 9, 20, 15, 42, 7, 0, time.UTC),
-	}) + "\n[Agent " + t731Worker + " responded] report_id=abc\n" + inner
+	}) + "\n" + formatAgentResponded(t731Worker, agentreport.Handle{Agent: t731Worker, ReportID: "abc"}, inner, time.Time{})
 	got, err := envelope.Parse(wrapped)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -256,7 +259,6 @@ func TestT747DifferentBodyStillDelivered(t *testing.T) {
 		t.Fatalf("sent+queued=%d want 2 (sent=%d): %v", got, len(parent.sent), parent.sent)
 	}
 }
-
 
 // T766.5.1: if a pending copy exists when the same report is independently
 // received, the stale queue entry must not generate a second user message.

@@ -29,7 +29,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
-	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatstop"
@@ -1823,7 +1822,7 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 			"retrievable", !handle.Empty())
 	}
 
-	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
+	msg := envelope.PrefixAgentResponded + "\n" + fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
 	parentMsg := formatAgentResponded(agentName, handle, elision.Text, s.deliveryNow())
 
 	// 🎯T386: a green the report's own evidence does not support is flagged
@@ -1848,9 +1847,8 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 		s.logLifecycle(compAgentLifecycle, "false_green", "flagged", map[string]any{
 			"agent": agentName, "flags": kinds,
 		})
-		banner := gate.BannerFor(agentName, flags) + "\n\n"
-		msg = banner + msg
-		parentMsg = banner + parentMsg
+		msg = falseGreenLead(agentName, flags, msg)
+		parentMsg = falseGreenLead(agentName, flags, parentMsg)
 	}
 
 	// 🎯T690: the stored terminal report reaches the registry parent on the

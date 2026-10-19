@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
@@ -52,7 +53,7 @@ func FormatReapedReportBanner(agent string, rec fleetintent.Record) string {
 	if !rec.At.IsZero() {
 		at = rec.At.UTC().Format(time.RFC3339)
 	}
-	return fmt.Sprintf("[reaped seat %s at %s — this report describes that moment, not current ledger or fleet state (🎯T731)]",
+	return envelope.PrefixReapedSeat + "\n" + fmt.Sprintf("[reaped seat %s at %s — this report describes that moment, not current ledger or fleet state (🎯T731)]",
 		agent, at)
 }
 
@@ -89,7 +90,7 @@ func agentRespondedRoutingLine(agent string, h agentreport.Handle, now time.Time
 
 func formatAgentResponded(agent string, h agentreport.Handle, body string, now time.Time) string {
 	agent = strings.TrimSpace(agent)
-	return agentRespondedRoutingLine(agent, h, now) + "\n" + body
+	return envelope.PrefixAgentResponded + "\n" + agentRespondedRoutingLine(agent, h, now) + "\n" + body
 }
 
 func replaceAgentRespondedChrome(text, agent string, h agentreport.Handle, now time.Time) string {
@@ -216,7 +217,18 @@ type parentReportPrep struct {
 
 func hasReapedSeatBanner(text string) bool {
 	s := strings.TrimLeft(text, " \t\r\n")
-	return strings.HasPrefix(s, reapedSeatPrefix)
+	nl := strings.IndexByte(s, '\n')
+	first := s
+	if nl >= 0 {
+		first = s[:nl]
+	}
+	if strings.TrimSpace(first) == envelope.PrefixReapedSeat {
+		return true
+	}
+	// A copy wrapped before the fact line still counts, so prepareParentReport
+	// does not stamp a second banner onto it.
+	const legacy = "[reaped seat "
+	return len(s) >= len(legacy) && s[:len(legacy)] == legacy
 }
 
 func (s *Server) prepareParentReport(dest, text string, fulfilling bool) parentReportPrep {
