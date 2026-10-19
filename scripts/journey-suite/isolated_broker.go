@@ -92,7 +92,9 @@ func (s *suite) withIsolatedBroker(run func(*suite) error) (result error) {
 		stopErr := child.signalStop(8 * time.Second)
 		brokerErr := b.close()
 		if result != nil {
-			for _, name := range []string{"jevonsd.log", "claudia-broker.log", "omp-sidecar.log"} {
+			// The child's store holds the agents' own words, which the logs
+			// do not; keep it beside them for a failed journey.
+			for _, name := range []string{"jevonsd.log", "claudia-broker.log", "omp-sidecar.log", "jevons.db", "jevons.db-wal", "jevons.db-shm"} {
 				if body, err := os.ReadFile(filepath.Join(state, name)); err == nil {
 					_ = os.WriteFile(filepath.Join(s.stateDir, "migration-"+name), body, 0o600)
 				}

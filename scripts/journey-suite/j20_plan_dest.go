@@ -178,6 +178,12 @@ func (s *suite) restorePlanAfterJ20(path string) error {
 	for _, name := range []string{"jv-t39015-park", "jv-t39015-po"} {
 		_, _ = s.mcpText("jevons_agent_kill", map[string]any{"name": name, "actor": "jevons", "force": true})
 	}
+	// Recovery re-mints the parked overseer, and the new seat may still be
+	// working whatever the park interrupted (a research brief, in the
+	// 2026-10-20 green run). Hand the next journey an idle overseer.
+	if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, overseerIdleBefore); err != nil {
+		return fmt.Errorf("the overseer J20's recovery brought back never went idle: %w", err)
+	}
 	return nil
 }
 
