@@ -114,10 +114,20 @@ func TestExtractOpenOwnerIntentResiduals(t *testing.T) {
 		t.Fatalf("empty: residual=%q", r.Residual)
 	}
 	if r := ExtractOpenOwnerIntent([]OwnerIntentTurn{
-		{Text: "[Daemon restart 12:00] reattached"},
-		{Text: "[event: daemon-restarted] fleet status"},
+		{Text: "open-intent harness daemon-restart"},
+		{Text: "open-intent harness event"},
 	}); r.Residual != ResidualOnlyHarness {
 		t.Fatalf("harness: residual=%q", r.Residual)
+	}
+	banner := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: "[Daemon restart 12:00] reattached"},
+		{Text: "[event: daemon-restarted] fleet status"},
+	})
+	if !banner.Recoverable() {
+		t.Fatalf("a restart banner is owner text, residual=%q", banner.Residual)
+	}
+	if !strings.Contains(banner.Text, "daemon-restarted") {
+		t.Fatalf("banner must stay the open text, got %q", banner.Text)
 	}
 	if r := ExtractOpenOwnerIntent([]OwnerIntentTurn{
 		{Text: "ok"},
@@ -255,6 +265,40 @@ func TestNotifyDaemonRestartedOverseerOpenIntentEvent(t *testing.T) {
 	}
 	if !strings.Contains(text, "shove it into the document") {
 		t.Fatal(text)
+	}
+}
+
+func TestIsOpenIntentHarness(t *testing.T) {
+	t.Parallel()
+	harness := []string{
+		"",
+		`{"type":"ux_state","composer_blocked":false}`,
+		"open-intent harness daemon-restart",
+		"open-intent harness standing-brief",
+		"open-intent harness event",
+		"open-intent harness system-reminder",
+		"open-intent harness agent-responded",
+	}
+	for _, h := range harness {
+		if !isOpenIntentHarness(h) {
+			t.Errorf("want harness: %q", h)
+		}
+	}
+	owner := []string{
+		"[Daemon restart 12:00] reattached",
+		"[Jevons fleet standing brief] Execute T444.",
+		"[event: daemon-restarted] fleet status",
+		"<system-reminder> background task completed",
+		"a system-reminder leaked into the chat",
+		"[Agent jevons-po responded] report",
+		"open-intent harness",
+		"open-intent harness other",
+		"open-intent harness daemon-restart please",
+	}
+	for _, o := range owner {
+		if isOpenIntentHarness(o) {
+			t.Errorf("want owner text: %q", o)
+		}
 	}
 }
 

@@ -33,10 +33,9 @@ import (
 // 🎯T528: a Goal / open-objective naming TargetIDs is closed when every named
 // id is achieved (or set_aside) in the ledger — Session Goal Continue must
 // not re-inject "Continue the open objective" for that text.
-// 🎯T551: marked send/delivery probes (ping-send-check,
-// http-send-probe-do-not-treat-as-owner-intent, …) are never recoverable
-// open owner work — probes are intentionally labelled, not answered by
-// T344/T477 closure.
+// 🎯T551: a declared send-probe fact (open-intent send-probe, or that
+// fact plus one token) is never recoverable open owner work. A slug or
+// a sentence that mentions a probe is owner text (🎯T766.4).
 // 🎯T568: a later sentence is not a close (🎯T766.4). An overseer reply
 // that names a TargetID achieved or set_aside in the ledger still closes,
 // even when the owner text named none. A bare ack does not close. The
@@ -1252,58 +1251,42 @@ func FormatOverseerOpenIntentResume(intent OpenOwnerIntent, parent string, worke
 	return b.String()
 }
 
-// isOpenIntentSendProbe reports marked send/delivery diagnostic lines that
-// must never become recoverable open owner work (🎯T551). Probes carry an
-// explicit label (do-not-treat-as-owner-intent) or a hyphenated slug token
-// (*-send-check, *-send-probe*) with no interior spaces — not owner prose
-// that merely mentions send-probe in a sentence.
+// isOpenIntentSendProbe reports a declared send-probe fact (🎯T551, 🎯T766.4).
+// The line is "open-intent send-probe" or that fact plus one token.
+// A slug or a sentence that mentions send-probe is owner text.
 func isOpenIntentSendProbe(text string) bool {
-	t := strings.TrimSpace(text)
-	if t == "" {
+	fields := strings.Fields(text)
+	switch len(fields) {
+	case 2, 3:
+	default:
 		return false
 	}
-	low := strings.ToLower(t)
-	if strings.Contains(low, "do-not-treat-as-owner-intent") {
-		return true
-	}
-	// Slug-shaped diagnostics: single token, no owner prose spaces.
-	if strings.ContainsAny(low, " \t\n") {
-		return false
-	}
-	if strings.HasSuffix(low, "-send-check") {
-		return true
-	}
-	if strings.Contains(low, "send-probe") {
-		return true
-	}
-	return false
+	return fields[0] == "open-intent" && fields[1] == "send-probe"
 }
 
-// isOpenIntentHarness matches harness/system injects that are not owner work.
+// isOpenIntentHarness reports machine turns that are not owner work.
+// Empty text is not an instruction. A protocol frame is a JSON object
+// with a type field (🎯T362). A declared fact is "open-intent harness"
+// plus one kind: daemon-restart, standing-brief, event, system-reminder,
+// or agent-responded. A rendered banner is owner text (🎯T766.4).
 func isOpenIntentHarness(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return true
 	}
-	// 🎯T362: client protocol control frames ({"type":"ux_state",…}) that
-	// leaked into the owner chatlog are machine wire, never an instruction.
-	// Resuming one re-fires composer telemetry as the open mission after
-	// every restart — the exact spam this filter stops.
 	if isOpenIntentProtocolJSON(t) {
 		return true
 	}
-	if strings.HasPrefix(t, "[Daemon restart") ||
-		strings.HasPrefix(t, "[Jevons fleet standing brief") ||
-		strings.HasPrefix(t, "[event:") {
-		return true
+	fields := strings.Fields(t)
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "harness" {
+		return false
 	}
-	if strings.Contains(t, "<system-reminder>") || strings.Contains(t, "system-reminder") {
+	switch fields[2] {
+	case "daemon-restart", "standing-brief", "event", "system-reminder", "agent-responded":
 		return true
+	default:
+		return false
 	}
-	if strings.HasPrefix(t, "[Agent ") && strings.Contains(t, "responded]") {
-		return true
-	}
-	return false
 }
 
 // isOpenIntentProtocolJSON reports whether a chatlog user turn is really a

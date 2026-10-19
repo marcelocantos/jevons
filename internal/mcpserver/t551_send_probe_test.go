@@ -16,10 +16,10 @@ import (
 func TestExtractOpenOwnerIntentIgnoresSendProbeOnly(t *testing.T) {
 	t.Parallel()
 	cases := []string{
-		"http-send-probe-do-not-treat-as-owner-intent",
-		"ping-send-check",
-		"ws-send-check",
-		"send-probe-mux-echo",
+		"open-intent send-probe",
+		"open-intent send-probe http",
+		"open-intent send-probe ping",
+		"open-intent send-probe mux",
 	}
 	for _, probe := range cases {
 		got := ExtractOpenOwnerIntent([]OwnerIntentTurn{{Text: probe}})
@@ -37,7 +37,7 @@ func TestExtractOpenOwnerIntentSendProbeAnsweredStillNotSubstantive(t *testing.T
 	// Live incident: probe answered with "Probe only — no action" still must not
 	// resume — T344 closes substantive turns; probes never enter the set.
 	turns := []OwnerIntentTurn{
-		{Role: "user", Text: "http-send-probe-do-not-treat-as-owner-intent"},
+		{Role: "user", Text: "open-intent send-probe http"},
 		{Role: "assistant", Text: "Received. Probe only — no action."},
 	}
 	got := ExtractOpenOwnerIntent(turns)
@@ -52,7 +52,7 @@ func TestExtractOpenOwnerIntentSendProbeAnsweredStillNotSubstantive(t *testing.T
 func TestExtractOpenOwnerIntentStillRecoversAfterSendProbe(t *testing.T) {
 	t.Parallel()
 	turns := []OwnerIntentTurn{
-		{Role: "user", Text: "ping-send-check", TS: time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)},
+		{Role: "user", Text: "open-intent send-probe ping", TS: time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)},
 		{Role: "assistant", Text: "Received. Probe only — no action."},
 		{
 			Role: "user",
@@ -77,7 +77,7 @@ func TestLoadOpenOwnerIntentSendProbeChatlog(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := strings.Join([]string{
-		`{"type":"user","timestamp":"2026-08-26T12:00:00Z","message":{"role":"user","content":"http-send-probe-do-not-treat-as-owner-intent"}}`,
+		`{"type":"user","timestamp":"2026-08-26T12:00:00Z","message":{"role":"user","content":"open-intent send-probe http"}}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Received. Probe only — no action."}]}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(chatDir, "jevons.jsonl"), []byte(body), 0o644); err != nil {
@@ -95,10 +95,10 @@ func TestLoadOpenOwnerIntentSendProbeChatlog(t *testing.T) {
 func TestIsOpenIntentSendProbe(t *testing.T) {
 	t.Parallel()
 	probes := []string{
-		"http-send-probe-do-not-treat-as-owner-intent",
-		"ping-send-check",
-		" mux-send-check ",
-		"send-probe-root-echo",
+		"open-intent send-probe",
+		"open-intent send-probe ping",
+		" open-intent send-probe mux ",
+		"open-intent send-probe root",
 	}
 	for _, p := range probes {
 		if !isOpenIntentSendProbe(p) {
@@ -107,6 +107,11 @@ func TestIsOpenIntentSendProbe(t *testing.T) {
 	}
 	notProbes := []string{
 		"",
+		"http-send-probe-do-not-treat-as-owner-intent",
+		"ping-send-check",
+		"mux-send-check",
+		"send-probe-root-echo",
+		"open-intent send-probe filter for restart",
 		"Please implement the send path fix",
 		"Why does ping fail on send?",
 		"Probe the API and file a target if broken",
