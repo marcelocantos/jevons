@@ -126,6 +126,8 @@ func TestT7664ErrorCauseEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "plan_policy.go"), "planSwitch", "turnInFlight")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../relayroute/classify.go"), "Classify", "Reason", "envelopeRoute")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t869_plan_only.go"), "shouldForwardAgentReply", "barePlanSentence")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ReportAwaitsOverseer")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_residue_evidence.go"), "fillIdleResidueEvidence")...)
 	if len(hits) != len(t7664ErrorEnglishAllowlist) {
 		t.Fatalf("error-control English classifiers = %v, allowlist %v", hits, t7664ErrorEnglishAllowlist)
 	}
@@ -150,7 +152,7 @@ func englishSelectorsIn(t *testing.T, path string, names ...string) []string {
 		"ClassifyReportAsk": true, "ClassifyReportAskDetail": true,
 		"hasFinishShape": true, "hasCompletionClaim": true, "hasForwardLookingPlan": true,
 		"LooksLikeOwnWorkCompleteReport": true, "containsAny": true,
-		"FindCompletionClaim": true, "ReportAwaitsOverseer": true,
+		"FindCompletionClaim":    true,
 		"FindActiveExternalWait": true, "declaresBlockingGateWaitLocalized": true,
 		"DeclaresBlockingGateWait": true, "declaresActiveExternalWait": true,
 		"declaresUnresolvedExternalWait": true,

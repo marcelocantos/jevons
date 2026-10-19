@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/noopwedge"
 )
 
@@ -707,18 +708,22 @@ func isCheckpointDelimited(rest string) bool {
 	return false
 }
 
-// ReportAwaitsOverseer is true when the report needs an answer to continue, so
-// reaping it would strand the mission (🎯T395).
-//
-// AskNoClaim is the other kind of not-a-finish (🎯T723): the report says
-// nothing, so the seat stays, but the parent is not being asked a question.
-// Treating silence as an overseer-ask would mark idle ack seats blocked-on-owner.
+// ReportAwaitsOverseer is true when the report declares that it needs an
+// answer to continue (🎯T395, 🎯T766.4). A valid escalation, a valid
+// target-file request, or a blocked finish-report is that declaration.
+// A sentence that asks is not. Silence is not an ask (🎯T723).
 func ReportAwaitsOverseer(report string) bool {
-	switch ClassifyReportAsk(report) {
-	case AskNone, AskNoClaim:
+	m, err := envelope.Parse(report)
+	if err != nil || m == nil {
 		return false
-	default:
+	}
+	switch m.Kind {
+	case envelope.KindEscalation, envelope.KindTargetFileRequest:
 		return true
+	case envelope.KindFinishReport:
+		return m.IsBlocked()
+	default:
+		return false
 	}
 }
 

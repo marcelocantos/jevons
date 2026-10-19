@@ -45,6 +45,8 @@ func fillIdleResidueEvidence(ao *staffops.AgentObs, d claudia.AgentDef, stateDir
 			// 🎯T1024: a finish shape that leaves scope outstanding (mid-gate,
 			// mid-wait, typed in-progress) is not finished_awaiting_gate.
 			ao.ReportLooksFinished = storedReportLooksFinished(rec.Text)
+			// A declared escalation, target-file request, or blocked finish
+			// is an ask. A sentence is not (🎯T766.4).
 			if ReportAwaitsOverseer(rec.Text) {
 				ao.OwnerAskPresent = true
 			}
