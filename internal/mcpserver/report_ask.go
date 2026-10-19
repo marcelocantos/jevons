@@ -100,32 +100,6 @@ func (c ReportAskClass) String() string {
 	}
 }
 
-// forwardLookingPlanMarkers are remaining-work phrases that mean the report
-// is a checkpoint, not a finish (🎯T577). Distinct from a line-initial
-// "Checkpoint" declaration: these may appear anywhere. The word "checkpoint"
-// itself stays declaration-only so a genuine finish ABOUT checkpoint
-// handling still reaps (🎯T446 / 🎯T497 mention).
-//
-// 🎯T716: "next turn:" (colon required) names remaining work the way
-// "next step" already did. Bare "the next turn" is not a plan —
-// "Done. Ready for the next turn." must still reap.
-// "not yet committed" / "not yet tested" are the incident's own unfinished
-// clauses; a mis-enveloped finish-report carrying them still reaps (kind
-// wins) but notifies the PO to respawn (T577).
-var forwardLookingPlanMarkers = []string{
-	"next step",
-	"next turn:",
-	"next work:",
-	"remaining scope:",
-	"remaining work:",
-	"not yet committed",
-	"not yet tested",
-	"i'll resume",
-	"i will resume",
-	"turn-depth ceiling",
-	"ending the turn here",
-}
-
 // ReportAskFinding is a classification plus the evidence for it: the marker
 // that matched and the span of report text it fired on (🎯T439). Offset is a
 // byte offset into the report as passed, so the span can be located again.
@@ -166,17 +140,9 @@ func ClassifyReportAskDetail(report string) ReportAskFinding {
 	return ReportAskFinding{Class: AskNone}
 }
 
-// hasForwardLookingPlan detects named remaining work (T577 / T784),
-// including the payload of a typed finish-report.
-func hasForwardLookingPlan(report string) bool {
-	lower := asciiLower(report)
-	for _, m := range forwardLookingPlanMarkers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
+// hasForwardLookingPlan is not a remaining-work decision (🎯T766.4).
+// A sentence that names a next step is not a plan slot.
+func hasForwardLookingPlan(string) bool { return false }
 
 // ReportAwaitsOverseer is true when the report declares that it needs an
 // answer to continue (🎯T395, 🎯T766.4). A valid escalation, a valid

@@ -37,7 +37,7 @@ func TestT512ExtractKillProseStaysOpen(t *testing.T) {
 
 func TestT512ExtractStructuredKillCloses(t *testing.T) {
 	t.Parallel()
-	turns := []OwnerIntentTurn{
+	prose := []OwnerIntentTurn{
 		{
 			Role: "user",
 			Text: "Kill jevons-po",
@@ -49,7 +49,23 @@ func TestT512ExtractStructuredKillCloses(t *testing.T) {
 			TS:   time.Date(2026, 8, 18, 12, 1, 0, 0, time.UTC),
 		},
 	}
-	got := ExtractOpenOwnerIntent(turns)
+	got := ExtractOpenOwnerIntent(prose)
+	if !got.Recoverable() {
+		t.Fatalf("a kill sentence is not a fleet-op directive, residual=%q", got.Residual)
+	}
+	turns := []OwnerIntentTurn{
+		{
+			Role: "user",
+			Text: "fleet-op agent_kill jevons-po",
+			TS:   time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			Role: "assistant",
+			Text: "fleet-op agent_kill jevons-po",
+			TS:   time.Date(2026, 8, 18, 12, 1, 0, 0, time.UTC),
+		},
+	}
+	got = ExtractOpenOwnerIntent(turns)
 	if got.Recoverable() {
 		t.Fatalf("structured agent_kill must not recover, text=%q residual=%q", got.Text, got.Residual)
 	}
@@ -119,17 +135,22 @@ func TestT512OwnerFleetDirectiveCompletedHelpers(t *testing.T) {
 	}) {
 		t.Fatal("kill prose must not complete the directive")
 	}
-	if !OwnerFleetDirectiveCompleted("Kill jevons-po", []string{
+	if OwnerFleetDirectiveCompleted("Kill jevons-po", []string{
+		"fleet-op agent_kill jevons-po",
+	}) {
+		t.Fatal("a kill sentence is not a fleet-op directive")
+	}
+	if !OwnerFleetDirectiveCompleted("fleet-op agent_kill jevons-po", []string{
 		"fleet-op agent_kill jevons-po",
 	}) {
 		t.Fatal("structured agent_kill must complete the directive")
 	}
-	if OwnerFleetDirectiveCompleted("Kill jevons-po", []string{
+	if OwnerFleetDirectiveCompleted("fleet-op agent_kill jevons-po", []string{
 		"fleet-op agent_kill jv-t999-other",
 	}) {
 		t.Fatal("structured kill of another seat must not complete the directive")
 	}
-	if OwnerFleetDirectiveCompleted("Kill jevons-po", []string{"working on the kill"}) {
+	if OwnerFleetDirectiveCompleted("fleet-op agent_kill jevons-po", []string{"working on the kill"}) {
 		t.Fatal("progress chatter must not complete a kill directive")
 	}
 	if OwnerFleetDirectiveCompleted("Please fix the chat wire bug", []string{
@@ -142,7 +163,12 @@ func TestT512OwnerFleetDirectiveCompletedHelpers(t *testing.T) {
 	}) {
 		t.Fatal("nameless mass kill must not pretend a concrete seat closed")
 	}
-	if !OwnerFleetDirectiveCompleted("Please stop the `jv-t100-worker` agent", []string{
+	if OwnerFleetDirectiveCompleted("Please stop the `jv-t100-worker` agent", []string{
+		"fleet-op agent_stop jv-t100-worker",
+	}) {
+		t.Fatal("a stop sentence is not a fleet-op directive")
+	}
+	if !OwnerFleetDirectiveCompleted("fleet-op agent_stop jv-t100-worker", []string{
 		"fleet-op agent_stop jv-t100-worker",
 	}) {
 		t.Fatal("structured agent_stop must complete the stop directive")
@@ -193,7 +219,7 @@ func TestT512LoadKillWithoutEvidenceStillRecoversFromChatlog(t *testing.T) {
 	}
 }
 
-func TestT512LoadKillCompletedFromChatlogToolUse(t *testing.T) {
+func TestT512LoadKillSentencePlusToolUseStaysOpen(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	chatDir := filepath.Join(dir, "chatlog")
@@ -203,6 +229,27 @@ func TestT512LoadKillCompletedFromChatlogToolUse(t *testing.T) {
 	path := filepath.Join(chatDir, "jevons.jsonl")
 	body := strings.Join([]string{
 		`{"type":"user","timestamp":"2026-08-18T12:00:00Z","message":{"role":"user","content":"Kill jevons-po"}}`,
+		`{"type":"assistant","timestamp":"2026-08-18T12:01:00Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"use_tool","input":{"tool_name":"jevonsmcp__jevons_agent_kill","tool_input":{"name":"jevons-po","actor":"jevons"}}}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadOpenOwnerIntent(dir, "jevons")
+	if !got.Recoverable() {
+		t.Fatalf("a kill sentence plus tool_use must stay open, residual=%q", got.Residual)
+	}
+}
+
+func TestT512LoadKillCompletedFromChatlogToolUse(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	chatDir := filepath.Join(dir, "chatlog")
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(chatDir, "jevons.jsonl")
+	body := strings.Join([]string{
+		`{"type":"user","timestamp":"2026-08-18T12:00:00Z","message":{"role":"user","content":"fleet-op agent_kill jevons-po"}}`,
 		`{"type":"assistant","timestamp":"2026-08-18T12:01:00Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"use_tool","input":{"tool_name":"jevonsmcp__jevons_agent_kill","tool_input":{"name":"jevons-po","actor":"jevons"}}}]}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

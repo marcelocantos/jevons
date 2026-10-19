@@ -424,15 +424,10 @@ func ownerIntentReplyNamesClosedTarget(laterAssistant []string, statusByID map[s
 	return false
 }
 
-// openIntentFleetDirectiveRe matches an owner kill/stop/park/reap directive
-// aimed at a named fleet seat (🎯T512). Captures the verb and the remainder
-// (agent name / "Jevons PO" / backtick name).
-var openIntentFleetDirectiveRe = regexp.MustCompile(`(?i)^\s*(?:please\s+)?(kill|stop|park|reap)\b(?:\s+(?:the|a|an))?\s+(.+?)\s*$`)
-
-// OwnerFleetDirectiveCompleted reports whether the owner turn is a fleet
-// kill/stop/park/reap directive that a later excerpt completes with a
-// structured fleet-op line for the same named seat (🎯T512). A sentence is
-// not that line (🎯T766.4). Unrelated seats leave the directive open.
+// OwnerFleetDirectiveCompleted reports whether the owner turn is a structured
+// fleet-op directive that a later excerpt completes for the same seat
+// (🎯T512). A kill, stop, park, or reap sentence is not that directive
+// (🎯T766.4). Unrelated seats leave the directive open.
 func OwnerFleetDirectiveCompleted(ownerText string, laterAssistant []string) bool {
 	targets := ownerFleetDirectiveTargets(ownerText)
 	if len(targets) == 0 {
@@ -457,85 +452,14 @@ func OwnerFleetDirectiveCompleted(ownerText string, laterAssistant []string) boo
 	return false
 }
 
-// ownerFleetDirectiveTargets returns normalised agent names the owner asked
-// to kill/stop/park/reap. Empty when the turn is not a fleet directive or
-// names no seat (e.g. "kill all workers" without a concrete agent id).
+// ownerFleetDirectiveTargets returns the seat of a structured fleet-op
+// directive. A kill, stop, park, or reap sentence names no seat (🎯T766.4).
 func ownerFleetDirectiveTargets(ownerText string) []string {
-	ownerText = strings.TrimSpace(ownerText)
-	if ownerText == "" {
+	_, seat, _, ok := parseFleetOpExcerpt(ownerText)
+	if !ok || seat == "" {
 		return nil
 	}
-	m := openIntentFleetDirectiveRe.FindStringSubmatch(ownerText)
-	if m == nil {
-		return nil
-	}
-	rest := stripFleetDirectiveNoise(strings.TrimSpace(m[2]))
-	if rest == "" {
-		return nil
-	}
-	// Prefer backtick-quoted names when present.
-	var names []string
-	for _, q := range extractBacktickTokens(rest) {
-		if n := normalizeFleetAgentName(q); n != "" && looksLikeFleetAgentName(n) {
-			names = append(names, n)
-		}
-	}
-	if len(names) == 0 {
-		if n := normalizeFleetAgentName(rest); n != "" && looksLikeFleetAgentName(n) {
-			names = append(names, n)
-		}
-	}
-	return uniqueStrings(names)
-}
-
-// stripFleetDirectiveNoise drops trailing filler so "Kill jevons-po please"
-// and "Kill the jevons-po agent now" still resolve to the seat name.
-func stripFleetDirectiveNoise(rest string) string {
-	rest = strings.TrimSpace(rest)
-	if rest == "" {
-		return ""
-	}
-	noise := []string{
-		"from the fleet", "from fleet", "please", "now", "immediately",
-		"thanks", "thank you", "agent", "seat", "process",
-	}
-	for {
-		low := strings.ToLower(rest)
-		trimmed := false
-		for _, n := range noise {
-			if strings.HasSuffix(low, n) {
-				rest = strings.TrimSpace(rest[:len(rest)-len(n)])
-				rest = strings.TrimRight(rest, ".,!;:?")
-				trimmed = true
-				break
-			}
-		}
-		if !trimmed {
-			break
-		}
-	}
-	return strings.TrimSpace(rest)
-}
-
-func extractBacktickTokens(s string) []string {
-	var out []string
-	for {
-		i := strings.IndexByte(s, '`')
-		if i < 0 {
-			break
-		}
-		s = s[i+1:]
-		j := strings.IndexByte(s, '`')
-		if j < 0 {
-			break
-		}
-		tok := strings.TrimSpace(s[:j])
-		if tok != "" {
-			out = append(out, tok)
-		}
-		s = s[j+1:]
-	}
-	return out
+	return []string{seat}
 }
 
 // normalizeFleetAgentName maps owner spellings onto registry-style ids:
@@ -562,39 +486,6 @@ func normalizeFleetAgentName(s string) string {
 		}
 	}
 	out := strings.Trim(b.String(), "-")
-	return out
-}
-
-// looksLikeFleetAgentName rejects bare plurals ("workers") and one-word
-// noise so "Kill all workers" does not close on coincidental chatter.
-func looksLikeFleetAgentName(n string) bool {
-	if n == "" || !strings.Contains(n, "-") {
-		return false
-	}
-	// Reject all-digit segments-only noise; require a letter somewhere.
-	hasLetter := false
-	for _, r := range n {
-		if unicode.IsLetter(r) {
-			hasLetter = true
-			break
-		}
-	}
-	return hasLetter
-}
-
-func uniqueStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
 	return out
 }
 
@@ -1440,33 +1331,15 @@ func isOpenIntentProtocolJSON(text string) bool {
 	return strings.TrimSpace(typ) != ""
 }
 
-// isOpenIntentRestartNudge skips owner messages that are pure bounce re-prompts
-// or meta-complaints about agents sitting idle after restart — not the work itself.
+// isOpenIntentRestartNudge skips an exact bounce word. A sentence about a
+// restart is the owner's text, not a nudge (🎯T766.4).
 func isOpenIntentRestartNudge(text string) bool {
-	low := strings.ToLower(strings.TrimSpace(text))
-	if low == "" {
-		return false
-	}
-	// Exact-ish re-nudges.
-	switch low {
+	switch strings.ToLower(strings.TrimSpace(text)) {
 	case "continue", "keep going", "resume", "go on", "carry on", "please continue":
 		return true
+	default:
+		return false
 	}
-	// "service restarted. Continue" and close cousins.
-	if strings.Contains(low, "service restarted") ||
-		strings.Contains(low, "daemon restarted") ||
-		strings.Contains(low, "after the restart") ||
-		strings.Contains(low, "after restart") {
-		return true
-	}
-	// Meta gap reports (the T328 incident itself).
-	if strings.Contains(low, "gap in the restart") ||
-		strings.Contains(low, "until being told to keep going") ||
-		strings.Contains(low, "sit there until") ||
-		(strings.Contains(low, "waited") && strings.Contains(low, "restart")) {
-		return true
-	}
-	return false
 }
 
 // isOpenIntentAckOnly is an exact ack word. A short sentence is not an ack,

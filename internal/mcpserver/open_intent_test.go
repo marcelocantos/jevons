@@ -86,8 +86,7 @@ func TestExtractOpenOwnerIntentRecoversInstructionAfterRestartNudges(t *testing.
 		{Text: "Let's explore leaders and visionaries.", Source: "owner_chat"},
 		{Text: "I'm especially interested in Elon Musk and his documented approaches.", Source: "owner_chat"},
 		{Text: "Both of your last two responses were brilliant. Let's grab whatever you think makes sense and shove it into the document.", Source: "owner_chat", TS: time.Date(2026, 8, 8, 10, 0, 33, 0, time.UTC)},
-		{Text: "service restarted. Continue", Source: "owner_chat"},
-		{Text: "I waited a while for you to keep going after the service restarted, but it doesn't seem like that happens", Source: "owner_chat"},
+		{Text: "continue", Source: "owner_chat"},
 	}
 	got := ExtractOpenOwnerIntent(turns)
 	if !got.Recoverable() {
@@ -96,8 +95,16 @@ func TestExtractOpenOwnerIntentRecoversInstructionAfterRestartNudges(t *testing.
 	if !strings.Contains(got.Text, "shove it into the document") {
 		t.Fatalf("want open work order, got %q", got.Text)
 	}
-	if strings.Contains(strings.ToLower(got.Text), "service restarted") {
-		t.Fatalf("must skip restart re-nudge, got %q", got.Text)
+	turns = append(turns, OwnerIntentTurn{
+		Text:   "service restarted. Continue",
+		Source: "owner_chat",
+	})
+	got = ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("a restart sentence is owner text, residual=%q", got.Residual)
+	}
+	if !strings.Contains(strings.ToLower(got.Text), "service restarted") {
+		t.Fatalf("restart sentence must stay the open text, got %q", got.Text)
 	}
 }
 
@@ -198,7 +205,7 @@ func TestLoadOpenOwnerIntentFromChatlog(t *testing.T) {
 	body := strings.Join([]string{
 		`{"type":"user","timestamp":"2026-08-08T10:00:00Z","message":{"role":"user","content":"Please shove the leader research into life-and-work-org-map.md now."}}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`,
-		`{"type":"user","timestamp":"2026-08-08T10:02:00Z","message":{"role":"user","content":"service restarted. Continue"}}`,
+		`{"type":"user","timestamp":"2026-08-08T10:02:00Z","message":{"role":"user","content":"continue"}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -257,11 +264,11 @@ func TestIsOpenIntentRestartNudge(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"service restarted. Continue", true},
+		{"service restarted. Continue", false},
 		{"continue", true},
 		{"keep going", true},
-		{"I waited a while for you to keep going after the service restarted", true},
-		{"Is this a gap in the restart sequence?", true},
+		{"I waited a while for you to keep going after the service restarted", false},
+		{"Is this a gap in the restart sequence?", false},
 		{"Shove Musk Algorithm into the org map", false},
 		{"Please fix chat", false},
 	}
