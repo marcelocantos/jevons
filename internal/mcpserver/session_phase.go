@@ -133,6 +133,32 @@ func classifyAgentListPhase(alive, turnBegan, materialized bool, ev SessionEvide
 	return status
 }
 
+// classifySeatListPhase is classifyAgentListPhase for a registered seat: a
+// seat the owner addresses (the overseer, an aside) has no brief to miss.
+//
+// never_briefed is a work seat's alarm (🎯T305): it was minted with a brief
+// and no turn has begun. phase_unknown is the same seat when nothing can
+// say whether that brief landed. Neither question applies to a seat that
+// waits for the owner's next message: alive and not yet addressed, it is
+// running and idle. On a fresh daemon the 30-second seat check could see a
+// brand-new overseer alive before any turn (sidecar seats keep no record
+// this daemon can call absent, so evidence is unknown), record
+// phase_unknown, and /api/agents served that ahead of its alive → running
+// fallback (🎯T1078). Liveness still decides — a stopped overseer is
+// stopped — and so does located-absent evidence under a materialized row
+// (🎯T412 dead_unmaterialized), which is a real finding for any seat.
+func classifySeatListPhase(purpose string, alive, turnBegan, materialized bool, ev SessionEvidence) string {
+	status := classifyAgentListPhase(alive, turnBegan, materialized, ev)
+	if purpose != claudia.PurposeOverseer && purpose != claudia.PurposeAside {
+		return status
+	}
+	switch status {
+	case AgentStatusNeverBriefed, AgentStatusPhaseUnknown:
+		return AgentStatusRunning
+	}
+	return status
+}
+
 // ClassifyAgentListStatus decides stopped | never_briefed | running.
 // turnBegan is process-local evidence (successful start prompt or send).
 // materialized is durable conversation evidence (registry Materialized /

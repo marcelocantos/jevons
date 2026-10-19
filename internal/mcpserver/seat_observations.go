@@ -158,7 +158,7 @@ func (s *Server) observeSeatTranscript(d claudia.AgentDef) {
 		if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
 			ev = SessionEvidencePresent
 		}
-		status := classifyAgentListPhase(st.Alive == seatstate.Yes, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
+		status := classifySeatListPhase(d.Purpose, st.Alive == seatstate.Yes, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
 		s.Seats().Observe(seatstate.Observation{Name: d.Name, ForSession: d.SessionID, Status: status, QueueDepth: seatstate.QueueUnknown, Source: "transcript.lifecycle", At: at})
 	}
 	s.diagnoseBirth(d, s.birthClock())
