@@ -7,16 +7,28 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
+func idleNote(name, body string) string {
+	return envelope.SeatFact(envelope.IntentIdle, name) + "\n" + body
+}
+
+func agentNote(name, body string) string {
+	return envelope.PrefixAgentResponded + "\n" + envelope.SeatFact(envelope.IntentRoute, name) + "\n" + body
+}
+
 func TestNotifyCoalesceKey(t *testing.T) {
-	idleA := "[event: worker-idle] A work agent under you entered phase=idle\n\nWorker: jv-a\nTarget: 🎯T1\n"
-	idleA2 := "[event: worker-idle] A work agent under you entered phase=idle\n\nWorker: jv-a\nTarget: 🎯T1\n(later)"
-	idleB := "[event: worker-idle] …\nWorker: jv-b\n"
-	agentA := "[Agent jv-a responded]\nfirst body"
-	agentA2 := "[Agent jv-a responded]\nsecond body"
+	idleA := idleNote("jv-a", "[event: worker-idle] A work agent under you entered phase=idle\n\nWorker: jv-a\nTarget: 🎯T1\n")
+	idleA2 := idleNote("jv-a", "[event: worker-idle] A work agent under you entered phase=idle\n\nWorker: jv-a\nTarget: 🎯T1\n(later)")
+	idleB := idleNote("jv-b", "[event: worker-idle] …\nWorker: jv-b\n")
+	agentA := agentNote("jv-a", "first body")
+	agentA2 := agentNote("jv-a", "second body")
 	owner := userTurnPrefix + "hello"
 	other := "budget alert: burn high"
+	englishIdle := "[event: worker-idle] A work agent under you entered phase=idle\n\nWorker: jv-a\nTarget: 🎯T1\n"
+	englishAgent := "[Agent jv-a responded]\nfirst body"
 
 	if k := notifyCoalesceKey(idleA); k != "idle:jv-a" {
 		t.Fatalf("idleA key=%q", k)
@@ -39,12 +51,18 @@ func TestNotifyCoalesceKey(t *testing.T) {
 	if notifyCoalesceKey(other) != "" {
 		t.Fatal("unkeyed notes must not coalesce")
 	}
+	if notifyCoalesceKey(englishIdle) != "" {
+		t.Fatal("an [event:] line and a Worker: line are not an idle key")
+	}
+	if notifyCoalesceKey(englishAgent) != "" {
+		t.Fatal("a rendered [Agent … responded] line is not an agent key")
+	}
 }
 
 func TestCoalesceNotifyEnqueueSameWorkerIdle(t *testing.T) {
 	var q []string
 	for i := 0; i < 20; i++ {
-		note := fmt.Sprintf("[event: worker-idle] tick %d\nWorker: jevons-po\n", i)
+		note := idleNote("jevons-po", fmt.Sprintf("[event: worker-idle] tick %d\nWorker: jevons-po\n", i))
 		q = coalesceNotifyEnqueue(q, note)
 	}
 	if len(q) != 1 {
@@ -60,8 +78,8 @@ func TestCoalesceNotifyEnqueueOnePerWorker(t *testing.T) {
 	workers := []string{"jv-a", "jv-b", "jv-c", "jevons-po"}
 	for round := 0; round < 5; round++ {
 		for _, w := range workers {
-			q = coalesceNotifyEnqueue(q, fmt.Sprintf(
-				"[event: worker-idle] r%d\nWorker: %s\n", round, w))
+			q = coalesceNotifyEnqueue(q, idleNote(w, fmt.Sprintf(
+				"[event: worker-idle] r%d\nWorker: %s\n", round, w)))
 		}
 	}
 	if len(q) != len(workers) {
@@ -98,11 +116,11 @@ func TestTakeNotifyDrainBatchOwnerFirst(t *testing.T) {
 
 func TestRequeueNotifyFrontRecoalesces(t *testing.T) {
 	batch := []string{
-		"[event: worker-idle]\nWorker: jv-a\nbody-old",
-		"[event: worker-idle]\nWorker: jv-b\n",
+		idleNote("jv-a", "[event: worker-idle]\nWorker: jv-a\nbody-old"),
+		idleNote("jv-b", "[event: worker-idle]\nWorker: jv-b\n"),
 	}
 	arrived := []string{
-		"[event: worker-idle]\nWorker: jv-a\nbody-new",
+		idleNote("jv-a", "[event: worker-idle]\nWorker: jv-a\nbody-new"),
 	}
 	got := requeueNotifyFront(batch, arrived)
 	if len(got) != 2 {
@@ -140,10 +158,10 @@ func TestNotifyQueueFloodCoalescesOwnerPriorityAndWorkingLevel(t *testing.T) {
 	for tIdx := 0; tIdx < mTransitions; tIdx++ {
 		for w := 0; w < nWorkers; w++ {
 			name := fmt.Sprintf("jv-w%d", w)
-			note := fmt.Sprintf(
+			note := idleNote(name, fmt.Sprintf(
 				"[event: worker-idle] transition=%d\nWorker: %s\nTarget: 🎯T%d\n",
 				tIdx, name, w,
-			)
+			))
 			_ = s.SendToOverseer(note)
 		}
 	}

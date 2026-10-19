@@ -317,6 +317,29 @@ func TestT3927OwnerDirectToPONotRerouted(t *testing.T) {
 	}
 }
 
+func TestStripLeadingIdentityEnvelopeStopsAtEndFact(t *testing.T) {
+	header := FormatIdentityHeader(AgentIdentity{Name: "jevons-po", Role: RoleProductOwner})
+	if !strings.Contains(header, "You are jevons-po, a product owner") {
+		t.Fatal("doctrine missing")
+	}
+	if !strings.HasSuffix(strings.TrimRight(header, "\n"), envelope.PrefixIdentityEnd) {
+		t.Fatal("header does not end on the identity-end fact")
+	}
+	payload := "[event: worker-idle] done\nWorker: jv-x\n"
+	got := stripLeadingIdentityEnvelope(strings.TrimRight(header, "\n") + "\n\n" + payload)
+	if got != payload {
+		t.Fatalf("stripped payload = %q", got)
+	}
+	english := envelope.PrefixIdentity + "\n[Who you are]\n\ncarry on with your own work.\n\nYou are jevons-po, a product owner.\n- a doctrine row\n\n" + payload
+	if stripLeadingIdentityEnvelope(english) != english {
+		t.Fatal("You are and dash rows located the payload")
+	}
+	event := envelope.PrefixIdentity + "\n[Who you are]\n\n[event: worker-idle] body"
+	if stripLeadingIdentityEnvelope(event) != event {
+		t.Fatal("an [event:] line located the payload")
+	}
+}
+
 // 🎯T515: daemon-composed PO traffic (worker-idle) opens with a 🎯T425
 // identity header whose role doctrine contains "oracle", while the idle body
 // contains "done". That pair must not classify as oracle_done and steal the

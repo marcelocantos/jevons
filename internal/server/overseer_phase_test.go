@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/muxwin"
 )
 
@@ -80,7 +81,7 @@ func TestT555_1FleetDrainAcceptedWithCorrespondent(t *testing.T) {
 	s := &Server{}
 	s.notifySender = func(string) error { return nil }
 	cap := newPhaseCapture(s)
-	_ = s.SendToOverseer("[Agent jevons-po responded]\nreport")
+	_ = s.SendToOverseer(envelope.PrefixAgentResponded + "\n" + envelope.SeatFact(envelope.IntentRoute, "jevons-po") + "\nreport")
 	fr := cap.frames(t)
 	if len(fr) != 1 || fr[0]["phase"] != PhaseAccepted {
 		t.Fatalf("want one accepted frame, got %v", fr)
@@ -122,7 +123,7 @@ func TestT555_1QueuedFleetNoteIsNotCorrespondent(t *testing.T) {
 	cap := newPhaseCapture(s)
 	_ = s.SendToOverseer(userTurnPrefix + "owner speaks")
 	busy = true
-	_ = s.SendToOverseer("[Agent jevons-po responded]\nqueued behind owner")
+	_ = s.SendToOverseer(envelope.PrefixAgentResponded + "\n" + envelope.SeatFact(envelope.IntentRoute, "jevons-po") + "\nqueued behind owner")
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "answering owner"})
 	for _, f := range cap.frames(t) {
 		if _, has := f["correspondent"]; has {
@@ -192,8 +193,8 @@ func TestT555_3MapperConsumesTypedProgressAndUsage(t *testing.T) {
 		t.Fatalf("permission: %+v ok=%v", p, ok)
 	}
 	p, ok = phaseFromEvent(claudia.Event{
-		Type: "assistant",
-		Text: "hi",
+		Type:  "assistant",
+		Text:  "hi",
 		Usage: claudia.Usage{OutputTokens: 9},
 	})
 	if !ok || p.Phase != PhaseStreaming || p.Tokens != 9 {

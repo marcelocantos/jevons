@@ -419,7 +419,31 @@ func formatIdleNudgeWire(event, text string) string {
 	if src == "" {
 		src = "idle-nudge"
 	}
-	return fmt.Sprintf("[event: %s] %s", src, strings.TrimSpace(text))
+	text = strings.TrimSpace(text)
+	// A leading seat fact stays line 1. The event wrapper is display on the
+	// next line so coalesce and classify read the fact, not "[event:".
+	line, rest, _ := strings.Cut(text, "\n")
+	if seatFactLine(line) {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			return line + "\n" + fmt.Sprintf("[event: %s]", src)
+		}
+		return line + "\n" + fmt.Sprintf("[event: %s] %s", src, rest)
+	}
+	return fmt.Sprintf("[event: %s] %s", src, text)
+}
+
+func seatFactLine(line string) bool {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[2] == "" {
+		return false
+	}
+	switch fields[1] {
+	case envelope.IntentIdle, envelope.IntentHeld, envelope.IntentRoute:
+		return true
+	default:
+		return false
+	}
 }
 
 var idleNudgeWireRE = regexp.MustCompile(`(?m)^\[event:\s*idle-nudge(?:-brief)?\]`)

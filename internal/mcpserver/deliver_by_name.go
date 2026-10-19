@@ -523,11 +523,9 @@ func (s *Server) storeRelayedReport(agent, report string) bool {
 	return true
 }
 
-// identityDoctrineCloser is the last fixed sentence FormatIdentityHeader
-// writes before role-addressed doctrine. Everything after that doctrine is
-// the payload withIdentity appended.
-const identityDoctrineCloser = "carry on with your own work."
-
+// stripLeadingIdentityEnvelope returns the payload after a composed identity
+// header. The header is the opening identity fact through PrefixIdentityEnd.
+// Doctrine sentences and an [event:] wrapper are not the boundary.
 func stripLeadingIdentityEnvelope(text string) string {
 	body := strings.TrimLeft(text, " \t\r\n")
 	nl := strings.IndexByte(body, '\n')
@@ -538,32 +536,14 @@ func stripLeadingIdentityEnvelope(text string) string {
 	if strings.TrimSpace(first) != envelope.PrefixIdentity {
 		return text
 	}
-	// Idle / recover wires put the event marker immediately after the header.
-	if i := strings.Index(body, "\n[event:"); i >= 0 {
-		return strings.TrimLeft(body[i+1:], " \t\r\n")
-	}
-	i := strings.Index(body, identityDoctrineCloser)
-	if i < 0 {
-		return text
-	}
-	rest := strings.TrimLeft(body[i+len(identityDoctrineCloser):], " \t\r\n")
-	if !strings.HasPrefix(rest, "You are ") {
-		return rest
-	}
-	lines := strings.Split(rest, "\n")
-	out := 1 // skip the "You are …" line
-	for out < len(lines) {
-		line := lines[out]
-		if line == "" {
-			out++
-			break
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != envelope.PrefixIdentityEnd {
+			continue
 		}
-		if !strings.HasPrefix(line, "- ") {
-			break
-		}
-		out++
+		return strings.TrimLeft(strings.Join(lines[i+1:], "\n"), " \t\r\n")
 	}
-	return strings.Join(lines[out:], "\n")
+	return text
 }
 
 // deliverToOverseer is the overseer arm of the single path. Delivery itself

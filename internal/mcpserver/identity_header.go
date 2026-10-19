@@ -167,7 +167,11 @@ func FormatIdentityHeader(id AgentIdentity) string {
 		"that agent. Report it to your parent and the overseer, quoting this NAME " +
 		"and your own, and carry on with your own work.\n")
 	b.WriteString(roleAddressedDoctrine(name, role))
-	b.WriteString("\n")
+	b.WriteByte('\n')
+	// The end fact is the payload boundary. The doctrine above it stays
+	// display; stripLeadingIdentityEnvelope does not read those sentences.
+	b.WriteString(envelope.PrefixIdentityEnd)
+	b.WriteByte('\n')
 	return b.String()
 }
 

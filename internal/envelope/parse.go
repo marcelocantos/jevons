@@ -23,6 +23,9 @@ const (
 	PrefixFalseGreen     = "open-intent prefix false-green"
 	PrefixEnvelopeCheck  = "open-intent prefix envelope-check"
 	PrefixIdentity       = "open-intent prefix identity"
+	// PrefixIdentityEnd is the last line of a composed identity header.
+	// The payload starts on the next line. Role doctrine above it is display.
+	PrefixIdentityEnd = "open-intent prefix identity-end"
 
 	// IntentOpen is the first field of a declared open-intent fact.
 	IntentOpen = "open-intent"

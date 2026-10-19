@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -610,6 +611,11 @@ func TestFormatIdleNudgeWire(t *testing.T) {
 	got := formatIdleNudgeWire("idle-nudge-brief", "hello")
 	if got != "[event: idle-nudge-brief] hello" {
 		t.Fatalf("got %q", got)
+	}
+	fact := envelope.SeatFact(envelope.IntentIdle, "jv-a")
+	kept := formatIdleNudgeWire("worker-idle", fact+"\nA work agent went idle\nWorker: jv-a\n")
+	if kept != fact+"\n[event: worker-idle] A work agent went idle\nWorker: jv-a" {
+		t.Fatalf("fact was not kept as line 1: %q", kept)
 	}
 }
 
