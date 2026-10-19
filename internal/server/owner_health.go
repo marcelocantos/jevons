@@ -550,11 +550,19 @@ func (a ownerActuator) requeueOwnerSend(g converge.OwnerGap, now time.Time) erro
 	// The drain's first receipt query can miss a row the replica has
 	// not published yet. Re-read that same id before minting a second
 	// prompt. Do not hold ownerMu across the query.
-	a.s.ownerMu.Lock()
-	requestID := a.s.ownerHealthLocked().sendRequestID
-	a.s.ownerMu.Unlock()
-	if requestID != "" && a.s.noteOwnerDeliveredFromReceipt(requestID) {
-		return converge.ErrOwnerStepNotApplicable
+	//
+	// The receipt answers one question: did the prompt land. That is the
+	// send-landed gap's question only. A question-answered or reply gap
+	// stands over a turn that already landed (its seals prove it), and
+	// re-pressure is the step's whole point there (🎯T378), so a settled
+	// receipt must not suppress it.
+	if g.Dimension == converge.OwnerDimSendLanded {
+		a.s.ownerMu.Lock()
+		requestID := a.s.ownerHealthLocked().sendRequestID
+		a.s.ownerMu.Unlock()
+		if requestID != "" && a.s.noteOwnerDeliveredFromReceipt(requestID) {
+			return converge.ErrOwnerStepNotApplicable
+		}
 	}
 	slog.Warn("owner health: re-injecting unacked owner turn",
 		"kind", g.Kind, "reason", g.Reason, "attempt", g.StepsByKind[converge.StepRequeueOwnerSend]+1)
