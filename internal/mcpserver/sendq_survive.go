@@ -271,7 +271,7 @@ func (s *Server) restartHeldSendqForDrain(held []HeldSeatSnapshot, newParent, ac
 				"detail", "seat is registered and working; sweep/start will drain")
 		} else {
 			s.wireAgentEvents(name, proc)
-			go s.drainAgentSendQueue(name)
+			s.goDrainAgentSendQueue(name)
 		}
 	}
 	if len(restarted) > 0 {

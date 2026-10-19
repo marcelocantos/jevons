@@ -1729,7 +1729,7 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			// Off the event goroutine since 🎯T416: the drain now waits for the
 			// message to become a turn, and blocking an agent's event stream
 			// for that window would stall its own progress reporting.
-			go s.drainAgentSendQueue(name)
+			s.goDrainAgentSendQueue(name)
 			// 🎯T793: a malformed load-bearing envelope (e.g. a silent-decision
 			// confidence written as a 1-10 rank instead of [0,1]) gets the
 			// author itself told the exact field and range, on its own

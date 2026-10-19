@@ -1187,6 +1187,24 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 	return proc, true
 }
 
+// goDrainAgentSendQueue runs drainAgentSendQueue in the background and
+// counts it, so WaitBackgroundDrains can wait for its queue writes.
+func (s *Server) goDrainAgentSendQueue(name string) {
+	s.backgroundDrains.Add(1)
+	go func() {
+		defer s.backgroundDrains.Done()
+		s.drainAgentSendQueue(name)
+	}()
+}
+
+// WaitBackgroundDrains blocks until every drain started by
+// goDrainAgentSendQueue has returned. A drain writes the sendq directory
+// (claim, settle, atomic rename); whoever removes that directory waits
+// here first, or the removal races the last write.
+func (s *Server) WaitBackgroundDrains() {
+	s.backgroundDrains.Wait()
+}
+
 // drainAgentSendQueue delivers the next queued message after a terminal
 // stop. Called from the agent event sink (🎯T111.1).
 func (s *Server) drainAgentSendQueue(name string) {

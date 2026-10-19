@@ -186,7 +186,7 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 	if rec.Depth > 0 {
 		if _, live := s.liveSender(name); live {
 			b.WriteString("Kicking a drain now: the remaining messages are pending and the seat is live.\n")
-			go s.drainAgentSendQueue(name)
+			s.goDrainAgentSendQueue(name)
 		} else {
 			fmt.Fprintf(&b, "No live process to deliver to; the pending messages drain at the next sweep, "+
 				"or immediately after jevons_agent_start name=%q with no prompt.\n", name)

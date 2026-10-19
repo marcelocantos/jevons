@@ -33,6 +33,10 @@ func t418Daemon(t *testing.T, dir string) (*Server, *recordingSender, *upward) {
 	t.Helper()
 	s := &Server{}
 	s.SetSendQueueDir(dir)
+	// A reconcile or kill can kick a background drain that is still writing
+	// dir/sendq when the test returns. Cleanups run last-in first-out, so
+	// this wait runs before the caller's t.TempDir removal.
+	t.Cleanup(s.WaitBackgroundDrains)
 	sender := &recordingSender{}
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
 	s.SetTurnWitness(func(_, _ string) turnWatch {

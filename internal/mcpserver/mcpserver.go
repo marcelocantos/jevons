@@ -491,6 +491,10 @@ type Server struct {
 	roleAssignments *roles.Assignments
 	// roleCat resolves role definition files (builtin + overlays).
 	roleCat roles.Catalog
+	// backgroundDrains counts drains started by goDrainAgentSendQueue, so a
+	// caller that owns the queue directory can wait for the last write
+	// before removing it (WaitBackgroundDrains).
+	backgroundDrains sync.WaitGroup
 	// pendingSpawnRole is set by handleAgentStart before stitchAgentStart so
 	// hermetic callers of the 9-arg stitch keep compiling (role defaults inside).
 	pendingSpawnRole string
