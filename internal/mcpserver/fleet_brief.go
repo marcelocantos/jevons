@@ -12,7 +12,8 @@ import (
 // FleetStandingBrief is prepended to the first jevons_agent_send of each
 // fleet child so PO/workers inherit product delivery + spawn doctrine
 // without relying on the parent to remember (🎯T78 / 🎯T104 / 🎯T111.4 / 🎯T125 / 🎯T129 / 🎯T130 / 🎯T155 / 🎯T193 / 🎯T262.1 / 🎯T325.1 / 🎯T31 / 🎯T427 / 🎯T176 / 🎯T188 / 🎯T191 / 🎯T194 / 🎯T197 / 🎯T386 / 🎯T396 / 🎯T493.1 / 🎯T552 / 🎯T553 / 🎯T690 / 🎯T692 / 🎯T693 / 🎯T969 under fan-out).
-const FleetStandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
+const FleetStandingBrief = `open-intent harness standing-brief
+[Jevons fleet standing brief — apply for this whole assignment]
 
 ## Cross-repository target references (🎯T1056)
 - When naming a bullseye target outside the current repository, write
@@ -487,8 +488,9 @@ func EnsureFleetBriefWithRole(already map[string]bool, name, text, roleBody stri
 	if name == "" || already[name] {
 		return text, false
 	}
-	// Skip if caller already included the standing brief (idempotent).
-	if strings.Contains(text, "Jevons fleet standing brief") {
+	// Skip if the caller already included the declared standing-brief fact.
+	// A sentence that mentions the brief is not that fact (🎯T766.4).
+	if textHasHarnessFact(text, "standing-brief") {
 		already[name] = true
 		return text, false
 	}
@@ -497,4 +499,19 @@ func EnsureFleetBriefWithRole(already map[string]bool, name, text, roleBody stri
 		return FleetStandingBrief + text, true
 	}
 	return roles.Assemble(FleetStandingBrief, roleBody, text), true
+}
+
+// textHasHarnessFact reports whether a line is the declared fact
+// "open-intent harness <kind>". A sentence is not this fact.
+func textHasHarnessFact(text, kind string) bool {
+	if kind == "" {
+		return false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "open-intent" && fields[1] == "harness" && fields[2] == kind {
+			return true
+		}
+	}
+	return false
 }

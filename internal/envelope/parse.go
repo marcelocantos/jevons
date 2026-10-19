@@ -231,13 +231,31 @@ func stripOnePrefix(s string) (string, bool) {
 		}
 		return "", true
 	}
-	if strings.HasPrefix(s, "[Jevons fleet standing brief") {
-		const end = "\n---\n"
-		if i := strings.Index(s, end); i >= 0 {
-			return s[i+len(end):], true
-		}
+	if rest, ok := stripStandingBrief(s); ok {
+		return rest, true
 	}
 	return s, false
+}
+
+// stripStandingBrief peels a brief that opens with the declared fact
+// "open-intent harness standing-brief" through the following "\n---\n".
+// A rendered standing-brief banner is not this fact (🎯T766.4).
+func stripStandingBrief(s string) (string, bool) {
+	nl := strings.IndexByte(s, '\n')
+	first := s
+	if nl >= 0 {
+		first = s[:nl]
+	}
+	fields := strings.Fields(first)
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "harness" || fields[2] != "standing-brief" {
+		return "", false
+	}
+	const end = "\n---\n"
+	i := strings.Index(s, end)
+	if i < 0 {
+		return "", false
+	}
+	return s[i+len(end):], true
 }
 
 // splitFence returns the fence body and the payload after it when text

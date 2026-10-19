@@ -67,39 +67,40 @@ func IsOwnerFrame(body []byte) bool {
 // LegacyInjectionText retains the historical transcript reader's T329 rule.
 // Canonical events must use IsOwnerFrame so explicit origin is not inferred.
 func LegacyInjectionText(text string) bool {
-	raw := strings.TrimSpace(text)
-	if raw == "" {
+	display := unwrapUserQuery(strings.TrimSpace(text))
+	if display == "" {
 		return false
 	}
-	display := raw
-	// Unwrap a single outer <user_query>…</user_query> for inject checks.
-	if strings.HasPrefix(display, "<user_query") {
-		if i := strings.Index(display, ">"); i >= 0 {
-			inner := display[i+1:]
-			if j := strings.LastIndex(inner, "</user_query>"); j >= 0 {
-				display = strings.TrimSpace(inner[:j])
-			}
-		}
+	// A declared harness fact is not an owner boundary (🎯T329, 🎯T766.4).
+	// The line is "open-intent harness <kind>". A rendered banner is owner text.
+	fields := strings.Fields(display)
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "harness" {
+		return false
 	}
-	low := strings.ToLower(display)
-	if strings.Contains(low, "<system-reminder") || strings.Contains(low, "system-reminder") {
+	switch fields[2] {
+	case "daemon-restart", "standing-brief", "event", "system-reminder", "background-task":
 		return true
+	default:
+		return false
 	}
-	if strings.HasPrefix(display, "[Jevons fleet standing brief") ||
-		strings.Contains(display, "Jevons fleet standing brief") {
-		return true
+}
+
+// unwrapUserQuery drops one outer <user_query>…</user_query> wrapper.
+// The comparison is the tag, not a sentence.
+func unwrapUserQuery(display string) string {
+	const open = "<user_query"
+	const closeTag = "</user_query>"
+	if len(display) < len(open) || display[:len(open)] != open {
+		return display
 	}
-	if strings.HasPrefix(display, "[event:") || strings.HasPrefix(strings.ToLower(display), "[event:") {
-		return true
+	i := strings.Index(display, ">")
+	if i < 0 {
+		return display
 	}
-	if strings.HasPrefix(display, "[Daemon restart") {
-		return true
+	inner := display[i+1:]
+	j := strings.LastIndex(inner, closeTag)
+	if j < 0 {
+		return display
 	}
-	if strings.HasPrefix(strings.ToLower(display), "background task") {
-		return true
-	}
-	if strings.Contains(low, "background task") && strings.Contains(low, "completed") {
-		return true
-	}
-	return false
+	return strings.TrimSpace(inner[:j])
 }

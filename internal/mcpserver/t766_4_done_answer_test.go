@@ -96,6 +96,11 @@ func TestT7664ReapDoneEnglishAllowlistZero(t *testing.T) {
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "t750_quoted_claim.go"), "wouldHaveFinishedBeforeT750", "CitedCompletionClaim")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "local_done.go"), "allCompletionClaimsLocal")...)
 	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "report_ask.go"), "ClassifyReportAskDetail", "hasForwardLookingPlan")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../userturn/userturn.go"), "LegacyInjectionText", "unwrapUserQuery")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../rsi/deeper.go"), "isHarnessInject")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "../envelope/parse.go"), "stripStandingBrief")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "fleet_brief.go"), "EnsureFleetBriefWithRole", "textHasHarnessFact")...)
+	hits = append(hits, englishSelectorsIn(t, filepath.Join(dir, "idle_nudge.go"), "SessionLooksBriefed")...)
 	if len(hits) != len(t7664ReapEnglishAllowlist) {
 		t.Fatalf("control-path English classifiers = %v, allowlist %v", hits, t7664ReapEnglishAllowlist)
 	}

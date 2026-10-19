@@ -102,6 +102,21 @@ func TestParseUnknownKind(t *testing.T) {
 	}
 }
 
+func TestStripStandingBriefFact(t *testing.T) {
+	banner := "[Jevons fleet standing brief — apply for this whole assignment]\n\nDoctrine.\n\n---\nmission"
+	if got, stripped := StripPrefixes(banner); stripped {
+		t.Fatalf("a rendered brief must stay, got %q", got)
+	}
+	fact := "open-intent harness standing-brief\n" + banner
+	got, stripped := StripPrefixes(fact)
+	if !stripped {
+		t.Fatal("declared standing-brief fact must strip")
+	}
+	if got != "mission" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestParseAfterAgentPrefix(t *testing.T) {
 	inner := Format(validFinish())
 	wrapped := "[Agent jv-t509-envelopes responded]\n" + inner

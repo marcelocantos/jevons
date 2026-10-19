@@ -434,12 +434,7 @@ func IsIdleNudgeText(text string) bool {
 // SessionLooksBriefed reports whether transcript/user text already carries
 // the standing fleet brief (or inject marker). Pure string heuristic.
 func SessionLooksBriefed(priorUserText string) bool {
-	s := strings.TrimSpace(priorUserText)
-	if s == "" {
-		return false
-	}
-	return strings.Contains(s, "Jevons fleet standing brief") ||
-		strings.Contains(s, "fleet standing brief")
+	return textHasHarnessFact(priorUserText, "standing-brief")
 }
 
 // --- activity tracker (last progress per agent) ---

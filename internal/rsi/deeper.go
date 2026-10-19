@@ -376,22 +376,18 @@ func extractContentText(raw json.RawMessage) string {
 }
 
 func isHarnessInject(text string) bool {
-	t := strings.TrimSpace(text)
-	if strings.HasPrefix(t, "[Daemon restart") || strings.HasPrefix(t, "[Jevons fleet standing brief") {
-		return true
+	// A declared harness fact is not owner friction (🎯T766.4).
+	// The line is "open-intent harness <kind>". A rendered banner is owner text.
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "harness" {
+		return false
 	}
-	if strings.Contains(t, "<system-reminder>") || strings.Contains(t, "system-reminder") {
+	switch fields[2] {
+	case "daemon-restart", "standing-brief", "system-reminder", "agent-responded", "subagent", "verifier":
 		return true
+	default:
+		return false
 	}
-	if strings.HasPrefix(t, "[Agent ") && strings.Contains(t, "responded]") {
-		return true
-	}
-	// Synthetic subagent / verifier prompts are not owner friction.
-	if strings.Contains(t, "You are a Grok Build subagent") ||
-		strings.Contains(t, "You are an **adversarial verifier**") {
-		return true
-	}
-	return false
 }
 
 // frictionSignal reports whether text carries owner/session product friction

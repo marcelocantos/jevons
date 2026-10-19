@@ -92,6 +92,37 @@ func TestFrictionSignalIgnoresBenignAgain(t *testing.T) {
 	}
 }
 
+func TestIsHarnessInject(t *testing.T) {
+	facts := []string{
+		"open-intent harness daemon-restart",
+		"open-intent harness standing-brief",
+		"open-intent harness system-reminder",
+		"open-intent harness agent-responded",
+		"open-intent harness subagent",
+		"open-intent harness verifier",
+	}
+	for _, f := range facts {
+		if !isHarnessInject(f) {
+			t.Errorf("want harness: %q", f)
+		}
+	}
+	owner := []string{
+		"",
+		"[Daemon restart. Your session was rotated]",
+		"[Jevons fleet standing brief] Execute T444.",
+		"<system-reminder> background task completed",
+		"[Agent jevons-po responded] report",
+		"You are a Grok Build subagent",
+		"You are an **adversarial verifier**",
+		"deploy still broken on device",
+	}
+	for _, o := range owner {
+		if isHarnessInject(o) {
+			t.Errorf("want owner text: %q", o)
+		}
+	}
+}
+
 func TestLoadChatLogTurns(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "jevons.jsonl")
@@ -101,6 +132,7 @@ func TestLoadChatLogTurns(t *testing.T) {
 		`{"type":"user","timestamp":"2026-08-03T10:01:00Z","message":{"role":"user","content":"deploy still broken on device"}}`,
 		`{"type":"user","timestamp":"2026-08-03T10:02:00Z","message":{"role":"user","content":"still broken after rebuild"}}`,
 		`{"type":"user","timestamp":"2026-08-03T10:03:00Z","message":{"role":"user","content":"[Daemon restart. Your session was rotated]"}}`,
+		`{"type":"user","timestamp":"2026-08-03T10:04:00Z","message":{"role":"user","content":"open-intent harness daemon-restart"}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -109,9 +141,9 @@ func TestLoadChatLogTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// user lines except harness inject
-	if len(turns) != 3 {
-		t.Fatalf("want 3 user turns (inject skipped), got %d %+v", len(turns), turns)
+	// The rendered restart banner is owner text. The declared fact is not.
+	if len(turns) != 4 {
+		t.Fatalf("want 4 user turns (fact skipped, banner kept), got %d %+v", len(turns), turns)
 	}
 	ev := ChatTurnsToEvidence(turns)
 	if len(ev) != 2 {

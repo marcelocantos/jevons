@@ -264,7 +264,10 @@ func TestSessionLooksBriefed(t *testing.T) {
 		t.Fatal("bare continue is not a brief")
 	}
 	if !SessionLooksBriefed(FleetStandingBrief + "do the thing") {
-		t.Fatal("standing brief marker should count")
+		t.Fatal("standing brief fact should count")
+	}
+	if SessionLooksBriefed("Read the Jevons fleet standing brief and continue") {
+		t.Fatal("a sentence about the brief is not the fact")
 	}
 }
 

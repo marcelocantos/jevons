@@ -21,7 +21,8 @@ const t614FinishReport = "```jevons\n" +
 	"```\n\n" +
 	"Month-trim landed."
 
-const t614StandingBrief = `[Jevons fleet standing brief — apply for this whole assignment]
+const t614StandingBrief = `open-intent harness standing-brief
+[Jevons fleet standing brief — apply for this whole assignment]
 
 Refuse bare done without oracle evidence (GATE … GREEN).
 

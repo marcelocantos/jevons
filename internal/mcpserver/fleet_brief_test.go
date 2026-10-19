@@ -177,6 +177,21 @@ func TestEnsureFleetBriefInjectsOnce(t *testing.T) {
 	}
 }
 
+func TestEnsureFleetBriefSentenceIsNotAlreadyIncluded(t *testing.T) {
+	m := map[string]bool{}
+	body := "Please read the Jevons fleet standing brief and then implement the fix"
+	out, inj := EnsureFleetBrief(m, "w", body)
+	if !inj {
+		t.Fatal("a sentence that mentions the brief must still inject")
+	}
+	if !strings.Contains(out, "open-intent harness standing-brief") {
+		t.Fatal("inject must open with the standing-brief fact")
+	}
+	if !strings.Contains(out, body) {
+		t.Fatal("mission dropped")
+	}
+}
+
 func TestEnsureFleetBriefIdempotentWhenCallerIncluded(t *testing.T) {
 	m := map[string]bool{}
 	body := FleetStandingBrief + "already briefed task"
