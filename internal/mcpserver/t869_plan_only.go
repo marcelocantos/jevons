@@ -34,10 +34,10 @@ func earnsAnotherPrompt(toolCalls int, text, cause string) bool {
 }
 
 // shouldForwardAgentReply reports whether a completed turn is delivered
-// to the parent as a fresh user turn. A bare plan ("I'll inspect…", no
-// tool call) is not. A finish, a question, and an ordinary status report
-// still are. toolCalls < 0 means the caller does not know (the legacy
-// notify path) and the text is forwarded.
+// to the parent as a fresh user turn. toolCalls < 0 means the caller does
+// not know (the legacy notify path) and the text is forwarded. A sentence
+// that opens with a future commitment is not a reason to drop the turn
+// (🎯T766.4).
 func shouldForwardAgentReply(text string, toolCalls int) bool {
 	if toolCalls < 0 || toolCalls > 0 {
 		return true
@@ -45,27 +45,11 @@ func shouldForwardAgentReply(text string, toolCalls int) bool {
 	return !barePlanSentence(text)
 }
 
-// barePlanSentence is the 2026-09-26 shape: the reply opens with a future
-// commitment and does not ask, finish, or report status.
-func barePlanSentence(text string) bool {
-	s := strings.TrimSpace(text)
-	if s == "" || strings.Contains(s, "?") {
-		return false
-	}
-	if LooksLikeFinishedWorkReport(s) || ReportAwaitsOverseer(s) {
-		return false
-	}
-	lower := strings.ToLower(s)
-	switch {
-	case strings.HasPrefix(lower, "i'll "),
-		strings.HasPrefix(lower, "i will "),
-		strings.HasPrefix(lower, "i’ll "),
-		strings.HasPrefix(lower, "i'm going to "),
-		strings.HasPrefix(lower, "i am going to "):
-		return true
-	default:
-		return false
-	}
+// barePlanSentence reports a declared plan. A future-commitment sentence
+// is not that declaration. There is no plan envelope kind, so no reply
+// is a bare plan (🎯T766.4).
+func barePlanSentence(string) bool {
+	return false
 }
 
 // turnCountedTool reports one tool call in a seat event, in any backend's

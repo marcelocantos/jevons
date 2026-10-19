@@ -1718,7 +1718,9 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 				// Notify overseer first so the done report is delivered before
 				// the worker leaves the registry (🎯T165) — unless [silent]
 				// (ops events: daemon-restarted / worker-idle fine chatter).
-				// 🎯T869: a plan-only reply is not forwarded.
+				// 🎯T869 withholds another daemon prompt after a no-tool reply.
+				// 🎯T766.4: the notify itself is not dropped because the
+				// sentence opens with a future commitment.
 				s.notifyTurn(name, text, n)
 			}
 			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
@@ -1787,9 +1789,8 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 		return
 	}
 
-	// 🎯T869: a bare plan ("I'll inspect…") is not a fresh user turn for
-	// the parent. A finish, a question, and a status report still are.
-	// toolCalls < 0 is the legacy path, which does not know and still forwards.
+	// 🎯T766.4: an unenveloped "I'll …" is not a declared plan, so it is
+	// forwarded. toolCalls < 0 is the legacy path, which still forwards.
 	if !shouldForwardAgentReply(text, toolCalls) {
 		slog.Info("plan-only reply not forwarded",
 			"agent", agentName, "len", len(text))
