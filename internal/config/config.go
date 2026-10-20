@@ -473,6 +473,13 @@ func Default() Config {
 	}
 }
 
+// IsDevelopmentState reports whether this config's state directory is the
+// development daemon's own (~/.jevons). An isolate or test daemon has
+// another, and its agents are told so (🎯T1082).
+func (c Config) IsDevelopmentState() bool {
+	return filepath.Clean(c.StateDir) == filepath.Clean(Default().StateDir)
+}
+
 // DefaultPath returns the default config file location.
 func DefaultPath() string { return filepath.Join(Default().StateDir, "config.yaml") }
 

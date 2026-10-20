@@ -104,6 +104,8 @@ type suite struct {
 	// aliveProbe and stdout replace the real probe and os.Stdout in tests.
 	aliveProbe func() error
 	stdout     io.Writer
+	// devGuard watches the development state for the run (🎯T1082).
+	devGuard *devStateGuard
 }
 
 func (s *suite) out() io.Writer {
@@ -259,6 +261,10 @@ persona_notes: |
 	// user-scope journey name).
 	cleanups.Add(stop)
 	catchSignals()
+	// 🎯T1082: fingerprint the development state before anything starts.
+	if s.devGuard, err = startDevStateGuard(homeDir(), os.Getpid()); err != nil {
+		fatal(fmt.Errorf("development state guard: %w", err))
+	}
 	if journeyNeedsBroker(provider) {
 		primaryBroker, err = s.startIsolatedBroker()
 		if err != nil {
@@ -335,7 +341,7 @@ persona_notes: |
 	stop()
 
 	s.run("J5-isolation", func() error {
-		return errors.Join(assertIsolation(provider, hadDailyMCP, stateDir, p), brokerStopErr)
+		return errors.Join(assertIsolation(provider, hadDailyMCP, stateDir, p), brokerStopErr, s.devGuard.finish(stateDir))
 	})
 
 	// 🎯T839: each isolate death once, with its first cause, however many
