@@ -66,7 +66,9 @@ type AchieveCheckArgs struct {
 	// at all. Attestations also carry report ids, output digests, gate ids
 	// quoted bare and shas from other repos; demanding the gate contain
 	// those buries the real flags under noise a reader learns to skip
-	// (🎯T760's lesson). Nil treats every token as a commit.
+	// (🎯T760's lesson). It is the only filter: the repo, not the token's
+	// spelling, decides what is a commit (🎯T1092). Nil treats every token
+	// as a commit.
 	IsCommit func(sha string) bool
 }
 
@@ -120,16 +122,20 @@ var keyValueRe = regexp.MustCompile(`\b\w+=\S+`)
 // namedCommitRe matches an abbreviated or full commit sha in prose.
 var namedCommitRe = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
 
-// NamedCommits returns the commits an attestation names as evidence, with
-// gate handles removed. A token must mix letters and digits: a bare date or
-// count is all digits, and a pure-letter run is a word.
+// NamedCommits returns the hex tokens an attestation names that may be
+// commits, with gate handles removed. It does not judge a token by its
+// spelling: a real abbreviated sha is all digits or all letters often enough
+// — about one 7-character abbreviation in 27 is all digits — that dropping
+// those tokens let a gate on the commit before such a fix verify (🎯T1092).
+// Telling commits from dates, counts and words is AchieveCheckArgs.IsCommit's
+// job, answered by the repo.
 func NamedCommits(attestation string) []string {
 	text := ledgerGateRe.ReplaceAllString(attestation, " ")
 	text = keyValueRe.ReplaceAllString(text, " ")
 	seen := map[string]bool{}
 	var out []string
 	for _, sha := range namedCommitRe.FindAllString(strings.ToLower(text), -1) {
-		if seen[sha] || !strings.ContainsAny(sha, "0123456789") || !strings.ContainsAny(sha, "abcdef") {
+		if seen[sha] {
 			continue
 		}
 		seen[sha] = true

@@ -142,6 +142,37 @@ func TestT765GreenOnAncestorOfFixIsRefused(t *testing.T) {
 	}
 }
 
+// 🎯T1092: an abbreviated sha that is all digits or all letters is still a
+// commit. About one 7-character abbreviation in 27 is all digits; dropping
+// those let a clean GREEN on the commit before the fix verify. The repo
+// (IsCommit) decides what is a commit, not the token's spelling.
+func TestT1092UnmixedFixShaIsStillAFix(t *testing.T) {
+	const (
+		parent = "d1bae19ceeaa15527cdd68adeb0c5a45b434ecae"
+		digits = "3412036839685310e6b05588ad595f0ece0fbd03"
+		letter = "ededecaafa5664160ad5c420e7f86e960996eb9c"
+	)
+	for _, fix := range []string{digits, letter} {
+		abbrev := fix[:10]
+		if got := NamedCommits("Fixed in " + abbrev + ". GATE t9 exit=0 GREEN id=dddd4444"); len(got) != 1 || got[0] != abbrev {
+			t.Fatalf("NamedCommits dropped fix %s: got %v", abbrev, got)
+		}
+		r := CheckAchieve(&AchieveCheckArgs{
+			Attestation: "Fixed in " + abbrev + ". GATE t9 exit=0 GREEN id=dddd4444",
+			Lookup: func(id string) (*Record, bool) {
+				return &Record{ID: id, StatusKnown: true, Verdict: VerdictGreen,
+					Tree: &TreeProvenance{Commit: parent, Clean: true}}, id == "dddd4444"
+			},
+			// parent ← fix: the gate's commit contains only itself.
+			Contains: func(code, fix string) bool { return sameCommit(code, fix) },
+			IsCommit: func(sha string) bool { return sameCommit(sha, fix) },
+		})
+		if r.Verdict != AchieveRefused || !t765HasFlag(r, FlagAchieveGatePrecedesFix) {
+			t.Errorf("gate on the parent of fix %s: got %s", abbrev, r)
+		}
+	}
+}
+
 // A hex token that is not a commit — a gate id quoted bare, a report id —
 // is not a fix the gate must contain, once the caller can tell commits apart.
 func TestT765NonCommitTokensAreNotFixes(t *testing.T) {

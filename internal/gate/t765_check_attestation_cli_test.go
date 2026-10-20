@@ -4,6 +4,7 @@
 package gate_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,15 +25,31 @@ type t765Repo struct {
 	parent, fix, kid string // full shas: parent ← fix ← kid
 }
 
-func newT765Repo(t *testing.T) t765Repo {
+// Commit dates for newT765Repo. Every fixture commit is empty and carries
+// this date, so its shas are a function of the date alone. Unpinned, they
+// were a function of the wall-clock second: about one second in a hundred
+// gave a fix whose 10-character abbreviation was all digits, which
+// NamedCommits used to drop as "not a sha", so a gate on the commit before
+// the fix verified (🎯T1092: "exit 0, want 4" under full-suite load, where
+// slower runs sample more distinct seconds). The dates were searched for the
+// abbreviation shapes they give; newT765Repo asserts each shape.
+const (
+	t765DateMixed  int64 = 1790000000 // fix 2e0b712f86…
+	t765DateDigits int64 = 1790000003 // fix 3412036839…
+	t765DateLetter int64 = 1790027509 // fix ededecaafa…
+)
+
+func newT765Repo(t *testing.T, date int64) t765Repo {
 	t.Helper()
 	dir := t.TempDir()
+	stamp := fmt.Sprintf("@%d +0000", date)
 	git := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
-			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -87,8 +104,33 @@ func checkAttestation(t *testing.T, store string, r t765Repo, id, attestation st
 	return cmd.ProcessState.ExitCode(), string(out)
 }
 
+// The acceptance table runs on fixtures whose fix abbreviation is mixed, all
+// digits and all letters: the repo decides what is a commit, never the
+// token's spelling (🎯T1092).
 func TestCheckAttestationAcceptance1(t *testing.T) {
-	r := newT765Repo(t)
+	for _, f := range []struct {
+		name  string
+		date  int64
+		shape func(string) bool
+	}{
+		{"mixed fix sha", t765DateMixed, func(s string) bool {
+			return strings.ContainsAny(s, "0123456789") && strings.ContainsAny(s, "abcdef")
+		}},
+		{"all-digit fix sha", t765DateDigits, func(s string) bool { return strings.Trim(s, "0123456789") == "" }},
+		{"all-letter fix sha", t765DateLetter, func(s string) bool { return strings.Trim(s, "abcdef") == "" }},
+	} {
+		t.Run(f.name, func(t *testing.T) {
+			r := newT765Repo(t, f.date)
+			if !f.shape(r.fix[:10]) {
+				t.Fatalf("fixture date %d gave fix %s, not a %s: the coverage this case exists for is gone",
+					f.date, r.fix, f.name)
+			}
+			checkAttestationAcceptance1(t, r)
+		})
+	}
+}
+
+func checkAttestationAcceptance1(t *testing.T, r t765Repo) {
 	store := t.TempDir()
 	fix := r.fix[:10]
 	saveT765Record(t, store, "aaaa1111", r.kid, gate.VerdictGreen, 0, true)
@@ -137,7 +179,7 @@ func TestCheckAttestationAcceptance1(t *testing.T) {
 // Accepted risk about the gate passes but never reads as verified, and never
 // launders a citation of a run that did not happen as described.
 func TestCheckAttestationMarkedIsVisiblyDistinct(t *testing.T) {
-	r := newT765Repo(t)
+	r := newT765Repo(t, t765DateMixed)
 	store := t.TempDir()
 	fix := r.fix[:10]
 	saveT765Record(t, store, "bbbb2222", r.kid, gate.VerdictDirty, 0, false)
@@ -161,7 +203,7 @@ func TestCheckAttestationMarkedIsVisiblyDistinct(t *testing.T) {
 // A check that cannot be made is not a pass: it exits 70 (or 2 for a bad
 // command line), never 0.
 func TestCheckAttestationCannotJudgeIsNotAPass(t *testing.T) {
-	r := newT765Repo(t)
+	r := newT765Repo(t, t765DateMixed)
 	store := t.TempDir()
 	att := "GATE t9 exit=0 GREEN id=aaaa1111"
 
