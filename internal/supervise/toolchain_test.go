@@ -227,7 +227,9 @@ func TestRestartHelpersNamesEveryHardRequiredBuild(t *testing.T) {
 	// from the unconditional RestartHelpers list — not a gap this test
 	// checks. buildident is documented above RestartHelpers as excluded on
 	// purpose because its build failure is caught by `|| return 0`.
-	exempt := map[string]bool{"buildsnap": true, "buildident": true}
+	// supervisorpolicy (🎯T1086) degrades the same way across two lines:
+	// an unbuildable one makes the policy "unknown" and the restart goes on.
+	exempt := map[string]bool{"buildsnap": true, "buildident": true, "supervisorpolicy": true}
 
 	buildLineRE := regexp.MustCompile(`go build -o "\$\w+" \./cmd/(\w+)\)([^\n]*)`)
 	named := map[string]bool{}
