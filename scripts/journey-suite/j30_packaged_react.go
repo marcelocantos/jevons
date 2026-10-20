@@ -120,7 +120,7 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	// notify-queue handoff (seam fired 0x). In the 2026-10-20 J20→J30 green
 	// run, the overseer J20's recovery re-minted was still working a
 	// research brief when J30's owner turn arrived.
-	if drivesOverseer(script) {
+	if drivesOverseer(script) && !s.j45NoIdleWait {
 		if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, overseerIdleBefore); err != nil {
 			return fmt.Errorf("overseer never settled before %s: %w", script, err)
 		}

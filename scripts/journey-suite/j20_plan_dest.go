@@ -94,6 +94,12 @@ func (s *suite) j20PlanDest() (result error) {
 	if err != nil {
 		return fmt.Errorf("explicit grok start: %w", err)
 	}
+	if s.j45HoldOverseer {
+		// 🎯T1091: the park lands while the overseer works a fleet turn.
+		if err := s.j45HoldOverseerInFleetTurn("jv-t39015-po"); err != nil {
+			return err
+		}
+	}
 	// Exhaust every plan, not grok alone. With other plans unread, Claudia's
 	// placement defers ("destination plan readings incomplete") rather than
 	// parking, since a destination may exist; a park needs every plan read
@@ -180,7 +186,11 @@ func (s *suite) restorePlanAfterJ20(path string) error {
 	}
 	// Recovery re-mints the parked overseer, and the new seat may still be
 	// working whatever the park interrupted (a research brief, in the
-	// 2026-10-20 green run). Hand the next journey an idle overseer.
+	// 2026-10-20 green run). Hand the next journey an idle overseer — except
+	// to J45, which is about exactly that window (🎯T1091).
+	if s.j45HoldOverseer {
+		return nil
+	}
 	if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, overseerIdleBefore); err != nil {
 		return fmt.Errorf("the overseer J20's recovery brought back never went idle: %w", err)
 	}

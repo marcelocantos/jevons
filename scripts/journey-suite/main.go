@@ -93,6 +93,11 @@ type suite struct {
 	broker *isolatedBroker
 	// readyWait overrides readyTimeout when non-zero (hermetic tests only).
 	readyWait time.Duration
+	// 🎯T1091 (J45): j45HoldOverseer has J20 hold the overseer in a fleet
+	// turn before it exhausts the plan; j45NoIdleWait skips the waits for
+	// an idle overseer that would hide the race J45 exists for.
+	j45HoldOverseer bool
+	j45NoIdleWait   bool
 
 	// 🎯T839: isolateDown is the current isolate outage (nil while the
 	// isolate answers); isolateOutages keeps every one for the summary.
@@ -328,6 +333,7 @@ persona_notes: |
 	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
 	s.run("J30-packaged-react-owner-turn", s.jPackagedReactOwnerTurn)
 	s.run("J31-packaged-react-owner-boundary", s.jPackagedReactOwnerBoundary)
+	s.run("J45-t1091-owner-after-recover", s.jT1091OwnerTurnAfterRecover)
 	s.run("J32-packaged-react-send-cutin", s.jPackagedReactSendCutIn)
 	s.run("J33-undelivered-resend", s.jUndeliveredResend)
 	s.run("J35-worker-busy-escalates", s.jWorkerBusyVisibleQueue)
