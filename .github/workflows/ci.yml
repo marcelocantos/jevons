@@ -33,6 +33,11 @@ jobs:
           cd scripts/browser-loop-test && npx playwright install --with-deps chromium && cd ../..
           make test-web test-ui
 
+      # internal/cost runs the Claudia sidecar; a missing Bun fails it.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
       - name: Install tmux (required by the T36 clamp-down drill)
         run: sudo apt-get update && sudo apt-get install -y tmux
 
