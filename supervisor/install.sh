@@ -21,6 +21,25 @@ if [ -z "${HOME:-}" ]; then
   HOME="$(eval echo ~"$(id -un)")"
   export HOME
 fi
+
+# 🎯T1103 — same host-sentinel pause contract as scripts/restart-jevonsd.sh
+# (docs/design/sentinel-pause-contract.md). supervisord autostart reaches
+# the port without going through that script, so this installer checks the
+# marker itself before rendering or (re)starting anything.
+PAUSE_MARKER="${JEVONS_RESTART_PAUSE_MARKER:-$HOME/.local/share/sen/jevons-paused.txt}"
+PAUSE_OVERRIDE="${JEVONS_RESTART_OVERRIDE_PAUSE:-0}"
+if [ -f "$PAUSE_MARKER" ] && [ "$PAUSE_OVERRIDE" != "1" ]; then
+  echo "supervisor/install.sh: refusing - host-sentinel pause marker present at $PAUSE_MARKER:" >&2
+  sed 's/^/  /' "$PAUSE_MARKER" >&2
+  echo "" >&2
+  echo "This script will not race the sentinel. Lift the pause through the" >&2
+  echo "sentinel's own unpause step (docs/design/sentinel-pause-contract.md);" >&2
+  echo "do not delete the marker by hand from here." >&2
+  echo "To proceed anyway on the owner's explicit word:" >&2
+  echo "  JEVONS_RESTART_OVERRIDE_PAUSE=1 $0 \"\$@\"" >&2
+  exit 3
+fi
+
 mkdir -p "$CONF_DIR"
 mkdir -p "$HOME/.local/var/log"
 chmod +x "$REPO/supervisor/run-jevonsd.sh"

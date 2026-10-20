@@ -167,11 +167,45 @@ DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-jevonsd.log}"
 # lock: introspection that blocks behind a live restart, or that appends
 # to the restart log, is a trap for anyone debugging one.
 WANTS_WORK=1
+WANTS_HELP=0
 for _arg in ${@+"$@"}; do
   case "$_arg" in
-    -h|--help|--dry-run) WANTS_WORK=0 ;;
+    -h|--help) WANTS_HELP=1; WANTS_WORK=0 ;;
+    --dry-run) WANTS_WORK=0 ;;
   esac
 done
+
+# 🎯T1103 — host-sentinel pause contract. An owner-authorised restart must
+# not be raced by a host sentinel acting on a stale pause order: on
+# 2026-10-21 the owner approved re-enabling the fleet and this script
+# served a fresh daemon at 09:01, and at 09:05 a separate host sentinel
+# (~/.local/bin/sen), holding a pause order from 2026-10-15 that nothing
+# here knew about, stopped it again and reported the restart as an
+# incident. Fixed by hand; this check is the standing fix: before this
+# script touches anything (even the --dry-run plan, since both sides must
+# agree the marker is gone before invoking it), look for the sentinel's
+# pause marker. Present ⇒ refuse with the marker's own text and the exact
+# override, never race it. The contract — what writes the marker, what
+# removes it, and when a running paused-but-autostarted daemon is the
+# owner's action rather than an incident — is docs/design/sentinel-pause-contract.md.
+#
+# -h/--help is exempt: reading the manual is never something a pause
+# should block.
+PAUSE_MARKER="${JEVONS_RESTART_PAUSE_MARKER:-$HOME/.local/share/sen/jevons-paused.txt}"
+PAUSE_OVERRIDE="${JEVONS_RESTART_OVERRIDE_PAUSE:-0}"
+if [[ "$WANTS_HELP" != "1" && -f "$PAUSE_MARKER" && "$PAUSE_OVERRIDE" != "1" ]]; then
+  {
+    echo "restart-jevonsd: refusing — host-sentinel pause marker present at $PAUSE_MARKER:"
+    sed 's/^/  /' "$PAUSE_MARKER"
+    echo ""
+    echo "This script will not race the sentinel. To lift the pause, follow the"
+    echo "sentinel's own unpause step (docs/design/sentinel-pause-contract.md) —"
+    echo "do not delete the marker by hand from here."
+    echo "To proceed anyway on the owner's explicit word:"
+    echo "  JEVONS_RESTART_OVERRIDE_PAUSE=1 $0 ${*:+"$@"}"
+  } >&2
+  exit 3
+fi
 
 # 🎯T553: every successful run appends "served <epoch> <sha> bounce=<0|1>"
 # to $SERVED_FILE, naming the committed HEAD it built and whether it
@@ -247,6 +281,9 @@ Env:
   JEVONS_RESTART_SUPERVISOR_CONF   supervisord config for supervisorctl -c (🎯T1086)
   JEVONS_RESTART_SUPERVISOR_PROGRAM  supervisord program (default jevonsd)
   JEVONS_RESTART_RELAUNCH_WAIT_SEC   Wait for a supervised relaunch (default 20)
+  JEVONS_RESTART_PAUSE_MARKER      Host-sentinel pause marker file (🎯T1103;
+                                   default ~/.local/share/sen/jevons-paused.txt)
+  JEVONS_RESTART_OVERRIDE_PAUSE    If 1, proceed despite the pause marker (owner only)
 
 SELF-DETACH (🎯T405): this script re-execs itself through bin/detach into
 its own session before doing anything, so the caller's death — including
