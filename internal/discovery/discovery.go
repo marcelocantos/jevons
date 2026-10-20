@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -470,11 +471,61 @@ func ClaudiaGrokHomeSessionsDir(homesRoot, sessionID string) string {
 	return filepath.Join(homesRoot, sessionID, "sessions")
 }
 
+// tempGlobs counts listings of the temp dir, for tests (🎯T1084).
+var tempGlobs atomic.Int64
+
+// TempDirListings is how many times this process has listed the temp dir for
+// exclusive Grok homes. Tests diff it across a call; not a production signal.
+func TempDirListings() int64 { return tempGlobs.Load() }
+
+// tempHomes remembers which entries of a temp dir are exclusive Grok homes,
+// keyed on the temp dir's own identity, mtime and size (🎯T1084). The seat
+// tick asked several times per seat per pass, and each ask listed $TMPDIR:
+// 35,100 entries on the development host, about 0.36 s of system CPU each.
+// A directory's mtime moves whenever an entry is added, removed or renamed,
+// so an unchanged one names the same homes. Each home's sessions dir is
+// still stat'ed every call: it is created inside the home and does not
+// touch the temp dir. Residue: a filesystem whose mtime is too coarse to
+// tell apart two changes in one tick could serve a stale list until the
+// next change; APFS and ext4 stamp nanoseconds.
+var tempHomes struct {
+	mu    sync.Mutex
+	tmp   string
+	dir   os.FileInfo
+	homes []string // glob matches, as filepath.Glob returned them
+}
+
+func sameDirState(a, b os.FileInfo) bool {
+	return a != nil && b != nil && os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size()
+}
+
+// exclusiveGrokHomes is filepath.Glob(tmp/claudia-mcp-grok-*), listed again
+// only when the temp dir changed since the last listing.
+func exclusiveGrokHomes(tmp string) ([]string, error) {
+	tempHomes.mu.Lock()
+	defer tempHomes.mu.Unlock()
+	before, statErr := os.Stat(tmp)
+	if statErr == nil && tempHomes.tmp == tmp && sameDirState(tempHomes.dir, before) {
+		return tempHomes.homes, nil
+	}
+	tempGlobs.Add(1)
+	matches, err := filepath.Glob(filepath.Join(tmp, exclusiveGrokHomePrefix+"*"))
+	if err != nil {
+		return nil, err
+	}
+	// Remember the listing only if the dir held still while it was read.
+	tempHomes.tmp, tempHomes.dir, tempHomes.homes = "", nil, nil
+	if after, err := os.Stat(tmp); statErr == nil && err == nil && sameDirState(before, after) {
+		tempHomes.tmp, tempHomes.dir, tempHomes.homes = tmp, before, matches
+	}
+	return matches, nil
+}
+
 func exclusiveGrokSessionRoots(tmp string) []string {
 	if tmp == "" {
 		return nil
 	}
-	matches, err := filepath.Glob(filepath.Join(tmp, exclusiveGrokHomePrefix+"*"))
+	matches, err := exclusiveGrokHomes(tmp)
 	if err != nil {
 		return nil
 	}

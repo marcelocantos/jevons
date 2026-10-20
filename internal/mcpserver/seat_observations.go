@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
@@ -35,8 +36,12 @@ func (s *Server) observeSeatTranscripts(observers ...func(claudia.AgentDef)) {
 	if s == nil || s.registry == nil {
 		return
 	}
+	// One roots reading per pass (🎯T1084): each one checks the temp dir for
+	// exclusive Grok homes, and a pass asked several times per seat. A pass
+	// already reads one registry snapshot; it reads one roots snapshot too.
+	roots := s.transcriptRoots()
 	for _, d := range s.registry.List() {
-		s.observeSeatTranscript(d)
+		s.observeSeatTranscriptWith(d, roots)
 		for _, observe := range observers {
 			observe(d)
 		}
@@ -44,6 +49,10 @@ func (s *Server) observeSeatTranscripts(observers ...func(claudia.AgentDef)) {
 }
 
 func (s *Server) diagnoseBirth(d claudia.AgentDef, now time.Time) birthDiagnosis {
+	return s.diagnoseBirthWith(d, now, s.transcriptRoots())
+}
+
+func (s *Server) diagnoseBirthWith(d claudia.AgentDef, now time.Time, roots discovery.Roots) birthDiagnosis {
 	var out birthDiagnosis
 	sid := strings.TrimSpace(d.SessionID)
 	if sid == "" || strings.TrimSpace(d.Name) == "" {
@@ -67,7 +76,7 @@ func (s *Server) diagnoseBirth(d claudia.AgentDef, now time.Time) birthDiagnosis
 	out.PastGrace = out.Elapsed >= BornStuckGrace
 	out.Existence = LookupTranscriptExistence(TranscriptExistenceQuery{
 		Name: d.Name, Provider: d.Provider, SessionID: sid, WorkDir: d.WorkDir,
-		Roots: s.transcriptRoots(),
+		Roots: roots,
 	})
 	switch out.Existence.Verdict {
 	case ExistencePresent:
@@ -145,12 +154,16 @@ func (t *IdleActivityTracker) observeActivity(name string, act IdleActivity) {
 }
 
 func (s *Server) observeSeatTranscript(d claudia.AgentDef) {
+	s.observeSeatTranscriptWith(d, s.transcriptRoots())
+}
+
+func (s *Server) observeSeatTranscriptWith(d claudia.AgentDef, roots discovery.Roots) {
 	at := time.Now()
-	activity := seatactivity.Lookup(seatactivity.Query{Name: d.Name, Provider: d.Provider, SessionID: d.SessionID, WorkDir: d.WorkDir, Roots: s.transcriptRoots(), Now: at})
+	activity := seatactivity.Lookup(seatactivity.Query{Name: d.Name, Provider: d.Provider, SessionID: d.SessionID, WorkDir: d.WorkDir, Roots: roots, Now: at})
 	if activity.Verdict == seatactivity.VerdictKnown {
 		s.Seats().Observe(seatstate.Observation{Name: d.Name, ForSession: d.SessionID, LastActivity: activity.LastMove, QueueDepth: seatstate.QueueUnknown, Source: "transcript.activity", At: at})
 	}
-	phase := classifyAgentSessionPhase(d, s.transcriptRoots())
+	phase := classifyAgentSessionPhase(d, roots)
 	s.Seats().Observe(seatstate.Observation{Name: d.Name, ForSession: d.SessionID, Phase: phase, QueueDepth: seatstate.QueueUnknown, Source: "transcript.fold", At: at})
 	st := s.seatState(d.Name)
 	if st.Alive.Known() {
@@ -161,7 +174,7 @@ func (s *Server) observeSeatTranscript(d claudia.AgentDef) {
 		status := classifySeatListPhase(d.Purpose, st.Alive == seatstate.Yes, s.agentHasTurnBegan(d.Name), d.Materialized, ev)
 		s.Seats().Observe(seatstate.Observation{Name: d.Name, ForSession: d.SessionID, Status: status, QueueDepth: seatstate.QueueUnknown, Source: "transcript.lifecycle", At: at})
 	}
-	s.diagnoseBirth(d, s.birthClock())
+	s.diagnoseBirthWith(d, s.birthClock(), roots)
 	_, _ = s.sendQueue().Depth(d.Name)
 }
 
