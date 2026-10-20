@@ -57,11 +57,19 @@ func (s *suite) jControlPlaneLifecycle() error {
 	if err := waitOwnerMuxReply(ctx, frames, prompt, token); err != nil {
 		return fmt.Errorf("lifecycle turn: %w", err)
 	}
+	// The reply paints before the turn ends: the seat can make one more model
+	// call after the token (gate 1a06d7ed counted 11, then the turn's last
+	// call landed 2.8 s later and read as a restart-made row). The baseline is
+	// taken once the overseer is idle and its usage count has stopped moving,
+	// so the comparison after the restart measures the restart alone.
+	if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, overseerIdleBefore); err != nil {
+		return fmt.Errorf("lifecycle turn did not end: %w", err)
+	}
 	before, err := s.waitControlFacts(overseerName, session, 20*time.Second)
 	if err != nil {
 		return err
 	}
-	calls, err := canonicalUsageCalls(s.stateDir, session)
+	calls, err := settledUsageCalls(s.stateDir, session, usageSettle, 20*time.Second)
 	if err != nil {
 		return err
 	}
@@ -290,4 +298,34 @@ func canonicalUsageCalls(stateDir, session string) (int, error) {
 	var n int
 	err = db.QueryRow(`SELECT COUNT(*) FROM usage_calls WHERE session_id = ?`, session).Scan(&n)
 	return n, err
+}
+
+// usageSettle is how long the canonical usage count must hold still before
+// J44 takes it as the pre-restart baseline: a fact replicates from the
+// broker after the turn that made it ends.
+const usageSettle = 2 * time.Second
+
+// settledUsageCalls returns the session's canonical usage count once two
+// reads usageSettle apart agree, or an error naming the last two counts when
+// it is still moving at timeout.
+func settledUsageCalls(stateDir, session string, settle, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	prev, err := canonicalUsageCalls(stateDir, session)
+	if err != nil {
+		return 0, err
+	}
+	for {
+		time.Sleep(settle)
+		cur, err := canonicalUsageCalls(stateDir, session)
+		if err != nil {
+			return 0, err
+		}
+		if cur == prev {
+			return cur, nil
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("canonical usage calls for %s still moving after %s (%d then %d)", session, timeout, prev, cur)
+		}
+		prev = cur
+	}
 }
