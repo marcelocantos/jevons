@@ -75,6 +75,11 @@ type AgentObservation struct {
 	// Binary is the watchdog executable, empty when it is missing —
 	// which is the one gap the daemon cannot close by reloading.
 	Binary string
+	// Disabled reports that the owner has switched the job off in
+	// launchd (`launchctl disable`, 🎯T1095). That is a hold, not a gap:
+	// launchd refuses to bootstrap a disabled job, so reinstating it
+	// fails every retry and fights the owner's own decision.
+	Disabled bool
 }
 
 // AgentState is what the daemon remembers between checks, so a gap costs
@@ -84,8 +89,12 @@ type AgentState struct {
 	LastAttempt time.Time `json:"last_attempt,omitzero"`
 	// Attempts counts reinstatements tried for the current gap.
 	Attempts int `json:"attempts,omitempty"`
-	// Notified records that the owner has been told about this gap.
+	// Notified records that the owner has been told about this gap, or
+	// about the hold while Held is set.
 	Notified bool `json:"notified,omitempty"`
+	// Held records that the owner has disabled the job (🎯T1095), so the
+	// hold costs one notice rather than one per pass.
+	Held bool `json:"held,omitempty"`
 }
 
 // AgentDecision is one verdict about the supervisor.
@@ -100,6 +109,10 @@ type AgentDecision struct {
 	// Silent is how long the heartbeat had been quiet, zero when the
 	// supervisor was never seen at all.
 	Silent time.Duration
+	// Held marks a verdict made under the owner's hold (🎯T1095): the
+	// job is disabled, nothing is reinstated, and the log says so at
+	// INFO rather than raising an error every pass.
+	Held bool
 }
 
 // ClassifyAgent decides what the daemon should do about its supervisor:
@@ -133,6 +146,26 @@ func ClassifyAgent(cfg AgentConfig, st AgentState, obs AgentObservation, now tim
 	}
 
 	d := AgentDecision{Silent: silent}
+
+	// 🎯T1095: the owner switched the job off. launchd will not
+	// bootstrap it, so a reinstatement can only fail — 58 times on
+	// 2026-10-20, each one an ERROR and a rewritten plist. Respect the
+	// hold, say so once, and forget any pacing so that re-enabling the
+	// job is answered on the very next pass.
+	if obs.Disabled {
+		d.Held = true
+		d.Reason = fmt.Sprintf("%s, and the owner has disabled it in launchd; not reinstating while the hold stands", gap)
+		held := AgentState{Held: true, Notified: st.Held && st.Notified}
+		if !held.Notified {
+			d.Notify = NotifyProblem
+			held.Notified = true
+		}
+		return d, held
+	}
+	// Leaving a hold: the owner re-enabled the job and was told about
+	// the hold, so the reinstatement below needs no second notice, and
+	// the recovery notice closes the story once it probes.
+	st.Held = false
 
 	// The one gap reloading cannot close. Say so rather than
 	// bootstrapping a job that is guaranteed not to run, which would
@@ -175,6 +208,10 @@ const SupervisorSubject = "jevons-watchdog"
 func AgentNoticeText(d AgentDecision) string {
 	if d.Notify == NotifyOK {
 		return "watchdog restored: the daemon's own supervisor is loaded and probing again. " + d.Reason
+	}
+	if d.Held {
+		return "watchdog held: " + d.Reason + ". Nothing is supervising the development jevonsd until it is re-enabled with `launchctl enable " +
+			AgentDomain() + "/" + AgentLabel + "`; the daemon reinstates it on its next check after that."
 	}
 	msg := "watchdog gap: nothing was supervising the development jevonsd — " + d.Reason + "."
 	if d.Silent > 0 {
@@ -279,6 +316,10 @@ func ObserveAgent(p AgentPaths) AgentObservation {
 		obs.LastProbe = st.ModTime()
 	}
 	obs.Loaded, _ = AgentLoaded(AgentLabel)
+	// An unreadable override list counts as enabled: the cost is the
+	// pre-🎯T1095 behaviour (a reinstatement that may fail), never a
+	// healthy job left unsupervised behind an imagined hold.
+	obs.Disabled, _ = AgentDisabled(AgentLabel)
 	if path := AgentPlistPath(p.Home); fileExists(path) {
 		obs.PlistPath = path
 	}
@@ -389,6 +430,9 @@ func WatchAgentLoop(ctx context.Context, p AgentPaths, cfg AgentConfig, every ti
 		obs := ObserveAgent(p)
 		d, next := ClassifyAgent(cfg, st, obs, time.Now())
 
+		if d.Held {
+			slog.Info("supervise: watchdog disabled by the owner; not reinstating", "label", AgentLabel, "reason", d.Reason)
+		}
 		if d.Reinstate {
 			if err := ReinstateAgent(p); err != nil {
 				slog.Error("supervise: reinstating the watchdog", "err", err, "reason", d.Reason)

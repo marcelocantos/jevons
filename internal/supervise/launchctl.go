@@ -15,6 +15,20 @@ import (
 // reinstatement path (🎯T405) and the watchdog's own -install use the
 // same code and cannot drift into two different definitions of loaded.
 
+// launchctl runs one launchctl command and returns its combined output.
+// Every call in this package goes through it, so a test can answer for
+// launchd instead of reaching the owner's real one (🎯T1095): an
+// observation or a bootstrap from a test run lands on the same gui/<uid>
+// domain the development watchdog lives in.
+var launchctl = func(args ...string) ([]byte, error) {
+	return exec.Command("launchctl", args...).CombinedOutput()
+}
+
+// haveLaunchd reports whether this platform has a launchd to talk to. A
+// variable beside launchctl so a test that fakes launchd on another
+// platform exercises the same paths it would on macOS.
+var haveLaunchd = runtime.GOOS == "darwin"
+
 // AgentDomain is the launchd domain the LaunchAgent lives in.
 func AgentDomain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
 
@@ -26,10 +40,10 @@ func AgentDomain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
 // being asked. A non-darwin build reports false with no error, because
 // there is no launchd to hold anything.
 func AgentLoaded(label string) (bool, error) {
-	if runtime.GOOS != "darwin" {
+	if !haveLaunchd {
 		return false, nil
 	}
-	out, err := exec.Command("launchctl", "print", AgentDomain()+"/"+label).CombinedOutput()
+	out, err := launchctl("print", AgentDomain()+"/"+label)
 	if err == nil {
 		return true, nil
 	}
@@ -38,6 +52,42 @@ func AgentLoaded(label string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("supervise: launchctl print %s: %w: %s", label, err, strings.TrimSpace(string(out)))
+}
+
+// AgentDisabled reports whether the owner has disabled the job in its
+// domain (`launchctl disable`), which is an off switch rather than a
+// failure: launchd refuses to bootstrap a disabled job — "Bootstrap
+// failed: 5: Input/output error" — however good the plist is (🎯T1095).
+//
+// print-disabled lists every service with an override in the domain, one
+// per line as `"label" => disabled` (older releases print `=> true`). A
+// label absent from the list has no override and is enabled.
+func AgentDisabled(label string) (bool, error) {
+	if !haveLaunchd {
+		return false, nil
+	}
+	out, err := launchctl("print-disabled", AgentDomain())
+	if err != nil {
+		return false, fmt.Errorf("supervise: launchctl print-disabled %s: %w: %s", AgentDomain(), err, strings.TrimSpace(string(out)))
+	}
+	return disabledIn(string(out), label), nil
+}
+
+// disabledIn reads one label's override out of print-disabled output.
+func disabledIn(out, label string) bool {
+	quoted := `"` + label + `"`
+	for _, line := range strings.Split(out, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=>")
+		if !ok || strings.TrimSpace(key) != quoted {
+			continue
+		}
+		switch strings.TrimSpace(value) {
+		case "disabled", "true":
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 // LoadAgent makes launchd hold the job described by plistPath.
@@ -53,11 +103,11 @@ func AgentLoaded(label string) (bool, error) {
 // state — the old job is only removed once its replacement is known to
 // be loadable, and a total failure leaves whatever was working alone.
 func LoadAgent(plistPath, label string) error {
-	if runtime.GOOS != "darwin" {
+	if !haveLaunchd {
 		return fmt.Errorf("supervise: launchd agents are macOS only")
 	}
 	domain := AgentDomain()
-	out, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
+	out, err := launchctl("bootstrap", domain, plistPath)
 	if err == nil {
 		return nil
 	}
@@ -72,10 +122,10 @@ func LoadAgent(plistPath, label string) error {
 		return fmt.Errorf("supervise: bootstrap %s: %w: %s", label, err, strings.TrimSpace(string(out)))
 	}
 	// It was in the way. Replace it so the new arguments take effect.
-	if out, err := exec.Command("launchctl", "bootout", domain+"/"+label).CombinedOutput(); err != nil {
+	if out, err := launchctl("bootout", domain+"/"+label); err != nil {
 		return fmt.Errorf("supervise: bootout %s: %w: %s", label, err, strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput(); err != nil {
+	if out, err := launchctl("bootstrap", domain, plistPath); err != nil {
 		return fmt.Errorf("supervise: re-bootstrap %s: %w: %s", label, err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -84,10 +134,10 @@ func LoadAgent(plistPath, label string) error {
 // UnloadAgent removes the job from launchd. A job that is not there is
 // not an error — the caller asked for it gone.
 func UnloadAgent(label string) error {
-	if runtime.GOOS != "darwin" {
+	if !haveLaunchd {
 		return fmt.Errorf("supervise: launchd agents are macOS only")
 	}
-	out, err := exec.Command("launchctl", "bootout", AgentDomain()+"/"+label).CombinedOutput()
+	out, err := launchctl("bootout", AgentDomain()+"/"+label)
 	if err == nil || strings.Contains(string(out), "Could not find service") {
 		return nil
 	}
