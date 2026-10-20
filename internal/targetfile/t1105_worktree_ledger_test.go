@@ -118,6 +118,11 @@ func TestT1105SubmoduleIsNotAWorktree(t *testing.T) {
 
 // One real `git worktree add`, so the file-reading resolver is held to what
 // git itself writes, and to `git rev-parse --git-common-dir`.
+//
+// 🎯T440 //worktreereap:exempt — the worktree belongs to a throwaway repo
+// inside t.TempDir, not to the shared clone: its admin entry lives in that
+// repo's own .git and both vanish with the temp dir, so there is no shared
+// `git worktree list` row for an owner mark to protect.
 func TestT1105RealGitWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
