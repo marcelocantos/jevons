@@ -50,9 +50,13 @@ Same-machine browser use is the supported docs-only path today.
    + Jevon iOS QR scan (source under `ios/`; no App Store binary yet; full
    onboarding is 🎯T14). See README [Pair a device](README.md#pair-a-device)
    (🎯T156).
-6. **MCP attach**: fleet seats get `jevonsmcp` on `AgentDef.MCPServers`
-   at Claudia mint/Launch (served URL, 🎯T379; T520 owner-map HTTP uses
-   the same list). Development and isolate boot do **not** write
+6. **MCP attach**: fleet seats get the **owner MCP map** (mnemo, bullseye,
+   …) plus `jevonsmcp` on `AgentDef.MCPServers` at Claudia mint/Launch
+   (served URL, 🎯T379; T520 owner-map HTTP uses the same list). **Provider
+   choice must not silently drop history tools (🎯T696):** routing a seat
+   to grok / xai-oauth must not strip mnemo-backed briefing context — the
+   standard set is Claude's LoadMCP inventory for every backend (🎯T871),
+   not jevonsmcp-only. Development and isolate boot do **not** write
    `~/.claude.json`, `~/.cursor/mcp.json`, `~/.codex/config.toml`,
    `~/.grok/config.toml`, or isolate `state_dir/mcp`. Do not hand-roll
    `claude mcp add` / `grok mcp add` for fleet seats. An external client

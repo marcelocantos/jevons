@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mcpattach is how jevonsd puts the MCP set on every Session:
-// LoadMCP (discovery) + append jevonsmcp for Claude/Codex/Cursor, then
-// AgentDef.MCPServers. Grok is different (🎯T525): ACP session/new gets
-// only this daemon's HTTP jevonsmcp — re-sending the full inventory in a
-// Claude-shaped ACP payload made session/new return Invalid params.
+// LoadMCP (discovery) + append jevonsmcp for every backend, then
+// AgentDef.MCPServers. Provider choice must not silently drop history
+// tools (🎯T696): Grok/xai-oauth seats get the same owner MCP map
+// (mnemo, bullseye, …) as Claude. The old Grok ACP-only jevonsmcp list
+// (🎯T525) was for Claude-shaped ACP session/new Invalid params; fleet
+// Grok is OMP sidecar now and consumes MCPServers as host tools.
 // Codex exclusive Launch writes CODEX_HOME from MCPServers (app-server
 // thread/start has no MCP field). Claudia v0.27+ has no EnsureMCP.
 package mcpattach
@@ -54,15 +56,13 @@ func HTTPURL(host string, port int) string {
 }
 
 // SessionServers is the list Jevons passes on AgentDef.MCPServers.
-// Every backend except Grok ACP uses Claude's LoadMCP inventory as the
-// standard set (🎯T871), plus this daemon's jevonsmcp, with T520/T1039
-// grants applied from Proxied. Grok ACP still gets only the live
-// HTTP jevonsmcp (🎯T525): a Claude-shaped full inventory made
-// session/new return Invalid params.
+// Every backend — including ProviderGrok and xai-oauth — uses Claude's
+// LoadMCP inventory as the standard set (🎯T871 / 🎯T696), plus this
+// daemon's jevonsmcp, with T520/T1039 grants applied from Proxied.
+// computer-use is dropped. Routing a seat to grok must not strip
+// mnemo-backed briefing context (🎯T696).
 func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
-	if provider == claudia.ProviderGrok {
-		return grokSessionServers(a)
-	}
+	_ = provider // policy is provider-uniform (🎯T696); kept for call-site clarity
 	inv, err := claudia.LoadMCP(loadArgs(a, workDir))
 	if err != nil || inv == nil {
 		inv = &claudia.MCPInventory{}
@@ -98,16 +98,6 @@ func isComputerUseMCP(name string) bool {
 	}
 }
 
-func grokSessionServers(a Args) []claudia.MCPServer {
-	if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.URL) == "" {
-		return nil
-	}
-	return []claudia.MCPServer{{
-		Name: a.Name,
-		Type: "http",
-		URL:  a.URL,
-	}}
-}
 
 func loadArgs(a Args, workDir string) *claudia.LoadMCPArgs {
 	explicit := a.ClaudeJSON != "" || a.GrokTOML != "" || a.CodexTOML != "" || a.CursorJSON != ""
