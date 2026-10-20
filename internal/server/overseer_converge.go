@@ -407,12 +407,33 @@ func (s *Server) cockpitAttach(state *cockpitState) error {
 		return fmt.Errorf("cockpit: no registry")
 	}
 	proc := reg.Get(name)
-	if proc == nil || !(seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
+	seat := seatstate.ReadRegistry(reg, name)
+	if proc == nil || !(seat.Alive == seatstate.Yes) {
 		return fmt.Errorf("cockpit: attach raced; process gone")
 	}
+	s.mu.RLock()
+	replaced := s.proc != nil && s.proc != proc
+	orphaned := replaced && s.waiting && seat.InFlight != seatstate.Yes
+	s.mu.RUnlock()
 	s.AttachOverseer(proc)
+	if orphaned {
+		// The turn the server holds open belonged to the process this one
+		// replaced (a plan-policy park stops the seat mid-turn and the
+		// recovery sweep re-mints it), and that process's terminal will never
+		// arrive. Left set, `waiting` wedged the notify queue until the
+		// stuck-busy watchdog: in the 2026-10-20 full journey suite an owner
+		// turn in flight when J20 parked the overseer left J30's owner turn
+		// queued, undrained, for six minutes. The new seat is not in a turn,
+		// so the queue is free.
+		slog.Warn("cockpit: re-attached a replacement overseer process; settled the previous process's open turn",
+			"name", name)
+		s.settleOverseerAfterUnstick()
+	}
 	s.broadcastCockpitReady("overseer is back")
 	slog.Info("cockpit: overseer re-attached to chat", "name", name)
+	if orphaned {
+		s.drainOverseerNotes()
+	}
 	s.SetOverseerDownReason("")
 	state.mu.Lock()
 	state.attempts = 0
