@@ -381,7 +381,29 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		s.logLifecycle(compAgentLifecycle, "start", "error", map[string]any{
 			"name": name, "err": "name and workdir are required",
 		})
-		return mcp.NewToolResultError("name and workdir are required"), nil
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, "name and workdir are required")), nil
+	}
+
+	// 🎯T758: a same-name start against a seat that is already running reports
+	// the existing outcome. It does not launch a second executor and does not
+	// re-deliver the opening brief — that is how a transport false-negative
+	// used to mint two implementers under one registry name.
+	if s.seatAlive(name) {
+		if d := s.registry.Def(name); d != nil {
+			life["session_id"] = sessionDisplay(d.SessionID)
+			life["existed"] = true
+			life["outcome"] = StartOutcomeStarted
+			life["already_running"] = true
+			s.logLifecycle(compAgentLifecycle, "start", "ok", life)
+			purpose := string(d.Purpose)
+			if strings.TrimSpace(purpose) == "" {
+				purpose = claudia.PurposeWork
+			}
+			msg := formatAgentStartResult(name, d.WorkDir, d.Parent, purpose, s.roleDisplay(*d), d.TargetID,
+				string(d.Provider), d.Model, sessionDisplay(d.SessionID), "", "")
+			msg += " (already running; same-name retry is a no-op — no second executor, no re-brief; 🎯T758)"
+			return mcp.NewToolResultText(msg), nil
+		}
 	}
 
 	// Budget clamp: both new spawn and re-launch of a pause/kill-clamped
@@ -423,9 +445,9 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		if dec.Blocking != fleetintent.Reaped || rowExisted {
 			life["err"] = dec.Reason
 			s.logLifecycle(compAgentLifecycle, "start", "error", life)
-			return mcp.NewToolResultError(fmt.Sprintf(
+			return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, fmt.Sprintf(
 				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
-				name, fleetintent.Describe(dec.Blocking), dec.Reason)), nil
+				name, fleetintent.Describe(dec.Blocking), dec.Reason))), nil
 		}
 		s.MarkAgentWorking(name, s.intentActor(ctx, args), "fresh start under a previously reaped name")
 	}
@@ -450,9 +472,9 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	if st, err := os.Stat(workdir); err != nil || !st.IsDir() {
 		life["err"] = "workdir_missing"
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
-		return mcp.NewToolResultError(fmt.Sprintf(
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, fmt.Sprintf(
 			"workdir %q does not exist on disk; pass the shared clone path (the daemon creates the .jevons-worktrees-<repo>/%s isolated tree itself, per 🎯T254.2) — no registry row, no broker launch",
-			workdir, name)), nil
+			workdir, name))), nil
 	}
 
 	// Lineage: parent defaults to actor, else overseer root.
@@ -606,7 +628,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		if targetID != "" && !existed {
 			s.noteSeatFailure(targetID, name, parent, "register failed: "+err.Error())
 		}
-		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, fmt.Sprintf("register failed: %v", err))), nil
 	}
 	life["existed"] = existed
 	if routeNote != "" {
@@ -639,8 +661,8 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		// 🎯T970: the row stays, so it says why it never ran.
 		s.noteSeatStop(name, seatstop.SourceStartFailed, "start failed: "+err.Error(), strings.TrimSpace(actor), "")
-		return mcp.NewToolResultError(prefixRehydrate(rehydrated,
-			fmt.Sprintf("start failed: %v", err))), nil
+		return mcp.NewToolResultError(withStartOutcome(StartOutcomeNotStarted, prefixRehydrate(rehydrated,
+			fmt.Sprintf("start failed: %v", err)))), nil
 	}
 
 	missionStarted = true
@@ -799,8 +821,8 @@ func (s *Server) repoSharedWithWorker(workdir, excludeName string) bool {
 // 🎯T476: routeNote must already cite which knob selected the provider.
 func formatAgentStartResult(name, workdir, parent, purpose, role, targetID, provider, model, session, routeNote, prompt string) string {
 	msg := fmt.Sprintf(
-		"Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, role: %s, provider: %s",
-		name, session, workdir, parent, purpose, role, provider)
+		"outcome=%s: Agent %q started (session: %s, workdir: %s, parent: %s, purpose: %s, role: %s, provider: %s",
+		StartOutcomeStarted, name, session, workdir, parent, purpose, role, provider)
 	if strings.TrimSpace(model) != "" {
 		msg += fmt.Sprintf(", model: %s", model)
 	}
