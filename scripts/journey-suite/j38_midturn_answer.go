@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,7 +84,7 @@ func (s *suite) midTurnAnswerWithBroker() error {
 	if line := relayLogLine(s.logPath, id); !strings.Contains(line, "status=sent") {
 		return fmt.Errorf("the mid-turn answer relay was not settled by its receipt: %s", line)
 	}
-	if _, err := s.waitReplyContaining(id, len(base), "SLEPTTWICE", 150*time.Second); err != nil {
+	if err := s.waitReplyGrownSince(id, base, "SLEPTTWICE", 150*time.Second); err != nil {
 		return fmt.Errorf("the worker did not finish its turn: %w", err)
 	}
 	ahead := time.Since(relayedAt)
@@ -128,4 +129,54 @@ func relayLogLine(path, agent string) string {
 		}
 	}
 	return ""
+}
+
+// replyGrownSince reports whether a reply row in now contains want where
+// the same row in base did not. The canonical store folds a turn's
+// assistant text into the row its stream opened, so text the worker writes
+// after the base snapshot can land in a row that already existed then. In
+// the second full suite on 024bbdf1 the worker's "I'll run the first
+// `sleep 30` now." opened row 2 before base was taken, and "Paris" and
+// "SLEPTTWICE" were later folded into that same row; looking only past
+// len(base) never saw them.
+func replyGrownSince(base, now []any, want string) bool {
+	want = strings.ToUpper(want)
+	text := func(item any) (string, bool) {
+		turn, _ := item.(map[string]any)
+		if turn["role"] != "assistant" && turn["role"] != "agent_note" {
+			return "", false
+		}
+		raw, _ := json.Marshal(turn["raw"])
+		return strings.ToUpper(string(raw)), true
+	}
+	for i, item := range now {
+		got, ok := text(item)
+		if !ok || !strings.Contains(got, want) {
+			continue
+		}
+		if i >= len(base) {
+			return true
+		}
+		if before, _ := text(base[i]); !strings.Contains(before, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitReplyGrownSince polls name's transcript until replyGrownSince holds.
+func (s *suite) waitReplyGrownSince(name string, base []any, want string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		payload, err := s.agentTranscriptHTTP(name)
+		if err != nil {
+			return err
+		}
+		now, _ := payload["turns"].([]any)
+		if replyGrownSince(base, now, want) {
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("no assistant reply written after the question contains %q within %s", want, timeout)
 }
