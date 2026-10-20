@@ -665,47 +665,28 @@ func main() {
 		upgrade.InstallCursorLaunchGuard(registry)
 	}
 
-	// Prior upgrade handoff: session_ids + optional connect-mode endpoints.
-	// Process reattach when handles carry ConnectURL+PID (agents.json also
-	// persists those fields from the last Launch).
+	// Prior upgrade handoff contributes session IDs only. Legacy process
+	// endpoints are never adopted after the OMP-only cutover.
 	upgradeSnap, err := upgrade.LoadSnapshot(upgrade.SnapshotPath(cfg.StateDir))
 	if err != nil {
 		slog.Error("upgrade handles load failed (malformed handoff is hard error)", "err", err)
 		os.Exit(1)
 	}
-	preservedCLI := map[string]bool{}
 	if snap := upgradeSnap; snap != nil {
 		plan := upgrade.PlanReattach(snap)
-		// Merge connect endpoints into registry defs before StartAll so
-		// Launch/Adopt reattaches to still-running serve processes.
+		// Merge session identity only; never import a CLI process endpoint.
 		for _, h := range snap.Agents {
 			if h.Name == "" {
 				continue
 			}
-			if h.ConnectURL == "" && h.TmuxWindowID == "" {
-				continue
-			}
-			// The upgrade handoff identifies the transport of a surviving
-			// legacy CLI process. Preserve it until that process ends; only
-			// a cold seat can be reminted onto a sidecar.
+			// A snapshot from the removed CLI transport cannot be adopted.
+			// Only session identity survives; OMP remint below clears endpoints.
 			if def := registry.Def(h.Name); def != nil {
-				if def.Provider == claudia.Provider(h.Provider) &&
-					def.Provider != cli.SidecarLaunchProvider(def.Provider) &&
-					upgrade.HandoffTransportAlive(h) {
-					preservedCLI[h.Name] = true
-				}
-				// Preserve the endpoint only for the legacy CLI we will
-				// reattach, never for a row already on the sidecar.
-				if h.ConnectURL != "" && (preservedCLI[h.Name] || !seatreg.SubscriptionPlan(def.Provider)) {
-					def.ConnectURL = h.ConnectURL
-					def.ConnectPID = h.PID
-					def.GrokConnect = true
-				}
 				if h.SessionID != "" {
 					def.SessionID = h.SessionID
 				}
 				if err := registry.Register(*def); err != nil {
-					slog.Warn("upgrade handoff: could not merge connect endpoint", "agent", h.Name, "err", err)
+					slog.Warn("upgrade handoff: could not merge session id", "agent", h.Name, "err", err)
 				}
 			}
 		}
@@ -716,10 +697,9 @@ func main() {
 			"residual", plan.Residual)
 	}
 
-	// Remint only cold seats after the upgrade merge. A reattachable
-	// legacy CLI retains its transport identity and endpoint; rewriting its
-	// persisted provider while the process survives would misroute Launch.
-	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
+	// Legacy CLI transports are never adopted. Remint old plan ids before
+	// any reattach: the sidecar alone owns fleet Sessions.
+	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
 		slog.Warn("sidecar remint failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n)
@@ -1271,7 +1251,7 @@ func main() {
 	if ctx.Err() != nil {
 		return
 	}
-	if n, err := seatreg.RemintRegistryExcept(registry, "", preservedCLI); err != nil {
+	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
 		slog.Warn("sidecar remint after reattach failed", "err", err)
 	} else if n > 0 {
 		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
@@ -1463,11 +1443,8 @@ func main() {
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
 			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl),
 			upgrade.DefaultReattachConcurrency))
-		// The handoff only promised an adoptable endpoint, not a live
-		// process. Once every permitted seat has had its adoption attempt,
-		// remint cold legacy rows; RemintRegistryExcept checks the actual
-		// running handle before it rewrites any transport identity.
-		if n, err := seatreg.RemintRegistryExcept(registry, "", nil); err != nil {
+		// A late remint catches cold rows discovered during reattach.
+		if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
 			slog.Warn("sidecar remint after fleet reattach failed", "err", err)
 		} else if n > 0 {
 			slog.Info("sidecar remint", "seats", n, "when", "after-fleet-reattach")

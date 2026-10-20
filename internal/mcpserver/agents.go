@@ -1044,18 +1044,24 @@ func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sess
 	return cfg.Provider, cfg.SessionID, cfg.RequireResume
 }
 
-// alignStartTransport aligns the persisted row with the transport Claudia
-// Launch will actually return. A cold start instead binds fresh and explicit
-// provider requests to the subscription sidecar.
-func alignStartTransport(def *claudia.AgentDef, existed bool, providerArg string, live claudia.Provider) error {
-	if live != "" {
-		if cli.PlanProvider(live) != cli.PlanProvider(def.Provider) {
-			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; migrate or stop it first", def.Name, live, def.Provider)
-		}
-		def.Provider = live
-	} else if !existed || strings.TrimSpace(providerArg) != "" {
-		def.Provider = cli.SidecarLaunchProvider(def.Provider)
+// alignStartTransport binds every seat launch to an explicit OMP runtime id.
+// A live legacy handle must be stopped by its owner before it can be reminted;
+// silently relabelling that handle would make the registry lie about transport.
+func alignStartTransport(def *claudia.AgentDef, _ bool, _ string, live claudia.Provider) error {
+	want, err := cli.OMPSeatProvider(def.Provider)
+	if err != nil {
+		return err
 	}
+	if live != "" {
+		actual, err := cli.OMPSeatProvider(live)
+		if err != nil || live != actual {
+			return fmt.Errorf("seat %q has a live legacy or unsupported transport %q; stop it before OMP remint", def.Name, live)
+		}
+		if actual != want {
+			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; migrate or stop it first", def.Name, live, want)
+		}
+	}
+	def.Provider = want
 	return nil
 }
 

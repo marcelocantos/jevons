@@ -232,6 +232,29 @@ func LaunchRecovering(reg *claudia.Registry, name string) (*claudia.Agent, error
 	if reg == nil {
 		return nil, fmt.Errorf("launch %q: no agent registry", name)
 	}
+	// All fleet Session entrypoints converge here. Never reach Claudia's
+	// legacy CLI dispatch even if an old row or direct caller bypassed mint.
+	def := reg.Def(name)
+	if def == nil {
+		return nil, fmt.Errorf("launch %q: no agent definition", name)
+	}
+	want, err := cli.OMPSeatProvider(def.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("launch %q: %w", name, err)
+	}
+	if proc := reg.Get(name); proc != nil && proc.Alive() && proc.Provider() != want {
+		return nil, fmt.Errorf("launch %q: live legacy or mismatched transport %q; stop before OMP remint", name, proc.Provider())
+	}
+	if def.Provider != want {
+		def.Provider = want
+		def.Materialized = false // vendor JSONL is not an OMP spool
+		def.GrokConnect = false
+		def.ConnectURL = ""
+		def.ConnectPID = 0
+		if err := reg.Register(*def); err != nil {
+			return nil, fmt.Errorf("launch %q: OMP remint: %w", name, err)
+		}
+	}
 	if lost, ok, err := RehydrateLostSessionIn(reg, name); err != nil {
 		// Not fatal: fall through and let Launch report the real problem.
 		slog.Warn("lost-session rehydrate failed; launching anyway",
