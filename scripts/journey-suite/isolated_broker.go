@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/marcelocantos/claudia"
@@ -373,10 +374,77 @@ func (b *isolatedBroker) close() error {
 	if body, err := os.ReadFile(filepath.Join(b.root, "omp-sidecar.log")); err == nil {
 		stopped = errors.Join(stopped, os.WriteFile(filepath.Join(filepath.Dir(b.log.Name()), "omp-sidecar.log"), body, 0o600))
 	}
-	if err := omp.StopSidecar(filepath.Join(b.root, "omp.sock")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		stopped = errors.Join(stopped, err)
-	}
+	stopped = errors.Join(stopped, stopIsolatedSidecar(filepath.Join(b.root, "omp.sock"), sidecarExitWait))
 	killPrivateClaudiaTmux(b.root)
 	stopped = errors.Join(stopped, b.log.Close(), os.RemoveAll(b.root))
 	return stopped
+}
+
+// sidecarExitWait bounds how long teardown waits for the broker's sidecar to
+// follow the broker out before signalling it.
+const sidecarExitWait = 10 * time.Second
+
+// stopIsolatedSidecar makes sure no sidecar still serves socket once its
+// broker has exited.
+//
+// The sidecar is the broker's child and exits when the broker does: its
+// stdin is a lifeline only the broker holds (claudia 🎯T166). So by the
+// time teardown gets here it is usually already gone, or going, and the pid
+// file it wrote is left behind naming a dead process. Signalling that pid
+// unconditionally (omp.StopSidecar) then fails with "os: process already
+// finished" — the J38 teardown failure of gate 252cf6ac, after the journey's
+// own checks had passed — and could signal an unrelated process if the pid
+// had been reused. The socket's lock is the evidence instead: a sidecar holds
+// it for its whole life and the kernel drops it on exit. Only a sidecar that
+// still holds it after the wait is signalled.
+func stopIsolatedSidecar(socket string, wait time.Duration) error {
+	if released, err := waitSidecarLockFree(socket, wait); err != nil || released {
+		return err
+	}
+	if err := omp.StopSidecar(socket); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	released, err := waitSidecarLockFree(socket, wait)
+	if err != nil {
+		return err
+	}
+	if !released {
+		return fmt.Errorf("isolated Claudia sidecar still holds %s after SIGTERM", socket)
+	}
+	return nil
+}
+
+// waitSidecarLockFree polls the sidecar's socket lock until no process holds
+// it or wait elapses. A free lock means no sidecar serves the socket,
+// whatever the pid file says.
+func waitSidecarLockFree(socket string, wait time.Duration) (bool, error) {
+	deadline := time.Now().Add(wait)
+	for {
+		free, err := sidecarLockFree(socket)
+		if err != nil || free {
+			return free, err
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// sidecarLockFree takes the socket's lock and releases it at once, so it
+// never keeps a sidecar out.
+func sidecarLockFree(socket string) (bool, error) {
+	f, err := os.OpenFile(socket+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, fmt.Errorf("sidecar lock: %w", err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return false, nil
+		}
+		return false, fmt.Errorf("sidecar lock: %w", err)
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return true, nil
 }

@@ -233,7 +233,7 @@ func t952IsolateVerdict(f t952Facts) (bool, string) {
 		return true, ""
 	}
 	if !f.StallResolved {
-		return false, fmt.Sprintf("stall queue is empty with notices=%d and no start, drain, kill, or undelivered record", f.StallNotices)
+		return false, fmt.Sprintf("stall queue is empty with notices=%d and no start, drain, kill, reconcile, or undelivered record", f.StallNotices)
 	}
 	return true, ""
 }
@@ -246,6 +246,14 @@ func t952HoldSubmitted(logText string) bool {
 	})
 }
 
+// t952StallResolved reads the daemon's own record of how the stall queue
+// left. decision=sendq_reconcile is the overseer settling it through
+// jevons_sendq_reconcile (🎯T726), which logs the removed payload with the
+// actor and evidence: in gate 252cf6ac the overseer's start of t952-stall was
+// refused (its planted session has no conversation to resume) and it then
+// dropped the entry on the record. That is a recorded disposition, not a
+// queue that vanished; it was missing from this list, so J39 failed in the
+// suite and passed alone only because the model chose differently.
 func t952StallResolved(logText string) bool {
 	return t952LogHas(logText, t952Stall, []string{
 		"re-offering a held message",
@@ -253,6 +261,7 @@ func t952StallResolved(logText string) bool {
 		"rehydrated dead/stopped",
 		"kill_discard_sendq",
 		"backlog_undelivered",
+		"decision=sendq_reconcile",
 	})
 }
 
