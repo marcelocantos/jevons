@@ -80,23 +80,24 @@ func (s *suite) j20PlanDest() (result error) {
 	// The worker hangs off an intermediate seat. When this fixture exhausts
 	// grok, that seat is on the hot provider too and the sweep parks it
 	// (🎯T850). The oracle here is the worker.
+	poName, parkName := s.j20SeatNames()
 	_, err = s.MCPToolCall("jevons_agent_start", map[string]any{
-		"name": "jv-t39015-po", "workdir": s.workdir, "actor": "jevons",
+		"name": poName, "workdir": s.workdir, "actor": "jevons",
 		"parent": "jevons", "purpose": "work", "provider": "grok",
 	})
 	if err != nil {
 		return fmt.Errorf("explicit grok po start: %w", err)
 	}
 	_, err = s.MCPToolCall("jevons_agent_start", map[string]any{
-		"name": "jv-t39015-park", "workdir": s.workdir, "actor": "jv-t39015-po",
-		"parent": "jv-t39015-po", "purpose": "work", "provider": "grok",
+		"name": parkName, "workdir": s.workdir, "actor": poName,
+		"parent": poName, "purpose": "work", "provider": "grok",
 	})
 	if err != nil {
 		return fmt.Errorf("explicit grok start: %w", err)
 	}
 	if s.j45HoldOverseer {
 		// 🎯T1091: the park lands while the overseer works a fleet turn.
-		if err := s.j45HoldOverseerInFleetTurn("jv-t39015-po"); err != nil {
+		if err := s.j45HoldOverseerInFleetTurn(poName); err != nil {
 			return err
 		}
 	}
@@ -125,14 +126,26 @@ func (s *suite) j20PlanDest() (result error) {
 	}
 	parked := false
 	for _, a := range acts {
-		if a.Name == "jv-t39015-park" && a.To == "" {
+		if a.Name == parkName && a.To == "" {
 			parked = true
 		}
 	}
 	if !parked {
-		return fmt.Errorf("sweep did not park jv-t39015-park: %+v", acts)
+		return fmt.Errorf("sweep did not park %s: %+v", parkName, acts)
 	}
 	return nil
+}
+
+// j20SeatNames names the seats J20's exhaust-and-recover mints. J45 runs the
+// same flow later in the suite, and a killed seat's stored identity outlives
+// the kill in Claudia: re-minting the same name failed with "load seat
+// identity mismatch" (final suite 2026-10-20, after J20's recovery had
+// re-placed jv-t39015-po). J45's run gets names of its own.
+func (s *suite) j20SeatNames() (po, park string) {
+	if s.j45HoldOverseer {
+		return "jv-t39015-po-j45", "jv-t39015-park-j45"
+	}
+	return "jv-t39015-po", "jv-t39015-park"
 }
 
 // j20PlanParkBy is the actor the plan sweep records on the parks it makes.
@@ -181,7 +194,8 @@ func (s *suite) restorePlanAfterJ20(path string) error {
 	}
 	// The worker J20 minted has done its job; a seat left running would do
 	// work of its own during every later journey.
-	for _, name := range []string{"jv-t39015-park", "jv-t39015-po"} {
+	poName, parkName := s.j20SeatNames()
+	for _, name := range []string{parkName, poName} {
 		_, _ = s.mcpText("jevons_agent_kill", map[string]any{"name": name, "actor": "jevons", "force": true})
 	}
 	// Recovery re-mints the parked overseer, and the new seat may still be
