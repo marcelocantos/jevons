@@ -12,9 +12,10 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// 🎯T409: ensureAgentProcess must perform the same lost-session recovery
-// agent_start does (🎯T313), because THIS is the path the impatience
-// ladder drives.
+// 🎯T409 / 🎯T756: ensureAgentProcess must perform the same lost-session
+// recovery agent_start does (🎯T313), because THIS is the path the
+// impatience ladder drives — and it must do so without minting a live
+// Claude seat on the production claudia socket.
 //
 // Observed 2026-08-10: after a token-exhaustion event, 10 of 16 agents
 // carried a session id with no transcript on disk — Materialized is set
@@ -23,19 +24,37 @@ import (
 // identical error on a timer, forever, and the fleet could not recover
 // without the owner.
 //
-// This asserts the rotation happens on the send path. It stops short of
-// launching a real process: what regressed was the recovery being absent
-// here, not the launch itself.
+// 🎯T756: the previous body allowed a real Launch (claude on PATH, live
+// broker/tmux) and only deferred Stop afterward. That is how a hermetic
+// suite still minted production seats. The launch seam is stubbed, the
+// same way TestEnsureAgentProcessRemintsCursorResumeDenial does, so a
+// dead-socket TestMain is sufficient and a mutation that calls the real
+// Start path is visible as a RED (starts counter / stub identity).
 func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // Claude JSONL path under HOME never sees the lost id.
+
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	reg.SetDirect(true)
+	var starts int
+	var startedSession string
+	reg.SetLaunchers(&claudia.RegistryLaunchers{
+		Start: func(ctx context.Context, cfg claudia.Config) (*claudia.Agent, error) {
+			starts++
+			startedSession = cfg.SessionID
+			return claudia.StartStub(ctx, cfg, nil)
+		},
+	})
+
 	s := New(t.TempDir(), nil, nil)
 	s.SetRegistry(reg)
+	t.Cleanup(reg.StopAll)
 
 	// A row that claims a resumable conversation which does not exist.
-	phantom := "jv-t372-auto"
+	// Non-auto name so 🎯T1066 auto-seat hold cannot refuse the rehydrate.
+	phantom := "jv-t756-phantom"
 	lost := "22fb41fb-29cc-4b70-8b83-8290d757c84f"
 	if err := reg.Register(claudia.AgentDef{
 		Name:         phantom,
@@ -48,10 +67,19 @@ func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The launch itself is incidental — and may even succeed, since a
-	// claude binary is usually on PATH — so stop whatever it started.
-	defer reg.Stop(phantom)
-	_, _, _ = s.ensureAgentProcess(phantom)
+	proc, rehydrated, err := s.ensureAgentProcess(phantom)
+	if err != nil {
+		t.Fatalf("ensureAgentProcess: %v", err)
+	}
+	if proc == nil {
+		t.Fatal("expected a process from the stub launcher")
+	}
+	if !rehydrated {
+		t.Fatal("expected rehydrate=true on a dead/stopped phantom row")
+	}
+	if starts != 1 {
+		t.Fatalf("starts=%d, want exactly one stub launch (no live Claude mint)", starts)
+	}
 
 	def := reg.Def(phantom)
 	if def == nil {
@@ -59,6 +87,12 @@ func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
 	}
 	if def.SessionID == lost {
 		t.Error("still pinned to the phantom session; every repressure will fail identically forever")
+	}
+	if startedSession == "" || startedSession == lost {
+		t.Fatalf("stub launched session %q; want the rotated id, not the phantom", startedSession)
+	}
+	if def.SessionID != startedSession {
+		t.Fatalf("registry session %q != stub launch session %q", def.SessionID, startedSession)
 	}
 	// Materialized is deliberately NOT asserted here. claudia's
 	// Registry.Launch sets it as soon as Start returns a process, so it is
