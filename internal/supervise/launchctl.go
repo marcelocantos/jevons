@@ -57,18 +57,25 @@ func Launchctl(args ...string) ([]byte, error) { return launchctl(args...) }
 // code cannot redirect launchd. Install once, before tests start
 // (internal/launchdfake does it from init); swapping it under a running
 // goroutine is a data race.
+//
+// A faked launchd is a launchd: the helpers below stop answering "no
+// launchd here" and go through fn on every platform, so a Linux CI run
+// exercises the same paths the owner's Mac does. Without this the fake
+// recorded nothing on ubuntu and launchdfake's own tests failed there.
 func ReplaceLaunchctl(fn func(args ...string) ([]byte, error)) func(args ...string) ([]byte, error) {
 	if !testing.Testing() {
 		panic("supervise.ReplaceLaunchctl is for test binaries only")
 	}
 	prev := launchctl
 	launchctl = fn
+	haveLaunchd = true
 	return prev
 }
 
 // haveLaunchd reports whether this platform has a launchd to talk to. A
 // variable beside launchctl so a test that fakes launchd on another
-// platform exercises the same paths it would on macOS.
+// platform exercises the same paths it would on macOS: ReplaceLaunchctl
+// (and this package's own export_test) set it.
 var haveLaunchd = runtime.GOOS == "darwin"
 
 // AgentDomain is the launchd domain the LaunchAgent lives in.

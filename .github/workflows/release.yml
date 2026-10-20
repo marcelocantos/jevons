@@ -22,6 +22,11 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: ui/package-lock.json
+      # The cost tests run Claudia's sidecar from its frozen lockfile; a
+      # missing Bun is a failure there by design, not a skip.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
       - name: Verify the React assets embedded in the release binary
         run: make ui-check-bundle
       - name: Install browser dependencies for the clean-checkout UI gate
