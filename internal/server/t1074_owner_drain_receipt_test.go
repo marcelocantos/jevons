@@ -194,22 +194,33 @@ func TestT1074DrainMissingSessionDoesNotQuery(t *testing.T) {
 	}
 }
 
+// A fleet batch's receipt is read under the batch's own fn- id (its
+// settlement is the fleet note's, see notify_receipt.go). Even a settling
+// receipt for it never confirms owner delivery.
 func TestT1074DrainFleetNoteDoesNotConfirmOwnerDelivery(t *testing.T) {
 	s, calls := drainReceiptServer(t)
 	installOwnerReceiptSession(t, s)
-	called := 0
-	s.SetSendReceiptQuery(func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
-		called++
-		return nil, fmt.Errorf("fleet note has no owner delivery")
+	queried := make(chan claudiawire.ReceiptQuery, 4)
+	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+		queried <- q
+		return durableOwnerReceipt(q, claudiawire.ReceiptCompleted, "fleet turn completed"), nil
 	})
 	if err := s.SendToOverseer("[worker] fleet note"); err != nil {
 		t.Fatal(err)
 	}
-	if called != 0 || ownerSendDelivered(s) {
-		t.Fatalf("fleet note queried=%d delivered=%v calls=%+v", called, ownerSendDelivered(s), *calls)
-	}
-	if len(*calls) != 1 || (*calls)[0].id == "" || strings.HasPrefix((*calls)[0].id, "om-") {
+	if len(*calls) != 1 || (*calls)[0].id == "" || !strings.HasPrefix((*calls)[0].id, "fn-") {
 		t.Fatalf("fleet handoff = %+v", *calls)
+	}
+	select {
+	case q := <-queried:
+		if q.RequestID != (*calls)[0].id {
+			t.Fatalf("fleet receipt read %q, want the batch's own id %q", q.RequestID, (*calls)[0].id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fleet batch's receipt was never read")
+	}
+	if ownerSendDelivered(s) {
+		t.Fatal("a fleet note's receipt confirmed owner delivery")
 	}
 }
 

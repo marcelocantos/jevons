@@ -20,11 +20,18 @@ import (
 // no row, as when Claudia's seat pump publishes after the send returns.
 func fleetReceiptServer(t *testing.T) (s *Server, ids func() []string, publish func(string), queries func() int) {
 	t.Helper()
-	s, calls := drainReceiptServer(t)
+	s, _ = drainReceiptServer(t)
 	installOwnerReceiptSession(t, s)
 	var mu sync.Mutex
 	published := map[string]bool{}
 	n := 0
+	var sent []string
+	s.overseerSendSeam = func(_, id string) error {
+		mu.Lock()
+		sent = append(sent, id)
+		mu.Unlock()
+		return nil
+	}
 	s.SetSendReceiptQuery(func(_ context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -40,11 +47,7 @@ func fleetReceiptServer(t *testing.T) (s *Server, ids func() []string, publish f
 	ids = func() []string {
 		mu.Lock()
 		defer mu.Unlock()
-		var out []string
-		for _, c := range *calls {
-			out = append(out, c.id)
-		}
-		return out
+		return append([]string(nil), sent...)
 	}
 	publish = func(id string) {
 		mu.Lock()
