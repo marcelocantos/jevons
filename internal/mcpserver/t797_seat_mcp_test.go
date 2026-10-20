@@ -63,8 +63,14 @@ func t797Setup(t *testing.T, transcript string) *t679_2Env {
 
 // warmList is agent_list after the background sweep has run, as in the
 // product: the request path reads only the cache that sweep keeps (🎯T804).
+// The sweep only reads live seats, and in the product the fast registry
+// feed has already observed liveness; observe it here too. Without that, a
+// first warmList swept nothing and passed only because the request path was
+// slow enough (a $TMPDIR glob per lookup, until 🎯T1084) for its own
+// background scan to finish before the render read the cache.
 func (e *t679_2Env) warmList() string {
 	e.t.Helper()
+	e.s.observeRegistryLiveness()
 	e.s.sweepSeatMCP()
 	return e.list()
 }
