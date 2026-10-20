@@ -25,8 +25,9 @@ import (
 // A steerable run provider is the only backend. An unsteerable run
 // provider stays in the snapshot (the journey asked for it) and the
 // fixture also offers steerable plans. The switch destination sits at
-// strictly more weekly headroom than the others: equal slack is
-// ErrTokenTied, and ResolveMint then refuses every seat.
+// strictly more weekly headroom than the others, so the journey's expected
+// destination is decided by the readings rather than by Claudia's random
+// draw among exact ties (v0.61.0, 🎯T203).
 const (
 	defaultPlanRemaining    = 90.0
 	defaultPlanUsed         = 10.0

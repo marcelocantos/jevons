@@ -73,28 +73,26 @@ func recoveryFixture(t *testing.T) (*Server, *recoverySwitcher, *planusage.Snaps
 }
 
 // Journey exception: this regression is deterministic placement and durable
-// intent across two sweeps. Injected readings cover empty/tied usage and exact
+// intent across two sweeps. Injected readings cover empty usage and exact
 // transitions without changing real subscription usage or parking real seats.
+// A "tied" initial arm used to sit beside "empty": equal codex/grok readings
+// made Resolve fail ErrTokenTied and the sweep park. Claudia v0.61.0
+// (🎯T203) ranks near ties and draws exact ones, so tied readings no longer
+// produce an unresolved placement; TestT203TiedReadingsResolveWithoutPark
+// pins that instead.
 // The switch and launch are faked; these tests exercise the real
 // Claudia Resolve, registry and intent store through SweepPlanPolicy.
 func TestT1001PolicyParkRecoversOnNextDecisiveSweep(t *testing.T) {
-	for _, initial := range []string{"empty", "tied"} {
+	for _, initial := range []string{"empty"} {
 		for _, destination := range []string{"other", "cooled-source", "missing-source", "same-provider"} {
 			{
 				t.Run(initial+"/"+destination, func(t *testing.T) {
 					s, m, snap := recoveryFixture(t)
-					if initial == "empty" {
-						// A persisted park from an earlier unresolved placement.
-						s.MarkAgentParked("worker", planPolicyActor, "resolve: token-tied models; set PreferProvider")
-					} else {
-						snap.Backends = []planusage.Backend{t39015Weekly("claude", 6, 94, snap.At), t39015Weekly("codex", 50, 50, snap.At), t39015Weekly("grok", 50, 50, snap.At)}
-					}
+					// A persisted park from an earlier unresolved placement.
+					s.MarkAgentParked("worker", planPolicyActor, "resolve: token-tied models; set PreferProvider")
 					first := s.SweepPlanPolicy()
 					if len(first) != 1 || first[0].Execution != "parked" || m.prepared != 0 || len(m.launched) != 0 {
 						t.Fatalf("unresolved placement must stay parked: %+v", first)
-					}
-					if initial == "tied" && !strings.Contains(first[0].Reason, "token-tied") {
-						t.Fatalf("not a real tie: %+v", first)
 					}
 					if rec := s.fleetIntent().Agents["worker"]; rec.State != fleetintent.Parked || rec.By != planPolicyActor {
 						t.Fatalf("missing policy park: %+v", rec)
@@ -146,6 +144,25 @@ func TestT1001PolicyParkRecoversOnNextDecisiveSweep(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestT203TiedReadingsResolveWithoutPark: with Claude hot and codex/grok at
+// identical weekly readings, the sweep moves the seat to one of the tied
+// plans on the first pass. Before Claudia v0.61.0 the same readings parked
+// it ("token-tied models … set TieBreak").
+func TestT203TiedReadingsResolveWithoutPark(t *testing.T) {
+	s, _, snap := recoveryFixture(t)
+	snap.Backends = []planusage.Backend{t39015Weekly("claude", 6, 94, snap.At), t39015Weekly("codex", 50, 50, snap.At), t39015Weekly("grok", 50, 50, snap.At)}
+	acts := s.SweepPlanPolicy()
+	if len(acts) != 1 || acts[0].Execution == "parked" || acts[0].Failure != "" {
+		t.Fatalf("tied destinations must resolve, not park: %+v", acts)
+	}
+	if acts[0].To != "codex" && acts[0].To != "grok" {
+		t.Fatalf("resolved to %q, want one of the tied plans codex/grok: %+v", acts[0].To, acts)
+	}
+	if rec := s.fleetIntent().Agents["worker"]; rec.State == fleetintent.Parked {
+		t.Fatalf("seat parked on a tie: %+v", rec)
 	}
 }
 
