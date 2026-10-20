@@ -142,14 +142,22 @@ func decodeLine(raw []byte) (Record, bool) {
 	if err := json.Unmarshal(line, &rec); err != nil {
 		return Record{}, false
 	}
-	if rec.RawTS != "" {
-		if ts, err := time.Parse(time.RFC3339Nano, rec.RawTS); err == nil {
-			rec.TS = ts
-		} else if ts, err := time.Parse(time.RFC3339, rec.RawTS); err == nil {
-			rec.TS = ts
-		}
-	}
+	rec.TS = parseRecordTS(rec.RawTS)
 	return rec, true
+}
+
+// parseRecordTS is a record's "ts" as a time, or zero when it does not parse.
+func parseRecordTS(raw string) time.Time {
+	if raw == "" {
+		return time.Time{}
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return ts
+	}
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return ts
+	}
+	return time.Time{}
 }
 
 // LatestPath is the newest dated log that names seat. Empty when the
@@ -236,10 +244,16 @@ type fileIndex struct {
 	// (🎯T1084; see phase.go).
 	phase map[string]*phaseMark
 	tail  *phaseMark
+	// spans is, per seat, where its complete lines are (🎯T1085; see
+	// seatlines.go).
+	spans map[string][]seatSpan
 }
 
 func newFileIndex() *fileIndex {
-	return &fileIndex{seats: map[string]bool{}, ts: map[string]time.Time{}, phase: map[string]*phaseMark{}}
+	return &fileIndex{
+		seats: map[string]bool{}, ts: map[string]time.Time{},
+		phase: map[string]*phaseMark{}, spans: map[string][]seatSpan{},
+	}
 }
 
 type indexedSeats struct {
@@ -346,9 +360,10 @@ func refreshIndexLocked(dir string) (*indexedSeats, []string, error) {
 
 // scanFrom reads path from fi.offset on. Per seat it records that the file
 // names it, the "ts" of its newest line there (last in file wins, since
-// lines are chronological), and the newest line that may move its phase
-// (🎯T1084). Only each line's head is decoded, except a text line, which is
-// small and decoded whole. It returns the offset just past the last complete
+// lines are chronological), the newest line that may move its phase
+// (🎯T1084), and where its lines are (🎯T1085). Only each line's head is
+// decoded, except a text line, which is small and decoded whole, and a line
+// whose head does not plainly name its seat. It returns the offset just past the last complete
 // line: a line still being written is read again, whole, next time, and
 // until then is fi.tail.
 func (fi *fileIndex) scanFrom(path string) (int64, error) {
@@ -378,6 +393,13 @@ func (fi *fileIndex) scanFrom(path string) (int64, error) {
 				if mark != nil {
 					fi.phase[mark.seat] = mark
 				}
+				owner, ok := headSeat(head)
+				if !ok {
+					owner = lineOwner(whole) // nextLineHead kept it whole
+				}
+				if owner != "" {
+					fi.addSpan(owner, offset, n)
+				}
 				offset += n
 			} else {
 				fi.tail = mark
@@ -397,8 +419,9 @@ func (fi *fileIndex) scanFrom(path string) (int64, error) {
 const headLen = 512
 
 // nextLineHead reads one line: its first headLen bytes, the whole line when
-// the head says it is a text record, its full length, and whether it ended
-// in a newline (a line cut short by EOF is still being written).
+// the head says it is a text record or does not plainly name its seat
+// (headSeat), its full length, and whether it ended in a newline (a line cut
+// short by EOF is still being written).
 func nextLineHead(r *bufio.Reader) (head, whole []byte, n int64, complete bool, err error) {
 	first, keep := true, false
 	for {
@@ -416,7 +439,8 @@ func nextLineHead(r *bufio.Reader) (head, whole []byte, n int64, complete bool, 
 			// A first chunk is the whole line or a full buffer, so the
 			// head is complete by now.
 			first = false
-			keep = LineType(head) == "text"
+			_, seated := headSeat(head)
+			keep = LineType(head) == "text" || !seated
 		}
 		if keep {
 			whole = append(whole, chunk...)

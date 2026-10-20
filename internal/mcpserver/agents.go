@@ -1035,21 +1035,30 @@ func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
 	if len(entries) != 0 {
 		return "conversation store exists under " + seatDir + "; preserve history and recover the model with jevons_agent_switch_model"
 	}
-	recs, err := spool.ReadSeat(spool.Dir(), def.Name)
+	return spoolConversationEvidence(spool.Dir(), def.Name)
+}
+
+// spoolConversationEvidence is why seat's dated spool forbids treating it as
+// a phantom, or empty: its oldest record that is conversation, or an
+// accepted send that may still be in flight. It reads the seat's own lines,
+// and only up to that record (🎯T1085).
+func spoolConversationEvidence(dir, seat string) string {
+	reason := ""
+	err := spool.EachSeatRecord(dir, seat, func(rec spool.Record) bool {
+		switch rec.Type {
+		case "text", "turn_end", "tool_call", "tool_result":
+			reason = "conversation evidence in dated spool; preserve history and recover the model with jevons_agent_switch_model"
+		case "accepted":
+			if rec.TS.IsZero() || time.Since(rec.TS) < 2*time.Minute {
+				reason = "accepted send may still be in flight; wait for a model reply or inspect history before retry"
+			}
+		}
+		return reason == ""
+	})
 	if err != nil {
 		return "cannot inspect spool: " + err.Error() + "; recover manually"
 	}
-	for _, rec := range recs {
-		switch rec.Type {
-		case "text", "turn_end", "tool_call", "tool_result":
-			return "conversation evidence in dated spool; preserve history and recover the model with jevons_agent_switch_model"
-		case "accepted":
-			if rec.TS.IsZero() || time.Since(rec.TS) < 2*time.Minute {
-				return "accepted send may still be in flight; wait for a model reply or inspect history before retry"
-			}
-		}
-	}
-	return ""
+	return reason
 }
 
 // codexCatalogHasModel checks the same session catalog used by automatic

@@ -298,7 +298,8 @@ func (s *Server) reconstructedInspectLines(name string) []string {
 	if s == nil {
 		return nil
 	}
-	if recs, err := spool.ReadSeat(spool.Dir(), name); err == nil && len(recs) > 0 {
+	// 🎯T1085: the seat's own lines, found by the spool index, not every day file.
+	if recs, err := spool.SeatRecords(spool.Dir(), name); err == nil && len(recs) > 0 {
 		out := make([]string, 0, len(recs))
 		for _, line := range chatWireFromSpool(recs) {
 			out = append(out, stampConversationName(line, name))
