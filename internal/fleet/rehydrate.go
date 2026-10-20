@@ -6,6 +6,7 @@ package fleet
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/seatstate"
@@ -261,12 +262,18 @@ func HistoryAbsent(err error) bool {
 	return strings.Contains(msg, absentClaudeJSONL) || strings.Contains(msg, absentSidecarSpool)
 }
 
-// remintAfterResumeError is the 🎯T627.1 gate: a failed Launch may rotate
-// onto a fresh session when the history is absent (HistoryAbsent), and
-// otherwise only in two cases.
+// remintAfterResumeError is the 🎯T627.1 / 🎯T629 gate: a failed Launch may
+// rotate onto a fresh session when the history is absent (HistoryAbsent),
+// and otherwise only in two cases.
 //
-// Cursor session/load Invalid params, where stacking a second ACP writer
-// on the same store is 🎯T541.1.
+// Cursor (🎯T629): session/load refused AND the provider conversation never
+// materialized — no store.db under ~/.cursor/acp-sessions/<id>/. That is the
+// bounce path that left a named seat stranded on meta.json alone. A present
+// store, an unreadable store, or a denial without store evidence stays
+// fail-closed here: missing files alone do not prove the conversation was
+// unused, and a real conversation is not silently replaced. T541.1 reaps
+// leftover writers on the same id; an operator cold-recovery remints a
+// present conversation deliberately.
 //
 // Grok "exclusive GROK_HOME unavailable": claudia will not mkdir on
 // resume, and the directory was never published. A cold provider switch
@@ -283,10 +290,28 @@ func remintAfterResumeError(def *claudia.AgentDef, err error) bool {
 	}
 	switch def.Provider {
 	case claudia.ProviderCursor:
-		return claudia.IsCursorResumeDenied(err)
+		return claudia.IsCursorResumeDenied(err) && cursorNeverMaterialized(def.SessionID)
 	case claudia.ProviderGrok:
 		return strings.Contains(err.Error(), "exclusive GROK_HOME unavailable")
 	default:
 		return false
 	}
+}
+
+// cursorNeverMaterialized is the 🎯T629 evidence that a Cursor conversation
+// never wrote durable state: store.db is absent (or empty). A present file
+// of any size means the id hosted a conversation; an unreadable path is
+// treated as present so recovery fails closed rather than minting over
+// uncertainty.
+func cursorNeverMaterialized(sessionID string) bool {
+	path := claudia.CursorACPStorePath(sessionID)
+	if path == "" {
+		// No HOME / empty session — cannot prove absence; fail closed.
+		return false
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return st.Size() == 0
 }
