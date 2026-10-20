@@ -351,6 +351,42 @@ describe('PlanUsageBar mux wiring', () => {
     expect(container.querySelector('.plan-spend')).toBeFalsy();
   });
 
+  // 🎯T967.4: Cursor never paints a dollar figure. Live DashboardService
+  // carries unitless spend counters without currency or on-demand
+  // enablement; the served payload therefore has no spend, and the bar
+  // must stay silent even when the monthly window is full.
+  it('shows no Cursor dollar figure at a full monthly window (T967.4 silence)', async () => {
+    const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
+    const mux = {
+      subscribe(ch: string, handler: (env: { t: string; ch: string; body: unknown }) => void) {
+        handlers.set(ch, handler);
+        return () => handlers.delete(ch);
+      },
+      openChannel: vi.fn(),
+      closeChannel: vi.fn(),
+    } as unknown as MuxClient;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+    const tree: ReactNode = createElement(QueryClientProvider, { client: qc }, createElement(PlanUsageBar, { mux }));
+    const { container } = render(tree);
+    handlers.get(PLAN_USAGE_CHANNEL)!({
+      t: 'frame',
+      ch: PLAN_USAGE_CHANNEL,
+      body: {
+        backends: [
+          {
+            provider: 'cursor',
+            status: 'available',
+            windows: [{ name: 'monthly', remaining_percent: 0, used_percent: 100, band: 'exhausted' }],
+            // no spend — T967.4 residue: unit/enablement not established
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(container.querySelector('[data-provider="cursor"]')).toBeTruthy());
+    expect(container.querySelector('.plan-spend')).toBeFalsy();
+    expect(container.textContent || '').not.toMatch(/A\$/);
+  });
+
   it('spend figure survives an override that paints the bar ok (override-proof)', async () => {
     const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
     const mux = {

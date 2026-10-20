@@ -46,12 +46,15 @@ func WithBands(snap Snapshot, now time.Time, th Thresholds) Snapshot {
 
 	for i := range out.Backends {
 		be := &out.Backends[i]
-		if be.Available() {
-			if strings.EqualFold(be.Provider, "claude") {
-				be.Spend = spendIfActive(be.rawSpend, be.Windows)
-			} else {
-				be.Spend = nil
-			}
+		// 🎯T967.1 serves Claude extra-usage only while spending.
+		// 🎯T967.2 / 🎯T967.3 / 🎯T967.4: Grok / Codex / Cursor stay silent
+		// until each provider's on-demand/overage unit and enablement are
+		// established live. Cursor's DashboardService carries unitless
+		// totalSpend/includedSpend/bonusSpend and a sparse spendLimitUsage
+		// with no currency and no on-demand flag (live probe 2026-10-14) —
+		// that is residue, not a dollar figure.
+		if be.Available() && strings.EqualFold(be.Provider, "claude") {
+			be.Spend = spendIfActive(be.rawSpend, be.Windows)
 		} else {
 			be.Spend = nil
 		}
