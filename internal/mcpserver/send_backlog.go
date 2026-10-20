@@ -256,7 +256,12 @@ func (s *Server) SweepSendBacklogs() {
 		case b.Uncertain > 0:
 			// An attempt nobody could confirm in the window may have been
 			// confirmed by the receiver since. Look before pinning it.
-			if settled := s.reconcileHeldFromTranscript(q, b.Agent); settled > 0 {
+			// Transcript reconcile covers Claude-shaped seats; codex has no
+			// transcript, so 🎯T772 checks the session log on this same sweep
+			// cadence (no new loop) before the TurnInput rows age out.
+			settled := s.reconcileHeldFromTranscript(q, b.Agent)
+			settled += s.confirmCodexReceipts(b.Agent)
+			if settled > 0 {
 				b.Uncertain -= settled
 				b.Depth -= settled
 				if b.Uncertain <= 0 {

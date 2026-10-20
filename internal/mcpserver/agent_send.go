@@ -1030,6 +1030,12 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 		}
 		if resolve(sendq.Unverified, detail) {
 			s.reportDrainedSendNotBegun(name, entry, ev, time.Now())
+			// 🎯T772: check the codex session log while the TurnInput row still
+			// exists. Waiting for the next drain loses receipts on idle seats
+			// (codex prunes ~30 minutes of submissions).
+			if n := s.confirmCodexReceipts(name); n > 0 {
+				return true // held entries cleared; retry drain for pending behind them
+			}
 		}
 		return false
 	}

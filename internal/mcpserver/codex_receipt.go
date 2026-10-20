@@ -161,19 +161,25 @@ func codexReceipts(q *sendq.Store, name, home, thread string, now time.Time) ([]
 }
 
 // confirmCodexReceipts settles a codex seat's Uncertain entries from its own
-// session log before the next drain. It runs where the drain already runs —
-// at the seat's turn boundaries — so it adds no loop.
-func (s *Server) confirmCodexReceipts(name string) {
+// session log. Codex prunes TurnInput rows after ~30 minutes (🎯T772), so a
+// check that waits for the next drain loses the receipt on an idle seat.
+// Call sites (no new standing loop):
+//   - when an entry first resolves Uncertain (drain path)
+//   - at the start of a drain (existing turn boundary)
+//   - on the backlog sweep cadence while any remain held (SweepSendBacklogs)
+// It returns how many entries it confirmed.
+func (s *Server) confirmCodexReceipts(name string) int {
 	if s == nil || s.registry == nil {
-		return
+		return 0
 	}
 	d := s.registry.Def(name)
 	if d == nil || d.Provider != claudia.ProviderCodex || d.SessionID == "" {
-		return
+		return 0
 	}
 	ids, err := codexReceipts(s.sendQueue(), name, codexHomeDir(d.SessionID), d.SessionID, time.Now())
 	if err != nil {
 		slog.Warn("agent send queue: codex receipt check failed; entries stay held", "name", name, "err", err)
+		return 0
 	}
 	if len(ids) > 0 {
 		slog.Info("agent send queue: confirmed held entries from codex session log",
@@ -182,4 +188,5 @@ func (s *Server) confirmCodexReceipts(name string) {
 			s.clearSendqPin(name)
 		}
 	}
+	return len(ids)
 }
