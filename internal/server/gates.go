@@ -13,8 +13,12 @@ import (
 )
 
 // handleGetGate GET /api/gates/{id} — supervisor lookup of a cited GATE
-// record (🎯T697). The daemon reads the store; the caller does not need
-// filesystem access to ~/.jevons/gates or permission to run bin/gate.
+// record (🎯T697 / 🎯T701). The daemon reads the store; the caller does not
+// need filesystem access to ~/.jevons/gates or permission to run bin/gate.
+// The body is gate.View: command, exit status, verdict, tree state, duration
+// and output path — the same fields `bin/gate last` prints in band. Lookup
+// also finds voided/ records so a quarantined id reads as VOID rather than
+// not-found or green.
 //
 // An id with no record (or an id that is not a legal handle) returns 404
 // with error=not-found, which is distinguishable from a pass.
