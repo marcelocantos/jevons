@@ -9,7 +9,6 @@
 package supervise_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -75,17 +74,6 @@ func (l *heldLaunchd) count(prefix string) int {
 	return n
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 // TestT1095DisabledWatchdogIsAnOwnerHold drives the daemon's loop against
 // a domain where the watchdog is disabled: no plist write, no bootstrap,
 // one notice naming how to re-enable. Re-enabling resumes supervision on
@@ -113,28 +101,26 @@ func TestT1095DisabledWatchdogIsAnOwnerHold(t *testing.T) {
 
 	var mu sync.Mutex
 	var notices []string
-	ctx, cancel := context.WithCancel(context.Background())
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		supervise.WatchAgentLoop(ctx,
-			supervise.AgentPaths{StateDir: stateDir, Home: home, Repo: repo},
-			supervise.AgentConfig{Stale: 10 * time.Millisecond, Retry: time.Millisecond},
-			5*time.Millisecond,
-			func(subject, kind, text string) bool {
-				mu.Lock()
-				defer mu.Unlock()
-				notices = append(notices, text)
-				return true
-			})
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-stopped
-	})
+	notify := func(subject, kind, text string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		notices = append(notices, text)
+		return true
+	}
 	noticeCount := func() int { mu.Lock(); defer mu.Unlock(); return len(notices) }
 
-	waitFor(t, "several passes over the held job", func() bool { return ld.count("print-disabled") >= 6 })
+	p := supervise.AgentPaths{StateDir: stateDir, Home: home, Repo: repo}
+	cfg := supervise.AgentConfig{Stale: time.Hour, Retry: time.Millisecond}
+
+	// Several passes over the held job: deterministic, driven directly
+	// rather than by waiting on a real ticker (🎯T1102), so the test
+	// cannot miss a pass or a notice because the host was busy.
+	for i := 0; i < 6; i++ {
+		supervise.CheckAgentOnce(p, cfg, notify)
+	}
+	if n := ld.count("print-disabled"); n < 6 {
+		t.Fatalf("want at least 6 passes over the held job, got %d: %v", n, ld.calls)
+	}
 	if n := ld.count("bootstrap"); n != 0 {
 		t.Fatalf("a disabled watchdog was bootstrapped %d time(s): %v", n, ld.calls)
 	}
@@ -162,7 +148,10 @@ func TestT1095DisabledWatchdogIsAnOwnerHold(t *testing.T) {
 
 	// The owner re-enables it: the next pass reinstates.
 	ld.set(false)
-	waitFor(t, "the reinstatement after re-enable", func() bool { return ld.count("bootstrap") >= 1 })
+	supervise.CheckAgentOnce(p, cfg, notify)
+	if n := ld.count("bootstrap"); n < 1 {
+		t.Fatalf("want a bootstrap after re-enable, got %d: %v", n, ld.calls)
+	}
 	if _, err := os.Stat(plist); err != nil {
 		t.Fatalf("re-enabled watchdog was bootstrapped without its plist: %v", err)
 	}
@@ -170,7 +159,10 @@ func TestT1095DisabledWatchdogIsAnOwnerHold(t *testing.T) {
 	if err := os.WriteFile(supervise.AgentLogPath(stateDir), []byte("probe\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the recovery notice", func() bool { return noticeCount() >= 2 })
+	supervise.CheckAgentOnce(p, cfg, notify)
+	if n := noticeCount(); n < 2 {
+		t.Fatalf("want the recovery notice, got %d: %v", n, notices)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(notices) != 2 || !strings.Contains(notices[1], "watchdog restored") {

@@ -419,47 +419,13 @@ func WatchAgentLoop(ctx context.Context, p AgentPaths, cfg AgentConfig, every ti
 	if cfg.Stale <= 0 {
 		cfg = DefaultAgentConfig()
 	}
-	dir := Dir(p.StateDir)
-
-	check := func() {
-		st, err := LoadAgentState(dir)
-		if err != nil {
-			slog.Warn("supervise: supervisor state", "err", err)
-			return
-		}
-		obs := ObserveAgent(p)
-		d, next := ClassifyAgent(cfg, st, obs, time.Now())
-
-		if d.Held {
-			slog.Info("supervise: watchdog disabled by the owner; not reinstating", "label", AgentLabel, "reason", d.Reason)
-		}
-		if d.Reinstate {
-			if err := ReinstateAgent(p); err != nil {
-				slog.Error("supervise: reinstating the watchdog", "err", err, "reason", d.Reason)
-				d.Reason += "; the reinstatement itself failed: " + err.Error()
-			} else {
-				slog.Warn("supervise: watchdog reinstated", "reason", d.Reason)
-			}
-		}
-		if d.Notify != NotifyNone && notify != nil {
-			if !notify(SupervisorSubject, SupervisorKind, AgentNoticeText(d)) && d.Notify == NotifyProblem {
-				// No journal to write to. Leave the gap unreported so
-				// the next check tells the owner rather than assuming
-				// silence was delivery.
-				next.Notified = false
-			}
-		}
-		if err := SaveAgentState(dir, next); err != nil {
-			slog.Warn("supervise: saving supervisor state", "err", err)
-		}
-	}
 
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(cfg.Stale):
 	}
-	check()
+	CheckAgentOnce(p, cfg, notify)
 
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -468,8 +434,51 @@ func WatchAgentLoop(ctx context.Context, p AgentPaths, cfg AgentConfig, every ti
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			check()
+			CheckAgentOnce(p, cfg, notify)
 		}
+	}
+}
+
+// CheckAgentOnce runs a single watchdog-supervision pass: load the
+// remembered state, observe the job, classify, act, notify and save.
+// It is the unit WatchAgentLoop repeats on a ticker; exported so a test
+// can drive the loop by calling it directly, deterministically, rather
+// than by waiting on real wall-clock ticks (🎯T1102).
+func CheckAgentOnce(p AgentPaths, cfg AgentConfig, notify Notifier) {
+	if cfg.Stale <= 0 {
+		cfg = DefaultAgentConfig()
+	}
+	dir := Dir(p.StateDir)
+
+	st, err := LoadAgentState(dir)
+	if err != nil {
+		slog.Warn("supervise: supervisor state", "err", err)
+		return
+	}
+	obs := ObserveAgent(p)
+	d, next := ClassifyAgent(cfg, st, obs, time.Now())
+
+	if d.Held {
+		slog.Info("supervise: watchdog disabled by the owner; not reinstating", "label", AgentLabel, "reason", d.Reason)
+	}
+	if d.Reinstate {
+		if err := ReinstateAgent(p); err != nil {
+			slog.Error("supervise: reinstating the watchdog", "err", err, "reason", d.Reason)
+			d.Reason += "; the reinstatement itself failed: " + err.Error()
+		} else {
+			slog.Warn("supervise: watchdog reinstated", "reason", d.Reason)
+		}
+	}
+	if d.Notify != NotifyNone && notify != nil {
+		if !notify(SupervisorSubject, SupervisorKind, AgentNoticeText(d)) && d.Notify == NotifyProblem {
+			// No journal to write to. Leave the gap unreported so
+			// the next check tells the owner rather than assuming
+			// silence was delivery.
+			next.Notified = false
+		}
+	}
+	if err := SaveAgentState(dir, next); err != nil {
+		slog.Warn("supervise: saving supervisor state", "err", err)
 	}
 }
 
