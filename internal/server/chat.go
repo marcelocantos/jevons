@@ -31,6 +31,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/ownercomms"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/silentresponse"
@@ -344,6 +345,56 @@ func (s *Server) DeliverOverseerEvent(ev claudia.Event) {
 		s.mu.Lock()
 		streamID = s.ensureOverseerStreamIDLocked()
 		s.mu.Unlock()
+	}
+
+	// 🎯T1054: an unsolicited fleet turn is not an owner request. Hold its
+	// text before the first delta reaches the owner, then admit unknown or
+	// material content and suppress only narrow routine/no-action reports.
+	// Owner-origin turns retain the immediate streaming path below.
+	if ev.Type == "assistant" {
+		s.mu.RLock()
+		fleetTurn := !s.overseerOwnerTurn
+		s.mu.RUnlock()
+		if fleetTurn && (ev.Text != "" || ev.IsTerminalStop()) {
+			s.mu.Lock()
+			s.overseerStreamAcc += ev.Text
+			if ev.Text != "" {
+				if line, ok := chatWireLine(ev); ok {
+					s.overseerStreamHold = append(s.overseerStreamHold, stampStreamID(line, streamID))
+				}
+			}
+			if !ev.IsTerminalStop() {
+				s.mu.Unlock()
+				s.HandleAgentEvent(ev)
+				return
+			}
+			text := s.overseerStreamAcc
+			held := s.overseerStreamHold
+			s.mu.Unlock()
+			suppress := silentresponse.Is(text) || ownercomms.SuppressRoutine(text)
+			if suppress {
+				if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
+					s.BroadcastChat(line)
+				}
+			} else {
+				for _, line := range held {
+					s.BroadcastChat(line)
+				}
+				if ev.Text == "" {
+					if line := emptyEndTurnWire(ev.StopReason, streamID); line != "" {
+						s.BroadcastChat(line)
+					}
+				}
+				s.noteOwnerVisibleText(text)
+			}
+			s.clearOverseerStreamID()
+			s.applyOverseerEventPhase(ev)
+			if s.ObserveAgentProgress(s.overseerAgentName(), ev) {
+				s.NotifyAgentsChanged()
+			}
+			s.HandleAgentEvent(ev)
+			return
+		}
 	}
 
 	// 🎯T240 whole-stream silent: accumulate assistant text, suppress body.
