@@ -754,10 +754,17 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		feedOK = true
 	}
 	explicit := strings.ToLower(strings.TrimSpace(providerArg))
+	// 🎯T743: when an explicit pin is dropped, the start result and any
+	// later launch failure must still name what was asked — the caller's
+	// mental model stays "my grok seat" unless the substitution is cited.
+	askedDropped := ""
+	dropReason := ""
 	// 🎯T652: a PO habit pin on a depleted dest is not a decision — drop
 	// it so Claudia Resolve / the omit path can choose. Resume, an
 	// eligible explicit, and owner_asked still win (🎯T148 / 🎯T583 tape 3).
 	if explicit != "" && !existed && !ownerAsked && !s.providerDestEligible(explicit) {
+		askedDropped = explicit
+		dropReason = "ineligible"
 		explicit = ""
 	}
 	// 🎯T791: an unsteerable pin is dropped the same way; the exclusion is
@@ -765,6 +772,8 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 	droppedUnsteerable := ""
 	if explicit != "" && !existed && !ownerAsked {
 		if why := planusage.UnsteerableReason(explicit); why != "" {
+			askedDropped = explicit
+			dropReason = "unsteerable (" + why + ")"
 			droppedUnsteerable = fmt.Sprintf("explicit %s dropped: unsteerable (%s)", explicit, why)
 			explicit = ""
 		}
@@ -790,7 +799,7 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 			}
 			// 🎯T978: say which plan refused and why, not only that none matched.
 			pick.Detail += ": " + planusage.MintRefusalDetail(cands, now, th)
-			return pick
+			return pick.WithSubstitution(askedDropped, dropReason)
 		}
 		p := strings.ToLower(string(resolved.Provider))
 		pick := cost.MintProviderPick{
@@ -812,7 +821,7 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 				pick.LosingProvider = want
 			}
 		}
-		return pick
+		return pick.WithSubstitution(askedDropped, dropReason)
 	}
 	return cost.PickMintProvider(cost.MintProviderArgs{
 		ProviderArg:       explicit,
@@ -823,7 +832,7 @@ func (s *Server) mintProviderPick(providerArg, stored string, existed bool, task
 		PortfolioFromFile: fromFile,
 		PlanFeedOK:        feedOK,
 		OwnerAsked:        ownerAsked,
-	})
+	}).WithSubstitution(askedDropped, dropReason)
 }
 
 func (s *Server) planPolicyInputs() (planusage.Snapshot, []planusage.DestCand, time.Time, planusage.Thresholds, bool) {

@@ -574,7 +574,11 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		// 🎯T980: the frontier row shows pause and why, not a spinner.
 		s.noteSeatWait(targetID, pick.Detail)
-		return mcp.NewToolResultError("plan dest empty; refusing to land on a hot or unsteerable dest (🎯T390.1.5 / 🎯T791): " + pick.Detail), nil
+		refuse := "plan dest empty; refusing to land on a hot or unsteerable dest (🎯T390.1.5 / 🎯T791): " + pick.Detail
+		if sub := pick.SubstitutionCite(); sub != "" {
+			refuse += " [" + sub + "]"
+		}
+		return mcp.NewToolResultError(refuse), nil
 	}
 	if !rowExisted {
 		if dest := strings.TrimSpace(pick.Provider); dest != "" {
@@ -601,12 +605,16 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		life["err"] = err.Error()
 		life["existed"] = existed
+		if routeNote != "" {
+			life["provider_knob"] = routeNote
+		}
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		// 🎯T990: no row to carry the reason, so the frontier row does.
+		regMsg := formatStartFailure(fmt.Errorf("register failed: %v", err), routeNote)
 		if targetID != "" && !existed {
-			s.noteSeatFailure(targetID, name, parent, "register failed: "+err.Error())
+			s.noteSeatFailure(targetID, name, parent, regMsg)
 		}
-		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
+		return mcp.NewToolResultError(regMsg), nil
 	}
 	life["existed"] = existed
 	if routeNote != "" {
@@ -638,9 +646,12 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 		life["session_id"] = sessionDisplay(def.SessionID)
 		s.logLifecycle(compAgentLifecycle, "start", "error", life)
 		// 🎯T970: the row stays, so it says why it never ran.
-		s.noteSeatStop(name, seatstop.SourceStartFailed, "start failed: "+err.Error(), strings.TrimSpace(actor), "")
-		return mcp.NewToolResultError(prefixRehydrate(rehydrated,
-			fmt.Sprintf("start failed: %v", err))), nil
+		// 🎯T743: a launch that fails after a T652 substitution must name
+		// asked/minted so "my grok seat timed out" is never the account of
+		// a cursor seat that timed out.
+		failMsg := formatStartFailure(err, routeNote)
+		s.noteSeatStop(name, seatstop.SourceStartFailed, failMsg, strings.TrimSpace(actor), "")
+		return mcp.NewToolResultError(prefixRehydrate(rehydrated, failMsg)), nil
 	}
 
 	missionStarted = true
@@ -673,16 +684,16 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 					ferr)
 				prompt = ""
 			} else {
+				failMsg := formatStartFailure(ferr, routeNote)
 				if released {
 					life["seat_released"] = true
-					s.notifySpawnFailure(def.Parent, def.TargetID, name, ferr.Error())
+					s.notifySpawnFailure(def.Parent, def.TargetID, name, failMsg)
 				}
 				life["failure_class"] = agenterr.ClassifyText(ferr.Error()).String()
 				life["err"] = ferr.Error()
 				life["session_id"] = sessionDisplay(def.SessionID)
 				s.logLifecycle(compAgentLifecycle, "start", "error", life)
-				return mcp.NewToolResultError(prefixRehydrate(rehydrated,
-					fmt.Sprintf("start failed: %v", ferr))), nil
+				return mcp.NewToolResultError(prefixRehydrate(rehydrated, failMsg)), nil
 			}
 		} else {
 			briefNote = note
@@ -793,6 +804,51 @@ func (s *Server) repoSharedWithWorker(workdir, excludeName string) bool {
 		}
 	}
 	return false
+}
+
+func lifeString(life map[string]any, key string) string {
+	if life == nil {
+		return ""
+	}
+	v, _ := life[key].(string)
+	return v
+}
+
+// formatStartFailure is the owner-visible start-failure text (🎯T743).
+// When routeNote carries a T652 substitution (asked=X minted=Y), it is
+// appended so a timeout on the substituted dest is never reported as a
+// failure of the provider the caller asked for.
+func formatStartFailure(err error, routeNote string) string {
+	msg := "start failed"
+	if err != nil {
+		text := strings.TrimSpace(err.Error())
+		// register failed: already has its own prefix from the call site.
+		if strings.HasPrefix(text, "register failed:") || strings.HasPrefix(text, "start failed:") {
+			msg = text
+		} else if text != "" {
+			msg = "start failed: " + text
+		}
+	}
+	if sub := substitutionFromRouteNote(routeNote); sub != "" {
+		msg += " [" + sub + "]"
+	}
+	return msg
+}
+
+// substitutionFromRouteNote pulls the 🎯T743 "substituted: …" fragment out of
+// a pick.Cite() / routeNote string. Empty when no substitution was recorded.
+func substitutionFromRouteNote(routeNote string) string {
+	const marker = "substituted: "
+	i := strings.Index(routeNote, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := routeNote[i:]
+	// Cite appends " (losing_knob…)" after the substitution; cut at that.
+	if j := strings.Index(rest, " ("); j > 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
 }
 
 // formatAgentStartResult is the owner-visible jevons_agent_start text.
@@ -1945,20 +2001,20 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 			// running/never_briefed seat as successful work, and (🎯T387)
 			// retire a row this call minted so the target is not left
 			// engaged by a worker that never ran.
+			failMsg := formatStartFailure(err, lifeString(life, "provider_knob"))
 			if released {
 				life["seat_released"] = true
 				// 🎯T433: the tool error below reaches only the caller, and a
 				// caller LLM dropping it is how a mint died twice with nobody
 				// told. The seat's parent hears about the lost mint by name,
 				// with the error verbatim, on the durable send path.
-				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
+				s.notifySpawnFailure(def.Parent, def.TargetID, name, failMsg)
 			}
 			life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
 			s.logLifecycle(compAgentLifecycle, "start", "error", life)
-			return startBriefResult{life: life, failed: prefixRehydrate(rehydrated,
-				fmt.Sprintf("start failed: %v", err))}
+			return startBriefResult{life: life, failed: prefixRehydrate(rehydrated, failMsg)}
 		}
 	}
 	life["prompt_delivered"] = true
