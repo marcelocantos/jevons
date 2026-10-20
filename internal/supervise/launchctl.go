@@ -9,19 +9,61 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"testing"
 )
 
 // This is the one place that talks to launchd, so the daemon's
 // reinstatement path (🎯T405) and the watchdog's own -install use the
 // same code and cannot drift into two different definitions of loaded.
 
+// LaunchctlCommand is the launchd control tool. No other Go file in the
+// module names it (🎯T1097, ratcheted by internal/launchdfake): every
+// launchctl exec goes through Launchctl.
+const LaunchctlCommand = "launchctl"
+
+// LaunchdFakePackage is the package a test binary imports for effect to
+// answer for launchd (🎯T1097).
+const LaunchdFakePackage = "github.com/marcelocantos/jevons/internal/launchdfake"
+
 // launchctl runs one launchctl command and returns its combined output.
-// Every call in this package goes through it, so a test can answer for
+// Every call in the module goes through it, so a test can answer for
 // launchd instead of reaching the owner's real one (🎯T1095): an
 // observation or a bootstrap from a test run lands on the same gui/<uid>
 // domain the development watchdog lives in.
+//
+// In a test binary the default refuses rather than execs (🎯T1097). A
+// test binary that links this package is required to install a fake
+// (internal/launchdfake, or this package's own export_test.go), and the
+// ratchet that requires it runs in another binary — so without this the
+// first run of a binary that forgot the import would already have reached
+// the owner's launchd before anything failed.
 var launchctl = func(args ...string) ([]byte, error) {
-	return exec.Command("launchctl", args...).CombinedOutput()
+	if testing.Testing() {
+		return []byte("launchctl refused in a test binary"), fmt.Errorf(
+			"supervise: launchctl %s refused: a test binary reached for the owner's launchd; "+
+				"add a _test.go file with import _ %q", strings.Join(args, " "), LaunchdFakePackage)
+	}
+	return exec.Command(LaunchctlCommand, args...).CombinedOutput()
+}
+
+// Launchctl runs one launchctl command through the seam and returns its
+// combined output. It is the one launchctl exec in the module, for the
+// callers outside this package that need a launchctl verb the helpers
+// below do not cover.
+func Launchctl(args ...string) ([]byte, error) { return launchctl(args...) }
+
+// ReplaceLaunchctl installs fn as the seam and returns the one it
+// replaced. Test binaries only: it panics anywhere else, so production
+// code cannot redirect launchd. Install once, before tests start
+// (internal/launchdfake does it from init); swapping it under a running
+// goroutine is a data race.
+func ReplaceLaunchctl(fn func(args ...string) ([]byte, error)) func(args ...string) ([]byte, error) {
+	if !testing.Testing() {
+		panic("supervise.ReplaceLaunchctl is for test binaries only")
+	}
+	prev := launchctl
+	launchctl = fn
+	return prev
 }
 
 // haveLaunchd reports whether this platform has a launchd to talk to. A

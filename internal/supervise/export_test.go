@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+// DefaultLaunchctl is the seam as the package built it, captured before
+// init below replaces it: package variables initialise before init runs.
+var DefaultLaunchctl = launchctl
+
 // No test in this package reaches the owner's launchd (🎯T1095). The
 // gui/<uid> domain a test would address is the one the development
 // watchdog lives in, so a stray bootstrap or bootout from a test run is a

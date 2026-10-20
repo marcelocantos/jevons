@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/supervise"
 )
 
 // Automation liveness (🎯T27.9): jevonsd tracks declared automations
@@ -176,6 +177,13 @@ func NewLivenessMonitor(args LivenessMonitorArgs) *LivenessMonitor {
 	}
 	if m.runCmd == nil {
 		m.runCmd = func(ctx context.Context, name string, cmdArgs ...string) (string, error) {
+			// launchctl goes through the one seam in the module, which a
+			// test binary fakes (🎯T1097). It takes no context; launchctl
+			// list answers from launchd's table at once.
+			if name == supervise.LaunchctlCommand {
+				out, err := supervise.Launchctl(cmdArgs...)
+				return string(out), err
+			}
 			out, err := exec.CommandContext(ctx, name, cmdArgs...).CombinedOutput()
 			return string(out), err
 		}
@@ -389,7 +397,7 @@ func (m *LivenessMonitor) probe(ctx context.Context, src config.AutomationSource
 		// LastExitStatus is the signal: a loaded job whose last run exited
 		// 0 is healthy; missing or failing is an immediate stall. launchd
 		// keeps no last-run timestamp, so this source is health-style.
-		out, err := m.runCmd(ctx, "launchctl", "list", src.Label)
+		out, err := m.runCmd(ctx, supervise.LaunchctlCommand, "list", src.Label)
 		if err != nil {
 			return Signal{Healthy: false, Detail: fmt.Sprintf("launchd job %s not loaded", src.Label)}, nil
 		}

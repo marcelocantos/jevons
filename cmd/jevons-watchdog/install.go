@@ -99,7 +99,7 @@ func installAgent(repo string, port int, state string) int {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: %v\n", err)
 		return 1
 	}
-	out, err := exec.Command("launchctl", "print", supervise.AgentDomain()+"/"+supervise.AgentLabel).CombinedOutput()
+	out, err := supervise.Launchctl("print", supervise.AgentDomain()+"/"+supervise.AgentLabel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "jevons-watchdog: loaded, but launchctl print failed: %v\n", err)
 		return 1

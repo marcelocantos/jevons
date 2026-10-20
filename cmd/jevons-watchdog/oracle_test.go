@@ -81,6 +81,7 @@ func newRig(t *testing.T) *rig {
 	// build fails and the script refuses before it bounces anything.
 	t405Build(t, root, filepath.Join(root, "bin", "claudiapin"), "./cmd/claudiapin")
 	r.writeBlurterShim()
+	r.writeLaunchctlShim()
 	// With SKIP_MAKE=1 the script still refuses to bounce a root with no
 	// ui/dist (🎯T540.2). The daemon here is a stub that never serves it,
 	// so a placeholder satisfies the check in a clean checkout — where
@@ -113,6 +114,33 @@ func (r *rig) writeBlurterShim() {
 	}
 	shim := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >>%q\n", r.blurterLog)
 	if err := os.WriteFile(filepath.Join(bin, "blurter"), []byte(shim), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// writeLaunchctlShim puts a fake launchctl first on PATH (🎯T1097). The
+// watchdog asks launchd whether KeepAlive owns the daemon before every
+// restart, and kickstarts the job when it does; the real launchctl would
+// answer about — and kickstart — the owner's development daemon, because
+// a child's gui/<uid> domain is the owner's. Some oracles hand the
+// children launchd's own PATH, which reaches /bin/launchctl directly, so
+// the inherited internal/testhome stub is not enough here. This one
+// answers as an empty domain and refuses every change.
+func (r *rig) writeLaunchctlShim() {
+	bin := filepath.Join(r.dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	shim := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >>%q
+case "$1" in
+print-disabled) printf 'disabled services = {\n}\n'; exit 0 ;;
+print|list) echo "Could not find service \"$2\"" >&2; exit 113 ;;
+esac
+echo "rig launchctl: $* refused in tests" >&2
+exit 1
+`, filepath.Join(r.dir, "launchctl.log"))
+	if err := os.WriteFile(filepath.Join(bin, "launchctl"), []byte(shim), 0o755); err != nil {
 		r.t.Fatal(err)
 	}
 }

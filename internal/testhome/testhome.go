@@ -27,6 +27,16 @@
 // a test that shells out to `go build` or `npm ci` must not fetch the world
 // again.
 //
+// The init also puts a stub launchctl first on PATH (🎯T1097). launchd is
+// owner state too: a child process a test starts — a built watchdog or
+// daemon, the restart script — addresses the gui/<uid> domain the owner's
+// development jobs live in, and a stray bootstrap, bootout or kickstart
+// from it changes the owner's machine. The stub answers as an empty domain,
+// refuses every change, and appends each invocation to LaunchctlLog. It
+// covers children that inherit this process's PATH; in-process calls go
+// through the internal/supervise seam, which internal/launchdfake fakes,
+// and a child given a PATH built from scratch needs its own stub.
+//
 // A live run (any *_LIVE variable set, as for testbroker.DeadEnd) is left
 // alone: it means to reach real providers. The ratchet in this package's
 // tests requires every test binary in the module to link this one.
@@ -50,6 +60,29 @@ const AccountHomeEnv = "JEVONS_TEST_ACCOUNT_HOME"
 
 // Dir is the private home this process runs under, or "" in a live run.
 var Dir string
+
+// LaunchctlLog is the file the PATH stub launchctl appends each invocation
+// to, one line of arguments per call, or "" in a live run. It is also
+// exported to children as LaunchctlLogEnv.
+var LaunchctlLog string
+
+// LaunchctlLogEnv names LaunchctlLog in the environment.
+const LaunchctlLogEnv = "JEVONS_TEST_LAUNCHCTL_LOG"
+
+// launchctlStub answers launchctl as a domain holding no jobs and no
+// overrides — the same answers internal/launchdfake gives in process —
+// and refuses anything that would change it. The log path is baked in so
+// a child that rebuilds its environment still records.
+const launchctlStub = `#!/bin/sh
+# internal/testhome (🎯T1097): tests never reach the owner's launchd.
+printf '%%s\n' "$*" >>%q
+case "$1" in
+print-disabled) printf 'disabled services = {\n}\n'; exit 0 ;;
+print|list) echo "Could not find service \"$2\"" >&2; exit 113 ;;
+esac
+echo "testhome launchctl stub: $* refused in tests" >&2
+exit 1
+`
 
 func init() {
 	if !testing.Testing() {
@@ -97,6 +130,18 @@ func init() {
 		_ = os.Setenv(name, path)
 	}
 	Dir = dir
+
+	stubDir := filepath.Join(dir, ".testhome-bin")
+	log := filepath.Join(dir, "launchctl.log")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(stubDir, "launchctl"), []byte(fmt.Sprintf(launchctlStub, log)), 0o755); err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_ = os.Setenv(LaunchctlLogEnv, log)
+	LaunchctlLog = log
 }
 
 // LiveRun reports whether env (in os.Environ form) opts into a live run: any
