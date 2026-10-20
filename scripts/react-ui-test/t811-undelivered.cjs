@@ -83,7 +83,11 @@ async function main() {
   await page.waitForTimeout(1500);
   assert.equal(await page.locator(`#messages [data-kind="user"]:has-text("${token}")`).count(), 1, 'one owner row');
   assert.equal(await page.locator(`#messages [data-kind="assistant"]:has-text("${token}")`).count(), 1, 'one reply: delivered once');
-  assert.equal(await page.locator('.msg-resend').count(), 0, 'Resend is gone once delivered');
+  // Scoped to this message: an earlier journey in the same isolate can
+  // legitimately leave another owner row undelivered with its own Resend
+  // (🎯T1094: J32's turn that stuck-busy recovery interrupted, final suite
+  // 2026-10-20), and that Resend is not this one.
+  assert.equal(await row.locator('.msg-resend').count(), 0, 'Resend is gone once delivered');
   assert.deepEqual(errors, []);
   console.log(`PASS: T811 not_owner refusal painted undelivered with Resend; Resend delivered once; screenshot ${shot}`);
 }
