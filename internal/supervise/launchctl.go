@@ -53,8 +53,9 @@ var launchctl = func(args ...string) ([]byte, error) {
 func Launchctl(args ...string) ([]byte, error) { return launchctl(args...) }
 
 // ReplaceLaunchctl installs fn as the seam and returns the one it
-// replaced. Test binaries only: it panics anywhere else, so production
-// code cannot redirect launchd. Install once, before tests start
+// replaced, and reports launchd present on every platform. Test binaries
+// only: it panics anywhere else, so production code cannot redirect
+// launchd. Install once, before tests start
 // (internal/launchdfake does it from init); swapping it under a running
 // goroutine is a data race.
 func ReplaceLaunchctl(fn func(args ...string) ([]byte, error)) func(args ...string) ([]byte, error) {
@@ -63,6 +64,10 @@ func ReplaceLaunchctl(fn func(args ...string) ([]byte, error)) func(args ...stri
 	}
 	prev := launchctl
 	launchctl = fn
+	// A faked launchd is a launchd: off macOS the helpers would otherwise
+	// short-circuit before the fake answers, and a test would check paths
+	// a macOS run never takes.
+	haveLaunchd = true
 	return prev
 }
 
