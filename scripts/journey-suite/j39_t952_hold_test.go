@@ -104,3 +104,17 @@ func TestT952DiagCountsDrainAndBodies(t *testing.T) {
 		}
 	}
 }
+
+// Gate c3afc8fc, row jevons/430 byte for byte: the stall's notice carried a
+// concurrent tool call's input naming the hold. The notice's words do not.
+func TestT952HoldCountReadsTheNoticeWordsNotFoldedToolFields(t *testing.T) {
+	folded := `{"input":{"name":"t952-hold"},"name":"jevons_sendq_reconcile","text":"[Fleet health] Stalled backlog on \"t952-stall\": 1 message(s) held by the daemon, the oldest waiting 10m25s, because it has no live process to deliver to. They are on disk and will be delivered when it next takes a turn. If that agent should not still be busy, confirm from ITS transcript (terminal assistant message + turn_duration, file not growing) and then jevons_agent_send with interrupt=true. (occurrence 8772ea0f5259)","timestamp":"2026-10-20T01:26:56.5688Z","type":"agent_note"}`
+	stalled, holdNamed := t952NoticeCounts([]string{folded})
+	if stalled != 1 || holdNamed != 0 {
+		t.Fatalf("stalled=%d holdNamed=%d, want the stall notice counted and the hold not named", stalled, holdNamed)
+	}
+	named := `{"text":"[Fleet health] Stalled backlog on \"t952-hold\": 1 message(s) held","type":"agent_note"}`
+	if _, holdNamed := t952NoticeCounts([]string{named}); holdNamed != 1 {
+		t.Fatalf("a notice whose words name the hold was not counted: %d", holdNamed)
+	}
+}

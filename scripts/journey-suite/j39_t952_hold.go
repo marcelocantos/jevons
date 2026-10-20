@@ -5,6 +5,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -457,7 +458,13 @@ func t952NoticeCounts(bodies []string) (stalled, holdNamed int) {
 			joined.WriteString(flat)
 			joined.WriteByte('\n')
 		}
-		if strings.Contains(flat, t952Hold) && (strings.Contains(flat, "Stalled backlog") || strings.Contains(flat, "[Fleet health]") || strings.Contains(flat, "no action")) {
+		// The words of the row, not its whole body: in the second full suite
+		// on 024bbdf1 the stall's notice row (agent_note, naming only
+		// t952-stall) carried the input of a concurrent overseer tool call,
+		// {"name":"t952-hold"} for jevons_sendq_reconcile, and was counted as
+		// a notice naming the hold (🎯T1088 records the fold).
+		words := t952RowWords(body)
+		if strings.Contains(words, t952Hold) && (strings.Contains(words, "Stalled backlog") || strings.Contains(words, "[Fleet health]") || strings.Contains(words, "no action")) {
 			holdNamed++
 		}
 	}
@@ -485,4 +492,25 @@ func t952OverseerBodies(stateDir string) ([]string, error) {
 		bodies = append(bodies, body)
 	}
 	return bodies, rows.Err()
+}
+
+// t952RowWords is the text a transcript row says: an agent_note's text, or
+// a message's text content. A body that is not JSON is its own text.
+func t952RowWords(body string) string {
+	var row struct {
+		Text    string `json:"text"`
+		Message struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(body), &row); err != nil {
+		return body
+	}
+	parts := []string{row.Text}
+	for _, c := range row.Message.Content {
+		parts = append(parts, c.Text)
+	}
+	return strings.Join(parts, "\n")
 }
