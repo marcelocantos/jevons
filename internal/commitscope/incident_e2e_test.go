@@ -384,10 +384,22 @@ func (r *guardedRepo) stagedPaths(t *testing.T) []string {
 }
 
 var (
-	buildOnce sync.Once
-	builtBin  string
-	buildErr  error
+	buildOnce   sync.Once
+	builtBin    string
+	builtBinDir string
+	buildErr    error
 )
+
+// TestMain removes the commitscope-bin* directory built once for the whole
+// package run (🎯T1087): without this, every `go test` invocation left a
+// built binary behind in $TMPDIR forever.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtBinDir != "" {
+		os.RemoveAll(builtBinDir)
+	}
+	os.Exit(code)
+}
 
 // guardBinary compiles cmd/commitscope once for the whole package run. The
 // tests exercise the shipped shim, and the shim execs this.
@@ -399,6 +411,7 @@ func guardBinary(t *testing.T) string {
 			buildErr = err
 			return
 		}
+		builtBinDir = dir
 		builtBin = filepath.Join(dir, "commitscope")
 		cmd := exec.Command("go", "build", "-o", builtBin, "./cmd/commitscope")
 		cmd.Dir = repoRoot(t)

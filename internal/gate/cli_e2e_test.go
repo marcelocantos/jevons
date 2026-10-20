@@ -19,10 +19,22 @@ import (
 // honest while the command wrapping it loses the status would close nothing.
 
 var (
-	buildOnce sync.Once
-	builtBin  string
-	buildErr  error
+	buildOnce   sync.Once
+	builtBin    string
+	builtBinDir string
+	buildErr    error
 )
+
+// TestMain removes the gate-bin* directory built once for the whole package
+// run (🎯T1087): without this, every `go test` invocation left a built
+// binary behind in $TMPDIR forever.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtBinDir != "" {
+		os.RemoveAll(builtBinDir)
+	}
+	os.Exit(code)
+}
 
 func gateBinary(t *testing.T) string {
 	t.Helper()
@@ -32,6 +44,7 @@ func gateBinary(t *testing.T) string {
 			buildErr = err
 			return
 		}
+		builtBinDir = dir
 		builtBin = filepath.Join(dir, "gate")
 		cmd := exec.Command("go", "build", "-o", builtBin, "./cmd/gate")
 		cmd.Dir = repoRoot(t)
