@@ -10,7 +10,7 @@ $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
 .PHONY: all
-all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest mcpscope claudiapin buildident
+all: jevonsd jevons-head treeguard commitscope commitbase attrib runlock buildsnap recover detach jevons-watchdog gate gotest mcpscope claudiapin buildident supervisorpolicy
 
 # 🎯T710: unbuildable strays (bin/jevond predating the jevon-to-jevons
 # rename) must not survive a clean. bin/ is gitignored; this recipe is
@@ -93,6 +93,17 @@ runlock: bin/runlock
 bin/runlock: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/runlock ./cmd/runlock
+
+# supervisord restart-policy reader (🎯T1086). restart-jevonsd reads the
+# program's autorestart before its upgrade SIGHUP. A missing binary is
+# built on demand; an unbuildable one leaves the policy "unknown", and the
+# script still starts a program supervisord leaves EXITED.
+.PHONY: supervisorpolicy
+supervisorpolicy: bin/supervisorpolicy
+
+bin/supervisorpolicy: $(GO_SRC)
+	@mkdir -p bin
+	go build -o bin/supervisorpolicy ./cmd/supervisorpolicy
 
 # Detached diagnostician (🎯T415.1). jevonsd launches this setsid'd when
 # convergence gives up on an agent, so it outlives the daemon and can even

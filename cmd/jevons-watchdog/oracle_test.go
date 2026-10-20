@@ -76,6 +76,10 @@ func newRig(t *testing.T) *rig {
 	// would compile under the scratch HOME, from cold.
 	t405Build(t, root, filepath.Join(root, "bin", "detach"), "./cmd/detach")
 	t405Build(t, root, filepath.Join(root, "bin", "runlock"), "./cmd/runlock")
+	// claudiapin too: the script builds it on demand under the scratch env,
+	// which has no GOWORK=off, so in a worktree outside ../go.work that
+	// build fails and the script refuses before it bounces anything.
+	t405Build(t, root, filepath.Join(root, "bin", "claudiapin"), "./cmd/claudiapin")
 	r.writeBlurterShim()
 	// With SKIP_MAKE=1 the script still refuses to bounce a root with no
 	// ui/dist (🎯T540.2). The daemon here is a stub that never serves it,
