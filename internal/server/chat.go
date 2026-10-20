@@ -531,6 +531,13 @@ func (s *Server) SendToOverseer(text string) error {
 // SendToOverseerAs is SendToOverseer for an owner turn that has a message id
 // (🎯T806): the id is registered in the same lock hold that enqueues the text.
 func (s *Server) SendToOverseerAs(text, msgID string) error {
+	_, err := s.sendToOverseerAs(text, msgID)
+	return err
+}
+
+// sendToOverseerAs is SendToOverseerAs reporting the batch, if any, that this
+// call's own drain handed to the overseer.
+func (s *Server) sendToOverseerAs(text, msgID string) (*sentNotifyBatch, error) {
 	owner := isOwnerNotifyText(text)
 	// The owner talking to Jevons is the strongest owner-present signal —
 	// feed the budget dead-man's switch so it never stops a fleet the
@@ -596,14 +603,14 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 		s.journalFleetHealthNote(text)
 	}
 
-	s.drainOverseerNotes()
+	sent := s.drainOverseerNotesSent()
 	// A working fleet still returns nil when the seat is busy: the text is
 	// queued and the caller hears delivered_unconfirmed. A non-working fleet
 	// must not. The drain above leaves the text in the queue either way.
 	if !s.notifyDrainAllowed() {
-		return delivery.ErrNotifyHeldByIntent
+		return nil, delivery.ErrNotifyHeldByIntent
 	}
-	return nil
+	return sent, nil
 }
 
 // fleetHealthNotePrefix is the marker notifyFleetHealth puts on a notice.
@@ -982,11 +989,18 @@ func (s *Server) logNotifyDrainStop(decision string) {
 // Busy / unreachable: requeue at front (coalesced) for the next turn-complete
 // (🎯T62 — nothing dropped). Drain-in-progress serializes concurrent callers.
 func (s *Server) drainOverseerNotes() {
+	s.drainOverseerNotesSent()
+}
+
+// drainOverseerNotesSent is drainOverseerNotes reporting the fleet batch it
+// handed to the overseer, or nil when it handed none (stopped, refused, or an
+// owner batch, whose receipt is read below).
+func (s *Server) drainOverseerNotesSent() *sentNotifyBatch {
 	s.mu.Lock()
 	if stop, decision := s.notifyDrainStopLocked(); stop {
 		s.mu.Unlock()
 		s.logNotifyDrainStop(decision)
-		return
+		return nil
 	}
 	s.mu.Unlock()
 
@@ -1003,14 +1017,14 @@ func (s *Server) drainOverseerNotes() {
 			"decision", "hold_fleet_intent",
 			"depth", depth,
 		)
-		return
+		return nil
 	}
 
 	s.mu.Lock()
 	if stop, decision := s.notifyDrainStopLocked(); stop {
 		s.mu.Unlock()
 		s.logNotifyDrainStop(decision)
-		return
+		return nil
 	}
 	batch, rest, ownerBatch := takeNotifyDrainBatch(s.notifyQueue)
 	s.notifyQueue = rest
@@ -1023,7 +1037,7 @@ func (s *Server) drainOverseerNotes() {
 		s.mu.Lock()
 		s.notifyDraining = false
 		s.mu.Unlock()
-		return
+		return nil
 	}
 
 	requestID, err := s.sendNotes(strings.Join(batch, "\n\n"))
@@ -1054,7 +1068,7 @@ func (s *Server) drainOverseerNotes() {
 			s.announceOwnerUndelivered(batch[0], err)
 			s.scheduleNotifyRetry()
 		}
-		return
+		return nil
 	}
 	// Successful prompt delivery: mark waiting so stuck-busy can see an
 	// in-flight turn even when only notify/owner notes are on the wire.
@@ -1076,6 +1090,11 @@ func (s *Server) drainOverseerNotes() {
 		s.noteOwnerRequest(requestID)
 		acked := s.noteOwnerDeliveredFromReceipt(requestID)
 		s.announceOwnerDelivered(batch[0], acked)
+		logNotifyReceipt(requestID, true, len(batch), acked)
+	}
+	var sent *sentNotifyBatch
+	if !ownerBatch && requestID != "" && s.receiptQueryConfigured() {
+		sent = s.settleFleetBatchReceipt(requestID, batch)
 	}
 	// 🎯T555.1: the batch owns the session now — accepted + correspondent
 	// before the first ACP update, so the bar does not wait for it.
@@ -1093,6 +1112,7 @@ func (s *Server) drainOverseerNotes() {
 	if !ownerBatch && ownerPending && s.interruptOverseerForOwner() {
 		s.drainOverseerNotes()
 	}
+	return sent
 }
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is

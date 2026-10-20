@@ -182,6 +182,9 @@ type Server struct {
 	// overseer-addressed send reuses the owner chat journal and notify queue.
 	// Nil falls back to notifyJevon for agent-origin text (see deliverToOverseer).
 	overseerDeliver OverseerDeliverFunc
+	// overseerDeliverReceipted, when set, replaces overseerDeliver and also
+	// reports whether the handoff's receipt settled.
+	overseerDeliverReceipted OverseerReceiptFunc
 	// overseerNotifyDrain runs after an intent write so a queue held by a
 	// non-working fleet drains once the fleet is runnable again. Nil is a no-op.
 	overseerNotifyDrain func()
