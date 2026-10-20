@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,9 +40,13 @@ import (
 //
 //   - agent tool calls: every tool_use row in the isolate stores (the primary
 //     isolate and each brokered child, read before the child is deleted) is
-//     scanned for a path into the development state dir. That is the opener
-//     actually seen, and it is decidable whether or not the development
-//     daemon is running.
+//     scanned, shell comments stripped. A call that names the development
+//     jevons.db fails the run: that is the opener actually seen, and it is
+//     decidable whether or not the development daemon is running. A call that
+//     names anything else under ~/.jevons (agents list it habitually: J36's
+//     worker ran `ls -la ~/.jevons` on its own initiative) is printed as a
+//     NOTE. T1082's acceptance asks for files unopened for writing, and a
+//     listing writes nothing; the NOTE keeps it visible.
 //   - a database fingerprint: size, mtime and SHA-256 of jevons.db, and the
 //     presence, size and mtime of its -wal and -shm, before and after. Only
 //     meaningful while no development daemon holds the database, so it is
@@ -55,25 +60,71 @@ import (
 // devStatePollEvery is the holder poll's cadence.
 const devStatePollEvery = 500 * time.Millisecond
 
-// devStateRefPattern matches a path into home's .jevons directory, however a
-// shell command spells home, and not a sibling such as .jevons-worktrees.
-func devStateRefPattern(home string) *regexp.Regexp {
+// devStateHomes is every way a shell command spells home.
+func devStateHomes(home string) string {
 	homes := []string{`~`, `\$HOME`, `\$\{HOME\}`}
 	if home != "" {
 		homes = append(homes, regexp.QuoteMeta(home))
 	}
-	return regexp.MustCompile(`(?:` + strings.Join(homes, "|") + `)/\.jevons(?:[/"'\s;|&)\\]|$)`)
+	return `(?:` + strings.Join(homes, "|") + `)`
 }
 
-// devStateTouch is one agent tool call that reached into the development state.
+// devStateRefPattern matches a path into home's .jevons directory, and not
+// a sibling such as .jevons-worktrees.
+func devStateRefPattern(home string) *regexp.Regexp {
+	return regexp.MustCompile(devStateHomes(home) + `/\.jevons(?:[/"'\s;|&)]|$)`)
+}
+
+// devDBRefPattern matches a path to the development database or its WAL
+// siblings.
+func devDBRefPattern(home string) *regexp.Regexp {
+	return regexp.MustCompile(devStateHomes(home) + `/\.jevons/jevons\.db`)
+}
+
+// devStateTouch is one agent tool call that reached into the development
+// state. db is set when it named the development database.
 type devStateTouch struct {
 	store, agent string
 	idx          int
+	db           bool
 	excerpt      string
 }
 
 func (t devStateTouch) String() string {
 	return fmt.Sprintf("%s: agent %s tool call #%d: %s", t.store, t.agent, t.idx, t.excerpt)
+}
+
+// shellCommentPattern is a shell comment: a # at the start of a line or
+// after whitespace, to the end of the line.
+var shellCommentPattern = regexp.MustCompile(`(?m)(^|\s)#.*$`)
+
+// toolCallText is the strings of a tool_use row's input, comments stripped:
+// "don't touch ~/.jevons" in a comment is not a touch.
+func toolCallText(body string) string {
+	var row struct {
+		Input any `json:"input"`
+	}
+	if err := json.Unmarshal([]byte(body), &row); err != nil {
+		return body
+	}
+	var parts []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			parts = append(parts, shellCommentPattern.ReplaceAllString(v, "$1"))
+		case []any:
+			for _, e := range v {
+				walk(e)
+			}
+		case map[string]any:
+			for _, e := range v {
+				walk(e)
+			}
+		}
+	}
+	walk(row.Input)
+	return strings.Join(parts, "\n")
 }
 
 // scanDevStateRefs reads every tool_use row of the isolate store under
@@ -95,7 +146,7 @@ func scanDevStateRefs(stateDir, home string) ([]devStateTouch, error) {
 		return nil, fmt.Errorf("scan %s tool calls: %w", stateDir, err)
 	}
 	defer rows.Close()
-	re := devStateRefPattern(home)
+	ref, dbRef := devStateRefPattern(home), devDBRefPattern(home)
 	var out []devStateTouch
 	for rows.Next() {
 		var agent, body string
@@ -103,13 +154,15 @@ func scanDevStateRefs(stateDir, home string) ([]devStateTouch, error) {
 		if err := rows.Scan(&agent, &idx, &body); err != nil {
 			return nil, err
 		}
-		loc := re.FindStringIndex(body)
+		text := toolCallText(body)
+		loc := ref.FindStringIndex(text)
 		if loc == nil {
 			continue
 		}
 		from := max(0, loc[0]-80)
-		to := min(len(body), loc[1]+80)
-		out = append(out, devStateTouch{store: stateDir, agent: agent, idx: idx, excerpt: body[from:to]})
+		to := min(len(text), loc[1]+80)
+		out = append(out, devStateTouch{store: stateDir, agent: agent, idx: idx,
+			db: dbRef.MatchString(text), excerpt: text[from:to]})
 	}
 	return out, rows.Err()
 }
@@ -338,7 +391,11 @@ func (g *devStateGuard) finish(primaryStateDir string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, t := range g.touches {
-		errs = append(errs, fmt.Errorf("🎯T1082 an isolate agent reached into the development state: %s", t))
+		if t.db {
+			errs = append(errs, fmt.Errorf("🎯T1082 an isolate agent opened the development database: %s", t))
+		} else {
+			fmt.Printf("NOTE 🎯T1082: an isolate agent named the development state (not its database): %s\n", t)
+		}
 	}
 	for _, h := range g.holders {
 		errs = append(errs, fmt.Errorf("🎯T1082 a process started by this suite held the development %s open: %s", g.db, h))
