@@ -235,13 +235,26 @@ func (s *Server) settleForeignTurnEnd() {
 // already reached the old seat, and a second unasked delivery is the duplicate
 // 🎯T416 forbids. If the seat answers after all, the report flips to delivered.
 func (s *Server) abandonReplacedOverseerTurn() {
+	s.abandonOverseerTurn("the overseer was stopped before it answered; it was not resent")
+}
+
+// abandonStuckOverseerTurn ends the turn the stuck-busy recovery just
+// interrupted (🎯T1094). Same contract as abandonReplacedOverseerTurn: an
+// owner turn is reported with Resend, not resent, and a late answer flips it.
+func (s *Server) abandonStuckOverseerTurn() {
+	s.abandonOverseerTurn("the overseer was stuck and was interrupted before it answered; it was not resent")
+}
+
+// abandonOverseerTurn settles the turn the server holds and, when it is the
+// owner's, tells the owner why it went unanswered.
+func (s *Server) abandonOverseerTurn(reason string) {
 	s.mu.Lock()
 	msgID, text := s.overseerOwnerTurnMsgID, s.overseerOwnerTurnText
 	report := s.overseerOwnerTurn && s.recordOwnerUnansweredLocked(msgID, text)
 	s.mu.Unlock()
 	s.settleOverseerAfterUnstick()
 	if report {
-		s.announceOwnerUnanswered(msgID, "the overseer was stopped before it answered; it was not resent")
+		s.announceOwnerUnanswered(msgID, reason)
 	}
 }
 

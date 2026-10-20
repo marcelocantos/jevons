@@ -474,8 +474,9 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 		}
 		// Settle server + clients even if interrupt is racy. The strip
 		// was just set to stuck; leave it there and the queued follow-up
-		// never sends, because busy stays true.
-		s.settleOverseerAfterUnstick()
+		// never sends, because busy stays true. 🎯T1094: an owner turn
+		// among them is reported with Resend, not settled silently.
+		s.abandonStuckOverseerTurn()
 		s.broadcastCockpitReady("overseer is back")
 		// Flush deferred owner/notify notes now that local busy is cleared.
 		s.drainOverseerNotes()
