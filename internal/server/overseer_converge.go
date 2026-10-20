@@ -427,7 +427,8 @@ func (s *Server) cockpitAttach(state *cockpitState) error {
 		// so the queue is free.
 		slog.Warn("cockpit: re-attached a replacement overseer process; settled the previous process's open turn",
 			"name", name)
-		s.settleOverseerAfterUnstick()
+		// 🎯T1091: an owner turn among them is reported, not lost.
+		s.abandonReplacedOverseerTurn()
 	}
 	s.broadcastCockpitReady("overseer is back")
 	slog.Info("cockpit: overseer re-attached to chat", "name", name)
@@ -592,12 +593,10 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 		return fmt.Errorf("cockpit: %w", err)
 	}
 	s.AttachOverseer(agent)
-	s.mu.Lock()
-	s.waiting = false
-	s.overseerOwnerTurn = false // 🎯T291
-	s.turnBuf = ""
-	s.noteOverseerProgressLocked()
-	s.mu.Unlock()
+	// The fresh process holds no turn. One the server held belonged to the
+	// process this launch replaced; an owner turn among them is reported,
+	// not lost (🎯T1091).
+	s.abandonReplacedOverseerTurn()
 	s.SetOverseerDownReason("")
 	state.mu.Lock()
 	state.attempts = 0

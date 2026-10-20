@@ -1040,6 +1040,12 @@ func (s *Server) drainOverseerNotesSent() *sentNotifyBatch {
 		return nil
 	}
 
+	// 🎯T1091: the owner message id this batch's cockpit row carries; the
+	// delivered announcement below retires it from notifyOwnerIDs.
+	ownerMsgID := ""
+	if ownerBatch {
+		ownerMsgID = s.peekOwnerMessageID(batch[0])
+	}
 	requestID, err := s.sendNotes(strings.Join(batch, "\n\n"))
 
 	s.mu.Lock()
@@ -1075,13 +1081,17 @@ func (s *Server) drainOverseerNotesSent() *sentNotifyBatch {
 	s.waiting = true
 	s.overseerOwnerTurn = ownerBatch
 	s.overseerOwnerTurnText = ""
+	s.clearOwnerTurnPlacementLocked()
+	armPreempt := func() {}
 	if ownerBatch {
 		s.overseerOwnerTurnText = batch[0]
+		armPreempt = s.noteOwnerHandoffLocked(requestID, ownerMsgID) // 🎯T1091
 	}
 	s.noteOverseerProgressLocked()
 	depth := len(s.notifyQueue)
 	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
+	armPreempt()
 	if ownerBatch {
 		// The write returned. Send-landed and the owner-visible delivered
 		// frame are the receipt for this request. Retiring the id is
@@ -2031,6 +2041,7 @@ func (s *Server) settleCancel() {
 	s.waiting = false
 	s.overseerOwnerTurn = false // 🎯T291
 	s.overseerOwnerTurnText = ""
+	s.clearOwnerTurnPlacementLocked()
 	s.overseerStreamID = ""
 	s.overseerStreamAcc = ""
 	s.overseerStreamSilent = false

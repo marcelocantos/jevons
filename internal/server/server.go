@@ -391,6 +391,23 @@ type Server struct {
 	overseerOwnerTurnText string
 	notifyInFlight        []string
 	ownerInterruptSeam    func() (settled bool, err error)
+	// 🎯T1091: where the provider put the owner turn in flight.
+	// overseerOwnerTurnRequestID is the request id the drain handed over;
+	// overseerOwnerTurnMsgID is the owner message id its cockpit row carries
+	// ("" for an untracked owner note). overseerOwnerQueuedBehind is set when
+	// the provider accepted that request without opening a turn for it: it
+	// waits behind a turn this server does not hold. ownerQueuedBehindGrace
+	// is how long such a turn may wait before it preempts (0 = default).
+	// ownerUnanswered holds owner turns that will not be answered (the seat
+	// was replaced, or the provider closed the request unrun), by message id,
+	// until the owner resends one or the seat answers after all.
+	overseerOwnerTurnRequestID string
+	overseerOwnerTurnMsgID     string
+	overseerOwnerQueuedBehind  bool
+	overseerOwnerQueuedGen     uint64
+	ownerQueuedBehindGrace     time.Duration
+	ownerQueuedBehindEarly     string // a queued-behind acceptance seen before its drain recorded the request
+	ownerUnanswered            map[string]string
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
 	seatStopReader func(name string) (reason string, at time.Time, ok bool)
@@ -552,6 +569,9 @@ func New(version, stateDir string) *Server {
 // the Grok voice bridge for TTS. Wired via Agent.SubscribeEvents in
 // the daemon entry point.
 func (s *Server) HandleAgentEvent(ev claudia.Event) {
+	// 🎯T1091: the end of a turn the owner turn is queued behind is not the
+	// owner turn's end.
+	foreignEnd := s.observeOwnerTurnPlacement(ev)
 	switch ev.Type {
 	case "assistant":
 		if ev.Text != "" {
@@ -568,6 +588,10 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		}
 		fallthrough
 	case "system":
+		if foreignEnd {
+			s.settleForeignTurnEnd()
+			return
+		}
 		s.mu.Lock()
 		wasWaiting := s.waiting
 		wasOwnerTurn := s.overseerOwnerTurn
@@ -576,6 +600,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.waiting = false
 		s.overseerOwnerTurn = false // 🎯T291: seal clears owner-turn chrome level
 		s.overseerOwnerTurnText = ""
+		s.clearOwnerTurnPlacementLocked()
 		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
 		s.overseerStreamAcc = ""
 		s.overseerStreamSilent = false
@@ -1035,6 +1060,7 @@ func (s *Server) HandleUserMessage(text string) {
 	s.mu.Lock()
 	s.waiting = true
 	s.overseerOwnerTurn = true // 🎯T291: remote owner speech is an owner turn
+	s.clearOwnerTurnPlacementLocked()
 	s.mu.Unlock()
 	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
 	if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,

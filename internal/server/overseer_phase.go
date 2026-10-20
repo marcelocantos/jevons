@@ -314,6 +314,7 @@ func (s *Server) settleOverseerAfterUnstick() {
 	s.mu.Lock()
 	s.waiting = false
 	s.overseerOwnerTurn = false // 🎯T291
+	s.clearOwnerTurnPlacementLocked()
 	s.turnBuf = ""
 	s.noteOverseerProgressLocked()
 	s.mu.Unlock()

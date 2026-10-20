@@ -191,6 +191,11 @@ func (s *Server) ResendOwnerMessage(id string) error {
 	}
 	if !queued {
 		s.mu.Unlock()
+		// 🎯T1091: an owner turn its replaced seat never answered goes again
+		// on the owner's word, once, under its own id.
+		if text, ok := s.takeUnansweredOwnerTurn(id); ok {
+			return s.SendToOverseerAs(text, id)
+		}
 		return fmt.Errorf("message %s is not waiting for delivery", id)
 	}
 	if s.notifyRetryTimer != nil {
