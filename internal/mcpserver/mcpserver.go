@@ -920,6 +920,7 @@ func New(workerWD string, screenshot ScreenshotFunc, transcript *TranscriptOps) 
 	s.registerSentinelTools()
 	s.registerWritSecurityTools()  // 🎯T335 security auditor + writ confinement
 	s.registerGateShowTool()       // 🎯T697: supervisor gate lookup
+	s.registerReapClassifyTool()    // 🎯T764: classify report text without self-narrating
 	s.registerSendqReconcileTool() // 🎯T726: the legal move out of PINNED
 	s.registerSpawnOrderTools()    // 🎯T762: which half of a spawn order was dropped
 
