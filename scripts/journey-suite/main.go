@@ -201,7 +201,10 @@ provider: %s
 persona_notes: |
   You are a short-lived journey-test overseer. Prefer one-line text answers.
   Do not spawn workers. For "Reply with exactly: X" prompts, reply with X only.
-`, overseerName, p, stateDir, sessionsDir, mcpName, stateDir, provider)
+  Your whole state is in %s. %s/.jevons belongs to the owner's
+  development daemon, not to you: never list, read, open or query anything
+  there (🎯T1082). Use your jevons_* tools, or files under your own state.
+`, overseerName, p, stateDir, sessionsDir, mcpName, stateDir, provider, stateDir, homeDir())
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		fatal(err)
 	}
