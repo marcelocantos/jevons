@@ -487,16 +487,62 @@ func extractTurns(lines []jsonlLine, keepInject bool) []Turn {
 // shape this decoder does not yet know. It is the last step before giving up,
 // and it exists because "I could not find the prompts" and "there is nothing
 // here" are different answers and only one of them is true (🎯T422 clause 7).
+//
+// 🎯T1099: a sidecar (omp) seat's spool view carries one assistant JSONL line
+// per streamed text delta, plus one per tool call and one sealing the turn
+// with stop_reason. Rendering each line as its own Turn reported thousands of
+// one-token "turns" for a seat the cockpit shows as a handful of bubbles.
+// Deltas of one message fold into a single Turn, by the same row boundary
+// 🎯T1089 uses for the live cockpit: a tool call or a steered message opens a
+// new turn, a sealing stop_reason closes the one in progress (its own text,
+// if any, joins what came before it), and a fresh accumulation then starts
+// clean for whatever comes next.
 func assistantOnlyTurns(lines []jsonlLine) []Turn {
 	var turns []Turn
-	for _, l := range lines {
-		if !l.decoded || l.rec.Kind != turnev.KindAssistant {
-			continue
+	var acc strings.Builder
+	open := false
+	flush := func() {
+		if !open {
+			return
 		}
-		if text := strings.TrimSpace(l.rec.Text); text != "" {
-			turns = append(turns, Turn{Number: len(turns) + 1, Role: "assistant", Text: l.rec.Text})
+		text := acc.String()
+		acc.Reset()
+		open = false
+		if strings.TrimSpace(text) != "" {
+			turns = append(turns, Turn{Number: len(turns) + 1, Role: "assistant", Text: text})
 		}
 	}
+	for _, l := range lines {
+		if !l.decoded {
+			continue
+		}
+		if l.isUserTurn {
+			// A steered message interleaved mid-stream opens a new turn
+			// (🎯T1089); it carries no assistant text of its own here.
+			flush()
+			continue
+		}
+		if l.rec.Kind != turnev.KindAssistant {
+			continue
+		}
+		if l.rec.HasToolUse {
+			// A tool call opens a new turn; text after it does not fold
+			// back into what came before (🎯T1089). The call itself
+			// renders no turn text, matching the prior per-line behaviour.
+			flush()
+			continue
+		}
+		if l.rec.Text != "" {
+			acc.WriteString(l.rec.Text)
+			open = true
+		}
+		if l.rec.StopReason != "" {
+			// The sealing record's own text (if any) joins the message
+			// it closes; what follows starts a fresh accumulation.
+			flush()
+		}
+	}
+	flush()
 	return turns
 }
 

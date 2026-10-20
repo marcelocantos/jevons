@@ -25,9 +25,11 @@ func TestReadForSeatUsesSpoolNotSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 🎯T1099: the "text" delta and the turn_end that seals it are one
+	// message, so they fold into a single turn.
 	found := false
 	for _, turn := range turns {
-		if text, _ := turn["text"].(string); text == "from spool" {
+		if text, _ := turn["text"].(string); text == "from spoolfrom spool" {
 			found = true
 		}
 	}
