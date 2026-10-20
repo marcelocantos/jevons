@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -107,11 +108,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *pairInstance != "" || *addCredential != "" {
-		runOneShot(*pairInstance, *addCredential, *relayURL)
-		os.Exit(0)
-	}
-
 	logLevel := slog.LevelInfo
 	if *debug {
 		logLevel = slog.LevelDebug
@@ -171,6 +167,15 @@ func main() {
 	if err != nil {
 		slog.Error("cannot load config", "path", cfgPath, "err", err)
 		os.Exit(1)
+	}
+	// 🎯T1093: the pairing one-shots write the credential where this
+	// daemon reads it, so they run after the config that names state_dir.
+	if *pairInstance != "" || *addCredential != "" {
+		code, err := runOneShot(cfg.StateDir, *pairInstance, *addCredential, *relayURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(code)
 	}
 	// 🎯T574: the one loader seam for owner-editable policy files. Every
 	// family below registers here and is re-read on change (≤5 s); nothing
@@ -1458,60 +1463,55 @@ func main() {
 // runOneShot handles --pair and --add-credential flags. Both modes
 // load (or create) the credential store and exit; they do not start
 // the daemon.
-func runOneShot(pairInstance, addCredential, relayURL string) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "cannot determine home directory:", err)
-		os.Exit(1)
-	}
-	store := server.NewCredentialStore(filepath.Join(homeDir, ".jevons", "credential.json"))
+// runOneShot runs --pair or --add-credential and returns the exit code.
+//
+// The credential lives under the daemon's state_dir (🎯T1093) — main passes
+// the state_dir from the config it loaded — because the daemon reads
+// <state_dir>/credential.json. A one-shot that wrote
+// ~/.jevons/credential.json regardless paired a non-default daemon with a
+// file it never reads, and an isolate's pairing wrote into development state.
+func runOneShot(stateDir, pairInstance, addCredential, relayURL string) (int, error) {
+	store := server.NewCredentialStore(filepath.Join(stateDir, "credential.json"))
 	if _, err := store.Load(); err != nil {
-		fmt.Fprintln(os.Stderr, "load credential:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("load credential: %w", err)
 	}
 
 	if addCredential != "" {
 		data, err := os.ReadFile(addCredential)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "read server record:", err)
-			os.Exit(1)
+			return 1, fmt.Errorf("read server record: %w", err)
 		}
 		var rec crypto.PairingRecord
 		if err := json.Unmarshal(data, &rec); err != nil {
-			fmt.Fprintln(os.Stderr, "parse server record:", err)
-			os.Exit(1)
+			return 1, fmt.Errorf("parse server record: %w", err)
 		}
 		if err := store.Save(&rec); err != nil {
-			fmt.Fprintln(os.Stderr, "save credential:", err)
-			os.Exit(1)
+			return 1, fmt.Errorf("save credential: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "credential saved for peer %s\n", rec.PeerInstanceID)
-		return
+		return 0, nil
 	}
 
 	// --pair mode.
 	if relayURL == "" {
-		fmt.Fprintln(os.Stderr, "--pair requires --relay")
-		os.Exit(2)
+		return 2, errors.New("--pair requires --relay")
 	}
 	host := pigeon.NewPairingHost(relayURL)
 	artifact, serverRec, err := host.Mint(pairInstance)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "mint:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("mint: %w", err)
 	}
 	if err := store.Save(serverRec); err != nil {
-		fmt.Fprintln(os.Stderr, "save server record:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("save server record: %w", err)
 	}
 	text, err := artifact.MarshalText()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "marshal artifact:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("marshal artifact: %w", err)
 	}
 	qr.Print(os.Stderr, string(text))
 	fmt.Println(string(text))
 	fmt.Fprintf(os.Stderr, "artifact for %s expires %s\n", pairInstance, artifact.ExpiresAt.Format(time.RFC3339))
+	return 0, nil
 }
 
 // keyInstructions maps service names to instructions for obtaining the key.

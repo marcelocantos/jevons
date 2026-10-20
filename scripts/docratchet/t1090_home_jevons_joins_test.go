@@ -43,7 +43,6 @@ var t1090HomeJevonsJoins = map[string]string{
 	"internal/attrib/hook.go:LookupAgent":          "attribution hook reads the development registry; not a daemon state path",
 	// Owner-run one-shot modes of the jevonsd binary that exit before the
 	// daemon starts.
-	"cmd/jevonsd/main.go:runOneShot":       "--pair / --add-credential one-shot; ignores state_dir (known gap, named in 🎯T1090's report)",
 	"internal/uidaemon/install.go:Install": "-install-ui-agents owner install; Spec.StateDir overrides the default",
 }
 
