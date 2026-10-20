@@ -646,6 +646,14 @@ channel** until an oracle or an explicit accepted-risk record adjudicates it.
   reap, stop, idle (🎯T766.4): not finished, not blocked, not waiting.
   You may still read its prose as a judge; the daemon does not decide by
   it. YAML front matter (`---`) is not this format.
+- **Done shape (🎯T1083):** a done finish-report omits `status` and
+  carries an oracle — `jevons: oracle sha=<head-sha>`, the commit that
+  lands the work or, for a read-only task, the HEAD it measured
+  (`envelope.DoneShape`). Status takes only
+  `in-progress | live | landed | shipped | blocked`, none of which means
+  done; `status done` or `status achieved` is unknown and is not reaped.
+  The author is told the slot and accepted values
+  (`envelope.CorrectionNotice`). When you brief a read-only worker, say so.
 - **Silent-decision ledger (🎯T536.1):** finish-reports must carry
   `silent-ledger none` or ranked `silent-decision` slots (least-confident
   first). confidence is a float in the range 0 to 1, e.g.

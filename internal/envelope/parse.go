@@ -366,6 +366,11 @@ func parseSlots(fence string) (*Message, error) {
 			return msg, fmt.Errorf("slot line is not a %s key value pair: %q", Sigil, trim)
 		}
 		if err := applySlot(msg, key, value, &kindSeen); err != nil {
+			// 🎯T1083: every slot failure names its slot, so the author's
+			// correction notice can say which line to fix.
+			if _, ok := AsSlotError(err); !ok {
+				err = &SlotError{Slot: key, Value: value, Err: err}
+			}
 			return msg, err
 		}
 	}
@@ -398,7 +403,7 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 	case "kind":
 		k, ok := ParseKind(value)
 		if !ok {
-			return fmt.Errorf("unknown kind %q", value)
+			return kindSlotError(value)
 		}
 		msg.Kind = k
 		*kindSeen = true
@@ -415,19 +420,19 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 	case "risk":
 		r, ok := ParseRisk(value)
 		if !ok {
-			return fmt.Errorf("unknown risk %q", value)
+			return riskSlotError(value)
 		}
 		msg.Risk = r
 	case "verdict":
 		v, ok := ParseVerdict(value)
 		if !ok {
-			return fmt.Errorf("unknown verdict %q", value)
+			return verdictSlotError(value)
 		}
 		msg.Verdict = v
 	case "status":
 		p, ok := ParseProgress(value)
 		if !ok {
-			return fmt.Errorf("unknown status %q", value)
+			return statusSlotError(value)
 		}
 		msg.Status = p
 	case "blocker", "blocked-on", "blocked_on":
@@ -673,14 +678,32 @@ func Annotate(text string, err error) string {
 // record of the defect is a banner on the parent's copy — nobody with write
 // access to the report is ever told. Returns "" when text has no malformed
 // load-bearing envelope (nothing to correct).
+//
+// 🎯T1083: the notice names the failing slot line and, for a closed
+// vocabulary, the accepted values (carried by SlotError), and a malformed
+// finish-report is shown DoneShape. A worker told only `unknown status
+// "done"` resent `status achieved`: it had a slot to fix and no list to fix
+// it from.
 func CorrectionNotice(text string) string {
 	m, err := Parse(text)
 	if m == nil || err == nil || !m.Kind.LoadBearing() {
 		return ""
 	}
-	return "⚠ Your " + m.Kind.String() + " envelope did not parse (🎯T793): " + err.Error() +
-		"\nThis reply is not your terminal report; the parent copy is flagged malformed. " +
-		"Resend a corrected " + m.Kind.String() + " in your next reply. " +
-		"Reminder: a silent-decision confidence is a float in the range 0 to 1 " +
-		"(e.g. confidence=0.3), least-confident first — not a 1-10 score or an integer rank."
+	kind := m.Kind.String()
+	var b strings.Builder
+	b.WriteString("⚠ Your " + kind + " envelope did not parse (🎯T793 / 🎯T1083): " + err.Error())
+	if se, ok := AsSlotError(err); ok {
+		b.WriteString("\nThe failing slot line is `" + Sigil + " " + se.Slot + " " + se.Value + "`.")
+		switch se.Slot {
+		case "silent-decision", "silent_decision", "decision":
+			b.WriteString(" A silent-decision confidence is a float in the range 0 to 1 " +
+				"(e.g. confidence=0.3), least-confident first — not a 1-10 score or an integer rank.")
+		}
+	}
+	b.WriteString("\nThis reply is not your terminal report; the parent copy is flagged malformed. " +
+		"Resend a corrected " + kind + " in your next reply.")
+	if m.Kind == KindFinishReport {
+		b.WriteString("\nA finish-report the daemon reads as done has this shape:\n" + DoneShape + "\n" + DoneShapeNote)
+	}
+	return b.String()
 }

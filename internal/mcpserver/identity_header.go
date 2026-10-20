@@ -243,6 +243,17 @@ func roleAddressedDoctrine(name, role string) string {
 			"live registry check from this turn, or stay intent.\n")
 		b.WriteString("- 🎯T509 — a terminal report MUST be a jevons finish-report envelope " +
 			"(fenced ```jevons, jevons: slots). Schema and enums: internal/envelope.\n")
+		// 🎯T1083: read-only workers wrote `status done`, which no status
+		// value is. The enum is read from the schema, not restated.
+		statuses := make([]string, 0, len(envelope.ProgressValues()))
+		for _, p := range envelope.ProgressValues() {
+			statuses = append(statuses, string(p))
+		}
+		b.WriteString("- 🎯T1083 — a done finish-report OMITS status (status takes only " +
+			strings.Join(statuses, " | ") + "; none of them means done) and carries " +
+			"`jevons: oracle sha=<head-sha>` — the commit that lands your work, or for a " +
+			"read-only task the HEAD you measured — plus `jevons: silent-ledger none` " +
+			"or a ranked ledger. Shape: the fleet standing brief.\n")
 	}
 	return b.String()
 }

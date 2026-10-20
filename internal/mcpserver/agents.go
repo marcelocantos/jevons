@@ -1738,13 +1738,23 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			// parent's copy and reaping an author who now has no route to
 			// resend. Skip the reap this turn so a corrected resend has a
 			// worker left to send it.
+			// 🎯T1083: the notice names the failing slot and its accepted
+			// values, and a finish-report is shown envelope.DoneShape; the
+			// journal line names the slot too, so a parent reading the log
+			// sees why the seat was kept.
 			if notice := envelope.CorrectionNotice(text); notice != "" {
 				if _, err := s.deliverByName(name, notice, OriginAgent, false); err != nil {
 					slog.Warn("T793 correction notice undeliverable", "agent", name, "err", err)
 				}
-				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", map[string]any{
-					"agent": name,
-				})
+				fields := map[string]any{"agent": name}
+				if m, perr := envelope.Parse(text); m != nil && perr != nil {
+					fields["kind"] = m.Kind.String()
+					fields["err"] = perr.Error()
+					if se, ok := envelope.AsSlotError(perr); ok {
+						fields["slot"] = se.Slot
+					}
+				}
+				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", fields)
 				return
 			}
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).

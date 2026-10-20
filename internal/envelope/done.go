@@ -36,6 +36,33 @@ func (c DoneClass) String() string {
 // IsDone is true only for DoneYes.
 func (c DoneClass) IsDone() bool { return c == DoneYes }
 
+// DoneShape is the smallest finish-report ClassifyDone answers DoneYes for
+// (🎯T1083). It parses as written: the placeholders are non-empty slot
+// values, and a ratchet holds it to DoneYes. Instruction files that show a
+// done finish-report are held to the same classification.
+//
+// It has no status slot. Every status value (ProgressValues) either says
+// the seat is not done (in-progress, blocked) or claims owner-visible
+// product evidence (live, landed, shipped — 🎯T176), so a finished report
+// with nothing owner-visible to claim, a read-only survey above all, omits
+// the slot. That is the shape no instruction showed before 🎯T1083: two
+// read-only pilot workers on 2026-10-20 wrote `status done`, then
+// `status achieved`, each read as unknown, and their parent reaped them by
+// hand.
+const DoneShape = "```jevons\n" +
+	"jevons: kind finish-report\n" +
+	"jevons: target T<n>\n" +
+	"jevons: oracle sha=<head-sha>\n" +
+	"jevons: silent-ledger none\n" +
+	"```"
+
+// DoneShapeNote is the guidance that travels with DoneShape.
+const DoneShapeNote = "Omit status: done is not a status value, and in-progress and blocked mean not done. " +
+	"The oracle is the commit that lands the work — or, for a read-only task, the HEAD you measured " +
+	"(git rev-parse HEAD). Add gate-id <id> and verdict GREEN when you cite a bin/gate run, or " +
+	"risk class-3 instead of an oracle for accepted risk; use silent-ledger ranked when the brief was " +
+	"silent on a material choice."
+
 // ClassifyDone is the single field-read answer to is-this-report-done
 // (🎯T766.4). It does not scan English for a completion word.
 //

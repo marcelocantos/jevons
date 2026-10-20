@@ -373,6 +373,26 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   it measured another repo's commit (🎯T1027). A GATE line in the payload
   is prose to the reap.
 
+## The done finish-report shape (🎯T1083)
+- A finish-report the daemon reads as done, and reaps (🎯T165), opens at
+  line 1 with these slot lines inside a jevons fence:
+    jevons: kind finish-report
+    jevons: target T<n>
+    jevons: oracle sha=<head-sha>
+    jevons: silent-ledger none
+- Omit status. Its accepted values are in-progress | live | landed |
+  shipped | blocked: in-progress and blocked mean not done, and live,
+  landed and shipped claim owner-visible product evidence (🎯T176).
+  "done", "achieved" and "complete" are not status values; a report that
+  carries one is unknown and is not reaped.
+- The oracle is the commit that lands your work. A read-only task (a
+  survey, a count, an audit with no commit) cites the HEAD it measured
+  (git rev-parse HEAD) as sha. Add gate-id and verdict GREEN when you cite
+  a bin/gate run.
+- If a slot fails to parse, the daemon tells you which slot and the
+  accepted values (internal/envelope.CorrectionNotice). Resend the
+  corrected finish-report; do not guess a synonym.
+
 ## Reap vs park (🎯T985)
 - A worker whose own work is fully complete or superseded, with nothing
   left to do, is **reaped** (stop+Remove) rather than parked — including

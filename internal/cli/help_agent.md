@@ -810,7 +810,24 @@ jevons: kind finish-report
 jevons: target T509
 jevons: oracle sha=… gate-id=…
 jevons: verdict GREEN
-jevons: status in-progress
+jevons: silent-ledger none
+```
+
+**A done finish-report omits `status` (🎯T1083).** The slot accepts only
+`in-progress | live | landed | shipped | blocked` (`envelope.ProgressValues`):
+`in-progress` and `blocked` mean not done, and `live` / `landed` /
+`shipped` claim owner-visible product evidence (🎯T176). `done`,
+`achieved` and `complete` are not status values — a report carrying one
+is unknown to `envelope.ClassifyDone` and is not reaped (🎯T165), and the
+daemon tells you the slot and the accepted values
+(`envelope.CorrectionNotice`) so you can resend. A **read-only** task — a
+survey, a count, an audit with no commit — cites the HEAD it measured
+(`git rev-parse HEAD`) as its oracle. This is `envelope.DoneShape`:
+
+```jevons
+jevons: kind finish-report
+jevons: target T<n>
+jevons: oracle sha=<head-sha>
 jevons: silent-ledger none
 ```
 
