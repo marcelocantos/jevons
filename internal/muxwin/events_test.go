@@ -66,7 +66,10 @@ func TestOwnerTurnBarrierOnLiveAndReplay(t *testing.T) {
 			{"owner quotes injection", "owner", "[event: report] is this correct?", true},
 			{"owner quotes protocol", "owner", `{"type":"permission_request"}`, true},
 			{"owner image-only", "owner", "", true},
-			{"agent injection", "agent", "new question", false},
+			// A steered agent message is a barrier too: text after it was
+			// written after it (🎯T1089, J38's "Paris" folded above the
+			// overseer's question).
+			{"steered agent message", "agent", "new question", true},
 			{"legacy owner", "", "new question", true},
 			// A legacy row (no turn_origin) is an injection only by the
 			// declared harness fact; a rendered "[event: …]" banner is owner
@@ -95,7 +98,7 @@ func TestOwnerTurnBarrierOnLiveAndReplay(t *testing.T) {
 							t.Errorf("%s moved continuation across owner: %+v", label, events)
 						}
 					} else if len(events) != 2 || prose(events[0]) != "beforeafter" {
-						t.Errorf("%s split a non-owner injection: %+v", label, events)
+						t.Errorf("%s split an unmarked harness record: %+v", label, events)
 					}
 				}
 				if tc.barrier && (len(folds) != 1 || folds[0].Op != "put" || folds[0].Event.Index != 3) {
@@ -205,14 +208,14 @@ func TestEventsFromLinesKeepsAssistantToolUseAsSteps(t *testing.T) {
 			asst++
 		}
 	}
-	if asst != 1 {
-		t.Fatalf("assistant events=%d want 1 (text joined): types=%v", asst, typesOf(evs))
-	}
 	if steps != 2 || strings.Join(names, ",") != "Read,Grep" {
 		t.Fatalf("steps=%d names=%v types=%v — tool_use must survive hydrate", steps, names, typesOf(evs))
 	}
-	if prose(evs[1]) != "Checking. done" && prose(findType(evs, "assistant")) != "Checking. done" {
-		t.Fatalf("joined assistant %q", prose(findType(evs, "assistant")))
+	// Text written after the tools is stored after them (🎯T1089), not
+	// folded back into the row the stream opened before them.
+	if asst != 2 || strings.Join(typesOf(evs), ",") != "user,assistant,tool_use,tool_use,assistant" ||
+		prose(evs[1]) != "Checking." || prose(evs[4]) != " done" {
+		t.Fatalf("assistant rows=%d types=%v first=%q last=%q", asst, typesOf(evs), prose(evs[1]), prose(evs[len(evs)-1]))
 	}
 }
 

@@ -45,17 +45,12 @@ func (s *suite) midTurnAnswerWithBroker() error {
 		return fmt.Errorf("worker never became busy: %w", err)
 	}
 	time.Sleep(10 * time.Second) // inside the first sleep
-	payload, err := s.agentTranscriptHTTP(id)
-	if err != nil {
-		return err
-	}
-	base, _ := payload["turns"].([]any)
 
 	// The overseer's question, on the overseer's own path.
 	sentAt := time.Now()
 	out, err := s.mcpText("jevons_agent_send", map[string]any{
 		"name": id, "actor": "jevons",
-		"text": "Overseer here: what is the capital of France? Answer in one word, then carry on.",
+		"text": "Overseer here: what is the " + j38Question + "? Answer in one word, then carry on.",
 	})
 	if err != nil {
 		return fmt.Errorf("overseer send: %w", err)
@@ -84,7 +79,7 @@ func (s *suite) midTurnAnswerWithBroker() error {
 	if line := relayLogLine(s.logPath, id); !strings.Contains(line, "status=sent") {
 		return fmt.Errorf("the mid-turn answer relay was not settled by its receipt: %s", line)
 	}
-	if err := s.waitReplyGrownSince(id, base, "SLEPTTWICE", 150*time.Second); err != nil {
+	if err := s.waitRepliesAfterQuestion(id, 150*time.Second, "PARIS", "SLEPTTWICE"); err != nil {
 		return fmt.Errorf("the worker did not finish its turn: %w", err)
 	}
 	ahead := time.Since(relayedAt)
@@ -131,52 +126,73 @@ func relayLogLine(path, agent string) string {
 	return ""
 }
 
-// replyGrownSince reports whether a reply row in now contains want where
-// the same row in base did not. The canonical store folds a turn's
-// assistant text into the row its stream opened, so text the worker writes
-// after the base snapshot can land in a row that already existed then. In
-// the second full suite on 024bbdf1 the worker's "I'll run the first
-// `sleep 30` now." opened row 2 before base was taken, and "Paris" and
-// "SLEPTTWICE" were later folded into that same row; looking only past
-// len(base) never saw them.
-func replyGrownSince(base, now []any, want string) bool {
-	want = strings.ToUpper(want)
-	text := func(item any) (string, bool) {
+// j38Question is the overseer's steered question; its row is the boundary
+// the worker's later text must be stored after.
+const j38Question = "capital of France"
+
+// repliesAfterQuestion reports whether every one of wants appears in a reply
+// row stored after the steered question's row, and in none at or before it
+// (🎯T1089). The canonical store used to fold a turn's assistant text into
+// the row its stream opened: in the second full suite on 024bbdf1 the
+// worker's "I'll run the first `sleep 30` now." opened row 2, and "Paris"
+// and "SLEPTTWICE" were later folded into that same row, above the tool
+// call and the question they follow. The oracle now refuses that shape.
+func repliesAfterQuestion(now []any, wants ...string) error {
+	text := func(item any) (role, upper string) {
 		turn, _ := item.(map[string]any)
-		if turn["role"] != "assistant" && turn["role"] != "agent_note" {
-			return "", false
-		}
+		role, _ = turn["role"].(string)
 		raw, _ := json.Marshal(turn["raw"])
-		return strings.ToUpper(string(raw)), true
+		return role, strings.ToUpper(string(raw))
 	}
+	asked := -1
 	for i, item := range now {
-		got, ok := text(item)
-		if !ok || !strings.Contains(got, want) {
-			continue
-		}
-		if i >= len(base) {
-			return true
-		}
-		if before, _ := text(base[i]); !strings.Contains(before, want) {
-			return true
+		if role, got := text(item); role == "user" && strings.Contains(got, strings.ToUpper(j38Question)) {
+			asked = i
 		}
 	}
-	return false
+	if asked < 0 {
+		return fmt.Errorf("the steered question is not in the transcript")
+	}
+	for _, want := range wants {
+		want = strings.ToUpper(want)
+		after := false
+		for i, item := range now {
+			role, got := text(item)
+			if role != "assistant" && role != "agent_note" || !strings.Contains(got, want) {
+				continue
+			}
+			if i <= asked {
+				return fmt.Errorf("%q was stored in row %d, at or above the question in row %d", want, i+1, asked+1)
+			}
+			after = true
+		}
+		if !after {
+			return fmt.Errorf("no reply row after the question contains %q", want)
+		}
+	}
+	return nil
 }
 
-// waitReplyGrownSince polls name's transcript until replyGrownSince holds.
-func (s *suite) waitReplyGrownSince(name string, base []any, want string, timeout time.Duration) error {
+// waitRepliesAfterQuestion polls name's transcript until
+// repliesAfterQuestion holds. A reply folded above the question fails at
+// once: waiting cannot move it.
+func (s *suite) waitRepliesAfterQuestion(name string, timeout time.Duration, wants ...string) error {
 	deadline := time.Now().Add(timeout)
+	var last error
 	for time.Now().Before(deadline) {
 		payload, err := s.agentTranscriptHTTP(name)
 		if err != nil {
 			return err
 		}
 		now, _ := payload["turns"].([]any)
-		if replyGrownSince(base, now, want) {
+		last = repliesAfterQuestion(now, wants...)
+		if last == nil {
 			return nil
+		}
+		if strings.Contains(last.Error(), "at or above the question") {
+			return last
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return fmt.Errorf("no assistant reply written after the question contains %q within %s", want, timeout)
+	return fmt.Errorf("within %s: %w", timeout, last)
 }
