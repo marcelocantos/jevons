@@ -610,12 +610,22 @@ func main() {
 	// These two loops make each process responsible for the other, and
 	// they live in different process trees precisely so that whatever
 	// takes one down cannot take the other with it.
-	go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
-		StateDir: cfg.StateDir,
-		Home:     supervise.HomeDir(),
-		Repo:     supervise.RepoRoot(),
-		Port:     cfg.Port,
-	}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
+	//
+	// 🎯T1090: only the development daemon does this. The loop observes
+	// and reinstates the owner's real LaunchAgent under $HOME, so an
+	// isolate running it reported the owner's watchdog as a gap from a
+	// test run (gate 252cf6ac) and could have rewritten its plist.
+	if supervisesOwnerWatchdog(cfg.Port, cfg.StateDir) {
+		go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
+			StateDir: cfg.StateDir,
+			Home:     supervise.HomeDir(),
+			Repo:     supervise.RepoRoot(),
+			Port:     cfg.Port,
+		}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
+	} else {
+		slog.Info("supervise: not the development daemon; leaving the owner's watchdog LaunchAgent alone",
+			"port", cfg.Port, "state_dir", cfg.StateDir, "label", supervise.AgentLabel)
+	}
 
 	// ð¯T27.9: start the liveness check loop once the daemon context exists.
 	if liveMon != nil {

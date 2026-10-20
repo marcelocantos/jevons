@@ -26,7 +26,7 @@ func (s *Server) OpenRoleAssignments(stateDir string) error {
 	}
 	s.mu.Lock()
 	s.roleAssignments = a
-	s.roleCat = defaultRolesCatalog()
+	s.roleCat = defaultRolesCatalog(stateDir)
 	s.mu.Unlock()
 	return nil
 }
@@ -39,24 +39,32 @@ func (s *Server) SetRoleAssignments(a *roles.Assignments) {
 	s.mu.Lock()
 	s.roleAssignments = a
 	if s.roleCat.OwnerDir == "" && s.roleCat.OverrideDir == "" && s.roleCat.RepoDir == "" {
-		s.roleCat = defaultRolesCatalog()
+		s.roleCat = defaultRolesCatalog(s.recordedDaemonStateDir())
 	}
 	s.mu.Unlock()
 }
 
-func defaultRolesCatalog() roles.Catalog {
+// defaultRolesCatalog resolves owner role overrides from JEVONS_ROLES_DIR,
+// else <state_dir>/roles. 🎯T1090: never $HOME/.jevons/roles directly —
+// for the development daemon the two are the same directory, and for an
+// isolate the home join read (and let agents write) the development
+// daemon's overrides. With no state dir there is no owner overlay; the
+// builtin roles still resolve.
+func defaultRolesCatalog(stateDir string) roles.Catalog {
 	override := strings.TrimSpace(os.Getenv("JEVONS_ROLES_DIR"))
-	if override == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			override = filepath.Join(home, ".jevons", "roles")
-		}
+	if override == "" && strings.TrimSpace(stateDir) != "" {
+		override = filepath.Join(strings.TrimSpace(stateDir), "roles")
 	}
 	return roles.Catalog{OwnerDir: override}
 }
 
 // rolesCatalog returns the resolver, optionally with a repo-local overlay.
 func (s *Server) rolesCatalog(workdir string) roles.Catalog {
-	c := defaultRolesCatalog()
+	stateDir := ""
+	if s != nil {
+		stateDir = s.recordedDaemonStateDir()
+	}
+	c := defaultRolesCatalog(stateDir)
 	if s != nil {
 		s.mu.Lock()
 		if s.roleCat.OwnerDir != "" || s.roleCat.OverrideDir != "" || s.roleCat.RepoDir != "" {

@@ -944,7 +944,8 @@ jevons_agent_start name=… workdir=… role=auditor parent=jevons-po …
 ```
 
 Built-in role files live in `internal/roles/` (`builtin/auditor.md` and
-siblings). Owner overrides: `~/.jevons/roles/` (or `$JEVONS_ROLES_DIR`).
+siblings). Owner overrides: `<state_dir>/roles/` — `~/.jevons/roles/` on the
+development daemon (or `$JEVONS_ROLES_DIR`; 🎯T1090).
 Override wins; built-ins cannot be deleted. The registry records
 `role=` (AgentDef + `state_dir/agent_roles.json`); `jevons_agent_list`
 surfaces it. Instruction assembly is universal fleet brief + role body +

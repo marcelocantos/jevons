@@ -327,10 +327,18 @@ func (s *Server) SetDaemonStateDir(dir string) {
 	s.daemonStateDir.Store(strings.TrimSpace(dir))
 }
 
+// recordedDaemonStateDir is the state directory SetDaemonStateDir recorded,
+// or "" when none was. State paths the daemon resolves lazily are rooted
+// here, never at $HOME/.jevons (🎯T1090).
+func (s *Server) recordedDaemonStateDir() string {
+	dir, _ := s.daemonStateDir.Load().(string)
+	return dir
+}
+
 // isolateStateDir is the daemon's state directory when it is not the
 // development daemon's own, else "".
 func (s *Server) isolateStateDir() string {
-	dir, _ := s.daemonStateDir.Load().(string)
+	dir := s.recordedDaemonStateDir()
 	if dir == "" || (config.Config{StateDir: dir}).IsDevelopmentState() {
 		return ""
 	}
