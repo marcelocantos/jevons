@@ -41,6 +41,8 @@ func TestT1082ToolCallScanFindsTheDevelopmentOpener(t *testing.T) {
 		"jv-sibling": {"tool_use", `{"input":{"command":"ls /Users/someone/.jevons-worktrees-jevons/x ~/.jevonsrc"},"type":"tool_use"}`},
 		"jv-own":     {"tool_use", `{"input":{"command":"sqlite3 ` + state + `/jevons.db .tables"},"type":"tool_use"}`},
 		"jv-prose":   {"assistant", `{"message":{"content":[{"text":"development state is ~/.jevons"}]}}`},
+		// jv-fanout-po in the first full suite on d1d1baa7: a comment, not a touch.
+		"jv-comment": {"tool_use", `{"input":{"command":"# journey source might be elsewhere; don't touch ~/.jevons\nls /tmp/jevons-broker-1/state"},"type":"tool_use"}`},
 	})
 	touches, err := scanDevStateRefs(state, home)
 	if err != nil {
@@ -56,6 +58,11 @@ func TestT1082ToolCallScanFindsTheDevelopmentOpener(t *testing.T) {
 	}
 	if !strings.Contains(touches[0].String(), "sqlite3 ~/.jevons/jevons.db") {
 		t.Fatalf("touch does not quote the call: %s", touches[0])
+	}
+	// Only the opener named the development database; the listing and the
+	// agents.json read are notes, not failures.
+	if !touches[0].db || touches[1].db || touches[2].db {
+		t.Fatalf("database classification = %v %v %v, want only the opener", touches[0].db, touches[1].db, touches[2].db)
 	}
 	if none, err := scanDevStateRefs(t.TempDir(), home); err != nil || len(none) != 0 {
 		t.Fatalf("absent store: %v %v", none, err)
@@ -137,7 +144,27 @@ func TestT1082GuardSkipsTheFingerprintWhileADevelopmentDaemonRuns(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.finish(state); err == nil || !strings.Contains(err.Error(), "reached into the development state") {
+	if err := g.finish(state); err == nil || !strings.Contains(err.Error(), "opened the development database") {
 		t.Fatalf("the opener passed while a development daemon ran: %v", err)
+	}
+}
+
+// A listing of the development state, as J36's worker made in the first full
+// suite on d1d1baa7, is reported and does not fail the run.
+func TestT1082GuardNotesAListingWithoutFailing(t *testing.T) {
+	home := t.TempDir()
+	state := t.TempDir()
+	seedToolRows(t, state, map[string][2]string{
+		"j36-send-ack": {"tool_use", `{"input":{"command":"pwd; ls -la ~/.jevons 2>/dev/null | head -50"},"type":"tool_use"}`},
+	})
+	g, err := startDevStateGuardWith(home, os.Getpid(), func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.finish(state); err != nil {
+		t.Fatalf("a listing failed the guard: %v", err)
+	}
+	if len(g.touches) != 1 || g.touches[0].db {
+		t.Fatalf("touches = %+v, want one non-database note", g.touches)
 	}
 }
