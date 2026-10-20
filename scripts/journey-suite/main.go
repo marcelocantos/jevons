@@ -121,6 +121,18 @@ func (s *suite) out() io.Writer {
 }
 
 func main() {
+	// 🎯T1106: an unrecovered panic in this goroutine unwinds through this
+	// defer (os.Exit and a signal do not, which is why state-dir cleanup
+	// below is registered with cleanups rather than deferred). Run
+	// teardown explicitly and re-panic so the exit code and stack trace
+	// are unchanged.
+	defer func() {
+		if r := recover(); r != nil {
+			cleanups.Run()
+			panic(r)
+		}
+	}()
+
 	port := flag.Int("port", defaultPort, "isolated listen port (0 = ephemeral)")
 	keep := flag.Bool("keep", false, "keep sandbox state dir after run (for debugging)")
 	bin := flag.String("bin", "", "path to jevonsd (default: bin/jevonsd or PATH)")
@@ -163,11 +175,20 @@ func main() {
 		fatal(err)
 	}
 	if !*keep {
-		defer os.RemoveAll(stateDir)
-		defer killPrivateClaudiaTmux(stateDir)
+		// 🎯T1106: these must survive a kill, a fatal() exit, or a panic in
+		// another goroutine, none of which unwind a `defer` in main. Route
+		// through cleanups (which exitNow and catchSignals already run on
+		// every exit path) instead, in the same order a defer pair would
+		// have run them: killPrivateClaudiaTmux before RemoveAll.
+		cleanups.Add(func() { os.RemoveAll(stateDir) })
+		cleanups.Add(func() { killPrivateClaudiaTmux(stateDir) })
 	} else {
 		fmt.Println("KEEP state:", stateDir)
 	}
+	// Catch signals from here on, before anything else that could leak
+	// state is created — an external timeout wrapper's SIGTERM must not
+	// outrun the handler that cleans this directory up (🎯T1106).
+	catchSignals()
 	// Relocate the executable as well as cwd: an executable-relative lookup
 	// of ../ui/dist must not let a broken package borrow checkout assets.
 	packaged, err := os.ReadFile(daemon)
@@ -268,7 +289,6 @@ persona_notes: |
 	// Process and the removal is a no-op (or reclaims a previous run's stale
 	// user-scope journey name).
 	cleanups.Add(stop)
-	catchSignals()
 	// 🎯T1082: fingerprint the development state before anything starts.
 	if s.devGuard, err = startDevStateGuard(homeDir(), os.Getpid()); err != nil {
 		fatal(fmt.Errorf("development state guard: %w", err))
