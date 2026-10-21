@@ -421,13 +421,24 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	// otherwise every automated caller (frontier consume, PO proactive, the
 	// restart reattach) reaches a parked fleet through this one door.
 	//
-	// Reaped is the exception, and the distinction is the registry row rather
-	// than the name: resurrecting the row that was reaped is the 🎯T413 bug,
-	// while starting a fresh agent under a name the fleet once used is
-	// ordinary re-use.
+	// Reaped is always the exception for a fresh start: 🎯T560's kill
+	// preserves the registry row (and its descendants) alongside the Reaped
+	// stamp, so rowExisted is true for the ordinary "name reused after a
+	// preserved-row kill" case, not only for a never-registered name. Gating
+	// the fresh-start allowance on rowExisted (as 🎯T414 originally did)
+	// refused exactly that ordinary re-use: a start under a once-killed auto
+	// name died here, the brief it carried sat behind
+	// agent_intent_reaped, and the 🎯T984 sentinel then stopped the seat the
+	// moment a later caller (e.g. frontier_consume) got a process running
+	// anyway — because MarkAgentWorking was skipped on this path, intent
+	// stayed Reaped under a live process (🎯T1109). What 🎯T413 actually
+	// guards against is reviving the exact OLD stopped process in place
+	// without going through Launch at all — not a registry row's mere
+	// existence — and this start always calls Launch below, so there is no
+	// row-existence case left that needs a separate refusal here.
 	rowExisted := s.registry != nil && s.registry.Def(name) != nil
 	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
-		if dec.Blocking != fleetintent.Reaped || rowExisted {
+		if dec.Blocking != fleetintent.Reaped {
 			life["err"] = dec.Reason
 			s.logLifecycle(compAgentLifecycle, "start", "error", life)
 			return mcp.NewToolResultError(fmt.Sprintf(
