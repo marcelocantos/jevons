@@ -707,3 +707,31 @@ func CorrectionNotice(text string) string {
 	}
 	return b.String()
 }
+
+// MissingDefaultNotice is what the daemon sends BACK TO THE AUTHOR (same
+// shape as CorrectionNotice, 🎯T793) when an owner-decision block parses
+// fine but states no question-default (🎯T404.2). Validate does not refuse
+// this — refusing would drop the question from the durable view (🎯T378) —
+// so the only way the author learns the slot is missing is this notice.
+// Returns "" when text has no valid owner-decision block, or the block
+// already carries a default.
+func MissingDefaultNotice(text string) string {
+	m, err := Parse(text)
+	if m == nil || err != nil || m.Kind != KindFinishReport {
+		return ""
+	}
+	if m.BlockClass != BlockOwnerDecision {
+		return ""
+	}
+	if strings.TrimSpace(m.QuestionDefault) != "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("⚠ Your owner-decision question states no `question-default` (🎯T404.2): " +
+		"the owner answers to change an outcome, not to unblock one, but a question with no " +
+		"default stalls your seat on silence.")
+	b.WriteString("\nThe failing slot line is `" + Sigil + " question-default <what you will do if unanswered>`.")
+	b.WriteString("\nThe question itself is already recorded and paged (🎯T378: never dropped). " +
+		"Carry a default on your next ask so silence degrades into a decision instead of a stall.")
+	return b.String()
+}

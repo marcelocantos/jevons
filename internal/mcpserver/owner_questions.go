@@ -16,6 +16,53 @@ import (
 	"time"
 )
 
+// SetOwnerQuestionSilenceWindow configures the 🎯T404.2 silence-resolution
+// window: how long an unanswered, default-carrying question sits before the
+// sweep retires it as moot and tells the asker to proceed on its default. A
+// non-positive d leaves the zero value, which sweepOwnerQuestionSilence
+// reads as "use config.DefaultOwnerQuestionSilenceWindow".
+func (s *Server) SetOwnerQuestionSilenceWindow(d time.Duration) {
+	if s == nil {
+		return
+	}
+	s.ownerQuestionSilenceWindow = d
+}
+
+// sweepOwnerQuestionSilence retires every open, default-carrying question
+// that has sat unanswered past the configured window, and routes each
+// asker the same "proceed on your default" outcome an explicit op=resolve
+// would send. A question with no default is untouched and keeps its
+// STALLS mark regardless of age (🎯T404.2). Throttled to once a minute so
+// a busy fleet pass does not re-walk the store on every tick.
+func (s *Server) sweepOwnerQuestionSilence(now time.Time) {
+	if s == nil || strings.TrimSpace(s.ownerQuestionsDir) == "" {
+		return
+	}
+	if !s.lastOwnerQuestionSilenceSweep.IsZero() && now.Sub(s.lastOwnerQuestionSilenceSweep) < time.Minute {
+		return
+	}
+	s.lastOwnerQuestionSilenceSweep = now
+	window := s.ownerQuestionSilenceWindow
+	if window <= 0 {
+		window = 24 * time.Hour // config.DefaultOwnerQuestionSilenceWindow
+	}
+	st := ownerquestionview.New(s.ownerQuestionsDir)
+	resolved, err := st.ResolveSilence(now, window)
+	if err != nil {
+		return
+	}
+	for _, r := range resolved {
+		q, ferr := st.Find(r.Identity)
+		if ferr != nil {
+			continue
+		}
+		note := "proceeded on default: " + r.Default
+		s.routeQuestionOutcome(s.overseerName(), q, ownerquestionview.Moot, note)
+		key := q.Identity.Repo + "#" + q.Identity.Target + "#" + q.Identity.ID
+		_ = ownerquestions.New(s.ownerQuestionsDir).Resolve(key)
+	}
+}
+
 // SetOwnerQuestionsDir exposes the durable cross-repo question index. This is
 // intentionally a query/intake surface, not T404's future Q&A cockpit UX.
 func (s *Server) SetOwnerQuestionsDir(dir string) {
