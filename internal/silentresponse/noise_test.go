@@ -3,7 +3,10 @@
 
 package silentresponse
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 🎯T1054 acceptance 2: a small deterministic regression set — a routine
 // worker finish report (suppressed), a report carrying the previously missed
@@ -92,5 +95,57 @@ func TestIsFiltered(t *testing.T) {
 	}
 	if IsFiltered("The build is broken and I need a decision.") {
 		t.Fatal("material text must not be filtered")
+	}
+}
+
+// 🎯T1054: ClassifyLive bounds how long the live stream may hold before
+// committing to a verdict, and never permanently mis-suppresses text whose
+// escape word streams in after a routine-sounding opener.
+func TestClassifyLive(t *testing.T) {
+	t.Parallel()
+	// Short routine text, streamed one fragment at a time, terminal at end:
+	// Pending while short, Silent once sealed.
+	if got := ClassifyLive("Good,", false); got != Pending {
+		t.Fatalf("short partial = %v, want Pending", got)
+	}
+	if got := ClassifyLive("Good, all idle.", false); got != Pending {
+		t.Fatalf("still short, not terminal = %v, want Pending", got)
+	}
+	if got := ClassifyLive("Good, all idle.", true); got != Silent {
+		t.Fatalf("sealed routine = %v, want Silent", got)
+	}
+
+	// The load-bearing case: a routine-looking opener that later reveals a
+	// safety/incident escape word must NOT be silenced, even though early
+	// fragments alone looked identical to the routine case above.
+	if got := ClassifyLive("Good,", false); got != Pending {
+		t.Fatalf("opener alone = %v, want Pending", got)
+	}
+	full := "Good, though if this script had run unsupervised it could have been a safety incident."
+	if got := ClassifyLive(full, true); got != Visible {
+		t.Fatalf("sealed with late escape word = %v, want Visible", got)
+	}
+
+	// A long, substantive answer must not be held for the whole turn: once
+	// accumulated text exceeds NoiseBufferRunes it commits to Visible
+	// immediately, before terminal, so a real answer streams live.
+	long := strings.Repeat("x", NoiseBufferRunes+1)
+	if got := ClassifyLive(long, false); got != Visible {
+		t.Fatalf("over-cap non-terminal = %v, want Visible", got)
+	}
+
+	// The explicit [silent] marker still commits immediately, not bounded by
+	// terminal/length — same behaviour as before this change.
+	if got := ClassifyLive("[silent] continuing", false); got != Silent {
+		t.Fatalf("explicit marker mid-stream = %v, want Silent", got)
+	}
+
+	// Empty text: Pending while streaming, Visible if sealed empty (terminal
+	// end_turn with nothing accumulated — e.g. a tool-only turn).
+	if got := ClassifyLive("", false); got != Pending {
+		t.Fatalf("empty non-terminal = %v, want Pending", got)
+	}
+	if got := ClassifyLive("", true); got != Visible {
+		t.Fatalf("empty terminal = %v, want Visible", got)
 	}
 }
