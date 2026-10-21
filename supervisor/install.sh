@@ -60,6 +60,12 @@ if [ "${SUPERVISOR_RETIRE_VANILLA_ONLY:-}" != 1 ]; then
     exit 1
   fi
   render jevonsd
+  # Phone access (jevons.canticode.com, owner-only Google sign-in at the edge).
+  # Rendered only where the edge policy exists: without it the tunnel would
+  # either refuse to start or, worse, be configured by hand without it.
+  if [ -f "$HOME/.config/ngrok/jevons-policy.yml" ]; then
+    render jevons-tunnel
+  fi
   # Claudia owns the host broker socket. Retire the Jevons broker
   # definition so a later supervisord reload cannot reclaim it.
   rm -f "$CONF_DIR/jevons-broker.ini"
