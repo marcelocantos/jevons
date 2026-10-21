@@ -10,23 +10,32 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// 🎯T1064 scout oracle. T382 (chat_wire_owner_echo_test.go) fixed the case
-// where a pasted image is represented INLINE in a single text block
+// 🎯T1064 regression guard. T382 (chat_wire_owner_echo_test.go) fixed the
+// case where a pasted image is represented INLINE in a single text block
 // ("[image: ref]\n<words>"). It never covered the case where the provider's
 // user-message content is genuinely MULTIPART — a non-text block (e.g. a
 // real {"type":"image",...} block, Anthropic's actual multimodal shape)
-// alongside a text block carrying userTurnPrefix. userTurnText's typed-block
-// loop bails to (""/false) the instant it sees ANY non-"text" block type, so
-// the owner-turn fact on the text block is never read, isOwnerNotifyText
-// never runs, and chatWireLine falls through to the isClaudeShaped
-// pass-through — emitting the RAW provider echo (marker and all) onto the
-// wire as a second user-role line, alongside the clean bubble chatUserEcho
-// already painted on send. One logical owner message, two wire lines.
+// alongside a text block carrying userTurnPrefix.
 //
-// This is a candidate mechanism for T1064 (split bubble), not a confirmed
-// cause — it demonstrates the dedup gap is real and reproducible on
-// multipart content; whether the real incident used mixed content blocks is
-// unconfirmed (no incident tape available).
+// Before the fix, userTurnText's typed-block loop bailed to (""/false) the
+// instant it saw ANY non-"text" block, so the owner-turn fact on the text
+// block was never read, isOwnerNotifyText never ran, and chatWireLine fell
+// through to the isClaudeShaped pass-through — emitting the RAW provider
+// echo (marker and all) onto the wire as a second user-role line, alongside
+// the clean bubble chatUserEcho already painted on send. One logical owner
+// message, two wire lines.
+//
+// The fix: an "image" block alongside a "text" block no longer forces the
+// bail; userTurnText joins the text blocks and ignores the image block, so
+// the owner-turn fact is read and T382's dedup drops the echo as before.
+// A structured line with NO text block (tool_result, bare tool_use) still
+// bails to the pass-through, unaffected (see
+// TestUserTurnTextLeavesStructuredLinesAlone).
+//
+// This is a candidate mechanism for the 2026-10-11 T1064 incident, not a
+// confirmed cause — there is no access to that incident's actual event
+// tape to confirm the real report used a true multipart block rather than
+// some other shape.
 func TestT1064MixedContentBlockEchoBypassesOwnerDedup(t *testing.T) {
 	body := "Here is a screenshot"
 	delivered := userTurnPrefix + body
@@ -46,25 +55,16 @@ func TestT1064MixedContentBlockEchoBypassesOwnerDedup(t *testing.T) {
 	ev := claudia.Event{Type: "user", Raw: raw}
 
 	text, prose := userTurnText(ev)
-	if prose {
-		t.Fatalf("userTurnText unexpectedly classified mixed content as prose (text=%q) — gap may already be closed", text)
+	if !prose {
+		t.Fatalf("userTurnText did not classify the multipart owner echo as prose (text=%q) — fix regressed", text)
 	}
-	if isOwnerNotifyText(text) {
-		t.Fatalf("isOwnerNotifyText unexpectedly true on empty text")
+	if !isOwnerNotifyText(text) {
+		t.Fatalf("isOwnerNotifyText did not recognize the owner-turn fact in %q", text)
 	}
 
-	line, ok := chatWireLine(ev)
-	if !ok {
-		t.Fatal("chatWireLine dropped the mixed-content echo (gap closed — update this test)")
+	// chatWireLine must now DROP this echo (the dedup runs), not pass it
+	// through verbatim as a second bubble.
+	if line, ok := chatWireLine(ev); ok {
+		t.Fatalf("chatWireLine passed the multipart owner echo through to the wire (fix regressed): %s", line)
 	}
-	// The raw provider echo, marker included, reached the wire — this is
-	// the second line a client would paint as a second bubble for the
-	// SAME owner message it already painted via chatUserEcho on send.
-	var decoded struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal([]byte(line), &decoded); err != nil || decoded.Type != "user" {
-		t.Fatalf("expected a pass-through user-role wire line, got: %s", line)
-	}
-	t.Logf("REPRO confirmed: mixed-content owner echo bypasses isOwnerNotifyText dedup and reaches the wire verbatim: %s", line)
 }

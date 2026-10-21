@@ -527,8 +527,13 @@ func userTurnText(ev claudia.Event) (text string, prose bool) {
 		}
 		return s, true
 	}
-	// Typed blocks: prose only when every block is text. A single
-	// tool_result block makes the line structured, not a turn to paint.
+	// Typed blocks: prose when at least one block is text, ignoring any
+	// attachment blocks alongside it (🎯T1064 — a real multimodal turn is
+	// genuinely multipart: an image block next to the text block that
+	// carries the owner-turn fact, not inline-"[image: ref]" text). A
+	// structured line with NO text block at all (a single tool_result, a
+	// bare tool_use) still bails to the raw pass-through below, so that
+	// content keeps rendering verbatim.
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -538,10 +543,16 @@ func userTurnText(ev claudia.Event) (text string, prose bool) {
 	}
 	texts := make([]string, 0, len(blocks))
 	for _, b := range blocks {
-		if b.Type != "text" {
+		switch b.Type {
+		case "text":
+			texts = append(texts, b.Text)
+		case "image":
+			// An attachment block does not make this line structured —
+			// it rides along with the prose, the same as inline "[image:
+			// ref]" text already does.
+		default:
 			return "", false
 		}
-		texts = append(texts, b.Text)
 	}
 	text = strings.Join(texts, "\n")
 	if text == "" {
