@@ -59,6 +59,7 @@ func (s *Server) Reconcile() {
 	}
 	s.ReapLostSeats()
 	s.sweepStoodDownSeats() // 🎯T984
+	s.sweepUnownedWhileAliveSeats() // 🎯T1110
 	s.SweepSeatLoad()
 	s.SweepPostReapCommits()
 	s.sweepBornStuck()
