@@ -116,6 +116,13 @@ func addrHost(addr string) string {
 	return s
 }
 
+// IsLoopback reports whether addr (an lsof -Fn style "host:port") names
+// jevonsd's own 127.0.0.1 bind (🎯T6) — the holder a watchdog alarm about
+// the daemon itself should describe, as opposed to a wildcard squatter.
+func IsLoopback(addr string) bool {
+	return isIPv4Loopback(addr)
+}
+
 func isIPv4Loopback(addr string) bool {
 	return addrHost(addr) == "127.0.0.1"
 }

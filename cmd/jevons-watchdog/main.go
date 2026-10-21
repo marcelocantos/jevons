@@ -92,11 +92,20 @@ func run() int {
 
 	switch d.Action {
 	case supervise.ActionRestart:
+		// 🎯T1068: name a frozen holder before trying to bounce it, so the
+		// alarm says WHY the port went quiet instead of just that it did.
+		stopped := stoppedProcessNote(*port)
 		detail := restart(*repo, *port)
+		switch {
+		case stopped != "" && detail != "":
+			detail = stopped + " " + detail
+		case stopped != "":
+			detail = stopped
+		}
 		if detail != "" {
 			logf("restart reported: %s", detail)
 		}
-		notify(d, *port, detail)
+		notify(d, *port, next.DownSince, detail)
 	case supervise.ActionRecovered:
 		rec := supervise.Outage{
 			ID:          st.DownSince.Format(time.RFC3339Nano),
@@ -110,7 +119,7 @@ func run() int {
 		if err := supervise.AppendOutage(dir, rec); err != nil {
 			logf("ERROR recording outage: %v", err)
 		}
-		notify(d, *port, "")
+		notify(d, *port, st.DownSince, "")
 	}
 
 	// 🎯T405: the heartbeat, written by every cycle including the quiet
@@ -216,7 +225,7 @@ func restart(repo string, port int) string {
 //
 // Best-effort by design. A missing blurter must not stop a restart, and
 // the durable half of the story does not depend on it.
-func notify(d supervise.Decision, port int, detail string) {
+func notify(d supervise.Decision, port int, downSince time.Time, detail string) {
 	if d.Notify == supervise.NotifyNone {
 		return
 	}
@@ -241,13 +250,29 @@ func notify(d supervise.Decision, port int, detail string) {
 	cmd := exec.Command(blurter, "send",
 		"--app", "jevons-watchdog",
 		"--severity", string(d.Notify),
-		"--key", fmt.Sprintf("jevonsd-down-%d", port),
+		"--key", downNoticeKey(port, downSince),
 		"--subject", subject,
 		"--body", body,
 		"--quiet")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		logf("blurter notice failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
+}
+
+// downNoticeKey scopes blurter's dedup to THIS outage rather than the
+// port alone. Before 🎯T1068 the key was a bare "jevonsd-down-<port>",
+// identical for every outage that ever happens on that port — so a
+// problem notice landing within blurter's 7-day repeat-suppression
+// window of any earlier, wholly unrelated outage was read as "identical
+// problem already sent" and silently dropped. Keying on when THIS outage
+// started still lets an unresolved outage renotify/escalate normally
+// (same key throughout), while a new, distinct one never collides with
+// an old one still inside the window.
+func downNoticeKey(port int, downSince time.Time) string {
+	if downSince.IsZero() {
+		return fmt.Sprintf("jevonsd-down-%d", port)
+	}
+	return fmt.Sprintf("jevonsd-down-%d-%s", port, downSince.UTC().Format("20060102T150405Z"))
 }
 
 func printStatus(state string, port int) int {
