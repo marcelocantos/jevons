@@ -165,7 +165,17 @@ export function AgentInteraction(props: {
         disabled={props.planWall ? true : undefined}
         onSend={(t, opts) => {
           if (props.planWall) return;
-          return queue.submit(t, opts?.mode ?? 'submit');
+          const result = queue.submit(t, opts?.mode ?? 'submit');
+          // 🎯T1126: a send that actually goes out now (not merely queued
+          // for later) is the owner re-attaching to the live end — restore
+          // follow so the sent bubble and the reply paint in view instead
+          // of leaving a ↓ Latest detour behind.
+          if (!result.queued) {
+            conv.rejoinLive();
+            setFollowing(true);
+            setFollowEpoch((n) => n + 1);
+          }
+          return result;
         }}
         onInterrupt={props.planWall ? undefined : () => conv.send('', { mode: 'interrupt' })}
         queue={{ items: queue.items, focusedId: queueFocus, onFocus: setQueueFocus, onSend: queue.sendItem }}
