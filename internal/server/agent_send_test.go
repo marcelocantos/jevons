@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T182: POST /api/agents/{name}/send is the product path frontier play uses.
@@ -141,7 +143,7 @@ func TestHandleAgentSendQueuedOK(t *testing.T) {
 func TestHandleAgentSendClassifiesInternalError(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.SetAgentSendHook(func(name, text string) (string, error) {
-		return "", fmt.Errorf("Internal error")
+		return "", agenterr.WithCause(agenterr.CauseBackendUnavailable, fmt.Errorf("Internal error"))
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/agents/jevons-po/send",
 		strings.NewReader(`{"text":"kickoff"}`))
@@ -169,7 +171,8 @@ func fmtBusy() error {
 
 type errBusy struct{}
 
-func (errBusy) Error() string { return "prompt already in flight" }
+func (errBusy) Error() string         { return "prompt already in flight" }
+func (errBusy) ProviderCause() string { return agenterr.CauseTurnInFlight }
 
 func TestAgentSendRouteRegistered(t *testing.T) {
 	s := New("test", t.TempDir())

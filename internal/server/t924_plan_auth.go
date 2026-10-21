@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // PlanAuth is one subscription plan's login health as Claudia's broker
@@ -106,7 +107,7 @@ func (s *Server) planLoginUnhealthy(ctx context.Context, provider claudia.Provid
 		return false
 	}
 	for _, p := range plans {
-		if claudia.Provider(p.Provider) == provider {
+		if seatprovider.Same(claudia.Provider(p.Provider), provider) {
 			return p.State != planAuthOK
 		}
 	}

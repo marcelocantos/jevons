@@ -64,14 +64,26 @@ type Entry struct {
 	// Unlike ID (queue acceptance) and AttemptID (delivery try), it survives
 	// retries, daemon restarts and digest archival without being reminted.
 	RequestID string `json:"request_id,omitempty"`
+	// TransportRequestID and SessionID are written together before an
+	// identified handoff. Empty means no durable receipt binding exists;
+	// legacy holds must never infer one from the current seat or Entry.ID.
+	TransportRequestID string `json:"transport_request_id,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
 	// Text is the payload exactly as accepted. Never truncated: this is the
 	// message, not a record of it.
 	Text string `json:"text"`
+	// WireText freezes any transport decoration at first receipt binding.
+	// Text remains the original admission used for duplicate detection.
+	// The presence flag distinguishes an explicitly empty wire payload from
+	// older bindings, whose wire payload is the original Text.
+	WireText    string `json:"wire_text,omitempty"`
+	WireTextSet bool   `json:"wire_text_set,omitempty"`
 	// EnqueuedAt is when the daemon accepted it. The age of the oldest entry
 	// is the number that says whether a queue is waiting or stalled.
 	EnqueuedAt time.Time `json:"enqueued_at"`
-	// Empty state is the legacy pending representation. Attempting/uncertain
-	// entries remain on disk but cannot be claimed by an automatic retry.
+	// Empty state is the legacy pending representation when AttemptID is
+	// empty. Attempting, uncertain, and an empty state that still carries
+	// an attempt id remain on disk but cannot be claimed by an automatic retry.
 	State     DeliveryState `json:"state,omitempty"`
 	AttemptID string        `json:"attempt_id,omitempty"`
 	Detail    string        `json:"detail,omitempty"`
@@ -90,6 +102,10 @@ type Entry struct {
 type DeliveryState string
 
 const (
+	// Pending is the empty on-disk state. With no attempt id, EntryPhase
+	// reads it as admitted, digest, or requeued — the one claimable pending.
+	// An empty state that still carries an attempt id is a held attempt, or
+	// in flight when this store owns that id. The name stays.
 	Pending    DeliveryState = ""
 	Attempting DeliveryState = "attempting"
 	Uncertain  DeliveryState = "uncertain"
@@ -122,9 +138,20 @@ type Backlog struct {
 	// EntryIDs freezes the observed cohort for automatic cleanup. A later
 	// arrival must not replace an entry another drain has since removed.
 	EntryIDs []string
-	// Uncertain counts entries that must be reconciled rather than replayed.
-	// An attempt left by a dead daemon has the same conservative meaning.
+	// Uncertain counts entries that must be reconciled rather than replayed:
+	// an uncertain delivery, or an attempt left by a dead daemon. An attempt
+	// this store owns is not one of those. It is InFlight, and a sweep must
+	// not treat that queue as idle work either.
 	Uncertain int
+	// InFlight counts attempts this store owns. It is not an uncertain receipt.
+	InFlight int
+	// Pending is the one pending meaning: admitted, digest, and requeued.
+	// In-flight, held-attempt, and uncertain entries stay in Depth. They are
+	// not pending. Depth remains every phase, so a blocked queue stays visible.
+	Pending int
+	// BlockReason is why the queue is not only waiting. Empty means every
+	// entry is claimable pending. It is depth's companion, not a second queue.
+	BlockReason string
 }
 
 // OldestAge is how long the head of this queue has been waiting.
@@ -140,12 +167,18 @@ func (b Backlog) Describe(now time.Time) string {
 	if b.Depth == 0 {
 		return fmt.Sprintf("%s: queue empty", b.Agent)
 	}
+	var msg string
 	if b.Uncertain > 0 {
-		return fmt.Sprintf("%s: %d held, %d delivery outcome(s) uncertain, oldest waiting %s",
+		msg = fmt.Sprintf("%s: %d held, %d delivery outcome(s) uncertain, oldest waiting %s",
 			b.Agent, b.Depth, b.Uncertain, b.OldestAge(now).Round(time.Second))
+	} else {
+		msg = fmt.Sprintf("%s: %d queued, oldest waiting %s",
+			b.Agent, b.Depth, b.OldestAge(now).Round(time.Second))
 	}
-	return fmt.Sprintf("%s: %d queued, oldest waiting %s",
-		b.Agent, b.Depth, b.OldestAge(now).Round(time.Second))
+	if b.BlockReason != "" {
+		msg += "; block: " + b.BlockReason
+	}
+	return msg
 }
 
 // file is the on-disk shape. The agent name is written into the record as
@@ -161,8 +194,36 @@ type file struct {
 // mutated concurrently by unrelated agents' turn boundaries, and a shared
 // file would serialise every drain behind every enqueue for the sake of a
 // single inode.
+// Stoppage is one read of a queue: every phase in Depth, the head entry's
+// enqueue time in Oldest, and the first block reason in queue order.
+// An empty Block means the queue is not blocked. Oldest is zero when the
+// queue has no head. Age is not stored here; the reader subtracts from now.
+type Stoppage struct {
+	Agent  string
+	Depth  int
+	Oldest time.Time
+	Block  string
+}
+
+// stoppageOf reads the entries already in hand. It does not lock and it does
+// not call the store. active is the attempt id this store owns, or empty.
+func stoppageOf(agent string, entries []Entry, active string) Stoppage {
+	out := Stoppage{Agent: strings.TrimSpace(agent), Depth: len(entries)}
+	if len(entries) == 0 {
+		return out
+	}
+	out.Oldest = entries[0].EnqueuedAt
+	for _, e := range entries {
+		if reason := blockReason(EntryPhase(e, active)); reason != "" {
+			out.Block = reason
+			break
+		}
+	}
+	return out
+}
+
 type Store struct {
-	observe func(string, int)
+	observe func(Stoppage)
 
 	mu  sync.Mutex
 	dir string
@@ -183,8 +244,9 @@ type Store struct {
 func NewStore(dir string) *Store { return &Store{dir: strings.TrimSpace(dir)} }
 
 // SetObserver installs the queue's observation feed. It runs under the queue
-// lock and must not call back into the store.
-func (s *Store) SetObserver(observe func(string, int)) {
+// lock, on a successful load or save, and must not call back into the store.
+// The report is the entries in hand plus the attempt this store owns.
+func (s *Store) SetObserver(observe func(Stoppage)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.observe = observe
@@ -221,7 +283,7 @@ func (s *Store) path(agent string) (string, error) {
 func (s *Store) load(agent string) (out file, err error) {
 	defer func() {
 		if err == nil && s.observe != nil {
-			s.observe(agent, len(out.Entries))
+			s.observe(stoppageOf(agent, out.Entries, s.active[agent]))
 		}
 	}()
 	if !s.Durable() {
@@ -247,6 +309,9 @@ func (s *Store) load(agent string) (out file, err error) {
 		return file{}, fmt.Errorf("sendq: parse queue for %q (%s): %w", agent, path, err)
 	}
 	for _, e := range f.Entries {
+		if err := e.validateReceiptBinding(); err != nil {
+			return file{}, fmt.Errorf("sendq: invalid receipt binding for %q: %w", agent, err)
+		}
 		if e.Directive != nil {
 			if err := e.Directive.Validate(); err != nil {
 				return file{}, err
@@ -269,7 +334,7 @@ func (s *Store) load(agent string) (out file, err error) {
 func (s *Store) save(f file) (err error) {
 	defer func() {
 		if err == nil && s.observe != nil {
-			s.observe(f.Agent, len(f.Entries))
+			s.observe(stoppageOf(f.Agent, f.Entries, s.active[f.Agent]))
 		}
 	}()
 	if !s.Durable() {
@@ -382,17 +447,21 @@ func (s *Store) AppendWithRequestID(agent, text, requestID string, at time.Time)
 	return e, len(f.Entries), nil
 }
 
-// AppendSuperseding is Append that first removes every still-Pending entry for
-// which supersedes reports true (🎯T821). Attempting and Uncertain entries are
-// never touched: they may already be in the receiver's hands. The returned
-// count is how many held entries the new one replaced.
+// AppendSuperseding is Append that first removes admitted entries for which
+// supersedes reports true (🎯T821). The removed payloads are archived under
+// the new entry's id before the queue changes. A digest and an operator
+// requeue stay: they are not the admitted phase, even though their on-disk
+// state is empty. Attempting and Uncertain entries are never touched: they
+// may already be in the receiver's hands. The returned count is how many
+// admitted entries the new one replaced.
 func (s *Store) AppendSuperseding(agent, text string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
 	return s.AppendSupersedingWithRequestID(agent, text, "", at, supersedes)
 }
 
 // AppendSupersedingWithRequestID retains the incoming question identity and
 // never silently replaces another admitted question (even if the predicate
-// would otherwise match it).
+// would otherwise match it). A previously receipt-bound entry also keeps its
+// identity when returned to Pending.
 func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at time.Time, supersedes func(Entry) bool) (Entry, int, int, error) {
 	if s == nil {
 		return Entry{}, 0, 0, fmt.Errorf("sendq: no store")
@@ -407,20 +476,30 @@ func (s *Store) AppendSupersedingWithRequestID(agent, text, requestID string, at
 		return Entry{}, 0, 0, err
 	}
 	kept := make([]Entry, 0, len(f.Entries)+1)
-	replaced := 0
+	var removed []Entry
 	for _, old := range f.Entries {
-		if old.State == Pending && old.RequestID == "" && supersedes != nil && supersedes(old) {
-			replaced++
+		if EntryPhase(old, s.active[agent]) == PhaseAdmitted && old.RequestID == "" && old.TransportRequestID == "" && supersedes != nil && supersedes(old) {
+			removed = append(removed, old)
 			continue
 		}
 		kept = append(kept, old)
 	}
 	e := Entry{ID: NewID(), RequestID: requestID, Text: text, EnqueuedAt: at.UTC()}
+	if len(removed) > 0 {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      at.UTC(),
+			HoldID:  e.ID,
+			Removed: removed,
+		}); err != nil {
+			return Entry{}, 0, 0, err
+		}
+	}
 	f.Entries = append(kept, e)
 	if err := s.save(f); err != nil {
 		return Entry{}, 0, 0, err
 	}
-	return e, len(f.Entries), replaced, nil
+	return e, len(f.Entries), len(removed), nil
 }
 
 // PushFront returns an entry to the head of the queue, for the drain that
@@ -444,36 +523,58 @@ func (s *Store) PushFront(agent string, e Entry) error {
 	return s.save(f)
 }
 
-// PopFront removes and returns the oldest queued message.
-func (s *Store) PopFront(agent string) (Entry, bool, error) {
+// PopFront removes the oldest claimable entry and returns it on a receipt.
+// The removed payload is archived under its own id before the queue is
+// saved. A failed archive leaves the queue unchanged. The caller names who
+// took it and what they observed. A blank actor or a blank evidence line
+// removes nothing. An in-flight attempt and a queue of only unresolved
+// attempts stay where they are, and neither is archived. An empty queue is
+// ok=false and a nil error. Reconcile rejects ReconcilePop: taking the
+// payload is not a confirmed, requeued, or dropped delivery.
+func (s *Store) PopFront(agent, actor, evidence string, now time.Time) (Receipt, bool, error) {
 	if s == nil {
-		return Entry{}, false, fmt.Errorf("sendq: no store")
+		return Receipt{}, false, fmt.Errorf("sendq: no store")
+	}
+	actor, evidence, err := validAttribution(actor, evidence)
+	if err != nil {
+		return Receipt{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := s.load(agent)
 	if err != nil {
-		return Entry{}, false, err
+		return Receipt{}, false, err
 	}
 	if len(f.Entries) == 0 {
-		return Entry{}, false, nil
+		return Receipt{}, false, nil
 	}
 	i, _, blocked := claimable(f.Entries, s.active[agent])
 	if blocked {
-		return Entry{}, false, fmt.Errorf("sendq: %q has a delivery attempt in flight", agent)
+		return Receipt{}, false, fmt.Errorf("sendq: %q has a delivery attempt in flight", agent)
 	}
 	if i < 0 {
-		if len(f.Entries) > 0 {
-			return Entry{}, false, fmt.Errorf("sendq: %q holds only unresolved delivery attempts", agent)
-		}
-		return Entry{}, false, nil
+		return Receipt{}, false, fmt.Errorf("sendq: %q holds only unresolved delivery attempts", agent)
 	}
 	e := f.Entries[i]
+	if err := s.archiveSupersession(Supersession{
+		Agent:   strings.TrimSpace(agent),
+		At:      now.UTC(),
+		HoldID:  e.ID,
+		Removed: []Entry{e},
+	}); err != nil {
+		return Receipt{}, false, err
+	}
 	f.Entries = append(f.Entries[:i:i], f.Entries[i+1:]...)
 	if err := s.save(f); err != nil {
-		return Entry{}, false, err
+		return Receipt{}, false, err
 	}
-	return e, true, nil
+	rec := Receipt{
+		Agent:   strings.TrimSpace(agent),
+		By:      Reconciliation{Actor: actor, At: now.UTC(), Outcome: ReconcilePop, Evidence: evidence},
+		Removed: []Entry{e},
+		Depth:   len(f.Entries),
+	}
+	return rec, true, nil
 }
 
 // claimable finds the entry a drain may take next (🎯T766.5).
@@ -502,12 +603,17 @@ func (s *Store) PopFront(agent string) (Entry, bool, error) {
 // (observed 2026-09-21 on jevons-po after a restart). It is held the same
 // way: never offered again, and flowed past.
 func claimable(entries []Entry, active string) (i int, blocker Entry, blocked bool) {
-	for idx, e := range entries {
-		switch {
-		case e.State == Pending:
-			return idx, Entry{}, false
-		case e.State == Attempting && active != "" && e.AttemptID == active:
+	// Reconciliation can requeue an older hold ahead of an active send.
+	// Ownership serializes the entire seat, not just the prefix before the
+	// first Pending entry; check it before selecting the next obligation.
+	for _, e := range entries {
+		if EntryPhase(e, active) == PhaseInFlight {
 			return -1, e, true
+		}
+	}
+	for idx, e := range entries {
+		if claimablePhase(EntryPhase(e, active)) {
+			return idx, Entry{}, false
 		}
 	}
 	return -1, Entry{}, false
@@ -520,10 +626,118 @@ func (s *Store) ClaimFront(agent string) (Entry, bool, error) {
 	return s.claimFront(agent, "", false)
 }
 
-// ClaimFrontID claims only an observed entry, so stale cleanup cannot consume
-// a replacement which arrived after its backlog snapshot.
+// ClaimFrontID claims only the first claimable entry, and only when that
+// entry is the observed id. A stale snapshot cannot consume a replacement
+// which arrived ahead of it. A claimable entry behind another claimable
+// entry is left for ClaimID.
 func (s *Store) ClaimFrontID(agent, id string) (Entry, bool, error) {
 	return s.claimFront(agent, id, true)
+}
+
+// ClaimID claims one claimable entry by id, including one behind a claimable
+// entry the caller is leaving in place. An attempt this store owns still
+// blocks the seat. A missing or non-claimable id returns ok=false and does
+// not change the queue.
+func (s *Store) ClaimID(agent, id string) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Entry{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil || len(f.Entries) == 0 {
+		return Entry{}, false, err
+	}
+	for _, e := range f.Entries {
+		if EntryPhase(e, s.active[agent]) == PhaseInFlight {
+			return e, false, nil
+		}
+	}
+	at := -1
+	for i, e := range f.Entries {
+		if e.ID == id {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return Entry{}, false, nil
+	}
+	e := f.Entries[at]
+	if !claimablePhase(EntryPhase(e, s.active[agent])) {
+		return e, false, nil
+	}
+	e, _, err = applyDelivery(e, stepClaim, "", NewID(), nil)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	f.Entries[at] = e
+	if s.active == nil {
+		s.active = map[string]string{}
+	}
+	prev, had := s.active[agent]
+	s.active[agent] = e.AttemptID
+	if err := s.save(f); err != nil {
+		if had {
+			s.active[agent] = prev
+		} else {
+			delete(s.active, agent)
+		}
+		return Entry{}, false, err
+	}
+	return e, true, nil
+}
+
+// TakeClaimableID archives and removes one claimable entry by id.
+// ClaimFrontID refuses the whole seat while this store owns an attempt, so
+// it cannot drop the message behind that attempt. This can. The attempt, a
+// held attempt, and an uncertain entry are not claimable and stay. A missing
+// id returns ok=false. A failed archive leaves the queue unchanged.
+func (s *Store) TakeClaimableID(agent, id string) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Entry{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	at := -1
+	for i, e := range f.Entries {
+		if e.ID == id {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return Entry{}, false, nil
+	}
+	e := f.Entries[at]
+	if !claimablePhase(EntryPhase(e, s.active[agent])) {
+		return Entry{}, false, nil
+	}
+	if err := s.archiveSupersession(Supersession{
+		Agent:   strings.TrimSpace(agent),
+		At:      time.Now().UTC(),
+		HoldID:  e.ID,
+		Removed: []Entry{e},
+	}); err != nil {
+		return Entry{}, false, err
+	}
+	f.Entries = append(f.Entries[:at:at], f.Entries[at+1:]...)
+	if err := s.save(f); err != nil {
+		return Entry{}, false, err
+	}
+	return e, true, nil
 }
 
 func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) {
@@ -550,16 +764,53 @@ func (s *Store) claimFront(agent, id string, matchID bool) (Entry, bool, error) 
 	if e.ID == "" {
 		e.ID = NewID()
 	}
-	e.State, e.AttemptID, e.Detail = Attempting, NewID(), ""
-	f.Entries[i] = e
-	if err := s.save(f); err != nil {
+	e, _, err = applyDelivery(e, stepClaim, "", NewID(), nil)
+	if err != nil {
 		return Entry{}, false, err
 	}
+	f.Entries[i] = e
+	// Ownership is recorded before save. The observer runs inside save, and
+	// an owned attempt it has not heard about is published as a held attempt.
 	if s.active == nil {
 		s.active = map[string]string{}
 	}
+	prev, had := s.active[agent]
 	s.active[agent] = e.AttemptID
+	if err := s.save(f); err != nil {
+		if had {
+			s.active[agent] = prev
+		} else {
+			delete(s.active, agent)
+		}
+		return Entry{}, false, err
+	}
 	return e, true, nil
+}
+
+// OwnedAttempt returns the entry this process is inside, if any.
+// Reconcile refuses that attempt. Claim will not take it, or anything
+// behind it, until Resolve records the result. A restarted store owns
+// nothing, so the same row is then a held attempt.
+func (s *Store) OwnedAttempt(agent string) (Entry, bool, error) {
+	if s == nil {
+		return Entry{}, false, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	active := s.active[agent]
+	if active == "" {
+		return Entry{}, false, nil
+	}
+	for _, e := range f.Entries {
+		if EntryPhase(e, active) == PhaseInFlight {
+			return e, true, nil
+		}
+	}
+	return Entry{}, false, nil
 }
 
 // BlockedHead atomically reads an unresolved attempt and its local ownership.
@@ -575,7 +826,8 @@ func (s *Store) BlockedHead(agent string) (Entry, bool, error) {
 		return Entry{}, false, err
 	}
 	for _, e := range f.Entries {
-		if e.State == Pending || (e.State == Attempting && s.active[agent] == e.AttemptID) {
+		phase := EntryPhase(e, s.active[agent])
+		if claimablePhase(phase) || phase == PhaseInFlight {
 			continue
 		}
 		return e, true, nil
@@ -584,7 +836,10 @@ func (s *Store) BlockedHead(agent string) (Entry, bool, error) {
 }
 
 // Resolve records one attempt's outcome. Unverified retains the payload without
-// offering it again. Both entry and attempt IDs guard late results.
+// offering it again. Confirmed and TerminalUndelivered leave the queue only
+// after that entry's payload is archived under its own id. DefinitelyNotSent
+// puts the same entry back and archives nothing. Both entry and attempt IDs
+// guard late results.
 func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, detail string) error {
 	if s == nil {
 		return fmt.Errorf("sendq: no store")
@@ -596,7 +851,10 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 	defer s.mu.Unlock()
 	// Even a failed persistence attempt ends this operation's ownership. Its
 	// durable claim remains unresolved and must become visible to recovery.
-	if s.active[agent] == attempt.AttemptID {
+	// Record ownership first: an empty on-disk state is not pending while
+	// this store owns the attempt id, and the delete below would hide that.
+	owned := attempt.AttemptID != "" && s.active[agent] == attempt.AttemptID
+	if owned {
 		delete(s.active, agent)
 	}
 	f, err := s.load(agent)
@@ -612,17 +870,38 @@ func (s *Store) Resolve(agent string, attempt Entry, outcome AttemptOutcome, det
 			}
 		}
 	}
-	if at < 0 || f.Entries[at].AttemptID != attempt.AttemptID || f.Entries[at].State == Pending {
+	if at < 0 || f.Entries[at].AttemptID != attempt.AttemptID || (f.Entries[at].State == Pending && !owned) {
 		return fmt.Errorf("sendq: stale delivery attempt for %q", agent)
 	}
-	if outcome == Confirmed || outcome == TerminalUndelivered {
+	e := f.Entries[at]
+	var remove bool
+	switch outcome {
+	case Confirmed:
+		_, remove, err = applyDelivery(e, stepConfirm, detail, "", nil)
+	case TerminalUndelivered:
+		_, remove, err = applyDelivery(e, stepTerminal, detail, "", nil)
+	case Unverified:
+		e, remove, err = applyDelivery(e, stepUnverified, detail, "", nil)
+	case DefinitelyNotSent:
+		e, remove, err = applyDelivery(e, stepNotSent, detail, "", nil)
+	}
+	if err != nil {
+		return err
+	}
+	if remove {
+		// e is the on-disk entry, text included. Archive it before the
+		// removal is saved. A failed archive leaves the queue unchanged.
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      time.Now().UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return err
+		}
 		f.Entries = append(f.Entries[:at:at], f.Entries[at+1:]...)
 	} else {
-		f.Entries[at].State, f.Entries[at].Detail = Uncertain, detail
-		if outcome == DefinitelyNotSent {
-			f.Entries[at].State = Pending
-			f.Entries[at].AttemptID = ""
-		}
+		f.Entries[at] = e
 	}
 	return s.save(f)
 }
@@ -642,11 +921,17 @@ func (s *Store) Snapshot(agent string) ([]Entry, error) {
 }
 
 // DischargePending removes copies positively identified in receiver records
-// (🎯T766.5.1). Only Pending entries are touched: an Attempting/Uncertain
-// delivery may have reached the receiver and must be reconciled, not silently
-// forgotten. Pending digests are unfolded from their archived originals before
-// matching, so a receipt for one member cannot discard unrelated accepted
-// messages or replay that member inside the digest on the next drain.
+// (🎯T766.5.1). Each removed payload is archived under its own id before the
+// queue changes. An operator requeue shares the empty on-disk state, so a
+// matched requeued copy is discharged too, and the archive is what keeps
+// that text. An Attempting or Uncertain delivery, and an empty state that
+// still carries an attempt id, may have reached the receiver and must be
+// reconciled, not discharged. Pending digests are
+// unfolded from their archived originals before matching, so a receipt for
+// one member cannot discard unrelated accepted messages or replay that
+// member inside the digest on the next drain. Receipt-bound entries retain
+// their exact identity; this legacy matcher must neither settle them nor
+// unfold a previously bound digest into new inputs.
 func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, error) {
 	if s == nil {
 		return 0, fmt.Errorf("sendq: no store")
@@ -658,9 +943,9 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 		return 0, err
 	}
 	kept := make([]Entry, 0, len(f.Entries))
-	removed := 0
+	var removedEntries []Entry
 	for _, e := range f.Entries {
-		if e.State != Pending {
+		if !claimablePhase(EntryPhase(e, s.active[agent])) || e.TransportRequestID != "" {
 			kept = append(kept, e)
 			continue
 		}
@@ -672,7 +957,7 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 			survivors := make([]Entry, 0, len(members))
 			for _, m := range members {
 				if matches(m) {
-					removed++
+					removedEntries = append(removedEntries, m)
 				} else {
 					survivors = append(survivors, m)
 				}
@@ -685,28 +970,48 @@ func (s *Store) DischargePending(agent string, matches func(Entry) bool) (int, e
 			continue
 		}
 		if matches(e) {
-			removed++
+			removedEntries = append(removedEntries, e)
 			continue
 		}
 		kept = append(kept, e)
 	}
-	if removed == 0 {
+	if len(removedEntries) == 0 {
 		return 0, nil
+	}
+	for _, e := range removedEntries {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      time.Now().UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return 0, err
+		}
 	}
 	f.Entries = kept
 	if err := s.save(f); err != nil {
 		return 0, err
 	}
-	return removed, nil
+	return len(removedEntries), nil
 }
 
-// Depth is the number of messages waiting for an agent. An unreadable queue
-// reports zero AND an error; callers that only want the number (a status
-// line) may ignore the error, but none may read zero as "nothing waiting"
-// while an error is set.
+// Depth is the number of messages waiting for an agent, every phase.
+// An unreadable queue reports zero AND an error; callers that only want
+// the number (a status line) may ignore the error, but none may read zero
+// as "nothing waiting" while an error is set.
 func (s *Store) Depth(agent string) (int, error) {
 	entries, err := s.Snapshot(agent)
 	return len(entries), err
+}
+
+// Pending is the claimable count: admitted, digest, and requeued.
+// An unreadable queue reports zero AND an error, same as Depth.
+func (s *Store) Pending(agent string) (int, error) {
+	b, err := s.Backlog(agent)
+	if err != nil {
+		return 0, err
+	}
+	return b.Pending, nil
 }
 
 // Clear drops an agent's whole queue. Used when a seat is removed: a backlog
@@ -717,9 +1022,11 @@ func (s *Store) Clear(agent string) error {
 	return err
 }
 
-// Discard is an explicit authority override. Return the exact removed entries
-// under the same lock so the caller can record IDs and uncertain dispositions.
-// Automatic drains/reapers must use ClaimFront/Resolve instead.
+// Discard is an explicit authority override. Each removed payload is archived
+// under its own id before the queue is emptied. A failed archive leaves the
+// queue unchanged. Return the exact removed entries under the same lock so
+// the caller can record IDs and uncertain dispositions. Automatic
+// drains/reapers must use ClaimFront/Resolve instead.
 func (s *Store) Discard(agent string) ([]Entry, error) {
 	if s == nil {
 		return nil, fmt.Errorf("sendq: no store")
@@ -729,6 +1036,16 @@ func (s *Store) Discard(agent string) ([]Entry, error) {
 	f, err := s.load(agent)
 	if err != nil {
 		return nil, err
+	}
+	for _, e := range f.Entries {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      time.Now().UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.save(file{Agent: agent}); err != nil {
 		return nil, err
@@ -785,22 +1102,53 @@ func (s *Store) Backlogs() ([]Backlog, error) {
 	}
 	var out []Backlog
 	for _, name := range names {
-		entries, err := s.Snapshot(name)
+		b, err := s.Backlog(name)
 		if err != nil {
 			return out, err
 		}
-		if len(entries) == 0 {
+		if b.Depth == 0 {
 			continue
-		}
-		b := Backlog{Agent: name, Depth: len(entries), Oldest: entries[0].EnqueuedAt}
-		for _, e := range entries {
-			b.EntryIDs = append(b.EntryIDs, e.ID)
-			if e.State != Pending {
-				b.Uncertain++
-			}
 		}
 		out = append(out, b)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Oldest.Before(out[j].Oldest) })
 	return out, nil
+}
+
+// Backlog reports one agent's current cohort, including an empty queue. Recovery
+// uses it after receipt queries, which can race later arrivals and dispositions.
+func (s *Store) Backlog(agent string) (Backlog, error) {
+	if s == nil {
+		return Backlog{}, fmt.Errorf("sendq: no store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load(agent)
+	if err != nil {
+		return Backlog{Agent: agent}, err
+	}
+	view := stoppageOf(agent, f.Entries, s.active[agent])
+	b := Backlog{Agent: agent, Depth: view.Depth, Oldest: view.Oldest, BlockReason: view.Block}
+	if len(f.Entries) == 0 {
+		return b, nil
+	}
+	active := s.active[agent]
+	for _, e := range f.Entries {
+		b.EntryIDs = append(b.EntryIDs, e.ID)
+		phase := EntryPhase(e, active)
+		if claimablePhase(phase) {
+			b.Pending++
+		}
+		switch phase {
+		case PhaseInFlight:
+			b.InFlight++
+		case PhaseUncertain, PhaseHeldAttempt:
+			b.Uncertain++
+		default:
+			if e.State != Pending {
+				b.Uncertain++
+			}
+		}
+	}
+	return b, nil
 }

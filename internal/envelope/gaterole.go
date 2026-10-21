@@ -23,7 +23,7 @@ const GateRoleControl = "control"
 
 // IsControl reports whether r names a red-before control.
 func (r GateRole) IsControl() bool {
-	return strings.EqualFold(strings.TrimSpace(r.Role), GateRoleControl)
+	return strings.ToLower(strings.TrimSpace(r.Role)) == GateRoleControl
 }
 
 // ControlIDs collects every declared control gate id in text, including

@@ -54,7 +54,7 @@ func ClassifyFilingQuality(name string, acceptance []string, evidence string) Fi
 	real := false
 	for _, a := range acceptance {
 		a = strings.TrimSpace(a)
-		if a == "" || strings.EqualFold(a, DefaultFilingAcceptance) {
+		if a == "" || strings.ToLower(a) == strings.ToLower(DefaultFilingAcceptance) {
 			continue
 		}
 		real = true

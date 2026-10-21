@@ -104,6 +104,11 @@ func (s *Server) holdSendForReaped(name, text string, rec fleetintent.Record) ag
 
 func (s *Server) holdSendForReapedWithRequestID(name, text string, rec fleetintent.Record, requestID string) agentSendResult {
 	depth, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
+	if qerr == nil {
+		if pending := s.pendingAgentSends(name); pending >= 0 {
+			depth = pending
+		}
+	}
 	reportID := s.ReapedReportRef(name)
 	msg := FormatReapedSend(name, rec, reportID, depth, qerr)
 	attrs := []any{

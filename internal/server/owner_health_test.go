@@ -81,6 +81,9 @@ func ownerHealthServer(t *testing.T, send func(string) error) (*Server, chan str
 
 	clk := newOwnerClock()
 	s.SetOwnerHealthClock(clk.Now)
+	// A nil stub send is the socket write. Send-landed now requires a
+	// settling receipt for that request.
+	installSettlingOwnerReceipt(t, s)
 	return s, frames, clk
 }
 

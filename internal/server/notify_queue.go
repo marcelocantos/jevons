@@ -4,8 +4,9 @@
 package server
 
 import (
-	"regexp"
 	"strings"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T291: overseer notify queue must not starve owner chat under fleet churn.
@@ -19,71 +20,62 @@ import (
 // that are not agent-responded shape, one-off alerts).
 //
 // Coalesced shapes (🎯T291 acceptance 2):
-//   - [event: worker-idle] … Worker: <name>  → idle:<name>
-//   - [Agent <name> responded] …             → agent:<name>
+//   - a note that opens with an idle seat fact → idle:<name>
+//   - a note that opens with the agent-responded prefix and a route fact → agent:<name>
+//
+// A rendered [event:] line or [Agent … responded] line is not a key.
 func notifyCoalesceKey(text string) string {
 	t := strings.TrimSpace(text)
 	if t == "" || isOwnerNotifyText(t) {
 		return ""
 	}
-	// Worker-idle (and same-class enter-idle) event bodies name the worker.
-	if strings.HasPrefix(t, "[event:") {
-		if worker := notifyWorkerLine(t); worker != "" {
-			// Only idle-class events coalesce per worker; other events keep order.
-			if eventName, ok := notifyEventName(t); ok {
-				switch eventName {
-				case "worker-idle", "idle-nudge", "idle-nudge-brief", "post-restart-wake":
-					return "idle:" + worker
-				}
-			}
-		}
-		return ""
+	if name, ok := openingSeatFact(t, envelope.IntentIdle); ok {
+		return "idle:" + name
 	}
-	// Agent turn-complete notify: latest body wins for the same agent.
 	if name, ok := notifyAgentRespondedName(t); ok {
 		return "agent:" + name
 	}
 	return ""
 }
 
-var (
-	notifyEventNameRe = regexp.MustCompile(`(?i)^\[event:\s*([^\]]+)\]`)
-	notifyWorkerRe    = regexp.MustCompile(`(?m)^Worker:\s*(\S+)\s*$`)
-	notifyAgentRe     = regexp.MustCompile(`(?i)^\[Agent\s+([^\]]+?)\s+responded\]`)
-)
-
-func notifyEventName(text string) (string, bool) {
-	m := notifyEventNameRe.FindStringSubmatch(strings.TrimSpace(text))
-	if len(m) < 2 {
+// openingSeatFact reads "open-intent <kind> <name>" from the first line.
+func openingSeatFact(text, kind string) (string, bool) {
+	line, _, _ := strings.Cut(text, "\n")
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[1] != kind || fields[2] == "" {
 		return "", false
 	}
-	return strings.ToLower(strings.TrimSpace(m[1])), true
+	return fields[2], true
 }
 
-func notifyWorkerLine(text string) string {
-	m := notifyWorkerRe.FindStringSubmatch(text)
-	if len(m) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(m[1])
-}
-
+// notifyAgentRespondedName reads the route fact on the line after the
+// agent-responded prefix. A rendered [Agent … responded] banner is not a name.
 func notifyAgentRespondedName(text string) (string, bool) {
-	m := notifyAgentRe.FindStringSubmatch(strings.TrimSpace(text))
-	if len(m) < 2 {
+	line, rest, found := strings.Cut(strings.TrimSpace(text), "\n")
+	if !found || strings.TrimSpace(line) != envelope.PrefixAgentResponded {
 		return "", false
 	}
-	name := strings.TrimSpace(m[1])
-	if name == "" {
-		return "", false
-	}
-	return name, true
+	return openingSeatFact(rest, envelope.IntentRoute)
 }
 
-// isOwnerNotifyText reports whether the queue item is a genuine owner turn
-// (userTurnPrefix). Owner items never coalesce and always drain first.
+// isOwnerNotifyText reports whether the queue item is a genuine owner turn.
+// The decision is the owner-turn fact on line 1. A rendered "[user]" line
+// is not an owner turn. Owner items never coalesce and always drain first.
 func isOwnerNotifyText(text string) bool {
-	return strings.HasPrefix(text, userTurnPrefix)
+	line, _, _ := strings.Cut(text, "\n")
+	return strings.TrimSpace(line) == envelope.PrefixOwnerTurn
+}
+
+// ownerQueueFact prepends the owner-turn fact to a row from the owner-queue
+// file that was written before the fact existed. The file stores only owner
+// turns, so membership is the declaration. The display bytes are left as they
+// are. A row that already opens with the fact is unchanged.
+func ownerQueueFact(text string) string {
+	line, _, _ := strings.Cut(text, "\n")
+	if strings.TrimSpace(line) == envelope.PrefixOwnerTurn {
+		return text
+	}
+	return envelope.PrefixOwnerTurn + "\n" + text
 }
 
 // coalesceNotifyEnqueue appends note to queue, replacing any earlier item

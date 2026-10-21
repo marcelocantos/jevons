@@ -131,6 +131,15 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 	activity := s.idleActivity
 	s.mu.Unlock()
 
+	if ledger != nil {
+		decision, err := ledger.Reserve(agent, time.Now(), DefaultIdleNudgeMax, DefaultIdleNudgeBackoffs)
+		if err != nil {
+			return fmt.Errorf("repressure ledger: %w", err)
+		}
+		if decision != NudgeReserved {
+			return fmt.Errorf("repressure refused: %s", decision)
+		}
+	}
 	kind := ClassifyIdleNudgeKind(briefPresent)
 	text := FormatIdleNudgeText(IdleNudgeTextArgs{
 		Name:     agent,
@@ -150,11 +159,6 @@ func (r *rePressureSink) RePressure(agent, mission string) error {
 		}
 		s.fleetBriefed[agent] = true
 		s.mu.Unlock()
-	}
-	if ledger != nil {
-		if err := ledger.Record(agent, time.Now()); err != nil {
-			slog.Warn("impatience re-pressure ledger record failed", "agent", agent, "err", err)
-		}
 	}
 	if activity != nil {
 		activity.ClearRecover(agent, time.Now())
@@ -248,7 +252,7 @@ func (e *ImpatienceEngine) tick(s *Server, deps idlePressureDeps, hooks IdlePres
 		// 🎯T454: phase=working under a refusal hold is not progress — it is
 		// the agent thrashing against a wall. 🎯T869: a plan-only turn is
 		// not progress either, and must not arm the next repressure.
-		if strings.EqualFold(strings.TrimSpace(obs.Phase), "working") && !obs.RefusalHold && !obs.PlanOnly {
+		if strings.ToLower(strings.TrimSpace(obs.Phase)) == "working" && !obs.RefusalHold && !obs.PlanOnly {
 			e.ladder.ObserveProgress(d.Name, attenuate.SignalTargetWorking, now)
 		}
 	}
@@ -399,7 +403,7 @@ func (s *Server) observeForImpatience(
 	// (IsAutoSpawnedWorkerName), never a named worker or PO, and never the
 	// owner's own jevons_agent_send (this is the ladder's own fire decision,
 	// not the generic send chokepoint).
-	autoSeatPaused := s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(d.Name)
+	autoSeatPaused := s.autoSeatHold(d.Name) != ""
 	deliberateStop := (!running && !d.AutoStart) || autoSeatPaused
 
 	phase := ""
@@ -438,7 +442,7 @@ func (s *Server) observeForImpatience(
 		// 🎯T330: PO/boss with engaged children is not open for parent thrash.
 		phaseOf := func(name string) string { return s.seatState(name).Phase.String() }
 
-		missionOpen = HasOpenMissionForIdle(d, hooks.MissionOpen,
+		missionOpen = HasOpenMissionForIdle(s.withSeatRole(d), hooks.MissionOpen,
 			CountWorkChildren(defs, d.Name),
 			CountEngagedWorkChildren(defs, d.Name, phaseOf, hooks.MissionOpen))
 	}

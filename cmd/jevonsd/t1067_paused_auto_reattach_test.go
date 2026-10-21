@@ -19,8 +19,8 @@ func TestT1067RestartReattachHoldsPausedAutoWorkers(t *testing.T) {
 	overseer := func(name string) bool { return name == "jevons" }
 	auto := mcpserver.FrontierWorkerName("T703")
 	for _, paused := range []bool{true, false} {
-		include := fleetReattachInclude(overseer, allowAll, func(name string) bool {
-			return paused && mcpserver.IsAutoSpawnedWorkerName(name)
+		include := fleetReattachInclude(overseer, allowAll, func(name string) string {
+			return mcpserver.AutoSeatHold(name, "", paused, nil)
 		})
 		for name, want := range map[string]bool{
 			auto:              !paused,

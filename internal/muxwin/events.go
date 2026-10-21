@@ -239,6 +239,7 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 	}
 	if err := json.Unmarshal([]byte(line), &h); err != nil {
 		ev := parseEvent(line, nextIndex(dst))
+		closeAssistantRuns(open, ev)
 		return append(dst, ev), []LiveFold{{Event: ev, Op: "put"}}
 	}
 	if h.Type == "progress" {
@@ -282,17 +283,51 @@ func foldLine(dst []Event, line string, open, byID map[string]int) (next []Event
 					byID[strings.TrimSpace(id)] = len(next) - 1
 				}
 			}
+			closeAssistantRuns(open, ev)
 		}
 		return next, folds
 	}
-	if h.Type == "user" && userturn.IsOwnerFrame([]byte(line)) {
-		// A continuation cannot grow an earlier bubble across this owner
-		// request. Do not invent a provider stop event; retire only the fold
-		// mapping. The live backward scan enforces the same boundary below.
+	// A continuation cannot grow an earlier bubble across an owner request,
+	// a steered message, a tool call or a note (🎯T1089). Do
+	// not invent a provider stop event; retire only the fold mapping. The
+	// live backward scan enforces the same boundary in openAssistant.
+	ev := parseEvent(line, nextIndex(next))
+	closeAssistantRuns(open, ev)
+	return append(next, ev), []LiveFold{{Event: ev, Op: "put"}}
+}
+
+// interruptsAssistant reports whether ev, stored after an open assistant
+// row, ends what that row may still take. Text written after a tool call, a
+// note, or a message that carries its provenance — the owner's request or a
+// steered agent message (turn_origin) — was written after it, so it is
+// stored after it in a new row, not folded back into the row its turn's
+// stream opened (🎯T1089: in J38 the worker's "Paris" and "SLEPTTWICE" were
+// folded above the tool call and the question they followed). Unmarked
+// harness and protocol records are not painted as messages and keep the
+// owner-frame inference; status chrome and unknown types do not interrupt;
+// another stream's assistant row is handled by the stream match.
+func interruptsAssistant(ev Event) bool {
+	if ev.Type == "user" {
+		return userturn.IsOwnerFrame(ev.Body) || declaresOrigin(ev.Body)
+	}
+	return KindOfType(ev.Type) == KindSteps
+}
+
+// declaresOrigin reports whether a user row names who sent it.
+func declaresOrigin(body []byte) bool {
+	var h struct {
+		Origin string `json:"turn_origin"`
+	}
+	_ = json.Unmarshal(body, &h)
+	return strings.TrimSpace(h.Origin) != ""
+}
+
+// closeAssistantRuns retires the hydrate fold mapping once a row that
+// interrupts assistant text has been minted.
+func closeAssistantRuns(open map[string]int, ev Event) {
+	if interruptsAssistant(ev) {
 		clear(open)
 	}
-	ev := parseEvent(line, nextIndex(next))
-	return append(next, ev), []LiveFold{{Event: ev, Op: "put"}}
 }
 
 // ToolStamp is a real MCP tools/call name+args to pair onto a generic
@@ -338,9 +373,13 @@ func applyStamp(prev []Event, st ToolStamp) ([]Event, []LiveFold) {
 	return prev, []LiveFold{{Event: prev[i], Op: "append"}}
 }
 
+// oldestGenericSteps is the oldest tool row still waiting for a real name.
+// Only a tool_use row qualifies: an agent_note is a KindSteps row with no
+// name too, and stamping it wrote a concurrent tool call's name and input
+// into a fleet notice (🎯T1089, gate c3afc8fc row jevons/430).
 func oldestGenericSteps(evs []Event) (int, bool) {
 	for i, e := range evs {
-		if e.Kind == KindSteps && genericToolName(eventToolName(e)) {
+		if e.Type == "tool_use" && genericToolName(eventToolName(e)) {
 			return i, true
 		}
 	}
@@ -430,7 +469,7 @@ func mergeProgress(prev []Event, line string, byID map[string]int) ([]Event, []L
 			}
 		} else {
 			for i := len(prev) - 1; i >= 0; i-- {
-				if prev[i].Kind != KindSteps {
+				if prev[i].Type != "tool_use" {
 					continue
 				}
 				if eventToolID(prev[i]) != id {
@@ -528,7 +567,7 @@ func openAssistant(evs []Event, sid string, open map[string]int) (int, bool) {
 		return i, true
 	}
 	for i := len(evs) - 1; i >= 0; i-- {
-		if evs[i].Type == "user" && userturn.IsOwnerFrame(evs[i].Body) {
+		if interruptsAssistant(evs[i]) {
 			return 0, false
 		}
 		if evs[i].Type != "assistant" {

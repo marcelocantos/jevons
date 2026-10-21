@@ -242,7 +242,7 @@ func splitQuestionOptions(raw any) []string {
 // closed-form options; prose answers are still accepted, just labelled.
 func matchesQuestionOption(options []string, answer string) bool {
 	for _, o := range options {
-		if strings.EqualFold(strings.TrimSpace(o), strings.TrimSpace(answer)) {
+		if strings.ToLower(strings.TrimSpace(o)) == strings.ToLower(strings.TrimSpace(answer)) {
 			return true
 		}
 	}

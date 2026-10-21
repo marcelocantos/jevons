@@ -76,8 +76,8 @@ func TestT723NoClaimReportsAreNotTerminal(t *testing.T) {
 			if ok {
 				t.Fatalf("no-claim report reaps (reason %s)", reason)
 			}
-			if reason != "no_work_claim" {
-				t.Fatalf("reason = %q, want no_work_claim", reason)
+			if reason != "unknown_report" {
+				t.Fatalf("reason = %q, want unknown_report", reason)
 			}
 		})
 	}
@@ -142,11 +142,12 @@ func TestT723GenuineFinishStillReaps(t *testing.T) {
 	if ClassifyReportAsk(report) != AskNone {
 		t.Fatalf("genuine finish classified as ask: %s", ClassifyReportAsk(report))
 	}
-	if !LooksLikeFinishedWorkReport(report) {
-		t.Fatal("genuine finish must still reap")
+	done := declaredFinishReport("T723", report)
+	if !LooksLikeFinishedWorkReport(done) {
+		t.Fatal("declared finish must still reap")
 	}
 	reg := t395Registry(t, "jv-t723-done")
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t723-done", report, nil)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t723-done", done, nil)
 	if !ok {
 		t.Fatalf("genuine finish did not reap (reason %s)", reason)
 	}

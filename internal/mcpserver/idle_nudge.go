@@ -10,13 +10,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/turnev"
@@ -89,44 +89,22 @@ const (
 	// IdleSkipStarved: quiet past the bar, but the host has no CPU left to
 	// give — starved, not stalled (🎯T708).
 	IdleSkipStarved = "starved_host_critical"
-	// IdleSkipWaitingOnGate: the last turn declared a blocking wait on a
-	// tracked background gate (🎯T565) — the idle is the wait.
+	// IdleSkipWaitingOnGate: the last turn's status slot says the work is
+	// not idle for want of direction (🎯T565). A sentence is not that claim.
 	IdleSkipWaitingOnGate = "waiting_on_gate"
 )
 
-// gateWaitVerbs and gateWaitObjects together recognise a turn whose text
-// says the agent is deliberately waiting on a gate it already started: a
-// verb of waiting near a name for the gate. Both halves are required so a
-// report that merely mentions `bin/gate` in passing does not park the agent.
-var (
-	gateWaitVerbs   = []string{"waiting on", "waiting for", "blocked on", "blocking wait", "wait on", "until it finishes", "until it completes", "still running"}
-	gateWaitObjects = []string{"bin/gate", "gate ", "gate run", "background gate", "test-go", "test-journey", "make test", "go test", "ci run", "background task", "run_in_background", "task notification", "task-notification"}
-)
-
-// DeclaresBlockingGateWait reports whether a completed turn's text says the
-// agent is waiting on a tracked background gate rather than idle for want of
-// direction (🎯T565). Pure; the caller supplies the last terminal text.
+// DeclaresBlockingGateWait reports whether a completed turn declares a
+// typed wait (🎯T565 / 🎯T766.4). The status slot is the claim:
+// in-progress or blocked; so is an active-wait slot (🎯T1024, typed by
+// 🎯T766.4.1). A sentence that says "waiting on bin/gate" is not.
+// Validation may fail; the slots are still read.
 func DeclaresBlockingGateWait(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	if t == "" {
+	m, _ := envelope.Parse(text)
+	if m == nil {
 		return false
 	}
-	verb := false
-	for _, v := range gateWaitVerbs {
-		if strings.Contains(t, v) {
-			verb = true
-			break
-		}
-	}
-	if !verb {
-		return false
-	}
-	for _, o := range gateWaitObjects {
-		if strings.Contains(t, o) {
-			return true
-		}
-	}
-	return false
+	return m.Status == envelope.ProgressInProgress || m.Status == envelope.ProgressBlocked || m.HasActiveWait()
 }
 
 // IdleNudgeKind is the payload shape once ClassifyIdleNudge returns nudge.
@@ -174,10 +152,10 @@ type IdleNudgeObs struct {
 	// session_id (🎯T545.1). The post-restart wake still full_briefs
 	// that seat. Fleet recover unstick does not treat it as the same turn.
 	SessionReminted bool
-	// WaitingOnGate is true when the agent's last completed turn declares a
-	// blocking wait on a tracked background gate (🎯T565). An idle phase
-	// under that declaration is the wait, not a stall: nudging it produced
-	// six identical "still waiting" turns in forty seconds (jv-t555.1).
+	// WaitingOnGate is true when the last completed turn's status slot is
+	// in-progress or blocked (🎯T565). An idle phase under that declaration
+	// is the wait, not a stall: nudging it produced six identical "still
+	// waiting" turns in forty seconds (jv-t555.1). Prose is not the claim.
 	WaitingOnGate bool
 	// TurnInFlight: send-path flightState == FlightInFlight (🎯T761).
 	TurnInFlight bool
@@ -433,35 +411,67 @@ func IdleNudgeEventSource(postRestart bool, kind IdleNudgeKind) string {
 	return "idle-nudge"
 }
 
-// formatIdleNudgeWire wraps the resume body like butler.FormatEventPush so
-// workers can distinguish automated idle pressure from owner chat.
-// Kept local so the fire-and-forget send path does not need a Butler.
+// formatIdleNudgeWire puts the event fact ahead of the body so classifiers
+// read the fact. A leading seat fact stays line 1 and the event fact follows
+// it. The "[event:]" line is display for workers and older readers. It is
+// not what IsIdleNudgeText matches. Kept local so the fire-and-forget send
+// path does not need a Butler.
 func formatIdleNudgeWire(event, text string) string {
 	src := strings.TrimSpace(event)
 	if src == "" {
 		src = "idle-nudge"
 	}
-	return fmt.Sprintf("[event: %s] %s", src, strings.TrimSpace(text))
+	fact := envelope.EventFact(src)
+	text = strings.TrimSpace(text)
+	display := fmt.Sprintf("[event: %s]", src)
+	line, rest, _ := strings.Cut(text, "\n")
+	if seatFactLine(line) {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			return line + "\n" + fact + "\n" + display
+		}
+		return line + "\n" + fact + "\n" + display + " " + rest
+	}
+	if text == "" {
+		return fact + "\n" + display
+	}
+	return fact + "\n" + display + " " + text
 }
 
-var idleNudgeWireRE = regexp.MustCompile(`(?m)^\[event:\s*idle-nudge(?:-brief)?\]`)
+func seatFactLine(line string) bool {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[2] == "" {
+		return false
+	}
+	switch fields[1] {
+	case envelope.IntentIdle, envelope.IntentHeld, envelope.IntentRoute:
+		return true
+	default:
+		return false
+	}
+}
 
-// IsIdleNudgeText reports whether text is an idle-nudge / idle-nudge-brief
-// wire message (🎯T821). Anchored at a line start so a brief that merely
-// quotes the marker mid-line does not match.
+// IsIdleNudgeText reports whether text carries an idle-nudge or
+// idle-nudge-brief event fact (🎯T821). A rendered "[event:]" line is not
+// a nudge. The fact may sit under a leading seat fact.
 func IsIdleNudgeText(text string) bool {
-	return idleNudgeWireRE.MatchString(text)
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[1] != envelope.IntentEvent {
+			continue
+		}
+		switch fields[2] {
+		case "idle-nudge", "idle-nudge-brief":
+			return true
+		}
+	}
+	return false
 }
 
 // SessionLooksBriefed reports whether transcript/user text already carries
 // the standing fleet brief (or inject marker). Pure string heuristic.
 func SessionLooksBriefed(priorUserText string) bool {
-	s := strings.TrimSpace(priorUserText)
-	if s == "" {
-		return false
-	}
-	return strings.Contains(s, "Jevons fleet standing brief") ||
-		strings.Contains(s, "fleet standing brief")
+	return textHasHarnessFact(priorUserText, "standing-brief")
 }
 
 // --- activity tracker (last progress per agent) ---
@@ -729,6 +739,19 @@ func OpenIdleNudgeLedger(stateDir string) (*IdleNudgeLedger, error) {
 	return l, nil
 }
 
+// NudgeReserve is the durable decision to spend one automatic attempt.
+type NudgeReserve string
+
+const (
+	// NudgeReserved means the attempt is already on disk. The caller may act.
+	// A later ambiguous outcome stays spent; there is no refund.
+	NudgeReserved NudgeReserve = "reserved"
+	// NudgeExhausted means the allowance was already used.
+	NudgeExhausted NudgeReserve = "max_nudges"
+	// NudgeBackoff means the previous attempt is still inside its wait.
+	NudgeBackoff NudgeReserve = "backoff"
+)
+
 // Get returns count and last-nudge time for name.
 func (l *IdleNudgeLedger) Get(name string) (count int, last time.Time) {
 	if l == nil {
@@ -740,21 +763,77 @@ func (l *IdleNudgeLedger) Get(name string) (count int, last time.Time) {
 	return e.Count, e.LastNudge
 }
 
-// Record increments count and sets last nudge time; atomic write-and-rename.
-func (l *IdleNudgeLedger) Record(name string, at time.Time) error {
+// Reserve spends one attempt before the caller acts. The allowance check,
+// the increment, and the write share one lock, so two callers cannot both
+// observe the same remaining attempt. A failed write leaves the previous
+// allowance in place and the caller must not act.
+func (l *IdleNudgeLedger) Reserve(name string, at time.Time, max int, backoffs []time.Duration) (NudgeReserve, error) {
 	if l == nil || name == "" {
-		return nil
+		return "", fmt.Errorf("idle nudge: no ledger")
+	}
+	if max <= 0 {
+		return "", fmt.Errorf("idle nudge: reserve requires a positive allowance")
+	}
+	if at.IsZero() {
+		at = time.Now()
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.data.Agents == nil {
 		l.data.Agents = map[string]idleNudgeEntry{}
 	}
-	e := l.data.Agents[name]
-	e.Count++
-	e.LastNudge = at.UTC()
-	l.data.Agents[name] = e
-	return l.persistLocked()
+	prev, existed := l.data.Agents[name]
+	if prev.Count >= max {
+		return NudgeExhausted, nil
+	}
+	need := NextNudgeBackoff(prev.Count, backoffs)
+	if !prev.LastNudge.IsZero() && need > 0 && at.Sub(prev.LastNudge) < need {
+		return NudgeBackoff, nil
+	}
+	next := prev
+	next.Count++
+	next.LastNudge = at.UTC()
+	l.data.Agents[name] = next
+	if err := l.persistLocked(); err != nil {
+		if existed {
+			l.data.Agents[name] = prev
+		} else {
+			delete(l.data.Agents, name)
+		}
+		return "", err
+	}
+	return NudgeReserved, nil
+}
+
+// Record increments count and sets last nudge time; atomic write-and-rename.
+// A failed write does not keep the increment. Callers that are about to act
+// use Reserve, which also enforces the allowance.
+func (l *IdleNudgeLedger) Record(name string, at time.Time) error {
+	if l == nil || name == "" {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.data.Agents == nil {
+		l.data.Agents = map[string]idleNudgeEntry{}
+	}
+	prev, existed := l.data.Agents[name]
+	next := prev
+	next.Count++
+	next.LastNudge = at.UTC()
+	l.data.Agents[name] = next
+	if err := l.persistLocked(); err != nil {
+		if existed {
+			l.data.Agents[name] = prev
+		} else {
+			delete(l.data.Agents, name)
+		}
+		return err
+	}
+	return nil
 }
 
 // Reset clears an agent (e.g. after kill/deregister). Best-effort.
@@ -862,6 +941,10 @@ type IdleNudgeSweepArgs struct {
 	// (the zero value, every existing caller/test) preserves prior
 	// behaviour exactly.
 	AutoSpawnPaused bool
+	// SeatRole optionally answers a row's declared fleet role (🎯T766.4):
+	// production wires Server.seatRoleOf, which reads the role recorded at
+	// spawn. Nil reads the row alone (AgentDef.Role, else its purpose).
+	SeatRole func(d claudia.AgentDef) string
 }
 
 // SweepIdleNudges classifies every registered agent and delivers nudges.
@@ -882,6 +965,9 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 	for _, d := range args.Reg.List() {
 		if d.Name == "" || d.Name == overseer {
 			continue
+		}
+		if args.SeatRole != nil {
+			d.Role = args.SeatRole(d)
 		}
 		rep := classifyIdleNudgeFor(d, args, now)
 		if rep.Action == IdleNudgeSkip && rep.Reason == "not_work_purpose" {
@@ -915,7 +1001,11 @@ func SweepIdleNudges(args IdleNudgeSweepArgs) []IdleNudgeReport {
 		if d == nil {
 			continue
 		}
-		out[i] = deliverIdleNudge(*d, args, now, r)
+		row := *d
+		if args.SeatRole != nil {
+			row.Role = args.SeatRole(row)
+		}
+		out[i] = deliverIdleNudge(row, args, now, r)
 	}
 	return out
 }
@@ -1096,7 +1186,26 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 		Kind:        rep.Kind,
 	})
 	event := IdleNudgeEventSource(args.PostRestart, rep.Kind)
+	if args.Ledger != nil {
+		decision, err := args.Ledger.Reserve(d.Name, now, DefaultIdleNudgeMax, DefaultIdleNudgeBackoffs)
+		if err != nil {
+			rep.Error = err.Error()
+			slog.Warn("idle nudge ledger reserve failed", "agent", d.Name, "err", err)
+			return rep
+		}
+		if decision != NudgeReserved {
+			if decision == NudgeExhausted {
+				rep.Action = IdleNudgeMaxed
+			} else {
+				rep.Action = IdleNudgeSkip
+			}
+			rep.Reason = string(decision)
+			return rep
+		}
+	}
 	if err := args.Push(d.Name, event, text); err != nil {
+		// The reservation is already durable. A failed or uncertain delivery
+		// stays spent so a restart cannot repeat it inside the same allowance.
 		rep.Error = err.Error()
 		slog.Warn("idle nudge deliver failed", "agent", d.Name, "err", err)
 		return rep
@@ -1104,11 +1213,6 @@ func deliverIdleNudge(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.Time
 	rep.Delivered = true
 	if rep.Kind == IdleNudgeKindFullBrief && args.MarkBriefed != nil {
 		args.MarkBriefed(d.Name)
-	}
-	if args.Ledger != nil {
-		if err := args.Ledger.Record(d.Name, now); err != nil {
-			slog.Warn("idle nudge ledger record failed", "agent", d.Name, "err", err)
-		}
 	}
 	if args.Activity != nil {
 		args.Activity.ClearRecover(d.Name, now)
@@ -1371,9 +1475,10 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		}
 	}
 
-	defs := s.registry.List()
+	defs := s.withSeatRoles(s.registry.List())
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:             s.registry,
+		SeatRole:        s.seatRoleOf,
 		SessionPhase:    deps.SessionPhase,
 		Activity:        activity,
 		Ledger:          ledger,
@@ -1487,6 +1592,7 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 	}
 
 	reps := SweepFleetRecover(FleetRecoverSweepArgs{
+		SeatRole:  s.seatRoleOf,
 		Reg:       s.registry,
 		Activity:  activity,
 		Ledger:    ledger,
@@ -1499,12 +1605,12 @@ func (s *Server) runFleetRecoverSweep(postRestart bool) {
 		// pause the 2026-10-11 incident actually tripped on (never a named
 		// worker/PO, and this hook only gates the automatic recover sweep).
 		Intent: func(name string) fleetintent.Decision {
-			if s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(name) {
+			if hold := s.autoSeatHold(name); hold != "" {
 				return fleetintent.Decision{
 					Control:  fleetintent.ControlDeliverSubmit,
 					Allow:    false,
 					Blocking: fleetintent.Parked,
-					Reason:   "frontier_consume_disabled",
+					Reason:   hold,
 				}
 			}
 			return s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit)
@@ -1617,7 +1723,7 @@ func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 	missionOpen := memoMissionOpen(s.missionOpenHook())
 	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, missionOpen)
 	intent := s.fleetIntent()
-	openMission := HasOpenMissionForIdle(*def, missionOpen, workKids, engagedKids)
+	openMission := HasOpenMissionForIdle(s.withSeatRole(*def), missionOpen, workKids, engagedKids)
 	if suppress, reason := s.workerIdleSuppressReason(name); suppress {
 		slog.Info("worker-idle notification withheld — terminal or in-flight",
 			"agent", name, "reason", reason)
@@ -1980,6 +2086,7 @@ func (s *Server) resumeOpenMissionWorkers(overseer, stateDir string, activity *I
 	}
 	reps := SweepIdleNudges(IdleNudgeSweepArgs{
 		Reg:             s.registry,
+		SeatRole:        s.seatRoleOf,
 		Activity:        activity,
 		Ledger:          ledger,
 		Push:            push,

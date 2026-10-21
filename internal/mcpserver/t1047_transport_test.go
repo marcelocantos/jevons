@@ -10,12 +10,19 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// The persisted def is the transport that the real registry Launch uses;
-// startConfigFromDef alone is not an oracle for the running path.
+// The persisted def is the seat id the real registry Launch talks to.
+// A plan id (claude, codex, grok) is stored as that seat. An id that is
+// already a seat id stays one. startConfigFromDef alone is not an oracle
+// for the running path: the reloaded registry row is.
 func TestT1047FreshSubscriptionTransportParity(t *testing.T) {
 	for _, tc := range []struct{ plan, transport claudia.Provider }{
 		{claudia.ProviderClaude, "anthropic"},
 		{claudia.ProviderCodex, "openai-codex"},
+		{claudia.ProviderGrok, "xai-oauth"},
+		{claudia.ProviderCursor, claudia.ProviderCursor},
+		{"anthropic", "anthropic"},
+		{"openai-codex", "openai-codex"},
+		{"xai-oauth", "xai-oauth"},
 	} {
 		for _, explicit := range []bool{false, true} {
 			t.Run(string(tc.plan)+map[bool]string{true: "-explicit", false: "-omitted"}[explicit], func(t *testing.T) {
@@ -58,7 +65,7 @@ func TestT1047FreshSubscriptionTransportParity(t *testing.T) {
 	}
 }
 
-func TestT1047ExistingLiveCLIIsNotSilentlyRelabelled(t *testing.T) {
+func TestT1047ExistingProviderIsNotSilentlyRelabelled(t *testing.T) {
 	for _, tc := range []struct {
 		name, requested string
 		live, want      claudia.Provider
@@ -68,14 +75,14 @@ func TestT1047ExistingLiveCLIIsNotSilentlyRelabelled(t *testing.T) {
 		{"codex-explicit", "codex", claudia.ProviderCodex, claudia.ProviderCodex, false},
 		{"claude-implicit", "", claudia.ProviderClaude, claudia.ProviderClaude, false},
 		{"cross-plan", "codex", claudia.ProviderClaude, claudia.ProviderCodex, true},
-		{"cold-explicit", "claude", "", "anthropic", false},
+		{"cold-explicit", "claude", "", claudia.ProviderClaude, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			def := &claudia.AgentDef{Name: tc.name, Provider: claudia.ProviderClaude}
 			if tc.name == "codex-explicit" || tc.name == "cross-plan" {
 				def.Provider = claudia.ProviderCodex
 			}
-			err := alignStartTransport(def, true, tc.requested, tc.live)
+			err := preserveLiveProvider(def, tc.live)
 			if (err != nil) != tc.refused {
 				t.Fatalf("align error=%v want refusal=%v", err, tc.refused)
 			}

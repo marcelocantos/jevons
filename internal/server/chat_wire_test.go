@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -873,15 +874,26 @@ func TestT455ChatWireRecordsTransportNotAuthored(t *testing.T) {
 			wantTextSub: "backend_unavailable",
 		},
 		{
-			name: "Claude IsError flag is transport",
+			name: "Claude IsError with a backend cause is transport",
+			ev: claudia.Event{
+				Type:       "assistant",
+				Text:       "Internal error",
+				StopReason: "end_turn",
+				IsError:    true,
+				Reason:     agenterr.CauseBackendUnavailable,
+			},
+			wantClass:   "backend_unavailable",
+			wantTextSub: "backend_unavailable",
+		},
+		{
+			name: "Claude IsError without a cause is not a class",
 			ev: claudia.Event{
 				Type:       "assistant",
 				Text:       "Internal error",
 				StopReason: "end_turn",
 				IsError:    true,
 			},
-			wantClass:   "backend_unavailable",
-			wantTextSub: "backend_unavailable",
+			wantTextExact: "Internal error",
 		},
 		{
 			name: "ACP chunk with the same words is authored",
@@ -1006,6 +1018,141 @@ func TestAssistantTextSource(t *testing.T) {
 	}
 	if got := assistantTextSource(claudia.Event{}); got != agenterr.SourceAuthored {
 		t.Fatalf("empty: %q", got)
+	}
+}
+
+func TestRPCFrameCauseIsNumeric(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		code int
+		want string
+	}{
+		{401, agenterr.CauseAuth},
+		{403, agenterr.CauseAuth},
+		{402, agenterr.CauseSpendWall},
+		{429, agenterr.CauseRateLimit},
+		{400, agenterr.CauseClientBug},
+		{-32700, agenterr.CauseClientBug},
+		{-32600, agenterr.CauseClientBug},
+		{-32601, agenterr.CauseClientBug},
+		{-32602, agenterr.CauseClientBug},
+		{-32603, agenterr.CauseBackendUnavailable},
+		{500, agenterr.CauseBackendUnavailable},
+		{502, agenterr.CauseBackendUnavailable},
+		{503, agenterr.CauseBackendUnavailable},
+		{504, agenterr.CauseBackendUnavailable},
+		{418, ""},
+	}
+	for _, tc := range cases {
+		raw := fmt.Sprintf(`{"code":%d,"message":"not a class"}`, tc.code)
+		ev := claudia.Event{Type: "assistant", Text: "not a class", Raw: []byte(raw)}
+		want := "none"
+		if tc.want != "" {
+			want = tc.want
+		}
+		if got := classifyAssistantEvent(ev).String(); got != want {
+			t.Errorf("code %d classified as %q, want %q", tc.code, got, want)
+		}
+	}
+	sentence := claudia.Event{Type: "assistant", Text: "401 Unauthorized", IsError: true}
+	if classifyAssistantEvent(sentence) == agenterr.ClassAuth {
+		t.Fatal("an IsError sentence is not auth")
+	}
+	sentence.Reason = agenterr.CauseAuth
+	if classifyAssistantEvent(sentence) != agenterr.ClassAuth {
+		t.Fatal("Reason auth did not classify")
+	}
+	spend := claudia.Event{
+		Type:    "assistant",
+		Text:    "You've hit your monthly spend limit",
+		IsError: true,
+		Raw:     []byte(`{"code":429,"message":"You've hit your monthly spend limit"}`),
+		Reason:  "You've hit your monthly spend limit",
+	}
+	if classifyAssistantEvent(spend) != agenterr.ClassNone {
+		t.Fatal("a spend sentence in Reason classified, and it must not fall through to the 429")
+	}
+	spend.Reason = agenterr.CauseSpendWall
+	if classifyAssistantEvent(spend) != agenterr.ClassSpendWall {
+		t.Fatal("Reason spend_wall did not classify ahead of the 429 frame")
+	}
+	spend.Reason = agenterr.CauseRateLimit
+	if got := classifyAssistantEvent(spend); got != agenterr.ClassRateLimit {
+		t.Fatalf("Reason rate_limit classified as %s", got)
+	}
+	authored := claudia.Event{
+		Type: "assistant",
+		Text: "401 Unauthorized",
+		Raw:  []byte(`{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk"}}`),
+	}
+	if classifyAssistantEvent(authored) != agenterr.ClassNone {
+		t.Fatal("authored 401 classified")
+	}
+}
+
+// TestProviderCodeCauseReadsTheErrorField is the Event published Claudia
+// v0.57.0 emits for a transcript line whose error field is a provider
+// code: IsError is set and Reason is left empty. The code is on Raw.
+// The spend sentence is not the cause.
+func TestProviderCodeCauseReadsTheErrorField(t *testing.T) {
+	t.Parallel()
+	bill := claudia.Event{
+		Type:    "assistant",
+		IsError: true,
+		Text:    "You've hit your monthly spend limit",
+		Raw:     []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"You've hit your monthly spend limit"}]},"error":"billing_error"}`),
+	}
+	if got := classifyAssistantEvent(bill); got != agenterr.ClassSpendWall {
+		t.Fatalf("billing_error classified as %s", got)
+	}
+	rate := bill
+	rate.Text = "you are rate limited"
+	rate.Raw = []byte(`{"type":"assistant","error":"rate_limit"}`)
+	if got := classifyAssistantEvent(rate); got != agenterr.ClassRateLimit {
+		t.Fatalf("rate_limit classified as %s", got)
+	}
+	auth := bill
+	auth.Raw = []byte(`{"type":"assistant","error":"authentication_failed"}`)
+	if got := classifyAssistantEvent(auth); got != agenterr.ClassAuth {
+		t.Fatalf("authentication_failed classified as %s", got)
+	}
+	auth.Raw = []byte(`{"type":"assistant","error":"authentication_error"}`)
+	if got := classifyAssistantEvent(auth); got != agenterr.ClassAuth {
+		t.Fatalf("authentication_error classified as %s", got)
+	}
+	bug := bill
+	bug.Raw = []byte(`{"type":"assistant","error":"model_not_found"}`)
+	if got := classifyAssistantEvent(bug); got != agenterr.ClassClientBug {
+		t.Fatalf("model_not_found classified as %s", got)
+	}
+	backend := bill
+	backend.Raw = []byte(`{"type":"assistant","error":"overloaded_error"}`)
+	if got := classifyAssistantEvent(backend); got != agenterr.ClassBackendUnavailable {
+		t.Fatalf("overloaded_error classified as %s", got)
+	}
+	backend.Raw = []byte(`{"type":"assistant","error":"internal_error"}`)
+	if got := classifyAssistantEvent(backend); got != agenterr.ClassBackendUnavailable {
+		t.Fatalf("internal_error classified as %s", got)
+	}
+	prose := bill
+	prose.Raw = []byte(`{"type":"assistant","error":"You've hit your monthly spend limit"}`)
+	if got := classifyAssistantEvent(prose); got != agenterr.ClassNone {
+		t.Fatalf("a sentence in the error field classified as %s", got)
+	}
+	textOnly := bill
+	textOnly.Raw = []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"billing_error"}]}}`)
+	if got := classifyAssistantEvent(textOnly); got != agenterr.ClassNone {
+		t.Fatalf("billing_error only in the text classified as %s", got)
+	}
+	unknown := bill
+	unknown.Raw = []byte(`{"type":"assistant","error":"something_else"}`)
+	if got := classifyAssistantEvent(unknown); got != agenterr.ClassNone {
+		t.Fatalf("an unknown code classified as %s", got)
+	}
+	held := bill
+	held.Reason = "You've hit your monthly spend limit"
+	if got := classifyAssistantEvent(held); got != agenterr.ClassNone {
+		t.Fatalf("a sentence Reason fell through to billing_error and classified as %s", got)
 	}
 }
 

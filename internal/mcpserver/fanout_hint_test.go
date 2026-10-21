@@ -11,15 +11,15 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-func TestLooksLikePOOrBoss(t *testing.T) {
-	for _, name := range []string{"jevons-po", "tern-po", "sqlpipe_po", "release-boss", "po"} {
-		if !looksLikePOOrBoss(name) {
-			t.Errorf("%q should look like PO/boss", name)
+func TestPurposeCoordinator(t *testing.T) {
+	for _, purpose := range []string{"product-owner", "Product-Owner", "boss", "Boss"} {
+		if !purposeCoordinator(purpose) {
+			t.Errorf("%q should be a coordinator purpose", purpose)
 		}
 	}
-	for _, name := range []string{"jevons", "jv-t111", "worker-a", ""} {
-		if looksLikePOOrBoss(name) {
-			t.Errorf("%q should not look like PO/boss", name)
+	for _, purpose := range []string{"", "work", "aside", "overseer", "jevons-po"} {
+		if purposeCoordinator(purpose) {
+			t.Errorf("%q should not be a coordinator purpose", purpose)
 		}
 	}
 }
@@ -33,13 +33,13 @@ func TestFormatFanOutHintsZeroChildren(t *testing.T) {
 	dir := t.TempDir()
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "1", Provider: "grok"},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "2", Provider: "grok", Parent: "jevons"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "2", Provider: "grok", Parent: "jevons", Purpose: purposeProductOwner},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got := FormatFanOutHints(reg, "jevons")
+	got := FormatFanOutHints(reg, "jevons", nil)
 	if !strings.Contains(got, "jevons-po") || !strings.Contains(got, "zero children") {
 		t.Fatalf("want zero-children hint for po, got %q", got)
 	}
@@ -56,14 +56,14 @@ func TestFormatFanOutHintsWithChildrenClear(t *testing.T) {
 	dir := t.TempDir()
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "1", Provider: "grok"},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "2", Provider: "grok", Parent: "jevons"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "2", Provider: "grok", Parent: "jevons", Purpose: purposeProductOwner},
 		{Name: "jv-t111", WorkDir: dir, SessionID: "3", Provider: "grok", Parent: "jevons-po"},
 	} {
 		if err := reg.Register(d); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got := FormatFanOutHints(reg, "jevons")
+	got := FormatFanOutHints(reg, "jevons", nil)
 	if got != "" {
 		t.Fatalf("want no hint when children exist, got %q", got)
 	}

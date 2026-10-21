@@ -78,3 +78,37 @@ func TestT821NudgesToBusySeatLeaveOnePending(t *testing.T) {
 		t.Fatalf("non-nudge message was disturbed: %q", entries[0].Text)
 	}
 }
+
+// The displaced nudge is an accepted payload. Supersede archives it under the
+// surviving entry. Deleting the archive leaves this red even though depth
+// stays one nudge plus the gate message.
+func TestT7665IdleNudgeSupersedeKeepsTheDisplacedPayload(t *testing.T) {
+	s, _ := t401Server(t)
+	const name = "jv-t7665-nudge"
+	if _, err := s.enqueueAgentSend(name, "gate: fix your commit"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.enqueueAgentSend(name, formatIdleNudgeWire("idle-nudge", "first-nudge")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.enqueueAgentSend(name, formatIdleNudgeWire("idle-nudge", "second-nudge")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := s.sendQueue().Snapshot(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || !strings.Contains(entries[0].Text, "gate: fix") {
+		t.Fatalf("queue = %+v", entries)
+	}
+	if !IsIdleNudgeText(entries[1].Text) || !strings.Contains(entries[1].Text, "second-nudge") {
+		t.Fatalf("surviving nudge = %q", entries[1].Text)
+	}
+	archived, err := s.sendQueue().ReadSupersession(entries[1].ID)
+	if err != nil || len(archived.Removed) != 1 || !strings.Contains(archived.Removed[0].Text, "first-nudge") {
+		t.Fatalf("displaced nudge archive = %+v %v", archived, err)
+	}
+	if strings.Contains(archived.Removed[0].Text, "gate: fix") {
+		t.Fatalf("archive took the owner message: %+v", archived.Removed)
+	}
+}

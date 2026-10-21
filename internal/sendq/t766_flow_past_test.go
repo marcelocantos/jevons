@@ -68,7 +68,7 @@ func TestT766AttemptInFlightStillSerialisesTheSeat(t *testing.T) {
 	if err != nil || ok || blocker.ID != first.ID {
 		t.Fatalf("a second attempt started while one was in flight: %+v %v %v", blocker, ok, err)
 	}
-	if _, _, err := q.PopFront("a"); err == nil {
+	if _, _, err := q.PopFront("a", "operator", "must not take a live attempt", time.Now()); err == nil {
 		t.Fatal("legacy pop took an entry while an attempt was in flight")
 	}
 }

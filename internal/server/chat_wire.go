@@ -5,6 +5,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -18,12 +19,12 @@ import (
 
 // userTurnPrefix marks a turn delivered to the overseer as a genuine owner
 // message, distinguishing it from injected agent/system notifications
-// (worker replies, budget alerts) that share the ACP "user" role. The
-// browser renders prefixed turns as owner bubbles (prefix elided) and folds
-// unprefixed notifications into the activity strip; the overseer itself sees
-// the marker so it can tell the owner's words from a notification and relay
-// only what the owner's instructions warrant (🎯T63).
-const userTurnPrefix = "[user]\n"
+// (worker replies, budget alerts) that share the ACP "user" role. Line 1
+// is the owner-turn fact, which is what the notify queue and journal
+// replay decide on. The following "[user]" line is display (🎯T63, 🎯T766.4).
+// The browser renders prefixed turns as owner bubbles (prefix elided) and
+// folds unprefixed notifications into the activity strip.
+const userTurnPrefix = envelope.PrefixOwnerTurn + "\n[user]\n"
 
 // chatWireLine converts a claudia Event into the stable JSON line the
 // web chat UI expects. Grok ACP events carry ACP session/update params
@@ -119,11 +120,12 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 			}
 			return "", false
 		}
-		// A genuine owner turn carries userTurnPrefix. The browser already
+		// A genuine owner turn carries the owner-turn fact. The browser already
 		// rendered its clean bubble via chatUserEcho on send, so this provider
 		// echo is a duplicate — drop it (also de-dups the journal, which
 		// used to store the owner turn twice: echo + provider echo).
-		if strings.HasPrefix(text, userTurnPrefix) {
+		// A rendered "[user]" line is not that fact (🎯T766.4).
+		if isOwnerNotifyText(text) {
 			return "", false
 		}
 		// No marker → an injected agent/system notification (a worker reply,
@@ -168,14 +170,13 @@ func chatWireLine(ev claudia.Event) (line string, ok bool) {
 				}
 				return "", false
 			}
-			// 🎯T237: rewrite bare provider failure prose (e.g. "Internal error")
-			// so owner-visible copy carries class; structured slog for T236.
-			// 🎯T455: only when the frame that carried it was the backend's own
-			// answer — authored prose is never classified, so a sentence with
-			// the word "failed" in it stays the sentence the agent wrote.
+			// 🎯T237: a typed provider-failure cause rewrites owner-visible copy
+			// so it carries the class; structured slog for T236.
+			// 🎯T455: authored prose is never classified, and neither is a
+			// transport sentence that carries no cause.
 			displayText := ev.Text
 			var failClass agenterr.Class
-			if class := agenterr.ClassifyFrom(assistantTextSource(ev), ev.Text); class.IsFailure() {
+			if class := classifyAssistantEvent(ev); class.IsFailure() {
 				failClass = class
 				displayText = agenterr.OwnerCopy(class, ev.Text)
 				slog.Warn("provider_failure",
@@ -387,6 +388,107 @@ func isRPCErrorFrame(raw []byte) bool {
 	return true
 }
 
+// classifyAssistantEvent classes a chat event from a provider-failure cause.
+// Event.Reason carries one when the provider named a code. A bare JSON-RPC
+// error frame carries one in its numeric code. The message text is not a cause.
+// Authored prose is ClassNone. Transport text with no cause is ClassNone.
+func classifyAssistantEvent(ev claudia.Event) agenterr.Class {
+	if assistantTextSource(ev) != agenterr.SourceTransport {
+		return agenterr.ClassNone
+	}
+	cause := assistantProviderCause(ev)
+	if cause == "" {
+		return agenterr.ClassNone
+	}
+	return agenterr.Classify(agenterr.WithCause(cause, errors.New(ev.Text)))
+}
+
+// assistantProviderCause reads a typed cause off the event.
+// A Reason that is already set and is not one of the known failure causes
+// is left alone, so a context-overflow reason is not rewritten from a code
+// that happens to sit on the same frame. A sentence in Reason is not a cause.
+func assistantProviderCause(ev claudia.Event) string {
+	switch ev.Reason {
+	case agenterr.CauseAuth, agenterr.CauseRateLimit, agenterr.CauseSpendWall, agenterr.CauseAccountWall,
+		agenterr.CauseBackendUnavailable, agenterr.CauseClientBug,
+		agenterr.CauseRetryExhausted, agenterr.CauseContextOverflow:
+		return ev.Reason
+	}
+	if ev.Reason != "" {
+		return ""
+	}
+	if cause := rpcFrameCause(ev.Raw); cause != "" {
+		return cause
+	}
+	return providerCodeCause(ev.Raw)
+}
+
+// providerCodeCause maps the provider's own error code on a transcript
+// line. Claudia v0.58.0 stamps Event.Reason from that code. A frame whose
+// Reason is still empty keeps the code on Raw. The message text is not
+// read. An unrecognised code, including a sentence in the field, has no
+// cause.
+func providerCodeCause(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var probe struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || len(probe.Error) == 0 {
+		return ""
+	}
+	var code string
+	if err := json.Unmarshal(probe.Error, &code); err != nil || code == "" {
+		return ""
+	}
+	switch code {
+	case "billing_error":
+		return agenterr.CauseSpendWall
+	case "rate_limit":
+		return agenterr.CauseRateLimit
+	case "authentication_failed", "authentication_error":
+		return agenterr.CauseAuth
+	case "model_not_found":
+		return agenterr.CauseClientBug
+	case "overloaded_error", "internal_error":
+		return agenterr.CauseBackendUnavailable
+	default:
+		return ""
+	}
+}
+
+// rpcFrameCause maps a JSON-RPC numeric code. The message string is not read.
+func rpcFrameCause(raw []byte) string {
+	if !isRPCErrorFrame(raw) {
+		return ""
+	}
+	var probe struct {
+		Code *json.Number `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || probe.Code == nil {
+		return ""
+	}
+	n, err := probe.Code.Int64()
+	if err != nil {
+		return ""
+	}
+	switch n {
+	case 401, 403:
+		return agenterr.CauseAuth
+	case 402:
+		return agenterr.CauseSpendWall
+	case 429:
+		return agenterr.CauseRateLimit
+	case 400, -32700, -32600, -32601, -32602:
+		return agenterr.CauseClientBug
+	case -32603, 500, 502, 503, 504:
+		return agenterr.CauseBackendUnavailable
+	default:
+		return ""
+	}
+}
+
 // userTurnText extracts the prose of a user-role turn from a provider event,
 // reporting prose=false for user lines that are not prose at all (tool_result
 // blocks and other structured payloads the chat UI dispatches on directly).
@@ -449,16 +551,14 @@ func userTurnText(ev claudia.Event) (text string, prose bool) {
 }
 
 // echoedOwnerTurnLine reports whether a stored chat wire line is a provider
-// echo of an owner turn — a user-role line whose prose still carries the
-// internal userTurnPrefix marker (🎯T382).
+// echo of an owner turn — a user-role line whose prose carries the
+// owner-turn fact (🎯T382, 🎯T766.4).
 //
-// Live traffic no longer produces these, but journals written before the fix
-// contain them, and replaying one repaints the owner's message — its
-// attachments and a literal "[user]" line with it. Both replay paths filter
-// on this so history shows what live now emits.
+// A journal line whose text is only a rendered "[user]" prefix is not an
+// echo. Live wires start with the fact, so those echoes still drop.
 func echoedOwnerTurnLine(line string) bool {
 	text, prose := userTurnText(claudia.Event{Raw: []byte(line)})
-	return prose && strings.HasPrefix(text, userTurnPrefix)
+	return prose && isOwnerNotifyText(text)
 }
 
 // stampStreamID injects stream_id onto a chat wire JSON object (🎯T223).

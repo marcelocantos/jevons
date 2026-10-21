@@ -3,53 +3,56 @@
 
 package mcpserver
 
-import "testing"
+import (
+	"testing"
 
-// 🎯T31.1: pure classifier for finish reports (oracle vs accepted-risk vs bare done).
+	"github.com/marcelocantos/jevons/internal/envelope"
+)
+
+// 🎯T766.4: an unenveloped sentence is not a completion class. Envelope
+// slots still are.
 func TestClassifyCompletionReport(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want CompletionEvidenceClass
-	}{
-		{"empty", "", CompletionNoClaim},
-		{"status only", "still reading the tree", CompletionNoClaim},
-		{"bare done", "Done. Mission complete.", CompletionBareDone},
-		{"bare finished", "All finished, ready for review.", CompletionBareDone},
-		{"oracle go test", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T31 PASS", CompletionOracleEvidence},
-		{"oracle make test", "complete — make test-web green", CompletionOracleEvidence},
-		{"oracle word", "Oracle: node web/scripts/foo_test.js PASS", CompletionOracleEvidence},
-		{"accepted risk", "Done with accepted risk: owner smoke residual (class-3)", CompletionAcceptedRisk},
-		{"class-3 only", "Residual: isolated class-3 human gate for visual feel", CompletionAcceptedRisk},
-		{"accepted-risk hyphen", "accepted-risk: no hermetic path for this spike", CompletionAcceptedRisk},
-		{"risk beats bare claim", "finished; accepted risk logged", CompletionAcceptedRisk},
-		{"oracle beats bare claim", "done; hermetic TestEnsureFleetBriefInjectsOnce green", CompletionOracleEvidence},
+	for _, in := range []string{
+		"",
+		"still reading the tree",
+		"Done. Mission complete.",
+		"All finished, ready for review.",
+		"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T31 PASS",
+		"complete — make test-web green",
+		"Oracle: node web/scripts/foo_test.js PASS",
+		"Done with accepted risk: owner smoke residual (class-3)",
+		"Residual: isolated class-3 human gate for visual feel",
+		"accepted-risk: no hermetic path for this spike",
+		"finished; accepted risk logged",
+		"done; hermetic TestEnsureFleetBriefInjectsOnce green",
+	} {
+		if got := ClassifyCompletionReport(in); got != CompletionNoClaim {
+			t.Fatalf("ClassifyCompletionReport(%q)=%s want no_claim", in, got)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ClassifyCompletionReport(tc.in)
-			if got != tc.want {
-				t.Fatalf("ClassifyCompletionReport(%q)=%s want %s", tc.in, got, tc.want)
-			}
-		})
+	if got := ClassifyCompletionReport(declaredFinishReport("T31", "Landed.")); got != CompletionOracleEvidence {
+		t.Fatalf("declared finish class=%s", got)
 	}
 }
 
 func TestLooksLikeBareDoneAndHasOracleOrRisk(t *testing.T) {
-	if !LooksLikeBareDone("Done, nothing else.") {
-		t.Fatal("expected bare done")
+	if LooksLikeBareDone("Done, nothing else.") {
+		t.Fatal("unenveloped prose is not a bare done")
 	}
 	if LooksLikeBareDone("Done. go test ./... PASS") {
-		t.Fatal("oracle evidence must not look bare")
+		t.Fatal("unenveloped oracle prose is not a bare done")
 	}
-	if !HasOracleOrRisk("SHA deadbeef make test green") {
-		t.Fatal("expected oracle or risk")
+	if HasOracleOrRisk("SHA deadbeef make test green") {
+		t.Fatal("unenveloped oracle prose is not oracle evidence")
 	}
-	if !HasOracleOrRisk("accepted risk residual for owner") {
-		t.Fatal("expected risk path")
+	if HasOracleOrRisk("accepted risk residual for owner") {
+		t.Fatal("unenveloped risk prose is not accepted risk")
 	}
 	if HasOracleOrRisk("done") {
 		t.Fatal("bare done is not oracle-or-risk")
+	}
+	if !HasOracleOrRisk(declaredFinishReport("T31", "Landed.")) {
+		t.Fatal("declared finish with oracle slots must be oracle evidence")
 	}
 }
 
@@ -62,8 +65,18 @@ func TestCompletionEvidenceClassString(t *testing.T) {
 	}
 }
 
-// 🎯T194: daily-path evidence required for daemon/API achieve; hermetics alone insufficient.
+// 🎯T194 / 🎯T766.4: activation is the envelope daily slot. A sentence that
+// names a restart, a curl, or the development surface is not that slot.
 func TestHasActivationEvidence(t *testing.T) {
+	activated := envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       "T194",
+		SHA:          "abcdef0123456",
+		Daily:        "restart-jevonsd",
+		Verdict:      envelope.VerdictGreen,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      "observed on the development surface",
+	})
 	cases := []struct {
 		name string
 		in   string
@@ -72,15 +85,17 @@ func TestHasActivationEvidence(t *testing.T) {
 		{"empty", "", false},
 		{"hermetic only", "Done. SHA abcdef0. go test ./internal/server -run Frontier PASS", false},
 		{"make test only", "complete — make test green", false},
-		{"restart-jevonsd", "Done. Detached restart-jevonsd succeeded; SHA deadbeef", true},
-		{"live curl", "Live probe: curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:13705/api/frontier → 200", true},
-		{"http 200 frontier", "GET http://127.0.0.1:13705/api/frontier → HTTP 200 with targets JSON", true},
-		{"non-404", "restart-jevonsd exit 0; /api/frontier non-404", true},
-		{"daily path phrase", "proven on the daily path after bounce", true},
-		{"development path phrase", "proven on the development path after bounce", true},
-		{"development surface phrase", "observed on the development surface", true},
-		{"zero-downtime residual", "proven zero-downtime upgrade; product path green", true},
+		{"restart sentence", "Done. Detached restart-jevonsd succeeded; SHA deadbeef", false},
+		{"live curl sentence", "Live probe: curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:13705/api/frontier → 200", false},
+		{"http 200 frontier sentence", "GET http://127.0.0.1:13705/api/frontier → HTTP 200 with targets JSON", false},
+		{"non-404 sentence", "restart-jevonsd exit 0; /api/frontier non-404", false},
+		{"daily path sentence", "proven on the daily path after bounce", false},
+		{"development path sentence", "proven on the development path after bounce", false},
+		{"development surface sentence", "observed on the development surface", false},
+		{"zero-downtime sentence", "proven zero-downtime upgrade; product path green", false},
 		{"status only", "still rebuilding", false},
+		{"declared oracle without daily", declaredFinishReport("T194", "go test ./internal/server PASS"), false},
+		{"declared daily slot", activated, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,24 +108,39 @@ func TestHasActivationEvidence(t *testing.T) {
 }
 
 func TestLooksLikeHermeticOnlyDaemonClaim(t *testing.T) {
-	if !LooksLikeHermeticOnlyDaemonClaim("Done. hermetic go test ./internal/server PASS") {
-		t.Fatal("hermetic-only achieve claim should flag T194 anti-pattern")
+	prose := "Done. hermetic go test ./internal/server PASS"
+	if LooksLikeHermeticOnlyDaemonClaim(prose) {
+		t.Fatal("a hermetic sentence is not a daemon claim")
+	}
+	if !LooksLikeHermeticOnlyDaemonClaim(declaredFinishReport("T194", prose)) {
+		t.Fatal("a declared hermetic finish with no activation slot must flag")
+	}
+	activated := envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       "T194",
+		SHA:          "abcdef0123456",
+		Daily:        "restart-jevonsd",
+		Verdict:      envelope.VerdictGreen,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      "curl /api/frontier HTTP 200",
+	})
+	if LooksLikeHermeticOnlyDaemonClaim(activated) {
+		t.Fatal("a declared daily slot must clear the hermetic-only flag")
 	}
 	if LooksLikeHermeticOnlyDaemonClaim("Done. restart-jevonsd + curl /api/frontier HTTP 200. go test green") {
-		t.Fatal("daily-path evidence must clear hermetic-only flag")
+		t.Fatal("a restart sentence is not activation and is not a hermetic-only claim")
 	}
 	if LooksLikeHermeticOnlyDaemonClaim("still reading the tree") {
 		t.Fatal("non-claim must not flag")
 	}
 	if LooksLikeHermeticOnlyDaemonClaim("Done. Mission complete.") {
-		// bare done is T31, not T194 hermetic-only
-		t.Fatal("bare done without hermetic markers is not hermetic-only daemon claim")
+		t.Fatal("bare done without an oracle slot is not a hermetic-only daemon claim")
 	}
 }
 
 func TestT430LiveRenderOracleDidNotRun(t *testing.T) {
-	if !LiveRenderOracleDidNotRun("Live-render oracle DID NOT RUN: Browser is already in use for profile") {
-		t.Fatal("expected explicit non-result")
+	if LiveRenderOracleDidNotRun("Live-render oracle DID NOT RUN: Browser is already in use for profile") {
+		t.Fatal("a sentence is not a browser-oracle admission")
 	}
 	if LiveRenderOracleDidNotRun("Done. go test ./internal/mcpattach -run T430 PASS") {
 		t.Fatal("plain hermetic finish is not a browser non-result")
@@ -119,12 +149,12 @@ func TestT430LiveRenderOracleDidNotRun(t *testing.T) {
 
 func TestT430LooksLikeSilentBrowserOracleFallback(t *testing.T) {
 	silent := "Browser is already in use for /Users/marcelo/.config/playwright-mcp/profile; cited go test ./internal/ui PASS as live evidence"
-	if !LooksLikeSilentBrowserOracleFallback(silent) {
-		t.Fatal("hermetic cited after browser lock must flag silent fallback")
+	if LooksLikeSilentBrowserOracleFallback(silent) {
+		t.Fatal("hermetic cited after a browser sentence is not a silent fallback")
 	}
 	honest := "Browser is already in use for playwright-mcp/profile. Live-render oracle DID NOT RUN. No hermetic substitution."
 	if LooksLikeSilentBrowserOracleFallback(honest) {
-		t.Fatal("explicit DID NOT RUN must not flag as silent fallback")
+		t.Fatal("an honest non-result sentence is not a silent fallback")
 	}
 	clean := "Done. SHA abcdef0. go test ./internal/mcpattach -run T430 PASS"
 	if LooksLikeSilentBrowserOracleFallback(clean) {

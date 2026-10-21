@@ -33,7 +33,7 @@ func TestT1039SessionServersGrantsDirectOverStaleNested(t *testing.T) {
 		{Name: "bullseye", Type: "http", URL: "http://127.0.0.1:18743/mcp"},
 		{Name: "atlassian", Type: "http", URL: "http://127.0.0.1:13705/upstream/atlassian"},
 	}
-	list := SessionServers(a, claudia.ProviderClaude, "")
+	list := SessionServers(a, "")
 	byName := map[string]claudia.MCPServer{}
 	for _, s := range list {
 		byName[s.Name] = s
@@ -68,7 +68,7 @@ func TestT1039SessionServersKeepsDirectWhenProxiedIsNested(t *testing.T) {
 	a.Proxied = []claudia.MCPServer{{
 		Name: "bullseye", Type: "http", URL: "http://127.0.0.1:13705/upstream/bullseye",
 	}}
-	list := SessionServers(a, claudia.ProviderClaude, "")
+	list := SessionServers(a, "")
 	byName := map[string]claudia.MCPServer{}
 	for _, s := range list {
 		byName[s.Name] = s

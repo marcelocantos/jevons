@@ -45,12 +45,14 @@ func TestStampRegistrySessionMCPAppliesProxied(t *testing.T) {
 		Name: "jevons", SessionID: "root", Provider: claudia.ProviderGrok,
 	}
 	stampRegistrySessionMCP(reg, attach, overseer)
-	if len(overseer.MCPServers) != 1 || overseer.MCPServers[0].Name != "jevonsmcp" {
-		t.Fatalf("overseer MCPServers = %+v", overseer.MCPServers)
-	}
 	po := reg.Def("jevons-po")
 	if po == nil {
 		t.Fatal("missing PO")
+	}
+	// 🎯T1079: the overseer (here a legacy grok row) gets the PO's list; the
+	// Grok ACP exception (🎯T525) died with the Grok CLI transport.
+	if !mcpattach.ServersEqual(overseer.MCPServers, po.MCPServers) {
+		t.Fatalf("overseer MCPServers = %+v, want the PO's %+v", overseer.MCPServers, po.MCPServers)
 	}
 	byName := map[string]claudia.MCPServer{}
 	for _, s := range po.MCPServers {

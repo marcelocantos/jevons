@@ -10,9 +10,8 @@ import (
 
 	"strings"
 
-	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T305 — delivery confirmation and never-briefed status.
@@ -72,12 +71,10 @@ func (s *Server) markAgentTurnBegan(name string) {
 	// real, so it promotes Materialized — the flag recovery reads to decide
 	// whether a seat can be resumed rather than re-minted.
 	//
-	// Called unconditionally on purpose. MarkMaterialized itself refuses a
-	// Claude row with no durable JSONL behind it ("cannot mark materialized
-	// without session JSONL"), and that judgment belongs to the registry,
-	// which owns the evidence — a provider check here would be a second
-	// copy of it, free to drift. The error is expected for exactly that
-	// case and is not a failure of this path.
+	// Called unconditionally on purpose. Published Claudia attests every
+	// sidecar provider from this host turn. Resume admission reads the
+	// canonical seat store, not a Claude JSONL file. MarkMaterialized
+	// returns an error only for an unknown agent or a persist failure.
 	if reg != nil {
 		// An accepted send is not evidence that the OMP model exists or has
 		// answered. In particular an explicit Spark pin can pass Launch and
@@ -85,7 +82,7 @@ func (s *Server) markAgentTurnBegan(name string) {
 		// not turn that into a durable RequireResume obligation for a void
 		// Codex conversation. Preserve the process-local turn-began mark above;
 		// a later provider reply can carry its own durable evidence.
-		if d := reg.Def(name); d != nil && cli.PlanProvider(d.Provider) == claudia.ProviderCodex &&
+		if d := reg.Def(name); d != nil && seatprovider.Resolve(d.Provider).Plan == seatprovider.Codex &&
 			d.Model == cost.ModelCodexSpark && !s.codexCatalogHasModel(d.Model) {
 			return
 		}
@@ -265,13 +262,25 @@ func (s *Server) deliverStartPrompt(name, prompt string) error {
 }
 
 // submitStartBrief is one attempt: watch, send, confirm.
+//
+// A capable seat binds a receipt before the handoff. That receipt is the
+// verdict: a settled one has already returned sent, and reading the
+// transcript here would release a healthy seat when the watch is empty
+// or accept an unsettled one when the watch reports PayloadSeen. An
+// incapable seat still has no receipt, and this watch remains its verdict.
 func (s *Server) submitStartBrief(name, text string) error {
 	watch := s.watchAgentTurnFor(name, text)
 
-	// This watch owns the verdict (🎯T416): the send path must not also judge,
-	// or a healthy brief comes back with a status ConfirmTurnBegan does not
-	// recognise.
 	res, err := s.deliverByNameConfirmedByCaller(name, text, OriginAgent, false)
+	if err == nil && res.ReceiptSettled {
+		s.markAgentTurnBegan(name)
+		if s.registry != nil {
+			if d := s.registry.Def(name); d != nil {
+				s.noteMintSucceeded(d.Parent)
+			}
+		}
+		return nil
+	}
 	if confErr := ConfirmTurnBegan(res.Status, err, watch()); confErr != nil {
 		// 🎯T518: the two middle verdicts mean the brief is HELD — by this
 		// daemon's queue or by the receiver — or the instrument could not

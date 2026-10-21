@@ -33,8 +33,14 @@ func TestT581IncidentReportIsTheIncidentShape(t *testing.T) {
 	if !strings.Contains(lower, "reading done") || !strings.Contains(lower, "implementing now") {
 		t.Fatal("fixture lost the local done-word grammar")
 	}
-	if !hasCompletionClaim(lower) || !hasOracleEvidence(lower) {
-		t.Fatal("fixture no longer carries the done + oracle words that reaped it")
+	if !strings.Contains(lower, "oracle") || !strings.Contains(lower, "green") {
+		t.Fatal("fixture lost the oracle words")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a claim")
+	}
+	if hasOracleEvidence(lower) {
+		t.Fatal("an oracle sentence is oracle evidence")
 	}
 	if hasForwardLookingPlan(lower) {
 		t.Fatal("T577's list now covers this report; T581 rule would be untested")
@@ -77,25 +83,22 @@ func TestT581FinishReportEnvelopeStillReaps(t *testing.T) {
 }
 
 func TestT581LocalDoneShapes(t *testing.T) {
-	cases := []struct {
-		report string
-		local  bool
-	}{
-		{"Status: reading done, no tool hung; implementing now — governor wiring.", true},
-		{"Recon done. Now wiring the loader; tests after.", true},
-		{"Survey done; next: the writer. Commit abcdef1 has the scaffold.", true},
-		{"Done. Commit abcdef1, go test ./... green.", false},
-		{"Reading done; implementing now. Done: commit abcdef1, go test green.", false},
-		{"Everything is done now.", false},
-		{"Mission complete.", false},
+	cases := []string{
+		"Status: reading done, no tool hung; implementing now — governor wiring.",
+		"Recon done. Now wiring the loader; tests after.",
+		"Survey done; next: the writer. Commit abcdef1 has the scaffold.",
+		"Done. Commit abcdef1, go test ./... green.",
+		"Reading done; implementing now. Done: commit abcdef1, go test green.",
+		"Everything is done now.",
+		"Mission complete.",
 	}
-	for _, tc := range cases {
-		lower := strings.ToLower(tc.report)
-		if got := allCompletionClaimsLocal(lower); got != tc.local {
-			t.Errorf("allCompletionClaimsLocal(%q) = %v, want %v", tc.report, got, tc.local)
+	for _, report := range cases {
+		lower := strings.ToLower(report)
+		if allCompletionClaimsLocal(lower) {
+			t.Errorf("allCompletionClaimsLocal(%q) decided", report)
 		}
-		if tc.local && hasFinishShape(lower) {
-			t.Errorf("hasFinishShape(%q) = true for a local done", tc.report)
+		if hasFinishShape(lower) {
+			t.Errorf("hasFinishShape(%q) decided", report)
 		}
 	}
 }

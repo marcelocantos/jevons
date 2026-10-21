@@ -88,15 +88,15 @@ func TestT446MentionReportsAreTheIncidentShape(t *testing.T) {
 		{"negated mention", t446NegatedMentionReport(t), "re-send"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if !hasCompletionClaim(strings.ToLower(tc.report)) {
+			lower := strings.ToLower(tc.report)
+			if !hasAnyCompletionMarker(lower) {
 				t.Fatal("fixture carries no completion word — there was no reap for the mention to block")
 			}
-			m, i := firstMarker(asciiLower(tc.report), requestMarkers)
-			if i < 0 {
-				t.Fatal("unguarded scan finds no request phrase — the fixture no longer reproduces the incident")
+			if hasCompletionClaim(lower) {
+				t.Fatal("a completion sentence is a completion claim")
 			}
-			if m != tc.wantMarker {
-				t.Fatalf("unguarded marker = %q, want %q", m, tc.wantMarker)
+			if !strings.Contains(asciiLower(tc.report), tc.wantMarker) {
+				t.Fatalf("fixture lost %q", tc.wantMarker)
 			}
 		})
 	}
@@ -133,51 +133,38 @@ func TestT446MetaMentionReportReaps(t *testing.T) {
 		d := ClassifyReportAskDetail(report)
 		t.Fatalf("ClassifyReportAsk = %s (marker %q, span %q), want %s", got, d.Marker, d.Span, AskNone)
 	}
-	if !LooksLikeFinishedWorkReport(report) {
-		t.Fatal("🎯T446: a finished report that names the ask vocabulary is a finished-work report")
+	if LooksLikeFinishedWorkReport(report) {
+		t.Fatal("unenveloped prose is not a finished-work report")
+	}
+	done := declaredFinishReport("T446", report)
+	if !LooksLikeFinishedWorkReport(done) {
+		t.Fatal("🎯T446: a declared finish that names the ask vocabulary is a finished-work report")
 	}
 
 	reg := t439Registry(t, "jv-t439-reap-request")
 	s := &Server{registry: reg}
-	s.maybeReapDoneWorkAgent("jv-t439-reap-request", report)
+	s.maybeReapDoneWorkAgent("jv-t439-reap-request", done)
 	if reg.Def("jv-t439-reap-request") != nil {
 		t.Fatal("🎯T165 / 🎯T195: the finished worker stayed in the fleet")
 	}
 }
 
-// TestT446QuotedCommitSubjectIsTheDeclaredResidual pins what this target does
-// NOT fix, so the gap is visible in the suite rather than in a paragraph
-// somebody has to remember.
-//
-// The second report is still held — not as a request now, but as
-// explicit_incomplete, because it quotes its own commit subject as evidence:
-// "*fix(T439): a worker asking for its brief has not finished*". The claim in
-// those words belongs to the commit title, not to the worker.
-//
-// It is left alone deliberately. The guards that fit the request class do not
-// transfer: an explicit-incomplete marker is a statement about the worker's own
-// state, and every rule that would reject the quotation ("must be in the
-// worker's own voice", "must be clause-initial", "emphasis spans are
-// citations") also rejects ordinary ways of writing the real thing — "the work
-// is not finished", "**not finished**". Getting that wrong reaps a worker that
-// said it had not finished, which is the destructive direction 🎯T395 and
-// 🎯T439 exist to prevent. Keeping a finished worker registered costs an idle
-// process the sentinel prunes.
-//
-// When a later target does fix it, this test is the one that fails.
+// TestT446QuotedCommitSubjectIsTheDeclaredResidual pins the negated-mention
+// fixture. A quoted commit subject is not an ask class (🎯T766.4). The
+// words stay in the fixture. Unenveloped prose does not reap.
 func TestT446QuotedCommitSubjectIsTheDeclaredResidual(t *testing.T) {
 	report := t446NegatedMentionReport(t)
 
 	d := ClassifyReportAskDetail(report)
-	if d.Class != AskExplicitIncomplete {
-		t.Fatalf("residual has moved: class = %s (marker %q) — update or retire this test", d.Class, d.Marker)
+	if d.Class != AskNone {
+		t.Fatalf("a quoted commit subject is an ask: class = %s", d.Class)
 	}
-	if d.Marker != "not finished" || !strings.Contains(d.Span, "a worker asking for its brief has not finished") {
-		t.Fatalf("residual is no longer the quoted commit subject: marker=%q span=%q", d.Marker, d.Span)
+	if !strings.Contains(strings.ToLower(report), "not finished") || !strings.Contains(report, "a worker asking for its brief has not finished") {
+		t.Fatal("fixture lost the quoted commit subject")
 	}
 	reg := t439Registry(t, "jv-t439-reap-request")
-	if ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-t439-reap-request", report, nil); ok {
-		t.Fatal("residual has moved: the report now reaps — update or retire this test")
+	if ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t439-reap-request", report, nil); ok {
+		t.Fatalf("unenveloped prose reaps (%s)", reason)
 	}
 }
 
@@ -201,7 +188,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "negation belongs to its own clause",
 			report:   "I did not get anything, please resend the brief.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -213,7 +200,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "imperative is the verb",
 			report:   "Analysis complete. Re-send the acceptance clauses and I'll continue.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -225,7 +212,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "a bare verb after a request cue is a request",
 			report:   "Finished the recon. Could you resend the acceptance clauses?",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -237,7 +224,7 @@ func TestT446MentionsAndRequests(t *testing.T) {
 		{
 			name:     "🎯T439 shape survives untouched",
 			report:   "I did not receive your detailed brief — only the target id. Please resend it. Recon done meanwhile.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -254,7 +241,11 @@ func TestT446MentionsAndRequests(t *testing.T) {
 				t.Fatalf("ClassifyReportAsk = %s (marker %q), want %s", got, d.Marker, tc.wantAsk)
 			}
 			reg := t439Registry(t, "jv-worker")
-			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", tc.report, nil)
+			reapReport := tc.report
+			if tc.wantReap {
+				reapReport = declaredFinishReport("T446", tc.report)
+			}
+			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", reapReport, nil)
 			if ok != tc.wantReap {
 				t.Fatalf("ShouldAutoReapDoneWorkAgent = %v (%s), want %v", ok, reason, tc.wantReap)
 			}
@@ -284,46 +275,13 @@ func TestT446RejectedMentionDoesNotVetoALaterRequest(t *testing.T) {
 		}
 		for _, q := range requests {
 			report := "Done. " + m + "\n\n" + q
-			if got := ClassifyReportAsk(report); got != AskRequest {
-				t.Errorf("mention %q swallowed request %q: class = %s", m, q, got)
+			if got := ClassifyReportAsk(report); got != AskNone {
+				t.Errorf("a sentence became an ask (%s): %q + %q", got, m, q)
 			}
 			reg := t439Registry(t, "jv-worker")
 			if ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", report, nil); ok {
 				t.Errorf("🎯T439: %q + %q reaps", m, q)
 			}
 		}
-	}
-}
-
-// TestT446GuardsAreEachLoadBearing checks the three guards one at a time at the
-// level they are written, so a failure names which one moved rather than only
-// that the classifier changed.
-func TestT446GuardsAreEachLoadBearing(t *testing.T) {
-	cases := []struct {
-		name   string
-		text   string
-		marker string
-		want   bool
-	}{
-		{"whole phrase", "please re-send the brief", "re-send", true},
-		{"head of a longer word", "re-sending would stack a copy", "re-send", false},
-		{"plural of the noun", "the daemon resends the brief on wake", "resend", false},
-		{"negated in clause", "i did not re-send anything", "re-send", false},
-		{"negation in an earlier clause", "i did not get anything, please resend it", "resend", true},
-		{"clause-initial imperative", "the brief was truncated; resend the clauses", "resend", true},
-		{"bare noun in apposition", "an input it is waiting on (brief resend, an answer)", "resend", false},
-		{"after a request cue", "could you resend the acceptance clauses", "resend", true},
-		{"phrase carrying its own grammar", "i did not receive your detailed brief", "did not receive", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			at := strings.Index(tc.text, tc.marker)
-			if at < 0 {
-				t.Fatalf("marker %q is not in %q", tc.marker, tc.text)
-			}
-			if got := isRequestAsk(tc.text, tc.marker, at); got != tc.want {
-				t.Fatalf("isRequestAsk(%q, %q) = %v, want %v", tc.text, tc.marker, got, tc.want)
-			}
-		})
 	}
 }

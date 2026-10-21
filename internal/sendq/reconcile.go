@@ -61,6 +61,9 @@ const (
 	// ReconcileDrop: it may or may not have landed and will not be pursued.
 	// A deliberate, attributed abandonment — never a silent one.
 	ReconcileDrop ReconcileOutcome = "drop"
+	// ReconcilePop records that an operator took the payload off the queue.
+	// Reconcile rejects it. A pop is not a confirmed, requeued, or dropped delivery.
+	ReconcilePop ReconcileOutcome = "pop"
 	// ReconcileConsolidate marks the survivor of a supersession.
 	ReconcileConsolidate ReconcileOutcome = "consolidate"
 )
@@ -166,39 +169,62 @@ func (s *Store) Reconcile(agent, entryID, attemptID string, outcome ReconcileOut
 		return Receipt{}, fmt.Errorf("sendq: %q holds no entry %s (it may already have been reconciled or delivered)", agent, entryID)
 	}
 	e := f.Entries[idx]
-	if e.AttemptID != "" && attemptID != "" && attemptID != e.AttemptID {
+	if attemptID != "" && attemptID != e.AttemptID {
 		return Receipt{}, fmt.Errorf("sendq: entry %s now carries attempt %s, not %s — re-read the queue before reconciling",
 			e.ID, e.AttemptID, attemptID)
 	}
-	if e.State != Pending && attemptID == "" {
+	phase := EntryPhase(e, "")
+	if !claimablePhase(phase) && attemptID == "" {
+		label := string(e.State)
+		if label == "" {
+			label = string(phase)
+		}
 		return Receipt{}, fmt.Errorf("sendq: entry %s has an unresolved %s attempt %s; name it as attempt_id so the disposition cannot land on a stale view",
-			e.ID, e.State, e.AttemptID)
+			e.ID, label, e.AttemptID)
 	}
 	// A submission this process is still inside is not an orphan (🎯T623): the
 	// drain that owns it will resolve it, and reconciling it here would race a
-	// live provider call.
-	if e.State == Attempting && s.active[agent] == e.AttemptID {
+	// live provider call. Attempting is the usual shape. An empty on-disk
+	// state that still carries this store's attempt id is the same phase.
+	if EntryPhase(e, s.active[agent]) == PhaseInFlight {
 		return Receipt{}, fmt.Errorf("sendq: entry %s is an ACTIVE submission owned by this daemon, not an orphan — wait for it to resolve", e.ID)
 	}
-	if outcome == ReconcileRequeue && e.State == Pending {
+	if outcome == ReconcileRequeue && claimablePhase(phase) {
 		return Receipt{}, fmt.Errorf("sendq: entry %s is already pending; nothing to requeue", e.ID)
 	}
 
+	priorAttempt := e.AttemptID
 	by := Reconciliation{Actor: actor, At: now.UTC(), Outcome: outcome, Evidence: evidence}
 	rec := Receipt{Agent: strings.TrimSpace(agent), By: by}
 	if outcome == ReconcileRequeue {
-		e.State, e.AttemptID, e.Detail = Pending, "", ""
-		e.Reconciled = &by
+		e, _, err = applyDelivery(e, stepRequeue, "", "", &by)
+		if err != nil {
+			return Receipt{}, err
+		}
 		f.Entries[idx] = e
 		rec.Kept = []Entry{e}
 	} else {
+		if _, _, err = applyDelivery(e, stepReconcileRemove, "", "", &by); err != nil {
+			return Receipt{}, err
+		}
+		// e is the on-disk entry, text included. A confirmed or drop
+		// disposition leaves the queue only after that payload is archived
+		// under the entry id. A failed archive leaves the queue unchanged.
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      now.UTC(),
+			HoldID:  e.ID,
+			Removed: []Entry{e},
+		}); err != nil {
+			return Receipt{}, err
+		}
 		rec.Removed = []Entry{e}
 		f.Entries = append(append([]Entry(nil), f.Entries[:idx]...), f.Entries[idx+1:]...)
 	}
 	if err := s.save(f); err != nil {
 		return Receipt{}, err
 	}
-	if s.active[agent] == e.AttemptID && e.AttemptID != "" {
+	if s.active[agent] == priorAttempt && priorAttempt != "" {
 		delete(s.active, agent)
 	}
 	rec.Depth = len(f.Entries)
@@ -244,11 +270,18 @@ func (s *Store) Consolidate(agent, keepID, text, actor, evidence string, now tim
 		if e.RequestID != "" {
 			return Receipt{}, fmt.Errorf("sendq: request_id %q on entry %s cannot be consolidated", e.RequestID, e.ID)
 		}
-		if e.State != Pending {
+		if e.TransportRequestID != "" {
+			return Receipt{}, fmt.Errorf("sendq: receipt-bound entry %s cannot be consolidated", e.ID)
+		}
+		if phase := EntryPhase(e, s.active[agent]); !claimablePhase(phase) {
+			label := string(e.State)
+			if label == "" {
+				label = string(phase)
+			}
 			return Receipt{}, fmt.Errorf(
 				"sendq: entry %s has an unresolved %s attempt %s — reconcile it before consolidating; "+
 					"folding it away would claim non-delivery this call has no evidence for (🎯T416)",
-				e.ID, e.State, e.AttemptID)
+				e.ID, label, e.AttemptID)
 		}
 	}
 	idx := len(f.Entries) - 1
@@ -284,6 +317,19 @@ func (s *Store) Consolidate(agent, keepID, text, actor, evidence string, now tim
 	survivor.EnqueuedAt = oldest
 	survivor.Reconciled = &by
 	f.Entries = []Entry{survivor}
+	// The folded payloads leave the queue only after each one is archived
+	// under its own id. The survivor stays, and is not archived. A failed
+	// archive leaves the queue unchanged.
+	for _, removed := range rec.Removed {
+		if err := s.archiveSupersession(Supersession{
+			Agent:   strings.TrimSpace(agent),
+			At:      now.UTC(),
+			HoldID:  removed.ID,
+			Removed: []Entry{removed},
+		}); err != nil {
+			return Receipt{}, err
+		}
+	}
 	if err := s.save(f); err != nil {
 		return Receipt{}, err
 	}

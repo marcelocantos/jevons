@@ -4,11 +4,21 @@
 package agenterr_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 )
+
+type causeStub struct {
+	cause string
+	text  string
+}
+
+func (e causeStub) Error() string         { return e.text }
+func (e causeStub) ProviderCause() string { return e.cause }
 
 // 🎯T214 J6: busy classifier is not Grok-ACP-string-only.
 func TestIsPromptBusy(t *testing.T) {
@@ -19,16 +29,15 @@ func TestIsPromptBusy(t *testing.T) {
 		{nil, false},
 		{fmt.Errorf("connection reset"), false},
 		{fmt.Errorf("send failed: other"), false},
-		// Grok ACP (historical 🎯T111.1 path).
-		{fmt.Errorf("grok acp: prompt already in flight"), true},
-		{fmt.Errorf("send to x: grok acp: prompt already in flight"), true},
-		{fmt.Errorf("broker protocol: agent_failed: Migrate: turn in flight; wait for the current response or Interrupt first"), true},
-		// Claudia Task.
-		{fmt.Errorf("task abc is busy"), true},
-		// 🎯T766.4: "prompt in progress", "session busy" and "turn in
-		// progress" were matched here for a backend that "surfaces busy", and
-		// no backend in jevons or claudia produces any of them. Branches that
-		// can only match text nobody writes are deleted, not kept as a hedge.
+		{fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight), true},
+		{fmt.Errorf("send to x: %w", fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight)), true},
+		{errors.New("grok acp: prompt already in flight"), false},
+		{errors.New("broker protocol: agent_failed: cursor acp: prompt already in flight"), false},
+		{errors.New("401 unauthorized"), false},
+		{causeStub{cause: agenterr.CauseTurnInFlight, text: "401 unauthorized"}, true},
+		{causeStub{cause: agenterr.CauseBusy, text: "task abc is busy"}, true},
+		{causeStub{cause: agenterr.CauseProcessNotRunning, text: "claude process not running"}, false},
+		{errors.New("task abc is busy"), false},
 	}
 	for _, tc := range cases {
 		got := agenterr.IsPromptBusy(tc.err)

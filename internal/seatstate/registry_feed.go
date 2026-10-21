@@ -114,8 +114,9 @@ func ObserveStopped(reg *claudia.Registry, name string) {
 	bound.(*Authority).Observe(Observation{Name: name, Alive: No, LocalAlive: No, BrokerAlive: No, InFlight: No, Status: "stopped", QueueDepth: QueueUnknown, Source: "registry.stop"})
 }
 
-// ObserveResumeEvidence reports whether the located conversation required by a
-// Claude resume is absent. Other providers and failed lookups stay unknown.
+// ObserveResumeEvidence distinguishes a not-yet-materialized row from a
+// generation whose resume status only Claudia can establish. Native vendor
+// transcripts and disposable spool projections do not locate sidecar history.
 func (a *Authority) ObserveResumeEvidence(d *claudia.AgentDef) {
 	if d == nil || d.Name == "" {
 		return
@@ -124,10 +125,6 @@ func (a *Authority) ObserveResumeEvidence(d *claudia.AgentDef) {
 	at := time.Now()
 	if !d.Materialized || d.SessionID == "" {
 		lost = No
-	} else if d.Provider == "" || d.Provider == claudia.ProviderClaude {
-		if exists, err := claudia.SessionExists(d.SessionID, d.WorkDir); err == nil {
-			lost = TriOf(!exists)
-		}
 	}
 	a.Observe(Observation{Name: d.Name, ForSession: d.SessionID, ResumeLost: lost,
 		QueueDepth: QueueUnknown, Source: "resume.evidence", At: at})

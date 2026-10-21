@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // ModelSwitchHow names how a landed model change was made. Stable for the
@@ -36,7 +37,7 @@ func (f *Claudia) noteModelSwitch(sw *ModelSwitch) {
 		return
 	}
 	if strings.TrimSpace(sw.From) == strings.TrimSpace(sw.To) &&
-		strings.TrimSpace(sw.FromProvider) == strings.TrimSpace(sw.Provider) {
+		seatprovider.Same(claudia.Provider(sw.FromProvider), claudia.Provider(sw.Provider)) {
 		return
 	}
 	f.onModelSwitch(sw)
@@ -62,7 +63,7 @@ func (f *Claudia) SwitchModel(name string, to claudia.Provider, model string, fo
 	}
 	target := def.Provider
 	if p := strings.TrimSpace(string(to)); p != "" {
-		target = claudia.SubscriptionSeatProvider(claudia.Provider(p))
+		target = seatprovider.Resolve(claudia.Provider(p)).Launch
 	}
 	// 🎯T763: refuse before anything changes when the move would have to
 	// drop a restriction the destination cannot enforce.

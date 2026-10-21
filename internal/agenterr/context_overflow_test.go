@@ -4,6 +4,7 @@
 package agenterr_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -26,8 +27,15 @@ func TestT926ClassifiesContextOverflow(t *testing.T) {
 		"Input is too long for requested model.",
 	}
 	for _, in := range cases {
-		if got := agenterr.ClassifyText(in); got != agenterr.ClassContextOverflow {
-			t.Errorf("ClassifyText(%q) = %q, want context_overflow", in, got)
+		if got := agenterr.ClassifyText(in); got != agenterr.ClassNone {
+			t.Errorf("ClassifyText(%q) = %q, want none", in, got)
+		}
+		if agenterr.IsContextOverflow(errors.New(in)) {
+			t.Errorf("IsContextOverflow(%q) read the sentence", in)
+		}
+		caused := agenterr.WithCause(agenterr.CauseContextOverflow, errors.New(in))
+		if !agenterr.IsContextOverflow(caused) || agenterr.Classify(caused) != agenterr.ClassContextOverflow {
+			t.Errorf("typed cause of %q did not classify as context_overflow", in)
 		}
 	}
 }
@@ -47,7 +55,7 @@ func TestT926ContextOverflowIsTerminalNotHardBlock(t *testing.T) {
 
 func TestT926OwnerCopyNamesRemintNotConfig(t *testing.T) {
 	t.Parallel()
-	got := agenterr.OwnerCopy(agenterr.ClassifyText(incidentRefusal), incidentRefusal)
+	got := agenterr.OwnerCopy(agenterr.ClassContextOverflow, incidentRefusal)
 	for _, want := range []string{"context_overflow", "context window", "jevons_agent_kill", "jevons_agent_start", "1058579"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("owner copy missing %q: %q", want, got)

@@ -389,6 +389,32 @@ func TestT452HeaderTellsItsReaderWhatAWrongNameMeans(t *testing.T) {
 	}
 }
 
+func TestOverseerSeatNameReadsPurposeFold(t *testing.T) {
+	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "Jevons", WorkDir: "/w", Purpose: "Overseer",
+		SessionID: "s-overseer", Materialized: true, Provider: claudia.ProviderGrok,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{registry: reg}
+	if got := s.overseerSeatName(); got != "Jevons" {
+		t.Fatalf("overseer seat = %q, want Jevons", got)
+	}
+	if !isOverseerSeatRow(claudia.AgentDef{Name: "Jevons", Purpose: "Overseer", Parent: "portfolio"}) {
+		t.Fatal("purpose Overseer is the overseer row")
+	}
+	if !s.isOverseerAgent("Jevons") {
+		t.Fatal("overseer name compares case-insensitively")
+	}
+	if s.isOverseerAgent("jevons-po") {
+		t.Fatal("a different seat is not the overseer")
+	}
+}
+
 func keysOf(m map[string][]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

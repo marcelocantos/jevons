@@ -235,6 +235,23 @@ func TestSectionsSplitOnHeadings(t *testing.T) {
 	}
 }
 
+func TestTruncationFactIsNotTheVisibleMarker(t *testing.T) {
+	prose := "the overseer was told [⚠️ REPORT TRUNCATED in the note"
+	if IsTruncatedDelivery(prose) {
+		t.Fatal("quoting the visible marker is not a truncated delivery")
+	}
+	if !IsTruncatedDelivery("head\n" + TruncationFact + "\n" + TruncationMarkerPrefix + "]\n tail") {
+		t.Fatal("the fact line is the truncation slot")
+	}
+	got := Elide(strings.Repeat("x", DeliveryBound+1), DeliveryBound, Handle{})
+	if !got.Truncated || !IsTruncatedDelivery(got.Text) {
+		t.Fatal("an elided delivery did not carry the truncation fact")
+	}
+	if !strings.Contains(got.Text, TruncationMarkerPrefix) {
+		t.Fatal("the visible marker is still written for the reader")
+	}
+}
+
 // An agent name is free-form and arrives from the fleet layer, so the store
 // must refuse anything that could escape its root.
 func TestStoreRefusesUnsafeAgentNames(t *testing.T) {

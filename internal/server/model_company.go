@@ -3,7 +3,12 @@
 
 package server
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
+)
 
 // Company keys shared with web/scripts/model_prefix.js (🎯T287 / 🎯T323).
 // Provider wins for the badge mark; a model id that sniffs as a *different*
@@ -17,18 +22,19 @@ const (
 	companyCursor    = "cursor"
 )
 
-// providerCompany maps a registry provider id to a badge company.
-// Empty when the provider is unknown (caller keeps the model rather than
-// inventing a mismatch).
+// providerCompany maps a registry provider id, in either vocabulary
+// (🎯T1079: xai-oauth and openai-codex rows used to read as unknown), to a
+// badge company. Empty when the provider is unknown (caller keeps the model
+// rather than inventing a mismatch).
 func providerCompany(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude", "anthropic", "bedrock":
+	switch seatprovider.Resolve(claudia.Provider(provider)).Plan {
+	case seatprovider.Claude, seatprovider.Bedrock:
 		return companyAnthropic
-	case "grok", "xai":
+	case seatprovider.Grok:
 		return companyXAI
-	case "codex", "openai":
+	case seatprovider.Codex:
 		return companyOpenAI
-	case "cursor":
+	case seatprovider.Cursor:
 		return companyCursor
 	default:
 		return ""
@@ -76,7 +82,7 @@ func modelFitsProvider(provider, model string) bool {
 	if strings.TrimSpace(model) == "" {
 		return true
 	}
-	if providerCompany(provider) == companyCursor {
+	if seatprovider.Resolve(claudia.Provider(provider)).Plan == seatprovider.Cursor {
 		return true
 	}
 	mc := modelCompany(model)

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"strings"
 	"sync"
 
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -197,11 +196,15 @@ func supportsRequestID(proc agentSender) bool {
 	return sendModeRequestSeam(proc, "probe") != nil
 }
 
-// sendWithRequestID never falls back to Send: losing a host ID is a refusal,
-// not a legacy delivery. The optional interface compiles against Claudia
-// v0.52 while the T184 pin is separately reviewed.
+// sendWithRequestID never falls back to Send once the process can carry a
+// host id. An empty id on that process is a refusal, not a legacy delivery.
+// A process with no request-id method still uses Send, because there is no
+// tagged transport to drop the id onto.
 func sendWithRequestID(proc agentSender, text, requestID string) error {
 	if requestID == "" {
+		if supportsRequestID(proc) {
+			return fmt.Errorf("capable seat has no host request id: %w", errRequestIDUnavailable)
+		}
 		return proc.Send(text)
 	}
 	if sender, ok := proc.(interface{ SendWithRequestID(string, string) error }); ok {
@@ -222,12 +225,6 @@ func logSendModeSeamMissing(name string) {
 			"component", "agent_send", "name", name,
 			"fallback", "submit when idle, "+delivery.MechanismQueueUntilIdle+" when busy")
 	})
-}
-
-// isSteerUnsupported recognises claudia's ErrSteerUnsupported by text, the
-// pin having no symbol to compare against.
-func isSteerUnsupported(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "steer unsupported")
 }
 
 // describeMode renders the mode for a caller-facing message; empty for the

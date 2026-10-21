@@ -5,15 +5,14 @@
 // turn or can reach the overseer directly (🎯T392.7).
 //
 // A PO that only restates a worker report costs two coordinator turns for
-// information that did not change. Reports that need no product judgement
-// — oracle-backed done, blocked-on-X, needs-owner-decision — skip that hop.
-// Everything else stays on the parent. The safe default is the current
-// behaviour: if the classifier cannot tell, the PO still sees it first.
+// information that did not change. A declared envelope decides the hop:
+// an oracle or risk finish-report, a blocked finish-report, an escalation,
+// or a target-file request skips to the overseer. A report that declares
+// nothing stays with the parent. A sentence that says "blocked on" or
+// "needs owner" is not that declaration (🎯T766.4).
 package relayroute
 
 import (
-	"strings"
-
 	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
@@ -31,29 +30,19 @@ const (
 	RouteOverseer Route = "overseer"
 )
 
-// Classify reads the report, not the agent's name.
+// Classify reads the declared envelope, not the agent's name and not the
+// sentence. An unenveloped report stays with the parent (🎯T766.4).
 func Classify(report string) Route {
-	body, decided, route := envelopeRoute(report)
+	_, decided, route := envelopeRoute(report)
 	if decided {
 		return route
-	}
-	s := strings.ToLower(strings.TrimSpace(body))
-	if s == "" {
-		return RouteParent
-	}
-	// A record of a prior route is itself not a report to reroute.
-	if strings.HasPrefix(s, "[routed to overseer]") {
-		return RouteParent
-	}
-	if needsOwner(s) || blockedOn(s) || oracleDone(s) {
-		return RouteOverseer
 	}
 	return RouteParent
 }
 
 // envelopeRoute is the envelope arm shared by Classify and Reason. It returns
-// the prose the keyword heuristics may read (never the fence's own slot
-// lines), and whether the envelope alone decided the route.
+// the payload when the envelope did not decide, and whether the envelope
+// alone decided the route.
 //
 // 🎯T658: two shapes used to fall through to the keyword scan over text the
 // sender never wrote as a report. A fence that parses but fails validation
@@ -66,13 +55,15 @@ func Classify(report string) Route {
 func envelopeRoute(report string) (body string, decided bool, route Route) {
 	m, err := envelope.Parse(report)
 	if m == nil {
-		if fenceBeyondLine1(report) {
-			return "", true, RouteParent
-		}
+		// Parse accepts a fence on line 1 only. A later fence is not an
+		// envelope, and the words ahead of it are not scanned (🎯T766.4).
 		return report, false, RouteParent
 	}
 	switch m.Kind {
 	case envelope.KindFinishReport:
+		if err == nil && m.IsBlocked() {
+			return "", true, RouteOverseer
+		}
 		if err == nil && (m.HasOracle() || m.HasRisk()) {
 			return "", true, RouteOverseer
 		}
@@ -94,145 +85,19 @@ func envelopeRoute(report string) (body string, decided bool, route Route) {
 	return m.Payload, false, RouteParent
 }
 
-// fenceBeyondLine1 reports whether text carries a ```jevons fence that
-// Parse did not accept because prose precedes it. Parse treats such a fence
-// as a quotation; for routing it means daemon framing this package does not
-// know about sits ahead of the sender's envelope, and the words ahead of it
-// are not the sender's report.
-func fenceBeyondLine1(text string) bool {
-	return strings.Contains(text, "\n```"+envelope.FenceInfo+"\n") ||
-		strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), "```"+envelope.FenceInfo+"\n")
-}
-
-func needsOwner(s string) bool {
-	for _, p := range []string{
-		"needs-owner", "needs owner", "awaiting owner",
-		"owner verdict", "class-3", "blocked-on-human",
-	} {
-		if strings.Contains(s, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func blockedOn(s string) bool {
-	return strings.Contains(s, "blocked on") || strings.Contains(s, "blocked-on")
-}
-
-// disclaimed reports whether the body explicitly disclaims completion
-// (🎯T860): "not claiming done/complete" and "reporting status only" both
-// supply the raw substrings "done"/"complete" that the naive done-word scan
-// reads as a claim, so the negation must be checked before those words are
-// trusted.
-func disclaimed(s string) bool {
-	for _, p := range []string{
-		"not claiming done",
-		"not claiming complete",
-		"no assumed completion",
-		"reporting status only",
-	} {
-		if strings.Contains(s, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// externallyAttributedOracle reports whether the body's oracle-shaped
-// markers (GATE/GREEN, "oracle", SHA) are quoted as evidence belonging to a
-// named OTHER agent or a sibling's commit, rather than the reporter's own
-// (🎯T860). A reporter quoting someone else's green does not thereby earn
-// oracle_done for its own report.
-func externallyAttributedOracle(s string) bool {
-	for _, p := range []string{
-		"another agent",
-		"sibling agent",
-		"sibling's commit",
-		"'s commit",
-		"'s evidence",
-	} {
-		if strings.Contains(s, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func oracleDone(s string) bool {
-	if disclaimed(s) {
-		return false
-	}
-	done := strings.Contains(s, "done") || strings.Contains(s, "achieved") ||
-		strings.Contains(s, "complete") || strings.Contains(s, "finished")
-	if !done {
-		return false
-	}
-	if externallyAttributedOracle(s) {
-		return false
-	}
-	oracle := strings.Contains(s, "gate") && strings.Contains(s, "green")
-	oracle = oracle || strings.Contains(s, "oracle")
-	oracle = oracle || (strings.Contains(s, "sha") && (strings.Contains(s, "test") || strings.Contains(s, "green")))
-	return oracle
-}
-
-// ReportSummary returns a bounded, single-line excerpt for the PO record and
-// durable route event. It is deliberately mechanical: the full report still
-// goes to the overseer, while the PO gets enough content to identify it.
-func ReportSummary(report string) string {
-	if m, _ := envelope.Parse(report); m != nil {
-		if p := strings.TrimSpace(m.Payload); p != "" {
-			report = p
-		}
-	}
-	summary := strings.Join(strings.Fields(report), " ")
-	if summary == "" {
-		return "empty report"
-	}
-	runes := []rune(summary)
-	if len(runes) <= recordSummaryRuneLimit {
-		return summary
-	}
-	return string(runes[:recordSummaryRuneLimit-1]) + "…"
-}
-
-// RecordLine is the one-line the PO still sees when the full report skipped
-// the hop. It identifies the reporting worker and carries a report summary.
-func RecordLine(agent, reason, summary string) string {
-	if strings.TrimSpace(agent) == "" {
-		agent = "worker"
-	}
-	if strings.TrimSpace(reason) == "" {
-		reason = "unspecified"
-	}
-	summary = ReportSummary(summary)
-	return "[routed to overseer] " + agent + " report skipped the PO hop (" + reason + "): " + summary + " (🎯T392.7)"
-}
-
 func (r Route) String() string { return string(r) }
 
 // Reason is a stable token for logs and the PO record line.
 func Reason(report string) string {
-	body, decided, route := envelopeRoute(report)
-	if decided {
-		if route == RouteParent {
-			return "parent"
-		}
-		if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
-			return "oracle_done"
-		}
-		return "needs_owner"
-	}
-	s := strings.ToLower(strings.TrimSpace(body))
-	switch {
-	case needsOwner(s):
-		return "needs_owner"
-	case blockedOn(s):
-		return "blocked_on"
-	case oracleDone(s):
-		return "oracle_done"
-	default:
+	_, decided, route := envelopeRoute(report)
+	if !decided || route != RouteOverseer {
 		return "parent"
 	}
+	if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
+		if m.IsBlocked() {
+			return "blocked_on"
+		}
+		return "oracle_done"
+	}
+	return "needs_owner"
 }

@@ -103,7 +103,7 @@ func (s *Server) autoClearCapacityPark(plans string) {
 	if fleet.State != fleetintent.Parked {
 		return
 	}
-	if strings.EqualFold(strings.TrimSpace(fleet.By), "owner") {
+	if strings.ToLower(strings.TrimSpace(fleet.By)) == "owner" {
 		return
 	}
 	if !fleetintent.CapacityRelatedReason(fleet.Reason) {

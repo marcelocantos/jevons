@@ -50,6 +50,38 @@ func TestT940IsolatedBrokerEnvStripsAnyInheritedOverride(t *testing.T) {
 	}
 }
 
+// The isolate daemon links Claudia and renews a missing or expired plan
+// token in-process. That path is not the broker, so the broker's
+// CLAUDIA_OMP_NO_REFRESH does not cover it. An empty inherited value, or
+// the same empty value stuffed into the per-journey env, must still leave
+// exactly one forced refusal.
+func TestT940IsolateDaemonEnvNeverRefreshes(t *testing.T) {
+	t.Setenv("CLAUDIA_OMP_NO_REFRESH", "")
+	s := &suite{
+		stateDir: t.TempDir(),
+		daemonEnv: []string{
+			"CLAUDIA_OMP_NO_REFRESH=0",
+			"JOURNEY_EXTRA=1",
+		},
+	}
+	env := s.isolateDaemonEnv()
+	n := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("CLAUDIA_OMP_NO_REFRESH appears %d times, want 1", n)
+	}
+	if got := findEnv(env, "CLAUDIA_OMP_NO_REFRESH"); got != "1" {
+		t.Fatalf("CLAUDIA_OMP_NO_REFRESH=%q, want 1", got)
+	}
+	if got := findEnv(env, "JOURNEY_EXTRA"); got != "1" {
+		t.Fatal("per-journey daemonEnv dropped")
+	}
+}
+
 func findEnv(env []string, key string) string {
 	for _, e := range env {
 		if name, val, ok := strings.Cut(e, "="); ok && name == key {

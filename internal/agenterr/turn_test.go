@@ -18,10 +18,11 @@ func TestT454ClassifyTurnOutput(t *testing.T) {
 		want TurnKind
 	}{
 		{"empty", "", TurnEmpty},
-		{"spend_limit", spend, TurnRefusalOnly},
-		{"auth", auth, TurnRefusalOnly},
-		{"revoked", revoked, TurnRefusalOnly},
-		{"internal_error", "Internal error", TurnRefusalOnly},
+		// Spend, revoked, and a bare Internal error are sentences, not causes.
+		{"spend_limit", spend, TurnSubstantive},
+		{"auth", auth, TurnSubstantive},
+		{"revoked", revoked, TurnSubstantive},
+		{"internal_error", "Internal error", TurnSubstantive},
 		{"mixed_quotes_refusal", mixed, TurnSubstantive},
 		{"substantive", work, TurnSubstantive},
 	}

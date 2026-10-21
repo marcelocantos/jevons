@@ -328,7 +328,7 @@ func TestT766StaleAuthorityNeverFallsBackToPrivateFlight(t *testing.T) {
 	s.SetSeats(a)
 	s.noteTurnInFlight("seat")
 	now = now.Add(2 * time.Second)
-	a.FromQueue("seat", 1, now)
+	a.FromQueue("seat", seatstate.QueueReport{Depth: 1}, now)
 	if s.flightState("seat") != FlightUnknown || s.seatInFlight("seat") != seatstate.Unknown {
 		t.Fatal("stale authority fell back to private flight or was refreshed by queue traffic")
 	}

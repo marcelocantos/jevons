@@ -28,7 +28,7 @@ func TestAttemptSurvivesRestartWithoutAnotherClaim(t *testing.T) {
 	if err != nil || ok || held != attempt || held.ID != original.ID || held.Text != original.Text {
 		t.Fatalf("restart changed or replayed attempt: %+v %v %v", held, ok, err)
 	}
-	if _, _, err := after.PopFront("a"); err == nil {
+	if _, _, err := after.PopFront("a", "operator", "must not bypass the unresolved attempt", time.Now()); err == nil {
 		t.Fatal("legacy pop bypassed unresolved attempt")
 	}
 	if err := after.PushFront("a", original); err == nil {

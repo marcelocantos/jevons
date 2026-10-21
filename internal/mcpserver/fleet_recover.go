@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/modelladder"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
 // 🎯T236: after provider outage or failed turns, re-pressure open-mission
@@ -328,6 +329,10 @@ type FleetRecoverSweepArgs struct {
 	// declining ControlDeliverSubmit skips BOTH the interrupt and the push
 	// for this agent this sweep, reported as FleetRecoverSkip.
 	Intent func(name string) fleetintent.Decision
+	// SeatRole optionally answers a row's declared fleet role (🎯T766.4).
+	// Production wires Server.seatRoleOf (the role recorded at spawn). Nil
+	// reads the row alone (AgentDef.Role, else its purpose).
+	SeatRole func(d claudia.AgentDef) string
 }
 
 // SweepFleetRecover classifies every registered work agent and unsticks /
@@ -348,6 +353,9 @@ func SweepFleetRecover(args FleetRecoverSweepArgs) []FleetRecoverReport {
 	for _, d := range args.Reg.List() {
 		if d.Name == "" || d.Name == overseer {
 			continue
+		}
+		if args.SeatRole != nil {
+			d.Role = args.SeatRole(d)
 		}
 		rep := evaluateAndMaybeRecover(d, args, now)
 		if rep.Action == FleetRecoverSkip && rep.Reason == "not_work_purpose" {
@@ -466,7 +474,7 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 		SinceLastRecov:    sinceRecov,
 		EverRecovered:     ever,
 		Backoffs:          DefaultFleetRecoverBackoffs,
-		SpawnClass:        isSpawnClassSeat(d.Name, purpose),
+		SpawnClass:        isSpawnClassSeat(d.Name, roles.OfSeat(d.Role, purpose)),
 		SameToolID:        act.ToolCallID,
 		SameToolSince:     sameToolSince,
 		SessionReminted:   args.SessionReminted != nil && args.SessionReminted(d.Name),
@@ -506,6 +514,23 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	if args.Push == nil {
 		rep.Error = "no_pusher"
 		return rep
+	}
+	if args.Ledger != nil {
+		decision, err := args.Ledger.Reserve(d.Name, now, DefaultFleetRecoverMax, DefaultFleetRecoverBackoffs)
+		if err != nil {
+			rep.Error = err.Error()
+			slog.Warn("fleet recover ledger reserve failed", "agent", d.Name, "err", err)
+			return rep
+		}
+		if decision != NudgeReserved {
+			if decision == NudgeExhausted {
+				rep.Action = FleetRecoverMaxed
+			} else {
+				rep.Action = FleetRecoverSkip
+			}
+			rep.Reason = string(decision)
+			return rep
+		}
 	}
 
 	acceptance := ""
@@ -557,11 +582,6 @@ func evaluateAndMaybeRecover(d claudia.AgentDef, args FleetRecoverSweepArgs, now
 	if kind == IdleNudgeKindFullBrief && args.MarkBriefed != nil {
 		args.MarkBriefed(d.Name)
 	}
-	if args.Ledger != nil {
-		if err := args.Ledger.Record(d.Name, now); err != nil {
-			slog.Warn("fleet recover ledger record failed", "agent", d.Name, "err", err)
-		}
-	}
 	// Clear NeedsRecover and reset idle clock (phase stays idle until ACP).
 	if args.Activity != nil {
 		args.Activity.ClearRecover(d.Name, now)
@@ -591,6 +611,23 @@ func switchSeatModel(d claudia.AgentDef, args FleetRecoverSweepArgs,
 		rep.Error = "no_model_switcher"
 		return rep
 	}
+	if args.Ledger != nil {
+		decision, err := args.Ledger.Reserve(d.Name, now, DefaultFleetRecoverMax, DefaultFleetRecoverBackoffs)
+		if err != nil {
+			rep.Error = err.Error()
+			slog.Warn("fleet recover ledger reserve failed", "agent", d.Name, "err", err)
+			return rep
+		}
+		if decision != NudgeReserved {
+			if decision == NudgeExhausted {
+				rep.Action = FleetRecoverMaxed
+			} else {
+				rep.Action = FleetRecoverSkip
+			}
+			rep.Reason = string(decision)
+			return rep
+		}
+	}
 	if err := args.SwitchModel(d.Name, obs.FallbackModel); err != nil {
 		rep.Error = err.Error()
 		slog.Warn("fleet recover model fallback failed",
@@ -601,11 +638,6 @@ func switchSeatModel(d claudia.AgentDef, args FleetRecoverSweepArgs,
 	rep.Model = obs.FallbackModel
 	if args.Activity != nil {
 		args.Activity.NoteModelSwitched(d.Name, now)
-	}
-	if args.Ledger != nil {
-		if err := args.Ledger.Record(d.Name, now); err != nil {
-			slog.Warn("fleet recover ledger record failed", "agent", d.Name, "err", err)
-		}
 	}
 	// WARN, not INFO: the fleet just spent capability to stay alive, and
 	// the owner is the one who decides whether that trade is acceptable.
@@ -638,23 +670,16 @@ func FormatFleetRecoverSummary(reps []FleetRecoverReport) string {
 
 // --- activity: terminal failure tracking ---
 
-// NoteTerminalOutcome records structured failure class + recover need after
-// an end_turn (or equivalent). Pure class via agenterr (T237); no prose scrape
-// in the recovery decision path beyond ClassifyText fixtures.
-//
-// 🎯T454: also latches RefusalHold from whole-turn classification so the
-// impatience ladder cannot close on a spend-limit / auth wall as if the
-// agent had resumed work.
+// NoteTerminalOutcome records the end of a turn from its text. The sentence
+// is not a provider-failure cause: failure class, refusal hold, and
+// rate-limit strikes come from ApplyTerminalCause. An empty terminal still
+// needs recover. A substantive sentence clears a hold latched earlier.
 func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	if t == nil || name == "" {
 		return
 	}
 	text := strings.TrimSpace(terminalText)
 	empty := text == ""
-	class := agenterr.ClassifyText(text)
-	// Empty terminal always needs recover for open-mission (caller filters).
-	// Transient / unknown failures need recover; auth/client fail closed.
-	needs := empty || fleetRecoverWorthy(class)
 	kind := agenterr.ClassifyTurnOutput(text)
 
 	t.mu.Lock()
@@ -667,27 +692,49 @@ func (t *IdleActivityTracker) NoteTerminalOutcome(name, terminalText string) {
 	prev.Updated = t.clock()
 	prev.ToolCallID = ""
 	prev.ToolCallSince = time.Time{}
-	prev.FailureClass = class
-	if class == agenterr.ClassRateLimit {
-		prev.RateLimitStrikes++
-	} else if !empty {
-		// A terminal that got far enough to say something other than
-		// "rate limited" proves the model can still answer.
+	prev.FailureClass = agenterr.ClassNone
+	if !empty {
+		// A sentence is not a rate-limit strike. A typed cause, applied
+		// after this call, is what increments the counter.
 		prev.RateLimitStrikes = 0
 	}
 	prev.TerminalEmpty = empty
-	prev.NeedsRecover = needs
+	prev.NeedsRecover = empty
 	prev.LastTerminal = truncate(text, 400)
-	switch kind {
-	case agenterr.TurnRefusalOnly:
-		prev.RefusalHold = true
-	case agenterr.TurnSubstantive:
+	if kind == agenterr.TurnSubstantive {
 		prev.RefusalHold = false
 		prev.SubstantivePulse = true
 	}
-	// TurnEmpty leaves RefusalHold unchanged — an empty terminal after a
-	// wall is not evidence the account recovered.
+	// Empty and refusal-only prose leave RefusalHold unchanged. A typed
+	// hard-block cause latches it in ApplyTerminalCause.
 	t.by[name] = prev
+}
+
+// ApplyTerminalCause records a provider-failure cause observed on the
+// terminal event. A sentence, an empty reason, and any unknown reason are
+// ClassNone and change nothing. Call it after NoteTerminalOutcome so a
+// substantive sentence can clear a hold before a hard-block cause re-latches.
+func (t *IdleActivityTracker) ApplyTerminalCause(name, cause string) agenterr.Class {
+	class := agenterr.ClassFromCause(cause)
+	if t == nil || name == "" || !class.IsFailure() {
+		return class
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.by == nil {
+		t.by = make(map[string]IdleActivity)
+	}
+	prev := t.by[name]
+	prev.FailureClass = class
+	if class == agenterr.ClassRateLimit {
+		prev.RateLimitStrikes++
+	}
+	prev.NeedsRecover = prev.TerminalEmpty || fleetRecoverWorthy(class)
+	if agenterr.HardBlock(class, "") {
+		prev.RefusalHold = true
+	}
+	t.by[name] = prev
+	return class
 }
 
 // NoteTurnErrored records whether the backend reported the latest turn as
@@ -720,8 +767,9 @@ func (t *IdleActivityTracker) NoteTerminalTurn(name, text string, toolCalls int)
 	defer t.mu.Unlock()
 	prev := t.by[name]
 	prev.LastToolCalls = toolCalls
-	_, blocked := envelope.BlockedOn(text) // 🎯T938: a blocked report is a report, not a plan
-	if toolCalls > 0 || LooksLikeFinishedWorkReport(text) || blocked {
+	_, blocked := envelope.BlockedOn(text)    // 🎯T938: a blocked report is a report, not a plan
+	_, waiting := envelope.ActiveWaitIn(text) // 🎯T1024: so is a declared active wait
+	if toolCalls > 0 || LooksLikeFinishedWorkReport(text) || blocked || waiting {
 		prev.PlanOnly = false
 		t.by[name] = prev
 		return

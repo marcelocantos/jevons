@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T947: a plan login loss (invalid_grant and friends) must be
@@ -27,7 +29,7 @@ func TestPlanAuthLossIsLoggedWithPidAndSeat(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	t.Cleanup(func() { rehydrateFailures.Delete("po-lost") })
-	RecordRehydrateFailure("po-lost", errors.New("omp: anthropic refresh failed: invalid_grant"))
+	RecordRehydrateFailure("po-lost", agenterr.WithCause(agenterr.CauseAuth, errors.New("omp: anthropic refresh failed: invalid_grant")))
 
 	out := buf.String()
 	if !strings.Contains(out, "plan auth: login failure recorded for seat") {
@@ -54,8 +56,12 @@ func TestPlanAuthLossLogSkipsNonPlanFailures(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	t.Cleanup(func() { rehydrateFailures.Delete("po-crashed") })
+	t.Cleanup(func() {
+		rehydrateFailures.Delete("po-crashed")
+		rehydrateFailures.Delete("po-sentence")
+	})
 	RecordRehydrateFailure("po-crashed", fmt.Errorf("process exited: signal: killed"))
+	RecordRehydrateFailure("po-sentence", errors.New("omp: anthropic refresh failed: invalid_grant"))
 
 	if strings.Contains(buf.String(), "plan auth: login failure recorded for seat") {
 		t.Fatalf("did not expect a plan-auth-loss line for a non-plan failure, got: %s", buf.String())
@@ -69,7 +75,10 @@ func TestPlanAuthLossLogSkipsRecovery(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	rehydrateFailures.Store("po-recovered", "omp: anthropic refresh failed: invalid_grant")
+	rehydrateFailures.Store("po-recovered", rehydrateRecord{
+		Text:  "omp: anthropic refresh failed: invalid_grant",
+		Cause: agenterr.CauseAuth,
+	})
 	t.Cleanup(func() { rehydrateFailures.Delete("po-recovered") })
 
 	RecordRehydrateFailure("po-recovered", nil)

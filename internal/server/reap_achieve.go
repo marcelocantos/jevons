@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
 // 🎯T195: after a mission target is achieved on the bullseye ledger, reap
@@ -24,26 +25,29 @@ import (
 // unchanged. Multi-target agents without a matching TargetID stay.
 
 // durableFleetAgentForAchieve mirrors mcpserver.DurableFleetAgent so this
-// package does not import mcpserver (cycle). Keep in sync.
-func durableFleetAgentForAchieve(name, purpose string, isOverseer func(string) bool) bool {
+// package does not import mcpserver (cycle). Keep in sync. The seat's
+// declared role decides (AgentDef.Role, else the role its purpose implies);
+// isDurable answers for what the row alone cannot name — the overseer and,
+// on the production path, a seat whose recorded role (agent_roles.json) is
+// durable. The name does not decide.
+func durableFleetAgentForAchieve(name string, def claudia.AgentDef, isDurable func(string) bool) bool {
 	if name == "" {
 		return true
 	}
-	if isOverseer != nil && isOverseer(name) {
+	if isDurable != nil && isDurable(name) {
 		return true
 	}
-	p := strings.TrimSpace(purpose)
-	if p == "" {
-		p = claudia.PurposeWork
-	}
-	if p == claudia.PurposeOverseer || p == claudia.PurposeAside {
+	return durableRole(roles.OfSeat(def.Role, def.Purpose))
+}
+
+// durableRole is a role that auto-achieve reaping never removes.
+func durableRole(role string) bool {
+	switch roles.Normalize(role) {
+	case roles.Overseer, roles.Aside, roles.ProductOwner:
 		return true
+	default:
+		return false
 	}
-	lower := strings.ToLower(name)
-	if lower == "po" || strings.HasSuffix(lower, "-po") {
-		return true
-	}
-	return false
 }
 
 // ReapWorkAgentsOnTargetAchieve removes non-durable work agents whose
@@ -80,7 +84,7 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account
 		if def == nil {
 			continue
 		}
-		if durableFleetAgentForAchieve(name, def.Purpose, isOverseer) {
+		if durableFleetAgentForAchieve(name, *def, isOverseer) {
 			continue
 		}
 		toReap = append(toReap, name)
@@ -108,6 +112,8 @@ func ReapWorkAgentsOnTargetAchieve(reg *claudia.Registry, acct *fleetlog.Account
 	return removed, nil
 }
 
+const ledgerStatusAchieved = "achieved"
+
 // listAchievedTargetIDs reads a bullseye ledger and returns target IDs with
 // status=achieved (normalized). set_aside is not treated as achieve-reap.
 func listAchievedTargetIDs(ledgerPath string) (map[string]bool, error) {
@@ -124,7 +130,7 @@ func listAchievedTargetIDs(ledgerPath string) (map[string]bool, error) {
 		return nil, fmt.Errorf("parse ledger: %w", err)
 	}
 	for id, t := range doc.Targets {
-		if strings.EqualFold(strings.TrimSpace(t.Status), "achieved") {
+		if strings.ToLower(strings.TrimSpace(t.Status)) == ledgerStatusAchieved {
 			nid := NormalizeTargetID(id)
 			if nid != "" {
 				out[nid] = true
@@ -192,12 +198,23 @@ func (s *Server) maybeReapOnLedgerAchieve(ledgerPath string) {
 	if overseer == "" {
 		overseer = defaultOverseerName
 	}
+	stateDir := s.stateDir
 	s.mu.Unlock()
 
 	if reg == nil || len(newly) == 0 {
 		return
 	}
-	isO := func(n string) bool { return n == overseer }
+	// A product owner is named by the role recorded at spawn
+	// (agent_roles.json, written by the mcpserver half), not by its purpose
+	// (always work on a live PO) or its name (🎯T766.4). A store that cannot
+	// be read reaps nothing: a PO wrongly reaped costs more than a worker
+	// left for the next pass.
+	recorded, err := roles.OpenAssignments(roles.DefaultAssignmentsPath(stateDir))
+	if err != nil {
+		slog.Warn("T195 reap on achieve skipped: role assignments unreadable", "err", err)
+		return
+	}
+	isO := func(n string) bool { return n == overseer || durableRole(recorded.Get(n)) }
 	// 🎯T389: the achieve belongs to this ledger, and so does every id in it.
 	// The ledger's own directory is the scope — never the daemon's cwd, which
 	// is some other repo whenever the watch fires for a second ledger.

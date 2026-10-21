@@ -167,7 +167,7 @@ func TestT679_2BirthPromptAccepted(t *testing.T) {
 }
 
 func TestT679_2BeforeGraceNoClaimOrNotice(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-before")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-before")
 	e.accept()
 	e.clock.add(BornStuckGrace - time.Second)
 	body := e.list()
@@ -180,7 +180,7 @@ func TestT679_2BeforeGraceNoClaimOrNotice(t *testing.T) {
 }
 
 func TestT679_2AtDeadlineMarksAndNotifiesParentOnce(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-deadline")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-deadline")
 	e.accept()
 	childSends := len(e.child.sent)
 	e.clock.add(BornStuckGrace)
@@ -210,7 +210,7 @@ func TestT679_2AtDeadlineMarksAndNotifiesParentOnce(t *testing.T) {
 }
 
 func TestT679_2PeriodicHookRunsWithoutList(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-hook")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-hook")
 	e.accept()
 	e.clock.add(BornStuckGrace)
 	sweepObservedBirths(e.s)
@@ -223,7 +223,7 @@ func TestT679_2PeriodicHookRunsWithoutList(t *testing.T) {
 }
 
 func TestT679_2LateTranscriptClearsEvenQueueAttachmentOnly(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-late")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-late")
 	e.accept()
 	e.clock.add(BornStuckGrace)
 	if body := e.list(); !strings.Contains(body, AgentStatusBornStuck) {
@@ -237,7 +237,7 @@ func TestT679_2LateTranscriptClearsEvenQueueAttachmentOnly(t *testing.T) {
 }
 
 func TestT679_2RemintCannotUseOldEvidence(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-old")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-old")
 	e.accept()
 	e.clock.add(BornStuckGrace)
 	if body := e.list(); !strings.Contains(body, AgentStatusBornStuck) {
@@ -249,7 +249,7 @@ func TestT679_2RemintCannotUseOldEvidence(t *testing.T) {
 	const newSID = "t6792-new"
 	if err := e.reg.Register(claudia.AgentDef{
 		Name: e.name, WorkDir: e.work, SessionID: newSID,
-		Purpose: claudia.PurposeWork, Parent: e.parentName, Provider: claudia.ProviderClaude,
+		Purpose: claudia.PurposeWork, Parent: e.parentName, Provider: claudeJSONLSeat,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestT679_2UnobservableNeverAbsence(t *testing.T) {
 	})
 
 	t.Run("claude permission denied", func(t *testing.T) {
-		e := t679_2Harness(t, claudia.ProviderClaude, "t6792-perm")
+		e := t679_2Harness(t, claudeJSONLSeat, "t6792-perm")
 		e.accept()
 		path := e.plantTranscript(`{"type":"user"}` + "\n")
 		bucket := filepath.Dir(path)
@@ -352,7 +352,7 @@ func TestT679_2UnobservableNeverAbsence(t *testing.T) {
 }
 
 func TestT679_2NoAcceptedPromptNeverAccusedAndNudgesKeepDeadline(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-nudge")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-nudge")
 	e.clock.add(BornStuckGrace * 2)
 	if body := e.list(); strings.Contains(body, AgentStatusBornStuck) {
 		t.Fatalf("no accepted prompt must never be accused:\n%s", body)
@@ -374,7 +374,7 @@ func TestT679_2NoAcceptedPromptNeverAccusedAndNudgesKeepDeadline(t *testing.T) {
 }
 
 func TestT679_2NoticeFailureRetriesAfterRestartWithoutManufacturingSuccess(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-retry")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-retry")
 	e.accept()
 	e.parent.sendErr = fmt.Errorf("parent unreachable")
 	e.clock.add(BornStuckGrace)
@@ -429,7 +429,7 @@ func TestT679_2NoticeFailureRetriesAfterRestartWithoutManufacturingSuccess(t *te
 }
 
 func TestT679_2DiagnosisDoesNotStopKillMigrateOrWeakenT664(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-t664")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-t664")
 	e.accept()
 	e.s.noteUnconfirmedSend(e.name, "Execute 🎯T679.2.")
 	e.clock.add(BornStuckGrace)
@@ -437,7 +437,7 @@ func TestT679_2DiagnosisDoesNotStopKillMigrateOrWeakenT664(t *testing.T) {
 	if e.reg.Def(e.name) == nil {
 		t.Fatal("diagnosis killed or removed the seat")
 	}
-	if got := e.reg.Def(e.name).Provider; got != claudia.ProviderClaude {
+	if got := e.reg.Def(e.name).Provider; got != claudeJSONLSeat {
 		t.Fatalf("diagnosis migrated the seat: provider=%s", got)
 	}
 	res, err := e.s.handleAgentStop(context.Background(), t664Call(e.name, "jevons", false))
@@ -450,7 +450,7 @@ func TestT679_2DiagnosisDoesNotStopKillMigrateOrWeakenT664(t *testing.T) {
 }
 
 func TestT679_2PinnedStaysVisibleAlongsideBornStuck(t *testing.T) {
-	e := t679_2Harness(t, claudia.ProviderClaude, "t6792-pin")
+	e := t679_2Harness(t, claudeJSONLSeat, "t6792-pin")
 	e.accept()
 	e.clock.add(BornStuckGrace)
 	body := e.list()

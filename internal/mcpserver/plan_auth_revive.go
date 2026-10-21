@@ -58,13 +58,15 @@ func (s *Server) ReattachRunningSeats() []string {
 }
 
 // relaunchableLostSeat reports whether the reattach loop may relaunch a seat
-// it could not adopt. Only a seat lost to a broker restart qualifies, and
-// under the frontier pause an auto-spawned worker never does (🎯T1067): it
-// is adopted if its process still runs, never started again. Relaunching
+// it could not adopt. Only a seat lost to a broker restart qualifies, and an
+// auto-spawned worker the frontier pause or an achieved target holds never
+// does (🎯T1067, 🎯T1066): it is adopted if its process still runs, never
+// started again. Relaunching
 // the -auto seats a restart had lost is the launch storm the PO answered on
 // 2026-10-12 by stopping the daemon with SIGSTOP.
 func (s *Server) relaunchableLostSeat(name string) bool {
-	if s.AutoSpawnPaused() && IsAutoSpawnedWorkerName(name) {
+	if hold := s.autoSeatHold(name); hold != "" {
+		s.noteRevive(name, "reattach", hold, nil)
 		return false
 	}
 	return s.lostToBroker(name)

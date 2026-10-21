@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T429 — A SEND REPORTS ONLY WHAT IT OBSERVED.
@@ -257,9 +258,18 @@ func TestClassifySendErrorSeparatesNonObservationFromDisproof(t *testing.T) {
 		{"wrapped reply deadline",
 			fmt.Errorf("deliver turn to agent %q: %w", "jevons-po", context.DeadlineExceeded),
 			ClaimReplyUnverified},
-		{"operation timed out",
+		// A sentence that quotes a timeout is not the typed deadline. The
+		// specimen words are what an MCP client said about a push that had
+		// already landed; they do not decide the claim.
+		{"quoted operation timed out",
 			errors.New("push \"jevons-po\" (event \"worker-finished\"): The operation timed out"),
-			ClaimReplyUnverified},
+			ClaimNotSent},
+		{"quoted deadline",
+			errors.New("context deadline exceeded"),
+			ClaimNotSent},
+		{"quoted timed out waiting",
+			errors.New("timed out waiting for a turn"),
+			ClaimNotSent},
 		// Disproof: each of these is a statement about the handover.
 		{"no such agent", errors.New(`no agent "ghost"`), ClaimNotSent},
 		{"registry refused", errors.New(`could not rehydrate agent "w": pane exited`), ClaimNotSent},
@@ -283,11 +293,10 @@ func TestClassifySendErrorSeparatesNonObservationFromDisproof(t *testing.T) {
 
 // ── the drain, where believing the transport is most expensive ─────────
 
-// On the drain the message has ALREADY left the daemon's queue. Believing an
-// unverified submit there loses it twice: the queue no longer holds it, and the
-// fleet is told a delivery that happened did not — a fleet-health note naming
-// an "undelivered backlog" that the receiver is at that moment working through.
-func TestDrainWithAnUnverifiedSubmitReadsTheReceiverInstead(t *testing.T) {
+// An incapable sender's nil-or-chip error is not a receipt. The receiver log
+// can show the payload and still must not confirm the handoff, start the
+// turn, or drop the queue entry. The notice says the outcome is undecided.
+func TestDrainWithAnUnverifiedSubmitDoesNotConfirmFromTheReceiver(t *testing.T) {
 	tr := newSessionLog(t)
 	tr.submitted("the turn that just ended")
 	agent := &chipSender{alive: true, sendErr: pasteChipErr(), onPaste: func(text string) {
@@ -302,22 +311,31 @@ func TestDrainWithAnUnverifiedSubmitReadsTheReceiverInstead(t *testing.T) {
 	if len(agent.sent) != 1 {
 		t.Fatalf("drain sent %d times want 1", len(agent.sent))
 	}
-	if len(inbox.texts) != 0 {
-		t.Fatalf("a delivered payload was reported to the overseer as an undelivered backlog: %v", inbox.texts)
+	if len(inbox.texts) != 1 {
+		t.Fatalf("unbound handoff notices = %v", inbox.texts)
 	}
-	if n := observedPendingSends(s, "w"); n != 0 {
-		t.Fatalf("pending=%d want 0 — the message was delivered", n)
+	note := inbox.texts[0]
+	for _, want := range []string{"UNDECIDED", "NOT evidence the message was lost", "do not re-send"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("fleet-health note missing %q: %q", want, note)
+		}
 	}
-	// The discriminating assertion, and the reason this test is not satisfied
-	// by the pre-fix tree: believing the transport made the drain RETURN, which
-	// left an empty queue, a silent log line and no record that the receiver had
-	// taken the message up. Everything above is true of that silence too. Only
-	// the turn-began mark says the daemon actually read the receiver.
-	if !s.agentHasTurnBegan("w") {
-		t.Fatal("the drain believed the transport and never read the receiver's records")
+	if strings.Contains(note, "Uncertain delivery") || strings.Contains(note, "UNDELIVERED") {
+		t.Fatalf("notice claims a finding the drain did not make: %q", note)
 	}
-	if got := s.flightState("w"); got != FlightInFlight {
-		t.Fatalf("flight=%s want in_flight — the drained payload is in a running turn", got)
+	left, err := s.sendQueue().Snapshot("w")
+	if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain {
+		t.Fatalf("handoff = %+v %v", left, err)
+	}
+	if s.agentHasTurnBegan("w") {
+		t.Fatal("transcript confirmation started a turn")
+	}
+	if got := s.flightState("w"); got == FlightInFlight {
+		t.Fatalf("flight=%s; an unbound handoff must not start a turn", got)
+	}
+	s.drainAgentSendQueue("w")
+	if len(agent.sent) != 1 {
+		t.Fatalf("retained handoff resent: %d", len(agent.sent))
 	}
 }
 
@@ -336,8 +354,14 @@ func TestDrainWithAnUnverifiedSubmitAndNoRecordsStillSurfaces(t *testing.T) {
 	if len(inbox.texts) != 1 {
 		t.Fatalf("an undelivered backlog was not surfaced to the overseer: %v", inbox.texts)
 	}
-	if !strings.Contains(inbox.texts[0], "Uncertain delivery") {
-		t.Errorf("fleet-health note does not name the failure: %q", inbox.texts[0])
+	note := inbox.texts[0]
+	for _, want := range []string{"UNDECIDED", "NOT evidence the message was lost", "do not re-send"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("fleet-health note missing %q: %q", want, note)
+		}
+	}
+	if pending, held := observedPendingSends(s, "w"), observedQueueDepth(s, "w"); pending != 0 || held != 1 {
+		t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
 	}
 }
 
@@ -417,7 +441,7 @@ func callPush(t *testing.T, s *Server, target, event, text string) *mcp.CallTool
 // TIMEOUT IS NOT ABSENCE. The reply never comes back inside the window, and the
 // receiver's records show the payload in its turn. The tool must report
 // delivered — from those records — and must not hand the caller a failure.
-func TestEventPushWhoseReplyOutlivesTheWindowReportsDeliveryFromTheReceiver(t *testing.T) {
+func TestT1074EventPushTranscriptDoesNotConfirm(t *testing.T) {
 	tr := newSessionLog(t)
 	tr.submitted("the turn that was running when the push arrived")
 	release := make(chan struct{})
@@ -437,10 +461,13 @@ func TestEventPushWhoseReplyOutlivesTheWindowReportsDeliveryFromTheReceiver(t *t
 		t.Fatalf("a delivered push was returned as an error: %q", toolText(res))
 	}
 	text := toolText(res)
-	for _, want := range []string{"DELIVERED", "delivered_confirmed", "DO NOT re-push"} {
+	for _, want := range []string{"NOT CONFIRMED", "delivered_unconfirmed", "DO NOT re-push", "not a receipt"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %q", want, text)
 		}
+	}
+	if strings.Contains(text, "delivered_confirmed") {
+		t.Fatalf("transcript confirmed the push: %q", text)
 	}
 }
 
@@ -460,7 +487,7 @@ func TestEventPushWithNoEvidenceIsUnknownRatherThanFailure(t *testing.T) {
 		t.Fatalf("an unknown was returned as an error: %q", toolText(res))
 	}
 	text := toolText(res)
-	for _, want := range []string{"NOT CONFIRMED", "delivered_unconfirmed", "DO NOT re-push", "jevons_transcript_read"} {
+	for _, want := range []string{"NOT CONFIRMED", "delivered_unconfirmed", "DO NOT re-push", "not a receipt"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %q", want, text)
 		}

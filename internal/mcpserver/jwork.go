@@ -202,79 +202,24 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("worker dispatch failed: %v", err)), nil
 	}
 
-	// Collect result while extracting progress heartbeats and token totals.
-	var textParts []string
-	var inputTok, outputTok int64
-	var costUSD float64
-	var errClass agenterr.Class
-	var errRaw string
 	hb := &heartbeatTracker{}
-
-	for ev := range events {
-		switch ev.Type {
-		case claudia.TaskEventText:
-			textParts = append(textParts, ev.Content)
-			if s.workers != nil {
-				for _, line := range strings.Split(ev.Content, "\n") {
-					if strings.TrimSpace(line) != "" {
-						_ = s.workers.Progress(workerID, line)
-					}
-				}
-			}
-			// Check each line for markdown headings.
-			for _, line := range strings.Split(ev.Content, "\n") {
-				if heading, hdepth := extractHeading(line); heading != "" {
-					if hb.shouldEmit(hdepth) {
-						slog.Info("jwork: progress",
-							"worker", workerID,
-							"depth", depth,
-							"heading_depth", hdepth,
-							"heading", heading,
-						)
-						s.broadcastWorkerProgress(workerID, depth, heading)
-					}
-				}
-			}
-		case claudia.TaskEventResult:
-			inputTok += int64(ev.Usage.InputTokens)
-			outputTok += int64(ev.Usage.OutputTokens)
-			costUSD += ev.CostUSD
-			if ev.Content != "" {
-				textParts = append(textParts, ev.Content)
-			}
-		case claudia.TaskEventError:
-			// 🎯T283: keep the strongest class seen. Previously these were
-			// logged and dropped, so a backend outage surfaced to the caller
-			// as "Worker finished (no output)" — a product defect, apparently.
-			if c := agenterr.ClassifyText(ev.ErrorMsg); c.IsFailure() {
-				errClass, errRaw = c, ev.ErrorMsg
-			}
-			slog.Warn("jwork: worker error",
-				"worker", workerID,
-				"error", ev.ErrorMsg,
-				"failure_class", agenterr.ClassifyText(ev.ErrorMsg).String(),
-			)
-			if s.workers != nil {
-				_ = s.workers.Progress(workerID, "error: "+ev.ErrorMsg)
-			}
-		}
-	}
+	fold := s.foldJworkEvents(workerID, depth, hb, events)
 
 	result := task.LastResult()
 	if result == "" {
-		result = strings.Join(textParts, "")
+		result = strings.Join(fold.textParts, "")
 	}
 
-	failClass, failMsg := jworkFailure(errClass, errRaw, result)
+	failClass, failMsg := s.settleJworkFailure(workerID, fold, result)
 	if failClass.IsFailure() {
 		s.logProviderFailure("jwork", workerID, failClass, failMsg)
 		if s.workers != nil {
 			_ = s.workers.Finish(workers.FinishArgs{
 				ID: workerID, Status: workers.StatusFailed,
 				Outcome:      truncate(failMsg, 500),
-				InputTokens:  inputTok,
-				OutputTokens: outputTok,
-				CostUSD:      costUSD,
+				InputTokens:  fold.inputTok,
+				OutputTokens: fold.outputTok,
+				CostUSD:      fold.costUSD,
 			})
 		}
 		return mcp.NewToolResultStructured(map[string]any{
@@ -283,9 +228,9 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"status":        workers.StatusFailed,
 			"failure_class": failClass.String(),
 			"transient":     failClass.IsTransient(),
-			"input_tokens":  inputTok,
-			"output_tokens": outputTok,
-			"cost_usd":      costUSD,
+			"input_tokens":  fold.inputTok,
+			"output_tokens": fold.outputTok,
+			"cost_usd":      fold.costUSD,
 		}, failMsg), nil
 	}
 
@@ -305,9 +250,9 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		_ = s.workers.Finish(workers.FinishArgs{
 			ID: workerID, Status: workers.StatusCompleted,
 			Outcome:      truncate(result, 500),
-			InputTokens:  inputTok,
-			OutputTokens: outputTok,
-			CostUSD:      costUSD,
+			InputTokens:  fold.inputTok,
+			OutputTokens: fold.outputTok,
+			CostUSD:      fold.costUSD,
 			Policy: &workers.PolicyArgs{
 				Decision: policy.Decision,
 				Level:    policy.Level,
@@ -327,11 +272,11 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		"result":        truncated,
 		"worker_id":     workerID,
 		"status":        workers.StatusCompleted,
-		"failure_class": errClass.String(),
-		"transient":     errClass.IsTransient(),
-		"input_tokens":  inputTok,
-		"output_tokens": outputTok,
-		"cost_usd":      costUSD,
+		"failure_class": fold.errClass.String(),
+		"transient":     fold.errClass.IsTransient(),
+		"input_tokens":  fold.inputTok,
+		"output_tokens": fold.outputTok,
+		"cost_usd":      fold.costUSD,
 		"policy": map[string]any{
 			"decision":  policy.Decision,
 			"level":     policy.Level,
@@ -340,6 +285,76 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"audit_seq": policy.AuditSeq,
 		},
 	}, truncated), nil
+}
+
+// jworkFold is one jwork run's events, folded the way handleJwork folds them.
+type jworkFold struct {
+	textParts []string
+	inputTok  int64
+	outputTok int64
+	costUSD   float64
+	errClass  agenterr.Class
+	errRaw    string
+}
+
+// foldJworkEvents is the event loop handleJwork runs. TaskEvent.ErrorMsg is
+// a sentence. The published event has no cause field, so the sentence is
+// not a failure class and does not enter a provider hard-block.
+func (s *Server) foldJworkEvents(workerID string, depth int, hb *heartbeatTracker, events <-chan claudia.TaskEvent) jworkFold {
+	var fold jworkFold
+	for ev := range events {
+		switch ev.Type {
+		case claudia.TaskEventText:
+			fold.textParts = append(fold.textParts, ev.Content)
+			if s.workers != nil {
+				for _, line := range strings.Split(ev.Content, "\n") {
+					if strings.TrimSpace(line) != "" {
+						_ = s.workers.Progress(workerID, line)
+					}
+				}
+			}
+			for _, line := range strings.Split(ev.Content, "\n") {
+				if heading, hdepth := extractHeading(line); heading != "" {
+					if hb.shouldEmit(hdepth) {
+						slog.Info("jwork: progress",
+							"worker", workerID,
+							"depth", depth,
+							"heading_depth", hdepth,
+							"heading", heading,
+						)
+						s.broadcastWorkerProgress(workerID, depth, heading)
+					}
+				}
+			}
+		case claudia.TaskEventResult:
+			fold.inputTok += int64(ev.Usage.InputTokens)
+			fold.outputTok += int64(ev.Usage.OutputTokens)
+			fold.costUSD += ev.CostUSD
+			if ev.Content != "" {
+				fold.textParts = append(fold.textParts, ev.Content)
+			}
+		case claudia.TaskEventError:
+			slog.Warn("jwork: worker error",
+				"worker", workerID,
+				"error", ev.ErrorMsg,
+				"failure_class", fold.errClass.String(),
+			)
+			if s.workers != nil {
+				_ = s.workers.Progress(workerID, "error: "+ev.ErrorMsg)
+			}
+		}
+	}
+	return fold
+}
+
+// settleJworkFailure reports a folded run that is a provider outage.
+// A sentence that produced no class does not call ObserveProviderFailure.
+func (s *Server) settleJworkFailure(workerID string, fold jworkFold, result string) (agenterr.Class, string) {
+	failClass, failMsg := jworkFailure(fold.errClass, fold.errRaw, result)
+	if failClass.IsFailure() {
+		s.logProviderFailure("jwork", workerID, failClass, failMsg)
+	}
+	return failClass, failMsg
 }
 
 // extractHeading parses a markdown heading line, returning the text

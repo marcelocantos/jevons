@@ -6,6 +6,8 @@ package mcpserver
 import (
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // This regression uses only pre-existing APIs so it also runs against the
@@ -30,7 +32,8 @@ func TestT623AcceptedPayloadIsPresentDuringProviderSubmit(t *testing.T) {
 	if !called {
 		t.Fatal("the production drain never submitted")
 	}
-	if depth := observedPendingSends(s, "a"); depth != 0 {
-		t.Fatalf("healthy delivery left %d held", depth)
+	entries, err := s.sendQueue().Snapshot("a")
+	if err != nil || len(entries) != 1 || entries[0].ID != original.ID || entries[0].State != sendq.Uncertain {
+		t.Fatalf("transcript confirmed an unbound drain: %+v %v", entries, err)
 	}
 }

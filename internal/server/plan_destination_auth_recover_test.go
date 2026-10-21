@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/planusage"
 )
 
@@ -21,8 +22,9 @@ func TestPlanDestinationAuthRecoveryKeepsRunningSourceAndRetriesAfterCancellatio
 	decision := planusage.PlanAction{
 		Name: "jevons", From: "grok", To: "claude", Action: planusage.SeatMigrate,
 		Reason: "weekly hot or exhausted", Execution: "failed",
-		Failure: "Migrate: context transfer: anthropic refresh failed: invalid_grant",
-		Author:  claudia.DecisionAuthor,
+		Failure:      "Migrate: context transfer: anthropic refresh failed: invalid_grant",
+		FailureCause: agenterr.CauseAuth,
+		Author:       claudia.DecisionAuthor,
 	}
 	s := New("test", t.TempDir())
 	s.SetPlanDecisions(func() []planusage.PlanAction { return []planusage.PlanAction{decision} })
@@ -57,11 +59,19 @@ func TestPlanDestinationAuthRecoveryKeepsRunningSourceAndRetriesAfterCancellatio
 	if w := request(http.MethodPost, "/api/plan-usage/auth/recover/ollama"); w.Code != http.StatusBadRequest {
 		t.Fatalf("unsupported provider status=%d body=%s", w.Code, w.Body.String())
 	}
+	decision.FailureCause = ""
+	if w := request(http.MethodGet, "/api/plan-usage/decisions"); strings.Contains(w.Body.String(), `"ReauthAvailable":true`) {
+		t.Fatalf("sentence without a cause offered recovery: %s", w.Body.String())
+	}
+	if w := request(http.MethodPost, "/api/plan-usage/auth/recover/claude"); w.Code != http.StatusConflict {
+		t.Fatalf("sentence without a cause status=%d body=%s", w.Code, w.Body.String())
+	}
 	decision.Failure = "destination process exited without authentication error"
 	if w := request(http.MethodPost, "/api/plan-usage/auth/recover/claude"); w.Code != http.StatusConflict {
 		t.Fatalf("unrelated failure status=%d body=%s", w.Code, w.Body.String())
 	}
 	decision.Failure = "anthropic refresh failed: invalid_grant"
+	decision.FailureCause = agenterr.CauseAuth
 	if w := request(http.MethodPost, "/api/plan-usage/auth/recover/claude"); w.Code != http.StatusBadGateway ||
 		!strings.Contains(w.Body.String(), "sign-in was cancelled") {
 		t.Fatalf("cancelled sign-in status=%d body=%s", w.Code, w.Body.String())
@@ -94,12 +104,15 @@ func TestPlanDestinationAuthRecoveryOnlyOffersRejectedLogins(t *testing.T) {
 		action planusage.PlanAction
 		want   bool
 	}{
-		{"rejected refresh", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "failed", Failure: "OAuthError: invalid_grant"}, true},
-		{"missed keychain", planusage.PlanAction{To: "cursor", Action: planusage.SeatMigrate, Execution: "failed", Failure: "keychain was not read at startup"}, true},
-		{"healthy destination", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "migrated", Failure: ""}, false},
-		{"pending move", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "pending", Failure: "invalid_grant"}, false},
+		{"rejected refresh", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "failed", Failure: "OAuthError: invalid_grant", FailureCause: agenterr.CauseAuth}, true},
+		{"quoted refresh", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "failed", Failure: "OAuthError: invalid_grant"}, false},
+		{"missed keychain", planusage.PlanAction{To: "cursor", Action: planusage.SeatMigrate, Execution: "failed", Failure: "keychain was not read at startup", FailureCause: agenterr.CauseAuth}, true},
+		{"quoted keychain", planusage.PlanAction{To: "cursor", Action: planusage.SeatMigrate, Execution: "failed", Failure: "keychain was not read at startup"}, false},
+		{"healthy destination", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "migrated", FailureCause: agenterr.CauseAuth}, false},
+		{"pending move", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "pending", Failure: "invalid_grant", FailureCause: agenterr.CauseAuth}, false},
 		{"unrelated error", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "failed", Failure: "destination process exited"}, false},
-		{"non-plan provider", planusage.PlanAction{To: "ollama", Action: planusage.SeatMigrate, Execution: "failed", Failure: "invalid_grant"}, false},
+		{"other cause", planusage.PlanAction{To: "claude", Action: planusage.SeatMigrate, Execution: "failed", Failure: "OAuthError: invalid_grant", FailureCause: agenterr.CauseSpendWall}, false},
+		{"non-plan provider", planusage.PlanAction{To: "ollama", Action: planusage.SeatMigrate, Execution: "failed", Failure: "invalid_grant", FailureCause: agenterr.CauseAuth}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := destinationAuthRecoverable(tc.action); got != tc.want {
@@ -111,19 +124,28 @@ func TestPlanDestinationAuthRecoveryOnlyOffersRejectedLogins(t *testing.T) {
 
 func TestPlanDestinationAuthRecoveryRequiresMigrationRetry(t *testing.T) {
 	s := New("test", t.TempDir())
-	s.SetPlanDecisions(func() []planusage.PlanAction {
-		return []planusage.PlanAction{{
-			Name: "worker", From: "grok", To: "claude", Action: planusage.SeatMigrate,
-			Execution: "failed", Failure: "invalid_grant",
-		}}
-	})
+	sentence := planusage.PlanAction{
+		Name: "worker", From: "grok", To: "claude", Action: planusage.SeatMigrate,
+		Execution: "failed", Failure: "invalid_grant",
+	}
+	s.SetPlanDecisions(func() []planusage.PlanAction { return []planusage.PlanAction{sentence} })
 	called := false
 	s.authRecover = func(context.Context, claudia.Provider) error { called = true; return nil }
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/plan-usage/auth/recover/claude", nil))
-	if w.Code != http.StatusServiceUnavailable || called {
+	post := func() *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/plan-usage/auth/recover/claude", nil))
+		return w
+	}
+	if w := post(); w.Code != http.StatusConflict || called {
+		t.Fatalf("sentence without a cause status=%d called=%v body=%s", w.Code, called, w.Body.String())
+	}
+	typed := sentence
+	typed.FailureCause = agenterr.CauseAuth
+	s.SetPlanDecisions(func() []planusage.PlanAction { return []planusage.PlanAction{typed} })
+	if w := post(); w.Code != http.StatusServiceUnavailable || called {
 		t.Fatalf("unwired recovery status=%d called=%v body=%s", w.Code, called, w.Body.String())
 	}
 }

@@ -271,17 +271,28 @@ func FormatJob(j *Job) string {
 // jobsRegistry returns the server's job registry, creating it on first
 // use. Records live beside the rest of the daemon's state so a handle
 // survives a bounce.
+//
+// 🎯T1090: "the rest of the daemon's state" is <state_dir>, never
+// $HOME/.jevons. An isolate daemon used to write its job records into the
+// development tree because this joined the home directory directly. With
+// no state dir recorded (a hermetic Server that never had
+// SetDaemonStateDir called) the registry is memory-only rather than
+// borrowing the development daemon's directory.
 func (s *Server) jobsRegistry() *jobRegistry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.jobs == nil {
-		dir := ""
-		if home, err := os.UserHomeDir(); err == nil {
-			dir = filepath.Join(home, ".jevons", "jobs")
-		}
-		s.jobs = newJobRegistry(dir)
+		s.jobs = newJobRegistry(jobsDir(s.recordedDaemonStateDir()))
 	}
 	return s.jobs
+}
+
+// jobsDir is <state_dir>/jobs, or "" (memory-only) without a state dir.
+func jobsDir(stateDir string) string {
+	if stateDir == "" {
+		return ""
+	}
+	return filepath.Join(stateDir, "jobs")
 }
 
 // dispatchJob is what a formerly-blocking handler calls: start the work,

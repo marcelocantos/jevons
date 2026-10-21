@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -13,10 +14,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
 )
+
+type t7664Cause struct {
+	cause string
+	text  string
+}
+
+func (e *t7664Cause) Error() string         { return e.text }
+func (e *t7664Cause) ProviderCause() string { return e.cause }
 
 type queueAttemptSender struct{ send func(string) error }
 
@@ -73,19 +84,19 @@ func TestT623DrainErrorNeverLosesOrBlindlyRetriesPayload(t *testing.T) {
 		err   error
 		retry bool
 	}{
-		{"known busy refusal", errors.New("grok acp: prompt already in flight"), true},
-		{"process gone before write", errors.New("claude process not running"), true},
+		{"known busy refusal", fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight), true},
+		{"process gone before write", &t7664Cause{cause: agenterr.CauseProcessNotRunning, text: "claude process not running"}, true},
+		{"process gone rendered text", errors.New("claude process not running"), false},
 		{"EOF after write", io.EOF, false},
 		{"closed awaiting response", errors.New("codex app-server: closed waiting for turn/start"), false},
 		{"unrecognized provider error", errors.New("provider failed"), false},
 		{"quoted busy text", errors.New("provider response quoted: grok acp: prompt already in flight"), false},
-		// 🎯T766: the live specimen. Every error from a broker-hosted
-		// seat arrives wrapped like this, and on 2026-09-20 20:55 one of them
-		// resolved Uncertain and froze 104 messages behind it for seventeen
-		// hours, because the classifier compared the whole rendered string
-		// against four unwrapped literals. A wrapped refusal must be
-		// classified identically to the bare one it wraps.
-		{"broker-wrapped busy refusal", errors.New("broker protocol: agent_failed: cursor acp: prompt already in flight"), true},
+		{"rendered broker refusal", errors.New("broker protocol: agent_failed: cursor acp: prompt already in flight"), false},
+		{"unauthorized prose", errors.New("401 unauthorized"), false},
+		// A broker refusal and the same cause wrapped again classify the same.
+		// The rendered sentence is not the cause.
+		{"broker refusal cause", &t7664Cause{cause: agenterr.CauseTurnInFlight, text: "broker protocol: agent_failed: cursor acp: prompt already in flight"}, true},
+		{"wrapped broker refusal cause", fmt.Errorf("send: %w", &t7664Cause{cause: agenterr.CauseTurnInFlight, text: "broker protocol: agent_failed: grok acp: prompt already in flight"}), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -198,7 +209,8 @@ func TestT623DrainClaimAndResolutionMustReachDisk(t *testing.T) {
 				if len(got) != 1 || !strings.Contains(got[0], "tail") {
 					t.Fatalf("after restart delivered %q, want only the never-sent tail", got)
 				}
-				if left, _ := after.sendQueue().Snapshot("a"); len(left) != 1 || left[0].Text != "head" || left[0].State != sendq.Attempting {
+				left, _ := after.sendQueue().Snapshot("a")
+				if len(left) != 2 || left[0].Text != "head" || left[0].State != sendq.Attempting || left[1].Text != "tail" || left[1].State != sendq.Uncertain || !strings.Contains(left[1].Detail, "no receipt") {
 					t.Fatalf("orphaned attempt not kept held: %+v", left)
 				}
 			}
@@ -223,8 +235,26 @@ func TestT623TerminalDuringWitnessPreservesNextDrain(t *testing.T) {
 		}}, false, nil
 	})
 	s.drainAgentSendQueue("a")
-	if len(got) != 2 || got[0] != "first" || got[1] != "second" || observedPendingSends(s, "a") != 0 || s.flightState("a") != FlightIdle {
-		t.Fatalf("terminal wakeup lost: sent=%v depth=%d flight=%v", got, observedPendingSends(s, "a"), s.flightState("a"))
+	// The nested drain races the outer claim, so only the first handoff
+	// happens inside that call. It stays held: the sender has no receipt.
+	if len(got) != 1 || got[0] != "first" || s.flightState("a") != FlightIdle {
+		t.Fatalf("in-flight claim blocked the racing drain: sent=%v flight=%v", got, s.flightState("a"))
+	}
+	mid, err := s.sendQueue().Snapshot("a")
+	if err != nil || len(mid) != 2 || mid[0].Text != "first" || mid[0].State != sendq.Uncertain || mid[1].Text != "second" || mid[1].State != sendq.Pending {
+		t.Fatalf("after the racing drain: %+v %v", mid, err)
+	}
+	s.drainAgentSendQueue("a")
+	if len(got) != 2 || got[1] != "second" || observedQueueDepth(s, "a") != 2 || observedPendingSends(s, "a") != 0 {
+		t.Fatalf("pending behind a held handoff was not offered: sent=%v pending=%d depth=%d", got, observedPendingSends(s, "a"), observedQueueDepth(s, "a"))
+	}
+	left, _ := s.sendQueue().Snapshot("a")
+	if len(left) != 2 || left[0].State != sendq.Uncertain || left[1].State != sendq.Uncertain {
+		t.Fatalf("both handoffs = %+v", left)
+	}
+	s.drainAgentSendQueue("a")
+	if len(got) != 2 {
+		t.Fatalf("held handoffs resent: %v", got)
 	}
 }
 
@@ -269,8 +299,16 @@ func TestT623SuccessfulLiveStreamVerdictStillDrains(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.drainAgentSendQueue("a")
-	if len(receiver.delivered()) != 1 || observedPendingSends(s, "a") != 0 {
+	if len(receiver.delivered()) != 1 {
 		t.Fatal("durability change froze the existing healthy stream path")
+	}
+	left, err := s.sendQueue().Snapshot("a")
+	if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain || !strings.Contains(left[0].Detail, "no receipt") {
+		t.Fatalf("healthy stream without a receipt must stay held: %+v %v", left, err)
+	}
+	s.drainAgentSendQueue("a")
+	if len(receiver.delivered()) != 1 {
+		t.Fatal("held handoff was offered again")
 	}
 }
 
@@ -300,7 +338,7 @@ func TestT623ConcurrentDrainAndAppendPreserveFIFO(t *testing.T) {
 	close(proceed)
 	<-done
 	entries, err := s.sendQueue().Snapshot("a")
-	if err != nil || calls != 1 || len(entries) != 1 || entries[0].Text != "second" || entries[0].State != sendq.Pending {
+	if err != nil || calls != 1 || len(entries) != 2 || entries[0].Text != "first" || entries[0].State != sendq.Uncertain || entries[1].Text != "second" || entries[1].State != sendq.Pending {
 		t.Fatalf("concurrent drain duplicated or lost an arrival: calls=%d entries=%+v err=%v", calls, entries, err)
 	}
 }
@@ -311,7 +349,7 @@ func TestT623BusyRefusalsRemainOrdinaryWaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
-		return queueAttemptSender{send: func(string) error { return errors.New("grok acp: prompt already in flight") }}, false, nil
+		return queueAttemptSender{send: func(string) error { return fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight) }}, false, nil
 	})
 	for range SendqPinFailureThreshold + 1 {
 		s.drainAgentSendQueue("a")
@@ -321,16 +359,19 @@ func TestT623BusyRefusalsRemainOrdinaryWaiting(t *testing.T) {
 	}
 }
 
-func TestT623BrokerWrappedBusyWithPayloadQueuedConfirms(t *testing.T) {
+func TestT623BrokerWrappedBusyStaysPendingForRetry(t *testing.T) {
 	s, _, _ := t418Daemon(t, t.TempDir())
 	if _, err := s.enqueueAgentSend("a", "monitor objective"); err != nil {
 		t.Fatal(err)
 	}
+	calls := 0
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) {
 		return queueAttemptSender{send: func(string) error {
-			return errors.New("broker protocol: agent_failed: grok acp: prompt already in flight")
+			calls++
+			return &t7664Cause{cause: agenterr.CauseTurnInFlight, text: "broker protocol: agent_failed: grok acp: prompt already in flight"}
 		}}, false, nil
 	})
+	// PayloadQueued used to confirm this refusal. A transcript is not a receipt.
 	s.SetTurnWitness(witnessYielding(TurnEvidence{
 		Observed:      true,
 		PayloadQueued: true,
@@ -338,11 +379,15 @@ func TestT623BrokerWrappedBusyWithPayloadQueuedConfirms(t *testing.T) {
 	}))
 	s.drainAgentSendQueue("a")
 	entries, err := s.sendQueue().Snapshot("a")
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("queued-behind-turn must confirm and pop entry: %+v %v", entries, err)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Pending || entries[0].AttemptID != "" || !strings.Contains(entries[0].Detail, "grok acp: prompt already in flight") {
+		t.Fatalf("busy refusal must stay pending for retry: %+v %v", entries, err)
 	}
 	if pin, ok := s.sendqPinFor("a"); ok {
-		t.Fatalf("must not pin when receiver holds payload: %+v", pin)
+		t.Fatalf("busy refusal pinned the seat: %+v", pin)
+	}
+	s.drainAgentSendQueue("a")
+	if calls != 2 {
+		t.Fatalf("calls=%d want 2; a definite non-send must be offered again", calls)
 	}
 }
 
@@ -365,8 +410,8 @@ func TestT623ReapedRoutingKeepsConcurrentArrivals(t *testing.T) {
 	rec, _ := LookupReapedRecord(f.s.fleetIntent(), agent)
 	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
 	entries, err := f.s.sendQueue().Snapshot(agent)
-	if err != nil || len(entries) != 1 || entries[0].Text != "arrived during routing" {
-		t.Fatalf("routing erased concurrent arrival: %+v %v", entries, err)
+	if err != nil || len(entries) != 2 || entries[0].Text != "old held message" || entries[0].State != sendq.Uncertain || !strings.Contains(entries[0].Detail, "without a receipt") || entries[1].Text != "arrived during routing" || entries[1].State != sendq.Pending {
+		t.Fatalf("routing lost a message: %+v %v", entries, err)
 	}
 }
 
@@ -396,20 +441,37 @@ func TestT623CleanupUsesOriginalEntryIDs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Another drain consumes one old entry and a new one arrives before
-			// cleanup gets the stale snapshot. Depth is still two, IDs differ.
+			// The drain leaves the first entry uncertain and does not take the
+			// second. A new arrival lands before cleanup sees the stale
+			// snapshot of the original two ids.
 			s.drainAgentSendQueue("a")
 			if _, err := s.enqueueAgentSend("a", "new arrival"); err != nil {
 				t.Fatal(err)
 			}
 			if mode == "missing" {
 				s.reapBacklogForMissingAgent(backlogs[0], time.Now())
-			} else {
-				s.routeHeldReapedBacklog(backlogs[0], fleetintent.Record{}, time.Now())
+				entries, err := s.sendQueue().Snapshot("a")
+				if err != nil || len(entries) != 3 ||
+					entries[0].Text != "first" || entries[0].State != sendq.Uncertain ||
+					entries[1].Text != "second" || entries[1].State != sendq.Pending ||
+					entries[2].Text != "new arrival" || entries[2].State != sendq.Pending {
+					t.Fatalf("departed reap discarded a payload: %+v %v", entries, err)
+				}
+				if _, err := s.sendQueue().ReadSupersession(entries[1].ID); err == nil {
+					t.Fatal("departed reap archived the claimable entry")
+				}
+				return
 			}
+			s.routeHeldReapedBacklog(backlogs[0], fleetintent.Record{}, time.Now())
 			entries, err := s.sendQueue().Snapshot("a")
-			if err != nil || len(entries) != 1 || entries[0].Text != "new arrival" {
-				t.Fatalf("stale cleanup consumed new cohort: %+v %v", entries, err)
+			if err != nil || len(entries) != 3 ||
+				entries[0].Text != "first" || entries[0].State != sendq.Uncertain ||
+				entries[1].Text != "second" || entries[1].State != sendq.Pending ||
+				entries[2].Text != "new arrival" || entries[2].State != sendq.Pending {
+				t.Fatalf("finished-seat route discarded a payload: %+v %v", entries, err)
+			}
+			if _, err := s.sendQueue().ReadSupersession(entries[1].ID); err == nil {
+				t.Fatal("finished-seat route archived the claimable entry")
 			}
 		})
 	}
@@ -480,7 +542,11 @@ func TestT766SweepReoffersPendingBehindHeldEntryAfterRestart(t *testing.T) {
 		t.Fatalf("sweep delivered %q, want exactly the pending message behind the held one", got)
 	}
 	left, err := after.sendQueue().Snapshot("a")
-	if err != nil || len(left) != 1 || left[0].ID != first.ID || left[0].State != sendq.Uncertain {
+	if err != nil || len(left) != 2 || left[0].ID != first.ID || left[0].State != sendq.Uncertain || !strings.Contains(left[0].Detail, "no session event") || left[1].Text != "waiting behind it" || left[1].State != sendq.Uncertain || !strings.Contains(left[1].Detail, "no receipt") {
 		t.Fatalf("held entry not kept after the sweep flowed past it: %+v %v", left, err)
+	}
+	after.SweepSendBacklogs()
+	if again := receiver.delivered(); len(again) != 1 {
+		t.Fatalf("sweep resent %q", again)
 	}
 }

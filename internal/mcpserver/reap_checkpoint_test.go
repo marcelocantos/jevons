@@ -46,8 +46,11 @@ func loadT497Fixture(t *testing.T, name string, minBytes int) string {
 func TestT497CheckpointReportIsTheIncidentShape(t *testing.T) {
 	report := loadCheckpointReport(t)
 	lower := strings.ToLower(report)
-	if !hasCompletionClaim(lower) {
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — it cannot reproduce the incident")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a completion claim")
 	}
 	if !strings.HasPrefix(strings.TrimSpace(lower), "checkpoint") {
 		t.Fatal("fixture no longer opens with its checkpoint declaration")
@@ -74,7 +77,7 @@ func TestT497CheckpointDoesNotReap(t *testing.T) {
 			name:     "jv-t496 depth-ceiling checkpoint does not reap",
 			report:   loadCheckpointReport(t),
 			wantReap: false,
-			wantAsk:  AskCheckpoint,
+			wantAsk:  AskNone,
 		},
 		{
 			// jv-t498-test-web 20260817T101623Z-7e905ae6: resumed mid-mission,
@@ -82,7 +85,7 @@ func TestT497CheckpointDoesNotReap(t *testing.T) {
 			name:     "jv-t498 mid-mission resume does not reap",
 			report:   loadT497Fixture(t, "t497_jv_t498_midmission_report.md", 200),
 			wantReap: false,
-			wantAsk:  AskExplicitIncomplete,
+			wantAsk:  AskNone,
 		},
 		{
 			// jv-t498-test-web 20260817T101708Z-32040136: the hardest not-done
@@ -93,7 +96,7 @@ func TestT497CheckpointDoesNotReap(t *testing.T) {
 			name:     "jv-t498 checkpoint with a real SHA does not reap",
 			report:   loadT497Fixture(t, "t497_jv_t498_sha_checkpoint_report.md", 500),
 			wantReap: false,
-			wantAsk:  AskCheckpoint,
+			wantAsk:  AskNone,
 		},
 		{
 			// Cite oracle evidence without an invented GATE id: a fake id trips
@@ -110,7 +113,11 @@ func TestT497CheckpointDoesNotReap(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := t395Registry(t, "jv-t496-owner-reply")
-			got, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t496-owner-reply", tc.report, nil)
+			reapReport := tc.report
+			if tc.wantReap {
+				reapReport = declaredFinishReport("T497", tc.report)
+			}
+			got, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t496-owner-reply", reapReport, nil)
 			if got != tc.wantReap {
 				t.Fatalf("ShouldAutoReapDoneWorkAgent = %v (%s), want %v", got, reason, tc.wantReap)
 			}
@@ -131,13 +138,13 @@ func TestT497CheckpointShapes(t *testing.T) {
 		report string
 		want   ReportAskClass
 	}{
-		{"opening declaration with em dash", "Checkpoint — parser mapped; writer next.\nDone so far: the map.", AskCheckpoint},
-		{"opening declaration with colon", "Checkpoint: wired the decoder. Next step: the encoder.", AskCheckpoint},
-		{"bare banner line", "Recon complete on the wire path.\n\nCHECKPOINT", AskCheckpoint},
-		{"emphasised banner line", "**Checkpoint.** Ran out of depth; successor picks up at step 3.", AskCheckpoint},
-		{"ceiling echo without the word checkpoint", "Ending this turn at the depth ceiling. Step 3 next.", AskCheckpoint},
-		{"status in progress", "Status: in progress. Decoder wired; encoder not started.", AskExplicitIncomplete},
-		{"nothing to commit", "Survey ran the full path. No files modified yet; nothing to commit.", AskExplicitIncomplete},
+		{"opening declaration with em dash", "Checkpoint — parser mapped; writer next.\nDone so far: the map.", AskNone},
+		{"opening declaration with colon", "Checkpoint: wired the decoder. Next step: the encoder.", AskNone},
+		{"bare banner line", "Recon complete on the wire path.\n\nCHECKPOINT", AskNone},
+		{"emphasised banner line", "**Checkpoint.** Ran out of depth; successor picks up at step 3.", AskNone},
+		{"ceiling echo without the word checkpoint", "Ending this turn at the depth ceiling. Step 3 next.", AskNone},
+		{"status in progress", "Status: in progress. Decoder wired; encoder not started.", AskNone},
+		{"nothing to commit", "Survey ran the full path. No files modified yet; nothing to commit.", AskNone},
 		{"mention is not a declaration", "Done. Commit 4f2b8c1; go test PASS. Checkpoint reports now classify as open work.", AskNone},
 		{"finish about the ceiling still finishes", "Done. Commit 4f2b8c1; go test PASS. The ceiling ask no longer reaps compliant workers.", AskNone},
 	}
@@ -146,9 +153,13 @@ func TestT497CheckpointShapes(t *testing.T) {
 			if got := ClassifyReportAsk(tc.report); got != tc.want {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", got, tc.want)
 			}
-			wantFinish := tc.want == AskNone && hasCompletionClaim(strings.ToLower(tc.report))
-			if got := LooksLikeFinishedWorkReport(tc.report); got != wantFinish {
-				t.Fatalf("LooksLikeFinishedWorkReport = %v, want %v", got, wantFinish)
+			if got := LooksLikeFinishedWorkReport(tc.report); got {
+				t.Fatalf("unenveloped prose looked finished")
+			}
+			if hasAnyCompletionMarker(strings.ToLower(tc.report)) {
+				if !LooksLikeFinishedWorkReport(declaredFinishReport("T497", tc.report)) {
+					t.Fatal("declared finish-report must be done")
+				}
 			}
 		})
 	}
@@ -178,11 +189,14 @@ func TestT497ReasonNamesTheCheckpoint(t *testing.T) {
 	if ok {
 		t.Fatal("checkpoint report reaped")
 	}
-	if reason != "awaits_overseer_checkpoint" {
-		t.Fatalf("reason = %q, want awaits_overseer_checkpoint", reason)
+	if reason != "unknown_report" {
+		t.Fatalf("reason = %q, want unknown_report", reason)
 	}
 	f := ClassifyReportAskDetail(loadCheckpointReport(t))
-	if f.Marker != "checkpoint" || !strings.Contains(strings.ToLower(f.Span), "checkpoint") {
-		t.Fatalf("finding does not point at the declaration: marker=%q span=%q", f.Marker, f.Span)
+	if f.Class != AskNone {
+		t.Fatalf("class = %s, want none — a checkpoint sentence is not an ask", f.Class)
+	}
+	if !strings.Contains(strings.ToLower(loadCheckpointReport(t)), "checkpoint") {
+		t.Fatal("fixture lost its checkpoint declaration")
 	}
 }

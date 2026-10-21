@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/claudia"
+
 	"github.com/marcelocantos/jevons/internal/statedb"
 )
 
@@ -284,8 +286,14 @@ func (s *suite) assertLaunchedOn(names ...string) error {
 		return err
 	}
 	for _, name := range names {
-		if err := queueJourneyProvider(logs, name, string(s.provider)); err != nil {
+		got, err := queueJourneyLaunchProvider(logs, name)
+		if err != nil {
 			return err
+		}
+		// An unsteerable pin is dropped at mint. The launch must be the
+		// steerable plan that actually started, not the requested name.
+		if err := expectLandedProvider(s.provider, claudia.Provider(got)); err != nil {
+			return fmt.Errorf("agent %s: %w", name, err)
 		}
 	}
 	return nil

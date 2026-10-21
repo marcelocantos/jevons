@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 func TestT862RetryExhaustionOnOwnerWire(t *testing.T) {
@@ -19,7 +21,18 @@ func TestT862RetryExhaustionOnOwnerWire(t *testing.T) {
 	} {
 		t.Run(raw, func(t *testing.T) {
 			for _, transport := range []bool{true, false} {
-				line, ok := chatWireLine(claudia.Event{Type: "assistant", Text: raw, IsError: transport, StopReason: "end_turn"})
+				ev := claudia.Event{Type: "assistant", Text: raw, IsError: transport, StopReason: "end_turn"}
+				if transport {
+					ev.Reason = agenterr.CauseRetryExhausted
+				}
+				bare := ev
+				bare.Reason = ""
+				if line, ok := chatWireLine(bare); !ok {
+					t.Fatal("terminal outcome was dropped")
+				} else if strings.Contains(line, `"failure_class"`) {
+					t.Fatalf("a sentence classified without a cause: %s", line)
+				}
+				line, ok := chatWireLine(ev)
 				if !ok {
 					t.Fatal("terminal outcome was dropped")
 				}

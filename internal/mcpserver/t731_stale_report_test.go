@@ -80,16 +80,30 @@ func t731Reap(t *testing.T, s *Server, name string) {
 
 func TestParseAgentResponded(t *testing.T) {
 	t.Parallel()
-	name, id, ok := parseAgentRespondedLine("[Agent jv-t731-probe responded]")
+	name, id, ok := parseAgentRespondedLine(envelope.SeatFact(envelope.IntentRoute, "jv-t731-probe"))
 	if !ok || name != t731Worker || id != "" {
 		t.Fatalf("plain: name=%q id=%q ok=%v", name, id, ok)
 	}
-	name, id, ok = parseAgentRespondedLine("[Agent jv-t731-probe responded] report_id=20260921T010203Z-abcd")
+	name, id, ok = parseAgentRespondedLine(envelope.SeatFact(envelope.IntentRoute, "jv-t731-probe") + " report_id=20260921T010203Z-abcd age=5h")
 	if !ok || name != t731Worker || id != "20260921T010203Z-abcd" {
 		t.Fatalf("with id: name=%q id=%q ok=%v", name, id, ok)
 	}
+	if _, _, ok := parseAgentRespondedLine("[Agent jv-t731-probe responded] report_id=abc"); ok {
+		t.Fatal("rendered chrome parsed as a route")
+	}
 	if _, _, ok := parseAgentRespondedLine("[held backlog from jv-x]"); ok {
 		t.Fatal("non-report parsed as agent-responded")
+	}
+}
+
+func TestHasReapedSeatBannerRequiresFact(t *testing.T) {
+	t.Parallel()
+	rendered := "[reaped seat jv-x at 2026-09-20T15:42:07Z — this report describes that moment, not current ledger or fleet state (🎯T731)]"
+	if hasReapedSeatBanner(rendered) {
+		t.Fatal("rendered reap sentence is not the banner")
+	}
+	if !hasReapedSeatBanner(envelope.PrefixReapedSeat + "\n" + rendered) {
+		t.Fatal("fact line is the banner")
 	}
 }
 
@@ -103,8 +117,11 @@ func TestFormatReapedReportBannerCarriesTime(t *testing.T) {
 	if !strings.Contains(got, "not current ledger or fleet state") {
 		t.Fatalf("missing stale-claim sentence: %q", got)
 	}
-	if !strings.HasPrefix(got, reapedSeatPrefix) {
+	if !strings.HasPrefix(got, envelope.PrefixReapedSeat+"\n") {
 		t.Fatalf("prefix: %q", got)
+	}
+	if !strings.Contains(got, reapedSeatPrefix) {
+		t.Fatalf("missing chrome: %q", got)
 	}
 }
 
@@ -169,7 +186,7 @@ func TestT731LiveSeatReportIsUnmarked(t *testing.T) {
 	if strings.Contains(parent.sent[0], reapedSeatPrefix) {
 		t.Fatalf("live seat marked as reaped:\n%s", parent.sent[0])
 	}
-	if !strings.Contains(parent.sent[0], "[Agent "+t731Live+" responded") {
+	if !strings.Contains(parent.sent[0], envelope.SeatFact(envelope.IntentRoute, t731Live)) {
 		t.Fatalf("live parent copy lost framing:\n%s", parent.sent[0])
 	}
 	if len(inbox.texts) != 1 {
@@ -178,7 +195,7 @@ func TestT731LiveSeatReportIsUnmarked(t *testing.T) {
 	if strings.Contains(inbox.texts[0], reapedSeatPrefix) {
 		t.Fatalf("overseer copy of a live report was marked:\n%s", inbox.texts[0])
 	}
-	if inbox.texts[0] != "[Agent "+t731Live+" responded]\n"+t731Report {
+	if inbox.texts[0] != envelope.PrefixAgentResponded+"\n"+envelope.SeatFact(envelope.IntentRoute, t731Live)+"\n"+t731Report {
 		t.Fatalf("overseer short-report chrome drifted:\n%q", inbox.texts[0])
 	}
 	_ = live
@@ -207,7 +224,7 @@ func TestT731ReapedBannerStillParsesEnvelope(t *testing.T) {
 	})
 	wrapped := FormatReapedReportBanner(t731Worker, fleetintent.Record{
 		At: time.Date(2026, 9, 20, 15, 42, 7, 0, time.UTC),
-	}) + "\n[Agent " + t731Worker + " responded] report_id=abc\n" + inner
+	}) + "\n" + formatAgentResponded(t731Worker, agentreport.Handle{Agent: t731Worker, ReportID: "abc"}, inner, time.Time{})
 	got, err := envelope.Parse(wrapped)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -257,12 +274,11 @@ func TestT747DifferentBodyStillDelivered(t *testing.T) {
 	}
 }
 
-
 // T766.5.1: if a pending copy exists when the same report is independently
 // received, the stale queue entry must not generate a second user message.
 func TestT766ReportDeliveredDischargesPendingCopy(t *testing.T) {
 	s, parent, _, _ := t731Server(t)
-	text := "[Agent " + t731Worker + " responded] report_id=receipt-1\n" + t731Report
+	text := envelope.SeatFact(envelope.IntentRoute, t731Worker) + " report_id=receipt-1\n" + t731Report
 	if _, err := s.enqueueAgentSend(t731Parent, text); err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +302,7 @@ func TestT766ReportDeliveredDischargesPendingCopy(t *testing.T) {
 // report. It is not a receiver receipt and cannot erase a pending copy.
 func TestT766UnrelatedSessionEventDoesNotDischargeReport(t *testing.T) {
 	s, parent, _, _ := t731Server(t)
-	text := "[Agent " + t731Worker + " responded] report_id=no-receipt\n" + t731Report
+	text := envelope.SeatFact(envelope.IntentRoute, t731Worker) + " report_id=no-receipt\n" + t731Report
 	if _, err := s.enqueueAgentSend(t731Parent, text); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +324,7 @@ func TestT766UnrelatedSessionEventDoesNotDischargeReport(t *testing.T) {
 // its attempt may itself have landed and needs reconciliation, not a blind drop.
 func TestT766ReceiptPreservesUncertainReportAttempt(t *testing.T) {
 	s, _, _, _ := t731Server(t)
-	text := "[Agent " + t731Worker + " responded] report_id=held-receipt\n" + t731Report
+	text := envelope.SeatFact(envelope.IntentRoute, t731Worker) + " report_id=held-receipt\n" + t731Report
 	q := s.sendQueue()
 	if _, _, err := q.Append(t731Parent, text, time.Now()); err != nil {
 		t.Fatal(err)
@@ -334,7 +350,7 @@ func TestT766ReceiptPreservesUncertainReportAttempt(t *testing.T) {
 // without a user-message row. That receipt discharges the daemon's pending copy.
 func TestT766ReceiverQueueOperationDischargesReport(t *testing.T) {
 	s, parent, _, _ := t731Server(t)
-	text := "[Agent " + t731Worker + " responded] report_id=queue-receipt\n" + t731Report
+	text := envelope.SeatFact(envelope.IntentRoute, t731Worker) + " report_id=queue-receipt\n" + t731Report
 	if _, err := s.enqueueAgentSend(t731Parent, text); err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +372,7 @@ func TestT766ReceiverQueueOperationDischargesReport(t *testing.T) {
 // messages. Discharging by a substring/ID inside it would discard their payloads.
 func TestT766ReceiptDoesNotDiscardMixedDigest(t *testing.T) {
 	s, _, _, _ := t731Server(t)
-	text := "[Agent " + t731Worker + " responded] report_id=mixed-digest\n" + t731Report
+	text := envelope.SeatFact(envelope.IntentRoute, t731Worker) + " report_id=mixed-digest\n" + t731Report
 	q := s.sendQueue()
 	if _, _, err := q.Append(t731Parent, text, time.Now()); err != nil {
 		t.Fatal(err)

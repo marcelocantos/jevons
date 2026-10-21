@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,7 +13,157 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/gate"
 )
+
+// declaredFinishReport is a valid finish-report. Unenveloped prose is not
+// a done claim (🎯T766.4).
+func declaredFinishReport(target, payload string) string {
+	return envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       target,
+		SHA:          "abcdef0123456",
+		Verdict:      envelope.VerdictGreen,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      payload,
+	})
+}
+
+// declaredInProgressReport is a finish-report whose status slot says the
+// work is not done. Payload prose is not that claim (🎯T766.4).
+func declaredInProgressReport(target, payload string) string {
+	return envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       target,
+		Status:       envelope.ProgressInProgress,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      payload,
+	})
+}
+
+// declaredRiskFinishReport is a valid finish-report with accepted-risk and
+// no SHA or gate id. The uncited-claim veto (🎯T946) only runs after a
+// declared finish, and a SHA slot would cite an oracle id.
+func declaredRiskFinishReport(target, payload string) string {
+	return envelope.Format(&envelope.Message{
+		Kind:         envelope.KindFinishReport,
+		Target:       target,
+		Risk:         envelope.RiskAccepted,
+		SilentLedger: envelope.SilentLedgerEmpty,
+		Payload:      payload,
+	})
+}
+
+// TestT7664ReapFieldsFollowTheEnvelopeNotTheSentence drives the reap log.
+// A completion sentence, including one that says a turn is in flight, is
+// not a done class and is not a log field. A declared finish is.
+func TestT7664ReapFieldsFollowTheEnvelopeNotTheSentence(t *testing.T) {
+	prose := "Done. reading done; implementing now. A turn is in flight; the quoted marker is not a claim."
+	fields := reapDecisionFields("worker", "unknown_report", prose)
+	if fields["done_class"] != "unknown" {
+		t.Fatalf("prose done_class=%v", fields["done_class"])
+	}
+	for _, key := range []string{"claim_marker", "ask_class", "ask_marker", "report_span", "cited_marker"} {
+		if _, ok := fields[key]; ok {
+			t.Fatalf("prose field %s=%v", key, fields[key])
+		}
+	}
+
+	finish := declaredFinishReport("T766.4", prose)
+	fields = reapDecisionFields("worker", "finished_work", finish)
+	if fields["done_class"] != envelope.DoneYes.String() {
+		t.Fatalf("finish done_class=%v", fields["done_class"])
+	}
+	if fields["envelope_kind"] != string(envelope.KindFinishReport) {
+		t.Fatalf("envelope_kind=%v", fields["envelope_kind"])
+	}
+	if _, ok := fields["claim_marker"]; ok {
+		t.Fatalf("finish still names a prose claim: %v", fields)
+	}
+
+	inProgress := declaredInProgressReport("T766.4", prose)
+	fields = reapDecisionFields("worker", "outstanding_scope_in_progress", inProgress)
+	if fields["done_class"] != envelope.DoneNo.String() || fields["envelope_status"] != string(envelope.ProgressInProgress) {
+		t.Fatalf("in-progress fields=%v", fields)
+	}
+
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	reg := t439Registry(t, "jv-t7664-prose")
+	s := &Server{registry: reg}
+	s.maybeReapDoneWorkAgent("jv-t7664-prose", prose)
+	if reg.Def("jv-t7664-prose") == nil {
+		t.Fatal("prose completion reaped the seat")
+	}
+	for _, rec := range cap.snapshot() {
+		m := attrsMap(rec)
+		switch m["reason"] {
+		case "local_done_clause", "quoted_completion_claim":
+			t.Fatalf("reap log reclassified prose: %v", m)
+		}
+		if m["claim_marker"] != nil || m["ask_class"] != nil || m["cited_marker"] != nil {
+			t.Fatalf("reap log carried a prose span: %v", m)
+		}
+	}
+
+	cap.reset()
+	reg2 := t439Registry(t, "jv-t7664-finish")
+	s2 := &Server{registry: reg2}
+	s2.maybeReapDoneWorkAgent("jv-t7664-finish", finish)
+	if reg2.Def("jv-t7664-finish") != nil {
+		t.Fatal("declared finish stayed registered")
+	}
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
+	if got == nil {
+		t.Fatal("declared finish wrote no reap_done log")
+	}
+	if got["outcome"] != "ok" || got["reason"] != "finished_work" || got["done_class"] != "yes" {
+		t.Fatalf("reap log=%v", got)
+	}
+	if got["claim_marker"] != nil || got["envelope_kind"] != string(envelope.KindFinishReport) {
+		t.Fatalf("reap log=%v", got)
+	}
+}
+
+// TestT7664FalseGreenSkipLogsTheTypedReason drives maybeReapDoneWorkAgent.
+// The skip log repeats the false-green reason the typed checker returned.
+// It does not name a completion sentence inside that report. The RED gate
+// is the declared gate-id slot (🎯T766.4.1): a GATE line in the payload is
+// prose the reap no longer reads.
+func TestT7664FalseGreenSkipLogsTheTypedReason(t *testing.T) {
+	t76641Store(t, t76641Record("2817ca36", gate.VerdictRed, 1))
+	report := declaredGateFinishReport("T470", "2817ca36", envelope.VerdictGreen, "Done. Mission complete.")
+	reg := t439Registry(t, "jv-t7664-false-green")
+	ok, want := ShouldAutoReapDoneWorkAgent(reg, "jv-t7664-false-green", report, nil)
+	if ok || !strings.HasPrefix(want, "false_green_") {
+		t.Fatalf("reap=%v reason=%s, want a false-green veto", ok, want)
+	}
+
+	cap := &slogCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(cap))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	s := &Server{registry: reg}
+	s.maybeReapDoneWorkAgent("jv-t7664-false-green", report)
+	if reg.Def("jv-t7664-false-green") == nil {
+		t.Fatal("false-green report reaped the seat")
+	}
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
+	if got == nil {
+		t.Fatal("false-green skip wrote no reap_done log")
+	}
+	if got["outcome"] != "skipped" || got["reason"] != want || got["done_class"] != "yes" {
+		t.Fatalf("reap log=%v, want reason %s", got, want)
+	}
+	if got["claim_marker"] != nil || got["ask_class"] != nil {
+		t.Fatalf("false-green log named prose: %v", got)
+	}
+}
 
 func TestLooksLikeFinishedWorkReport(t *testing.T) {
 	cases := []struct {
@@ -21,13 +172,14 @@ func TestLooksLikeFinishedWorkReport(t *testing.T) {
 	}{
 		{"", false},
 		{"still reading the tree", false},
-		{"Done. Mission complete.", true}, // 🎯T195 bare done still reaps
-		{"go test ./... PASS", false},     // evidence without claim
+		{"Done. Mission complete.", false},
+		{"go test ./... PASS", false},
 		{"SHA abcdef0123456 landed", false},
-		{"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS", true},
-		{"finished — make test green", true},
-		{"complete with accepted risk: owner smoke residual (class-3)", true},
-		{"All finished, ready for review. hermetic TestReapDone green", true},
+		{"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS", false},
+		{"finished — make test green", false},
+		{"complete with accepted risk: owner smoke residual (class-3)", false},
+		{"All finished, ready for review. hermetic TestReapDone green", false},
+		{declaredFinishReport("T165", "Landed."), true},
 	}
 	for _, tc := range cases {
 		if got := LooksLikeFinishedWorkReport(tc.in); got != tc.want {
@@ -41,11 +193,14 @@ func TestDurableFleetAgent(t *testing.T) {
 	if !DurableFleetAgent("jevons", claudia.PurposeOverseer, isO) {
 		t.Fatal("overseer must be durable")
 	}
-	if !DurableFleetAgent("jevons-po", claudia.PurposeWork, isO) {
-		t.Fatal("jevons-po must be durable")
+	if DurableFleetAgent("jevons-po", claudia.PurposeWork, isO) {
+		t.Fatal("a -po name with purpose work is not durable")
 	}
-	if !DurableFleetAgent("po", claudia.PurposeWork, isO) {
-		t.Fatal("po fixture must be durable")
+	if !DurableFleetAgent("jevons-po", purposeProductOwner, isO) {
+		t.Fatal("purpose product-owner must be durable")
+	}
+	if DurableFleetAgent("po", claudia.PurposeWork, isO) {
+		t.Fatal("the name po is not a purpose")
 	}
 	if !DurableFleetAgent("att-billing", claudia.PurposeAside, isO) {
 		t.Fatal("aside must be durable")
@@ -64,7 +219,7 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok"},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons", Materialized: true, Provider: "grok"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: purposeProductOwner, Parent: "jevons", Materialized: true, Provider: "grok"},
 		{Name: "jv-t165-reap-done", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po", Materialized: true, Provider: "grok"},
 	} {
 		if err := reg.Register(d); err != nil {
@@ -84,8 +239,8 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 		t.Fatal("stop must not deregister (T165 residual)")
 	}
 
-	// Done path: finished report with oracle evidence → stop+Remove.
-	report := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS"
+	// Done path: a declared finish-report → stop+Remove.
+	report := declaredFinishReport("T165", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS")
 	reaped, err := ReapDoneWorkAgent(reg, nil, "jv-t165-reap-done", report, isO)
 	if err != nil {
 		t.Fatal(err)
@@ -132,20 +287,30 @@ func TestT165ReapDoneWorkAgentHermetic(t *testing.T) {
 	}
 }
 
-// 🎯T195: imperfect (bare done) completion reports still reap work leaves.
-// Overseer may still refuse bare done for acceptance (T31.1); reaping is hygiene.
+// 🎯T766.4: unenveloped bare done declares nothing, so it is unknown and
+// the seat stays. A declared finish-report still reaps the work leaf.
 func TestT195BareDoneReapsWorkAgent(t *testing.T) {
 	reg := regWithTree(t)
-	// "worker" from fixture is purpose-empty (defaults to work) and not durable.
-	reaped, err := ReapDoneWorkAgent(reg, nil, "worker", "Done. All finished.", func(string) bool { return false })
+	isWork := func(string) bool { return false }
+	reaped, err := ReapDoneWorkAgent(reg, nil, "worker", "Done. All finished.", isWork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reaped {
+		t.Fatal("unenveloped bare done must not reap")
+	}
+	if reg.Def("worker") == nil {
+		t.Fatal("worker removed on unenveloped bare done")
+	}
+	reaped, err = ReapDoneWorkAgent(reg, nil, "worker", declaredFinishReport("T195", "Done. All finished."), isWork)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reaped {
-		t.Fatal("bare done must reap work implementer (T195)")
+		t.Fatal("declared finish-report must reap work implementer")
 	}
 	if reg.Def("worker") != nil {
-		t.Fatal("worker still registered after bare-done reap")
+		t.Fatal("worker still registered after declared finish")
 	}
 }
 
@@ -158,7 +323,7 @@ func TestT195ImperfectDoneReportHermetic(t *testing.T) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok"},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons", Materialized: true, Provider: "grok"},
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: purposeProductOwner, Parent: "jevons", Materialized: true, Provider: "grok"},
 		{Name: "jv-t195-reap-imperfect", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po", Materialized: true, Provider: "grok", TargetID: "T195"},
 	} {
 		if err := reg.Register(d); err != nil {
@@ -178,8 +343,11 @@ func TestT195ImperfectDoneReportHermetic(t *testing.T) {
 		t.Fatal("stop must not deregister (T165/T195 residual)")
 	}
 
-	// Imperfect done report (no oracle markers) → stop+Remove.
-	report := "Done. Mission complete. Target achieved."
+	// Unenveloped prose stays. A declared finish-report stop+Removes.
+	if reaped, err := ReapDoneWorkAgent(reg, nil, "jv-t195-reap-imperfect", "Done. Mission complete. Target achieved.", isO); err != nil || reaped {
+		t.Fatalf("unenveloped prose reaped=%v err=%v", reaped, err)
+	}
+	report := declaredFinishReport("T195", "Done. Mission complete. Target achieved.")
 	reaped, err := ReapDoneWorkAgent(reg, nil, "jv-t195-reap-imperfect", report, isO)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +398,7 @@ func TestT165HasDescendantsDoesNotReap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	report := "Done. SHA abcdef0123456. go test ./... PASS"
+	report := declaredFinishReport("T165", "Done. SHA abcdef0123456. go test ./... PASS")
 	reaped, err := ReapDoneWorkAgent(reg, nil, "boss-slice", report, func(n string) bool { return n == "jevons" })
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +440,7 @@ func TestT165MaybeReapOnTerminalSink(t *testing.T) {
 	sink := s.agentEventSink("leaf-w")
 	sink(claudia.Event{
 		Type:       "assistant",
-		Text:       "Done. SHA abcdef0123456. hermetic TestT165 PASS",
+		Text:       declaredFinishReport("T165", "Done. SHA abcdef0123456. hermetic TestT165 PASS"),
 		StopReason: "end_turn",
 	})
 	if reg.Def("leaf-w") != nil {

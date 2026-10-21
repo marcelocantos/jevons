@@ -148,23 +148,21 @@ func (c claudiaSweep) RemoveDeadSeat(name string) error {
 //
 // overseerName is never recovered here (owner chat overseer has its own path).
 // Returns every detected dead name; Recovered true when Launch succeeded.
-func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, autoSpawnPaused bool) []DeadAgentReport {
+func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
-	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent, autoSpawnPaused)
+	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent, hold)
 }
 
 // sweepDeadAgents is the testable implementation (real path + hermetic fakes).
 //
-// autoSpawnPaused is config frontier_consume.disabled (🎯T1066 — reviewing
-// jv-t1066-idle-admission/4e5b06bb for this slice): a dead AutoStart handle
-// is only relaunched here while the config pause is clear, OR the handle is
-// not one frontier-consume minted itself (IsAutoSpawnedWorkerName). Scoped
-// by name, not by AutoStart alone — AutoStart is true for named workers and
-// POs too (see frontier_consume.go), and this gate must never hold a named
-// worker's or PO's own crash-recovery relaunch hostage to a frontier pause.
-func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot, autoSpawnPaused bool) []DeadAgentReport {
+// hold is Server.autoSeatHold (🎯T1066): a dead handle the daemon minted
+// itself is not relaunched under the frontier pause, nor once its target is
+// achieved. hold names only frontier-consume's own seats (by name, not by
+// AutoStart, which named workers and POs carry too), so a named worker's or
+// PO's crash-recovery relaunch is never held here. Nil holds nothing.
+func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot, hold func(name string) string) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
@@ -178,10 +176,12 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 		allow := dec.Allow
 		declineReason := dec.Reason
 		declineBlocking := string(dec.Blocking)
-		if allow && autoSpawnPaused && IsAutoSpawnedWorkerName(d.Name) {
-			allow = false
-			declineReason = "frontier_consume_disabled"
-			declineBlocking = "config_pause"
+		if allow && hold != nil {
+			if why := hold(d.Name); why != "" {
+				allow = false
+				declineReason = why
+				declineBlocking = "auto_seat_hold"
+			}
 		}
 		detect, tryRecover, clearHandle, remove := deadRecoveryPlan(hasProc, alive, d.AutoStart, allow, d.Purpose)
 		if !detect {

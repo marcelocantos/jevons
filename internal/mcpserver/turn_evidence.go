@@ -15,6 +15,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
@@ -373,7 +374,7 @@ func (s *Server) watchAgentTurnForCancelable(name, payload string, window time.D
 			obs = proc
 			if def := s.registry.Def(name); def != nil && !providerKeepsClaudeTranscript(def.Provider) {
 				obs = liveStreamObserver{proc}
-				if def.Provider == claudia.ProviderCodex {
+				if seatprovider.Resolve(def.Provider).Plan == seatprovider.Codex {
 					// 🎯T857: a codex app-server thread publishes a bare
 					// "system"/thread-start ack the instant the session
 					// object is created — before codex has accepted, let
@@ -429,8 +430,13 @@ func codexSubstantiveEvent(ev claudia.Event) bool {
 // fact the registry holds and claudia's Agent does not expose. When
 // claudia stops advertising the phantom path, this collapses to a no-op:
 // JSONLPath()=="" already takes the live-stream branch.
+//
+// Every named plan runs on the sidecar since claudia v0.58, so only an unset
+// provider still takes the Claude-shaped path; a legacy row storing claude
+// is the anthropic sidecar seat it launches as (🎯T1079).
 func providerKeepsClaudeTranscript(p claudia.Provider) bool {
-	return p == "" || p == claudia.ProviderClaude
+	id := seatprovider.Resolve(p)
+	return id.Plan == seatprovider.Unset && !id.Sidecar
 }
 
 // liveStreamObserver hides the vestigial Claude-shaped JSONLPath so the

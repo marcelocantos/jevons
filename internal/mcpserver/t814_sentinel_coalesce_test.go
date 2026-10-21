@@ -136,7 +136,7 @@ func TestT814InProgressReportWithMentioningCommitIsNotFinished(t *testing.T) {
 
 func TestT814TerminalReportStillNotifies(t *testing.T) {
 	dir := t814Repo(t)
-	v := t814Verdict(t, dir, "🎯T814 done. Commit abcdef1 lands the classifier.\n`go test ./internal/staffops/ -run T814` PASS.")
+	v := t814Verdict(t, dir, declaredFinishReport("T814", "🎯T814 done. Commit abcdef1 lands the classifier.\n`go test ./internal/staffops/ -run T814` PASS."))
 	if v.Class != staffops.IdleResidueFinishedAwaitingGate {
 		t.Fatalf("terminal report must classify finished: %+v", v)
 	}

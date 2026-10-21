@@ -61,9 +61,11 @@ func TestT658MalformedEnvelopeFixtureShape(t *testing.T) {
 	if m.Kind != envelope.KindScoutReport {
 		t.Fatalf("kind=%q want scout-report", m.Kind)
 	}
-	lower := strings.ToLower(text)
-	if !oracleDone(lower) {
-		t.Fatal("fixture must trip the keyword scan when read whole — otherwise it no longer reproduces the incident")
+	if !strings.Contains(text, "oracleDone") {
+		t.Fatal("fixture must still name the keyword scan the incident tripped — otherwise it no longer reproduces the incident")
+	}
+	if got := Classify(text); got != RouteParent {
+		t.Fatalf("malformed scout classified %s, want parent", got)
 	}
 }
 
@@ -106,9 +108,10 @@ func TestT658FenceBehindUnknownPrefixStaysOnParent(t *testing.T) {
 	if got := Reason(text); got != "parent" {
 		t.Fatalf("Reason=%s want parent", got)
 	}
-	// Control: the same prefix with no fence behind it is still scanned as
-	// prose, so the guard is about the fence, not about the words.
-	if got := Classify(doctrine + "Done. GATE x GREEN, tests pass."); got != RouteOverseer {
-		t.Fatalf("control: Classify=%s want overseer", got)
+	// 🎯T766.4: the same words with no fence are still not a done report.
+	// A declared finish-report is what skips the hop, and that case is
+	// TestT658MalformedFinishReportStaysOnParentValidOneSkips.
+	if got := Classify(doctrine + "Done. GATE x GREEN, tests pass."); got != RouteParent {
+		t.Fatalf("unenveloped doctrine classified %s, want parent", got)
 	}
 }

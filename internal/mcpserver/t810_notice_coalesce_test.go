@@ -149,10 +149,10 @@ func TestT810OwnerSendsAreNeverCoalesced(t *testing.T) {
 	}
 }
 
-// 🎯T810 (PO check): an unconfirmed first delivery does not suppress repeats.
-// Repeats are re-offered, uncounted, until one is confirmed; saved counts start
-// from confirmation. Past the bounded window an unconfirmed copy counts as landed.
-func TestT810UnconfirmedFirstDeliveryIsReofferedUntilConfirmed(t *testing.T) {
+// An unconfirmed receipt is still the original episode. Age drift inside
+// one band must not mint another prompt; a changed depth is a new episode
+// and does deliver. Confirmation is not what suppresses the age drift.
+func TestT810UnconfirmedSameMaterialIsOneEpisode(t *testing.T) {
 	ev := TurnEvidence{}
 	s := &Server{}
 	inbox := &overseerInbox{}
@@ -162,33 +162,34 @@ func TestT810UnconfirmedFirstDeliveryIsReofferedUntilConfirmed(t *testing.T) {
 	s.SetNoticeCoalesceClock(func() time.Time { return now })
 	s.SetNotifyReplayClock(func() time.Time { return now })
 
-	// First delivery and three repeats, none confirmed: each is re-offered.
 	for i := range 4 {
-		s.notifyFleetHealth("k1", t810Stalled(1, fmt.Sprintf("2%d m", i)))
+		s.notifyFleetHealth("k1", t810Stalled(1, fmt.Sprintf("2%dm0s", i)))
 		now = now.Add(40 * time.Second)
 	}
-	if got := s.NoticeSavedTurns()["k1"]; got != 0 {
-		t.Fatalf("saved=%d while unconfirmed; want 0 (repeats must be re-offered)", got)
+	if len(inbox.texts) != 1 {
+		t.Fatalf("delivered=%d want 1; unconfirmed age drift minted prompts: %v", len(inbox.texts), inbox.texts)
 	}
-	if len(inbox.texts) < 4 {
-		t.Fatalf("delivered=%d want 4 re-offers while unconfirmed", len(inbox.texts))
+	if got := s.NoticeSavedTurns()["k1"]; got != 3 {
+		t.Fatalf("saved=%d want 3 suppressed repeats of the original episode", got)
 	}
 
-	// One copy is confirmed; later repeats are saved from there.
-	ev = TurnEvidence{Observed: true, PayloadSeen: true}
-	s.notifyFleetHealth("k1", t810Stalled(1, "26m0s"))
-	before := len(inbox.texts)
-	s.notifyFleetHealth("k1", t810Stalled(1, "27m0s"))
-	s.notifyFleetHealth("k1", t810Stalled(1, "28m0s"))
-	if len(inbox.texts) != before {
-		t.Fatalf("repeats after confirmation reached the overseer: %d -> %d", before, len(inbox.texts))
+	s.notifyFleetHealth("k1", t810Stalled(2, "23m0s"))
+	if len(inbox.texts) != 2 {
+		t.Fatalf("depth change delivered=%d want 2", len(inbox.texts))
 	}
-	if got := s.NoticeSavedTurns()["k1"]; got != 2 {
-		t.Fatalf("saved=%d want 2 counted from confirmation", got)
+
+	ev = TurnEvidence{Observed: true, PayloadSeen: true}
+	before := len(inbox.texts)
+	s.notifyFleetHealth("k1", t810Stalled(2, "24m0s"))
+	s.notifyFleetHealth("k1", t810Stalled(2, "25m0s"))
+	if len(inbox.texts) != before {
+		t.Fatalf("confirmed repeats reached the overseer: %d -> %d", before, len(inbox.texts))
 	}
 }
 
-func TestT810UnconfirmedCountsAsLandedAfterBoundedWindow(t *testing.T) {
+// A key that goes quiet longer than the clear window is a recurrence, even
+// when the earlier copy was never confirmed.
+func TestT810ClearedUnconfirmedConditionRedelivers(t *testing.T) {
 	s := &Server{}
 	inbox := &overseerInbox{}
 	s.SetOverseerDeliver(inbox.deliver)
@@ -198,16 +199,14 @@ func TestT810UnconfirmedCountsAsLandedAfterBoundedWindow(t *testing.T) {
 	s.SetNotifyReplayClock(func() time.Time { return now })
 
 	s.notifyFleetHealth("k1", t810Stalled(1, "20m0s"))
-	now = now.Add(5 * time.Minute) // inside the window: re-offered, not saved
+	now = now.Add(5 * time.Minute)
 	s.notifyFleetHealth("k1", t810Stalled(1, "21m0s"))
-	if got := s.NoticeSavedTurns()["k1"]; got != 0 {
-		t.Fatalf("saved=%d inside the re-offer window; want 0", got)
+	if len(inbox.texts) != 1 || s.NoticeSavedTurns()["k1"] != 1 {
+		t.Fatalf("inside the clear window delivered=%d saved=%d want 1 and 1", len(inbox.texts), s.NoticeSavedTurns()["k1"])
 	}
-	now = now.Add(notifyReplayUnconfirmedGrace) // past the window measured from the first copy
-	before := len(inbox.texts)
+	now = now.Add(NoticeClearedAfter + time.Second)
 	s.notifyFleetHealth("k1", t810Stalled(1, "22m0s"))
-	if len(inbox.texts) != before || s.NoticeSavedTurns()["k1"] != 1 {
-		t.Fatalf("past the bounded window the copy must count as landed: delivered %d->%d saved=%d",
-			before, len(inbox.texts), s.NoticeSavedTurns()["k1"])
+	if len(inbox.texts) != 2 {
+		t.Fatalf("quiet condition delivered=%d want a recurrence", len(inbox.texts))
 	}
 }

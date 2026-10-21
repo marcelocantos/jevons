@@ -83,6 +83,9 @@ func TestReasonAcceptsEachCurrencyOfLandedEvidence(t *testing.T) {
 			t.Fatalf("writer and reader disagree about %q", reason)
 		}
 	}
+	if HasLandedEvidence("the test passed and the commit reached the gate today") {
+		t.Fatal("the words test, commit, and gate are not landed evidence")
+	}
 }
 
 // An answered gate is no longer a gate. Reject in particular must return the
@@ -104,13 +107,19 @@ func TestAnsweredGateIsNotAwaiting(t *testing.T) {
 		t.Fatal("fresh record is not awaiting")
 	}
 	for _, v := range []Verdict{VerdictAccept, VerdictReject} {
-		answered := reason + " " + FormatAnswer(v, "still jumps on the second aside", "jevons-po", testNow())
+		answered := reason + "\n" + FormatAnswer(v, "still jumps on the second aside", "jevons-po", testNow())
 		if !IsAnswered(answered, "") {
 			t.Fatalf("%s: answer not detected in %q", v, answered)
 		}
 		if IsAwaiting(OwnerHandle, answered, "") {
 			t.Fatalf("%s: answered gate still reads as awaiting", v)
 		}
+	}
+	if IsAwaiting("", "we are AWAITING OWNER VERDICT today", "") {
+		t.Fatal("the words awaiting owner verdict are not the marker")
+	}
+	if IsAnswered("the owner verdict answered yesterday", "") {
+		t.Fatal("a sentence is not the answered marker")
 	}
 }
 

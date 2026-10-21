@@ -3,7 +3,12 @@
 
 package planusage
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
+)
 
 // DefaultMonthlyWindowSeconds is used when a monthly window publishes
 // resets_at but no length (~30d billing cycle).
@@ -21,10 +26,10 @@ const (
 // weekly; Cursor's included-usage cycle is monthly.
 func normalizeWindowLabel(provider string, w Window) Window {
 	name := strings.ToLower(strings.TrimSpace(w.Name))
-	p := strings.ToLower(strings.TrimSpace(provider))
+	cursor := seatprovider.Resolve(claudia.Provider(provider)).Plan == seatprovider.Cursor
 	// Older Claudia builds copied the billing-cycle name onto Cursor's API
 	// bucket. Keep the two histories separate even if that wire shape returns.
-	if p == "cursor" && strings.EqualFold(strings.TrimSpace(w.Model), "API") {
+	if cursor && strings.EqualFold(strings.TrimSpace(w.Model), "API") {
 		w.Name = string(cursorAPIWindowName)
 		return w
 	}
@@ -34,7 +39,7 @@ func normalizeWindowLabel(provider string, w Window) Window {
 	if isWeeklyDuration(w.LimitWindowSeconds) {
 		return w
 	}
-	if p == "cursor" || isMonthlyDuration(w.LimitWindowSeconds) {
+	if cursor || isMonthlyDuration(w.LimitWindowSeconds) {
 		w.Name = WindowMonthly
 	}
 	return w

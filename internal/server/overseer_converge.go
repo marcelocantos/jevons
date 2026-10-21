@@ -14,6 +14,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/capacity"
 	"github.com/marcelocantos/jevons/internal/ownerquestions"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -305,7 +306,9 @@ func (s *Server) ObserveCockpit() cockpitObs {
 		// says a prompt is outstanding", which is exactly the condition a
 		// wedge also satisfies; treating it as evidence of work would
 		// make the stuck-busy case 🎯T204 exists for unconvictable.
-		if st.Provider == string(claudia.ProviderClaude) {
+		// Nor on the sidecar, whose in-flight flag is the client's word too:
+		// a claude row is the anthropic sidecar seat (🎯T1079).
+		if id := seatprovider.Resolve(claudia.Provider(st.Provider)); id.Plan == seatprovider.Claude && !id.Sidecar {
 			o.PaneWorking = o.PromptInFlight
 		}
 	}
@@ -404,12 +407,34 @@ func (s *Server) cockpitAttach(state *cockpitState) error {
 		return fmt.Errorf("cockpit: no registry")
 	}
 	proc := reg.Get(name)
-	if proc == nil || !(seatstate.ReadRegistry(reg, name).Alive == seatstate.Yes) {
+	seat := seatstate.ReadRegistry(reg, name)
+	if proc == nil || !(seat.Alive == seatstate.Yes) {
 		return fmt.Errorf("cockpit: attach raced; process gone")
 	}
+	s.mu.RLock()
+	replaced := s.proc != nil && s.proc != proc
+	orphaned := replaced && s.waiting && seat.InFlight != seatstate.Yes
+	s.mu.RUnlock()
 	s.AttachOverseer(proc)
+	if orphaned {
+		// The turn the server holds open belonged to the process this one
+		// replaced (a plan-policy park stops the seat mid-turn and the
+		// recovery sweep re-mints it), and that process's terminal will never
+		// arrive. Left set, `waiting` wedged the notify queue until the
+		// stuck-busy watchdog: in the 2026-10-20 full journey suite an owner
+		// turn in flight when J20 parked the overseer left J30's owner turn
+		// queued, undrained, for six minutes. The new seat is not in a turn,
+		// so the queue is free.
+		slog.Warn("cockpit: re-attached a replacement overseer process; settled the previous process's open turn",
+			"name", name)
+		// 🎯T1091: an owner turn among them is reported, not lost.
+		s.abandonReplacedOverseerTurn()
+	}
 	s.broadcastCockpitReady("overseer is back")
 	slog.Info("cockpit: overseer re-attached to chat", "name", name)
+	if orphaned {
+		s.drainOverseerNotes()
+	}
 	s.SetOverseerDownReason("")
 	state.mu.Lock()
 	state.attempts = 0
@@ -449,8 +474,9 @@ func (s *Server) cockpitUnstickBusy(state *cockpitState, obs cockpitObs) error {
 		}
 		// Settle server + clients even if interrupt is racy. The strip
 		// was just set to stuck; leave it there and the queued follow-up
-		// never sends, because busy stays true.
-		s.settleOverseerAfterUnstick()
+		// never sends, because busy stays true. 🎯T1094: an owner turn
+		// among them is reported with Resend, not settled silently.
+		s.abandonStuckOverseerTurn()
 		s.broadcastCockpitReady("overseer is back")
 		// Flush deferred owner/notify notes now that local busy is cleared.
 		s.drainOverseerNotes()
@@ -568,12 +594,10 @@ func (s *Server) cockpitLaunch(state *cockpitState) error {
 		return fmt.Errorf("cockpit: %w", err)
 	}
 	s.AttachOverseer(agent)
-	s.mu.Lock()
-	s.waiting = false
-	s.overseerOwnerTurn = false // 🎯T291
-	s.turnBuf = ""
-	s.noteOverseerProgressLocked()
-	s.mu.Unlock()
+	// The fresh process holds no turn. One the server held belonged to the
+	// process this launch replaced; an owner turn among them is reported,
+	// not lost (🎯T1091).
+	s.abandonReplacedOverseerTurn()
 	s.SetOverseerDownReason("")
 	state.mu.Lock()
 	state.attempts = 0

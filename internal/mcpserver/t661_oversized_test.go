@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,48 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/transcript"
 )
+
+// ProtocolError is the shape of claudia's broker ProtocolError.
+// The production type lives in claudia's broker package, which this
+// module does not import. Code is the machine code. The sentence is not.
+type ProtocolError struct {
+	Code string
+	Msg  string
+}
+
+func (e *ProtocolError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return "broker protocol: " + e.Code + ": " + e.Msg
+}
+
+// notAProtocolError has a Code field and is not a broker refusal.
+type notAProtocolError struct {
+	Code string
+}
+
+func (e *notAProtocolError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return "broker protocol: " + e.Code
+}
+
+// lineLimitSender is a capable seat whose send returns the error Claudia's
+// sendWithRequestID returns: the receipt sentinel and the protocol error
+// wrapped together.
+type lineLimitSender struct {
+	err error
+}
+
+func (s *lineLimitSender) Alive() bool { return true }
+
+func (s *lineLimitSender) Interrupt() error { return nil }
+
+func (s *lineLimitSender) Send(string) error { return s.err }
+
+func (s *lineLimitSender) SendWithRequestID(string, string) error { return s.err }
 
 // t661Roots plants a Grok session for sid under a temp root with one
 // ordinary turn and one record over the broker line limit.
@@ -66,12 +109,27 @@ func TestT661SeatWithOversizedSessionIsMarked(t *testing.T) {
 // 🎯T661 acceptance: a send that dies at the broker wire names the seat's
 // oversized records and the recovery, not the bare protocol error.
 func TestT661SendErrorNamesTheSessionAndRecovery(t *testing.T) {
-	brokerErr := errors.New("broker protocol: malformed: message exceeds the 1048576-byte line limit")
-	if !IsBrokerLineLimitError(brokerErr) {
-		t.Fatal("the broker refusal is not recognised")
+	sentence := errors.New("broker protocol: malformed: message exceeds the 1048576-byte line limit")
+	if IsBrokerLineLimitError(sentence) {
+		t.Fatal("a line-limit sentence is not the refusal")
+	}
+	malformed := &ProtocolError{Code: "malformed", Msg: "message exceeds the 1048576-byte line limit"}
+	if IsBrokerLineLimitError(malformed) {
+		t.Fatal("code malformed is not the refusal")
+	}
+	if IsBrokerLineLimitError(&notAProtocolError{Code: "frame_too_large"}) {
+		t.Fatal("a Code field on a different type is not the refusal")
 	}
 	if IsBrokerLineLimitError(errors.New("agent \"x\" is not running")) {
 		t.Fatal("an unrelated error is read as the line limit")
+	}
+	brokerErr := &ProtocolError{Code: "frame_too_large", Msg: "frame of 2000000 bytes exceeds the 1048576-byte line limit; it was dropped and the connection kept open"}
+	if !IsBrokerLineLimitError(brokerErr) {
+		t.Fatal("frame_too_large was not recognised")
+	}
+	wrapped := fmt.Errorf("%w: %w", errors.New("request receipt uncertain"), brokerErr)
+	if !IsBrokerLineLimitError(wrapped) {
+		t.Fatal("frame_too_large inside a two-error wrap was not recognised")
 	}
 	lines := []transcript.OversizedLine{{Line: 41, Bytes: 1_400_000}, {Line: 58, Bytes: 1_200_000}}
 	msg := OversizedSendAdvice("jv-t657-steer-ui", 1200, lines, brokerErr)
@@ -87,5 +145,82 @@ func TestT661SendErrorNamesTheSessionAndRecovery(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("advice missing %q:\n%s", want, msg)
 		}
+	}
+}
+
+// t661SendDaemon is a daemon whose session roots are the planted t661
+// transcript, and whose registry names that seat.
+func t661SendDaemon(t *testing.T, name, workdir, sid string, roots discovery.Roots) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	s, _, _ := t418Daemon(t, dir)
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: name, WorkDir: workdir, SessionID: sid, Provider: "grok", Materialized: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.registry = reg
+	s.SetBirthRoots(roots)
+	return s
+}
+
+// TestT661TypedLineLimitNamesTheSessionOnTheSendPath drives the send that
+// dies at the wire. The sender returns the two-error wrap Claudia's
+// sendWithRequestID returns. A sentence that only quotes the line limit
+// stays a plain send failure.
+func TestT661TypedLineLimitNamesTheSessionOnTheSendPath(t *testing.T) {
+	const sid = "78239742-0000-4000-8000-0000000230bc"
+	const name = "jv-t657-steer-ui"
+	workdir := t.TempDir()
+	roots := t661Roots(t, workdir, sid)
+	pe := &ProtocolError{
+		Code: "frame_too_large",
+		Msg:  "frame of 2000000 bytes exceeds the 1048576-byte line limit; it was dropped and the connection kept open",
+	}
+	wrapped := fmt.Errorf("%w: %w", errors.New("request receipt uncertain"), pe)
+	s := t661SendDaemon(t, name, workdir, sid, roots)
+	_, err := deliverObservedToSender(s, name, "short", false, &lineLimitSender{err: wrapped}, false)
+	if err == nil {
+		t.Fatal("frame_too_large send returned no error")
+	}
+	for _, want := range []string{
+		"is not the problem",
+		name,
+		"jevons_agent_kill",
+		"jevons_agent_start",
+		"Do not retry the send",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("send advice missing %q:\n%s", want, err.Error())
+		}
+	}
+
+	sentence := errors.New("broker protocol: malformed: message exceeds the 1048576-byte line limit")
+	s = t661SendDaemon(t, name, workdir, sid, roots)
+	_, err = deliverObservedToSender(s, name, "short", false, &lineLimitSender{err: sentence}, false)
+	if err == nil {
+		t.Fatal("sentence send returned no error")
+	}
+	if strings.Contains(err.Error(), "is not the problem") {
+		t.Fatalf("a line-limit sentence took the oversized advice path:\n%s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "send failed") {
+		t.Fatalf("sentence send = %v", err)
+	}
+
+	malformed := fmt.Errorf("%w: %w", errors.New("request receipt uncertain"), &ProtocolError{
+		Code: "malformed", Msg: "message exceeds the 1048576-byte line limit",
+	})
+	s = t661SendDaemon(t, name, workdir, sid, roots)
+	_, err = deliverObservedToSender(s, name, "short", false, &lineLimitSender{err: malformed}, false)
+	if err == nil {
+		t.Fatal("malformed send returned no error")
+	}
+	if strings.Contains(err.Error(), "is not the problem") {
+		t.Fatalf("code malformed took the oversized advice path:\n%s", err.Error())
 	}
 }

@@ -69,11 +69,29 @@ func TestEventsToEvidenceClassifies(t *testing.T) {
 		{Level: "info", Component: "thread", Decision: "spawn", Outcome: "ok", Msg: "spawned"},
 		{Level: "warn", Component: "cost", Decision: "monitor", Msg: "cost spike anomaly", Corr: "c3"},
 		{Level: "warn", Component: "cost", Decision: "monitor", Msg: "cost spike anomaly", Corr: "c4"},
+		// Message words are not kinds. Component "toolchain" contains "tool"
+		// and is still not the tool token.
+		{Level: "warn", Component: "thread", Decision: "monitor", Msg: "cost spike stuck tool fail error timeout", Corr: "prose"},
+		{Level: "error", Component: "toolchain", Decision: "build", Outcome: "error", Msg: "tool blew up", Corr: "toolish"},
 	}
 	ev := EventsToEvidence(rows)
-	// info ok dropped; 2 event_push_error + 2 cost_anomaly
-	if len(ev) != 4 {
-		t.Fatalf("want 4 evidence rows, got %d %+v", len(ev), ev)
+	// info and the prose warn are dropped. toolchain is lifecycle_error,
+	// not tool_failure. 2 event_push_error + 2 cost_anomaly + 1 lifecycle.
+	if len(ev) != 5 {
+		t.Fatalf("want 5 evidence rows, got %d %+v", len(ev), ev)
+	}
+	kinds := map[string]int{}
+	for _, e := range ev {
+		kinds[e.Kind]++
+		if e.SourceID == "prose" {
+			t.Fatalf("message text classified: %+v", e)
+		}
+		if e.SourceID == "toolish" && e.Kind != "lifecycle_error" {
+			t.Fatalf("toolchain classified as %s", e.Kind)
+		}
+	}
+	if kinds["event_push_error"] != 2 || kinds["cost_anomaly"] != 2 || kinds["lifecycle_error"] != 1 {
+		t.Fatalf("kinds=%v", kinds)
 	}
 	cands := ExtractCandidates(ev, 2)
 	if len(cands) < 2 {

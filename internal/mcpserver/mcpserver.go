@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/audit"
 	"github.com/marcelocantos/jevons/internal/butler"
 	"github.com/marcelocantos/jevons/internal/capacity"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/cost"
@@ -43,6 +44,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/seatload"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/secauditor"
@@ -125,7 +127,21 @@ type Server struct {
 	// read-back finds one (🎯T752).
 	grokSessions string
 
+	// reconcileMu keeps one fleet pass at a time (🎯T766.3). The cockpit
+	// tick and the sentinel repair both call Reconcile. The lock covers
+	// the whole pass so those callers cannot interleave one seat's sweeps.
+	// It is not mu: the pass locks mu in short sections.
+	reconcileMu sync.Mutex
+	// reconcileBlock runs inside the pass while reconcileMu is held.
+	// Production leaves it nil. Tests park one pass here.
+	reconcileBlock func()
+
 	mu sync.Mutex
+
+	// seatPairMu guards seatPairHandlers. Catch-up runs the handler
+	// registered here, not the deadline wrapper that commits.
+	seatPairMu       sync.Mutex
+	seatPairHandlers map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
 	// startMu serializes Launch/wire on jevons_agent_start. It must be
 	// released before any ACP prompt delivery (🎯T541): holding it across
 	// session/prompt confirmation hangs MCP so agent_list/send/kill/event_push
@@ -166,6 +182,12 @@ type Server struct {
 	// overseer-addressed send reuses the owner chat journal and notify queue.
 	// Nil falls back to notifyJevon for agent-origin text (see deliverToOverseer).
 	overseerDeliver OverseerDeliverFunc
+	// overseerDeliverReceipted, when set, replaces overseerDeliver and also
+	// reports whether the handoff's receipt settled.
+	overseerDeliverReceipted OverseerReceiptFunc
+	// overseerNotifyDrain runs after an intent write so a queue held by a
+	// non-working fleet drains once the fleet is runnable again. Nil is a no-op.
+	overseerNotifyDrain func()
 	// notifyReplay remembers which notification batches the overseer already
 	// holds, so the one channel every source funnels through refuses to
 	// re-deliver byte-identical content (🎯T428). Nil until first use; see
@@ -207,6 +229,12 @@ type Server struct {
 	// the AGENT did after a send, as opposed to what the send call returned.
 	// Nil — the product path — watches the live claudia process. Test seam.
 	observeTurnWitness turnWitness
+	// querySendReceipt is a test seam; nil uses Claudia's read-only API.
+	querySendReceipt func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)
+	// recordRequestMission freezes the seat's target for one transport
+	// request at receipt bind. Nil leaves mission unknown. The daemon wires
+	// cost.Store.RecordRequestMission.
+	recordRequestMission func(ctx context.Context, seat, requestID, mission string) error
 	// agentEventHook receives every fleet worker event (progress, assistant, …)
 	// so the HTTP server can maintain RHS progress chrome (🎯T118).
 	agentEventHook       func(name string, ev claudia.Event)
@@ -446,6 +474,8 @@ type Server struct {
 	// deterministic notice does not depend on.
 	recoverBin string
 	stateDir   string
+	// daemonStateDir is cfg.StateDir (🎯T1082); see SetDaemonStateDir.
+	daemonStateDir atomic.Value
 	// spawnOrderEvidence caches the journalled start attempts 🎯T762 reconciles
 	// against: the journal is a full scan, and /api/agents asks per row.
 	spawnOrderMu       sync.Mutex
@@ -467,6 +497,10 @@ type Server struct {
 	roleAssignments *roles.Assignments
 	// roleCat resolves role definition files (builtin + overlays).
 	roleCat roles.Catalog
+	// backgroundDrains counts drains started by goDrainAgentSendQueue, so a
+	// caller that owns the queue directory can wait for the last write
+	// before removing it (WaitBackgroundDrains).
+	backgroundDrains sync.WaitGroup
 	// pendingSpawnRole is set by handleAgentStart before stitchAgentStart so
 	// hermetic callers of the 9-arg stitch keep compiling (role defaults inside).
 	pendingSpawnRole string
@@ -533,10 +567,7 @@ type Server struct {
 	// delivered (🎯T599): the pin names the blocking message for
 	// agent_list / fleet health, and the fail counts decide when repeated
 	// delivery failure of one entry becomes a pin. Guarded by mu.
-	sendqPin map[string]SendqPin
-	// heldScannedAt is the transcript size at which an agent's held attempts
-	// were last checked against it (reconcileHeldFromTranscript).
-	heldScannedAt map[string]int64
+	sendqPin      map[string]SendqPin
 	sendqPinFails map[string]sendqEntryFails
 }
 
@@ -715,11 +746,14 @@ func activeProcessLoad(defs []claudia.AgentDef, state func(string) seatstate.Sta
 			(st.Alive == seatstate.No || parkedWithoutHandle(d.Name)) {
 			continue
 		}
-		p := strings.ToLower(strings.TrimSpace(string(d.Provider)))
-		if p == "" {
-			p = string(cli.DefaultProvider)
+		// Keyed by plan, as the portfolio's soft caps are (🎯T1079): a seat
+		// stored as xai-oauth spends the grok cap. Keyed by the raw string,
+		// every launch-id seat counted against a cap no portfolio names.
+		p := seatprovider.Resolve(d.Provider).Plan
+		if p == seatprovider.Unset {
+			p = seatprovider.Resolve(cli.DefaultProvider).Plan
 		}
-		load[p]++
+		load[p.String()]++
 	}
 	return load
 }
@@ -736,11 +770,22 @@ func (s *Server) resolvedDefaultProvider() claudia.Provider {
 // plan feed asks claudia.Resolve and records the pick — jevons does not
 // re-adjudicate it. No feed → config default (T476).
 //
-// 🎯T475: omit-task_type derivation uses the agent name so product-owner
-// seats (suffix -po) get ceo even when purpose=work — they must not
-// inherit work→code_implement→Claude/Opus.
+// 🎯T475: omit-task_type derivation uses the seat's declared role so a
+// product owner gets ceo even though its purpose is work — it must not
+// inherit work→code_implement→Claude/Opus. The role is the one this mint
+// is spawning (role=, carried as pendingSpawnRole), else the role recorded
+// for the seat; the name does not decide (🎯T766.4).
 func (s *Server) mintProviderPick(providerArg, stored string, existed bool, taskTypeArg, purpose, name string, ownerAsked bool) cost.MintProviderPick {
 	tt := cost.TaskTypeForMint(name, purpose, taskTypeArg)
+	if strings.TrimSpace(taskTypeArg) == "" {
+		s.mu.Lock()
+		role := strings.TrimSpace(s.pendingSpawnRole)
+		s.mu.Unlock()
+		if role == "" {
+			role = s.agentRole(name, purpose)
+		}
+		tt = cost.TaskTypeFromRole(role, purpose)
+	}
 	dec := s.effectivePortfolio().Route(tt, s.harnessLoadCounts())
 	_, fromFile := s.llmPortfolioSource()
 	cfg := string(s.resolvedDefaultProvider())

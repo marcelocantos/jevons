@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 func t32521Mint(t *testing.T, s *Server, name, model, provider, taskType, purpose, prompt string) *claudia.AgentDef {
@@ -41,7 +42,7 @@ func TestStitchFastCheapPinsGrokPeerOnMechanicalAndOps(t *testing.T) {
 	s.SetDefaultProvider(string(claudia.ProviderGrok))
 
 	mech := t32521Mint(t, s, "jv-mech", "", "", "mechanical", claudia.PurposeWork, "")
-	if cli.PlanProvider(mech.Provider) != claudia.ProviderGrok {
+	if seatprovider.Resolve(mech.Provider).Plan != seatprovider.Grok {
 		t.Fatalf("mechanical provider=%q want grok", mech.Provider)
 	}
 	if mech.Model != cost.ModelGrokFast {
@@ -148,7 +149,7 @@ func TestStitchDoesNotPinSparkOnRedCodexWeekly(t *testing.T) {
 	})
 
 	omit := t32521Mint(t, s, "jv-no-spark-omit", "", "", "mechanical", claudia.PurposeWork, "")
-	if cli.PlanProvider(omit.Provider) == claudia.ProviderCodex {
+	if seatprovider.Resolve(omit.Provider).Plan == seatprovider.Codex {
 		t.Fatalf("omit mint landed on red Codex: %+v", omit)
 	}
 	if omit.Model == cost.ModelCodexSpark {

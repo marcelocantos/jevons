@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // t919Server is a bare server with a /ws/mux session subscribed to the
@@ -162,7 +163,7 @@ func TestT919PreviewIsStreamingNotTool(t *testing.T) {
 func TestT919DrainOnTerminalStopLeavesNextTurnAccepted(t *testing.T) {
 	s, sess := t919Server(t)
 	_ = s.SendToOverseer(userTurnPrefix + "owner speaks")
-	_ = s.SendToOverseer("[Agent jevons-po responded]\nqueued behind owner")
+	_ = s.SendToOverseer(envelope.PrefixAgentResponded + "\n" + envelope.SeatFact(envelope.IntentRoute, "jevons-po") + "\nqueued behind owner")
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "answer", StopReason: "end_turn"})
 	p := s.OverseerPhase()
 	if p.Phase != PhaseAccepted || len(p.Correspondent) != 1 || p.Correspondent[0] != "jevons-po" {

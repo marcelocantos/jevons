@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/seatactivity"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
@@ -28,7 +29,7 @@ func DefaultSessionRoots() discovery.Roots {
 // AgentTranscriptPath is the current session file for d — registry session
 // id at the moment of the read, not a stale id (🎯T423 clause 6).
 func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
-	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
+	if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
 		// Sidecar seats have no vendor JSONL. Callers that need bytes
 		// use classifyAgentSessionPhase / spool.ReadSeat (🎯T866.4).
 		return ""
@@ -52,14 +53,23 @@ func AgentTranscriptPath(d claudia.AgentDef, roots discovery.Roots) string {
 // Decode via ClassifyPhase on the agent's current session. Missing or
 // unreadable is unknown, never idle.
 func classifyAgentSessionPhase(d claudia.AgentDef, roots discovery.Roots) turnev.Phase {
-	if spool.SidecarProvider(string(d.Provider)) && spool.SeatHasHistory(spool.Dir(), d.Name) {
-		recs, err := spool.ReadSeat(spool.Dir(), d.Name)
-		if err != nil || len(recs) == 0 {
-			return turnev.PhaseUnknown
-		}
-		return turnev.ClassifyPhase(turnev.DecodeAll(bytes.NewReader(spool.AsJSONL(recs))))
+	if seatprovider.Resolve(d.Provider).Sidecar && spool.SeatHasHistory(spool.Dir(), d.Name) {
+		return sidecarSpoolPhase(spool.Dir(), d.Name)
 	}
 	return turnev.PhaseFromFile(AgentTranscriptPath(d, roots))
+}
+
+// sidecarSpoolPhase folds the seat's newest phase-moving spool record, which
+// answers what folding its whole history (ReadSeat → AsJSONL → ClassifyPhase)
+// answers, at the cost of what was appended since the last call: the 30 s
+// seat-observation tick runs this for every registered seat, and the full
+// read kept the daemon at a whole core over an 11 GB spool (🎯T1084).
+func sidecarSpoolPhase(dir, seat string) turnev.Phase {
+	rec, ok, err := spool.LatestPhaseRecord(dir, seat)
+	if err != nil || !ok {
+		return turnev.PhaseUnknown
+	}
+	return turnev.ClassifyPhase(turnev.DecodeAll(bytes.NewReader(spool.AsJSONL([]spool.Record{rec}))))
 }
 
 // ReadSessionEvidence asks whether durable transcript evidence exists for the
@@ -75,12 +85,15 @@ func ReadSessionEvidence(provider claudia.Provider, sessionID, workDir string) S
 	if sessionID == "" || workDir == "" {
 		return SessionEvidenceUnknown
 	}
-	if spool.SidecarProvider(string(provider)) {
+	if seatprovider.Resolve(provider).Sidecar {
 		// Sidecar seats have no Claude JSONL. Absence of that file is
 		// not a dead conversation and is not idle (🎯T866.3).
 		return SessionEvidenceUnknown
 	}
-	if provider != "" && provider != claudia.ProviderClaude {
+	// Every named plan is a sidecar seat since claudia v0.58 (a legacy row
+	// storing claude is the anthropic seat, 🎯T1079); only an unset provider
+	// still takes Claude Code's JSONL convention.
+	if seatprovider.Resolve(provider).Plan != seatprovider.Unset {
 		return SessionEvidenceUnknown
 	}
 	ok, err := claudia.SessionExists(sessionID, workDir)
@@ -125,6 +138,32 @@ func classifyAgentListPhase(alive, turnBegan, materialized bool, ev SessionEvide
 		if !turnBegan && ev == SessionEvidenceAbsent {
 			return AgentStatusDeadUnmaterialized
 		}
+	}
+	return status
+}
+
+// classifySeatListPhase is classifyAgentListPhase for a registered seat: a
+// seat the owner addresses (the overseer, an aside) has no brief to miss.
+//
+// never_briefed is a work seat's alarm (🎯T305): it was minted with a brief
+// and no turn has begun. phase_unknown is the same seat when nothing can
+// say whether that brief landed. Neither question applies to a seat that
+// waits for the owner's next message: alive and not yet addressed, it is
+// running and idle. On a fresh daemon the 30-second seat check could see a
+// brand-new overseer alive before any turn (sidecar seats keep no record
+// this daemon can call absent, so evidence is unknown), record
+// phase_unknown, and /api/agents served that ahead of its alive → running
+// fallback (🎯T1078). Liveness still decides — a stopped overseer is
+// stopped — and so does located-absent evidence under a materialized row
+// (🎯T412 dead_unmaterialized), which is a real finding for any seat.
+func classifySeatListPhase(purpose string, alive, turnBegan, materialized bool, ev SessionEvidence) string {
+	status := classifyAgentListPhase(alive, turnBegan, materialized, ev)
+	if purpose != claudia.PurposeOverseer && purpose != claudia.PurposeAside {
+		return status
+	}
+	switch status {
+	case AgentStatusNeverBriefed, AgentStatusPhaseUnknown:
+		return AgentStatusRunning
 	}
 	return status
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -51,6 +52,11 @@ type agentSendResult struct {
 	// receiver's user-message or queue-operation records. A status of sent
 	// alone can be inferred from an unrelated live session event (🎯T416).
 	ReceiverReceipt bool
+	// ReceiptSettled means a capable spawn handoff's structured receipt
+	// accepted the opening brief. submitStartBrief treats that as the
+	// verdict and does not consult the transcript watch. It is not a
+	// delivery status the caller is shown.
+	ReceiptSettled bool
 }
 
 // agentSender is the process surface sendToAgent needs (testable).
@@ -79,7 +85,8 @@ func isPromptInFlight(err error) bool {
 }
 
 // enqueueAgentSend appends text for delivery after the current turn and
-// returns the total pending for name.
+// returns the queue depth, every phase. The claimable count is
+// pendingAgentSends.
 //
 // 🎯T418: the error is returned rather than logged, and every caller reports it
 // instead of answering "queued". A daemon that could not write the queue is not
@@ -109,19 +116,37 @@ func (s *Server) enqueueAgentSendWithRequestID(name, text, requestID string) (in
 // unreadable queue is reported as empty AND logged: the drain runs on an event,
 // with nobody to return an error to, so the alternative to logging is silence.
 func (s *Server) dequeueAgentSend(name string) sendq.Entry {
-	e, ok, err := s.sendQueue().PopFront(name)
+	rec, ok, err := s.sendQueue().PopFront(name, "dequeueAgentSend", "oldest pending entry removed for delivery", time.Now())
 	if err != nil {
 		slog.Error("agent send queue: unreadable; nothing drained",
 			"component", "agent_send", "name", name, "err", err)
 		return sendq.Entry{}
 	}
-	if !ok {
+	if !ok || len(rec.Removed) == 0 {
 		return sendq.Entry{}
 	}
-	return e
+	return rec.Removed[0]
 }
 
+// pendingAgentSends is the claimable count: admitted, digest, and requeued.
+// A seat whose queue was never observed stays unknown. An unreadable queue
+// stays unknown, so a failed read is not an empty pending count.
+// In-flight, held-attempt, and uncertain entries are heldAgentSends.
 func (s *Server) pendingAgentSends(name string) int {
+	st, ok := s.Seats().Get(name)
+	if !ok || st.QueueDepth == seatstate.QueueUnknown {
+		return seatstate.QueueUnknown
+	}
+	n, err := s.sendQueue().Pending(name)
+	if err != nil {
+		return seatstate.QueueUnknown
+	}
+	return n
+}
+
+// heldAgentSends is every phase still stored for the seat. Kill, recovery,
+// and "messages held" read this. It is not the pending count.
+func (s *Server) heldAgentSends(name string) int {
 	st, _ := s.Seats().Get(name)
 	return st.QueueDepth
 }
@@ -226,15 +251,22 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 			name, fleetintent.Describe(dec.Blocking), dec.Reason)
 	}
 
-	// 🎯T409: lost-session recovery belongs on this path. It is what a
-	// parent report and the impatience ladder call, and they retry on a
-	// timer. registry.Launch latches a Cursor session/load refusal
-	// (RequireResume after a bounce, even when store.db was never written)
-	// and every later call returns that same error. SessionLost does not
-	// see a Cursor row, so the rotate-before-launch arm never engages.
-	// LaunchRecovering rotates once after that refusal and launches the
-	// fresh id; a store a leftover still holds is not rotated (🎯T541.1).
+	// 🎯T409: launch recovery belongs on this path. It is what a parent
+	// report and the impatience ladder call, and they retry on a timer.
+	// LaunchRecovering keeps a refused canonical resume on the same
+	// generation. Missing vendor files and provider refusal prose do not
+	// authorize a replacement mint. A store a leftover still holds is not
+	// rotated (🎯T541.1).
+	// 🎯T1066: a send to a stopped seat frontier-consume minted is not a
+	// licence to start it while the frontier is paused or once its target
+	// is achieved — the 2026-10-11 wake wave came in through sends exactly
+	// like this one. The message stays the caller's to hold or retry.
+	if hold := s.autoSeatHold(name); hold != "" {
+		s.noteRevive(name, "send", hold, nil)
+		return nil, false, fmt.Errorf("agent %q is not running and is held (%s, 🎯T1066) — lift the pause or start it explicitly with jevons_agent_start", name, hold)
+	}
 	p2, err := fleet.LaunchRecovering(s.registry, name)
+	s.noteRevive(name, "send", "", err)
 	if err != nil {
 		return nil, false, fmt.Errorf("agent %q is not running and rehydrate failed: %v", name, err)
 	}
@@ -487,6 +519,56 @@ func (s *Server) lockAgentSend(name string) func() {
 	return lock.Unlock
 }
 
+// unconfirmedBoundHandoffResult is the caller answer when a capable
+// handoff's structured receipt did not settle. The transcript watch is
+// not consulted. confirmHere and the spawn path both return it. The spawn
+// predicate already keeps the seat on delivered_unconfirmed.
+func (s *Server) unconfirmedBoundHandoffResult(name, text string, rehydrated bool, mm sendMech) agentSendResult {
+	res := agentSendResult{
+		Status: "delivered_unconfirmed",
+		Message: fmt.Sprintf(
+			"Message handed to %q but NOT confirmed as a turn: the socket write returned and the structured receipt did not settle this handoff. "+
+				"DO NOT re-send on this verdict — the attempt stays held until a receipt settles.",
+			name) + describeMode(mm),
+		Queued:    s.pendingAgentSends(name),
+		Mode:      mm.Mode,
+		Mechanism: mm.Mechanism,
+	}
+	s.noteUnconfirmedSend(name, text)
+	logAgentSendResult(name, res, rehydrated)
+	return res
+}
+
+// settledHandoffCallerResult is the caller answer after that receipt settled.
+// PayloadSeen and PayloadEnteredTurn do not choose it and are not recorded
+// as delivery evidence.
+func (s *Server) settledHandoffCallerResult(name string, rehydrated, interrupted bool, transportErr error, mm sendMech) agentSendResult {
+	msg := fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)
+	switch {
+	case interrupted:
+		msg = fmt.Sprintf("Interrupted in-flight turn on %q and sent the new message.", name)
+	case rehydrated:
+		msg += s.rehydratedAfter(name)
+	}
+	if claim := describeTransportClaim(transportErr); claim != "" {
+		msg += fmt.Sprintf(
+			" (the send transport reported %q — a claim about its own observation, contradicted by the structured receipt)",
+			claim)
+	}
+	msg += describeMode(mm)
+	res := agentSendResult{
+		Status:    sentStatus(rehydrated, interrupted),
+		Message:   msg,
+		Queued:    s.pendingAgentSends(name),
+		Mode:      mm.Mode,
+		Mechanism: mm.Mechanism,
+	}
+	logAgentSendResult(name, res, rehydrated)
+	s.markAgentTurnBegan(name)
+	s.noteTurnInFlight(name)
+	return res
+}
+
 // The provider may know a turn is open before Jevons has observed a turn
 // event. OMP marks that phase before writing the prompt to its sidecar.
 // deliverToSenderMode is the mode-carrying send path (🎯T657).
@@ -506,13 +588,44 @@ func deliverToSenderMode(s *Server, name, text string, mode delivery.Mode, proc 
 	return deliverToSenderModeWithRequestID(s, name, text, "", mode, proc, rehydrated, confirm)
 }
 
-func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (agentSendResult, error) {
+func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, mode delivery.Mode, proc agentSender, rehydrated bool, confirm sendConfirmation) (res agentSendResult, err error) {
 	s.observeQueue(name)
 	// A sidecar socket write returns before the provider accepts or rejects
 	// the prompt. Serialize sends to one seat through the witness verdict so
 	// simultaneous callers cannot both mistake that interval for idle.
 	unlock := s.lockAgentSend(name)
 	defer unlock()
+	var handoff sendq.Entry
+	releaseToPending := false
+	// confirmHere settles the bound handoff before it chooses a caller
+	// status, so the defer must not settle that same attempt again.
+	receiptSettled := false
+	defer func() {
+		if handoff.ID == "" {
+			return
+		}
+		switch {
+		case releaseToPending:
+			detail := "handoff refused before acceptance"
+			if err != nil {
+				detail = err.Error()
+			}
+			s.settleHandoff(name, handoff, sendq.DefinitelyNotSent, detail)
+		case err != nil:
+			// The caller received the failure. Dropping the attempt matches
+			// the historical immediate path, which did not keep a queue copy.
+			s.settleHandoff(name, handoff, sendq.TerminalUndelivered, err.Error())
+		case receiptSettled:
+			// confirmHere already settled this attempt and chose the caller
+			// status from that result.
+		default:
+			// A nil send error is the socket write returning. It is not
+			// transport acceptance. Steer takes this path too: folding into
+			// the open turn still has its own receipt. confirmByCaller still
+			// uses this arm: the spawn path owns its own status word.
+			s.settleBoundHandoffReceipt(name, handoff)
+		}
+	}()
 	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
 		return agentSendResult{}, fmt.Errorf("agent %q is not running", name)
 	}
@@ -554,13 +667,17 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			if qerr != nil {
 				return agentSendResult{}, undeliverableQueueError(name, qerr)
 			}
+			pending := s.pendingAgentSends(name)
+			if pending < 0 {
+				pending = n
+			}
 			mm.Mechanism = delivery.MechanismClientQueue
 			msg := fmt.Sprintf(
 				"agent %q is running and idle, but fleet intent says it should not receive a turn: %s (%s) — "+
 					"message held by the daemon (%d pending), NOT delivered; it drains once the intent is lifted "+
 					"(jevons_fleet_intent state=working) — 🎯T1066.",
-				name, fleetintent.Describe(dec.Blocking), dec.Reason, n)
-			res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: n, Mode: mode, Mechanism: mm.Mechanism}
+				name, fleetintent.Describe(dec.Blocking), dec.Reason, pending)
+			res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: pending, Mode: mode, Mechanism: mm.Mechanism}
 			logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightIdle, TurnEvidence{})
 			return res, nil
 		}
@@ -593,6 +710,10 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		if qerr != nil {
 			return agentSendResult{}, undeliverableQueueError(name, qerr)
 		}
+		pending := s.pendingAgentSends(name)
+		if pending < 0 {
+			pending = n
+		}
 		mm.Mechanism = delivery.MechanismClientQueue
 		if mode == delivery.ModeSteer {
 			mm.Mechanism = delivery.MechanismQueueUntilIdle
@@ -601,10 +722,10 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			"busy: %q has a turn in flight; message queued (%d pending) for delivery when it ends — "+
 				"held by the daemon, not pasted into the agent's composer. "+
 				"To cut the current turn short instead: jevons_agent_send with mode=interrupt.",
-			name, n)
+			name, pending)
 		if darkStream {
 			slog.Warn("🎯T426 queued behind an unobserved turn boundary — event stream was dark",
-				"agent", name, "queued", n,
+				"agent", name, "queued", pending,
 				"detail", "in_flight was written before the sink detached; re-attached on this send")
 			msg = fmt.Sprintf(
 				"queued (%d pending) for %q, BUT ITS IN-FLIGHT RECORD IS NOT TRUSTWORTHY: the daemon had lost "+
@@ -614,9 +735,9 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 					"If nothing moves, that agent's turn already ended before the re-attach: confirm from ITS "+
 					"transcript (terminal assistant message + turn_duration, file not growing) and then use "+
 					"jevons_agent_send with mode=interrupt.",
-				n, name)
+				pending, name)
 		}
-		res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: n, Mode: mode, Mechanism: mm.Mechanism}
+		res := agentSendResult{Status: "queued", Message: msg + describeMode(mm), Queued: pending, Mode: mode, Mechanism: mm.Mechanism}
 		logAgentSendOutcome(name, res, rehydrated, OutcomeQueuedBehindTurn, FlightInFlight, TurnEvidence{})
 		return res, nil
 	}
@@ -670,11 +791,39 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 
 	// trySend is the one place text reaches the process. Through the seam it
 	// also reports what ran and the phase the process saw itself in.
+	// A capable seat binds the receipt, and freezes the mission, before that
+	// call. The id handed across is the transport id, which is sendq:<entry>
+	// when the admission had no owner request id.
 	trySend := func() (sendModeOutcome, error) {
-		if seam != nil {
-			return seam(text, mode)
+		wire, id := text, requestID
+		if handoff.ID == "" {
+			sessionID, mission, doBind, berr := s.receiptBind(name, proc)
+			if berr != nil {
+				return sendModeOutcome{}, berr
+			}
+			if doBind {
+				bound, berr := s.claimAndBindHandoff(name, text, requestID, false, sessionID, mission)
+				if berr != nil {
+					return sendModeOutcome{}, berr
+				}
+				handoff = bound
+				wire, id = bound.WirePayload(), bound.TransportRequestID
+			}
+		} else {
+			wire, id = handoff.WirePayload(), handoff.TransportRequestID
 		}
-		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, requestID) })
+		if seam != nil {
+			use := seam
+			if id != "" {
+				if req := sendModeRequestSeam(proc, id); req != nil {
+					use = req
+				} else if handoff.ID != "" {
+					return sendModeOutcome{}, errRequestIDUnavailable
+				}
+			}
+			return use(wire, mode)
+		}
+		return sendModeOutcome{Mechanism: delivery.MechanismSubmit}, readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, wire, id) })
 	}
 
 	// Opened BEFORE the send so "the payload arrived" is measured against a
@@ -693,6 +842,22 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 	}
 
 	out, err := trySend()
+	if errors.Is(err, errHandoffQueued) {
+		n := s.pendingAgentSends(name)
+		if n < 0 {
+			n = 1
+		}
+		mm.Mechanism = delivery.MechanismClientQueue
+		res = agentSendResult{
+			Status:    "queued",
+			Message:   fmt.Sprintf("busy: %q already has queued work; message queued (%d pending) for delivery in order.", name, n) + describeMode(mm),
+			Queued:    n,
+			Mode:      mode,
+			Mechanism: mm.Mechanism,
+		}
+		logAgentSendResult(name, res, rehydrated)
+		return res, nil
+	}
 	if err == nil {
 		// 🎯T711: a cut already named the mechanism (session_cancel+prompt),
 		// and the plain Send that follows it reports the generic "submit".
@@ -700,6 +865,18 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// says the turn was cut rather than joined.
 		if out.Mechanism != "" && !interrupted {
 			mm.Mechanism = out.Mechanism
+		}
+		// A bound confirmHere handoff is settled from its receipt before any
+		// caller-visible sent or steered. PayloadSeen does not record
+		// delivery, and it does not answer the caller, whether the receipt
+		// is still unknown or has already settled.
+		if confirm == confirmHere && handoff.TransportRequestID != "" {
+			s.settleBoundHandoffReceipt(name, handoff)
+			receiptSettled = true
+			if !handoffConfirmed(s, name, handoff.ID) {
+				res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+				return res, nil
+			}
 		}
 		if seam != nil && out.PhaseBefore == delivery.PhaseInTurn {
 			// Folded into the open turn: there is no new turn to watch begin,
@@ -717,8 +894,23 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			return res, nil
 		}
 		if confirm == confirmByCaller {
-			// The spawn path judges this one; reporting a verdict here would
-			// hand it a status its own predicate does not know.
+			if handoff.TransportRequestID != "" {
+				// A capable opening brief is decided here, from the receipt.
+				// sent without ReceiptSettled would send the spawn back to
+				// the transcript watch. delivered_unconfirmed on a settled
+				// receipt is a status that watch does not treat as begun.
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, interrupted, nil, mm)
+				res.ReceiptSettled = true
+				return res, nil
+			}
+			// An incapable seat has no receipt. The spawn's own watch judges
+			// this status, which ConfirmTurnBegan already recognises.
 			res := agentSendResult{
 				Status:    sentStatus(rehydrated, interrupted),
 				Message:   fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name) + describeMode(mm),
@@ -731,16 +923,23 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			s.noteTurnInFlight(name)
 			return res, nil
 		}
+		if receiptSettled {
+			res = s.settledHandoffCallerResult(name, rehydrated, interrupted, nil, mm)
+			return res, nil
+		}
 		ev := watch()
 		outcome := s.classifySend(name, text, flight, ev)
 		return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, interrupted, nil, mm)
 	}
 
-	// 🎯T657: claudia answered that this handle cannot steer. Not busy, not a
-	// transport failure — the honest answer is to hold the text.
-	steerRefused := mode == delivery.ModeSteer && isSteerUnsupported(err)
+	// 🎯T657 / 🎯T766.4: a steer that never started is held. steer_unsupported
+	// means this handle cannot steer. turn_idle means nothing is open to
+	// fold into, so the copy stays the ordinary fold sentence. A rendered
+	// sentence is a send failure.
+	steerRefused := mode == delivery.ModeSteer && escalate.SteerUnsupported(err)
+	steerHeld := mode == delivery.ModeSteer && escalate.NotStarted(err)
 
-	if !isPromptInFlight(err) && !steerRefused {
+	if !isPromptInFlight(err) && !steerHeld {
 		// 🎯T429: ask the error the narrow question first — does it DISPROVE
 		// delivery? A transport that could not verify a submission has not
 		// observed the receiver at all, and returning its claim as a failure is
@@ -748,7 +947,31 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// caller as `turn not submitted`. Where the payload may have landed, the
 		// same instrument the success path uses decides: the watch is already
 		// open, taken from a pre-send baseline, and it reads the RECEIVER.
+		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmByCaller && handoff.TransportRequestID != "" {
+			// Same rule as the nil-write arm. A reply timeout does not
+			// disprove delivery, and the transcript must not decide the
+			// opening brief once a receipt was bound.
+			s.settleBoundHandoffReceipt(name, handoff)
+			receiptSettled = true
+			if !handoffConfirmed(s, name, handoff.ID) {
+				res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+				return res, nil
+			}
+			res = s.settledHandoffCallerResult(name, rehydrated, interrupted, err, mm)
+			res.ReceiptSettled = true
+			return res, nil
+		}
 		if claim := ClassifySendError(err); !claim.DisprovesDelivery() && confirm == confirmHere {
+			if handoff.TransportRequestID != "" {
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, interrupted, err, mm)
+				return res, nil
+			}
 			ev := watch()
 			outcome := s.classifySend(name, text, flight, ev)
 			return s.reportSendOutcome(name, text, outcome, flight, ev, rehydrated, interrupted, err, mm)
@@ -757,7 +980,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// not this payload — say which records, and how to recover.
 		if IsBrokerLineLimitError(err) && s.registry != nil {
 			if d := s.registry.Def(name); d != nil {
-				if lines := s.seatOversized(*d, DefaultSessionRoots()); len(lines) > 0 {
+				if lines := s.seatOversized(*d, s.transcriptRoots()); len(lines) > 0 {
 					advice := OversizedSendAdvice(name, len(text), lines, err)
 					slog.Warn("agent_send", "component", "agent_send", "name", name,
 						"status", "failed", "mode", string(mode), "failure_class", "oversized_session",
@@ -806,15 +1029,44 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		// cutting a turn short, "it went into the composer and stayed there"
 		// is precisely the outcome the caller must not hear as success.
 		watch2 := s.watchAgentTurnFor(name, text)
-		if err2 := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, requestID) }); err2 == nil {
+		if _, err2 := trySend(); err2 == nil {
+			// A bound handoff settles from its receipt whoever owns
+			// confirmation. confirmHere already did. A caller-owned
+			// interrupt used to fall through to the transcript watch.
+			if handoff.TransportRequestID != "" {
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, true, nil, mm)
+				if confirm == confirmByCaller {
+					res.ReceiptSettled = true
+				}
+				return res, nil
+			}
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
 			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, nil, mm)
 		} else if !isPromptInFlight(err2) && !ClassifySendError(err2).DisprovesDelivery() {
 			// 🎯T429, on the interrupt arm: the same non-observation, and the
 			// same rule. An interrupt that succeeded leaves the agent known
-			// idle, so the strict verdict is available here — but it has to be
-			// earned from the receiver, not inherited from the transport.
+			// idle. A bound handoff settles from its receipt. An unbound
+			// seat still earns the verdict from the receiver's transcript.
+			if handoff.TransportRequestID != "" {
+				s.settleBoundHandoffReceipt(name, handoff)
+				receiptSettled = true
+				if !handoffConfirmed(s, name, handoff.ID) {
+					res = s.unconfirmedBoundHandoffResult(name, text, rehydrated, mm)
+					return res, nil
+				}
+				res = s.settledHandoffCallerResult(name, rehydrated, true, err2, mm)
+				if confirm == confirmByCaller {
+					res.ReceiptSettled = true
+				}
+				return res, nil
+			}
 			ev := watch2()
 			outcome := s.classifySend(name, text, FlightIdle, ev)
 			return s.reportSendOutcome(name, text, outcome, FlightIdle, ev, rehydrated, true, err2, mm)
@@ -846,9 +1098,44 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 		}
 	}
 
+	if handoff.ID != "" {
+		releaseToPending = true
+		mm.Mechanism = delivery.MechanismClientQueue
+		why := "prompt already in flight"
+		if mode == delivery.ModeSteer {
+			mm.Mechanism = delivery.MechanismQueueUntilIdle
+			why = "steer asked for but this seat cannot fold text into its open turn"
+			if steerRefused {
+				why = "steer asked for but claudia reports this handle cannot steer"
+			}
+		}
+		// This attempt is in flight until the return releases it to pending.
+		n := s.pendingAgentSends(name)
+		if n < 0 {
+			n = 1
+		} else {
+			n++
+		}
+		res = agentSendResult{
+			Status: "queued",
+			Message: fmt.Sprintf(
+				"busy: %s on %q; message queued (%d pending) for delivery when the current turn ends. "+
+					"Not a dead-end — no silent drop. To interrupt a stuck turn: jevons_agent_send with mode=interrupt "+
+					"(or stop+start to resume the same session without kill/remint).",
+				why, name, n) + describeMode(mm),
+			Queued:    n,
+			Mode:      mode,
+			Mechanism: mm.Mechanism,
+		}
+		logAgentSendResult(name, res, rehydrated)
+		return res, nil
+	}
 	n, qerr := s.enqueueAgentSendWithRequestID(name, text, requestID)
 	if qerr != nil {
 		return agentSendResult{}, undeliverableQueueError(name, qerr)
+	}
+	if pending := s.pendingAgentSends(name); pending >= 0 {
+		n = pending
 	}
 	mm.Mechanism = delivery.MechanismClientQueue
 	why := "prompt already in flight"
@@ -859,7 +1146,7 @@ func deliverToSenderModeWithRequestID(s *Server, name, text, requestID string, m
 			why = "steer asked for but claudia reports this handle cannot steer"
 		}
 	}
-	res := agentSendResult{
+	res = agentSendResult{
 		Status: "queued",
 		Message: fmt.Sprintf(
 			"busy: %s on %q; message queued (%d pending) for delivery when the current turn ends. "+
@@ -900,17 +1187,41 @@ func (s *Server) liveSender(name string) (agentSender, bool) {
 	return proc, true
 }
 
+// goDrainAgentSendQueue runs drainAgentSendQueue in the background and
+// counts it, so WaitBackgroundDrains can wait for its queue writes.
+func (s *Server) goDrainAgentSendQueue(name string) {
+	s.backgroundDrains.Add(1)
+	go func() {
+		defer s.backgroundDrains.Done()
+		s.drainAgentSendQueue(name)
+	}()
+}
+
+// WaitBackgroundDrains blocks until every drain started by
+// goDrainAgentSendQueue has returned. A drain writes the sendq directory
+// (claim, settle, atomic rename); whoever removes that directory waits
+// here first, or the removal races the last write.
+func (s *Server) WaitBackgroundDrains() {
+	s.backgroundDrains.Wait()
+}
+
 // drainAgentSendQueue delivers the next queued message after a terminal
 // stop. Called from the agent event sink (🎯T111.1).
 func (s *Server) drainAgentSendQueue(name string) {
-	for s.drainAgentSendQueueOnce(name) {
+	ctx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	defer cancel()
+	s.drainAgentSendQueueWithReceiptContext(ctx, name)
+}
+
+func (s *Server) drainAgentSendQueueWithReceiptContext(ctx context.Context, name string) {
+	for s.drainAgentSendQueueOnce(ctx, name) {
 		// A terminal arrived before its message's witness completed. Its first
 		// drain saw the held attempt; run that wakeup again after resolution.
 	}
 }
 
-func (s *Server) drainAgentSendQueueOnce(name string) bool {
-	s.confirmCodexReceipts(name)
+func (s *Server) drainAgentSendQueueOnce(receiptCtx context.Context, name string) bool {
+	s.reconcileHeldReceipts(receiptCtx, name)
 	q := s.sendQueue()
 	// 🎯T774: a pile of pending messages is one digest, not one turn apiece.
 	entry, claimed, err := q.ClaimDigest(name)
@@ -974,68 +1285,61 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 	// reads it. Do not suppress here — this drain is the first delivery.
 	// A digest already carries its members' text; per-report stamping would
 	// misread the "[Agent X responded]" lines quoted inside it.
-	text := entry.Text
-	if entry.Members == "" {
+	text := entry.WirePayload()
+	if !entry.WireTextSet && entry.Members == "" {
 		text = s.prepareParentReport(name, entry.Text, true).Text
 	}
-	watch, cancel := s.watchAgentTurnForCancelable(name, entry.Text, turnConfirmWindow())
-	defer cancel()
-	generation := s.terminalGeneration(name)
-	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, entry.RequestID) })
-	// Busy refusals may still have enqueued the payload in the receiver (🎯T447).
-	// Watch before treating the attempt as failed — broker-wrapped errors miss
-	// queueSendDefinitelyNotSent's exact-string match and would otherwise land
-	// as uncertain/PINNED even when the transcript shows PayloadQueued.
-	ev := watch()
-	outcome := ClassifySendOutcome(FlightIdle, ev)
-	if outcome == OutcomeQueuedBehindTurn {
-		detail := evidenceDetail(ev)
-		if sendErr != nil {
-			detail = describeTransportClaim(sendErr) + "; " + detail
-		}
-		if resolve(sendq.Confirmed, detail) {
-			s.clearSendqPin(name)
-			slog.Info("agent send queue: message waiting in receiver queue behind live turn",
-				"name", name, "entry_id", entry.ID, "detail", detail)
+	transportID := entry.RequestID
+	sessionID, mission, doBind, bindErr := s.receiptBind(name, proc)
+	if bindErr != nil {
+		if resolve(sendq.DefinitelyNotSent, bindErr.Error()) {
+			s.noteSendqDeliveryFailure(name, entry, bindErr.Error())
 		}
 		return false
 	}
+	if doBind {
+		bound, err := s.bindOwnedAttempt(name, entry, text, sessionID, mission)
+		if err != nil {
+			if resolve(sendq.DefinitelyNotSent, err.Error()) {
+				slog.Error("agent send queue: receipt bind failed before handoff", "name", name, "entry_id", entry.ID, "err", err)
+			}
+			return false
+		}
+		entry = bound
+		text = bound.WirePayload()
+		transportID = bound.TransportRequestID
+	}
+	generation := s.terminalGeneration(name)
+	sendErr := readoptDeliver(name, proc, func(a agentSender) error { return sendWithRequestID(a, text, transportID) })
+	// A bound host request settles from its Claudia receipt. PayloadSeen,
+	// transcript growth, and assistant prose do not confirm it.
+	if entry.TransportRequestID != "" {
+		if errors.Is(sendErr, errRequestIDUnavailable) || queueSendDefinitelyNotSent(sendErr) {
+			if resolve(sendq.DefinitelyNotSent, sendErr.Error()) && !isPromptInFlight(sendErr) {
+				s.noteSendqDeliveryFailure(name, entry, sendErr.Error())
+			}
+			return false
+		}
+		return s.settleBoundDrainReceipt(receiptCtx, name, entry, generation, resolve)
+	}
+	// An incapable sender has no receipt. A transcript watch cannot confirm
+	// the handoff, and it must not start the turn or clear the pin. A
+	// definite non-send still goes back to Pending so the next boundary
+	// retries. Anything else stays held and is not offered again.
 	if errors.Is(sendErr, errRequestIDUnavailable) || queueSendDefinitelyNotSent(sendErr) {
 		if resolve(sendq.DefinitelyNotSent, sendErr.Error()) && !isPromptInFlight(sendErr) {
 			s.noteSendqDeliveryFailure(name, entry, sendErr.Error())
 		}
 		return false
 	}
-	// Preserve the existing successful-send verdict in this durability slice.
-	// Its generic live-event branch is inherited receipt-quality residue under
-	// T623, not a new guarantee of correlated delivery. On an errored send only
-	// evidence of this payload may release the obligation; activity alone cannot.
-	begun := outcome == OutcomeBegun
-	if sendErr != nil && !ev.PayloadSeen && !ev.PayloadEnteredTurn {
-		begun = false
+	detail := "unbound send has no receipt"
+	if sendErr != nil {
+		detail = describeTransportClaim(sendErr)
 	}
-	if !begun {
-		detail := evidenceDetail(ev)
-		if sendErr != nil {
-			detail = describeTransportClaim(sendErr) + "; " + detail
-		}
-		if resolve(sendq.Unverified, detail) {
-			s.reportDrainedSendNotBegun(name, entry, ev, time.Now())
-		}
-		return false
+	if resolve(sendq.Unverified, detail) {
+		s.reportDrainedSendNotBegun(name, entry, TurnEvidence{}, time.Now())
 	}
-	if !resolve(sendq.Confirmed, evidenceDetail(ev)) {
-		return false
-	}
-	s.markAgentTurnBegan(name)
-	ended := s.noteQueuedTurnBegan(name, generation)
-	if !ended {
-		s.wedges.handedOver(name, entry.ID)
-	}
-	s.clearSendqPin(name)
-	slog.Info("agent send queue: drained one message", "name", name, "entry_id", entry.ID,
-		"remaining", s.pendingAgentSends(name))
-	return ended
+	return false
 }
 
 // queueSendDefinitelyNotSent reports whether a drain's send provably never
@@ -1044,61 +1348,14 @@ func (s *Server) drainAgentSendQueueOnce(name string) bool {
 // "not sent" duplicates a delivery, a false "uncertain" only stalls one
 // entry behind a pin the owner can see. So doubt resolves to uncertain.
 //
-// 🎯T766: this question has been answered two wrong ways in a row, and both
-// were failures of the same kind — classifying prose.
-//
-// It began as an exact-string switch over four provider literals. Every
-// error from a broker-hosted seat arrives wrapped as
-// "broker protocol: agent_failed: cursor acp: prompt already in flight",
-// which equals none of them, so a plain busy refusal was not "definitely not
-// sent": the entry resolved Unverified, the queue head became Uncertain, and
-// ClaimFront refuses a non-Pending head. One refusal froze a seat's entire
-// queue with no automatic exit — jevons-po sat at 87 stranded messages, the
-// oldest fourteen hours old, and the only exit anyone used was a reconcile
-// that discards the payload.
-//
-// Replacing it with agenterr.IsPromptBusy, which matches on substring,
-// bought the wrapping and sold the guarantee: "provider response quoted:
-// grok acp: prompt already in flight" is a report *about* a refusal, not a
-// refusal, and substring matching cannot tell those apart. Neither can any
-// other textual rule, because both strings are a prefix followed by the same
-// phrase. That is 🎯T623's own case, and it caught this.
-//
-// So this does not match text at all where it matters. It decodes the one
-// envelope whose format is defined — broker.ProtocolError.Error(), whose Msg
-// is the provider's own error verbatim — and compares that exactly. A quoted
-// report is not that envelope, so it stays uncertain; a wrapped refusal is,
-// so it retries.
-//
-// The real seam is claudia exporting a predicate over its typed
-// *broker.ProtocolError, which Go's internal/ rule puts out of reach from
-// here (🎯T767).
+// The cause is agenterr.ProviderCause. A rendered sentence, including
+// "401 unauthorized" and a report that quotes a refusal, is not a cause.
+// Turn-in-flight and process-not-running are the only definite non-sends.
 func queueSendDefinitelyNotSent(err error) bool {
-	if err == nil {
-		return false
-	}
-	switch providerRefusalText(err) {
-	case "claude process not running",
-		"grok acp: prompt already in flight", "cursor acp: prompt already in flight",
-		"codex app-server: turn already in flight":
+	switch agenterr.ProviderCause(err) {
+	case agenterr.CauseTurnInFlight, agenterr.CauseProcessNotRunning:
 		return true
 	default:
 		return false
 	}
-}
-
-// brokerAgentFailedPrefix is how claudia renders a provider failure the
-// daemon relayed: broker.ProtocolError.Error() with Code CodeAgentFailed and
-// no Field. Msg after it is the provider's error, untouched.
-const brokerAgentFailedPrefix = "broker protocol: agent_failed: "
-
-// providerRefusalText returns the provider's own error message, unwrapping a
-// relayed broker failure. Anything else is returned as it stands, so a string
-// that merely mentions a refusal is compared as the whole string it is.
-func providerRefusalText(err error) string {
-	msg := err.Error()
-	if rest, ok := strings.CutPrefix(msg, brokerAgentFailedPrefix); ok {
-		return rest
-	}
-	return msg
 }

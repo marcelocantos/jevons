@@ -5,11 +5,12 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
 // 🎯T309.2: ONE agent-addressed conversation family. Three operations —
@@ -48,7 +49,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
 	}
-	return strings.EqualFold(name, s.overseerAgentName())
+	return strings.ToLower(name) == strings.ToLower(s.overseerAgentName())
 }
 
 // overseerTurnsFromWire projects owner chat journal lines (chat wire frames)
@@ -107,8 +108,9 @@ func overseerTurnsFromWire(lines []string) []map[string]any {
 		switch frame.Type {
 		case "user":
 			text := wireContentText(frame.Message.Content)
-			// The ACP echo of an owner turn is prefixed; the clean echo the
-			// browser sent is the journal's owner bubble (chat_wire.go).
+			// The ACP echo of an owner turn starts with userTurnPrefix
+			// (fact plus display line). A rendered "[user]" line is the
+			// owner's text, not a prefix to peel (🎯T766.4).
 			text = strings.TrimPrefix(text, userTurnPrefix)
 			if strings.TrimSpace(text) == "" {
 				continue
@@ -206,13 +208,22 @@ func (s *Server) sendToOverseerAsOwner(text string) error {
 	// specimen was refused 0.3 s before re-attach). Wait a bounded moment for
 	// re-attach before nacking; only a sustained absence is a nack.
 	if !s.awaitOverseerProcess() {
-		return fmt.Errorf("overseer not running")
+		return agenterr.ErrOverseerNotRunning()
 	}
 	msgID := newOwnerMessageID()
 	echo := chatUserEchoID(text, msgID)
 	s.NoteOwnerSend(text, echo)
 	s.BroadcastChat(echo)
 	if err := s.SendToOverseerAs(userTurnPrefix+text, msgID); err != nil {
+		if errors.Is(err, delivery.ErrNotifyHeldByIntent) {
+			// The owner bubble is already on screen and the text is queued.
+			// This is not a provider failure and not a drop; the lift drains it.
+			slog.Info("chat: owner turn held by fleet intent",
+				"component", "notify_queue",
+				"decision", "hold_fleet_intent",
+			)
+			return err
+		}
 		class, ownerMsg := agenterr.ClassifyAndFormat(err)
 		if !class.IsFailure() {
 			ownerMsg = err.Error()

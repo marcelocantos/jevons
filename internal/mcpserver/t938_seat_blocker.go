@@ -56,9 +56,6 @@ func classifyStoredReport(report string, cleared func(report string) bool) (hasS
 		return false, false, b
 	}
 	hasStoredTerminal, looksFinished = storedTerminalFromReport(report)
-	if !hasStoredTerminal {
-		looksFinished = LooksLikeFinishedWorkReport(report)
-	}
 	return hasStoredTerminal, looksFinished, ""
 }
 

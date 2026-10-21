@@ -31,13 +31,12 @@ import (
 //
 // Two paths consume the decision:
 //   - handleAgentStop: a stop whose reason (or, when the reason is silent,
-//     the seat's latest stored report) reads as own-work-complete is
-//     converted to a reap. Durable roles and seats with descendants still
-//     park — a reap of either is a kill, which has its own tool.
-//   - ShouldAutoReapDoneWorkAgent: a terminal report that says "already
-//     achieved by someone else, nothing left" is reaped as own_work_complete
-//     even without a Done. finish shape (🎯T445), so the seat does not idle
-//     until someone parks it.
+//     the seat's latest stored report) is a declared finish is converted
+//     to a reap. Durable roles and seats with descendants still park — a
+//     reap of either is a kill, which has its own tool.
+//   - ShouldAutoReapDoneWorkAgent: a declared finish-report reaps. A
+//     sentence that says the work is already achieved is unknown, not a
+//     finish (🎯T766.4).
 
 // WorkerIdleAction is the lifecycle action 🎯T985 assigns to a worker's
 // terminal/idle state.
@@ -56,200 +55,39 @@ const (
 	IdleActionPark WorkerIdleAction = "park"
 )
 
-// nothingLeftPhrases are the decisive "this seat has no more work" shapes.
-// They outrank external-block vocabulary on purpose: the T947 park reason
-// named a claudia-side remainder AND said "Nothing left for this
-// worktree/worker" — the remainder was somebody else's, and this seat was
-// finished. "no further acceptance" is the load-bearing acceptance case:
-// a worker whose target was already achieved by someone else with no
-// further acceptance criteria open.
-var nothingLeftPhrases = []string{
-	"nothing left",
-	"nothing further",
-	"nothing more to do",
-	"no more work",
-	"no further work",
-	"no remaining work",
-	"no further acceptance",
-	"no work left",
-	"no work remaining",
-}
-
-// completionPhrases are own-work-complete shapes that are not a Done.
-// finish shape (🎯T445). They reap only when no external-block phrase is
-// present: "jevons-side achieved; blocked on claudia-po for the rest" is a
-// seat that still owns a remainder.
-var completionPhrases = []string{
-	"already achieved",
-	"fully achieved",
-	"already landed",
-	"already integrated",
-	"superseded",
-	"duplicate of",
-}
-
-// blockedOnExternalPhrases are genuine external blocks that may resume.
-// Distinct from own-work-complete: the worker still has a reason to exist
-// once the external thing moves. The jv-t765.1-worker park reason is the
-// specimen ("genuinely cross-repo blocked on bullseye's own src/apply.rs,
-// which jevons-po has no mandate ... to touch; needs owner-level
-// coordination").
-var blockedOnExternalPhrases = []string{
-	"blocked on",
-	"blocked by",
-	"cross-repo",
-	"outside mandate",
-	"outside its mandate",
-	"outside my mandate",
-	"no mandate",
-	"claudia-side remainder",
-	"bullseye-side",
-	"owner decision",
-	"owner go-ahead",
-	"owner-level",
-	"needs owner",
-	"needs-owner",
-	"design gate",
-	"design-gated",
-	"parked-for-design",
-	"waiting on",
-	"waiting for",
-	"may resume",
-	"resume later",
-}
-
 // ClassifyWorkerIdleDisposition classifies a worker's terminal/idle report
 // (or a stop reason) into reap vs park vs keep (🎯T985).
 //
-// Order is load-bearing:
-//  1. A typed status-blocked finish-report is park (🎯T938 — waiting on
-//     someone else, may resume). Nothing in the prose outranks that.
-//  2. An active wait on an alive external process (🎯T1024 — a queued
-//     gate, a monitored background run) is park, unless a decisive
-//     nothing-left phrase says the seat is finished regardless.
-//  3. A typed finish-report, or a genuine finish shape, is reap (🎯T165).
-//  4. A decisive nothing-left phrase is reap, even beside external-block
-//     words (the remainder is someone else's).
-//  5. External-block prose is park.
-//  6. A completion phrase (already/fully achieved, superseded) is reap.
-//  7. Otherwise keep.
-//
-// Quoted, cited, negated and fenced text is masked before the phrase scan
-// (🎯T750): "the PO said 'nothing left' but I disagree" is not a claim.
+// It reads the same done answer as reap (🎯T766.4). A declared
+// finish-report reaps. A declared blocked finish-report parks. A declared
+// active external wait parks, whatever the kind (🎯T1024, typed by
+// 🎯T766.4.1): the seat is watching a process that will resume it. A
+// report that declares nothing is keep: prose "already achieved", "blocked
+// on", and "still queued" are not a disposition.
 func ClassifyWorkerIdleDisposition(text string) WorkerIdleAction {
-	if strings.TrimSpace(text) == "" {
+	if _, ok := declaredActiveWait(text); ok {
+		return IdleActionPark
+	}
+	switch envelope.ClassifyDone(text) {
+	case envelope.DoneYes:
+		return IdleActionReap
+	case envelope.DoneNo:
+		m, err := envelope.Parse(text)
+		if err == nil && m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressBlocked {
+			return IdleActionPark
+		}
+		return IdleActionKeep
+	default:
 		return IdleActionKeep
 	}
-	if action := reportOpenStatus(text); action != "" {
-		return action
-	}
-	lower := claimScanText(strings.ToLower(text))
-	// 🎯T1024: a seat narrating an active wait on an alive external process
-	// (a queued gate on the shared lease, a monitored background run) is
-	// blocked on something external that may resume — park, not reap —
-	// whatever completion word a sub-step earned. A decisive nothing-left
-	// phrase still outranks it, as it outranks every external-block shape.
-	if declaresUnresolvedExternalWait(text) && !containsAny(lower, nothingLeftPhrases) {
-		return IdleActionPark
-	}
-	if LooksLikeFinishedWorkReport(text) {
-		return IdleActionReap
-	}
-	if containsAny(lower, nothingLeftPhrases) {
-		return IdleActionReap
-	}
-	if containsAny(lower, blockedOnExternalPhrases) {
-		return IdleActionPark
-	}
-	if containsAny(lower, completionPhrases) {
-		return IdleActionReap
-	}
-	return IdleActionKeep
 }
 
-func containsAny(lower string, phrases []string) bool {
-	for _, p := range phrases {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// LooksLikeOwnWorkCompleteReport is the auto-reap half of 🎯T985: a terminal
-// report with no Done. finish shape that nonetheless says this seat has
-// nothing left — its target was achieved by someone else, superseded, or
-// has no further acceptance criteria open. It carries the same vetoes as
-// LooksLikeFinishedWorkReport (an ask, a forward-looking plan, a report that
-// awaits the overseer), because this is a new avenue into an irreversible
-// reap and the 🎯T445 burden of proof applies to it too.
+// LooksLikeOwnWorkCompleteReport is the 🎯T985 name for a report whose own
+// work is finished. It is ClassifyWorkerIdleDisposition's reap answer
+// (🎯T766.4): a declared finish-report. A sentence that says nothing is
+// left is not that claim.
 func LooksLikeOwnWorkCompleteReport(report string) bool {
-	if strings.TrimSpace(report) == "" {
-		return false
-	}
-	if reportOpenStatus(report) != "" {
-		return false
-	}
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.Kind != envelope.KindFinishReport {
-		// A scout-report, status-ping, ack, escalation or brief is never
-		// this seat's "nothing left".
-		return false
-	}
-	if ClassifyReportAsk(report) != AskNone {
-		return false
-	}
-	lower := claimScanText(strings.ToLower(report))
-	if !containsAny(lower, nothingLeftPhrases) {
-		return false
-	}
-	if hasForwardLookingPlan(report) {
-		return false
-	}
-	// 🎯T581 shape: "nothing left on the scout; implementing now" closes a
-	// sub-step, not the seat.
-	if allNothingLeftClausesLocal(lower) {
-		return false
-	}
-	return !ReportAwaitsOverseer(report)
-}
-
-// allNothingLeftClausesLocal is allCompletionClaimsLocal for the nothing-left
-// phrases: true when every nothing-left sentence runs on into next-work
-// language ("<verb>ing now", "now …", "next …") in the same sentence or the
-// one after it.
-func allNothingLeftClausesLocal(lower string) bool {
-	sentences := strings.FieldsFunc(lower, func(r rune) bool {
-		return r == '.' || r == '!' || r == '?' || r == '\n'
-	})
-	claims := 0
-	for i, sent := range sentences {
-		if !containsAny(sent, nothingLeftPhrases) {
-			continue
-		}
-		claims++
-		clauses := strings.FieldsFunc(sent, finishClauseDelimiter)
-		if i+1 < len(sentences) {
-			clauses = append(clauses, strings.FieldsFunc(sentences[i+1], finishClauseDelimiter)...)
-		}
-		claimAt := -1
-		for j, c := range clauses {
-			if containsAny(c, nothingLeftPhrases) {
-				claimAt = j
-				break
-			}
-		}
-		local := false
-		for _, c := range clauses[claimAt+1:] {
-			if nextWorkClause(c) {
-				local = true
-				break
-			}
-		}
-		if !local {
-			return false
-		}
-	}
-	return claims > 0
+	return ClassifyWorkerIdleDisposition(report) == IdleActionReap
 }
 
 // ownWorkCompleteReapReason is the ShouldAutoReapDoneWorkAgent reason for a
@@ -326,7 +164,7 @@ func (s *Server) stopDispositionFor(name string, args map[string]any) StopDispos
 		// as the pre-T985 code did.
 		return StopDisposition{IdleActionPark, "not registered"}
 	}
-	durable := DurableFleetAgent(name, def.Purpose, s.isOverseerAgent)
+	durable := DurableFleetAgent(name, s.seatRoleOf(*def), s.isOverseerAgent)
 	hasDescendants := len(s.registry.Descendants(name)) > 0
 	ownedUncommitted := false
 	for _, sc := range outstandingScopeReasonsForWorker("", def.WorkDir) {

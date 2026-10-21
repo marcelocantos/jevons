@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
@@ -264,7 +265,10 @@ func TestSessionLooksBriefed(t *testing.T) {
 		t.Fatal("bare continue is not a brief")
 	}
 	if !SessionLooksBriefed(FleetStandingBrief + "do the thing") {
-		t.Fatal("standing brief marker should count")
+		t.Fatal("standing brief fact should count")
+	}
+	if SessionLooksBriefed("Read the Jevons fleet standing brief and continue") {
+		t.Fatal("a sentence about the brief is not the fact")
 	}
 }
 
@@ -605,8 +609,31 @@ func TestSweepIdleNudgesEmptyTargetIDWorkEligible(t *testing.T) {
 func TestFormatIdleNudgeWire(t *testing.T) {
 	t.Parallel()
 	got := formatIdleNudgeWire("idle-nudge-brief", "hello")
-	if got != "[event: idle-nudge-brief] hello" {
+	want := envelope.EventFact("idle-nudge-brief") + "\n[event: idle-nudge-brief] hello"
+	if got != want {
 		t.Fatalf("got %q", got)
+	}
+	if !IsIdleNudgeText(got) {
+		t.Fatal("declared idle-nudge-brief fact was not a nudge")
+	}
+	if IsIdleNudgeText("[event: idle-nudge-brief] hello") {
+		t.Fatal("display wrapper is not an idle nudge")
+	}
+	if IsIdleNudgeText("[event: idle-nudge] hello") {
+		t.Fatal("display wrapper is not an idle nudge")
+	}
+	fact := envelope.SeatFact(envelope.IntentIdle, "jv-a")
+	kept := formatIdleNudgeWire("worker-idle", fact+"\nA work agent went idle\nWorker: jv-a\n")
+	wantKept := fact + "\n" + envelope.EventFact("worker-idle") + "\n[event: worker-idle] A work agent went idle\nWorker: jv-a"
+	if kept != wantKept {
+		t.Fatalf("fact was not kept as line 1: %q", kept)
+	}
+	if IsIdleNudgeText(kept) {
+		t.Fatal("worker-idle event fact is not an idle nudge")
+	}
+	nudge := formatIdleNudgeWire("idle-nudge", fact+"\nresume")
+	if !IsIdleNudgeText(nudge) {
+		t.Fatal("idle-nudge fact under a seat fact was not a nudge")
 	}
 }
 
@@ -621,7 +648,10 @@ func TestSweepIdleNudgesPostRestartSkipsPOAndAside(t *testing.T) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", WorkDir: dir, SessionID: "s-o", Purpose: claudia.PurposeOverseer, Materialized: true, Provider: "grok", AutoStart: true},
-		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Parent: "jevons",
+		// The PO's declared role rides the registry row (AgentDef.Role):
+		// this pure sweep reads the row, and production fills Role from
+		// the recorded role via SeatRole. The name decides nothing.
+		{Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork, Role: purposeProductOwner, Parent: "jevons",
 			Materialized: true, Provider: "grok", AutoStart: true},
 		{Name: "jv-t171-worker", WorkDir: dir, SessionID: "s-w", Purpose: claudia.PurposeWork, Parent: "jevons-po",
 			Materialized: true, Provider: "grok", AutoStart: true, TargetID: "T171"},

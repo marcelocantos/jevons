@@ -5,6 +5,7 @@ package planusage
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -54,11 +55,11 @@ func bandReason(be Backend, band WeeklyBand, now time.Time, th Thresholds) strin
 	winLabel := allowanceWindowLabel(w)
 	used := usedPercent(w)
 	rtp, hasTime := remainingTimePercent(w, now)
+	// The number the band was cut from (🎯T1072), not a ratio of its own.
 	burn := ""
 	if used != nil && hasTime {
-		elapsed := 100 - rtp
-		if elapsed > 0 {
-			burn = fmt.Sprintf("burn %.1f×", dampedBurn(*used, elapsed, th.DampLambdaPercent))
+		if p := Pressure(*used, 100-rtp, th); !math.IsInf(p, 0) && !math.IsNaN(p) {
+			burn = fmt.Sprintf("pressure %+.2f", p)
 		}
 	}
 	remaining := ""

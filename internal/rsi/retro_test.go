@@ -100,7 +100,10 @@ func TestPathScopeAndSubjectShapes(t *testing.T) {
 	for subject, want := range map[string]bool{
 		"fix(sentinel): ignore synthetic rows": true,
 		"fix: whatever":                        true,
-		"web: kill residual jiggle":            true,
+		"hotfix: row":                          true,
+		"web: kill residual jiggle":            false,
+		"please fix the build":                 false,
+		"still broken again":                   false,
 		"feat(rsi): retrospective mine":        false,
 		"docs: architecture refresh":           false,
 	} {
@@ -200,6 +203,11 @@ func TestClassifyRetroValueCoarseBar(t *testing.T) {
 				Count: 6, Kinds: []string{"chat_gap"}, Phrase: "timeout"},
 		},
 		{
+			name: "a longer sentence that merely contains a weak phrase is judged",
+			cand: Candidate{Name: "Owner-chat friction (timeout) is reduced or filed as a target",
+				Count: 3, Kinds: []string{"chat_gap"}, Phrase: "the build timed out overnight"},
+		},
+		{
 			name: "bare phrase friction never reaches the overseer",
 			cand: Candidate{Name: "friction: timeout", Count: 9, Kinds: []string{"chat_gap"}, Phrase: "timeout"},
 			want: "retro_bare_phrase_friction",
@@ -241,8 +249,8 @@ func TestRetroCycleJudgesHistoryAndSuppressesNoise(t *testing.T) {
 	})...)
 	// Noise: two owner-chat turns carrying a weak phrase.
 	ev = append(ev, ChatTurnsToEvidence([]ChatTurn{
-		{Role: "user", Text: "that timed out again", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at},
-		{Role: "user", Text: "it timed out", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at.Add(time.Minute)},
+		{Role: "user", Text: "open-intent friction timed-out", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at},
+		{Role: "user", Text: "open-intent friction timed-out", Source: "owner_chat", SourceID: "jevons.jsonl", TS: at.Add(time.Minute)},
 	})...)
 
 	d := &fakeDeliverer{}

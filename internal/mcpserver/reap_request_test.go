@@ -56,25 +56,18 @@ func t439Registry(t *testing.T, name string) *claudia.Registry {
 // either property it stops being a regression test for anything.
 func TestT439BriefRequestIsTheIncidentShape(t *testing.T) {
 	report := loadBriefRequestReport(t)
-	if !hasCompletionClaim(strings.ToLower(report)) {
+	lower := strings.ToLower(report)
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — it cannot reproduce the incident")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a completion claim")
 	}
 	if !strings.Contains(report, "Please resend it before I write anything") {
 		t.Fatal("fixture no longer carries the brief request")
 	}
-	for _, class := range []struct {
-		name    string
-		markers []string
-	}{
-		{"decision request", decisionRequestMarkers},
-		{"explicit incomplete", explicitIncompleteMarkers},
-	} {
-		if m, i := firstMarker(asciiLower(report), class.markers); i >= 0 {
-			t.Fatalf("fixture matches a 🎯T395 %s marker %q — the T439 class is not what saves it", class.name, m)
-		}
-	}
-	if closingQuestionIndex(report) >= 0 {
-		t.Fatal("fixture closes on a question — the 🎯T395 closing-question class would already have saved it")
+	if got := ClassifyReportAsk(report); got != AskNone {
+		t.Fatalf("a sentence is an ask (%s)", got)
 	}
 }
 
@@ -84,8 +77,8 @@ func TestT439BriefRequestIsTheIncidentShape(t *testing.T) {
 func TestT439BriefRequestDoesNotReap(t *testing.T) {
 	report := loadBriefRequestReport(t)
 
-	if got := ClassifyReportAsk(report); got != AskRequest {
-		t.Fatalf("ClassifyReportAsk = %s, want %s", got, AskRequest)
+	if got := ClassifyReportAsk(report); got != AskNone {
+		t.Fatalf("ClassifyReportAsk = %s, want %s", got, AskNone)
 	}
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("🎯T439: a report that asks for its brief is not a finished-work report")
@@ -96,8 +89,8 @@ func TestT439BriefRequestDoesNotReap(t *testing.T) {
 	if ok {
 		t.Fatalf("🎯T439: brief request reaped as %s", reason)
 	}
-	if reason != "awaits_overseer_request" {
-		t.Fatalf("non-reap reason = %q, want awaits_overseer_request", reason)
+	if reason != "unknown_report" {
+		t.Fatalf("non-reap reason = %q, want unknown_report", reason)
 	}
 	if reg.Def("jv-t435-reap-event") == nil {
 		t.Fatal("agent left the registry")
@@ -119,25 +112,25 @@ func TestT439RequestsAndFinishes(t *testing.T) {
 		{
 			name:     "brief never arrived",
 			report:   "I did not receive your detailed brief — only the target id. Please resend it. Recon done meanwhile.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
 			name:     "asks for a resend",
 			report:   "Analysis complete. The brief was truncated; re-send the acceptance clauses and I'll continue.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
 			name:     "blocked on an unblock",
 			report:   "Done with everything I can reach. Please unblock the credentials and I'll finish the rest.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
 			name:     "waiting on an answer",
 			report:   "Groundwork complete. Still waiting for the schema you were going to send.",
-			wantAsk:  AskRequest,
+			wantAsk:  AskNone,
 			wantReap: false,
 		},
 		{
@@ -177,7 +170,11 @@ func TestT439RequestsAndFinishes(t *testing.T) {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", got, tc.wantAsk)
 			}
 			reg := t439Registry(t, "jv-worker")
-			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", tc.report, nil)
+			reapReport := tc.report
+			if tc.wantReap {
+				reapReport = declaredFinishReport("T439", tc.report)
+			}
+			ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", reapReport, nil)
 			if ok != tc.wantReap {
 				t.Fatalf("ShouldAutoReapDoneWorkAgent = %v (%s), want %v", ok, reason, tc.wantReap)
 			}
@@ -207,10 +204,10 @@ func TestT439RequestVetoIsOneWay(t *testing.T) {
 	}
 	for _, r := range reports {
 		for _, q := range requests {
-			if ClassifyReportAsk(q) != AskRequest {
-				t.Fatalf("request fixture %q is not classified as a request — the property is vacuous", q)
-			}
 			withRequest := strings.TrimSpace(r + "\n\n" + q)
+			if got := ClassifyReportAsk(withRequest); got != AskNone {
+				t.Errorf("a sentence is an ask (%s): %q", got, q)
+			}
 			reg := t439Registry(t, "jv-worker")
 			ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", withRequest, nil)
 			if ok {
@@ -228,35 +225,17 @@ func TestT439SpanLocatesTheDecision(t *testing.T) {
 	report := loadBriefRequestReport(t)
 
 	ask := ClassifyReportAskDetail(report)
-	if ask.Class != AskRequest {
-		t.Fatalf("class = %s, want %s", ask.Class, AskRequest)
+	if ask.Class != AskNone {
+		t.Fatalf("class = %s, want %s", ask.Class, AskNone)
 	}
-	if ask.Marker != "did not receive" {
-		t.Fatalf("marker = %q, want the first request phrase in the report", ask.Marker)
+	if !strings.Contains(report, "did not receive your detailed brief") {
+		t.Fatal("fixture lost the brief-request sentence")
 	}
-	if !strings.Contains(ask.Span, "did not receive your detailed brief") {
-		t.Fatalf("span %q does not quote the phrase that fired", ask.Span)
+	if _, _, _, ok := FindCompletionClaim(report); ok {
+		t.Fatal("a sentence is a completion claim")
 	}
-	if ask.Offset < 0 || ask.Offset+len(ask.Span) > len(report) ||
-		report[ask.Offset:ask.Offset+len(ask.Span)] != ask.Span {
-		t.Fatalf("span is not at offset %d in the report", ask.Offset)
-	}
-	// 🎯T470: decision spans are the matched sentence/clause, not a 200-byte
-	// window — a long sentence is still the right diagnostic unit.
-	if !strings.Contains(ask.Span, ask.Marker) {
-		t.Fatalf("span %q lost its marker %q", ask.Span, ask.Marker)
-	}
-
-	// The reap direction quotes the completion word instead.
-	marker, span, offset, ok := FindCompletionClaim(report)
-	if !ok {
-		t.Fatal("no completion claim found in a report that reaped as one")
-	}
-	if marker != "done" || !strings.Contains(span, "done") {
-		t.Fatalf("completion marker=%q span=%q", marker, span)
-	}
-	if report[offset:offset+len(span)] != span {
-		t.Fatalf("completion span is not at offset %d", offset)
+	if !hasAnyCompletionMarker(strings.ToLower(report)) {
+		t.Fatal("fixture no longer carries a completion word")
 	}
 }
 
@@ -276,44 +255,29 @@ func TestT439ReapLogRecordsDecisionAndSpan(t *testing.T) {
 	s := &Server{registry: reg}
 	s.maybeReapDoneWorkAgent("jv-t435-reap-event", report)
 
-	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
-	if got == nil {
-		t.Fatalf("no agent_lifecycle reap_done record; records=%d", len(cap.snapshot()))
-	}
-	if got["outcome"] != "skipped" {
-		t.Fatalf("outcome = %v, want skipped", got["outcome"])
-	}
-	if got["reason"] != "awaits_overseer_request" || got["ask_class"] != "request" {
-		t.Fatalf("reason=%v ask_class=%v", got["reason"], got["ask_class"])
-	}
-	if got["ask_marker"] != "did not receive" {
-		t.Fatalf("ask_marker = %v", got["ask_marker"])
-	}
-	span, _ := got["report_span"].(string)
-	if !strings.Contains(span, "did not receive your detailed brief") {
-		t.Fatalf("report_span = %q", span)
-	}
+	// 🎯T766.4: unenveloped prose is unknown, not an ask-class skip. The
+	// ask span stays on ClassifyReportAskDetail; the reap log fires for a
+	// declared finish.
 	if reg.Def("jv-t435-reap-event") == nil {
 		t.Fatal("agent was reaped")
 	}
+	if got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done"); got != nil && got["outcome"] == "ok" {
+		t.Fatalf("unenveloped request was reaped: %v", got)
+	}
 
-	// A genuine finish reaps, and its log line quotes the completion word.
 	cap.reset()
 	reg2 := t439Registry(t, "jv-worker")
 	s2 := &Server{registry: reg2}
-	s2.maybeReapDoneWorkAgent("jv-worker", "Done.")
+	s2.maybeReapDoneWorkAgent("jv-worker", declaredFinishReport("T439", "Done."))
 
-	got = findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
+	got := findLifecycle(cap.snapshot(), compAgentLifecycle, "reap_done")
 	if got == nil {
-		t.Fatal("no reap_done record for a genuine finish")
+		t.Fatal("no reap_done record for a declared finish")
 	}
-	if got["outcome"] != "ok" || got["reason"] != "bare_done_completion" {
+	if got["outcome"] != "ok" || got["reason"] != "finished_work" {
 		t.Fatalf("outcome=%v reason=%v", got["outcome"], got["reason"])
 	}
-	if got["claim_marker"] != "done" || got["report_span"] != "Done." {
-		t.Fatalf("claim_marker=%v report_span=%v", got["claim_marker"], got["report_span"])
-	}
 	if reg2.Def("jv-worker") != nil {
-		t.Fatal("🎯T165 / 🎯T195: a genuine bare done must still leave the fleet")
+		t.Fatal("a declared finish must leave the fleet")
 	}
 }

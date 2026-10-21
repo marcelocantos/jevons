@@ -17,7 +17,8 @@ import (
 //
 // Three hermetic tapes:
 //  1. instruction + bare ack → still open (T512:61 stays green)
-//  2. instruction + later substantive reply → closed
+//  2. instruction + a long sentence stays open; a declared finish on the
+//     same complaint closes (🎯T766.4)
 //  3. instruction + reply naming an achieved TargetID (Cursor-monthly / 🎯T550)
 
 func TestT568InstructionPlusBareAckStillOpen(t *testing.T) {
@@ -45,12 +46,12 @@ func TestT568InstructionPlusBareAckStillOpen(t *testing.T) {
 
 func TestT568InstructionPlusSubstantiveReplyCloses(t *testing.T) {
 	t.Parallel()
-	// No SHA / PASS / achieve, no TargetID, no T477 "because" connective —
-	// T344/T477/T528 miss this. T568 (a) closes on the later substantive reply.
+	// A long sentence is not a close. A declared finish on the same
+	// complaint is (🎯T766.4).
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
-			Text: "Please relabel Cursor's plan window as monthly, not weekly.",
+			Text: "Please relabel Cursor's plan window as monthly, not weekly. (T550)",
 			TS:   time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC),
 		},
 		{
@@ -60,8 +61,13 @@ func TestT568InstructionPlusSubstantiveReplyCloses(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("a long sentence must stay open, residual=%q", got.Residual)
+	}
+	turns[1].Text = declaredFinishReport("T550", "relabel Cursor plan window monthly")
+	got = ExtractOpenOwnerIntent(turns)
 	if got.Recoverable() {
-		t.Fatalf("later substantive reply must close, text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("declared finish on the plan window must close, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want residual %q, got %q", ResidualAnsweredOrClosed, got.Residual)
@@ -147,16 +153,25 @@ func TestT568LoadSubstantiveReplyFromChatlog(t *testing.T) {
 	if err := os.MkdirAll(chatDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Join([]string{
-		`{"type":"user","timestamp":"2026-08-26T10:00:00Z","message":{"role":"user","content":"Please relabel Cursor's plan window as monthly, not weekly."}}`,
-		`{"type":"assistant","timestamp":"2026-08-26T10:02:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Cursor's included-usage window is a billing-cycle month. The ticker should say monthly, not weekly; unused does not roll over."}]}}`,
-	}, "\n") + "\n"
+	user := `{"type":"user","timestamp":"2026-08-26T10:00:00Z","message":{"role":"user","content":"Please relabel Cursor's plan window as monthly, not weekly. (T550)"}}`
+	prose := `{"type":"assistant","timestamp":"2026-08-26T10:02:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Cursor's included-usage window is a billing-cycle month. The ticker should say monthly, not weekly; unused does not roll over."}]}}`
+	body := strings.Join([]string{user, prose}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(chatDir, "jevons.jsonl"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadOpenOwnerIntent(dir, "jevons")
+	if !got.Recoverable() {
+		t.Fatalf("a chatlog sentence must stay open, residual=%q", got.Residual)
+	}
+	ts := time.Date(2026, 8, 26, 10, 2, 0, 0, time.UTC)
+	finish := t7664AssistantLine(ts, declaredFinishReport("T550", "relabel Cursor plan window monthly"))
+	body = strings.Join([]string{user, finish}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(chatDir, "jevons.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = LoadOpenOwnerIntent(dir, "jevons")
 	if got.Recoverable() {
-		t.Fatalf("chatlog substantive reply must close, text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("declared finish must close the chatlog, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)

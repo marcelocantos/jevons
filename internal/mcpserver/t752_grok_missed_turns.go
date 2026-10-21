@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/turnev"
 )
@@ -151,7 +152,7 @@ func (s *Server) recoverGrokMissedTurns(name, path string) int {
 func (s *Server) seatTranscriptPath(name string, proc *claudia.Agent) string {
 	if s != nil && s.registry != nil {
 		if def := s.registry.Def(name); def != nil &&
-			spool.SidecarProvider(string(def.Provider)) &&
+			seatprovider.Resolve(def.Provider).Sidecar &&
 			spool.SeatHasHistory(spool.Dir(), name) {
 			// Sidecar seats have no vendor JSONL (🎯T866.4).
 			return ""

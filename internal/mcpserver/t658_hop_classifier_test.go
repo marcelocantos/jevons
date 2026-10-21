@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
@@ -118,8 +119,15 @@ func TestT658FirstSendScoutReportStaysOnPO(t *testing.T) {
 	if !strings.HasPrefix(body, "```jevons\n") {
 		t.Fatalf("relay report body must open at the sender's fence; got %.120q", body)
 	}
-	if relayroute.ReportSummary(body) == relayroute.ReportSummary(got) {
-		t.Fatal("summary of the body equals summary of the wrap — the doctrine is still ahead of the report")
+	// 🎯T614: ReportSummary peels the wrap, so wrap and stripped body name
+	// the same report — not the doctrine that used to win the first 160 runes.
+	wrapSummary := relayroute.ReportSummary(got)
+	bodySummary := relayroute.ReportSummary(body)
+	if wrapSummary != bodySummary {
+		t.Fatalf("summary of the wrap %q != summary of the body %q — peel lost the report", wrapSummary, bodySummary)
+	}
+	if strings.Contains(wrapSummary, roles.DoctrineMarker) || strings.Contains(wrapSummary, "Product-owner role") {
+		t.Fatalf("summary of the wrap still names the doctrine: %q", wrapSummary)
 	}
 	// And without the role body the doctrine cannot be bounded: the relay
 	// says so (empty ⇒ parent) instead of scanning the doctrine.
@@ -164,7 +172,11 @@ func TestT658ProgressOpenersStayOnPOOnTheWire(t *testing.T) {
 // report as before. With a store, the reroute stores the sender's words
 // (not the wrap) and the record line summarizes those same words.
 func TestT658SkippedHopRecordRequiresStoredReport(t *testing.T) {
-	report := "Blocked: needs owner verdict on the provider spend cap before I can proceed."
+	report := strings.TrimSpace(envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T658",
+		Payload: "Blocked: needs owner verdict on the provider spend cap before I can proceed.",
+	}))
 
 	t.Run("no store, no record", func(t *testing.T) {
 		po := &fakeSender{alive: true}

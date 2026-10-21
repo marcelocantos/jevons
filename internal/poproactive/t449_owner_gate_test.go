@@ -72,7 +72,7 @@ func TestT449ControlAnsweredGateReturnsToNormalHandling(t *testing.T) {
 			ID:            "T383",
 			Name:          "Sticky fleet-tree selection",
 			OwnedBy:       ownergate.OwnerHandle,
-			OwnedByReason: base + " " + ownergate.FormatAnswer(v, "", "jevons-po",
+			OwnedByReason: base + "\n" + ownergate.FormatAnswer(v, "", "jevons-po",
 				time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)),
 		}
 		if got := ClassifyLeaf(obs); got != LeafReady {

@@ -42,6 +42,13 @@ func TestT977CapacityRestoredWakesOverseerAndPOs(t *testing.T) {
 	}
 	s := &Server{}
 	s.registry = reg
+	// The three -po seats were spawned as product owners; that recorded
+	// role is what makes them POs (🎯T766.4), not their names.
+	for _, name := range []string{"jevons-po", "claudia-po", "stopped-po"} {
+		if err := s.recordAgentRole(name, purposeProductOwner); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s.observeRegistryLiveness()
 	for _, name := range []string{"jevons-po", "claudia-po", "jv-t977-worker"} {
 		d := reg.Def(name)
@@ -141,7 +148,7 @@ func TestT977CapacityRestoredDoesNotLiftOwnerParkedFleetIntent(t *testing.T) {
 	}
 	s := &Server{}
 	s.SetFleetIntentStore(store)
-	if err := s.SetFleetIntent(fleetintent.Parked, "owner",
+	if err := s.SetFleetIntent(fleetintent.Parked, "Owner",
 		"standing the fleet down for capacity while I'm travelling"); err != nil {
 		t.Fatal(err)
 	}

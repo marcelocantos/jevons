@@ -133,8 +133,8 @@ func TestT946IncidentReportsAreNotFinishedWork(t *testing.T) {
 			if !strings.Contains(lower, tc.deny) {
 				t.Fatalf("fixture lost its incident sentence %q", tc.deny)
 			}
-			if !hasCompletionClaim(asciiLower(report)) {
-				t.Fatal("fixture no longer carries a completion word — cannot reproduce the incident")
+			if hasCompletionClaim(asciiLower(report)) {
+				t.Fatal("a completion sentence is a claim")
 			}
 			if reportCitesOracleID(report) {
 				t.Fatal("fixture unexpectedly cites a SHA or gate id — no longer the uncited shape")
@@ -146,34 +146,38 @@ func TestT946IncidentReportsAreNotFinishedWork(t *testing.T) {
 			if ok {
 				t.Fatalf("incident report reaps (reason %s)", reason)
 			}
-			if !strings.HasPrefix(reason, "awaits_overseer_") {
-				t.Fatalf("reason = %q, want awaits_overseer_* (the phrase-level veto)", reason)
+			if reason != "unknown_report" {
+				t.Fatalf("reason = %q, want unknown_report", reason)
 			}
 		})
 	}
 }
 
-// The worktree-vs-claim veto in isolation: a report that clears every
-// existing ask/finish-shape check (no explicit-incomplete phrase, no
-// checkpoint, no closing question) must still not reap finished_work when it
-// cites no SHA/gate id and the worker's worktree is dirty.
+// Marker words are not an uncited-claim veto (🎯T766.4). A prose sentence
+// stays unknown. A declared risk finish of that sentence still reaps.
 func TestT946UncitedOracleClaimOverDirtyWorktreeNeverReaps(t *testing.T) {
-	report := "Implemented the fix. All tests pass. Done."
+	prose := "Implemented the fix. All tests pass. Done."
+	report := declaredRiskFinishReport("T946", prose)
 	if !LooksLikeFinishedWorkReport(report) {
-		t.Fatal("control must look like finished_work before the T946 veto — otherwise this is not testing the new check")
+		t.Fatal("control must look like finished_work")
 	}
 	if reportCitesOracleID(report) {
 		t.Fatal("control must not cite a SHA or gate id")
 	}
 
 	for _, shape := range []dirtyShape{dirtyTrackedEdit, dirtyUntrackedFile} {
-		reg := regWithWorkerDir(t, seededGitWorktree(t, shape))
-		ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
-		if ok {
-			t.Fatalf("shape %v: uncited oracle-marker claim reaped over a dirty worktree", shape)
+		dir := seededGitWorktree(t, shape)
+		if UncitedClaimAgainstDirtyWorktree(prose, gate.ProbeTree(dir)) {
+			t.Fatalf("shape %v: marker words vetoed the dirty worktree", shape)
 		}
-		if reason != "false_green_uncited_claim_dirty_worktree" {
-			t.Fatalf("shape %v: reason = %q, want false_green_uncited_claim_dirty_worktree", shape, reason)
+		reg := regWithWorkerDir(t, dir)
+		ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", prose, func(string) bool { return false })
+		if ok || reason != "unknown_report" {
+			t.Fatalf("shape %v: prose reap=%v reason=%s", shape, ok, reason)
+		}
+		ok, reason = ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
+		if !ok {
+			t.Fatalf("shape %v: declared risk finish did not reap (reason %s)", shape, reason)
 		}
 	}
 }
@@ -182,7 +186,7 @@ func TestT946UncitedOracleClaimOverDirtyWorktreeNeverReaps(t *testing.T) {
 // veto is about contradicted evidence, not a blanket refusal of prose-only
 // oracle markers.
 func TestT946UncitedOracleClaimOverCleanWorktreeStillReaps(t *testing.T) {
-	report := "Implemented the fix. All tests pass. Done."
+	report := declaredRiskFinishReport("T946", "Implemented the fix. All tests pass. Done.")
 	reg := regWithWorkerDir(t, seededGitWorktree(t, dirtyNone))
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
 	if !ok {
@@ -194,9 +198,13 @@ func TestT946UncitedOracleClaimOverCleanWorktreeStillReaps(t *testing.T) {
 // artifact is exactly what the veto asks for, and shaevidence's own
 // extraction (🎯T427) recognises it.
 func TestT946CitedSHAOverDirtyWorktreeStillReaps(t *testing.T) {
-	report := "Implemented the fix. All tests pass. Done. Committed abcdef0123456."
+	prose := "Implemented the fix. All tests pass. Done. Committed abcdef0123456."
+	if reportCitesOracleID(prose) {
+		t.Fatal("a prose SHA is an oracle citation")
+	}
+	report := declaredFinishReport("T946", prose)
 	if !reportCitesOracleID(report) {
-		t.Fatal("control must cite a SHA")
+		t.Fatal("declared sha slot is not an oracle citation")
 	}
 	reg := regWithWorkerDir(t, seededGitWorktree(t, dirtyTrackedEdit))
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
@@ -218,8 +226,8 @@ func TestT946UncitedClaimAgainstDirtyWorktree(t *testing.T) {
 	if UncitedClaimAgainstDirtyWorktree(claim, cleanTree) {
 		t.Fatal("clean tree must not veto")
 	}
-	if !UncitedClaimAgainstDirtyWorktree(claim, dirtyTree) {
-		t.Fatal("uncited marker-only claim over a dirty tree must veto")
+	if UncitedClaimAgainstDirtyWorktree(claim, dirtyTree) {
+		t.Fatal("marker words are an uncited-claim veto")
 	}
 	if UncitedClaimAgainstDirtyWorktree(cited, dirtyTree) {
 		t.Fatal("a cited SHA must clear the veto even over a dirty tree")

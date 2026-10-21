@@ -19,21 +19,37 @@ import (
 
 func TestAuthRecoverOnlyOffersStoppedPlanFailures(t *testing.T) {
 	for _, tc := range []struct {
+		name     string
 		provider claudia.Provider
-		health   string
+		err      error
 		want     bool
 	}{
-		{"anthropic", "broken: anthropic refresh failed: invalid_grant", true},
-		{"openai-codex", "broken: omp: keychain was not read at startup", true},
-		{"grok", "broken: no xai-oauth login", true},
-		{"codex", "broken: invalid_grant", false},
-		{"anthropic", "resumable", false},
-		{"anthropic", "broken: tool process exited", true},
-		{"ollama", "broken: invalid_grant", false},
+		{"auth-offer-anthropic", "anthropic", errors.New("anthropic refresh failed: invalid_grant"), true},
+		{"auth-offer-openai-codex", "openai-codex", errors.New("omp: keychain was not read at startup"), true},
+		{"auth-offer-grok", "grok", errors.New("no xai-oauth login"), true},
+		// 🎯T1079: a codex row is the openai-codex sidecar seat; its login is
+		// the plan's, recovered the same way.
+		{"auth-offer-codex", "codex", errors.New("invalid_grant"), true},
+		{"auth-offer-resumable", "anthropic", nil, false},
+		{"auth-offer-exited", "anthropic", errors.New("tool process exited"), true},
+		{"auth-offer-ollama", "ollama", errors.New("invalid_grant"), false},
 	} {
-		if got := reauthablePlanFailure(tc.provider, tc.health); got != tc.want {
-			t.Errorf("provider=%s health=%q: got %v want %v", tc.provider, tc.health, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err != nil {
+				fleet.RecordRehydrateFailure(tc.name, tc.err)
+				t.Cleanup(func() { fleet.RecordRehydrateFailure(tc.name, nil) })
+			}
+			def := claudia.AgentDef{Name: tc.name, Provider: tc.provider}
+			if got := reauthablePlanFailure(tc.provider, def); got != tc.want {
+				t.Errorf("provider=%s err=%v: got %v want %v", tc.provider, tc.err, got, tc.want)
+			}
+			if tc.want {
+				health := fleet.RehydrateHealth(def)
+				if !strings.HasPrefix(health, "broken:") {
+					t.Errorf("display = %q, want the broken prefix", health)
+				}
+			}
+		})
 	}
 }
 
@@ -70,7 +86,7 @@ func TestAuthRecoverRechecksSeatAndReportsClaudiaFailure(t *testing.T) {
 	}
 	if got := fleet.RehydrateHealth(*reg.Def(name)); !strings.Contains(got, "sign-in was cancelled") {
 		t.Fatalf("failure was not updated: %q", got)
-	} else if !reauthablePlanFailure("anthropic", got) {
+	} else if !reauthablePlanFailure("anthropic", *reg.Def(name)) {
 		t.Fatalf("failed sign-in hid the retry action: %q", got)
 	}
 }

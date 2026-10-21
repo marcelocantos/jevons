@@ -72,6 +72,11 @@ func observedPendingSends(s *Server, name string) int {
 	return s.pendingAgentSends(name)
 }
 
+func observedQueueDepth(s *Server, name string) int {
+	s.observeQueue(name)
+	return s.heldAgentSends(name)
+}
+
 func observedEscalateIfBusy(s *Server, name, text, class, asker string, proc agentSender) (agentSendResult, bool, error) {
 	observeSenderFixture(s, name, proc)
 	return s.escalateIfBusy(name, text, class, asker, proc)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -61,10 +62,10 @@ func (s *Server) handleMCPReconnect(ctx context.Context, req mcp.CallToolRequest
 // than that silent lie, non-Grok overseers get a message naming the real
 // remedy. It returns ok=true when the cycle may proceed.
 func mcpReconnectUnsupported(provider claudia.Provider) (string, bool) {
-	switch provider {
-	case claudia.ProviderGrok, "":
+	switch seatprovider.Resolve(provider).Plan {
+	case seatprovider.Grok, seatprovider.Unset:
 		return "", true
-	case claudia.ProviderClaude:
+	case seatprovider.Claude:
 		return "mcp reconnect is a Grok control plane (`grok mcp disable/enable`); " +
 			"the overseer provider is claude, which has no live disable/enable — " +
 			"re-attach with /mcp in the session, or re-mint so AgentDef.MCPServers " +

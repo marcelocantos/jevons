@@ -29,9 +29,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
-	"github.com/marcelocantos/jevons/internal/gate"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/spool"
 	"github.com/marcelocantos/jevons/internal/targetfile"
@@ -92,7 +92,7 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 			mcp.WithString("actor", mcp.Description("Your agent name (who is starting the child). Used as default parent for lineage.")),
 			mcp.WithString("parent", mcp.Description("Parent agent name for lineage (default: actor, else overseer). Required for correct kill authorization.")),
 			mcp.WithString("purpose", mcp.Description("Fleet purpose: work (default), aside, or overseer (🎯T114). UI: work + aside → RHS fleet tree (asides 💡 chrome; 🎯T136); overseer uses main chat.")),
-			mcp.WithString("role", mcp.Description("Declarative fleet role (🎯T511 / 🎯T536.2): worker (default for Build), auditor (read-only ledger challenger), product-owner, boss, aside, overseer. Registry records the role; built-ins cannot be deleted. Empty → default from purpose/name.")),
+			mcp.WithString("role", mcp.Description("Declarative fleet role (🎯T511 / 🎯T536.2): worker (default for Build), auditor (read-only ledger challenger), product-owner, boss, aside, overseer. Registry records the role; built-ins cannot be deleted. Empty → default from purpose, never from the name: a product owner MUST be started with role=product-owner, or it counts as a worker — reapable on a finish-report, invisible to PO idle and fan-out gates (🎯T766.4.1).")),
 			mcp.WithString("target_id", mcp.Description("Optional bullseye target id this agent is engaged on (e.g. T10.2). Written to registry as target_id for Frontier engagement overlay (🎯T198). Empty = not mission-bound.")),
 			mcp.WithBoolean("remint_override", mcp.Description("T998: authorize one start past the target start bound. Requires actor=owner or the overseer and override_reason; force_engage does not bypass the bound.")),
 			mcp.WithString("override_reason", mcp.Description("Reason for a one-start remint_override; durably recorded with actor and target.")),
@@ -119,11 +119,11 @@ func (s *Server) SetRegistry(registry *claudia.Registry) {
 
 	s.addTool(
 		mcp.NewTool("jevons_agent_stop",
-			mcp.WithDescription("Stop a running agent process. Parked (🎯T414) when the seat is blocked on something external that may resume later: it stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Reaped (🎯T985, stop+Remove like the finished-work path) when the reason reads as finished work — own work complete or superseded, nothing left for this seat: a worker with no more work to do is reaped, not parked. Durable roles (PO / aside / overseer) and seats with live descendants always park; kill those with jevons_agent_kill."),
+			mcp.WithDescription("Stop a running agent process. Parked (🎯T414) when the seat is blocked on something external that may resume later: it stays registered, and the park is a standing instruction that outlives the process — no delivery, restart, idle sweep or repair mission revives it until the park is lifted with jevons_fleet_intent state=working. Reaped (🎯T985, stop+Remove like the finished-work path) when the seat has nothing left — own work complete or superseded: a worker with no more work to do is reaped, not parked. The disposition is declared, not read from English (🎯T766.4.1): pass disposition=reap or disposition=park. Without it, only a reason or stored report that is a jevons envelope decides (declared finish-report reaps; blocked finish-report or active-wait parks); anything else parks. Durable roles (PO / aside / overseer) and seats with live descendants always park; kill those with jevons_agent_kill."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("actor", mcp.Description("Your agent name (who is stopping it). Default: the overseer.")),
-			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it. It also decides park vs reap (🎯T985): 'nothing left for this worker' / 'already achieved' / 'superseded' reaps; 'blocked on' / 'cross-repo' / 'owner decision' / 'design gate' parks. Silent, the seat's latest stored report is read the same way; unclassifiable parks.")),
-			mcp.WithString("disposition", mcp.Description("park | reap — fix the outcome instead of classifying the reason (🎯T985). Durable roles and seats with descendants park regardless (use jevons_agent_kill).")),
+			mcp.WithString("reason", mcp.Description("Why it is being stood down — shown to whoever later wonders why nothing is restarting it. Its wording does not decide park vs reap (🎯T766.4.1) — pass disposition. A reason that is itself a jevons envelope is read by its slots; silent, the seat's latest stored report is; anything else parks.")),
+			mcp.WithString("disposition", mcp.Description("park | reap — the declared outcome (🎯T985 / 🎯T766.4.1): reap when the seat has nothing left, park when it is blocked on something external that may resume. Durable roles and seats with descendants park regardless (use jevons_agent_kill).")),
 			mcp.WithBoolean("force", mcp.Description("🎯T664: stop even while a turn is in flight or a delivery is still delivered_unconfirmed. Without it the stop is refused and the check that decides it is named. Pass only with a reason you can state.")),
 		),
 		s.handleAgentStop,
@@ -239,20 +239,27 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 			}
 		}
 		if pinned {
-			fmt.Fprintf(&b, "  ^ %s\n", FormatSendqPinLine(d.Name, pin))
+			_, ownedOK, _ := s.sendQueue().OwnedAttempt(d.Name)
+			fmt.Fprintf(&b, "  ^ %s\n", formatSendqPinLine(d.Name, pin, !ownedOK))
+		}
+		// sendqPinFor already read the queue, which publishes depth, head
+		// age, and block reason onto the authority. The list is the place
+		// an operator reads that without opening a log.
+		if line := FormatQueueStoppage(d.Name, s.seatState(d.Name), time.Now()); line != "" {
+			fmt.Fprintf(&b, "  ^ %s\n", line)
 		}
 		if line, wedged := s.WedgedSeat(d.Name); wedged {
 			fmt.Fprintf(&b, "  ^ %s\n", line)
 		}
 		// 🎯T661: a session the broker wire cannot carry is named on the row,
 		// so a PO sees why sends to it fail before trying one.
-		if lines := s.seatOversized(d, DefaultSessionRoots()); len(lines) > 0 {
+		if lines := s.seatOversized(d, s.transcriptRoots()); len(lines) > 0 {
 			fmt.Fprintf(&b, "  ^ %s\n", FormatOversizedSeatLine(d.Name, lines))
 		}
 	}
 	// 🎯T111.4 thin surface: PO/boss with zero children while multi-slice
 	// missions should have fan-out — visible without only RHS eyeballing.
-	if hints := FormatFanOutHints(s.registry, s.overseerName()); hints != "" {
+	if hints := FormatFanOutHints(s.registry, s.overseerName(), s.seatRoleOf); hints != "" {
 		b.WriteString("\n")
 		b.WriteString(hints)
 	}
@@ -488,7 +495,10 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	// 🎯T511 / 🎯T536.2: resolve declarative role (explicit or purpose/name default).
 	roleName := strings.TrimSpace(strings.ToLower(roleArg))
 	if roleName == "" {
-		roleName = roles.DefaultForPurpose(purpose, name)
+		// An omitted role keeps the role recorded for this seat (a PO
+		// remint stays a PO), else the role its purpose implies. The name
+		// does not decide (🎯T766.4).
+		roleName = s.agentRole(name, purpose)
 	}
 	resolved, err := s.resolveRoleDef(roleName)
 	if err != nil {
@@ -677,7 +687,7 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 					life["seat_released"] = true
 					s.notifySpawnFailure(def.Parent, def.TargetID, name, ferr.Error())
 				}
-				life["failure_class"] = agenterr.ClassifyText(ferr.Error()).String()
+				life["failure_class"] = agenterr.Classify(ferr).String()
 				life["err"] = ferr.Error()
 				life["session_id"] = sessionDisplay(def.SessionID)
 				s.logLifecycle(compAgentLifecycle, "start", "error", life)
@@ -835,7 +845,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	role := strings.TrimSpace(s.pendingSpawnRole)
 	s.mu.Unlock()
 	if role == "" {
-		role = roles.DefaultForPurpose(purpose, name)
+		role = s.agentRole(name, purpose)
 	}
 	existed := s.registry.Def(name) != nil
 	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
@@ -850,7 +860,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	// A pre-T1046 accepted send could mark an unsupported OMP pin as
 	// Materialized before any model reply. Diagnose before PickMintModel or
 	// Register can treat that flag as a valid resume binding.
-	if existed && def.Materialized && spool.SidecarProvider(string(def.Provider)) && cli.PlanProvider(def.Provider) == claudia.ProviderCodex &&
+	if existed && def.Materialized && seatprovider.Resolve(def.Provider).Sidecar && seatprovider.Resolve(def.Provider).Plan == seatprovider.Codex &&
 		strings.TrimSpace(def.Model) != "" && !s.codexCatalogHasModel(def.Model) {
 		if reason := s.unsupportedMaterializedModel(def); reason != "" {
 			return nil, true, "", fmt.Errorf("seat %q: unsupported OMP model %q: %s", name, def.Model, reason)
@@ -879,7 +889,9 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
 	}
-	def.Provider = claudia.Provider(pick.Provider)
+	// The registry stores the id Launch talks to. Catalog ranking above
+	// keeps pick.Provider, the plan id (claude, codex, grok).
+	def.Provider = seatprovider.Resolve(claudia.Provider(pick.Provider)).Launch
 	routeNote := pick.Cite()
 
 	// 🎯T324 + 🎯T325.2.1: session-truth model binding for this Launch.
@@ -950,9 +962,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		def.SandboxMode = ""
 		def.SandboxGitWrite = false
 	}
-	// A live handle is the transport authority: Claudia Launch returns that
-	// same handle without starting another process. Never relabel its persisted
-	// row to a sidecar while the legacy CLI still owns the seat. An explicit
+	// Claudia Launch returns an existing live handle. An explicit
 	// cross-plan request is a model switch (jevons_agent_switch_model), not an
 	// in-place Register.
 	// 🎯T766: liveness and provider come from the seat authority, fed at
@@ -965,7 +975,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 			liveProvider = claudia.ProviderClaude
 		}
 	}
-	if err := alignStartTransport(def, existed, providerArg, liveProvider); err != nil {
+	if err := preserveLiveProvider(def, liveProvider); err != nil {
 		return nil, existed, routeNote, err
 	}
 
@@ -978,7 +988,7 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		}
 	}
 	if s.mcp.URL != "" {
-		def.MCPServers = mcpattach.SessionServers(s.mcp, def.Provider, def.WorkDir)
+		def.MCPServers = mcpattach.SessionServers(s.mcp, def.WorkDir)
 	}
 	def.MCPExclusive = mcpattach.Exclusive
 	if err := s.registry.Register(*def); err != nil {
@@ -1025,21 +1035,30 @@ func (s *Server) unsupportedMaterializedModel(def *claudia.AgentDef) string {
 	if len(entries) != 0 {
 		return "conversation store exists under " + seatDir + "; preserve history and recover the model with jevons_agent_switch_model"
 	}
-	recs, err := spool.ReadSeat(spool.Dir(), def.Name)
+	return spoolConversationEvidence(spool.Dir(), def.Name)
+}
+
+// spoolConversationEvidence is why seat's dated spool forbids treating it as
+// a phantom, or empty: its oldest record that is conversation, or an
+// accepted send that may still be in flight. It reads the seat's own lines,
+// and only up to that record (🎯T1085).
+func spoolConversationEvidence(dir, seat string) string {
+	reason := ""
+	err := spool.EachSeatRecord(dir, seat, func(rec spool.Record) bool {
+		switch rec.Type {
+		case "text", "turn_end", "tool_call", "tool_result":
+			reason = "conversation evidence in dated spool; preserve history and recover the model with jevons_agent_switch_model"
+		case "accepted":
+			if rec.TS.IsZero() || time.Since(rec.TS) < 2*time.Minute {
+				reason = "accepted send may still be in flight; wait for a model reply or inspect history before retry"
+			}
+		}
+		return reason == ""
+	})
 	if err != nil {
 		return "cannot inspect spool: " + err.Error() + "; recover manually"
 	}
-	for _, rec := range recs {
-		switch rec.Type {
-		case "text", "turn_end", "tool_call", "tool_result":
-			return "conversation evidence in dated spool; preserve history and recover the model with jevons_agent_switch_model"
-		case "accepted":
-			if rec.TS.IsZero() || time.Since(rec.TS) < 2*time.Minute {
-				return "accepted send may still be in flight; wait for a model reply or inspect history before retry"
-			}
-		}
-	}
-	return ""
+	return reason
 }
 
 // codexCatalogHasModel checks the same session catalog used by automatic
@@ -1050,7 +1069,7 @@ func (s *Server) codexCatalogHasModel(model string) bool {
 		catalog = s.modelCatalog()
 	}
 	for _, row := range catalog {
-		if cli.PlanProvider(row.Provider) == claudia.ProviderCodex && row.Session &&
+		if seatprovider.Resolve(row.Provider).Plan == seatprovider.Codex && row.Session &&
 			row.Access == claudia.ModelAccessPlan && row.Model == model {
 			return true
 		}
@@ -1064,7 +1083,7 @@ func (s *Server) codexCatalogHasModel(model string) bool {
 // launch follows the same recovery path. Explicit pins and materialized
 // conversations are not overridden: they must retain their resume binding.
 func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider string, materialized bool) cost.MintModelPick {
-	if strings.TrimSpace(explicit) != "" || materialized || cli.PlanProvider(claudia.Provider(provider)) != claudia.ProviderCodex ||
+	if strings.TrimSpace(explicit) != "" || materialized || seatprovider.Resolve(claudia.Provider(provider)).Plan != seatprovider.Codex ||
 		p.Model != cost.ModelCodexSpark {
 		return p
 	}
@@ -1074,7 +1093,7 @@ func (s *Server) availableMintModel(p cost.MintModelPick, explicit, provider str
 	}
 	fallback := ""
 	for _, row := range catalog {
-		if cli.PlanProvider(row.Provider) != claudia.ProviderCodex || !row.Session || row.Access != claudia.ModelAccessPlan {
+		if seatprovider.Resolve(row.Provider).Plan != seatprovider.Codex || !row.Session || row.Access != claudia.ModelAccessPlan {
 			continue
 		}
 		if row.Model == p.Model {
@@ -1101,17 +1120,14 @@ func launchConfigFromDef(def *claudia.AgentDef) (provider claudia.Provider, sess
 	return cfg.Provider, cfg.SessionID, cfg.RequireResume
 }
 
-// alignStartTransport aligns the persisted row with the transport Claudia
-// Launch will actually return. A cold start instead binds fresh and explicit
-// provider requests to the subscription sidecar.
-func alignStartTransport(def *claudia.AgentDef, existed bool, providerArg string, live claudia.Provider) error {
+// preserveLiveProvider prevents start from relabelling an existing seat.
+// Claudia owns provider aliases and the sole sidecar transport on cold starts.
+func preserveLiveProvider(def *claudia.AgentDef, live claudia.Provider) error {
 	if live != "" {
-		if cli.PlanProvider(live) != cli.PlanProvider(def.Provider) {
+		if seatprovider.Resolve(live).Plan != seatprovider.Resolve(def.Provider).Plan {
 			return fmt.Errorf("seat %q is still running on %s; cannot switch to %s through start; use jevons_agent_switch_model, or stop it first", def.Name, live, def.Provider)
 		}
 		def.Provider = live
-	} else if !existed || strings.TrimSpace(providerArg) != "" {
-		def.Provider = cli.SidecarLaunchProvider(def.Provider)
 	}
 	return nil
 }
@@ -1487,7 +1503,7 @@ func (s *Server) handleAgentKill(ctx context.Context, req mcp.CallToolRequest) (
 	desc := plan.Removed
 	// Refusal looks at every descendant (a PO with its own sendq is still a
 	// remintable parent); T530 drain restarts apply only to seats that leave.
-	refuse, reason, restartNames := ClassifyKillHeldSendq(name, allDesc, s.pendingAgentSends)
+	refuse, reason, restartNames := ClassifyKillHeldSendq(name, allDesc, s.heldAgentSends)
 	if !subtree {
 		restartNames = nil
 	}
@@ -1579,7 +1595,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 	if name == "" {
 		return false
 	}
-	if strings.EqualFold(name, s.overseerName()) {
+	if strings.ToLower(name) == strings.ToLower(s.overseerName()) {
 		return true
 	}
 	if s.transcript != nil && s.transcript.GetID != nil && s.registry != nil {
@@ -1608,7 +1624,7 @@ func (s *Server) isOverseerAgent(name string) bool {
 // isOverseerSeatRow reports whether a registry row could be the overseer:
 // explicit purpose=overseer, or a root row (no parent).
 func isOverseerSeatRow(d claudia.AgentDef) bool {
-	if strings.EqualFold(strings.TrimSpace(d.Purpose), claudia.PurposeOverseer) {
+	if strings.ToLower(strings.TrimSpace(d.Purpose)) == strings.ToLower(claudia.PurposeOverseer) {
 		return true
 	}
 	return strings.TrimSpace(d.Parent) == ""
@@ -1703,20 +1719,27 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			s.mu.Unlock()
 			if tracker != nil {
 				tracker.NoteTerminalTurn(name, text, n)
+				// Reason is the typed cause. The accumulated sentence is not.
+				class := tracker.ApplyTerminalCause(name, ev.Reason)
+				if agenterr.HardBlock(class, "") {
+					s.ObserveProviderFailure(class, text)
+				}
 				tracker.NoteTurnErrored(name, ev.IsError)
 			}
 			if text != "" {
 				// Notify overseer first so the done report is delivered before
 				// the worker leaves the registry (🎯T165) — unless [silent]
 				// (ops events: daemon-restarted / worker-idle fine chatter).
-				// 🎯T869: a plan-only reply is not forwarded.
+				// 🎯T869 withholds another daemon prompt after a no-tool reply.
+				// 🎯T766.4: the notify itself is not dropped because the
+				// sentence opens with a future commitment.
 				s.notifyTurn(name, text, n)
 			}
 			// 🎯T111.1: deliver any nudges queued while the prompt was in flight.
 			// Off the event goroutine since 🎯T416: the drain now waits for the
 			// message to become a turn, and blocking an agent's event stream
 			// for that window would stall its own progress reporting.
-			go s.drainAgentSendQueue(name)
+			s.goDrainAgentSendQueue(name)
 			// 🎯T793: a malformed load-bearing envelope (e.g. a silent-decision
 			// confidence written as a 1-10 rank instead of [0,1]) gets the
 			// author itself told the exact field and range, on its own
@@ -1724,13 +1747,23 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 			// parent's copy and reaping an author who now has no route to
 			// resend. Skip the reap this turn so a corrected resend has a
 			// worker left to send it.
+			// 🎯T1083: the notice names the failing slot and its accepted
+			// values, and a finish-report is shown envelope.DoneShape; the
+			// journal line names the slot too, so a parent reading the log
+			// sees why the seat was kept.
 			if notice := envelope.CorrectionNotice(text); notice != "" {
 				if _, err := s.deliverByName(name, notice, OriginAgent, false); err != nil {
 					slog.Warn("T793 correction notice undeliverable", "agent", name, "err", err)
 				}
-				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", map[string]any{
-					"agent": name,
-				})
+				fields := map[string]any{"agent": name}
+				if m, perr := envelope.Parse(text); m != nil && perr != nil {
+					fields["kind"] = m.Kind.String()
+					fields["err"] = perr.Error()
+					if se, ok := envelope.AsSlotError(perr); ok {
+						fields["slot"] = se.Slot
+					}
+				}
+				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", fields)
 				return
 			}
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
@@ -1760,9 +1793,9 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 
 	// 🎯T502: a bare acknowledgement ("No response requested.") is a
 	// turn-boundary artefact, not a report. The idle signal still reaches the
-	// parent through the 🎯T207/T414 tracker, and anything with a finish shape,
-	// an ask, or a T392.7 direct-route class still escalates. See
-	// bareAckTurnReport.
+	// parent through the 🎯T207/T414 tracker. A declared done report is not
+	// suppressed, and a T392.7 overseer route still escalates. A completion
+	// sentence is not that decision (🎯T766.4). See bareAckTurnReport.
 	//
 	// 🎯T747: it is not stored either. It was stored at first (649 of 3848
 	// files on one machine were this 22-byte ack), which made a seat that ended
@@ -1778,9 +1811,8 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 		return
 	}
 
-	// 🎯T869: a bare plan ("I'll inspect…") is not a fresh user turn for
-	// the parent. A finish, a question, and a status report still are.
-	// toolCalls < 0 is the legacy path, which does not know and still forwards.
+	// 🎯T766.4: an unenveloped "I'll …" is not a declared plan, so it is
+	// forwarded. toolCalls < 0 is the legacy path, which still forwards.
 	if !shouldForwardAgentReply(text, toolCalls) {
 		slog.Info("plan-only reply not forwarded",
 			"agent", agentName, "len", len(text))
@@ -1813,7 +1845,7 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 			"retrievable", !handle.Empty())
 	}
 
-	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, elision.Text)
+	msg := envelope.PrefixAgentResponded + "\n" + agentRespondedRoutingLine(agentName, agentreport.Handle{}, time.Time{}) + "\n" + elision.Text
 	parentMsg := formatAgentResponded(agentName, handle, elision.Text, s.deliveryNow())
 
 	// 🎯T386: a green the report's own evidence does not support is flagged
@@ -1838,9 +1870,8 @@ func (s *Server) notifyTurn(agentName, text string, toolCalls int) {
 		s.logLifecycle(compAgentLifecycle, "false_green", "flagged", map[string]any{
 			"agent": agentName, "flags": kinds,
 		})
-		banner := gate.BannerFor(agentName, flags) + "\n\n"
-		msg = banner + msg
-		parentMsg = banner + parentMsg
+		msg = falseGreenLead(agentName, flags, msg)
+		parentMsg = falseGreenLead(agentName, flags, parentMsg)
 	}
 
 	// 🎯T690: the stored terminal report reaches the registry parent on the
@@ -1953,7 +1984,7 @@ func (s *Server) confirmStartBrief(ctx context.Context, name string, existed boo
 				// with the error verbatim, on the durable send path.
 				s.notifySpawnFailure(def.Parent, def.TargetID, name, err.Error())
 			}
-			life["failure_class"] = agenterr.ClassifyText(err.Error()).String()
+			life["failure_class"] = agenterr.Classify(err).String()
 			life["err"] = err.Error()
 			life["session_id"] = sessionDisplay(def.SessionID)
 			s.logLifecycle(compAgentLifecycle, "start", "error", life)

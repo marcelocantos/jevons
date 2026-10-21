@@ -15,198 +15,157 @@ import (
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/reapverify"
+	"github.com/marcelocantos/jevons/internal/roles"
 )
 
-// LooksLikeFinishedWorkReport is true when a terminal agent response claims
-// completion. Used to auto-deregister finished work agents (🎯T165 / 🎯T195).
-//
-// 🎯T195: a completion claim alone is enough for reaping (hygiene) even when
-// the report omits oracle markers — imperfect "done" must not leave zombie
-// implementers. Overseer acceptance still requires oracle or accepted-risk
-// under 🎯T31.1; reaping ≠ accepting the work.
-// Mid-turn status with a SHA or "go test" alone does not match — a completion
-// claim is required so WIP progress does not reap the worker.
-//
-// 🎯T395: a completion word is necessary but not sufficient. A report that asks
-// the overseer for a decision, states it has not acted yet, or arrives visibly
-// cut is not a finish however confidently the rest of it reads — see
-// ClassifyReportAsk. The veto is one-way on purpose: reaping is destructive and
-// irreversible, keeping is cheap, so ambiguity resolves toward keeping.
-//
-// 🎯T445: the ask classes are phrase lists, so the completion word cannot be
-// the whole positive case either — an ask worded outside every list must not
-// fall through to a reap. The claim has to arrive in a positive finish shape
-// (a bare claim clause, or a claim with oracle evidence or accepted-risk) —
-// see hasFinishShape.
-func typedFinishReport(report string) bool {
-	m, err := envelope.Parse(report)
-	return m != nil && err == nil && m.Kind == envelope.KindFinishReport
-}
-
+// LooksLikeFinishedWorkReport is the supervision name of the one
+// is-this-report-done answer (🎯T766.4). The reap path calls
+// reportDoneForReap, which reads the same envelope.ClassifyDone. A report
+// that declares no envelope kind is unknown, not finished. Reaping is not
+// acceptance: a declared finish still owes oracle or accepted-risk under
+// 🎯T31.1, and that check is the envelope's own validation.
 func LooksLikeFinishedWorkReport(report string) bool {
-	// 🎯T938: a finish-report declaring status blocked is a seat waiting on
-	// someone else, not finished work. Reaping it would strand the mission
-	// the moment the blocker clears.
-	if reportOpenStatus(report) != "" {
-		return false
-	}
-	if m, err := envelope.Parse(report); m != nil && err == nil {
-		switch m.Kind {
-		case envelope.KindFinishReport:
-			// T784: a slice's oracle does not make the mission terminal.
-			return midWorkReportScope(report) == nil
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindTargetFileRequest, envelope.KindScoutReport, envelope.KindEscalation:
-			// 🎯T536.3: scout-report is a fog handoff, not product-done.
-			return false
-		}
-	}
-	s := strings.ToLower(strings.TrimSpace(report))
-	if s == "" {
-		return false
-	}
-	// 🎯T723 / 🎯T716: a reap needs an affirmative claim. Empty and the
-	// harness ack are classified no-claim; they never become a finish
-	// even if a later finish-shape mutation matches their vocabulary.
-	if ClassifyReportAsk(report) == AskNoClaim {
-		return false
-	}
-	if !hasFinishShape(s) {
-		return false
-	}
-	if hasForwardLookingPlan(report) {
-		return false
-	}
-	return !ReportAwaitsOverseer(report)
+	return envelope.IsDoneReport(report)
 }
 
-// finishedWorkReapReason classifies why a finished-work report is reaping.
-func finishedWorkReapReason(report string) string {
-	switch ClassifyCompletionReport(report) {
-	case CompletionAcceptedRisk:
-		return "accepted_risk"
-	case CompletionOracleEvidence:
-		return "finished_work"
-	case CompletionBareDone:
-		return "bare_done_completion" // 🎯T195 imperfect report
+// reportDoneForReap is the reap path's only answer to is-this-report-done
+// (🎯T766.4). Prose is not a fallback.
+//
+// A declared active external wait (🎯T1024, typed by 🎯T766.4.1) keeps the
+// seat whatever the kind: on a finish-report it is the contradictory
+// incident shape and names outstanding scope, so the parent is told; on a
+// status-ping it is an ordinary mid-wait turn and keeps quietly.
+func reportDoneForReap(report string) (bool, string) {
+	if w, ok := declaredActiveWait(report); ok {
+		if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
+			return false, outstandingScopeReapReason([]OutstandingScope{activeWaitScope(w)})
+		}
+		return false, activeWaitKeepReason
+	}
+	switch envelope.ClassifyDone(report) {
+	case envelope.DoneYes:
+		return true, ""
+	case envelope.DoneNo:
+		m, _ := envelope.Parse(report)
+		if m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressBlocked {
+			return false, IdleSkipBlockedOnOwner
+		}
+		if m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressInProgress {
+			return false, outstandingScopeReapReason([]OutstandingScope{{
+				Kind:   "in_progress",
+				Detail: "the worker explicitly reports status in-progress",
+			}})
+		}
+		return false, "not_finished_work_report"
 	default:
-		return "finished_work"
+		return false, "unknown_report"
 	}
 }
+
+// finishedWorkReapReason names why a typed finish-report is reaping.
+// The class comes from envelope slots. Payload prose is not consulted.
+func finishedWorkReapReason(report string) string {
+	m, err := envelope.Parse(report)
+	if m == nil || err != nil || m.Kind != envelope.KindFinishReport {
+		return "finished_work"
+	}
+	if m.HasRisk() {
+		return "accepted_risk"
+	}
+	return "finished_work"
+}
+
+// purposeProductOwner is the product-owner role token. Claudia's purpose
+// is the work|aside|overseer enum, so in a live registry this arrives as a
+// recorded role (agent_roles.json), not as AgentDef.Purpose. A seat name
+// ending in -po is not this fact.
+const purposeProductOwner = roles.ProductOwner
 
 // DurableFleetAgent reports whether name must not be auto-reaped on done
 // (overseer, asides, product owners). Deliberate stop without kill remains
-// allowed for everyone (🎯T165 residual).
-func DurableFleetAgent(name, purpose string, isOverseer func(string) bool) bool {
+// allowed for everyone (🎯T165 residual). role is the seat's declared role
+// (Server.agentRole on the production path); a bare purpose reads as the
+// role it implies. The name does not decide.
+func DurableFleetAgent(name, role string, isOverseer func(string) bool) bool {
 	if name == "" {
 		return true
 	}
 	if isOverseer != nil && isOverseer(name) {
 		return true
 	}
-	p := strings.TrimSpace(purpose)
-	if p == "" {
-		p = claudia.PurposeWork
-	}
-	if p == claudia.PurposeOverseer || p == claudia.PurposeAside {
+	switch roles.OfSeat(role, "") {
+	case roles.Overseer, roles.Aside, roles.ProductOwner:
 		return true
+	default:
+		return false
 	}
-	// Standing POs: jevons-po, *-po, and the short "po" test/fixture name.
-	lower := strings.ToLower(name)
-	if lower == "po" || strings.HasSuffix(lower, "-po") {
-		return true
-	}
-	return false
 }
 
-// ShouldAutoReapDoneWorkAgent decides whether a finished-work report should
-// stop+Remove the agent from the live fleet registry (🎯T165 / 🎯T195).
+// durableSeat is ShouldAutoReapDoneWorkAgent's durable hook on the
+// production path: the overseer, or a seat whose declared role is durable.
+func (s *Server) durableSeat(name string) bool {
+	if s.isOverseerAgent(name) {
+		return true
+	}
+	purpose := ""
+	if s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			purpose = d.Purpose
+		}
+	}
+	return DurableFleetAgent(name, s.agentRole(name, purpose), nil)
+}
+
+// ShouldAutoReapDoneWorkAgent decides whether a declared finish-report
+// should stop+Remove the agent from the live fleet registry (🎯T165).
 // Refuses durable roles, unregistered names, agents with descendants, and
-// reports with no completion claim. Bare done (no oracle markers) still reaps
-// work leaves — imperfect implementer reports must not leave zombies (🎯T195).
-func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isOverseer func(string) bool) (bool, string) {
+// reports that do not declare a valid finish-report (🎯T766.4). Unenveloped
+// prose is unknown, not finished.
+//
+// isDurable answers for seats the registry row alone cannot name: the
+// overseer, and (on the production path, Server.durableSeat) a seat whose
+// recorded role is durable.
+func ShouldAutoReapDoneWorkAgent(reg *claudia.Registry, name, report string, isDurable func(string) bool) (bool, string) {
 	if reg == nil || name == "" {
 		return false, "no_registry_or_name"
 	}
-	// A declared blocked goal is an external wait, even when the envelope
-	// still says in-progress. Preserve T784's outstanding-scope reason for
-	// ordinary in-progress reports; its parent notice depends on that reason.
-	if reportOpenStatus(report) == IdleActionPark {
-		return false, IdleSkipBlockedOnOwner
+	// 🎯T766.4: the done answer is the declared envelope kind. Unenveloped
+	// prose is unknown, not a finish and not an ask-class reap.
+	done, reason := reportDoneForReap(report)
+	if !done {
+		return false, reason
 	}
-	if scope := midWorkReportScope(report); scope != nil {
-		return false, outstandingScopeReapReason([]OutstandingScope{*scope})
-	}
-	// A partially invalid envelope may still carry a parsed status slot;
-	// never turn that field into a finished-work inference.
-	if reportOpenStatus(report) == IdleActionKeep {
-		return false, "in_progress_report"
-	}
-	// 🎯T395 before the generic no-claim case: a report that asks for a decision
-	// is the opposite of a completion claim, and the lifecycle log should say so
-	// rather than lumping it in with ordinary mid-turn chatter.
-	//
-	// Typed remaining-work reports were retained above; the generic ask
-	// classifier below remains the fallback for unenveloped prose.
-	if !typedFinishReport(report) {
-		if ask := ClassifyReportAsk(report); ask != AskNone {
-			// 🎯T723: no-claim (empty / bare ack) keeps the seat but is not
-			// an overseer ask. The lifecycle reason must not say awaits_overseer.
-			if ask == AskNoClaim {
-				return false, "no_work_claim"
-			}
-			return false, "awaits_overseer_" + ask.String()
-		}
-	}
-	// 🎯T985: a report with no Done. finish shape that says this seat has
-	// nothing left — its target already achieved by someone else, no
-	// further acceptance criteria open — is own-work-complete, and a seat
-	// with no more work is reaped, not left to idle until someone parks it.
-	// Every veto below (false-green, durable role, outstanding scope,
-	// descendants) still applies to it.
-	ownWorkComplete := false
-	if !LooksLikeFinishedWorkReport(report) {
-		if !LooksLikeOwnWorkCompleteReport(report) {
-			return false, "not_finished_work_report"
-		}
-		ownWorkComplete = true
-	}
-	// 🎯T470: a report the false-green check flagged is never auto-reaped as
-	// finished_work in the same pass — jv-t391 was flagged
-	// attestation_not_green and reaped finished_work 447ms later.
-	//
-	// 🎯T946: the check also reads the worker's own worktree when one is
-	// registered — a report that never cites a SHA or gate id but reads as
-	// oracle evidence on marker words alone, over an uncommitted worktree,
-	// is the same shape as a contradicted attestation (jv-t906-accept-lifts-block,
-	// jv-t943-stale-token-reload).
+	// 🎯T470: a declared finish whose declared evidence is contradicted is
+	// never auto-reaped as finished_work in the same pass — jv-t391 was
+	// flagged attestation_not_green and reaped finished_work 447ms later.
+	// 🎯T1027: nor one resting on another repo's gate. The veto reads typed
+	// facts only (🎯T766.4.1): the envelope's slots and the gate record they
+	// name. The prose rules of the report-time FALSE-GREEN banner are not
+	// reachable from here.
 	var workDir string
 	if wd := reg.Def(name); wd != nil {
 		workDir = wd.WorkDir
 	}
-	if flags := FalseGreenFlagsForWorker(report, workDir); len(flags) > 0 {
+	if flags := reapGateVeto(report, workDir); len(flags) > 0 {
 		return false, "false_green_" + string(flags[0].Kind)
 	}
 	def := reg.Def(name)
 	if def == nil {
 		return false, "not_registered"
 	}
-	if DurableFleetAgent(name, def.Purpose, isOverseer) {
+	if DurableFleetAgent(name, roles.OfSeat(def.Role, def.Purpose), isDurable) {
 		return false, "durable_role"
 	}
-	// 🎯T972: a finished-work report is not reaped while it leaves scope
-	// outstanding — a declared blocking wait on a background gate, or
-	// uncommitted changes owned in the seat's own worktree that the report
-	// never mentioned. Checked after false-green (a contradicted claim is
-	// the stronger veto) and before the descendants check (a seat can be
-	// mid-gate with no descendants at all).
+	// 🎯T972: a finished-work report is not reaped while the seat's own
+	// worktree holds uncommitted files the report never mentioned. A
+	// sentence in the payload is not that fact (🎯T766.4). Checked after
+	// false-green (a contradicted claim is the stronger veto) and before
+	// the descendants check.
 	if scope := outstandingScopeReasonsForWorker(report, workDir); len(scope) > 0 {
 		return false, outstandingScopeReapReason(scope)
 	}
 	if len(reg.Descendants(name)) > 0 {
 		return false, "has_descendants"
-	}
-	if ownWorkComplete {
-		return true, ownWorkCompleteReapReason
 	}
 	return true, finishedWorkReapReason(report)
 }
@@ -253,76 +212,26 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		parent = def.Parent
 		targetID = def.TargetID
 	}
-	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.isOverseerAgent)
+	ok, reason := ShouldAutoReapDoneWorkAgent(s.registry, name, report, s.durableSeat)
 	if !ok {
-		// 🎯T395 near-miss: the report carried completion language and would
-		// have reaped under the old classifier. Log the save so the veto is
-		// visible in the lifecycle stream rather than silently absent.
-		if strings.HasPrefix(reason, "awaits_overseer_") &&
-			hasCompletionClaim(strings.ToLower(report)) {
-			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped",
-				reapDecisionFields(name, reason, report))
-			slog.Info("T395 kept agent that asked rather than finished",
-				"agent", name, "reason", reason)
+		// Skip logs repeat the reason ShouldAutoReapDoneWorkAgent already
+		// returned. They match that string to the typed producer. They do
+		// not scan the report for a completion word, an ask, or a prefix
+		// of the reason (🎯T766.4).
+		var workDir string
+		if def := s.registry.Def(name); def != nil {
+			workDir = def.WorkDir
 		}
-		// 🎯T470: same visibility for a false-green veto — the daemon held
-		// that the evidence did not support the claim and must not also
-		// treat the claim as finished_work.
-		if strings.HasPrefix(reason, "false_green_") {
-			var workDir string
-			if def := s.registry.Def(name); def != nil {
-				workDir = def.WorkDir
-			}
+		if flags := reapGateVeto(report, workDir); len(flags) > 0 &&
+			reason == "false_green_"+string(flags[0].Kind) {
 			fields := reapDecisionFields(name, reason, report)
-			fields["false_green_flags"] = falseGreenKinds(FalseGreenFlagsForWorker(report, workDir))
+			fields["false_green_flags"] = falseGreenKinds(flags)
 			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
 			slog.Info("T470 kept agent whose finish report was false-green flagged",
 				"agent", name, "reason", reason)
 		}
-		// 🎯T577: a checkpoint that the T165 path used to reap is kept;
-		// name it so a skipped reap is attributable as that save, not
-		// as a generic ask.
-		// 🎯T581: a local done-word ("reading done; implementing now") is
-		// a sub-step, not a finish — log the save so it is attributable.
-		if reason == "not_finished_work_report" && allCompletionClaimsLocal(strings.ToLower(report)) {
-			s.logLifecycle(compAgentLifecycle, "reap_done", "skipped",
-				reapDecisionFields(name, "local_done_clause", report))
-			slog.Info("T581 kept agent whose done-word was a local clause, not a finish",
-				"agent", name)
-		}
-		// 🎯T750: a completion marker the worker cited rather than claimed.
-		// Without this the save takes the silent return below and leaves no
-		// record, which reads exactly like a sink that never ran.
-		if reason == "not_finished_work_report" {
-			if m, span, offset, cited := CitedCompletionClaim(report); cited {
-				fields := map[string]any{
-					"name":          name,
-					"reason":        "quoted_completion_claim",
-					"cited_marker":  m,
-					"report_span":   span,
-					"report_offset": offset,
-				}
-				s.logLifecycle(compAgentLifecycle, "reap_done", "skipped", fields)
-				slog.Info("T750 kept agent whose completion marker was quoted, not claimed",
-					"agent", name, "cited_marker", m)
-			}
-		}
-		if strings.HasPrefix(reason, "awaits_overseer_checkpoint") ||
-			(strings.HasPrefix(reason, "awaits_overseer_") && hasForwardLookingPlan(report)) {
-			slog.Info("T577 kept agent whose report was a checkpoint, not a finish",
-				"agent", name, "reason", reason)
-		}
-		// 🎯T972: a finished-work report was kept because it leaves scope
-		// outstanding (a pending background gate, or uncommitted changes
-		// owned in the seat's own worktree). The parent is notified by name
-		// — a retained seat that nobody hears about is indistinguishable
-		// from a stuck one.
-		if strings.HasPrefix(reason, outstandingScopeReapReasonPrefix) {
-			var workDir string
-			if def := s.registry.Def(name); def != nil {
-				workDir = def.WorkDir
-			}
-			scope := outstandingScopeReasonsForWorker(report, workDir)
+		if scope := outstandingScopeReasonsForWorker(report, workDir); len(scope) > 0 &&
+			reason == outstandingScopeReapReason(scope) {
 			fields := reapDecisionFields(name, reason, report)
 			var kinds []string
 			for _, sc := range scope {
@@ -410,32 +319,25 @@ func (s *Server) notifyPORespawnAfterCheckpointReap(parent, worker, targetID str
 	}
 }
 
-// reapDecisionFields is the lifecycle-log evidence for a reap decision (🎯T439):
-// which classifier fired, on which phrase, and the span of report text around
-// it. A reap removes an agent from the fleet irreversibly, and jv-t435 showed
-// what the absence of this costs — a worker that had asked for its brief
-// vanished as bare_done_completion, and the log recorded only that reason, so
-// nothing in the record said which words had been read as a finish.
-//
-// The span reads differently either way round, and both are worth having: on a
-// reap it is the completion phrase that fired, on a skip it is the ask that
-// vetoed. Diagnostic only — nothing decides on these fields — so a missing span
-// weakens a log line and never a decision.
+// reapDecisionFields is the lifecycle-log evidence for a reap decision.
+// The decision is the reason already returned and the envelope class
+// ClassifyDone reads. A completion sentence in the payload is not a field
+// (🎯T766.4). jv-t435 vanished on a prose span; the log now names the
+// declared kind instead of the words that used to be read as a finish.
 func reapDecisionFields(name, reason, report string) map[string]any {
-	fields := map[string]any{"name": name, "reason": reason}
-	if ask := ClassifyReportAskDetail(report); ask.Class != AskNone {
-		fields["ask_class"] = ask.Class.String()
-		if ask.Marker != "" {
-			fields["ask_marker"] = ask.Marker
-		}
-		fields["report_span"] = ask.Span
-		fields["report_offset"] = ask.Offset
-		return fields
+	fields := map[string]any{
+		"name":       name,
+		"reason":     reason,
+		"done_class": envelope.ClassifyDone(report).String(),
 	}
-	if marker, span, offset, ok := FindCompletionClaim(report); ok {
-		fields["claim_marker"] = marker
-		fields["report_span"] = span
-		fields["report_offset"] = offset
+	if m, _ := envelope.Parse(report); m != nil {
+		fields["envelope_kind"] = string(m.Kind)
+		if m.Status != envelope.ProgressNone {
+			fields["envelope_status"] = string(m.Status)
+		}
+		if m.HasActiveWait() {
+			fields["envelope_active_wait"] = m.ActiveWaits[0].String()
+		}
 	}
 	return fields
 }

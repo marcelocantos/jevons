@@ -166,7 +166,7 @@ func hubPhase(phase string) string {
 }
 
 // correspondentForBatch stamps who a drained notify batch is for: nothing
-// for the owner; [Agent <name> responded] names in drain order (deduped);
+// for the owner; an agent-responded route fact names in drain order (deduped);
 // CorrespondentFleet for any nameless note.
 func correspondentForBatch(batch []string, ownerBatch bool) []string {
 	if ownerBatch {
@@ -314,6 +314,7 @@ func (s *Server) settleOverseerAfterUnstick() {
 	s.mu.Lock()
 	s.waiting = false
 	s.overseerOwnerTurn = false // 🎯T291
+	s.clearOwnerTurnPlacementLocked()
 	s.turnBuf = ""
 	s.noteOverseerProgressLocked()
 	s.mu.Unlock()

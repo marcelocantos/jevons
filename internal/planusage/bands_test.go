@@ -34,7 +34,7 @@ func TestT285_2WeeklyBandDetail(t *testing.T) {
 	if hot.Band != BandHot || hot.Eligible {
 		t.Fatalf("hot: band=%s eligible=%v", hot.Band, hot.Eligible)
 	}
-	for _, want := range []string{"Grok", "hot", "burn", "20% remaining"} {
+	for _, want := range []string{"Grok", "hot", "pressure +", "20% remaining"} {
 		if !strings.Contains(hot.Reason, want) {
 			t.Fatalf("hot reason %q lacks %q", hot.Reason, want)
 		}

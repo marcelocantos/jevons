@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -28,20 +29,42 @@ func TestT805MissingBinBuildsTreeDaemonNotPATH(t *testing.T) {
 	}
 }
 
-func TestT805ExistingBinAndFlagWinWithoutBuilding(t *testing.T) {
+func TestT805FlagBinWinsWithoutBuilding(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join(root, "bin", "jevonsd")
+	bin := filepath.Join(root, "given")
 	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	noBuild := func(string, string) error { t.Fatal("built although a daemon was given"); return nil }
-	if got, err := resolveDaemon(root, "", noBuild); err != nil || got != bin {
-		t.Fatalf("bin/jevonsd: got %q, %v", got, err)
-	}
+	noBuild := func(string, string) error { t.Fatal("built although -bin was given"); return nil }
 	if got, err := resolveDaemon(root, bin, noBuild); err != nil || got != bin {
 		t.Fatalf("-bin: got %q, %v", got, err)
+	}
+}
+
+func TestT805TreeBinaryIsKept(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin", "jevonsd")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveDaemon(root, "", func(string, string) error {
+		t.Fatal("rebuilt a tree binary that is already there")
+		return nil
+	})
+	if err != nil || got != bin {
+		t.Fatalf("tree bin: got %q, %v", got, err)
+	}
+}
+
+func TestDaemonBuildCommandBuildsTreeDaemon(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(t.TempDir(), "jevonsd")
+	cmd := daemonBuildCommand(dir, out)
+	got := strings.Join(cmd.Args, " ")
+	if got != "go build -o "+out+" ./cmd/jevonsd" || cmd.Dir != dir {
+		t.Fatalf("build command %q in %q", cmd.Args, cmd.Dir)
 	}
 }

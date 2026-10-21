@@ -159,8 +159,8 @@ func CollectProviderFailures(rows []EventRow) []ProviderFailureObs {
 	return out
 }
 
-// providerBlockClass returns auth or rate_limit when the row is a
-// provider_failure of that class, else "".
+// providerBlockClass returns auth or rate_limit when the row declares a
+// provider_failure of that class, else "". Message text is not the class.
 func providerBlockClass(r EventRow) string {
 	class := strings.ToLower(strings.TrimSpace(r.FailureClass))
 	if class == "" {
@@ -169,9 +169,7 @@ func providerBlockClass(r EventRow) string {
 	if class != "auth" && class != "rate_limit" {
 		return ""
 	}
-	comp := normalizeDrillToken(r.Component)
-	msg := strings.ToLower(r.Msg)
-	if comp == "provider_failure" || strings.Contains(msg, "provider_failure") || r.FailureClass != "" {
+	if normalizeDrillToken(r.Component) == "provider_failure" || strings.TrimSpace(r.FailureClass) != "" {
 		return class
 	}
 	return ""

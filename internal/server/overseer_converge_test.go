@@ -144,7 +144,7 @@ func TestT766OwnerQueueObservationIsSeparateFromFleetQueue(t *testing.T) {
 	s.observeOwnerQueueLocked()
 	s.mu.Unlock()
 	a := s.seats.Load()
-	a.FromQueue("jevons", 4, time.Now())
+	a.FromQueue("jevons", seatstate.QueueReport{Depth: 4}, time.Now())
 	if got := s.seatState("jevons"); got.OwnerQueueDepth != 1 || got.QueueDepth != 4 {
 		t.Fatalf("queue observations collided: %+v", got)
 	}

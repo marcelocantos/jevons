@@ -6,13 +6,13 @@ package mcpserver
 import (
 	"errors"
 	"log/slog"
-	"strings"
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/seatstop"
 	"github.com/marcelocantos/jevons/internal/thread"
@@ -56,11 +56,10 @@ func (s *Server) SweepPlanPolicy() []planusage.PlanAction {
 		// Re-noting stamps a fresh At every SweepPlanPolicy tick, which makes
 		// T662 treat each sweep as a new MASS STOP burst and re-notify the
 		// overseer under token depletion (same five POs every ~5m).
-		reason := "plan policy parked: " + a.Reason
-		if s.alreadyPlanParked(a.Name, reason) {
+		if s.alreadyPlanParked(a.Name) {
 			continue
 		}
-		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, reason, planPolicyActor, "")
+		s.noteSeatStop(a.Name, seatstop.SourcePlanPolicy, "plan policy parked: "+a.Reason, planPolicyActor, "")
 		if s.registry != nil {
 			s.registry.Stop(a.Name)
 			seatstate.ObserveStopped(s.registry, a.Name)
@@ -106,7 +105,9 @@ func (s *Server) planSwitch(a *planusage.PlanAction) {
 		// The seat is still where it was and still working; the next tick
 		// retries. Parking here would turn a refused switch into an outage.
 		slog.Warn("plan policy switch failed", "name", a.Name, "to", a.To, "err", err)
-		a.Execution, a.Failure = "failed", err.Error()
+		a.Execution = "failed"
+		a.Failure = err.Error()
+		a.FailureCause = agenterr.ProviderCause(err)
 		return
 	}
 	if !sw.Live {
@@ -123,17 +124,10 @@ func (s *Server) planSwitch(a *planusage.PlanAction) {
 	slog.Info("plan policy switched", "name", a.Name, "from", a.From, "to", a.To, "model", sw.Model, "live", sw.Live)
 }
 
-// turnInFlight reports a switch refused because the seat's turn is still
-// running.
+// turnInFlight reports a switch refused because the error's typed cause is
+// a turn still running. A sentence that quotes that fact is not the cause.
 func turnInFlight(err error) bool {
-	if err == nil {
-		return false
-	}
-	if isPromptInFlight(err) {
-		return true
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "turn is in flight") || strings.Contains(msg, "turn in flight") || strings.Contains(msg, "a turn is running")
+	return isPromptInFlight(err)
 }
 
 func (s *Server) rememberPlanResults(actions []planusage.PlanAction) {
@@ -153,12 +147,14 @@ func (s *Server) MarkPlanRetryAfterReauth(provider claudia.Provider) {
 	if s == nil {
 		return
 	}
-	plan := cli.PlanProvider(provider)
+	plan := seatprovider.Resolve(provider).Plan
 	s.planDecisionMu.Lock()
 	defer s.planDecisionMu.Unlock()
 	for name, last := range s.planLastResults {
-		if last.Execution == "failed" && cli.PlanProvider(claudia.Provider(last.To)) == plan {
-			last.Execution, last.Failure = "pending", "destination login recovered; retrying"
+		if last.Execution == "failed" && seatprovider.Resolve(claudia.Provider(last.To)).Plan == plan {
+			last.Execution = "pending"
+			last.Failure = "destination login recovered; retrying"
+			last.FailureCause = ""
 			s.planLastResults[name] = last
 		}
 	}
@@ -180,7 +176,7 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 		d := &decisions[i]
 		last, ok := s.planLastResults[d.Name]
 		if ok && last.From == d.From && last.To == d.To && last.Action == d.Action {
-			d.Execution, d.Failure = last.Execution, last.Failure
+			d.Execution, d.Failure, d.FailureCause = last.Execution, last.Failure, last.FailureCause
 		}
 	}
 	s.planDecisionMu.RUnlock()
@@ -197,10 +193,11 @@ func (s *Server) PlanPolicyDecisions() []planusage.PlanAction {
 // may interrupt or park this particular seat, and reports a host deferral
 // instead of silently changing the provider decision.
 
-// alreadyPlanParked reports that name is already stopped for this plan-policy
-// reason, so a second SweepPlanPolicy tick must not mint another seat_stop
-// (and another MASS STOP window).
-func (s *Server) alreadyPlanParked(name, reason string) bool {
+// alreadyPlanParked reports that name is already stopped by plan policy, so a
+// second SweepPlanPolicy tick must not mint another seat_stop (and another
+// MASS STOP window). The stop source is the decision. The recorded reason
+// sentence is not a classifier.
+func (s *Server) alreadyPlanParked(name string) bool {
 	if s == nil || name == "" {
 		return false
 	}
@@ -210,12 +207,7 @@ func (s *Server) alreadyPlanParked(name, reason string) bool {
 		}
 	}
 	last, ok := s.seatStops().Last(name)
-	if !ok || last.Source != seatstop.SourcePlanPolicy {
-		return false
-	}
-	// Same reason, or any prior plan-policy park while still down: intent is
-	// already parked and the stop ledger already explains the seat.
-	return last.Reason == reason || strings.HasPrefix(last.Reason, "plan policy parked:")
+	return ok && last.Source == seatstop.SourcePlanPolicy
 }
 
 func (s *Server) planHostDeferral(action planusage.PlanAction) string {

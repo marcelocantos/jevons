@@ -6,9 +6,10 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/claudia v0.53.0
+	github.com/marcelocantos/claudia v0.61.0
 	github.com/marcelocantos/doit v0.9.0
 	github.com/marcelocantos/pigeon v0.19.0
+	github.com/marcelocantos/sqlpipe/go/sqlpipe v0.33.0
 	github.com/mark3labs/mcp-go v0.47.0
 	golang.org/x/image v0.44.0
 	golang.org/x/net v0.61.0
@@ -42,6 +43,7 @@ require (
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/quic-go/webtransport-go v0.10.0 // indirect

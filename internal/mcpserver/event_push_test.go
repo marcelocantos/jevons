@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevons/internal/butler"
@@ -179,7 +180,7 @@ func assertQueuedPush(t *testing.T, res *mcp.CallToolResult, target string) {
 func TestT620EventPushQueuesWhenPromptInFlight(t *testing.T) {
 	p := &busyPushParticipants{
 		names: map[string]bool{"jevons-po": true},
-		err:   fmt.Errorf("grok acp: prompt already in flight"),
+		err:   fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight),
 	}
 	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
 	res := pushCall(t, s, "jevons-po", "worker-finished", "slice A landed")
@@ -204,7 +205,7 @@ func TestT620EventPushQueuesWhenPromptInFlight(t *testing.T) {
 func TestT620EventPushQueuesWhenFlightInFlightWithoutCallingDeliver(t *testing.T) {
 	p := &busyPushParticipants{
 		names: map[string]bool{"jevons-po": true},
-		err:   fmt.Errorf("grok acp: prompt already in flight"),
+		err:   fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight),
 	}
 	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
 	s.noteTurnInFlight("jevons-po")
@@ -222,7 +223,7 @@ func TestT620EventPushQueuesWhenFlightInFlightWithoutCallingDeliver(t *testing.T
 func TestT620EventPushQueuedDrainsOnTurnComplete(t *testing.T) {
 	p := &busyPushParticipants{
 		names: map[string]bool{"jevons-po": true},
-		err:   fmt.Errorf("grok acp: prompt already in flight"),
+		err:   fmt.Errorf("grok acp: %w", claudia.ErrTurnInFlight),
 	}
 	s := &Server{butler: newPushButler(t, t.TempDir(), &pushFakeFleet{}, p)}
 	res := pushCall(t, s, "jevons-po", "worker-finished", "slice A landed")
@@ -238,8 +239,16 @@ func TestT620EventPushQueuedDrainsOnTurnComplete(t *testing.T) {
 	if len(fs.sent) != 1 || fs.sent[0] != want {
 		t.Fatalf("drained sent=%v want [%q]", fs.sent, want)
 	}
-	if n := observedPendingSends(s, "jevons-po"); n != 0 {
-		t.Fatalf("pending after drain=%d", n)
+	if pending, held := observedPendingSends(s, "jevons-po"), observedQueueDepth(s, "jevons-po"); pending != 0 || held != 1 {
+		t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
+	}
+	left, err := s.sendQueue().Snapshot("jevons-po")
+	if err != nil || len(left) != 1 || left[0].State != sendq.Uncertain || !strings.Contains(left[0].Detail, "no receipt") {
+		t.Fatalf("unbound handoff = %+v %v", left, err)
+	}
+	s.drainAgentSendQueue("jevons-po")
+	if len(fs.sent) != 1 {
+		t.Fatalf("retained handoff resent: %v", fs.sent)
 	}
 }
 

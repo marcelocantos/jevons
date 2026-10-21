@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 const t757Worker = "jv-t757-probe"
@@ -56,7 +57,7 @@ func TestT757QueuedDeliveryStampsAgeAtFlush(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Queued copy may have been formatted before flush without a fresh age.
-	queued := "[Agent " + t731Worker + " responded] report_id=" + rec.ID + "\n" + t731Report
+	queued := envelope.SeatFact(envelope.IntentRoute, t731Worker) + " report_id=" + rec.ID + "\n" + t731Report
 
 	s.noteTurnInFlight(t731Parent)
 	res, err := s.deliverByName(t731Parent, queued, OriginAgent, false)
@@ -85,18 +86,21 @@ func TestT757LiveParentDeliveryIncludesAge(t *testing.T) {
 	if len(parent.sent) != 1 {
 		t.Fatalf("parent deliveries=%d want 1; %v", len(parent.sent), parent.sent)
 	}
-	firstLine := strings.SplitN(parent.sent[0], "\n", 2)[0]
-	if !strings.Contains(firstLine, "report_id=") {
-		t.Fatalf("routing line missing report_id: %q", firstLine)
+	lines := strings.Split(parent.sent[0], "\n")
+	if len(lines) < 2 || lines[0] != envelope.PrefixAgentResponded {
+		t.Fatalf("parent copy missing the agent-responded fact:\n%s", parent.sent[0])
 	}
-	if !strings.Contains(firstLine, " age=") {
-		t.Fatalf("routing line missing age: %q", firstLine)
+	if !strings.Contains(lines[1], "report_id=") {
+		t.Fatalf("routing line missing report_id: %q", lines[1])
+	}
+	if !strings.Contains(lines[1], " age=") {
+		t.Fatalf("routing line missing age: %q", lines[1])
 	}
 }
 
 func TestParseAgentRespondedWithAge(t *testing.T) {
 	t.Parallel()
-	name, id, ok := parseAgentRespondedLine("[Agent jv-t757-probe responded] report_id=20260921T010203Z-abcd age=5h")
+	name, id, ok := parseAgentRespondedLine(envelope.SeatFact(envelope.IntentRoute, t757Worker) + " report_id=20260921T010203Z-abcd age=5h")
 	if !ok || name != t757Worker || id != "20260921T010203Z-abcd" {
 		t.Fatalf("with age: name=%q id=%q ok=%v", name, id, ok)
 	}

@@ -60,6 +60,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // DefaultNoOpTurns is how many consecutive zero-owner-visible-text overseer
@@ -160,17 +162,22 @@ func opensInterrogative(t string) bool {
 	return slices.Contains(interrogativeOpeners, first)
 }
 
-// stripUserMarker removes the internal owner-turn marker the daemon prepends
-// when delivering to a provider (internal/server.userTurnPrefix). The marker
-// is transport, never something the owner typed, so the predicate must not see
-// it — and must not depend on the server package to say so.
+// stripUserMarker removes the owner-turn fact the daemon prepends when
+// delivering to a provider, and the display line written after it. The fact
+// is transport, never something the owner typed, so the predicate must not
+// see it — and must not depend on the server package to say so. A rendered
+// "[user]" line is not that fact (🎯T766.4).
 func stripUserMarker(text string) string {
-	const marker = "[user]"
 	t := strings.TrimLeft(text, " \t")
-	if !strings.HasPrefix(t, marker) {
+	line, rest, found := strings.Cut(t, "\n")
+	if !found || strings.TrimSpace(line) != envelope.PrefixOwnerTurn {
 		return text
 	}
-	return strings.TrimPrefix(t, marker)
+	_, body, found := strings.Cut(rest, "\n")
+	if !found {
+		return ""
+	}
+	return body
 }
 
 // wireLine is the subset of a chatlog JSONL record this package reads. The

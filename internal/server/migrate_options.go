@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Fleet-tree provider menu + "!" band marks (🎯T285.2).
@@ -79,7 +79,7 @@ func (s *Server) migrateOptions(now time.Time) []migrateProviderOption {
 	running := map[string][]string{}
 	if reg != nil {
 		for _, def := range reg.List() {
-			p := strings.ToLower(strings.TrimSpace(string(cli.PlanProvider(def.Provider))))
+			p := strings.ToLower(strings.TrimSpace(string(seatprovider.Resolve(def.Provider).Plan.AsProvider())))
 			if p == "" {
 				continue
 			}

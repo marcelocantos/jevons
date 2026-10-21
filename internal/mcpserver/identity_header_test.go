@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T425 — the brief that carries role doctrine names its own reader.
@@ -99,8 +101,17 @@ func t425Fixture(t *testing.T, defs ...claudia.AgentDef) (*Server, *t425Sender) 
 // value. Returned as a reason so the control arm can report WHICH part the
 // pre-fix message lacked rather than merely that it lacked something.
 func namesItsRecipient(msg string, want AgentIdentity) string {
-	if !strings.HasPrefix(strings.TrimSpace(msg), IdentityHeaderMarker) {
-		return "does not open with the identity header"
+	body := strings.TrimSpace(msg)
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	if first != envelope.PrefixIdentity {
+		return "does not open with the identity fact"
+	}
+	if !strings.Contains(msg, IdentityHeaderMarker) {
+		return "does not carry the identity header"
 	}
 	for _, f := range []struct{ label, value string }{
 		{"NAME", want.Name},
@@ -145,11 +156,17 @@ func TestT425SpawnOpeningPromptNamesItsRecipient(t *testing.T) {
 	} {
 		t.Run(tc.arm, func(t *testing.T) {
 			s, sender := t425Fixture(t, def)
+			// The seat was spawned as role=product-owner: that recorded
+			// role (agent_roles.json) is the typed fact that it is a PO.
+			// Its purpose stays work and its name decides nothing (🎯T766.4).
+			if err := s.recordAgentRole(name, purposeProductOwner); err != nil {
+				t.Fatal(err)
+			}
 			d := s.registry.Def(name)
 			if d == nil {
 				t.Fatal("fixture row missing")
 			}
-			want := IdentityFromDef(*d)
+			want := IdentityFromDef(s.withSeatRole(*d))
 
 			if tc.product {
 				if err := s.deliverStartPrompt(name, "Take 🎯T425."); err != nil {
@@ -367,21 +384,20 @@ func TestIdentityHeaderCarriesT692LifecycleNarration(t *testing.T) {
 	}
 }
 
-// Acceptance 4's derivation, stated as a table because the failure mode is a
-// role read off the wrong field: every PO in the live registry carries
-// purpose=work, so Purpose alone reproduces bullseye-po's own wrong answer.
+// Acceptance 4's derivation: explicit purpose decides. A -po name with
+// purpose work is a work agent. purpose product-owner is a product owner
+// even when the name does not say so.
 func TestT425DeriveAgentRole(t *testing.T) {
 	for _, tc := range []struct {
 		name, purpose, want string
 	}{
 		{"jevons", claudia.PurposeOverseer, RoleOverseer},
-		{"jevons-po", claudia.PurposeWork, RoleProductOwner},
-		{"bullseye-po", claudia.PurposeWork, RoleProductOwner},
-		{"bullseye_po", "", RoleProductOwner},
+		{"jevons-po", claudia.PurposeWork, RoleWork},
+		{"bullseye-po", claudia.PurposeWork, RoleWork},
+		{"bullseye_po", "", RoleWork},
+		{"plain-seat", purposeProductOwner, RoleProductOwner},
 		{"jv-t425-identity", claudia.PurposeWork, RoleWork},
 		{"ask-about-costs", claudia.PurposeAside, RoleAside},
-		// purpose=overseer wins over a -po suffix: an explicit role beats a
-		// naming heuristic.
 		{"weird-po", claudia.PurposeOverseer, RoleOverseer},
 	} {
 		if got := DeriveAgentRole(tc.name, tc.purpose, ""); got != tc.want {

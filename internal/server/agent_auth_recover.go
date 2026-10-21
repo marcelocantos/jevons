@@ -16,26 +16,25 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // reauthablePlanFailure is a presentation hint, not the broker's auth gate.
-// Offer recovery on a stopped broken plan seat regardless of error wording:
-// a failed Keychain read can surface as an OS error with no "keychain" token.
-// The broker decides whether to retry the read, refresh, or open sign-in.
-func reauthablePlanFailure(provider claudia.Provider, health string) bool {
-	return strings.HasPrefix(health, "broken:") && reauthablePlanProvider(provider)
+// Offer recovery when the seat's rehydrate state is broken, for a plan
+// provider. The error text is not read (🎯T766.4). The broker decides
+// whether to retry the read, refresh, or open sign-in.
+func reauthablePlanFailure(provider claudia.Provider, def claudia.AgentDef) bool {
+	return fleet.RehydrateBroken(def) && reauthablePlanProvider(provider)
 }
 
+// reauthablePlanProvider: every subscription plan's login is the broker's to
+// recover. The old list named launch ids and grok only, so a legacy claude
+// or codex row was never offered Reauth (🎯T1079).
 func reauthablePlanProvider(provider claudia.Provider) bool {
-	switch provider {
-	case "anthropic", "openai-codex", "grok", "xai-oauth", "cursor":
-		return true
-	default:
-		return false
-	}
+	return seatprovider.Resolve(provider).Sidecar
 }
 
 // runningPlanAuthFailure reports a running seat whose turns its provider
@@ -67,10 +66,9 @@ func (s *Server) notePlanAuthRecovered(reg *claudia.Registry, provider claudia.P
 	if s.planAuthRecovered == nil || reg == nil {
 		return
 	}
-	plan := recoverableDestinationProvider(provider)
 	var names []string
 	for _, d := range reg.List() {
-		if d.Provider == provider || (plan != "" && recoverableDestinationProvider(d.Provider) == plan) {
+		if seatprovider.Same(d.Provider, provider) {
 			names = append(names, d.Name)
 		}
 	}
@@ -101,7 +99,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		s.recoverRunningSeatAuth(w, r, reg, *def)
 		return
 	}
-	if !reauthablePlanFailure(def.Provider, fleet.RehydrateHealth(*def)) {
+	if !reauthablePlanFailure(def.Provider, *def) {
 		writeJSONError(w, http.StatusConflict, "agent no longer has a plan authentication failure")
 		return
 	}
@@ -128,7 +126,7 @@ func (s *Server) handleAgentAuthRecover(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	current := reg.Def(name)
-	if current == nil || current.Provider != def.Provider {
+	if current == nil || !seatprovider.Same(current.Provider, def.Provider) {
 		s.NotifyAgentsChanged()
 		writeJSONError(w, http.StatusConflict, "agent changed while authentication was being recovered")
 		return
@@ -215,7 +213,8 @@ func (s *Server) RecoverRunningPlanAuthFailures(ctx context.Context) []string {
 		if proc := reg.Get(d.Name); proc == nil || !(seatstate.ReadRegistry(reg, d.Name).Alive == seatstate.Yes) {
 			continue
 		}
-		byProvider[d.Provider] = append(byProvider[d.Provider], d.Name)
+		launch := seatprovider.Resolve(d.Provider).Launch
+		byProvider[launch] = append(byProvider[launch], d.Name)
 	}
 	if len(byProvider) == 0 {
 		return nil
@@ -273,33 +272,23 @@ func runClaudiaAuthRecover(ctx context.Context, provider claudia.Provider) error
 // recoverableDestinationProvider maps Claudia's plan identity to the
 // sidecar subscription id accepted by its auth-recovery broker request.
 func recoverableDestinationProvider(provider claudia.Provider) claudia.Provider {
-	id := cli.SubscriptionSeatProvider(cli.PlanProvider(provider))
-	switch id {
-	case "anthropic", "openai-codex", "cursor", "xai-oauth":
-		return id
-	default:
-		return ""
+	if id := seatprovider.Resolve(provider); id.Sidecar {
+		return id.Launch
 	}
+	return ""
 }
 
 // destinationAuthRecoverable is only a presentation/action hint for an
-// already-failed migration. It never judges credential validity itself; the
-// Claudia broker does that when the owner explicitly asks it to recover.
+// already-failed migration whose failure carries a typed auth cause.
+// A sentence that quotes a refresh or keychain error is not that cause.
+// It never judges credential validity itself; the Claudia broker does that
+// when the owner explicitly asks it to recover.
 func destinationAuthRecoverable(action planusage.PlanAction) bool {
 	if action.Action != planusage.SeatMigrate || action.Execution != "failed" ||
 		recoverableDestinationProvider(claudia.Provider(action.To)) == "" {
 		return false
 	}
-	failure := strings.ToLower(action.Failure)
-	for _, marker := range []string{
-		"invalid_grant", "refresh token", "keychain", "authentication failed",
-		"login required", "not logged in", "no login",
-	} {
-		if strings.Contains(failure, marker) {
-			return true
-		}
-	}
-	return false
+	return action.FailureCause == agenterr.CauseAuth
 }
 
 // handlePlanDestinationAuthRecover repairs a plan login on the owner's click:
@@ -318,7 +307,7 @@ func (s *Server) handlePlanDestinationAuthRecover(w http.ResponseWriter, r *http
 	}
 	matched := false
 	for _, action := range decisions {
-		if recoverableDestinationProvider(claudia.Provider(action.To)) == provider && destinationAuthRecoverable(action) {
+		if seatprovider.Same(claudia.Provider(action.To), provider) && destinationAuthRecoverable(action) {
 			matched = true
 			break
 		}

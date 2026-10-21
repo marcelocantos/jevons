@@ -9,6 +9,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/briefaddr"
+	"github.com/marcelocantos/jevons/internal/config"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/roles"
 )
 
@@ -29,11 +31,9 @@ import (
 // composed at send time, so no agent has to make a registry call before it can
 // act on its own brief.
 
-// Roles a recipient can occupy, as the header names them. Role is DERIVED, not
-// read straight off AgentDef.Purpose: every product owner in the live registry
-// carries purpose=work (bullseye-po, jevons-po, claudia-po …), so purpose alone
-// would have told bullseye-po it was a work agent — the same wrong answer it
-// gave itself. The name suffix is what distinguishes a PO, per isPOName.
+// Roles a recipient can occupy, as the header names them. Role is derived
+// from the explicit role and the declared purpose. A seat name does not
+// decide the stratum.
 const (
 	RoleOverseer     = "overseer"
 	RoleProductOwner = "product owner"
@@ -42,9 +42,9 @@ const (
 	RoleAuditor      = "auditor"
 )
 
-// IdentityHeaderMarker opens the header. Callers test for it to stay
-// idempotent: a message that already carries an identity never gets a second.
-// One definition, shared with every addressing check (🎯T452 / 🎯T513).
+// IdentityHeaderMarker is the rendered header line. Idempotence is the
+// declared identity fact on line 1, not this marker (🎯T766.4). One
+// definition, shared with every addressing check (🎯T452 / 🎯T513).
 const IdentityHeaderMarker = briefaddr.Marker
 
 // AgentIdentity is one registry row as its own subject needs to read it.
@@ -55,18 +55,20 @@ type AgentIdentity struct {
 	Parent   string
 	WorkDir  string
 	TargetID string
+	// StateDir is the daemon's own state directory, set only when it is not
+	// the development daemon's ~/.jevons (🎯T1082).
+	StateDir string
 }
 
 // DeriveAgentRole answers which role doctrine binds this recipient.
 //
 // Explicit role (from agent_roles.json / spawn role=, 🎯T511 / 🎯T536.2) wins
-// when set. Otherwise purpose=overseer and purpose=aside are authoritative.
-// Otherwise the name decides: a registry that stores purpose=work for every PO
-// cannot distinguish the stratum, and isPOName is the same heuristic the
-// staff-ops idle count already trusts. Residual: an agent named without the
-// -po suffix that is nevertheless a product owner reads as a work agent
-// (🎯T200 path portfolios are the richer answer, and are not wired here).
+// when set. Otherwise purpose=overseer, purpose=aside, and
+// purpose=product-owner are authoritative. A name suffix is not a role.
+// Boss purpose reads as a work agent: product-owner doctrine is the
+// product-owner purpose, not every coordinator.
 func DeriveAgentRole(name, purpose, role string) string {
+	_ = name
 	switch roles.Normalize(role) {
 	case roles.Auditor:
 		return RoleAuditor
@@ -84,20 +86,19 @@ func DeriveAgentRole(name, purpose, role string) string {
 		return RoleOverseer
 	case claudia.PurposeAside:
 		return RoleAside
-	}
-	if isPOName(name) {
+	case purposeProductOwner:
 		return RoleProductOwner
 	}
 	return RoleWork
 }
 
-// IdentityFromDef reads the header's inputs off a registry row.
-// Role doctrine uses purpose/name heuristics here; identityHeaderFor overlays
-// the recorded spawn role from agent_roles.json when present.
+// IdentityFromDef reads the header's inputs off a registry row: the row's
+// declared role (AgentDef.Role), else its purpose. identityHeaderFor
+// overlays the recorded spawn role from agent_roles.json when present.
 func IdentityFromDef(d claudia.AgentDef) AgentIdentity {
 	return AgentIdentity{
 		Name:     strings.TrimSpace(d.Name),
-		Role:     DeriveAgentRole(d.Name, d.Purpose, ""),
+		Role:     DeriveAgentRole(d.Name, d.Purpose, d.Role),
 		Purpose:  strings.TrimSpace(d.Purpose),
 		Parent:   strings.TrimSpace(d.Parent),
 		WorkDir:  strings.TrimSpace(d.WorkDir),
@@ -126,6 +127,8 @@ func FormatIdentityHeader(id AgentIdentity) string {
 	}
 
 	var b strings.Builder
+	b.WriteString(envelope.PrefixIdentity)
+	b.WriteByte('\n')
 	b.WriteString(IdentityHeaderMarker)
 	b.WriteString(" — from the fleet registry, read at send time (🎯T425)]\n")
 	fmt.Fprintf(&b, "- NAME: %s\n", name)
@@ -141,6 +144,14 @@ func FormatIdentityHeader(id AgentIdentity) string {
 	}
 	if wd := strings.TrimSpace(id.WorkDir); wd != "" {
 		fmt.Fprintf(&b, "- WORKDIR: %s\n", wd)
+	}
+	if sd := strings.TrimSpace(id.StateDir); sd != "" {
+		// 🎯T1082: an isolate's agents, told only that development state is
+		// ~/.jevons, went and read it — one opened the development
+		// database with sqlite3 from inside the journey suite.
+		fmt.Fprintf(&b, "- STATE DIR: %s — this daemon's own state. It is not the development "+
+			"daemon's ~/.jevons: never read, list, open, query or write anything under ~/.jevons; "+
+			"a ~/.jevons/... path in your instructions means %s/... here (🎯T1082).\n", sd, sd)
 	}
 	if tid := FormatTargetID(id.TargetID); tid != "" {
 		fmt.Fprintf(&b, "- TARGET: %s\n", tid)
@@ -164,7 +175,11 @@ func FormatIdentityHeader(id AgentIdentity) string {
 		"that agent. Report it to your parent and the overseer, quoting this NAME " +
 		"and your own, and carry on with your own work.\n")
 	b.WriteString(roleAddressedDoctrine(name, role))
-	b.WriteString("\n")
+	b.WriteByte('\n')
+	// The end fact is the payload boundary. The doctrine above it stays
+	// display; stripLeadingIdentityEnvelope does not read those sentences.
+	b.WriteString(envelope.PrefixIdentityEnd)
+	b.WriteByte('\n')
 	return b.String()
 }
 
@@ -228,6 +243,17 @@ func roleAddressedDoctrine(name, role string) string {
 			"live registry check from this turn, or stay intent.\n")
 		b.WriteString("- 🎯T509 — a terminal report MUST be a jevons finish-report envelope " +
 			"(fenced ```jevons, jevons: slots). Schema and enums: internal/envelope.\n")
+		// 🎯T1083: read-only workers wrote `status done`, which no status
+		// value is. The enum is read from the schema, not restated.
+		statuses := make([]string, 0, len(envelope.ProgressValues()))
+		for _, p := range envelope.ProgressValues() {
+			statuses = append(statuses, string(p))
+		}
+		b.WriteString("- 🎯T1083 — a done finish-report OMITS status (status takes only " +
+			strings.Join(statuses, " | ") + "; none of them means done) and carries " +
+			"`jevons: oracle sha=<head-sha>` — the commit that lands your work, or for a " +
+			"read-only task the HEAD you measured — plus `jevons: silent-ledger none` " +
+			"or a ranked ledger. Shape: the fleet standing brief.\n")
 	}
 	return b.String()
 }
@@ -247,6 +273,7 @@ func (s *Server) identityHeaderFor(name string) string {
 	if r := s.agentRole(d.Name, d.Purpose); r != "" {
 		id.Role = DeriveAgentRole(d.Name, d.Purpose, r)
 	}
+	id.StateDir = s.isolateStateDir()
 	return FormatIdentityHeader(id)
 }
 
@@ -263,7 +290,13 @@ func (s *Server) identityHeaderFor(name string) string {
 // is reporting: the send path below then refuses it, and the incident goes
 // unreported because it was described accurately.
 func (s *Server) withIdentity(name, text string) string {
-	if strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), IdentityHeaderMarker) {
+	body := strings.TrimLeft(text, " \t\r\n")
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	if strings.TrimSpace(first) == envelope.PrefixIdentity {
 		return text
 	}
 	header := s.identityHeaderFor(name)
@@ -285,4 +318,29 @@ func (s *Server) withIdentity(name, text string) string {
 // every ambient notice.
 func (s *Server) sendDaemonComposed(name, text string, interrupt bool) (agentSendResult, error) {
 	return s.sendToAgent(name, s.withIdentity(name, text), interrupt)
+}
+
+// SetDaemonStateDir records the daemon's state directory, so the identity
+// header can tell an isolate's agents where their state is (🎯T1082). It is
+// an atomic, not s.mu: the header is composed on send paths that hold s.mu.
+func (s *Server) SetDaemonStateDir(dir string) {
+	s.daemonStateDir.Store(strings.TrimSpace(dir))
+}
+
+// recordedDaemonStateDir is the state directory SetDaemonStateDir recorded,
+// or "" when none was. State paths the daemon resolves lazily are rooted
+// here, never at $HOME/.jevons (🎯T1090).
+func (s *Server) recordedDaemonStateDir() string {
+	dir, _ := s.daemonStateDir.Load().(string)
+	return dir
+}
+
+// isolateStateDir is the daemon's state directory when it is not the
+// development daemon's own, else "".
+func (s *Server) isolateStateDir() string {
+	dir := s.recordedDaemonStateDir()
+	if dir == "" || (config.Config{StateDir: dir}).IsDevelopmentState() {
+		return ""
+	}
+	return dir
 }

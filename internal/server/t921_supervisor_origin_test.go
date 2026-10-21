@@ -13,7 +13,7 @@ import (
 )
 
 // A pass to the overseer is painted in the owner's chat as a supervisor
-// notice, not an owner bubble.
+// notice, not an owner bubble. The origin field declares it.
 func TestT921SupervisorPassToTheOverseerIsASupervisorNotice(t *testing.T) {
 	s := New("test", t.TempDir())
 	s.SetAgentSendOriginHook(func(name, text, origin string, mode delivery.Mode) (AgentSendOutcome, error) {
@@ -25,7 +25,7 @@ func TestT921SupervisorPassToTheOverseerIsASupervisorNotice(t *testing.T) {
 	s.RegisterRoutes(mux)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/agents/jevons/send",
-		strings.NewReader(`{"text":"Automated supervisor pass, not the owner. The fleet is idle."}`)))
+		strings.NewReader(`{"text":"Automated supervisor pass, not the owner. The fleet is idle.","origin":"supervisor"}`)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("send: %d %s", w.Code, w.Body.String())
 	}
@@ -44,11 +44,9 @@ func TestT921SupervisorPassToTheOverseerIsASupervisorNotice(t *testing.T) {
 	}
 }
 
-// 🎯T921: the owner's overnight Codex supervisor posts through the owner's
-// HTTP send with no origin. Its passes declare themselves ("Automated
-// supervisor pass, not the owner", "no authority claimed"); they are
-// delivered as the supervisor's, never as the owner's. The owner's own
-// messages are untouched.
+// 🎯T921: a supervisor pass is the declared origin "supervisor". Prose
+// that merely says it is not the owner declares nothing, so it stays
+// the owner's. The owner's own messages are untouched.
 func TestT921SupervisorPassesAreNotTheOwners(t *testing.T) {
 	s := New("test", t.TempDir())
 	var got []string
@@ -66,12 +64,8 @@ func TestT921SupervisorPassesAreNotTheOwners(t *testing.T) {
 		}
 	}
 	for _, body := range []string{
-		// The three live shapes from 2026-09-21..29.
-		`{"text":"Automated supervisor pass, not the owner. jevons-po has no jevons_* tools (T886) and sits idle."}`,
-		`{"text":"Automated supervisor pass 12:20 (not the owner). jevonsd.log 11:36:43 ..."}`,
-		`{"text":"Supervisor keep-busy reminder (no authority claimed; your own T155/T325.1 doctrine): resume your workers."}`,
-		// Explicit, without the wording.
 		`{"text":"The fleet is idle.","origin":"supervisor"}`,
+		`{"text":"The fleet is idle.","origin":"Supervisor"}`,
 	} {
 		got = nil
 		send(body)
@@ -80,6 +74,10 @@ func TestT921SupervisorPassesAreNotTheOwners(t *testing.T) {
 		}
 	}
 	for _, body := range []string{
+		// Prose declares nothing. These shapes used to be sniffed as the supervisor.
+		`{"text":"Automated supervisor pass, not the owner. jevons-po has no jevons_* tools (T886) and sits idle."}`,
+		`{"text":"Automated supervisor pass 12:20 (not the owner). jevonsd.log 11:36:43 ..."}`,
+		`{"text":"Supervisor keep-busy reminder (no authority claimed; your own T155/T325.1 doctrine): resume your workers."}`,
 		`{"text":"Please check why jevons-po is stuck."}`,
 		`{"text":"The supervisord config needs a look — I am the owner.","origin":"owner"}`,
 	} {

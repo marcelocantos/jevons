@@ -274,12 +274,14 @@ func parseGitLogRecords(out string) []GitCommit {
 
 // GitCommitsToEvidence maps commits to Evidence rows. Two history signals:
 //
-//   - git_rework: a fix-shaped commit touching a code scope. One row per
-//     (commit, scope) so a single sprawling commit cannot fake a cluster —
-//     the cluster count is the number of *independent* fix commits.
-//   - git_revert: a revert commit (its own signal at any size).
+//   - git_rework: a commit whose type token is a declared repair type,
+//     touching a code scope. One row per (commit, scope) so a single
+//     sprawling commit cannot fake a cluster — the cluster count is the
+//     number of *independent* repair commits. Words inside the subject
+//     are not a type.
+//   - git_revert: a commit whose type token is revert.
 //
-// Non-fix commits are not evidence: ordinary feature history is not friction.
+// Other commits are not evidence: ordinary feature history is not friction.
 func GitCommitsToEvidence(commits []GitCommit) []Evidence {
 	var out []Evidence
 	for _, c := range commits {
@@ -404,29 +406,39 @@ func pathScope(p string) string {
 	return strings.Join(parts, "/")
 }
 
-// fixSubjectMarkers are commit-subject shapes that mean "this is repair work".
-var fixSubjectMarkers = []string{
-	"fix(", "fix:", "fix ", "hotfix", "bugfix", "repair",
-	"regression", "still ", "again", "residual", "kill ",
-	"broken", "workaround", "patch:",
+const (
+	commitTypeFix    = "fix"
+	commitTypeHotfix = "hotfix"
+	commitTypeBugfix = "bugfix"
+	commitTypeRepair = "repair"
+	commitTypePatch  = "patch"
+	commitTypeRevert = "revert"
+)
+
+// commitTypeToken is the conventional-commit type: the first field, cut at
+// '(' or ':'. Interior words ("kill", "residual", "broken") are not a type.
+func commitTypeToken(subject string) string {
+	s := strings.ToLower(strings.TrimSpace(subject))
+	if s == "" {
+		return ""
+	}
+	field, _, _ := strings.Cut(s, " ")
+	token, _, _ := strings.Cut(field, "(")
+	token, _, _ = strings.Cut(token, ":")
+	return token
 }
 
 func isFixSubject(subject string) bool {
-	s := strings.ToLower(strings.TrimSpace(subject))
-	if s == "" {
+	switch commitTypeToken(subject) {
+	case commitTypeFix, commitTypeHotfix, commitTypeBugfix, commitTypeRepair, commitTypePatch:
+		return true
+	default:
 		return false
 	}
-	for _, m := range fixSubjectMarkers {
-		if strings.HasPrefix(s, m) || strings.Contains(s, " "+m) {
-			return true
-		}
-	}
-	return false
 }
 
 func isRevertSubject(subject string) bool {
-	s := strings.ToLower(strings.TrimSpace(subject))
-	return strings.HasPrefix(s, "revert ") || strings.HasPrefix(s, `revert"`) || strings.HasPrefix(s, "revert:")
+	return commitTypeToken(subject) == commitTypeRevert
 }
 
 func shortSHA(sha string) string {
@@ -557,7 +569,7 @@ func isWeakRetroPhrase(phrase string) bool {
 		return false
 	}
 	for _, w := range retroWeakPhrases {
-		if strings.Contains(p, w) {
+		if p == w {
 			return true
 		}
 	}

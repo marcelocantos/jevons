@@ -58,11 +58,17 @@ func TestT716IncidentReportIsTheIncidentShape(t *testing.T) {
 	if !strings.Contains(lower, "next turn:") {
 		t.Fatal("fixture lost its Next turn: remaining-work heading")
 	}
-	if !hasCompletionClaim(lower) {
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — cannot reproduce the incident")
 	}
-	if !hasOracleEvidence(lower) {
-		t.Fatal("fixture no longer carries oracle-shaped words — cannot reproduce the incident")
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a completion claim")
+	}
+	if !strings.Contains(lower, "go test") {
+		t.Fatal("fixture lost the oracle-shaped words — cannot reproduce the incident")
+	}
+	if hasOracleEvidence(lower) {
+		t.Fatal("an oracle sentence is oracle evidence")
 	}
 }
 
@@ -71,8 +77,8 @@ func TestT716IncidentReportIsNotTerminal(t *testing.T) {
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("jv-t702 checkpoint 3 classified as finished_work")
 	}
-	if ask := ClassifyReportAsk(report); ask != AskCheckpoint {
-		t.Fatalf("ClassifyReportAsk = %s, want checkpoint", ask)
+	if ask := ClassifyReportAsk(report); ask != AskNone {
+		t.Fatalf("ClassifyReportAsk = %s, want none", ask)
 	}
 	reg := t395Registry(t, "jv-t702-seat-activity")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t702-seat-activity", report, nil)
@@ -107,17 +113,17 @@ func TestT716KeepSignalsIndependently(t *testing.T) {
 		{
 			name:   "numbered checkpoint declaration",
 			report: "Checkpoint 3 — mapped the parser. Builds green. Done this turn: the map.",
-			want:   AskCheckpoint,
+			want:   AskNone,
 		},
 		{
 			name:   "not yet committed",
 			report: "Done this turn. Builds green. Not yet committed or tested.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 		{
 			name:   "next turn remaining work",
 			report: "Done this turn. Builds green.\n\n**Next turn:** write the tests and commit.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 	}
 	for _, tc := range cases {
@@ -143,9 +149,9 @@ func TestT716NumberedCheckpointIsADeclaration(t *testing.T) {
 		report string
 		want   ReportAskClass
 	}{
-		{"em dash after number", "Checkpoint 3 — parser mapped; writer next.", AskCheckpoint},
-		{"colon after number", "Checkpoint 3: wired the decoder.", AskCheckpoint},
-		{"hash ordinal", "Checkpoint #3 — ending this slice.", AskCheckpoint},
+		{"em dash after number", "Checkpoint 3 — parser mapped; writer next.", AskNone},
+		{"colon after number", "Checkpoint 3: wired the decoder.", AskNone},
+		{"hash ordinal", "Checkpoint #3 — ending this slice.", AskNone},
 		{"mention still a mention", "Done. Commit 4f2b8c1; go test PASS. Checkpoint reports now classify as open work.", AskNone},
 		{"handling still a mention", "Done. Commit 4f2b8c1; go test PASS. Checkpoint handling no longer reaps numbered banners.", AskNone},
 	}
@@ -181,13 +187,23 @@ func TestT716CheckpointScopeWinsOverFinishKind(t *testing.T) {
 		SilentLedger: envelope.SilentLedgerEmpty,
 		Payload:      payload,
 	})
-	if LooksLikeFinishedWorkReport(finish) {
-		t.Fatal("T784: checkpoint scope remains open even inside a finish-report")
+	// 🎯T766.4: checkpoint words in the payload do not outrank a valid
+	// finish-report. Remaining work is status in-progress.
+	if !LooksLikeFinishedWorkReport(finish) {
+		t.Fatal("a valid finish-report is done; payload checkpoint words are not a veto")
 	}
 	reg = t395Registry(t, "jv-t716-finish")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t716-finish", finish, nil)
-	if ok {
-		t.Fatalf("checkpoint envelope reaped (reason %s)", reason)
+	if !ok {
+		t.Fatalf("valid finish-report did not reap (reason %s)", reason)
+	}
+	open := envelope.Format(&envelope.Message{
+		Kind: envelope.KindFinishReport, Target: "T716", SHA: "abcdef0123456",
+		Status: envelope.ProgressInProgress, SilentLedger: envelope.SilentLedgerEmpty,
+		Payload: payload,
+	})
+	if LooksLikeFinishedWorkReport(open) {
+		t.Fatal("in-progress finish-report must not be done")
 	}
 }
 
@@ -198,11 +214,12 @@ func TestT716GenuineFinishStillReaps(t *testing.T) {
 	if ClassifyReportAsk(report) != AskNone {
 		t.Fatalf("genuine finish classified as ask: %s", ClassifyReportAsk(report))
 	}
-	if !LooksLikeFinishedWorkReport(report) {
-		t.Fatal("genuine finish must still reap")
+	done := declaredFinishReport("T716", report)
+	if !LooksLikeFinishedWorkReport(done) {
+		t.Fatal("declared finish-report must be done")
 	}
 	reg := t395Registry(t, "jv-t716-done")
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t716-done", report, nil)
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t716-done", done, nil)
 	if !ok {
 		t.Fatalf("genuine finish did not reap (reason %s)", reason)
 	}
@@ -211,7 +228,7 @@ func TestT716GenuineFinishStillReaps(t *testing.T) {
 func TestT716BareNextTurnWithoutColonStillReaps(t *testing.T) {
 	// Control: "Done. Ready for the next turn." is not a remaining-work
 	// heading. The colon is what names what the worker will do next turn.
-	if !LooksLikeFinishedWorkReport(reapBareDoneNextTurn) {
-		t.Fatal("bare-done control fixture must still look like finished work")
+	if LooksLikeFinishedWorkReport(reapBareDoneNextTurn) {
+		t.Fatal("unenveloped bare-done must not look like finished work")
 	}
 }

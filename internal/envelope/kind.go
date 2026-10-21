@@ -102,18 +102,25 @@ const (
 	VerdictEmpty   Verdict = "EMPTY"
 )
 
+// allVerdicts is every verdict a slot may carry, in the order a correction
+// notice lists them (🎯T1083).
+var allVerdicts = []Verdict{
+	VerdictGreen, VerdictSuspect, VerdictRed, VerdictUnknown,
+	VerdictDirty, VerdictKilled, VerdictVoid, VerdictEmpty,
+}
+
 // ParseVerdict maps a slot value onto a Verdict. Unknown names fail.
 func ParseVerdict(raw string) (Verdict, bool) {
 	v := Verdict(strings.ToUpper(strings.TrimSpace(raw)))
-	switch v {
-	case VerdictGreen, VerdictSuspect, VerdictRed, VerdictUnknown,
-		VerdictDirty, VerdictKilled, VerdictVoid, VerdictEmpty:
-		return v, true
-	case VerdictNone:
+	if v == VerdictNone {
 		return VerdictNone, true
-	default:
-		return "", false
 	}
+	for _, known := range allVerdicts {
+		if v == known {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 func (v Verdict) String() string { return string(v) }
@@ -139,6 +146,17 @@ const (
 	ProgressBlocked Progress = "blocked"
 )
 
+// allProgress is every status a slot may carry, in the order a correction
+// notice lists them (🎯T1083). A finished finish-report carries none of
+// them: it omits the slot.
+var allProgress = []Progress{
+	ProgressInProgress, ProgressLive, ProgressLanded, ProgressShipped, ProgressBlocked,
+}
+
+// ProgressValues returns every accepted status value in definition order.
+// Instruction text that lists the enum is ratcheted against it.
+func ProgressValues() []Progress { return append([]Progress(nil), allProgress...) }
+
 // ParseProgress maps a slot value onto Progress. Spaces and underscores
 // collapse to a hyphen so "in progress" matches the canonical form.
 // A qualified blocked status ("blocked_design", "blocked-on-owner") reads
@@ -148,11 +166,13 @@ func ParseProgress(raw string) (Progress, bool) {
 	s = strings.ReplaceAll(s, "_", "-")
 	s = strings.Join(strings.Fields(s), "-")
 	p := Progress(s)
-	switch p {
-	case ProgressInProgress, ProgressLive, ProgressLanded, ProgressShipped, ProgressBlocked:
-		return p, true
-	case ProgressNone:
+	if p == ProgressNone {
 		return ProgressNone, true
+	}
+	for _, known := range allProgress {
+		if p == known {
+			return p, true
+		}
 	}
 	if strings.HasPrefix(s, string(ProgressBlocked)+"-") {
 		return ProgressBlocked, true
@@ -178,6 +198,10 @@ const (
 	RiskResidual Risk = "residual"
 	RiskAccepted Risk = "accepted-risk"
 )
+
+// allRisks is every risk value a slot may carry, in the order a correction
+// notice lists them (🎯T1083).
+var allRisks = []Risk{RiskNoneSlot, RiskClass3, RiskResidual, RiskAccepted}
 
 // ParseRisk maps a slot value onto Risk.
 func ParseRisk(raw string) (Risk, bool) {

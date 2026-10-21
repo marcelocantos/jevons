@@ -37,7 +37,11 @@
 // collector and enforcer off entirely; /api/cost reports disabled.
 package cost
 
-import "time"
+import (
+	"time"
+
+	"github.com/marcelocantos/jevons/internal/claudiawire"
+)
 
 // Usage is the token counts from one billable API response.
 type Usage struct {
@@ -57,8 +61,12 @@ func (u Usage) IsZero() bool { return u.Total() == 0 }
 
 // Event is one billable API response extracted from a session JSONL.
 type Event struct {
-	Timestamp time.Time
-	SessionID string
+	// UsageFact bypasses legacy transcript normalization. Its original seat,
+	// generation, invocation identity and unknown fields reach Store intact.
+	UsageFact    *claudiawire.UsageFact
+	UsageFailure *UsageFailure
+	Timestamp    time.Time
+	SessionID    string
 	// Worker is the jevons-level attribution (thread/agent id), or ""
 	// when the session is not one jevons knows about. Unattributed spend
 	// is a first-class signal, not an error — the incident fleet would

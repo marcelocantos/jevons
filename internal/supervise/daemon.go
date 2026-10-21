@@ -6,9 +6,7 @@ package supervise
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 )
@@ -103,10 +101,10 @@ func DaemonOwnsProcess() bool {
 // KickstartAgent asks launchd to run the job now (and kill a wedged
 // instance first). Missing job is the caller's problem.
 func KickstartAgent(label string) error {
-	if runtime.GOOS != "darwin" {
+	if !haveLaunchd {
 		return fmt.Errorf("supervise: launchd agents are macOS only")
 	}
-	out, err := exec.Command("launchctl", "kickstart", "-k", AgentDomain()+"/"+label).CombinedOutput()
+	out, err := launchctl("kickstart", "-k", AgentDomain()+"/"+label)
 	if err != nil {
 		return fmt.Errorf("supervise: kickstart %s: %w: %s", label, err, string(out))
 	}

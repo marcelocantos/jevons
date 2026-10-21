@@ -77,7 +77,7 @@ func (e TurnEvidence) Reading() turnev.Reading { return e.Fate().Reading() }
 // a message sitting in a composer that is re-queued is delivered twice the
 // moment anything submits the first copy (🎯T416 clause 4).
 func (s *Server) reportDrainedSendNotBegun(name string, entry sendq.Entry, ev TurnEvidence, now time.Time) {
-	behind := max(0, s.pendingAgentSends(name)-1)
+	behind := max(0, s.heldAgentSends(name)-1)
 	reading := ev.Reading()
 	if reading == turnev.ReadingInFlight {
 		slog.Info("🎯T447 drained message is waiting in the receiver's own queue",

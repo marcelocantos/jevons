@@ -69,7 +69,7 @@ func TestT1039FreshMintGrantsDirectBullseyeURL(t *testing.T) {
 		t.Fatal("mountHTTPUpstreamProxy returned nil")
 	}
 	attach.Proxied = up.Advertised()
-	list := mcpattach.SessionServers(attach, claudia.ProviderClaude, cfg.WorkDir)
+	list := mcpattach.SessionServers(attach, cfg.WorkDir)
 	byName := map[string]claudia.MCPServer{}
 	for _, s := range list {
 		byName[s.Name] = s

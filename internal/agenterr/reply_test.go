@@ -4,6 +4,7 @@
 package agenterr
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -15,12 +16,13 @@ func TestClassifyReplyFiresOnBareProviderFailure(t *testing.T) {
 		reply string
 		want  Class
 	}{
-		{"Internal error", ClassBackendUnavailable},
-		{"  Internal error.  ", ClassBackendUnavailable},
-		{"acp session/prompt: Internal error", ClassBackendUnavailable},
-		{"Error: 503 Service Unavailable", ClassBackendUnavailable},
-		{"429 Too Many Requests", ClassRateLimit},
-		{"401 Unauthorized: invalid api key", ClassAuth},
+		// A whole-reply sentence is not a class, including Internal error.
+		{"Internal error", ClassNone},
+		{"  Internal error.  ", ClassNone},
+		{"acp session/prompt: Internal error", ClassNone},
+		{"Error: 503 Service Unavailable", ClassNone},
+		{"429 Too Many Requests", ClassNone},
+		{"401 Unauthorized: invalid api key", ClassNone},
 	}
 	for _, c := range cases {
 		if got := ClassifyReply(c.reply); got != c.want {
@@ -29,21 +31,22 @@ func TestClassifyReplyFiresOnBareProviderFailure(t *testing.T) {
 	}
 }
 
-// The J10 shape: an outage arrives as the whole turn where a shell marker was
-// expected. It must classify as backend_unavailable, not read as a tool that
-// silently failed to run.
+// The J10 shape used to read a whole-turn "Internal error" as the outage.
+// The sentence is not a cause. The cause is.
 func TestClassifyReplyJ10OutageTurn(t *testing.T) {
 	class := ClassifyReply("Internal error")
-	if class != ClassBackendUnavailable {
-		t.Fatalf("class = %v, want backend_unavailable", class)
+	if class != ClassNone {
+		t.Fatalf("class = %v, want none", class)
 	}
-	if !class.IsTransient() {
-		t.Error("backend_unavailable must be transient so recovery re-pressures")
+	_, _, ok := ReplyFailure("Internal error")
+	if ok {
+		t.Fatal("ReplyFailure must not report a sentence as the outage")
 	}
-	_, ownerMsg, ok := ReplyFailure("Internal error")
-	if !ok {
-		t.Fatal("ReplyFailure must report the outage")
+	caused := Classify(WithCause(CauseBackendUnavailable, errors.New("Internal error")))
+	if caused != ClassBackendUnavailable || !caused.IsTransient() {
+		t.Fatalf("caused = %v", caused)
 	}
+	ownerMsg := OwnerCopy(caused, "Internal error")
 	if !strings.Contains(ownerMsg, "backend_unavailable") {
 		t.Errorf("owner copy must name the class, got %q", ownerMsg)
 	}
@@ -127,20 +130,35 @@ func TestNumericStatusFragmentsAreNotFailures(t *testing.T) {
 				t.Errorf("observed successful reply classified as %s", got)
 			}
 			for _, tc := range []struct {
-				code string
-				want Class
-			}{{"400", ClassClientBug}, {"401", ClassAuth}, {"402", ClassRateLimit}, {"403", ClassAuth},
-				{"429", ClassRateLimit}, {"500", ClassBackendUnavailable},
-				{"502", ClassBackendUnavailable}, {"503", ClassBackendUnavailable}, {"504", ClassBackendUnavailable}} {
+				code  string
+				cause string
+				want  Class
+			}{
+				{"400", CauseClientBug, ClassClientBug},
+				{"401", CauseAuth, ClassAuth},
+				{"402", CauseSpendWall, ClassSpendWall},
+				{"403", CauseAuth, ClassAuth},
+				{"429", CauseRateLimit, ClassRateLimit},
+				{"500", CauseBackendUnavailable, ClassBackendUnavailable},
+				{"502", CauseBackendUnavailable, ClassBackendUnavailable},
+				{"503", CauseBackendUnavailable, ClassBackendUnavailable},
+				{"504", CauseBackendUnavailable, ClassBackendUnavailable},
+			} {
 				for _, text := range []string{tc.code, "HTTP " + tc.code, "status=" + tc.code,
 					"status: " + tc.code + ".", "HTTP/1.1 " + tc.code,
 					"ref-" + tc.code + " HTTP " + tc.code} {
-					if got := classify.fn(text); got != tc.want {
-						t.Errorf("%q classified as %s, want %s", text, got, tc.want)
+					if got := classify.fn(text); got == tc.want {
+						t.Errorf("%q classified as %s from prose", text, got)
 					}
-					if tc.code == "402" && !HardBlock(tc.want, text) {
-						t.Errorf("real billing status %q lost its hard-block", text)
+					if tc.code == "402" && HardBlock(ClassRateLimit, text) {
+						t.Errorf("rate_limit text %q hard-blocked", text)
 					}
+					if tc.code == "402" && !HardBlock(ClassSpendWall, text) {
+						t.Errorf("spend class lost its hard-block on %q", text)
+					}
+				}
+				if got := Classify(WithCause(tc.cause, errors.New(tc.code))); got != tc.want {
+					t.Errorf("WithCause(%s, %q) = %s, want %s", tc.cause, tc.code, got, tc.want)
 				}
 			}
 		})

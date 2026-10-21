@@ -592,6 +592,14 @@ func (h *muxHub) applyStampNow(name string, st muxwin.ToolStamp) (folds []muxwin
 	return folds, true
 }
 
+// maxQueuedToolStamps bounds the stamps waiting for a generic tool row.
+// Only a tool_use row takes a stamp (🎯T1089); a provider whose tool rows
+// already carry real names never mints a generic one, so without a bound
+// every overseer MCP call during an open turn would wait forever. Agent
+// notes used to absorb them, which is how a fleet notice came to carry a
+// tool call's name and input.
+const maxQueuedToolStamps = 32
+
 func (h *muxHub) queueToolStamp(name string, st muxwin.ToolStamp) {
 	if h == nil || name == "" {
 		return
@@ -601,7 +609,11 @@ func (h *muxHub) queueToolStamp(name string, st muxwin.ToolStamp) {
 	if h.stamps == nil {
 		h.stamps = make(map[string][]muxwin.ToolStamp)
 	}
-	h.stamps[name] = append(h.stamps[name], st)
+	q := append(h.stamps[name], st)
+	if over := len(q) - maxQueuedToolStamps; over > 0 {
+		q = append([]muxwin.ToolStamp(nil), q[over:]...)
+	}
+	h.stamps[name] = q
 }
 
 // muxFanTranscript folds a line into the live window and persists it.

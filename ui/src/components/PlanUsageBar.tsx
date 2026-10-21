@@ -8,7 +8,7 @@ import type { MuxClient } from '../mux/client';
 import { PLAN_USAGE_CHANNEL } from '../mux/protocol';
 import { CompanyMark, companyOfProvider, windowAbbrev } from '../plan/companyMark';
 import { holdLastPlanSnapshot } from '../plan/holdSnapshot';
-import { applyThresholds, formatWindow } from '../plan/pace';
+import { formatWindow } from '../plan/pace';
 import { InstantTip } from './InstantTip';
 import {
   gaugeFillPercent,
@@ -168,17 +168,6 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
       ]);
     }
   };
-  useQuery({
-    queryKey: ['plan-usage-thresholds'],
-    queryFn: async () => {
-      const r = await fetch('/api/plan-usage/thresholds');
-      if (!r.ok) throw new Error(String(r.status));
-      const t = await r.json();
-      applyThresholds(t);
-      return t;
-    },
-    staleTime: Infinity,
-  });
   const [muxSnap, setMuxSnap] = useState<PlanSnapshot | undefined>(undefined);
   useEffect(() => {
     const mux = props.mux;
@@ -330,9 +319,9 @@ export function PlanUsageBar(props: { mux?: MuxClient; refusedSeats?: readonly R
                     <span className="plan-bar" aria-hidden="true">
                       {/* DO NOT set an inline background here. The server's band
                           is the only colour, via the pace class below and the
-                          rules in cockpit.css. fillColorForWindow will happily
-                          turn a served "ahead" into green or red. That is the
-                          drift: a green bar beside an amber graph. */}
+                          rules in cockpit.css (🎯T1072). A colour computed here
+                          is a second model, and a second model drifts: a green
+                          bar beside an amber graph. */}
                       <span className="plan-bar-fill" style={{ width: used + '%' }} />
                     </span>
                     {spentTime != null ? (

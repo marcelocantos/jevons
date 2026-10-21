@@ -4,6 +4,7 @@
 package cost
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -65,6 +66,14 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create usage schema: %w", err)
 	}
+	if _, err := db.Exec(usageSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create structured usage schema: %w", err)
+	}
+	if _, err := db.Exec(usageReplaySchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create usage replay schema: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -93,6 +102,32 @@ func (s *Store) InsertEvents(events []*Event) (int, error) {
 	defer stmt.Close()
 	n := 0
 	for _, e := range events {
+		if e.UsageFailure != nil {
+			f := e.UsageFailure
+			if f.Seat == "" || f.At.IsZero() {
+				return 0, fmt.Errorf("usage failure has no identity/time")
+			}
+			if _, err := tx.Exec(`INSERT INTO usage_failures (seat, session_id, ts, message) VALUES (?, ?, ?, ?)
+				ON CONFLICT(seat, session_id, ts, message) DO NOTHING`,
+				f.Seat, f.SessionID, f.At.UTC().Format(usageTimeLayout), f.Message); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if e.UsageFact != nil {
+			f := e.UsageFact
+			if err := f.ValidateIdentity(f.Seat, f.SessionID); err != nil {
+				return 0, err
+			}
+			changed, err := ingestUsageFact(context.Background(), tx, f)
+			if err != nil {
+				return 0, err
+			}
+			if changed {
+				n++
+			}
+			continue
+		}
 		// Defence in depth for pre-parse or direct InsertEvents callers:
 		// never persist negative spend/tokens that could deflate sums.
 		cost := e.CostUSD

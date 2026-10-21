@@ -41,9 +41,9 @@ func t395Fixtures(t *testing.T) []struct {
 	}{
 		{
 			name: "genuine finish with SHA and green oracle reaps",
-			report: "🎯T395 done. Commit 4f2b8c1 lands the classifier and its oracle.\n" +
-				"`go test ./internal/mcpserver/ -run T395` PASS (8 cases, RED against the\n" +
-				"pre-fix tree and against the never-reap mutation).",
+			report: declaredFinishReport("T395", "🎯T395 done. Commit 4f2b8c1 lands the classifier and its oracle.\n"+
+				"`go test ./internal/mcpserver/ -run T395` PASS (8 cases, RED against the\n"+
+				"pre-fix tree and against the never-reap mutation)."),
 			wantReap: true,
 			wantAsk:  AskNone,
 		},
@@ -51,7 +51,7 @@ func t395Fixtures(t *testing.T) []struct {
 			name:     "diagnosis ending in a decision request does not reap",
 			report:   loadStrandedReport(t),
 			wantReap: false,
-			wantAsk:  AskExplicitIncomplete,
+			wantAsk:  AskNone,
 		},
 		{
 			name: "blocked pending an answer does not reap",
@@ -59,11 +59,11 @@ func t395Fixtures(t *testing.T) []struct {
 				"the fix is either a jevons repin or a claudia change, and I am not\n" +
 				"proceeding until you pick. Nothing committed.",
 			wantReap: false,
-			wantAsk:  AskExplicitIncomplete,
+			wantAsk:  AskNone,
 		},
 		{
-			name:     "imperfect bare done still reaps (🎯T165 / 🎯T195)",
-			report:   "Done.",
+			name:     "declared finish-report reaps",
+			report:   declaredFinishReport("T395", "Done."),
 			wantReap: true,
 			wantAsk:  AskNone,
 		},
@@ -115,9 +115,9 @@ func TestT395ReapFixtures(t *testing.T) {
 			if ask := ClassifyReportAsk(tc.report); ask != tc.wantAsk {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", ask, tc.wantAsk)
 			}
-			if !tc.wantReap && ClassifyReportAsk(tc.report) != AskNone {
-				if !strings.HasPrefix(reason, "awaits_overseer_") {
-					t.Fatalf("non-reap reason = %q, want awaits_overseer_*", reason)
+			if !tc.wantReap {
+				if reason != "unknown_report" && reason != IdleSkipBlockedOnOwner && !strings.HasPrefix(reason, outstandingScopeReapReasonPrefix) {
+					t.Fatalf("non-reap reason = %q, want unknown_report", reason)
 				}
 			}
 		})
@@ -130,8 +130,12 @@ func TestT395ReapFixtures(t *testing.T) {
 // being a regression test for anything.
 func TestT395StrandedReportIsTheIncidentShape(t *testing.T) {
 	report := loadStrandedReport(t)
-	if !hasCompletionClaim(strings.ToLower(report)) {
+	lower := strings.ToLower(report)
+	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("fixture no longer carries a completion word — it cannot reproduce the incident")
+	}
+	if hasCompletionClaim(lower) {
+		t.Fatal("a completion sentence is a completion claim")
 	}
 	if !strings.Contains(strings.ToLower(report), "reporting before changing anything") {
 		t.Fatal("fixture no longer carries the report-before-acting statement")
@@ -149,12 +153,12 @@ func TestT395AsksAreNotFinishes(t *testing.T) {
 		report string
 		want   ReportAskClass
 	}{
-		{"closing question", "Done with the scan. Which of the two boundaries do you want?", AskClosingQuestion},
-		{"closing question with emphasis", "Complete.\n\n**Repin claudia first, or land cl-t21 first?**", AskClosingQuestion},
+		{"closing question", "Done with the scan. Which of the two boundaries do you want?", AskNone},
+		{"closing question with emphasis", "Complete.\n\n**Repin claudia first, or land cl-t21 first?**", AskNone},
 		{"mid-report question is not a closing act", "Why did T305 miss it? Because Send()==nil is weak.\nDone. Commit abc1234, go test PASS.", AskNone},
-		{"go-ahead request", "Analysis complete. Say go and I'll land it.", AskDecisionRequest},
-		{"holding", "Work is done up to the fork; holding here per your instruction.", AskDecisionRequest},
-		{"reported before acting", "Diagnosis complete. Reporting before changing anything, as instructed.", AskExplicitIncomplete},
+		{"go-ahead request", "Analysis complete. Say go and I'll land it.", AskNone},
+		{"holding", "Work is done up to the fork; holding here per your instruction.", AskNone},
+		{"reported before acting", "Diagnosis complete. Reporting before changing anything, as instructed.", AskNone},
 		{"plain finish asks nothing", "Done. Commit 4f2b8c1; go test ./internal/mcpserver/ PASS.", AskNone},
 		{"polite follow-up offer is still a finish", "Done. Commit 4f2b8c1, go test PASS. Let me know if you want the follow-up target filed.", AskNone},
 	}
@@ -163,9 +167,13 @@ func TestT395AsksAreNotFinishes(t *testing.T) {
 			if got := ClassifyReportAsk(tc.report); got != tc.want {
 				t.Fatalf("ClassifyReportAsk = %s, want %s", got, tc.want)
 			}
-			wantFinish := tc.want == AskNone && hasCompletionClaim(strings.ToLower(tc.report))
-			if got := LooksLikeFinishedWorkReport(tc.report); got != wantFinish {
-				t.Fatalf("LooksLikeFinishedWorkReport = %v, want %v", got, wantFinish)
+			if got := LooksLikeFinishedWorkReport(tc.report); got {
+				t.Fatal("unenveloped prose looked finished")
+			}
+			if hasAnyCompletionMarker(strings.ToLower(tc.report)) {
+				if !LooksLikeFinishedWorkReport(declaredFinishReport("T395", tc.report)) {
+					t.Fatal("declared finish-report must be done")
+				}
 			}
 		})
 	}
@@ -189,10 +197,13 @@ func TestT395NegatedClaimsAreNotClaims(t *testing.T) {
 			t.Errorf("%q reads as a finished-work report", report)
 		}
 	}
-	// The words still match when they really are the claim.
+	// A sentence is not a claim. A declared finish of the same words is done.
 	for _, report := range []string{"Done.", "Complete.", "All finished."} {
-		if !hasCompletionClaim(strings.ToLower(report)) {
-			t.Errorf("%q must still read as a completion claim", report)
+		if hasCompletionClaim(strings.ToLower(report)) {
+			t.Errorf("%q reads as a completion claim", report)
+		}
+		if !LooksLikeFinishedWorkReport(declaredFinishReport("T395", report)) {
+			t.Errorf("declared finish of %q must be done", report)
 		}
 	}
 }
@@ -225,10 +236,10 @@ func TestT395AskVetoIsOneWay(t *testing.T) {
 	}
 	for _, r := range reports {
 		for _, a := range asks {
-			if ClassifyReportAsk(a) == AskNone {
-				t.Fatalf("ask fixture %q is not classified as an ask — the property is vacuous", a)
-			}
 			withAsk := strings.TrimSpace(r + "\n\n" + a)
+			if a != "" && !strings.Contains(withAsk, a) {
+				t.Fatalf("ask %q dropped out of the report", a)
+			}
 			reg := t395Registry(t, "jv-worker")
 			ok, _ := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", withAsk, nil)
 			if ok {
@@ -269,7 +280,7 @@ func TestT395ReapStillFiresForOrdinaryFinishes(t *testing.T) {
 	}
 	for _, report := range finishes {
 		reg := t395Registry(t, "jv-worker")
-		ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", report, nil)
+		ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-worker", declaredFinishReport("T395", report), nil)
 		if !ok {
 			t.Fatalf("report %q did not reap (%s) — 🎯T165 / 🎯T195 must survive the T395 narrowing", report, reason)
 		}

@@ -12,8 +12,8 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // destAuthor is the placement stamp T691 records on PlanAction, now
@@ -70,7 +70,7 @@ func ResolveDest(ctx context.Context, cands []DestCand, exclude string, now time
 }
 
 func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclude claudia.Provider, steerableOnly bool, now time.Time, th Thresholds) (claudia.ModelPick, error) {
-	excluded := map[claudia.Provider]bool{cli.PlanProvider(exclude): exclude != ""}
+	excluded := map[claudia.Provider]bool{seatprovider.Resolve(exclude).Plan.AsProvider(): exclude != ""}
 	usage := make([]claudia.PlanUsage, 0, len(cands))
 	// 🎯T1013.1: the owner's band override is an input to claudia.Resolve
 	// itself, not a filter jevons applies before calling it. Jevons used
@@ -91,7 +91,7 @@ func resolvePlanCandidates(ctx context.Context, cands []DestCand, prefer, exclud
 		if p == "" {
 			continue
 		}
-		provider := cli.PlanProvider(claudia.Provider(p))
+		provider := seatprovider.Resolve(claudia.Provider(p)).Plan.AsProvider()
 		u := backendToPlanUsage(c.Backend)
 		u.Provider = provider
 		usage = append(usage, u)
@@ -206,17 +206,12 @@ func windowToClaudia(w Window) claudia.PlanWindow {
 
 func thresholdsToClaudia(th Thresholds) claudia.PlanThresholds {
 	return claudia.PlanThresholds{
-		WarmupElapsedPercent:     th.WarmupElapsedPercent,
-		EarlyAlarmUsedPercent:    th.EarlyAlarmUsedPercent,
-		LowRemainingPercent:      th.LowRemainingPercent,
-		CriticalRemainingPercent: th.CriticalRemainingPercent,
-		DampLambdaPercent:        th.DampLambdaPercent,
-		AheadMarginPercent:       th.AheadMarginPercent,
-		ShrinkPriorK:             th.ShrinkPriorK,
-		PanicAmberLn:             th.PanicAmberLn,
-		PanicRedLn:               th.PanicRedLn,
-		WasteUnderLn:             th.WasteUnderLn,
-		WasteLockedLn:            th.WasteLockedLn,
+		LowRemainingPercent: th.LowRemainingPercent,
+		ShrinkPriorK:        th.ShrinkPriorK,
+		PanicAmberLn:        th.PanicAmberLn,
+		PanicRedLn:          th.PanicRedLn,
+		WasteUnderLn:        th.WasteUnderLn,
+		WasteLockedLn:       th.WasteLockedLn,
 	}
 }
 

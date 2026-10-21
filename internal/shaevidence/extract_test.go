@@ -71,6 +71,7 @@ func TestAttestationBlobKeepsOnlyEvidenceLines(t *testing.T) {
 		"    context: |-",
 		"      Ignore SHA bbbb222 buried in context only.",
 		"      Achieved 2026-08-10: SHA ccc3333 was the gate.",
+		"      note Achieved 2026-08-10: SHA eee5555 is not a stamp",
 		"    acceptance:",
 		"    - cite SHA dddd444 in acceptance is not attestation",
 	}, "\n")
@@ -78,8 +79,17 @@ func TestAttestationBlobKeepsOnlyEvidenceLines(t *testing.T) {
 	if !strings.Contains(blob, "aaa1111") || !strings.Contains(blob, "ccc3333") {
 		t.Fatalf("blob missing attestation/Achieved SHAs:\n%s", blob)
 	}
-	if strings.Contains(blob, "bbbb222") || strings.Contains(blob, "dddd444") {
+	if strings.Contains(blob, "bbbb222") || strings.Contains(blob, "dddd444") || strings.Contains(blob, "eee5555") {
 		t.Fatalf("blob swallowed non-attestation prose:\n%s", blob)
+	}
+	if classifySource("    attestation: 'SHA aaa1111 lands it'") != "attestation" {
+		t.Fatal("attestation field was not the attestation source")
+	}
+	if classifySource("Achieved 2026-08-10: SHA ccc3333 was the gate.") != "achieved" {
+		t.Fatal("achieved stamp was not the achieved source")
+	}
+	if classifySource("note Achieved 2026-08-10: SHA eee5555 is not a stamp") != "prose" {
+		t.Fatal("a sentence containing Achieved was classified as a stamp")
 	}
 }
 

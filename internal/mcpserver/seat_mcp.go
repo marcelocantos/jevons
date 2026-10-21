@@ -258,7 +258,12 @@ func (s *Server) diagnoseSeatMCPOnRequest(d claudia.AgentDef, now time.Time) sea
 
 func (s *Server) diagnoseSeatMCPWith(d claudia.AgentDef, now time.Time, scan bool) seatMCPDiagnosis {
 	var out seatMCPDiagnosis
-	if d.Provider != claudia.ProviderClaude || strings.TrimSpace(d.SessionID) == "" {
+	// The scan reads a Claude Code JSONL, which only a seat off the sidecar
+	// keeps. A row storing the plan name claude is the anthropic sidecar
+	// seat it launches as (🎯T1079), whose records are the dated spool every
+	// seat shares — scanning that file would read other seats' tool calls.
+	// The sidecar's own answer is the launch report (🎯T934).
+	if !providerKeepsClaudeTranscript(d.Provider) || strings.TrimSpace(d.SessionID) == "" {
 		return out
 	}
 	ex := LookupTranscriptExistence(TranscriptExistenceQuery{

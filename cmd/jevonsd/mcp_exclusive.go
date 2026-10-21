@@ -16,7 +16,7 @@ import (
 // keep remote owner-map URLs after a restart.
 func stampRegistrySessionMCP(reg *claudia.Registry, attach mcpattach.Args, overseer *claudia.AgentDef) {
 	if overseer != nil {
-		overseer.MCPServers = mcpattach.SessionServers(attach, overseer.Provider, overseer.WorkDir)
+		overseer.MCPServers = mcpattach.SessionServers(attach, overseer.WorkDir)
 	}
 	if reg == nil || strings.TrimSpace(attach.URL) == "" {
 		return
@@ -26,7 +26,7 @@ func stampRegistrySessionMCP(reg *claudia.Registry, attach mcpattach.Args, overs
 		if overseer != nil && def.Name == overseer.Name {
 			continue
 		}
-		want := mcpattach.SessionServers(attach, def.Provider, def.WorkDir)
+		want := mcpattach.SessionServers(attach, def.WorkDir)
 		if mcpattach.ServersEqual(def.MCPServers, want) {
 			continue
 		}

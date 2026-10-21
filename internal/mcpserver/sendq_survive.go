@@ -122,7 +122,7 @@ func (s *Server) snapshotHeldSeats(names []string) []HeldSeatSnapshot {
 	}
 	var out []HeldSeatSnapshot
 	for _, name := range names {
-		depth := s.pendingAgentSends(name)
+		depth := s.heldAgentSends(name)
 		if depth <= 0 {
 			continue
 		}
@@ -271,7 +271,7 @@ func (s *Server) restartHeldSendqForDrain(held []HeldSeatSnapshot, newParent, ac
 				"detail", "seat is registered and working; sweep/start will drain")
 		} else {
 			s.wireAgentEvents(name, proc)
-			go s.drainAgentSendQueue(name)
+			s.goDrainAgentSendQueue(name)
 		}
 	}
 	if len(restarted) > 0 {

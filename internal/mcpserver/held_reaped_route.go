@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -31,14 +32,17 @@ import (
 // again". The message has a live reader already: the parent that spawned the
 // seat, which owns whatever follow-up the feedback implies.
 //
-// So a backlog held for a seat reaped by reap_achieve / reap_done is ROUTED,
-// not re-announced:
+// So a backlog held for a seat reaped by reap_achieve / reap_done is not
+// re-announced every sweep:
 //
-//   - to the seat's PARENT, tagged with the reaped name, so the PO reads it as
-//     feedback about a worker it owns rather than as a message from nowhere;
-//   - or DROPPED with one eventlog record when it is gate feedback about the
-//     very target the reap rode on — there is nothing left to act on, and the
-//     honest record of that is a log line, not a queue nobody drains;
+//   - a message that is not gate feedback about an achieve reap, and that has
+//     a recorded parent, goes to that PARENT, tagged with the reaped name, so
+//     the PO reads it as feedback about a worker it owns;
+//   - gate feedback about the target an achieve reap closed, and any hold
+//     whose seat has no recorded parent, STAYS in the queue. The daemon does
+//     not claim it and does not discard it. jevons_sendq_reconcile or an
+//     overseer kill is the recorded exit. One backlog_held event names the
+//     head entry id and its byte size, not the text;
 //   - and the overseer hears about a given reaped seat AT MOST ONCE, because
 //     an alarm that repeats every sweep for the normal aftermath of a finish
 //     is not loud, it is background (🎯T426).
@@ -77,9 +81,9 @@ func reapedOnAchieve(rec fleetintent.Record) bool {
 
 // looksLikeGateFeedback recognises the message class that produced the
 // incident: a gate/verification note addressed to a worker about the commit it
-// just finished. It is deliberately narrow — anything it does not recognise is
-// routed to the parent rather than dropped, because a wrong route costs a
-// reader's attention and a wrong drop costs the message.
+// just finished. It is deliberately narrow. Anything it does not recognise is
+// routed to the recorded parent. A match on an achieve reap is left in the
+// queue: the daemon does not deliver it and does not discard it.
 func looksLikeGateFeedback(text string) bool {
 	t := strings.ToLower(text)
 	for _, marker := range []string{
@@ -97,8 +101,8 @@ func looksLikeGateFeedback(text string) bool {
 // this runs — that is what reaped means — so the answer comes from the removal
 // account, which recorded the lineage at the moment it dropped the row
 // (🎯T435). An empty answer is not a guess: without a parent there is nobody
-// to route to, and the message is dropped with its record rather than
-// delivered to an invented address.
+// to route to. The message stays in the queue rather than being delivered
+// to an invented address or discarded by the sweep.
 func (s *Server) parentOfReaped(name string) string {
 	acct := s.RemovalAccount()
 	if acct == nil {
@@ -156,121 +160,152 @@ func (s *Server) forgetReapedBacklogNotice(name string) {
 	delete(s.heldReapedNoticed, name)
 }
 
+// formatHeldBacklogRoute is the parent copy of a finished seat's hold.
+// The first line is the held fact. The rendered sentence is display.
+func formatHeldBacklogRoute(agent, why, text string) string {
+	agent = strings.TrimSpace(agent)
+	return fmt.Sprintf("%s\n[held backlog from %s — that seat was %s, so this is routed to you as its parent (🎯T582)]\n\n%s",
+		envelope.SeatFact(envelope.IntentHeld, agent), agent, why, text)
+}
+
 // routeHeldReapedBacklog is the sweep's answer for a queue held against a seat
-// reaped on finish. It drains the queue itself — to the parent, or to the
-// eventlog — and tells the overseer once.
+// reaped on finish. A non-gate hold with a recorded parent is delivered to
+// that parent. Gate feedback about an achieve reap, and any hold with no
+// recorded parent, stays in its current phase until jevons_sendq_reconcile
+// records a drop or an overseer kill discards it. The overseer hears once.
 func (s *Server) routeHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record, now time.Time) {
 	age := b.OldestAge(now)
 	q := s.sendQueue()
 	parent := s.parentOfReaped(b.Agent)
 	achieve := reapedOnAchieve(rec)
 
-	routed, dropped := 0, 0
+	rows, err := q.Snapshot(b.Agent)
+	if err != nil {
+		slog.Error("held backlog unreadable", "agent", b.Agent, "err", err)
+		return
+	}
+	byID := make(map[string]sendq.Entry, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+
+	routed, held := 0, 0
+	var heldHead sendq.Entry
 	for _, id := range b.EntryIDs {
-		e, claimed, err := q.ClaimFrontID(b.Agent, id)
+		seen, ok := byID[id]
+		if !ok {
+			continue
+		}
+		// Do not claim. Claiming would mark the entry Attempting, and the
+		// Resolve that followed would be a daemon disposition. The payload
+		// stays in the phase it already has.
+		if parent == "" || (achieve && looksLikeGateFeedback(seen.Text)) {
+			if held == 0 {
+				heldHead = seen
+			}
+			held++
+			continue
+		}
+		// ClaimID, not ClaimFrontID. The kept head is still the first
+		// claimable entry, and ClaimFrontID will not take the one behind it.
+		e, claimed, err := q.ClaimID(b.Agent, id)
 		if err != nil {
 			slog.Error("held backlog claim failed", "agent", b.Agent, "entry_id", id, "err", err)
 			break
 		}
 		if !claimed {
-			continue // A concurrent drain owns or already resolved this entry.
+			continue
 		}
-		outcome := sendq.TerminalUndelivered
-
-		switch {
-		case achieve && looksLikeGateFeedback(e.Text):
-			// The target this feedback is about is the one the reap rode on.
-			// Nobody is going to act on it; the honest record is a log line.
-			s.LogEvent("agent_send", "held_backlog_dropped", map[string]any{
-				"target":     "T582",
-				"agent":      b.Agent,
-				"entry_id":   e.ID,
-				"reason":     "gate feedback about an already-achieved target",
-				"intent":     rec.Describe(),
-				"bytes":      len(e.Text),
-				"oldest_age": age.Round(time.Second).String(),
-			})
-			dropped++
-		case parent != "":
-			tagged := fmt.Sprintf(
-				"[held backlog from %s — that seat was %s, so this is routed to you as its parent (🎯T582)]\n\n%s",
-				b.Agent, rec.Describe(), e.Text)
-			res, derr := s.deliverByName(parent, tagged, OriginAgent, false)
-			if derr == nil {
-				switch res.Status {
-				case "sent", "interrupted_sent", "rehydrated_sent":
-					// Retains the existing direct-send success predicate.
-				case "queued", "interrupted_queued", StatusReapedHeld:
-					if res.Queued == 0 || !q.Durable() {
-						derr = fmt.Errorf("parent hold is not a confirmed durable successor: %s", res.Message)
-					}
-				default:
-					derr = fmt.Errorf("parent delivery remains %s: %s", res.Status, res.Message)
+		tagged := formatHeldBacklogRoute(b.Agent, rec.Describe(), e.Text)
+		res, derr := s.deliverByName(parent, tagged, OriginAgent, false)
+		// sent, interrupted_sent, and rehydrated_sent mean the parent
+		// call returned. That is not a receipt. Keep the payload and do
+		// not offer it again. A durable queue successor is still a hold
+		// the parent accepted into its own queue.
+		unconfirmedHandoff := false
+		if derr == nil {
+			switch res.Status {
+			case "sent", "interrupted_sent", "rehydrated_sent":
+				unconfirmedHandoff = true
+			case "queued", "interrupted_queued", StatusReapedHeld:
+				if res.Queued == 0 || !q.Durable() {
+					derr = fmt.Errorf("parent hold is not a confirmed durable successor: %s", res.Message)
 				}
+			default:
+				derr = fmt.Errorf("parent delivery remains %s: %s", res.Status, res.Message)
 			}
-			if derr != nil {
-				slog.Warn("🎯T582 held backlog could not be routed to the parent",
-					"component", "agent_send", "agent", b.Agent, "parent", parent, "err", derr)
-				s.LogEvent("agent_send", "held_backlog_uncertain", map[string]any{
-					"target":   "T582",
-					"agent":    b.Agent,
-					"entry_id": e.ID,
-					"parent":   parent,
-					"reason":   "parent delivery unverified; payload retained: " + derr.Error(),
-					"bytes":    len(e.Text),
-				})
-				if err := q.Resolve(b.Agent, e, sendq.Unverified, "parent delivery outcome uncertain: "+derr.Error()); err != nil {
-					slog.Error("held backlog route outcome not persisted", "agent", b.Agent, "entry_id", e.ID, "err", err)
-				}
-				s.notifyFleetHealth(e.ID, fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
-				return
-			}
-			outcome = sendq.Confirmed
-			routed++
-		default:
-			s.LogEvent("agent_send", "held_backlog_dropped", map[string]any{
+		}
+		if derr != nil {
+			slog.Warn("🎯T582 held backlog could not be routed to the parent",
+				"component", "agent_send", "agent", b.Agent, "parent", parent, "err", derr)
+			s.LogEvent("agent_send", "held_backlog_uncertain", map[string]any{
 				"target":   "T582",
 				"agent":    b.Agent,
 				"entry_id": e.ID,
-				"reason":   "reaped seat has no recorded parent to route to",
-				"intent":   rec.Describe(),
+				"parent":   parent,
+				"reason":   "parent delivery unverified; payload retained: " + derr.Error(),
 				"bytes":    len(e.Text),
 			})
-			dropped++
+			if err := q.Resolve(b.Agent, e, sendq.Unverified, "parent delivery outcome uncertain: "+derr.Error()); err != nil {
+				slog.Error("held backlog route outcome not persisted", "agent", b.Agent, "entry_id", e.ID, "err", err)
+			}
+			s.notifyFleetHealth(e.ID, fmt.Sprintf("Uncertain route of held message %s from %q to %q. The payload remains held; reconcile before retrying.", e.ID, b.Agent, parent))
+			return
 		}
-		if err := q.Resolve(b.Agent, e, outcome, "recorded reaped-seat disposition"); err != nil {
+		outcome := sendq.Confirmed
+		detail := "recorded reaped-seat disposition"
+		if unconfirmedHandoff {
+			outcome = sendq.Unverified
+			detail = "parent accepted the call without a receipt; payload retained"
+		}
+		routed++
+		if err := q.Resolve(b.Agent, e, outcome, detail); err != nil {
 			slog.Error("held backlog route not persisted; attempt retained", "agent", b.Agent, "entry_id", e.ID, "err", err)
 			return
 		}
 	}
-	if routed+dropped == 0 {
+	if routed+held == 0 {
 		return
 	}
-
-	slog.Info("🎯T582 held backlog on a finished seat routed",
-		"component", "agent_send",
-		"agent", b.Agent,
-		"parent", parent,
-		"routed", routed,
-		"dropped", dropped,
-		"oldest_age", age.Round(time.Second).String(),
-		"intent", rec.Describe())
-
 	hold := heldBacklogKey(b)
 	if s.noticedReapedBacklog(b.Agent, hold) {
 		return
 	}
+	if held > 0 {
+		reason := "reaped seat has no recorded parent to route to; payload stays"
+		if achieve && looksLikeGateFeedback(heldHead.Text) {
+			reason = "gate feedback about an already-achieved target; payload stays"
+		}
+		s.LogEvent("agent_send", "backlog_held", map[string]any{
+			"target":   "T582",
+			"agent":    b.Agent,
+			"entry_id": heldHead.ID,
+			"reason":   reason,
+			"bytes":    len(heldHead.Text),
+			"queued":   held,
+		})
+	}
+	slog.Info("🎯T582 held backlog on a finished seat",
+		"component", "agent_send",
+		"agent", b.Agent,
+		"parent", parent,
+		"routed", routed,
+		"held", held,
+		"oldest_age", age.Round(time.Second).String(),
+		"intent", rec.Describe())
+
 	var b2 strings.Builder
 	fmt.Fprintf(&b2, "Held backlog on finished agent %q (%s): %d message(s) waiting %s. ",
 		b.Agent, rec.Describe(), b.Depth, age.Round(time.Second))
 	switch {
-	case routed > 0 && dropped > 0:
-		fmt.Fprintf(&b2, "%d routed to its parent %q (tagged with the reaped name); %d dropped as gate feedback about work already achieved (one eventlog record each). ",
-			routed, parent, dropped)
+	case routed > 0 && held > 0:
+		fmt.Fprintf(&b2, "%d routed to its parent %q (tagged with the reaped name); %d left in place (entry %s, %d bytes). The payload stays. Record a drop with jevons_sendq_reconcile, or an overseer kill discards it. The daemon will not discard it. ",
+			routed, parent, held, heldHead.ID, len(heldHead.Text))
 	case routed > 0:
 		fmt.Fprintf(&b2, "Routed to its parent %q, tagged with the reaped name. ", parent)
 	default:
-		fmt.Fprintf(&b2, "Dropped with an eventlog record: it is feedback about work already finished, and there is no live seat it belongs to. ")
+		fmt.Fprintf(&b2, "The payload stays (entry %s, %d bytes). Record a drop with jevons_sendq_reconcile, or an overseer kill discards it. The daemon will not discard it. ",
+			heldHead.ID, len(heldHead.Text))
 	}
 	b2.WriteString("No action: the seat finished its mission and was deregistered — do NOT jevons_agent_start it to drain this. " +
 		"This notice is sent once per reaped seat (🎯T582).")

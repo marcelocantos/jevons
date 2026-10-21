@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,9 +13,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/sendq"
-	"github.com/marcelocantos/jevons/internal/spool"
-	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T418 — WHAT HAPPENS TO A MESSAGE THE DAEMON ACCEPTED.
@@ -62,7 +62,14 @@ func (s *Server) sendQueue() *sendq.Store {
 	if s.agentSendQ == nil {
 		s.agentSendQ = sendq.NewStore("")
 	}
-	s.agentSendQ.SetObserver(func(name string, depth int) { s.Seats().FromQueue(name, depth, time.Now()) })
+	s.agentSendQ.SetObserver(func(q sendq.Stoppage) {
+		block := q.Block
+		s.Seats().FromQueue(q.Agent, seatstate.QueueReport{
+			Depth:  q.Depth,
+			Oldest: q.Oldest,
+			Block:  &block,
+		}, time.Now())
+	})
 	return s.agentSendQ
 }
 
@@ -118,113 +125,31 @@ func (s *Server) ReportRecoveredBacklog() {
 	if len(backlogs) == 0 {
 		return
 	}
-	now := time.Now()
+	now := s.sweepClock()
 	var lines []string
+	var keys []string
 	total := 0
 	for _, b := range backlogs {
-		total += b.Depth
-		lines = append(lines, b.Describe(now))
 		slog.Info("🎯T418 recovered a queued message the last daemon accepted",
 			"component", "agent_send",
 			"agent", b.Agent,
 			"queued", b.Depth,
 			"oldest_age", b.OldestAge(now).Round(time.Second).String())
-	}
-	keys := make([]string, 0, len(backlogs))
-	for _, b := range backlogs {
+		if s.backlogHeldByIntent(b.Agent) {
+			continue
+		}
+		total += b.Depth
+		lines = append(lines, b.Describe(now))
 		keys = append(keys, heldBacklogKey(b))
+	}
+	if len(lines) == 0 {
+		return
 	}
 	s.notifyFleetHealth(strings.Join(keys, ","), fmt.Sprintf(
 		"Recovered %d queued message(s) with outstanding delivery obligations: %s. "+
 			"Pending entries are offered at an agent's next turn boundary. Unresolved attempts remain held; "+
 			"their outcome is uncertain and they must be reconciled before any retry.",
 		total, strings.Join(lines, "; ")))
-}
-
-// reconcileHeldFromTranscript settles held attempts the receiver's transcript
-// now shows it received, and reports how many it settled.
-//
-// An attempt goes Uncertain when the confirm window closes with no record of
-// the payload. For a Claude seat that is mid-turn, the window closing proves
-// little: Claude Code holds a submitted message in its own input queue until
-// the running turn ends, and the transcript gains it only then — routinely
-// later than the window. On 2026-09-21 claudia-po held seven such attempts,
-// the oldest 28 hours old, each naming a report_id that was sitting in its
-// transcript. Only an operator could clear them, none had, and 244 messages
-// were queued around them.
-//
-// This is not the automatic discard 🎯T623 forbids. Nothing is dropped on a
-// guess: an entry is settled only on the positive evidence the send itself
-// would have accepted — a user message, a queue record, or a queued payload
-// entering a turn. An entry the transcript does not show stays held.
-//
-// The scan starts at the top of the transcript because the entry does not
-// record where the transcript stood when it was attempted. The cost is that
-// an earlier delivery of identical text settles a later one; the receiver
-// then holds that text once rather than twice.
-func (s *Server) reconcileHeldFromTranscript(q *sendq.Store, name string) int {
-	if s == nil || s.registry == nil {
-		return 0
-	}
-	def := s.registry.Def(name)
-	proc := s.registry.Get(name)
-	if def == nil || proc == nil {
-		return 0
-	}
-	if spool.SidecarProvider(string(def.Provider)) {
-		if path, err := spool.EnsureView(spool.Dir(), def.Name); err == nil && path != "" {
-			return s.settleHeldAgainst(q, name, path)
-		}
-	}
-	if !providerKeepsClaudeTranscript(def.Provider) {
-		return 0
-	}
-	return s.settleHeldAgainst(q, name, proc.JSONLPath())
-}
-
-// settleHeldAgainst is reconcileHeldFromTranscript once the receiver's
-// transcript is known.
-func (s *Server) settleHeldAgainst(q *sendq.Store, name, path string) int {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	// Re-reading a multi-megabyte transcript for every held entry on every
-	// sweep would be the cost; only a transcript that grew can say more.
-	s.mu.Lock()
-	if s.heldScannedAt == nil {
-		s.heldScannedAt = make(map[string]int64)
-	}
-	unchanged := s.heldScannedAt[name] == info.Size()
-	s.heldScannedAt[name] = info.Size()
-	s.mu.Unlock()
-	if unchanged {
-		return 0
-	}
-	entries, err := q.Snapshot(name)
-	if err != nil {
-		return 0
-	}
-	settled := 0
-	for _, e := range entries {
-		if e.State != sendq.Uncertain {
-			continue
-		}
-		ev, ok := fateEvidence(path, 0, true, turnev.Needle(e.Text))
-		if !ok {
-			continue
-		}
-		if err := q.Resolve(name, e, sendq.Confirmed, ev.Detail); err != nil {
-			slog.Warn("held attempt is in the transcript but could not be settled",
-				"component", "agent_send", "agent", name, "entry_id", e.ID, "err", err)
-			continue
-		}
-		settled++
-		slog.Info("held attempt settled from the receiver's transcript",
-			"component", "agent_send", "agent", name, "entry_id", e.ID,
-			"attempt_id", e.AttemptID, "enqueued_at", e.EnqueuedAt, "evidence", ev.Detail)
-	}
-	return settled
 }
 
 // SweepSendBacklogs re-offers held messages and surfaces the ones it cannot
@@ -238,8 +163,9 @@ func (s *Server) settleHeldAgainst(q *sendq.Store, name, path string) int {
 //     by the bounce, and a queue that waits for the next one waits for an event
 //     nothing will now generate.
 //   - the agent is not in the registry at all → the seat is gone, so the
-//     message has nowhere to be delivered. Report it with its payload size and
-//     age, then drop it: a queue against a name nobody will fill is not pending.
+//     message has nowhere to be delivered. Report the hold once, by entry id
+//     and size, not by quoting the text. The payload stays until an owner
+//     records a drop or an overseer kill discards it. The daemon does not.
 //   - the agent is registered but busy or not running → leave it queued, and
 //     say so once it has been waiting longer than StalledBacklogAfter.
 func (s *Server) SweepSendBacklogs() {
@@ -251,23 +177,54 @@ func (s *Server) SweepSendBacklogs() {
 		return
 	}
 	now := s.sweepClock()
+	receiptCtx, cancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	defer cancel()
 	for _, b := range backlogs {
-		switch {
-		case b.Uncertain > 0:
-			// An attempt nobody could confirm in the window may have been
-			// confirmed by the receiver since. Look before pinning it.
-			if settled := s.reconcileHeldFromTranscript(q, b.Agent); settled > 0 {
-				b.Uncertain -= settled
-				b.Depth -= settled
-				if b.Uncertain <= 0 {
-					if b.Depth > 0 && s.flightState(b.Agent) != FlightInFlight {
-						if _, live := s.liveSender(b.Agent); live {
-							s.drainAgentSendQueue(b.Agent)
-						}
-					}
-					break
-				}
+		// Receipt reads do not dispatch work or lift intent. Even a parked or
+		// reaped seat can resolve a handoff to its stored original generation.
+		// An owned attempt is InFlight, not an uncertain receipt. Do not
+		// query or settle it on this pass.
+		if b.Uncertain > 0 {
+			s.reconcileHeldReceipts(receiptCtx, b.Agent)
+			// The query can race arrivals, claims and operator dispositions.
+			// Refresh the cohort rather than subtracting from the old snapshot.
+			b, err = q.Backlog(b.Agent)
+			if err != nil {
+				slog.Warn("receipt recovery cannot refresh backlog", "agent", b.Agent, "error", err)
+				continue
 			}
+			if b.Depth == 0 {
+				continue
+			}
+		}
+		// A deliberate hold is status, including an uncertain attempt. Keep
+		// its durable obligation readable; no receipt guess or model prompt
+		// can lift the intent. Reaped recovery/routing remains a separate case.
+		if s.backlogHeldByIntent(b.Agent) {
+			s.reportStalledBacklog(b, now, "held by fleet intent")
+			continue
+		}
+		switch {
+		case b.InFlight > 0:
+			// This store owns the attempt. Do not announce it as a departed
+			// hold, replay it, or drop anything behind it. reapBacklogForMissingAgent
+			// keeps every payload; this case is what keeps a live attempt off
+			// that hold notice. A coexisting pin does not flow past it.
+			if b.Uncertain == 0 {
+				break
+			}
+			pin, ok := s.sendqPinFor(b.Agent)
+			if !ok || pin.AttemptID == "" {
+				break
+			}
+			if _, reaped := LookupReapedRecord(s.fleetIntent(), b.Agent); reaped {
+				break
+			}
+			if s.registry != nil && !s.agentIsRegistered(b.Agent) {
+				break
+			}
+			s.noticeUncertainAttempt(b.Agent, pin, formatSendqPinLine(b.Agent, pin, false))
+		case b.Uncertain > 0:
 			// Never route, discard, or replay an attempt left by this daemon or
 			// its predecessor (🎯T623). PINNED is a live-seat word (🎯T599):
 			// a reaped or departed name must not keep raising it (🎯T686).
@@ -277,6 +234,13 @@ func (s *Server) SweepSendBacklogs() {
 			}
 			if rec, reaped := LookupReapedRecord(s.fleetIntent(), b.Agent); reaped {
 				s.noticeUncertainAttempt(b.Agent, pin, FormatReapedUncertainHoldLine(b.Agent, pin, rec))
+				// The uncertain attempt stays where it is. Pending messages
+				// behind it are not that attempt, and a reaped seat has no
+				// live sender for the flow-past drain below. The finished-seat
+				// route claims only Pending entries.
+				if b.Depth > b.Uncertain {
+					s.reportHeldReapedBacklog(b, rec, now)
+				}
 				break
 			}
 			if s.registry != nil && !s.agentIsRegistered(b.Agent) {
@@ -294,13 +258,14 @@ func (s *Server) SweepSendBacklogs() {
 				if _, live := s.liveSender(b.Agent); live {
 					slog.Info("🎯T766.5 backlog sweep: re-offering pending messages behind held entries",
 						"component", "agent_send", "agent", b.Agent, "queued", b.Depth, "held", b.Uncertain)
-					s.drainAgentSendQueue(b.Agent)
+					s.drainAgentSendQueueWithReceiptContext(receiptCtx, b.Agent)
 				}
 			}
 		case !s.agentIsRegistered(b.Agent):
 			// 🎯T401: a reaped seat is recoverable — gate feedback stays held
 			// until jevons_agent_start (or intent lift + start) recreates it.
-			// A never-registered / aged-out name still drops (T418 clause 5).
+			// A never-registered / aged-out name is held, not dropped (🎯T766.5).
+			// The payload stays until jevons_sendq_reconcile or an overseer kill.
 			if rec, ok := LookupReapedRecord(s.fleetIntent(), b.Agent); ok {
 				s.reportHeldReapedBacklog(b, rec, now)
 				continue
@@ -324,7 +289,7 @@ func (s *Server) SweepSendBacklogs() {
 			slog.Info("🎯T418 backlog sweep: re-offering a held message",
 				"component", "agent_send", "agent", b.Agent, "queued", b.Depth,
 				"oldest_age", b.OldestAge(now).Round(time.Second).String())
-			s.drainAgentSendQueue(b.Agent)
+			s.drainAgentSendQueueWithReceiptContext(receiptCtx, b.Agent)
 		}
 	}
 }
@@ -347,10 +312,11 @@ func (s *Server) reportHeldReapedBacklog(b sendq.Backlog, rec fleetintent.Record
 			"oldest_age", age.Round(time.Second).String())
 		return
 	}
-	// 🎯T582: a seat reaped on finish is not coming back for this. Route the
-	// hold to its parent (or drop gate feedback about the achieved target with
-	// one eventlog record) and tell the overseer once, rather than advising
-	// jevons_agent_start on a finished seat every sweep.
+	// 🎯T582: a seat reaped on finish is not coming back for this. Route a
+	// non-gate hold to its recorded parent. Gate feedback about an achieved
+	// target, and a hold with no recorded parent, stays until an operator
+	// reconcile or an overseer kill. Tell the overseer once, rather than
+	// advising jevons_agent_start on a finished seat every sweep.
 	if age >= heldReapedRouteAfter && reapRoutable(rec) {
 		s.routeHeldReapedBacklog(b, rec, now)
 		return
@@ -413,44 +379,57 @@ func (s *Server) agentIsRegistered(name string) bool {
 	return false
 }
 
-// reapBacklogForMissingAgent drops a queue whose addressee has left the fleet,
-// after saying what was in it. The payload is named by size and age rather than
-// quoted: the point is that someone learns a message was never delivered, and
-// pasting an arbitrarily long payload into a health notice buries that.
+// reapBacklogForMissingAgent reports a queue whose addressee has left the
+// fleet. It does not claim, archive, or remove. A daemon decision is not an
+// owner decision: the payload stays until jevons_sendq_reconcile records a
+// drop, or an overseer kill discards it. The notice names the head entry's
+// id and size, not the text, and a second pass for the same hold is silent.
+// A failed snapshot leaves the queue untouched and does not consume the notice.
 func (s *Server) reapBacklogForMissingAgent(b sendq.Backlog, now time.Time) {
-	q := s.sendQueue()
-	for _, id := range b.EntryIDs {
-		e, claimed, err := q.ClaimFrontID(b.Agent, id)
-		if err != nil {
-			slog.Error("departed-agent backlog claim failed", "agent", b.Agent, "entry_id", id, "err", err)
-			return
-		}
-		if !claimed {
-			continue // A concurrent drain owns or already resolved this entry.
-		}
-		s.LogEvent("agent_send", "backlog_undelivered", map[string]any{
-			"agent": b.Agent, "entry_id": e.ID, "attempt_id": e.AttemptID,
-			"bytes": len(e.Text), "reason": "addressee no longer registered",
-		})
-		s.notifyFleetHealth(e.ID, fmt.Sprintf("UNDELIVERED: queued message %s (%d bytes) for %q has no registered addressee. "+
-			"It waited %s and is being discarded with a terminal record; re-send to a live agent if still needed.",
-			e.ID, len(e.Text), b.Agent, e.Age(now).Round(time.Second)))
-		if err := q.Resolve(b.Agent, e, sendq.TerminalUndelivered, "addressee no longer registered; sender notified"); err != nil {
-			slog.Error("backlog terminal outcome not persisted; attempt remains held", "agent", b.Agent, "entry_id", e.ID, "err", err)
-			return
+	if b.Depth == 0 {
+		return
+	}
+	rows, err := s.sendQueue().Snapshot(b.Agent)
+	if err != nil {
+		slog.Error("departed-agent backlog unreadable", "agent", b.Agent, "err", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	hold := heldBacklogKey(b)
+	if s.noticedReapedBacklog(b.Agent, hold) {
+		return
+	}
+	head := rows[0]
+	if len(b.EntryIDs) > 0 {
+		for _, e := range rows {
+			if e.ID == b.EntryIDs[0] {
+				head = e
+				break
+			}
 		}
 	}
+	s.LogEvent("agent_send", "backlog_held", map[string]any{
+		"agent": b.Agent, "entry_id": head.ID, "bytes": len(head.Text),
+		"queued": len(rows), "reason": "addressee no longer registered",
+	})
+	s.notifyFleetHealth(head.ID, fmt.Sprintf("HELD: queued message %s (%d bytes) for %q has no registered addressee. "+
+		"It waited %s. The payload stays. Record a drop with jevons_sendq_reconcile, "+
+		"or an overseer kill discards it. The daemon will not discard it.",
+		head.ID, len(head.Text), b.Agent, head.Age(now).Round(time.Second)))
 }
 
-// reportStalledBacklog names a queue that has stopped moving. It fires once the
-// head has been waiting longer than StalledBacklogAfter and then at most once
-// per sweep, because an alarm that fires for the normal state of the world is
-// not loud (🎯T426): a queue thirty seconds behind a working agent is a queue
-// doing its job.
-//
-// 🎯T527: when fleet intent says the agent should not be running (parked,
-// blocked, reaped), the notice names that stand-down and does NOT prescribe
-// interrupt=true — interrupting a deliberate park fights 🎯T414.
+// backlogHeldByIntent distinguishes intentional no-action holds from reaped
+// seats whose pending obligations may still need routing or one recovery alert.
+func (s *Server) backlogHeldByIntent(name string) bool {
+	dec := s.AllowFleetControl(name, fleetintent.ControlDeliverStart)
+	return !dec.Allow && dec.Blocking != fleetintent.Reaped
+}
+
+// reportStalledBacklog names a queue waiting longer than StalledBacklogAfter.
+// 🎯T952: a deliberately stood-down seat is durable status, not a request
+// for the overseer to spend another turn confirming that no action is needed.
 func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string) {
 	age := b.OldestAge(now)
 	if age < StalledBacklogAfter {
@@ -470,13 +449,6 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 			"oldest_age", age.Round(time.Second).String(),
 			"reason", reason,
 			"intent", dec.Reason)
-		s.notifyFleetHealth(heldBacklogKey(b), fmt.Sprintf(
-			"Stalled backlog on %q: %d message(s) held by the daemon, the oldest waiting %s. "+
-				"Agent is stood down (%s; %s) — intentional stand-down; messages stay on disk until "+
-				"the park is lifted (jevons_fleet_intent name=%q state=working). "+
-				"No recovery action: a deliberate park is not a stuck turn.",
-			b.Agent, b.Depth, age.Round(time.Second),
-			fleetintent.Describe(dec.Blocking), dec.Reason, b.Agent))
 		return
 	}
 
@@ -494,16 +466,48 @@ func (s *Server) reportStalledBacklog(b sendq.Backlog, now time.Time, why string
 		b.Agent, b.Depth, age.Round(time.Second), why))
 }
 
+// IsolateSweepNowFileEnv names a file of one RFC3339Nano timestamp. The
+// backlog sweep reads it only when JEVONS_TEST_FAULTS=1, which the isolate
+// journey suite sets and the development daemon does not. An unreadable
+// file leaves the sweep on the wall clock.
+const IsolateSweepNowFileEnv = "JEVONS_BACKLOG_SWEEP_NOW_FILE"
+
+const isolateTestFaultsEnv = "JEVONS_TEST_FAULTS"
+
 // sweepClock is the sweep's now. Injectable so a ten-minute run of the sweep
-// is a test that costs no wall time (🎯T582); the daemon leaves it nil.
+// is a test that costs no wall time (🎯T582). The development daemon leaves
+// the injection nil and does not set the isolate fault env, so it uses the
+// wall clock.
 func (s *Server) sweepClock() time.Time {
 	s.mu.Lock()
 	fn := s.sweepNow
 	s.mu.Unlock()
-	if fn == nil {
-		return time.Now()
+	if fn != nil {
+		return fn()
 	}
-	return fn()
+	if t, ok := isolateSweepNow(); ok {
+		return t
+	}
+	return time.Now()
+}
+
+func isolateSweepNow() (time.Time, bool) {
+	if os.Getenv(isolateTestFaultsEnv) != "1" {
+		return time.Time{}, false
+	}
+	path := strings.TrimSpace(os.Getenv(IsolateSweepNowFileEnv))
+	if path == "" {
+		return time.Time{}, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // SetSweepClock injects the backlog sweep's clock. Test-only seam: the daemon
@@ -555,17 +559,47 @@ type SendqPin struct {
 	AttemptID string
 }
 
+// FormatQueueStoppage is the agent_list line for a queue the authority has
+// read and that still holds messages. An unknown depth and an empty queue
+// say nothing: a missing claim is not an empty queue, and an empty queue is
+// not a stoppage. Age is computed from the stored enqueue time. A block
+// claim of "" is "not blocked" and adds no block clause.
+func FormatQueueStoppage(name string, st seatstate.State, now time.Time) string {
+	if st.QueueDepth <= 0 {
+		return ""
+	}
+	msg := fmt.Sprintf("QUEUE %s: %d queued, oldest waiting %s",
+		name, st.QueueDepth, st.QueueOldestAge(now).Round(time.Second))
+	if st.QueueBlock != nil && *st.QueueBlock != "" {
+		msg += "; block: " + *st.QueueBlock
+	}
+	return msg
+}
+
 // FormatSendqPinLine is the operator-facing account of a pinned seat, shared
 // by agent_list and the fleet-health notice so the two never drift.
+// Those callers have no owned-attempt argument, so they keep the flow-past
+// sentence. The reconcile tool passes false while this daemon owns an attempt,
+// because that attempt blocks the seat and nothing behind the pin delivers.
 func FormatSendqPinLine(name string, pin SendqPin) string {
-	if pin.State != sendq.Pending {
+	return formatSendqPinLine(name, pin, true)
+}
+
+func formatSendqPinLine(name string, pin SendqPin, flowPast bool) string {
+	// An empty on-disk state that still carries an attempt id is a held
+	// attempt, not an admitted message. A start does not claim it.
+	if pin.State != sendq.Pending || pin.AttemptID != "" {
+		behind := "messages behind it keep delivering past it (🎯T766.5). "
+		if !flowPast {
+			behind = "An attempt this daemon owns blocks the seat, so nothing behind this entry delivers until that attempt's result is recorded. "
+		}
 		return fmt.Sprintf("PINNED %s: sendq message %s has an unresolved %s attempt %s (%s). "+
-			"The payload remains held. A start will not retry it; messages behind it keep delivering past it (🎯T766.5). "+
+			"The payload remains held. A start will not retry it; %s"+
 			"Reconcile it with jevons_sendq_reconcile name=%[1]q (call it with only name= to see the queue, then "+
 			"action=confirmed|requeue|drop entry_id=%[2]q attempt_id=%[4]q actor=… evidence=…) — 🎯T726. "+
 			"Never edit ~/.jevons/sendq/*.json while the daemon is running. "+
 			"An explicit overseer kill discards the held obligation without claiming non-delivery.",
-			name, pin.EntryID, pin.State, pin.AttemptID, pin.Reason)
+			name, pin.EntryID, pinAttemptKind(pin.State), pin.AttemptID, pin.Reason, behind)
 	}
 	fails := ""
 	if pin.Fails > 0 {
@@ -720,7 +754,7 @@ func FormatReapedUncertainHoldLine(name string, pin SendqPin, rec fleetintent.Re
 			"The seat is %s — a recoverable closed address, not a live PINNED seat. "+
 			"The payload remains held; a start will not retry it. jevons_agent_kill is a no-op here (🎯T401/🎯T686). "+
 			"Resolve the attempt with jevons_sendq_reconcile name=%[1]q entry_id=%[2]q attempt_id=%[4]q (🎯T726).",
-		name, pin.EntryID, pin.State, pin.AttemptID, pin.Reason, closed)
+		name, pin.EntryID, pinAttemptKind(pin.State), pin.AttemptID, pin.Reason, closed)
 }
 
 // noticeUncertainAttempt delivers one fleet-health line per unresolved

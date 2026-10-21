@@ -14,9 +14,11 @@ import (
 // 🎯T454: fixture turn outputs drive satisfaction / rung suppression.
 
 func TestT454RefusalOnlyTurnDoesNotSatisfy(t *testing.T) {
-	spend := "You've hit your monthly spend limit. Run /usage-credits to manage your limit."
-	if agenterr.ClassifyTurnOutput(spend) != agenterr.TurnRefusalOnly {
-		t.Fatal("fixture must classify as refusal-only")
+	// RefusalHold latches from a typed provider cause (🎯T766.4), not from
+	// spend-limit prose: the fixture is the cause the production latch
+	// (IdleActivityTracker.ApplyTerminalCause) reads.
+	if !agenterr.HardBlock(agenterr.ClassFromCause(agenterr.CauseSpendWall), "") {
+		t.Fatal("fixture: a spend_wall cause must hard-block and so latch RefusalHold")
 	}
 	o := Observation{
 		Name: "jv-x", Purpose: "work", ProcessRunning: true,

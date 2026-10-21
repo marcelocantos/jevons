@@ -71,7 +71,7 @@ func callDirect(t *testing.T, s *Server, id, text string) *mcp.CallToolResult {
 // 🎯T283 acceptance: an outage during jevons_thread_direct returns the
 // classified reason, not a bare "Internal error" the caller cannot act on.
 func TestThreadDirectClassifiesTransportOutage(t *testing.T) {
-	s, id := directServer(t, &failFleet{sendErr: fmt.Errorf("acp session/prompt: Internal error")})
+	s, id := directServer(t, &failFleet{sendErr: agenterr.WithCause(agenterr.CauseBackendUnavailable, fmt.Errorf("acp session/prompt: Internal error"))})
 	res := callDirect(t, s, id, "do the thing")
 	if !res.IsError {
 		t.Fatal("outage must surface as an error result")
@@ -85,16 +85,15 @@ func TestThreadDirectClassifiesTransportOutage(t *testing.T) {
 	}
 }
 
-// The Grok ACP shape: the outage is the assistant turn, so Direct returns it
-// as a successful reply. That is the J10 failure mode — the caller reads an
-// outage as "the shell tool did not run".
+// A whole-turn "Internal error" is a sentence. Direct returns it as the
+// reply. The outage is the typed transport error, covered above.
 func TestThreadDirectClassifiesReplyCarriedOutage(t *testing.T) {
 	s, id := directServer(t, &failFleet{reply: "Internal error"})
 	res := callDirect(t, s, id, "run the shell command")
-	if !res.IsError {
-		t.Fatal("reply-carried outage must surface as an error result")
+	if res.IsError {
+		t.Fatalf("a reply sentence must not surface as an outage: %s", toolText(res))
 	}
-	if !strings.Contains(toolText(res), string(agenterr.ClassBackendUnavailable)) {
+	if !strings.Contains(toolText(res), "Internal error") {
 		t.Fatalf("got %q", toolText(res))
 	}
 }
@@ -138,7 +137,7 @@ func TestThreadDirectLeavesNonProviderErrorsAlone(t *testing.T) {
 // 🎯T283 acceptance: the deliver path (jevons_event_push) classifies too.
 func TestEventPushClassifiesOutage(t *testing.T) {
 	dir := t.TempDir()
-	ff := &failFleet{sendErr: fmt.Errorf("session/prompt failed: 503 Service Unavailable")}
+	ff := &failFleet{sendErr: agenterr.WithCause(agenterr.CauseBackendUnavailable, fmt.Errorf("session/prompt failed: 503 Service Unavailable"))}
 	b := newPushButler(t, dir, ff, nil)
 	if _, err := b.Spawn(butler.SpawnArgs{ID: "w1", WorkDir: dir, Parent: "jevons"}); err != nil {
 		t.Fatal(err)
@@ -169,12 +168,16 @@ func TestJworkFailureReportsOutageOverEmptyResult(t *testing.T) {
 	}
 }
 
-// A reply that is nothing but the outage counts even without an error event —
-// the provider delivered it as the worker's whole turn.
+// A result that is only the sentence "Internal error" is not an outage.
+// The class arrives on the error event, which the empty-result test covers.
 func TestJworkFailureReportsReplyCarriedOutage(t *testing.T) {
-	class, _ := jworkFailure(agenterr.ClassNone, "", "Internal error")
-	if class != agenterr.ClassBackendUnavailable {
-		t.Fatalf("class = %v, want backend_unavailable", class)
+	class, msg := jworkFailure(agenterr.ClassNone, "", "Internal error")
+	if class != agenterr.ClassNone || msg != "" {
+		t.Fatalf("class = %v msg = %q, want none", class, msg)
+	}
+	class, msg = jworkFailure(agenterr.ClassBackendUnavailable, "Internal error", "Internal error")
+	if class.IsFailure() {
+		t.Fatalf("a non-empty sentence hid the error class as %v %q", class, msg)
 	}
 }
 

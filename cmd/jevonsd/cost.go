@@ -16,6 +16,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/cost"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/seatpair"
 	"github.com/marcelocantos/jevons/internal/server"
 )
 
@@ -31,13 +33,18 @@ type costGuard struct {
 	store *cost.Store
 	// config reports the live budget policy (session bound, daily lines).
 	config func() *cost.BudgetConfig
+	// collector ingests the sqlpipe replica. It does not poll the usage socket.
+	collector *cost.Collector
+	// replica is Jevons' own control-plane file. Its broker link ends with
+	// the daemon context; nil when the control plane is unavailable.
+	replica *cost.ReplicaSource
 }
 
 // startCostGuard constructs and starts the clamp-down loops. It returns
 // nil (with a logged warning) rather than failing the daemon if the
 // usage DB can't open — cost monitoring is important but must not be a
 // single point of failure for the whole cockpit.
-func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watcher, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server) *costGuard {
+func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watcher, registry *claudia.Registry, _ *discovery.Scanner, srv *server.Server, mcp *mcpserver.Server) *costGuard {
 	budgetPath := filepath.Join(jc.StateDir, "budget.json")
 	// 🎯T574: budget.json is hot — limits, protected workers, and the
 	// accounting mode swap in ≤5 s. The configured overseer is always
@@ -103,11 +110,29 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 		return ""
 	}
 
+	replica, err := cost.OpenReplica(ctx, jc.StateDir)
+	if err != nil {
+		slog.Error("cost: control plane unavailable — usage socket poll stays off", "err", err)
+	}
 	collector := cost.NewCollector(&cost.CollectorArgs{
 		Store:        store,
 		ProjectsRoot: jc.SessionsDir,
 		Attribute:    attribute,
+		Replica:      replica,
 	})
+	if collector != nil {
+		if mcp != nil {
+			collector.BindSendReceiptQuery(mcp.SetSendReceiptQuery)
+		}
+		if srv != nil {
+			collector.BindSendReceiptQuery(srv.SetSendReceiptQuery)
+		}
+	}
+	if mcp != nil {
+		if err := seatpair.CatchUpDir(ctx, filepath.Join(jc.StateDir, seatpair.DirName), mcp.ExecuteSeatPair); err != nil {
+			slog.Error("cost: seat pair catch-up failed", "err", err)
+		}
+	}
 
 	monitor := cost.NewMonitor(&cost.MonitorArgs{
 		Store:           store,
@@ -161,7 +186,7 @@ func startCostGuard(ctx context.Context, jc config.Config, watcher *config.Watch
 	slog.Info("cost clamp-down started", "budget", budgetPath,
 		"cost_safety", "T334", "protected", cfg.ProtectedWorkers)
 
-	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config}
+	return &costGuard{monitor: monitor, enforcer: enforcer, store: store, config: config, collector: collector, replica: replica}
 }
 
 // brokerSeatNames lists the names of every seat the claudia broker holds.

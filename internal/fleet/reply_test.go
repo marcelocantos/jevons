@@ -77,9 +77,11 @@ func TestReplyAssemblerConcatenatesGrokDeltas(t *testing.T) {
 }
 
 // Block-shaped providers publish one event per content block, where the
-// newline is the author's paragraphing and must be preserved.
+// newline is the author's paragraphing and must be preserved. Every named
+// plan is a sidecar seat since claudia v0.58 (🎯T1079), so the block shape
+// is a backend off the sidecar (bedrock), or a row with no provider.
 func TestReplyAssemblerJoinsBlockProvidersWithNewline(t *testing.T) {
-	r := testAssembler(chunkSeparator(claudia.ProviderClaude))
+	r := testAssembler(chunkSeparator(claudia.ProviderBedrock))
 	defer r.Close()
 	r.Started()
 
@@ -183,7 +185,7 @@ func TestReplyAssemblerKeepsTrailingBlocksAfterTerminal(t *testing.T) {
 	// trailing block was observed. The property is about ordering, not
 	// duration, so the timers here are fired by hand.
 	clock := &manualClock{}
-	r := testAssembler(chunkSeparator(claudia.ProviderClaude))
+	r := testAssembler(chunkSeparator(claudia.ProviderBedrock))
 	r.afterFunc = clock.afterFunc
 	defer r.Close()
 	r.Started()
@@ -243,8 +245,11 @@ func TestChunkSeparator(t *testing.T) {
 	}{
 		{claudia.ProviderGrok, ""},
 		{claudia.ProviderCursor, ""},
-		{claudia.ProviderClaude, "\n"},
-		{claudia.ProviderCodex, "\n"},
+		// 🎯T1079: claude and codex rows are sidecar seats too.
+		{claudia.ProviderClaude, ""},
+		{claudia.ProviderCodex, ""},
+		{"anthropic", ""},
+		{claudia.ProviderBedrock, "\n"},
 		{"", "\n"},
 	} {
 		if got := chunkSeparator(tc.provider); got != tc.want {

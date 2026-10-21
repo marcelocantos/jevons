@@ -7,12 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/marcelocantos/jevons/internal/turnev"
 )
 
 // 🎯T428 — THE OVERSEER'S NOTIFICATION CHANNEL DOES NOT REPLAY A BATCH IT HAS
@@ -373,10 +370,10 @@ func (l *notifyReplayLedger) allInFlight() bool {
 	return true
 }
 
-// batchAlreadyHeld reports that this exact batch already reached the
-// overseer and must not be offered again (🎯T568). The in-memory T428
-// ledger is empty after a bounce; confirmation lives in the T417
-// delivery-evidence store, or in the overseer chatlog itself.
+// batchAlreadyHeld reports a batch this process already recorded as
+// delivered. A chatlog byte search is not that record: provider transcript
+// text does not decide delivery. The in-memory T428 ledger is empty after
+// a bounce, so only evidence written by a settling handoff survives.
 func (s *Server) batchAlreadyHeld(name, text string) (bool, string) {
 	if s == nil || strings.TrimSpace(text) == "" {
 		return false, ""
@@ -384,35 +381,7 @@ func (s *Server) batchAlreadyHeld(name, text string) (bool, string) {
 	if s.priorDelivery(name, text) {
 		return true, "durable delivery-evidence already records this exact batch"
 	}
-	if s.overseerJournalHolds(name, text) {
-		s.recordDeliveryEvidence(name, text, TurnEvidence{
-			PayloadSeen: true,
-			Detail:      "overseer journal already carries this batch",
-		})
-		return true, "the overseer's own journal already carries this exact batch"
-	}
 	return false, ""
-}
-
-// overseerJournalHolds scans the product chatlog for a user/queue record
-// carrying this payload. That is the T568 "confirmed at user-message
-// level" reading, and it is what makes the first bounce after deploy
-// refuse batches delivered before T417 evidence existed.
-func (s *Server) overseerJournalHolds(name, text string) bool {
-	needle := turnev.Needle(text)
-	if needle == "" {
-		return false
-	}
-	dir := s.deliveryStateDir()
-	if dir == "" {
-		return false
-	}
-	path := filepath.Join(dir, "chatlog", name+".jsonl")
-	switch turnev.Scan(path, 0, true, needle) {
-	case turnev.FateUserMessage, turnev.FateEnteredTurn, turnev.FateQueued:
-		return true
-	}
-	return false
 }
 
 // describeHeldBatch is the operator-facing refusal for a T568 durable hit.

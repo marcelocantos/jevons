@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -44,6 +45,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/provider"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatreg"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -106,11 +108,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *pairInstance != "" || *addCredential != "" {
-		runOneShot(*pairInstance, *addCredential, *relayURL)
-		os.Exit(0)
-	}
-
 	logLevel := slog.LevelInfo
 	if *debug {
 		logLevel = slog.LevelDebug
@@ -170,6 +167,15 @@ func main() {
 	if err != nil {
 		slog.Error("cannot load config", "path", cfgPath, "err", err)
 		os.Exit(1)
+	}
+	// 🎯T1093: the pairing one-shots write the credential where this
+	// daemon reads it, so they run after the config that names state_dir.
+	if *pairInstance != "" || *addCredential != "" {
+		code, err := runOneShot(cfg.StateDir, *pairInstance, *addCredential, *relayURL)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(code)
 	}
 	// 🎯T574: the one loader seam for owner-editable policy files. Every
 	// family below registers here and is re-read on change (≤5 s); nothing
@@ -609,12 +615,22 @@ func main() {
 	// These two loops make each process responsible for the other, and
 	// they live in different process trees precisely so that whatever
 	// takes one down cannot take the other with it.
-	go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
-		StateDir: cfg.StateDir,
-		Home:     supervise.HomeDir(),
-		Repo:     supervise.RepoRoot(),
-		Port:     cfg.Port,
-	}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
+	//
+	// 🎯T1090: only the development daemon does this. The loop observes
+	// and reinstates the owner's real LaunchAgent under $HOME, so an
+	// isolate running it reported the owner's watchdog as a gap from a
+	// test run (gate 252cf6ac) and could have rewritten its plist.
+	if supervisesOwnerWatchdog(cfg.Port, cfg.StateDir) {
+		go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
+			StateDir: cfg.StateDir,
+			Home:     supervise.HomeDir(),
+			Repo:     supervise.RepoRoot(),
+			Port:     cfg.Port,
+		}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
+	} else {
+		slog.Info("supervise: not the development daemon; leaving the owner's watchdog LaunchAgent alone",
+			"port", cfg.Port, "state_dir", cfg.StateDir, "label", supervise.AgentLabel)
+	}
 
 	// ð¯T27.9: start the liveness check loop once the daemon context exists.
 	if liveMon != nil {
@@ -669,12 +685,6 @@ func main() {
 			"sessions", len(upgrade.SessionIDs(snap)), "written_at", snap.WrittenAt)
 	}
 
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
-		slog.Warn("sidecar remint failed", "err", err)
-	} else if n > 0 {
-		slog.Info("sidecar remint", "seats", n)
-	}
-
 	// Placement and migration fields the published AgentDef does not carry.
 	// 🎯T1013.2: storage lives in Claudia now, keyed on agent name, shared
 	// by any client of that module -- not a jevons-private sidecar. The
@@ -705,20 +715,11 @@ func main() {
 	// ð¯T120: product log introspection (durable events.jsonl).
 	mcpSrv.SetEventLogTailer(func(opt eventlog.TailOptions) ([]eventlog.Event, string, error) {
 		path := srv.EventLogPath()
-		limit := opt.Limit
-		if limit <= 0 {
-			limit = 100
-		}
-		if limit > eventlog.MaxPageEvents {
-			limit = eventlog.MaxPageEvents
-		}
-		page, err := eventlog.Page(path, nil, limit, eventlog.Query{
-			Component: opt.Component,
-			Decision:  opt.Decision,
-			Source:    opt.Source,
-			Contains:  opt.Contains,
-		})
-		return page.Events, path, err
+		// Collect walks Page until Limit so a hydrate flood filling the
+		// newest 4 MiB cannot return count=0 (🎯T411). HTTP /api/logs stays
+		// one Page — it exposes next_cursor; MCP does not.
+		evs, err := eventlog.Collect(path, opt)
+		return evs, path, err
 	})
 	// ð¯T128.4: fleet MCP tools dual-write lifecycle events (source=server)
 	// into the same journal so GET /api/logs / jevons_logs_tail see them.
@@ -734,6 +735,7 @@ func main() {
 	// 🎯T418: accepted messages live in state_dir/sendq so a restart
 	// between accept and deliver no longer eats them.
 	mcpSrv.SetSendQueueDir(cfg.StateDir)
+	mcpSrv.SetDaemonStateDir(cfg.StateDir) // 🎯T1082: isolate agents are told their own state dir
 
 	// 🎯T414: the shared answer to "should this agent be running?", opened
 	// before any control can ask it. Durable and opened here rather than
@@ -777,7 +779,7 @@ func main() {
 	// Token-spend clamp-down (ð¯T36): start it before the butler so its
 	// spawn/resume guards feed the butler's lifecycle. Returns nil if the
 	// usage DB is unavailable â the cockpit still runs, just unguarded.
-	guard := startCostGuard(ctx, cfg, watcher, registry, scanner, srv)
+	guard := startCostGuard(ctx, cfg, watcher, registry, scanner, srv, mcpSrv)
 
 	// ð¯T114: same Claudia adapter is Fleet (threads) and Participants
 	// (agent-only names) so Deliver/PushEvent share one id space.
@@ -920,6 +922,9 @@ func main() {
 	if guard != nil {
 		mcpSrv.SetBudgetGuards(guard.enforcer.AllowSpawn, guard.enforcer.AllowResume)
 		mcpSrv.SetCostMonitor(guard.monitor.Snapshot)
+		mcpSrv.SetRequestMissionRecorder(guard.store.RecordRequestMission)
+		srv.SetRequestMissionRecorder(guard.store.RecordRequestMission)
+		fleetAdapter.SetRequestMissionRecorder(guard.store.RecordRequestMission)
 		srv.SetCostSource(mcpSrv.CostJSON)
 		srv.SetActivityHook(guard.enforcer.Heartbeat)
 	}
@@ -971,22 +976,9 @@ func main() {
 	if overseerModelChoice == "" {
 		overseerModelChoice = cfg.Model
 	}
-	jevonDef, err := registry.EnsureAgent(cfg.OverseerName, jevDir, overseerModelChoice, true)
+	jevonDef, err := registerOverseerSeat(registry, cfg.OverseerName, jevDir, overseerModelChoice, defaultProvider)
 	if err != nil {
 		slog.Error("jevon agent setup failed", "err", err)
-		os.Exit(1)
-	}
-	// ð¯T148: keep stored provider on resume; only set default when empty.
-	jevonDef.Provider = cli.SelectAgentProvider("", jevonDef.Provider, defaultProvider)
-	// ð¯T114: overseer purpose on the unified participant record.
-	if jevonDef.Purpose == "" {
-		jevonDef.Purpose = claudia.PurposeOverseer
-	}
-
-	// Overseer MCP registration happens after the listener is bound, so the
-	// advertised URL names the port actually served (ð¯T379). See below.
-	if err := registry.Register(*jevonDef); err != nil {
-		slog.Error("jevon agent register failed", "err", err)
 		os.Exit(1)
 	}
 	slog.Info("jevon agent", "provider", jevonDef.Provider, "session", jevonDef.SessionID, "resume", jevonDef.Materialized)
@@ -1047,6 +1039,21 @@ func main() {
 	mcpSrv.SetOverseerDeliver(func(text string, origin mcpserver.SendOrigin) error {
 		return srv.DeliverToOverseerAs(text, string(origin))
 	})
+	// An agent note to the overseer settles from its batch's receipt when
+	// this send's own drain handed it off (🎯T902 relay, worker reports).
+	mcpSrv.SetOverseerDeliverReceipted(func(text string, origin mcpserver.SendOrigin) (bool, error) {
+		return srv.DeliverToOverseerAsReceipted(text, string(origin))
+	})
+	// The overseer notify queue is the worker drain's hand-off gate. A
+	// non-working fleet holds the text; lifting intent drains it.
+	notifyGateName := cfg.OverseerName
+	if strings.TrimSpace(notifyGateName) == "" {
+		notifyGateName = "jevons"
+	}
+	srv.SetAllowNotifyDrain(func() bool {
+		return mcpSrv.AllowFleetControl(notifyGateName, fleetintent.ControlDeliverSubmit).Allow
+	})
+	mcpSrv.SetOverseerNotifyDrain(srv.DrainOverseerNotes)
 	// ð¯T82: event-driven fleet panel refresh when agents.json mutates.
 	srv.WatchAgentsFile(registryPath)
 
@@ -1083,7 +1090,7 @@ func main() {
 	}
 	fleetAdapter.SetMCP(mcpAttach)
 	mcpSrv.SetMCP(mcpAttach)
-	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.Provider, jevonDef.WorkDir)
+	jevonDef.MCPServers = mcpattach.SessionServers(mcpAttach, jevonDef.WorkDir)
 	jevonDef.MCPExclusive = mcpattach.Exclusive
 	stampRegistrySessionMCP(registry, mcpAttach, jevonDef)
 	if err := registry.Register(*jevonDef); err != nil {
@@ -1128,7 +1135,7 @@ func main() {
 			mode = upgrade.ModeUpgrade
 		}
 		if mode.StopAgents() {
-			registry.StopAll()
+			stopFleetForDrain(registry)
 			if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
 				slog.Warn("could not drop stale upgrade handoff on drain", "err", err)
 			}
@@ -1157,6 +1164,10 @@ func main() {
 		}
 		slog.Info("shutting down", "signal", sig, "exit_mode", mode.String(),
 			"stop_agents", mode.StopAgents())
+		// Receipts that already settled must leave the send queue before
+		// this process exits. A later snapshot otherwise reads an uncertain
+		// row whose receipt is cancelled.
+		mcpSrv.SettleHeldReceipts()
 		cancel()
 		httpSrv.Close()
 	}()
@@ -1198,11 +1209,6 @@ func main() {
 	noteRemint(upgrade.ReattachSeatsContext(ctx, registry, isOverseerSeat, 1))
 	if ctx.Err() != nil {
 		return
-	}
-	if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
-		slog.Warn("sidecar remint after reattach failed", "err", err)
-	} else if n > 0 {
-		slog.Info("sidecar remint", "seats", n, "when", "after-reattach")
 	}
 	if upgradeSnap != nil {
 		if err := upgrade.ConsumeSnapshot(upgrade.SnapshotPath(cfg.StateDir)); err != nil {
@@ -1382,22 +1388,13 @@ func main() {
 	go func() {
 		defer fleetStarted.Store(true)
 		started := time.Now()
-		pausedAuto := func(name string) bool {
-			return cfg.FrontierConsume.Disabled && mcpserver.IsAutoSpawnedWorkerName(name)
-		}
+		// 🎯T1067 / 🎯T1066: an auto seat the frontier pause or an achieved
+		// target holds is adopted if it still runs, never started again.
+		heldAuto := mcpSrv.AutoSeatHold
 		noteRemint(upgrade.ReattachSeatsContext(ctx, registry,
-			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, pausedAuto),
+			fleetReattachInclude(isOverseerSeat, mcpSrv.AllowFleetControl, heldAuto),
 			upgrade.DefaultReattachConcurrency))
-		adoptPausedAutoSeats(registry, pausedAuto)
-		// The handoff only promised an adoptable endpoint, not a live
-		// process. Once every permitted seat has had its adoption attempt,
-		// remint cold legacy rows; RemintRegistry checks the actual
-		// running handle before it rewrites any transport identity.
-		if n, err := seatreg.RemintRegistry(registry, ""); err != nil {
-			slog.Warn("sidecar remint after fleet reattach failed", "err", err)
-		} else if n > 0 {
-			slog.Info("sidecar remint", "seats", n, "when", "after-fleet-reattach")
-		}
+		adoptPausedAutoSeats(registry, heldAuto)
 		// Workers started here never passed through handleAgentStart, so
 		// wire their completion-notify now (🎯T61); the standing sweep
 		// (🎯T426) would also catch them, later.
@@ -1457,60 +1454,55 @@ func main() {
 // runOneShot handles --pair and --add-credential flags. Both modes
 // load (or create) the credential store and exit; they do not start
 // the daemon.
-func runOneShot(pairInstance, addCredential, relayURL string) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "cannot determine home directory:", err)
-		os.Exit(1)
-	}
-	store := server.NewCredentialStore(filepath.Join(homeDir, ".jevons", "credential.json"))
+// runOneShot runs --pair or --add-credential and returns the exit code.
+//
+// The credential lives under the daemon's state_dir (🎯T1093) — main passes
+// the state_dir from the config it loaded — because the daemon reads
+// <state_dir>/credential.json. A one-shot that wrote
+// ~/.jevons/credential.json regardless paired a non-default daemon with a
+// file it never reads, and an isolate's pairing wrote into development state.
+func runOneShot(stateDir, pairInstance, addCredential, relayURL string) (int, error) {
+	store := server.NewCredentialStore(filepath.Join(stateDir, "credential.json"))
 	if _, err := store.Load(); err != nil {
-		fmt.Fprintln(os.Stderr, "load credential:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("load credential: %w", err)
 	}
 
 	if addCredential != "" {
 		data, err := os.ReadFile(addCredential)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "read server record:", err)
-			os.Exit(1)
+			return 1, fmt.Errorf("read server record: %w", err)
 		}
 		var rec crypto.PairingRecord
 		if err := json.Unmarshal(data, &rec); err != nil {
-			fmt.Fprintln(os.Stderr, "parse server record:", err)
-			os.Exit(1)
+			return 1, fmt.Errorf("parse server record: %w", err)
 		}
 		if err := store.Save(&rec); err != nil {
-			fmt.Fprintln(os.Stderr, "save credential:", err)
-			os.Exit(1)
+			return 1, fmt.Errorf("save credential: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "credential saved for peer %s\n", rec.PeerInstanceID)
-		return
+		return 0, nil
 	}
 
 	// --pair mode.
 	if relayURL == "" {
-		fmt.Fprintln(os.Stderr, "--pair requires --relay")
-		os.Exit(2)
+		return 2, errors.New("--pair requires --relay")
 	}
 	host := pigeon.NewPairingHost(relayURL)
 	artifact, serverRec, err := host.Mint(pairInstance)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "mint:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("mint: %w", err)
 	}
 	if err := store.Save(serverRec); err != nil {
-		fmt.Fprintln(os.Stderr, "save server record:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("save server record: %w", err)
 	}
 	text, err := artifact.MarshalText()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "marshal artifact:", err)
-		os.Exit(1)
+		return 1, fmt.Errorf("marshal artifact: %w", err)
 	}
 	qr.Print(os.Stderr, string(text))
 	fmt.Println(string(text))
 	fmt.Fprintf(os.Stderr, "artifact for %s expires %s\n", pairInstance, artifact.ExpiresAt.Format(time.RFC3339))
+	return 0, nil
 }
 
 // keyInstructions maps service names to instructions for obtaining the key.
@@ -1791,25 +1783,25 @@ func claudeBin() string {
 // binOnPath: provider CLI found on PATH. candidatePath: non-empty when a
 // known install path exists off-PATH (Grok only today).
 func diagnoseOverseerUnavailable(provider claudia.Provider, binOnPath bool, candidatePath string) string {
-	switch provider {
-	case claudia.ProviderClaude:
+	switch seatprovider.Resolve(provider).Plan {
+	case seatprovider.Claude:
 		if binOnPath {
 			return "the Claude agent failed to start â check that the Claude CLI is authenticated " +
 				"and see the jevonsd log for details (overseer provider is claude)"
 		}
 		return "the Claude CLI is not installed (or not on PATH) â install Claude Code, authenticate, " +
 			"then restart jevonsd (overseer provider is claude; this is not a Grok CLI issue)"
-	case claudia.ProviderCodex:
+	case seatprovider.Codex:
 		if binOnPath {
 			return "the Codex agent failed to start â check Codex auth and see the jevonsd log " +
 				"(overseer provider is codex)"
 		}
 		return "the Codex CLI is not installed (or not on PATH) â install Codex, authenticate, " +
 			"then restart jevonsd (overseer provider is codex; this is not a Grok CLI issue)"
-	case claudia.ProviderBedrock:
+	case seatprovider.Bedrock:
 		return "the Bedrock agent failed to start — check AWS credentials/region and see the " +
 			"jevonsd log (overseer provider is bedrock; this is not a Grok CLI issue)"
-	case claudia.ProviderCursor:
+	case seatprovider.Cursor:
 		if binOnPath {
 			return "the Cursor agent failed to start — session/load of the existing conversation failed or the ACP child died; see the jevonsd log (overseer provider is cursor; this is not a Grok CLI issue)"
 		}
@@ -1842,8 +1834,8 @@ func overseerDownReason(provider claudia.Provider, resumeDenied error) string {
 // overseerUnavailableReason probes the host for the selected overseer
 // provider's CLI and returns a legible, actionable explanation (🎯T54, 🎯T214).
 func overseerUnavailableReason(provider claudia.Provider) string {
-	switch provider {
-	case claudia.ProviderClaude:
+	switch seatprovider.Resolve(provider).Plan {
+	case seatprovider.Claude:
 		if _, err := exec.LookPath("claude"); err == nil {
 			return diagnoseOverseerUnavailable(provider, true, "")
 		}
@@ -1853,12 +1845,12 @@ func overseerUnavailableReason(provider claudia.Provider) string {
 			}
 		}
 		return diagnoseOverseerUnavailable(provider, false, "")
-	case claudia.ProviderCodex:
+	case seatprovider.Codex:
 		_, err := exec.LookPath("codex")
 		return diagnoseOverseerUnavailable(provider, err == nil, "")
-	case claudia.ProviderBedrock:
+	case seatprovider.Bedrock:
 		return diagnoseOverseerUnavailable(provider, false, "")
-	case claudia.ProviderCursor:
+	case seatprovider.Cursor:
 		if _, err := exec.LookPath("cursor-agent"); err == nil {
 			return diagnoseOverseerUnavailable(provider, true, "")
 		}
@@ -2214,19 +2206,21 @@ func resolveRSIMintCwd(cfg config.Config) string {
 // on the owner is still reattached, so the answer has somewhere to land, and
 // a fleet-wide provider block is transient.
 //
-// Under the frontier pause (frontier_consume.disabled) an auto-spawned worker
-// is not started either (🎯T1067): adoptPausedAutoSeats adopts it if its
-// process still runs, and nothing launches a new one. On 2026-10-12 a
+// An auto-spawned worker a hold names — the frontier pause, or an achieved
+// target (🎯T1067, 🎯T1066) — is not started either: adoptPausedAutoSeats
+// adopts it if its process still runs, and nothing launches a new one. On 2026-10-12 a
 // restart under the pause launched 57 Claude processes for -auto seats, and
 // the PO stopped the daemon with SIGSTOP to halt them.
-func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision, pausedAuto func(string) bool) func(string) bool {
+func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetintent.Control) fleetintent.Decision, heldAuto func(string) string) func(string) bool {
 	return func(name string) bool {
 		if overseer(name) {
 			return false
 		}
-		if pausedAuto != nil && pausedAuto(name) {
-			slog.Info("restart reattach skipped — frontier pause holds auto-spawned workers", "agent", name)
-			return false
+		if heldAuto != nil {
+			if hold := heldAuto(name); hold != "" {
+				slog.Info("restart reattach skipped — auto-spawned worker is held", "agent", name, "hold", hold)
+				return false
+			}
 		}
 		if d := allow(name, fleetintent.ControlRevive); fleetintent.StoodDown(d.Agent) {
 			slog.Info("restart reattach skipped — agent intent keeps it down", "agent", name, "intent", d.Agent)
@@ -2239,13 +2233,13 @@ func fleetReattachInclude(overseer func(string) bool, allow func(string, fleetin
 // adoptPausedAutoSeats re-adopts the auto-spawned workers the frontier pause
 // kept out of the restart reattach, when their process is still running, so
 // a live seat stays observed. It never launches one (🎯T1067).
-func adoptPausedAutoSeats(reg *claudia.Registry, pausedAuto func(string) bool) {
+func adoptPausedAutoSeats(reg *claudia.Registry, heldAuto func(string) string) {
 	if reg == nil {
 		return
 	}
 	adopted, down := 0, 0
 	for _, d := range reg.List() {
-		if !d.AutoStart || !pausedAuto(d.Name) {
+		if !d.AutoStart || heldAuto(d.Name) == "" {
 			continue
 		}
 		if _, err := reg.Adopt(d.Name); err != nil {

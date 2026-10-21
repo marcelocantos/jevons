@@ -88,8 +88,16 @@ type suite struct {
 	// brokerSocket is set only while a migration journey owns a throwaway
 	// Claudia broker. Other journeys keep their direct-mode drain semantics.
 	brokerSocket string
+	// broker is the throwaway Claudia broker behind brokerSocket, when the
+	// suite owns one. J44 reads its control file and its pid.
+	broker *isolatedBroker
 	// readyWait overrides readyTimeout when non-zero (hermetic tests only).
 	readyWait time.Duration
+	// 🎯T1091 (J45): j45HoldOverseer has J20 hold the overseer in a fleet
+	// turn before it exhausts the plan; j45NoIdleWait skips the waits for
+	// an idle overseer that would hide the race J45 exists for.
+	j45HoldOverseer bool
+	j45NoIdleWait   bool
 
 	// 🎯T839: isolateDown is the current isolate outage (nil while the
 	// isolate answers); isolateOutages keeps every one for the summary.
@@ -101,6 +109,8 @@ type suite struct {
 	// aliveProbe and stdout replace the real probe and os.Stdout in tests.
 	aliveProbe func() error
 	stdout     io.Writer
+	// devGuard watches the development state for the run (🎯T1082).
+	devGuard *devStateGuard
 }
 
 func (s *suite) out() io.Writer {
@@ -111,6 +121,18 @@ func (s *suite) out() io.Writer {
 }
 
 func main() {
+	// 🎯T1106: an unrecovered panic in this goroutine unwinds through this
+	// defer (os.Exit and a signal do not, which is why state-dir cleanup
+	// below is registered with cleanups rather than deferred). Run
+	// teardown explicitly and re-panic so the exit code and stack trace
+	// are unchanged.
+	defer func() {
+		if r := recover(); r != nil {
+			cleanups.Run()
+			panic(r)
+		}
+	}()
+
 	port := flag.Int("port", defaultPort, "isolated listen port (0 = ephemeral)")
 	keep := flag.Bool("keep", false, "keep sandbox state dir after run (for debugging)")
 	bin := flag.String("bin", "", "path to jevonsd (default: bin/jevonsd or PATH)")
@@ -153,11 +175,20 @@ func main() {
 		fatal(err)
 	}
 	if !*keep {
-		defer os.RemoveAll(stateDir)
-		defer killPrivateClaudiaTmux(stateDir)
+		// 🎯T1106: these must survive a kill, a fatal() exit, or a panic in
+		// another goroutine, none of which unwind a `defer` in main. Route
+		// through cleanups (which exitNow and catchSignals already run on
+		// every exit path) instead, in the same order a defer pair would
+		// have run them: killPrivateClaudiaTmux before RemoveAll.
+		cleanups.Add(func() { os.RemoveAll(stateDir) })
+		cleanups.Add(func() { killPrivateClaudiaTmux(stateDir) })
 	} else {
 		fmt.Println("KEEP state:", stateDir)
 	}
+	// Catch signals from here on, before anything else that could leak
+	// state is created — an external timeout wrapper's SIGTERM must not
+	// outrun the handler that cleans this directory up (🎯T1106).
+	catchSignals()
 	// Relocate the executable as well as cwd: an executable-relative lookup
 	// of ../ui/dist must not let a broken package borrow checkout assets.
 	packaged, err := os.ReadFile(daemon)
@@ -196,7 +227,10 @@ provider: %s
 persona_notes: |
   You are a short-lived journey-test overseer. Prefer one-line text answers.
   Do not spawn workers. For "Reply with exactly: X" prompts, reply with X only.
-`, overseerName, p, stateDir, sessionsDir, mcpName, stateDir, provider)
+  Your whole state is in %s. %s/.jevons belongs to the owner's
+  development daemon, not to you: never list, read, open or query anything
+  there (🎯T1082). Use your jevons_* tools, or files under your own state.
+`, overseerName, p, stateDir, sessionsDir, mcpName, stateDir, provider, stateDir, homeDir())
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		fatal(err)
 	}
@@ -255,17 +289,21 @@ persona_notes: |
 	// Process and the removal is a no-op (or reclaims a previous run's stale
 	// user-scope journey name).
 	cleanups.Add(stop)
-	catchSignals()
+	// 🎯T1082: fingerprint the development state before anything starts.
+	if s.devGuard, err = startDevStateGuard(homeDir(), os.Getpid()); err != nil {
+		fatal(fmt.Errorf("development state guard: %w", err))
+	}
 	if journeyNeedsBroker(provider) {
 		primaryBroker, err = s.startIsolatedBroker()
 		if err != nil {
 			fatal(fmt.Errorf("start journey broker: %w", err))
 		}
 		s.brokerSocket = primaryBroker.socket
+		s.broker = primaryBroker
 	}
 
 	if err := s.startDaemon(); err != nil {
-		dumpTail(logPath, 40)
+		dumpIsolateLogs(os.Stderr, filepath.Dir(logPath), 40)
 		// 🎯T837: an isolate whose overseer never ran is a harness outage —
 		// no journey got to assert anything — and says why it is stopped.
 		if isOutage(err) {
@@ -285,6 +323,8 @@ persona_notes: |
 	// Orchestration (MCP-direct against the isolate — not the development stream).
 	s.run("J6-mcp-tool-surface", s.jMCPToolSurface)
 	s.run("J6c-overseer-tools-attached", s.jOverseerToolsAttached)
+	s.run("J43-sdk-seat-pair", s.jSDKSeatPair)
+	s.run("J44-control-plane-lifecycle", s.jControlPlaneLifecycle)
 	s.run("J6b-mcp-reconnect", s.jMCPReconnect)
 	s.run("J7-overseer-registry", s.jOverseerInRegistry)
 	s.run("J8-two-agents-same-workdir", s.jTwoAgentsSameWorkdir)
@@ -299,6 +339,7 @@ persona_notes: |
 	s.run("J37-busy-escalation", s.jBusyEscalation)
 	s.run("J38-midturn-answer", s.jMidTurnAnswer)
 	s.run("J14-bounce-resume", s.jBounceResume)
+	s.run("J40-owner-pause-resume", s.jOwnerPauseResume)
 	s.run("J17-t418-queue-bounce", s.jT418QueueBounce)
 	s.run("J19-root-history-paint", s.j19RootHistoryPaint)
 	s.run("J22-send-once", s.jSendOnce)
@@ -312,10 +353,13 @@ persona_notes: |
 	s.run("J21-goal-continue-all-backends", s.j21GoalContinuesAllBackends)
 	s.run("J30-packaged-react-owner-turn", s.jPackagedReactOwnerTurn)
 	s.run("J31-packaged-react-owner-boundary", s.jPackagedReactOwnerBoundary)
+	s.run("J45-t1091-owner-after-recover", s.jT1091OwnerTurnAfterRecover)
 	s.run("J32-packaged-react-send-cutin", s.jPackagedReactSendCutIn)
 	s.run("J33-undelivered-resend", s.jUndeliveredResend)
 	s.run("J35-worker-busy-escalates", s.jWorkerBusyVisibleQueue)
 	s.run("J36-send-ack-correlation", s.jSendAckCorrelation)
+	// J39 bounces the isolate and restores a clock-free daemon before return.
+	s.run("J39-t952-hold", s.jT952Hold)
 	// Last: J18 stops every agent and raises the fleet-mute alarm on
 	// purpose, and the overseer then works the alarm. Any journey after it
 	// shared the isolate with that work (J19's history window filled with
@@ -326,7 +370,7 @@ persona_notes: |
 	stop()
 
 	s.run("J5-isolation", func() error {
-		return errors.Join(assertIsolation(provider, hadDailyMCP, stateDir, p), brokerStopErr)
+		return errors.Join(assertIsolation(provider, hadDailyMCP, stateDir, p), brokerStopErr, s.devGuard.finish(stateDir))
 	})
 
 	// 🎯T839: each isolate death once, with its first cause, however many
@@ -335,7 +379,7 @@ persona_notes: |
 		fmt.Printf("ISOLATE OUTAGE: %s; %d later journey(s) OUT without an isolate\n", o, o.later)
 	}
 	if s.failures > 0 {
-		dumpTail(logPath, 60)
+		dumpIsolateLogs(os.Stderr, filepath.Dir(logPath), 60)
 		fmt.Printf("FAIL: %d journey(s) failed\n", s.failures)
 		exitNow(1)
 	}
@@ -343,7 +387,7 @@ persona_notes: |
 	// the suite says which it saw rather than letting a backend outage read as
 	// a broken product.
 	if s.outages > 0 {
-		dumpTail(logPath, 30)
+		dumpIsolateLogs(os.Stderr, filepath.Dir(logPath), 30)
 		if len(s.isolateOutages) > 0 {
 			fmt.Printf("OUTAGE: %d journey(s) could not run — the isolate died (see ISOLATE OUTAGE above for the first cause); not a journey verdict.\n", s.outages)
 		} else {
@@ -900,17 +944,21 @@ func freePort() (int, error) {
 	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
-func dumpTail(path string, n int) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return
+func dumpIsolateLogs(w io.Writer, stateDir string, n int) {
+	if w == nil {
+		w = os.Stderr
 	}
-	lines := strings.Split(string(b), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
+	for _, name := range []string{"jevonsd.log", "claudia-broker.log", "omp-sidecar.log"} {
+		b, err := os.ReadFile(filepath.Join(stateDir, name))
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(b), "\n")
+		if len(lines) > n {
+			lines = lines[len(lines)-n:]
+		}
+		fmt.Fprintf(w, "—— %s ——\n%s\n", name, strings.Join(lines, "\n"))
 	}
-	fmt.Fprintln(os.Stderr, "—— jevonsd log tail ——")
-	fmt.Fprintln(os.Stderr, strings.Join(lines, "\n"))
 }
 
 func trim(s string, n int) string {

@@ -4,6 +4,7 @@
 package agenterr_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -30,53 +31,47 @@ func TestClassifyTextFixtures(t *testing.T) {
 		{"task abc is busy", agenterr.ClassNone},
 		{"codex app-server: turn already in flight", agenterr.ClassNone}, // real codex busy (🎯T766.4 replaced an invented phrase)
 
-		// backend_unavailable (Grok outage post-mortem class)
-		{"Internal error", agenterr.ClassBackendUnavailable},
-		{"INTERNAL ERROR", agenterr.ClassBackendUnavailable},
-		{"internal error", agenterr.ClassBackendUnavailable},
-		{"Internal", agenterr.ClassBackendUnavailable},
-		{"acp session/prompt: Internal error", agenterr.ClassBackendUnavailable},
-		{"service unavailable", agenterr.ClassBackendUnavailable},
-		{"connection refused", agenterr.ClassBackendUnavailable},
-		{"dial tcp: connection refused", agenterr.ClassBackendUnavailable},
-		{"502 Bad Gateway", agenterr.ClassBackendUnavailable},
-		{"503 Service Unavailable", agenterr.ClassBackendUnavailable},
-		{"gateway timeout 504", agenterr.ClassBackendUnavailable},
-		{"request timed out", agenterr.ClassBackendUnavailable},
-		{"grok acp: connection closed waiting for session/prompt", agenterr.ClassBackendUnavailable},
-		{"i/o timeout", agenterr.ClassBackendUnavailable},
-		{"upstream overloaded", agenterr.ClassBackendUnavailable},
+		// A sentence is not a class, including one that says error or failed.
+		{"Internal error", agenterr.ClassNone},
+		{"INTERNAL ERROR", agenterr.ClassNone},
+		{"internal error", agenterr.ClassNone},
+		{"Internal", agenterr.ClassNone},
+		{"acp session/prompt: Internal error", agenterr.ClassNone},
+		{"service unavailable", agenterr.ClassNone},
+		{"connection refused", agenterr.ClassNone},
+		{"dial tcp: connection refused", agenterr.ClassNone},
+		{"502 Bad Gateway", agenterr.ClassNone},
+		{"503 Service Unavailable", agenterr.ClassNone},
+		{"gateway timeout 504", agenterr.ClassNone},
+		{"request timed out", agenterr.ClassNone},
+		{"grok acp: connection closed waiting for session/prompt", agenterr.ClassNone},
+		{"i/o timeout", agenterr.ClassNone},
+		{"upstream overloaded", agenterr.ClassNone},
+		{"rate limit exceeded", agenterr.ClassNone},
+		{"HTTP 429 Too Many Requests", agenterr.ClassNone},
+		{"429 Too Many Requests", agenterr.ClassNone},
+		{"quota exceeded for model", agenterr.ClassNone},
+		{"resource_exhausted: throttle", agenterr.ClassNone},
+		{"unauthorized: invalid api key", agenterr.ClassNone},
+		{"401 Unauthorized", agenterr.ClassNone},
+		{"invalid API key", agenterr.ClassNone},
+		{"not signed in — run grok auth", agenterr.ClassNone},
+		{"authentication failed", agenterr.ClassNone},
+		{"403 Forbidden", agenterr.ClassNone},
+		{"grok acp: no session", agenterr.ClassNone},
+		{"grok acp: client closed", agenterr.ClassNone},
+		{"grok acp: no transport", agenterr.ClassNone},
+		{"invalid request: unknown method", agenterr.ClassNone},
+		{"agent \"x\" is not registered", agenterr.ClassNone},
+		{"name and text are required", agenterr.ClassNone},
+		{"acp session/load abc: unknown session — existing conversation; refusing to mint a replacement session", agenterr.ClassNone},
+		{"unknown agent provider \"xyz\"", agenterr.ClassNone},
+		{"agent registry not available", agenterr.ClassNone},
 
-		// rate_limit
-		{"rate limit exceeded", agenterr.ClassRateLimit},
-		{"HTTP 429 Too Many Requests", agenterr.ClassRateLimit},
-		{"429 Too Many Requests", agenterr.ClassRateLimit},
-		{"quota exceeded for model", agenterr.ClassRateLimit},
-		{"resource_exhausted: throttle", agenterr.ClassRateLimit},
-
-		// auth
-		{"unauthorized: invalid api key", agenterr.ClassAuth},
-		{"401 Unauthorized", agenterr.ClassAuth},
-		{"invalid API key", agenterr.ClassAuth},
-		{"not signed in — run grok auth", agenterr.ClassAuth},
-		{"authentication failed", agenterr.ClassAuth},
-		{"403 Forbidden", agenterr.ClassAuth},
-
-		// client_bug
-		{"grok acp: no session", agenterr.ClassClientBug},
-		{"grok acp: client closed", agenterr.ClassClientBug},
-		{"grok acp: no transport", agenterr.ClassClientBug},
-		{"invalid request: unknown method", agenterr.ClassClientBug},
-		{"agent \"x\" is not registered", agenterr.ClassClientBug},
-		{"name and text are required", agenterr.ClassClientBug},
-		{"acp session/load abc: unknown session — existing conversation; refusing to mint a replacement session", agenterr.ClassClientBug},
-		{"unknown agent provider \"xyz\"", agenterr.ClassClientBug},
-		{"agent registry not available", agenterr.ClassClientBug},
-
-		// unknown failure-shaped
-		{"something failed mysteriously", agenterr.ClassUnknown},
-		{"something failed unexpectedly", agenterr.ClassUnknown},
-		{"unexpected error from harness", agenterr.ClassUnknown},
+		// Failure-shaped prose is still not a class.
+		{"something failed mysteriously", agenterr.ClassNone},
+		{"something failed unexpectedly", agenterr.ClassNone},
+		{"unexpected error from harness", agenterr.ClassNone},
 	}
 	for _, tc := range cases {
 		got := agenterr.ClassifyText(tc.in)
@@ -92,15 +87,63 @@ func TestClassifyErrorNilBusyAndInternal(t *testing.T) {
 		t.Fatal("nil err → none")
 	}
 	if agenterr.Classify(fmt.Errorf("grok acp: prompt already in flight")) != agenterr.ClassNone {
-		t.Fatal("busy must not be a failure class")
+		t.Fatal("rendered busy text is not a failure class")
 	}
-	c := agenterr.Classify(fmt.Errorf("Internal error"))
-	if c != agenterr.ClassBackendUnavailable {
-		t.Fatalf("got %q", c)
+	if agenterr.Classify(causeStub{cause: agenterr.CauseTurnInFlight, text: "401 unauthorized"}) != agenterr.ClassNone {
+		t.Fatal("typed busy was classified from its text")
 	}
-	c = agenterr.Classify(fmt.Errorf("acp session/prompt: Internal error"))
-	if c != agenterr.ClassBackendUnavailable {
-		t.Fatalf("got %q", c)
+	if got := agenterr.Classify(fmt.Errorf("401 unauthorized")); got == agenterr.ClassAuth {
+		t.Fatalf("untyped 401 classified as %q", got)
+	}
+	if got := agenterr.Classify(fmt.Errorf("Internal error")); got != agenterr.ClassNone {
+		t.Fatalf("untyped internal error = %q, want none", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseRetryExhausted, fmt.Errorf("the fleet is fine"))); got != agenterr.ClassRetryExhausted {
+		t.Fatalf("retry cause = %q", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseContextOverflow, fmt.Errorf("slow down"))); got != agenterr.ClassContextOverflow {
+		t.Fatalf("overflow cause = %q", got)
+	}
+}
+
+func TestTypedProviderCauseClassifiesWrappedAndBare(t *testing.T) {
+	t.Parallel()
+	bare := errors.New("401 unauthorized")
+	if got := agenterr.Classify(bare); got == agenterr.ClassAuth {
+		t.Fatal("errors.New of an auth sentence is not ClassAuth")
+	}
+	caused := agenterr.WithCause(agenterr.CauseAuth, bare)
+	if got := agenterr.Classify(caused); got != agenterr.ClassAuth {
+		t.Fatalf("CauseAuth = %q", got)
+	}
+	if got := agenterr.Classify(fmt.Errorf("send: %w", caused)); got != agenterr.ClassAuth {
+		t.Fatalf("wrapped CauseAuth = %q", got)
+	}
+	backend := agenterr.WithCause(agenterr.CauseBackendUnavailable, errors.New("Internal error"))
+	if got := agenterr.Classify(backend); got != agenterr.ClassBackendUnavailable {
+		t.Fatalf("CauseBackendUnavailable = %q", got)
+	}
+	unrelated := agenterr.WithCause(agenterr.CauseBackendUnavailable, errors.New("the fleet is fine"))
+	if got := agenterr.Classify(unrelated); got != agenterr.ClassBackendUnavailable {
+		t.Fatalf("unrelated text = %q", got)
+	}
+	if got := agenterr.Classify(fmt.Errorf("wrap: %w", unrelated)); got != agenterr.ClassBackendUnavailable {
+		t.Fatalf("wrapped unrelated = %q", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseRateLimit, errors.New("slow down"))); got != agenterr.ClassRateLimit {
+		t.Fatalf("CauseRateLimit = %q", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseSpendWall, errors.New("slow down"))); got != agenterr.ClassSpendWall {
+		t.Fatalf("CauseSpendWall = %q", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseAccountWall, errors.New("revoked"))); got != agenterr.ClassAccountWall {
+		t.Fatalf("CauseAccountWall = %q", got)
+	}
+	if got := agenterr.ClassFromCause("You've hit your monthly spend limit"); got != agenterr.ClassNone {
+		t.Fatalf("sentence cause = %q", got)
+	}
+	if got := agenterr.Classify(agenterr.WithCause(agenterr.CauseClientBug, errors.New("no session"))); got != agenterr.ClassClientBug {
+		t.Fatalf("CauseClientBug = %q", got)
 	}
 }
 
@@ -121,6 +164,9 @@ func TestTransientBackend(t *testing.T) {
 	if agenterr.TransientBackend(agenterr.ClassAuth) {
 		t.Fatal("auth must not auto-recover loop")
 	}
+	if agenterr.TransientBackend(agenterr.ClassSpendWall) || agenterr.TransientBackend(agenterr.ClassAccountWall) {
+		t.Fatal("spend and account walls must not auto-recover")
+	}
 	if agenterr.TransientBackend(agenterr.ClassNone) {
 		t.Fatal("none is not transient")
 	}
@@ -131,6 +177,8 @@ func TestOwnerCopyNotBareInternalError(t *testing.T) {
 	classes := []agenterr.Class{
 		agenterr.ClassBackendUnavailable,
 		agenterr.ClassRateLimit,
+		agenterr.ClassSpendWall,
+		agenterr.ClassAccountWall,
 		agenterr.ClassAuth,
 		agenterr.ClassClientBug,
 		agenterr.ClassUnknown,
@@ -152,11 +200,12 @@ func TestOwnerCopyNotBareInternalError(t *testing.T) {
 func TestClassifyAndFormat(t *testing.T) {
 	t.Parallel()
 	class, msg := agenterr.ClassifyAndFormat(fmt.Errorf("Internal error"))
-	if class != agenterr.ClassBackendUnavailable {
-		t.Fatalf("class=%q", class)
+	if class != agenterr.ClassNone || msg != "Internal error" {
+		t.Fatalf("untyped class=%q msg=%q", class, msg)
 	}
-	if msg == "Internal error" || !strings.Contains(msg, "backend_unavailable") {
-		t.Fatalf("msg=%q", msg)
+	class, msg = agenterr.ClassifyAndFormat(agenterr.WithCause(agenterr.CauseBackendUnavailable, fmt.Errorf("Internal error")))
+	if class != agenterr.ClassBackendUnavailable || !strings.Contains(msg, "backend_unavailable") {
+		t.Fatalf("caused class=%q msg=%q", class, msg)
 	}
 	class, msg = agenterr.ClassifyAndFormat(fmt.Errorf("prompt already in flight"))
 	if class != agenterr.ClassNone || !strings.Contains(msg, "in flight") {
@@ -190,8 +239,11 @@ func TestIsFailure(t *testing.T) {
 
 func TestClassifyMessageAlias(t *testing.T) {
 	t.Parallel()
-	if agenterr.ClassifyMessage("Internal error") != agenterr.ClassBackendUnavailable {
+	if agenterr.ClassifyMessage("Internal error") != agenterr.ClassifyText("Internal error") {
 		t.Fatal("ClassifyMessage must match ClassifyText")
+	}
+	if agenterr.ClassifyMessage("Internal error") == agenterr.ClassBackendUnavailable {
+		t.Fatal("Internal error prose is not backend_unavailable")
 	}
 	c := agenterr.ClassRateLimit
 	if !c.IsTransient() || !c.IsFailure() {

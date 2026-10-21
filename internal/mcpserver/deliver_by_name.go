@@ -4,12 +4,15 @@
 package mcpserver
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/delivery"
+	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/relayroute"
 	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/sendq"
@@ -81,6 +84,18 @@ func (s *Server) SetOverseerDeliver(fn OverseerDeliverFunc) {
 	s.overseerDeliver = fn
 }
 
+// OverseerReceiptFunc is OverseerDeliverFunc that also reports whether a
+// structured receipt settled the handoff (server.DeliverToOverseerAsReceipted).
+type OverseerReceiptFunc func(text string, origin SendOrigin) (settled bool, err error)
+
+// SetOverseerDeliverReceipted wires the receipt-reporting overseer arm. When
+// set it is used in place of the OverseerDeliverFunc.
+func (s *Server) SetOverseerDeliverReceipted(fn OverseerReceiptFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overseerDeliverReceipted = fn
+}
+
 // SetAgentRequestRecorder attaches the canonical journal for non-overseer
 // admission. A failed record refuses submission; it never claims delivery.
 func (s *Server) SetAgentRequestRecorder(fn func(name, text string, origin SendOrigin) error) {
@@ -127,11 +142,11 @@ type sendConfirmation int
 const (
 	// confirmHere: deliverToSender judges, against this payload.
 	confirmHere sendConfirmation = iota
-	// confirmByCaller: the caller opened a watch before calling and will
-	// judge the outcome itself. Only the spawn path does this, and only
-	// because its evidence question is the different one — a fresh seat has
-	// an empty composer, so "did the agent stir" cannot be confused with an
-	// earlier message finally being submitted.
+	// confirmByCaller: the spawn opened a watch before calling. An incapable
+	// seat is still judged by that watch. A capable seat is settled from
+	// its structured receipt first. ReceiptSettled means that receipt
+	// accepted the handoff. delivered_unconfirmed means it did not, and the
+	// spawn keeps the seat rather than reading the transcript.
 	confirmByCaller
 )
 
@@ -237,7 +252,7 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 	// under some other spelling would deliver into the overseer's transcript
 	// while reporting the addressed name — the 2026-08-29 misroute, seen from
 	// the other side. Refusing is loud and delivers nothing.
-	if overseerArm && !strings.EqualFold(dest, name) {
+	if overseerArm && strings.ToLower(dest) != strings.ToLower(name) {
 		slog.Error("🎯T565 receiver resolved to a different seat than addressed",
 			"component", "agent_send",
 			"addressed", name,
@@ -273,21 +288,26 @@ func (s *Server) deliverByNameWithModeRequestID(actor, name, text string, origin
 	// "needs-owner" / "oracle" (🎯T515 / 🎯T658).
 	report := relayReportBodyWithRole(text, s.roleBodyForAgent(dest))
 
-	// 🎯T392.7: a named worker report that needs no product judgement skips the
-	// PO hop. The PO still gets a one-line record. Owner directs and daemon-
-	// composed owner-surface traffic (empty actor) are never rerouted — those
-	// are not worker reports, and their identity doctrine alone can trip the
-	// keyword classifier (🎯T515).
+	// 🎯T392.7: a named worker report whose envelope declares an overseer hop
+	// skips the PO. The PO still gets a one-line record. Owner directs and
+	// daemon-composed owner-surface traffic (empty actor) are never rerouted
+	// — those are not worker reports (🎯T515). A sentence is not the hop.
 	//
 	// 🎯T565: the reroute is for a WORKER reporting up. The overseer directing
 	// its PO by name is not a report, whatever phrases the direct contains —
 	// on 2026-08-29 `name=jevons-po actor=jevons` classified as needs-owner
 	// and was delivered into the overseer's own transcript, twice. The PO
 	// speaking to itself is not a report either.
+	destPurpose := ""
+	if s.registry != nil {
+		if def := s.registry.Def(dest); def != nil {
+			destPurpose = def.Purpose
+		}
+	}
 	who := strings.TrimSpace(actor)
-	if origin == OriginAgent && !overseerArm && isPOName(dest) &&
+	if origin == OriginAgent && !overseerArm && purposeCoordinator(s.agentRole(dest, destPurpose)) &&
 		who != "" && who != ActorOwnerSurface &&
-		!s.isOverseerAgent(who) && !strings.EqualFold(who, dest) &&
+		!s.isOverseerAgent(who) && strings.ToLower(who) != strings.ToLower(dest) &&
 		relayroute.Classify(report) == relayroute.RouteOverseer &&
 		s.storeRelayedReport(who, report) {
 		po := dest
@@ -521,42 +541,27 @@ func (s *Server) storeRelayedReport(agent, report string) bool {
 	return true
 }
 
-// identityDoctrineCloser is the last fixed sentence FormatIdentityHeader
-// writes before role-addressed doctrine. Everything after that doctrine is
-// the payload withIdentity appended.
-const identityDoctrineCloser = "carry on with your own work."
-
+// stripLeadingIdentityEnvelope returns the payload after a composed identity
+// header. The header is the opening identity fact through PrefixIdentityEnd.
+// Doctrine sentences and an [event:] wrapper are not the boundary.
 func stripLeadingIdentityEnvelope(text string) string {
 	body := strings.TrimLeft(text, " \t\r\n")
-	if !strings.HasPrefix(body, IdentityHeaderMarker) {
+	nl := strings.IndexByte(body, '\n')
+	first := body
+	if nl >= 0 {
+		first = body[:nl]
+	}
+	if strings.TrimSpace(first) != envelope.PrefixIdentity {
 		return text
 	}
-	// Idle / recover wires put the event marker immediately after the header.
-	if i := strings.Index(body, "\n[event:"); i >= 0 {
-		return strings.TrimLeft(body[i+1:], " \t\r\n")
-	}
-	i := strings.Index(body, identityDoctrineCloser)
-	if i < 0 {
-		return text
-	}
-	rest := strings.TrimLeft(body[i+len(identityDoctrineCloser):], " \t\r\n")
-	if !strings.HasPrefix(rest, "You are ") {
-		return rest
-	}
-	lines := strings.Split(rest, "\n")
-	out := 1 // skip the "You are …" line
-	for out < len(lines) {
-		line := lines[out]
-		if line == "" {
-			out++
-			break
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != envelope.PrefixIdentityEnd {
+			continue
 		}
-		if !strings.HasPrefix(line, "- ") {
-			break
-		}
-		out++
+		return strings.TrimLeft(strings.Join(lines[i+1:], "\n"), " \t\r\n")
 	}
-	return strings.Join(lines[out:], "\n")
+	return text
 }
 
 // deliverToOverseer is the overseer arm of the single path. Delivery itself
@@ -566,8 +571,17 @@ func stripLeadingIdentityEnvelope(text string) string {
 func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentSendResult, error) {
 	s.mu.Lock()
 	deliver := s.overseerDeliver
+	receipted := s.overseerDeliverReceipted
 	legacy := s.notifyJevon
 	s.mu.Unlock()
+	settled := false
+	if receipted != nil {
+		deliver = func(t string, o SendOrigin) error {
+			var err error
+			settled, err = receipted(t, o)
+			return err
+		}
+	}
 
 	if deliver == nil && legacy != nil {
 		if origin == OriginOwner {
@@ -590,14 +604,8 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 	// its composer was found holding four accumulated pastes, each of which had
 	// been answered "Message delivered to overseer". The seam returning nil
 	// means the text was accepted into the notify queue, which is a statement
-	// about the queue and not about the overseer.
-	//
-	// The overseer's turn boundaries are not visible from this package (its
-	// event stream is owned by the chat layer, not the fleet event sink), so
-	// its flight state is permanently unknown here. That is the honest input:
-	// a payload that appears is confirmed, and one that does not is reported
-	// unconfirmed rather than delivered — never as the defect, because a note
-	// legitimately waiting behind an owner turn looks identical from here.
+	// about the queue and not about the overseer. A transcript hit is not a
+	// receipt, so this arm does not watch one and does not report "sent".
 
 	// 🎯T428 / 🎯T568. Every notification source — sentinel, RSI coach, fleet
 	// health, worker report notify, jevons_event_push — arrives here, so the
@@ -641,11 +649,27 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		}
 	}
 
-	watch := s.watchAgentTurnFor(name, text)
 	if err := deliver(text, origin); err != nil {
 		// The batch never reached the seam, so remembering it would refuse the
 		// retry that is the correct response to this failure.
 		ticket.Abandon()
+		if errors.Is(err, delivery.ErrNotifyHeldByIntent) {
+			dec := s.AllowFleetControl(name, fleetintent.ControlDeliverSubmit)
+			msg := fmt.Sprintf(
+				"overseer %q must not receive a turn while fleet intent refuses one: %s (%s) — "+
+					"message held by the daemon, NOT delivered; it drains once the intent is lifted "+
+					"(jevons_fleet_intent state=working)",
+				name, fleetintent.Describe(dec.Blocking), dec.Reason)
+			res := agentSendResult{Status: "queued", Message: msg}
+			slog.Info("agent_send",
+				"component", "agent_send",
+				"name", name,
+				"origin", string(origin),
+				"status", res.Status,
+				"outcome", "held_fleet_intent",
+			)
+			return res, nil
+		}
 		slog.Warn("agent_send",
 			"component", "agent_send",
 			"name", name,
@@ -656,33 +680,41 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		return agentSendResult{}, fmt.Errorf("send to overseer %q failed: %w", name, err)
 	}
 
-	ev := watch()
-
-	// 🎯T428 seals on the RECEIVER's records, never on deliver returning nil:
-	// the seam accepting text is a statement about the notify queue. A user
-	// message carrying the payload, a queue record draining it into the running
-	// turn, or an enqueue record holding it behind one all say the overseer has
-	// it (🎯T416 / 🎯T429); anything else leaves the batch retryable.
-	confirmed := ev.PayloadSeen || ev.PayloadEnteredTurn || ev.PayloadQueued
-	ticket.Settle(confirmed)
-	if confirmed {
-		s.recordDeliveryEvidence(name, text, ev)
-	}
-
-	outcome := ClassifySendOutcome(FlightUnknown, ev)
-	res := agentSendResult{
-		Status:  "sent",
-		Message: fmt.Sprintf("Message delivered to overseer %q.", name),
-	}
-	if outcome != OutcomeBegun {
-		res = agentSendResult{
-			Status: "delivered_unconfirmed",
-			Message: fmt.Sprintf(
-				"Message accepted for overseer %q but NOT confirmed as a turn: %s. "+
-					"It may be waiting behind an in-flight turn, or it may be sitting unsubmitted. "+
-					"Treat as undelivered until the overseer acts on it.",
-				name, evidenceDetail(ev)),
+	if settled {
+		// The batch carrying this text went out in this call and Claudia's
+		// receipt for its request id settled it: that is delivery.
+		ticket.Settle(true)
+		res := agentSendResult{
+			Status:         "sent",
+			ReceiptSettled: true,
+			Message:        fmt.Sprintf("Message delivered to overseer %q: its structured receipt settled the handoff.", name),
 		}
+		slog.Info("agent_send",
+			"component", "agent_send",
+			"name", name,
+			"origin", string(origin),
+			"status", res.Status,
+			"queued", 0,
+			"rehydrated", false,
+			"outcome", "receipt_settled",
+		)
+		return res, nil
+	}
+
+	// The notify queue accepted the bytes. That is not a structured receipt.
+	// PayloadSeen, a chatlog byte search, and assistant prose do not settle
+	// it, and this arm does not record delivery evidence from them. The
+	// batch stays unconfirmed: an immediate identical offer is collapsed
+	// for the grace window, and a restart is not told the overseer already
+	// has it.
+	ticket.Settle(false)
+	res := agentSendResult{
+		Status: "delivered_unconfirmed",
+		Message: fmt.Sprintf(
+			"Message accepted for overseer %q but NOT confirmed as a turn: "+
+				"the notify queue accepted it and no structured receipt settled this handoff. "+
+				"Treat as undelivered until a receipt settles.",
+			name),
 	}
 	slog.Info("agent_send",
 		"component", "agent_send",
@@ -691,9 +723,7 @@ func (s *Server) deliverToOverseer(name, text string, origin SendOrigin) (agentS
 		"status", res.Status,
 		"queued", 0,
 		"rehydrated", false,
-		"outcome", string(outcome),
-		"payload_seen", ev.PayloadSeen,
-		"evidence", ev.Detail,
+		"outcome", string(OutcomeUnconfirmed),
 	)
 	return res, nil
 }

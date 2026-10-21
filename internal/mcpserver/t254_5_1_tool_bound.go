@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/roles"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
-	"github.com/marcelocantos/claudia"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -44,6 +44,7 @@ func (s *Server) addTool(t mcp.Tool, h func(context.Context, mcp.CallToolRequest
 	if t.Name == "jevons_agent_switch_model" {
 		h = s.detachSwitch(h) // 🎯T790: the switch outlives the caller's deadline
 	}
+	s.rememberSeatPairHandler(t.Name, h)
 	s.mcpSrv.AddTool(t, s.boundTool(t.Name, h))
 }
 
@@ -59,13 +60,19 @@ func (s *Server) boundTool(name string, h func(context.Context, mcp.CallToolRequ
 		id := s.trackMCPFlight(caller, cancel)
 		defer s.untrackMCPFlight(caller, id)
 
+		call := h
+		if seat, root := s.seatPairCall(ctx); seat != "" && root != "" {
+			call = func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return s.answerThroughSeatPair(ctx, root, seat, name, req)
+			}
+		}
 		type outcome struct {
 			res *mcp.CallToolResult
 			err error
 		}
 		ch := make(chan outcome, 1)
 		go func() {
-			res, err := h(ctx, req)
+			res, err := call(ctx, req)
 			ch <- outcome{res, err}
 		}()
 		select {
@@ -197,10 +204,14 @@ func (s *Server) cancelMCPFlights(name string) {
 }
 
 // isSpawnClassSeat reports PO / overseer seats whose hung MCP is a
-// control-plane outage (🎯T254.5.2).
-func isSpawnClassSeat(name, purpose string) bool {
-	if purpose == claudia.PurposeOverseer {
+// control-plane outage (🎯T254.5.2). role is the seat's declared role (a
+// bare purpose reads as the role it implies); the name does not decide.
+func isSpawnClassSeat(name, role string) bool {
+	_ = name
+	switch roles.OfSeat(role, "") {
+	case roles.Overseer, roles.ProductOwner:
 		return true
+	default:
+		return false
 	}
-	return isPOName(name)
 }

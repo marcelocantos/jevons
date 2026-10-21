@@ -15,7 +15,45 @@ const (
 	FenceInfo = "jevons"
 	// Sigil prefixes every slot line. Spelled out; never abbreviated.
 	Sigil = "jevons:"
+
+	// Prefix facts are the only daemon chrome StripPrefixes peels.
+	// A rendered banner is not one of these lines (🎯T766.4).
+	PrefixAgentResponded = "open-intent prefix agent-responded"
+	PrefixReapedSeat     = "open-intent prefix reaped-seat"
+	PrefixFalseGreen     = "open-intent prefix false-green"
+	PrefixEnvelopeCheck  = "open-intent prefix envelope-check"
+	PrefixIdentity       = "open-intent prefix identity"
+	// PrefixIdentityEnd is the last line of a composed identity header.
+	// The payload starts on the next line. Role doctrine above it is display.
+	PrefixIdentityEnd = "open-intent prefix identity-end"
+	// PrefixOwnerTurn is line 1 of an owner notify. A rendered "[user]"
+	// line is display, not this fact (🎯T766.4).
+	PrefixOwnerTurn = "open-intent prefix owner-turn"
+
+	// IntentOpen is the first field of a declared open-intent fact.
+	IntentOpen = "open-intent"
+	// IntentRoute, IntentIdle, and IntentHeld are the second field.
+	// The third field is the seat name. Classifiers match these fields.
+	// A rendered banner is not one of these facts (🎯T766.4).
+	IntentRoute = "route"
+	IntentIdle  = "idle"
+	IntentHeld  = "held"
+	// IntentEvent is the second field of an event fact. The third field
+	// is the event kind (idle-nudge, worker-idle), not a seat name.
+	IntentEvent = "event"
 )
+
+// SeatFact is the line "open-intent <kind> <name>". kind is IntentRoute,
+// IntentIdle, or IntentHeld. Producers emit it; classifiers read the fields.
+func SeatFact(kind, name string) string {
+	return IntentOpen + " " + kind + " " + strings.TrimSpace(name)
+}
+
+// EventFact is the line "open-intent event <kind>". Classifiers read the
+// fields. A rendered "[event: …]" line is not this fact.
+func EventFact(kind string) string {
+	return IntentOpen + " " + IntentEvent + " " + strings.TrimSpace(kind)
+}
 
 // BannerHeading opens the note prepended to a malformed load-bearing
 // envelope on the message path. Silence is the normal case.
@@ -62,6 +100,10 @@ type Message struct {
 	FogBlindspot []string
 	// GateRoles are declared roles for cited gate ids (🎯T722). Repeatable.
 	GateRoles []GateRole
+	// ActiveWaits are declared active external waits (🎯T1024 typed by
+	// 🎯T766.4.1): the seat is watching an alive process it does not
+	// control. Repeatable. On a finish-report this is a contradiction.
+	ActiveWaits []ActiveWait
 	// Extra holds unknown jevons: keys so a newer emitter is not refused.
 	Extra   map[string]string
 	Payload string
@@ -151,6 +193,7 @@ func (m *Message) SlotsFingerprint() string {
 		ledgerFingerprint(m),
 		fogFingerprint(m),
 		gateRoleFingerprint(m),
+		activeWaitFingerprint(m),
 	}, "\n")
 }
 
@@ -161,9 +204,9 @@ func (m *Message) SlotsFingerprint() string {
 //	(msg, err)  — envelope present but malformed / missing required slots
 //
 // The fence is sought at line 1 of the author's content after stripping
-// known daemon prefixes ([Agent … responded], [reaped seat …] 🎯T731,
-// identity header, check banners). A fence deeper in the body is treated
-// as a quotation and is not an envelope.
+// a declared prefix fact (open-intent prefix <kind>) or a standing-brief
+// fact. A rendered banner is not stripped. A fence deeper in the body is
+// treated as a quotation and is not an envelope.
 func Parse(text string) (*Message, error) {
 	body, _ := StripPrefixes(text)
 	if body == "" {
@@ -207,37 +250,73 @@ func StripPrefixes(text string) (string, bool) {
 
 func stripOnePrefix(s string) (string, bool) {
 	s = strings.TrimLeft(s, "\r")
-	if strings.HasPrefix(s, "[Agent ") || strings.HasPrefix(s, "[reaped seat ") {
-		if i := strings.IndexByte(s, '\n'); i >= 0 {
-			return s[i+1:], true
+	if rest, ok := stripDeclaredPrefix(s); ok {
+		return rest, true
+	}
+	if rest, ok := stripStandingBrief(s); ok {
+		return rest, true
+	}
+	return s, false
+}
+
+// stripDeclaredPrefix peels one "open-intent prefix <kind>" fact.
+// agent-responded and reaped-seat also drop the next line: the route
+// fact, or the reaped-seat display sentence. A rendered banner between
+// that line and the fence is not dropped and hides the fence.
+// identity, false-green, and envelope-check drop through the next blank
+// line. A rendered banner with no fact stays.
+func stripDeclaredPrefix(s string) (string, bool) {
+	nl := strings.IndexByte(s, '\n')
+	first := s
+	if nl >= 0 {
+		first = s[:nl]
+	}
+	fields := strings.Fields(first)
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "prefix" {
+		return "", false
+	}
+	switch fields[2] {
+	case "agent-responded", "reaped-seat":
+		if nl < 0 {
+			return "", true
+		}
+		rest := s[nl+1:]
+		if i := strings.IndexByte(rest, '\n'); i >= 0 {
+			return rest[i+1:], true
 		}
 		return "", true
-	}
-	if strings.HasPrefix(s, "[Who you are") {
-		// Identity header runs until a blank line followed by the standing
-		// brief or the author's content. A lone blank line ends it.
-		rest := s
-		if i := strings.Index(rest, "\n\n"); i >= 0 {
-			return rest[i+2:], true
-		}
-		return "", true
-	}
-	if strings.HasPrefix(s, "⚠ FALSE-GREEN") || strings.HasPrefix(s, "⚠ ENVELOPE CHECK") {
+	case "identity", "false-green", "envelope-check":
 		if i := strings.Index(s, "\n\n"); i >= 0 {
 			return s[i+2:], true
 		}
-		if i := strings.IndexByte(s, '\n'); i >= 0 {
-			return s[i+1:], true
+		if nl >= 0 {
+			return s[nl+1:], true
 		}
 		return "", true
+	default:
+		return "", false
 	}
-	if strings.HasPrefix(s, "[Jevons fleet standing brief") {
-		const end = "\n---\n"
-		if i := strings.Index(s, end); i >= 0 {
-			return s[i+len(end):], true
-		}
+}
+
+// stripStandingBrief peels a brief that opens with the declared fact
+// "open-intent harness standing-brief" through the following "\n---\n".
+// A rendered standing-brief banner is not this fact (🎯T766.4).
+func stripStandingBrief(s string) (string, bool) {
+	nl := strings.IndexByte(s, '\n')
+	first := s
+	if nl >= 0 {
+		first = s[:nl]
 	}
-	return s, false
+	fields := strings.Fields(first)
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "harness" || fields[2] != "standing-brief" {
+		return "", false
+	}
+	const end = "\n---\n"
+	i := strings.Index(s, end)
+	if i < 0 {
+		return "", false
+	}
+	return s[i+len(end):], true
 }
 
 // splitFence returns the fence body and the payload after it when text
@@ -245,28 +324,26 @@ func stripOnePrefix(s string) (string, bool) {
 // so a mid-stream paint is not flagged as malformed.
 func splitFence(text string) (fence, payload string, ok bool) {
 	s := strings.TrimLeft(text, " \t")
-	if !strings.HasPrefix(s, "```") {
+	const open = "```"
+	if len(s) < len(open) || s[:len(open)] != open {
 		return "", "", false
 	}
 	nl := strings.IndexByte(s, '\n')
 	if nl < 0 {
 		return "", "", false
 	}
-	info := strings.TrimSpace(strings.TrimPrefix(s[:nl], "```"))
+	info := strings.TrimSpace(s[len(open):nl])
 	fields := strings.Fields(info)
-	if len(fields) == 0 || !strings.EqualFold(fields[0], FenceInfo) {
+	if len(fields) == 0 || strings.ToLower(fields[0]) != FenceInfo {
 		return "", "", false
 	}
 	rest := s[nl+1:]
-	closer := "\n```"
+	const closer = "\n```"
 	ci := strings.Index(rest, closer)
 	if ci < 0 {
-		// Closing fence as the last characters, no trailing newline.
-		if strings.HasSuffix(rest, "\n```") || rest == "```" {
-			if rest == "```" {
-				return "", "", true
-			}
-			return rest[:len(rest)-4], "", true
+		// Closing fence as the whole remainder, with no newline before it.
+		if rest == "```" {
+			return "", "", true
 		}
 		return "", "", false
 	}
@@ -289,6 +366,11 @@ func parseSlots(fence string) (*Message, error) {
 			return msg, fmt.Errorf("slot line is not a %s key value pair: %q", Sigil, trim)
 		}
 		if err := applySlot(msg, key, value, &kindSeen); err != nil {
+			// 🎯T1083: every slot failure names its slot, so the author's
+			// correction notice can say which line to fix.
+			if _, ok := AsSlotError(err); !ok {
+				err = &SlotError{Slot: key, Value: value, Err: err}
+			}
 			return msg, err
 		}
 	}
@@ -299,7 +381,8 @@ func parseSlots(fence string) (*Message, error) {
 }
 
 func parseSlotLine(line string) (key, value string, ok bool) {
-	if !strings.HasPrefix(strings.ToLower(line), Sigil) {
+	lower := strings.ToLower(line)
+	if len(lower) < len(Sigil) || lower[:len(Sigil)] != Sigil {
 		return "", "", false
 	}
 	rest := strings.TrimSpace(line[len(Sigil):])
@@ -320,7 +403,7 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 	case "kind":
 		k, ok := ParseKind(value)
 		if !ok {
-			return fmt.Errorf("unknown kind %q", value)
+			return kindSlotError(value)
 		}
 		msg.Kind = k
 		*kindSeen = true
@@ -337,19 +420,19 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 	case "risk":
 		r, ok := ParseRisk(value)
 		if !ok {
-			return fmt.Errorf("unknown risk %q", value)
+			return riskSlotError(value)
 		}
 		msg.Risk = r
 	case "verdict":
 		v, ok := ParseVerdict(value)
 		if !ok {
-			return fmt.Errorf("unknown verdict %q", value)
+			return verdictSlotError(value)
 		}
 		msg.Verdict = v
 	case "status":
 		p, ok := ParseProgress(value)
 		if !ok {
-			return fmt.Errorf("unknown status %q", value)
+			return statusSlotError(value)
 		}
 		msg.Status = p
 	case "blocker", "blocked-on", "blocked_on":
@@ -419,6 +502,12 @@ func applySlot(msg *Message, key, value string, kindSeen *bool) error {
 			return err
 		}
 		msg.GateRoles = append(msg.GateRoles, r)
+	case "active-wait", "active_wait":
+		w, err := parseActiveWait(value)
+		if err != nil {
+			return err
+		}
+		msg.ActiveWaits = append(msg.ActiveWaits, w)
 	default:
 		msg.Extra[key] = value
 	}
@@ -540,11 +629,14 @@ func Format(m *Message) string {
 		}
 		writeSlot(&b, "gate-role", r.ID+" "+r.Role)
 	}
+	for _, w := range m.ActiveWaits {
+		writeSlot(&b, "active-wait", w.String())
+	}
 	b.WriteString("```\n")
 	if p := strings.TrimLeft(m.Payload, "\n"); p != "" {
 		b.WriteByte('\n')
 		b.WriteString(p)
-		if !strings.HasSuffix(p, "\n") {
+		if p[len(p)-1] != '\n' {
 			b.WriteByte('\n')
 		}
 	}
@@ -577,7 +669,7 @@ func Annotate(text string, err error) string {
 	if err == nil {
 		return text
 	}
-	return Banner(err) + "\n\n" + text
+	return PrefixEnvelopeCheck + "\n" + Banner(err) + "\n\n" + text
 }
 
 // CorrectionNotice is what the daemon sends BACK TO THE AUTHOR (not the
@@ -586,14 +678,32 @@ func Annotate(text string, err error) string {
 // record of the defect is a banner on the parent's copy — nobody with write
 // access to the report is ever told. Returns "" when text has no malformed
 // load-bearing envelope (nothing to correct).
+//
+// 🎯T1083: the notice names the failing slot line and, for a closed
+// vocabulary, the accepted values (carried by SlotError), and a malformed
+// finish-report is shown DoneShape. A worker told only `unknown status
+// "done"` resent `status achieved`: it had a slot to fix and no list to fix
+// it from.
 func CorrectionNotice(text string) string {
 	m, err := Parse(text)
 	if m == nil || err == nil || !m.Kind.LoadBearing() {
 		return ""
 	}
-	return "⚠ Your " + m.Kind.String() + " envelope did not parse (🎯T793): " + err.Error() +
-		"\nThis reply is not your terminal report; the parent copy is flagged malformed. " +
-		"Resend a corrected " + m.Kind.String() + " in your next reply. " +
-		"Reminder: a silent-decision confidence is a float in the range 0 to 1 " +
-		"(e.g. confidence=0.3), least-confident first — not a 1-10 score or an integer rank."
+	kind := m.Kind.String()
+	var b strings.Builder
+	b.WriteString("⚠ Your " + kind + " envelope did not parse (🎯T793 / 🎯T1083): " + err.Error())
+	if se, ok := AsSlotError(err); ok {
+		b.WriteString("\nThe failing slot line is `" + Sigil + " " + se.Slot + " " + se.Value + "`.")
+		switch se.Slot {
+		case "silent-decision", "silent_decision", "decision":
+			b.WriteString(" A silent-decision confidence is a float in the range 0 to 1 " +
+				"(e.g. confidence=0.3), least-confident first — not a 1-10 score or an integer rank.")
+		}
+	}
+	b.WriteString("\nThis reply is not your terminal report; the parent copy is flagged malformed. " +
+		"Resend a corrected " + kind + " in your next reply.")
+	if m.Kind == KindFinishReport {
+		b.WriteString("\nA finish-report the daemon reads as done has this shape:\n" + DoneShape + "\n" + DoneShapeNote)
+	}
+	return b.String()
 }

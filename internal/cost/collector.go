@@ -6,13 +6,15 @@ package cost
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -22,6 +24,56 @@ const (
 	DefaultPollInterval = 3 * time.Second
 	DefaultActiveWindow = 15 * time.Minute
 )
+
+// Tiered discovery (🎯T1084). The projects tree on the development host is
+// 66,598 transcripts in 5,066 directories; listing every directory and
+// stat'ing every transcript cost about 0.65 s of CPU per 30 s pass. Every
+// FullSweepInterval the scan still does exactly that. Between sweeps a pass
+// lists only directories whose own mtime/size changed (an entry was added,
+// removed or renamed) and stats only transcripts that were written within
+// WarmWindow when last stat'ed, plus every transcript in a re-listed
+// directory.
+//
+// Residue, accepted (🎯T1084, 2026-10-20): appending to a file does not
+// change its directory, so a transcript idle for longer than WarmWindow that
+// is then appended is not seen until the next full sweep — at most
+// FullSweepInterval late. Its usage is delayed, not lost: the tail resumes
+// from the stored offset.
+const (
+	FullSweepInterval = 10 * time.Minute
+	WarmWindow        = 24 * time.Hour
+)
+
+// scanListings, scanFileStats and scanDirStats count what the scan reads,
+// for tests (🎯T1084).
+var scanListings, scanFileStats, scanDirStats atomic.Int64
+
+// scanDir is one directory as the scan last listed it.
+type scanDir struct {
+	info  os.FileInfo // nil when the listing failed: list it again
+	items []scanItem  // in ReadDir (name) order, as filepath.WalkDir visits
+}
+
+// scanItem is one entry of a listed directory.
+type scanItem struct {
+	path     string // spelled as filepath.WalkDir would: durable tail keys use it
+	abs      string // filepath.Abs(path) when it differs from path, else ""
+	dir      bool
+	billable bool
+	warm     bool // written within the warm horizon when last stat'ed
+}
+
+// identity is the file's absolute path, the key that de-duplicates spellings.
+func (it *scanItem) identity() string {
+	if it.abs != "" {
+		return it.abs
+	}
+	return it.path
+}
+
+func sameDirState(a, b os.FileInfo) bool {
+	return a != nil && b != nil && os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size()
+}
 
 // CollectorArgs parameterises NewCollector. Store and ProjectsRoot are
 // required. Attribute maps a session id to a jevons worker/thread id
@@ -33,6 +85,19 @@ type CollectorArgs struct {
 	Attribute    func(sessionID string) string
 	ActiveWindow time.Duration
 	Now          func() time.Time
+	// UsageSource enables bounded canonical history catch-up over the
+	// Claudia socket. Nil leaves that socket poll disabled. Spool polling
+	// remains independent of this source.
+	UsageSource *UsageSource
+	// Replica ingests Claudia-owned sqlpipe usage and receipt tables.
+	// The daemon sets this and leaves UsageSource nil.
+	Replica *ReplicaSource
+}
+
+// UsageSource is Claudia's provider-neutral history API, injected for tests.
+type UsageSource struct {
+	Discover func(context.Context, claudiawire.GenerationQuery) (*claudiawire.GenerationPage, error)
+	Query    func(context.Context, claudiawire.UsageQuery) (*claudiawire.UsagePage, error)
 }
 
 // Collector discovers active session transcripts under ProjectsRoot and
@@ -50,9 +115,19 @@ type Collector struct {
 	// a blocking walk to prove a slow scan never starves the poll loop.
 	scan func() ([]string, error)
 
-	mu     sync.Mutex
-	active []string // JSONL paths from the last scan
-	health CollectorHealth
+	mu              sync.Mutex
+	active          []string // JSONL paths from the last scan
+	health          CollectorHealth
+	usageSource     *UsageSource
+	replica         *ReplicaSource
+	replayMu        sync.Mutex
+	discoveryCursor string
+	nextDiscovery   time.Time
+
+	// scanMu serialises ScanOnce, which owns dirs and lastFullScan.
+	scanMu       sync.Mutex
+	dirs         map[string]*scanDir
+	lastFullScan time.Time
 }
 
 // CollectorHealth is the collector's own account of its two loops, so
@@ -62,9 +137,13 @@ type Collector struct {
 type CollectorHealth struct {
 	// Started bounds warm-up even if Run never gets scheduled.
 	Started time.Time `json:"started"`
-	// LastPoll / LastScan are when each pass last completed.
+	// LastPoll is the last fully successful accounting pass; LastScan is
+	// the last completed discovery pass. Errors remain separately visible.
 	LastPoll time.Time `json:"last_poll"`
 	LastScan time.Time `json:"last_scan"`
+	// LastFullScan is the last full sweep; passes between sweeps are
+	// tiered (🎯T1084) and stamp LastScan only.
+	LastFullScan time.Time `json:"last_full_scan,omitempty"`
 	// PollStarted / ScanStarted are non-zero while a pass is in flight.
 	PollStarted time.Time `json:"poll_started,omitempty"`
 	ScanStarted time.Time `json:"scan_started,omitempty"`
@@ -72,6 +151,14 @@ type CollectorHealth struct {
 	// the last pass was clean).
 	LastPollErr string `json:"last_poll_err,omitempty"`
 	LastScanErr string `json:"last_scan_err,omitempty"`
+	// History traversal and replay are independent of recent spool polling.
+	// A terminal traversal is weakly consistent, never an atomic inventory.
+	HistoryEnabled        bool      `json:"history_enabled"`
+	HistoryStarted        time.Time `json:"history_started,omitempty"`
+	LastHistoryPass       time.Time `json:"last_history_pass,omitempty"`
+	LastHistoryErr        string    `json:"last_history_err,omitempty"`
+	LastInventoryComplete time.Time `json:"last_inventory_complete,omitempty"`
+	InventoryIncomplete   bool      `json:"inventory_incomplete"`
 }
 
 // Describe renders the health as one clause for an alert detail.
@@ -89,6 +176,17 @@ func (h CollectorHealth) Describe(now time.Time) string {
 	if h.LastScanErr != "" {
 		parts = append(parts, "last scan error: "+h.LastScanErr)
 	}
+	if h.HistoryEnabled {
+		if h.LastHistoryErr != "" {
+			parts = append(parts, "history catch-up error: "+h.LastHistoryErr)
+		}
+		if h.LastInventoryComplete.IsZero() || h.InventoryIncomplete {
+			parts = append(parts, "history inventory coverage is incomplete")
+		}
+		if !h.HistoryStarted.IsZero() {
+			parts = append(parts, fmt.Sprintf("history pass in flight for %s", now.Sub(h.HistoryStarted).Round(time.Second)))
+		}
+	}
 	if h.LastScan.IsZero() {
 		parts = append(parts, "no scan has completed")
 	} else {
@@ -97,7 +195,7 @@ func (h CollectorHealth) Describe(now time.Time) string {
 	return strings.Join(parts, "; ")
 }
 
-// LastPoll reports when the collector last completed a poll pass. The
+// LastPoll reports when the collector last completed a successful poll pass. The
 // monitor alarms on staleness: a safety system whose failure mode is
 // silence would recreate the incident's invisibility inside the
 // monitoring itself.
@@ -105,6 +203,21 @@ func (c *Collector) LastPoll() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.health.LastPoll
+}
+
+// UsesSocketHistory reports whether this collector polls Claudia's usage socket.
+func (c *Collector) UsesSocketHistory() bool {
+	return c != nil && c.usageSource != nil
+}
+
+// BindSendReceiptQuery installs this collector's replica receipt read.
+// startCostGuard is the production caller. A nil collector, a nil replica,
+// or a nil setter leaves the query unset. This does not start Run.
+func (c *Collector) BindSendReceiptQuery(set func(func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error))) {
+	if c == nil || c.replica == nil || set == nil {
+		return
+	}
+	set(c.ReplicatedReceipt)
 }
 
 // Health reports the collector's loop state (🎯T654).
@@ -129,6 +242,8 @@ func NewCollector(args *CollectorArgs) *Collector {
 		attribute:    args.Attribute,
 		activeWindow: args.ActiveWindow,
 		now:          args.Now,
+		usageSource:  args.UsageSource,
+		replica:      args.Replica,
 	}
 	if c.attribute == nil {
 		c.attribute = func(string) string { return "" }
@@ -140,43 +255,151 @@ func NewCollector(args *CollectorArgs) *Collector {
 		c.now = time.Now
 	}
 	c.health.Started = c.now()
+	c.health.HistoryEnabled = c.usageSource != nil || c.replica != nil
+	c.health.InventoryIncomplete = c.usageSource != nil
 	c.scan = c.ScanOnce
 	return c
 }
 
-// ScanOnce walks the projects tree and refreshes the active-file set:
-// billable transcripts modified within the active window. Returns the set.
-// Billable = Grok updates.jsonl or Claude Code <session-uuid>.jsonl —
-// other sidecars (chat_history, events, …) never carry usage (🎯T117).
+// ScanOnce refreshes the active-file set: billable transcripts under the
+// projects tree and the spool modified within the active window. Billable =
+// Grok updates.jsonl or Claude Code <session-uuid>.jsonl — other sidecars
+// (chat_history, events, …) never carry usage (🎯T117). The order is
+// filepath.WalkDir's. A full sweep every FullSweepInterval reads the whole
+// tree; the passes between read what changed (see FullSweepInterval for the
+// one transcript they can miss, and for how long).
 func (c *Collector) ScanOnce() ([]string, error) {
+	c.scanMu.Lock()
+	defer c.scanMu.Unlock()
+	now := c.now()
 	c.mu.Lock()
-	c.health.ScanStarted = c.now()
+	c.health.ScanStarted = now
 	c.mu.Unlock()
-	cutoff := c.now().Add(-c.activeWindow)
+	full := c.dirs == nil || c.lastFullScan.IsZero() || now.Sub(c.lastFullScan) >= FullSweepInterval || now.Before(c.lastFullScan)
+	cutoff := now.Add(-c.activeWindow)
+	warmCut := now.Add(-max(WarmWindow, c.activeWindow))
+	prev := c.dirs
+	next := make(map[string]*scanDir, len(prev))
 	var files []string
+	seen := make(map[string]bool)
+	spoolRoot := spool.Dir()
+
+	// visit decides one billable file, as the old walk's callback did.
+	visit := func(it *scanItem) {
+		if seen[it.identity()] {
+			it.warm = true // decided via another spelling; look again next pass
+			return
+		}
+		scanFileStats.Add(1)
+		fi, err := os.Lstat(it.path)
+		if err != nil {
+			it.warm = true // vanished or unreadable: its directory will say which
+			return
+		}
+		it.warm = fi.ModTime().After(warmCut)
+		if fi.ModTime().After(cutoff) {
+			seen[it.identity()] = true
+			// Preserve the path spelling used by durable tail offsets.
+			// Normalizing that key would replay previously consumed rows.
+			files = append(files, it.path)
+		}
+	}
+
 	walk := func(root string) error {
 		if strings.TrimSpace(root) == "" {
 			return nil
 		}
-		return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !isBillableTranscript(path) {
+		viewRoot := ""
+		if spoolRoot != "" {
+			var err error
+			viewRoot, err = filepath.Abs(filepath.Join(spoolRoot, ".view"))
+			if err != nil {
+				return err
+			}
+		}
+		// .view is generated from the dated spool for transcript readers.
+		// Counting both doubles legacy costs that have no request ID.
+		isView := func(identity string) bool {
+			return viewRoot != "" && (identity == viewRoot || strings.HasPrefix(identity, viewRoot+string(filepath.Separator)))
+		}
+		var walkDir func(path, identity string, info os.FileInfo) error
+		walkDir = func(path, identity string, info os.FileInfo) error {
+			if isView(identity) {
 				return nil
 			}
-			if fi, err := d.Info(); err == nil && fi.ModTime().After(cutoff) {
-				files = append(files, path)
+			d := prev[path]
+			if full || d == nil || !sameDirState(d.info, info) {
+				scanListings.Add(1)
+				entries, err := os.ReadDir(path)
+				d = &scanDir{info: info}
+				if err != nil {
+					d.info = nil // WalkDir walks what it got; so do we, and list again
+				}
+				for _, e := range entries {
+					p := filepath.Join(path, e.Name())
+					id, err := filepath.Abs(p)
+					if err != nil {
+						return err
+					}
+					if id == p {
+						id = "" // the common case; do not hold the path twice
+					}
+					d.items = append(d.items, scanItem{path: p, abs: id, dir: e.IsDir(),
+						billable: !e.IsDir() && isBillableTranscript(p), warm: true})
+				}
+			}
+			next[path] = d
+			for i := range d.items {
+				it := &d.items[i]
+				switch {
+				case it.dir:
+					scanDirStats.Add(1)
+					sub, err := os.Lstat(it.path)
+					if err != nil || !sub.IsDir() {
+						continue // gone, or no longer a directory: WalkDir could not list it either
+					}
+					if err := walkDir(it.path, it.identity(), sub); err != nil {
+						return err
+					}
+				case it.billable && it.warm:
+					visit(it)
+				}
 			}
 			return nil
-		})
+		}
+		info, err := os.Lstat(root)
+		if err != nil {
+			return nil
+		}
+		identity, err := filepath.Abs(root)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			if isBillableTranscript(root) {
+				it := scanItem{path: root, abs: identity, billable: true}
+				visit(&it)
+			}
+			return nil
+		}
+		return walkDir(root, identity, info)
 	}
 	err := walk(c.projectsRoot)
 	if err == nil {
-		if serr := walk(spool.Dir()); serr != nil {
+		if serr := walk(spoolRoot); serr != nil {
 			err = serr
 		}
+	}
+	c.dirs = next
+	if full && err == nil {
+		c.lastFullScan = now
 	}
 	c.mu.Lock()
 	c.active = files
 	c.health.LastScan = c.now()
+	if full && err == nil {
+		c.health.LastFullScan = now
+	}
 	c.health.ScanStarted = time.Time{}
 	c.health.LastScanErr = errString(err)
 	c.mu.Unlock()
@@ -229,6 +452,11 @@ func (c *Collector) PollOnce() (int, error) {
 			}
 		}
 	}
+	if firstErr != nil {
+		// Healthy files were still ingested, but missing observations must
+		// not refresh the monitor's clock of successful accounting passes.
+		return fail(total, firstErr)
+	}
 	c.mu.Lock()
 	c.health.LastPoll = c.now()
 	c.health.PollStarted = time.Time{}
@@ -250,6 +478,28 @@ func (c *Collector) Run(ctx context.Context, scanEvery, pollEvery time.Duration)
 	}
 	if pollEvery == 0 {
 		pollEvery = DefaultPollInterval
+	}
+	if c.replica != nil || c.usageSource != nil {
+		go func() {
+			for ctx.Err() == nil {
+				var err error
+				if c.replica != nil {
+					err = c.CatchUpReplicas(ctx)
+				} else {
+					err = c.CatchUpOnce(ctx)
+				}
+				if err != nil {
+					slog.Warn("cost collector: history", "err", err)
+				}
+				timer := time.NewTimer(pollEvery)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+		}()
 	}
 	go func() {
 		// One synchronous walk at a time on this goroutine, including the

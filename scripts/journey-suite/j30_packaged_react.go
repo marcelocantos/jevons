@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,7 +19,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/agenterr"
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // J30 exercises the actual packaged React composer and mux wire. No direct
@@ -34,7 +35,49 @@ func (s *suite) jPackagedReactOwnerBoundary() error {
 
 // J32 (🎯T789.1) sends and Cuts in on a busy seat over a transcript taller than 12,000 px.
 func (s *suite) jPackagedReactSendCutIn() error {
-	return s.jPackagedReactScript("t789-live.cjs", 25*time.Minute)
+	err := s.jPackagedReactScript("t789-live.cjs", 25*time.Minute)
+	return errors.Join(err, s.cancelLeftoverOverseerWork("J32"))
+}
+
+// leftoverCancelWait bounds the cleanup of an overseer backlog a journey left.
+const leftoverCancelWait = 3 * time.Minute
+
+// cancelLeftoverOverseerWork cancels, as the owner would, the overseer work
+// a journey left running, until the overseer is idle.
+//
+// J32 grows the transcript with up to twelve 150-line answers (moving on
+// from any not answered within 120 s), then sends a 200-line request, two
+// held messages and a Cut in. Its assertions end while that backlog still
+// runs. In the 2026-10-20 green subset the overseer was still working it
+// five minutes after J32 returned, so J33 could not start from an idle
+// overseer. The backlog is J32's own, so J32 cancels it: an owner interrupt
+// ends the running turn and 🎯T915 holds the queue for the owner's next send.
+func (s *suite) cancelLeftoverOverseerWork(journey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), leftoverCancelWait+30*time.Second)
+	defer cancel()
+	conn, frames, err := dialOwnerMux(ctx, s.host)
+	if err != nil {
+		return fmt.Errorf("%s cleanup: %w", journey, err)
+	}
+	defer conn.CloseNow()
+	if _, err := collectOwnerMuxReplay(ctx, frames); err != nil {
+		return fmt.Errorf("%s cleanup: %w", journey, err)
+	}
+	go func() {
+		for range frames {
+		}
+	}()
+	deadline := time.Now().Add(leftoverCancelWait)
+	for {
+		if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, 10*time.Second); err == nil {
+			return nil
+		} else if time.Now().After(deadline) {
+			return fmt.Errorf("%s cleanup: the overseer is still working its backlog after %s of owner interrupts: %w", journey, leftoverCancelWait, err)
+		}
+		if err := writeOwnerMux(ctx, conn, "interrupt", map[string]any{}); err != nil {
+			return fmt.Errorf("%s cleanup: %w", journey, err)
+		}
+	}
 }
 
 // J33 (🎯T811): the daemon refuses the first owner delivery with the broker's
@@ -44,6 +87,14 @@ func (s *suite) jPackagedReactSendCutIn() error {
 func (s *suite) jUndeliveredResend() error {
 	return s.jPackagedReactScript("t811-undelivered.cjs", 10*time.Minute)
 }
+
+// overseerIdleBefore bounds the wait for the shared overseer to finish an
+// earlier journey's work before a journey that drives it starts.
+const overseerIdleBefore = 5 * time.Minute
+
+// drivesOverseer reports whether script sends owner turns to the shared
+// overseer (boundary.cjs drives only its own aside).
+func drivesOverseer(script string) bool { return script != "boundary.cjs" }
 
 func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error {
 	provider := string(s.provider)
@@ -59,6 +110,20 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	}
 	if ready != nil {
 		return &outageError{step: "J30 provider prerequisite", class: agenterr.ClassBackendUnavailable, msg: ready.Error()}
+	}
+	// The overseer is shared with every earlier journey. A journey that
+	// drives it starts from an idle overseer, as J3 does (🎯T840): its owner
+	// turn otherwise waits behind, or is steered into, work it did not send.
+	// Gate 252cf6ac: J33's message, sent while J32's queued owner turn still
+	// ran, took the 🎯T903 steer ladder ("agent_send name=jevons
+	// status=steered … class=owner") and never reached the faulted
+	// notify-queue handoff (seam fired 0x). In the 2026-10-20 J20→J30 green
+	// run, the overseer J20's recovery re-minted was still working a
+	// research brief when J30's owner turn arrived.
+	if drivesOverseer(script) && !s.j45NoIdleWait {
+		if err := s.waitAgentPhase(overseerName, func(p string) bool { return p == "idle" }, overseerIdleBefore); err != nil {
+			return fmt.Errorf("overseer never settled before %s: %w", script, err)
+		}
 	}
 	surface, err := s.startReactSurface()
 	if err != nil {
@@ -77,7 +142,7 @@ func (s *suite) jPackagedReactScript(script string, timeout time.Duration) error
 	if err != nil {
 		return err
 	}
-	if cli.PlanProvider(overseer) != cli.PlanProvider(s.provider) {
+	if seatprovider.Resolve(overseer).Plan != seatprovider.Resolve(s.provider).Plan {
 		fmt.Printf("NOTE %s is on %s, not the suite's %s: an earlier journey moved it; its checks follow its current provider (T832)\n", overseerName, overseer, provider)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -175,7 +240,7 @@ func latestLaunchProvider(logs []byte, name string, current claudia.Provider) er
 	if latest == "" {
 		return fmt.Errorf("no named runtime launch evidence for %s", name)
 	}
-	if cli.PlanProvider(claudia.Provider(latest)) != cli.PlanProvider(current) {
+	if seatprovider.Resolve(claudia.Provider(latest)).Plan != seatprovider.Resolve(current).Plan {
 		return fmt.Errorf("agent %s last launched on %q, but the registry names %q", name, latest, current)
 	}
 	return nil

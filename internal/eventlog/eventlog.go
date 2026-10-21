@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,12 +34,15 @@ type Event struct {
 
 // Journal is a concurrent-safe append-only log.
 type Journal struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
+	mu       sync.Mutex
+	f        *os.File
+	path     string
+	writeErr error
 }
 
-// Open creates or appends the journal at path (parents created).
+// Open creates or appends the journal at path (parents created). A nonempty
+// file must end with a newline, so the next event cannot join a torn record.
+// This checks the append boundary only, not the validity of earlier records.
 func Open(path string) (*Journal, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("eventlog: path required")
@@ -46,9 +50,25 @@ func Open(path string) (*Journal, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("eventlog: mkdir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("eventlog: open: %w", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("eventlog: stat append boundary: %w", err)
+	}
+	if info.Size() > 0 {
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], info.Size()-1); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("eventlog: read append boundary: %w", err)
+		}
+		if last[0] != '\n' {
+			_ = f.Close()
+			return nil, fmt.Errorf("eventlog: unterminated journal tail; existing bytes preserved")
+		}
 	}
 	return &Journal{f: f, path: path}, nil
 }
@@ -84,7 +104,7 @@ func (j *Journal) Close() error {
 // Append writes one event as a JSONL line and fsyncs.
 // Best-effort callers may ignore errors; load-bearing paths should not.
 func (j *Journal) Append(ev Event) error {
-	if j == nil || j.f == nil {
+	if j == nil {
 		return fmt.Errorf("eventlog: nil journal")
 	}
 	if ev.TS == "" {
@@ -100,13 +120,31 @@ func (j *Journal) Append(ev Event) error {
 	if err != nil {
 		return fmt.Errorf("eventlog: marshal: %w", err)
 	}
+	// Include the newline in Scanner's existing maximum buffer size. Refuse
+	// before writing rather than acknowledge evidence the readers cannot see.
+	if len(b)+1 > maxEventLineBytes {
+		return fmt.Errorf("eventlog: encoded event exceeds reader limit of %d bytes", maxEventLineBytes)
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if _, err := j.f.Write(append(b, '\n')); err != nil {
-		return fmt.Errorf("eventlog: write: %w", err)
+	if j.f == nil {
+		return fmt.Errorf("eventlog: closed journal")
+	}
+	if j.writeErr != nil {
+		return fmt.Errorf("eventlog: previous append failed; journal must be reopened: %w", j.writeErr)
+	}
+	line := append(b, '\n')
+	n, err := j.f.Write(line)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		j.writeErr = fmt.Errorf("eventlog: write: %w", err)
+		return j.writeErr
 	}
 	if err := j.f.Sync(); err != nil {
-		return fmt.Errorf("eventlog: fsync: %w", err)
+		j.writeErr = fmt.Errorf("eventlog: fsync: %w", err)
+		return j.writeErr
 	}
 	return nil
 }
@@ -148,7 +186,7 @@ func Tail(path string, opt TailOptions) ([]Event, error) {
 	ring := make([]Event, 0, limit)
 	sc := bufio.NewScanner(f)
 	// 1 MiB lines max (decisions are small; guard against corruption).
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), maxEventLineBytes)
 	comp := strings.TrimSpace(opt.Component)
 	dec := strings.TrimSpace(opt.Decision)
 	src := strings.TrimSpace(opt.Source)

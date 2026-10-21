@@ -48,6 +48,11 @@ func TestClassifyObservationSatisfactionSemantics(t *testing.T) {
 			wantCond: ConditionSatisfied, wantWhy: "working_on_open_mission",
 		},
 		{
+			name:     "Working fold is the same phase token",
+			mutate:   func(o *Observation) { o.Phase = "Working" },
+			wantCond: ConditionSatisfied, wantWhy: "working_on_open_mission",
+		},
+		{
 			name:     "plan-only prose is still a gap (T869)",
 			mutate:   func(o *Observation) { o.Phase = "working"; o.PlanOnly = true },
 			wantCond: ConditionGap, wantKind: GapKindIdle, wantWhy: "plan_only_turn",

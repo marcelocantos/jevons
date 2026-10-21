@@ -135,8 +135,24 @@ func (s *Store) seed(r io.Reader, scope func(string) string, now time.Time) erro
 		s.state.Starts = append(s.state.Starts, Start{ID: "history-" + rand.Text(), At: e.TS, Scope: wd, Target: str("target_id"), Seat: str("name"), Actor: str("actor")})
 	}
 }
+
+// Worker reports an implementer seat. The overseer seat token "jevons" stays
+// excluded. Role overseer, product-owner, boss, or aside is not a worker.
+// Empty purpose is work. A name suffix does not decide.
 func Worker(name, purpose, role string) bool {
-	return name != "" && name != "jevons" && name != "po" && !strings.HasSuffix(name, "-po") && (purpose == "" || purpose == "work") && role != "overseer" && role != "product-owner"
+	if name == "" || name == "jevons" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "overseer", "product-owner", "boss", "aside":
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "", "work":
+		return true
+	default:
+		return false
+	}
 }
 func key(scope, target string) string { return scope + "\x00" + target }
 func (s *Store) prune(now time.Time) state {

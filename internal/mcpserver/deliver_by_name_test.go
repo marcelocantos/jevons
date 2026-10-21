@@ -10,12 +10,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/eventlog"
 	"github.com/marcelocantos/jevons/internal/relayroute"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // chainServer builds a Server whose fleet arm resolves to fake senders and
@@ -59,6 +62,55 @@ func chainServer(t *testing.T, fleet map[string]*fakeSender) (*Server, *overseer
 	return s, inbox
 }
 
+// A parent report that already reached the receiver discharges the queued
+// copy through deliverByName. The copy here was operator-requeued, which
+// shares the empty on-disk state with an admission. The payload stays in
+// the supersession archive. A non-report beside it stays in the queue.
+func TestT7665DeliveredReportDischargeArchivesTheRequeuedCopy(t *testing.T) {
+	parent := &fakeSender{alive: true}
+	s, _ := chainServer(t, map[string]*fakeSender{"jevons-po": parent})
+	report := envelope.SeatFact(envelope.IntentRoute, "jv-t7665-worker") + " report_id=20261019T120000Z-abcd\nbody that must survive"
+	if _, err := s.enqueueAgentSend("jevons-po", report); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := s.sendQueue().Snapshot("jevons-po")
+	if err != nil || len(queued) != 1 || queued[0].Text != report {
+		t.Fatalf("queued = %+v %v", queued, err)
+	}
+	attempt, ok, err := s.sendQueue().ClaimFront("jevons-po")
+	if err != nil || !ok || attempt.ID != queued[0].ID {
+		t.Fatalf("claim: %+v %v %v", attempt, ok, err)
+	}
+	if err := s.sendQueue().Resolve("jevons-po", attempt, sendq.Unverified, "no receiver evidence"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	if _, err := s.sendQueue().Reconcile("jevons-po", queued[0].ID, attempt.AttemptID, sendq.ReconcileRequeue, "owner", "transcript has no copy", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.enqueueAgentSend("jevons-po", "gate: fix your commit"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.deliverByName("jevons-po", report, OriginAgent, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "sent" || !res.ReceiverReceipt {
+		t.Fatalf("delivery = %+v", res)
+	}
+	if len(parent.sent) != 1 || !strings.Contains(parent.sent[0], "body that must survive") {
+		t.Fatalf("parent sent = %v", parent.sent)
+	}
+	left, err := s.sendQueue().Snapshot("jevons-po")
+	if err != nil || len(left) != 1 || !strings.Contains(left[0].Text, "gate: fix") {
+		t.Fatalf("queue after discharge = %+v %v", left, err)
+	}
+	archived, err := s.sendQueue().ReadSupersession(queued[0].ID)
+	if err != nil || len(archived.Removed) != 1 || archived.Removed[0].Text != report || archived.Removed[0].Reconciled == nil {
+		t.Fatalf("archive = %+v %v", archived, err)
+	}
+}
+
 func TestDeliverByNameWorkerToPOToOverseerChain(t *testing.T) {
 	po := &fakeSender{alive: true}
 	s, inbox := chainServer(t, map[string]*fakeSender{"jevons-po": po})
@@ -81,8 +133,8 @@ func TestDeliverByNameWorkerToPOToOverseerChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PO→overseer: %v", err)
 	}
-	if res.Status != "sent" {
-		t.Fatalf("PO→overseer status=%q want sent", res.Status)
+	if res.Status != "delivered_unconfirmed" {
+		t.Fatalf("PO→overseer status=%q want delivered_unconfirmed", res.Status)
 	}
 	if len(inbox.texts) != 1 || !strings.Contains(inbox.texts[0], "T309.3 converging") {
 		t.Fatalf("overseer inbox=%v", inbox.texts)
@@ -190,7 +242,11 @@ func TestT3927RelayReportSkipsPOHop(t *testing.T) {
 	s.SetAgentReportDir(t.TempDir()) // 🎯T658: a skipped hop needs a stored report
 	s.fleetBriefed = map[string]bool{"jevons-po": true}
 
-	text := "Blocked: needs owner verdict on the provider spend cap before I can proceed.\nDetails stay with the overseer."
+	text := envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T392.7",
+		Payload: "Blocked: needs owner verdict on the provider spend cap before I can proceed.\nDetails stay with the overseer.",
+	})
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]any{
 		"name":  "jevons-po",
@@ -258,6 +314,29 @@ func TestT3927OwnerDirectToPONotRerouted(t *testing.T) {
 	}
 	if len(inbox.texts) != 0 {
 		t.Fatalf("owner→PO leaked to overseer: %v", inbox.texts)
+	}
+}
+
+func TestStripLeadingIdentityEnvelopeStopsAtEndFact(t *testing.T) {
+	header := FormatIdentityHeader(AgentIdentity{Name: "jevons-po", Role: RoleProductOwner})
+	if !strings.Contains(header, "You are jevons-po, a product owner") {
+		t.Fatal("doctrine missing")
+	}
+	if !strings.HasSuffix(strings.TrimRight(header, "\n"), envelope.PrefixIdentityEnd) {
+		t.Fatal("header does not end on the identity-end fact")
+	}
+	payload := "[event: worker-idle] done\nWorker: jv-x\n"
+	got := stripLeadingIdentityEnvelope(strings.TrimRight(header, "\n") + "\n\n" + payload)
+	if got != payload {
+		t.Fatalf("stripped payload = %q", got)
+	}
+	english := envelope.PrefixIdentity + "\n[Who you are]\n\ncarry on with your own work.\n\nYou are jevons-po, a product owner.\n- a doctrine row\n\n" + payload
+	if stripLeadingIdentityEnvelope(english) != english {
+		t.Fatal("You are and dash rows located the payload")
+	}
+	event := envelope.PrefixIdentity + "\n[Who you are]\n\n[event: worker-idle] body"
+	if stripLeadingIdentityEnvelope(event) != event {
+		t.Fatal("an [event:] line located the payload")
 	}
 }
 
@@ -347,7 +426,11 @@ func TestT515EnvelopeDoesNotFakeRouteOrPolluteSummary(t *testing.T) {
 	s.noteTurnEnded("jevons-po")
 	po.sent = nil
 	inbox.texts = nil
-	report := "Blocked: needs owner verdict on the provider spend cap before I can proceed."
+	report := envelope.Format(&envelope.Message{
+		Kind:    envelope.KindEscalation,
+		Target:  "T515",
+		Payload: "Blocked: needs owner verdict on the provider spend cap before I can proceed.",
+	})
 	req.Params.Arguments = map[string]any{
 		"name":  "jevons-po",
 		"text":  report,
@@ -464,7 +547,7 @@ func TestNotifyRoutesThroughDeliverByName(t *testing.T) {
 	if len(inbox.texts) != 1 {
 		t.Fatalf("overseer inbox=%v", inbox.texts)
 	}
-	if !strings.Contains(inbox.texts[0], "[Agent jv-t309.3-fleet-deliver responded]") {
+	if !strings.Contains(inbox.texts[0], envelope.SeatFact(envelope.IntentRoute, "jv-t309.3-fleet-deliver")) {
 		t.Fatalf("framing lost: %q", inbox.texts[0])
 	}
 	if !strings.Contains(inbox.texts[0], "commit abc123") {
@@ -798,9 +881,24 @@ func newLineageRegistry(t *testing.T, parents map[string]string) *claudia.Regist
 		t.Fatal(err)
 	}
 	for name, parent := range parents {
-		if _, err := reg.EnsureAgentWithParent(name, "/work/"+name, "", parent, false); err != nil {
+		def, err := reg.EnsureAgentWithParent(name, "/work/"+name, "", parent, false)
+		if err != nil {
 			t.Fatalf("EnsureAgentWithParent %s→%s: %v", name, parent, err)
+		}
+		// The mint API has no purpose argument. These fixtures used a -po
+		// name as the product-owner declaration. Record that as the purpose
+		// the product now reads.
+		if poShapedFixture(name) {
+			def.Purpose = purposeProductOwner
+			if err := reg.Register(*def); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	return reg
+}
+
+func poShapedFixture(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == "po" || strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") || strings.Contains(n, "-po-")
 }

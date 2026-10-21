@@ -18,7 +18,7 @@ func TestT753FinishReapHoldsLandedTargetAcrossRestart(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "bullseye.yaml"), []byte("targets:\n  T717:\n    name: Small repair\n    status: identified\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	s.maybeReapDoneWorkAgent(t734Worker, "Done.")
+	s.maybeReapDoneWorkAgent(t734Worker, declaredFinishReport("T717", "Done."))
 	if s.registry.Def(t734Worker) != nil {
 		t.Fatal("finish did not reap worker")
 	}
@@ -58,7 +58,7 @@ func TestT753NoImplementationDoesNotHold(t *testing.T) {
 				path = "bullseye.yaml"
 			}
 			t734Commit(t, repo, path, "# unrelated\n", message)
-			s.maybeReapDoneWorkAgent(t734Worker, "Done.")
+			s.maybeReapDoneWorkAgent(t734Worker, declaredFinishReport("T717", "Done."))
 			if s.registry.Def(t734Worker) != nil {
 				t.Fatal("did not reap")
 			}
@@ -78,7 +78,7 @@ func TestT753FailedPersistenceRetainsSeat(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(s.stateDir, "fleet", "reap-verify.json.tmp"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	s.maybeReapDoneWorkAgent(t734Worker, "Done.")
+	s.maybeReapDoneWorkAgent(t734Worker, declaredFinishReport("T717", "Done."))
 	if s.registry.Def(t734Worker) == nil {
 		t.Fatal("removed seat without durable hold")
 	}
@@ -96,7 +96,7 @@ func TestT753ExistingForceEngageDoesNotReleaseNewHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	t734Commit(t, repo, "feature.go", "package p\n", "fix(T717): implementation")
-	s.maybeReapDoneWorkAgent(t734Worker, "Done.")
+	s.maybeReapDoneWorkAgent(t734Worker, declaredFinishReport("T717", "Done."))
 	if note := s.reapedTargetPending("T717", repo, true); note == "" {
 		t.Fatal("old force-engage tag released new hold")
 	}

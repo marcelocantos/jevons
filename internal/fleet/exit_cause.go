@@ -9,10 +9,6 @@ import (
 	"github.com/marcelocantos/claudia"
 )
 
-// brokerCausePrefix begins every exit cause Claudia gives a broker-backed
-// handle: its connection lost, or the broker reporting the seat gone.
-const brokerCausePrefix = "claudia broker"
-
 // Exit causes, now published by claudia (🎯T1008) as
 // claudia.ExitCauseBrokerLost / claudia.ExitCauseBrokerRestarted.
 // Aliased here so existing callers keep one import path.
@@ -33,14 +29,14 @@ func ExitCause(proc any) string {
 	return strings.TrimSpace(c.ExitCause())
 }
 
-// BrokerPlanned reports that the broker said it was stopping on purpose
-// before it closed the seat's connection: a planned restart (🎯T944).
+// BrokerPlanned reports that cause is the published planned-restart code.
+// A sentence that only says the broker stopped on purpose is not that code.
 func BrokerPlanned(cause string) bool {
-	return strings.Contains(cause, "stopped on purpose")
+	return cause == ExitCauseBrokerRestarted
 }
 
-// BrokerCaused reports that cause is the broker's doing — it stopped,
-// restarted or dropped the seat — rather than the seat's own exit.
+// BrokerCaused reports that cause is one of the published broker exit
+// codes. A sentence that only begins with the broker's words is not.
 func BrokerCaused(cause string) bool {
-	return strings.HasPrefix(cause, brokerCausePrefix)
+	return cause == ExitCauseBrokerLost || cause == ExitCauseBrokerRestarted
 }

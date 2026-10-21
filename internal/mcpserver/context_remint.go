@@ -6,7 +6,9 @@ package mcpserver
 import (
 	"strings"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T561: the daemon's own answer to "how do I remint this blown seat?".
@@ -46,7 +48,7 @@ func (s *Server) refuseContextRemintSwitch(name, target string, ownerAsked bool)
 	if !ok || plan.Mode != planusage.RemintSameProvider {
 		return ""
 	}
-	if strings.EqualFold(strings.TrimSpace(target), plan.Provider) {
+	if seatprovider.Same(claudia.Provider(target), claudia.Provider(plan.Provider)) {
 		return ""
 	}
 	return "refused (🎯T561): " + plan.Advice(name) +

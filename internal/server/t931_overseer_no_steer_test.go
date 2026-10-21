@@ -10,12 +10,16 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/delivery"
 )
 
-// relayedSteerRefusal is the 2026-09-29 refusal, verbatim as the broker
-// relayed it: a string, which errors.Is cannot match.
-var relayedSteerRefusal = errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)")
+// relayedSteerRefusal is the 2026-09-29 refusal text with the cause the
+// broker copies onto the protocol error. The sentence alone is not a cause.
+var relayedSteerRefusal = agenterr.WithCause(
+	agenterr.CauseSteerUnsupported,
+	errors.New("broker protocol: agent_failed: steer unsupported: claude provider: provider has no steer mechanism (policy queue_until_idle)"),
+)
 
 // capsOverseerSeat reports the turn capabilities a Claude Code seat reports.
 type capsOverseerSeat struct {

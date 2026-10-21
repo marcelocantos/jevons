@@ -6,7 +6,6 @@ package mcpserver
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -72,8 +71,8 @@ func TestT445ReapedCheckpointReportIsNotAFinish(t *testing.T) {
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("reaped checkpoint fixture reads as finish")
 	}
-	if ask := ClassifyReportAsk(report); ask == AskNone {
-		t.Fatal("checkpoint fixture not recognised as an ask/checkpoint")
+	if ask := ClassifyReportAsk(report); ask != AskNone {
+		t.Fatal("a checkpoint sentence is an ask")
 	}
 	reg := regWithTree(t)
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", report, func(string) bool { return false })
@@ -94,16 +93,16 @@ func TestT445PositiveFinishShapesStillReap(t *testing.T) {
 		"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T165 PASS",
 		"complete with accepted risk: owner smoke residual (class-3)",
 	} {
-		if !LooksLikeFinishedWorkReport(report) {
-			t.Errorf("positive finish shape not read as finish:\n%q", report)
+		if LooksLikeFinishedWorkReport(report) {
+			t.Errorf("unenveloped prose read as finish:\n%q", report)
 		}
 	}
 	reg := regWithTree(t)
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", "Done. All finished.", func(string) bool { return false })
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "worker", declaredFinishReport("T445", "Done. All finished."), func(string) bool { return false })
 	if !ok {
-		t.Fatalf("bare done must still reap (T195); reason %s", reason)
+		t.Fatalf("declared finish-report must reap; reason %s", reason)
 	}
-	if !strings.Contains(reason, "bare_done") {
-		t.Fatalf("bare done reason = %s", reason)
+	if reason != "finished_work" {
+		t.Fatalf("declared finish reason = %s", reason)
 	}
 }

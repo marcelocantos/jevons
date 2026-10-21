@@ -13,8 +13,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
-// 🎯T313 hermetic surface. Everything here is decided from disk state
-// plus the registry; no Claude, no Grok, no process is spawned.
+// 🎯T313 explicit recovery surface. Loss is supplied by a generation-scoped
+// authority observation, never inferred from archived vendor files.
 //
 // HOME is redirected so claudia.SessionExists resolves
 // $HOME/.claude/projects/<escaped-workdir>/<session>.jsonl inside the
@@ -63,18 +63,21 @@ func writeSessionJSONL(t *testing.T, sessionID, workDir string) {
 	}
 }
 
-// Acceptance 3: a registry entry with a missing JSONL rehydrates, and
-// lineage / target / provider / model survive the rotation.
+// Explicit loss evidence permits recovery while lineage and settings survive.
 func TestRehydrateLostSessionPreservesLineage(t *testing.T) {
 	f, reg, _ := lostSessionFixture(t)
 	before := *reg.Def("jv-t313-rehydrate")
+	seatstate.RegistryAuthority(reg).Observe(seatstate.Observation{
+		Name: before.Name, SessionID: before.SessionID, ResumeLost: seatstate.Yes,
+		QueueDepth: seatstate.QueueUnknown, Source: "explicit-loss-fixture",
+	})
 
 	lost, ok, err := f.RehydrateLostSession("jv-t313-rehydrate")
 	if err != nil {
 		t.Fatalf("rehydrate: %v", err)
 	}
 	if !ok {
-		t.Fatal("missing JSONL did not trigger rehydrate — the dead-end survives")
+		t.Fatal("explicit generation loss did not permit rehydrate")
 	}
 
 	after := reg.Def("jv-t313-rehydrate")
@@ -147,9 +150,7 @@ func TestRehydrateSkipsHealthySession(t *testing.T) {
 	}
 }
 
-// SessionLost is the gate. It must fire only for a Claude row that is
-// Materialized with no transcript — never on a first launch, and never
-// on a provider whose sessions jevons does not store.
+// Missing historical provider storage is not canonical generation loss.
 func TestSessionLostGate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -159,8 +160,8 @@ func TestSessionLostGate(t *testing.T) {
 		Name: "a", WorkDir: workDir, SessionID: "missing-id",
 		Materialized: true, Provider: claudia.ProviderClaude,
 	}
-	if !observedResumeLost(claudeLost) {
-		t.Fatal("materialized claude row with no JSONL not reported lost")
+	if observedResumeLost(claudeLost) {
+		t.Fatal("missing native JSONL reported canonical generation lost")
 	}
 
 	// Not yet materialized: a first launch legitimately has no JSONL.
@@ -170,9 +171,7 @@ func TestSessionLostGate(t *testing.T) {
 		t.Fatal("un-materialized row reported lost — first launch would rotate needlessly")
 	}
 
-	// Grok is not a Claude JSONL. Missing exclusive home is recovered by
-	// remintAfterResumeError on the unavailable-home error, not here
-	// (🎯T627.1).
+	// Neither native Grok storage nor archived Claude JSONL decides loss.
 	grok := *claudeLost
 	grok.Provider = claudia.ProviderGrok
 	grok.SessionID = "grok-missing-home"
@@ -252,9 +251,9 @@ func TestRehydrateDoesNotStatCursorStore(t *testing.T) {
 	}
 }
 
-// Provider already refused session/load. Rotate — stacking a second
-// writer on the same id is T541.1. Disk layout is Claudia's.
-func TestRotateOntoFreshSessionAfterResumeDenied(t *testing.T) {
+// The explicit rotation primitive remains available after removing automatic
+// error-string recovery; the caller supplies the decision to replace history.
+func TestExplicitRotateOntoFreshSession(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
 		t.Fatal(err)

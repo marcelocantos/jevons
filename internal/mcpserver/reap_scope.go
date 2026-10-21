@@ -14,23 +14,23 @@ import (
 )
 
 // 🎯T972 (split from 🎯T784, whose classifier-fix half landed separately): a
-// pre-reap scope-scan. A finished-work report that reads as done is not
-// always done — the seat may be mid-background-gate, or its own worktree may
-// carry uncommitted work the report never mentioned. Reaping such a seat
-// loses that scope: the process is gone, nothing can finish the gate wait or
-// commit the pending diff, and the parent has no notice that anything was
-// left behind.
+// pre-reap scope-scan. A declared finish-report is not always safe to reap
+// when the seat's own worktree still holds uncommitted files the report
+// never mentioned. Reaping that seat loses the diff. A sentence in the
+// payload is not that fact (🎯T766.4): a gate wait or an active-wait
+// narration does not keep the seat. Status in-progress and the active-wait
+// slot (🎯T1024 typed by 🎯T766.4.1) are the typed claims that the report
+// is not done, and ClassifyDone already refused both.
 //
-// This scan runs before the reap decision and, when it finds outstanding
-// scope, keeps the seat registered instead — retention is cheap (the seat
-// sits idle until the next classification, or a human/parent acts), and a
-// reap is irreversible (🎯T435's own framing: "reaping is destructive and
-// irreversible, keeping is cheap").
+// This scan runs after the done answer. When it finds owned uncommitted
+// files, the seat stays registered. Retention is cheap, and a reap is
+// irreversible (🎯T435: "reaping is destructive and irreversible, keeping
+// is cheap").
 
 // OutstandingScope is one thing a finished-work report leaves unresolved.
 type OutstandingScope struct {
-	// Kind is a short machine-readable tag: "pending_gate" or
-	// "owned_uncommitted". Used as a lifecycle-log/reason suffix.
+	// Kind is a short machine-readable tag: "active_wait", "in_progress",
+	// or "owned_uncommitted". Used as a lifecycle-log/reason suffix.
 	Kind string
 	// Detail is the operator-facing sentence naming the specific scope —
 	// what a parent notice quotes.
@@ -45,29 +45,28 @@ type OutstandingScope struct {
 //
 // ownWorktree matters on purpose: a dirty shared clone is not this seat's
 // scope to answer for (other agents may share it), so only a seat's own
-// isolated worktree (🎯T254.2) counts uncommitted paths as owned. A report
-// that declares a blocking wait on a tracked background gate (🎯T565's own
-// classifier, DeclaresBlockingGateWait) is always this seat's scope
-// regardless of where it runs.
+// isolated worktree (🎯T254.2) counts uncommitted paths as owned. Payload
+// English is not scope, including a gate-wait sentence and an active-wait
+// narration (🎯T766.4).
 func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktree bool) []OutstandingScope {
 	var out []OutstandingScope
-	if scope := midWorkReportScope(report); scope != nil {
-		out = append(out, *scope)
+	// 🎯T1024 / 🎯T766.4.1: a finish-report that declares an active external
+	// wait is the 2026-10-07 incident shape. It comes first so the reap
+	// reason (outstanding_scope_active_wait) and this list agree, and the
+	// parent notice names the wait.
+	if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport {
+		for _, w := range m.ActiveWaits {
+			out = append(out, activeWaitScope(w))
+		}
 	}
-	if declaresBlockingGateWaitLocalized(report) {
+	// The status slot is recorded here so a parent notice can name an
+	// explicit in-progress report. ClassifyDone already refused it as done.
+	// Validation may fail (an in-progress report owes no oracle). The status
+	// slot is still the claim, matching ClassifyDone.
+	if m, _ := envelope.Parse(report); m != nil && m.Kind == envelope.KindFinishReport && m.Status == envelope.ProgressInProgress {
 		out = append(out, OutstandingScope{
-			Kind:   "pending_gate",
-			Detail: "the report declares a blocking wait on a tracked background gate that has not resolved",
-		})
-	} else if span, ok := FindActiveExternalWait(report); ok {
-		// 🎯T1024: the same scope narrated in monitoring vocabulary ("alive
-		// and still queued", "monitor armed ... still watching") that the
-		// T565 verb list does not hear. Only when T565 was silent, so a
-		// report both recognise logs once, under the classifier that
-		// existed first.
-		out = append(out, OutstandingScope{
-			Kind:   activeWaitScopeKind,
-			Detail: "the report narrates an active wait on an alive external process it does not control: " + strings.TrimSpace(span),
+			Kind:   "in_progress",
+			Detail: "the worker explicitly reports status in-progress",
 		})
 	}
 	if ownWorktree && tree != nil && !tree.Clean && tree.DirtyFiles > 0 {
@@ -86,18 +85,16 @@ func OutstandingScopeReasons(report string, tree *gate.TreeProvenance, ownWorktr
 	return out
 }
 
-// midWorkReportScope gives declared remaining work precedence over the
-// envelope kind (T784). Evidence for a slice does not close its mission.
+// midWorkReportScope reads a finish-report's status slot and, historically,
+// payload English. The reap path does not call it (🎯T766.4): remaining
+// work is status in-progress, decided by ClassifyDone.
 func midWorkReportScope(report string) *OutstandingScope {
-	m, err := envelope.Parse(report)
-	if m == nil || err != nil || m.Kind != envelope.KindFinishReport {
+	m, _ := envelope.Parse(report)
+	if m == nil || m.Kind != envelope.KindFinishReport {
 		return nil
 	}
 	if m.Status == envelope.ProgressInProgress {
 		return &OutstandingScope{Kind: "in_progress", Detail: "the worker explicitly reports status in-progress"}
-	}
-	if hasForwardLookingPlan(m.Payload) || ClassifyReportAsk(m.Payload) == AskExplicitIncomplete || ClassifyReportAsk(m.Payload) == AskCheckpoint {
-		return &OutstandingScope{Kind: "remaining_work", Detail: "the worker names remaining work: " + m.Payload}
 	}
 	return nil
 }
@@ -200,7 +197,7 @@ func outstandingScopeKind(scope []OutstandingScope) string {
 }
 
 // outstandingScopeReapReason is the ShouldAutoReapDoneWorkAgent reason
-// string for a retained seat — "outstanding_scope_pending_gate" or
+// string for a retained seat — "outstanding_scope_in_progress" or
 // "outstanding_scope_owned_uncommitted".
 const outstandingScopeReapReasonPrefix = "outstanding_scope_"
 

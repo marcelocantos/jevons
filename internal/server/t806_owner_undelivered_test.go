@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
+
+	"github.com/marcelocantos/jevons/internal/agenterr"
 )
 
 // 🎯T806: an owner message the daemon cannot deliver must not stay displayed
@@ -77,6 +79,7 @@ func TestT806OwnerRefusalIsUndeliveredThenDeliveredOnce(t *testing.T) {
 	}
 
 	refuse = false
+	installSettlingOwnerReceipt(t, s)
 	s.drainOverseerNotes()
 	ok := sendErrors(drainFrames())
 	if len(ok) != 1 || !strings.Contains(ok[0], "delivered") || strings.Contains(ok[0], "not delivered") {
@@ -97,7 +100,9 @@ func TestT806BusyDeferStaysQuiet(t *testing.T) {
 	s.notifyRetryDelay = time.Hour
 	lines := make(chan string, 4)
 	s.chatListeners = append(s.chatListeners, lines)
-	s.notifySender = func(string) error { return fmt.Errorf("grok acp: prompt already in flight") }
+	s.notifySender = func(string) error {
+		return agenterr.WithCause(agenterr.CauseTurnInFlight, fmt.Errorf("grok acp: prompt already in flight"))
+	}
 	_ = s.SendToOverseer(userTurnPrefix + "hello")
 	select {
 	case l := <-lines:
@@ -173,6 +178,7 @@ func TestT811IdenticalTextsKeepTheirOwnIDs(t *testing.T) {
 	// a delivers (one drain), then b is refused: b announces under its own
 	// id, not suppressed because a text-keyed flag from a lingered.
 	refuse = false
+	installSettlingOwnerReceipt(t, s)
 	s.drainOverseerNotes()
 	if got := frames(); got != "delivered:om-a" {
 		t.Fatalf("frames %q", got)

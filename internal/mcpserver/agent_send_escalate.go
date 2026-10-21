@@ -4,6 +4,8 @@
 package mcpserver
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T899: a product owner that gets its own hands dirty must stay reachable.
@@ -93,22 +96,23 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 	// ladder. Refuse the ladder and use the ordinary typed mode/queue path
 	// rather than silently stripping the ID. The optional T184 method is
 	// selected only when present, without pinning Claudia in this slice.
-	var typed interface {
+	typed, hasTyped := proc.(interface {
 		SendEscalatingWithRequestID(string, escalate.Ladder, string) (claudia.DeliveryOutcome, error)
-	}
-	if requestID != "" {
-		typed, ok = proc.(interface {
-			SendEscalatingWithRequestID(string, escalate.Ladder, string) (claudia.DeliveryOutcome, error)
-		})
-		if !ok {
-			return agentSendResult{}, false, nil
-		}
+	})
+	if requestID != "" && !hasTyped {
+		return agentSendResult{}, false, nil
 	}
 	unlock := s.lockAgentSend(name)
 	defer unlock()
 	if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) || !(s.flightState(name) == FlightInFlight) {
 		return agentSendResult{}, false, nil
 	}
+	// Drain reconciles before it claims. This ladder does not. An earlier
+	// handoff whose receipt is already terminal would otherwise stay an
+	// uncertain row until some later sweep, including across shutdown.
+	receiptCtx, receiptCancel := context.WithTimeout(context.Background(), heldReceiptQueryTimeout)
+	s.reconcileHeldReceipts(receiptCtx, name)
+	receiptCancel()
 	// 🎯T931: the ladder holds only rungs this seat can run. A steer-first
 	// ladder cannot start on a seat with no steer mechanism, so the ordinary
 	// path holds the message for the turn boundary.
@@ -129,10 +133,36 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 	if relay {
 		s.midTurn().expect(name, asker, text)
 	}
+	sendText, sendID := text, requestID
+	var handoff sendq.Entry
+	sessionID, mission, doBind, bindErr := s.receiptBind(name, proc)
+	if bindErr != nil {
+		if relay {
+			s.midTurn().forget(name, text)
+		}
+		return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, bindErr)
+	}
+	if doBind && hasTyped {
+		bound, berr := s.claimAndBindHandoff(name, text, requestID, true, sessionID, mission)
+		if berr != nil {
+			if relay {
+				s.midTurn().forget(name, text)
+			}
+			if errors.Is(berr, sendq.ErrActiveHandoff) {
+				return agentSendResult{}, false, nil
+			}
+			return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, berr)
+		}
+		handoff = bound
+		sendText, sendID = bound.WirePayload(), bound.TransportRequestID
+	}
 	var out claudia.DeliveryOutcome
 	var err error
-	if requestID != "" {
-		out, err = typed.SendEscalatingWithRequestID(text, ladder, requestID)
+	if sendID != "" && hasTyped {
+		out, err = typed.SendEscalatingWithRequestID(sendText, ladder, sendID)
+	} else if handoff.ID != "" {
+		s.settleHandoff(name, handoff, sendq.TerminalUndelivered, errRequestIDUnavailable.Error())
+		return agentSendResult{}, false, nil
 	} else {
 		out, err = es.SendEscalating(text, ladder)
 	}
@@ -141,12 +171,45 @@ func (s *Server) escalateIfBusyWithRequestID(name, text, class, asker string, pr
 			s.midTurn().forget(name, text)
 		}
 		if escalate.NotStarted(err) {
+			s.settleHandoff(name, handoff, sendq.TerminalUndelivered, err.Error())
 			// Nothing reached the seat; the ordinary path holds or submits it.
 			slog.Info("🎯T899 escalation not available on this seat; ordinary delivery",
 				"component", "agent_send", "name", name, "class", class, "err", err.Error())
 			return agentSendResult{}, false, nil
 		}
+		// A hard disconnect is the same claim as an immediate send: the
+		// payload did not reach a receipt, and keeping the row uncertain
+		// leaves an obligation this path will not retry. A reply timeout
+		// still cannot prove that, so that row stays unverified.
+		if ClassifySendError(err).DisprovesDelivery() {
+			s.settleHandoff(name, handoff, sendq.TerminalUndelivered, err.Error())
+		} else {
+			s.settleHandoff(name, handoff, sendq.Unverified, err.Error())
+		}
 		return agentSendResult{}, true, fmt.Errorf("escalating send to %q: %w", name, err)
+	}
+	// A nil ladder return is the socket write. The receipt settles the
+	// transport obligation. An empty handoff is an incapable seat and has
+	// nothing to settle. A bound handoff whose receipt does not settle is
+	// not steered or sent: the caller hears the same unconfirmed verdict
+	// as a bound immediate send.
+	s.settleBoundHandoffReceipt(name, handoff)
+	if handoff.ID != "" && !handoffConfirmed(s, name, handoff.ID) {
+		s.noteUnconfirmedSend(name, text)
+		msg := fmt.Sprintf(
+			"Message handed to %q but NOT confirmed as a turn: the socket write returned and the structured receipt did not settle this handoff. "+
+				"DO NOT re-send on this verdict — the attempt stays held until a receipt settles.",
+			name)
+		slog.Info("agent_send",
+			"component", "agent_send", "name", name, "status", "delivered_unconfirmed",
+			"mode", string(ladder[0].Mode), "mechanism", out.Mechanism,
+			"outcome", "escalating", "class", class, "ladder", len(ladder))
+		return agentSendResult{
+			Status:    "delivered_unconfirmed",
+			Message:   msg,
+			Mode:      delivery.Mode(ladder[0].Mode),
+			Mechanism: out.Mechanism,
+		}, true, nil
 	}
 	status, verb := "steered", "steered into its running turn"
 	if ladder[0].Mode == claudia.DeliverySubmit {

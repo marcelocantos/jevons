@@ -59,7 +59,7 @@ func (s *Store) ApplyDirective(agent, text string, d Directive, queued bool, at 
 	var kept, removed []Entry
 	for _, old := range f.Entries {
 		if d.Kind == "hold" && old.Directive != nil && old.Directive.Kind == "authorization" && old.Directive.Family == d.Family {
-			if old.State != Pending {
+			if !claimablePhase(EntryPhase(old, s.active[agent])) {
 				return Entry{}, 0, nil, fmt.Errorf("sendq: authorization %s has unresolved delivery attempt; reconcile before holding %q", old.ID, d.Family)
 			}
 			removed = append(removed, old)

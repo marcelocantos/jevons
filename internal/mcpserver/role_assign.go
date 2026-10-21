@@ -26,7 +26,7 @@ func (s *Server) OpenRoleAssignments(stateDir string) error {
 	}
 	s.mu.Lock()
 	s.roleAssignments = a
-	s.roleCat = defaultRolesCatalog()
+	s.roleCat = defaultRolesCatalog(stateDir)
 	s.mu.Unlock()
 	return nil
 }
@@ -39,24 +39,32 @@ func (s *Server) SetRoleAssignments(a *roles.Assignments) {
 	s.mu.Lock()
 	s.roleAssignments = a
 	if s.roleCat.OwnerDir == "" && s.roleCat.OverrideDir == "" && s.roleCat.RepoDir == "" {
-		s.roleCat = defaultRolesCatalog()
+		s.roleCat = defaultRolesCatalog(s.recordedDaemonStateDir())
 	}
 	s.mu.Unlock()
 }
 
-func defaultRolesCatalog() roles.Catalog {
+// defaultRolesCatalog resolves owner role overrides from JEVONS_ROLES_DIR,
+// else <state_dir>/roles. 🎯T1090: never $HOME/.jevons/roles directly —
+// for the development daemon the two are the same directory, and for an
+// isolate the home join read (and let agents write) the development
+// daemon's overrides. With no state dir there is no owner overlay; the
+// builtin roles still resolve.
+func defaultRolesCatalog(stateDir string) roles.Catalog {
 	override := strings.TrimSpace(os.Getenv("JEVONS_ROLES_DIR"))
-	if override == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			override = filepath.Join(home, ".jevons", "roles")
-		}
+	if override == "" && strings.TrimSpace(stateDir) != "" {
+		override = filepath.Join(strings.TrimSpace(stateDir), "roles")
 	}
 	return roles.Catalog{OwnerDir: override}
 }
 
 // rolesCatalog returns the resolver, optionally with a repo-local overlay.
 func (s *Server) rolesCatalog(workdir string) roles.Catalog {
-	c := defaultRolesCatalog()
+	stateDir := ""
+	if s != nil {
+		stateDir = s.recordedDaemonStateDir()
+	}
+	c := defaultRolesCatalog(stateDir)
 	if s != nil {
 		s.mu.Lock()
 		if s.roleCat.OwnerDir != "" || s.roleCat.OverrideDir != "" || s.roleCat.RepoDir != "" {
@@ -86,19 +94,59 @@ func (s *Server) roleDisplay(d claudia.AgentDef) string {
 	return s.agentRole(d.Name, d.Purpose)
 }
 
-// agentRole returns the recorded role for name, or a purpose/name default.
+// agentRole returns name's declared fleet role (🎯T766.4): the role recorded
+// at spawn (agent_roles.json, 🎯T511 / 🎯T536.2), else the registry row's
+// AgentDef.Role, else the role its declared purpose implies. Claudia's
+// purpose is the work|aside|overseer enum, so every live product owner
+// carries purpose=work and the recorded role is the fact that says product
+// owner. The seat name never decides.
 func (s *Server) agentRole(name, purpose string) string {
-	if s != nil {
-		s.mu.Lock()
-		a := s.roleAssignments
-		s.mu.Unlock()
-		if a != nil {
-			if r := a.Get(name); r != "" {
-				return r
-			}
+	if r := s.recordedRole(name); r != "" {
+		return r
+	}
+	defRole := ""
+	if s != nil && s.registry != nil {
+		if d := s.registry.Def(name); d != nil {
+			defRole = d.Role
 		}
 	}
-	return roles.DefaultForPurpose(purpose, name)
+	return roles.OfSeat(defRole, purpose)
+}
+
+// seatRoleOf is agentRole for a registry row. Pure classifiers read
+// roles.OfSeat(d.Role, d.Purpose); withSeatRole fills d.Role so they see
+// the recorded role too.
+func (s *Server) seatRoleOf(d claudia.AgentDef) string {
+	if r := s.recordedRole(d.Name); r != "" {
+		return r
+	}
+	return roles.OfSeat(d.Role, d.Purpose)
+}
+
+// recordedRole is the role recorded at spawn for name, or "".
+func (s *Server) recordedRole(name string) string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	a := s.roleAssignments
+	s.mu.Unlock()
+	return a.Get(name)
+}
+
+// withSeatRole returns a copy of d whose Role is its declared role.
+func (s *Server) withSeatRole(d claudia.AgentDef) claudia.AgentDef {
+	d.Role = s.seatRoleOf(d)
+	return d
+}
+
+// withSeatRoles is withSeatRole over a registry listing.
+func (s *Server) withSeatRoles(defs []claudia.AgentDef) []claudia.AgentDef {
+	out := make([]claudia.AgentDef, len(defs))
+	for i, d := range defs {
+		out[i] = s.withSeatRole(d)
+	}
+	return out
 }
 
 // recordAgentRole persists spawn role= alongside AgentDef.Role.

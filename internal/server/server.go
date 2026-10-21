@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/buildident"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/config"
 	"github.com/marcelocantos/jevons/internal/delivery"
@@ -229,20 +230,53 @@ type Server struct {
 	notifyQueue    []string
 	notifyDraining bool
 	notifySender   func(string) error
+	// allowNotifyDrain reports whether fleet intent permits beginning an
+	// overseer turn. Nil allows, so a server with no fleet store keeps the
+	// pre-gate behaviour. Invoked without s.mu held.
+	allowNotifyDrain func() bool
+	// fleetHealthJournaled counts fleet-health notes already written into
+	// the overseer transcript. The OMP sidecar does not echo that prompt
+	// as a user event, so the 🎯T63 agent_note path never sees it. A later
+	// provider echo of the same text is consumed here instead of journaled
+	// again. Guarded by mu.
+	fleetHealthJournaled map[string]int
+	// overseerSendSeam observes the host request id on the notify drain.
+	// A stub *claudia.Agent drops that id, so tests cannot see it on Send.
+	// Nil is production: sendNotes calls SendWithRequestID.
+	overseerSendSeam func(text, requestID string) error
+	// recordRequestMission freezes the overseer's target onto a host
+	// request before the provider sees the text. Nil leaves the mission
+	// unknown. Wired from the daemon next to the fleet recorder.
+	recordRequestMission func(ctx context.Context, seat, requestID, mission string) error
+	// querySendReceipt reads one structured execution receipt. Nil does
+	// not dial Claudia: a missing read cannot confirm an owner handoff.
+	querySendReceipt func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)
 	// 🎯T806: owner-message honesty. Ids ride beside the queued wire text (FIFO
 	// per text); ownerUndelivered marks texts whose refusal was announced so a
 	// retry storm tells the owner once; the timer re-drains a refused batch.
-	notifyOwnerIDs       map[string][]string
-	ownerUndelivered     map[string]bool
-	notifyRetryDelay     time.Duration
-	notifyRetryTimer     *time.Timer
-	notifyRetryN         int
-	overseerReattachWait time.Duration
-	brokerFaultDir       string // 🎯T811 isolate-only fault seam
-	ownerQueueMu         sync.Mutex
-	ownerQueuePath       string
-	ownerDelivered       []string
-	overseerOwnerTurn    bool
+	notifyOwnerIDs map[string][]string
+	// notifyFleetBatchText is the composed fleet prompt currently bound to
+	// notifyFleetBatchID. A failed handoff retries those same bytes under
+	// that id. A different composition replaces both. Owner batches do not
+	// use this slot.
+	notifyFleetBatchText string
+	notifyFleetBatchID   string
+	// notifyUntrackedOwnerIDs is the host id for an owner note that was
+	// queued without one, keyed by the exact wire text. Owner-health
+	// re-injection is that path. A failed handoff retries the same text
+	// under the same id. Success drops the entry. A registered owner id
+	// never lands here.
+	notifyUntrackedOwnerIDs map[string]string
+	ownerUndelivered        map[string]bool
+	notifyRetryDelay        time.Duration
+	notifyRetryTimer        *time.Timer
+	notifyRetryN            int
+	overseerReattachWait    time.Duration
+	brokerFaultDir          string // 🎯T811 isolate-only fault seam
+	ownerQueueMu            sync.Mutex
+	ownerQueuePath          string
+	ownerDelivered          []string
+	overseerOwnerTurn       bool
 	// overseerPhase is the current reduce of the interleaved turn-state
 	// stream (🎯T555.1); overseerCorrespondent is the in-flight notify batch
 	// stamped onto non-idle samples.
@@ -357,6 +391,23 @@ type Server struct {
 	overseerOwnerTurnText string
 	notifyInFlight        []string
 	ownerInterruptSeam    func() (settled bool, err error)
+	// 🎯T1091: where the provider put the owner turn in flight.
+	// overseerOwnerTurnRequestID is the request id the drain handed over;
+	// overseerOwnerTurnMsgID is the owner message id its cockpit row carries
+	// ("" for an untracked owner note). overseerOwnerQueuedBehind is set when
+	// the provider accepted that request without opening a turn for it: it
+	// waits behind a turn this server does not hold. ownerQueuedBehindGrace
+	// is how long such a turn may wait before it preempts (0 = default).
+	// ownerUnanswered holds owner turns that will not be answered (the seat
+	// was replaced, or the provider closed the request unrun), by message id,
+	// until the owner resends one or the seat answers after all.
+	overseerOwnerTurnRequestID string
+	overseerOwnerTurnMsgID     string
+	overseerOwnerQueuedBehind  bool
+	overseerOwnerQueuedGen     uint64
+	ownerQueuedBehindGrace     time.Duration
+	ownerQueuedBehindEarly     string // a queued-behind acceptance seen before its drain recorded the request
+	ownerUnanswered            map[string]string
 	// 🎯T662 decorations for /api/agents rows: why a seat stopped, and the
 	// fleet-wide mass-stop line. Nil = no ledger wired (tests).
 	seatStopReader func(name string) (reason string, at time.Time, ok bool)
@@ -518,6 +569,9 @@ func New(version, stateDir string) *Server {
 // the Grok voice bridge for TTS. Wired via Agent.SubscribeEvents in
 // the daemon entry point.
 func (s *Server) HandleAgentEvent(ev claudia.Event) {
+	// 🎯T1091: the end of a turn the owner turn is queued behind is not the
+	// owner turn's end.
+	foreignEnd := s.observeOwnerTurnPlacement(ev)
 	switch ev.Type {
 	case "assistant":
 		if ev.Text != "" {
@@ -534,6 +588,10 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		}
 		fallthrough
 	case "system":
+		if foreignEnd {
+			s.settleForeignTurnEnd()
+			return
+		}
 		s.mu.Lock()
 		wasWaiting := s.waiting
 		wasOwnerTurn := s.overseerOwnerTurn
@@ -542,6 +600,7 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 		s.waiting = false
 		s.overseerOwnerTurn = false // 🎯T291: seal clears owner-turn chrome level
 		s.overseerOwnerTurnText = ""
+		s.clearOwnerTurnPlacementLocked()
 		s.overseerStreamID = "" // 🎯T223: terminal settle closes stream label
 		s.overseerStreamAcc = ""
 		s.overseerStreamSilent = false
@@ -587,14 +646,7 @@ func (s *Server) BroadcastBinary(data []byte) {
 		return
 	}
 
-	s.mu.RLock()
-	remotes := make([]remoteConn, 0, len(s.remotes))
-	for _, rc := range s.remotes {
-		remotes = append(remotes, rc)
-	}
-	s.mu.RUnlock()
-
-	for _, rc := range remotes {
+	for _, rc := range s.snapshotRemotes() {
 		writeCtx, cancel := context.WithTimeout(rc.ctx, 5*time.Second)
 		if err := rc.writer.WriteBinary(writeCtx, data); err != nil {
 			slog.Debug("binary broadcast write failed", "err", err)
@@ -662,7 +714,6 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("GET /api/logs", s.handleLogsTail)
 	mux.HandleFunc("GET /api/logs/stream", s.handleLogsStream)
-	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 	mux.HandleFunc("/ws/voice", s.handleVoice)
 	s.registerWorkerRoutes(mux)
@@ -854,24 +905,13 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Register this connection.
-	s.mu.Lock()
-	s.remoteSeq++
-	remoteID := s.remoteSeq
-	s.remotes[remoteID] = remoteConn{writer: wsWriter{conn: conn}, ctx: ctx}
-	clients := len(s.remotes)
-	s.mu.Unlock()
+	// Register this connection. 🎯T630 / 🎯T604.1: the remotes map is only
+	// touched through registerRemote / unregisterRemote / snapshotRemotes.
+	remoteID, clients := s.registerRemote(remoteConn{writer: wsWriter{conn: conn}, ctx: ctx})
 
-	// 🎯T604.1: the disconnect count is sampled in the same critical
-	// section as the delete, then logged after the lock is released.
-	// Other remote handlers write s.remotes concurrently, so it is never
-	// read outside s.mu.
 	logDisconnect := false
 	defer func() {
-		s.mu.Lock()
-		delete(s.remotes, remoteID)
-		clients := len(s.remotes)
-		s.mu.Unlock()
+		clients := s.unregisterRemote(remoteID)
 		if logDisconnect {
 			slog.Info("remote disconnected", "clients", clients)
 		}
@@ -945,6 +985,35 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// registerRemote inserts a remote client under s.mu and returns its id
+// and the resulting client count. 🎯T630: registration, removal and
+// broadcast snapshot the shared remotes map only through these helpers.
+func (s *Server) registerRemote(rc remoteConn) (id, clients int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.remoteSeq++
+	id = s.remoteSeq
+	s.remotes[id] = rc
+	return id, len(s.remotes)
+}
+
+func (s *Server) unregisterRemote(id int) (clients int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.remotes, id)
+	return len(s.remotes)
+}
+
+func (s *Server) snapshotRemotes() []remoteConn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]remoteConn, 0, len(s.remotes))
+	for _, rc := range s.remotes {
+		out = append(out, rc)
+	}
+	return out
+}
+
 // Broadcast sends a JSON message to all connected remote clients.
 func (s *Server) Broadcast(v any) {
 	data, err := json.Marshal(v)
@@ -953,14 +1022,7 @@ func (s *Server) Broadcast(v any) {
 		return
 	}
 
-	s.mu.RLock()
-	remotes := make([]remoteConn, 0, len(s.remotes))
-	for _, rc := range s.remotes {
-		remotes = append(remotes, rc)
-	}
-	s.mu.RUnlock()
-
-	for _, rc := range remotes {
+	for _, rc := range s.snapshotRemotes() {
 		writeCtx, cancel := context.WithTimeout(rc.ctx, 5*time.Second)
 		if err := rc.writer.WriteText(writeCtx, data); err != nil {
 			slog.Debug("broadcast write failed", "err", err)
@@ -988,15 +1050,27 @@ func (s *Server) HandleUserMessage(text string) {
 		slog.Warn("jevons: message received before claude started")
 		return
 	}
+	// Mint before the provider call. A freeze error must not send and must
+	// not mark the overseer as already taking this turn.
+	requestID := newOwnerMessageID()
+	if err := s.freezeOverseerMission(requestID); err != nil {
+		slog.Error("jevons: mission freeze failed", "err", err)
+		return
+	}
 	s.mu.Lock()
 	s.waiting = true
 	s.overseerOwnerTurn = true // 🎯T291: remote owner speech is an owner turn
+	s.clearOwnerTurnPlacementLocked()
 	s.mu.Unlock()
 	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
 	if err := upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
-		func(a *claudia.Agent) error { return a.Send(text) }); err != nil {
+		func(a *claudia.Agent) error { return a.SendWithRequestID(text, requestID) }); err != nil {
 		slog.Error("jevons: send failed", "err", err)
+		return
 	}
+	// A nil write is not owner delivery. The flag waits for a settling
+	// receipt of this request. A nil query does not dial.
+	s.noteOwnerDeliveredFromReceipt(requestID)
 }
 
 // HandleAction processes a UI action from a remote client or a timer callback.

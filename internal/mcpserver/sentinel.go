@@ -562,7 +562,8 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 	// --- Fleet agents ---
 	if s.registry != nil {
 		s.observeRegistryLiveness()
-		reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.AutoSpawnPaused())
+		reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold)
+		s.noteDeadHandleRevives(reps)
 		recovered := map[string]bool{}
 		dead := map[string]DeadAgentReport{}
 		for _, r := range reps {
@@ -590,7 +591,7 @@ func (s *Server) sampleSentinel(args SentinelLoopArgs, now time.Time) ([]staffop
 				running++
 			} else {
 				stopped++
-				if isPOName(d.Name) {
+				if purposeIsProductOwner(s.seatRoleOf(d)) {
 					idlePO++
 				}
 			}
@@ -821,7 +822,7 @@ func eventRowFromEvent(e eventlog.Event) staffops.EventRow {
 	case bool:
 		row.Drill = v
 	case string:
-		row.Drill = strings.EqualFold(strings.TrimSpace(v), "true")
+		row.Drill = strings.ToLower(strings.TrimSpace(v)) == "true"
 	}
 	if fc, ok := e.Fields["failure_class"].(string); ok {
 		row.FailureClass = strings.TrimSpace(fc)

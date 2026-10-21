@@ -26,6 +26,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -54,8 +55,8 @@ type Query struct {
 	SessionID string
 	WorkDir   string
 	Roots     discovery.Roots
-	// OMP is the registry sidecar mark. Grok without it still uses the
-	// Grok Build store until T866.6 remints the seat.
+	// OMP is the registry sidecar mark. Locate no longer needs it: every
+	// named plan is a sidecar seat (🎯T1079).
 	OMP bool
 	// Now is the clock the age is measured against. Zero means time.Now();
 	// tests inject so an age is a computed distance and not whatever the
@@ -112,13 +113,23 @@ func Locate(q Query) Location {
 	if sid == "" {
 		return Location{State: discovery.LookupUnobservable, Reason: "no session id"}
 	}
-	switch q.Provider {
-	case "", claudia.ProviderClaude:
+	// A plan name is the seat its launch name is (🎯T1079). Every named
+	// plan runs on the sidecar since claudia v0.58, so a legacy row storing
+	// grok or claude has no vendor transcript that is still its conversation:
+	// reading one would report a stale Grok Build store, or "absent" for a
+	// Claude JSONL that a sidecar seat never writes, as the seat's truth.
+	// Until the sidecar records the seat's first line it is unobservable,
+	// never absent: the spool is an optional projection (claudia's
+	// CLAUDIA_OMP_SPOOL_DIR), so an empty one proves nothing.
+	id := seatprovider.Resolve(q.Provider)
+	switch {
+	case id.Sidecar:
+		return Location{
+			State:  discovery.LookupUnobservable,
+			Reason: fmt.Sprintf("%s sidecar seat has no spool record yet", id.Launch),
+		}
+	case id.Plan == seatprovider.Unset:
 		return locateClaude(sid, q.WorkDir)
-	case claudia.ProviderGrok:
-		return locateGrok(q.Roots, sid)
-	case claudia.ProviderCursor:
-		return locateCursor(q)
 	default:
 		return Location{
 			State: discovery.LookupUnobservable,
@@ -214,19 +225,6 @@ func locateClaude(sessionID, workDir string) Location {
 	return Location{State: discovery.LookupAbsent, Reason: "claude JSONL is absent"}
 }
 
-func locateGrok(roots discovery.Roots, sessionID string) Location {
-	got := discovery.GrokUpdatesLookup(roots, sessionID)
-	out := Location{State: got.State, Reason: got.Reason, Path: got.Path}
-	if got.Err != nil && out.Reason != "" {
-		out.Reason = fmt.Sprintf("%s: %v", got.Reason, got.Err)
-	}
-	if out.State == "" {
-		out.State = discovery.LookupUnobservable
-		out.Reason = "grok lookup returned no state"
-	}
-	return out
-}
-
 func locateSpool(seat string) Location {
 	path := spool.LatestPath(spool.Dir(), seat)
 	if path == "" {
@@ -236,23 +234,6 @@ func locateSpool(seat string) Location {
 		}
 	}
 	return Location{State: discovery.LookupPresent, Path: path}
-}
-
-func locateCursor(q Query) Location {
-	// Pinned claudia v0.40.0 startCursorAgent leaves JSONLPath empty and sets
-	// TailJSONL=false, so agent.go keeps the initially computed Claude-shaped
-	// path — a phantom T501/T519 already refuse. store.db is opened at
-	// session/new|session/load (Launch), not at first Prompt, so its
-	// existence is a resume check and cannot prove first-submit creation.
-	name := strings.TrimSpace(q.Name)
-	if name == "" {
-		name = "cursor seat"
-	}
-	return Location{
-		State: discovery.LookupUnobservable,
-		Reason: name + ": cursor ACP has no first-submit JSONL contract; " +
-			"store.db is a resume check (session/new|load) and the Claude-shaped path is a phantom (T501/T519)",
-	}
 }
 
 func providerLabel(p claudia.Provider) string {

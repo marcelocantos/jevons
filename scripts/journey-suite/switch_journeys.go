@@ -16,8 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // Model-switch journeys (claudia 🎯T195). A seat switches provider in place:
@@ -32,7 +31,7 @@ import (
 // switchJourneyDestination is the other plan a journey moves to. Codex
 // and Claude carry the moves, so the journeys do not spend Cursor.
 func switchJourneyDestination(from claudia.Provider) claudia.Provider {
-	if cli.PlanProvider(from) == claudia.ProviderCodex {
+	if seatprovider.Resolve(from).Plan == seatprovider.Codex {
 		return claudia.ProviderClaude
 	}
 	return claudia.ProviderCodex
@@ -41,7 +40,7 @@ func switchJourneyDestination(from claudia.Provider) claudia.Provider {
 // switchedInPlace checks the registry row after a switch: on the
 // destination plan, on the same session.
 func switchedInPlace(source, after claudia.AgentDef, to claudia.Provider) error {
-	if cli.PlanProvider(after.Provider) != cli.PlanProvider(to) {
+	if seatprovider.Resolve(after.Provider).Plan != seatprovider.Resolve(to).Plan {
 		return fmt.Errorf("seat is on %s, want %s", after.Provider, to)
 	}
 	if after.SessionID == "" || after.SessionID != source.SessionID {
@@ -87,12 +86,12 @@ func (s *suite) providerSwitchWithBroker() error {
 		return err
 	}
 	defer func() { _, _ = s.mcpText("jevons_thread_remove", map[string]any{"id": id}) }()
-	to := switchJourneyDestination(s.provider)
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey switch worker",
-		// The source is the isolate's provider: the switch is under test
-		// here, not placement.
-		"provider": string(cli.PlanProvider(s.provider)),
+		// The source request is the isolate's provider. An unsteerable
+		// pin is dropped at mint (🎯T791); the switch below follows the
+		// plan that actually started.
+		"provider": string(seatprovider.Resolve(s.provider).Plan.AsProvider()),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
@@ -109,15 +108,22 @@ func (s *suite) providerSwitchWithBroker() error {
 		return fmt.Errorf("source registry: %w", err)
 	}
 	source := before[id]
-	if source.SessionID == "" || cli.PlanProvider(source.Provider) != cli.PlanProvider(s.provider) {
+	if source.SessionID == "" {
 		return fmt.Errorf("source identity is not the running provider: %+v", source)
 	}
+	if err := expectLandedProvider(s.provider, source.Provider); err != nil {
+		return fmt.Errorf("source identity: %w", err)
+	}
+	to := switchJourneyDestination(seatprovider.Resolve(source.Provider).Plan.AsProvider())
 	// owner_asked: the journey plays the owner requesting this move (🎯T561
 	// refuses an un-asked leave of a provider with weekly remaining).
 	out, err := s.mcpText("jevons_agent_switch_model", map[string]any{
 		"name": id, "provider": string(to), "owner_asked": true,
 	})
 	if err != nil {
+		if authRefreshRefused(err, out) {
+			return s.authUnavailablePreserved(id, source, to, passphrase, err)
+		}
 		return fmt.Errorf("switch %s → %s: %w (%s)", s.provider, to, err, trim(out, 200))
 	}
 	if !strings.Contains(out, "in place") {
@@ -171,7 +177,7 @@ func (s *suite) stoppedProviderSwitchWithBroker() error {
 	to := switchJourneyDestination(s.provider)
 	if _, err := s.mcpText("jevons_thread_spawn", map[string]any{
 		"id": id, "workdir": work, "description": "journey stopped switch worker",
-		"provider": string(cli.PlanProvider(s.provider)),
+		"provider": string(seatprovider.Resolve(s.provider).Plan.AsProvider()),
 	}); err != nil {
 		return fmt.Errorf("spawn: %w", err)
 	}
@@ -264,6 +270,56 @@ func (s *suite) overseerSwitchWithBroker() error {
 		time.Sleep(10 * time.Second)
 	}
 	return fmt.Errorf("overseer on %s never recalled the codeword after the switch", to)
+}
+
+// authRefreshRefused is an isolate (or any broker) refusing to rotate the
+// shared plan token. The destination never starts. The source seat is the
+// one that must still be there.
+func authRefreshRefused(err error, out string) bool {
+	text := out
+	if err != nil {
+		text += "\n" + err.Error()
+	}
+	return strings.Contains(text, "refresh refused") || strings.Contains(text, "CLAUDIA_OMP_NO_REFRESH")
+}
+
+// seatPreserved reports whether a failed switch left the running seat on
+// the same plan and the same session. A missing row or a new session is
+// the work being discarded.
+func seatPreserved(before, after claudia.AgentDef) error {
+	if strings.TrimSpace(after.SessionID) == "" && strings.TrimSpace(string(after.Provider)) == "" {
+		return fmt.Errorf("seat is gone")
+	}
+	if seatprovider.Resolve(after.Provider).Plan != seatprovider.Resolve(before.Provider).Plan {
+		return fmt.Errorf("provider changed from %s to %s", before.Provider, after.Provider)
+	}
+	if after.SessionID == "" || after.SessionID != before.SessionID {
+		return fmt.Errorf("session changed from %q to %q", before.SessionID, after.SessionID)
+	}
+	return nil
+}
+
+// authUnavailablePreserved is the auth-unavailable clause. The switch did
+// not complete. The same seat must still answer from its own conversation.
+// A nil return would read as a finished provider switch, so the error names
+// the preservation and the switch that did not happen.
+func (s *suite) authUnavailablePreserved(id string, source claudia.AgentDef, to claudia.Provider, passphrase string, switchErr error) error {
+	after, err := bounceRegistrySnapshot(s.agentsPath())
+	if err != nil {
+		return fmt.Errorf("auth unavailable: registry after the refused switch: %w (switch: %v)", err, switchErr)
+	}
+	if err := seatPreserved(source, after[id]); err != nil {
+		return fmt.Errorf("auth unavailable lost %s: %w (switch: %v)", id, err, switchErr)
+	}
+	probe := "What is the mission passphrase? Reply with the passphrase only."
+	if err := s.recallWithin(id, probe, passphrase, 90*time.Second); err != nil {
+		return fmt.Errorf("auth unavailable: %s stayed on %s session %s but the conversation did not: %w (switch: %v)",
+			id, source.Provider, source.SessionID, err, switchErr)
+	}
+	fmt.Printf("auth-unavailable preserved %s provider=%s session=%s passphrase recalled; switch to %s did not complete\n",
+		id, source.Provider, source.SessionID, to)
+	return fmt.Errorf("auth unavailable preserved %s on %s session %s; provider switch to %s did not complete: %w",
+		id, source.Provider, source.SessionID, to, switchErr)
 }
 
 // switchSettleRetry is how often a switch refused for a running turn is

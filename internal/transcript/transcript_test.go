@@ -94,9 +94,9 @@ func TestExtractTurns_GrokShape(t *testing.T) {
 // 🎯T329: system-reminder / background-task user lines are not owner turn boundaries.
 const t329NonBoundaryFixture = `{"type":"user","content":[{"type":"text","text":"owner ask"}]}
 {"type":"assistant","content":"Part one of answer."}
-{"type":"user","content":[{"type":"text","text":"<system-reminder>\\nBackground task \\"call-1\\" completed (exit code: 0).\\n</system-reminder>"}]}
+{"type":"user","content":[{"type":"text","text":"open-intent harness system-reminder"}]}
 {"type":"assistant","content":"Part two after inject."}
-{"type":"user","content":[{"type":"text","text":"Background task call-2 completed"}]}
+{"type":"user","content":[{"type":"text","text":"open-intent harness background-task"}]}
 {"type":"assistant","content":"Part three after bare background-task user."}
 {"type":"user","content":[{"type":"text","text":"second owner turn"}]}
 {"type":"assistant","content":"New turn reply."}
@@ -140,9 +140,34 @@ func TestExtractTurns_T329NonBoundaryUserInject(t *testing.T) {
 		!strings.Contains(assistants[0].Text, "Part three") {
 		t.Fatalf("first assistant must join multi-tool parts across injects: %q", assistants[0].Text)
 	}
-	if strings.Contains(assistants[0].Text, "system-reminder") ||
-		strings.Contains(assistants[0].Text, "Background task") {
+	if strings.Contains(assistants[0].Text, "open-intent harness") {
 		t.Fatalf("inject body must not land in assistant text: %q", assistants[0].Text)
+	}
+}
+
+func TestExtractTurns_RenderedReminderIsOwnerBoundary(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chat_history.jsonl")
+	body := `{"type":"user","content":[{"type":"text","text":"owner ask"}]}
+{"type":"user","content":[{"type":"text","text":"<system-reminder>\nBackground task \"call-1\" completed (exit code: 0).\n</system-reminder>"}]}
+{"type":"user","content":[{"type":"text","text":"Background task call-2 completed"}]}
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lines, err := readLines(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns := extractTurns(lines, false)
+	var users int
+	for _, tr := range turns {
+		if tr.Role == "user" {
+			users++
+		}
+	}
+	if users != 3 {
+		t.Fatalf("rendered reminders are owner turns, got %d: %+v", users, turns)
 	}
 }
 

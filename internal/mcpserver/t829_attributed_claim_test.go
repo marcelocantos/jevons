@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/claudia"
@@ -36,8 +37,11 @@ func TestT829WitnessTheUnmaskedScanMatched(t *testing.T) {
 	if !hasAnyCompletionMarker(lower) {
 		t.Fatal("specimen no longer carries a completion marker; the test has drifted off the shape it pins")
 	}
-	if !hasOracleEvidence(lower) {
-		t.Fatal("specimen no longer carries oracle-evidence vocabulary (GREEN); without it hasFinishShape never reached its short-circuit")
+	if !strings.Contains(lower, "green") {
+		t.Fatal("specimen no longer carries oracle-evidence vocabulary (GREEN)")
+	}
+	if hasOracleEvidence(lower) {
+		t.Fatal("an oracle sentence is oracle evidence")
 	}
 	if hasCompletionClaim(lower) {
 		t.Fatal("masked scan still reads an asserted claim in a report whose only marker relays the owner's action on a different target")
@@ -51,8 +55,8 @@ func TestT829SeatIsKeptOnAnAttributedClaim(t *testing.T) {
 	if ok {
 		t.Fatalf("a report whose only completion marker relays another party's action reaps (reason %s)", reason)
 	}
-	if reason != "not_finished_work_report" {
-		t.Errorf("reason = %q, want not_finished_work_report", reason)
+	if reason != "unknown_report" {
+		t.Errorf("reason = %q, want unknown_report", reason)
 	}
 
 	s, reg2 := reapSinkServer(t, agent)
@@ -76,8 +80,11 @@ The owner asked for a screenshot too; I have attached one.
 GOAL_STATUS: complete`
 
 func TestT829GenuineOwnClaimStillReaps(t *testing.T) {
-	if !LooksLikeFinishedWorkReport(t829GenuineFinishReport) {
-		t.Fatal("a report that asserts its own completion, and separately mentions the owner without an attribution lead-in, must still reap")
+	if LooksLikeFinishedWorkReport(t829GenuineFinishReport) {
+		t.Fatal("unenveloped own-claim prose must not be done")
+	}
+	if !LooksLikeFinishedWorkReport(declaredFinishReport("T829", t829GenuineFinishReport)) {
+		t.Fatal("the same claim inside a finish-report must be done")
 	}
 }
 
@@ -98,10 +105,12 @@ func TestT829AttributionShapes(t *testing.T) {
 		{"per the owner",
 			"Per the owner, the earlier run is finished. I have not verified that myself and my change is unlanded.", false},
 
-		{"worker's own bare claim still reaps",
-			"Done.", true},
-		{"worker's own claim with oracle evidence still reaps",
-			"My change is committed as 477983f4. Oracle: go test ./internal/mcpserver -run T829, GREEN. The work is done.", true},
+		{"worker's own bare claim declares nothing",
+			"Done.", false},
+		{"worker's own oracle prose declares nothing",
+			"My change is committed as 477983f4. Oracle: go test ./internal/mcpserver -run T829, GREEN. The work is done.", false},
+		{"declared finish-report is done",
+			declaredFinishReport("T829", "The work is done."), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,7 +143,7 @@ func TestT829MaskPreservesOffsets(t *testing.T) {
 // below.
 
 func TestT829GenuineTerminalControlStillReaps(t *testing.T) {
-	const report = "```jevons\njevons: kind finish-report\njevons: target T494.1.1\njevons: oracle-gate go-test exit=0 GREEN id=deadbeef tree=clean@abc123\njevons: silent-ledger none\n```\n\nImplementation landed and committed as abc1234567.\n\nGOAL_STATUS: complete"
+	report := declaredFinishReport("T494.1.1", "Implementation landed and committed as abc1234567.\n\nGOAL_STATUS: complete")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("a genuine typed finish-report envelope must still reap")
 	}

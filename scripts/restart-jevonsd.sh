@@ -100,6 +100,15 @@
 #                               ~/.jevons/restart-jevonsd.log)
 #   JEVONS_RESTART_FAULT=after-kill  test seam: die between freeing the
 #                               port and starting the daemon (🎯T405 oracle)
+#   JEVONS_RESTART_SUPERVISOR_CONF  supervisord config to drive through
+#                               `supervisorctl -c` (🎯T1086). Unset: the
+#                               default supervisorctl, development port only.
+#                               Set: that supervisord on any port — the
+#                               oracle's private one, never the owner's.
+#   JEVONS_RESTART_SUPERVISOR_PROGRAM  program name, default jevonsd
+#   JEVONS_RESTART_RELAUNCH_WAIT_SEC   how long a supervised upgrade exit may
+#                               go without a new pid before this script
+#                               gives up, default 20 (🎯T1086)
 
 set -euo pipefail
 
@@ -158,11 +167,45 @@ DETACH_LOG="${JEVONS_RESTART_DETACH_LOG:-$HOME/.jevons/restart-jevonsd.log}"
 # lock: introspection that blocks behind a live restart, or that appends
 # to the restart log, is a trap for anyone debugging one.
 WANTS_WORK=1
+WANTS_HELP=0
 for _arg in ${@+"$@"}; do
   case "$_arg" in
-    -h|--help|--dry-run) WANTS_WORK=0 ;;
+    -h|--help) WANTS_HELP=1; WANTS_WORK=0 ;;
+    --dry-run) WANTS_WORK=0 ;;
   esac
 done
+
+# 🎯T1103 — host-sentinel pause contract. An owner-authorised restart must
+# not be raced by a host sentinel acting on a stale pause order: on
+# 2026-10-21 the owner approved re-enabling the fleet and this script
+# served a fresh daemon at 09:01, and at 09:05 a separate host sentinel
+# (~/.local/bin/sen), holding a pause order from 2026-10-15 that nothing
+# here knew about, stopped it again and reported the restart as an
+# incident. Fixed by hand; this check is the standing fix: before this
+# script touches anything (even the --dry-run plan, since both sides must
+# agree the marker is gone before invoking it), look for the sentinel's
+# pause marker. Present ⇒ refuse with the marker's own text and the exact
+# override, never race it. The contract — what writes the marker, what
+# removes it, and when a running paused-but-autostarted daemon is the
+# owner's action rather than an incident — is docs/design/sentinel-pause-contract.md.
+#
+# -h/--help is exempt: reading the manual is never something a pause
+# should block.
+PAUSE_MARKER="${JEVONS_RESTART_PAUSE_MARKER:-$HOME/.local/share/sen/jevons-paused.txt}"
+PAUSE_OVERRIDE="${JEVONS_RESTART_OVERRIDE_PAUSE:-0}"
+if [[ "$WANTS_HELP" != "1" && -f "$PAUSE_MARKER" && "$PAUSE_OVERRIDE" != "1" ]]; then
+  {
+    echo "restart-jevonsd: refusing — host-sentinel pause marker present at $PAUSE_MARKER:"
+    sed 's/^/  /' "$PAUSE_MARKER"
+    echo ""
+    echo "This script will not race the sentinel. To lift the pause, follow the"
+    echo "sentinel's own unpause step (docs/design/sentinel-pause-contract.md) —"
+    echo "do not delete the marker by hand from here."
+    echo "To proceed anyway on the owner's explicit word:"
+    echo "  JEVONS_RESTART_OVERRIDE_PAUSE=1 $0 ${*:+"$@"}"
+  } >&2
+  exit 3
+fi
 
 # 🎯T553: every successful run appends "served <epoch> <sha> bounce=<0|1>"
 # to $SERVED_FILE, naming the committed HEAD it built and whether it
@@ -198,6 +241,11 @@ fi
 
 BIN="${JEVONS_RESTART_BIN:-$ROOT/bin/jevonsd}"
 DRY_RUN=0
+# 🎯T1086: which supervisord this script may drive, and how.
+SUPERVISOR_CONF="${JEVONS_RESTART_SUPERVISOR_CONF:-}"
+SUPERVISOR_PROGRAM="${JEVONS_RESTART_SUPERVISOR_PROGRAM:-jevonsd}"
+RELAUNCH_WAIT_SEC="${JEVONS_RESTART_RELAUNCH_WAIT_SEC:-20}"
+SUPERVISORPOLICY="$ROOT/bin/supervisorpolicy"
 SKIP_MAKE="${JEVONS_RESTART_SKIP_MAKE:-0}"
 
 usage() {
@@ -230,6 +278,12 @@ Env:
   JEVONS_RESTART_BIN               Daemon binary (default $REPO/bin/jevonsd)
   JEVONS_RESTART_NO_DETACH         If 1, skip the 🎯T405 self-detach re-exec
   JEVONS_RESTART_DETACH_LOG        Detached run's log (default ~/.jevons/restart-jevonsd.log)
+  JEVONS_RESTART_SUPERVISOR_CONF   supervisord config for supervisorctl -c (🎯T1086)
+  JEVONS_RESTART_SUPERVISOR_PROGRAM  supervisord program (default jevonsd)
+  JEVONS_RESTART_RELAUNCH_WAIT_SEC   Wait for a supervised relaunch (default 20)
+  JEVONS_RESTART_PAUSE_MARKER      Host-sentinel pause marker file (🎯T1103;
+                                   default ~/.local/share/sen/jevons-paused.txt)
+  JEVONS_RESTART_OVERRIDE_PAUSE    If 1, proceed despite the pause marker (owner only)
 
 SELF-DETACH (🎯T405): this script re-execs itself through bin/detach into
 its own session before doing anything, so the caller's death — including
@@ -254,6 +308,27 @@ log() {
 die() {
   log "ERROR: $*"
   exit 1
+}
+
+# 🎯T1086 / 🎯T405: tell the owner out of band that this run is leaving the
+# daemon down. The cockpit is what is missing during an outage, so the
+# notice goes through blurter, a separate daemon, as the watchdog's do.
+# Same key as the watchdog's outage notice, so both speak of one outage.
+# Best effort: no blurter is logged, never a reason to change the exit.
+notify_owner_down() {
+  local reason="$1" blurter
+  blurter="$(command -v blurter 2>/dev/null || true)"
+  if [[ -z "$blurter" ]]; then
+    log "no blurter on PATH; the owner is not told that :$PORT is down"
+    return 0
+  fi
+  "$blurter" send \
+    --app restart-jevonsd \
+    --severity problem \
+    --key "jevonsd-down-$PORT" \
+    --subject "jevons daemon down on :$PORT" \
+    --body "restart-jevonsd is leaving the development jevonsd down: $reason (daemon log: $LOG)" \
+    --quiet >/dev/null 2>&1 || log "blurter notice failed"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -462,25 +537,120 @@ stop_brew_jevons() {
   fi
 }
 
+# 🎯T1086: every supervisorctl call goes through here, so a run told to use
+# a private supervisord (the oracle's) can never reach the owner's.
+sctl() {
+  if [[ -n "$SUPERVISOR_CONF" ]]; then
+    supervisorctl -c "$SUPERVISOR_CONF" "$@"
+  else
+    supervisorctl "$@"
+  fi
+}
+
+# 🎯T1086: what supervisord's config says it does when the program exits,
+# as one line ("autorestart=false autostart=false file=…"), or
+# "policy unknown: …". supervisorctl cannot show autorestart, so
+# bin/supervisorpolicy reads the config the running supervisord loaded
+# (its -c argument) and follows [include] to the program's section.
+supervisor_policy() {
+  local out spid
+  if [[ ! -x "$SUPERVISORPOLICY" ]]; then
+    (cd "$ROOT" && go build -o "$SUPERVISORPOLICY" ./cmd/supervisorpolicy) >/dev/null 2>&1 || {
+      printf 'policy unknown: cannot build %s' "$SUPERVISORPOLICY"
+      return 0
+    }
+  fi
+  if [[ -n "$SUPERVISOR_CONF" ]]; then
+    out="$("$SUPERVISORPOLICY" -program "$SUPERVISOR_PROGRAM" -conf "$SUPERVISOR_CONF" 2>&1)" || true
+  else
+    spid="$(sctl pid 2>/dev/null || true)"
+    if [[ ! "$spid" =~ ^[1-9][0-9]*$ ]]; then
+      printf 'policy unknown: supervisorctl pid gave no supervisord pid'
+      return 0
+    fi
+    out="$("$SUPERVISORPOLICY" -program "$SUPERVISOR_PROGRAM" -supervisord-pid "$spid" 2>&1)" || true
+  fi
+  printf '%s' "${out:-policy unknown: no output from $SUPERVISORPOLICY}"
+}
+
+# 🎯T1086: after the upgrade exit, make sure something launches the
+# replacement. supervisord does when the program relaunches on exit; when
+# it does not (autorestart=false or unexpected — a paused config is a
+# legitimate owner state, not a broken one) the program lands in EXITED,
+# and this script starts it, restoring the RUNNING state it found. The
+# check is the program's state, not the policy line: the file on disk can
+# differ from what supervisord loaded until `supervisorctl update`.
+#
+# FATAL is started too: supervisord tried to relaunch and gave up. STOPPED
+# is not: that is someone's explicit stop, and overriding it is not this
+# script's call.
+ensure_supervised_relaunch() {
+  local old_pid="$1" policy="$2" ticks pid status started=0
+  ticks=$((RELAUNCH_WAIT_SEC * 5))
+  while [[ "$ticks" -gt 0 ]]; do
+    pid="$(sctl pid "$SUPERVISOR_PROGRAM" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$old_pid" ]]; then
+      if [[ "$started" -eq 1 ]]; then
+        log "🎯T1086 started $SUPERVISOR_PROGRAM through supervisord: pid=$pid"
+      else
+        log "supervisord relaunched $SUPERVISOR_PROGRAM: pid=$pid"
+      fi
+      return 0
+    fi
+    status="$(sctl status "$SUPERVISOR_PROGRAM" 2>/dev/null || true)"
+    case "$status" in
+      *EXITED*|*FATAL*)
+        if [[ "$started" -eq 0 ]]; then
+          log "🎯T1086 supervisord left $SUPERVISOR_PROGRAM down after the upgrade exit ($(printf '%s' "$status" | tr -s ' ' | cut -c1-120); $policy); starting it"
+          started=1
+          sctl start "$SUPERVISOR_PROGRAM" ||
+            log "🎯T1086 supervisorctl start $SUPERVISOR_PROGRAM failed; still waiting for a pid"
+        fi
+        ;;
+    esac
+    sleep 0.2
+    ticks=$((ticks - 1))
+  done
+  notify_owner_down "supervisord program $SUPERVISOR_PROGRAM has no new pid ${RELAUNCH_WAIT_SEC}s after its upgrade exit ($policy)"
+  die "🎯T1086 supervisord program $SUPERVISOR_PROGRAM did not come back within ${RELAUNCH_WAIT_SEC}s of its upgrade exit ($policy)"
+}
+
 # T540.2: preserve the existing supervisor owner during React activation.
 # SIGHUP requests the daemon's fleet-preserving upgrade exit. Do not race
 # supervisord's replacement with the legacy kill-port/nohup adoption path.
+#
+# 🎯T1086: on 2026-10-20 this signalled a program whose config said
+# autorestart=false (left by a pause) and then waited 90 s for a daemon
+# nothing would start. It now reads the policy before signalling, says
+# which way the bounce will complete, and completes it either way.
 upgrade_with_supervisor() {
-  [[ "$PORT" == "$DAILY_PORT" ]] || return 1
+  # The owner's supervisord serves only the development port. A run on any
+  # other port uses a supervisord only when told which one, by config path.
+  if [[ -z "$SUPERVISOR_CONF" ]]; then
+    [[ "$PORT" == "$DAILY_PORT" ]] || return 1
+  fi
   command -v supervisorctl >/dev/null 2>&1 || return 1
-  local managed_pid listeners remaining
-  managed_pid="$(supervisorctl pid jevonsd 2>/dev/null)" || return 1
+  local managed_pid listeners remaining policy
+  managed_pid="$(sctl pid "$SUPERVISOR_PROGRAM" 2>/dev/null)" || return 1
   [[ "$managed_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   listeners="$(list_listen_pids)"
   [[ "$listeners" == "$managed_pid" ]] || return 1
-  log "React upgrade through existing supervisord owner pid=$managed_pid"
-  supervisorctl signal HUP jevonsd || die "supervisor could not request upgrade exit"
+  policy="$(supervisor_policy)"
+  log "React upgrade through existing supervisord owner pid=$managed_pid ($policy)"
+  case "$policy" in
+    autorestart=true\ *)
+      log "🎯T1086 supervisord relaunches $SUPERVISOR_PROGRAM on exit; this script starts it only if supervisord leaves it EXITED or FATAL" ;;
+    *)
+      log "🎯T1086 supervisord will not relaunch $SUPERVISOR_PROGRAM on an upgrade exit ($policy); this script starts it after the exit" ;;
+  esac
+  sctl signal HUP "$SUPERVISOR_PROGRAM" || die "supervisor could not request upgrade exit"
   remaining=$((STOP_WAIT_SEC * 5))
   while kill -0 "$managed_pid" 2>/dev/null; do
     [[ "$remaining" -gt 0 ]] || die "supervised daemon did not finish upgrade exit"
     sleep 0.2
     remaining=$((remaining - 1))
   done
+  ensure_supervised_relaunch "$managed_pid" "$policy"
   return 0
 }
 
@@ -628,6 +798,7 @@ wait_until_serving() {
     sleep 1
     i=$((i + 1))
   done
+  notify_owner_down "not serving ${deadline}s after the bounce"
   die "timed out after ${deadline}s waiting for development jevonsd on :$PORT (log=$LOG)"
 }
 
@@ -650,7 +821,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
   log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
-  log "[dry-run] would: wait for /health 200 and /api/frontier non-404"
+  log "[dry-run] would: 🎯T1086 under supervisord, read $SUPERVISOR_PROGRAM's autorestart before SIGHUP and supervisorctl start it if the upgrade exit leaves it EXITED or FATAL"
+  log "[dry-run] would: wait for /health 200 and /api/frontier non-404; on timeout tell the owner through blurter"
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-jevonsd.sh >>\$HOME/.jevons/restart-jevonsd.log 2>&1 &"
   exit 0
 fi

@@ -24,10 +24,10 @@ const (
 	ClaimNotSent SendClaim = iota
 	// ClaimReplyUnverified: the payload was handed over and the wait for a
 	// REPLY ran out. It says the receiver had not finished answering inside a
-	// window this daemon chose; it says nothing whatever about delivery, and
-	// clause 5 is the instance — `The operation timed out` returned for a
-	// payload sitting in the receiver's transcript at 10:22:51Z, 3873 bytes of
-	// it, while the caller was told the operation had failed.
+	// window this daemon chose; it says nothing whatever about delivery.
+	// Clause 5 is the instance: a payload sat in the receiver's transcript at
+	// 10:22:51Z, 3873 bytes of it, while the caller was told the operation
+	// had failed. The claim is the typed deadline, not that sentence.
 	ClaimReplyUnverified
 )
 
@@ -46,31 +46,21 @@ func (c SendClaim) String() string {
 // from "not there yet".
 func (c SendClaim) DisprovesDelivery() bool { return c == ClaimNotSent }
 
-// replyUnverifiedMarkers are the shapes a REPLY wait leaves behind. Kept narrow
-// on purpose: the generic network timeouts agenterr treats as backend-unavailable
-// ("connection timed out", "i/o timeout") are failures of the transport to reach
-// the provider at all, and reading those as possible-deliveries would invent an
-// uncertainty where there is none.
-var replyUnverifiedMarkers = []string{
-	"context deadline exceeded",
-	"operation timed out",
-	"timed out waiting",
-	"timeout waiting",
-}
-
 // ClassifySendError decides what a send error says about the payload. Pure.
+//
+// A reply wait is context.DeadlineExceeded, wrapped or not. That is what
+// fleet's reply assembler returns when its own window closes. A sentence
+// that quotes a timeout is not that wait: the MCP client wrote "The
+// operation timed out" for a push that had already landed, and matching
+// the words would treat a quoted failure as a failure to observe.
+// Network deadlines (os.ErrDeadlineExceeded, a net.Error timeout) stay
+// ClaimNotSent — they are a transport that did not reach the provider.
 func ClassifySendError(err error) SendClaim {
 	if err == nil {
 		return ClaimNotSent
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return ClaimReplyUnverified
-	}
-	msg := strings.ToLower(err.Error())
-	for _, m := range replyUnverifiedMarkers {
-		if strings.Contains(msg, m) {
-			return ClaimReplyUnverified
-		}
 	}
 	return ClaimNotSent
 }

@@ -74,14 +74,17 @@ type Report struct {
 	UnscopedStarts int      `json:"unscoped_starts"`
 }
 
-func tier(s string) string {
-	if s == "jevons" || s == "overseer" {
+// tier reports the declared purpose. An empty purpose is a worker, and a
+// seat name is not a tier: "jevons" and a "-po" suffix do not decide.
+func tier(purpose string) string {
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "overseer":
 		return "overseer"
-	}
-	if strings.HasSuffix(s, "-po") {
+	case "product-owner":
 		return "po"
+	default:
+		return "worker"
 	}
-	return "worker"
 }
 
 // Scan streams files one record at a time. A truncated final line, malformed
@@ -120,10 +123,20 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 	if workdirPrefix != "" {
 		workdirPrefix = filepath.Clean(workdirPrefix)
 	}
+	purposes := map[string]string{}
+	remember := func(name, purpose string) {
+		if strings.TrimSpace(purpose) == "" {
+			return
+		}
+		purposes[name] = purpose
+		if s := seats[name]; s != nil {
+			s.Tier = tier(purpose)
+		}
+	}
 	get := func(name string) *Seat {
 		s := seats[name]
 		if s == nil {
-			s = &Seat{Name: name, Tier: tier(name)}
+			s = &Seat{Name: name, Tier: tier(purposes[name])}
 			seats[name] = s
 		}
 		return s
@@ -140,6 +153,7 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 					Name     string `json:"name"`
 					TargetID string `json:"target_id"`
 					Workdir  string `json:"workdir"`
+					Purpose  string `json:"purpose"`
 				} `json:"fields"`
 			}
 			if err := json.Unmarshal(b, &e); err != nil {
@@ -151,6 +165,7 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 			if e.Fields.Name == "" {
 				return fmt.Errorf("successful start missing name")
 			}
+			remember(e.Fields.Name, e.Fields.Purpose)
 			eligible := true
 			if workdirPrefix != "" {
 				d := filepath.Clean(e.Fields.Workdir)
@@ -200,6 +215,7 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 				TS       string `json:"ts"`
 				Seat     string `json:"seat"`
 				Type     string `json:"type"`
+				Purpose  string `json:"purpose"`
 				Snapshot struct {
 					Messages []json.RawMessage `json:"messages"`
 				} `json:"snapshot"`
@@ -226,6 +242,7 @@ func ScanScoped(spoolPaths, eventPaths []string, w Window, workdirPrefix string)
 				return nil
 			}
 			s := get(rec.Seat)
+			remember(rec.Seat, rec.Purpose)
 			s.Turns++
 			var turnBytes int64
 			for _, msg := range rec.Snapshot.Messages {

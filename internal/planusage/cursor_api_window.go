@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // attachCursorAPIUsage adds Cursor's named-model API bucket when the
@@ -29,7 +30,7 @@ func attachCursorAPIUsage(readings []claudia.PlanUsage, dir string) []claudia.Pl
 		return readings
 	}
 	for i, reading := range readings {
-		if !strings.EqualFold(string(reading.Provider), string(claudia.ProviderCursor)) {
+		if seatprovider.Resolve(reading.Provider).Plan != seatprovider.Cursor {
 			continue
 		}
 		if cursorReadingHasAPI(reading) {

@@ -115,8 +115,14 @@ func TestT5362DefaultForPurpose(t *testing.T) {
 	if got := roles.DefaultForPurpose("aside", "chat"); got != "aside" {
 		t.Fatalf("aside=%q", got)
 	}
-	if got := roles.DefaultForPurpose("work", "jevons-po"); got != "product-owner" {
-		t.Fatalf("po=%q", got)
+	if got := roles.DefaultForPurpose("work", "jevons-po"); got != "worker" {
+		t.Fatalf("work purpose with a -po name=%q", got)
+	}
+	if got := roles.DefaultForPurpose("product-owner", "jv-t1-x"); got != "product-owner" {
+		t.Fatalf("product-owner purpose=%q", got)
+	}
+	if got := roles.DefaultForPurpose("po", "x"); got != "product-owner" {
+		t.Fatalf("purpose token po=%q", got)
 	}
 	if got := roles.DefaultForPurpose("", "x"); got != "worker" {
 		t.Fatalf("empty purpose=%q", got)

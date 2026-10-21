@@ -95,9 +95,10 @@ func claudeLine(rec Record) []byte {
 
 // EnsureView writes a derived Claude-shaped JSONL for seat under dir/.view
 // so path-based readers (transcript, cost tail) read the spool, not a
-// vendor JSONL (🎯T866.4).
+// vendor JSONL (🎯T866.4). It reads the seat's own lines (🎯T1085); AsJSONL
+// renders neither Snapshot nor UsageFact.
 func EnsureView(dir, seat string) (string, error) {
-	recs, err := ReadSeat(dir, seat)
+	recs, err := SeatRecords(dir, seat)
 	if err != nil || len(recs) == 0 {
 		return "", err
 	}

@@ -4,9 +4,14 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/seatstate"
 
 	"github.com/marcelocantos/claudia"
@@ -14,6 +19,14 @@ import (
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/escalate"
 )
+
+// ownerReceiptQueryTimeout matches the fleet held-receipt read. One
+// unavailable receipt service must not wait longer than that.
+const ownerReceiptQueryTimeout = 10 * time.Second
+
+// errSendReceiptQueryUnconfigured means the daemon has not installed a
+// receipt read. Callers fail closed and do not dial Claudia.
+var errSendReceiptQueryUnconfigured = errors.New("send receipt query is not configured")
 
 // 🎯T903: an owner message to an overseer that is mid-way through an owner
 // turn used to wait in the notify queue until that turn ended — five minutes
@@ -34,6 +47,14 @@ func (s *Server) SetOwnerEscalation(fn func() (escalate.Ladder, bool)) {
 // overseerEscalator is the part of the overseer's seat the ladder needs.
 type overseerEscalator interface {
 	SendEscalating(text string, esc escalate.Ladder) (claudia.DeliveryOutcome, error)
+}
+
+// requestIDEscalator is the production seat. SendEscalating passes an
+// empty id into Claudia, so a seat that can carry one must be given the
+// id minted at acceptance. A test double without the method stays on
+// SendEscalating.
+type requestIDEscalator interface {
+	SendEscalatingWithRequestID(text string, esc escalate.Ladder, requestID string) (claudia.DeliveryOutcome, error)
 }
 
 // escalateOwnerToOverseer steers text into the overseer's running owner
@@ -77,7 +98,21 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	echo := chatUserEchoID(text, msgID)
 	s.NoteOwnerSend(text, echo)
 	s.BroadcastChat(echo)
-	out, err := proc.SendEscalating(userTurnPrefix+text, ladder)
+	wire := userTurnPrefix + text
+	var out claudia.DeliveryOutcome
+	var err error
+	boundID := ""
+	if typed, ok := proc.(requestIDEscalator); ok {
+		if err = s.freezeOverseerMission(msgID); err != nil {
+			slog.Error("🎯T903 escalating owner send to overseer failed", "err", err)
+			s.NoteOwnerResidual("delivery_failed")
+			return AgentSendOutcome{}, true, fmt.Errorf("message not delivered: %w", err)
+		}
+		boundID = msgID
+		out, err = typed.SendEscalatingWithRequestID(wire, ladder, msgID)
+	} else {
+		out, err = proc.SendEscalating(wire, ladder)
+	}
 	if err != nil {
 		if escalate.NotStarted(err) {
 			// Nothing reached the seat. The bubble is painted; queue behind
@@ -92,7 +127,12 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 		s.NoteOwnerResidual("delivery_failed")
 		return AgentSendOutcome{}, true, fmt.Errorf("message not delivered: %w", err)
 	}
-	s.NoteOwnerDelivered()
+	// A nil ladder return is the socket write. Owner delivery is the
+	// receipt for this minted request. An untyped seat has no request
+	// identity to read, and a nil query does not dial.
+	if boundID != "" {
+		s.noteOwnerDeliveredFromReceipt(boundID)
+	}
 	// 🎯T906: steering into a running turn is delivery, not proof the provider
 	// answered — that only comes from authored assistant text or a real reply.
 	status, verb := "steered", "steered into its running turn"
@@ -109,4 +149,131 @@ func (s *Server) escalateOwnerToOverseer(text string) (AgentSendOutcome, bool, e
 	slog.Info("agent_send", "component", "agent_send", "name", s.overseerAgentName(),
 		"status", status, "mechanism", out.Mechanism, "outcome", "escalating", "class", "owner")
 	return res, true, nil
+}
+
+// SetSendReceiptQuery installs the production receipt read for owner
+// escalation. Nil does not dial Claudia.
+func (s *Server) SetSendReceiptQuery(fn func(context.Context, claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error)) {
+	s.mu.Lock()
+	s.querySendReceipt = fn
+	s.mu.Unlock()
+}
+
+// receiptQueryConfigured reports whether a receipt read is installed.
+// A nil query does not dial.
+func (s *Server) receiptQueryConfigured() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.querySendReceipt != nil
+}
+
+// LookupSendReceipt reads one receipt through the installed query.
+// A nil query returns errSendReceiptQueryUnconfigured and does not dial.
+func (s *Server) LookupSendReceipt(ctx context.Context, q claudiawire.ReceiptQuery) (*claudiawire.RequestReceipt, error) {
+	if s == nil {
+		return nil, errSendReceiptQueryUnconfigured
+	}
+	s.mu.RLock()
+	query := s.querySendReceipt
+	s.mu.RUnlock()
+	if query == nil {
+		return nil, errSendReceiptQueryUnconfigured
+	}
+	return query(ctx, q)
+}
+
+// noteOwnerDeliveredFromReceipt sets the owner-delivery flag only when a
+// settling receipt names this seat, its registry session, and requestID.
+// Owner escalation and the notify-queue drain both use it. Unknown, a
+// missing session, a query error, or a nil query leaves the flag clear.
+// Reason is not a cause and is not consulted.
+func (s *Server) noteOwnerDeliveredFromReceipt(requestID string) bool {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return false
+	}
+	s.mu.RLock()
+	name := s.overseerName
+	reg := s.registry
+	s.mu.RUnlock()
+	sessionID := ""
+	if reg != nil && name != "" {
+		if d := reg.Def(name); d != nil {
+			sessionID = strings.TrimSpace(d.SessionID)
+		}
+	}
+	if sessionID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
+	defer cancel()
+	// The receipt reaches the replica after the send returns; an absent
+	// row is read again until the deadline (claudiawire.AwaitReceipt).
+	r, err := claudiawire.AwaitReceipt(ctx, s.LookupSendReceipt, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
+	if err != nil || r == nil {
+		if err != nil && !errors.Is(err, errSendReceiptQueryUnconfigured) {
+			slog.Debug("owner delivery receipt unavailable; delivery not confirmed", "seat", name, "request_id", requestID, "err", err)
+		}
+		return false
+	}
+	if err := r.ValidateIdentity(name, sessionID, requestID); err != nil {
+		slog.Debug("owner delivery receipt rejected", "seat", name, "request_id", requestID, "err", err)
+		return false
+	}
+	if !ownerReceiptStateSettles(r.State) {
+		return false
+	}
+	s.NoteOwnerDelivered()
+	return true
+}
+
+// namedSendReceiptSettles reports whether a settling receipt names this
+// seat, its registry session, and requestID. A nil query, a missing
+// session, a query error, an unknown state, or a foreign receipt does not
+// settle. Reason is not a cause and is not consulted. This does not dial
+// when the query is nil, and it does not set the owner-delivery flag.
+func (s *Server) namedSendReceiptSettles(name, requestID string) bool {
+	requestID = strings.TrimSpace(requestID)
+	name = strings.TrimSpace(name)
+	if s == nil || requestID == "" || name == "" {
+		return false
+	}
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+	sessionID := ""
+	if reg != nil {
+		if d := reg.Def(name); d != nil {
+			sessionID = strings.TrimSpace(d.SessionID)
+		}
+	}
+	if sessionID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ownerReceiptQueryTimeout)
+	defer cancel()
+	// The receipt reaches the replica after the send returns; an absent
+	// row is read again until the deadline (claudiawire.AwaitReceipt).
+	r, err := claudiawire.AwaitReceipt(ctx, s.LookupSendReceipt, claudiawire.ReceiptQuery{Seat: name, SessionID: sessionID, RequestID: requestID})
+	if err != nil || r == nil {
+		return false
+	}
+	if err := r.ValidateIdentity(name, sessionID, requestID); err != nil {
+		return false
+	}
+	return ownerReceiptStateSettles(r.State)
+}
+
+// ownerReceiptStateSettles is the transport-acceptance fact. Failed and
+// cancelled execution still settle the obligation. Unknown does not.
+func ownerReceiptStateSettles(state claudiawire.ReceiptState) bool {
+	switch state {
+	case claudiawire.ReceiptAccepted, claudiawire.ReceiptStarted, claudiawire.ReceiptCompleted, claudiawire.ReceiptCancelled, claudiawire.ReceiptFailed:
+		return true
+	default:
+		return false
+	}
 }

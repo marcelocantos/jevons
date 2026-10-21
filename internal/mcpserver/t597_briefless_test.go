@@ -16,6 +16,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T597 tapes. The 2026-08-31 incident: after a daemon restart, the registry
@@ -221,7 +222,9 @@ func TestT597IsFullRebrief(t *testing.T) {
 		want bool
 	}{
 		{"spawn-brief envelope", t597SpawnBrief, true},
-		{"big opening prose", "[Who you are — from the fleet registry]\nYou are jv-t1-x.\n" + strings.Repeat("Mission context. ", 100), true},
+		{"big rendered marker", "[Who you are — from the fleet registry]\nYou are jv-t1-x.\n" + strings.Repeat("Mission context. ", 100), false},
+		{"big identity fact", envelope.PrefixIdentity + "\n[Who you are — from the fleet registry]\n" + strings.Repeat("Mission context. ", 100), true},
+		{"big standing-brief fact", "open-intent harness standing-brief\n" + strings.Repeat("Mission context. ", 100), true},
 		{"big prose without markers", strings.Repeat("status update line. ", 100), false},
 		{"small mention of spawn-brief", "your last spawn-brief said T10 — status?", false},
 		{"big prose discussing spawn-brief", "The previous spawn-brief (kind spawn-brief) was refused. " + strings.Repeat("Mission context. ", 100), false},

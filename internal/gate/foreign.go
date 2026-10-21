@@ -125,6 +125,19 @@ func FlagForeignGates(report string, lookup func(string) (*Record, bool), known 
 		return nil
 	}
 	ids, evidence := citedGateIDs(report)
+	return FlagForeignIDs(ids, evidence, lookup, known)
+}
+
+// FlagForeignIDs is FlagForeignGates over gate ids the caller already holds
+// as typed facts — envelope gate-id and gate-role slots — rather than ids
+// scanned out of report text. The reap path calls this (🎯T766.4.1): it
+// may not read a GATE line from the payload, which is prose. evidence maps
+// an id to the fragment a reader can find the citation by; a missing entry
+// leaves the flag's Evidence empty.
+func FlagForeignIDs(ids []string, evidence map[string]string, lookup func(string) (*Record, bool), known CommitKnownFunc) []Flag {
+	if lookup == nil || known == nil {
+		return nil
+	}
 	var flags []Flag
 	for _, id := range ids {
 		rec, ok := lookup(id)

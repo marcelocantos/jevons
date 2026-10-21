@@ -14,6 +14,21 @@ that day; `go.mod` in this checkout is `v0.42.0`.
 > or seed is started. Read "Migrate" in the paths below as the in-place
 > switch (`Registry.SwitchModel`, reached from `jevons_agent_switch_model`).
 
+> **Seat engine decided by 🎯T1074.12 (2026-10-19):** seats stay on bare
+> `@oh-my-pi/pi-agent-core`, as this design chose. Claudia v0.54.0–v0.58.0
+> also adopted the coding-agent SDK's `AgentSession` beside the seat loop,
+> and a one-day test hosted seats on it outright (Claudia branch
+> `t1074.12-sdk-two-seats`). Two seats in one sidecar worked, but `Settings`
+> leaks three keys into process-global state across seats, non-terminal
+> `agent_end` re-emits closed receipts early, auto-compaction takes no
+> instructions, and holding the seat's queue, abort and receipt contracts
+> took nine host-side workarounds with the suite still red. Claudia branch
+> `t1074.12-bare-core` (d5b520d, f057396; full `make gate` attested on tree
+> 5c05b49b) removes the SDK and its patch. The `pi-ai` and `pi-agent-core`
+> patches stay. The SDK remains a source to lift specific tools or code
+> from; the adoption is parked on Claudia `park/omp-sdk-session` (v0.58.0).
+> Claudia's `docs/design/omp-coding-agent-sdk.md` has the findings.
+
 Decisions below are the ones already made (2026-09-23). Gaps are
 marked as open questions. Claudia's own source is not in the jevons
 checkout; the seam is what this repo calls

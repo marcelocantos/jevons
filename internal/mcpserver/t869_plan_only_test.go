@@ -4,6 +4,7 @@
 package mcpserver
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -32,10 +33,10 @@ func TestT869OverseerSequenceDoesNotReprompt(t *testing.T) {
 	if earnsAnotherPrompt(0, "", promptSentinel) == false {
 		t.Fatal("no reply yet must not block the sequence's own prompts")
 	}
-	if shouldForwardAgentReply(reply, 0) {
-		t.Fatal("plan-only reply was forwarded to the parent")
+	if !shouldForwardAgentReply(reply, 0) {
+		t.Fatal("unenveloped plan prose was not forwarded to the parent")
 	}
-	const finish = "Done — implemented the hold. suite green."
+	finish := declaredFinishReport("T869", "Done — implemented the hold. suite green.")
 	if !shouldForwardAgentReply(finish, 0) {
 		t.Fatal("a finish with no tool call in the closing message must still be forwarded")
 	}
@@ -90,10 +91,9 @@ func TestT869OverseerSequenceDoesNotReprompt(t *testing.T) {
 		t.Fatalf("plan-only turn emitted a close notice: %v", pm.texts)
 	}
 
-	// The forwarded plan sentence and the sentinel notice are the other
-	// prompts in the sequence. After the no-tool reply, neither is sent.
-	// This server has no registry: a missed withhold would panic in send
-	// rather than launch a provider.
+	// The sentinel notice is the other prompt in the sequence. After the
+	// no-tool reply it is not sent. The unenveloped plan sentence is
+	// forwarded: a future-commitment opener is not a declared plan.
 	hold := &Server{idleActivity: NewIdleActivityTracker()}
 	var sent []string
 	hold.notifyJevon = func(body string) { sent = append(sent, body) }
@@ -101,9 +101,12 @@ func TestT869OverseerSequenceDoesNotReprompt(t *testing.T) {
 	if err := hold.deliverSentinel("jevons", "sentinel", "idle:mm2-t65-keys-doors"); err != nil {
 		t.Fatal(err)
 	}
-	hold.notifyTurn("mm2-t65-keys-doors", reply, 0)
 	if len(sent) != 0 {
-		t.Fatalf("prompts after the no-tool reply: %q", sent)
+		t.Fatalf("sentinel after the no-tool reply: %q", sent)
+	}
+	hold.notifyTurn("mm2-t65-keys-doors", reply, 0)
+	if len(sent) != 1 || !strings.Contains(sent[0], reply) {
+		t.Fatalf("unenveloped plan prose was not forwarded: %q", sent)
 	}
 
 	// A tool-using turn is work again: the hold clears and the pulse can close.

@@ -13,6 +13,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/converge"
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 const (
@@ -166,6 +167,10 @@ func TestT761AmbiguousWorkerIdleTextHasNoActLine(t *testing.T) {
 	t.Parallel()
 	text := FormatWorkerIdleAmbiguousText(WorkerIdleRef{Name: t761Worker, TargetID: "T761"},
 		"stored report is not a typed finish-report or scout-report")
+	first, _, _ := strings.Cut(text, "\n")
+	if first != envelope.SeatFact(envelope.IntentIdle, t761Worker) {
+		t.Fatalf("ambiguous notice decision line: %q", first)
+	}
 	if strings.Contains(text, "Act: continue") {
 		t.Fatalf("ambiguous notice must not prescribe continue:\n%s", text)
 	}

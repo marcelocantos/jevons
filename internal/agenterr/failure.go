@@ -6,7 +6,6 @@ package agenterr
 import (
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 // Class is a structured provider/ACP failure class (🎯T237).
@@ -15,7 +14,9 @@ import (
 //
 // Enumerated classes:
 //   - backend_unavailable: cloud/provider outage, 5xx, Internal error, timeout
-//   - rate_limit: 429 / quota / throttle
+//   - rate_limit: 429 / quota / throttle. Ordinary throttle stays transient.
+//   - spend_wall: account spend or billing refusal. Not a 429.
+//   - account_wall: revoked key or blocked account that is not an auth class.
 //   - auth: 401 / 403 / API key / unauthorized
 //   - client_bug: local config, wire, session, bad request
 //   - retry_exhausted: the CLI's own retry budget ran out on a transient
@@ -31,6 +32,8 @@ const (
 	ClassNone               Class = ""
 	ClassBackendUnavailable Class = "backend_unavailable"
 	ClassRateLimit          Class = "rate_limit"
+	ClassSpendWall          Class = "spend_wall"
+	ClassAccountWall        Class = "account_wall"
 	ClassAuth               Class = "auth"
 	ClassClientBug          Class = "client_bug"
 	ClassUnknown            Class = "unknown"
@@ -56,82 +59,57 @@ func (c Class) IsFailure() bool {
 	return c != ClassNone
 }
 
-// Classify maps an error to a Class. Nil and busy → ClassNone.
+// Classify maps an error to a Class. Nil, a typed busy cause, and an error
+// with no provider-failure cause are ClassNone. A rendered sentence is not
+// a class. Auth, rate-limit, spend, account, backend, client-bug,
+// retry-exhausted, and context-overflow come from the cause.
 func Classify(err error) Class {
 	if err == nil {
 		return ClassNone
 	}
-	if IsPromptBusy(err) {
+	switch cause := ProviderCause(err); cause {
+	case "":
 		return ClassNone
-	}
-	return ClassifyText(err.Error())
-}
-
-// ClassifyText maps provider/ACP failure text or owner-visible copy to Class.
-// Hermetic fixture surface for 🎯T237; T236 consumes the result only.
-// Prefer structured codes when available; string patterns are a residual
-// for wire messages that only carry prose today (e.g. Grok "Internal error").
-func ClassifyText(msg string) Class {
-	s := strings.TrimSpace(msg)
-	if s == "" {
+	case CauseTurnInFlight, CauseBusy, CauseProcessNotRunning, CauseSteerUnsupported, CauseTurnIdle:
 		return ClassNone
-	}
-	low := strings.ToLower(s)
-
-	// Busy is not a provider failure.
-	if isBusyMessage(low) {
-		return ClassNone
-	}
-
-	// 🎯T862.12: the retry budget itself ran out. Checked ahead of the
-	// backend/timeout markers because the underlying transient cause
-	// ("timed out", "500") is often quoted alongside the exhaustion
-	// phrase and would otherwise mask it as a plain backend_unavailable —
-	// an ambiguous generic failure is exactly the outcome this class
-	// exists to replace.
-	if IsRetryExhausted(low) {
-		return ClassRetryExhausted
-	}
-
-	// 🎯T926: a prompt longer than the model's window. Ahead of client_bug,
-	// where its "400 invalid_request_error" would otherwise land, and of
-	// rate_limit, whose "maximum" markers it must not trip.
-	if IsContextOverflow(s) {
-		return ClassContextOverflow
-	}
-
-	// Auth first — "unauthorized" before generic "error". Account/key walls
-	// that Classify would otherwise miss (revoked, suspended) also land here
-	// so 🎯T406 HardBlock sees ClassAuth rather than ClassNone.
-	if containsAny(low, authMarkers...) || isAccountWall(low) {
-		return ClassAuth
-	}
-
-	// Rate limit — including account-level spend/billing walls (🎯T406).
-	// ClassifyText maps spend walls to rate_limit so 🎯T407's auth/rate_limit
-	// cluster still sees them; HardBlock then distinguishes spend from a
-	// transient 429.
-	if containsAny(low, rateLimitMarkers...) || isSpendWall(low) {
-		return ClassRateLimit
-	}
-
-	// Client / local bugs — fail closed, do not treat as cloud recovering.
-	// Exclude backend signatures that share the word "error".
-	if containsAny(low, clientBugMarkers...) {
-		if !isBackendSignature(low) {
-			return ClassClientBug
+	default:
+		if class := ClassFromCause(cause); class != ClassNone {
+			return class
 		}
-	}
-
-	// Backend / transient outage (includes bare "Internal error").
-	if isBackendSignature(low) || containsAny(low, backendUnavailableMarkers...) {
-		return ClassBackendUnavailable
-	}
-
-	// Residual failure-shaped text without a clear class.
-	if containsAny(low, "error", "failed", "failure", "exception") {
 		return ClassUnknown
 	}
+}
+
+// ClassFromCause maps an exact known provider-failure cause to a class.
+// Any other string, including a sentence and an empty cause, is ClassNone.
+// It does not read the rendered text.
+func ClassFromCause(cause string) Class {
+	switch cause {
+	case CauseAuth:
+		return ClassAuth
+	case CauseRateLimit:
+		return ClassRateLimit
+	case CauseSpendWall:
+		return ClassSpendWall
+	case CauseAccountWall:
+		return ClassAccountWall
+	case CauseBackendUnavailable:
+		return ClassBackendUnavailable
+	case CauseClientBug:
+		return ClassClientBug
+	case CauseRetryExhausted:
+		return ClassRetryExhausted
+	case CauseContextOverflow:
+		return ClassContextOverflow
+	default:
+		return ClassNone
+	}
+}
+
+// ClassifyText reports the class of a rendered sentence. A sentence is not
+// a provider-failure cause, so this is ClassNone. Retry-exhausted and
+// context-overflow are causes read by Classify.
+func ClassifyText(string) Class {
 	return ClassNone
 }
 
@@ -175,6 +153,12 @@ func OwnerCopy(class Class, raw string) string {
 			detailSuffix(raw)
 	case ClassRateLimit:
 		return "Provider rate limit (rate_limit). Backing off; will retry when capacity allows. " +
+			detailSuffix(raw)
+	case ClassSpendWall:
+		return "Provider spend limit (spend_wall). This will not recover by waiting. " +
+			detailSuffix(raw)
+	case ClassAccountWall:
+		return "Provider account blocked (account_wall). This will not recover by waiting. " +
 			detailSuffix(raw)
 	case ClassAuth:
 		return "Provider authentication failed (auth). Check Grok/Claude/Codex sign-in or API keys — this will not recover by waiting. " +
@@ -248,69 +232,7 @@ func detailSuffix(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	if isBareInternalError(strings.ToLower(raw)) {
-		return "(provider returned Internal error)"
-	}
 	return "Detail: " + truncate(raw, 240)
-}
-
-func isBackendSignature(low string) bool {
-	if isBareInternalError(low) {
-		return true
-	}
-	return containsAny(low,
-		"internal error", "internal server error",
-		"service unavailable", "backend unavailable", "backend down",
-		"provider unavailable", "provider down",
-	)
-}
-
-func isBareInternalError(lower string) bool {
-	s := strings.Trim(lower, " \t\n\r.!,:;")
-	switch s {
-	case "internal error", "internal", "an internal error", "an internal error occurred",
-		"internal server error", "error: internal error",
-		"acp session/prompt: internal error", "acp session/prompt: internal":
-		return true
-	}
-	if strings.HasSuffix(s, ": internal error") || strings.HasSuffix(s, ": internal") {
-		return true
-	}
-	// Whole-message Internal error with only short noise around it.
-	if strings.Contains(s, "internal error") && len(s) <= 48 {
-		return true
-	}
-	return false
-}
-
-func isBusyMessage(lower string) bool {
-	return containsAny(lower,
-		"already in flight",
-		" is busy",
-	)
-}
-
-func containsAny(low string, needles ...string) bool {
-	for _, n := range needles {
-		if !strings.Contains(low, n) {
-			continue
-		}
-		if n != "" && strings.Trim(n, "0123456789") == "" {
-			// HTTP codes are tokens, not arbitrary digit sequences inside
-			// IDs, filenames, paths or numbers. Keep identifier punctuation
-			// inside each token; only trailing sentence periods are ignored.
-			for _, token := range strings.FieldsFunc(low, func(r rune) bool {
-				return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("_-./", r)
-			}) {
-				if strings.TrimRight(token, ".") == n {
-					return true
-				}
-			}
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func truncate(s string, n int) string {
@@ -318,116 +240,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
-}
-
-// Marker lists — representative strings/codes from Grok ACP, Claude, Codex,
-// and common HTTP/transport failures. Live residual: real outage copy may
-// evolve; hermetic fixtures lock these (🎯T237).
-
-var authMarkers = []string{
-	"unauthorized",
-	"unauthorised",
-	"authentication",
-	"not authenticated",
-	"invalid api key",
-	"invalid_api_key",
-	"api key",
-	"apikey",
-	"not signed in",
-	"login required",
-	"forbidden",
-	"access denied",
-	"401",
-	"403",
-	"permission denied",
-	"auth failed",
-	"auth error",
-	"credentials",
-}
-
-var rateLimitMarkers = []string{
-	"rate limit",
-	"rate_limit",
-	"ratelimit",
-	"too many requests",
-	"429",
-	"quota exceeded",
-	"quota_exceeded",
-	"quota limit",
-	"capacity",
-	"throttl",
-	"resource_exhausted",
-	"requests per minute",
-	"rpm limit",
-}
-
-var clientBugMarkers = []string{
-	"no session",
-	"session not found",
-	"client closed",
-	"no transport",
-	"unknown session",
-	"refusing to mint",
-	"malformed",
-	"invalid json",
-	"json decode",
-	"decode failed",
-	"not registered",
-	"name and text are required",
-	"text is required",
-	"name is required",
-	"unsupported capability",
-	"unknown agent provider",
-	"invalid request",
-	"bad request",
-	"400",
-	"unknown method",
-	"unsupported",
-	"invalid argument",
-	"config error",
-	"configuration",
-	"parse error",
-	"method not allowed",
-	"no registry",
-	"agent registry not available",
-	"session/load",
-	"existing conversation; refusing",
-}
-
-var backendUnavailableMarkers = []string{
-	"service unavailable",
-	"backend unavailable",
-	"backend down",
-	"provider down",
-	"connection refused",
-	"connection reset",
-	"connection timed out",
-	"i/o timeout",
-	"i/o error",
-	"network is unreachable",
-	"network error",
-	"no such host",
-	"temporarily unavailable",
-	"try again",
-	"timed out",
-	"timeout",
-	"bad gateway",
-	"gateway timeout",
-	"500",
-	"503",
-	"502",
-	"504",
-	"econnrefused",
-	"econnreset",
-	"enotfound",
-	"server error",
-	"overloaded",
-	"over capacity",
-	"upstream",
-	"cloudflare",
-	"dial tcp",
-	"ws: close",
-	"websocket: close",
-	"connection closed waiting",
-	"eof",
 }

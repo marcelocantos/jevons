@@ -103,6 +103,12 @@ func TestT728ReopenedGateIsRecognisedAndDated(t *testing.T) {
 	if IsReopenedGate(plain) {
 		t.Fatal("an ordinary gate must not be mistaken for a reopened one — accept would re-achieve a row that was never achieved")
 	}
+	if IsReopenedGate("please note REOPENED TO RECORD OWNER GATE today") {
+		t.Fatal("the marker words later in a line are not the ceremony")
+	}
+	if d := ReopenedAchievedDate("REOPENED TO RECORD OWNER GATE — this row was achieved 2026-09-21"); d != "" {
+		t.Fatalf("prose achieved date %q is not the declared slot", d)
+	}
 }
 
 // An unknown date is said, not invented (🎯T31).
@@ -133,6 +139,20 @@ func TestT728RestoreAttestationReproducesTheOriginal(t *testing.T) {
 	missing := RestoreAttestation(VerdictAccept, "", "jevons-po", "2026-09-21", "", time.Now())
 	if !strings.Contains(missing, "could not be recovered") {
 		t.Errorf("an unrecoverable attestation must say so, not re-achieve quietly: %q", missing)
+	}
+}
+
+func TestPreservedAttestationReadsTheLineAfterTheMarker(t *testing.T) {
+	if got := PreservedAttestation("notes PRESERVED ATTESTATION: secret"); got != "" {
+		t.Fatalf("inline marker recovered %q", got)
+	}
+	got := PreservedAttestation("header\nPRESERVED ATTESTATION:\nline one\n\nline two")
+	if got != "line one\n\nline two" {
+		t.Fatalf("following lines = %q", got)
+	}
+	last := PreservedAttestation("PRESERVED ATTESTATION:\nfirst\nPRESERVED ATTESTATION:\nsecond")
+	if last != "second" {
+		t.Fatalf("last opening line = %q", last)
 	}
 }
 

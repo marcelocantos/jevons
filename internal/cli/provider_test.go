@@ -83,21 +83,6 @@ func TestSelectAgentProviderNoClobber(t *testing.T) {
 	}
 }
 
-func TestSidecarLaunchProviderRewritesSubscriptionIds(t *testing.T) {
-	if got := SidecarLaunchProvider(claudia.ProviderClaude); got != claudia.Provider("anthropic") {
-		t.Fatalf("claude → %q", got)
-	}
-	if got := SidecarLaunchProvider(claudia.ProviderCodex); got != claudia.Provider("openai-codex") {
-		t.Fatalf("codex → %q", got)
-	}
-	if got := SidecarLaunchProvider(claudia.ProviderGrok); got != claudia.Provider("xai-oauth") {
-		t.Fatalf("grok → %q", got)
-	}
-	if got := SidecarLaunchProvider(claudia.ProviderCursor); got != claudia.ProviderCursor {
-		t.Fatalf("cursor stayed %q", got)
-	}
-}
-
 func TestDefaultProviderIsGrok(t *testing.T) {
 	if DefaultProvider != claudia.ProviderGrok {
 		t.Fatalf("DefaultProvider = %q, want %q", DefaultProvider, claudia.ProviderGrok)

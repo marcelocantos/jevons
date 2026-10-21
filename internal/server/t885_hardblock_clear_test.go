@@ -21,8 +21,14 @@ func TestT885OverseerAnswerClearsHardBlock(t *testing.T) {
 
 	refusal := `provider refused the turn: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: refusal, IsError: true})
+	if failures != 0 || oks != 0 {
+		t.Fatalf("refusal sentence: failures=%d oks=%d, want 0/0", failures, oks)
+	}
+	s.DeliverOverseerEvent(claudia.Event{
+		Type: "assistant", Text: refusal, IsError: true, Reason: agenterr.CauseAuth,
+	})
 	if failures != 1 || oks != 0 {
-		t.Fatalf("refusal: failures=%d oks=%d, want 1/0", failures, oks)
+		t.Fatalf("refusal cause: failures=%d oks=%d, want 1/0", failures, oks)
 	}
 	s.DeliverOverseerEvent(claudia.Event{Type: "assistant", Text: "session reset by peer", IsError: true})
 	if oks != 0 {

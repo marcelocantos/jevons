@@ -5,7 +5,7 @@ package agenterr
 
 // Source names where a candidate failure string came from (🎯T455).
 //
-// ClassifyText reads words, and words are not evidence of an outage — an
+// Words are not evidence of an outage — an
 // agent that *writes about* a refusal produces the same characters as the
 // backend that *issued* one. On 2026-08-15 the overseer told the owner
 // "**The whole fleet is dead — Claude account monthly spend limit reached.**"
@@ -20,10 +20,9 @@ package agenterr
 // signal a talkative overseer can pollute indefinitely, in the one direction
 // that keeps a cleared block looking un-cleared.
 //
-// So the classifier is told which side of the wire the string arrived on, and
-// refuses to read authored content at all. The discrimination lives here
-// rather than in an `if` at each call site because a caller that forgets is
-// exactly the failure being fixed.
+// So the classifier refuses to read the words, on either side of the wire.
+// A provider failure is a typed cause. Quoting a refusal is not one, and
+// neither is the same sentence arriving as transport text.
 type Source string
 
 const (
@@ -39,12 +38,9 @@ const (
 )
 
 // ClassifyFrom classifies msg only when it arrived as transport evidence.
-// Authored content is ClassNone unconditionally — no substring is consulted,
-// so no quotation of a refusal can ever record one.
-//
-// Transport-sourced text classifies exactly as ClassifyText does: narrowing
-// the source must not blind the detector (🎯T406 clause 4 depends on the
-// genuine signal still arriving with its class intact).
+// Authored content is ClassNone. Transport text is also ClassNone: a
+// sentence is not a cause. The class arrives through Classify on a typed
+// cause (🎯T406 clause 4 reads that cause, not the words).
 func ClassifyFrom(src Source, msg string) Class {
 	if src != SourceTransport {
 		return ClassNone

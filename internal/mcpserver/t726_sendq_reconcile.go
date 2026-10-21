@@ -142,7 +142,9 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 
 	// The pin is the seat's blocker, and the blocker is gone. Clearing it here
 	// (rather than waiting for the next sweep to notice) is what "returns to
-	// service by that path" means from the caller's side.
+	// service by that path" means from the caller's side. An attempt this
+	// daemon still owns is not that pin: BlockedHead skips it, and a drain
+	// kicked now would not move the seat.
 	s.clearSendqPin(name)
 
 	var b strings.Builder
@@ -155,11 +157,23 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 		fmt.Fprintf(&b, "  kept %s (%s, %d bytes, waiting %s)\n",
 			e.ID, stateWord(e.State), len(e.Text), e.Age(now).Round(time.Second))
 	}
+	owned, ownedOK, ownedErr := s.sendQueue().OwnedAttempt(name)
 	if pin, pinned := s.sendqPinFor(name); pinned {
-		fmt.Fprintf(&b, "Still PINNED on %s: %s\n", pin.EntryID, FormatSendqPinLine(name, pin))
+		fmt.Fprintf(&b, "Still PINNED on %s: %s\n", pin.EntryID, formatSendqPinLine(name, pin, !ownedOK))
 		s.notifyFleetHealth(rec.By.At.Format(time.RFC3339Nano)+":"+name, fmt.Sprintf(
 			"sendq reconciled for %q (%s), but the queue is still blocked by entry %s (🎯T726).",
 			name, rec.By.Describe(), pin.EntryID))
+		if ownedOK {
+			b.WriteString(inFlightExitLine(owned))
+		}
+		return b.String()
+	}
+	if ownedErr != nil {
+		fmt.Fprintf(&b, "The owned attempt could not be read: %v\nDo not treat the queue as clear.\n", ownedErr)
+		return b.String()
+	}
+	if ownedOK {
+		b.WriteString(inFlightExitLine(owned))
 		return b.String()
 	}
 
@@ -172,7 +186,7 @@ func (s *Server) recordSendqReconciliation(name string, rec sendq.Receipt, now t
 	if rec.Depth > 0 {
 		if _, live := s.liveSender(name); live {
 			b.WriteString("Kicking a drain now: the remaining messages are pending and the seat is live.\n")
-			go s.drainAgentSendQueue(name)
+			s.goDrainAgentSendQueue(name)
 		} else {
 			fmt.Fprintf(&b, "No live process to deliver to; the pending messages drain at the next sweep, "+
 				"or immediately after jevons_agent_start name=%q with no prompt.\n", name)
@@ -195,9 +209,14 @@ func (s *Server) describeSendqForReconcile(name string, now time.Time) string {
 	} else {
 		fmt.Fprintf(&b, "sendq for %q holds %d message(s), oldest first:\n", name, len(entries))
 	}
+	owned, ownedOK, _ := s.sendQueue().OwnedAttempt(name)
+	ownedAttempt := ""
+	if ownedOK {
+		ownedAttempt = owned.AttemptID
+	}
 	for _, e := range entries {
 		fmt.Fprintf(&b, "  %s  %-10s  %5d bytes  waiting %s\n",
-			e.ID, stateWord(e.State), len(e.Text), e.Age(now).Round(time.Second))
+			e.ID, reconcileStateWord(e, ownedAttempt), len(e.Text), e.Age(now).Round(time.Second))
 		if e.AttemptID != "" {
 			fmt.Fprintf(&b, "      attempt %s%s\n", e.AttemptID, detailSuffix(e.Detail))
 		}
@@ -206,13 +225,17 @@ func (s *Server) describeSendqForReconcile(name string, now time.Time) string {
 		}
 		fmt.Fprintf(&b, "      %s\n", previewPayload(e.Text))
 	}
+	if ownedOK {
+		b.WriteString("\n")
+		b.WriteString(inFlightExitLine(owned))
+	}
 	if pin, pinned := s.sendqPinFor(name); pinned {
-		fmt.Fprintf(&b, "\n%s\n", FormatSendqPinLine(name, pin))
+		fmt.Fprintf(&b, "\n%s\n", formatSendqPinLine(name, pin, !ownedOK))
 		fmt.Fprintf(&b, "\nNext call, once you have LOOKED (🎯T416: payload-match at user-message level, the receiver's own "+
 			"queue-operation records, transcript-file absence):\n"+
 			"  jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%q attempt_id=%q actor=<you> evidence=<what you read>\n",
 			name, pin.EntryID, pin.AttemptID)
-	} else if len(entries) > 0 {
+	} else if len(entries) > 0 && !ownedOK {
 		fmt.Fprintf(&b, "\nNothing is unresolved, so nothing needs deciding. Offer the head to the seat now:\n"+
 			"  jevons_sendq_reconcile name=%q action=drain\n", name)
 		if len(entries) > 1 {
@@ -245,21 +268,62 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	if len(before) == 0 {
 		return fmt.Sprintf("sendq for %q is empty: nothing to drain.\n", name)
 	}
-	// 🎯T766.5: a held entry no longer blocks the drain. It is never resent;
-	// the pending messages behind it are offered past it, as the automatic
+	// Pending is the claimable phases only. A held attempt and an uncertain
+	// entry stay in the snapshot and are not that count. EntryPhase with an
+	// empty active id reads an owned attempt as held; the owned-attempt
+	// reply below does not use this count.
+	pendingN := 0
+	var oldestWait time.Duration
+	for _, e := range before {
+		switch sendq.EntryPhase(e, "") {
+		case sendq.PhaseAdmitted, sendq.PhaseDigest, sendq.PhaseRequeued:
+			age := e.Age(now)
+			if pendingN == 0 || age > oldestWait {
+				oldestWait = age
+			}
+			pendingN++
+		}
+	}
+	flightNote := ""
+	if owned, ok, err := s.sendQueue().OwnedAttempt(name); err == nil && ok {
+		flightNote = inFlightExitLine(owned)
+	}
+	// 🎯T766.5: a held entry no longer blocks the drain. It is never resent.
+	// Claimable messages behind it are offered past it, as the automatic
 	// drain does. The reply still names it, because it still needs a decision.
+	// That flow-past clause is false while this daemon owns an attempt, and
+	// false when nothing behind the hold is claimable.
 	heldNote := ""
 	if e, blocked, err := s.sendQueue().BlockedHead(name); err == nil && blocked {
+		flow := ""
+		if flightNote == "" && pendingN > 0 {
+			flow = ", and the messages behind it drain past it (🎯T766.5)"
+		}
 		heldNote = fmt.Sprintf(
-			"Entry %s has an unresolved %s attempt %s and stays held — it is never resent, and the messages behind it drain past it (🎯T766.5).\n"+
+			"Entry %s has an unresolved %s attempt %s and stays held — it is never resent%s.\n"+
 				"Settle it with: jevons_sendq_reconcile name=%q action=confirmed|requeue|drop entry_id=%[1]s attempt_id=%[3]s actor=… evidence=…\n",
-			e.ID, e.State, e.AttemptID, name)
+			e.ID, pinAttemptKind(e.State), e.AttemptID, flow, name)
 	}
 	if _, live := s.liveSender(name); !live {
+		if flightNote != "" {
+			var blocked strings.Builder
+			fmt.Fprintf(&blocked, "%q has no live process. Starting it does not drain this queue while this daemon owns the attempt.\n", name)
+			blocked.WriteString(flightNote)
+			if pin, pinned := s.sendqPinFor(name); pinned {
+				fmt.Fprintf(&blocked, "%s\n", formatSendqPinLine(name, pin, false))
+			}
+			return blocked.String()
+		}
+		if pendingN == 0 {
+			var blocked strings.Builder
+			fmt.Fprintf(&blocked, "%q has no live process. Starting it does not drain this queue while nothing here is waiting to be delivered.\n", name)
+			blocked.WriteString(heldNote)
+			return blocked.String()
+		}
 		return fmt.Sprintf(
 			"%q holds %d pending message(s), oldest waiting %s, but has no live process to deliver to.\n"+
 				"Give it one and the queue drains at the first turn boundary: jevons_agent_start name=%[1]q (no prompt).\n",
-			name, len(before), before[0].Age(now).Round(time.Second))
+			name, pendingN, oldestWait.Round(time.Second)) + heldNote
 	}
 
 	s.drainAgentSendQueue(name)
@@ -275,8 +339,15 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Drained %q: %d of %d held message(s) delivered, %d still queued.\n",
 		name, delivered, len(before), len(after))
-	b.WriteString(heldNote)
+	if flightNote == "" {
+		b.WriteString(heldNote)
+	}
+	b.WriteString(flightNote)
 	switch {
+	case delivered == 0 && flightNote != "":
+		// The in-flight line already names why nothing moved.
+	case delivered == 0 && pendingN == 0:
+		// A held or uncertain entry is not offered at the next boundary.
 	case delivered == 0:
 		b.WriteString("Nothing moved — the seat is most likely mid-turn, and the backlog is offered again at its next boundary.\n")
 	case len(after) > 0:
@@ -286,9 +357,19 @@ func (s *Server) drainHeldSendqOnRequest(name string, now time.Time) string {
 		b.WriteString("The remainder follows one per turn boundary — that cadence is deliberate (🎯T416), not a stall.\n")
 	}
 	if pin, pinned := s.sendqPinFor(name); pinned {
-		fmt.Fprintf(&b, "%s\n", FormatSendqPinLine(name, pin))
+		fmt.Fprintf(&b, "%s\n", formatSendqPinLine(name, pin, flightNote == ""))
 	}
 	return b.String()
+}
+
+// pinAttemptKind is the word in an unresolved-attempt notice. The empty
+// on-disk state is still Pending, and a leftover that pairs it with an
+// attempt id is a held attempt.
+func pinAttemptKind(st sendq.DeliveryState) string {
+	if st == sendq.Pending {
+		return "held"
+	}
+	return string(st)
 }
 
 // stateWord names a delivery state for an operator. Pending's empty string is
@@ -298,6 +379,27 @@ func stateWord(st sendq.DeliveryState) string {
 		return "pending"
 	}
 	return string(st)
+}
+
+// inFlightExitLine names the only exit for an attempt this daemon owns.
+// Reconcile is refused, and drain will not pass it.
+func inFlightExitLine(e sendq.Entry) string {
+	return fmt.Sprintf(
+		"Entry %s is in flight as attempt %s. This daemon owns it. jevons_sendq_reconcile will not confirm, requeue, or drop it while the attempt is active. The exit is that attempt's result: a definite non-send returns the same entry to pending, and a confirmed or undelivered result archives the payload before removing it. Drain will not take this entry or anything behind it until then. A restart leaves the attempt held, and the exit is then jevons_sendq_reconcile action=confirmed|requeue|drop entry_id=%s attempt_id=%s.\n",
+		e.ID, e.AttemptID, e.ID, e.AttemptID)
+}
+
+// reconcileStateWord is the show-listing column. An omitted state beside an
+// attempt id is not an admitted pending message. An attempt this daemon
+// owns is in flight, not an admitted pending message either.
+func reconcileStateWord(e sendq.Entry, ownedAttempt string) string {
+	if sendq.EntryPhase(e, ownedAttempt) == sendq.PhaseInFlight {
+		return "in flight"
+	}
+	if e.State == sendq.Pending && sendq.EntryPhase(e, "") == sendq.PhaseHeldAttempt {
+		return "held attempt"
+	}
+	return stateWord(e.State)
 }
 
 func detailSuffix(detail string) string {

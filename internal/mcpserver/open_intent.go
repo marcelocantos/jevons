@@ -25,29 +25,22 @@ import (
 
 // 🎯T328: post-restart resume of unfinished owner instructions.
 // 🎯T344: do not re-fire owner turns already answered with product evidence.
-// 🎯T477: an owner *question* is also closed by a topically-linked explanation
-// answer — "why did X" answered with "because Y" carries no SHA/PASS/achieve
-// marker, and before this every bounce re-fired the answered question as
-// owner-intent-resume.
+// 🎯T477: an owner question is not closed by an explanation sentence.
+// A declared oracle or accepted-risk slot on the same topic is.
 // 🎯T512: an owner fleet directive (kill/stop/park/reap a named seat) is closed
-// by later ops evidence (killed/deregistered, gone from agent_list, fleet
-// intent reaped/parked) for that seat — ops directives have no code SHA, and
-// before this every bounce re-fired "Kill jevons-po" after the seat was gone.
+// by a structured fleet-op excerpt for that seat. A killed/deregistered
+// sentence is not that excerpt (🎯T766.4).
 // 🎯T528: a Goal / open-objective naming TargetIDs is closed when every named
 // id is achieved (or set_aside) in the ledger — Session Goal Continue must
 // not re-inject "Continue the open objective" for that text.
-// 🎯T551: marked send/delivery probes (ping-send-check,
-// http-send-probe-do-not-treat-as-owner-intent, …) are never recoverable
-// open owner work — probes are intentionally labelled, not answered by
-// T344/T477 closure.
-// 🎯T568: an owner instruction is closed once (a) a later substantive
-// overseer reply appears in the owner chatlog after the instruction's
-// observed timestamp, or (b) an overseer reply names a TargetID that is
-// achieved/set_aside in the ledger. A bare ack does not close. The live
-// miss was the 2026-08-26 "Cursor monthly cycle?" question: answered and
-// landed as 🎯T550, then re-issued as MANDATORY open work on every bounce
-// because T528 only closes IDs named in the *owner* text and T477 dropped
-// the reply at load (not explanation-shaped).
+// 🎯T551: a declared send-probe fact (open-intent send-probe, or that
+// fact plus one token) is never recoverable open owner work. A slug or
+// a sentence that mentions a probe is owner text (🎯T766.4).
+// 🎯T568: a later sentence is not a close (🎯T766.4). An overseer reply
+// that names a TargetID achieved or set_aside in the ledger still closes,
+// even when the owner text named none. A bare ack does not close. The
+// live miss was the 2026-08-26 "Cursor monthly cycle?" question, landed
+// as 🎯T550, then re-issued because the owner text named no id.
 //
 // Durable source: state_dir/chatlog/<overseer>.jsonl (survives control-plane
 // bounce). On restart, when a recoverable open owner instruction is found,
@@ -56,8 +49,8 @@ import (
 //
 // Residual classes (no resume payload; daemon-restarted status path only):
 //   - no_chatlog / no_user_turns / only_harness / ack_only / no_recoverable_intent
-//   - answered_or_closed (T344/T477/T512/T528/T568: later evidence, substantive
-//     reply, or ledger close)
+//   - answered_or_closed (T344/T477/T512/T528/T568: declared evidence,
+//     fleet ops, or a ledger-closed target id)
 //   - session fully wiped (chatlog missing or empty after materialize loss)
 
 const (
@@ -157,8 +150,8 @@ type OwnerIntentTurn struct {
 // from turns ordered oldest→newest. Skips harness injects, pure restart
 // re-nudges, and short acks. When a later assistant turn reports product
 // evidence for the same complaint, yields residual answered_or_closed (🎯T344);
-// explanation answers close questions (🎯T477); fleet ops evidence closes
-// kill/stop/park/reap directives (🎯T512). Hermetic oracle surface for
+// explanation answers do not close questions (🎯T477); a structured fleet-op
+// excerpt closes kill/stop/park/reap directives (🎯T512). Hermetic oracle surface for
 // 🎯T328 + 🎯T344 + 🎯T477 + 🎯T512. Ledger Goal close is
 // ExtractOpenOwnerIntentWithLedger (🎯T528).
 func ExtractOpenOwnerIntent(turns []OwnerIntentTurn) OpenOwnerIntent {
@@ -278,25 +271,22 @@ func ExtractOpenOwnerIntentWithLedger(turns []OwnerIntentTurn, statusByID map[st
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
-	// 🎯T477: a question is answered by explanation prose, not only by product
-	// evidence. T568 then closes any later substantive reply (non-fleet);
-	// fleet kill/stop/park/reap keep T512's same-seat ops contract.
+	// 🎯T477: explanation prose is not an answer. The helper returns false
+	// until a declared slot exists. Fleet kill/stop/park/reap keep T512.
 	if OwnerQuestionAnsweredWithExplanation(last.Text, laterAnswers) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
-	// 🎯T512: kill/stop/park/reap fleet directives close on ops evidence for the
-	// named seat (no SHA/PASS/achieve required).
+	// 🎯T512: kill/stop/park/reap fleet directives close on a structured
+	// fleet-op excerpt for the named seat. A sentence is not that excerpt.
 	if OwnerFleetDirectiveCompleted(last.Text, laterAnswers) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
 	}
 
-	// 🎯T568: later substantive overseer reply (not a bare ack) closes, and a
-	// reply that names a ledger-closed TargetID closes even when the owner
-	// instruction named none (Cursor-monthly / 🎯T550).
-	// Fleet kill/stop/park/reap keep the T512 same-seat ops contract — an
-	// unrelated-seat completion is a later substantive turn but must not
-	// close the named directive (t512_kill_resume_test.go unrelated-seat).
+	// 🎯T568: a later sentence does not close. The callee returns false.
+	// A reply that names a ledger-closed TargetID still closes when the
+	// owner instruction named none (Cursor-monthly / 🎯T550).
+	// Fleet kill/stop/park/reap keep the T512 structured same-seat contract.
 	if len(ownerFleetDirectiveTargets(last.Text)) == 0 &&
 		ownerIntentClosedByLaterSubstantiveReply(laterAnswers) {
 		return OpenOwnerIntent{Residual: ResidualAnsweredOrClosed}
@@ -357,8 +347,8 @@ func parseAssistantGoalStatus(text string) (string, bool) {
 }
 
 // OwnerIntentAnsweredWithProductEvidence reports whether any later assistant
-// excerpt answers the owner complaint with product evidence (SHA and/or
-// hermetic PASS and/or achieved-target attestation) for the same topic (🎯T344).
+// excerpt answers the owner complaint with a declared oracle or accepted-risk
+// slot for the same topic (🎯T344). A SHA sentence is not that slot (🎯T766.4).
 func OwnerIntentAnsweredWithProductEvidence(ownerText string, laterAssistant []string) bool {
 	ownerText = strings.TrimSpace(ownerText)
 	if ownerText == "" {
@@ -380,13 +370,9 @@ func OwnerIntentAnsweredWithProductEvidence(ownerText string, laterAssistant []s
 }
 
 // OwnerQuestionAnsweredWithExplanation reports whether the owner turn is a
-// question that a later assistant excerpt answers with explanation prose on
-// the same topic (🎯T477). Questions only: ownerqa.IsQuestion is the gate, so
-// directives keep the T344 product-evidence contract. The answer must be
-// answer-shaped (explanatory substance, not a progress ack) and topically
-// linked, so "looking into it" and an unrelated explanation both leave the
-// question open — the cost of a false close is a lost resume, which is the
-// T328 regression class.
+// question that a later excerpt answers on the same topic (🎯T477).
+// openIntentAnswerShaped returns false: an explanation sentence is not
+// that answer (🎯T766.4). Questions only: ownerqa.IsQuestion is the gate.
 func OwnerQuestionAnsweredWithExplanation(ownerText string, laterAssistant []string) bool {
 	ownerText = strings.TrimSpace(ownerText)
 	if ownerText == "" || !ownerqa.IsQuestion(ownerText) {
@@ -404,8 +390,9 @@ func OwnerQuestionAnsweredWithExplanation(ownerText string, laterAssistant []str
 	return false
 }
 
-// ownerIntentClosedByLaterSubstantiveReply reports whether any later overseer
-// excerpt is a real reply rather than a bare ack / progress chatter (🎯T568).
+// ownerIntentClosedByLaterSubstantiveReply reports whether a later excerpt
+// closes the instruction (🎯T568). The callee returns false: a sentence
+// is not that close (🎯T766.4).
 func ownerIntentClosedByLaterSubstantiveReply(laterAssistant []string) bool {
 	for _, a := range laterAssistant {
 		if openIntentSubstantiveReply(a) {
@@ -436,113 +423,42 @@ func ownerIntentReplyNamesClosedTarget(laterAssistant []string, statusByID map[s
 	return false
 }
 
-// openIntentFleetDirectiveRe matches an owner kill/stop/park/reap directive
-// aimed at a named fleet seat (🎯T512). Captures the verb and the remainder
-// (agent name / "Jevons PO" / backtick name).
-var openIntentFleetDirectiveRe = regexp.MustCompile(`(?i)^\s*(?:please\s+)?(kill|stop|park|reap)\b(?:\s+(?:the|a|an))?\s+(.+?)\s*$`)
-
-// OwnerFleetDirectiveCompleted reports whether the owner turn is a fleet
-// kill/stop/park/reap directive that a later assistant excerpt completes with
-// ops evidence for the same named seat — killed/deregistered, gone from the
-// agent list, stopped+parked, or fleet intent reaped/parked — without needing
-// SHA/PASS/achieve markers (🎯T512). Unrelated seats and progress chatter leave
-// the directive open.
+// OwnerFleetDirectiveCompleted reports whether the owner turn is a structured
+// fleet-op directive that a later excerpt completes for the same seat
+// (🎯T512). A kill, stop, park, or reap sentence is not that directive
+// (🎯T766.4). Unrelated seats leave the directive open.
 func OwnerFleetDirectiveCompleted(ownerText string, laterAssistant []string) bool {
 	targets := ownerFleetDirectiveTargets(ownerText)
 	if len(targets) == 0 {
 		return false
 	}
-	for _, a := range laterAssistant {
-		a = strings.TrimSpace(a)
-		if a == "" || !openIntentFleetOpsEvidence(a) {
+	want := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		if target != "" {
+			want[target] = true
+		}
+	}
+	for _, answer := range laterAssistant {
+		answer = strings.TrimSpace(answer)
+		if answer == "" || openIntentFleetOpsEvidence(answer) {
 			continue
 		}
-		if openIntentFleetOpsNamesTarget(a, targets) {
+		_, seat, _, ok := parseFleetOpExcerpt(answer)
+		if ok && want[seat] {
 			return true
 		}
 	}
 	return false
 }
 
-// ownerFleetDirectiveTargets returns normalised agent names the owner asked
-// to kill/stop/park/reap. Empty when the turn is not a fleet directive or
-// names no seat (e.g. "kill all workers" without a concrete agent id).
+// ownerFleetDirectiveTargets returns the seat of a structured fleet-op
+// directive. A kill, stop, park, or reap sentence names no seat (🎯T766.4).
 func ownerFleetDirectiveTargets(ownerText string) []string {
-	ownerText = strings.TrimSpace(ownerText)
-	if ownerText == "" {
+	_, seat, _, ok := parseFleetOpExcerpt(ownerText)
+	if !ok || seat == "" {
 		return nil
 	}
-	m := openIntentFleetDirectiveRe.FindStringSubmatch(ownerText)
-	if m == nil {
-		return nil
-	}
-	rest := stripFleetDirectiveNoise(strings.TrimSpace(m[2]))
-	if rest == "" {
-		return nil
-	}
-	// Prefer backtick-quoted names when present.
-	var names []string
-	for _, q := range extractBacktickTokens(rest) {
-		if n := normalizeFleetAgentName(q); n != "" && looksLikeFleetAgentName(n) {
-			names = append(names, n)
-		}
-	}
-	if len(names) == 0 {
-		if n := normalizeFleetAgentName(rest); n != "" && looksLikeFleetAgentName(n) {
-			names = append(names, n)
-		}
-	}
-	return uniqueStrings(names)
-}
-
-// stripFleetDirectiveNoise drops trailing filler so "Kill jevons-po please"
-// and "Kill the jevons-po agent now" still resolve to the seat name.
-func stripFleetDirectiveNoise(rest string) string {
-	rest = strings.TrimSpace(rest)
-	if rest == "" {
-		return ""
-	}
-	noise := []string{
-		"from the fleet", "from fleet", "please", "now", "immediately",
-		"thanks", "thank you", "agent", "seat", "process",
-	}
-	for {
-		low := strings.ToLower(rest)
-		trimmed := false
-		for _, n := range noise {
-			if strings.HasSuffix(low, n) {
-				rest = strings.TrimSpace(rest[:len(rest)-len(n)])
-				rest = strings.TrimRight(rest, ".,!;:?")
-				trimmed = true
-				break
-			}
-		}
-		if !trimmed {
-			break
-		}
-	}
-	return strings.TrimSpace(rest)
-}
-
-func extractBacktickTokens(s string) []string {
-	var out []string
-	for {
-		i := strings.IndexByte(s, '`')
-		if i < 0 {
-			break
-		}
-		s = s[i+1:]
-		j := strings.IndexByte(s, '`')
-		if j < 0 {
-			break
-		}
-		tok := strings.TrimSpace(s[:j])
-		if tok != "" {
-			out = append(out, tok)
-		}
-		s = s[j+1:]
-	}
-	return out
+	return []string{seat}
 }
 
 // normalizeFleetAgentName maps owner spellings onto registry-style ids:
@@ -572,103 +488,47 @@ func normalizeFleetAgentName(s string) string {
 	return out
 }
 
-// looksLikeFleetAgentName rejects bare plurals ("workers") and one-word
-// noise so "Kill all workers" does not close on coincidental chatter.
-func looksLikeFleetAgentName(n string) bool {
-	if n == "" || !strings.Contains(n, "-") {
-		return false
+// openIntentFleetOpsEvidence is not a fleet-op close (🎯T766.4).
+// A killed, deregistered, or parked sentence is not a structured excerpt.
+func openIntentFleetOpsEvidence(string) bool { return false }
+
+// parseFleetOpExcerpt reads "fleet-op <leaf> <seat>" and, for fleet_intent,
+// a following reaped or parked state. The fields are identifiers. A sentence
+// is not this excerpt.
+func parseFleetOpExcerpt(text string) (leaf, seat, state string, ok bool) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) < 3 || fields[0] != "fleet-op" {
+		return "", "", "", false
 	}
-	// Reject all-digit segments-only noise; require a letter somewhere.
-	hasLetter := false
-	for _, r := range n {
-		if unicode.IsLetter(r) {
-			hasLetter = true
-			break
+	leaf, seat = fields[1], fields[2]
+	switch leaf {
+	case "agent_kill", "agent_stop":
+		if seat == "" {
+			return "", "", "", false
 		}
+		return leaf, seat, "", true
+	case "fleet_intent":
+		if len(fields) < 4 || seat == "" {
+			return "", "", "", false
+		}
+		if fields[3] != "reaped" && fields[3] != "parked" {
+			return "", "", "", false
+		}
+		return leaf, seat, fields[3], true
+	default:
+		return "", "", "", false
 	}
-	return hasLetter
 }
 
-func uniqueStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out
-}
-
-// openIntentFleetOpsEvidence detects kill/stop/park/reap completion prose
-// or tool payloads (🎯T512) — stricter than bare "working on the kill".
-func openIntentFleetOpsEvidence(text string) bool {
-	low := strings.ToLower(strings.TrimSpace(text))
-	if low == "" {
-		return false
-	}
-	// Progress chatter is not completion.
-	for _, m := range openIntentProgressMarkers {
-		if strings.Contains(low, m) {
-			return false
-		}
-	}
-	strong := []string{
-		"killed", "deregistered", "deregister",
-		"stopped and parked",
-		"already not registered",
-		"no longer in the registry",
-		"gone from the registry",
-		"removed from the fleet",
-		"removed from the registry",
-		"not on agent list",
-		"no longer appears in agent_list",
-		"no longer on agent_list",
-		"state=reaped", "state=parked",
-		`"state":"reaped"`, `"state":"parked"`,
-		`"state": "reaped"`, `"state": "parked"`,
-	}
-	for _, m := range strong {
-		if strings.Contains(low, m) {
-			return true
-		}
-	}
-	if strings.Contains(low, "fleet intent") &&
-		(strings.Contains(low, "reaped") || strings.Contains(low, "parked")) {
+// fleetOpsToolIs reports whether a tool identifier is leaf or ends with a
+// separator plus leaf. The comparison is the identifier, not a sentence.
+func fleetOpsToolIs(name, leaf string) bool {
+	if name == leaf {
 		return true
 	}
-	if strings.Contains(low, "parked") &&
-		(strings.Contains(low, "still registered") || strings.Contains(low, "nothing revives")) {
-		return true
-	}
-	// Tool names that are themselves the completion act.
-	if strings.Contains(low, "agent_kill") || strings.Contains(low, "agent_stop") ||
-		(strings.Contains(low, "fleet_intent") &&
-			(strings.Contains(low, "reaped") || strings.Contains(low, "parked"))) {
-		return true
-	}
-	return false
-}
-
-func openIntentFleetOpsNamesTarget(answer string, targets []string) bool {
-	if len(targets) == 0 {
-		return false
-	}
-	low := strings.ToLower(answer)
-	for _, t := range targets {
-		if t == "" {
-			continue
-		}
-		if strings.Contains(low, t) {
-			return true
-		}
-		spaced := strings.ReplaceAll(t, "-", " ")
-		if spaced != t && strings.Contains(low, spaced) {
+	for _, sep := range []string{"__", "/", "_"} {
+		suffix := sep + leaf
+		if len(name) >= len(suffix) && name[len(name)-len(suffix):] == suffix {
 			return true
 		}
 	}
@@ -677,10 +537,10 @@ func openIntentFleetOpsNamesTarget(answer string, targets []string) bool {
 
 func isOpenIntentFleetOpsTool(name string, input map[string]any) bool {
 	n := openIntentFleetOpsToolName(name, input)
-	if strings.Contains(n, "agent_kill") || strings.Contains(n, "agent_stop") {
+	if fleetOpsToolIs(n, "agent_kill") || fleetOpsToolIs(n, "agent_stop") {
 		return true
 	}
-	if strings.Contains(n, "fleet_intent") {
+	if fleetOpsToolIs(n, "fleet_intent") {
 		state := openIntentFleetOpsToolState(input)
 		return state == "reaped" || state == "parked"
 	}
@@ -710,36 +570,35 @@ func openIntentFleetOpsToolState(input map[string]any) string {
 	return strings.ToLower(strings.TrimSpace(state))
 }
 
-// synthesizeOpenIntentFleetOpsTool builds a chatlog excerpt from a fleet-ops
-// tool_use so extraction can match both the completion act and the seat name
-// (🎯T512). Flat input alone often carries only `name=jevons-po`.
+// synthesizeOpenIntentFleetOpsTool builds the structured fleet-op excerpt a
+// close can recognize (🎯T512). flat is the rendered tool input and is not
+// part of the excerpt: a sentence in that input is not the close (🎯T766.4).
 func synthesizeOpenIntentFleetOpsTool(name string, input map[string]any, flat string) string {
+	_ = flat
 	tool := openIntentFleetOpsToolName(name, input)
 	state := openIntentFleetOpsToolState(input)
-	var parts []string
+	var leaf string
 	switch {
-	case strings.Contains(tool, "agent_kill"):
-		parts = append(parts, "agent_kill", "killed", "deregistered")
-	case strings.Contains(tool, "agent_stop"):
-		parts = append(parts, "agent_stop", "stopped and parked")
-	case strings.Contains(tool, "fleet_intent"):
-		parts = append(parts, "fleet_intent")
-		if state != "" {
-			parts = append(parts, "state="+state)
+	case fleetOpsToolIs(tool, "agent_kill"):
+		leaf = "agent_kill"
+	case fleetOpsToolIs(tool, "agent_stop"):
+		leaf = "agent_stop"
+	case fleetOpsToolIs(tool, "fleet_intent"):
+		if state != "reaped" && state != "parked" {
+			return ""
 		}
+		leaf = "fleet_intent"
 	default:
-		if tool != "" {
-			parts = append(parts, tool)
-		}
+		return ""
 	}
-	if target := openIntentFleetOpsToolTarget(input); target != "" {
-		parts = append(parts, target)
+	target := openIntentFleetOpsToolTarget(input)
+	if target == "" {
+		return ""
 	}
-	flat = strings.TrimSpace(flat)
-	if flat != "" {
-		parts = append(parts, flat)
+	if leaf == "fleet_intent" {
+		return "fleet-op " + leaf + " " + target + " " + state
 	}
-	return strings.TrimSpace(strings.Join(parts, " "))
+	return "fleet-op " + leaf + " " + target
 }
 
 func openIntentFleetOpsToolTarget(input map[string]any) string {
@@ -759,115 +618,23 @@ func openIntentFleetOpsToolTarget(input map[string]any) string {
 	return ""
 }
 
-// openIntentExplanationConnectives mark prose as explaining a cause rather
-// than acknowledging work. Deliberately concrete: generic verbs would let
-// status chatter close a question.
-var openIntentExplanationConnectives = []string{
-	"because", "due to", "caused by", "the cause", "root cause", "the reason",
-	"reason is", "turns out", "loses to", "wins over", "takes precedence",
-	"overrides", "overridden", "shadowed by", "falls back", "comes from",
-	"leftover",
-}
+// openIntentAnswerShaped is not an explanation close (🎯T766.4).
+// A connective or a file name is not an answer.
+func openIntentAnswerShaped(string) bool { return false }
 
-// openIntentProgressMarkers veto answer shape: a turn announcing that the
-// answer is being sought is not the answer.
-var openIntentProgressMarkers = []string{
-	"looking into", "investigating", "digging into", "working on",
-	"will report", "stand by", "one moment", "checking ",
-}
+// openIntentSubstantiveReply is not a close (🎯T766.4).
+// A long sentence is not a reply that finishes owner work.
+func openIntentSubstantiveReply(string) bool { return false }
 
-// openIntentFileTokenRe matches a concrete file/knob citation — the
-// "citing knobs/files" half of an explanation answer.
-var openIntentFileTokenRe = regexp.MustCompile(`(?i)[\w./~-]+\.(go|yaml|yml|json|md|js|ts|html|css|sh|sql|txt|plist)\b`)
-
-// openIntentAnswerShaped reports whether assistant prose has the substance of
-// an explanation answer (🎯T477): an explanatory connective, or a concrete
-// file/knob citation without progress-marker framing. Short turns never
-// qualify — an answer that fits in an ack is an ack.
-func openIntentAnswerShaped(text string) bool {
-	t := strings.TrimSpace(text)
-	if utf8.RuneCountInString(t) < 40 {
-		return false
-	}
-	low := strings.ToLower(t)
-	for _, m := range openIntentProgressMarkers {
-		if strings.Contains(low, m) {
-			return false
-		}
-	}
-	for _, c := range openIntentExplanationConnectives {
-		if strings.Contains(low, c) {
-			return true
-		}
-	}
-	return openIntentFileTokenRe.MatchString(t)
-}
-
-// openIntentSubstantiveReply reports a later overseer turn with enough
-// substance to count as a reply (🎯T568). Bare acks and progress chatter
-// ("looking into it") stay open — T512's kill-without-evidence tape.
-func openIntentSubstantiveReply(text string) bool {
-	t := strings.TrimSpace(text)
-	if t == "" || utf8.RuneCountInString(t) < 40 {
-		return false
-	}
-	if isOpenIntentAckOnly(t) {
-		return false
-	}
-	low := strings.ToLower(t)
-	for _, m := range openIntentProgressMarkers {
-		if strings.Contains(low, m) {
-			return false
-		}
-	}
-	return true
-}
-
-// hasOpenIntentProductEvidence detects SHA / hermetic PASS / achieved-target
-// product evidence in an assistant excerpt (stricter than bare chatter).
+// hasOpenIntentProductEvidence is true when the excerpt declares an oracle
+// or accepted-risk slot. A SHA sentence, a hermetic PASS, or the word
+// achieved is not product evidence (🎯T766.4).
 func hasOpenIntentProductEvidence(text string) bool {
-	s := strings.TrimSpace(text)
-	if s == "" {
-		return false
-	}
-	low := strings.ToLower(s)
-	hasSHA := commitSHARe.MatchString(s)
-	hasTarget := openIntentTargetIDRe.MatchString(s)
-	hasAchieved := strings.Contains(low, "achieved") || strings.Contains(low, "attestation")
-	hasFixCommit := strings.Contains(low, "fix(") || strings.Contains(low, "feat(")
-	hasPass := strings.Contains(low, "pass") &&
-		(strings.Contains(low, "hermetic") ||
-			strings.Contains(low, "test") ||
-			strings.Contains(low, "oracle") ||
-			strings.Contains(low, "playwright") ||
-			strings.Contains(low, "go test") ||
-			strings.Contains(low, "make test") ||
-			strings.Contains(low, "node "))
-
-	// SHA + closing context (fix/feat/achieved/pass/sha/commit/landed).
-	if hasSHA && (hasAchieved || hasFixCommit || hasPass ||
-		strings.Contains(low, "sha") || strings.Contains(low, "commit") ||
-		strings.Contains(low, "landed") || strings.Contains(low, "merged")) {
-		return true
-	}
-	// Achieved target attestation (with or without SHA).
-	if hasAchieved && (hasTarget || hasSHA) {
-		return true
-	}
-	// Hermetic PASS with target or SHA ties the oracle to work product.
-	if hasPass && (hasTarget || hasSHA) {
-		return true
-	}
-	// Reuse T31 oracle classifier when it already sees SHA/test evidence
-	// alongside a completion claim (achieved/done/finished).
-	if HasOracleEvidence(s) && hasCompletionClaim(low) {
-		return true
-	}
-	return false
+	return HasOracleEvidence(text) || HasAcceptedRisk(text)
 }
 
-// openIntentTopicalLink is true when owner complaint and evidence answer
-// share a target id or significant content tokens (same complaint).
+// openIntentTopicalLink is true when the owner text and the answer share a
+// target id. Token overlap is not that link (🎯T766.4).
 func openIntentTopicalLink(owner, answer string) bool {
 	oIDs := openIntentTargetIDs(owner)
 	aIDs := openIntentTargetIDs(answer)
@@ -875,35 +642,6 @@ func openIntentTopicalLink(owner, answer string) bool {
 		if aIDs[id] {
 			return true
 		}
-	}
-	// Answer names a target while also carrying complaint tokens.
-	oTokens := openIntentContentTokens(owner)
-	aLow := strings.ToLower(answer)
-	hits := 0
-	for _, tok := range oTokens {
-		if openIntentTokenIn(tok, aLow) {
-			hits++
-		}
-	}
-	// One strong content hit is enough when answer has product evidence
-	// (caller already checked evidence); two hits for weaker short tokens.
-	if hits >= 2 {
-		return true
-	}
-	if hits >= 1 {
-		// Prefer longer stems (jiggl*, thrash, layout, re-render…).
-		for _, tok := range oTokens {
-			if len(tok) >= 5 && openIntentTokenIn(tok, aLow) {
-				return true
-			}
-		}
-	}
-	// Owner question without shared tokens but answer explicitly quotes the
-	// complaint class with evidence (e.g. "text jiggle" for pixel/jiggle Q)
-	// — covered by stem overlap above. If owner mentioned no long tokens
-	// and no target, require ≥1 token hit of len≥4.
-	if hits >= 1 {
-		return true
 	}
 	return false
 }
@@ -917,83 +655,6 @@ func openIntentTargetIDs(s string) map[string]bool {
 		}
 	}
 	return out
-}
-
-var openIntentStop = map[string]bool{
-	"that": true, "this": true, "with": true, "from": true, "have": true,
-	"what": true, "when": true, "where": true, "which": true, "while": true,
-	"about": true, "after": true, "before": true, "being": true, "there": true,
-	"their": true, "would": true, "could": true, "should": true, "doing": true,
-	"does": true, "didn": true, "isn": true, "aren": true, "wasn": true,
-	"were": true, "been": true, "will": true, "just": true, "like": true,
-	"some": true, "them": true, "then": true, "than": true, "also": true,
-	"into": true, "over": true, "under": true, "your": true, "youre": true,
-	"page": true, "text": true, "time": true, "make": true, "need": true,
-	"want": true, "please": true, "still": true, "really": true, "constantly": true,
-	"affecting": true, "subtle": true, "all": true, "the": true, "and": true,
-	"for": true, "not": true, "but": true, "are": true, "why": true, "how": true,
-	"its": true, "it": true, "or": true, "so": true, "to": true, "of": true,
-	"in": true, "on": true, "a": true, "an": true, "is": true, "by": true,
-	"up": true, "down": true, "way": true, "whats": true,
-}
-
-func openIntentContentTokens(s string) []string {
-	low := strings.ToLower(s)
-	var b strings.Builder
-	var toks []string
-	flush := func() {
-		tok := b.String()
-		b.Reset()
-		if len(tok) < 4 || openIntentStop[tok] {
-			return
-		}
-		// Digits-only noise.
-		allDigit := true
-		for _, r := range tok {
-			if !unicode.IsDigit(r) {
-				allDigit = false
-				break
-			}
-		}
-		if allDigit {
-			return
-		}
-		toks = append(toks, tok)
-	}
-	for _, r := range low {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		} else if b.Len() > 0 {
-			flush()
-		}
-	}
-	if b.Len() > 0 {
-		flush()
-	}
-	return toks
-}
-
-func openIntentTokenIn(tok, hayLower string) bool {
-	if tok == "" || hayLower == "" {
-		return false
-	}
-	if strings.Contains(hayLower, tok) {
-		return true
-	}
-	// Crude stem: jiggling ↔ jiggle / thrashing ↔ thrash.
-	if len(tok) >= 6 {
-		stem := tok
-		for _, suf := range []string{"ing", "ed", "es", "ly", "tion"} {
-			if strings.HasSuffix(stem, suf) && len(stem)-len(suf) >= 4 {
-				stem = stem[:len(stem)-len(suf)]
-				break
-			}
-		}
-		if len(stem) >= 4 && stem != tok && strings.Contains(hayLower, stem) {
-			return true
-		}
-	}
-	return false
 }
 
 // ChatTurnsToOwnerIntentTurns adapts rsi chat turns for extraction.
@@ -1352,7 +1013,10 @@ func keepOpenIntentAssistant(text string) bool {
 	if hasOpenIntentProductEvidence(text) || openIntentEvidenceCandidate(text) {
 		return true
 	}
-	if openIntentAnswerShaped(text) || openIntentFleetOpsEvidence(text) {
+	if openIntentAnswerShaped(text) {
+		return true
+	}
+	if _, _, _, ok := parseFleetOpExcerpt(text); ok {
 		return true
 	}
 	if openIntentSubstantiveReply(text) {
@@ -1361,24 +1025,9 @@ func keepOpenIntentAssistant(text string) bool {
 	return openIntentTargetIDRe.MatchString(text)
 }
 
-// openIntentEvidenceCandidate is a cheaper pre-filter before full product
-// evidence check — catches achieve/SHA-ish tool payloads worth retaining.
-func openIntentEvidenceCandidate(text string) bool {
-	low := strings.ToLower(text)
-	if commitSHARe.MatchString(text) {
-		return true
-	}
-	if openIntentTargetIDRe.MatchString(text) &&
-		(strings.Contains(low, "achiev") || strings.Contains(low, "attestation") ||
-			strings.Contains(low, "pass") || strings.Contains(low, "fix(") ||
-			strings.Contains(low, "oracle") || strings.Contains(low, "hermetic")) {
-		return true
-	}
-	if strings.Contains(low, "attestation") {
-		return true
-	}
-	return false
-}
+// openIntentEvidenceCandidate is not product evidence (🎯T766.4).
+// A SHA or the word achieved is not a slot.
+func openIntentEvidenceCandidate(string) bool { return false }
 
 // parseOpenIntentChatlogLine extracts role + plain text from a chatlog JSONL line.
 // Assistant tool_use bodies are flattened when they carry evidence-shaped fields.
@@ -1498,9 +1147,8 @@ func extractOpenIntentAssistantContent(raw json.RawMessage) string {
 				continue
 			}
 			// 🎯T512: agent_kill / agent_stop / fleet_intent reaped|parked are
-			// themselves the completion act — keep a synthetic excerpt that
-			// carries the tool marker plus the target name (flat alone is just
-			// "jevons-po" and would not pass openIntentFleetOpsEvidence).
+			// themselves the completion act. The excerpt is the structured
+			// fleet-op line, not the English words that used to stand in for it.
 			if isOpenIntentFleetOpsTool(toolName, input) {
 				if syn := synthesizeOpenIntentFleetOpsTool(toolName, input, flat); syn != "" {
 					chunks = append(chunks, syn)
@@ -1531,7 +1179,7 @@ func flattenOpenIntentToolInput(input map[string]any) string {
 		}
 	}
 	// op=achieve is strong signal even without attestation field alone.
-	if op, ok := input["op"].(string); ok && strings.EqualFold(op, "achieve") {
+	if op, ok := input["op"].(string); ok && strings.ToLower(op) == "achieve" {
 		parts = append(parts, "op=achieve")
 		if id, ok := input["id"].(string); ok {
 			parts = append(parts, "id="+id)
@@ -1603,58 +1251,42 @@ func FormatOverseerOpenIntentResume(intent OpenOwnerIntent, parent string, worke
 	return b.String()
 }
 
-// isOpenIntentSendProbe reports marked send/delivery diagnostic lines that
-// must never become recoverable open owner work (🎯T551). Probes carry an
-// explicit label (do-not-treat-as-owner-intent) or a hyphenated slug token
-// (*-send-check, *-send-probe*) with no interior spaces — not owner prose
-// that merely mentions send-probe in a sentence.
+// isOpenIntentSendProbe reports a declared send-probe fact (🎯T551, 🎯T766.4).
+// The line is "open-intent send-probe" or that fact plus one token.
+// A slug or a sentence that mentions send-probe is owner text.
 func isOpenIntentSendProbe(text string) bool {
-	t := strings.TrimSpace(text)
-	if t == "" {
+	fields := strings.Fields(text)
+	switch len(fields) {
+	case 2, 3:
+	default:
 		return false
 	}
-	low := strings.ToLower(t)
-	if strings.Contains(low, "do-not-treat-as-owner-intent") {
-		return true
-	}
-	// Slug-shaped diagnostics: single token, no owner prose spaces.
-	if strings.ContainsAny(low, " \t\n") {
-		return false
-	}
-	if strings.HasSuffix(low, "-send-check") {
-		return true
-	}
-	if strings.Contains(low, "send-probe") {
-		return true
-	}
-	return false
+	return fields[0] == "open-intent" && fields[1] == "send-probe"
 }
 
-// isOpenIntentHarness matches harness/system injects that are not owner work.
+// isOpenIntentHarness reports machine turns that are not owner work.
+// Empty text is not an instruction. A protocol frame is a JSON object
+// with a type field (🎯T362). A declared fact is "open-intent harness"
+// plus one kind: daemon-restart, standing-brief, event, system-reminder,
+// or agent-responded. A rendered banner is owner text (🎯T766.4).
 func isOpenIntentHarness(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return true
 	}
-	// 🎯T362: client protocol control frames ({"type":"ux_state",…}) that
-	// leaked into the owner chatlog are machine wire, never an instruction.
-	// Resuming one re-fires composer telemetry as the open mission after
-	// every restart — the exact spam this filter stops.
 	if isOpenIntentProtocolJSON(t) {
 		return true
 	}
-	if strings.HasPrefix(t, "[Daemon restart") ||
-		strings.HasPrefix(t, "[Jevons fleet standing brief") ||
-		strings.HasPrefix(t, "[event:") {
-		return true
+	fields := strings.Fields(t)
+	if len(fields) != 3 || fields[0] != "open-intent" || fields[1] != "harness" {
+		return false
 	}
-	if strings.Contains(t, "<system-reminder>") || strings.Contains(t, "system-reminder") {
+	switch fields[2] {
+	case "daemon-restart", "standing-brief", "event", "system-reminder", "agent-responded":
 		return true
+	default:
+		return false
 	}
-	if strings.HasPrefix(t, "[Agent ") && strings.Contains(t, "responded]") {
-		return true
-	}
-	return false
 }
 
 // isOpenIntentProtocolJSON reports whether a chatlog user turn is really a
@@ -1682,76 +1314,36 @@ func isOpenIntentProtocolJSON(text string) bool {
 	return strings.TrimSpace(typ) != ""
 }
 
-// isOpenIntentRestartNudge skips owner messages that are pure bounce re-prompts
-// or meta-complaints about agents sitting idle after restart — not the work itself.
+// isOpenIntentRestartNudge skips an exact bounce word. A sentence about a
+// restart is the owner's text, not a nudge (🎯T766.4).
 func isOpenIntentRestartNudge(text string) bool {
-	low := strings.ToLower(strings.TrimSpace(text))
-	if low == "" {
-		return false
-	}
-	// Exact-ish re-nudges.
-	switch low {
+	switch strings.ToLower(strings.TrimSpace(text)) {
 	case "continue", "keep going", "resume", "go on", "carry on", "please continue":
 		return true
+	default:
+		return false
 	}
-	// "service restarted. Continue" and close cousins.
-	if strings.Contains(low, "service restarted") ||
-		strings.Contains(low, "daemon restarted") ||
-		strings.Contains(low, "after the restart") ||
-		strings.Contains(low, "after restart") {
-		return true
-	}
-	// Meta gap reports (the T328 incident itself).
-	if strings.Contains(low, "gap in the restart") ||
-		strings.Contains(low, "until being told to keep going") ||
-		strings.Contains(low, "sit there until") ||
-		(strings.Contains(low, "waited") && strings.Contains(low, "restart")) {
-		return true
-	}
-	return false
 }
 
-// isOpenIntentAckOnly filters short acks / pure praise without a work order.
+// isOpenIntentAckOnly is an exact ack word. A short sentence is not an ack,
+// and a prefix of an ack is not an ack (🎯T766.4). A fleet directive is a
+// work order.
 func isOpenIntentAckOnly(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return true
 	}
-	// Long enough to carry a real instruction — keep.
-	if utf8.RuneCountInString(t) >= 48 {
-		return false
-	}
-	// 🎯T512: short fleet directives ("Kill jevons-po") are work orders, not acks.
 	if len(ownerFleetDirectiveTargets(t)) > 0 {
 		return false
 	}
-	low := strings.ToLower(t)
-	// Imperative / work markers even in short messages.
-	workHints := []string{
-		"fix ", "file ", "spawn", "shove", "write ", "update ", "implement",
-		"document", "add ", "remove ", "delete ", "restart", "deploy", "merge ",
-		"commit", "test ", "please ", "need you", "do this", "make sure",
-		"kill ", "stop ", "park ", "reap ",
-		"🎯", "target:",
+	switch strings.ToLower(t) {
+	case "ok", "okay", "thanks", "thank you", "ty", "cool", "great", "nice",
+		"perfect", "good", "lgtm", "got it", "sounds good", "brilliant",
+		"yes", "yep", "nope", "no", "k", "👍":
+		return true
+	default:
+		return false
 	}
-	for _, h := range workHints {
-		if strings.Contains(low, h) {
-			return false
-		}
-	}
-	// Short praise / ack without work order.
-	acks := []string{
-		"ok", "okay", "thanks", "thank you", "ty", "cool", "great", "nice",
-		"perfect", "good", "lgtm", "👍", "got it", "sounds good", "brilliant",
-		"yes", "yep", "nope", "no", "k",
-	}
-	for _, a := range acks {
-		if low == a || strings.HasPrefix(low, a+" ") || strings.HasPrefix(low, a+"!") || strings.HasPrefix(low, a+".") {
-			return true
-		}
-	}
-	// Very short without work markers.
-	return utf8.RuneCountInString(t) < 20
 }
 
 func truncateRunes(s string, max int) string {

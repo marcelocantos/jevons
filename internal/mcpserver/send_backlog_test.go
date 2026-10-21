@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/claudia"
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T418 clause 7 — the oracle for the durability half, and it is RED against
@@ -32,6 +33,10 @@ func t418Daemon(t *testing.T, dir string) (*Server, *recordingSender, *upward) {
 	t.Helper()
 	s := &Server{}
 	s.SetSendQueueDir(dir)
+	// A reconcile or kill can kick a background drain that is still writing
+	// dir/sendq when the test returns. Cleanups run last-in first-out, so
+	// this wait runs before the caller's t.TempDir removal.
+	t.Cleanup(s.WaitBackgroundDrains)
 	sender := &recordingSender{}
 	setObservedSenderResolver(s, func(string) (agentSender, bool, error) { return sender, false, nil })
 	s.SetTurnWitness(func(_, _ string) turnWatch {
@@ -75,8 +80,15 @@ func TestQueuedMessageSurvivesTheDaemonThatAcceptedIt(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != payload {
 		t.Fatalf("delivered = %v; want the payload the previous daemon accepted", got)
 	}
-	if depth := observedPendingSends(recovering, name); depth != 0 {
-		t.Fatalf("depth after delivery = %d; want 0", depth)
+	// The incapable sender has no receipt. The payload was handed across the
+	// restart and stays held; a second drain must not send it again.
+	entries, err := recovering.sendQueue().Snapshot(name)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain || entries[0].Text != payload {
+		t.Fatalf("restarted unbound handoff was confirmed from the transcript: %+v %v", entries, err)
+	}
+	recovering.drainAgentSendQueue(name)
+	if got := sender.delivered(); len(got) != 1 {
+		t.Fatalf("uncertain handoff was sent again: %v", got)
 	}
 }
 
@@ -101,10 +113,9 @@ func TestSweepDeliversABacklogNoBoundaryWillEverDrain(t *testing.T) {
 	}
 }
 
-// Clause 5's sibling for the send queue: a backlog addressed to a seat that no
-// longer exists is reported and dropped. Kept forever, it is neither delivered
-// nor surfaced — the state clause 9 forbids.
-func TestBacklogForADepartedAgentIsSurfacedThenDropped(t *testing.T) {
+// A backlog addressed to a seat that is not in the registry is reported and
+// kept. The daemon does not discard it. A second sweep does not alarm again.
+func TestBacklogForADepartedAgentIsHeld(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
 	if err != nil {
@@ -117,12 +128,65 @@ func TestBacklogForADepartedAgentIsSurfacedThenDropped(t *testing.T) {
 		t.Fatalf("seed queue: %v", err)
 	}
 	s.SweepSendBacklogs()
+	s.SweepSendBacklogs()
 
-	if !containsLine(up.all(), "UNDELIVERED") {
-		t.Fatalf("a queue for a departed agent was dropped silently; overseer saw %q", up.all())
+	joined := strings.Join(up.all(), "\n")
+	if strings.Count(joined, "HELD:") != 1 {
+		t.Fatalf("held notices = %d, want 1; overseer saw %q", strings.Count(joined, "HELD:"), up.all())
 	}
-	if depth := observedPendingSends(s, "jv-departed"); depth != 0 {
-		t.Fatalf("depth = %d; want 0 — a queue against a seat nobody will fill is not pending", depth)
+	if strings.Contains(joined, "UNDELIVERED") {
+		t.Fatalf("departed sweep discarded a payload: %v", up.all())
+	}
+	if depth := observedPendingSends(s, "jv-departed"); depth != 1 {
+		t.Fatalf("depth = %d; want 1 — the payload stays until an owner records a drop", depth)
+	}
+	rows, err := s.sendQueue().Snapshot("jv-departed")
+	if err != nil || len(rows) != 1 || rows[0].Text != "reply to your question" {
+		t.Fatalf("queue = %+v %v", rows, err)
+	}
+}
+
+// The departed-agent sweep does not archive or remove. The health notice
+// names the entry id and the byte size, not the text.
+func TestT7665DepartedAgentHoldKeepsThePayload(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _, up := t418Daemon(t, dir)
+	s.registry = reg
+
+	const payload = "reply that must survive the departed-agent hold"
+	admitted, _, err := s.sendQueue().Append("jv-departed", payload, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SweepSendBacklogs()
+	s.SweepSendBacklogs()
+
+	joined := strings.Join(up.all(), "\n")
+	if strings.Count(joined, "HELD:") != 1 {
+		t.Fatalf("held notices:\n%s", joined)
+	}
+	if strings.Contains(joined, "UNDELIVERED") {
+		t.Fatalf("departed sweep discarded a payload:\n%s", joined)
+	}
+	if strings.Contains(joined, payload) {
+		t.Fatal("the health notice quoted the payload")
+	}
+	if !strings.Contains(joined, admitted.ID) || !strings.Contains(joined, fmt.Sprintf("%d bytes", len(payload))) {
+		t.Fatalf("notice did not name the entry and its size:\n%s", joined)
+	}
+	if depth := observedPendingSends(s, "jv-departed"); depth != 1 {
+		t.Fatalf("depth = %d; want 1", depth)
+	}
+	rows, err := s.sendQueue().Snapshot("jv-departed")
+	if err != nil || len(rows) != 1 || rows[0].ID != admitted.ID || rows[0].Text != payload {
+		t.Fatalf("queue = %+v %v", rows, err)
+	}
+	if _, err := s.sendQueue().ReadSupersession(admitted.ID); err == nil {
+		t.Fatal("departed sweep archived the payload")
 	}
 }
 
@@ -252,15 +316,8 @@ func TestT527ParkedStalledBacklogHasNoInterruptPrescription(t *testing.T) {
 
 	s.SweepSendBacklogs()
 
-	text := strings.Join(up.all(), "\n")
-	if !containsLine(up.all(), "Stalled backlog") {
-		t.Fatalf("parked stalled backlog raised no notice; overseer saw %q", text)
-	}
-	if strings.Contains(text, "interrupt=true") {
-		t.Fatalf("parked backlog prescribed interrupt=true — fights T414 park; overseer saw %q", text)
-	}
-	if !strings.Contains(text, "intentional stand-down") && !strings.Contains(text, "stood down") {
-		t.Fatalf("parked backlog did not name the park; overseer saw %q", text)
+	if got := up.all(); len(got) != 0 {
+		t.Fatalf("parked backlog prompted a model despite requiring no action: %v", got)
 	}
 	if depth := observedPendingSends(s, agent); depth != 3 {
 		t.Fatalf("depth = %d; want 3 — park holds the queue, never drops it", depth)

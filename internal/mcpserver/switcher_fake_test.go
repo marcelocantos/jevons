@@ -9,6 +9,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/thread"
 )
 
@@ -42,7 +43,7 @@ func (f *fakeSwitcher) SwitchModel(name string, to claudia.Provider, model strin
 			out.From, out.FromModel = def.Provider, def.Model
 			next := *def
 			if strings.TrimSpace(string(to)) != "" {
-				next.Provider = claudia.SubscriptionSeatProvider(to)
+				next.Provider = seatprovider.Resolve(to).Launch
 				out.To = next.Provider
 			}
 			next.Model = model

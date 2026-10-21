@@ -5,13 +5,11 @@ package planusage
 
 import (
 	"context"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/marcelocantos/claudia"
-
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // SeatAction is Claudia's placement verb for one seat.
@@ -26,7 +24,7 @@ const (
 
 // WeeklyBand is the daemon policy class for one provider's weekly window.
 // Names match the ticker's discrete labels so paint and policy cohere;
-// they are computed here, not read from CSS or classifyPace.
+// they are Claudia's verdict (🎯T1072), never re-derived in the cockpit.
 type WeeklyBand string
 
 const (
@@ -69,6 +67,9 @@ type PlanAction struct {
 	// placement choice is not proof that a migration finished.
 	Execution string
 	Failure   string
+	// FailureCause is the typed provider cause of this result. Empty means
+	// the failure arrived as a sentence. A sentence is not a cause.
+	FailureCause string `json:"FailureCause,omitempty"`
 	// ReauthAvailable is an owner action for a failed destination login.
 	// The server decorates the read-only decision; Claudia owns recovery.
 	ReauthAvailable bool
@@ -97,81 +98,21 @@ func WeeklyBandOf(be Backend, now time.Time, th Thresholds) WeeklyBand {
 
 // BandOfWindow classifies a single window at now for the served ticker band.
 //
-// Overspend (ahead/hot/exhausted) is claudia.ClassifyWindow (🎯T691 / T596).
-// Waste (under/locked) is T390.1.1 arithmetic so late-window leftover paints
-// as locked surplus, not continuation-blue, and session bars never paint
-// underutilization. Dest/mint still read WeeklyBandOf.
+// The verdict is claudia.ClassifyWindow: the owner-tuned Spend Pressure Map
+// (🎯T641), ln(current/required) against the amber/red and under/locked
+// vertices, for overspend and leftover alike (🎯T1072). The only thing this
+// adds is that a session bar never paints leftover. Dest/mint read
+// WeeklyBandOf.
+//
+// 🎯T1072: this used to recompute leftover with fixed-15% arithmetic
+// (🎯T390.1.1) and demote any under/locked that fell short of it to ok.
+// A fixed share of the whole window is the wrong yardstick at the end of a
+// window: on 2026-10-14 Cursor had 8.3% of the month left with 2.2% of it to
+// go — pressure −1.38, under — and painted green. The pressure model
+// already weighs leftover against the time left to burn it.
 func BandOfWindow(w Window, now time.Time, th Thresholds) WeeklyBand {
 	band := WeeklyBand(claudia.ClassifyWindow(windowToClaudia(w), now, thresholdsToClaudia(th)))
-	return applyWeeklyWaste(band, w, now, th)
-}
-
-func wasteWindow(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case WindowWeekly, WindowMonthly, WindowModelWeekly:
-		return true
-	default:
-		return false
-	}
-}
-
-// applyWeeklyWaste is 🎯T390.1.1: session bars never paint underutilization;
-// weekly/monthly continuation leftover is under (blue) past warmup; locked
-// surplus remaining−1.5×time_left is locked (purple) and outranks blue.
-// Overspend bands from the pressure model are left alone.
-func applyWeeklyWaste(band WeeklyBand, w Window, now time.Time, th Thresholds) WeeklyBand {
-	switch band {
-	case BandHot, BandAhead, BandExhausted, BandUnpublished:
-		return band
-	}
-	name := strings.ToLower(strings.TrimSpace(w.Name))
-	if name == WindowSession {
-		if band == BandUnder || band == BandLocked {
-			return BandOK
-		}
-		return band
-	}
-	if !wasteWindow(w.Name) {
-		return band
-	}
-	used := usedPercent(w)
-	rtp, hasTime := remainingTimePercent(w, now)
-	if used == nil || !hasTime {
-		return band
-	}
-	rem := 100 - *used
-	if w.RemainingPercent != nil {
-		rem = *w.RemainingPercent
-	}
-	elapsed := 100 - rtp
-	hot := th.HotRatio
-	if hot <= 0 {
-		hot = 1.5
-	}
-	lockedThresh := th.LockedWastePercent
-	if lockedThresh <= 0 {
-		lockedThresh = 15
-	}
-	underThresh := th.UnderWastePercent
-	if underThresh <= 0 {
-		underThresh = 15
-	}
-	warmup := th.WarmupElapsedPercent
-	if warmup <= 0 {
-		warmup = 5
-	}
-	locked := math.Max(0, rem-hot*rtp)
-	if locked >= lockedThresh {
-		return BandLocked
-	}
-	continuation := 0.0
-	if elapsed > 0 {
-		continuation = math.Max(0, 100-(*used/elapsed)*100)
-	}
-	if elapsed >= warmup && continuation >= underThresh {
-		return BandUnder
-	}
-	if band == BandUnder || band == BandLocked {
+	if strings.EqualFold(strings.TrimSpace(w.Name), WindowSession) && (band == BandUnder || band == BandLocked) {
 		return BandOK
 	}
 	return band
@@ -190,7 +131,7 @@ const (
 )
 
 // SessionStatusOf classifies one backend's session window for mint/migrate
-// eligibility. Same snapshot numbers the ticker paints; no JS classifyPace.
+// eligibility. Same snapshot numbers the ticker paints; the cockpit classifies nothing.
 func SessionStatusOf(be Backend, th Thresholds) SessionStatus {
 	return SessionStatus(classifyPlan(be, time.Time{}, th).Session)
 }
@@ -270,7 +211,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		if p == "" {
 			p = c.Backend.Provider
 		}
-		exclusions = append(exclusions, cli.PlanProvider(claudia.Provider(p)))
+		exclusions = append(exclusions, seatprovider.Resolve(claudia.Provider(p)).Plan.AsProvider())
 		capped = append(capped, p)
 	}
 	// 🎯T948: a seat on a plan the owner has put in a dest band stays,
@@ -286,7 +227,7 @@ func PlanDecisions(snap Snapshot, agents []AgentRef, now time.Time, th Threshold
 		if strings.EqualFold(strings.TrimSpace(a.Purpose), "aside") {
 			continue
 		}
-		plan := strings.ToLower(string(claudia.PlanProvider(claudia.Provider(a.Provider))))
+		plan := strings.ToLower(string(seatprovider.Resolve(claudia.Provider(a.Provider)).Plan.AsProvider()))
 		if ov := held[plan]; ov != nil && !a.RecoverPlanPark {
 			out = append(out, PlanAction{Name: a.Name, From: plan, Action: SeatStay,
 				Reason: "owner override (" + string(ov.Band) + "): " + ov.Reason, Author: "owner"})
@@ -334,11 +275,11 @@ type seatDecision struct {
 // claudia.Resolve with Background set, which is Claudia's own
 // ahead / hot / exhausted veto on destinations.
 func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, th Thresholds, extraExclude []claudia.Provider) seatDecision {
-	current := cli.PlanProvider(claudia.Provider(a.Provider))
+	current := seatprovider.Resolve(claudia.Provider(a.Provider)).Plan.AsProvider()
 	byProv := map[claudia.Provider]claudia.PlanUsage{}
 	normalized := make([]claudia.PlanUsage, 0, len(usage))
 	for _, u := range usage {
-		u.Provider = cli.PlanProvider(u.Provider)
+		u.Provider = seatprovider.Resolve(u.Provider).Plan.AsProvider()
 		if u.Provider == "" {
 			continue
 		}
@@ -352,7 +293,7 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 	}
 	others := 0
 	for p := range byProv {
-		if p != current {
+		if !seatprovider.Same(p, current) {
 			others++
 		}
 	}
@@ -364,19 +305,19 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 	}
 	excluded := map[claudia.Provider]bool{current: current != "" && !a.RecoverPlanPark}
 	for _, p := range extraExclude {
-		if id := cli.PlanProvider(p); id != "" {
+		if id := seatprovider.Resolve(p).Plan.AsProvider(); id != "" {
 			excluded[id] = true
 		}
 	}
 	for _, p := range a.ExcludeProviders {
-		if id := cli.PlanProvider(p); id != "" {
+		if id := seatprovider.Resolve(p).Plan.AsProvider(); id != "" {
 			excluded[id] = true
 		}
 	}
 	if len(a.AllowedProviders) > 0 {
 		allow := map[claudia.Provider]bool{}
 		for _, p := range a.AllowedProviders {
-			allow[cli.PlanProvider(p)] = true
+			allow[seatprovider.Resolve(p).Plan.AsProvider()] = true
 		}
 		for _, row := range claudia.ModelCatalog() {
 			if !allow[row.Provider] {
@@ -390,7 +331,7 @@ func resolveSeatPlacement(a AgentRef, usage []claudia.PlanUsage, now time.Time, 
 			exclusions = append(exclusions, row.Provider)
 		}
 	}
-	prefer := cli.PlanProvider(a.PreferProvider)
+	prefer := seatprovider.Resolve(a.PreferProvider).Plan.AsProvider()
 	pick, err := claudia.Resolve(context.Background(), claudia.ModelPredicates{
 		Mode: claudia.CapabilitySession, Quality: claudia.ModelQualityStandard,
 		PreferPlan: true, RequireUsage: true, Background: true,
@@ -462,16 +403,6 @@ func migrateOffReason(be Backend, now time.Time, th Thresholds) string {
 	}
 }
 
-// dampedBurn is used/elapsed with the additive damping λ on both terms
-// (🎯T390.1.6.1) — see Thresholds.DampLambdaPercent for why. The ticker's
-// classifyPace applies the same formula from the same served λ.
-func dampedBurn(used, elapsed, lambda float64) float64 {
-	if lambda < 0 {
-		lambda = 0
-	}
-	return (used + lambda) / (elapsed + lambda)
-}
-
 func usedPercent(w Window) *float64 {
 	if w.UsedPercent != nil {
 		return w.UsedPercent
@@ -508,22 +439,6 @@ func remainingTimePercent(w Window, now time.Time) (float64, bool) {
 		pct = 100
 	}
 	return pct, true
-}
-
-// burningFastReachable gates the ahead / hot verdicts (🎯T591, 🎯T595).
-//
-// Two independent ways to be over-confident about a window, so two guards:
-// the overspend must be real rather than a rounding step (T591), and
-// enough of the window must have passed for a rate to mean anything
-// (T595) — unless the absolute spend is already alarming on its own, which
-// keeps a genuine early blowout red.
-func burningFastReachable(used, elapsed float64, th Thresholds) bool {
-	if used-elapsed <= th.AheadMarginPercent {
-		return false
-	}
-	warmup := th.WarmupElapsedPercent
-	early := th.EarlyAlarmUsedPercent
-	return elapsed >= warmup || (early > 0 && used >= early)
 }
 
 // Pressure is the log of the correction this window demands: how far the

@@ -56,8 +56,11 @@ func TestT577IncidentReportIsTheIncidentShape(t *testing.T) {
 	if hasCompletionClaim(lower) {
 		t.Fatal("fixture's quoted completion word is being read as an asserted claim (🎯T750)")
 	}
-	if !hasOracleEvidence(lower) {
-		t.Fatal("fixture no longer carries oracle-shaped words — cannot reproduce the incident")
+	if !strings.Contains(lower, "make test-go") {
+		t.Fatal("fixture lost the oracle-shaped words — cannot reproduce the incident")
+	}
+	if hasOracleEvidence(lower) {
+		t.Fatal("an oracle sentence is oracle evidence")
 	}
 }
 
@@ -66,16 +69,16 @@ func TestT577IncidentReportIsNotTerminal(t *testing.T) {
 	if LooksLikeFinishedWorkReport(report) {
 		t.Fatal("jv-t568 checkpoint classified as finished_work")
 	}
-	if ask := ClassifyReportAsk(report); ask != AskCheckpoint {
-		t.Fatalf("ClassifyReportAsk = %s, want checkpoint", ask)
+	if ask := ClassifyReportAsk(report); ask != AskNone {
+		t.Fatalf("ClassifyReportAsk = %s, want none", ask)
 	}
 	reg := t395Registry(t, "jv-t568-intent-closed")
 	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t568-intent-closed", report, nil)
 	if ok {
 		t.Fatalf("incident report reaps (reason %s)", reason)
 	}
-	if !strings.Contains(reason, "checkpoint") && reason != "not_finished_work_report" {
-		t.Fatalf("reason = %q, want checkpoint keep", reason)
+	if reason != "unknown_report" {
+		t.Fatalf("reason = %q, want unknown_report", reason)
 	}
 }
 
@@ -121,22 +124,22 @@ func TestT577ForwardLookingPlanShapesDoNotReap(t *testing.T) {
 		{
 			name:   "jammed checkpoint after period",
 			report: "Surveyed the loader.Checkpoint (turn-depth ceiling). Next step: implement the close rule.",
-			want:   AskCheckpoint,
+			want:   AskNone,
 		},
 		{
 			name:   "next step remaining work",
 			report: "Mapped the resume path. TargetID that is achieved in the ledger is the close rule. Next step: implement both rules.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 		{
 			name:   "i'll resume",
 			report: "Diagnosis complete. I'll resume on the writer after this turn.",
-			want:   AskExplicitIncomplete,
+			want:   AskNone,
 		},
 		{
 			name:   "ending the turn here",
 			report: "Wired the decoder. Ending the turn here; encoder is next.",
-			want:   AskCheckpoint,
+			want:   AskNone,
 		},
 	}
 	for _, tc := range cases {
@@ -161,16 +164,24 @@ func TestT577MentionOfCheckpointStillFinishes(t *testing.T) {
 	if ClassifyReportAsk(report) != AskNone {
 		t.Fatalf("mention classified as ask: %s", ClassifyReportAsk(report))
 	}
-	if !LooksLikeFinishedWorkReport(report) {
-		t.Fatal("genuine finish about checkpoint handling must still reap")
+	if LooksLikeFinishedWorkReport(report) {
+		t.Fatal("unenveloped prose is not a finish")
+	}
+	if !LooksLikeFinishedWorkReport(declaredFinishReport("T577", report)) {
+		t.Fatal("declared finish about checkpoint handling must still be done")
 	}
 }
 
 func TestT577BareDoneStillReaps(t *testing.T) {
 	reg := t395Registry(t, "jv-t577-bare")
-	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t577-bare", "Done. Mission complete.", nil)
+	prose := "Done. Mission complete."
+	ok, reason := ShouldAutoReapDoneWorkAgent(reg, "jv-t577-bare", prose, nil)
+	if ok || reason != "unknown_report" {
+		t.Fatalf("unenveloped bare done = %v (%s), want unknown", ok, reason)
+	}
+	ok, reason = ShouldAutoReapDoneWorkAgent(reg, "jv-t577-bare", declaredFinishReport("T577", prose), nil)
 	if !ok {
-		t.Fatalf("T195 bare done must still reap; reason %s", reason)
+		t.Fatalf("declared finish must still reap; reason %s", reason)
 	}
 }
 
@@ -218,6 +229,7 @@ func TestT577MisEnvelopedCheckpointNotifiesPO(t *testing.T) {
 		Kind:         envelope.KindFinishReport,
 		Target:       "T577",
 		SHA:          "abcdef0123456",
+		Status:       envelope.ProgressInProgress,
 		SilentLedger: envelope.SilentLedgerEmpty,
 		Payload:      "Checkpoint (turn-depth ceiling). Next step: implement the close rule.",
 	})
@@ -229,7 +241,7 @@ func TestT577MisEnvelopedCheckpointNotifiesPO(t *testing.T) {
 		t.Fatalf("PO deliveries = %d, want 1: %v", len(po.sent), po.sent)
 	}
 	got := po.sent[0]
-	for _, want := range []string{"🎯T577", "jv-t577-envelope", "remaining work", "kept"} {
+	for _, want := range []string{"🎯T577", "jv-t577-envelope", "in-progress", "kept"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PO notice missing %q:\n%s", want, got)
 		}
@@ -257,7 +269,7 @@ func TestT577GenuineFinishDoesNotNotifyPO(t *testing.T) {
 		return po, false, nil
 	})
 	s.maybeReapDoneWorkAgent("jv-t577-done",
-		"Done. SHA abcdef0123456. go test ./internal/mcpserver -run T577 PASS")
+		declaredFinishReport("T577", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T577 PASS"))
 	if reg.Def("jv-t577-done") != nil {
 		t.Fatal("genuine finish must reap")
 	}

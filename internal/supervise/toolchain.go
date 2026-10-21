@@ -104,6 +104,9 @@ func AgentPATH(lookPath LookPath, tools []string) (path string, missing []string
 // buildident is deliberately NOT listed: the script's own fallback
 // (`|| return 0`) treats a failed build as silently skippable, so a
 // missing `go` degrades that one check rather than blocking the restart.
+// supervisorpolicy (🎯T1086) is not listed either: an unbuildable one
+// leaves the supervisord policy "unknown", and the script still starts a
+// program supervisord leaves EXITED after the upgrade exit.
 var RestartHelpers = []string{"detach", "runlock", "claudiapin"}
 
 // RestartBlocker names why an attempted restart cannot succeed, or returns

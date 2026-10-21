@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/internal/seatstate"
+	"github.com/marcelocantos/jevons/internal/sendq"
 
 	"github.com/marcelocantos/claudia"
 )
@@ -35,7 +37,7 @@ const defaultLaunchDeadline = 5 * time.Minute
 // deferStartPrompt reports whether this provider must use start-then-send
 // instead of waiting for turn confirmation on the start RPC.
 func deferStartPrompt(p claudia.Provider) bool {
-	return p == claudia.ProviderCursor
+	return seatprovider.Resolve(p).Plan == seatprovider.Cursor
 }
 
 func (s *Server) launchAgent(ctx context.Context, name string) (*claudia.Agent, error) {
@@ -133,13 +135,36 @@ func (s *Server) submitCursorStartBrief(name, prompt string) error {
 		// feed runs once a second, and read before it the new seat was
 		// unknown, so every Cursor start failed here (journey J34).
 		seatstate.ObserveRegistrySeat(s.registry, name)
-		proc := s.registry.Get(name)
-		if proc == nil || !(s.seatState(name).Alive == seatstate.Yes) {
+		proc, live := s.liveSender(name)
+		if !live {
 			return fmt.Errorf("no bound cursor-agent for %q", name)
 		}
 		// ACP session/prompt is fire-and-forget: do not wait for turn
-		// confirmation (that is what hung the start RPC).
-		sendErr = proc.Send(text)
+		// confirmation (that is what hung the start RPC). A process that
+		// can carry a host request id binds that id before the write.
+		sessionID, mission, doBind, bindErr := s.receiptBind(name, proc)
+		if bindErr != nil {
+			return bindErr
+		}
+		if doBind {
+			bound, berr := s.claimAndBindHandoff(name, text, "", false, sessionID, mission)
+			if berr != nil {
+				return berr
+			}
+			sendErr = readoptDeliver(name, proc, func(a agentSender) error {
+				return sendWithRequestID(a, bound.WirePayload(), bound.TransportRequestID)
+			})
+			if sendErr != nil {
+				s.settleHandoff(name, bound, sendq.TerminalUndelivered, sendErr.Error())
+			} else {
+				// The write returned. Transport acceptance is the receipt,
+				// not this nil error. This is not the turn watch that hung
+				// the start RPC.
+				s.settleBoundHandoffReceipt(name, bound)
+			}
+		} else {
+			sendErr = sendWithRequestID(proc, text, "")
+		}
 	}
 	if sendErr == nil {
 		s.observeBirthAcceptance(name, agentSendResult{Status: "sent"}, nil)

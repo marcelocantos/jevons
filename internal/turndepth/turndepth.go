@@ -10,8 +10,9 @@ import "github.com/marcelocantos/jevons/internal/spool"
 
 // Depth is the number of tool_call records for seat that have not been
 // closed by a later turn_end. Readers use this instead of a Claude hook.
+// It reads the seat's own lines, not the whole spool (🎯T1085).
 func Depth(dir, seat string) int {
-	recs, err := spool.ReadSeat(dir, seat)
+	recs, err := spool.SeatRecords(dir, seat)
 	if err != nil {
 		return 0
 	}

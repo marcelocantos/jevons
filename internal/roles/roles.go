@@ -73,20 +73,35 @@ func Normalize(name string) string {
 	return n
 }
 
-// DefaultForPurpose maps legacy purpose (🎯T114) onto a role when spawn
-// omits role=.
+// DefaultForPurpose maps a declared purpose onto a role when spawn omits
+// role=. The agent name does not decide.
 func DefaultForPurpose(purpose, agentName string) string {
-	switch strings.TrimSpace(strings.ToLower(purpose)) {
-	case "overseer":
+	_ = agentName
+	switch Normalize(purpose) {
+	case Overseer:
 		return Overseer
-	case "aside":
+	case Aside:
 		return Aside
-	}
-	n := strings.ToLower(strings.TrimSpace(agentName))
-	if strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") || n == "po" {
+	case ProductOwner:
 		return ProductOwner
+	case Boss:
+		return Boss
+	case Auditor:
+		return Auditor
+	default:
+		return Worker
 	}
-	return Worker
+}
+
+// OfSeat is a seat's declared role: the explicit role when one is recorded,
+// else the role its declared purpose implies (🎯T766.4). Claudia's purpose
+// is the work|aside|overseer enum, so a product owner or boss is only ever
+// named by its role. The seat name never decides.
+func OfSeat(role, purpose string) string {
+	if r := Normalize(role); r != "" {
+		return r
+	}
+	return DefaultForPurpose(purpose, "")
 }
 
 // DoctrineMarker opens the role-doctrine section Assemble injects between

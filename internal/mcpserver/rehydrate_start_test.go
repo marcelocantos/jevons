@@ -55,31 +55,29 @@ func TestAgentStartRehydratesLostSessionBeforeLaunch(t *testing.T) {
 	}
 	lostID := def.SessionID
 
-	// Today's behaviour, asserted so the regression is visible: Launch
-	// would demand a resume of a transcript that does not exist.
+	// Launch still demands a resume. A missing JSONL is not canonical
+	// generation loss, so the start seam must not rotate the row.
 	if _, _, requireResume := launchConfigFromDef(reg.Def(name)); !requireResume {
 		t.Fatal("fixture wrong: row does not demand a resume")
 	}
-	if !observedResumeLost(reg.Def(name)) {
-		t.Fatal("fixture wrong: session not judged lost")
+	if observedResumeLost(reg.Def(name)) {
+		t.Fatal("missing JSONL judged lost; vendor files are not canonical generation loss")
 	}
 
-	lost, ok, err := fleet.RehydrateLostSessionIn(reg, name)
-	if err != nil || !ok {
-		t.Fatalf("rehydrate: ok=%v err=%v", ok, err)
+	_, ok, err := fleet.RehydrateLostSessionIn(reg, name)
+	if err != nil || ok {
+		t.Fatalf("rehydrate: ok=%v err=%v; missing JSONL must not rotate", ok, err)
 	}
 
-	// The point of the wiring: the very next Launch mints instead of
-	// refusing, and it does so under the same identity.
 	provider, sessionID, requireResume := launchConfigFromDef(reg.Def(name))
-	if requireResume {
-		t.Fatal("still RequireResume after rehydrate — Launch would refuse again")
+	if !requireResume {
+		t.Fatal("RequireResume cleared without explicit loss")
 	}
-	if sessionID == lostID || sessionID != lost.NewSession {
-		t.Fatalf("session not rotated: %s (lost %s, reported %s)", sessionID, lostID, lost.NewSession)
+	if sessionID != lostID {
+		t.Fatalf("session rotated off %s to %s", lostID, sessionID)
 	}
 	if provider != claudia.ProviderClaude {
-		t.Fatalf("legacy CLI provider lost in rehydrate: %q", provider)
+		t.Fatalf("legacy CLI provider lost: %q", provider)
 	}
 	after := reg.Def(name)
 	if after.Parent != "jevons-po" || after.Purpose != claudia.PurposeWork ||

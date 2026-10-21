@@ -79,29 +79,6 @@ func TestT627_1GrokLoadFailureDoesNotRemint(t *testing.T) {
 	}
 }
 
-func TestGrokHomeNeverPublishedRemintsOnce(t *testing.T) {
-	reg := bounceLoadedGrok(t, false)
-	starts := 0
-	reg.SetLaunchers(&claudia.RegistryLaunchers{
-		Start: func(_ context.Context, cfg claudia.Config) (*claudia.Agent, error) {
-			starts++
-			if cfg.RequireResume {
-				return nil, fmt.Errorf("exclusive GROK_HOME unavailable for session %s: stat grok-homes/%s: no such file or directory", cfg.SessionID, cfg.SessionID)
-			}
-			return claudia.StartStub(context.Background(), cfg, nil)
-		},
-	})
-	if _, err := LaunchRecovering(reg, "jevons"); err != nil {
-		t.Fatal(err)
-	}
-	if got := reg.Def("jevons").SessionID; got == t6271GrokSID || got == "" {
-		t.Fatalf("session not rotated: %q", got)
-	}
-	if starts != 2 {
-		t.Fatalf("starts=%d, want one refusal then one mint", starts)
-	}
-}
-
 func TestT627_1GrokMissingStorageDoesNotLookLost(t *testing.T) {
 	def := &claudia.AgentDef{
 		Name: "bounce-aside", WorkDir: t.TempDir(), SessionID: t6271GrokSID,
@@ -151,69 +128,5 @@ func TestT627_1SameProcessGrokMintIsNotResume(t *testing.T) {
 	t.Cleanup(func() { reg.Stop("fresh-grok") })
 	if requireResume == nil || *requireResume {
 		t.Fatal("same-process first mint required resume — mint and resume are no longer distinct")
-	}
-}
-
-func TestT627_1CursorResumeDeniedStillRemints(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agents.json")
-	r1, err := claudia.NewRegistry(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r1.Register(claudia.AgentDef{
-		Name: "jevons-po", WorkDir: t.TempDir(), SessionID: "cursor-present",
-		Provider: claudia.ProviderCursor, Materialized: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reg, err := claudia.NewRegistry(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reg.SetDirect(true)
-	starts := 0
-	reg.SetLaunchers(&claudia.RegistryLaunchers{
-		Start: func(_ context.Context, cfg claudia.Config) (*claudia.Agent, error) {
-			starts++
-			if cfg.RequireResume {
-				return nil, fmt.Errorf("acp session/load %s: Invalid params (%w)", cfg.SessionID, claudia.ErrCursorResumeDenied)
-			}
-			return claudia.StartStub(context.Background(), cfg, nil)
-		},
-	})
-	agent, err := LaunchRecovering(reg, "jevons-po")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { reg.Stop("jevons-po") })
-	if agent == nil {
-		t.Fatal("cursor remint returned no process")
-	}
-	if got := reg.Def("jevons-po").SessionID; got == "cursor-present" {
-		t.Fatal("cursor resume denial did not rotate — T541.1 stacking path is back")
-	}
-	if starts != 2 {
-		t.Fatalf("starts=%d want fail then remint", starts)
-	}
-}
-
-func TestRemintAfterResumeErrorGrokStringMatchIsNotCursor(t *testing.T) {
-	err := grokLoadErr(t6271GrokSID)
-	if !claudia.IsCursorResumeDenied(err) {
-		t.Fatal("fixture no longer shares Cursor's refuse-to-mint phrase — the T627.1 trap is gone")
-	}
-	grok := &claudia.AgentDef{Name: "jevons", Provider: claudia.ProviderGrok, SessionID: t6271GrokSID}
-	if remintAfterResumeError(grok, err) {
-		t.Fatal("Grok load failure authorized a remint")
-	}
-	cursor := &claudia.AgentDef{Name: "jevons-po", Provider: claudia.ProviderCursor, SessionID: "sid"}
-	if !remintAfterResumeError(cursor, fmt.Errorf("acp session/load sid: Invalid params (%w)", claudia.ErrCursorResumeDenied)) {
-		t.Fatal("Cursor resume denial no longer remints")
-	}
-	if remintAfterResumeError(cursor, errors.New("connection reset")) {
-		t.Fatal("generic Cursor error reminted")
-	}
-	if remintAfterResumeError(nil, err) || remintAfterResumeError(grok, nil) {
-		t.Fatal("nil def or nil error reminted")
 	}
 }

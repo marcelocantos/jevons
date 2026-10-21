@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/marcelocantos/claudia"
 
-	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"github.com/marcelocantos/jevons/scripts/journey-suite/portguard"
 )
 
@@ -34,7 +34,9 @@ func (s *suite) isolateDaemonEnv() []string {
 			strings.HasPrefix(entry, "CLAUDIA_BROKER_SOCKET=") ||
 			strings.HasPrefix(entry, "CLAUDIA_OMP_SOCKET=") ||
 			strings.HasPrefix(entry, "JEVONS_SPOOL_DIR=") ||
-			strings.HasPrefix(entry, "XDG_STATE_HOME=") {
+			strings.HasPrefix(entry, "CLAUDIA_OMP_SPOOL_DIR=") ||
+			strings.HasPrefix(entry, "XDG_STATE_HOME=") ||
+			strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") {
 			continue
 		}
 		env = append(env, entry)
@@ -48,18 +50,29 @@ func (s *suite) isolateDaemonEnv() []string {
 	env = append(env,
 		"XDG_STATE_HOME="+s.stateDir,
 		"JEVONS_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"),
+		"CLAUDIA_OMP_SPOOL_DIR="+filepath.Join(s.stateDir, "spool"),
 		// 🎯T811: arms the daemon's isolate-only broker fault seam; inert
 		// until a journey writes the fault file.
 		"JEVONS_TEST_FAULTS=1",
 	)
 	// 🎯T625.6: hermetic plan feed; the journey's own daemonEnv follows
-	// and, being later, overrides it.
+	// and, being later, overrides it. 🎯T940 forces NO_REFRESH after that
+	// so a journey cannot clear it.
 	planEnv, err := defaultPlanFixtureEnv(s.stateDir, string(s.provider))
 	if err != nil {
 		panic(fmt.Sprintf("isolate plan fixture: %v", err))
 	}
 	env = append(env, planEnv)
-	return append(env, s.daemonEnv...)
+	for _, entry := range s.daemonEnv {
+		// 🎯T940: the isolate daemon links Claudia and calls plan login
+		// in-process. An inherited or per-journey empty value must not
+		// win, or an expired seat rotates the shared Keychain item.
+		if strings.HasPrefix(entry, "CLAUDIA_OMP_NO_REFRESH=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "CLAUDIA_OMP_NO_REFRESH=1")
 }
 
 func (s *suite) startDaemon() error {
@@ -287,9 +300,13 @@ func (s *suite) jBounceResume() error {
 	if err != nil {
 		return fmt.Errorf("snapshot before bounce: %w", err)
 	}
-	if before[id].SessionID == "" || before[id].Provider != s.provider {
+	if before[id].SessionID == "" {
 		return fmt.Errorf("bounce fixture lacks its selected provider/session identity")
 	}
+	if err := expectLandedProvider(s.provider, before[id].Provider); err != nil {
+		return fmt.Errorf("bounce fixture: %w", err)
+	}
+	landed := string(seatprovider.Resolve(before[id].Provider).Plan.AsProvider())
 	if before[overseerName].SessionID == "" {
 		return fmt.Errorf("bounce owner conversation lacks a provider session identity")
 	}
@@ -297,7 +314,7 @@ func (s *suite) jBounceResume() error {
 	if err != nil {
 		return err
 	}
-	if err := queueJourneyProvider(preLogs, id, string(s.provider)); err != nil {
+	if err := queueJourneyProvider(preLogs, id, landed); err != nil {
 		return fmt.Errorf("original aside: %w", err)
 	}
 	if err := s.signalStop(8 * time.Second); err != nil {
@@ -344,7 +361,7 @@ func (s *suite) jBounceResume() error {
 		// The broker reclaims a seat under its plan's seat id (grok →
 		// xai-oauth), so the identity is the session and the plan.
 		if next, ok := after[name]; !ok || next.SessionID != agent.SessionID ||
-			cli.PlanProvider(next.Provider) != cli.PlanProvider(agent.Provider) {
+			seatprovider.Resolve(next.Provider).Plan != seatprovider.Resolve(agent.Provider).Plan {
 			return fmt.Errorf("bounce changed existing session/provider for %s: before %s/%s, after %s/%s (present=%v)",
 				name, agent.Provider, agent.SessionID, next.Provider, next.SessionID, ok)
 		}
@@ -359,7 +376,7 @@ func (s *suite) jBounceResume() error {
 	if !bytes.HasPrefix(logs, preLogs) {
 		return fmt.Errorf("daemon launch log was replaced during bounce")
 	}
-	if err := queueJourneyProvider(logs[len(preLogs):], id, string(s.provider)); err != nil {
+	if err := queueJourneyProvider(logs[len(preLogs):], id, landed); err != nil {
 		return fmt.Errorf("replacement aside: %w", err)
 	}
 

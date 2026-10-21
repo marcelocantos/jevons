@@ -28,6 +28,11 @@ func t998Server(t *testing.T) (*Server, string, *fakeSender) {
 	if e = reg.Register(claudia.AgentDef{Name: "jevons-po", Purpose: "work", WorkDir: dir, SessionID: "po", Materialized: true, Provider: "grok", Parent: "jevons"}); e != nil {
 		t.Fatal(e)
 	}
+	// jevons-po was spawned as a product owner: the recorded role, not the
+	// -po name, makes it a durable seat outside the mission bound (🎯T766.4).
+	if e = s.recordAgentRole("jevons-po", purposeProductOwner); e != nil {
+		t.Fatal(e)
+	}
 	st, e := missionbound.Open(filepath.Join(dir, "mission-starts.json"), missionbound.Policy{MaxStarts: 1, WindowHours: 24}, nil, nil, time.Now())
 	if e != nil {
 		t.Fatal(e)

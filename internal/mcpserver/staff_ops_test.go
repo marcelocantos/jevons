@@ -124,18 +124,19 @@ func TestStaffOpsCycleCooldownDryRunNoDeliver(t *testing.T) {
 	}
 }
 
-func TestIsPOName(t *testing.T) {
+func TestPurposeIsProductOwner(t *testing.T) {
 	cases := map[string]bool{
-		"jevons-po":    true,
-		"tern-po":      true,
-		"worker-a":     false,
-		"jv-t99-impl":  false,
-		"minicades_po": true,
-		"":             false,
+		"product-owner":  true,
+		"Product-Owner":  true,
+		" product-owner": true,
+		"work":           false,
+		"":               false,
+		"boss":           false,
+		"po":             false,
 	}
-	for name, want := range cases {
-		if got := isPOName(name); got != want {
-			t.Errorf("isPOName(%q)=%v want %v", name, got, want)
+	for purpose, want := range cases {
+		if got := purposeIsProductOwner(purpose); got != want {
+			t.Errorf("purposeIsProductOwner(%q)=%v want %v", purpose, got, want)
 		}
 	}
 }
@@ -148,7 +149,8 @@ func TestSampleStaffOpsCountsAgents(t *testing.T) {
 	}
 	for _, d := range []claudia.AgentDef{
 		{Name: "jevons", SessionID: "sess-overseer", Purpose: claudia.PurposeOverseer},
-		{Name: "jevons-po", SessionID: "sess-po", Purpose: claudia.PurposeWork},
+		{Name: "jevons-po", SessionID: "sess-po", Purpose: purposeProductOwner},
+		{Name: "tern-po", SessionID: "sess-tern", Purpose: claudia.PurposeWork},
 		{Name: "worker-1", SessionID: "sess-w1", Purpose: claudia.PurposeWork},
 	} {
 		if err := reg.Register(d); err != nil {
@@ -162,11 +164,12 @@ func TestSampleStaffOpsCountsAgents(t *testing.T) {
 	if resources.FrontierDepth != 4 {
 		t.Fatalf("frontier=%d", resources.FrontierDepth)
 	}
-	// No live procs → all non-overseer count as stopped; idle PO includes jevons-po.
+	// No live procs → all non-overseer count as stopped. Only the declared
+	// product-owner purpose is an idle PO; a purpose-work seat named tern-po is not.
 	if resources.StoppedAgents < 2 {
 		t.Fatalf("stopped=%d", resources.StoppedAgents)
 	}
-	if resources.IdlePOCount < 1 {
+	if resources.IdlePOCount != 1 {
 		t.Fatalf("idlePO=%d", resources.IdlePOCount)
 	}
 }

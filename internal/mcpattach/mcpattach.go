@@ -2,12 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mcpattach is how jevonsd puts the MCP set on every Session:
-// LoadMCP (discovery) + append jevonsmcp for Claude/Codex/Cursor, then
-// AgentDef.MCPServers. Grok is different (🎯T525): ACP session/new gets
-// only this daemon's HTTP jevonsmcp — re-sending the full inventory in a
-// Claude-shaped ACP payload made session/new return Invalid params.
-// Codex exclusive Launch writes CODEX_HOME from MCPServers (app-server
-// thread/start has no MCP field). Claudia v0.27+ has no EnsureMCP.
+// LoadMCP (discovery) + this daemon's jevonsmcp, then AgentDef.MCPServers.
+// The set is the same for every seat, whichever provider it runs on
+// (🎯T1079). Grok used to differ (🎯T525): the Grok ACP CLI's session/new
+// returned Invalid params on a Claude-shaped inventory, so a grok seat got
+// jevonsmcp alone. Claudia v0.58 runs every subscription plan, grok
+// included, on the Oh My Pi sidecar and refuses the CLI transports, so that
+// payload no longer exists — and the exception had come to depend on
+// spelling: a row storing the plan name grok got one server, the same seat
+// storing xai-oauth got the full set. The sidecar offers a seat the tools
+// of the HTTP servers on the list; a server that does not answer within
+// claudia's host-tools budget is left out of that launch and named in
+// Agent.HostMCPUnavailable (🎯T934), never a launch failure.
+// Claudia v0.27+ has no EnsureMCP.
 package mcpattach
 
 import (
@@ -53,16 +60,12 @@ func HTTPURL(host string, port int) string {
 	return fmt.Sprintf("http://%s:%d/mcp", host, port)
 }
 
-// SessionServers is the list Jevons passes on AgentDef.MCPServers.
-// Every backend except Grok ACP uses Claude's LoadMCP inventory as the
-// standard set (🎯T871), plus this daemon's jevonsmcp, with T520/T1039
-// grants applied from Proxied. Grok ACP still gets only the live
-// HTTP jevonsmcp (🎯T525): a Claude-shaped full inventory made
-// session/new return Invalid params.
-func SessionServers(a Args, provider claudia.Provider, workDir string) []claudia.MCPServer {
-	if provider == claudia.ProviderGrok {
-		return grokSessionServers(a)
-	}
+// SessionServers is the list Jevons passes on AgentDef.MCPServers: Claude's
+// LoadMCP inventory as the standard set (🎯T871), plus this daemon's
+// jevonsmcp, with T520/T1039 grants applied from Proxied. Every seat gets
+// the same list, the overseer included (🎯T1079); it does not depend on the
+// provider, so it takes none.
+func SessionServers(a Args, workDir string) []claudia.MCPServer {
 	inv, err := claudia.LoadMCP(loadArgs(a, workDir))
 	if err != nil || inv == nil {
 		inv = &claudia.MCPInventory{}
@@ -96,17 +99,6 @@ func isComputerUseMCP(name string) bool {
 	default:
 		return false
 	}
-}
-
-func grokSessionServers(a Args) []claudia.MCPServer {
-	if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.URL) == "" {
-		return nil
-	}
-	return []claudia.MCPServer{{
-		Name: a.Name,
-		Type: "http",
-		URL:  a.URL,
-	}}
 }
 
 func loadArgs(a Args, workDir string) *claudia.LoadMCPArgs {

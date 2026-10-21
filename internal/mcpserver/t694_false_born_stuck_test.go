@@ -48,57 +48,21 @@ func t694Home(workDir string) string {
 	return filepath.Dir(workDir)
 }
 
-func TestT694GrokHomesUpdatesJSONLIsPresentWithoutClaudeJSONL(t *testing.T) {
+// 🎯T1079: the grok row the specimen names is the xai-oauth sidecar seat, so
+// its grok-homes updates.jsonl is no longer read as its transcript at all:
+// the seat reads unobservable, which can never accuse it of being born
+// stuck. The born-stuck half of this target is pinned below.
+func TestT694GrokHomesStoreIsNotTheSeatsTranscript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 	work := filepath.Join(home, "work")
 	homes := discovery.ClaudiaGrokHomesRoot()
-	want := plantT694GrokHomesUpdates(t, homes, work, t694SID, `{"method":"session/update"}`+"\n")
+	plantT694GrokHomesUpdates(t, homes, work, t694SID, `{"method":"session/update"}`+"\n")
 
 	got := LookupTranscriptExistence(t694Query(homes, work, t694SID))
-	if got.Verdict != ExistencePresent || got.Path != want {
-		t.Fatalf("grok-homes updates.jsonl: %+v want present %q", got, want)
-	}
-
-	claudePath := claudia.SessionJSONLPath(t694SID, work)
-	if _, err := os.Stat(claudePath); !os.IsNotExist(err) {
-		t.Fatalf("fixture must not plant Claude JSONL: path=%s err=%v", claudePath, err)
-	}
-
-	viaDefaults := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: "jevons-po", Provider: claudia.ProviderGrok,
-		SessionID: t694SID, WorkDir: work,
-		Roots: DefaultSessionRoots(),
-	})
-	if viaDefaults.Verdict != ExistencePresent || viaDefaults.Path != want {
-		t.Fatalf("DefaultSessionRoots grok-homes: %+v want present %q", viaDefaults, want)
-	}
-}
-
-func TestT694ClaudeJSONLOnlyMutationGoesRed(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	work := filepath.Join(home, "work")
-	homes := filepath.Join(home, ".local", "state", "claudia", "grok-homes")
-	plantT694GrokHomesUpdates(t, homes, work, t694SID, `{"method":"session/update"}`+"\n")
-	q := t694Query(homes, work, t694SID)
-
-	if got := LookupTranscriptExistence(q); got.Verdict != ExistencePresent {
-		t.Fatalf("control: real lookup must be present: %+v", got)
-	}
-
-	// Mutant: existence is only claudia.SessionExists / Claude JSONL. This
-	// is the live false-green — Grok updates.jsonl growing, no Claude file.
-	mutant := LookupTranscriptExistence(TranscriptExistenceQuery{
-		Name: q.Name, Provider: claudia.ProviderClaude,
-		SessionID: q.SessionID, WorkDir: q.WorkDir, Roots: q.Roots,
-	})
-	if mutant.Verdict == ExistencePresent {
-		t.Fatal("claude-JSONL-only mutant reported present; this oracle would not catch the live miss")
-	}
-	if mutant.Verdict != ExistenceAbsent {
-		t.Fatalf("claude-JSONL-only mutant: %+v want absent", mutant)
+	if got.Verdict != ExistenceUnobservable {
+		t.Fatalf("grok row over a grok-homes store: %+v want unobservable", got)
 	}
 }
 

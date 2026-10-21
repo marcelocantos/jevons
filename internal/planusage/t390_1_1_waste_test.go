@@ -45,8 +45,9 @@ func t39011sessionAt(now time.Time, rem, used, remTimePct float64) Window {
 	}
 }
 
-// 🎯T390.1.1: weekly continuation leftover is blue, locked surplus is purple,
-// session never paints underutilization, overspend stays orange/red.
+// 🎯T390.1.1 as amended by 🎯T1072: weekly/monthly leftover is blue (under)
+// or purple (locked) by the Spend Pressure Map, session never paints
+// underutilization, overspend stays orange/red.
 func TestT390_1_1WeeklyWasteBands(t *testing.T) {
 	th := DefaultThresholds()
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
@@ -55,27 +56,27 @@ func TestT390_1_1WeeklyWasteBands(t *testing.T) {
 		return BandOfWindow(be.Windows[0], now, th)
 	}
 
-	// Codex 0% used / 19% elapsed is continuation-blue (past 5% warmup).
-	if got := paint(t39011weeklyAt(now, 100, 0, 81)); got != BandUnder {
-		t.Fatalf("Codex 0%% used / 19%% elapsed → under, got %s", got)
+	// Codex idle at 19% elapsed: pressure ≈ −0.42, inside ok. The August
+	// fixed-15% rule called this blue; the pressure model does not (🎯T1072).
+	if got := paint(t39011weeklyAt(now, 100, 0, 81)); got != BandOK {
+		t.Fatalf("idle at 19%% elapsed → ok, got %s", got)
 	}
 
-	// First 5% of the window does not flash blue.
-	if got := paint(t39011weeklyAt(now, 100, 0, 97)); got != BandOK {
-		t.Fatalf("idle week-start inside warmup → ok, got %s", got)
-	}
-
-	// Idle Codex does not go purple until ~43% elapsed
-	// (locked = 100 − 1.5×time_left ≥ 15 ⇒ time_left ≤ 56.67).
+	// Idle at 40% elapsed: pressure ≈ −0.92, past the −0.60 under vertex.
 	if got := paint(t39011weeklyAt(now, 100, 0, 60)); got != BandUnder {
 		t.Fatalf("idle with 60%% of the week left → under, got %s", got)
 	}
-	if got := paint(t39011weeklyAt(now, 100, 0, 50)); got != BandLocked {
-		t.Fatalf("idle at 50%% elapsed → locked, got %s", got)
+	// Idle at 50% elapsed: pressure ≈ −1.39, still under (locked is −1.50).
+	if got := paint(t39011weeklyAt(now, 100, 0, 50)); got != BandUnder {
+		t.Fatalf("idle at 50%% elapsed → under, got %s", got)
+	}
+	// Idle at 60% elapsed: pressure ≈ −1.83, locked.
+	if got := paint(t39011weeklyAt(now, 100, 0, 40)); got != BandLocked {
+		t.Fatalf("idle at 60%% elapsed → locked, got %s", got)
 	}
 
 	// Owner 2026-09-12: Cursor monthly ~36% remaining / ~9.5% time left is
-	// locked surplus (remaining − 1.5×time_left ≈ 22% ≥ 15%), not continuation-blue.
+	// locked surplus, not continuation-blue: pressure ≈ −1.64, past −1.50.
 	if got := paint(t39011monthlyAt(now, 36, 64, 9.5)); got != BandLocked {
 		t.Fatalf("late-window leftover → locked, got %s", got)
 	}

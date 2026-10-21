@@ -94,6 +94,16 @@ func TestClassifyFixtures(t *testing.T) {
 		ev:   Evidence{Turns: []Turn{quiet(), quiet()}},
 		want: Unobserved,
 	}, {
+		// NOT FLAGGED: a rendered silent marker is display, not the silent-ack fact.
+		name: "rendered silent marker alone is a real turn",
+		ev:   Evidence{Turns: []Turn{ack("[silent]")}},
+		want: Working,
+	}, {
+		// FLAGGED: the declared fact is the empty silent acknowledgement.
+		name: "silent-ack fact alone is a no-op",
+		ev:   Evidence{Turns: []Turn{ack(SilentAckFact)}},
+		want: NoOpOnly,
+	}, {
 		// NOT FLAGGED: bare "ok" is the natural answer to a yes/no question,
 		// and this package cannot see the question. 241 corpus sessions
 		// consist of exactly this. Excluded from the vocabulary on purpose.
@@ -170,7 +180,8 @@ func TestIsBareAck(t *testing.T) {
 	acks := []string{
 		"No response requested.", "no response requested",
 		"Acknowledged.", "ACK", "Understood.", "Noted.", "Nothing to report.",
-		"Will do.", "[silent]", "  [silent]  ",
+		"Will do.", SilentAckFact, "  " + SilentAckFact + "  ",
+		"OPEN-INTENT SILENT-ACK",
 	}
 	for _, s := range acks {
 		if !IsBareAck(s) {
@@ -185,11 +196,29 @@ func TestIsBareAck(t *testing.T) {
 		strings.Repeat("ok ", 40),
 		// Excluded on corpus evidence — see the note on bareAcks.
 		"", "   \n ", "OK", "okay", "Ok.", "roger", "[silent] ok",
+		"[silent]", "  [silent]  ", "[silent] acknowledged",
+		SilentAckFact + " acknowledged",
+		SilentAckFact + "\nAcknowledged.",
 	}
 	for _, s := range notAcks {
 		if IsBareAck(s) {
 			t.Errorf("IsBareAck(%q) = true, want false", s)
 		}
+	}
+}
+
+func TestSilentAckFactIsNotTheVisibleMarker(t *testing.T) {
+	if IsBareAck("[silent]") {
+		t.Fatal("a rendered silent marker is not the silent-ack fact")
+	}
+	if IsBareAck("[silent] " + SilentAckFact) {
+		t.Fatal("a marker glued in front of the fact is not the whole fact")
+	}
+	if !IsBareAck("  " + SilentAckFact + "  ") {
+		t.Fatal("the fact with surrounding whitespace is the silent ack")
+	}
+	if IsBareAck("the fact is " + SilentAckFact + " today") {
+		t.Fatal("a sentence that quotes the fact is not an ack")
 	}
 }
 

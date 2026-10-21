@@ -5,7 +5,6 @@ package mcpserver
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
@@ -20,10 +19,16 @@ import (
 // banner. Two reports in one session nearly retired targets on such a green.
 //
 // Delivery is unchanged: the report still reaches the overseer whole, with
-// the flags in front of it. Auto-reap is not (🎯T470): a report carrying any
-// false-green flag is never read as finished_work in the same pass — the
-// daemon must not hold both "evidence does not support the claim" and "the
-// claim is true". Overseer judgment of the annotated report remains separate.
+// the flags in front of it. That banner is the only consumer of the prose
+// rules in gate.FlagFalseGreen (GATE lines, pipeline and shell-array
+// hazards, failure and removal framing): they are report-time advice to a
+// reader who will judge the report.
+//
+// Auto-reap is a control, and a control does not decide by English
+// (🎯T766.4.1). Its 🎯T470 veto is reapGateVeto (reap_gate_veto.go), which
+// reads typed facts only: the envelope's declared slots and the gate record
+// those slots name. A report whose evidence lives only in its prose is not
+// a declared finish in the first place, so it is not reaped either.
 
 // gateStore is opened once for the daemon's lifetime. A store that cannot be
 // opened degrades to textual checking, which needs no disk: the flags that
@@ -102,32 +107,6 @@ func envelopeGateFlags(id string, lookup func(string) (*gate.Record, bool)) []ga
 	return nil
 }
 
-// FalseGreenFlagsForWorker is FalseGreenFlags plus the one check only the
-// reap path can make: it alone knows which directory the worker occupies
-// (🎯T946). A report that reads as oracle evidence on marker words alone —
-// no cited SHA, no cited gate id — while that worktree carries uncommitted
-// tracked changes or new untracked source files is flagged the same way a
-// contradicted attestation is: nothing was landed for "pass"/"green" to
-// describe. workDir == "" (a def the fixture never gave one, or a probe that
-// found no git repo) skips the check and this degrades to FalseGreenFlags.
-func FalseGreenFlagsForWorker(report, workDir string) []gate.Flag {
-	flags := FalseGreenFlagsForReport(report, workDir)
-	if strings.TrimSpace(workDir) == "" {
-		return flags
-	}
-	tree := gate.ProbeTree(workDir)
-	if !UncitedClaimAgainstDirtyWorktree(report, tree) {
-		return flags
-	}
-	return append(flags, gate.Flag{
-		Kind: gate.FlagUncitedClaimDirtyWorktree,
-		Detail: fmt.Sprintf(
-			"the report reads as oracle evidence on marker words alone (no SHA, no gate id) while %s carries %d uncommitted change(s) — nothing was landed for the claim to describe",
-			workDir, tree.DirtyFiles),
-		Evidence: strings.Join(tree.DirtySample, ", "),
-	})
-}
-
 // FalseGreenFlagsForReport is FalseGreenFlags plus the one check that needs
 // to know whose report this is: every cited gate id is resolved and its
 // measured commit asked of the author's own repository (🎯T1027). A gate
@@ -158,6 +137,16 @@ func ForeignGateFlags(report, workDir string) []gate.Flag {
 // the overseer, or "" when the report does not contradict itself.
 func FalseGreenBanner(report string) string {
 	return gate.Banner(FalseGreenFlags(report))
+}
+
+// falseGreenLead is the notify-path prefix: a declared fact, then the
+// rendered banner, then the report. StripPrefixes peels the fact. The
+// rendered banner alone is not a prefix.
+func falseGreenLead(agent string, flags []gate.Flag, msg string) string {
+	if len(flags) == 0 {
+		return msg
+	}
+	return envelope.PrefixFalseGreen + "\n" + gate.BannerFor(agent, flags) + "\n\n" + msg
 }
 
 // falseGreenKinds names the flags for the lifecycle log, which is read as a

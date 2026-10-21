@@ -21,7 +21,7 @@ func TestScanProxyPopulationTargetsAndWindow(t *testing.T) {
 		`{"ts":"2026-10-03T01:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"jv-a","target_id":"T1"}}`,
 		`{"ts":"2026-10-03T01:01:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"jv-a","target_id":"T1"}}`,
 		`{"ts":"2026-10-03T01:01:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"error","name":"jv-a"}}`,
-		`{"ts":"2026-10-03T01:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"jevons-po","target_id":"T1"}}`,
+		`{"ts":"2026-10-03T01:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"jevons-po","target_id":"T1","purpose":"product-owner"}}`,
 		`{"ts":"2026-10-04T00:00:00Z","component":"agent_lifecycle","decision":"start","fields":{"outcome":"ok","name":"jv-a"}}`,
 	}, "\n")+"\n")
 	spool := fixture(t, "spool.log", strings.Join([]string{
@@ -29,7 +29,7 @@ func TestScanProxyPopulationTargetsAndWindow(t *testing.T) {
 		`{"ts":"2026-10-03T02:01:00Z","seat":"jv-a","type":"turn_end","snapshot":{"messages":[{"role":"user","content":"hello"}]}}`,
 		`{"ts":"2026-10-03T02:00:00Z","seat":"jv-b","type":"turn_end","snapshot":{"messages":[{"role":"user","content":"x"}]}}`,
 		`{"ts":"2026-10-03T02:00:00Z","seat":"jevons-po","type":"turn_end","snapshot":{"messages":[{"role":"user","content":"p"}]}}`,
-		`{"ts":"2026-10-03T02:00:00Z","seat":"jevons","type":"turn_end","snapshot":{"messages":[]}}`,
+		`{"ts":"2026-10-03T02:00:00Z","seat":"jevons","type":"turn_end","purpose":"overseer","snapshot":{"messages":[]}}`,
 	}, "\n")+"\n")
 	to, _ := time.Parse(time.RFC3339, "2026-10-04T00:00:00Z")
 	r, err := Scan([]string{spool}, []string{ev}, Window{To: to})
@@ -55,6 +55,32 @@ func TestScanProxyPopulationTargetsAndWindow(t *testing.T) {
 	}
 	if r.Targets[0].Starts != 3 || r.Targets[0].Seats != 2 || r.WorkerStarts.Ranking[0].Seat != "jv-a" || r.WorkerStarts.Ranking[0].Rank != 1 {
 		t.Fatalf("aggregation %+v", r)
+	}
+	tiers := map[string]string{}
+	for _, s := range r.Seats {
+		tiers[s.Name] = s.Tier
+	}
+	if tiers["jevons"] != "overseer" || tiers["jevons-po"] != "po" || tiers["jv-a"] != "worker" || tiers["jv-b"] != "worker" {
+		t.Fatalf("tiers %+v", tiers)
+	}
+}
+
+func TestTierFollowsPurposeNotName(t *testing.T) {
+	spool := fixture(t, "spool.log", strings.Join([]string{
+		`{"ts":"2026-10-03T02:00:00Z","seat":"jevons-po","type":"turn_end","purpose":"work","snapshot":{"messages":[]}}`,
+		`{"ts":"2026-10-03T02:00:00Z","seat":"plain","type":"turn_end","purpose":"product-owner","snapshot":{"messages":[]}}`,
+		`{"ts":"2026-10-03T02:00:00Z","seat":"mystery","type":"turn_end","snapshot":{"messages":[]}}`,
+	}, "\n")+"\n")
+	r, err := Scan([]string{spool}, nil, Window{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tiers := map[string]string{}
+	for _, s := range r.Seats {
+		tiers[s.Name] = s.Tier
+	}
+	if tiers["jevons-po"] != "worker" || tiers["plain"] != "po" || tiers["mystery"] != "worker" {
+		t.Fatalf("tiers %+v", tiers)
 	}
 }
 func TestMalformedVisible(t *testing.T) {

@@ -4,12 +4,80 @@
 package mcpserver
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
+
+func t7664AssistantLine(ts time.Time, content string) string {
+	type message struct {
+		Content string `json:"content"`
+	}
+	type row struct {
+		Type      string  `json:"type"`
+		Timestamp string  `json:"timestamp"`
+		Message   message `json:"message"`
+	}
+	b, err := json.Marshal(row{
+		Type:      "assistant",
+		Timestamp: ts.Format(time.RFC3339),
+		Message:   message{Content: content},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func t7664AchieveToolLine(ts time.Time, id, attestation string) string {
+	type toolInput struct {
+		Op          string `json:"op"`
+		ID          string `json:"id"`
+		Attestation string `json:"attestation"`
+	}
+	type input struct {
+		ToolName  string    `json:"tool_name"`
+		ToolInput toolInput `json:"tool_input"`
+	}
+	type block struct {
+		Type  string `json:"type"`
+		Name  string `json:"name"`
+		Input input  `json:"input"`
+	}
+	type message struct {
+		Role    string  `json:"role"`
+		Content []block `json:"content"`
+	}
+	type row struct {
+		Type      string  `json:"type"`
+		Timestamp string  `json:"timestamp"`
+		Message   message `json:"message"`
+	}
+	b, err := json.Marshal(row{
+		Type:      "assistant",
+		Timestamp: ts.Format(time.RFC3339),
+		Message: message{
+			Role: "assistant",
+			Content: []block{{
+				Type: "tool_use",
+				Name: "use_tool",
+				Input: input{
+					ToolName:  "bullseye__bullseye_commit",
+					ToolInput: toolInput{Op: "achieve", ID: id, Attestation: attestation},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
 
 // 🎯T328: open owner intent recovery after control-plane bounce.
 
@@ -20,8 +88,7 @@ func TestExtractOpenOwnerIntentRecoversInstructionAfterRestartNudges(t *testing.
 		{Text: "Let's explore leaders and visionaries.", Source: "owner_chat"},
 		{Text: "I'm especially interested in Elon Musk and his documented approaches.", Source: "owner_chat"},
 		{Text: "Both of your last two responses were brilliant. Let's grab whatever you think makes sense and shove it into the document.", Source: "owner_chat", TS: time.Date(2026, 8, 8, 10, 0, 33, 0, time.UTC)},
-		{Text: "service restarted. Continue", Source: "owner_chat"},
-		{Text: "I waited a while for you to keep going after the service restarted, but it doesn't seem like that happens", Source: "owner_chat"},
+		{Text: "continue", Source: "owner_chat"},
 	}
 	got := ExtractOpenOwnerIntent(turns)
 	if !got.Recoverable() {
@@ -30,8 +97,16 @@ func TestExtractOpenOwnerIntentRecoversInstructionAfterRestartNudges(t *testing.
 	if !strings.Contains(got.Text, "shove it into the document") {
 		t.Fatalf("want open work order, got %q", got.Text)
 	}
-	if strings.Contains(strings.ToLower(got.Text), "service restarted") {
-		t.Fatalf("must skip restart re-nudge, got %q", got.Text)
+	turns = append(turns, OwnerIntentTurn{
+		Text:   "service restarted. Continue",
+		Source: "owner_chat",
+	})
+	got = ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("a restart sentence is owner text, residual=%q", got.Residual)
+	}
+	if !strings.Contains(strings.ToLower(got.Text), "service restarted") {
+		t.Fatalf("restart sentence must stay the open text, got %q", got.Text)
 	}
 }
 
@@ -41,10 +116,20 @@ func TestExtractOpenOwnerIntentResiduals(t *testing.T) {
 		t.Fatalf("empty: residual=%q", r.Residual)
 	}
 	if r := ExtractOpenOwnerIntent([]OwnerIntentTurn{
-		{Text: "[Daemon restart 12:00] reattached"},
-		{Text: "[event: daemon-restarted] fleet status"},
+		{Text: "open-intent harness daemon-restart"},
+		{Text: "open-intent harness event"},
 	}); r.Residual != ResidualOnlyHarness {
 		t.Fatalf("harness: residual=%q", r.Residual)
+	}
+	banner := ExtractOpenOwnerIntent([]OwnerIntentTurn{
+		{Text: "[Daemon restart 12:00] reattached"},
+		{Text: "[event: daemon-restarted] fleet status"},
+	})
+	if !banner.Recoverable() {
+		t.Fatalf("a restart banner is owner text, residual=%q", banner.Residual)
+	}
+	if !strings.Contains(banner.Text, "daemon-restarted") {
+		t.Fatalf("banner must stay the open text, got %q", banner.Text)
 	}
 	if r := ExtractOpenOwnerIntent([]OwnerIntentTurn{
 		{Text: "ok"},
@@ -101,10 +186,18 @@ func TestFormatOverseerOpenIntentResumeNotSilentIdleOnly(t *testing.T) {
 	if !strings.Contains(text, "jv-t328") {
 		t.Fatal("fleet context should list workers:", text)
 	}
-	// Event wire shape for probes.
+	// Event wire shape for probes. The decision is the event fact. The
+	// rendered wrapper is display and is not an idle nudge.
 	wire := formatIdleNudgeWire(eventOwnerIntentResume, text)
-	if !strings.HasPrefix(wire, "[event: owner-intent-resume]") {
-		t.Fatalf("wire prefix: %q", wire)
+	first, _, _ := strings.Cut(wire, "\n")
+	if first != envelope.EventFact(eventOwnerIntentResume) {
+		t.Fatalf("wire decision line: %q", first)
+	}
+	if !strings.Contains(wire, "[event: owner-intent-resume]") {
+		t.Fatalf("wire display: %q", wire)
+	}
+	if IsIdleNudgeText(wire) {
+		t.Fatal("owner-intent resume is not an idle nudge")
 	}
 	if !strings.Contains(wire, "Shove the Musk") {
 		t.Fatal("wire must not strip instruction")
@@ -132,7 +225,7 @@ func TestLoadOpenOwnerIntentFromChatlog(t *testing.T) {
 	body := strings.Join([]string{
 		`{"type":"user","timestamp":"2026-08-08T10:00:00Z","message":{"role":"user","content":"Please shove the leader research into life-and-work-org-map.md now."}}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`,
-		`{"type":"user","timestamp":"2026-08-08T10:02:00Z","message":{"role":"user","content":"service restarted. Continue"}}`,
+		`{"type":"user","timestamp":"2026-08-08T10:02:00Z","message":{"role":"user","content":"continue"}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -185,17 +278,51 @@ func TestNotifyDaemonRestartedOverseerOpenIntentEvent(t *testing.T) {
 	}
 }
 
+func TestIsOpenIntentHarness(t *testing.T) {
+	t.Parallel()
+	harness := []string{
+		"",
+		`{"type":"ux_state","composer_blocked":false}`,
+		"open-intent harness daemon-restart",
+		"open-intent harness standing-brief",
+		"open-intent harness event",
+		"open-intent harness system-reminder",
+		"open-intent harness agent-responded",
+	}
+	for _, h := range harness {
+		if !isOpenIntentHarness(h) {
+			t.Errorf("want harness: %q", h)
+		}
+	}
+	owner := []string{
+		"[Daemon restart 12:00] reattached",
+		"[Jevons fleet standing brief] Execute T444.",
+		"[event: daemon-restarted] fleet status",
+		"<system-reminder> background task completed",
+		"a system-reminder leaked into the chat",
+		"[Agent jevons-po responded] report",
+		"open-intent harness",
+		"open-intent harness other",
+		"open-intent harness daemon-restart please",
+	}
+	for _, o := range owner {
+		if isOpenIntentHarness(o) {
+			t.Errorf("want owner text: %q", o)
+		}
+	}
+}
+
 func TestIsOpenIntentRestartNudge(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		in   string
 		want bool
 	}{
-		{"service restarted. Continue", true},
+		{"service restarted. Continue", false},
 		{"continue", true},
 		{"keep going", true},
-		{"I waited a while for you to keep going after the service restarted", true},
-		{"Is this a gap in the restart sequence?", true},
+		{"I waited a while for you to keep going after the service restarted", false},
+		{"Is this a gap in the restart sequence?", false},
 		{"Shove Musk Algorithm into the org map", false},
 		{"Please fix chat", false},
 	}
@@ -210,11 +337,12 @@ func TestIsOpenIntentRestartNudge(t *testing.T) {
 
 func TestExtractOpenOwnerIntentAnsweredOrClosedJiggleEvidence(t *testing.T) {
 	t.Parallel()
-	// Live incident shape: owner jiggle question, later overseer evidence for T341.
+	// A SHA sentence is not product evidence. A declared finish on the
+	// same jiggle complaint is (🎯T766.4).
 	turns := []OwnerIntentTurn{
 		{
 			Role: "user",
-			Text: "Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time? Why is it affecting the layout in such a subtle way?",
+			Text: "Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time? Why is it affecting the layout in such a subtle way? (T341)",
 			TS:   time.Date(2026, 8, 8, 15, 43, 49, 0, time.UTC),
 		},
 		{
@@ -224,8 +352,13 @@ func TestExtractOpenOwnerIntentAnsweredOrClosedJiggleEvidence(t *testing.T) {
 		},
 	}
 	got := ExtractOpenOwnerIntent(turns)
+	if !got.Recoverable() {
+		t.Fatalf("a SHA sentence must stay open, residual=%q", got.Residual)
+	}
+	turns[1].Text = declaredFinishReport("T341", "stop jiggle pin thrash")
+	got = ExtractOpenOwnerIntent(turns)
 	if got.Recoverable() {
-		t.Fatalf("answered jiggle must not recover open work, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("declared finish must not recover the jiggle, text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want residual %q, got %q", ResidualAnsweredOrClosed, got.Residual)
@@ -290,17 +423,25 @@ func TestLoadOpenOwnerIntentAnsweredFromChatlogToolUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(chatDir, "jevons.jsonl")
-	// User jiggle + assistant tool_use achieve attestation (live chatlog shape).
-	body := strings.Join([]string{
-		`{"type":"user","timestamp":"2026-08-08T15:43:49Z","message":{"role":"user","content":"Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time?"}}`,
-		`{"type":"assistant","timestamp":"2026-08-08T15:55:38Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"use_tool","input":{"tool_name":"bullseye__bullseye_commit","tool_input":{"op":"achieve","id":"T341","attestation":"Independent overseer gate: SHA cf4bdce fix(web): stop continuous ~1px main-chat jiggle from pin thrash (T341). Hermetic PASS."}}}]}}`,
-	}, "\n") + "\n"
+	user := `{"type":"user","timestamp":"2026-08-08T15:43:49Z","message":{"role":"user","content":"Why is all the text on the page jiggling up and down by a pixel or so? It's doing it constantly. What's re-rendering all the time? (T341)"}}`
+	ts := time.Date(2026, 8, 8, 15, 55, 38, 0, time.UTC)
+	prose := t7664AchieveToolLine(ts, "T341", "Independent overseer gate: SHA cf4bdce fix(web): stop continuous ~1px main-chat jiggle from pin thrash (T341). Hermetic PASS.")
+	body := strings.Join([]string{user, prose}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadOpenOwnerIntent(dir, "jevons")
+	if !got.Recoverable() {
+		t.Fatalf("a SHA attestation must stay open, residual=%q", got.Residual)
+	}
+	finish := t7664AchieveToolLine(ts, "T341", declaredFinishReport("T341", "stop jiggle pin thrash"))
+	body = strings.Join([]string{user, finish}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = LoadOpenOwnerIntent(dir, "jevons")
 	if got.Recoverable() {
-		t.Fatalf("tool_use achieve evidence must close jiggle, got text=%q residual=%q", got.Text, got.Residual)
+		t.Fatalf("tool_use declared finish must close jiggle, got text=%q residual=%q", got.Text, got.Residual)
 	}
 	if got.Residual != ResidualAnsweredOrClosed {
 		t.Fatalf("want %q, got %q", ResidualAnsweredOrClosed, got.Residual)
@@ -309,20 +450,23 @@ func TestLoadOpenOwnerIntentAnsweredFromChatlogToolUse(t *testing.T) {
 
 func TestOwnerIntentAnsweredWithProductEvidence(t *testing.T) {
 	t.Parallel()
-	owner := "Why is all the text jiggling by a pixel from layout thrash?"
-	if !OwnerIntentAnsweredWithProductEvidence(owner, []string{
-		"SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved.",
-	}) {
-		t.Fatal("expected answered with product evidence")
+	owner := "Why is all the text jiggling by a pixel from layout thrash? (T341)"
+	prose := "SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved."
+	if OwnerIntentAnsweredWithProductEvidence(owner, []string{prose}) {
+		t.Fatal("a SHA sentence is not product evidence")
 	}
 	if OwnerIntentAnsweredWithProductEvidence(owner, []string{"looking into it"}) {
 		t.Fatal("working chatter is not product evidence")
 	}
+	finish := declaredFinishReport("T341", "stop jiggle pin thrash")
+	if !OwnerIntentAnsweredWithProductEvidence(owner, []string{finish}) {
+		t.Fatal("declared oracle on the same complaint must close")
+	}
 	if OwnerIntentAnsweredWithProductEvidence(
 		"Please implement the billing export CSV",
-		[]string{"SHA cf4bdce fix(web): stop jiggle pin thrash (T341). Hermetic PASS. Achieved."},
+		[]string{finish},
 	) {
-		t.Fatal("unrelated evidence must not close a different complaint")
+		t.Fatal("unrelated declared evidence must not close a different complaint")
 	}
 }
 

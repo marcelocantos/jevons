@@ -138,7 +138,7 @@ describe('PlanUsageBar mux wiring', () => {
     }
   });
 
-  it('paints weekly continuation blue and locked surplus purple; session stays off waste (🎯T390.1.1)', async () => {
+  it('paints served leftover blue (under) and purple (locked); session stays off waste (🎯T390.1.1 / 🎯T1072)', async () => {
     const now = Date.parse('2026-09-12T12:00:00Z');
     setNow(now);
     const handlers = new Map<string, (env: { t: string; ch: string; body: unknown }) => void>();
@@ -168,6 +168,7 @@ describe('PlanUsageBar mux wiring', () => {
                 used_percent: 14,
                 resets_at: new Date(now + 97 * 60 * 1000).toISOString(),
                 limit_window_seconds: 5 * 3600,
+                band: 'ok', // the daemon never serves leftover on a session
               },
               {
                 name: 'weekly',
@@ -175,6 +176,7 @@ describe('PlanUsageBar mux wiring', () => {
                 used_percent: 42,
                 resets_at: new Date(now + 3 * 24 * 3600 * 1000).toISOString(),
                 limit_window_seconds: WEEKLY_LIMIT_SECONDS,
+                band: 'under',
               },
             ],
           },
@@ -188,6 +190,7 @@ describe('PlanUsageBar mux wiring', () => {
                 used_percent: 0,
                 resets_at: new Date(now + 3600 * 1000).toISOString(),
                 limit_window_seconds: WEEKLY_LIMIT_SECONDS,
+                band: 'locked',
               },
             ],
           },
@@ -201,6 +204,7 @@ describe('PlanUsageBar mux wiring', () => {
                 used_percent: 64,
                 resets_at: new Date(now + 0.095 * 30 * 24 * 3600 * 1000).toISOString(),
                 limit_window_seconds: 30 * 24 * 3600,
+                band: 'locked',
               },
             ],
           },
@@ -255,6 +259,7 @@ describe('PlanUsageBar mux wiring', () => {
                 used_percent: 70.625,
                 resets_at: new Date(now + 2.5 * 3600 * 1000).toISOString(),
                 limit_window_seconds: 5 * 3600,
+                band: 'ahead',
               },
               {
                 name: 'weekly',
@@ -262,6 +267,7 @@ describe('PlanUsageBar mux wiring', () => {
                 used_percent: 46.25,
                 resets_at: new Date(now + 0.5 * WEEKLY_LIMIT_SECONDS * 1000).toISOString(),
                 limit_window_seconds: WEEKLY_LIMIT_SECONDS,
+                band: 'ok',
               },
             ],
           },

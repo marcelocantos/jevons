@@ -92,9 +92,10 @@ func (s *Server) announceOwnerUndelivered(text string, err error) {
 		fmt.Sprintf("message not delivered — will retry: %s", reason), reason)
 }
 
-// announceOwnerDelivered flips a previously announced refusal to delivered,
-// exactly once, and retires the id.
-func (s *Server) announceOwnerDelivered(text string) {
+// announceOwnerDelivered retires the id of a handoff whose write returned,
+// so a restart does not send those bytes again. acked is the receipt:
+// only then does a previously announced refusal flip to delivered.
+func (s *Server) announceOwnerDelivered(text string, acked bool) {
 	id := s.peekOwnerMessageID(text)
 	s.mu.Lock()
 	if ids := s.notifyOwnerIDs[text]; len(ids) > 1 {
@@ -109,7 +110,10 @@ func (s *Server) announceOwnerDelivered(text string) {
 	s.mu.Unlock()
 	s.noteOwnerDeliveredID(id)
 	s.persistOwnerQueue()
-	if was {
+	// acked is a settling receipt. A configured query that does not settle
+	// stays silent. With no query at all, the successful write of a message
+	// already announced undelivered is the delivery the cockpit flips.
+	if was && (acked || !s.receiptQueryConfigured()) {
 		s.broadcastDeliveryFrame("delivered", id, "message delivered to the overseer after retry", "")
 	}
 }
@@ -139,7 +143,13 @@ func (s *Server) scheduleNotifyRetry() {
 var ownerMsgSeq atomic.Uint64
 
 func newOwnerMessageID() string {
-	return fmt.Sprintf("om-%d-%d", time.Now().UnixMilli(), ownerMsgSeq.Add(1))
+	return newTrackedRequestID("om")
+}
+
+// newTrackedRequestID mints a host request id at acceptance. kind is a
+// short path tag (om, rq, vc). Identical text is a new id.
+func newTrackedRequestID(kind string) string {
+	return fmt.Sprintf("%s-%d-%d", kind, time.Now().UnixMilli(), ownerMsgSeq.Add(1))
 }
 
 // SetOverseerReattachWait bounds how long an owner send waits for a
@@ -181,6 +191,11 @@ func (s *Server) ResendOwnerMessage(id string) error {
 	}
 	if !queued {
 		s.mu.Unlock()
+		// 🎯T1091: an owner turn its replaced seat never answered goes again
+		// on the owner's word, once, under its own id.
+		if text, ok := s.takeUnansweredOwnerTurn(id); ok {
+			return s.SendToOverseerAs(text, id)
+		}
 		return fmt.Errorf("message %s is not waiting for delivery", id)
 	}
 	if s.notifyRetryTimer != nil {

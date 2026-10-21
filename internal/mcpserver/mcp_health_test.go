@@ -77,7 +77,7 @@ func TestMCPHealthNoteReportsDeadUserScopeRegistration(t *testing.T) {
 		"sawmill":           map[string]any{"command": "/opt/homebrew/bin/mcpbridge"},
 	})
 
-	note := mcpHealthNote(claudia.ProviderClaude)
+	note := mcpHealthNote(claudeJSONLSeat)
 	if note == "" {
 		t.Fatal("a dead user-scope registration must produce a note, got silence")
 	}
@@ -99,7 +99,7 @@ func TestMCPHealthNoteSilentWhenAllRegistrationsResolve(t *testing.T) {
 		"sawmill":   map[string]any{"command": "/opt/homebrew/bin/mcpbridge"},
 	})
 
-	if note := mcpHealthNote(claudia.ProviderClaude); note != "" {
+	if note := mcpHealthNote(claudeJSONLSeat); note != "" {
 		t.Errorf("healthy config must produce no note, got %q", note)
 	}
 }

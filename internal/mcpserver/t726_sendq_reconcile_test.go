@@ -173,8 +173,12 @@ func TestT726SupersededMessagesReachTheReceiverAsOne(t *testing.T) {
 	if got := sender.delivered(); len(got) != 1 || got[0] != "authoritative: do B" {
 		t.Fatalf("receiver got %v; want exactly one authoritative message", got)
 	}
-	if depth := observedPendingSends(s, name); depth != 0 {
-		t.Fatalf("queue depth after delivery = %d", depth)
+	if pending, held := observedPendingSends(s, name), observedQueueDepth(s, name); pending != 0 || held != 1 {
+		t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
+	}
+	left, err := s.sendQueue().Snapshot(name)
+	if err != nil || len(left) != 1 || left[0].Text != "authoritative: do B" || left[0].State != sendq.Uncertain {
+		t.Fatalf("authoritative handoff = %+v %v", left, err)
 	}
 }
 
@@ -199,25 +203,31 @@ func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
 		if got := sender.delivered(); len(got) != 1 || got[0] != "PO: bounce and re-read HEAD" {
 			t.Fatalf("delivered = %v; want the head message only", got)
 		}
-		if text := resultText(t, res); !strings.Contains(text, "1 still queued") {
-			t.Fatalf("drain does not account for what is left:\n%s", text)
+		text := resultText(t, res)
+		for _, want := range []string{"2 still queued", "unbound send has no receipt"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("drain does not account for the unconfirmed head:\n%s", text)
+			}
 		}
-		if depth := observedPendingSends(s, name); depth != 1 {
-			t.Fatalf("depth after drain = %d; want the tail still held", depth)
+		entries, err := s.sendQueue().Snapshot(name)
+		if err != nil || len(entries) != 2 || entries[0].State != sendq.Uncertain || entries[1].State != sendq.Pending || entries[1].Text != "PO: and cite the gate id" {
+			t.Fatalf("head was confirmed or the tail moved: %+v %v", entries, err)
 		}
-		// And the seat keeps draining: the second call takes the tail.
+		// The uncertain head is not offered again. The tail still drains.
 		reconcile(t, s, map[string]any{"name": name, "action": "drain"})
-		if got := sender.delivered(); len(got) != 2 || got[1] != "PO: and cite the gate id" {
-			t.Fatalf("delivered = %v; want the tail next, in order", got)
+		if got := sender.delivered(); len(got) != 2 || got[0] != "PO: bounce and re-read HEAD" || got[1] != "PO: and cite the gate id" {
+			t.Fatalf("delivered = %v; want the tail next, without resending the head", got)
 		}
-		if depth := observedPendingSends(s, name); depth != 0 {
-			t.Fatalf("depth after second drain = %d", depth)
+		entries, err = s.sendQueue().Snapshot(name)
+		if err != nil || len(entries) != 2 || entries[0].Text != "PO: bounce and re-read HEAD" || entries[0].State != sendq.Uncertain || entries[1].State != sendq.Uncertain {
+			t.Fatalf("tail was confirmed from the transcript: %+v %v", entries, err)
 		}
 	})
 
 	// 🎯T766.5: the owner chose flow-past over the freeze this case used to
 	// pin. The held entry is never resent and is still named with its next
-	// move; the pending message behind it is delivered.
+	// move. The pending message behind it is handed to the sender and, with
+	// no receipt, stays held rather than being confirmed from the transcript.
 	t.Run("unresolved head: drain past it and still name reconcile", func(t *testing.T) {
 		const name, payload = "claudia-po", "the message whose fate is unknown"
 		s, sender, _, held := pinnedDaemon(t, name, payload)
@@ -240,8 +250,8 @@ func TestT726PendingBacklogDrainsOnRequestWithoutAStart(t *testing.T) {
 			}
 		}
 		entries, err := s.sendQueue().Snapshot(name)
-		if err != nil || len(entries) != 1 || entries[0].Text != payload || entries[0].State != sendq.Uncertain {
-			t.Fatalf("held entry not kept in place: %+v %v", entries, err)
+		if err != nil || len(entries) != 2 || entries[0].Text != payload || entries[0].State != sendq.Uncertain || entries[1].Text != "a later pending message" || entries[1].State != sendq.Uncertain {
+			t.Fatalf("held entry was not kept, or the later handoff was confirmed from the transcript: %+v %v", entries, err)
 		}
 	})
 

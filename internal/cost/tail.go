@@ -7,12 +7,14 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/marcelocantos/jevons/internal/claudiawire"
 	"github.com/marcelocantos/jevons/internal/spool"
 )
 
@@ -64,6 +66,9 @@ func tailFile(path string, offset int64, attribute func(sessionID string) string
 	for {
 		line, err := r.ReadBytes('\n')
 		if err != nil {
+			if err != io.EOF {
+				return nil, offset, err
+			}
 			// Partial trailing line (no newline yet): leave it for the
 			// next poll by not advancing pos past it.
 			break
@@ -71,18 +76,41 @@ func tailFile(path string, offset int64, attribute func(sessionID string) string
 		pos += int64(len(line))
 		if isBillableTranscript(path) && strings.HasSuffix(path, ".log") {
 			var rec spool.Record
-			if json.Unmarshal(line, &rec) == nil && rec.Seat != "" {
-				for _, cline := range bytes.Split(spool.AsJSONL([]spool.Record{rec}), []byte("\n")) {
-					if len(cline) == 0 {
-						continue
-					}
-					if e := ParseLine(cline, rec.Seat, now); e != nil {
-						e.Worker = attribute(e.SessionID)
-						events = append(events, e)
-					}
+			if err := json.Unmarshal(line, &rec); err != nil {
+				return nil, offset, fmt.Errorf("invalid spool record: %w", err)
+			}
+			if rec.Seat == "" {
+				return nil, offset, fmt.Errorf("spool record has no seat")
+			}
+			if rec.Type == "usage_error" {
+				stamp, err := time.Parse(time.RFC3339Nano, rec.RawTS)
+				if err != nil {
+					return nil, offset, fmt.Errorf("invalid usage failure timestamp: %w", err)
 				}
+				events = append(events, &Event{UsageFailure: &UsageFailure{Seat: rec.Seat, SessionID: rec.SessionID, Message: rec.Text, At: stamp}})
 				continue
 			}
+			if rec.Type == "usage" {
+				var fact claudiawire.UsageFact
+				if err := json.Unmarshal(rec.UsageFact, &fact); err != nil {
+					return nil, offset, fmt.Errorf("invalid spooled usage: %w", err)
+				}
+				if err := fact.ValidateIdentity(rec.Seat, fact.SessionID); err != nil {
+					return nil, offset, err
+				}
+				events = append(events, &Event{UsageFact: &fact})
+				continue
+			}
+			for _, cline := range bytes.Split(spool.AsJSONL([]spool.Record{rec}), []byte("\n")) {
+				if len(cline) == 0 {
+					continue
+				}
+				if e := ParseLine(cline, rec.Seat, now); e != nil {
+					e.Worker = attribute(e.SessionID)
+					events = append(events, e)
+				}
+			}
+			continue
 		}
 		if e := ParseLine(line, session, now); e != nil {
 			e.Worker = attribute(e.SessionID)

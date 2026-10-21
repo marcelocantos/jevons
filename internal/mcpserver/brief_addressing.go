@@ -40,7 +40,7 @@ type MisaddressedBriefError = briefaddr.MisaddressedBriefError
 func (s *Server) overseerSeatName() string {
 	if s != nil && s.registry != nil {
 		for _, d := range s.registry.List() {
-			if strings.EqualFold(strings.TrimSpace(d.Purpose), claudia.PurposeOverseer) {
+			if strings.ToLower(strings.TrimSpace(d.Purpose)) == strings.ToLower(claudia.PurposeOverseer) {
 				if n := strings.TrimSpace(d.Name); n != "" {
 					return n
 				}

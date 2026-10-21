@@ -166,6 +166,16 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 		if err != nil {
 			return AgentSendOutcome{}, err
 		}
+		// A hermetic notify seam's nil error is the acceptance that send
+		// models, so that path reports sent. A live process write does not
+		// read a receipt here, so it does not report sent. The drain
+		// settles the owner flag from the receipt on its own.
+		s.mu.RLock()
+		hermeticNotify := s.notifySender != nil
+		s.mu.RUnlock()
+		if !hermeticNotify {
+			bare.Status = "delivered_unconfirmed"
+		}
 		return bare, nil
 	}
 
@@ -204,11 +214,23 @@ func (s *Server) sendToNamedAgentMode(name, text, origin string, mode delivery.M
 		proc = launched
 		rehydrated = true
 	}
+	requestID := newTrackedRequestID("rq")
+	if err := s.freezeSeatMission(name, requestID); err != nil {
+		return AgentSendOutcome{}, err
+	}
 	if err := upgrade.WithReadopt(context.Background(), name, proc,
-		func(a *claudia.Agent) error { return a.Send(text) }); err != nil {
+		func(a *claudia.Agent) error { return a.SendWithRequestID(text, requestID) }); err != nil {
 		// No product hook: busy is a loud failure (not silent). Production
 		// always sets the MCP deliver hook so busy queues instead (🎯T275).
 		return AgentSendOutcome{}, err
+	}
+	// A nil write is not delivery. "sent" and "rehydrated_sent" require a
+	// settling receipt for this seat, its registry session, and requestID.
+	// A nil query does not dial. The overseer branch above does not call
+	// SendWithRequestID and is unchanged.
+	if !s.namedSendReceiptSettles(name, requestID) {
+		bare.Status = "delivered_unconfirmed"
+		return bare, nil
 	}
 	if rehydrated {
 		bare.Status = "rehydrated_sent"

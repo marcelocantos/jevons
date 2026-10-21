@@ -28,6 +28,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/agenterr"
 	"github.com/marcelocantos/jevons/internal/briefaddr"
 	"github.com/marcelocantos/jevons/internal/chatlog"
+	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/fleet"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
@@ -318,7 +319,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	// recovery while the overseer kept answering its POs (2026-09-28, 🎯T885).
 	if !s.overseerAdmissionEnabled() && ev.Type == "assistant" && ev.Text != "" {
 		source := assistantTextSource(ev)
-		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
+		if class := classifyAssistantEvent(ev); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
 		} else if source == agenterr.SourceAuthored {
 			s.observeProviderOK()
@@ -334,6 +335,12 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	// overseer's own prose, and IdentityHeaderName already reads the opening
 	// header block alone, so a report QUOTING a header still lands.
 	if ev.Type == "user" {
+		if text, prose := userTurnText(ev); prose && s.consumeJournaledFleetHealth(text) {
+			// Admission already wrote this fleet-health note. The provider
+			// echo is the same text, not a second episode.
+			s.handleAdmissionSafeAgentEvent(ev, currentDurable)
+			return currentDurable
+		}
 		if text, _ := userTurnText(ev); text != "" {
 			if err := briefaddr.Check(s.overseerAgentName(), text); err != nil {
 				slog.Warn("chat: dropping wrong-seat brief from overseer wire (🎯T513)", "err", err)
@@ -462,7 +469,7 @@ func (s *Server) deliverOverseerEventAdmitted(ev claudia.Event) (currentDurable 
 	}
 	if s.overseerAdmissionEnabled() && currentDurable && ev.Type == "assistant" && ev.Text != "" {
 		source := assistantTextSource(ev)
-		if class := agenterr.ClassifyFrom(source, ev.Text); class.IsFailure() {
+		if class := classifyAssistantEvent(ev); class.IsFailure() {
 			s.observeProviderFailure(class, ev.Text)
 		} else if source == agenterr.SourceAuthored {
 			s.observeProviderOK()
@@ -524,6 +531,13 @@ func (s *Server) SendToOverseer(text string) error {
 // SendToOverseerAs is SendToOverseer for an owner turn that has a message id
 // (🎯T806): the id is registered in the same lock hold that enqueues the text.
 func (s *Server) SendToOverseerAs(text, msgID string) error {
+	_, err := s.sendToOverseerAs(text, msgID)
+	return err
+}
+
+// sendToOverseerAs is SendToOverseerAs reporting the batch, if any, that this
+// call's own drain handed to the overseer.
+func (s *Server) sendToOverseerAs(text, msgID string) (*sentNotifyBatch, error) {
 	owner := isOwnerNotifyText(text)
 	// The owner talking to Jevons is the strongest owner-present signal —
 	// feed the budget dead-man's switch so it never stops a fleet the
@@ -583,8 +597,75 @@ func (s *Server) SendToOverseerAs(text, msgID string) error {
 		s.interruptOverseerForOwner()
 	}
 
-	s.drainOverseerNotes()
-	return nil
+	// Journal before the drain sends. The provider echo, if one arrives,
+	// has to find the latch already set or the transcript stores the note twice.
+	if !owner {
+		s.journalFleetHealthNote(text)
+	}
+
+	sent := s.drainOverseerNotesSent()
+	// A working fleet still returns nil when the seat is busy: the text is
+	// queued and the caller hears delivered_unconfirmed. A non-working fleet
+	// must not. The drain above leaves the text in the queue either way.
+	if !s.notifyDrainAllowed() {
+		return nil, delivery.ErrNotifyHeldByIntent
+	}
+	return sent, nil
+}
+
+// fleetHealthNotePrefix is the marker notifyFleetHealth puts on a notice.
+// A coalesced repeat never reaches SendToOverseer, so it is not journaled.
+const fleetHealthNotePrefix = "[Fleet health]"
+
+func isFleetHealthNote(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), fleetHealthNotePrefix)
+}
+
+// journalFleetHealthNote writes one admitted fleet-health episode into the
+// overseer transcript. Queue acceptance is the episode boundary: the sweep
+// coalesces later copies, and a busy overseer must not hide the alert until
+// its current turn ends.
+func (s *Server) journalFleetHealthNote(text string) {
+	if s == nil || !isFleetHealthNote(text) {
+		return
+	}
+	text = strings.TrimSpace(text)
+	s.mu.Lock()
+	if s.fleetHealthJournaled == nil {
+		s.fleetHealthJournaled = map[string]int{}
+	}
+	s.fleetHealthJournaled[text]++
+	s.mu.Unlock()
+	line, err := json.Marshal(map[string]any{
+		"type":      "agent_note",
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"text":      text,
+	})
+	if err != nil || !s.persistChatLine(string(line)) {
+		s.consumeJournaledFleetHealth(text)
+	}
+}
+
+// consumeJournaledFleetHealth reports whether text was journaled at
+// admission and not yet echoed. The caller skips the echo so the
+// transcript keeps one copy.
+func (s *Server) consumeJournaledFleetHealth(text string) bool {
+	if s == nil {
+		return false
+	}
+	text = strings.TrimSpace(text)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.fleetHealthJournaled[text]
+	if n == 0 {
+		return false
+	}
+	if n == 1 {
+		delete(s.fleetHealthJournaled, text)
+	} else {
+		s.fleetHealthJournaled[text] = n - 1
+	}
+	return true
 }
 
 // interruptOverseerForOwner cancels a fleet-note chew so an owner turn can
@@ -658,21 +739,160 @@ func (s *Server) settleFleetChew() bool {
 	return true
 }
 
+// SetRequestMissionRecorder installs the host write that freezes the
+// overseer's target onto a transport request before handoff.
+func (s *Server) SetRequestMissionRecorder(fn func(ctx context.Context, seat, requestID, mission string) error) {
+	s.mu.Lock()
+	s.recordRequestMission = fn
+	s.mu.Unlock()
+}
+
+// ownerHandoffRequestID is the host id minted when this owner turn was
+// accepted. A fleet batch has none here. The id is peeked, not popped:
+// a failed handoff must leave it for retry, and a later identical text
+// must not take an earlier pending id.
+func (s *Server) ownerHandoffRequestID(text string) string {
+	if !isOwnerNotifyText(text) {
+		return ""
+	}
+	return s.peekOwnerMessageID(text)
+}
+
+// fleetBatchRequestID is the host id for one composed fleet prompt.
+// The notes are not one request until drain joins them, so the id is
+// minted at that handoff. The same bytes keep the id when the handoff
+// fails. A different composition is a different request.
+func (s *Server) fleetBatchRequestID(text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if text != "" && s.notifyFleetBatchText == text && s.notifyFleetBatchID != "" {
+		return s.notifyFleetBatchID
+	}
+	id := newTrackedRequestID("fn")
+	s.notifyFleetBatchText = text
+	s.notifyFleetBatchID = id
+	return id
+}
+
+func (s *Server) forgetFleetBatchRequestID(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifyFleetBatchText == text {
+		s.notifyFleetBatchText = ""
+		s.notifyFleetBatchID = ""
+	}
+}
+
+// untrackedOwnerRequestID is the host id for an owner note that reached
+// the queue without one. The same wire keeps the id across a failed
+// handoff. A later admission after success is a new id.
+func (s *Server) untrackedOwnerRequestID(text string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifyUntrackedOwnerIDs == nil {
+		s.notifyUntrackedOwnerIDs = map[string]string{}
+	}
+	if id := s.notifyUntrackedOwnerIDs[text]; id != "" {
+		return id
+	}
+	id := newTrackedRequestID("om")
+	s.notifyUntrackedOwnerIDs[text] = id
+	return id
+}
+
+func (s *Server) forgetUntrackedOwnerRequestID(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.notifyUntrackedOwnerIDs, text)
+}
+
+// freezeOverseerMission writes the overseer's registry target against
+// requestID before any provider call. An empty target is not stored.
+// A nil recorder leaves the mission unknown. A write error must not send.
+func (s *Server) freezeOverseerMission(requestID string) error {
+	s.mu.RLock()
+	name := s.overseerName
+	s.mu.RUnlock()
+	return s.freezeSeatMission(name, requestID)
+}
+
+// freezeSeatMission writes one seat's registry target against requestID
+// before any provider call. An empty target is not stored. A nil recorder
+// leaves the mission unknown. A write error must not send.
+func (s *Server) freezeSeatMission(seat, requestID string) error {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil
+	}
+	s.mu.RLock()
+	record := s.recordRequestMission
+	reg := s.registry
+	s.mu.RUnlock()
+	if record == nil {
+		return nil
+	}
+	mission := ""
+	seat = strings.TrimSpace(seat)
+	if reg != nil {
+		if d := reg.Def(seat); d != nil {
+			mission = strings.TrimSpace(d.TargetID)
+		}
+	}
+	return record(context.Background(), seat, requestID, mission)
+}
+
 // sendNotes delivers one coalesced note batch to the overseer. The
 // notifySender seam lets tests stub delivery; nil uses the live process.
-func (s *Server) sendNotes(text string) error {
+// An owner batch carries the id registered at acceptance. A fleet batch
+// mints an fn- id for the composed prompt and reuses it when that same
+// text is retried. An owner note with no registered id, including an
+// owner-health re-injection, mints an om- id under the same retry rule.
+func (s *Server) sendNotes(text string) (string, error) {
 	if err := s.injectedBrokerFault(text); err != nil {
-		return err
+		return "", err
 	}
-	if s.notifySender != nil {
-		return s.notifySender(text)
+	requestID := s.ownerHandoffRequestID(text)
+	fleet := false
+	untrackedOwner := false
+	if requestID == "" && !isOwnerNotifyText(text) {
+		requestID = s.fleetBatchRequestID(text)
+		fleet = true
 	}
-	proc := s.CurrentProcess()
-	if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
-		return fmt.Errorf("overseer not running")
+	if requestID == "" && isOwnerNotifyText(text) {
+		requestID = s.untrackedOwnerRequestID(text)
+		untrackedOwner = true
 	}
-	return upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
-		func(a *claudia.Agent) error { return a.Send(text) })
+	if requestID != "" {
+		if err := s.freezeOverseerMission(requestID); err != nil {
+			return requestID, err
+		}
+	}
+	var err error
+	switch {
+	case s.overseerSendSeam != nil:
+		err = s.overseerSendSeam(text, requestID)
+	case s.notifySender != nil:
+		err = s.notifySender(text)
+	default:
+		proc := s.CurrentProcess()
+		if proc == nil || !(s.seatState(s.overseerSeatName()).Alive == seatstate.Yes) {
+			return requestID, agenterr.ErrOverseerNotRunning()
+		}
+		err = upgrade.WithReadopt(context.Background(), s.overseerAgentName(), proc,
+			func(a *claudia.Agent) error {
+				if requestID == "" {
+					return a.Send(text)
+				}
+				return a.SendWithRequestID(text, requestID)
+			})
+	}
+	if err == nil && fleet {
+		s.forgetFleetBatchRequestID(text)
+	}
+	if err == nil && untrackedOwner {
+		s.forgetUntrackedOwnerRequestID(text)
+	}
+	return requestID, err
 }
 
 // notifyErrClass classifies overseer-notify delivery failures for structured
@@ -685,15 +905,76 @@ func notifyErrClass(err error) string {
 	if agenterr.IsPromptBusy(err) {
 		return "busy"
 	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "overseer not running"):
-		return "not_running"
-	case strings.Contains(msg, "not_owner"):
-		return "not_owner"
-	default:
-		return "other"
+	if class := agenterr.NotifyClass(err); class != "" {
+		return class
 	}
+	return "other"
+}
+
+// SetAllowNotifyDrain installs the fleet-intent gate for the overseer notify
+// queue. A nil callback allows every drain.
+func (s *Server) SetAllowNotifyDrain(allow func() bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.allowNotifyDrain = allow
+	s.mu.Unlock()
+}
+
+// notifyDrainAllowed is true when no gate is installed or the gate allows
+// a turn. The callback runs without s.mu held.
+func (s *Server) notifyDrainAllowed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	allow := s.allowNotifyDrain
+	s.mu.Unlock()
+	if allow == nil {
+		return true
+	}
+	return allow()
+}
+
+// DrainOverseerNotes delivers any queued overseer note the fleet intent
+// currently allows. A blocked fleet leaves the queue untouched.
+func (s *Server) DrainOverseerNotes() {
+	if s == nil {
+		return
+	}
+	s.drainOverseerNotes()
+}
+
+// notifyDrainStopLocked reports whether this drain must leave the queue
+// alone. The caller holds s.mu. decision is set when the stop should be logged.
+func (s *Server) notifyDrainStopLocked() (stop bool, decision string) {
+	// A successful socket write does not mean the provider has accepted the
+	// prompt. OMP can reject a second prompt asynchronously, so do not offer
+	// another batch while the first turn is still open (🎯T623).
+	if s.notifyDraining || s.waiting || len(s.notifyQueue) == 0 {
+		return true, ""
+	}
+	// 🎯T915: after the owner's cancel, nothing queued runs until the
+	// owner's own next send (which releases the hold) or the window lapses.
+	if s.ownerCancelHold {
+		return true, "hold_after_owner_cancel"
+	}
+	return false, ""
+}
+
+func (s *Server) logNotifyDrainStop(decision string) {
+	if decision == "" {
+		return
+	}
+	s.mu.Lock()
+	depth := len(s.notifyQueue)
+	s.mu.Unlock()
+	slog.Info("notify_queue",
+		"component", "notify_queue",
+		"decision", decision,
+		"depth", depth,
+	)
 }
 
 // drainOverseerNotes attempts to deliver queued async notifications.
@@ -708,25 +989,42 @@ func notifyErrClass(err error) string {
 // Busy / unreachable: requeue at front (coalesced) for the next turn-complete
 // (🎯T62 — nothing dropped). Drain-in-progress serializes concurrent callers.
 func (s *Server) drainOverseerNotes() {
+	s.drainOverseerNotesSent()
+}
+
+// drainOverseerNotesSent is drainOverseerNotes reporting the fleet batch it
+// handed to the overseer, or nil when it handed none (stopped, refused, or an
+// owner batch, whose receipt is read below).
+func (s *Server) drainOverseerNotesSent() *sentNotifyBatch {
 	s.mu.Lock()
-	// A successful socket write does not mean the provider has accepted the
-	// prompt. OMP can reject a second prompt asynchronously, so do not offer
-	// another batch while the first turn is still open (🎯T623).
-	if s.notifyDraining || s.waiting || len(s.notifyQueue) == 0 {
+	if stop, decision := s.notifyDrainStopLocked(); stop {
 		s.mu.Unlock()
-		return
+		s.logNotifyDrainStop(decision)
+		return nil
 	}
-	// 🎯T915: after the owner's cancel, nothing queued runs until the
-	// owner's own next send (which releases the hold) or the window lapses.
-	if s.ownerCancelHold {
+	s.mu.Unlock()
+
+	// 🎯T1066: the worker drain's hand-off gate, applied to the overseer
+	// queue. Checked after the empty/busy/cancel stops, and before sendNotes,
+	// so a blocked fleet never mints a receipt. Re-check the stops after the
+	// callback: it runs without s.mu.
+	if !s.notifyDrainAllowed() {
+		s.mu.Lock()
 		depth := len(s.notifyQueue)
 		s.mu.Unlock()
 		slog.Info("notify_queue",
 			"component", "notify_queue",
-			"decision", "hold_after_owner_cancel",
+			"decision", "hold_fleet_intent",
 			"depth", depth,
 		)
-		return
+		return nil
+	}
+
+	s.mu.Lock()
+	if stop, decision := s.notifyDrainStopLocked(); stop {
+		s.mu.Unlock()
+		s.logNotifyDrainStop(decision)
+		return nil
 	}
 	batch, rest, ownerBatch := takeNotifyDrainBatch(s.notifyQueue)
 	s.notifyQueue = rest
@@ -739,10 +1037,16 @@ func (s *Server) drainOverseerNotes() {
 		s.mu.Lock()
 		s.notifyDraining = false
 		s.mu.Unlock()
-		return
+		return nil
 	}
 
-	err := s.sendNotes(strings.Join(batch, "\n\n"))
+	// 🎯T1091: the owner message id this batch's cockpit row carries; the
+	// delivered announcement below retires it from notifyOwnerIDs.
+	ownerMsgID := ""
+	if ownerBatch {
+		ownerMsgID = s.peekOwnerMessageID(batch[0])
+	}
+	requestID, err := s.sendNotes(strings.Join(batch, "\n\n"))
 
 	s.mu.Lock()
 	s.notifyDraining = false
@@ -770,25 +1074,37 @@ func (s *Server) drainOverseerNotes() {
 			s.announceOwnerUndelivered(batch[0], err)
 			s.scheduleNotifyRetry()
 		}
-		return
+		return nil
 	}
 	// Successful prompt delivery: mark waiting so stuck-busy can see an
 	// in-flight turn even when only notify/owner notes are on the wire.
 	s.waiting = true
 	s.overseerOwnerTurn = ownerBatch
 	s.overseerOwnerTurnText = ""
+	s.clearOwnerTurnPlacementLocked()
+	armPreempt := func() {}
 	if ownerBatch {
 		s.overseerOwnerTurnText = batch[0]
+		armPreempt = s.noteOwnerHandoffLocked(requestID, ownerMsgID) // 🎯T1091
 	}
 	s.noteOverseerProgressLocked()
 	depth := len(s.notifyQueue)
 	ownerPending := queueHasOwner(s.notifyQueue)
 	s.mu.Unlock()
+	armPreempt()
 	if ownerBatch {
-		s.announceOwnerDelivered(batch[0])
-		// 🎯T355: the prompt left the queue into the overseer's session —
-		// the server-ack half of send-landed.
-		s.NoteOwnerDelivered()
+		// The write returned. Send-landed and the owner-visible delivered
+		// frame are the receipt for this request. Retiring the id is
+		// separate: the bytes already left, so a restart must not send
+		// them again.
+		s.noteOwnerRequest(requestID)
+		acked := s.noteOwnerDeliveredFromReceipt(requestID)
+		s.announceOwnerDelivered(batch[0], acked)
+		logNotifyReceipt(requestID, true, len(batch), acked)
+	}
+	var sent *sentNotifyBatch
+	if !ownerBatch && requestID != "" && s.receiptQueryConfigured() {
+		sent = s.settleFleetBatchReceipt(requestID, batch)
 	}
 	// 🎯T555.1: the batch owns the session now — accepted + correspondent
 	// before the first ACP update, so the bar does not wait for it.
@@ -806,6 +1122,7 @@ func (s *Server) drainOverseerNotes() {
 	if !ownerBatch && ownerPending && s.interruptOverseerForOwner() {
 		s.drainOverseerNotes()
 	}
+	return sent
 }
 
 // handleCost serves the live cost snapshot: burn-rates, the "what is
@@ -830,133 +1147,14 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// rewindStrategy selects how product rewind rebinds the overseer session
-// after the durable chatlog is truncated (🎯T214 J5).
-//
-//   - rewindNativeJSONL: Claude Session — claudia.RewindSession truncates the
-//     provider JSONL; same SessionID is resumed (not a silent Grok-style rotate).
-//   - rewindRotateRecap: Grok ACP and other providers without in-place session
-//     truncate — journal-first rotate onto a fresh SessionID + chatlog recap.
-type rewindStrategy int
-
-const (
-	rewindRotateRecap rewindStrategy = iota
-	rewindNativeJSONL
-)
-
-// rewindStrategyForProvider is the hermetic policy oracle for 🎯T214 J5.
-// Only Claude Session (and empty, which claudia treats as Claude) uses
-// native JSONL rewind. Grok/Codex/Bedrock/unknown must not silently apply
-// Claude JSONL rules — rotate+recap is the honest product path.
-func rewindStrategyForProvider(p claudia.Provider) rewindStrategy {
-	switch p {
-	case claudia.ProviderClaude, "":
-		return rewindNativeJSONL
-	default:
-		return rewindRotateRecap
-	}
-}
-
-// RewindOverseer rolls the Jevons conversation back n user turns and
-// resumes the overseer. Always journal-first (🎯T52): truncate the durable
-// chatlog, stop the live process, then rebind the session:
-//
-//   - Claude (🎯T214): claudia.RewindSession on the same SessionID, then Launch
-//     with Materialized/RequireResume. No silent Grok rotate applied wrongly.
-//     Falls back to rotate+recap if native JSONL rewind fails (missing file,
-//     wrong turn count) — failure is logged, not mislabeled as Grok-only success.
-//   - Grok / others: rotate SessionID + seed recap (Grok ACP cannot truncate
-//     in place). Residual: chatlog turn count vs Claude JSONL turn boundaries
-//     may diverge when both are used; product n is chatlog turns.
+// RewindOverseer refuses the retired CLI rewind operation before any mutation.
+// Sidecar Stop detaches a connection; it does not unload or reset its session.
+// A rotate-and-recap replacement cannot safely reuse that still-loaded seat.
 func (s *Server) RewindOverseer(n int) error {
 	if n < 1 {
 		return fmt.Errorf("rewind: turns must be >= 1")
 	}
-	s.mu.RLock()
-	reg := s.registry
-	clog := s.chatLog
-	s.mu.RUnlock()
-	if reg == nil {
-		return fmt.Errorf("rewind: no registry")
-	}
-	if clog == nil {
-		return fmt.Errorf("rewind: no chat log")
-	}
-	def := reg.Def(s.overseerName)
-	if def == nil {
-		return fmt.Errorf("rewind: overseer not registered")
-	}
-
-	if err := clog.TruncateTurns(n); err != nil {
-		return fmt.Errorf("rewind: %w", err)
-	}
-
-	reg.Stop(s.overseerName)
-
-	seatstate.ObserveStopped(reg, s.overseerName)
-	// Stop clears ConnectURL/PID on the registry copy, but `def` was
-	// snapshotted before Stop. Re-registering that snapshot re-persisted
-	// the dead serve endpoint and forced Launch into reattach → connection
-	// reset (🎯T204). Always clear connect endpoint before re-register.
-	next := clearConnectEndpoint(*def)
-	strategy := rewindStrategyForProvider(def.Provider)
-	injectRecap := true
-
-	if strategy == rewindNativeJSONL {
-		if _, err := claudia.RewindSession(def.SessionID, def.WorkDir, n); err != nil {
-			slog.Warn("rewind: Claude native JSONL rewind failed; falling back to rotate+recap",
-				"provider", def.Provider, "session", def.SessionID, "err", err)
-			// Fall through to rotate path.
-			strategy = rewindRotateRecap
-		} else {
-			// Same session id, still materialized; resume the truncated JSONL.
-			next.Materialized = true
-			injectRecap = false
-			slog.Info("rewind: Claude native JSONL path",
-				"provider", def.Provider, "session", next.SessionID, "turns", n)
-		}
-	}
-
-	if strategy == rewindRotateRecap {
-		// Grok ACP (and fallback): cannot truncate the live session in place.
-		next.SessionID = uuid.NewString()
-		next.Materialized = false
-		slog.Info("rewind: rotate+recap path",
-			"provider", def.Provider, "new_session", next.SessionID, "turns", n)
-	}
-
-	if err := reg.Register(next); err != nil {
-		return fmt.Errorf("rewind: register session: %w", err)
-	}
-	agent, lerr := fleet.LaunchRecovering(reg, s.overseerName)
-	if lerr != nil {
-		// Leave stopped + clean def; cockpit converge (🎯T204) will retry.
-		s.SetOverseerDownReason("rewind relaunch failed: " + lerr.Error())
-		s.NotifyAgentsChanged()
-		return fmt.Errorf("rewind: relaunch failed: %w", lerr)
-	}
-	s.AttachOverseer(agent)
-	s.SetOverseerDownReason("")
-
-	if injectRecap {
-		if recap := clog.Recap(30, 6<<10); recap != "" {
-			go func() {
-				if err := s.SendToOverseer(
-					"[Conversation rewound by the owner. The record below is the surviving context — read it, then acknowledge in ONE short sentence.]\n\n" + recap); err != nil {
-					slog.Error("rewind recap send failed", "err", err)
-				}
-			}()
-		}
-	} else {
-		// Native path: model already has truncated transcript; short ack only.
-		go func() {
-			if err := s.SendToOverseer(
-				"[Conversation rewound by the owner — your session transcript was truncated in place. Acknowledge in ONE short sentence.]"); err != nil {
-				slog.Error("rewind ack send failed", "err", err)
-			}
-		}()
-	}
-	return nil
+	return fmt.Errorf("rewind is unavailable: legacy CLI rewind was removed; your conversation has not been changed")
 }
 
 // SetRegistry attaches the agent registry for the /api/agents endpoint.
@@ -1424,7 +1622,7 @@ func listFleetAgentsNoting(reg *claudia.Registry, account *fleetlog.Account, onR
 		}
 		if !running {
 			info.Rehydrate = fleet.RehydrateHealth(d)
-			info.ReauthAvailable = reauthablePlanFailure(d.Provider, info.Rehydrate)
+			info.ReauthAvailable = reauthablePlanFailure(d.Provider, d)
 		}
 		info.DroppedCaps = fleet.CapDrop(d.Name)
 		// 🎯T365: target filings and idea/capture asides share purpose=aside;
@@ -1585,13 +1783,16 @@ func (s *Server) handleChatControlFrame(ctx context.Context, conn *websocket.Con
 		s.NoteOwnerComposerBlocked(ctl.ComposerBlocked, ctl.Reason)
 		return true
 	case "rewind":
-		// Roll conversation back N user turns; tell clients to trim.
-		slog.Info("chat: rewind", "turns", ctl.Turns)
+		// Refuse the withdrawn operation visibly, without telling clients
+		// to trim history or treating the control frame as an owner turn.
 		if err := s.RewindOverseer(ctl.Turns); err != nil {
-			slog.Error("chat: rewind failed", "err", err)
-			return true
+			payload, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := conn.Write(writeCtx, websocket.MessageText, payload); err != nil {
+				slog.Warn("chat: rewind refusal delivery failed", "err", err)
+			}
 		}
-		s.broadcastChatLive(fmt.Sprintf(`{"type":"rewound","turns":%d}`, ctl.Turns))
 		return true
 	case "inspect_subscribe", "inspect_unsubscribe", "subscribe", "unsubscribe":
 		// 🎯T209: RHS agent inspect multiplex on /ws/chat.
@@ -1840,6 +2041,7 @@ func (s *Server) settleCancel() {
 	s.waiting = false
 	s.overseerOwnerTurn = false // 🎯T291
 	s.overseerOwnerTurnText = ""
+	s.clearOwnerTurnPlacementLocked()
 	s.overseerStreamID = ""
 	s.overseerStreamAcc = ""
 	s.overseerStreamSilent = false

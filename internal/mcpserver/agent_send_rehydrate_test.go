@@ -23,9 +23,9 @@ import (
 // identical error on a timer, forever, and the fleet could not recover
 // without the owner.
 //
-// This asserts the rotation happens on the send path. It stops short of
-// launching a real process: what regressed was the recovery being absent
-// here, not the launch itself.
+// Missing JSONL is not canonical generation loss. The send path must
+// return the launch error and keep the session id. It must not mint a
+// replacement on the strength of a missing vendor file.
 func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
 	reg, err := claudia.NewRegistry(filepath.Join(t.TempDir(), "agents.json"))
 	if err != nil {
@@ -48,34 +48,28 @@ func TestEnsureAgentProcessRotatesPhantomSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The launch itself is incidental — and may even succeed, since a
-	// claude binary is usually on PATH — so stop whatever it started.
 	defer reg.Stop(phantom)
-	_, _, _ = s.ensureAgentProcess(phantom)
+	_, _, err = s.ensureAgentProcess(phantom)
+	if err == nil {
+		t.Fatal("phantom resume returned success; a missing vendor file must not launch a replacement")
+	}
 
 	def := reg.Def(phantom)
 	if def == nil {
 		t.Fatal("agent vanished from the registry")
 	}
-	if def.SessionID == lost {
-		t.Error("still pinned to the phantom session; every repressure will fail identically forever")
+	if def.SessionID != lost || !def.Materialized {
+		t.Errorf("session moved off the refused generation: sid=%s mat=%v", def.SessionID, def.Materialized)
 	}
-	// Materialized is deliberately NOT asserted here. claudia's
-	// Registry.Launch sets it as soon as Start returns a process, so it is
-	// true again after any successful launch regardless of whether a
-	// conversation exists. That is the ROOT cause of 🎯T409 and it lives in
-	// claudia, not here; this test pins the jevons half — that the send
-	// path rotates off an unresumable session instead of dead-ending.
-	// Identity must survive the rotation, or recovery silently orphans work.
 	if def.Purpose != claudia.PurposeWork || def.Name != phantom {
-		t.Errorf("rotation lost identity: %+v", def)
+		t.Errorf("refusal lost identity: %+v", def)
 	}
 }
 
 // A Cursor row reloaded after a bounce RequireResumes its persisted session
 // id even when that id never wrote store.db. session/load then returns
-// Invalid params and Launch latches the refusal. The send path used to
-// return that latch forever. It must rotate once and launch the fresh id.
+// Invalid params. Refusal prose is not generation loss: the send path
+// tries that resume once, returns the error, and keeps the session id.
 func TestEnsureAgentProcessRemintsCursorResumeDenial(t *testing.T) {
 	const oldSession = "82615afb-238d-44bd-a9fa-407b43009f13"
 	path := filepath.Join(t.TempDir(), "agents.json")
@@ -115,16 +109,16 @@ func TestEnsureAgentProcessRemintsCursorResumeDenial(t *testing.T) {
 	t.Cleanup(reg.StopAll)
 
 	proc, rehydrated, err := s.ensureAgentProcess("multimaze2-po")
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("cursor resume denial returned success; refusal prose must not mint a replacement")
 	}
-	if proc == nil || !rehydrated {
-		t.Fatalf("proc=%v rehydrated=%v", proc != nil, rehydrated)
+	if proc != nil || rehydrated {
+		t.Fatalf("proc=%v rehydrated=%v; denial must not launch a fresh id", proc != nil, rehydrated)
 	}
-	if resumes != 1 || mints != 1 {
-		t.Fatalf("resumes=%d mints=%d, want one refusal then one fresh mint", resumes, mints)
+	if resumes != 1 || mints != 0 {
+		t.Fatalf("resumes=%d mints=%d, want one refused resume and no remint", resumes, mints)
 	}
-	if got := reg.Def("multimaze2-po").SessionID; got == oldSession || got == "" {
-		t.Fatalf("session = %q, still the id Cursor will not load", got)
+	if got := reg.Def("multimaze2-po").SessionID; got != oldSession {
+		t.Fatalf("session = %q, want the refused id %q preserved", got, oldSession)
 	}
 }

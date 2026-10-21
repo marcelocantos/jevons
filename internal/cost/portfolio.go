@@ -6,6 +6,8 @@ package cost
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 	"os"
 	"strings"
 )
@@ -225,28 +227,24 @@ func TaskTypeFromRole(role, purpose string) string {
 }
 
 // TaskTypeForMint derives the portfolio task class for an omit-task_type
-// mint (🎯T475). Explicit taskTypeArg wins. Otherwise a product-owner
-// name (suffix -po / _po) maps to ceo even when purpose=work; other
-// seats fall back to TaskTypeFromPurpose.
+// mint (🎯T475). Explicit taskTypeArg wins. Otherwise a declared
+// product-owner purpose maps to ceo. A seat name is not that fact;
+// other seats fall back to TaskTypeFromPurpose.
 func TaskTypeForMint(name, purpose, taskTypeArg string) string {
+	_ = name
 	if tt := strings.TrimSpace(taskTypeArg); tt != "" {
 		return NormalizeTaskType(tt)
 	}
-	if isProductOwnerName(name) {
+	if purposeIsProductOwner(purpose) {
 		return TaskCEO
 	}
 	return TaskTypeFromPurpose(purpose)
 }
 
-func isProductOwnerName(name string) bool {
-	n := strings.ToLower(strings.TrimSpace(name))
-	if n == "" {
-		return false
-	}
-	if strings.HasSuffix(n, "-po") || strings.HasSuffix(n, "_po") {
-		return true
-	}
-	return n == "po" || strings.Contains(n, "-po-")
+// purposeIsProductOwner reports the declared product-owner purpose.
+// A seat name ending in -po is not this fact.
+func purposeIsProductOwner(purpose string) bool {
+	return strings.ToLower(strings.TrimSpace(purpose)) == "product-owner"
 }
 
 // Count is the load for provider (0 if unknown).
@@ -409,10 +407,10 @@ func IsFastCheapTask(taskType string) bool {
 // FastCheapPeer is the compiled fast-cheap model for a harness, empty
 // when that provider has no Spark-class peer (Claude has none).
 func FastCheapPeer(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case HarnessGrok:
+	switch seatprovider.Resolve(claudia.Provider(provider)).Plan {
+	case seatprovider.Grok:
 		return ModelGrokFast
-	case HarnessCodex:
+	case seatprovider.Codex:
 		return ModelCodexSpark
 	default:
 		return ""

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marcelocantos/jevons/internal/spool"
@@ -33,6 +34,8 @@ import (
 // Colossus by 2026-10-14). The suite kills its own server before removing the
 // directory.
 func TestMain(m *testing.M) {
+	sweepStaleTestDirs()
+
 	dir, err := os.MkdirTemp("", "mcpserver-test-")
 	if err != nil {
 		panic(err)
@@ -46,6 +49,31 @@ func TestMain(m *testing.M) {
 	killPrivateTmuxServer(sock)
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// sweepStaleTestDirs removes mcpserver-test-* directories left behind by a
+// prior run of this suite whose process is no longer alive (🎯T1087): a
+// binary killed by timeout or panic skips the os.RemoveAll in this
+// TestMain's normal return path, and the dir never gets another chance to
+// be cleaned since each run mints a fresh random name. A dir is only
+// removed when its tmux.sock has no owning server, so a concurrently
+// running suite's directory is left alone.
+func sweepStaleTestDirs() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "mcpserver-test-") {
+			continue
+		}
+		dir := filepath.Join(os.TempDir(), e.Name())
+		sock := filepath.Join(dir, "tmux.sock")
+		if _, err := os.Stat(sock); err == nil {
+			killPrivateTmuxServer(sock)
+		}
+		os.RemoveAll(dir)
+	}
 }
 
 // killPrivateTmuxServer stops the tmux server claudia may have started on

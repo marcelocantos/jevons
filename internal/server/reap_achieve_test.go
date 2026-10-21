@@ -65,7 +65,7 @@ func TestT195AchieveDoesNotReapPOEvenWithTargetID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := reg.Register(claudia.AgentDef{
-		Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork,
+		Name: "jevons-po", WorkDir: dir, SessionID: "s-po", Purpose: "product-owner",
 		Parent: "jevons", Materialized: true, Provider: "grok", TargetID: "T195",
 	}); err != nil {
 		t.Fatal(err)
@@ -85,6 +85,30 @@ func TestT195AchieveDoesNotReapPOEvenWithTargetID(t *testing.T) {
 	}
 	if reg.Def("jevons-po") == nil {
 		t.Fatal("PO must not auto-reap on achieve")
+	}
+}
+
+func TestT195WorkPurposeSuffixPOIsReaped(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "suffix-po", WorkDir: dir, SessionID: "s-po", Purpose: claudia.PurposeWork,
+		Parent: "jevons", Materialized: true, Provider: "grok", TargetID: "T195",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := ReapWorkAgentsOnTargetAchieve(reg, nil, "T195", dir, func(n string) bool { return n == "jevons" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || removed[0] != "suffix-po" {
+		t.Fatalf("removed=%v want [suffix-po]", removed)
+	}
+	if reg.Def("suffix-po") != nil {
+		t.Fatal("purpose-work seat named suffix-po stayed registered")
 	}
 }
 

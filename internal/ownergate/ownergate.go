@@ -160,26 +160,62 @@ func LedgerDay(t time.Time) string {
 	return t.In(time.Local).Format(ledgerDayLayout)
 }
 
-// HasLandedEvidence reports whether text names something a reader could go
-// and check: a commit-shaped hex token, a gate attestation, or a test name.
+// HasLandedEvidence reports whether text names a declared check: a
+// commit-shaped hex token, a gate id field (id=<hex>), or a Go test
+// identifier. The words "gate", "test", and "commit" are not evidence.
 func HasLandedEvidence(text string) bool {
 	t := strings.TrimSpace(text)
 	if len(t) < minEvidenceLen {
 		return false
 	}
-	lower := strings.ToLower(t)
-	if strings.Contains(lower, "gate ") || strings.Contains(lower, "id=") ||
-		strings.Contains(lower, "test") || strings.Contains(lower, "commit") {
-		return true
+	for _, field := range strings.Fields(t) {
+		if declaredTestName(field) || declaredGateID(field) {
+			return true
+		}
 	}
 	for _, tok := range strings.FieldsFunc(t, func(r rune) bool {
-		return !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F'))
+		return !isHexRune(r)
 	}) {
 		if len(tok) >= 7 && len(tok) <= 40 && hasDigit(tok) {
 			return true
 		}
 	}
 	return false
+}
+
+func isHexRune(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
+func declaredTestName(field string) bool {
+	rest, ok := strings.CutPrefix(field, "Test")
+	if !ok || rest == "" {
+		return false
+	}
+	for i, c := range rest {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_':
+			if i == 0 && c >= 'a' && c <= 'z' {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func declaredGateID(field string) bool {
+	rest, ok := strings.CutPrefix(field, "id=")
+	if !ok || len(rest) < 7 || len(rest) > 40 {
+		return false
+	}
+	for _, r := range rest {
+		if !isHexRune(r) {
+			return false
+		}
+	}
+	return hasDigit(rest)
 }
 
 func hasDigit(s string) bool {
@@ -203,25 +239,57 @@ func IsOwnerHandle(owner string) bool {
 	return false
 }
 
-// IsAnswered reports whether the record carries an answered marker. Checked
-// before IsAwaiting everywhere: an answered gate is no longer a gate.
+// markerRemainder returns the text after the declared marker on the first
+// line that opens with it. A sentence that uses the same words later in the
+// line is not the marker. The comparison is case-insensitive because the
+// writer and a pasted copy are the same token.
+func markerRemainder(text, marker string) (string, bool) {
+	if marker == "" {
+		return "", false
+	}
+	marker = strings.ToUpper(marker)
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.ToUpper(strings.TrimSpace(line))
+		rest, ok := strings.CutPrefix(line, marker)
+		if !ok {
+			continue
+		}
+		if rest == "" {
+			return "", true
+		}
+		switch rest[0] {
+		case ' ', '\t', '(', ':', '.', ',':
+			return rest, true
+		}
+	}
+	return "", false
+}
+
+// opensWithMarker reports whether a line of text opens with the declared marker.
+func opensWithMarker(text, marker string) bool {
+	_, ok := markerRemainder(text, marker)
+	return ok
+}
+
+// IsAnswered reports whether the record opens with the answered marker.
+// Checked before IsAwaiting everywhere: an answered gate is no longer a gate.
 func IsAnswered(reason, context string) bool {
-	return strings.Contains(strings.ToUpper(reason+" "+context), MarkerAnswered)
+	return opensWithMarker(reason, MarkerAnswered) || opensWithMarker(context, MarkerAnswered)
 }
 
 // IsAwaiting reports the awaiting-owner-verdict state for one target.
 //
-// True when the ledger says so, two ways: the assignment reason (or context)
-// carries the awaiting marker, or the target is assigned to the owner at all
-// — assigning work to the human IS the claim that the ball is in their court,
-// and a reader that ignored it would re-create the bug for every assignment
-// made by hand. Both are recorded states; neither is inferred from how
-// finished the prose sounds.
+// True when the ledger says so, two ways: a line of the assignment reason
+// or context opens with the awaiting marker, or the target is assigned to
+// the owner at all — assigning work to the human IS the claim that the ball
+// is in their court, and a reader that ignored it would re-create the bug
+// for every assignment made by hand. Both are recorded states; neither is
+// inferred from how finished the prose sounds.
 func IsAwaiting(owner, reason, context string) bool {
 	if IsAnswered(reason, context) {
 		return false
 	}
-	if strings.Contains(strings.ToUpper(reason+" "+context), "AWAITING OWNER VERDICT") {
+	if opensWithMarker(reason, MarkerAwaiting) || opensWithMarker(context, MarkerAwaiting) {
 		return true
 	}
 	return IsOwnerHandle(owner)

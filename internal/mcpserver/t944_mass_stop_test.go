@@ -26,7 +26,7 @@ func TestT944PlannedBrokerRestartRaisesNoAlarm(t *testing.T) {
 			causes:    map[string]string{"a": cause, "b": cause, "c": cause},
 			launchErr: errBrokerDown,
 		}
-		s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}, false))
+		s.noteDeadSeats(sweepDeadAgents(reg, "jevons", fleetintent.Snapshot{}, nil))
 		a, ok := s.massStop()
 		if !ok {
 			return ""
@@ -38,6 +38,9 @@ func TestT944PlannedBrokerRestartRaisesNoAlarm(t *testing.T) {
 	}
 	if got := burst(fleet.ExitCauseBrokerLost); got == "" {
 		t.Fatal("an unannounced broker loss raised no alarm")
+	}
+	if got := burst("claudia broker stopped on purpose (planned restart) and then some"); got == "" {
+		t.Fatal("a sentence that only quotes a planned restart raised no alarm")
 	}
 }
 

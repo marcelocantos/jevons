@@ -695,7 +695,14 @@ func (vb *VoiceBridge) runDelegatedTask(pt *pendingTask, agent *claudia.Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	if err := agent.Send(pt.task); err != nil {
+	requestID := newTrackedRequestID("vc")
+	if vb.srv != nil {
+		if err := vb.srv.freezeSeatMission(pt.agent, requestID); err != nil {
+			vb.completeTask(pt, "", fmt.Errorf("send to worker failed: %w", err))
+			return
+		}
+	}
+	if err := agent.SendWithRequestID(pt.task, requestID); err != nil {
 		vb.completeTask(pt, "", fmt.Errorf("send to worker failed: %w", err))
 		return
 	}

@@ -14,9 +14,9 @@ func TestT1034BlockedGoalAndInProgressDoNotReap(t *testing.T) {
 		name, report string
 		action       WorkerIdleAction
 	}{
-		{"incident", t1034Incident, IdleActionPark},
+		{"incident", t1034Incident, IdleActionKeep},
 		{"in-progress field despite done prose", "```jevons\njevons: kind finish-report\njevons: target T1034\njevons: status in-progress\njevons: oracle-sha abcdef0123456789\njevons: silent-ledger none\n```\nDone. SHA abcdef0123456789.", IdleActionKeep},
-		{"blocked goal without envelope", "Done. Nothing left for this worker. SHA abcdef0123456789.\nGOAL_STATUS: blocked", IdleActionPark},
+		{"blocked goal without envelope", "Done. Nothing left for this worker. SHA abcdef0123456789.\nGOAL_STATUS: blocked", IdleActionKeep},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ClassifyWorkerIdleDisposition(tc.report); got != tc.action {
@@ -40,7 +40,7 @@ func TestT1034BlockedGoalAndInProgressDoNotReap(t *testing.T) {
 }
 
 func TestT1034CitedBlockedGoalDoesNotVetoGenuineFinish(t *testing.T) {
-	report := "Done. SHA abcdef0123456789; go test ./internal/mcpserver PASS.\n```\nGOAL_STATUS: blocked\n```"
+	report := declaredFinishReport("T1034", "Done. SHA abcdef0123456789; go test ./internal/mcpserver PASS.\n```\nGOAL_STATUS: blocked\n```")
 	if got := ClassifyWorkerIdleDisposition(report); got != IdleActionReap {
 		t.Fatalf("quoted marker yielded %s", got)
 	}

@@ -287,13 +287,13 @@ func TestQueueDepthComesOnlyFromTheQueue(t *testing.T) {
 	if s.QueueDepth != QueueUnknown {
 		t.Fatalf("QueueDepth = %d before the queue reported, want unknown", s.QueueDepth)
 	}
-	a.FromQueue("jv-1", 87, c.t)
+	a.FromQueue("jv-1", QueueReport{Depth: 87}, c.t)
 	s, _ = a.Get("jv-1")
 	if s.QueueDepth != 87 {
 		t.Fatalf("QueueDepth = %d, want 87", s.QueueDepth)
 	}
 	// A caller that could not read the queue passes a negative and is ignored.
-	a.FromQueue("jv-1", -1, c.t)
+	a.FromQueue("jv-1", QueueReport{Depth: -1}, c.t)
 	s, _ = a.Get("jv-1")
 	if s.QueueDepth != 87 {
 		t.Fatalf("a failed queue read overwrote a real depth: %d", s.QueueDepth)
@@ -327,7 +327,7 @@ func TestT766PartialFeedDoesNotRefreshOtherSignals(t *testing.T) {
 	a, c := newAt(at("2026-10-03T00:00:00Z"), time.Minute)
 	a.FromTurnEvent("worker", false, c.now())
 	c.tick(2 * time.Minute)
-	a.FromQueue("worker", 2, c.now())
+	a.FromQueue("worker", QueueReport{Depth: 2}, c.now())
 	s, _ := a.Get("worker")
 	if s.Alive != Unknown || s.InFlight != Unknown || s.Phase != turnev.PhaseUnknown || s.LastActivity.IsZero() || s.QueueDepth != 2 {
 		t.Fatalf("queue feed revived stale evidence: %+v", s)

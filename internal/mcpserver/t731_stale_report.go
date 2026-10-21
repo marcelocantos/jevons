@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/jevons/internal/agentreport"
+	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 )
 
@@ -38,7 +39,6 @@ const (
 	// (byte-identical overseer batches) because a reap banner changes bytes.
 	StatusSuppressedDuplicateReport = "suppressed_duplicate_report"
 
-	agentRespondedPrefix    = "[Agent "
 	reapedSeatPrefix        = "[reaped seat "
 	parentReportOfferedFile = "parent-report-offered.jsonl"
 )
@@ -52,7 +52,7 @@ func FormatReapedReportBanner(agent string, rec fleetintent.Record) string {
 	if !rec.At.IsZero() {
 		at = rec.At.UTC().Format(time.RFC3339)
 	}
-	return fmt.Sprintf("[reaped seat %s at %s — this report describes that moment, not current ledger or fleet state (🎯T731)]",
+	return envelope.PrefixReapedSeat + "\n" + fmt.Sprintf("[reaped seat %s at %s — this report describes that moment, not current ledger or fleet state (🎯T731)]",
 		agent, at)
 }
 
@@ -76,7 +76,7 @@ func formatReportAge(d time.Duration) string {
 
 func agentRespondedRoutingLine(agent string, h agentreport.Handle, now time.Time) string {
 	agent = strings.TrimSpace(agent)
-	line := fmt.Sprintf("[Agent %s responded]", agent)
+	line := envelope.SeatFact(envelope.IntentRoute, agent)
 	if h.Empty() || strings.TrimSpace(h.Agent) != agent {
 		return line
 	}
@@ -89,7 +89,7 @@ func agentRespondedRoutingLine(agent string, h agentreport.Handle, now time.Time
 
 func formatAgentResponded(agent string, h agentreport.Handle, body string, now time.Time) string {
 	agent = strings.TrimSpace(agent)
-	return agentRespondedRoutingLine(agent, h, now) + "\n" + body
+	return envelope.PrefixAgentResponded + "\n" + agentRespondedRoutingLine(agent, h, now) + "\n" + body
 }
 
 func replaceAgentRespondedChrome(text, agent string, h agentreport.Handle, now time.Time) string {
@@ -144,31 +144,17 @@ func (s *Server) stampReportAgeAtDelivery(text string, now time.Time) string {
 
 func parseAgentRespondedLine(line string) (name, reportID string, ok bool) {
 	line = strings.TrimRight(line, "\r")
-	if !strings.HasPrefix(line, agentRespondedPrefix) {
+	fields := strings.Fields(line)
+	if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[1] != envelope.IntentRoute || fields[2] == "" {
 		return "", "", false
 	}
-	const mark = " responded]"
-	i := strings.Index(line, mark)
-	if i < 0 {
-		return "", "", false
-	}
-	name = strings.TrimSpace(line[len(agentRespondedPrefix):i])
-	if name == "" {
-		return "", "", false
-	}
-	rest := strings.TrimSpace(line[i+len(mark):])
-	if rest == "" {
-		return name, "", true
-	}
-	rest = strings.TrimSpace(strings.TrimPrefix(rest, "|"))
-	for _, tok := range strings.Fields(rest) {
-		if !strings.HasPrefix(tok, "report_id=") {
+	name = fields[2]
+	for _, tok := range fields[3:] {
+		id, found := strings.CutPrefix(tok, "report_id=")
+		if !found || id == "" {
 			continue
 		}
-		id := strings.TrimPrefix(tok, "report_id=")
-		if id != "" && !strings.ContainsAny(id, " \t]") {
-			return name, id, true
-		}
+		return name, id, true
 	}
 	return name, "", true
 }
@@ -216,7 +202,12 @@ type parentReportPrep struct {
 
 func hasReapedSeatBanner(text string) bool {
 	s := strings.TrimLeft(text, " \t\r\n")
-	return strings.HasPrefix(s, reapedSeatPrefix)
+	nl := strings.IndexByte(s, '\n')
+	first := s
+	if nl >= 0 {
+		first = s[:nl]
+	}
+	return strings.TrimSpace(first) == envelope.PrefixReapedSeat
 }
 
 func (s *Server) prepareParentReport(dest, text string, fulfilling bool) parentReportPrep {

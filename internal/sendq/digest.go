@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
 )
 
 // 🎯T774 — A BACKLOG DRAINS AS ONE DIGEST, NOT ONE RECIPIENT TURN PER ENTRY.
@@ -56,55 +58,47 @@ type classified struct {
 	sender string
 }
 
-func firstLines(text string, n int) []string {
-	lines := strings.SplitN(text, "\n", n+1)
-	if len(lines) > n {
-		lines = lines[:n]
-	}
-	return lines
-}
-
-// classify recognises the machine-generated shapes that supersede each other.
-// Anything else is kindOther: the digest never guesses about it.
+// classify recognises declared open-intent facts that supersede each other.
+// A rendered banner is kindOther: the digest never guesses about it.
+// The first idle, held, or route fact line wins, so a false-green banner
+// ahead of a route fact does not hide the sender.
 func classify(e Entry) classified {
 	c := classified{e: e, kind: kindOther}
-	text := strings.TrimSpace(e.Text)
-	switch {
-	case strings.HasPrefix(text, "[event: worker-idle]"):
-		for _, line := range strings.Split(text, "\n") {
-			if w, ok := strings.CutPrefix(line, "Worker: "); ok && strings.TrimSpace(w) != "" {
-				c.kind, c.sender = kindIdle, strings.TrimSpace(w)
-				return c
-			}
+	for _, line := range strings.Split(e.Text, "\n") {
+		line = strings.TrimSpace(line)
+		// A rendered "[event:]" wrapper is not a fact, including when a
+		// fact is glued after it on the same line. The fact is its own line.
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[2] == "" {
+			continue
 		}
-	case strings.HasPrefix(text, "[held backlog from "):
-		rest := strings.TrimPrefix(text, "[held backlog from ")
-		if i := strings.IndexAny(rest, " \n]"); i > 0 {
-			c.kind, c.sender = kindHeld, rest[:i]
+		switch fields[1] {
+		case envelope.IntentIdle:
+			c.kind, c.sender = kindIdle, fields[2]
 			return c
-		}
-	}
-	// A report may carry a banner line or two ahead of its header.
-	for _, line := range firstLines(text, 4) {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "[Agent "); ok {
-			if name, _, found := strings.Cut(rest, " responded]"); found && name != "" {
-				c.kind, c.sender = kindReport, name
-				return c
-			}
+		case envelope.IntentHeld:
+			c.kind, c.sender = kindHeld, fields[2]
+			return c
+		case envelope.IntentRoute:
+			c.kind, c.sender = kindReport, fields[2]
+			return c
 		}
 	}
 	return c
 }
 
-// reportID pulls "report_id=…" from a report's header, or "".
+// reportID pulls "report_id=…" from a route fact, or "".
 func reportID(text string) string {
-	for _, line := range firstLines(text, 4) {
-		if i := strings.Index(line, "report_id="); i >= 0 {
-			id := line[i+len("report_id="):]
-			if j := strings.IndexAny(id, " \t"); j >= 0 {
-				id = id[:j]
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || fields[0] != envelope.IntentOpen || fields[1] != envelope.IntentRoute {
+			continue
+		}
+		for _, tok := range fields {
+			id, ok := strings.CutPrefix(tok, "report_id=")
+			if ok && id != "" {
+				return id
 			}
-			return id
 		}
 	}
 	return ""
@@ -251,7 +245,8 @@ type archiveFile struct {
 // archive keeps the originals), Unverified holds it Uncertain for
 // reconciliation, DefinitelyNotSent returns it to Pending — where a later
 // ClaimDigest unpacks it back into its members rather than nesting a digest
-// inside a digest.
+// inside a digest. A receipt-bound digest instead retains its exact identity
+// and payload and is retried through ClaimFront.
 func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	if s == nil {
 		return Entry{}, false, fmt.Errorf("sendq: no store")
@@ -262,22 +257,25 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 	if err != nil || len(f.Entries) == 0 {
 		return Entry{}, false, err
 	}
-	if _, _, blocked := claimable(f.Entries, s.active[agent]); blocked {
+	active := s.active[agent]
+	if _, _, blocked := claimable(f.Entries, active); blocked {
 		return Entry{}, false, nil
 	}
-	// Typed directives and admitted owner questions cannot be folded into a digest:
+	// Typed directives, owner questions, and previously bound receipt identities
+	// cannot be folded into a digest:
 	// a digest has one delivery attempt and cannot carry one question identity
 	// for several distinct requests. A later hold must be
 	// able to remove the precise pending authorization under the queue lock.
+	// An empty state that still carries an attempt id is not pending.
 	for _, e := range f.Entries {
-		if e.State == Pending && (e.Directive != nil || e.RequestID != "") {
+		if claimablePhase(EntryPhase(e, active)) && (e.Directive != nil || e.RequestID != "" || e.TransportRequestID != "") {
 			return Entry{}, false, nil
 		}
 	}
 	var members []Entry
 	first := -1
 	for i, e := range f.Entries {
-		if e.State != Pending {
+		if !claimablePhase(EntryPhase(e, active)) {
 			continue
 		}
 		if first < 0 {
@@ -300,14 +298,16 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		ID:         NewID(),
 		Text:       BuildDigest(agent, members),
 		EnqueuedAt: members[0].EnqueuedAt,
-		State:      Attempting,
-		AttemptID:  NewID(),
 	}
 	memberIDs := make([]string, len(members))
 	for i, m := range members {
 		memberIDs[i] = m.ID
 	}
 	merged.Members = strings.Join(memberIDs, ",")
+	merged, _, err = applyDelivery(merged, stepClaim, "", NewID(), nil)
+	if err != nil {
+		return Entry{}, false, err
+	}
 	if err := s.archive(archiveFile{DigestID: merged.ID, Agent: agent, At: time.Now().UTC(), Members: members}); err != nil {
 		return Entry{}, false, err
 	}
@@ -316,18 +316,26 @@ func (s *Store) ClaimDigest(agent string) (Entry, bool, error) {
 		if i == first {
 			kept = append(kept, merged)
 		}
-		if e.State != Pending {
+		if !claimablePhase(EntryPhase(e, active)) {
 			kept = append(kept, e)
 		}
 	}
 	f.Entries = kept
-	if err := s.save(f); err != nil {
-		return Entry{}, false, err
-	}
+	// Ownership is recorded before save so the observer does not publish
+	// this attempt as one a dead daemon left behind.
 	if s.active == nil {
 		s.active = map[string]string{}
 	}
+	prev, had := s.active[agent]
 	s.active[agent] = merged.AttemptID
+	if err := s.save(f); err != nil {
+		if had {
+			s.active[agent] = prev
+		} else {
+			delete(s.active, agent)
+		}
+		return Entry{}, false, err
+	}
 	return merged, true, nil
 }
 

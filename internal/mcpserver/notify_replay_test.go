@@ -44,8 +44,8 @@ func TestT428IdenticalBatchDeliveredOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first delivery: %v", err)
 	}
-	if res.Status != "sent" {
-		t.Fatalf("first delivery status=%q want sent", res.Status)
+	if res.Status != "delivered_unconfirmed" {
+		t.Fatalf("first delivery status=%q want delivered_unconfirmed", res.Status)
 	}
 
 	// The three replays the overseer actually received.
@@ -181,24 +181,41 @@ func TestT428UnconfirmedRetriesAfterGrace(t *testing.T) {
 	}
 }
 
-// A SEALED BATCH HAS NO EXPIRY. A timer is the "you are being shown this
-// again" generator; only eviction may resurrect a confirmed batch.
-func TestT428ConfirmedBatchNeverExpires(t *testing.T) {
-	s, _ := t428Server(t, TurnEvidence{Observed: true, PayloadEnteredTurn: true})
+// A transcript hit does not seal the batch. PayloadEnteredTurn used to
+// hold it with no expiry. The grace still collapses an immediate copy.
+// Past the grace the same bytes are offered again, because no receipt
+// settled the first handoff.
+func TestT1074OverseerTranscriptDoesNotSeal(t *testing.T) {
+	s, inbox := t428Server(t, TurnEvidence{Observed: true, PayloadEnteredTurn: true, PayloadSeen: true, PayloadQueued: true})
 
 	now := time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)
 	s.SetNotifyReplayClock(func() time.Time { return now })
 
-	if _, err := s.deliverByName("jevons", t428Batch, OriginAgent, false); err != nil {
-		t.Fatalf("first delivery: %v", err)
-	}
-	now = now.Add(72 * time.Hour)
 	res, err := s.deliverByName("jevons", t428Batch, OriginAgent, false)
 	if err != nil {
-		t.Fatalf("three days later: %v", err)
+		t.Fatalf("first delivery: %v", err)
+	}
+	if res.Status != "delivered_unconfirmed" {
+		t.Fatalf("transcript confirmed the handoff: status=%q", res.Status)
+	}
+	now = now.Add(notifyReplayUnconfirmedGrace / 2)
+	res, err = s.deliverByName("jevons", t428Batch, OriginAgent, false)
+	if err != nil {
+		t.Fatalf("within grace: %v", err)
 	}
 	if res.Status != StatusSuppressedReplay {
-		t.Fatalf("a confirmed batch expired on a clock: status=%q", res.Status)
+		t.Fatalf("within grace status=%q want suppressed", res.Status)
+	}
+	now = now.Add(notifyReplayUnconfirmedGrace)
+	res, err = s.deliverByName("jevons", t428Batch, OriginAgent, false)
+	if err != nil {
+		t.Fatalf("past grace: %v", err)
+	}
+	if res.Status == StatusSuppressedReplay {
+		t.Fatalf("transcript held the batch past the grace: %s", res.Message)
+	}
+	if len(inbox.texts) != 2 {
+		t.Fatalf("overseer got %d copies, want 2: %v", len(inbox.texts), inbox.texts)
 	}
 }
 

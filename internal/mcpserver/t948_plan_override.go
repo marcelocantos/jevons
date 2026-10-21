@@ -11,7 +11,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/planusage"
+	"github.com/marcelocantos/jevons/internal/seatprovider"
 )
 
 // 🎯T948: the owner's band override on a plan. The store is applied to the
@@ -39,7 +41,10 @@ func (s *Server) SetPlanOverrides(store *planusage.OverrideStore) {
 
 func (s *Server) handlePlanOverride(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	store := s.planOverrides
-	plan := strings.ToLower(strings.TrimSpace(req.GetString("plan", "")))
+	// A plan in either vocabulary names the same override (🎯T1079): the
+	// store is keyed by the plan name the cockpit's backends carry.
+	resolved := seatprovider.Resolve(claudia.Provider(req.GetString("plan", "")))
+	plan := resolved.Plan.String()
 	switch strings.ToLower(strings.TrimSpace(req.GetString("action", ""))) {
 	case "status":
 		m, err := store.Load()
@@ -63,8 +68,8 @@ func (s *Server) handlePlanOverride(_ context.Context, req mcp.CallToolRequest) 
 		}
 		return mcp.NewToolResultText(plan + " override cleared: it is judged on its readings again"), nil
 	case "set":
-		switch plan {
-		case "claude", "codex", "grok", "cursor":
+		switch resolved.Plan {
+		case seatprovider.Claude, seatprovider.Codex, seatprovider.Grok, seatprovider.Cursor:
 		default:
 			return mcp.NewToolResultError("plan must be claude, codex, grok or cursor"), nil
 		}

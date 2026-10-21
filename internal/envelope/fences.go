@@ -24,8 +24,9 @@ func FenceStarts(text string) []int {
 			line, next = line[:nl], off+nl+1
 		}
 		trimmed := strings.TrimLeft(line, " \t")
-		if rest, ok := strings.CutPrefix(trimmed, "```"); ok &&
-			strings.EqualFold(strings.TrimSpace(rest), FenceInfo) {
+		const open = "```"
+		if len(trimmed) >= len(open) && trimmed[:len(open)] == open &&
+			strings.ToLower(strings.TrimSpace(trimmed[len(open):])) == FenceInfo {
 			out = append(out, off+len(line)-len(trimmed))
 		}
 		off = next

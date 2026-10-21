@@ -98,7 +98,7 @@ func main() {
 	flag.BoolVar(&allowSuspect, "allow-suspect", false,
 		"exit with the command's own status even when its output contradicts a pass")
 	flag.BoolVar(&clean, "clean", false,
-		"run the command in a fresh checkout of the commit, not in the shared working tree (🎯T397)")
+		"run in a fresh checkout with GOWORK=off; use the committed module graph (🎯T397)")
 	flag.StringVar(&commit, "commit", "",
 		"with -clean: the commit to verify (default HEAD)")
 	flag.BoolVar(&keep, "keep", false,
@@ -267,6 +267,10 @@ func usage() {
 The -- is required to run a command: without it a mistyped subcommand would be
 executed and recorded as though it were a gate (🎯T441). A subcommand given an
 argument it cannot honour is refused rather than performed in part (🎯T453).
+
+Clean runs disable Go workspace overlays, including committed go.work files.
+Explicit module overrides (-modfile, GOFLAGS, or command environment changes)
+still require separate dependency provenance.
 
 flags:
 `)

@@ -517,8 +517,8 @@ func TestDrainedMessageThatSticksIsNotRequeuedAndIsSurfaced(t *testing.T) {
 	if len(agent.sent) != 1 {
 		t.Fatalf("drain sent %d times want 1", len(agent.sent))
 	}
-	if n := observedPendingSends(s, "w"); n != 1 {
-		t.Fatalf("uncertain payload no longer retained: %d held", n)
+	if pending, held := observedPendingSends(s, "w"), observedQueueDepth(s, "w"); pending != 0 || held != 1 {
+		t.Fatalf("unverified handoff pending=%d depth=%d; want it held and not pending", pending, held)
 	}
 	s.drainAgentSendQueue("w")
 	if len(agent.sent) != 1 {
@@ -528,7 +528,9 @@ func TestDrainedMessageThatSticksIsNotRequeuedAndIsSurfaced(t *testing.T) {
 		t.Fatalf("undelivered backlog was not surfaced to the overseer: %v", inbox.texts)
 	}
 	note := inbox.texts[0]
-	for _, want := range []string{"Fleet health", "Uncertain delivery", "full payload remains held", "NOT be automatically retried"} {
+	// An incapable sender is not confirmed from the transcript. The notice is
+	// undecided: the payload stays held, and the text must not call it lost.
+	for _, want := range []string{"Fleet health", "UNDECIDED", "NOT evidence the message was lost", "do not re-send"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("fleet-health note missing %q: %q", want, note)
 		}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
+	"github.com/marcelocantos/jevons/internal/sendq"
 )
 
 // 🎯T582 — the incident this suite reproduces: one held message on a seat
@@ -137,12 +138,133 @@ func TestT582OneNoticePerReapedSeatOverTenMinutes(t *testing.T) {
 	if !strings.Contains(notice, "do NOT jevons_agent_start") {
 		t.Fatalf("notice does not say the seat is finished:\n%s", notice)
 	}
-	if depth := observedPendingSends(f.s, agent); depth != 0 {
-		t.Fatalf("depth = %d; want 0 — the hold is resolved, not left to re-alarm", depth)
+	const payload = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
+	rows, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(rows) != 1 || rows[0].State != sendq.Pending || rows[0].Text != payload {
+		t.Fatalf("sweep discarded the claimable payload: %+v %v", rows, err)
 	}
-	// Gate feedback about the achieved target is dropped, not routed onward.
+	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
+		t.Fatal("sweep archived the claimable payload")
+	}
+	if pending, depth := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 1 || depth != 1 {
+		t.Fatalf("pending=%d depth=%d; want the payload still claimable", pending, depth)
+	}
+	if strings.Contains(notice, "Dropped") || strings.Contains(notice, payload) {
+		t.Fatalf("notice drops or quotes the payload:\n%s", notice)
+	}
+	if !strings.Contains(notice, "The payload stays") || !strings.Contains(notice, "daemon will not discard") {
+		t.Fatalf("notice does not say the payload stays:\n%s", notice)
+	}
+	// Gate feedback about the achieved target is not routed onward.
 	if got := len(f.parent.delivered()); got != 0 {
 		t.Fatalf("parent received %d message(s); gate feedback about an achieved target has no actor", got)
+	}
+}
+
+// 🎯T766.5: routeHeldReapedBacklog must not discard a claimable payload on a
+// finished-and-reaped seat. Gate feedback about the achieved target is not
+// delivered to the parent, and it is not removed. The payload stays until
+// jevons_sendq_reconcile records a drop or an overseer kill discards it.
+func TestT7665FinishedReapedRouteKeepsTheClaimablePayload(t *testing.T) {
+	const agent, parent = "jv-t577-no-checkpoint-reap", "jevons-po"
+	const payload = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
+	f := t582Server(t, agent, parent, fleetlog.ReasonReapAchieve)
+	if _, _, err := f.s.sendQueue().Append(agent, payload, f.now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	backlogs, err := f.s.sendQueue().Backlogs()
+	if err != nil || len(backlogs) != 1 {
+		t.Fatal(err)
+	}
+	rec, ok := LookupReapedRecord(f.s.fleetIntent(), agent)
+	if !ok {
+		t.Fatal("reaped record missing")
+	}
+
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+
+	rows, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(rows) != 1 || rows[0].State != sendq.Pending || rows[0].Text != payload {
+		t.Fatalf("route discarded the claimable payload: %+v %v", rows, err)
+	}
+	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
+		t.Fatal("route archived the claimable payload")
+	}
+	if pending, depth := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 1 || depth != 1 {
+		t.Fatalf("pending=%d depth=%d; want the payload still claimable", pending, depth)
+	}
+	if got := len(f.parent.delivered()); got != 0 {
+		t.Fatalf("parent received %d; gate feedback on an achieve reap is not delivered", got)
+	}
+	lines := f.up.all()
+	if got := heldReapedNotices(lines); got != 1 {
+		t.Fatalf("overseer notices = %d; want exactly 1 after two routes\n%s", got, strings.Join(lines, "\n---\n"))
+	}
+	notice := lines[0]
+	for _, banned := range []string{"Dropped", payload} {
+		if strings.Contains(notice, banned) {
+			t.Fatalf("notice contains %q:\n%s", banned, notice)
+		}
+	}
+	for _, want := range []string{
+		"Held backlog on",
+		"do NOT jevons_agent_start",
+		"The payload stays",
+		"jevons_sendq_reconcile",
+		"daemon will not discard",
+	} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("notice missing %q:\n%s", want, notice)
+		}
+	}
+}
+
+// A kept claimable head is not a reason to leave the later message unrouted.
+// ClaimFrontID still refuses that later id. The route claims the later id
+// itself and leaves the head where it is.
+func TestT7665KeptClaimableHeadDoesNotBlockTheLaterRoute(t *testing.T) {
+	const agent, parent = "jv-t577-no-checkpoint-reap", "jevons-po"
+	const gate = "GATE make-test-go exit=1 SUSPECT id=deadbeef — master is red on your commit"
+	const follow = "owner: the follow-up slice for this mission needs a seat"
+	f := t582Server(t, agent, parent, fleetlog.ReasonReapAchieve)
+	if _, _, err := f.s.sendQueue().Append(agent, gate, f.now.Add(-2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.s.sendQueue().Append(agent, follow, f.now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	backlogs, err := f.s.sendQueue().Backlogs()
+	if err != nil || len(backlogs) != 1 || len(backlogs[0].EntryIDs) != 2 {
+		t.Fatalf("backlog: %+v %v", backlogs, err)
+	}
+	later := backlogs[0].EntryIDs[1]
+	if _, claimed, err := f.s.sendQueue().ClaimFrontID(agent, later); err != nil || claimed {
+		t.Fatalf("ClaimFrontID took a later id: claimed=%v err=%v", claimed, err)
+	}
+	rec, ok := LookupReapedRecord(f.s.fleetIntent(), agent)
+	if !ok {
+		t.Fatal("reaped record missing")
+	}
+
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+	f.s.routeHeldReapedBacklog(backlogs[0], rec, f.now)
+
+	got := f.parent.delivered()
+	if len(got) != 1 || !strings.Contains(got[0], follow) || strings.Contains(got[0], "GATE make-test-go") {
+		t.Fatalf("parent received %#v; want only the later message", got)
+	}
+	rows, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(rows) != 2 ||
+		rows[0].Text != gate || rows[0].State != sendq.Pending ||
+		rows[1].Text != follow || rows[1].State != sendq.Uncertain {
+		t.Fatalf("route did not keep the head and hand off the later message: %+v %v", rows, err)
+	}
+	if _, err := f.s.sendQueue().ReadSupersession(rows[0].ID); err == nil {
+		t.Fatal("route archived the kept head")
+	}
+	if got := heldReapedNotices(f.up.all()); got != 1 {
+		t.Fatalf("overseer notices = %d; want exactly 1\n%s", got, strings.Join(f.up.all(), "\n---\n"))
 	}
 }
 
@@ -169,8 +291,50 @@ func TestT582NonGateHoldIsRoutedToTheParent(t *testing.T) {
 			t.Errorf("routed message missing %q:\n%s", want, sent)
 		}
 	}
-	if depth := observedPendingSends(f.s, agent); depth != 0 {
-		t.Fatalf("depth = %d; want 0 after routing", depth)
+	if pending, held := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 0 || held != 1 {
+		t.Fatalf("unverified route pending=%d depth=%d; the parent call returned sent, which is not a receipt", pending, held)
+	}
+	entries, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain {
+		t.Fatalf("held route confirmed without a receipt: %+v %v", entries, err)
+	}
+	if !strings.Contains(entries[0].Detail, "without a receipt") {
+		t.Fatalf("detail = %q", entries[0].Detail)
+	}
+	if got := heldReapedNotices(f.up.all()); got != 1 {
+		t.Fatalf("overseer notices = %d; want exactly 1", got)
+	}
+}
+
+// rehydrated_sent is the same non-receipt as sent. The held route passes
+// interrupt=false, so interrupted_sent is that same case and this caller
+// does not produce it.
+func TestT1074HeldRehydratedSentDoesNotConfirm(t *testing.T) {
+	const agent, parent = "jv-t577-no-checkpoint-reap", "jevons-po"
+	f := t582Server(t, agent, parent, fleetlog.ReasonReapDone)
+	setObservedSenderResolver(f.s, func(name string) (agentSender, bool, error) {
+		if name == parent {
+			return f.parent, true, nil
+		}
+		return nil, false, nil
+	})
+	if _, _, err := f.s.sendQueue().Append(agent,
+		"owner: the parent was relaunched",
+		f.now.Add(-StalledBacklogAfter-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	f.sweepFor(2 * time.Minute)
+
+	if got := len(f.parent.delivered()); got != 1 {
+		t.Fatalf("parent received %d message(s); want 1", got)
+	}
+	if pending, held := observedPendingSends(f.s, agent), observedQueueDepth(f.s, agent); pending != 0 || held != 1 {
+		t.Fatalf("rehydrated_sent pending=%d depth=%d; want the hold kept and not pending", pending, held)
+	}
+	entries, err := f.s.sendQueue().Snapshot(agent)
+	if err != nil || len(entries) != 1 || entries[0].State != sendq.Uncertain {
+		t.Fatalf("rehydrated_sent confirmed the hold: %+v %v", entries, err)
 	}
 	if got := heldReapedNotices(f.up.all()); got != 1 {
 		t.Fatalf("overseer notices = %d; want exactly 1", got)

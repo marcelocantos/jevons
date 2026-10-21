@@ -4,14 +4,12 @@
 package mcpserver
 
 import (
-	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/gate"
-	"github.com/marcelocantos/jevons/internal/shaevidence"
 )
 
 // CompletionEvidenceClass is a hermetic classification of a finish report
@@ -50,50 +48,6 @@ func (c CompletionEvidenceClass) String() string {
 	}
 }
 
-// commitSHARe matches short/full git SHAs (7–40 hex). Word-boundary style
-// via non-hex flanks so "pass" / common English words are not false hits.
-var commitSHARe = regexp.MustCompile(`(?i)(?:^|[^0-9a-f])([0-9a-f]{7,40})(?:[^0-9a-f]|$)`)
-
-// 🎯T784: bare "pass" is removed — "the scout pass is done" (a status
-// noun, not a test verdict) false-positived as oracle evidence, which
-// short-circuited hasFinishShape's bare-claim check and reaped a worker
-// mid-status (jv-t762-dropped-spawn-half, 2026-09-21). "passed" stays: it
-// is verb-shaped and paired oracle prose ("the test passed", "N passed")
-// is the common case; a bare "tests pass" / "suite passes" phrasing is
-// covered by the compound entries below instead of the single word.
-var oracleEvidenceMarkers = []string{
-	"go test",
-	"make test",
-	"test-web",
-	"test-go",
-	"test-journey",
-	"test-ui",
-	"tests pass",
-	"test passes",
-	"suite passes",
-	"passed",
-	"green",
-	"oracle",
-	"hermetic",
-	"sha ",
-	"commit ",
-	"commits ",
-	"attestation",
-}
-
-var acceptedRiskMarkers = []string{
-	"accepted risk",
-	"accepted-risk",
-	"class-3",
-	"class 3",
-	"human gate",
-	"owner accept",
-	"owner smoke",
-	"residual:",
-	"residual declared",
-	"isolated class-3",
-}
-
 var completionClaimMarkers = []string{
 	"done",
 	"complete",
@@ -108,23 +62,18 @@ var completionClaimMarkers = []string{
 	"mission complete",
 }
 
-// HasOracleEvidence reports whether report contains executable-oracle
-// markers (tests/green/SHA). Envelope oracle slots win when present
-// (🎯T509); otherwise the prose heuristic.
+// HasOracleEvidence is true only for a valid envelope oracle slot (🎯T509 /
+// 🎯T766.4). A sentence is not oracle evidence.
 func HasOracleEvidence(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasOracle() {
-		return true
-	}
-	return hasOracleEvidence(strings.ToLower(oracleScanBody(report)))
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasOracle()
 }
 
-// HasAcceptedRisk reports explicit accepted-risk / class-3 residual language.
-// Envelope risk slots win when present (🎯T509).
+// HasAcceptedRisk is true only for a valid envelope risk slot (🎯T509 /
+// 🎯T766.4). A sentence is not accepted risk.
 func HasAcceptedRisk(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasRisk() {
-		return true
-	}
-	return hasAcceptedRisk(strings.ToLower(oracleScanBody(report)))
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasRisk()
 }
 
 func oracleScanBody(report string) string {
@@ -147,58 +96,41 @@ func HasOracleOrRisk(report string) bool {
 	return c == CompletionOracleEvidence || c == CompletionAcceptedRisk
 }
 
-// ClassifyCompletionReport classifies a worker/PO finish report.
-// Priority: envelope fields (🎯T509 / 🎯T536.1) when present, else
-// accepted-risk > oracle evidence > bare-done claim > no claim.
+// ClassifyCompletionReport classifies a worker/PO finish report from
+// envelope fields (🎯T509 / 🎯T536.1). A sentence is not a claim (🎯T766.4).
 func ClassifyCompletionReport(report string) CompletionEvidenceClass {
-	if m, err := envelope.Parse(report); m != nil {
-		switch m.Kind {
-		case envelope.KindFinishReport:
-			if envelope.MissingSilentLedger(m) {
-				return CompletionMissingSilentLedger
-			}
-			if err == nil {
-				if m.HasRisk() {
-					return CompletionAcceptedRisk
-				}
-				if m.HasOracle() {
-					return CompletionOracleEvidence
-				}
-				return CompletionBareDone
-			}
-			// Other malformation with a ledger still present: do not treat
-			// payload prose as a complete oracle finish.
-			if m.HasSilentLedger() {
-				if m.HasRisk() {
-					return CompletionAcceptedRisk
-				}
-				if m.HasOracle() {
-					return CompletionOracleEvidence
-				}
-			}
-		case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
-			if err == nil {
-				return CompletionNoClaim
-			}
-		}
-		if m.Payload != "" {
-			report = m.Payload
-		}
-	}
-	s := strings.ToLower(strings.TrimSpace(report))
-	if s == "" {
+	m, err := envelope.Parse(report)
+	if m == nil {
 		return CompletionNoClaim
 	}
-	// Accepted risk is an explicit residual path — preferred over bare claim
-	// even when "done" words co-occur.
-	if hasAcceptedRisk(s) {
-		return CompletionAcceptedRisk
-	}
-	if hasOracleEvidence(s) {
-		return CompletionOracleEvidence
-	}
-	if hasCompletionClaim(s) {
-		return CompletionBareDone
+	switch m.Kind {
+	case envelope.KindFinishReport:
+		if envelope.MissingSilentLedger(m) {
+			return CompletionMissingSilentLedger
+		}
+		if err == nil {
+			if m.HasRisk() {
+				return CompletionAcceptedRisk
+			}
+			if m.HasOracle() {
+				return CompletionOracleEvidence
+			}
+			return CompletionBareDone
+		}
+		// Other malformation with a ledger still present: do not treat
+		// payload prose as a complete oracle finish.
+		if m.HasSilentLedger() {
+			if m.HasRisk() {
+				return CompletionAcceptedRisk
+			}
+			if m.HasOracle() {
+				return CompletionOracleEvidence
+			}
+		}
+	case envelope.KindStatusPing, envelope.KindAck, envelope.KindSpawnBrief, envelope.KindScoutReport:
+		if err == nil {
+			return CompletionNoClaim
+		}
 	}
 	return CompletionNoClaim
 }
@@ -210,58 +142,17 @@ func LooksLikeMissingSilentLedger(report string) bool {
 	return ClassifyCompletionReport(report) == CompletionMissingSilentLedger
 }
 
-func hasOracleEvidence(lower string) bool {
-	if commitSHARe.MatchString(lower) {
-		// Require a claim-adjacent or evidence-shaped context: bare hex
-		// alone in a paragraph can false-positive; require SHA/commit word
-		// nearby or an explicit test/pass marker.
-		if strings.Contains(lower, "sha") || strings.Contains(lower, "commit") {
-			return true
-		}
-	}
-	// 🎯T784: word-boundary match, not a bare substring scan. A short
-	// marker like "pass" false-positived inside "the scout pass is done"
-	// (jv-t762-dropped-spawn-half, 2026-09-21), reading a status update
-	// as oracle evidence and short-circuiting hasFinishShape's bare-claim
-	// check straight into a reap.
-	for _, m := range oracleEvidenceMarkers {
-		if containsWordish(lower, strings.TrimSpace(m)) {
-			return true
-		}
-	}
-	// SHA without the word "sha" still counts when report also claims done
-	// with a short hex token after "SHA"/"sha" pattern handled above, or
-	// conventional "SHA abcdef0" form.
-	if commitSHARe.MatchString(lower) && (strings.Contains(lower, "sha") ||
-		strings.Contains(lower, "commit") ||
-		strings.Contains(lower, "landed") ||
-		strings.Contains(lower, "merged")) {
-		return true
-	}
-	return false
-}
+// hasOracleEvidence is not a control decision (🎯T766.4). A sentence is
+// not oracle evidence. HasOracleEvidence reads the envelope oracle slot.
+func hasOracleEvidence(string) bool { return false }
 
-func hasAcceptedRisk(lower string) bool {
-	for _, m := range acceptedRiskMarkers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
+// hasAcceptedRisk is not a control decision (🎯T766.4). A sentence is
+// not accepted risk. HasAcceptedRisk reads the envelope risk slot.
+func hasAcceptedRisk(string) bool { return false }
 
-// hasCompletionClaim is true when the report ASSERTS completion. 🎯T750: the
-// scan runs over claimScanText, so a marker the worker quoted, fenced, or
-// negated is not read as a claim it made.
-func hasCompletionClaim(lower string) bool {
-	scan := claimScanText(lower)
-	for _, m := range completionClaimMarkers {
-		if containsWordish(scan, m) {
-			return true
-		}
-	}
-	return false
-}
+// hasCompletionClaim is not a control decision (🎯T766.4). A sentence is
+// not a completion claim. The done answer is the envelope.
+func hasCompletionClaim(string) bool { return false }
 
 // containsWordish matches phrase as a whole word or phrase: the characters
 // flanking it must not be letters or digits.
@@ -293,32 +184,10 @@ func indexWordish(lower, phrase string) int {
 	return -1
 }
 
-// FindCompletionClaim locates the completion word that makes report read as a
-// claim, and the span of text around it (🎯T439). Reported so a reap can say in
-// the lifecycle log which words it fired on, rather than leaving a worker's
-// disappearance from the fleet unexplained.
-//
-// Diagnostic only: no decision is taken from this, so a miss costs an empty
-// span in a log line and nothing more.
-func FindCompletionClaim(report string) (marker, span string, offset int, ok bool) {
-	// 🎯T750: name the claim the worker made, so the log line and the reap
-	// decision are reading the same text.
-	lower := claimScanText(asciiLower(report))
-	best, at := "", -1
-	for _, m := range completionClaimMarkers {
-		i := indexWordish(lower, m)
-		if i < 0 || (at >= 0 && i >= at) {
-			continue
-		}
-		best, at = m, i
-	}
-	if at < 0 {
-		return "", "", 0, false
-	}
-	// 🎯T470: name the sentence that matched, not a 200-byte window around
-	// an offset — a wrong reap must be diagnosable from the log alone.
-	span, offset = matchedSentence(report, at, at+len(best))
-	return best, span, offset, true
+// FindCompletionClaim does not name a sentence as a claim (🎯T766.4).
+// A reap log does not decide from a completion word.
+func FindCompletionClaim(string) (marker, span string, offset int, ok bool) {
+	return "", "", 0, false
 }
 
 func wordRuneBefore(s string, i int) bool {
@@ -341,196 +210,40 @@ func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
-// dailyPathEvidenceMarkers cite an activated owner-visible surface (🎯T194 /
-// 🎯T572). Hermetic-only finish reports for daemon/API work are not sufficient.
-var dailyPathEvidenceMarkers = []string{
-	"restart-jevonsd",
-	"restart-jevonsd",
-	"live probe",
-	"development path",
-	"development surface",
-	"daily path", // legacy accept — speech is development (🎯T572)
-	"daily-path",
-	"curl ",
-	"curl\t",
-	"http 200",
-	"http/1.1 200",
-	"non-404",
-	"not 404",
-	":13705",
-	"127.0.0.1:13705",
-	"localhost:13705",
-	"/api/frontier",
-	"/health",
-	"stale binary", // often named when proving bounce fixed it
-	"zero-downtime upgrade",
-	"proven zero-downtime",
-}
-
-// hermeticOnlyMarkers are evidence that does not activate the development surface.
-// Used only to document the T194 residual in tests — HasActivationEvidence
-// does not treat these as daily-path proof.
-var hermeticOnlyMarkers = []string{
-	"go test",
-	"make test",
-	"hermetic",
-	"test-web",
-	"test-go",
-	"node web/scripts",
-}
-
-// HasActivationEvidence reports whether a finish report cites activation
-// of the development surface (restart script, curl, :13705, …). 🎯T552 / 🎯T553.2:
+// HasActivationEvidence reports whether a finish report declares activation
+// of the development surface in the envelope daily slot. 🎯T552 / 🎯T553.2:
 // this is a seam classifier, not an achieve gate. Observation of the
-// running surface is the test. Pure string heuristic.
+// running surface is the test. A sentence that names a restart or a curl
+// is not that slot (🎯T766.4).
 func HasActivationEvidence(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasActivation() {
-		return true
-	}
-	s := strings.ToLower(strings.TrimSpace(oracleScanBody(report)))
-	if s == "" {
-		return false
-	}
-	for _, m := range dailyPathEvidenceMarkers {
-		if strings.Contains(s, m) {
-			return true
-		}
-	}
-	// Live HTTP probe shapes: "GET … 200", "curl -sS … → 200"
-	if strings.Contains(s, "get ") && (strings.Contains(s, "200") || strings.Contains(s, "non-404")) {
-		if strings.Contains(s, "http") || strings.Contains(s, "/api/") || strings.Contains(s, ":13705") {
-			return true
-		}
-	}
-	return false
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasActivation()
 }
 
-// reportCitesOracleID is true when report names a checkable oracle artifact:
-// an envelope sha/gate-id slot, an evidence-shaped SHA in prose (🎯T427
-// shape), or a GATE attestation line (🎯T386 shape). Marker words alone —
-// "pass", "green", "oracle" — name nothing a reader can go check.
+// reportCitesOracleID is true only for a valid envelope oracle slot
+// (🎯T766.4). A SHA or GATE line in prose is not a citation.
 func reportCitesOracleID(report string) bool {
-	if m, err := envelope.Parse(report); m != nil && err == nil && m.HasOracle() {
-		return true
-	}
-	body := oracleScanBody(report)
-	if len(shaevidence.ExtractEvidenceSHAs(body)) > 0 {
-		return true
-	}
-	return len(gate.ParseAttestations(body)) > 0
+	m, err := envelope.Parse(report)
+	return m != nil && err == nil && m.HasOracle()
 }
 
-// UncitedClaimAgainstDirtyWorktree is true when report reads as oracle
-// evidence purely on marker words (🎯T946) — no cited SHA, no cited gate id —
-// while tree says the worker's own worktree carries uncommitted tracked
-// changes or new untracked source files.
-//
-// jv-t906-accept-lifts-block and jv-t943-stale-token-reload were both scored
-// finished_work this way: neither report named a landed commit or a gate id,
-// and both worktrees were fully uncommitted at the moment of the reap.
-// Nothing existed for the "pass"/"green"/"go test" words to describe.
-func UncitedClaimAgainstDirtyWorktree(report string, tree *gate.TreeProvenance) bool {
-	if tree == nil || tree.Clean {
-		return false
-	}
-	if reportCitesOracleID(report) {
-		return false
-	}
-	return hasOracleEvidence(strings.ToLower(oracleScanBody(report)))
-}
+// UncitedClaimAgainstDirtyWorktree is not a reap veto (🎯T766.4).
+// Marker words are not oracle evidence, so a dirty worktree is not
+// judged from a sentence. Nothing on the reap path calls it
+// (🎯T766.4.1); owned uncommitted scope is the 🎯T972 typed check.
+func UncitedClaimAgainstDirtyWorktree(string, *gate.TreeProvenance) bool { return false }
 
-// LooksLikeHermeticOnlyDaemonClaim is true when the report claims completion
-// with hermetic/test oracle language but no daily-path evidence (🎯T194
-// anti-pattern: achieve while stale binary may still serve). Instructional
-// residual for overseer review — not a hard block.
+// LooksLikeHermeticOnlyDaemonClaim is true when a report declares an oracle
+// and does not declare activation (🎯T194). A hermetic sentence is not that
+// claim (🎯T766.4). Instructional residual for overseer review — not a hard block.
 func LooksLikeHermeticOnlyDaemonClaim(report string) bool {
-	if HasActivationEvidence(report) {
-		return false
-	}
-	if !hasCompletionClaim(strings.ToLower(report)) && !HasOracleEvidence(report) {
-		return false
-	}
-	// Require hermetic-ish oracle markers so pure bare-done is T31, not T194.
-	lower := strings.ToLower(report)
-	for _, m := range hermeticOnlyMarkers {
-		if strings.Contains(lower, m) {
-			return hasCompletionClaim(lower) || HasOracleEvidence(report)
-		}
-	}
-	return false
+	return HasOracleEvidence(report) && !HasActivationEvidence(report)
 }
 
-// LiveRenderOracleDidNotRun reports whether text admits a browser live-render
-// oracle did not run (🎯T430 clause 3). A refused browser is a reportable
-// non-result — not something to paper over with hermetics.
-func LiveRenderOracleDidNotRun(report string) bool {
-	lower := strings.ToLower(report)
-	// Explicit non-result admissions only. The lock error string alone is
-	// not an admission — a worker can still silently cite hermetics after it.
-	markers := []string{
-		"live-render oracle did not run",
-		"live render oracle did not run",
-		"browser oracle did not run",
-		"live-render oracle skipped",
-		"live browser probe did not run",
-		"live-path oracle did not run",
-		"live path oracle did not run",
-		"oracle did not run",
-		"could not obtain a browser",
-		"browser refused",
-		"playwright refused",
-	}
-	for _, m := range markers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
+// LiveRenderOracleDidNotRun is not a browser-oracle admission (🎯T766.4).
+// A sentence that says the live-render oracle did not run is not that admission.
+func LiveRenderOracleDidNotRun(string) bool { return false }
 
-// LooksLikeSilentBrowserOracleFallback is true when a report cites hermetic /
-// synthetic evidence in the same breath as a browser/live-render block, without
-// admitting the live oracle did not run (🎯T430 clause 3 / 🎯T386). Instructional
-// residual — pure classifier for overseer/finish-shape review, not a hard block.
-func LooksLikeSilentBrowserOracleFallback(report string) bool {
-	if strings.TrimSpace(report) == "" {
-		return false
-	}
-	if LiveRenderOracleDidNotRun(report) {
-		return false
-	}
-	lower := strings.ToLower(report)
-	browserBlocked := false
-	for _, m := range []string{
-		"browser is already in use",
-		"use --isolated",
-		"playwright-mcp/profile",
-		"could not open a browser",
-		"browser locked",
-		"shared profile",
-	} {
-		if strings.Contains(lower, m) {
-			browserBlocked = true
-			break
-		}
-	}
-	if !browserBlocked {
-		return false
-	}
-	// Substituted evidence shapes that must not stand in for the live probe.
-	for _, m := range []string{
-		"go test",
-		"make test",
-		"hermetic",
-		"synthetic",
-		"test-web",
-		"test-ui",
-		"journey green",
-		"model caption",
-	} {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	return false
-}
+// LooksLikeSilentBrowserOracleFallback is not a silent-fallback finding (🎯T766.4).
+// Citing hermetics beside a browser sentence is not that finding.
+func LooksLikeSilentBrowserOracleFallback(string) bool { return false }

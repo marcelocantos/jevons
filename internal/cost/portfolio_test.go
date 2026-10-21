@@ -144,14 +144,20 @@ func TestNormalizeTaskTypeAndPurpose(t *testing.T) {
 	if TaskTypeFromRole("worker", "work") != TaskCodeImplement {
 		t.Fatal("role worker")
 	}
-	if TaskTypeForMint("jevons-po", "work", "") != TaskCEO {
-		t.Fatal("PO name mint → ceo")
+	if TaskTypeForMint("jevons-po", "work", "") != TaskCodeImplement {
+		t.Fatal("purpose work is not CEO")
+	}
+	if TaskTypeForMint("plain", "product-owner", "") != TaskCEO {
+		t.Fatal("purpose product-owner mint → ceo")
 	}
 	if TaskTypeForMint("jv-t475-worker", "work", "") != TaskCodeImplement {
 		t.Fatal("worker name mint → code_implement")
 	}
 	if TaskTypeForMint("jevons-po", "work", "code_implement") != TaskCodeImplement {
 		t.Fatal("explicit task_type wins")
+	}
+	if TaskTypeForMint("plain", "product-owner", "code_implement") != TaskCodeImplement {
+		t.Fatal("explicit task_type wins over purpose")
 	}
 }
 

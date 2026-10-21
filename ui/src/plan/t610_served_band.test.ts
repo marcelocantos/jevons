@@ -3,9 +3,9 @@
 
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
-  formatWindow, paceOfWindow, resetThresholds,
+  formatWindow, paceOfWindow,
   PACE_AHEAD, PACE_HOT, PACE_LOCKED, PACE_OK, PACE_UNDER,
-  unknownServedBands, unknownThresholdKeys, applyThresholds,
+  unknownServedBands,
 } from './pace';
 
 const WEEK = 7 * 24 * 3600;
@@ -24,21 +24,16 @@ function win(used: number, remaining: number, frac: number, band?: string) {
 }
 
 beforeEach(() => {
-  resetThresholds();
   unknownServedBands.length = 0;
 });
 
-describe('🎯T610 the cockpit paints the daemon verdict', () => {
-  // The live specimen. 39% used at 18.5% elapsed is ratio 2.11, which this
-  // file's own classifier calls hot; the daemon computes pressure +0.63 and
-  // says ahead. The owner saw red on a window the daemon did not consider
-  // hot, so migrate-off correctly never fired.
-  it('paints ahead when the daemon says ahead, even though the local model says hot', () => {
-    const w = win(39, 61, 0.815, 'ahead');
-    expect(paceOfWindow(w, NOW)).toBe(PACE_AHEAD);
-    // The control: without the served band this build really does say hot,
-    // so the case keeps exercising the disagreement it exists for.
-    expect(paceOfWindow(win(39, 61, 0.815), NOW)).toBe(PACE_HOT);
+describe('🎯T610 / 🎯T1072 the cockpit paints the daemon verdict and nothing else', () => {
+  // The live specimen. 39% used at 18.5% elapsed is ratio 2.11, which the
+  // cockpit's old local classifier called hot; the daemon computes pressure
+  // +0.63 and says ahead. The owner saw red on a window the daemon did not
+  // consider hot, so migrate-off correctly never fired.
+  it('paints ahead when the daemon says ahead', () => {
+    expect(paceOfWindow(win(39, 61, 0.815, 'ahead'))).toBe(PACE_AHEAD);
   });
 
   it('carries the verdict through to the painted class', () => {
@@ -56,22 +51,18 @@ describe('🎯T610 the cockpit paints the daemon verdict', () => {
     ['locked', PACE_LOCKED],
     ['exhausted', PACE_HOT],
   ])('maps served %s', (served, want) => {
-    expect(paceOfWindow(win(50, 50, 0.5, served), NOW)).toBe(want);
+    expect(paceOfWindow(win(50, 50, 0.5, served))).toBe(want);
   });
 
-  it('falls back to the local model when the daemon sends no band', () => {
-    // An older daemon, or a window with no usable numbers. The fallback is
-    // for absence, not a second opinion.
-    expect(paceOfWindow(win(80, 20, 0.5), NOW)).toBe(PACE_HOT);
+  // 🎯T1072: there is no local model to fall back to. 80% used at half-time
+  // is no colour at all until the daemon says what it is.
+  it('paints no pace when the daemon sends no band', () => {
+    expect(paceOfWindow(win(80, 20, 0.5))).toBe('');
+    expect(formatWindow(win(80, 20, 0.5), NOW).className).not.toMatch(/plan-(hot|ahead|under|locked)/);
   });
 
   it('reports a band it cannot paint instead of swallowing it', () => {
-    paceOfWindow(win(50, 50, 0.5, 'incandescent'), NOW);
+    expect(paceOfWindow(win(50, 50, 0.5, 'incandescent'))).toBe('');
     expect(unknownServedBands).toContain('incandescent');
-  });
-
-  it('reports an unrecognised threshold key', () => {
-    applyThresholds({ some_future_vertex: 1 } as never);
-    expect(unknownThresholdKeys).toContain('some_future_vertex');
   });
 });

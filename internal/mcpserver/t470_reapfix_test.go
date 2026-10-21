@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/gate"
 )
 
 // 🎯T470: mid-mission checkpoints that deny completion must not reap, a
@@ -38,14 +41,14 @@ func TestT470IncidentReportsAreNotFinishedWork(t *testing.T) {
 			name:    "jv-t390-plan-usage 20260815T062910Z-09c58493",
 			file:    "t470_jv_t390_checkpoint_report.md",
 			min:     2000,
-			wantAsk: AskCheckpoint, // opens with Checkpoint — …; also denies achievement
+			wantAsk: AskNone, // a checkpoint sentence is not an ask
 			deny:    "nothing here is achieved",
 		},
 		{
 			name:    "jv-t391-guard-all-paths 20260815T062936Z-8e58ef45",
 			file:    "t470_jv_t391_checkpoint_report.md",
 			min:     2000,
-			wantAsk: AskCheckpoint, // 🎯T577: jammed "init.**Checkpoint —" is a declaration
+			wantAsk: AskNone, // a jammed checkpoint sentence is not an ask
 			deny:    "oracles are missing",
 		},
 	}
@@ -56,8 +59,11 @@ func TestT470IncidentReportsAreNotFinishedWork(t *testing.T) {
 			if !strings.Contains(strings.ToLower(report), strings.ToLower(tc.deny)) {
 				t.Fatalf("fixture lost its non-completion sentence %q", tc.deny)
 			}
-			if !hasCompletionClaim(asciiLower(report)) {
+			if !hasAnyCompletionMarker(asciiLower(report)) {
 				t.Fatal("fixture no longer carries a completion word — cannot reproduce the incident")
+			}
+			if hasCompletionClaim(asciiLower(report)) {
+				t.Fatal("a completion sentence is a completion claim")
 			}
 			if LooksLikeFinishedWorkReport(report) {
 				t.Fatal("incident report classified as finished_work")
@@ -78,7 +84,7 @@ func TestT470IncidentReportsAreNotFinishedWork(t *testing.T) {
 func TestT470GenuineFinishStillReaps(t *testing.T) {
 	reg := regWithTree(t)
 	// No GATE id line: citing an invented id trips attestation_unknown (🎯T386).
-	report := "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T470 PASS"
+	report := declaredFinishReport("T470", "Done. SHA abcdef0123456. go test ./internal/mcpserver -run T470 PASS")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("genuine finish not read as finished_work")
 	}
@@ -91,14 +97,21 @@ func TestT470GenuineFinishStillReaps(t *testing.T) {
 	}
 }
 
-// Clause 2: any 🎯T386 false-green flag blocks auto-reap even when the prose
-// otherwise looks like a finish (the jv-t391 shape: claim + GATE RED).
+// Clause 2: a declared finish whose declared evidence is contradicted never
+// auto-reaps (the jv-t391 shape: claim + RED gate).
+//
+// 🎯T766.4.1: the RED gate is the envelope's gate-id slot, resolved against
+// the store. Before, it was a GATE line in the payload read by the banner's
+// regexes; that expectation was wrong once a control may not decide by
+// English, and the typed fact is what carries the jv-t391 contradiction now.
 func TestT470FalseGreenFlaggedReportNeverReaps(t *testing.T) {
+	t76641Store(t, t76641Record("2817ca36", gate.VerdictRed, 1))
 	reg := regWithTree(t)
-	// Finish-shaped (bare claim + oracle markers) but cites a RED gate — the
-	// same contradiction that flagged jv-t391 attestation_not_green before it
-	// was reaped finished_work 447ms later.
-	report := "Done. Mission complete. SHA abcdef0123456. GATE go-test exit=1 RED id=2817ca36."
+	// A declared finish citing a RED gate — the same contradiction that
+	// flagged jv-t391 attestation_not_green before it was reaped
+	// finished_work 447ms later. The veto runs only after a declared finish
+	// (🎯T766.4).
+	report := declaredGateFinishReport("T470", "2817ca36", envelope.VerdictGreen, "Done. Mission complete.")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("control must look like finished_work before the false-green veto")
 	}
@@ -115,42 +128,26 @@ func TestT470FalseGreenFlaggedReportNeverReaps(t *testing.T) {
 	}
 }
 
-// Clause 3: the reap decision names the sentence it matched, not a 200-char
-// window around an offset.
+// Clause 3: a sentence is not a completion claim. The fixture still
+// carries the incident clause. The reap log does not copy a prose span
+// (🎯T766.4).
 func TestT470ReapDecisionNamesMatchedSentence(t *testing.T) {
 	report := loadT470Fixture(t, "t470_jv_t391_checkpoint_report.md", 2000)
-	marker, span, offset, ok := FindCompletionClaim(report)
-	if !ok {
-		t.Fatal("expected a completion claim in the incident fixture")
+	if _, _, _, ok := FindCompletionClaim(report); ok {
+		t.Fatal("a sentence is a completion claim")
 	}
-	if marker != "complete" {
-		t.Fatalf("marker = %q, want complete (the incident word)", marker)
-	}
-	if offset < 0 || offset+len(span) > len(report) || report[offset:offset+len(span)] != span {
-		t.Fatalf("span not at offset %d", offset)
-	}
-	// Must be the clause carrying "complete", not a 200-byte mid-cut window.
-	if !strings.Contains(strings.ToLower(span), "complete") {
-		t.Fatalf("span lost the claim word: %q", span)
-	}
-	if strings.HasPrefix(span, "ed.") || strings.HasSuffix(span, "Let me") {
-		t.Fatalf("span looks like the old 200-byte window clip: %q", span)
-	}
-	if len(span) > 400 {
-		t.Fatalf("span is %d bytes — expected a sentence/clause, not a paragraph", len(span))
-	}
-	// Semicolon breaks the clause so the claim sentence is isolable.
-	lower := strings.ToLower(span)
-	if !strings.Contains(lower, "implementation is complete") {
-		t.Fatalf("span = %q, want the 'Implementation is complete' clause", span)
+	if !strings.Contains(strings.ToLower(report), "implementation is complete") {
+		t.Fatal("fixture lost the incident clause")
 	}
 
 	fields := reapDecisionFields("worker", "finished_work", "Done. Ship it tomorrow.")
-	spanField, _ := fields["report_span"].(string)
-	if spanField != "Done." && !strings.HasPrefix(spanField, "Done") {
-		// Bare "Done." is the whole sentence.
-		if fields["claim_marker"] != "done" {
-			t.Fatalf("fields=%v", fields)
-		}
+	if _, ok := fields["claim_marker"]; ok {
+		t.Fatalf("reap fields still name a prose claim: %v", fields)
+	}
+	if _, ok := fields["report_span"]; ok {
+		t.Fatalf("reap fields still carry a prose span: %v", fields)
+	}
+	if fields["done_class"] != "unknown" {
+		t.Fatalf("unenveloped prose done_class=%v", fields["done_class"])
 	}
 }

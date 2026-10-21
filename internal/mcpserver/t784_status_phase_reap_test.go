@@ -67,7 +67,7 @@ func TestT784GreenGateNamingNextWorkDoesNotReap(t *testing.T) {
 // Control: a genuine terminal finish-report still reaps (🎯T165) — the T784
 // fix narrows a false positive, it must not widen the veto.
 func TestT784GenuineFinishStillReapsControl(t *testing.T) {
-	const report = "My change for T494.1.1 is committed as abc1234567. Oracle: go test ./internal/mcpserver -run T494 GREEN. The mission is done."
+	report := declaredFinishReport("T494.1.1", "My change for T494.1.1 is committed as abc1234567. Oracle: go test ./internal/mcpserver -run T494 GREEN. The mission is done.")
 	if !LooksLikeFinishedWorkReport(report) {
 		t.Fatal("a genuine finish report with oracle evidence must still reap")
 	}

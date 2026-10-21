@@ -51,9 +51,10 @@ var structuredFlagKinds = []FlagKind{
 	FlagDirtyTreeGate,
 	FlagSHAUnreachable,
 	FlagAttestationEmptyPackage,
-	// FlagUncitedClaimDirtyWorktree is produced by FalseGreenFlagsForWorker
-	// (internal/mcpserver) from a git worktree probe, never a hazard
-	// substring scan here (🎯T946).
+	// FlagUncitedClaimDirtyWorktree was produced from a git worktree probe
+	// on the reap path, never a hazard substring scan here (🎯T946). It has
+	// no producer since 🎯T766.4 (marker words are not oracle evidence) and
+	// stays so a stored flag kind still renders.
 	FlagUncitedClaimDirtyWorktree,
 	// FlagForeignRepoGate resolves cited ids against the store and asks the
 	// citing repository's git whether it holds the measured commit (🎯T1027).
