@@ -51,6 +51,22 @@ func Is(text string) bool {
 	return false
 }
 
+// IsFiltered reports whether a COMPLETE (sealed) text should be hidden from
+// the owner: either the explicit [silent] marker (Is), or the 🎯T1054
+// heuristic routine-noise classifier (IsRoutineNoise).
+//
+// This is deliberately a different entry point from Is()/Classify(): those
+// two drive the live per-fragment ACP stream (🎯T240), where only the
+// literal "[silent]" prefix is safe to commit on early — a growing partial
+// accumulation cannot yet rule out an escape word (a safety/incident
+// mention) that has not streamed in yet. IsFiltered is for call sites that
+// already hold the whole, final text — history/replay rendering and
+// one-shot (non-streamed) report bodies — where there is no "later
+// fragment" that could still change the verdict.
+func IsFiltered(text string) bool {
+	return Is(text) || IsRoutineNoise(text)
+}
+
 // Classify reports whether accumulating stream text is silent, still pending
 // a complete [silent] prefix, or definitely owner-visible (🎯T240).
 func Classify(acc string) StreamClass {
