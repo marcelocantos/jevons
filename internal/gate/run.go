@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -106,6 +107,10 @@ func Run(args *RunArgs) (*Record, error) {
 	cmd.Stdin = nil
 	cmd.Stdout = &teeWriter{mu: &mu, buf: &captured, out: stdout}
 	cmd.Stderr = &teeWriter{mu: &mu, buf: &captured, out: stderr}
+	setGateCommandGroup(cmd)
+
+	callerPID := CallerPID()
+	var callerStopped atomic.Bool
 
 	// 🎯T603 — a heavy package run (go test, or a make target that runs one)
 	// waits for the host-pressure lease before it starts, so N seats each
@@ -120,7 +125,7 @@ func Run(args *RunArgs) (*Record, error) {
 		cmd.Env = append(cmd.Environ(), heavyLeaseEnv+"="+token)
 	}
 
-	runErr := cmd.Run()
+	runErr := startGatedCommand(cmd, callerPID, &callerStopped)
 	rec.Ended = now()
 
 	out := captured.Bytes()
@@ -154,15 +159,21 @@ func Run(args *RunArgs) (*Record, error) {
 		rec.StatusNote = "gate could not run the command: " + runErr.Error()
 	}
 	outStr := string(out)
-	hostKill := HostKill(signaled, rec.StatusKnown, rec.ExitStatus, outStr)
-	if hostKill && rec.StatusNote == "" {
-		rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
-	}
 	rec.EmptyPackages = EmptyPackages(outStr)
-	rec.Verdict = applyTreeVerdict(
-		verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill, EmptyRun(outStr)),
-		rec.Tree,
-	)
+	if callerStopped.Load() {
+		rec.StatusNote = CallerGoneNote
+		rec.StatusKnown = false
+		rec.Verdict = applyTreeVerdict(VerdictKilled, rec.Tree)
+	} else {
+		hostKill := HostKill(signaled, rec.StatusKnown, rec.ExitStatus, outStr)
+		if hostKill && rec.StatusNote == "" {
+			rec.StatusNote = hostKillNote(rec.StatusKnown, rec.ExitStatus, outStr)
+		}
+		rec.Verdict = applyTreeVerdict(
+			verdictFor(rec.StatusKnown, rec.ExitStatus, rec.Anomalies, hostKill, EmptyRun(outStr)),
+			rec.Tree,
+		)
+	}
 
 	if args.Store != nil {
 		if err := persistRun(args.Store, rec, out); err != nil {
