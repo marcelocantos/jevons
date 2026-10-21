@@ -61,6 +61,7 @@ func Run(args *RunArgs) (*Record, error) {
 	if args == nil || len(args.Command) == 0 {
 		return nil, errors.New("gate run: no command")
 	}
+	disownFromCallerProcessGroup()
 	now := args.Now
 	if now == nil {
 		now = time.Now

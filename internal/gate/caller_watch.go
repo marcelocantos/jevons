@@ -19,6 +19,13 @@ const CallerGoneNote = "caller_gone"
 // The acceptance oracle allows 2s for the tree to die after the wrapper goes.
 const callerWatchInterval = 50 * time.Millisecond
 
+// disownFromCallerProcessGroup starts a new session so a wrapper SIGKILL to
+// the invoking shell's process group does not take gate with it — only
+// CallerGone stops the run (🎯T1132).
+func disownFromCallerProcessGroup() {
+	_, _ = syscall.Setsid()
+}
+
 // CallerPID is the parent process at gate start — who the gate watches.
 func CallerPID() int {
 	return os.Getppid()

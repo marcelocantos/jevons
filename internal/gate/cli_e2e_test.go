@@ -280,7 +280,7 @@ func TestGateCLIT1132CallerGoneKillsOrphanTree(t *testing.T) {
 	if err := wrapper.Start(); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	if err := syscall.Kill(wrapper.Process.Pid, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
