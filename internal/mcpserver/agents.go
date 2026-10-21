@@ -853,12 +853,25 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 		role = s.agentRole(name, purpose)
 	}
 	existed := s.registry.Def(name) != nil
-	def, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
-	if err != nil {
-		return nil, existed, "", err
-	}
-	// Refresh copy after Ensure (Register may have stored a different pointer).
-	if d := s.registry.Def(name); d != nil {
+	// 🎯T1117: do NOT persist a new row (EnsureAgentWithParent writes one,
+	// with AutoStart true, when !existed) before the admission check below
+	// can still refuse the start. A ghost AutoStart=true row left behind by
+	// a refused mint is bait for fleet_health's dead-AutoStart recovery
+	// sweep, which later launches it for real — a live, token-consuming
+	// broker seat with no corresponding completed Register() and no record
+	// of ever being admitted. For an existing row, EnsureAgentWithParent is
+	// a pure read (registerLocked only runs on first creation), so calling
+	// it early here is harmless and the existed-materialized check below
+	// still needs it.
+	var def *claudia.AgentDef
+	if existed {
+		d, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+		if err != nil {
+			return nil, existed, "", err
+		}
+		if d2 := s.registry.Def(name); d2 != nil {
+			d = d2
+		}
 		def = d
 	}
 
@@ -893,6 +906,19 @@ func (s *Server) stitchAgentStart(name, workdir, model, providerArg, taskTypeArg
 	if strings.TrimSpace(pick.Provider) == "" && (pick.Knob == cost.KnobPlanDest || pick.Knob == cost.KnobClaudia) {
 		return nil, existed, pick.Cite(), fmt.Errorf(
 			"plan dest empty: all published providers fail mint thresholds; refusing to land on a hot dest (🎯T390.1.5)")
+	}
+	// 🎯T1117: the admission check passed — now, and only now, persist a
+	// new row (or refresh an existing one). A new name was never written to
+	// the registry while the pick above could still have refused it.
+	if def == nil {
+		d, err := s.registry.EnsureAgentWithParent(name, workdir, model, parent, true)
+		if err != nil {
+			return nil, existed, pick.Cite(), err
+		}
+		if d2 := s.registry.Def(name); d2 != nil {
+			d = d2
+		}
+		def = d
 	}
 	// The registry stores the id Launch talks to. Catalog ranking above
 	// keeps pick.Provider, the plan id (claude, codex, grok).
