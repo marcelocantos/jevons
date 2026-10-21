@@ -2071,3 +2071,62 @@ body.rhs-resizing-row { cursor: row-resize; }
   #agents-close { display: block; align-self: flex-end; margin: 8px 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-high); }
   #rhs-width-handle { display: none; }
 }
+
+/* 🎯T1044: owner review panel */
+.review-pane-body {
+  padding: 8px;
+  overflow-y: auto;
+  height: 100%;
+}
+.review-empty {
+  opacity: 0.6;
+  padding: 12px 4px;
+  font-size: 0.9em;
+}
+.review-card {
+  border: 1px solid var(--border-color, #444);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.review-card-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.review-target {
+  font-weight: 600;
+}
+.review-target-title {
+  font-weight: 600;
+  margin-top: 2px;
+}
+.review-question {
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.review-options {
+  margin-top: 4px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.review-evidence {
+  margin-top: 6px;
+  font-size: 0.82em;
+  opacity: 0.85;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.review-artifact-verified { color: #4caf50; }
+.review-artifact-reported_only { color: #c9a227; }
+.review-artifact-inaccessible { color: #e05252; }
+.review-artifact-missing { opacity: 0.6; }
+.review-card-actions {
+  margin-top: 8px;
+}
+.review-answer-btn {
+  font-size: 0.85em;
+}

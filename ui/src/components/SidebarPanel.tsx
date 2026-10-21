@@ -3,13 +3,15 @@
 
 import type { ReactNode } from 'react';
 import { CoachList } from './CoachList';
+import { ReviewPanel, type ReviewItem } from './ReviewPanel';
 
-export type SidebarTab = 'frontier' | 'transcript' | 'coach';
+export type SidebarTab = 'frontier' | 'transcript' | 'coach' | 'review';
 
 const TABS: { id: SidebarTab; label: string }[] = [
   { id: 'frontier', label: 'Frontier' },
   { id: 'transcript', label: 'Transcript' },
   { id: 'coach', label: 'Coach' },
+  { id: 'review', label: 'Review' },
 ];
 
 export function SidebarPanel(props: {
@@ -22,6 +24,7 @@ export function SidebarPanel(props: {
   readyNote?: string;
   transcript?: ReactNode;
   children: ReactNode;
+  onAnswerInChat?: (item: ReviewItem) => void;
 }) {
   return (
     <div id="rhs-bottom" aria-label="Frontier and agent transcript">
@@ -65,6 +68,14 @@ export function SidebarPanel(props: {
         role="tabpanel"
       >
         <CoachList active={props.tab === 'coach'} />
+      </div>
+      <div
+        id="review-pane"
+        className={'rhs-tab-pane' + (props.tab === 'review' ? ' active' : '')}
+        role="tabpanel"
+        aria-label="Owner review items"
+      >
+        <ReviewPanel active={props.tab === 'review'} onAnswerInChat={props.onAnswerInChat} />
       </div>
       {props.transcript}
     </div>

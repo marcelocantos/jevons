@@ -73,7 +73,7 @@ function parseSearch(raw: Record<string, unknown>): Search {
   const agent =
     typeof raw.agent === 'string' ? raw.agent.trim() : '';
   const tab: SidebarTab =
-    raw.tab === 'transcript' || raw.tab === 'coach' ? raw.tab : 'frontier';
+    raw.tab === 'transcript' || raw.tab === 'coach' || raw.tab === 'review' ? raw.tab : 'frontier';
   return { agent, tab };
 }
 
