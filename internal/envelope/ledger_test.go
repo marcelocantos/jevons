@@ -123,3 +123,51 @@ func TestReadSilentLedgerGateHelper(t *testing.T) {
 		t.Fatal("unenveloped is not ok")
 	}
 }
+
+// 🎯T1115: an unquoted why= value containing multiple space-separated,
+// hyphenated and parenthetical words must parse as one free-text field,
+// not be re-tokenized word-by-word into spurious "not key=value" errors.
+func TestSilentDecisionWhyFreeTextMultiWord(t *testing.T) {
+	raw := "```jevons\n" +
+		"jevons: kind finish-report\n" +
+		"jevons: target T1115\n" +
+		"jevons: oracle sha=abcdef0123456\n" +
+		"jevons: silent-ledger ranked\n" +
+		"jevons: silent-decision confidence=0.5 choice=exclude-only-when-seatstate-observed-dead why=a never-observed seat (proc nil, no seatstate authority) keeps the old conservative behaviour\n" +
+		"```\n"
+	m, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(m.Decisions) != 1 {
+		t.Fatalf("want 1 decision, got %d: %+v", len(m.Decisions), m.Decisions)
+	}
+	got := m.Decisions[0]
+	if got.Choice != "exclude-only-when-seatstate-observed-dead" {
+		t.Fatalf("choice = %q", got.Choice)
+	}
+	want := "a never-observed seat (proc nil, no seatstate authority) keeps the old conservative behaviour"
+	if got.Why != want {
+		t.Fatalf("why = %q, want %q", got.Why, want)
+	}
+}
+
+// 🎯T1115: direct unit coverage of parseSilentDecision for the same shape,
+// isolated from the fenced-envelope line splitter.
+func TestParseSilentDecisionWhyFreeText(t *testing.T) {
+	raw := `confidence=0.5 choice=exclude-only-when-seatstate-observed-dead why=a never-observed seat (proc nil, no seatstate authority) keeps the old conservative behaviour`
+	d, err := parseSilentDecision(raw)
+	if err != nil {
+		t.Fatalf("parseSilentDecision: %v", err)
+	}
+	want := "a never-observed seat (proc nil, no seatstate authority) keeps the old conservative behaviour"
+	if d.Why != want {
+		t.Fatalf("why = %q, want %q", d.Why, want)
+	}
+	if d.Choice != "exclude-only-when-seatstate-observed-dead" {
+		t.Fatalf("choice = %q", d.Choice)
+	}
+	if d.Confidence != 0.5 {
+		t.Fatalf("confidence = %v", d.Confidence)
+	}
+}
