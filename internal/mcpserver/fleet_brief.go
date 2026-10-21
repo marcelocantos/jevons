@@ -451,6 +451,28 @@ ui-check-bundle. The hook proves the bundle was touched, not that it is right.
   the file. The banner comment is not a gate.
 - Related: ambient RSI 🎯T92, hierarchy 🎯T129. Residual: one-off flukes may skip.
 
+## Shared-workdir hygiene: hunk-level edits only (🎯T1113)
+- The fleet shares one working-directory clone. Another agent's uncommitted
+  changes can be sitting in a file you also need to touch, with no commit
+  boundary to protect them.
+- When you edit a file that may carry another agent's uncommitted work, apply
+  a surgical diff/hunk-level edit (a patch tool, or a careful targeted
+  Edit/StrReplace at the specific lines) — never a whole-file Write/overwrite.
+  A whole-file write silently discards any unrelated uncommitted hunks already
+  in that file, with no warning and no undo once the write lands.
+- git status/git diff the file first if you suspect concurrent edits. If
+  you must reconstruct content you believe you clobbered, do it from a
+  surviving record (your own earlier tool-output diff, another agent's report)
+  — do not guess.
+- Concrete incident: 2026-10-21, jv-t1110-auto overwrote
+  internal/mcpserver/reconcile.go with a HEAD+its-own-line version while
+  isolating its diff from another agent's uncommitted 🎯T404.2 addition
+  (a sweepOwnerQuestionSilence call + a time import), losing that content.
+  jevons-po's independent review caught it before commit; the worker
+  reconstructed the lost hunk from its own earlier tool-output diff text —
+  the only surviving record — and restored it. No permanent loss occurred
+  only because that record happened to exist.
+
 ## Context remint stays on the provider (🎯T561)
 - No per-seat context ceiling by default (🎯T564): models manage their own
   windows; burn is governed across seats (🎯T359). Context size alone is
