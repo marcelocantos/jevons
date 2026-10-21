@@ -3,15 +3,16 @@
 # and make supervisord the owner of the development daemon's lifecycle (🎯T594).
 #
 # Exactly one thing may own :13705. This installer therefore evicts the
-# other two claimants before starting its own: the launchd KeepAlive job,
-# and Homebrew's brew-services copy. Leaving either loaded is how the
-# program ends up FATAL "exited too quickly" — supervisord starts a second
-# daemon, the bind fails, it exits inside startsecs, and after startretries
-# supervisord gives up FOR GOOD. That state looks like a warning and is
-# actually an unsupervised daemon (observed 2026-08-29 to 08-31).
+# other claimant before starting its own: Homebrew's brew-services copy.
+# Leaving it loaded is how the program ends up FATAL "exited too quickly" —
+# supervisord starts a second daemon, the bind fails, it exits inside
+# startsecs, and after startretries supervisord gives up FOR GOOD. That
+# state looks like a warning and is actually an unsupervised daemon
+# (observed 2026-08-29 to 08-31). launchd is not a claimant any more:
+# 🎯T1111 retired the KeepAlive job and the UI-probe LaunchAgents.
 #
 # SUPERVISOR_NO_TAKEOVER=1 renders the programs without taking the port,
-# for a machine that still wants launchd to own it.
+# for a machine where something else still holds it.
 set -e
 
 REPO="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
@@ -76,12 +77,6 @@ if ! command -v supervisorctl >/dev/null 2>&1; then
   exit 1
 fi
 
-# Retire the older launchd comparison job as well as its login-time plist.
-if command -v launchctl >/dev/null 2>&1; then
-  launchctl bootout "gui/$(id -u)/com.marcelocantos.jevons-ui-vanilla" 2>/dev/null || true
-fi
-rm -f "$HOME/Library/LaunchAgents/com.marcelocantos.jevons-ui-vanilla.plist"
-
 changes="$(supervisorctl reread)"
 printf '%s\n' "$changes"
 case "$changes" in
@@ -102,12 +97,6 @@ if [ "${SUPERVISOR_NO_TAKEOVER:-}" = 1 ]; then
   echo "jevonsd: rendered, not started (SUPERVISOR_NO_TAKEOVER=1)."
   echo "jevonsd: free :13705 before supervisord reloads, or the program goes FATAL."
 else
-  # Evict the launchd KeepAlive job. bootout on an absent job is not an
-  # error worth stopping for — the job may already be gone, which is the
-  # state we want.
-  if command -v launchctl >/dev/null 2>&1; then
-    launchctl bootout "gui/$(id -u)/com.marcelocantos.jevonsd" 2>/dev/null || true
-  fi
   supervisorctl stop jevons-broker 2>/dev/null || true
   supervisorctl update jevons-broker 2>/dev/null || true
   # Both brokers speak the same status protocol, so a successful status

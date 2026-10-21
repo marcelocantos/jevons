@@ -17,8 +17,11 @@
 //
 // The policy is pure so the decision can be tested without a port, a
 // daemon, or a clock. Effects — probing, restarting, notifying — live in
-// cmd/jevons-watchdog, which launchd runs on an interval and which is
-// therefore outside every process tree this is meant to survive.
+// cmd/jevons-watchdog, one probe per invocation, which any supervisor or
+// scheduler runs on an interval from outside the process tree this is
+// meant to survive. The development daemon itself is held by supervisord
+// (supervisor/jevonsd.ini, 🎯T1111); the watchdog is the probe that tells
+// the owner when a bounce did not take.
 package supervise
 
 import (
@@ -83,7 +86,7 @@ type Config struct {
 	BackoffInterval time.Duration
 }
 
-// DefaultConfig is what the launchd job runs with.
+// DefaultConfig is what the watchdog runs with.
 func DefaultConfig() Config {
 	return Config{
 		Grace:           90 * time.Second,
@@ -93,8 +96,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// State is what the supervisor remembers between runs. launchd starts a
-// fresh process every interval, so nothing survives in memory.
+// State is what the supervisor remembers between runs. Each run is a fresh
+// process, so nothing survives in memory.
 type State struct {
 	// DownSince is when the port was first seen unserved. Zero means
 	// the last observation was healthy.

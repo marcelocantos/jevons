@@ -164,10 +164,11 @@ bin/mcpscope: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/mcpscope ./cmd/mcpscope
 
-# Development-daemon supervisor (🎯T405 / 🎯T553.3). KeepAlive on jevonsd is the
-# standing owner (`make jevonsd-install`). The interval watchdog that
-# called restart-jevonsd is legacy; keep the binary for oracles until T553.3
-# retires it. `make watchdog-install` still exists but is not the product path.
+# Development-daemon watchdog (🎯T405): one probe per invocation, run by a
+# supervisor or scheduler on an interval; it restarts the development
+# daemon when a bounce did not take and tells the owner. The daemon's own
+# process is held by supervisord (`make supervisor-install`, 🎯T1111);
+# launchd is not involved.
 .PHONY: jevons-watchdog
 jevons-watchdog: bin/jevons-watchdog
 
@@ -175,26 +176,9 @@ bin/jevons-watchdog: $(GO_SRC)
 	@mkdir -p bin
 	go build -o bin/jevons-watchdog ./cmd/jevons-watchdog
 
-.PHONY: watchdog-install watchdog-uninstall watchdog-status
-watchdog-install: bin/jevons-watchdog
-	bin/jevons-watchdog -install
-
-watchdog-uninstall: bin/jevons-watchdog
-	bin/jevons-watchdog -uninstall
-
+.PHONY: watchdog-status
 watchdog-status: bin/jevons-watchdog
 	@bin/jevons-watchdog -status
-
-JEVONSD_LABEL := com.marcelocantos.jevonsd
-.PHONY: jevonsd-install jevonsd-uninstall jevonsd-status
-jevonsd-install: bin/jevonsd
-	bin/jevonsd -install-daemon-agent
-
-jevonsd-uninstall: bin/jevonsd
-	bin/jevonsd -uninstall-daemon-agent
-
-jevonsd-status:
-	-launchctl print gui/$$(id -u)/$(JEVONSD_LABEL) | head -20
 
 # Test verdict harness (owner, 2026-08-11). Wraps `go test -json` and
 # reports pass/fail with counts instead of a transcript, so a failing
@@ -353,24 +337,13 @@ ui-check-bundle: ui-deps
 # Daily/dev servers (🎯T540.4 / vellum supervisor/ shape): tracked
 # supervisor/*.ini with @REPO@, rendered into Homebrew supervisor.d.
 # Vite :5173 is not a standing program — make ui-dev is opt-in HMR.
-# jevonsd-install (launchd KeepAlive) remains until SUPERVISOR_TAKEOVER=1.
+# supervisord is the only supervisor of the development daemon (🎯T1111).
 .PHONY: supervisor-install supervisor-status
 supervisor-install: bin/jevonsd
 	supervisor/install.sh
 
 supervisor-status:
 	-supervisorctl status jevonsd
-
-# Daily UI LaunchAgents (legacy 🎯T540.4 path). Prefer make supervisor-install.
-UI_DAEMON_LABEL := com.marcelocantos.jevons-ui
-ui-daemon-install: bin/jevonsd
-	bin/jevonsd -install-ui-agents
-
-ui-daemon-stop: bin/jevonsd
-	bin/jevonsd -uninstall-ui-agents
-
-ui-daemon-status:
-	-launchctl print gui/$$(id -u)/$(UI_DAEMON_LABEL) | head -20
 
 # ui/node_modules is gitignored, so a clean checkout of HEAD (bin/gate -clean,
 # CI, a fresh clone) has no vitest until this install runs. 🎯T563: the old

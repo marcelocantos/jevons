@@ -53,7 +53,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/supervise"
 	"github.com/marcelocantos/jevons/internal/thread"
 	"github.com/marcelocantos/jevons/internal/transcript"
-	"github.com/marcelocantos/jevons/internal/uidaemon"
 	"github.com/marcelocantos/jevons/internal/upgrade"
 	"github.com/marcelocantos/jevons/internal/workers"
 	"github.com/marcelocantos/jevons/internal/writconf"
@@ -67,11 +66,6 @@ import (
 func main() {
 	configPath := flag.String("config", "", "config file (default ~/.jevons/config.yaml; missing file = built-in defaults)")
 	port := flag.Int("port", 13705, "listen port")
-	uiMode := flag.String("ui", "", "empty=full daemon; probe=React surface check")
-	installUIAgents := flag.Bool("install-ui-agents", false, "write and load the React surface probe, then exit")
-	uninstallUIAgents := flag.Bool("uninstall-ui-agents", false, "unload the React surface probe, then exit")
-	installDaemonAgent := flag.Bool("install-daemon-agent", false, "write the development jevonsd KeepAlive LaunchAgent (🎯T553.3), then exit")
-	uninstallDaemonAgent := flag.Bool("uninstall-daemon-agent", false, "unload the development jevonsd KeepAlive LaunchAgent, then exit")
 	bindAddr := flag.String("bind", "", "listen interface (default 127.0.0.1 â loopback only; remote devices use the pigeon relay)")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. https://carrier-pigeon.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
@@ -116,36 +110,6 @@ func main() {
 		Level: logLevel,
 	})))
 
-	if *installUIAgents {
-		runInstallUIAgents()
-	}
-	if *installDaemonAgent {
-		runInstallDaemonAgent(*workDir)
-	}
-	if *uninstallDaemonAgent {
-		if err := supervise.UnloadAgent(supervise.DaemonLabel); err != nil {
-			slog.Error("uninstall daemon KeepAlive", "err", err)
-			os.Exit(1)
-		}
-		home, _ := os.UserHomeDir()
-		_ = os.Remove(supervise.DaemonPlistPath(home))
-		os.Exit(0)
-	}
-	if *uninstallUIAgents {
-		if err := uidaemon.Uninstall(); err != nil {
-			slog.Error("uninstall UI LaunchAgents", "err", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	switch strings.TrimSpace(*uiMode) {
-	case "probe":
-		runUIProbe()
-	case "", "full":
-	default:
-		slog.Error("unknown -ui", "ui", *uiMode)
-		os.Exit(2)
-	}
 
 	// ð¯T282: drop any enclosing agent session's identity before anything
 	// spawns. Started from inside a Claude Code session (make run,
@@ -603,34 +567,10 @@ func main() {
 	// sees serving resume, the daemon it would tell is a process that
 	// started seconds ago knowing nothing. The record on disk is the
 	// handover between them, and this loop is the daemon reading it.
+	// The daemon's process is held by supervisord (🎯T1111); nothing here
+	// supervises a supervisor.
 	go supervise.ReportLoop(ctx, supervise.Dir(cfg.StateDir), 0, srv.NotifyOwnerNote)
 
-	// 🎯T405: and the other direction — the daemon supervises its own
-	// supervisor. The watchdog was installed on 2026-08-10 and stopped
-	// being held by launchd fourteen minutes later; the plist stayed on
-	// disk, the machine never rebooted, and for five days and four
-	// daemon bounces nothing noticed, because the only thing watching
-	// the watchdog was the owner. A supervisor whose absence has no
-	// alarm supervises nothing the moment it is the thing that broke.
-	// These two loops make each process responsible for the other, and
-	// they live in different process trees precisely so that whatever
-	// takes one down cannot take the other with it.
-	//
-	// 🎯T1090: only the development daemon does this. The loop observes
-	// and reinstates the owner's real LaunchAgent under $HOME, so an
-	// isolate running it reported the owner's watchdog as a gap from a
-	// test run (gate 252cf6ac) and could have rewritten its plist.
-	if supervisesOwnerWatchdog(cfg.Port, cfg.StateDir) {
-		go supervise.WatchAgentLoop(ctx, supervise.AgentPaths{
-			StateDir: cfg.StateDir,
-			Home:     supervise.HomeDir(),
-			Repo:     supervise.RepoRoot(),
-			Port:     cfg.Port,
-		}, supervise.DefaultAgentConfig(), 0, srv.NotifyOwnerNote)
-	} else {
-		slog.Info("supervise: not the development daemon; leaving the owner's watchdog LaunchAgent alone",
-			"port", cfg.Port, "state_dir", cfg.StateDir, "label", supervise.AgentLabel)
-	}
 
 	// ð¯T27.9: start the liveness check loop once the daemon context exists.
 	if liveMon != nil {
@@ -639,7 +579,7 @@ func main() {
 
 	// ð¯T40: SIGINT/SIGTERM = normal stop (StopAll); SIGHUP = upgrade exit
 	// (skip StopAll, write handles). JEVONS_UPGRADE_EXIT=1 also marks
-	// SIGTERM/SIGINT as upgrade when launchd cannot send SIGHUP.
+	// SIGTERM/SIGINT as upgrade when the supervisor cannot send SIGHUP.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
@@ -1644,102 +1584,6 @@ func repoSibling(bin string, elem ...string) string {
 	return dir
 }
 
-func runInstallDaemonAgent(workdir string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		slog.Error("daemon agent: home", "err", err)
-		os.Exit(1)
-	}
-	wd, _ := os.Getwd()
-	repo, err := supervise.DevelopmentRepoRoot(workdir, wd, supervise.RepoRoot())
-	if err != nil {
-		slog.Error("daemon agent: locate repo", "err", err)
-		os.Exit(1)
-	}
-	bin := supervise.DevelopmentDaemonBinary(repo)
-	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
-	spec := supervise.DaemonSpec{
-		Binary:   bin,
-		Workdir:  repo,
-		Port:     config.DevelopmentPort,
-		StateDir: config.Default().StateDir,
-		PathEnv:  pathEnv,
-		LogPath:  supervise.DaemonLogPath(config.Default().StateDir),
-	}
-	path := supervise.DaemonPlistPath(home)
-	if err := supervise.WriteDaemonPlist(path, spec); err != nil {
-		slog.Error("write daemon KeepAlive plist", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("wrote daemon KeepAlive plist", "path", path, "label", supervise.DaemonLabel)
-
-	if supervise.DaemonOwnsProcess() {
-		slog.Info("KeepAlive already loaded", "label", supervise.DaemonLabel)
-		os.Exit(0)
-	}
-	// Bootstrapping while a nohup daemon holds :13705 starts a second
-	// process that fail-to-bind and KeepAlive-loops. Write-only; the
-	// restart script bootstraps after SIGHUP frees the port.
-	if dailyPortHeld(spec.Port) {
-		slog.Info("port is held; not bootstrapping KeepAlive — bounce to adopt",
-			"port", spec.Port, "plist", path)
-		os.Exit(0)
-	}
-	if err := supervise.LoadAgent(path, supervise.DaemonLabel); err != nil {
-		slog.Error("load daemon KeepAlive", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("loaded daemon KeepAlive (🎯T553.3)", "label", supervise.DaemonLabel)
-	os.Exit(0)
-}
-
-func dailyPortHeld(port int) bool {
-	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
-}
-
-func runInstallUIAgents() {
-	bin, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		slog.Error("ui agents: binary path", "err", err)
-		os.Exit(1)
-	}
-	pathEnv, _ := supervise.AgentPATH(exec.LookPath, supervise.RestartTools)
-	spec := uidaemon.Spec{
-		Binary:   bin,
-		StateDir: config.Default().StateDir,
-		PathEnv:  pathEnv,
-	}
-	if err := uidaemon.Install(spec); err != nil {
-		slog.Error("install UI LaunchAgents", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("installed React surface probe", "label", uidaemon.ReactLabel)
-	os.Exit(0)
-}
-
-func runUIProbe() {
-	got := uidaemon.ProbeReact(nil, uidaemon.DevelopmentReactURL())
-	if got.OK {
-		slog.Info("React surface ok (🎯T540.4)", "status", got.Status)
-		os.Exit(0)
-	}
-	slog.Error("React surface failed", "reason", got.Reason)
-	// 🎯T553.3: kick KeepAlive; do not invoke the fat restart script.
-	if supervise.DaemonOwnsProcess() {
-		if err := supervise.KickstartAgent(supervise.DaemonLabel); err != nil {
-			slog.Error("KeepAlive kickstart failed", "err", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	slog.Error("React surface failed and KeepAlive is not loaded — not invoking restart-jevonsd (🎯T553.2)")
-	os.Exit(1)
-}
 
 func servedPort(addr net.Addr) int {
 	if tcp, ok := addr.(*net.TCPAddr); ok {

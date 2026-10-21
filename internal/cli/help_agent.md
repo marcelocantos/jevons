@@ -1037,18 +1037,20 @@ nohup scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 ```
 
 The script detaches (🎯T405), builds a committed HEAD snapshot and requests
-SIGHUP upgrade exit through the supervisor that owns the development daemon.
-Current development uses supervisord program `jevonsd`. Legacy launchd
-KeepAlive installations remain supported; obsolete arguments are reloaded
-before adoption. The script then waits for `/health` and `/api/frontier`.
-React changes require a rebuilt and activated daemon; hard reload observes that bundle.
+SIGHUP upgrade exit through supervisord program `jevonsd`
+(`supervisor/jevonsd.ini`), which owns the development daemon and
+relaunches it. Where nothing supervises the port (an isolate, a hand-run
+daemon) it starts a detached daemon of its own. The script then waits for
+`/health` and `/api/frontier`. React changes require a rebuilt and
+activated daemon; hard reload observes that bundle.
 
-**Supervision (🎯T405 / 🎯T553.3).** On 2026-08-10 a worker's restart
-killed the daemon and the script died with its invoker. The historical fix
-was KeepAlive on `jevonsd` itself; current development uses supervisord. The interval job
-**`com.marcelocantos.jevons-watchdog`** (`make watchdog-install` /
-`make watchdog-status`) is not the product path and must not call the
-fat script when KeepAlive owns the process. An upgrade bounce still
+**Supervision (🎯T405 / 🎯T1111).** On 2026-08-10 a worker's restart
+killed the daemon and the script died with its invoker. supervisord is the
+only supervisor of the development process; launchd is not a way of
+supervising Jevons (no KeepAlive job, no watchdog plist, no UI-probe
+LaunchAgent — 🎯T1111 removed them). `bin/jevons-watchdog` remains as an
+interval probe (`make watchdog-status`) that calls the script when a bounce
+did not take and tells the owner through blurter. An upgrade bounce still
 re-execs through `bin/detach` into its own session.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396)

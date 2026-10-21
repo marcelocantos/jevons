@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 🎯T191 / 🎯T553 — rebuild + activate the development jevonsd on :13705.
-# Workers do not auto-invoke this (🎯T553.2). Prefer KeepAlive
-# com.marcelocantos.jevonsd as the process owner (🎯T553.3).
+# Workers do not auto-invoke this (🎯T553.2). supervisord owns the
+# development process (supervisor/jevonsd.ini, 🎯T1111); this script asks it
+# for an upgrade exit and starts a detached daemon only where nothing
+# supervises the port.
 #
 # Purpose: overseer/PO/worker bounce after daemon-path Build without asking
 # the owner to restart by hand (🎯T188). Session death must not cancel the
@@ -72,10 +74,11 @@
 # The daemon itself is also started under nohup/setsid so it outlives
 # this script (reparented to init).
 #
-# SUPERVISION (🎯T405): the launchd job com.marcelocantos.jevons-watchdog
-# probes :$PORT every 30s and calls this script when the port stays dead —
-# so a bounce that fails for any other reason is also recovered without
-# the owner. Install with `make watchdog-install`.
+# SUPERVISION (🎯T405 / 🎯T1111): supervisord holds the development daemon
+# (supervisor/jevonsd.ini, autorestart=true) and relaunches it when it
+# exits; bin/jevons-watchdog is the interval probe that restarts the daemon
+# through this script when a bounce did not take, and tells the owner.
+# launchd is not involved.
 #
 # macOS bash 3.2 safe (no mapfile/associative arrays/bash-4isms).
 #
@@ -252,8 +255,9 @@ usage() {
   cat <<'EOF'
 Usage: restart-jevonsd.sh [options]
 
-Rebuild bin/jevonsd, stop brew KeepAlive if needed, free the development port,
-start repo bin/jevonsd detached, wait until /health and /api/frontier serve.
+Rebuild bin/jevonsd, stop the brew service if needed, free the development port,
+relaunch under supervisord (or start repo bin/jevonsd detached where nothing
+supervises the port), wait until /health and /api/frontier serve.
 
 🎯T218: if the rebuilt binary is already the one the running daemon is
 serving, this exits 0 without touching the port (already activated).
@@ -294,10 +298,9 @@ BLESSED INVOKE (survive agent/overseer death AND stop the caller blocking
 on the bounce; the self-detach above covers the first half on its own):
   nohup ./scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 
-SUPERVISION (🎯T405): com.marcelocantos.jevons-watchdog probes the port
-every 30s and calls this script when it stays dead — so a bounce that
-fails for any other reason is recovered without the owner. Install it
-with: make watchdog-install
+SUPERVISION (🎯T405 / 🎯T1111): supervisord holds the development daemon
+(supervisor/jevonsd.ini) and relaunches it on exit; bin/jevons-watchdog is
+the interval probe that calls this script when a bounce did not take.
 EOF
 }
 
@@ -654,44 +657,6 @@ upgrade_with_supervisor() {
   return 0
 }
 
-# 🎯T553.3: if KeepAlive owns jevonsd, SIGHUP is enough — launchd
-# relaunches the binary. Bootstrap the job when the plist exists but
-# launchd is not holding it (first adopt after write-only install).
-# Fall back to nohup only when no plist has been written yet.
-start_or_adopt_daemon() {
-  local label="com.marcelocantos.jevonsd"
-  local plist="$HOME/Library/LaunchAgents/${label}.plist"
-  local domain="gui/$(id -u)"
-  if [[ -f "$plist" ]]; then
-    if ! grep -q "$ROOT/bin/jevonsd" "$plist"; then
-      log "KeepAlive plist does not point at $ROOT/bin/jevonsd — refusing to bootstrap a wrong job; nohup-start"
-      start_daemon_detached
-      return 0
-    fi
-    local loaded_job
-    if loaded_job="$(launchctl print "${domain}/${label}" 2>/dev/null)"; then
-      if [[ "$loaded_job" == *"-vanilla-port"* ]]; then
-        # The running job retains ProgramArguments even after its plist is
-        # rewritten. SIGHUP has already preserved the fleet and freed the
-        # port; reload this one obsolete job before adopting the new binary.
-        log "T540.2: migrate loaded KeepAlive arguments after upgrade exit"
-        "$BIN" -install-daemon-agent -workdir "$ROOT" || die "cannot write React-only daemon job"
-        launchctl bootout "${domain}/${label}" || die "cannot unload obsolete daemon arguments"
-        launchctl bootstrap "$domain" "$plist" || die "cannot load React-only daemon job"
-      else
-        log "🎯T553.3 KeepAlive $label already loaded; kickstart after SIGHUP"
-        launchctl kickstart -k "${domain}/${label}" >/dev/null 2>&1 || true
-      fi
-    else
-      log "🎯T553.3 bootstrap KeepAlive $label (port is free)"
-      launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || \
-        die "could not bootstrap $label from $plist"
-    fi
-    return 0
-  fi
-  log "KeepAlive plist absent; nohup-start (legacy until make jevonsd-install)"
-  start_daemon_detached
-}
 
 start_daemon_detached() {
   # Detach so SIGHUP/SIGTERM to this script (or its parent agent) does not
@@ -820,7 +785,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] would: 🎯T392.5 hold $LOCK_FILE via runlock so concurrent restarts serialise"
   log "[dry-run] would: brew services stop jevons (if brew lists jevons)"
   log "[dry-run] would: 🎯T392.5 SIGHUP listeners on :$PORT (upgrade exit — in-flight agent turns survive), SIGKILL only if the port is still held after ${STOP_WAIT_SEC}s"
-  log "[dry-run] would: 🎯T553.3 bootstrap/kickstart com.marcelocantos.jevonsd if the KeepAlive plist exists, else nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG"
+  log "[dry-run] would: nohup/setsid start $BIN -port $PORT -workdir $WORKDIR >>$LOG where nothing supervises the port (🎯T1111)"
   log "[dry-run] would: 🎯T1086 under supervisord, read $SUPERVISOR_PROGRAM's autorestart before SIGHUP and supervisorctl start it if the upgrade exit leaves it EXITED or FATAL"
   log "[dry-run] would: wait for /health 200 and /api/frontier non-404; on timeout tell the owner through blurter"
   log "[dry-run] BLESSED INVOKE: nohup $ROOT/scripts/restart-jevonsd.sh >>\$HOME/.jevons/restart-jevonsd.log 2>&1 &"
@@ -850,22 +815,6 @@ if [[ "$SKIP_MAKE" != "1" ]]; then
   "$BUILDSNAP" -root "$ROOT" -snap "$SNAP_DIR" \
     -target bin/jevonsd -artifact bin/jevonsd -dest "$BIN"
 
-  # 🎯T405: the supervisor is part of the deployment, not something a
-  # human installed once. bin/jevons-watchdog was built by hand on
-  # 2026-08-10 and every bounce since rebuilt the daemon around it,
-  # leaving the one process responsible for the daemon being up as the
-  # one process that never received a fix. launchd re-execs the program
-  # each interval, and install() lands it by rename, so replacing the
-  # file here is picked up on the next probe with no reload.
-  #
-  # Not fatal, unlike the daemon build above: a watchdog that will not
-  # compile is a reason to bring the daemon up unsupervised and say so,
-  # never a reason to leave it down.
-  log "rebuild: bin/jevons-watchdog from committed HEAD"
-  "$BUILDSNAP" -root "$ROOT" -snap "$SNAP_DIR" \
-    -target bin/jevons-watchdog -artifact bin/jevons-watchdog \
-    -dest "$ROOT/bin/jevons-watchdog" ||
-    log "WARNING: the watchdog did not rebuild — the daemon is coming up supervised by whatever build is on disk"
 
   # 🎯T553.1: React is built, type-checked and embedded by bin/jevonsd in the
   # same committed HEAD snapshot. There is no separately mutable UI to copy.
@@ -972,7 +921,10 @@ if [[ "${JEVONS_RESTART_FAULT:-}" == "after-kill" ]]; then
   kill -9 $$
 fi
 
-start_or_adopt_daemon
+# No supervisor owns this port (🎯T1111: supervisord handles the development
+# daemon above; this is the isolate / hand-run path), so detach a daemon of
+# our own.
+start_daemon_detached
 fi
 wait_until_serving
 record_active_identity

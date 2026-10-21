@@ -10,87 +10,30 @@ import (
 	"strings"
 )
 
-// 🎯T434 — the supervisor's restart must not depend on a toolchain the
-// launchd environment cannot reach.
-//
-// THE GUARANTEE THIS FILE MAKES, and the failure it accepts.
+// 🎯T434 — a restart must not depend on a toolchain the supervisor's
+// environment cannot reach.
 //
 // The restart script builds bin/detach, bin/runlock and bin/buildsnap on
 // demand and fails closed (exit 2) when it cannot, because restarting
 // unserialised, or in a session the caller's death can sweep, is the
 // failure 🎯T392.5 and 🎯T405 exist to remove. Building needs `go`, which
-// on this machine lives in /opt/homebrew/bin. A LaunchAgent whose plist
-// says nothing about the environment runs with launchd's own PATH, which
-// contains neither Homebrew nor anything else the owner installed — so the
-// watchdog could not build the helper, refused every restart, and could
-// not even say so: `blurter`, its only channel to the owner while the
-// cockpit is down, is on the same unreachable PATH. The supervisor and its
-// own alarm shared one failure, and it was latent only because both
-// helpers happened to be on disk. `make clean` would have made it real.
+// on this machine lives in /opt/homebrew/bin. A supervisor that starts the
+// watchdog with a bare system PATH cannot build the helper, refuses every
+// restart, and cannot say so either: `blurter`, its only channel to the
+// owner while the cockpit is down, is on the same unreachable PATH. The
+// supervisor and its own alarm share one failure, latent only while both
+// helpers happen to be on disk; `make clean` makes it real.
 //
-// CHOSEN: the plist carries an EnvironmentVariables PATH, computed at
-// install time from where the tools actually are (AgentPATH below), rather
-// than hard-coding /opt/homebrew/bin or trusting bin/ to stay populated.
-// Install refuses when it cannot find `go` at all, because a watchdog
-// installed without one is a job that will fail every 30 seconds.
-//
-// ACCEPTED FAILURE: that PATH is a snapshot, true when written. Move the
-// toolchain afterwards and it is wrong — the same shape as every other
-// snapshot-of-the-environment bug in this repo (🎯T376 / 🎯T377 / 🎯T432).
-// It is not left silent: RestartBlocker sees at run time that the helpers
-// are absent and no `go` is reachable, and the watchdog puts that in the
-// out-of-band notice, so a restart that can never succeed reaches the
-// owner with the reason and the fix (`make watchdog-install`) instead of
-// looping unheard.
-
-// LaunchdDefaultPATH is what a LaunchAgent gets when its plist declares no
-// environment. Everything the owner installed — Homebrew, Go, blurter — is
-// somewhere else.
-const LaunchdDefaultPATH = "/usr/bin:/bin:/usr/sbin:/sbin"
-
-// RestartTools are the executables the supervised restart path needs and
-// launchd cannot see by default.
-//
-//	go      the restart script builds its helpers on demand
-//	blurter the only way the owner hears anything while jevonsd is down
-var RestartTools = []string{"go", "blurter"}
+// supervisord's program sections declare their PATH explicitly
+// (supervisor/jevonsd.ini `environment=`), which is where the toolchain is
+// made reachable. RestartBlocker is the audible half: at run time it sees
+// that the helpers are absent with no `go` on PATH, and the watchdog puts
+// that in the out-of-band notice, so a restart that can never succeed
+// reaches the owner with the reason and the fix instead of looping unheard.
 
 // LookPath is exec.LookPath's shape, taken as a parameter so the policy is
 // testable without depending on what the test machine has installed.
 type LookPath func(string) (string, error)
-
-// AgentPATH computes the PATH to write into the LaunchAgent: launchd's own
-// default plus the directory of each tool that could be found. Tools that
-// could not be found are returned by name; the caller decides which of
-// those are fatal.
-//
-// Directories, not a copy of the caller's whole PATH: the plist should say
-// why each entry is there, and an inherited login PATH carries dozens of
-// entries that have nothing to do with restarting a daemon.
-func AgentPATH(lookPath LookPath, tools []string) (path string, missing []string) {
-	dirs := strings.Split(LaunchdDefaultPATH, ":")
-	seen := map[string]bool{}
-	for _, d := range dirs {
-		seen[d] = true
-	}
-	for _, tool := range tools {
-		p, err := lookPath(tool)
-		if err != nil {
-			missing = append(missing, tool)
-			continue
-		}
-		if abs, err := filepath.Abs(p); err == nil {
-			p = abs
-		}
-		dir := filepath.Dir(p)
-		if seen[dir] {
-			continue
-		}
-		seen[dir] = true
-		dirs = append(dirs, dir)
-	}
-	return strings.Join(dirs, ":"), missing
-}
 
 // RestartHelpers are the binaries under <repo>/bin that the restart script
 // needs and (like buildsnap below) will `go build` on demand when they are
@@ -99,7 +42,7 @@ func AgentPATH(lookPath LookPath, tools []string) (path string, missing []string
 // detach, runlock: re-exec'd through, in the order the script needs them.
 // claudiapin: 🎯T448 hard-fails the whole restart ("refusing a silent
 // claudia pin") when it is missing and cannot be built — the same
-// no-go-on-launchd failure this file exists to name, so it belongs here.
+// no-go-on-PATH failure this file exists to name, so it belongs here.
 //
 // buildident is deliberately NOT listed: the script's own fallback
 // (`|| return 0`) treats a failed build as silently skippable, so a
@@ -136,8 +79,8 @@ func RestartBlocker(repo string, lookPath LookPath, pathEnv string) string {
 		return ""
 	}
 	return fmt.Sprintf("%s missing under %s and no `go` on PATH (%s) to build %s — "+
-		"the restart fails closed rather than run unserialised. Run `make watchdog-install` "+
-		"from that repo to give the LaunchAgent a PATH that reaches the toolchain.",
+		"the restart fails closed rather than run unserialised. Give the supervisor's program "+
+		"a PATH that reaches the Go toolchain (supervisor/jevonsd.ini environment=) and retry.",
 		strings.Join(absent, " and "), repo, pathEnv, plural(len(absent), "it", "them"))
 }
 

@@ -1,13 +1,16 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// jevons-watchdog is the supervisor for the development jevonsd (🎯T405).
+// jevons-watchdog probes the development jevonsd and restarts it when a
+// bounce did not take (🎯T405).
 //
-// launchd runs it on an interval, which is the point: it lives outside
-// every process tree that a daemon restart tears down, so it is still
-// there when the restart that killed the daemon has killed itself. One
-// invocation is one probe and at most one decision — no loop, no state
-// in memory, nothing to wedge. Everything it remembers is on disk.
+// A supervisor or scheduler runs it on an interval, which is the point: it
+// lives outside every process tree that a daemon restart tears down, so it
+// is still there when the restart that killed the daemon has killed
+// itself. One invocation is one probe and at most one decision — no loop,
+// no state in memory, nothing to wedge. Everything it remembers is on disk.
+// The daemon itself is held by supervisord (supervisor/jevonsd.ini,
+// 🎯T1111); launchd is not involved.
 //
 // It restarts the development daemon and it tells the owner. It does not
 // diagnose, does not build, and does not decide whether the outage was
@@ -34,8 +37,8 @@ const (
 	defaultPort = 13705
 	// A restart may rebuild from a HEAD worktree and then wait 90s for
 	// health, so the wait has to exceed that comfortably. It exists to
-	// stop a wedged restart holding a launchd slot forever, not to
-	// bound a normal one.
+	// stop a wedged restart holding the supervisor's slot forever, not
+	// to bound a normal one.
 	restartTimeout = 8 * time.Minute
 	probeTimeout   = 5 * time.Second
 )
@@ -46,23 +49,16 @@ func main() {
 
 func run() int {
 	var (
-		port    = flag.Int("port", defaultPort, "development jevonsd port to supervise")
-		repo    = flag.String("repo", defaultRepo(), "repo root holding scripts/restart-jevonsd.sh")
-		state   = flag.String("state", defaultState(), "jevonsd state dir (supervision state lives under watchdog/)")
-		grace   = flag.Duration("grace", supervise.DefaultConfig().Grace, "how long the port may be unserved before this is an outage")
-		install = flag.Bool("install", false, "write and load the launchd agent for the current user, then exit")
-		remove  = flag.Bool("uninstall", false, "unload and remove the launchd agent, then exit")
-		status  = flag.Bool("status", false, "print current supervision state as JSON and exit")
-		dry     = flag.Bool("dry-run", false, "decide and log, but do not restart or notify")
+		port   = flag.Int("port", defaultPort, "development jevonsd port to supervise")
+		repo   = flag.String("repo", defaultRepo(), "repo root holding scripts/restart-jevonsd.sh")
+		state  = flag.String("state", defaultState(), "jevonsd state dir (supervision state lives under watchdog/)")
+		grace  = flag.Duration("grace", supervise.DefaultConfig().Grace, "how long the port may be unserved before this is an outage")
+		status = flag.Bool("status", false, "print current supervision state as JSON and exit")
+		dry    = flag.Bool("dry-run", false, "decide and log, but do not restart or notify")
 	)
 	flag.Parse()
 
-	switch {
-	case *install:
-		return installAgent(*repo, *port, *state)
-	case *remove:
-		return uninstallAgent()
-	case *status:
+	if *status {
 		return printStatus(*state, *port)
 	}
 
@@ -124,10 +120,7 @@ func run() int {
 
 	// 🎯T405: the heartbeat, written by every cycle including the quiet
 	// ones. It is the only evidence anyone outside this process has that
-	// the supervisor ran at all — the daemon reads it to decide whether
-	// it still has a supervisor, and on 2026-08-10 nothing did, so a job
-	// that launchd had silently stopped holding went unnoticed for five
-	// days behind a plist that looked perfectly healthy on disk.
+	// the watchdog ran at all; `-status` reads it back.
 	next.LastProbe = now
 	if err := supervise.SaveState(dir, next); err != nil {
 		logf("ERROR saving state: %v", err)
@@ -159,18 +152,6 @@ func probe(port int) bool {
 // binary that was serving five minutes ago will serve now. A worker who
 // wants their newer build activated calls the restart script itself.
 func restart(repo string, port int) string {
-	// 🎯T553.3: KeepAlive on jevonsd is the standing supervisor. Calling
-	// the fat script here races launchd and recreates the bounce ceremony.
-	if supervise.DaemonOwnsProcess() {
-		logf("KeepAlive %s owns the daemon; not invoking restart-jevonsd", supervise.DaemonLabel)
-		if err := supervise.KickstartAgent(supervise.DaemonLabel); err != nil {
-			return fmt.Sprintf("KeepAlive kickstart failed: %v", err)
-		}
-		if !probe(port) {
-			return "KeepAlive kickstart ran but the port is still not serving."
-		}
-		return ""
-	}
 	script := filepath.Join(repo, "scripts", "restart-jevonsd.sh")
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Sprintf("no restart script at %s (%v)", script, err)
@@ -187,8 +168,8 @@ func restart(repo string, port int) string {
 	}
 	// 🎯T434: a restart that cannot succeed must say why, not just that it
 	// failed. The script fails closed when it cannot build the helpers it
-	// re-execs through, and the reason it cannot is almost always that
-	// launchd handed this process a PATH with no toolchain on it — which
+	// re-execs through, and the reason it cannot is almost always that the
+	// supervisor handed this process a PATH with no toolchain on it — which
 	// the owner can only act on if it reaches them.
 	blocker := supervise.RestartBlocker(repo, exec.LookPath, os.Getenv("PATH"))
 	if blocker != "" {
@@ -215,7 +196,8 @@ func restart(repo string, port int) string {
 }
 
 // notify sends an out-of-band notice through blurter, which is a
-// separate launchd daemon and therefore still alive when jevonsd is not.
+// separately supervised daemon and therefore still alive when jevonsd is
+// not.
 //
 // The cockpit is where the owner looks, and during an outage the cockpit
 // is exactly what is missing — so the notice that an outage is happening

@@ -812,23 +812,22 @@ If you *are* activating (owner asked, or you are applying HEAD), invoke
 nohup scripts/restart-jevonsd.sh >>"$HOME/.jevons/restart-jevonsd.log" 2>&1 &
 ```
 
-The script rebuilds HEAD, stops brew KeepAlive (Cellar must not reclaim
+The script rebuilds HEAD, stops the brew service (Cellar must not reclaim
 `:13705`), SIGHUPs the listener (🎯T40 / 🎯T392.5), and waits until
-`/health` serves. When supervisord owns the development listener, the script
-requests its SIGHUP upgrade exit and lets that supervisor relaunch it.
-The legacy launchd KeepAlive path remains supported on machines using it;
-do not start a second process owner (🎯T553.3).
+`/health` serves. supervisord program `jevonsd` (`supervisor/jevonsd.ini`)
+owns the development listener: the script requests its SIGHUP upgrade exit
+and lets supervisord relaunch it. Do not start a second process owner.
 
-**Supervision (🎯T405 / 🎯T553.3).** On 2026-08-10 a worker's restart
+**Supervision (🎯T405 / 🎯T1111).** On 2026-08-10 a worker's restart
 killed the daemon, the daemon's shutdown stopped that worker, and the
 script died with it five seconds before the step that starts the
-replacement — the fleet stayed down until the owner noticed. The
-historical fix was **launchd KeepAlive on `jevonsd` itself** (`own session`
-via `bin/detach` still wraps an upgrade bounce). Install with
-`make jevonsd-install`. The probe-and-invoke job
-**`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`) is
-**not** the standing supervisor — it must not call the fat script when
-KeepAlive owns the process.
+replacement — the fleet stayed down until the owner noticed. supervisord
+is the only supervisor of the development process (`own session` via
+`bin/detach` still wraps an upgrade bounce); launchd is not a way of
+supervising Jevons — 🎯T1111 removed the KeepAlive job, the watchdog plist
+and the UI-probe LaunchAgent. `bin/jevons-watchdog` remains as an interval
+probe (`make watchdog-status`) that calls the script when a bounce did not
+take and tells the owner through blurter.
 
 ## Run gates so the status survives (🎯T386 / 🎯T396) — hard rule
 
