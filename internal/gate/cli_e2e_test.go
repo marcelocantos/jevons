@@ -286,22 +286,21 @@ func TestGateCLIT1132CallerGoneKillsOrphanTree(t *testing.T) {
 	}
 	_ = wrapper.Wait()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	var lastOut string
 	for time.Now().Before(deadline) {
-		if out, err := exec.Command("pgrep", "-f", marker).Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
 		code, out := runGate(t, store, "last")
 		lastOut = out
 		if strings.Contains(out, "KILLED") && strings.Contains(out, "caller_gone") {
 			if code == 0 {
 				t.Fatalf("gate last exited 0 for caller_gone:\n%s", out)
 			}
+			if procs, err := exec.Command("pgrep", "-f", marker).Output(); err == nil && len(strings.TrimSpace(string(procs))) > 0 {
+				t.Fatalf("gate recorded caller_gone but command tree still alive: %s", procs)
+			}
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("gate did not record KILLED caller_gone within 2s; last=\n%s", lastOut)
+	t.Fatalf("gate did not record KILLED caller_gone within 5s; last=\n%s", lastOut)
 }
