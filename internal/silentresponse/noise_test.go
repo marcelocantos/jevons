@@ -149,3 +149,76 @@ func TestClassifyLive(t *testing.T) {
 		t.Fatalf("empty terminal = %v, want Visible", got)
 	}
 }
+
+// 🎯T1054 acceptance 2: precision report on real session samples.
+//
+// 20 real overseer/PO assistant messages pulled from actual jevons fleet
+// sessions (via mnemo search on repo=jevons), each hand-labelled with
+// ground truth: should the owner see this, or is it routine no-action
+// chatter? Text is quoted verbatim (occasionally truncated where the
+// source snippet itself was truncated) — nothing here is synthetic.
+//
+// Sources (session id, approx date): 019fc712-...-6961, 019fc1ba-...-2ab3,
+// 019fd105-...-42dbb, 019fe0d9-...-fd16, 019fbaf1-...-4ea13,
+// 019fd13d-...-50e21, 019fe341-...-58ca2, 01a00f1f-...-431f6 — all
+// marcelocantos/jevons, 2026-08 through 2026-08-18.
+func TestIsFiltered_RealSessionPrecisionReport(t *testing.T) {
+	t.Parallel()
+	type sample struct {
+		text     string
+		ownerSees bool // ground truth: true = must stay visible
+	}
+	samples := []sample{
+		{"Hermetic oracle green. Committing and notifying T188 + overseer.", true},
+		{"## Confirmed  | | | |--|--| | **SHA** | `043eb1b` | | **Glyphs** | collapsed → ▾, expanded → ▴ | | **Size** | `.chev` 10px → 13px | | **Oracle** | collapse-test", true},
+		{"silent - already achieved", false},
+		{"Aligned.  - No mass-spawn   - **`jv-t346-sentinel-frontier`** in progress on **🎯T346**   - PO idle on implement (correct)    I'll gate T346 when the finish repo", true},
+		{"Locked on **🎯T65**.  **Acceptance bar (PO):** prefix-first (`aside: …` etc.); **reject** button-primary Capture/Aside/Main; stack/RHS OK if quiet; prefix cheat-", true},
+		{"## Confirmed — 🎯T106 done (Build plane)  | Check | Result | |--------|--------| | Product SHA | `ff7c5ee` on local master | | Ledger | **achieved** + attestatio", true},
+		{"**Spawned** `jv-t247-aside-immediate` — `target_id=T247`, brief delivered.  **Children under jevons-po:** `jv-t246-msg-expand` (T246) + `jv-t247-aside-immediate", true},
+		{"**Folded into `jv-t173-frontier-chrome`** (interrupt attempted; brief queued if turn was mid-flight):  - ID / status / fanout → shrink-wrap + light padding   -", true},
+		{"[silent] T273 already gated (bf009e9); jv-t273 duplicate finish ack — no rework.", false},
+		{"[silent] Independent PO gate 🎯T244: SHA ca5481c on master; re-ran hermetics PASS; /health+/api/frontier 200; ledger already achieved; worker reaped; zero childr", false},
+		{"`jv-t496-owner-reply` is registered and **running**, `target_id=T496`, but **phase=idle** after the overseer CONTINUE. Transcript shows it started (prod at chat", true},
+		{"Two small updates, both waiting.  - **`jv-t625-journey-triage`:** the expiry notice was for its old J13 monitor, already resolved. J30 is still running and its", true},
+		{"`jv-t819-fold-md-clip` is still waiting on its J23 gate and hasn't chosen a side. It notes the overseer `chatlog` is still the replay source, which weakens the", true},
+		{"Acknowledged — voice as I/O, agent elsewhere. Writing it up as a target.", true},
+		{"Updating the stale tasks — T18's pending phases are superseded by T25's direction.", true},
+		{"No response requested.", false}, // 🎯T502 turn-boundary artifact; a different mechanism already drops this one, this classifier is not expected to catch it
+		{"Clean report for the user.", true},
+		{"`jv-t285.2-icon-menu` — Claude, **working** on the manual provider/model menu.  Also Claude/working: T502, T412, T433, T503 (the", true},
+		{"T25's acceptance is written around the now-dead Go server-side voice bridge. The architecture moved fully client-side. Rewriting it to the real plan, recording", true},
+		{"Honestly — you're right. The hacky feeling isn't tooling fatigue, it's a mismatch between the API design and our use case.  **What xAI Realtime is actually for:", true},
+	}
+	var tp, fp, tn, fn int
+	for _, s := range samples {
+		suppressed := IsFiltered(s.text)
+		switch {
+		case suppressed && !s.ownerSees:
+			tp++
+		case suppressed && s.ownerSees:
+			fp++
+			t.Errorf("FALSE POSITIVE (unsafe): suppressed a message the owner should see: %q", s.text)
+		case !suppressed && !s.ownerSees:
+			fn++
+		case !suppressed && s.ownerSees:
+			tn++
+		}
+	}
+	total := tp + fp + tn + fn
+	precision := 1.0
+	if tp+fp > 0 {
+		precision = float64(tp) / float64(tp+fp)
+	}
+	t.Logf("🎯T1054 precision report over %d real session samples: TP=%d FP=%d TN=%d FN=%d precision=%.2f",
+		total, tp, fp, tn, fn, precision)
+	// The safety property this classifier must hold: it never suppresses a
+	// message the owner should see. Recall (catching every routine phrasing)
+	// is deliberately NOT asserted here — the lead-in wordlist is narrow by
+	// design, so some routine chatter phrased outside it is correctly missed
+	// (false negative, the safe failure direction) rather than risk a false
+	// positive.
+	if fp != 0 {
+		t.Fatalf("got %d false positives, want 0 (never suppress owner-visible content)", fp)
+	}
+}
