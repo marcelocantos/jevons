@@ -237,21 +237,30 @@ func TestSkipSleepingCoordinatorRestart(t *testing.T) {
 		alive      bool
 		openIntent bool
 		kids       int
+		stoodDown  bool
 		wantSkip   bool
 		wantReason string
 	}{
-		{"sleeping po", po, overseer, false, false, 0, true, reasonSleepingPO},
-		{"running po", po, overseer, true, false, 0, false, ""},
-		{"open intent", po, overseer, false, true, 0, false, ""},
-		{"has work children", po, overseer, false, false, 1, false, ""},
-		{"overseer never skipped", overseer, overseer, false, false, 0, false, ""},
-		{"overseer case", "Jevons", "jevons", false, false, 0, false, ""},
-		{"empty overseer defaults", po, "", false, false, 0, true, reasonSleepingPO},
-		{"empty target", "", overseer, false, false, 0, false, ""},
+		{"sleeping po", po, overseer, false, false, 0, false, true, reasonSleepingPO},
+		{"running po", po, overseer, true, false, 0, false, false, ""},
+		{"open intent", po, overseer, false, true, 0, false, false, ""},
+		{"has work children", po, overseer, false, false, 1, false, false, ""},
+		{"overseer never skipped", overseer, overseer, false, false, 0, false, false, ""},
+		{"overseer case", "Jevons", "jevons", false, false, 0, false, false, ""},
+		{"empty overseer defaults", po, "", false, false, 0, false, true, reasonSleepingPO},
+		{"empty target", "", overseer, false, false, 0, false, false, ""},
+		// 🎯T1118: per-agent intent (parked/reaped) outranks a running
+		// process, a recoverable owner open intent, and live work children —
+		// none of those licence waking an agent someone deliberately parked.
+		{"agent intent stood down beats running", po, overseer, true, false, 0, true, true, reasonAgentIntentStoodDown},
+		{"agent intent stood down beats open intent", po, overseer, false, true, 0, true, true, reasonAgentIntentStoodDown},
+		{"agent intent stood down beats work children", po, overseer, false, false, 3, true, true, reasonAgentIntentStoodDown},
+		{"overseer never skipped even stood down", overseer, overseer, false, false, 0, true, false, ""},
+		{"empty target never skipped even stood down", "", overseer, false, false, 0, true, false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			skip, reason := SkipSleepingCoordinatorRestart(tc.target, tc.overseer, tc.alive, tc.openIntent, tc.kids)
+			skip, reason := SkipSleepingCoordinatorRestart(tc.target, tc.overseer, tc.alive, tc.openIntent, tc.kids, tc.stoodDown)
 			if skip != tc.wantSkip || reason != tc.wantReason {
 				t.Fatalf("skip=%v reason=%q want skip=%v reason=%q", skip, reason, tc.wantSkip, tc.wantReason)
 			}
