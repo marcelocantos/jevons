@@ -1859,7 +1859,10 @@ func (s *Server) NotifyDaemonRestarted(overseer, defaultPO, stateDir string) {
 		kids := byParent[target]
 		if target != overseer {
 			nKids := restartNotifyWorkChildren(target, byParent, defs)
-			if skip, reason := SkipSleepingCoordinatorRestart(target, overseer, running(target), previewIntent.Recoverable(), nKids); skip {
+			// 🎯T1118: per-agent intent outranks work-children/open-intent —
+			// a parked PO is left down exactly like restart reattach leaves it.
+			stoodDown := fleetintent.StoodDown(s.fleetIntent().Allow(target, fleetintent.ControlRevive).Agent)
+			if skip, reason := SkipSleepingCoordinatorRestart(target, overseer, running(target), previewIntent.Recoverable(), nKids, stoodDown); skip {
 				slog.Info("daemon restart skip sleeping coordinator",
 					"target", target, "reason", reason,
 					"open_intent", false, "workers", nKids, "process", "stopped")
