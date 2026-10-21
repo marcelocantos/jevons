@@ -122,7 +122,26 @@ func parseSilentLedger(raw string) (SilentLedgerState, error) {
 // author can fix in its own words costs one more turn and stays honest.
 func parseSilentDecision(raw string) (SilentDecision, error) {
 	d := SilentDecision{Confidence: -1}
-	for _, tok := range splitDecisionTokens(raw) {
+	tokens, positions := splitDecisionTokensWithPos(raw)
+	for i, tok := range tokens {
+		// why= (and its aliases) is free text (🎯T1115): peek the key
+		// before demanding every remaining token be key=value, because an
+		// unquoted multi-word explanation ("why=a never-observed seat
+		// (proc nil) keeps ...") is itself a sequence of bare words, not
+		// further key=value tokens. Detect it from the token prefix and
+		// consume the rest of raw verbatim, then stop splitting.
+		if k0, v0, cut0 := strings.Cut(tok, "="); cut0 {
+			lk := strings.ToLower(strings.TrimSpace(k0))
+			if lk == "why" || lk == "reason" || lk == "because" {
+				if len(v0) > 0 && (v0[0] == '"' || v0[0] == '\'') {
+					d.Why = unquoteSlot(v0)
+				} else {
+					keyEnd := positions[i] + len(k0) + 1 // past "why="
+					d.Why = strings.TrimSpace(raw[keyEnd:])
+				}
+				break
+			}
+		}
 		k, v, cut := strings.Cut(tok, "=")
 		if !cut {
 			return d, fmt.Errorf("silent-decision token %q is not key=value", tok)
@@ -141,8 +160,6 @@ func parseSilentDecision(raw string) (SilentDecision, error) {
 			d.Confidence = f
 		case "choice", "decision", "what":
 			d.Choice = unquoteSlot(v)
-		case "why", "reason", "because":
-			d.Why = unquoteSlot(v)
 		default:
 			return d, fmt.Errorf("unknown silent-decision key %q", k)
 		}
@@ -180,6 +197,48 @@ func splitDecisionTokens(raw string) []string {
 		out = append(out, b.String())
 	}
 	return out
+}
+
+// splitDecisionTokensWithPos is splitDecisionTokens plus the byte offset
+// (in raw) at which each returned token starts, so a free-text field like
+// why= can locate where its own value begins and consume the remainder of
+// the line instead of being re-tokenized (🎯T1115).
+func splitDecisionTokensWithPos(raw string) ([]string, []int) {
+	var out []string
+	var positions []int
+	var b strings.Builder
+	inQuote := false
+	start := -1
+	runes := []rune(raw)
+	byteOffset := 0
+	for _, r := range runes {
+		switch {
+		case r == '"':
+			if start < 0 {
+				start = byteOffset
+			}
+			inQuote = !inQuote
+			b.WriteRune(r)
+		case unicode.IsSpace(r) && !inQuote:
+			if b.Len() > 0 {
+				out = append(out, b.String())
+				positions = append(positions, start)
+				b.Reset()
+				start = -1
+			}
+		default:
+			if start < 0 {
+				start = byteOffset
+			}
+			b.WriteRune(r)
+		}
+		byteOffset += len(string(r))
+	}
+	if b.Len() > 0 {
+		out = append(out, b.String())
+		positions = append(positions, start)
+	}
+	return out, positions
 }
 
 func unquoteSlot(v string) string {
