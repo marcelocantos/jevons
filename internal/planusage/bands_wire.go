@@ -105,7 +105,14 @@ func pressureOfWindow(w Window, now time.Time, th Thresholds) *float64 {
 // copy — the history slice belongs to the shared snapshot.
 //
 // Same rule as the window's own Band, reached through the same function, so
-// the sparkline's colour at its right edge is the bar's colour now.
+// the sparkline's colour at its right edge is the bar's colour now — EXCEPT
+// that w.Band is the caller's already-decided verdict for "now", which by
+// the time this runs may already carry the owner's override (🎯T948). The
+// newest sample is "now": it gets w.Band verbatim rather than a second,
+// un-overridden recomputation, so the line's end and the dot drawn on top of
+// it (🎯T1069) read the same colour as the bar even when a band override is
+// in force and disagrees with what the newest reading alone would classify
+// as.
 func historyWithBands(w Window, th Thresholds) []HistoryPoint {
 	if len(w.History) == 0 {
 		return w.History
@@ -121,6 +128,7 @@ func historyWithBands(w Window, th Thresholds) []HistoryPoint {
 		p.Band = string(BandOfWindow(at, p.At, th))
 		out[i] = p
 	}
+	out[len(out)-1].Band = w.Band
 	return out
 }
 

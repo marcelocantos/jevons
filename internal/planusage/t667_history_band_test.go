@@ -75,3 +75,42 @@ func TestT667UnavailableBackendSamplesHaveNoBand(t *testing.T) {
 		t.Fatalf("unavailable backend sample band = %+v", got.History)
 	}
 }
+
+// 🎯T1069: an owner band override repaints the window, and the newest
+// sample — the one the dot sits on — must repaint with it too, even when
+// the measured value at that sample alone would classify differently.
+func TestT1069HistoryDotWearsOverrideBand(t *testing.T) {
+	th := DefaultThresholds()
+	lim := int64(30 * 24 * 3600)
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	resets := start.Add(time.Duration(lim) * time.Second)
+	now := start.Add(20 * 24 * time.Hour)
+
+	// Newest sample alone reads comfortably "ok".
+	history := []HistoryPoint{
+		{At: start.Add(5 * 24 * time.Hour), Remaining: 90},
+		{At: now, Remaining: 80},
+	}
+	w := Window{
+		Name: WindowWeekly, RemainingPercent: pctOf(80), UsedPercent: pctOf(20),
+		ResetsAt: &resets, LimitWindowSeconds: &lim, History: history,
+	}
+	snap := Snapshot{Backends: []Backend{{
+		Provider: "cursor", Status: StatusAvailable, Windows: []Window{w},
+		Override: &Override{Band: BandExhausted, Reason: "owner says so"},
+	}}}
+
+	got := WithBands(snap, now, th).Backends[0].Windows[0]
+	if got.Band != string(BandExhausted) {
+		t.Fatalf("window band = %q, want override %q", got.Band, BandExhausted)
+	}
+	last := got.History[len(got.History)-1]
+	if last.Band != got.Band {
+		t.Errorf("newest sample band %q != overridden window band %q — the dot and the line's end disagree", last.Band, got.Band)
+	}
+	// Earlier samples are untouched by the override: they still carry the
+	// measured verdict at their own moment.
+	if got.History[0].Band != string(BandOK) && got.History[0].Band == string(BandExhausted) {
+		t.Errorf("earlier sample band %q unexpectedly took the override", got.History[0].Band)
+	}
+}
