@@ -38,6 +38,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/missionbound"
+	"github.com/marcelocantos/jevons/internal/repowatch"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/reapverify"
 	"github.com/marcelocantos/jevons/internal/research"
@@ -549,6 +550,11 @@ type Server struct {
 	// refresh plus async feed triggers, writing durable versioned notes.
 	// Nil until SetResearchAgent.
 	research *research.Agent
+
+	// repowatch is the standing PO repo-watch cycle (🎯T1022.2): polls `gh`
+	// issues/PRs per PO workdir and delivers a typed brief to the owning PO.
+	// Nil until SetRepoWatchAgent.
+	repowatch *repowatch.Agent
 
 	// auditor is the periodic full-scan audit cycle (🎯T357): bounded passes
 	// over code, skills, and prompts on an advanced-tier model, folded into

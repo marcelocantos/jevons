@@ -43,6 +43,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/portown"
 	"github.com/marcelocantos/jevons/internal/provider"
+	"github.com/marcelocantos/jevons/internal/repowatch"
 	"github.com/marcelocantos/jevons/internal/research"
 	"github.com/marcelocantos/jevons/internal/rsi"
 	"github.com/marcelocantos/jevons/internal/seatprovider"
@@ -900,6 +901,10 @@ func main() {
 	// ð¯T356 ambient research: periodic context refresh + async feed triggers,
 	// writing durable versioned notes and briefing the overseer.
 	startAmbientResearch(ctx, cfg, mcpSrv, capacityGate(capGov))
+
+	// 🎯T1022.2 PO repo-watch: polls `gh` issues/PRs per PO workdir and
+	// delivers a typed brief to the owning PO.
+	startRepoWatch(ctx, cfg, mcpSrv, capacityGate(capGov))
 
 	// ð¯T357 periodic full-scan audit: bounded advanced-model passes over
 	// code, skills, and prompts, folded into durable residue.
@@ -1874,6 +1879,54 @@ func startAmbientResearch(ctx context.Context, cfg config.Config, mcpSrv *mcpser
 		"config", "state_dir/research/config.json",
 		"notes", "state_dir/research/notes",
 	)
+	return agent
+}
+
+// startRepoWatch wires the 🎯T1022.2 standing PO repo-watch cycle: `gh issue
+// list` / `gh pr list` per PO workdir, tracked against a durable per-repo
+// watermark, delivered to the owning PO as a typed repo-watch brief. Repos
+// are discovered from the live fleet registry (product-owner seats with a
+// workdir) at startup; a PO minted after startup is picked up on daemon
+// restart (the same boundary research's related-repo scan lives with).
+//
+// Env:
+//
+//	JEVONS_REPOWATCH=0           disable the schedule (MCP tool stays registered)
+//	JEVONS_REPOWATCH_INTERVAL    duration (default 30m); "0" disables the ticker
+func startRepoWatch(ctx context.Context, cfg config.Config, mcpSrv *mcpserver.Server, gate capacity.Gate) *repowatch.Agent {
+	interval := time.Duration(0) // 0 = follow durable config
+	if v := strings.TrimSpace(os.Getenv("JEVONS_REPOWATCH_INTERVAL")); v != "" {
+		if v == "0" {
+			interval = -1
+		} else if d, err := time.ParseDuration(v); err == nil {
+			interval = d
+		} else {
+			slog.Warn("JEVONS_REPOWATCH_INTERVAL invalid; using config", "value", v)
+		}
+	}
+	repos := mcpserver.DiscoverPORepos(mcpSrv.Registry())
+	agent, err := repowatch.New(repowatch.Args{
+		StateDir:  cfg.StateDir,
+		Repos:     repos,
+		Deliverer: mcpSrv.NewPODeliverer(),
+		Capacity:  gate,
+		Interval:  interval,
+	})
+	if err != nil {
+		slog.Warn("PO repo-watch disabled", "err", err)
+		return nil
+	}
+	if _, err := os.Stat(repowatch.ConfigPath(cfg.StateDir)); os.IsNotExist(err) {
+		_ = repowatch.SaveConfig(cfg.StateDir, repowatch.DefaultConfig())
+	}
+	mcpSrv.SetRepoWatchAgent(agent)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JEVONS_REPOWATCH"))) {
+	case "0", "false", "no", "off":
+		slog.Info("PO repo-watch schedule disabled by JEVONS_REPOWATCH (tool still registered)")
+		return agent
+	}
+	go agent.Run(ctx)
+	slog.Info("PO repo-watch ready", "repos", len(repos), "config", "state_dir/repowatch/config.json")
 	return agent
 }
 
