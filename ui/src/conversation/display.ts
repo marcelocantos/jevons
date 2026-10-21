@@ -3,6 +3,7 @@
 
 import { classifyInjectUserText } from './inject';
 import { coalesceAssistantText, isSealedAssistant, joinAssistantTexts, streamIdOf } from './stream';
+import { isAgentForgedOwnerEvent } from './agentForgedOwnerTurns';
 import { turnOriginOf, type TurnOrigin } from './paint';
 import { isGenericToolName, summariseInput } from './toolSummary';
 
@@ -439,7 +440,10 @@ export function displayRows(frames: unknown[], opts?: DisplayRowsOpts): DisplayR
       if (!text) continue;
       const frameId = asRec(f).id;
       const id = typeof frameId === 'string' ? frameId : undefined;
-      const origin = userTurnOrigin(f, raw, !!opts?.inspect);
+      let origin = userTurnOrigin(f, raw, !!opts?.inspect);
+      if (isAgentForgedOwnerEvent(id)) {
+        origin = 'agent';
+      }
       const last = out[out.length - 1];
       // Canonical identities distinguish real repeated prompts. Text-only
       // echo folding is limited to old unindexed frames of the same origin.

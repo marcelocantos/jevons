@@ -173,6 +173,10 @@ const FleetStandingBrief = `open-intent harness standing-brief
 - Build time: a reaped/finished seat has no owner-facing form (🎯T1121); a parked seat is one line naming what it waits on (🎯T1059).
 - Runtime: routine reports are not narrated into the owner's chat (🎯T1053); one owner question gets one answer (🎯T1120).
 
+## Only the owner speaks in the owner's chat (🎯T1129)
+- Workers may observe the development cockpit (read, screenshot, hard reload) for a 🎯T493.1 verdict; they never type into or submit its composer or click acting controls. Interactive checks run on an isolate (make test-ui-live, 🎯T572), not the real :13705 instance.
+- Owner-origin sends from a browser require the owner cockpit session cookie (GET /api/owner-cockpit/session). Fleet Playwright / browser MCP sessions carry JevonsFleetBrowser / X-Jevons-Fleet-Browser and are refused on owner-origin sends.
+
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 - After any change that can affect what the owner sees in #messages /
   the React transcript pane in ui/ (🎯T540) — pin, virtualize, replay,

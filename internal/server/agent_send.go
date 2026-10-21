@@ -267,6 +267,10 @@ func (s *Server) handleAgentSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	origin, supervisor := supervisorOrigin(strings.TrimSpace(req.Origin), text)
+	if err := s.authorizeOwnerSurfaceHTTP(r, origin, name); err != nil {
+		writeJSONError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if supervisor {
 		slog.Info("🎯T921 supervisor message delivered as the supervisor's, not the owner's",
 			"component", "agent_send", "name", name, "declared_origin", req.Origin)

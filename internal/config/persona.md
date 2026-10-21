@@ -841,6 +841,13 @@ by its own words, not owner-relevant. When the owner asks one question,
 answer it once. When you are unsure whether something matters to them,
 keep it reachable on demand rather than pushed.
 
+
+## Only the owner speaks in the owner's chat (🎯T1129)
+
+Workers may **observe** the development cockpit (read, screenshot, hard reload) for a 🎯T493.1 prose verdict. They **never** type into or submit its composer, answer its questions, or click controls that act. Interactive verification runs on an **isolate** (`make test-ui-live`, `UI_HOST` on a throwaway port, 🎯T572) — never the real :13705 development instance.
+
+The daemon accepts owner-origin sends from a browser only when it holds a real owner cockpit session cookie minted at `GET /api/owner-cockpit/session`. Fleet Playwright / browser MCP sessions are stamped (`JevonsFleetBrowser` user-agent / `X-Jevons-Fleet-Browser`) and cannot mint that cookie or send as the owner.
+
 ## Run gates so the status survives (🎯T386 / 🎯T396) — hard rule
 
 Oracle-first (🎯T31) demands cited evidence and assumes the citation is

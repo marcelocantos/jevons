@@ -338,9 +338,10 @@ func TestT430SessionServersIsolatesPlaywrightByDefault(t *testing.T) {
 
 func TestT430PlaywrightIsolatedArgsIdempotentAndDropsEqualsForm(t *testing.T) {
 	already := []string{"@playwright/mcp@latest", "--sandbox", "--isolated"}
+	want := append(already, "--user-agent", "JevonsFleetBrowser/1 (Playwright MCP; not the owner)")
 	got := playwrightIsolatedArgs(already)
-	if strings.Join(got, " ") != strings.Join(already, " ") {
-		t.Fatalf("idempotent rewrite changed args: got %v want %v", got, already)
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("idempotent rewrite changed args: got %v want %v", got, want)
 	}
 
 	equals := []string{"@playwright/mcp@latest", "--user-data-dir=/tmp/shared-profile"}

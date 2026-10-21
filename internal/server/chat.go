@@ -2050,6 +2050,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Info("chat: received", "msg", msg)
+		if err := s.authorizeOwnerSurfaceHTTP(r, sendOriginOwner, s.overseerAgentName()); err != nil {
+			payload, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+			wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = conn.Write(wctx, websocket.MessageText, payload)
+			wcancel()
+			continue
+		}
 		if _, err := s.sendToNamedAgentAs(s.overseerAgentName(), msg, sendOriginOwner); err != nil {
 			// Failure already journaled/broadcast inside sendToOverseerAsOwner.
 			_ = err

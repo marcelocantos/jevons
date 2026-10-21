@@ -219,6 +219,24 @@ func playwrightIsolatedArgs(args []string) []string {
 	if !hasIsolated {
 		out = append(out, "--isolated")
 	}
+	out = playwrightFleetBrowserArgs(out)
+	return out
+}
+
+// playwrightFleetBrowserArgs stamps fleet Playwright sessions so owner-origin
+// cockpit sends are refused (🎯T1129).
+func playwrightFleetBrowserArgs(args []string) []string {
+	const uaFlag = "--user-agent"
+	for i, a := range args {
+		if a == uaFlag && i+1 < len(args) {
+			return args
+		}
+		if strings.HasPrefix(a, uaFlag+"=") {
+			return args
+		}
+	}
+	out := append([]string(nil), args...)
+	out = append(out, uaFlag, "JevonsFleetBrowser/1 (Playwright MCP; not the owner)")
 	return out
 }
 
