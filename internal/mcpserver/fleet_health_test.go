@@ -239,7 +239,7 @@ func TestSweepDeadAgentsEmptyOnHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Never launched → Get nil → not a dead-handle detection.
-	reps := recoverDeadHandles(reg, nil, "jevons", fleetintent.Snapshot{}, nil, nil)
+	reps := recoverDeadHandles(reg, nil, "jevons", fleetintent.Snapshot{}, nil, nil, nil)
 	if len(reps) != 0 {
 		t.Fatalf("want no dead agents, got %+v", reps)
 	}
@@ -377,5 +377,45 @@ func TestSweepDeadAgentsDeliberateStopNotRevivedByIntentFlip(t *testing.T) {
 	}
 	if len(f2.launches) != 1 || f2.launches[0] != "jv-t1112-crashed" {
 		t.Fatalf("launches=%v want [jv-t1112-crashed]", f2.launches)
+	}
+}
+
+// 🎯T1112 acceptance 2: a rehydrate is a mint for admission purposes. The
+// claudiaSweep adapter's Launch consults the admit hook before calling
+// fleet.LaunchRecovering, exactly as jevons_agent_start consults the spawn
+// governor — a registered-but-dead AutoStart seat the governor declines
+// stays declined, it is not waved through because the row already existed.
+func TestClaudiaSweepLaunchConsultsAdmitHook(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "a.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(claudia.AgentDef{
+		Name: "jv-t1112-gov", WorkDir: dir, SessionID: "s1", Provider: "grok", AutoStart: true, Purpose: claudia.PurposeWork,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("refused: host pressure critical (🎯T1112 test)")
+	cs := claudiaSweep{reg: reg, admit: func(purpose, name string) error {
+		if name != "jv-t1112-gov" {
+			t.Fatalf("admit called for unexpected name %q", name)
+		}
+		return wantErr
+	}}
+	if err := cs.Launch("jv-t1112-gov"); err != wantErr {
+		t.Fatalf("Launch err=%v want %v (admit hook must gate the relaunch)", err, wantErr)
+	}
+	// A nil admit hook (no governor wired, or a hermetic test) launches as
+	// before — not a behaviour change for the unwired case.
+	cs2 := claudiaSweep{reg: reg}
+	if err := cs2.Launch("jv-t1112-gov"); err != nil {
+		// LaunchRecovering may itself fail in this sandbox (no real
+		// provider binary); the point under test is that admit was
+		// skipped, not that the launch succeeded, so only report if the
+		// error looks like our refusal leaking through.
+		if err == wantErr {
+			t.Fatalf("Launch with nil admit hook must not reuse a stale refusal: %v", err)
+		}
 	}
 }

@@ -265,6 +265,18 @@ func (s *Server) ensureAgentProcess(name string) (*claudia.Agent, bool, error) {
 		s.noteRevive(name, "send", hold, nil)
 		return nil, false, fmt.Errorf("agent %q is not running and is held (%s, 🎯T1066) — lift the pause or start it explicitly with jevons_agent_start", name, hold)
 	}
+	// 🎯T1112: a rehydrate is a mint for admission purposes — the same
+	// spawn governor (seat-count, memory grind, capacity) a fresh
+	// jevons_agent_start goes through, not a free pass because the row
+	// already existed.
+	var purpose string
+	if def := s.registry.Def(name); def != nil {
+		purpose = def.Purpose
+	}
+	if err := s.admitRehydrate(purpose, name); err != nil {
+		s.noteRevive(name, "send", "spawn_governor", err)
+		return nil, false, err
+	}
 	p2, err := fleet.LaunchRecovering(s.registry, name)
 	s.noteRevive(name, "send", "", err)
 	if err != nil {

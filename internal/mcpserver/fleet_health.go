@@ -104,9 +104,14 @@ type fleetSweepReg interface {
 
 // claudiaSweep adapts *claudia.Registry to fleetSweepReg. account may be
 // nil: fleetlog's nil receiver still removes, just without the event.
+//
+// admit is 🎯T1112's spawn-governor hook: a relaunch of a dead AutoStart
+// handle is a mint for admission purposes, same as jevons_agent_start —
+// nil admits unconditionally (tests, and a server with no governor wired).
 type claudiaSweep struct {
 	reg     *claudia.Registry
 	account *fleetlog.Account
+	admit   func(purpose, name string) error
 }
 
 func (c claudiaSweep) List() []claudia.AgentDef {
@@ -136,6 +141,15 @@ func (c claudiaSweep) ExitCause(name string) string {
 }
 
 func (c claudiaSweep) Launch(name string) error {
+	if c.admit != nil {
+		purpose := ""
+		if d := c.reg.Def(name); d != nil {
+			purpose = d.Purpose
+		}
+		if err := c.admit(purpose, name); err != nil {
+			return err
+		}
+	}
 	_, err := fleet.LaunchRecovering(c.reg, name)
 	return err
 }
@@ -164,11 +178,11 @@ func (c claudiaSweep) RemoveDeadSeat(name string) error {
 //
 // overseerName is never recovered here (owner chat overseer has its own path).
 // Returns every detected dead name; Recovered true when Launch succeeded.
-func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string, deliberateStop func(name string) bool) []DeadAgentReport {
+func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string, deliberateStop func(name string) bool, admit func(purpose, name string) error) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
-	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent, hold, deliberateStop)
+	return sweepDeadAgents(claudiaSweep{reg: reg, account: account, admit: admit}, overseerName, intent, hold, deliberateStop)
 }
 
 // sweepDeadAgents is the testable implementation (real path + hermetic fakes).

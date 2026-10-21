@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/reapverify"
+	"github.com/marcelocantos/jevons/internal/seatstate"
 )
 
 // 🎯T414: the daemon's half of the shared intent representation. The pure
@@ -321,9 +322,37 @@ func (s *Server) handleFleetIntent(ctx context.Context, req mcp.CallToolRequest)
 	if err := s.SetAgentIntent(name, st, actor, reason); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	stopped := s.nameLooksStopped(name)
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Intent for %q is now %s (by %s). %s%s",
-		name, fleetintent.Describe(st), actor, fleetIntentEffect(st, name), note)), nil
+		"Intent for %q is now %s (by %s). %s%s%s",
+		name, fleetintent.Describe(st), actor, fleetIntentEffect(st, name), note,
+		fleetIntentRevivalCaveat(st, stopped))), nil
+}
+
+// nameLooksStopped reports that name is a registered row with no live
+// process right now — the shape 🎯T560 preserves after a supervisor kill.
+// Best-effort: a nil registry or unknown name reads as not-stopped so the
+// caveat only ever adds information, never a false alarm.
+func (s *Server) nameLooksStopped(name string) bool {
+	if s == nil || s.registry == nil {
+		return false
+	}
+	if s.registry.Def(name) == nil {
+		return false
+	}
+	return s.seatState(name).Alive != seatstate.Yes
+}
+
+// fleetIntentRevivalCaveat is 🎯T1112's clarifying sentence: lifting a
+// stopped row's intent to working removes the decline, but it is not itself
+// a spawn, a send, or a revive — nothing mints a process from this call
+// alone. An operator clearing stale intents should not be surprised by a
+// fleet six minutes later.
+func fleetIntentRevivalCaveat(st fleetintent.State, stopped bool) string {
+	if !stopped || !fleetintent.Runnable(st) {
+		return ""
+	}
+	return " This row stays stopped until spawned or sent to (🎯T1112) — lifting intent only clears the decline; it does not start the process."
 }
 
 // fleetIntentEffect states the consequence in the caller's terms. An intent

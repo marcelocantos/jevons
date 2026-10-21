@@ -141,7 +141,7 @@ func (s *Server) sweepDeadAccountedWith(overseer string, intent fleetintent.Snap
 		return nil
 	}
 	s.observeRegistryLiveness()
-	reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold, s.wasDeliberatelyStopped)
+	reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold, s.wasDeliberatelyStopped, s.admitRehydrate)
 	s.noteDeadHandleRevives(reps)
 	s.noteDeadSeats(reps)
 	return reps
