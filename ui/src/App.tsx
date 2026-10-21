@@ -230,13 +230,13 @@ function Cockpit() {
     : [{ name: 'jevons' }, { name: 'jevons-po' }];
   const frontierCwd = agents.find((a) => a.name === agent)?.workdir?.trim() || '';
   const frontierQ = useSeatFrontier(frontierCwd);
-  const frontierNote = !frontierCwd || frontierQ.data
-    ? undefined
-    : frontierQ.isError
-      ? 'frontier unavailable'
-      : 'loading…';
-  const frontierRows = frontierCwd ? frontierQ.data?.rows || [] : [];
-  const frontierLedger = frontierCwd ? frontierQ.data?.ledgerKey || '' : '';
+  const frontierNote = frontierQ.isError
+    ? 'frontier unavailable'
+    : frontierQ.isFetching && !frontierQ.data
+      ? 'loading…'
+      : undefined;
+  const frontierRows = frontierQ.data?.rows || [];
+  const frontierLedger = frontierQ.data?.ledgerKey || '';
   // 🎯T267: live target-ask → select owning PO (T253 rebinds Frontier) + highlight row.
   const [frontierHighlightId, setFrontierHighlightId] = useState('');
   const askHost = useMemo<TargetAskHost>(
@@ -416,7 +416,7 @@ function Cockpit() {
             />
             <SidebarPanel
               tab={tab}
-              readyCount={!frontierCwd || frontierQ.data ? frontierRows.length : undefined}
+              readyCount={frontierQ.data ? frontierRows.length : undefined}
               readyNote={frontierNote}
               onTab={(next) => {
                 navigate({ search: { agent, tab: next } });

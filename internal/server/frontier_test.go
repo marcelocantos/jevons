@@ -96,12 +96,15 @@ targets:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("want 2 frontier rows, got %d %+v", len(rows), rows)
+	if len(rows) != 3 {
+		t.Fatalf("want 3 active frontier rows (2 ready + 1 blocked), got %d %+v", len(rows), rows)
 	}
 	// T2 has fanout 1, T4 fanout 0 → T2 first.
 	if rows[0].ID != "T2" || rows[0].Fanout != 1 || rows[0].Name != "Ready leaf" {
 		t.Fatalf("row0=%+v", rows[0])
+	}
+	if !rows[0].Ready || rows[0].Blocked {
+		t.Fatalf("T2 readiness=%+v", rows[0])
 	}
 	if rows[0].Status != "Converging" {
 		t.Fatalf("status display=%q", rows[0].Status)
@@ -145,14 +148,14 @@ targets:
 	if rows[1].ID != "T4" || rows[1].Fanout != 0 {
 		t.Fatalf("row1=%+v", rows[1])
 	}
+	if !rows[1].Ready || rows[1].Blocked {
+		t.Fatalf("T4 readiness=%+v", rows[1])
+	}
 	if len(rows[1].Dependents) != 0 {
 		t.Fatalf("T4 should have empty dependents, got %+v", rows[1].Dependents)
 	}
-	// T3 must not appear (blocked by active T2).
-	for _, r := range rows {
-		if r.ID == "T3" {
-			t.Fatal("blocked T3 must not be on frontier")
-		}
+	if rows[2].ID != "T3" || rows[2].Ready || !rows[2].Blocked {
+		t.Fatalf("blocked T3 row=%+v", rows[2])
 	}
 }
 
@@ -189,8 +192,8 @@ targets:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ID != "T10.2" {
-		t.Fatalf("want only T10.2 on frontier, got %+v", rows)
+	if len(rows) != 4 || rows[0].ID != "T10.2" || !rows[0].Ready {
+		t.Fatalf("want T10.2 ready plus 3 blocked children, got %+v", rows)
 	}
 	// Active dependents only (T10.5 achieved excluded).
 	if rows[0].Fanout != 3 || len(rows[0].Dependents) != 3 {
@@ -271,8 +274,14 @@ targets:
 	if resp.Ledger == hard {
 		t.Fatal("must not hard-code cwd/bullseye.yaml")
 	}
-	if len(resp.Targets) != 1 || resp.Targets[0].ID != "T9" || resp.Targets[0].Fanout != 1 {
-		t.Fatalf("targets=%+v", resp.Targets)
+	var ready []FrontierRow
+	for _, r := range resp.Targets {
+		if r.Ready {
+			ready = append(ready, r)
+		}
+	}
+	if len(ready) != 1 || ready[0].ID != "T9" || ready[0].Fanout != 1 {
+		t.Fatalf("ready targets=%+v all=%+v", ready, resp.Targets)
 	}
 	if len(saw) < 1 || !strings.Contains(strings.Join(saw[0], " "), "open") {
 		t.Fatalf("expected bullseye open, saw %v", saw)

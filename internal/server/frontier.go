@@ -26,6 +26,16 @@ import (
 	"github.com/marcelocantos/jevons/internal/targetfile"
 )
 
+// frontierDepSatisfied reports whether a depends_on edge is satisfied for
+// readiness (same rule as targetfile.FrontierLeaves / frontier consume).
+func frontierDepSatisfied(statusOf map[string]string, dep string) bool {
+	st, ok := statusOf[dep]
+	if !ok {
+		return false
+	}
+	return targetfile.IsClosedStatus(st)
+}
+
 // 🎯T131: live bullseye frontier for the RHS bottom pane.
 //
 // Path discovery always goes through the bullseye CLI (`open`) — never a
@@ -64,6 +74,11 @@ type FrontierRow struct {
 	Achieved    string              `json:"achieved,omitempty"`
 	// Extra carries non-canonical ledger keys as stringified values (🎯T184).
 	Extra map[string]string `json:"extra,omitempty"`
+	// Ready / Blocked mirror targetfile.FrontierLeaves readiness (🎯T1119).
+	// Active targets with satisfied depends_on are ready; active but blocked
+	// deps are blocked. Achieved / set_aside rows are omitted from the table.
+	Ready   bool `json:"ready"`
+	Blocked bool `json:"blocked"`
 }
 
 // FrontierResponse is GET /api/frontier JSON.
@@ -454,35 +469,32 @@ func computeFrontierFromLedger(ledgerPath string) ([]FrontierRow, error) {
 		if !active[id] {
 			continue
 		}
-		// All depends_on must be done (or missing = treat as blocking if unknown).
 		ready := true
 		for _, dep := range t.DependsOn {
 			dep = strings.TrimSpace(dep)
 			if dep == "" {
 				continue
 			}
-			st, ok := statusOf[dep]
-			if !ok {
-				// Unknown dep: treat as not done (conservative).
+			if !frontierDepSatisfied(statusOf, dep) {
 				ready = false
 				break
 			}
-			if !isDoneStatus(st) {
-				ready = false
-				break
-			}
-		}
-		if !ready {
-			continue
 		}
 		deps := dependents[id]
 		if deps == nil {
 			deps = []FrontierDependent{}
 		}
-		rows = append(rows, frontierRowFromTarget(id, t, extraByID[id], nameOf, deps))
+		row := frontierRowFromTarget(id, t, extraByID[id], nameOf, deps)
+		row.Ready = ready
+		row.Blocked = !ready
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Fanout != rows[j].Fanout {
+		// Ready leaves first (fanout desc), then blocked (id order).
+		if rows[i].Ready != rows[j].Ready {
+			return rows[i].Ready
+		}
+		if rows[i].Ready && rows[j].Ready && rows[i].Fanout != rows[j].Fanout {
 			return rows[i].Fanout > rows[j].Fanout
 		}
 		return targetIDLess(rows[i].ID, rows[j].ID)
