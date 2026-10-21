@@ -141,10 +141,19 @@ func (s *Server) sweepDeadAccountedWith(overseer string, intent fleetintent.Snap
 		return nil
 	}
 	s.observeRegistryLiveness()
-	reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold)
+	reps := recoverDeadHandles(s.registry, s.RemovalAccount(), overseer, intent, s.autoSeatHold, s.wasDeliberatelyStopped)
 	s.noteDeadHandleRevives(reps)
 	s.noteDeadSeats(reps)
 	return reps
+}
+
+// wasDeliberatelyStopped reports that name's last recorded stop was a
+// supervisor stop/kill (🎯T1112), so the ambient dead-handle sweep must not
+// read a mere later intent flip (no send/spawn/revive aimed at this name)
+// as licence to relaunch it.
+func (s *Server) wasDeliberatelyStopped(name string) bool {
+	rec, ok := s.seatStops().Last(name)
+	return ok && rec.Source == seatstop.SourceSupervisor
 }
 
 // massStopLookback bounds how far back a mass-stop reading looks. Wider

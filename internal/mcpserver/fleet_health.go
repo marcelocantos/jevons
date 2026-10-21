@@ -53,7 +53,16 @@ type DeadAgentReport struct {
 // gets launched by StartAll — so before intent existed the sweep read a
 // deliberately stopped AutoStart worker as a silent death every single pass.
 // That is one of the three resurrection paths of 2026-08-10.
-func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows bool, purpose string) (detect, tryRecover, clearHandle, remove bool) {
+//
+// wasDeliberatelyStopped is 🎯T1112: a row a supervisor stop/kill left down
+// (seatstop.SourceSupervisor) looks identical to a silent crash here — a
+// known process handle that is no longer alive — so intentAllows flipping
+// true on its own (a mass jevons_fleet_intent write, no send/spawn/revive
+// aimed at this name) must not relaunch it. The sweep still detects and
+// reports it; it only recovers an AutoStart seat intent allows AND nothing
+// recorded as a deliberate stop/kill, i.e. a seat someone actually asked
+// for comes back some other way (adopt, revive, a fresh send/spawn).
+func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows, wasDeliberatelyStopped bool, purpose string) (detect, tryRecover, clearHandle, remove bool) {
 	if !hasProc || alive {
 		return false, false, false, false
 	}
@@ -62,6 +71,13 @@ func deadRecoveryPlan(hasProc, alive, autoStart, intentAllows bool, purpose stri
 		// the handle is how a stopped row loses the evidence that its
 		// process died, and the owner asked for this one to be down.
 		return true, false, false, false
+	}
+	if autoStart && wasDeliberatelyStopped {
+		// Intent says this name may run again, but nothing addressed it —
+		// no send, no spawn, no explicit revive — so the ambient sweep
+		// leaves it exactly as stopped. Fall through to the same
+		// clear-handle path a non-AutoStart seat takes.
+		return true, false, true, false
 	}
 	if autoStart {
 		return true, true, false, false // clear only if recover fails (caller)
@@ -148,11 +164,11 @@ func (c claudiaSweep) RemoveDeadSeat(name string) error {
 //
 // overseerName is never recovered here (owner chat overseer has its own path).
 // Returns every detected dead name; Recovered true when Launch succeeded.
-func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string) []DeadAgentReport {
+func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overseerName string, intent fleetintent.Snapshot, hold func(name string) string, deliberateStop func(name string) bool) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
-	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent, hold)
+	return sweepDeadAgents(claudiaSweep{reg: reg, account: account}, overseerName, intent, hold, deliberateStop)
 }
 
 // sweepDeadAgents is the testable implementation (real path + hermetic fakes).
@@ -162,7 +178,14 @@ func recoverDeadHandles(reg *claudia.Registry, account *fleetlog.Account, overse
 // achieved. hold names only frontier-consume's own seats (by name, not by
 // AutoStart, which named workers and POs carry too), so a named worker's or
 // PO's crash-recovery relaunch is never held here. Nil holds nothing.
-func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot, hold func(name string) string) []DeadAgentReport {
+//
+// deliberateStop is 🎯T1112: reports that name's last recorded stop was a
+// supervisor stop/kill, not a crash the harness merely discovered. A dead
+// AutoStart handle in that state is left stopped however intent reads —
+// reviving it is the explicit revive/send/spawn paths' job, not this
+// ambient sweep's. Nil treats every dead handle as a possible silent death
+// (pre-🎯T1112 behaviour).
+func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.Snapshot, hold func(name string) string, deliberateStop func(name string) bool) []DeadAgentReport {
 	if reg == nil {
 		return nil
 	}
@@ -183,7 +206,8 @@ func sweepDeadAgents(reg fleetSweepReg, overseerName string, intent fleetintent.
 				declineBlocking = "auto_seat_hold"
 			}
 		}
-		detect, tryRecover, clearHandle, remove := deadRecoveryPlan(hasProc, alive, d.AutoStart, allow, d.Purpose)
+		wasDeliberatelyStopped := deliberateStop != nil && deliberateStop(d.Name)
+		detect, tryRecover, clearHandle, remove := deadRecoveryPlan(hasProc, alive, d.AutoStart, allow, wasDeliberatelyStopped, d.Purpose)
 		if !detect {
 			continue
 		}

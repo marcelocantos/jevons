@@ -60,7 +60,7 @@ func TestT1066DeadHandleOnAnAchievedTargetIsNotRelaunched(t *testing.T) {
 	hold := func(name string) string { return AutoSeatHold(name, targets[name], false, achieved) }
 
 	byName := map[string]DeadAgentReport{}
-	for _, r := range sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, hold) {
+	for _, r := range sweepDeadAgents(f, "jevons", fleetintent.Snapshot{}, hold, nil) {
 		byName[r.Name] = r
 	}
 	if r := byName["jv-t1008-auto"]; r.Recovered || r.Declined != AutoHoldTargetAchieved {
