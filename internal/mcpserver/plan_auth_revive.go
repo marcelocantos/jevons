@@ -17,7 +17,9 @@ func (s *Server) RevivePlanAuthPeers(provider claudia.Provider, skip string) []f
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	return fleet.RevivePlanAuthPeers(s.registry, s.fleetIntent(), provider, skip, time.Now())
+	out := fleet.RevivePlanAuthPeers(s.registry, s.fleetIntent(), provider, skip, time.Now())
+	s.notePlanAuthRevivals(out)
+	return out
 }
 
 // RevivePlanAfterOwnerReauth relaunches the seats an owner's successful
@@ -26,7 +28,9 @@ func (s *Server) RevivePlanAfterOwnerReauth(provider claudia.Provider, skip stri
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	return fleet.RevivePlanAfterOwnerReauth(s.registry, s.fleetIntent(), provider, skip, time.Now())
+	out := fleet.RevivePlanAfterOwnerReauth(s.registry, s.fleetIntent(), provider, skip, time.Now())
+	s.notePlanAuthRevivals(out)
+	return out
 }
 
 // RevivePlanAuthWhereHealthy relaunches auth-broken seats on every plan
@@ -35,7 +39,9 @@ func (s *Server) RevivePlanAuthWhereHealthy() []fleet.PlanAuthRevival {
 	if s == nil || s.registry == nil {
 		return nil
 	}
-	return fleet.RevivePlanAuthWhereHealthy(s.registry, s.fleetIntent(), time.Now())
+	out := fleet.RevivePlanAuthWhereHealthy(s.registry, s.fleetIntent(), time.Now())
+	s.notePlanAuthRevivals(out)
+	return out
 }
 
 // ReattachRunningSeats re-adopts auto-start seats the broker still runs but
@@ -52,9 +58,28 @@ func (s *Server) ReattachRunningSeats() []string {
 		// Running again: the broker stop no longer describes it, and must
 		// not license a later relaunch of a seat stopped on purpose.
 		s.seatStops().Forget(name)
+		// 🎯T1128: every seat-launch road names itself in the durable
+		// event log, not only slog. The reattach sweep used to be silent
+		// on success — noteRevive was wired for its hold-refused branch
+		// only (relaunchableLostSeat) — so a seat the broker brought back
+		// here left no agent_lifecycle trace at all.
+		s.noteRevive(name, "reattach", "", nil)
 	}
 	s.noteBrokerLostOutcome(res, now)
 	return res.Back
+}
+
+// notePlanAuthRevivals records each plan-auth-recovery relaunch durably
+// (🎯T1128). RevivePlanAuthPeers / RevivePlanAfterOwnerReauth /
+// RevivePlanAuthWhereHealthy all route a stopped seat back through
+// LaunchRecovering on evidence that provider's plan login works again, and
+// none of the three ever reached the event log before this: noteRevive's
+// own doc comment named "plan_auth" as a revival road, but nothing called
+// it with that path.
+func (s *Server) notePlanAuthRevivals(revivals []fleet.PlanAuthRevival) {
+	for _, r := range revivals {
+		s.noteRevive(r.Name, "plan_auth", "", r.Err)
+	}
 }
 
 // relaunchableLostSeat reports whether the reattach loop may relaunch a seat
