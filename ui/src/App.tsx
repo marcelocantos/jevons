@@ -194,6 +194,9 @@ function Cockpit() {
           rehydrate?: string;
           reauth_available?: boolean;
           plan_wall?: string;
+          class?: string;
+          visible?: boolean;
+          panel_line?: string;
         }) => ({
           name: a.name || '',
           purpose: a.purpose,
@@ -215,6 +218,9 @@ function Cockpit() {
           rehydrate: a.rehydrate,
           reauth_available: a.reauth_available,
           plan_wall: a.plan_wall,
+          class: a.class,
+          visible: a.visible,
+          panel_line: a.panel_line,
         }))
         .filter((a: AgentRow) => a.name);
       const merged = mergeAgentChrome(lastAgentsRef.current, rows);
@@ -252,6 +258,10 @@ function Cockpit() {
     }),
     [agents, agent, navigate],
   );
+  const [fleetHistory, setFleetHistory] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('fleet-panel-history') === '1';
+  });
   const [theme, setTheme] = useState<ThemePref>('system');
   const [layout, setLayout] = useState<RhsLayoutState>(() => {
     if (typeof window === 'undefined') {
@@ -397,6 +407,16 @@ function Cockpit() {
             >
               <AgentTree
                 agents={agents}
+                showHistory={fleetHistory}
+                onToggleHistory={() => {
+                  setFleetHistory((on) => {
+                    const next = !on;
+                    if (typeof window !== 'undefined') {
+                      window.localStorage.setItem('fleet-panel-history', next ? '1' : '0');
+                    }
+                    return next;
+                  });
+                }}
                 selected={agent}
                 onSelect={(name) => navigate({ search: { agent: name === agent ? '' : name, tab } })}
                 onDismiss={(name) => void dismissFleetAside(name)}

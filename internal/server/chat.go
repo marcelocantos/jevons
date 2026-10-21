@@ -1335,6 +1335,10 @@ type agentInfo struct {
 	TranscriptLastMove       string   `json:"transcript_last_move,omitempty"`
 	TranscriptAgeSeconds     *float64 `json:"transcript_age_seconds"`
 	TranscriptActivityReason string   `json:"transcript_activity_reason,omitempty"`
+	// 🎯T1121: default fleet panel filter (history rows omit from UI unless toggled).
+	Class     string `json:"class"`
+	Visible   bool   `json:"visible"`
+	PanelLine string `json:"panel_line,omitempty"`
 }
 
 // feedRelaunch is one dead seat's relaunch in progress, per registry
@@ -1739,6 +1743,8 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	mark("auth")
 	rows = s.decorateSeatActivity(reg, rows, time.Now())
 	mark("activity")
+	rows = s.decoratePanelClass(rows)
+	mark("panel")
 	if took := time.Since(start); took > agentsSlow {
 		slog.Warn("🎯T936 /api/agents slow", "took", took.Round(time.Millisecond), "phases", strings.Join(phases, " "), "rows", len(rows))
 	}

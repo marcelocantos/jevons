@@ -116,6 +116,9 @@ func (s *Server) fleetIntent() fleetintent.Snapshot {
 	return s.intentStore().Snapshot()
 }
 
+// FleetIntent is the durable intent snapshot for HTTP surfaces (🎯T1121).
+func (s *Server) FleetIntent() fleetintent.Snapshot { return s.fleetIntent() }
+
 // AllowFleetControl is the one question a control asks: may control c act on
 // this agent? The Decision carries the intent so the caller can name it.
 func (s *Server) AllowFleetControl(name string, c fleetintent.Control) fleetintent.Decision {

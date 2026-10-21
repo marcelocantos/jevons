@@ -2130,3 +2130,18 @@ body.rhs-resizing-row { cursor: row-resize; }
 .review-answer-btn {
   font-size: 0.85em;
 }
+
+.fleet-panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 4px 4px;
+}
+.fleet-history-toggle {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.agent-panel-line {
+  display: block;
+  font-size: 11px;
+  opacity: 0.85;
+}

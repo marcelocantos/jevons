@@ -168,7 +168,7 @@ func (s *Server) SetAgentEventHook(fn func(name string, ev claudia.Event)) {
 	s.agentEventHook = fn
 }
 
-func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAgentList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 🎯T804: where a slow call spends its time, logged when it is slow.
 	tm := newPhaseTimer()
 	defer tm.logIfSlow("🎯T804 jevons_agent_list slow", agentListSlow)
@@ -183,12 +183,15 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	s.sweepSeatMCPOnRequest() // 🎯T797, cache only on the request path (🎯T804)
 	tm.mark("sweep_seat_mcp")
 	s.notifyDeadAgents(reps)
+	showHistory := agentListShowHistory(req.GetArguments())
 	defs := s.registry.List()
 	notices := s.RemovalAccount().Recent(0)
 	if len(defs) == 0 {
 		body := "No agents registered."
-		if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
-			body += "\n" + reaped
+		if showHistory {
+			if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
+				body += "\n" + reaped
+			}
 		}
 		return mcp.NewToolResultText(fleetlog.PrependNotices(
 			s.withMassStop(PrependFleetHealth(body, reps)), notices)), nil
@@ -198,6 +201,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	defer tm.mark("rows")
 	for _, d := range defs {
 		alive := s.seatAlive(d.Name)
+		starting := !alive && s.AgentStarting(d.Name)
+		panel := s.panelClassForDef(d, alive, starting)
+		if !showHistory && !panel.Visible {
+			continue
+		}
 		// 🎯T766.2: the walk already holds what claudia says about
 		// every seat, so it feeds the authority. The event stream reports
 		// motion but is silent for a seat that is merely sitting there, and
@@ -274,9 +282,11 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 	}
 	// 🎯T401: finished-and-reaped names stay visible as recoverable addresses
 	// so the gate learns the seat is closed BEFORE composing into a void.
-	if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
-		b.WriteString("\n")
-		b.WriteString(reaped)
+	if showHistory {
+		if reaped := FormatReapedListSection(s.fleetIntent()); reaped != "" {
+			b.WriteString("\n")
+			b.WriteString(reaped)
+		}
 	}
 	if line := s.FormatNoticeSavings(); line != "" {
 		b.WriteString("\n")

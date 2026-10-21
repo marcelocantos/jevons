@@ -687,6 +687,7 @@ func main() {
 		slog.Error("fleet intent store failed", "err", err)
 		os.Exit(1)
 	}
+	srv.SetFleetIntentSource(mcpSrv.FleetIntent)
 	// T998: durable target churn bound, independent of provider quota.
 	if err := mcpSrv.OpenMissionProtection(cfg.StateDir); err != nil {
 		slog.Error("mission protection store failed", "err", err)

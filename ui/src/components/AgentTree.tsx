@@ -35,9 +35,25 @@ export type AgentRow = {
   /** 🎯T763: whether a stopped seat can come back. Empty while running. */
   rehydrate?: string;
   reauth_available?: boolean;
+  /** 🎯T1121: live | park | fault | history — history rows hide unless toggled. */
+  class?: string;
+  visible?: boolean;
+  panel_line?: string;
 };
 
 /** 🎯T662: one alert for the fleet, read off the rows (the daemon puts the same line on each). */
+
+export function panelRowShown(a: AgentRow, showHistory: boolean): boolean {
+  if (showHistory) return true;
+  if (a.visible === false) return false;
+  if (a.class === 'history') return false;
+  return true;
+}
+
+export function filterPanelAgents(agents: AgentRow[], showHistory: boolean): AgentRow[] {
+  return (agents || []).filter((a) => panelRowShown(a, showHistory));
+}
+
 export function massStopLine(agents: AgentRow[]): string {
   for (const a of agents || []) {
     const m = a && a.mass_stop ? String(a.mass_stop).trim() : '';
@@ -247,7 +263,11 @@ function Row(props: {
         {props.node.purpose !== 'portfolio' ? <ModelBadge node={props.node} /> : null}
         <AgentName name={props.node.name} />
         <Secondary node={props.node} parentWorkdir={props.parentWorkdir} />
-        {showSeatStopReason(props.node) ? (
+        {props.node.panel_line ? (
+          <span className="agent-panel-line" title={props.node.panel_line}>
+            {'⛔ ' + props.node.panel_line}
+          </span>
+        ) : showSeatStopReason(props.node) ? (
           <span className="agent-stop-reason" title={props.node.stop_reason}>
             {'⛔ ' + props.node.stop_reason}
           </span>
@@ -304,12 +324,26 @@ export function AgentTree(props: {
   selected: string;
   onSelect: (name: string) => void;
   onDismiss?: (name: string) => void;
+  showHistory?: boolean;
+  onToggleHistory?: () => void;
 }) {
-  const roots = buildAgentForest(props.agents);
+  const visibleAgents = filterPanelAgents(props.agents, !!props.showHistory);
+  const roots = buildAgentForest(visibleAgents);
   const mass = massStopLine(props.agents);
   const rootRef = useRef<HTMLDivElement>(null);
   return (
     <>
+      <div className="fleet-panel-toolbar">
+        <button
+          type="button"
+          className="fleet-history-toggle"
+          aria-pressed={props.showHistory ? true : false}
+          title="Show reaped and finished seats"
+          onClick={() => props.onToggleHistory?.()}
+        >
+          {props.showHistory ? "Hide history" : "History"}
+        </button>
+      </div>
       {mass ? (
         <div className="fleet-mass-stop" role="alert" title={mass}>
           {mass}

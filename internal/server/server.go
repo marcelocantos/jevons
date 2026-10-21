@@ -25,6 +25,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agenterr"
+	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/buildident"
 	"github.com/marcelocantos/jevons/internal/chatlog"
@@ -199,6 +200,8 @@ type Server struct {
 	// Wired from main to mcpserver.ObserveProviderFailure / ObserveProviderOK.
 	onProviderFailure func(class agenterr.Class, raw string)
 	onProviderOK      func()
+	// fleetIntentSource supplies intent for 🎯T1121 panel classification.
+	fleetIntentSource func() fleetintent.Snapshot
 	// modelSwitcher backs POST /api/agents/switch-model — the owner's
 	// per-seat provider/model switch from the fleet tree (🎯T285.2).
 	modelSwitcher ModelSwitcher
