@@ -342,6 +342,13 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 	}
 
 	var out []FrontierConsumeReport
+	// 🎯T1117: attempts bounds every register call this cycle makes,
+	// counting a failed register (plan dest empty, etc.) the same as a
+	// successful spawn — otherwise an unbounded number of ready leaves can
+	// be tried in one cycle looking for the one that succeeds, each failed
+	// try still calling ensureFreshStartIntent and persisting against the
+	// name before its own register fails.
+	attempts := 0
 	spawned := 0
 	remintName := map[string]string{}
 	var readyIDs []string
@@ -490,7 +497,7 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			out = append(out, rep)
 			continue
 		}
-		if spawned >= maxCycle {
+		if attempts >= maxCycle {
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonCapacity
 			out = append(out, rep)
 			continue
@@ -505,6 +512,7 @@ func SweepFrontierConsume(args FrontierConsumeArgs) []FrontierConsumeReport {
 			out = append(out, rep)
 			continue
 		}
+		attempts++
 		if err := args.Spawn(leaf, worker); err != nil {
 			rep.Action, rep.Reason = FrontierConsumePark, FrontierReasonSpawnFailed
 			rep.Err = err.Error()
@@ -737,10 +745,36 @@ func (s *Server) notifySpawnFailure(po, targetID, worker, errText string) {
 // the sweep's engagement check). Cursor ACP (🎯T541) starts then sends the
 // brief without holding startMu; other providers still confirm the opening
 // brief on start (🎯T305).
+// restoreFrontierIntent puts a name's fleet intent back to what it was
+// before ensureFreshStartIntent flipped it to Working, when the register
+// that flip was for never completed (🎯T1117). A no-op when preIntent is
+// already Working (nothing to undo) or when the name has since moved on to
+// some other intent a concurrent caller set (never clobber a fresher
+// decision with a stale restore).
+func (s *Server) restoreFrontierIntent(name string, preIntent fleetintent.State, reason string) {
+	if preIntent == fleetintent.Working {
+		return
+	}
+	if s.fleetIntent().AgentState(name) != fleetintent.Working {
+		// Something else already moved it; a blind restore here could
+		// clobber that decision instead of undoing our own flip.
+		return
+	}
+	if err := s.SetAgentIntent(name, preIntent, "auto:frontier", reason); err != nil {
+		slog.Warn("frontier consume: intent restore after failed register failed",
+			"name", name, "want", preIntent, "err", err)
+	}
+}
+
 func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief string) error {
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
 	}
+	// 🎯T1117: remember the intent ensureFreshStartIntent is about to flip
+	// (a previously-reaped name, most likely) so a register failure below
+	// can put it back — a register that never persisted or launched a
+	// process must not leave the ledger claiming the name is Working.
+	preIntent := s.fleetIntent().AgentState(name)
 	// 🎯T1109: the frontier sweep is its own start path and does not go
 	// through handleAgentStart, so it must pass the same fresh-start intent
 	// gate (ensureFreshStartIntent) directly — otherwise a re-mint of a
@@ -752,6 +786,7 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	}
 	settleStart, err := s.reserveMissionStart(name, workdir, targetID, parent, "work", "auto:frontier", false, "")
 	if err != nil {
+		s.restoreFrontierIntent(name, preIntent, "register refused: reserve failed")
 		return fmt.Errorf("%s", s.missionStartRefusal(name, targetID, err))
 	}
 	missionStarted := false
@@ -760,6 +795,13 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	defer s.markStarting(name)()
 	def, existed, _, err := s.stitchAgentStart(name, workdir, "", "", "", parent, "work", normalizeAgentTargetID(targetID), brief)
 	if err != nil {
+		// 🎯T1117: register refused (plan dest empty, etc.) before any
+		// process launched — nothing is running, so the intent flip above
+		// must not stand: restore it rather than leave a Working-but-never-
+		// started lie for 🎯T984's stand-down sweep to find nothing to do
+		// about (a Working intent on a never-launched seat looks, to every
+		// other reader, like a seat that is fine).
+		s.restoreFrontierIntent(name, preIntent, "register refused: "+err.Error())
 		return fmt.Errorf("register: %w", err)
 	}
 	s.startMu.Lock()
