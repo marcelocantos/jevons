@@ -13,9 +13,9 @@ import (
 	"github.com/marcelocantos/jevons/internal/supervise"
 )
 
-// TestStateRoundTrip: launchd starts a fresh process every interval, so
-// everything the supervisor knows has to survive on disk or it forgets an
-// open outage every 30 seconds.
+// TestStateRoundTrip: the supervisor runs the watchdog as a fresh process
+// every interval, so everything it knows has to survive on disk or it
+// forgets an open outage every 30 seconds.
 func TestStateRoundTrip(t *testing.T) {
 	dir := supervise.Dir(t.TempDir())
 
@@ -166,57 +166,5 @@ func TestUndeliveredNoticesStayPending(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("a later, better-configured run did not retry the notice: n=%d", n)
-	}
-}
-
-// TestPlistRendersTheJobLaunchdNeeds: the supervisor is only real once
-// launchd runs it, so the plist has to name the binary, the port, the
-// repo the restart script lives in, and an interval.
-func TestPlistRendersTheJobLaunchdNeeds(t *testing.T) {
-	spec := supervise.AgentSpec{
-		Binary:   "/repo/bin/jevons-watchdog",
-		Repo:     "/repo",
-		StateDir: "/home/.jevons",
-		Port:     13705,
-		LogPath:  "/home/.jevons/watchdog/watchdog.log",
-	}
-	xml := supervise.PlistXML(spec)
-	for _, want := range []string{
-		supervise.AgentLabel,
-		"/repo/bin/jevons-watchdog",
-		"<string>13705</string>",
-		"<string>/repo</string>",
-		"<key>StartInterval</key>",
-		"<key>RunAtLoad</key>",
-		spec.LogPath,
-	} {
-		if !strings.Contains(xml, want) {
-			t.Errorf("plist missing %q:\n%s", want, xml)
-		}
-	}
-
-	// A 30s interval against a 90s grace is what bounds an outage at about
-	// two minutes; a longer one silently widens that.
-	if supervise.AgentInterval > 60 {
-		t.Errorf("StartInterval %ds is too coarse to bound an outage", supervise.AgentInterval)
-	}
-
-	// Written where launchd looks, and escaped: a path with an ampersand
-	// in it would otherwise produce a plist launchd refuses to parse.
-	home := t.TempDir()
-	path := supervise.AgentPlistPath(home)
-	if !strings.HasSuffix(path, filepath.Join("Library", "LaunchAgents", supervise.AgentLabel+".plist")) {
-		t.Errorf("plist path %q is not a LaunchAgent", path)
-	}
-	spec.Repo = "/re&po"
-	if err := supervise.WriteAgentPlist(path, spec); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), "/re&amp;po") {
-		t.Errorf("plist did not escape the path:\n%s", b)
 	}
 }

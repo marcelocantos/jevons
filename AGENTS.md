@@ -546,68 +546,38 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   the template). The restart script signals that owner with SIGHUP.
   Script path: `scripts/restart-jevonsd.sh`. React changes require
   rebuilding and activating the embedded bundle before reloading.
-- **The process is supervised (🎯T405 / 🎯T553.3):** on 2026-08-10 a
-  worker's restart killed the daemon, the script died with its invoker
-  (own session was still a convention), and the fleet stayed down. The
-  historical fix was launchd KeepAlive **`com.marcelocantos.jevonsd`**
-  (`make jevonsd-install`). Current development uses supervisord program
-  `jevonsd`; it relaunches the daemon without calling the fat script. An upgrade bounce still
-  re-execs through `bin/detach` into its own session. The interval job
-  **`com.marcelocantos.jevons-watchdog`** (`make watchdog-install`,
-  `make watchdog-status`) is **not** the product path — it must not
-  invoke restart-jevonsd when KeepAlive owns the process. Residual:
-  Cellar `brew services jevons` must stay stopped so it cannot reclaim
-  `:13705`.
-- **Nothing was responsible for the supervisor (🎯T405, second half):** the
-  watchdog was installed on 2026-08-10 at 20:48 and launchd stopped holding
-  the job fourteen minutes later. The plist stayed on disk looking perfectly
-  healthy, the machine never rebooted, and for five days and four daemon
-  bounces not one line of code noticed — the owner did, by asking. A
-  supervisor whose absence has no alarm supervises nothing the moment it is
-  the thing that broke, which is clause 1 of this target failing one level
-  up. So **the daemon supervises the watchdog** while the watchdog
-  supervises the daemon (`internal/supervise/agent.go`, wired in
-  `cmd/jevonsd/main.go`): it checks that launchd still holds the job and
-  that the job still probes, reinstates it when either is false, and tells
-  the owner once per gap. The two live in different process trees precisely
-  so that whatever takes one down cannot take the other with it. Four
-  things the naive version gets wrong, each with an oracle
-  (`internal/supervise/agent_test.go`): *loaded* is not *running* — a job
-  whose binary dies on start is held by launchd forever and probes never, so
-  the heartbeat is the evidence, not the registration; a **late** probe is
-  not a gap — launchd defers a `StartInterval` job under load, and an alarm
-  that fires for lateness stops being read; a supervisor **older than the
-  heartbeat** is still alive, so the log launchd captures counts as a
-  heartbeat of last resort (the deployed watchdog predates the field, and
-  judged on the field alone it would be declared absent while probing every
-  30s); and a reinstatement **must not leave things worse**, so it carries
-  the installed plist's PATH (T434) over rather than recomputing it from
-  the environment a detached daemon happens to have. `install` also
-  bootstraps **before** it boots out, so a failed install can no longer
-  leave the machine with no job at all — a plausible reading of how the job
-  went missing. The supervisor is part of the deployment now too:
-  `restart-jevonsd` rebuilds `bin/jevons-watchdog` from committed HEAD
-  alongside the daemon, because the one process responsible for the daemon
-  being up had been the one process that never received a fix.
-- **The supervisor carries its own PATH (🎯T434):** a LaunchAgent whose
-  plist declares no environment runs on `/usr/bin:/bin:/usr/sbin:/sbin` —
-  no Homebrew, so no `go` to build the `bin/detach` and `bin/runlock` the
-  restart script re-execs itself through, and no `blurter` to say that it
-  therefore refused. The supervisor and its own alarm shared one failure,
-  latent only because both helpers happened to be on disk; `make clean` or
-  a fresh clone would have made it real, which is exactly the cold start
-  T405 exists for. **The guarantee: `make watchdog-install` computes the
-  PATH from where the tools actually are (`supervise.AgentPATH`) and writes
-  it into the plist's `EnvironmentVariables`, and refuses to install at all
-  when it cannot find `go`.** **The failure it accepts:** that PATH is a
-  snapshot, true when written — move the toolchain afterwards and it is
-  wrong, the same shape as T376/T377/T432. Kept audible rather than
-  silent: `supervise.RestartBlocker` sees at run time that the helpers are
-  absent with no `go` to build them, and the out-of-band notice names what
-  is missing, where, and the fix. Oracles run the shipped script out of a
-  cold repo on launchd's own PATH (fails closed, owner told why) and on the
-  PATH the installer writes (restarts a throwaway daemon) — each is the
-  other's control: `cmd/jevons-watchdog/t434_toolchain_test.go`.
+- **The process is supervised by supervisord (🎯T405 / 🎯T1111):** on
+  2026-08-10 a worker's restart killed the daemon, the script died with its
+  invoker (own session was still a convention), and the fleet stayed down.
+  The standing owner of the development process is supervisord program
+  `jevonsd` (`supervisor/jevonsd.ini`, `autorestart=true`; `make
+  supervisor-install` renders it): when the process exits, supervisord
+  relaunches the same binary without calling the fat script. An upgrade
+  bounce still re-execs through `bin/detach` into its own session.
+  **launchd is not a way of supervising Jevons** (🎯T1111 retired the
+  KeepAlive job `com.marcelocantos.jevonsd`, the interval watchdog plist,
+  the UI-probe LaunchAgent, the daemon's watchdog-reinstatement loop and
+  the launchd test fake; the only `launchctl` left in the module is the
+  read-only `supervise.Launchctl` seam that `internal/provider`'s liveness
+  probe uses to read *other* owners' jobs). `bin/jevons-watchdog` remains
+  as the interval probe that calls `restart-jevonsd` when a bounce did not
+  take and tells the owner through blurter; run it from supervisord or
+  cron if you want that net, `make watchdog-status` reads its state.
+  Residual: Cellar `brew services jevons` must stay stopped so it cannot
+  reclaim `:13705`.
+- **A restart does not depend on a toolchain the supervisor cannot reach
+  (🎯T434):** a program started with a bare system PATH
+  (`/usr/bin:/bin:/usr/sbin:/sbin`) has no Homebrew, so no `go` to build
+  the `bin/detach` and `bin/runlock` the restart script re-execs itself
+  through, and no `blurter` to say that it therefore refused. The
+  supervisor and its own alarm share one failure, latent only while both
+  helpers happen to be on disk; `make clean` or a fresh clone makes it
+  real. `supervisor/jevonsd.ini` declares the program's PATH explicitly
+  (`environment=`), which is where the toolchain is made reachable. Kept
+  audible rather than silent: `supervise.RestartBlocker` sees at run time
+  that the helpers are absent with no `go` to build them, and the watchdog
+  puts that in the out-of-band notice — what is missing, where, and the
+  fix (`internal/supervise/toolchain_test.go`).
 - **Owner-visible claims are observed (🎯T552 / 🎯T553.2; was 🎯T194):**
   a target whose product path is served by development jevonsd is **not
   achieved on hermetics alone**. Hermetic unit green is **necessary not sufficient**

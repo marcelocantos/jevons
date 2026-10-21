@@ -134,38 +134,3 @@ func moduleRoot(t *testing.T) string {
 	}
 	return filepath.Dir(mod)
 }
-
-// TestLaunchctlOnPathIsTheStub checks what a child process finds: the first
-// launchctl on PATH is the stub under the private home, it refuses a
-// change and answers a read as an empty domain, and it records both
-// (🎯T1097).
-func TestLaunchctlOnPathIsTheStub(t *testing.T) {
-	if Dir == "" {
-		t.Skip("live run: PATH left as the owner's")
-	}
-	found, err := exec.LookPath("launchctl")
-	if err != nil {
-		t.Fatalf("no launchctl on PATH: %v", err)
-	}
-	if rel, err := filepath.Rel(Dir, found); err != nil || strings.HasPrefix(rel, "..") {
-		t.Fatalf("first launchctl on PATH is %q, outside the private home %q", found, Dir)
-	}
-	if got := os.Getenv(LaunchctlLogEnv); got != LaunchctlLog || got == "" {
-		t.Fatalf("%s = %q, want %q", LaunchctlLogEnv, got, LaunchctlLog)
-	}
-	before, _ := os.ReadFile(LaunchctlLog)
-	if out, err := exec.Command(found, "bootout", "gui/1/com.example.t1097").CombinedOutput(); err == nil {
-		t.Fatalf("stub accepted a bootout: %s", out)
-	}
-	out, err := exec.Command(found, "print", "gui/1/com.example.t1097").CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "Could not find service") {
-		t.Fatalf("stub print = %q, %v; want the empty domain's not-found", out, err)
-	}
-	after, err := os.ReadFile(LaunchctlLog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.TrimPrefix(string(after), string(before)); got != "bootout gui/1/com.example.t1097\nprint gui/1/com.example.t1097\n" {
-		t.Fatalf("stub recorded %q", got)
-	}
-}

@@ -41,9 +41,6 @@ var t1090HomeJevonsJoins = map[string]string{
 	// daemon, and reads the development registry to name the session.
 	"internal/attrib/attrib.go:DefaultRosterPaths": "attribution CLI/hook reads the development registry; not a daemon state path",
 	"internal/attrib/hook.go:LookupAgent":          "attribution hook reads the development registry; not a daemon state path",
-	// Owner-run one-shot modes of the jevonsd binary that exit before the
-	// daemon starts.
-	"internal/uidaemon/install.go:Install": "-install-ui-agents owner install; Spec.StateDir overrides the default",
 }
 
 func TestT1090NoNewHomeJevonsJoinsInDaemonCode(t *testing.T) {

@@ -22,10 +22,10 @@ func TestT405SelfDetachIsUnconditional(t *testing.T) {
 		"🎯T405",
 		`exec "$DETACH"`,
 		"JEVONS_RESTART_DETACHED",
-		"cannot build $DETACH", // fails closed rather than running attached
-		"JEVONS_RESTART_FAULT", // the seam the oracle kills it through
-		"jevons-watchdog",      // points at its own supervisor
-		"JEVONS_RESTART_BIN",   // so the oracle can drive a stub daemon
+		"cannot build $DETACH",   // fails closed rather than running attached
+		"JEVONS_RESTART_FAULT",   // the seam the oracle kills it through
+		"jevons-watchdog",        // names the probe that calls it back
+		"JEVONS_RESTART_BIN",     // so the oracle can drive a stub daemon
 		"is not the development", // and leave brew alone on a scratch port
 	} {
 		if !strings.Contains(body, m) {
@@ -46,19 +46,26 @@ func TestT405SelfDetachIsUnconditional(t *testing.T) {
 }
 
 // TestT405SupervisorIsBuiltAndInstallable: an unwired supervisor is worth
-// zero, so `make all` builds it and there is a documented way to load it.
+// zero, so `make all` builds the watchdog and the detach helper, and the
+// development daemon has a documented supervisor — supervisord
+// (🎯T1111), not a launchd plist the Makefile installs.
 func TestT405SupervisorIsBuiltAndInstallable(t *testing.T) {
 	mk := readRepo(t, "Makefile")
 	for _, m := range []string{
 		"bin/detach",
 		"bin/jevons-watchdog",
-		"watchdog-install",
 		"watchdog-status",
 		"./cmd/detach",
 		"./cmd/jevons-watchdog",
+		"supervisor-install",
 	} {
 		if !strings.Contains(mk, m) {
 			t.Errorf("Makefile missing 🎯T405 target %q", m)
+		}
+	}
+	for _, gone := range []string{"watchdog-install", "jevonsd-install", "launchctl", "LaunchAgent"} {
+		if strings.Contains(mk, gone) {
+			t.Errorf("Makefile still carries the launchd supervision path (%q), retired by 🎯T1111", gone)
 		}
 	}
 	for _, line := range strings.Split(mk, "\n") {
@@ -80,12 +87,10 @@ func TestT405OracleIsCommitted(t *testing.T) {
 	for _, path := range []string{
 		"cmd/detach/main.go",
 		"cmd/jevons-watchdog/main.go",
-		"cmd/jevons-watchdog/install.go",
 		"cmd/jevons-watchdog/oracle_test.go",
 		"internal/supervise/policy.go",
 		"internal/supervise/store.go",
 		"internal/supervise/report.go",
-		"internal/supervise/launchd.go",
 		"internal/supervise/policy_test.go",
 		"internal/supervise/store_test.go",
 	} {
@@ -113,7 +118,8 @@ func TestT405OracleIsCommitted(t *testing.T) {
 }
 
 // TestT405DoctrineMarkers: the fleet is told that detaching is now
-// preferred rather than load-bearing, and that a supervisor exists.
+// preferred rather than load-bearing, and who supervises the daemon —
+// supervisord's program, not a launchd job (🎯T1111).
 func TestT405DoctrineMarkers(t *testing.T) {
 	for _, doc := range []struct{ name, body string }{
 		{"AGENTS.md", readRepo(t, "AGENTS.md")},
@@ -122,12 +128,16 @@ func TestT405DoctrineMarkers(t *testing.T) {
 	} {
 		for _, m := range []string{
 			"🎯T405",
-			"com.marcelocantos.jevons-watchdog",
-			"watchdog-install",
+			"supervisor/jevonsd.ini",
 			"own session",
 		} {
 			if !strings.Contains(doc.body, m) {
 				t.Errorf("%s missing 🎯T405 doctrine marker %q", doc.name, m)
+			}
+		}
+		for _, gone := range []string{"watchdog-install", "jevonsd-install", "com.marcelocantos.jevons-watchdog"} {
+			if strings.Contains(doc.body, gone) {
+				t.Errorf("%s still tells the fleet about the launchd supervision path (%q), retired by 🎯T1111", doc.name, gone)
 			}
 		}
 	}
