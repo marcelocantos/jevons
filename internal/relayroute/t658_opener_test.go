@@ -48,15 +48,19 @@ func TestT658ProgressOpenersStayOnParent(t *testing.T) {
 	}
 }
 
-// The jv-t658 fixture is the malformed-envelope shape on its own: Parse
-// returns a message AND an error, and the old classifier scanned the whole
-// text — fence slots included — for finish words. Pin that the fixture still
-// has that shape, so the table above keeps testing what it claims to.
+// The jv-t658 fixture is the real report the incident rerouted: the old
+// classifier scanned the whole text — fence slots included — for finish
+// words. When it was captured, one silent-decision's unquoted multi-word
+// why= failed slot validation; 🎯T1115 made why= free text, so the same
+// bytes now parse as a valid scout-report. It must route to the parent
+// either way — a scout-report is not a finish — so pin both: it parses
+// cleanly now, and it still carries the finish words the incident tripped
+// on. The malformed path keeps its own synthetic case below.
 func TestT658MalformedEnvelopeFixtureShape(t *testing.T) {
 	text := t658Fixture(t, "t658-scout-report-malformed.txt")
 	m, err := envelope.Parse(text)
-	if m == nil || err == nil {
-		t.Fatalf("fixture must parse as an envelope with a validation error; m=%v err=%v", m != nil, err)
+	if m == nil || err != nil {
+		t.Fatalf("fixture must parse as a scout-report under 🎯T1115's free-text why=; m=%v err=%v", m != nil, err)
 	}
 	if m.Kind != envelope.KindScoutReport {
 		t.Fatalf("kind=%q want scout-report", m.Kind)
@@ -69,8 +73,9 @@ func TestT658MalformedEnvelopeFixtureShape(t *testing.T) {
 	}
 }
 
-// A malformed finish-report is "cannot tell", which the package contract
-// routes to the parent; a valid oracle-backed finish-report still skips the
+// A malformed finish-report (here a non-numeric confidence, which the
+// silent-ledger grammar still rejects after 🎯T1115) is "cannot tell", which
+// the package contract routes to the parent; a valid oracle-backed finish-report still skips the
 // hop. The fix must not turn T392.7 off.
 func TestT658MalformedFinishReportStaysOnParentValidOneSkips(t *testing.T) {
 	valid := "```jevons\njevons: kind finish-report\njevons: target T658\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\njevons: silent-ledger none\n```\n\nWork landed."
@@ -80,7 +85,7 @@ func TestT658MalformedFinishReportStaysOnParentValidOneSkips(t *testing.T) {
 	if got := Reason(valid); got != "oracle_done" {
 		t.Fatalf("valid oracle finish-report: Reason=%s want oracle_done", got)
 	}
-	malformed := "```jevons\njevons: kind finish-report\njevons: target T658\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\njevons: silent-ledger ranked\njevons: silent-decision confidence=0.5 choice=x why=this token is not key=value\n```\n\nDone. GATE x GREEN. SHA abcdef0. Tests pass."
+	malformed := "```jevons\njevons: kind finish-report\njevons: target T658\njevons: oracle sha=abcdef0123456\njevons: verdict GREEN\njevons: silent-ledger ranked\njevons: silent-decision confidence=high choice=x why=x\n```\n\nDone. GATE x GREEN. SHA abcdef0. Tests pass."
 	if m, err := envelope.Parse(malformed); m == nil || err == nil {
 		t.Fatalf("fixture must be a malformed envelope; m=%v err=%v", m != nil, err)
 	}

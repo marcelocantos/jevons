@@ -168,6 +168,11 @@ const FleetStandingBrief = `open-intent harness standing-brief
   hermetics alone do not close an owner-visible claim.
 - React changes require a rebuilt and activated daemon; hard reload observes that bundle (🎯T540.2).
 
+## Owner-visible means owner-relevant (🎯T1122)
+- Anything shown to the owner (fleet-tree row, chat bubble, badge, notice, status line) must be a decision they must make, a fault they must know about, or a change in what they would do next. Name which; if none, it does not ship.
+- Build time: a reaped/finished seat has no owner-facing form (🎯T1121); a parked seat is one line naming what it waits on (🎯T1059).
+- Runtime: routine reports are not narrated into the owner's chat (🎯T1053); one owner question gets one answer (🎯T1120).
+
 ## Visual cockpit finish is a prose look, not a green metric (🎯T493.1)
 - After any change that can affect what the owner sees in #messages /
   the React transcript pane in ui/ (🎯T540) — pin, virtualize, replay,

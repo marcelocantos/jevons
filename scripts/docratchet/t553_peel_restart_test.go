@@ -104,3 +104,32 @@ func TestT638CommitWhenDoneVoidsAskFirst(t *testing.T) {
 		}
 	}
 }
+
+// TestT1122OwnerVisibleMeansOwnerRelevant ratchets the attention doctrine:
+// every surface the fleet reads its rules from says that an owner-visible
+// thing must be a decision, a fault, or a change in what the owner would do
+// next, and names the first applications so the rule is not left abstract.
+func TestT1122OwnerVisibleMeansOwnerRelevant(t *testing.T) {
+	for _, path := range []string{
+		"internal/config/persona.md",
+		"AGENTS.md",
+		"agents-guide.md",
+		"internal/cli/help_agent.md",
+		"internal/mcpserver/fleet_brief.go",
+	} {
+		body := readRepo(t, path)
+		for _, m := range []string{"T1122", "decision", "fault", "what they would do next"} {
+			if !strings.Contains(body, m) {
+				t.Errorf("%s missing 🎯T1122 doctrine marker %q", path, m)
+			}
+		}
+	}
+	for _, path := range []string{"AGENTS.md", "agents-guide.md", "internal/mcpserver/fleet_brief.go"} {
+		body := readRepo(t, path)
+		for _, m := range []string{"T1121", "T1053", "T1120"} {
+			if !strings.Contains(body, m) {
+				t.Errorf("%s does not name 🎯T1122's application %s", path, m)
+			}
+		}
+	}
+}
