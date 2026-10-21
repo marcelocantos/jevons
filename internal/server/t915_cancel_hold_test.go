@@ -317,3 +317,57 @@ func TestT915RequeueSkipsBatchMidHandover(t *testing.T) {
 		t.Fatalf("a second copy of the prompt was queued: %q", ts.notifyQueue)
 	}
 }
+
+// TestT1120ReofferDoesNotRedeliverInFlightOwnerTurn is the 2026-10-21 20:56
+// specimen: the owner asked one question, got the correct answer, and a
+// second bubble ("Same status as my last summary …") followed about 30s
+// later — a re-offer of the owner's own words (msgID == "", 🎯T915's
+// "owner-health re-injections carry none") landing while the first answer's
+// turn was still the one it was trying to rescue. One owner send must
+// produce exactly one provider request; the re-offer of the identical text
+// while that turn is in flight must not mint a second one.
+func TestT1120ReofferDoesNotRedeliverInFlightOwnerTurn(t *testing.T) {
+	ts := newT915Server(t)
+	text := "In one short paragraph: what is the fleet doing right now?"
+	wire := userTurnPrefix + text
+
+	ts.NoteOwnerSend(text, "echo")
+	if err := ts.SendToOverseerAs(wire, "om-1"); err != nil {
+		t.Fatalf("first owner send: %v", err)
+	}
+	if got := ts.got(); len(got) != 1 {
+		t.Fatalf("after first send delivered = %v, want exactly one provider request", got)
+	}
+	ts.Server.mu.RLock()
+	inFlight := ts.waiting && ts.overseerOwnerTurn && ts.overseerOwnerTurnText == wire
+	ts.Server.mu.RUnlock()
+	if !inFlight {
+		t.Fatalf("expected the owner turn to be recorded in flight after delivery")
+	}
+
+	// A re-offer — no msgID, 🎯T915's discriminator for a system re-injection
+	// — of the exact same wire text while the answer is still in flight.
+	if _, err := ts.sendToOverseerAs(wire, ""); err != nil {
+		t.Fatalf("re-offer while in flight: %v", err)
+	}
+	if got := ts.got(); len(got) != 1 {
+		t.Fatalf("after in-flight re-offer delivered = %v, want still exactly one provider request", got)
+	}
+	ts.Server.mu.RLock()
+	if slices.Contains(ts.notifyQueue, wire) {
+		t.Fatalf("the re-offer queued a second copy of the in-flight owner turn: %q", ts.notifyQueue)
+	}
+	ts.Server.mu.RUnlock()
+
+	// Once the turn seals, the SAME text arriving again (owner repeats the
+	// question for real, or a very late re-offer) is delivered normally —
+	// this guard only protects the in-flight race, not every future repeat.
+	ts.seal()
+	ts.NoteOwnerSend(text, "echo-2")
+	if err := ts.SendToOverseerAs(wire, "om-2"); err != nil {
+		t.Fatalf("second genuine owner send after seal: %v", err)
+	}
+	if got := ts.got(); len(got) != 2 {
+		t.Fatalf("after seal + genuine repeat delivered = %v, want two provider requests", got)
+	}
+}

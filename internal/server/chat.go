@@ -528,6 +528,19 @@ func (s *Server) SendToOverseer(text string) error {
 	return s.SendToOverseerAs(text, "")
 }
 
+// ownerReofferIsDuplicateInFlight reports whether text is exactly the owner
+// turn currently in flight to the overseer (🎯T1120). Scoped deliberately
+// narrow: only a system re-offer (caller already checked msgID == "") of the
+// SAME text as the live overseerOwnerTurnText, while that turn has not yet
+// sealed. Once the turn completes, overseerOwnerTurnText is cleared and a
+// later identical text — genuine repeat or late re-offer — is delivered
+// normally; this guard only stops the race against an answer already under way.
+func (s *Server) ownerReofferIsDuplicateInFlight(text string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.waiting && s.overseerOwnerTurn && s.overseerOwnerTurnText != "" && s.overseerOwnerTurnText == text
+}
+
 // SendToOverseerAs is SendToOverseer for an owner turn that has a message id
 // (🎯T806): the id is registered in the same lock hold that enqueues the text.
 func (s *Server) SendToOverseerAs(text, msgID string) error {
@@ -546,6 +559,24 @@ func (s *Server) sendToOverseerAs(text, msgID string) (*sentNotifyBatch, error) 
 	// calling its heartbeat here would re-enter that lock (🎯T623.1).
 	if owner && s.activityHook != nil {
 		s.activityHook()
+	}
+
+	// 🎯T1120: a system re-offer of the owner's own words (msgID == "" —
+	// 🎯T915's comment names this: "owner-health re-injections carry none")
+	// must not mint a second provider turn while the first is still the
+	// in-flight owner turn it is re-offering. A genuine fresh owner click
+	// always carries a msgID, so this only ever catches a re-offer racing
+	// the answer it was trying to rescue — the 2026-10-21 20:56 specimen
+	// where a duplicate "Same status as my last summary" bubble followed a
+	// correct answer by about 30s. This does not touch a deliberate repeat
+	// question the owner sends after the turn has actually completed: by
+	// then overseerOwnerTurnText is cleared and the text no longer matches.
+	if owner && msgID == "" && s.ownerReofferIsDuplicateInFlight(text) {
+		slog.Info("notify_queue",
+			"component", "notify_queue",
+			"decision", "dedup_reoffer_inflight",
+		)
+		return nil, nil
 	}
 
 	s.mu.Lock()
