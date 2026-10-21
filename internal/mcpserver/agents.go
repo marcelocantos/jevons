@@ -214,6 +214,13 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if pinned && status != AgentStatusBornStuck {
 			status = "PINNED"
 		}
+		// 🎯T404.4: an owner-decision block citing a still-open question is
+		// legible in the status column, distinct from idle/stopped and from
+		// an ordinary external block — named with the annotation below.
+		ownerBlockID, ownerBlockSilence, ownerBlocked := s.ownerDecisionBlockFor(d.Name)
+		if ownerBlocked && status != AgentStatusBornStuck && !pinned {
+			status = AgentStatusBlockedOnOwner
+		}
 		parent := d.Parent
 		if parent == "" {
 			parent = "-"
@@ -249,6 +256,9 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		}
 		if line, wedged := s.WedgedSeat(d.Name); wedged {
 			fmt.Fprintf(&b, "  ^ %s\n", line)
+		}
+		if ownerBlocked {
+			fmt.Fprintf(&b, "  ^ %s\n", FormatOwnerDecisionBlockLine(ownerBlockID, ownerBlockSilence))
 		}
 		// 🎯T661: a session the broker wire cannot carry is named on the row,
 		// so a PO sees why sends to it fail before trying one.
