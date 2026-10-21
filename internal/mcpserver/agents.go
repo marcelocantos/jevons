@@ -1777,6 +1777,18 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", fields)
 				return
 			}
+			// 🎯T404.2: a valid owner-decision block with no question-default
+			// is not malformed (Validate does not refuse it — refusing would
+			// drop the question, the 🎯T378 failure) but the author is still
+			// told, on its own channel, same shape as 🎯T793. The question is
+			// already recorded/paged before this runs; the seat is reaped as
+			// usual — this is a side notice, not a correction that holds it.
+			if notice := envelope.MissingDefaultNotice(text); notice != "" {
+				if _, err := s.deliverByName(name, notice, OriginAgent, false); err != nil {
+					slog.Warn("T404.2 missing-default notice undeliverable", "agent", name, "err", err)
+				}
+				s.logLifecycle(compAgentLifecycle, "envelope", "missing_default_notice_sent", map[string]any{"agent": name})
+			}
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
 			s.maybeReapDoneWorkAgent(name, text)
 		}

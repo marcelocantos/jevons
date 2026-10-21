@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"log/slog"
+	"time"
 	"sync"
 )
 
@@ -67,4 +68,5 @@ func (s *Server) Reconcile() {
 	s.runFleetRecoverSweep(false)
 	s.TriggerIdlePressureSweep()
 	s.FlushWakeBatches()
+	s.sweepOwnerQuestionSilence(time.Now()) // 🎯T404.2
 }

@@ -524,6 +524,13 @@ type Server struct {
 	// Empty until SetIdeaStateDir; idea tools stay unregistered.
 	ideaStateDir      string
 	ownerQuestionsDir string
+	// ownerQuestionSilenceWindow is the 🎯T404.2 silence-resolution window.
+	// Zero = config.DefaultOwnerQuestionSilenceWindow (set via
+	// SetOwnerQuestionSilenceWindow).
+	ownerQuestionSilenceWindow time.Duration
+	// lastOwnerQuestionSilenceSweep throttles the sweep to once a minute,
+	// matching the digest check's cadence (🎯T1028.3 sibling pattern).
+	lastOwnerQuestionSilenceSweep time.Time
 
 	// agentReportDir roots the durable agent-report store (🎯T388) so a
 	// terminal report outlives the agent that wrote it. Empty until

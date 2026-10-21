@@ -116,6 +116,36 @@ type Config struct {
 	// busy with its own turn, by who sent it (🎯T899). Zero value = compiled
 	// defaults.
 	DeliveryEscalation DeliveryEscalationConfig `yaml:"delivery_escalation"`
+
+	// OwnerQuestions tunes the 🎯T404.2 silence-resolution sweep: an
+	// unanswered question that carries a default is retired on its own
+	// after this window, and the asker is told to proceed on it. A
+	// question with no default never auto-resolves; it keeps its STALLS
+	// mark regardless of this window.
+	OwnerQuestions OwnerQuestionsConfig `yaml:"owner_questions"`
+}
+
+// OwnerQuestionsConfig is the 🎯T404.2 silence-resolution window. The window
+// is a config key, not a constant in prose, so a deployment can tune it
+// without a code change.
+type OwnerQuestionsConfig struct {
+	// SilenceWindowMinutes is how long an unanswered, default-carrying
+	// question stays open before being retired as moot: proceeded on
+	// default. 0 = DefaultOwnerQuestionSilenceWindow (24h).
+	SilenceWindowMinutes int `yaml:"silence_window_minutes"`
+}
+
+// DefaultOwnerQuestionSilenceWindow is the provisional silence window
+// (🎯T404.2) absent an explicit owner_questions.silence_window_minutes.
+const DefaultOwnerQuestionSilenceWindow = 24 * time.Hour
+
+// SilenceWindow resolves the configured window, falling back to the
+// provisional default when unset or non-positive.
+func (c OwnerQuestionsConfig) SilenceWindow() time.Duration {
+	if c.SilenceWindowMinutes <= 0 {
+		return DefaultOwnerQuestionSilenceWindow
+	}
+	return time.Duration(c.SilenceWindowMinutes) * time.Minute
 }
 
 // FrontierConsumeConfig is the 🎯T254.1 enforcement loop tuning. The loop is
