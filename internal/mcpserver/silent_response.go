@@ -25,7 +25,10 @@ const silentResponseInstruction = "" +
 	"- Prefer acting (continue / re-brief / restart workers) over narrating health.\n"
 
 // IsSilentAgentResponse reports whether agent completion text is owner-filterable.
-// Same predicate as silentresponse.Is (worker→overseer notify + overseer→owner wire).
+// This fires on a complete, already-sealed turn-report text (notify /
+// notifyTurn runs once per finished turn, never per stream fragment), so the
+// 🎯T1054 routine-noise heuristic is safe here: unlike the live overseer→
+// owner ACP stream, there is no later fragment still to arrive.
 func IsSilentAgentResponse(text string) bool {
-	return silentresponse.Is(text)
+	return silentresponse.IsFiltered(text)
 }
