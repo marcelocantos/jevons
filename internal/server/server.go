@@ -35,6 +35,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/escalate"
 	"github.com/marcelocantos/jevons/internal/eventlog"
+	"github.com/marcelocantos/jevons/internal/ownercockpit"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/planusage"
 	"github.com/marcelocantos/jevons/internal/provider"
@@ -78,6 +79,7 @@ type Server struct {
 	// from a plain restart. "" means unknown; clients never reload on it.
 	buildID                  string
 	stateDir                 string                                          // jevons state root (config-driven, 🎯T44/T49)
+	ownerCockpit             *ownercockpit.Gate                              // 🎯T1129 owner-session cookie gate
 	overseerName             string                                          // registry name of the CEO agent (config-driven, 🎯T44)
 	overseerDownSince        time.Time                                       // start of the current down-reason streak; zero when none (🎯T775); guarded by mu
 	ownerQuestionDigestCheck time.Time                                       // last standing owner-question digest check (T1028.3)
@@ -550,8 +552,9 @@ func New(version, stateDir string) *Server {
 		inspectChans:  make(map[string]map[chan string]struct{}),
 		mux:           newMuxHub(),
 		tokenLimiter:  newTokenRateLimiter(defaultTokenMintLimit, time.Minute),
-		historyGate:   newHistoryHydrateGate(maxHistoryHydrateConcurrent),
-		agentProgress: NewAgentProgressHub(),
+		historyGate:      newHistoryHydrateGate(maxHistoryHydrateConcurrent),
+		agentProgress:    NewAgentProgressHub(),
+		ownerCockpit: ownercockpit.NewGate(),
 	}
 
 	if rec, err := s.creds.Load(); err != nil {
@@ -664,6 +667,7 @@ func (s *Server) RegisterRoutes(m *http.ServeMux) {
 	// rather than by its author remembering to call rejectCrossSite.
 	mux := newGuardedRouter(m, s.eventJournal())
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /api/owner-cockpit/session", s.handleOwnerCockpitSession) // 🎯T1129
 	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/mux", s.handleMux) // 🎯T537.1 one conversation API

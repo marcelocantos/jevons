@@ -509,6 +509,9 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   (the Frontier tab shows the ready set), 🎯T1120 (one question, one answer;
   the status line settles), 🎯T1059 (park as one line). Persona +
   agents-guide + fleet standing brief.
+
+- **Only the owner speaks in the owner's chat (🎯T1129):** workers may observe the development cockpit (read, screenshot, hard reload) for a 🎯T493.1 verdict; they never type into or submit its composer or click acting controls. Interactive verification runs on an isolate (`make test-ui-live`, `UI_HOST`, 🎯T572), never the real :13705 instance. Owner-origin browser sends require the owner cockpit session cookie; fleet Playwright / browser MCP sessions are stamped `JevonsFleetBrowser` / `X-Jevons-Fleet-Browser` and are refused.
+
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /

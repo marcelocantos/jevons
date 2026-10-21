@@ -140,6 +140,7 @@ func (h *muxHub) journalLock(name string) *sync.Mutex {
 }
 
 type muxSession struct {
+	ownerCockpitHTTP *http.Request // 🎯T1129: upgrade request for owner-send auth
 	send        chan []byte
 	mu          sync.Mutex
 	transcripts map[string]*muxWatch
@@ -682,8 +683,9 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	sess := &muxSession{
-		send:        make(chan []byte, 256),
-		transcripts: make(map[string]*muxWatch),
+		send:             make(chan []byte, 256),
+		transcripts:      make(map[string]*muxWatch),
+		ownerCockpitHTTP: r,
 	}
 	if s.mux == nil {
 		s.mux = newMuxHub()
@@ -892,6 +894,16 @@ func (s *Server) handleMuxEnvelope(ctx context.Context, conn muxConn, sess *muxS
 			}
 			if text == "" {
 				return
+			}
+			if sess != nil && sess.ownerCockpitHTTP != nil {
+				if err := s.authorizeOwnerSurfaceHTTP(sess.ownerCockpitHTTP, sendOriginOwner, name); err != nil {
+					errBody := map[string]any{"error": err.Error()}
+					if sendID != "" {
+						errBody["id"] = sendID
+					}
+					s.muxWrite(context.Background(), conn, ch, "error", errBody)
+					return
+				}
 			}
 			out, err := s.sendToNamedAgentMode(name, text, sendOriginOwner, mode)
 			if err != nil {
