@@ -364,6 +364,7 @@ persona_notes: |
 	// purpose, and the overseer then works the alarm. Any journey after it
 	// shared the isolate with that work (J19's history window filled with
 	// it in the 2026-10-05 gate).
+	s.run("J46-t4043-owner-question-route", s.jT4043OwnerQuestionRoute)
 	s.run("J18-t418-mute", s.jT418Mute)
 
 	// Stop isolate before isolation oracle so MCP list is post-teardown.
