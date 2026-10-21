@@ -1053,6 +1053,29 @@ interval probe (`make watchdog-status`) that calls the script when a bounce
 did not take and tells the owner through blurter. An upgrade bounce still
 re-execs through `bin/detach` into its own session.
 
+## Owner-visible means owner-relevant (🎯T1122)
+
+Anything the cockpit shows the owner — a fleet-tree row, a chat bubble, a
+badge, a notice, a status line — earns its place by being one of three
+things: a **decision** the owner must make, a **fault** they must know
+about, or a **change in what they would do next**. Before you add or keep
+something owner-visible, name which of the three it is. If you cannot, it
+does not ship.
+
+This binds both how the product is built and what it says at runtime:
+
+- **Build time — which surfaces exist.** A reaped or finished seat has no
+  owner-facing form (🎯T1121); a parked seat is one line naming the
+  external thing it waits on (🎯T1059); a status line has a settled state.
+- **Runtime — which instances reach the owner now.** A routine worker
+  report is not narrated into the owner's chat (🎯T1053): a "no action
+  needed" message is, by its own words, not one of the three. One owner
+  question gets one answer (🎯T1120).
+
+The system showing what it knows is not the owner seeing what they need.
+When in doubt, keep it off the owner's surface and reachable on demand
+(history, transcript, event log).
+
 ## Run gates so the status survives (🎯T386 / 🎯T396)
 
 A pipeline's exit status is the **last** command's. `go test ./... |

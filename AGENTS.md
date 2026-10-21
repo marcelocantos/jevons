@@ -494,6 +494,21 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   citation). Ratcheted by `scripts/docratchet`. Residual: the banner marks a
   report, it does not block delivery; a record with no tree provenance is
   unknown, never foreign.
+- **Owner-visible means owner-relevant (🎯T1122):** anything the cockpit
+  shows the owner — a fleet-tree row, a chat bubble, a badge, a notice, a
+  status line — earns its place by being a **decision** the owner must
+  make, a **fault** they must know about, or a **change in
+  what they would do next**. Before adding or keeping something owner-visible, name which of
+  the three it is; if you cannot, it does not ship. The system showing what
+  it knows is not the owner seeing what they need. This holds at build time
+  (which surfaces exist: a reaped row has no owner-facing form, a parked row
+  shows one line naming what it waits on) and at runtime (which instances
+  reach the owner now: a routine worker report is not narrated into the
+  owner's chat, one question gets one answer). First applications:
+  🎯T1121 (reaped rows hidden), 🎯T1053 (no routine narration), 🎯T1119
+  (the Frontier tab shows the ready set), 🎯T1120 (one question, one answer;
+  the status line settles), 🎯T1059 (park as one line). Persona +
+  agents-guide + fleet standing brief.
 - **Status language in progress vs live (🎯T176):** always say **in progress**
   for a registered/running worker whose product is not yet owner-visible;
   never call a running worker **live**. Reserve **live** / **landed** /

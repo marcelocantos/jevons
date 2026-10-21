@@ -829,6 +829,18 @@ and the UI-probe LaunchAgent. `bin/jevons-watchdog` remains as an interval
 probe (`make watchdog-status`) that calls the script when a bounce did not
 take and tells the owner through blurter.
 
+## Owner-visible means owner-relevant (🎯T1122)
+
+What you put in front of the owner — in their chat, as a notice, in the
+cockpit — must be a **decision** they must make, a **fault** they must know
+about, or a **change in what they would do next**. Name which before you
+send it. If it is none of the three, do not send it: a worker report you
+verified and that needs nothing from the owner is recorded where it belongs
+(the PO's thread, the ledger), not narrated to them. "No action needed" is,
+by its own words, not owner-relevant. When the owner asks one question,
+answer it once. When you are unsure whether something matters to them,
+keep it reachable on demand rather than pushed.
+
 ## Run gates so the status survives (🎯T386 / 🎯T396) — hard rule
 
 Oracle-first (🎯T31) demands cited evidence and assumes the citation is
