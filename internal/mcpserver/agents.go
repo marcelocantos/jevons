@@ -1230,12 +1230,42 @@ func (s *Server) refuseEngagedOrClosedTarget(name, workdir, targetID string, for
 	}
 	var engaged []string
 	if s != nil && s.registry != nil {
-		engaged = workAgentsEngagedOnTarget(s.registry, targetID, workdir, name)
+		// 🎯T1114: the engagement gate counts only live seats. A row
+		// seatstate has observed as definitively dead (a stopped row, no
+		// process, whatever its fleet intent) must not hold the leaf
+		// against a PO that wants to spawn a fresh implementer. Unlike
+		// workAgentsBoundOnTarget (🎯T566.3, deliberately conservative for
+		// the consume sweep: unobserved == still bound), the admission gate
+		// excludes a name the instant seatstate says No — a nil process
+		// handle is the ordinary shape of every seat here, running or
+		// stopped, and is not itself evidence of life.
+		for _, cand := range workAgentsEngagedOnTarget(s.registry, targetID, workdir, name) {
+			if seatstate.ReadRegistry(s.registry, cand).Alive == seatstate.No {
+				continue
+			}
+			engaged = append(engaged, cand)
+		}
 	}
 	status, _ := loadTargetStatusForKickoff(workdir, targetID)
 	dec := targetfile.GateKickoff(status, engaged, force)
 	if dec.Allow {
 		return ""
+	}
+	if dec.Reason == "already_engaged" && s != nil && s.registry != nil {
+		// Name the seat(s) counted, with the live/stopped read that decided
+		// them, so a PO refused here can act on the specific seat instead of
+		// retrying blind (🎯T1114).
+		var annotated []string
+		for _, n := range dec.Engaged {
+			st := "running"
+			if seatstate.ReadRegistry(s.registry, n).Alive == seatstate.No {
+				st = "stopped"
+			}
+			annotated = append(annotated, fmt.Sprintf("engaged_by=%s status=%s", n, st))
+		}
+		if len(annotated) > 0 {
+			return dec.Message + " (" + strings.Join(annotated, ", ") + ")"
+		}
 	}
 	return dec.Message
 }
@@ -1776,6 +1806,18 @@ func (s *Server) agentEventSink(name string) func(claudia.Event) {
 				}
 				s.logLifecycle(compAgentLifecycle, "envelope", "correction_sent", fields)
 				return
+			}
+			// 🎯T404.2: a valid owner-decision block with no question-default
+			// is not malformed (Validate does not refuse it — refusing would
+			// drop the question, the 🎯T378 failure) but the author is still
+			// told, on its own channel, same shape as 🎯T793. The question is
+			// already recorded/paged before this runs; the seat is reaped as
+			// usual — this is a side notice, not a correction that holds it.
+			if notice := envelope.MissingDefaultNotice(text); notice != "" {
+				if _, err := s.deliverByName(name, notice, OriginAgent, false); err != nil {
+					slog.Warn("T404.2 missing-default notice undeliverable", "agent", name, "err", err)
+				}
+				s.logLifecycle(compAgentLifecycle, "envelope", "missing_default_notice_sent", map[string]any{"agent": name})
 			}
 			// 🎯T165: finished work agents auto stop+Remove (not persona-only).
 			s.maybeReapDoneWorkAgent(name, text)
