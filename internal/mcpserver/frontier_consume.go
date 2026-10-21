@@ -741,6 +741,15 @@ func (s *Server) spawnFrontierWorker(name, workdir, parent, targetID, brief stri
 	if name == "" || workdir == "" {
 		return fmt.Errorf("worker name and workdir required")
 	}
+	// 🎯T1109: the frontier sweep is its own start path and does not go
+	// through handleAgentStart, so it must pass the same fresh-start intent
+	// gate (ensureFreshStartIntent) directly — otherwise a re-mint of a
+	// name that was killed-with-descendants-preserved (🎯T560) registers and
+	// launches a live process while the registry row's intent stays Reaped,
+	// and the 🎯T984 sentinel stands it back down within its next sweep.
+	if err := s.ensureFreshStartIntent(name, "auto:frontier"); err != nil {
+		return err
+	}
 	settleStart, err := s.reserveMissionStart(name, workdir, targetID, parent, "work", "auto:frontier", false, "")
 	if err != nil {
 		return fmt.Errorf("%s", s.missionStartRefusal(name, targetID, err))

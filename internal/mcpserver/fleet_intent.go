@@ -274,6 +274,34 @@ func (s *Server) MarkAgentWorking(name, by, reason string) {
 	}
 }
 
+// ensureFreshStartIntent is the single 🎯T414/🎯T413/🎯T1109 gate every start
+// path must pass through before registering or launching a process: should
+// this name be running at all? A standing park or provider wall refuses the
+// start here, naming the intent — except Reaped, which 🎯T560's kill leaves
+// behind on a preserved row precisely so the name can be reused. A fresh
+// start under a reaped name is the ordinary case (not a revival of the old
+// stopped process — Launch always runs below any caller of this helper), so
+// here the intent is reset to Working before the caller registers/launches.
+// Skipping this reset is exactly the 🎯T1109 bug: a caller that registers and
+// launches a process without going through this door leaves the registry
+// row's intent at Reaped under a live process, and the 🎯T984 sentinel then
+// stands the seat back down within its next sweep, reading the stale intent
+// as ground truth. Every start path — jevons_agent_start's own handler,
+// frontier_consume's auto-spawn, and any future caller — MUST call this (or
+// MarkAgentWorking directly, as the 🎯T530 restart-to-drain path already
+// does) before registering a name that might be a previously-reaped row.
+func (s *Server) ensureFreshStartIntent(name, actor string) error {
+	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
+		if dec.Blocking != fleetintent.Reaped {
+			return fmt.Errorf(
+				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
+				name, fleetintent.Describe(dec.Blocking), dec.Reason)
+		}
+		s.MarkAgentWorking(name, actor, "fresh start under a previously reaped name")
+	}
+	return nil
+}
+
 // FleetIntentSummary is the owner-facing one-liner for the cockpit / logs.
 func (s *Server) FleetIntentSummary() string { return s.fleetIntent().Summarize() }
 

@@ -27,7 +27,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/delivery"
 	"github.com/marcelocantos/jevons/internal/envelope"
 	"github.com/marcelocantos/jevons/internal/fleet"
-	"github.com/marcelocantos/jevons/internal/fleetintent"
 	"github.com/marcelocantos/jevons/internal/fleetlog"
 	"github.com/marcelocantos/jevons/internal/mcpattach"
 	"github.com/marcelocantos/jevons/internal/roles"
@@ -437,15 +436,10 @@ func (s *Server) handleAgentStart(ctx context.Context, req mcp.CallToolRequest) 
 	// existence — and this start always calls Launch below, so there is no
 	// row-existence case left that needs a separate refusal here.
 	rowExisted := s.registry != nil && s.registry.Def(name) != nil
-	if dec := s.AllowFleetControl(name, fleetintent.ControlSpawn); !dec.Allow {
-		if dec.Blocking != fleetintent.Reaped {
-			life["err"] = dec.Reason
-			s.logLifecycle(compAgentLifecycle, "start", "error", life)
-			return mcp.NewToolResultError(fmt.Sprintf(
-				"refusing to start %q — %s (%s). Lift it with jevons_fleet_intent state=working before starting.",
-				name, fleetintent.Describe(dec.Blocking), dec.Reason)), nil
-		}
-		s.MarkAgentWorking(name, s.intentActor(ctx, args), "fresh start under a previously reaped name")
+	if err := s.ensureFreshStartIntent(name, s.intentActor(ctx, args)); err != nil {
+		life["err"] = err.Error()
+		s.logLifecycle(compAgentLifecycle, "start", "error", life)
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	// Expand ~ in workdir.
