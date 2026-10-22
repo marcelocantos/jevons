@@ -45,10 +45,21 @@ func (s *Server) CapacityGovernor() *capacity.Governor {
 	return s.capacityGov
 }
 
-// HarnessLoad exposes the per-provider registered-agent counts that feed both
-// portfolio routing (🎯T325.2) and capacity load headroom (🎯T359).
+// HarnessLoad exposes per-provider live-seat counts for capacity admission
+// (🎯T359 / 🎯T795). Same source as session census in the seat-count governor.
 func (s *Server) HarnessLoad() map[string]int {
-	return map[string]int(s.harnessLoadCounts())
+	return map[string]int(s.harnessLiveSeatCensus().Load)
+}
+
+// HarnessLiveSeatNames lists the live seats counted in HarnessLoad, by plan
+// (🎯T795 refusal visibility).
+func (s *Server) HarnessLiveSeatNames() map[string][]string {
+	c := s.harnessLiveSeatCensus()
+	out := make(map[string][]string, len(c.Names))
+	for k, v := range c.Names {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
 }
 
 // EffectiveProviderSoftCaps returns the portfolio's soft caps after
@@ -158,6 +169,7 @@ type CapacitySnapshotArgs struct {
 	OwnerActive func() bool
 	// ProviderLoad / ProviderSoftCaps are the 🎯T325.2 portfolio spread.
 	ProviderLoad     func() map[string]int
+	ProviderLoadSeats func() map[string][]string
 	ProviderSoftCaps func() map[string]int
 	// PlanRemaining is the 🎯T390 subscription-plan lever: the tightest
 	// published remaining fraction across backends the fleet is running on,
@@ -209,6 +221,9 @@ func CapacitySnapshot(args CapacitySnapshotArgs) capacity.Snapshot {
 	}
 	if args.ProviderLoad != nil {
 		snap.ProviderLoad = args.ProviderLoad()
+	}
+	if args.ProviderLoadSeats != nil {
+		snap.ProviderLoadSeats = args.ProviderLoadSeats()
 	}
 	if args.ProviderSoftCaps != nil {
 		snap.ProviderSoftCaps = args.ProviderSoftCaps()

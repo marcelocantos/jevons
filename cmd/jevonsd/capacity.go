@@ -51,8 +51,9 @@ func startCapacityGovernor(cfg config.Config, watcher *config.Watcher, guard *co
 
 	args := mcpserver.CapacitySnapshotArgs{
 		OwnerActive:      srv.OwnerTurnInFlight,
-		ProviderLoad:     mcpSrv.HarnessLoad,
-		ProviderSoftCaps: mcpSrv.EffectiveProviderSoftCaps,
+		ProviderLoad:      mcpSrv.HarnessLoad,
+		ProviderLoadSeats: mcpSrv.HarnessLiveSeatNames,
+		ProviderSoftCaps:  mcpSrv.EffectiveProviderSoftCaps,
 		DailyTokens:      func() int64 { return policy.Get().DailyTokenBudget },
 		// The host itself, cached so a status call and an ambient tick in the
 		// same second share one sysctl (🎯T463).
