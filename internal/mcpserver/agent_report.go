@@ -133,7 +133,14 @@ func (s *Server) storeAgentReport(agentName, text string) agentreport.Handle {
 	}
 	// 🎯T938: the seat's newest word supersedes any blocker clear.
 	s.forgetSeatBlockerClear(agentName)
-	return rec.Handle()
+	handle := rec.Handle()
+	// 🎯T1186: a finish-report can be stored while worker-idle still reads
+	// turn_in_flight; once flight is idle, reap from the store so the seat
+	// does not sit until an idle-nudge sweep.
+	if envelope.ClassifyDone(text) == envelope.DoneYes {
+		s.maybeReapStoredDoneWorkAgent(agentName)
+	}
+	return handle
 }
 
 // recordTerminalNotice extracts a structured 🎯T254.4 terminal-outcome notice

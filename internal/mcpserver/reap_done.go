@@ -197,6 +197,27 @@ func reapDoneRemoval(reason string) fleetlog.Removal {
 	}
 }
 
+// maybeReapStoredDoneWorkAgent re-reads the durable report store and runs the
+// 🎯T165 path when the latest stored report classifies Done (🎯T1186). The
+// send-path may store a finish-report while phase still reads turn_in_flight
+// (worker-idle withheld before noteTurnEnded); once flight is idle, this is
+// the second chance before idle-nudge would prod the seat.
+func (s *Server) maybeReapStoredDoneWorkAgent(name string) bool {
+	if s == nil || s.registry == nil || strings.TrimSpace(name) == "" {
+		return false
+	}
+	if s.flightState(name) == FlightInFlight {
+		return false
+	}
+	report := strings.TrimSpace(s.latestStoredReport(name))
+	if report == "" || envelope.ClassifyDone(report) != envelope.DoneYes {
+		return false
+	}
+	had := s.registry.Def(name) != nil
+	s.maybeReapDoneWorkAgent(name, report)
+	return had && s.registry.Def(name) == nil
+}
+
 // maybeReapDoneWorkAgent runs after a terminal worker turn is notified to the
 // overseer: if the reply is a finished-work report (including imperfect bare
 // done — 🎯T195), leave the fleet (🎯T165).

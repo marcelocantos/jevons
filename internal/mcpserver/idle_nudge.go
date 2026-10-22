@@ -904,6 +904,9 @@ type IdleNudgeSweepArgs struct {
 	BlockerCleared func(name, report string) bool
 	// TurnInFlight optional: send-path flight ledger (🎯T761). Nil = not in flight.
 	TurnInFlight func(name string) bool
+	// TryReapStoredDone optional: when the latest stored report classifies
+	// Done, attempt the 🎯T165 reap before nudging (🎯T1186). Nil = no reap try.
+	TryReapStoredDone func(name string) bool
 	// MissionAcceptance optional: targetID → acceptance text for full brief.
 	MissionAcceptance func(targetID string) string
 	// HostLoadCritical is optional: reports whether the host's run queue is
@@ -1103,6 +1106,16 @@ func classifyIdleNudgeFor(d claudia.AgentDef, args IdleNudgeSweepArgs, now time.
 			cleared = func(r string) bool { return args.BlockerCleared(d.Name, r) }
 		}
 		hasStoredTerminal, looksFinished, blockedOn = classifyStoredReport(args.LastTerminalReport(d.Name), cleared)
+	}
+	if looksFinished && args.TryReapStoredDone != nil {
+		if args.TryReapStoredDone(d.Name) {
+			return IdleNudgeReport{
+				Name:        d.Name,
+				Action:      IdleNudgeSkip,
+				Reason:      "reap_done",
+				PostRestart: args.PostRestart,
+			}
+		}
 	}
 
 	briefPresent := false
@@ -1510,6 +1523,7 @@ func (s *Server) idlePressureSweep(deps idlePressureDeps) []IdleNudgeReport {
 		TurnInFlight: func(name string) bool {
 			return s.flightState(name) == FlightInFlight
 		},
+		TryReapStoredDone: s.maybeReapStoredDoneWorkAgent,
 		ProcessRunning: deps.Running,
 		Intent:         s.fleetIntent(),
 		Eligible: func(d claudia.AgentDef) bool {
@@ -1724,6 +1738,9 @@ func (s *Server) emitWorkerIdleToParent(name, prevPhase, nextPhase string) {
 	engagedKids := CountEngagedWorkChildren(defs, name, phaseOf, missionOpen)
 	intent := s.fleetIntent()
 	openMission := HasOpenMissionForIdle(s.withSeatRole(*def), missionOpen, workKids, engagedKids)
+	if s.maybeReapStoredDoneWorkAgent(name) {
+		return
+	}
 	if suppress, reason := s.workerIdleSuppressReason(name); suppress {
 		slog.Info("worker-idle notification withheld — terminal or in-flight",
 			"agent", name, "reason", reason)

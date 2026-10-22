@@ -233,6 +233,9 @@ func (s *Server) noteTurnEnded(name string) {
 	s.mu.Unlock()
 	// 🎯T766.2: turn-flight write path feeds the shared authority (InFlight=No).
 	s.observeTurnFlight(name, FlightIdle)
+	// 🎯T1186: a finish-report may already be in the store from notify while
+	// worker-idle still read turn_in_flight; reap once flight settles.
+	s.maybeReapStoredDoneWorkAgent(name)
 }
 
 func (s *Server) terminalGeneration(name string) uint64 {
