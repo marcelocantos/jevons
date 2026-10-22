@@ -279,6 +279,9 @@ type Server struct {
 	// (🎯T416). Absent means unknown, which is a real answer and not a
 	// default — see turn_flight.go. Guarded by mu.
 	agentFlight map[string]TurnFlight
+	// sidecarTurnEndAt is the newest spool turn_end timestamp already folded
+	// into noteTurnEnded for each sidecar seat (🎯T1186). Guarded by mu.
+	sidecarTurnEndAt map[string]time.Time
 
 	// wedges holds what the daemon has seen of each in-flight turn since it
 	// began: motion, a host handle lost under it, messages handed over, and

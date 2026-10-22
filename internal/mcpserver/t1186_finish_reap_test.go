@@ -12,6 +12,7 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/agentreport"
 	"github.com/marcelocantos/jevons/internal/envelope"
+	"github.com/marcelocantos/jevons/internal/spool"
 )
 
 const t1186Worker = "jv-t1186-finish-reap"
@@ -125,5 +126,52 @@ func TestT1186EventSinkReapsFinishReportAfterInFlightIdle(t *testing.T) {
 	}
 	if rec, err := agentreport.Latest(dir, t1186Worker); err != nil || !strings.Contains(rec.Text, "finish-report") {
 		t.Fatalf("stored report missing after reap: err=%v", err)
+	}
+}
+
+// TestT1186SidecarSpoolTurnEndReapsStoredFinishReport drives the production
+// seat-observation path: a sidecar turn_end in the dated spool settles flight
+// so a stored done finish-report reaps (🎯T1186 / T419 call-site reachability).
+func TestT1186SidecarSpoolTurnEndReapsStoredFinishReport(t *testing.T) {
+	spoolDir := t.TempDir()
+	t.Setenv(spool.DirEnv, spoolDir)
+	dir := t.TempDir()
+	reg, err := claudia.NewRegistry(filepath.Join(dir, "agents.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const worker = "jv-t1186-sidecar-finish"
+	def := claudia.AgentDef{
+		Name: worker, WorkDir: dir, SessionID: "s1186-sidecar",
+		Purpose: claudia.PurposeWork, Parent: "jevons-po", TargetID: "T1186",
+		Provider: "grok", Materialized: true,
+	}
+	if err := reg.Register(def); err != nil {
+		t.Fatal(err)
+	}
+	s := New(t.TempDir(), nil, nil)
+	s.SetRegistry(reg)
+	s.SetAgentReportDir(dir)
+	s.SetSeatAliveFn(func(name string) bool { return name == worker })
+
+	finish := declaredFinishReport("T1186", "Done.")
+	s.noteTurnInFlight(worker)
+	s.storeAgentReport(worker, finish)
+	if reg.Def(worker) == nil {
+		t.Fatal("store must not reap while flight is in flight")
+	}
+	if suppress, reason := s.workerIdleSuppressReason(worker); !suppress || reason != "turn_in_flight" {
+		t.Fatalf("worker-idle suppress=%v reason=%q want turn_in_flight", suppress, reason)
+	}
+
+	plantT1080SpoolLine(t, spoolDir, worker, time.Now().UTC(), "turn_end")
+	s.observeRegistryLiveness()
+	s.observeSeatTranscriptWith(def, s.transcriptRoots())
+
+	if s.flightState(worker) == FlightInFlight {
+		t.Fatal("spool turn_end must settle flight for a sidecar seat")
+	}
+	if reg.Def(worker) != nil {
+		t.Fatal("stored done finish-report must reap once spool turn_end settles flight")
 	}
 }

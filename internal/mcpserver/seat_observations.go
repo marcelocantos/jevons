@@ -176,6 +176,9 @@ func (s *Server) observeSeatTranscriptWith(d claudia.AgentDef, roots discovery.R
 	}
 	s.diagnoseBirthWith(d, s.birthClock(), roots)
 	_, _ = s.sendQueue().Depth(d.Name)
+	// 🎯T1186: sidecar turn_end in the dated spool is the turn boundary when
+	// the wired sink never sees IsTerminalStop.
+	s.observeSidecarSpoolTurnEnd(d)
 }
 
 func (s *Server) observeBrokerSeats(broker map[string]claudia.BrokerSeat) map[string]seatstate.State {
