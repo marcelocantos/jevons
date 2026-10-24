@@ -309,7 +309,11 @@ func CoalesceStreamLines(lines []string) []string {
 		// is not rewritten; this is a view filter.
 		body := st.acc.String()
 		var content []any
-		if silentresponse.Is(body) {
+		// 🎯T1054: body here is the whole sealed turn (the stream is fully
+		// accumulated), so the routine-noise heuristic is safe to apply —
+		// unlike the live per-fragment path, there is no later fragment
+		// still to arrive that could reveal an escape word.
+		if silentresponse.IsFiltered(body) {
 			content = []any{}
 		} else if body != "" {
 			content = []any{

@@ -35,7 +35,7 @@ func TestT580SiblingHEADForcesActivation(t *testing.T) {
 	sibling := makeWorkspace(t, e.root)
 	e.build("a")
 
-	out, err := e.run()
+	out, err := e.run(0)
 	if err != nil {
 		t.Fatalf("cold start failed: %v\n%s", err, out)
 	}
@@ -50,7 +50,7 @@ func TestT580SiblingHEADForcesActivation(t *testing.T) {
 	// Control: nothing moved at all, so the thrash policy must still hold.
 	// Without this, a test that only proves "it restarts" would also pass
 	// for an identity that changes on every run.
-	out, err = e.run()
+	out, err = e.run(0)
 	if err != nil {
 		t.Fatalf("no-op run failed: %v\n%s", err, out)
 	}
@@ -66,7 +66,7 @@ func TestT580SiblingHEADForcesActivation(t *testing.T) {
 	// state the old check called "this exact build".
 	gitIn(t, sibling, "commit", "--allow-empty", "-m", "sibling-only readiness fix")
 
-	out, err = e.run()
+	out, err = e.run(0)
 	if err != nil {
 		t.Fatalf("sibling-moved run failed: %v\n%s", err, out)
 	}
