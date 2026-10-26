@@ -1,0 +1,38 @@
+# Homebrew tap publication for jevons. `tapper push` runs from the dev
+# Mac after the GitHub release exists; the token lives in the macOS
+# keychain, so there is no Actions secret and no CI step.
+repo: marcelocantos/jevons
+tap:
+  owner: marcelocantos
+  name: homebrew-tap
+push:
+  darwin_arm64: true
+  linux_amd64: true
+  linux_arm64: true
+  skip_checksum: true
+  update_readme_table: true
+install: |
+  bin.install "jevonsd" => "jevonsd"
+test: 'system bin/"jevonsd", "--version"'
+# depends_on is folded into formula_includes: tapper has no separate
+# depends_on input (homebrew-releaser renders includes at the top of the
+# class, so these lines move above desc in the generated formula).
+# gh is the only brew-installable tool the daemon shells out to.
+# Run jevonsd as a keep-alive brew service. formula_includes injects
+# this verbatim inside the formula class (the formula is DO-NOT-EDIT
+# generated, so the service block must come from the generator, not a
+# hand-edit). launchd gives brew services a spartan PATH, so augment
+# it here — otherwise the daemon can't resolve gh at runtime.
+formula_includes: |
+  depends_on "gh"
+
+  service do
+    run [opt_bin/"jevonsd"]
+    environment_variables PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:#{Dir.home}/.cargo/bin:#{Dir.home}/.local/bin:#{Dir.home}/.py/bin:#{Dir.home}/go/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    keep_alive true
+    log_path var/"log/jevonsd.log"
+    error_log_path var/"log/jevonsd.log"
+  end
+token:
+  env: HOMEBREW_TAP_TOKEN
+  op: op://Personal/GitHub Homebrew Tap PAT/token
