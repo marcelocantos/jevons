@@ -98,6 +98,12 @@ type Server struct {
 	seatLoadMu sync.Mutex
 	seatLoad   *seatload.Tracker
 
+	// landingVetoNoticed names each worker-and-commit whose landing veto
+	// has been explained to its parent, so the reap retries that follow
+	// a terminal report do not repeat the notice (🎯T1310).
+	landingVetoMu      sync.Mutex
+	landingVetoNoticed map[string]bool
+
 	// seats is the single answer to "what is true about this seat"
 	// (🎯T766.2). Controls read it instead of each deriving their own;
 	// see docs/fleet-census.md for the eleven derivations it replaces.

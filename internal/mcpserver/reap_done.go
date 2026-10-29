@@ -282,6 +282,9 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 			if flags[0].Kind == gate.FlagOwnerImpactMissingKind {
 				s.notifyParentOwnerImpactMissing(parent, name, targetID, flags[0])
 			}
+			if flags[0].Kind == gate.FlagLandingUnreachable {
+				s.notifyParentLandingUnreachable(parent, name, targetID, flags[0])
+			}
 		}
 		if scope := outstandingScopeReasonsForWorker(report, workDir); len(scope) > 0 &&
 			reason == outstandingScopeReapReason(scope) {
@@ -425,6 +428,48 @@ func (s *Server) notifyParentOwnerImpactMissing(parent, worker, targetID string,
 	if _, err := s.deliverByName(p, msg, OriginAgent, false); err != nil {
 		slog.Warn("T1122 owner-impact-missing notice undelivered to parent; escalating to overseer",
 			"parent", p, "worker", worker, "target", targetID, "err", err)
+		s.notifyFleetHealth(noticeAct, worker, fmt.Sprintf("parent %s unreachable (%v) for: %s", p, err, msg))
+	}
+}
+
+// notifyParentLandingUnreachable tells a worker's parent, once per worker
+// and cited commit, that the worker is kept because the commit it cited is
+// not on the shared checkout's tip (🎯T1310). The veto cannot tell a
+// rolled-back landing from work its parent landed another way (a
+// cherry-pick or rebase gives the work a new hash), and without this notice
+// the parent never learned the seat was kept: on 2026-10-29 an overseer
+// that had cherry-picked both workers' commits left them idle for good.
+func (s *Server) notifyParentLandingUnreachable(parent, worker, targetID string, flag gate.Flag) {
+	if s == nil || strings.TrimSpace(worker) == "" {
+		return
+	}
+	key := worker + "@" + flag.Evidence
+	s.landingVetoMu.Lock()
+	if s.landingVetoNoticed[key] {
+		s.landingVetoMu.Unlock()
+		return
+	}
+	if s.landingVetoNoticed == nil {
+		s.landingVetoNoticed = map[string]bool{}
+	}
+	s.landingVetoNoticed[key] = true
+	s.landingVetoMu.Unlock()
+
+	p := strings.TrimSpace(parent)
+	if p == "" {
+		p = "jevons-po"
+	}
+	target := ""
+	if strings.TrimSpace(targetID) != "" {
+		target = " (" + targetID + ")"
+	}
+	msg := fmt.Sprintf("[reap-veto 🎯T1310] %s%s finished, but it is kept, not reaped: %s.\n"+
+		"If you landed its work another way (a cherry-pick or rebase gives the commit a new hash), reap it: "+
+		"jevons_agent_stop name=%s disposition=reap. If its landing was rolled back, re-land the work.",
+		worker, target, flag.Detail, worker)
+	if _, err := s.deliverByName(p, msg, OriginAgent, false); err != nil {
+		slog.Warn("T1310 landing-veto notice undelivered to parent; escalating to overseer",
+			"parent", p, "worker", worker, "err", err)
 		s.notifyFleetHealth(noticeAct, worker, fmt.Sprintf("parent %s unreachable (%v) for: %s", p, err, msg))
 	}
 }
