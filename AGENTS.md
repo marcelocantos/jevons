@@ -466,10 +466,12 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   `git checkout -- <path>`, `git restore`, or `git reset` on the
   shared clone to “clean up” before landing. The only landing path is
   `go run ./cmd/integrate` — it refuses when dirty paths overlap the merge and
-  never stashes. `bin/fleetgit` on PATH (ahead of real git) and the treeguard
-  Bash hook refuse `git stash push` from a fleet seat and name the dirty paths
-  stash would take. Pre-commit refuses a commit that drops more than a few
-  bullseye target rows at once (ef5fdf35 incident). Sibling: 🎯T254.2 integrate.
+  never stashes. The real git guard is the Claude treeguard PreToolUse Bash
+  hook (Claude seats). `bin/fleetgit` exists but is not on fleet seats' PATH
+  (🎯T1315) — an OMP sidecar seat's `git` is `/usr/bin/git`; Claudia's sidecar
+  does not wrap git (it does refuse pattern kills, claudia 🎯T237). Pre-commit
+  refuses a commit that drops more than a few bullseye target rows at once
+  (ef5fdf35 incident). Sibling: 🎯T254.2 integrate.
 - **Never hand-resolve ledger merge conflicts (🎯T1145):** do not edit or rewrite
   `bullseye.yaml` to fix a merge conflict (including OMP sidecar edit/write from a
   truncated read). Land through `go run ./cmd/integrate`; when `bullseye.yaml` is the
@@ -479,8 +481,9 @@ make bullseye     # Standing invariants: build, test, vet, clean tree
   change in a sibling repository sends a `needs-release` request to that repo's product
   owner via `jevons_agent_send` and parks with an `active-wait`. It does not edit that
   sibling's shared clone, bump its version, or add/change a `go.mod replace` for
-  `github.com/marcelocantos/…` modules (🎯T448 publish-then-pin). `fleetgit` and
-  treeguard refuse mutating git in another repository's shared checkout from a work seat.
+  `github.com/marcelocantos/…` modules (🎯T448 publish-then-pin). The Claude
+  treeguard PreToolUse hook refuses mutating git in another repository's shared
+  checkout from a Claude work seat (`bin/fleetgit` is not on PATH, 🎯T1315).
 - **Private-index commits re-check HEAD (🎯T432):** when `git commit --only`
   cannot — a shared hot file (Makefile, AGENTS.md) still holds another
   worker's uncommitted hunks, so the work tree is not a safe stage source —

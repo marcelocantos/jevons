@@ -348,6 +348,20 @@ change. Specimen: claudia-po turns 250-253 (2026-10-28) held the Claudia
 release asking the owner to name Anthropic or Cursor after Codex's sandbox
 denied nested sandbox-exec; that is the bad shape.
 
+## Sandboxed worker cannot run the full gate (🎯T1313)
+When a worker's sandboxed seat cannot run its repo's full gate (nested
+sandbox-exec, ps or keychain refused), the fleet still gets it gated and
+landed without an owner step: the PO spawns an auditor (🎯T1182) on a
+provider whose sandbox can run that gate (🎯T1245), or a gate runner
+outside the worker sandbox, which runs the exact full-gate command in the
+worker's worktree, records it in the gate store, and integrate lands it. A
+GREEN gate record is valid regardless of which seat ran it. Do not park
+the worker or the target asking the owner to run the gate. Specimen:
+2026-10-29, 🎯claudia/T237 and 🎯claudia/T238 finished with focused gates GREEN, but
+neither worker nor claudia-po (both sandboxed) could run claudia's full
+gate; claudia-po parked both and the work sat until the owner session ran
+the gate and integrated by hand.
+
 ### Bosses (Stratum 1.5)
 Temporary agents spawned by product owners for specific initiatives.
 They decompose work, coordinate teams, and report structured outcomes.
@@ -496,9 +510,10 @@ id**, not a registry rewrite. Residual: flat ids unchanged (`jv-t159-seal`).
 Workers never run `git stash`, `git checkout -- <path>`, `git restore`, or
 `git reset` on the **shared checkout** to clean up before landing. Land only
 through `go run ./cmd/integrate` — it refuses overlapping dirty paths and never
-stashes. Fleet seats: `bin/fleetgit` ahead of real git on PATH and the
-treeguard Bash hook refuse `git stash push` and name the dirty paths stash
-would take. Pre-commit refuses a commit that drops more than a few bullseye
+stashes. The real git guard is the Claude treeguard PreToolUse Bash hook
+(Claude seats). `bin/fleetgit` is not on PATH (🎯T1315);
+an OMP sidecar seat's `git` is `/usr/bin/git`. Claudia's sidecar does not
+wrap git. Pre-commit refuses a commit that drops more than a few bullseye
 target rows at once.
 
 A landing can outlast a worker's 600-second shell call (🎯T1259). Workers
@@ -519,8 +534,9 @@ Work that needs an unpublished change in a sibling repository sends a
 `needs-release` request to that repo's product owner via `jevons_agent_send` and
 parks with an `active-wait`. It does not edit that sibling's shared clone, bump
 its version, or add/change a `go.mod replace` for `github.com/marcelocantos/…`
-modules (🎯T448 publish-then-pin). `fleetgit` and treeguard refuse mutating git
-in another repository's shared checkout from a work seat.
+modules (🎯T448 publish-then-pin). The Claude treeguard PreToolUse hook refuses
+mutating git in another repository's shared checkout from a Claude work seat
+(`bin/fleetgit` is not on PATH, 🎯T1315).
 
 ### Multi-slice fan-out (🎯T111.4) — PO/boss default
 

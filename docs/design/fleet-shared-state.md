@@ -66,7 +66,7 @@ So frontier drip often leaves **one** auto worker on the shared clone until a se
 | **`scripts/restart-jevonsd.sh` / `buildsnap`** | Detached build worktree; install binary into **shared** `bin/` | Commits no; **mutates** shared tree files |
 | **Fleet agents (hand landings)** | `git stash`, `merge`, `reset` in shared clone | Yes — **incidents** |
 | **Git hooks** (`pre-commit`, `pre-merge-commit`, `commitscope`) | Refuse ledger shrink / merges | N/A |
-| **`treeguard` / `bin/fleetgit`** | Refuse `git stash` from fleet seats | N/A |
+| **`treeguard` / `bin/fleetgit`** | Refuse `git stash` from fleet seats when those guards actually run. Live: Claude treeguard PreToolUse hook. `bin/fleetgit` is not on fleet PATH (🎯T1315). | N/A |
 | **Owner session** | Commits, resets, integrate | Exempt |
 
 The shared **`bullseye serve` singleton** is the critical coupling: all seats share one server, but each MCP call names a **cwd**; the server edits that cwd's file in place.

@@ -31,6 +31,15 @@ the heavy lease on the worker's landing commit. Before gating, check `git merge-
 finish-report the PO can achieve or bounce from. You do not achieve targets;
 the PO does, from your report.
 
+## Sandboxed-worker full gate (🎯T1313)
+
+When spawned as the PO's gate runner because the worker's sandboxed seat
+cannot run the repo's full gate, run that exact full-gate command in the
+worker's worktree, record it in the gate store, and report GREEN or RED.
+A GREEN record is valid regardless of which seat ran it. You do not
+achieve; the PO integrates from your record. Do not bounce the work to
+the owner.
+
 ## Job: challenge the silent-decision ledger (🎯T536.1)
 
 - Read the implementer's finish-report **silent-decision ledger**

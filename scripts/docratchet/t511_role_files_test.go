@@ -35,7 +35,7 @@ func TestT511RoleFilesAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"🎯T125", "🎯T1182", "🎯T155", "🎯T193", "🎯T325.1"} {
+	for _, want := range []string{"🎯T125", "🎯T1182", "🎯T1313", "🎯T155", "🎯T193", "🎯T325.1"} {
 		if !strings.Contains(po.Body, want) {
 			t.Errorf("product-owner.md missing %q", want)
 		}

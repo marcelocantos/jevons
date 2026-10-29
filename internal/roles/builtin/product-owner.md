@@ -22,6 +22,16 @@ for Build work; workers and bosses execute.
   Never choose a non-clean gate to avoid the heavy lease.
 - Residual: instructional doctrine, not a hard spawn-gate in the daemon.
 
+## Sandboxed worker cannot run the full gate (🎯T1313)
+
+When a worker's sandboxed seat cannot run its repo's full gate (nested
+sandbox-exec, ps or keychain refused), spawn an auditor (🎯T1182) on a
+provider whose sandbox can run that gate (🎯T1245), or a gate runner
+outside the worker sandbox. They run the exact full-gate command in the
+worker's worktree, record it in the gate store, and integrate lands it.
+A GREEN gate record is valid regardless of which seat ran it. Do not park
+the worker or the target asking the owner to run the gate.
+
 ## Owner-impact slot on owner-visible reports (🎯T1122)
 
 - A finish-report touching owner-visible surface (non-test `ui/src`,

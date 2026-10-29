@@ -5,6 +5,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -32,8 +33,12 @@ func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 	s, _ := t541Server(t)
 	s.launchDeadline = 50 * time.Millisecond
 	cleaned := make(chan struct{})
+	var entered time.Time
+	var launchErr error
 	s.launchAgentFn = func(ctx context.Context, _ string) (*claudia.Agent, error) {
+		entered = time.Now()
 		<-ctx.Done()
+		launchErr = ctx.Err()
 		close(cleaned)
 		return nil, ctx.Err()
 	}
@@ -53,9 +58,8 @@ func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 			t.Error("startup cleanup was abandoned")
 		}
 	})
-	start := time.Now()
 	res, err := s.handleAgentStart(t.Context(), req)
-	elapsed := time.Since(start)
+	returned := time.Now()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,8 +70,19 @@ func TestT541_2HandleAgentStartLaunchDeadlineReleasesMutex(t *testing.T) {
 	if !strings.Contains(text, "timed out") || !strings.Contains(text, "T541.2") {
 		t.Fatalf("error %q should name the T541.2 deadline", text)
 	}
-	if elapsed > 500*time.Millisecond {
-		t.Fatalf("deadline waited %s, want ~50ms", elapsed)
+	// Time the launch alone: the rest of handleAgentStart does registry and
+	// file work that make gate's load stretched past a whole-call bound
+	// (gate 7ef4e45b: 545ms). The deadline, not a hang, must end the launch.
+	select {
+	case <-cleaned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("launch never returned after its deadline")
+	}
+	if !errors.Is(launchErr, context.DeadlineExceeded) {
+		t.Fatalf("launch ended by %v, want the launch deadline", launchErr)
+	}
+	if waited := returned.Sub(entered); waited > 5*time.Second {
+		t.Fatalf("deadline waited %s, want ~50ms", waited)
 	}
 	if s.startMutexHeld() {
 		t.Fatal("start mutex still held after launch timeout")

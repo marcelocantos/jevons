@@ -37,8 +37,9 @@
 // real tests still run under those tags; undeclared tagged-out packages
 // still fail as "matched no packages".
 // -override-gate-check REASON is the owner's named escape
-// hatch; every use is logged in the shared clone's git dir rather than
-// vanishing when the process exits.
+// hatch for a missing GREEN record and for a GREEN record that does not
+// cover every changed package (🎯T1314); every use is logged in the shared
+// clone's git dir rather than vanishing when the process exits.
 // -detach runs the same landing in its own session and returns at once;
 // -result AGENT reports how the latest one ended (🎯T1259, detach.go).
 package main
@@ -63,7 +64,7 @@ func main() {
 	gateDir := flag.String("gate-dir", "",
 		"gate store to check for a GREEN record (default: ~/.jevons/gates, or $JEVONS_GATE_DIR)")
 	overrideReason := flag.String("override-gate-check", "",
-		"owner-only: land without a GREEN gate record, for the given reason (logged, 🎯T1107)")
+		"owner-only: land without a covering GREEN gate record, for the given reason (logged; missing-record and coverage checks, 🎯T1107/🎯T1314)")
 	overrideLandHold := flag.String("override-land-hold", "",
 		"owner-only: integrate despite an active no-merge hold (logged, 🎯T1040)")
 	detach := flag.Bool("detach", false,

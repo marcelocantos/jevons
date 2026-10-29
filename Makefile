@@ -46,7 +46,8 @@ bin/treeguard: $(GO_SRC)
 	go build -o bin/treeguard ./cmd/treeguard
 
 # Shared-checkout git wrapper (🎯T1134). Refuses `git stash` in the shared
-# clone from a fleet seat; prepend bin/ ahead of real git on PATH.
+# clone from a fleet seat when invoked as `git`. Not currently on fleet seats'
+# PATH (🎯T1315); the Claude treeguard PreToolUse hook is the live guard.
 .PHONY: fleetgit
 fleetgit: bin/fleetgit
 

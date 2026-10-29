@@ -48,11 +48,25 @@ func TestJ44CanonicalUsageWaitsForPositiveReplicatedCount(t *testing.T) {
 	}
 	// Model the production collector's poll arriving after an initial zero
 	// has already held for a settling interval.
+	// The poller's reads can hold the database while the insert runs, so a
+	// busy insert retries rather than vanishing (make gate runs this under
+	// heavy load, where it once failed with the error dropped).
+	inserted := make(chan error, 1)
 	go func() {
 		time.Sleep(80 * time.Millisecond)
-		_, _ = db.Exec(`INSERT INTO usage_calls (session_id) VALUES ('seat-generation')`)
+		var err error
+		for range 100 {
+			if _, err = db.Exec(`INSERT INTO usage_calls (session_id) VALUES ('seat-generation')`); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		inserted <- err
 	}()
-	got, err := settledUsageCalls(dir, "seat-generation", 25*time.Millisecond, time.Second)
+	got, err := settledUsageCalls(dir, "seat-generation", 25*time.Millisecond, 15*time.Second)
+	if ierr := <-inserted; ierr != nil {
+		t.Fatalf("insert: %v", ierr)
+	}
 	if err != nil || got != 1 {
 		t.Fatalf("settled count = %d, %v; want 1", got, err)
 	}

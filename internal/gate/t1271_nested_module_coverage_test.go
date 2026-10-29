@@ -76,7 +76,7 @@ func TestT1271NonTestBashStillBadCommand(t *testing.T) {
 	if err == nil || !errors.Is(err, ErrLandingGateCoverage) {
 		t.Fatalf("want bad-command refusal, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "must be go test or make test-go") {
+	if !strings.Contains(err.Error(), "must be go test") {
 		t.Fatalf("error should still name the command requirement: %v", err)
 	}
 }

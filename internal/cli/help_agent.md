@@ -398,15 +398,18 @@ unions the ledger mechanically. File targets via jevons_target_file / bullseye t
 change in a sibling repository sends a `needs-release` request to that repo's product
 owner via `jevons_agent_send` and parks with an `active-wait`. It does not edit that
 sibling's shared clone, bump its version, or add/change a `go.mod replace` for
-`github.com/marcelocantos/…` modules (🎯T448 publish-then-pin). `fleetgit` and
-treeguard refuse mutating git in another repository's shared checkout from a work seat.
+`github.com/marcelocantos/…` modules (🎯T448 publish-then-pin). The Claude
+treeguard PreToolUse hook refuses mutating git in another repository's shared
+checkout from a Claude work seat (`bin/fleetgit` is not on PATH, 🎯T1315).
 
 **Never stash or reset the shared checkout (🎯T1134).** Workers never run `git stash`,
 `git checkout -- <path>`, `git restore`, or `git reset` on the
 shared clone — not to “clean up” before a hand merge. Land only through
 `go run ./cmd/integrate`; it refuses overlapping dirty paths and never stashes. A pre-commit hook refuses a commit that
-drops more than a few bullseye target rows at once. Fleet seats: `bin/fleetgit`
-ahead of real git on PATH refuses `git stash push` and names dirty paths.
+drops more than a few bullseye target rows at once. The Claude treeguard
+PreToolUse Bash hook is the real git guard (Claude seats). `bin/fleetgit` is
+not on PATH (🎯T1315); an OMP sidecar seat's `git` is
+`/usr/bin/git`. Claudia's sidecar does not wrap git.
 
 **Kill only what you started (🎯T1296).** A seat signals only processes it
 started: keep the pid (`$!`, or the pid the command printed) and `kill` that
@@ -597,6 +600,20 @@ a provider. This is Build-plane execution placement, not a waiver or scope
 change. Specimen: claudia-po turns 250-253 (2026-10-28) held the Claudia
 release asking the owner to name Anthropic or Cursor after Codex's sandbox
 denied nested sandbox-exec; that is the bad shape.
+
+## Sandboxed worker cannot run the full gate (🎯T1313)
+When a worker's sandboxed seat cannot run its repo's full gate (nested
+sandbox-exec, ps or keychain refused), the fleet still gets it gated and
+landed without an owner step: the PO spawns an auditor (🎯T1182) on a
+provider whose sandbox can run that gate (🎯T1245), or a gate runner
+outside the worker sandbox, which runs the exact full-gate command in the
+worker's worktree, records it in the gate store, and integrate lands it. A
+GREEN gate record is valid regardless of which seat ran it. Do not park
+the worker or the target asking the owner to run the gate. Specimen:
+2026-10-29, 🎯claudia/T237 and 🎯claudia/T238 finished with focused gates GREEN, but
+neither worker nor claudia-po (both sandboxed) could run claudia's full
+gate; claudia-po parked both and the work sat until the owner session ran
+the gate and integrated by hand.
 
 ### Overseer never parents product workers (🎯T129)
 

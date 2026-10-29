@@ -199,9 +199,14 @@ func ReapDoneWorkAgent(reg *claudia.Registry, acct *fleetlog.Account, name, repo
 	if !ok {
 		return false, nil
 	}
+	workdir := ""
+	if d := reg.Def(name); d != nil {
+		workdir = d.WorkDir
+	}
 	if err := killSubtree(reg, acct, name, reapDoneRemoval(reason)); err != nil {
 		return false, fmt.Errorf("reap done %q (%s): %w", name, reason, err)
 	}
+	cleanupImprovisedAfterReap(reg, workdir)
 	return true, nil
 }
 
@@ -335,6 +340,10 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 	// owner to ask and reads that as "not complete", so a pane that
 	// survived the kill is fed "Continue the open objective" forever.
 	s.closeSeatGoalBeforeRemoval(name, "reaped_as_finished_work")
+	workdir := ""
+	if def := s.registry.Def(name); def != nil {
+		workdir = def.WorkDir
+	}
 	if err := killSubtree(s.registry, s.RemovalAccount(), name, reapDoneRemoval(reason)); err != nil {
 		slog.Warn("T165/T195 auto-reap failed", "agent", name, "reason", reason, "err", err)
 		fields := reapDecisionFields(name, reason, report)
@@ -342,6 +351,7 @@ func (s *Server) maybeReapDoneWorkAgent(name, report string) {
 		s.logLifecycle(compAgentLifecycle, "reap_done", "error", fields)
 		return
 	}
+	cleanupImprovisedAfterReap(s.registry, workdir)
 	s.logLifecycle(compAgentLifecycle, "reap_done", "ok",
 		reapDecisionFields(name, reason, report))
 	slog.Info("auto-reaped finished work agent", "agent", name, "reason", reason)

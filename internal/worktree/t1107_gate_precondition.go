@@ -35,8 +35,10 @@ import (
 // for lacking one.
 //
 // overrideReason, when set, is the owner's escape hatch: the landing
-// proceeds without a gate record, and the bypass is appended to a log in the
-// shared clone's git dir rather than vanishing the moment the process exits.
+// proceeds without a covering GREEN gate record — either no record at all
+// (🎯T1107) or a GREEN record whose command does not cover every changed
+// package (🎯T1314). The bypass is appended to a log in the shared clone's
+// git dir rather than vanishing the moment the process exits.
 
 // ErrNoGateRecord is returned by RequireLandingGate when the gate store has
 // no GREEN record measuring the worker branch's tip (or a tree-equal
@@ -63,10 +65,10 @@ const overrideLogName = "jevons-integrate-overrides.log"
 // (gateStoreRoot empty means gate.DefaultStoreRoot()).
 //
 // On success it returns the record that justified the landing — nil when
-// the check was bypassed by overrideReason. On refusal the error names the
-// worker branch's tip and either the missing/non-green record or the
-// mismatched citation, so the caller's message is specific rather than a
-// bare "refused".
+// the check was bypassed by overrideReason (missing record or insufficient
+// coverage). On refusal the error names the worker branch's tip and either
+// the missing/non-green record, a coverage miss, or the mismatched citation,
+// so the caller's message is specific rather than a bare "refused".
 func RequireLandingGate(base, agentName, gateStoreRoot, overrideReason string) (*gate.Record, error) {
 	workerBranch := BranchName(agentName)
 	workerTip, err := gitOut(base, "rev-parse", "--verify", "refs/heads/"+workerBranch)
@@ -87,12 +89,18 @@ func RequireLandingGate(base, agentName, gateStoreRoot, overrideReason string) (
 			return nil, fmt.Errorf("integrate: %s: HEAD %s: %w", agentName, short(workerTip), cerr)
 		}
 		if err := refuseLandingGatePackageCoverage(base, agentName, workerTip, cited); err != nil {
+			if ok, oerr := bypassCoverageWithOverride(base, agentName, workerTip, overrideReason, err); ok {
+				return nil, oerr
+			}
 			return nil, err
 		}
 		return cited, nil
 	}
 
 	if rec, err := latestGreenRecordForCommit(store, base, agentName, workerTip); err != nil {
+		if ok, oerr := bypassCoverageWithOverride(base, agentName, workerTip, overrideReason, err); ok {
+			return nil, oerr
+		}
 		return nil, fmt.Errorf("integrate: gate lookup: %w", err)
 	} else if rec != nil {
 		return rec, nil
@@ -261,6 +269,19 @@ func sameOrTreeEqualTo(workdir string, rec *gate.Record, commit, commitTree stri
 	}
 	recTree, err := gitOut(workdir, "rev-parse", rec.Tree.Commit+"^{tree}")
 	return err == nil && recTree == commitTree
+}
+
+// bypassCoverageWithOverride logs overrideReason and reports bypassed when
+// err is a package-coverage refusal (🎯T1314). Other refusals are unchanged:
+// a cited-id mismatch and a non-pristine GREEN still refuse.
+func bypassCoverageWithOverride(base, agentName, workerTip, reason string, err error) (bool, error) {
+	if strings.TrimSpace(reason) == "" || err == nil || !errors.Is(err, gate.ErrLandingGateCoverage) {
+		return false, nil
+	}
+	if logErr := logGateOverride(base, agentName, workerTip, reason); logErr != nil {
+		return true, logErr
+	}
+	return true, nil
 }
 
 // logGateOverride appends one line to the shared clone's override log,

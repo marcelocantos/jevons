@@ -3,8 +3,8 @@
 
 // Command fleetgit is a git wrapper for fleet seats: it refuses `git stash`
 // in the shared checkout when stash would take another actor's dirty paths
-// (🎯T1134). Prepend bin/ (or this binary's directory) ahead of real git on
-// PATH for harnesses without the Claude treeguard hook.
+// (🎯T1134). Intended to be prepended as `git` on PATH for harnesses without
+// the Claude treeguard hook. Not currently on fleet seats' PATH (🎯T1315).
 //
 // Real git is resolved from PATH with this binary removed so the wrapper
 // does not recurse.

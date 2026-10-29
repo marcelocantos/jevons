@@ -70,9 +70,10 @@ func GitBranchGoPackageDirs(repo, since, until string) ([]string, error) {
 }
 
 // CheckLandingGatePackageCoverage refuses when rec's command is not a go test
-// (or make test-go, or a nested-module bash -c cd-and-test form, 🎯T1271)
-// whose patterns cover every required package without a -run/-skip filter.
-// required empty means nothing to check.
+// (or a full-suite make target such as test-go / gate-checks, a root-level
+// bash -c that runs go test ./..., or a nested-module bash -c cd-and-test
+// form, 🎯T1271 / 🎯T1314) whose patterns cover every required package
+// without a -run/-skip filter. required empty means nothing to check.
 func CheckLandingGatePackageCoverage(rec *Record, required []string) error {
 	if rec == nil || len(required) == 0 {
 		return nil
@@ -131,7 +132,7 @@ func landingGateCoverageError(argv []string, required, missing []string, hasRun,
 	}
 	var why []string
 	if badCommand {
-		why = append(why, "gate command must be go test or make test-go")
+		why = append(why, "gate command must be go test, make test-go, or a full-suite make target")
 	}
 	if hasRun {
 		why = append(why, "gate used a -run filter")
@@ -172,8 +173,7 @@ func gateCommandIsGoTestOrKnownMake(argv []string) bool {
 	switch filepath.Base(argv[0]) {
 	case "make", "gmake":
 		for _, a := range argv[1:] {
-			switch a {
-			case "test-go", "test-go-raw", "test":
+			if knownFullSuiteMakeTarget(a) {
 				return true
 			}
 		}
@@ -279,16 +279,53 @@ func gateAchieveFullSuite(argv []string) bool {
 	switch filepath.Base(argv[0]) {
 	case "make", "gmake":
 		for _, a := range argv[1:] {
-			switch a {
-			case "test-go", "test-go-raw", "test":
+			if knownFullSuiteMakeTarget(a) {
 				return true
 			}
 		}
 	case "gotest":
 		return gotestIsFullSuite(argv[1:])
+	case "bash", "sh":
+		return bashCIsRootFullSuite(argv)
 	}
 	if len(argv) >= 2 && argv[0] == "go" {
 		return goTestIsFullSuite(argv[1:])
+	}
+	return false
+}
+
+// knownFullSuiteMakeTarget reports whether a make target is a repo's declared
+// full Go gate: it runs (or wraps) go test ./... at the repo root, so it
+// covers every changed package (🎯T1180 / 🎯T1314). gate-checks is Claudia's
+// declared full gate (go test -race ./... among other checks).
+func knownFullSuiteMakeTarget(a string) bool {
+	switch a {
+	case "test-go", "test-go-raw", "test", "gate-checks":
+		return true
+	}
+	return false
+}
+
+// bashCIsRootFullSuite reports a /bin/bash -c (or sh -c) command that runs
+// unfiltered go test ./... at the repo root — not after cd into a subdirectory
+// (those stay nested-module coverage, 🎯T1271).
+func bashCIsRootFullSuite(argv []string) bool {
+	script, ok := bashCScript(argv)
+	if !ok {
+		return false
+	}
+	segs := splitShellAnd(script)
+	if len(segs) == 0 {
+		return false
+	}
+	if _, isCd := parseCdSegment(segs[0]); isCd {
+		return false
+	}
+	for _, seg := range segs {
+		words := stripEnvAssigns(strings.Fields(seg))
+		if len(words) >= 2 && words[0] == "go" && goTestIsFullSuite(words[1:]) {
+			return true
+		}
 	}
 	return false
 }

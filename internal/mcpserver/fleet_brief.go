@@ -15,12 +15,13 @@ const fleetBriefT1134 = "\n\n## Landing never stashes shared work (🎯T1134)\n"
 	"- Workers never run `git stash`, `git checkout -- <path>`, `git restore`, or\n" +
 	"  `git reset` on the shared checkout to clean up before landing. Land only\n" +
 	"  through `go run ./cmd/integrate` — it refuses overlapping dirty paths and\n" +
-	"  never stashes. `bin/fleetgit` on PATH and the treeguard Bash hook refuse\n" +
-	"  mutating git in the shared checkout from fleet seats (🎯T1151.4); only\n" +
-	"  `cmd/integrate` and the ledger writer may move the shared branch.\n" +
-	"  `git stash push` from a fleet seat and name the dirty paths stash would take.\n" +
-	"  Pre-commit refuses a commit that drops more than a few bullseye target rows at once\n" +
-	"  (2026-10-21 ef5fdf35 incident).\n"
+	"  never stashes. The real git guard is the Claude treeguard PreToolUse Bash\n" +
+	"  hook (Claude seats). `bin/fleetgit` exists but is not on fleet seats' PATH\n" +
+	"  (🎯T1315) — an OMP sidecar seat's `git` is `/usr/bin/git`; Claudia's sidecar\n" +
+	"  does not wrap git (it does refuse pattern kills, claudia 🎯T237). Only\n" +
+	"  `cmd/integrate` and the ledger writer may move the shared branch\n" +
+	"  (🎯T1151.4). Pre-commit refuses a commit that drops more than a few bullseye\n" +
+	"  target rows at once (2026-10-21 ef5fdf35 incident).\n"
 
 // fleetBriefT1145 is split out for the same backtick reason as fleetBriefT1134.
 const fleetBriefT1145 = "\n\n## Ledger merge conflicts (🎯T1145)\n" +
@@ -44,7 +45,7 @@ const fleetBriefT1296 = "\n\n## Kill only what you started (🎯T1296)\n" +
 // fleetBriefT1160 is split out for the same backtick reason as fleetBriefT1134.
 const fleetBriefT1160 = "\n\n## Integrate refusal: no hand-land (🎯T1160)\n" +
 	"- When `go run ./cmd/integrate` refuses a landing, a work seat flags the refusal to its parent PO and parks — it does not hand-commit or merge onto the shared integration branch.\n" +
-	"  treeguard and fleetgit refuse `git commit` / `git merge` there from fleet work seats; only `cmd/integrate` and the ledger writer move the shared branch.\n" +
+	"  The Claude treeguard PreToolUse hook refuses `git commit` / `git merge` there from Claude work seats; only `cmd/integrate` and the ledger writer move the shared branch (`bin/fleetgit` is not on PATH, 🎯T1315).\n" +
 	"- Workers never write their own ledger achieve; achieve is PO-only after independent SHA+gate verification. commitscope refuses worker achieve commits (🎯T1160).\n" +
 	"- A landing can outlast a 600-second shell call: land with `go run ./cmd/integrate -repo <shared clone> -detach <worker>` and poll `go run ./cmd/integrate -result <worker>` (exit 0 landed, 1 refused, 3 running). A timed-out shell call is not a reason to hand the landing to the PO (🎯T1259).\n"
 const fleetBriefT1151_6 = "\n\n## Sibling repos and go.mod replaces (🎯T1151.6)\n" +
@@ -52,14 +53,16 @@ const fleetBriefT1151_6 = "\n\n## Sibling repos and go.mod replaces (🎯T1151.6
 	"  needs-release request to that repo's product owner via jevons_agent_send\n" +
 	"  and parks with an active-wait. It does not edit that sibling's shared clone,\n" +
 	"  bump its version, or add/change a go.mod replace for github.com/marcelocantos/…\n" +
-	"  modules (🎯T448 publish-then-pin). fleetgit and treeguard refuse mutating git\n" +
-	"  in another repository's shared checkout from a work seat.\n"
+	"  modules (🎯T448 publish-then-pin). The Claude treeguard PreToolUse hook refuses\n" +
+	"  mutating git in another repository's shared checkout from a Claude work seat\n" +
+	"  (`bin/fleetgit` is not on PATH, 🎯T1315).\n"
 
 const fleetBriefT1151_8 = "\n\n## Sibling shared clone: no writes by any command (🎯T1151.8)\n" +
 	"- Live probes of a sibling binary build to a private path (for example -o under /tmp)\n" +
 	"  or use an isolate broker with its own -state-dir — never `go build`, `make`, `cp`,\n" +
-	"  or shell redirects into the sibling's shared clone. treeguard and fleetgit refuse\n" +
-	"  those writes and name the sibling PO and your worktree alternative.\n"
+	"  or shell redirects into the sibling's shared clone. The Claude treeguard PreToolUse\n" +
+	"  hook refuses those writes from a Claude work seat and names the sibling PO and your\n" +
+	"  worktree alternative (`bin/fleetgit` is not on PATH, 🎯T1315).\n"
 
 // fleetBriefT1182 is split out so markdown backticks do not terminate the
 // FleetStandingBrief raw string literal.
@@ -439,6 +442,20 @@ a provider. This is Build-plane execution placement, not a waiver or scope
 change. Specimen: claudia-po turns 250-253 (2026-10-28) held the Claudia
 release asking the owner to name Anthropic or Cursor after Codex's sandbox
 denied nested sandbox-exec; that is the bad shape.
+
+## Sandboxed worker cannot run the full gate (🎯T1313)
+When a worker's sandboxed seat cannot run its repo's full gate (nested
+sandbox-exec, ps or keychain refused), the fleet still gets it gated and
+landed without an owner step: the PO spawns an auditor (🎯T1182) on a
+provider whose sandbox can run that gate (🎯T1245), or a gate runner
+outside the worker sandbox, which runs the exact full-gate command in the
+worker's worktree, records it in the gate store, and integrate lands it. A
+GREEN gate record is valid regardless of which seat ran it. Do not park
+the worker or the target asking the owner to run the gate. Specimen:
+2026-10-29, 🎯claudia/T237 and 🎯claudia/T238 finished with focused gates GREEN, but
+neither worker nor claudia-po (both sandboxed) could run claudia's full
+gate; claudia-po parked both and the work sat until the owner session ran
+the gate and integrated by hand.
 
 ## Actively waiting (🎯T1024, typed by 🎯T766.4.1)
 - When you are watching an alive external process you do not control —

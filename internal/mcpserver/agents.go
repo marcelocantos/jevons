@@ -1728,11 +1728,16 @@ func (s *Server) handleAgentStop(ctx context.Context, req mcp.CallToolRequest) (
 			stopWhy += ": " + r
 		}
 		s.noteSeatStop(name, seatstop.SourceReap, stopWhy, actor, "")
+		workdir := ""
+		if d := s.registry.Def(name); d != nil {
+			workdir = d.WorkDir
+		}
 		if err := killSubtree(s.registry, s.RemovalAccount(), name, reapStopRemoval(actor, disposition.Why)); err != nil {
 			s.logLifecycle(compAgentLifecycle, "stop", "error", map[string]any{
 				"name": name, "actor": actor, "reason": reason, "disposition": string(disposition.Action), "err": err.Error()})
 			return mcp.NewToolResultError(fmt.Sprintf("stop %q as reap: %v", name, err)), nil
 		}
+		cleanupImprovisedAfterReap(s.registry, workdir)
 		s.logLifecycle(compAgentLifecycle, "stop", "reaped", map[string]any{
 			"name": name, "actor": actor, "reason": reason, "why": disposition.Why})
 		slog.Info("T985 stop reaped finished worker instead of parking", "agent", name, "actor", actor, "why", disposition.Why)
